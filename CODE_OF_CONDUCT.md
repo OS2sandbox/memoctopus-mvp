@@ -1,6 +1,4 @@
-# 🧭 Code of Conduct / Adfærdskodeks
-
-## 🇩🇰 Dansk version
+## 🇩🇰 Adfærdskodeks
 Memoctopus-projektet følger [OS2’s Adfærdskodeks](https://github.com/OS2offdig/about/blob/main/CODE_OF_CONDUCT.md), som er et fælles grundlag for samarbejde i OS2-fællesskabet.
 
 Vi forpligter os til at skabe et inkluderende, respektfuldt og samarbejdsorienteret miljø for alle bidragsydere og brugere. Det betyder bl.a.:
@@ -16,7 +14,7 @@ Hvis du oplever adfærd, der strider mod denne kodeks, eller har forslag til for
 
 ---
 
-## 🇬🇧 English version
+## 🇬🇧 Code of Conduct
 The Memoctopus project adheres to the [OS2 Code of Conduct](https://www.os2.eu/code-of-conduct), which provides a shared foundation for collaboration within the OS2 community.
 
 We are committed to fostering an inclusive, respectful, and collaborative environment for all contributors and users. This includes:
@@ -27,5 +25,5 @@ We are committed to fostering an inclusive, respectful, and collaborative enviro
 
 If you experience behavior that violates this code or have suggestions for improvement, please open an issue or contact the project maintainers.
 
-🔗 **Read the full OS2 Code of Conduct here:**  
+🔗 **Read the full OS2 Code of Conduct (in danish) here:**  
 [https://www.os2.eu/code-of-conduct](https://www.os2.eu/code-of-conduct)
