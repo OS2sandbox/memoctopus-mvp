@@ -13,6 +13,11 @@ A clear and concise description of what the problem is. Ex. I'm always frustrate
 **Describe the solution you'd like**
 A clear and concise description of what you want to happen.
 
+**Acceptance criteria**  
+List the conditions that must be true for this feature to be considered complete.  
+- [ ] Criterion 1  
+- [ ] Criterion 2  
+
 **Describe alternatives you've considered**
 A clear and concise description of any alternative solutions or features you've considered.
 
