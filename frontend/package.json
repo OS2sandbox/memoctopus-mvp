@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "format": "biome check",
     "db:setup": "node scripts/setup-db.js",
     "db:check": "node scripts/check-db.js",
     "db:create-schema": "node scripts/create-schema.js",
@@ -30,6 +31,7 @@
   },
   "devDependencies": {
     "@better-auth/cli": "latest",
+    "@biomejs/biome": "2.2.6",
     "@types/node": "^22.5.5",
     "@types/pg": "^8.11.10",
     "@types/react": "^18.3.5",
