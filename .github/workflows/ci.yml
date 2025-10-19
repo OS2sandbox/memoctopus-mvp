@@ -1,0 +1,26 @@
+name: CI
+
+on: [pull_request]
+
+jobs:
+  biome:
+    name: Run Biome Checks
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Biome # TODO: replace with node.js setup IF a general setup is needed
+        uses: biomejs/setup-biome@v2
+        with:
+          version: latest
+
+      - name: Run Biome lint check
+        run: biome ci .
