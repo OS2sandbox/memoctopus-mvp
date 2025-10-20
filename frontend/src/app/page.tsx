@@ -1,11 +1,19 @@
 import { SignedIn, SignedOut } from "@/components/auth/auth-components";
 import Link from "next/link";
-import { NavBar } from "@/components/NavBar";
+import { authClient } from "@/lib/auth-client";
+import DashboardPage from "@/app/(application)/(dashboard)/page";
 
-export default function LandingPage() {
+export default async function LandingPage() {
+    const { getSession } = authClient;
+
+    const session = await getSession();
+
+    if (session.data) {
+        return <DashboardPage />;
+    }
+
   return (
     <>
-      <NavBar />
       <main className="flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center p-24">
       <div className="z-10 max-w-5xl w-full items-center justify-between font-mono text-sm">
         <h1 className="text-4xl font-bold mb-8 text-center">
@@ -33,7 +41,7 @@ export default function LandingPage() {
               You are signed in!
             </p>
             <Link
-              href="/dashboard"
+              href="/(application)/(dashboard)"
               className="rounded-md bg-primary px-6 py-3 text-primary-foreground hover:bg-primary/90 transition-colors"
             >
               Go to Dashboard

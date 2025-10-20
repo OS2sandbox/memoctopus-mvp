@@ -9,7 +9,7 @@ export function SignedIn({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    authClient.getSession().then((session: any) => {
+    authClient.getSession().then((session) => {
       setIsSignedIn(!!session.data);
       setIsLoading(false);
     });
@@ -26,7 +26,7 @@ export function SignedOut({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    authClient.getSession().then((session: any) => {
+    authClient.getSession().then((session) => {
       setIsSignedOut(!session.data);
       setIsLoading(false);
     });
@@ -43,7 +43,7 @@ export function RedirectToSignIn() {
   const [isChecking, setIsChecking] = useState(true);
 
   useEffect(() => {
-    authClient.getSession().then((session: any) => {
+    authClient.getSession().then((session) => {
       if (!session.data) {
         router.push("/auth/sign-in");
       }
