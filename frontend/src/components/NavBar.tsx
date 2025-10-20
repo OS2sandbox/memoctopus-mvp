@@ -9,7 +9,7 @@ export function NavBar() {
   const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
-    authClient.getSession().then((session: any) => {
+    authClient.getSession().then((session) => {
       if (session.data) {
         setUser(session.data.user);
       }
@@ -26,7 +26,7 @@ export function NavBar() {
         <div className="flex items-center gap-4">
           <SignedIn>
             <Link
-              href="/dashboard"
+              href="/(application)/(dashboard)"
               className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
             >
               Dashboard
