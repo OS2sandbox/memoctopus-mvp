@@ -3,7 +3,7 @@ import { createAuthClient } from "better-auth/client";
 export const authClient = createAuthClient({
   baseURL: typeof window !== 'undefined'
     ? window.location.origin
-    : process.env.NEXT_PUBLIC_BETTER_AUTH_URL || "http://localhost:3000",
+    : process.env["NEXT_PUBLIC_BETTER_AUTH_URL"] || "http://localhost:3000",
 }) as any; // Temporary type override for better-auth-ui compatibility
 
 export const { signIn, signOut, signUp } = authClient;
