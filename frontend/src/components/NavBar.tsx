@@ -1,12 +1,15 @@
 "use client";
 
+import type { User } from "better-auth";
+
 import { SignedIn } from "@/components/auth/auth-components";
 import { authClient } from "@/lib/auth-client";
+
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
 export function NavBar() {
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User>(null);
 
   useEffect(() => {
     authClient.getSession().then((session) => {

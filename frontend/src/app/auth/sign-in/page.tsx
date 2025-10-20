@@ -1,8 +1,9 @@
 "use client";
 
 import { authClient } from "@/lib/auth-client";
-import { useState } from "react";
 import { cn } from "@/lib/utils";
+
+import { useState } from "react";
 
 export default function SignInPage() {
   const [isLoading, setIsLoading] = useState<string | null>(null);
@@ -41,7 +42,7 @@ export default function SignInPage() {
                 "flex w-full items-center justify-center gap-3 rounded-md border border-border bg-background px-4 py-3 text-sm font-medium transition-colors",
                 "hover:bg-accent hover:text-accent-foreground",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                "disabled:pointer-events-none disabled:opacity-50"
+                "disabled:pointer-events-none disabled:opacity-50",
               )}
             >
               <svg
@@ -59,7 +60,6 @@ export default function SignInPage() {
                 ? "Signing in..."
                 : "Continue with Microsoft"}
             </button>
-
           </div>
 
           <div className="relative">

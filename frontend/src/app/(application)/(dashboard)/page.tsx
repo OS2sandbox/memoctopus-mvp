@@ -1,14 +1,17 @@
 "use client";
 
+import type { User } from "better-auth";
+
 import { RedirectToSignIn, SignedIn } from "@/components/auth/auth-components";
 import { authClient } from "@/lib/auth-client";
+
 import { useEffect, useState } from "react";
 
 export default function DashboardPage() {
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User>(null);
 
   useEffect(() => {
-    authClient.getSession().then((session: any) => {
+    authClient.getSession().then((session) => {
       if (session.data) {
         setUser(session.data.user);
       }

@@ -5,8 +5,8 @@
  * Manually creates the required tables for Better Auth
  */
 
-const { Client } = require('pg');
-require('dotenv').config({ path: '.env.local' });
+const { Client } = require("pg");
+require("dotenv").config({ path: ".env.local" });
 
 const schema = `
 -- User table
@@ -68,7 +68,7 @@ async function createSchema() {
   const DATABASE_URL = process.env.DATABASE_URL;
 
   if (!DATABASE_URL) {
-    console.error('❌ DATABASE_URL not found in .env.local');
+    console.error("❌ DATABASE_URL not found in .env.local");
     process.exit(1);
   }
 
@@ -78,11 +78,11 @@ async function createSchema() {
 
   try {
     await client.connect();
-    console.log('✅ Connected to database\n');
+    console.log("✅ Connected to database\n");
 
-    console.log('📝 Creating Better Auth schema...');
+    console.log("📝 Creating Better Auth schema...");
     await client.query(schema);
-    console.log('✅ Schema created successfully!\n');
+    console.log("✅ Schema created successfully!\n");
 
     // Check tables
     const tables = await client.query(`
@@ -93,17 +93,16 @@ async function createSchema() {
       ORDER BY table_name
     `);
 
-    console.log('📋 Created tables:');
+    console.log("📋 Created tables:");
     for (const table of tables.rows) {
       console.log(`   ✓ ${table.table_name}`);
     }
     console.log();
 
     await client.end();
-    console.log('✨ Database is ready for Better Auth!\n');
-
+    console.log("✨ Database is ready for Better Auth!\n");
   } catch (error) {
-    console.error('❌ Error creating schema:', error.message);
+    console.error("❌ Error creating schema:", error.message);
     process.exit(1);
   }
 }

@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState, ReactNode } from "react";
 import { authClient } from "@/lib/auth-client";
+
 import { useRouter } from "next/navigation";
+import { type ReactNode, useEffect, useState } from "react";
 
 export function SignedIn({ children }: { children: ReactNode }) {
   const [isSignedIn, setIsSignedIn] = useState(false);
