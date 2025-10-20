@@ -1,11 +1,11 @@
 "use client";
 
-import { SignedIn, SignedOut } from "@/components/auth-components";
+import { SignedIn } from "@/components/auth/auth-components";
 import { authClient } from "@/lib/auth-client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-export function Navbar() {
+export function NavBar() {
   const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
@@ -19,20 +19,11 @@ export function Navbar() {
   return (
     <nav className="border-b border-border bg-background">
       <div className="container mx-auto flex h-16 items-center justify-between px-4">
-        <Link href="/" className="text-xl font-bold">
+        <Link href="/frontend/public" className="text-xl font-bold">
           MemOctopus
         </Link>
 
         <div className="flex items-center gap-4">
-          <SignedOut>
-            <Link
-              href="/auth/sign-in"
-              className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Sign In
-            </Link>
-          </SignedOut>
-
           <SignedIn>
             <Link
               href="/dashboard"
