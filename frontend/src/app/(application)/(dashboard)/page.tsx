@@ -2,7 +2,10 @@
 
 import type { User } from "better-auth";
 
-import { RedirectToSignIn, SignedIn } from "@/components/custom/auth/auth-components";
+import {
+  RedirectToSignIn,
+  SignedIn,
+} from "@/components/custom/auth/auth-components";
 import { authClient } from "@/lib/auth-client";
 
 import { useEffect, useState } from "react";
