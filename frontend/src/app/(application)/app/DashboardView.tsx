@@ -6,9 +6,11 @@ import { authClient } from "@/lib/auth-client";
 
 import { useEffect, useState } from "react";
 
-export function DashboardView() {
+// TODO: Dashboard will become "Add Speech To Text" view
+export const DashboardView = () => {
   const [user, setUser] = useState<User | null>(null);
 
+  // TODO: Find a better alternative to this
   useEffect(() => {
     authClient.getSession().then((session) => {
       if (session?.data?.user) {
@@ -51,4 +53,4 @@ export function DashboardView() {
       </div>
     </div>
   );
-}
+};
