@@ -10,10 +10,10 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const signInUrl = new URL("/", request.url);
+  const signInUrl = new URL("/sign-in", request.url);
   return NextResponse.redirect(signInUrl);
 }
 
 export const config = {
-  matcher: ["/app/:path*", "/auth/:path*"],
+  matcher: ["/app/:path*"],
 };
