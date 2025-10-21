@@ -2,7 +2,7 @@
 
 import type { User } from "better-auth";
 
-import { SignedIn } from "@/components/auth/auth-components";
+import { SignedIn } from "@/components/custom/auth/auth-components";
 import { authClient } from "@/lib/auth-client";
 
 import Link from "next/link";
