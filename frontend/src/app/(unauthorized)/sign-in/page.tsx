@@ -28,38 +28,48 @@ export default function SignInPage() {
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  // quite ugly but only used for testing currently
   const handleEmailAuth = async (e: FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
 
-    try {
-      switch (mode) {
-        case Mode.SignIn: {
-          await authClient.signIn.email({
-            email,
-            password,
-            rememberMe: true,
-            callbackURL: "/app",
-          });
-          break;
+    switch (mode) {
+      case Mode.SignIn: {
+        const { error } = await authClient.signIn.email({
+          email,
+          password,
+          rememberMe: true,
+          callbackURL: "/app",
+        });
+        if (error) {
+          console.error("Sign-in error:", error.message);
+          setError("Authentication failed. Please check your input.");
         }
-        case Mode.SignUp: {
-          await authClient.signUp.email({
-            name,
-            email,
-            password,
-            callbackURL: "/app",
-          });
-          break;
-        }
+        break;
       }
-    } catch (err) {
-      console.error(err);
-      setError("Authentication failed. Please check your input.");
-    } finally {
-      setIsLoading(false);
+      case Mode.SignUp: {
+        const { error: signUpError } = await authClient.signUp.email({
+          name,
+          email,
+          password,
+          callbackURL: "/app",
+        });
+
+        const { error: signInError } = await authClient.signIn.email({
+          email,
+          password,
+          rememberMe: true,
+          callbackURL: "/app",
+        });
+
+        if (signUpError || signInError) {
+          setError("Authentication failed. Please check your input.");
+        }
+        break;
+      }
     }
+    setIsLoading(false);
   };
 
   const handleSocialSignIn = async () => {
@@ -68,7 +78,8 @@ export default function SignInPage() {
       provider: "microsoft",
       callbackURL: "/app",
     });
-    if (error?.message) setError(error.message);
+    if (error?.message)
+      setError("Authentication failed. Please check your input.");
     setIsLoading(false);
   };
 
@@ -120,7 +131,7 @@ export default function SignInPage() {
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="you@example.com"
+                    placeholder="janedoe@domain.com"
                     required
                   />
                 </Field>
@@ -208,10 +219,6 @@ export default function SignInPage() {
             </FieldSet>
           </FieldGroup>
         </form>
-
-        <p className="text-center text-xs text-muted-foreground">
-          By continuing, you agree to our Terms of Service and Privacy Policy.
-        </p>
       </div>
     </div>
   );
