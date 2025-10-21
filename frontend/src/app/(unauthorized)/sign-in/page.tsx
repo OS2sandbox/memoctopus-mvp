@@ -11,7 +11,7 @@ import {
   FieldSet,
 } from "@/components/ui/core/field";
 import { Input } from "@/components/ui/core/input";
-import { authClient } from "@/lib/auth-client";
+import { signIn, signUp } from "@/lib/auth-client";
 
 import { type FormEvent, useState } from "react";
 
@@ -36,7 +36,7 @@ export default function SignInPage() {
 
     switch (mode) {
       case Mode.SignIn: {
-        const { error } = await authClient.signIn.email({
+        const { error } = await signIn.email({
           email,
           password,
           rememberMe: true,
@@ -49,14 +49,14 @@ export default function SignInPage() {
         break;
       }
       case Mode.SignUp: {
-        const { error: signUpError } = await authClient.signUp.email({
+        const { error: signUpError } = await signUp.email({
           name,
           email,
           password,
           callbackURL: "/app",
         });
 
-        const { error: signInError } = await authClient.signIn.email({
+        const { error: signInError } = await signIn.email({
           email,
           password,
           rememberMe: true,
@@ -74,7 +74,7 @@ export default function SignInPage() {
 
   const handleSocialSignIn = async () => {
     setIsLoading(true);
-    const { error } = await authClient.signIn.social({
+    const { error } = await signIn.social({
       provider: "microsoft",
       callbackURL: "/app",
     });

@@ -2,13 +2,15 @@
 
 import type { User } from "better-auth";
 
-import { authClient } from "@/lib/auth-client";
+import { authClient, signOut } from "@/lib/auth-client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 export function NavBar() {
   const [user, setUser] = useState<User>(null);
+  const router = useRouter();
 
   useEffect(() => {
     authClient.getSession().then((session) => {
@@ -39,8 +41,13 @@ export function NavBar() {
             </span>
             <button
               onClick={async () => {
-                const { signOut } = await import("@/lib/auth-client");
-                await signOut();
+                await signOut({
+                  fetchOptions: {
+                    onSuccess: () => {
+                      router.push("/sign-in");
+                    },
+                  },
+                });
               }}
               className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
             >
