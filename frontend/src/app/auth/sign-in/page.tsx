@@ -13,7 +13,7 @@ export default function SignInPage() {
     try {
       await authClient.signIn.social({
         provider,
-        callbackURL: "/(dashboard)",
+        callbackURL: "/app",
       });
     } catch (error) {
       console.error(`Error signing in with ${provider}:`, error);
