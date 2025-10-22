@@ -46,6 +46,7 @@ export default function SignInPage() {
           console.error("Sign-in error:", error.message);
           setError("Authentication failed. Please check your input.");
         }
+        console.log("success");
         break;
       }
       case Mode.SignUp: {
@@ -53,7 +54,6 @@ export default function SignInPage() {
           name,
           email,
           password,
-          callbackURL: "/app",
         });
 
         const { error: signInError } = await signIn.email({
