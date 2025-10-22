@@ -2,14 +2,10 @@
 
 import { PromptDropdown } from "@/components/custom/nav/PromptDropdown";
 import { ProfileOverview } from "@/components/custom/profile/ProfileOverview";
-import { signOut } from "@/lib/auth-client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 
 export function NavBar() {
-  const router = useRouter();
-
   return (
     <nav className="border-b border-border bg-background">
       <div
@@ -40,18 +36,6 @@ export function NavBar() {
 
         <div className="flex justify-end items-center gap-3">
           <ProfileOverview />
-          <button
-            onClick={async () => {
-              await signOut({
-                fetchOptions: {
-                  onSuccess: () => router.push("/sign-in"),
-                },
-              });
-            }}
-            className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Sign Out
-          </button>
         </div>
       </div>
     </nav>

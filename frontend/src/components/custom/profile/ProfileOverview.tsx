@@ -1,13 +1,12 @@
 "use client";
 
-import { Avatar, AvatarFallback } from "@radix-ui/react-avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/core/shadcn/avatar";
+import { Button } from "@/components/ui/core/shadcn/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from "@radix-ui/react-dropdown-menu";
-
-import { Button } from "@/components/ui/core/shadcn/button";
+} from "@/components/ui/core/shadcn/dropdown-menu";
 import { signOut, type User, useSession } from "@/lib/auth-client";
 import { getInitials } from "@/lib/utils";
 
@@ -25,7 +24,7 @@ export function ProfileOverview() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Avatar className={"cursor-pointer"}>
+        <Avatar>
           <AvatarFallback>{initials}</AvatarFallback>
         </Avatar>
       </DropdownMenuTrigger>
