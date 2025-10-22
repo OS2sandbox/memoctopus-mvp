@@ -1,16 +1,10 @@
 "use client";
 
-import type { User } from "better-auth";
-
-import { authClient } from "@/lib/auth-client";
-
-import { useEffect, useState } from "react";
+import { type User, useSession } from "@/lib/auth-client";
 
 // TODO: Dashboard will become "Add Speech To Text" view
 export const DashboardView = () => {
-  const [user, setUser] = useState<User | null>(null);
-
-  // TODO: Find a better alternative to this
+  /*
   useEffect(() => {
     authClient.getSession().then((session) => {
       if (session?.data?.user) {
@@ -20,6 +14,10 @@ export const DashboardView = () => {
       }
     });
   }, []);
+   */
+
+  const { data } = useSession();
+  const user = data?.user as User | null;
 
   return (
     <div className="flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center p-24">
