@@ -20,6 +20,7 @@ enum Mode {
   SignIn,
 }
 
+// TODO: Maybe use shadcn card instead
 export default function SignInPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [mode, setMode] = useState<Mode>(Mode.SignIn);

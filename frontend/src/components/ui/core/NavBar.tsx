@@ -1,23 +1,14 @@
 "use client";
 
-import type { User } from "better-auth";
-
 import { PromptDropdown } from "@/components/custom/nav/PromptDropdown";
-import { authClient, signOut } from "@/lib/auth-client";
+import { ProfileOverview } from "@/components/custom/profile/ProfileOverview";
+import { signOut } from "@/lib/auth-client";
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
 
 export function NavBar() {
-  const [user, setUser] = useState<User | null>(null);
   const router = useRouter();
-
-  useEffect(() => {
-    authClient.getSession().then((session) => {
-      if (session.data) setUser(session.data.user);
-    });
-  }, []);
 
   return (
     <nav className="border-b border-border bg-background">
@@ -48,9 +39,7 @@ export function NavBar() {
         </div>
 
         <div className="flex justify-end items-center gap-3">
-          <span className="text-sm text-muted-foreground">
-            {user?.name || user?.email || "User"}
-          </span>
+          <ProfileOverview />
           <button
             onClick={async () => {
               await signOut({
