@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@/components/ui/core/button";
+import { Button } from "@/components/ui/core/shadcn/button";
 import {
   Field,
   FieldDescription,
@@ -9,9 +9,9 @@ import {
   FieldLegend,
   FieldSeparator,
   FieldSet,
-} from "@/components/ui/core/field";
-import { Input } from "@/components/ui/core/input";
-import { authClient } from "@/lib/auth-client";
+} from "@/components/ui/core/shadcn/field";
+import { Input } from "@/components/ui/core/shadcn/input";
+import { signIn, signUp } from "@/lib/auth-client";
 
 import { type FormEvent, useState } from "react";
 
@@ -20,6 +20,7 @@ enum Mode {
   SignIn,
 }
 
+// TODO: Maybe use shadcn card instead
 export default function SignInPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [mode, setMode] = useState<Mode>(Mode.SignIn);
@@ -36,7 +37,7 @@ export default function SignInPage() {
 
     switch (mode) {
       case Mode.SignIn: {
-        const { error } = await authClient.signIn.email({
+        const { error } = await signIn.email({
           email,
           password,
           rememberMe: true,
@@ -46,17 +47,17 @@ export default function SignInPage() {
           console.error("Sign-in error:", error.message);
           setError("Authentication failed. Please check your input.");
         }
+        console.log("success");
         break;
       }
       case Mode.SignUp: {
-        const { error: signUpError } = await authClient.signUp.email({
+        const { error: signUpError } = await signUp.email({
           name,
           email,
           password,
-          callbackURL: "/app",
         });
 
-        const { error: signInError } = await authClient.signIn.email({
+        const { error: signInError } = await signIn.email({
           email,
           password,
           rememberMe: true,
@@ -74,7 +75,7 @@ export default function SignInPage() {
 
   const handleSocialSignIn = async () => {
     setIsLoading(true);
-    const { error } = await authClient.signIn.social({
+    const { error } = await signIn.social({
       provider: "microsoft",
       callbackURL: "/app",
     });

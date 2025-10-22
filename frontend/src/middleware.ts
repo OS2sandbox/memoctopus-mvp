@@ -1,13 +1,13 @@
-import { getSession } from "@/lib/auth-client";
+import { getSessionCookie } from "better-auth/cookies";
 
 import { type NextRequest, NextResponse } from "next/server";
 
 // const DISABLE_AUTH = process.env["DISABLE_AUTH"] === "true"
 // acts as a gatekeeper for protected routes; authorization gate
 export async function middleware(request: NextRequest) {
-  const session = await getSession();
+  const session = getSessionCookie(request);
 
-  if (session?.data?.user || process.env.NODE_ENV === "development") {
+  if (session) {
     return NextResponse.next();
   }
 
