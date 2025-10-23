@@ -8,16 +8,19 @@ import { Fragment } from "react";
 import { Stepper } from "./stepper";
 import { WizardPanel } from "./WizardPanel";
 
-// TODO: Implement all steps content and navigation logic
+// TODO: Implement validation and conditional step navigation
 export const Wizard = () => {
   return (
     <Stepper.Provider
       labelOrientation="vertical"
-      className="space-y-8 p-6 border rounded-lg bg-card w-full max-w-2xl mx-auto"
+      className="space-y-8 p-6 border rounded-lg bg-card w-full max-w-5xl mx-auto"
     >
       {({ methods }) => (
         <Fragment>
-          <WizardHeader infoText={methods.current.description} />
+          <WizardHeader
+            title={methods.current.title}
+            infoText={methods.current.description}
+          />
 
           <Stepper.Navigation>
             {methods.all.map((step) => (
@@ -54,11 +57,24 @@ export const Wizard = () => {
                     </p>
                     <FileSelectButton fileType={"audio/*"} />
                   </WizardContentPanel>
+                  <WizardContentPanel>
+                    <h2 className="text-lg font-semibold text-foreground">
+                      Genbrug tale
+                    </h2>
+                    <p className="text-sm text-muted-foreground">
+                      Dine optagelser og uploads ligger i systemet i en uge, så
+                      du altid kan lave en opssummering.
+                    </p>
+                    <Button>Find fil</Button>
+                  </WizardContentPanel>
                 </WizardPanel>
               ),
               "step-2": () => (
                 <WizardPanel>
                   <WizardContentPanel>
+                    <h2 className="text-lg font-semibold text-foreground">
+                      Vælg Prompt
+                    </h2>
                     <RecordDialog />
                     this is text
                   </WizardContentPanel>
