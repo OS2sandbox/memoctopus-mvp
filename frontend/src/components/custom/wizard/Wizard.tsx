@@ -1,3 +1,5 @@
+import { RecordPopover } from "@/components/custom/wizard/RecordPopover";
+import { WizardContentPanel } from "@/components/custom/wizard/WizardContentPanel";
 import { WizardHeader } from "@/components/custom/wizard/WizardHeader";
 import { Button } from "@/components/ui/core/shadcn/button";
 
@@ -28,29 +30,43 @@ export const Wizard = () => {
               </Stepper.Step>
             ))}
           </Stepper.Navigation>
-
-          {methods.switch({
-            "step-1": () => (
-              <WizardPanel>
-                <p>{methods.current.description}</p>
-              </WizardPanel>
-            ),
-            "step-2": () => (
-              <Stepper.Panel className="p-6 rounded-md border bg-muted/20">
-                <p>{methods.current.description}</p>
-              </Stepper.Panel>
-            ),
-            "step-3": () => (
-              <Stepper.Panel className="p-6 rounded-md border bg-muted/20">
-                <p>{methods.current.description}</p>
-              </Stepper.Panel>
-            ),
-            "step-4": () => (
-              <Stepper.Panel className="p-6 rounded-md border bg-muted/20">
-                <p>{methods.current.description}</p>
-              </Stepper.Panel>
-            ),
-          })}
+          {
+            // TODO: Make a factory for step panels
+            methods.switch({
+              "step-1": () => (
+                <WizardPanel className="flex justify-center">
+                  <WizardContentPanel>
+                    <h2 className="text-lg font-semibold text-foreground">
+                      Optag tale
+                    </h2>
+                    <p className="text-sm text-muted-foreground">
+                      Du kan optage dit møde eller anden tale her på siden.
+                    </p>
+                    <RecordPopover />
+                  </WizardContentPanel>
+                  <WizardContentPanel>
+                    <RecordPopover />
+                    this is text
+                  </WizardContentPanel>
+                </WizardPanel>
+              ),
+              "step-2": () => (
+                <WizardPanel>
+                  <p>{methods.current.description}</p>
+                </WizardPanel>
+              ),
+              "step-3": () => (
+                <WizardPanel>
+                  <p>{methods.current.description}</p>
+                </WizardPanel>
+              ),
+              "step-4": () => (
+                <WizardPanel>
+                  <p>{methods.current.description}</p>
+                </WizardPanel>
+              ),
+            })
+          }
 
           <Stepper.Controls className="flex justify-between">
             {!methods.isFirst && (
