@@ -1,6 +1,7 @@
-import { RecordPopover } from "@/components/custom/wizard/RecordPopover";
 import { WizardContentPanel } from "@/components/custom/wizard/WizardContentPanel";
 import { WizardHeader } from "@/components/custom/wizard/WizardHeader";
+import { FileSelectButton } from "@/components/ui/core/FileSelectButton";
+import { RecordDialog } from "@/components/ui/core/RecordDialog";
 import { Button } from "@/components/ui/core/shadcn/button";
 
 import { Fragment } from "react";
@@ -42,17 +43,25 @@ export const Wizard = () => {
                     <p className="text-sm text-muted-foreground">
                       Du kan optage dit møde eller anden tale her på siden.
                     </p>
-                    <RecordPopover />
+                    <RecordDialog />
                   </WizardContentPanel>
                   <WizardContentPanel>
-                    <RecordPopover />
-                    this is text
+                    <h2 className="text-lg font-semibold text-foreground">
+                      Upload tale
+                    </h2>
+                    <p className="text-sm text-muted-foreground">
+                      Upload din egen optagelse af et møde eller anden tale her.
+                    </p>
+                    <FileSelectButton fileType={"audio/*"} />
                   </WizardContentPanel>
                 </WizardPanel>
               ),
               "step-2": () => (
                 <WizardPanel>
-                  <p>{methods.current.description}</p>
+                  <WizardContentPanel>
+                    <RecordDialog />
+                    this is text
+                  </WizardContentPanel>
                 </WizardPanel>
               ),
               "step-3": () => (
