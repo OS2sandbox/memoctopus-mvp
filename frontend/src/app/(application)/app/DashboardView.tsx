@@ -1,5 +1,6 @@
 "use client";
 
+import { Wizard } from "@/components/custom/wizard/Wizard";
 import { type User, useSession } from "@/lib/auth-client";
 
 // TODO: Dashboard will become "Add Speech To Text" view
@@ -49,6 +50,7 @@ export const DashboardView = () => {
           </div>
         </div>
       </div>
+      <Wizard />
     </div>
   );
 };
