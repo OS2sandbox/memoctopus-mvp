@@ -2,16 +2,19 @@ import { WizardHeader } from "@/components/custom/wizard/WizardHeader";
 import { Button } from "@/components/ui/core/shadcn/button";
 
 import { Fragment } from "react";
-import { Stepper, utils } from "./stepper";
+import { Stepper } from "./stepper";
 import { WizardPanel } from "./WizardPanel";
 
 // TODO: Implement all steps content and navigation logic
 export const Wizard = () => {
   return (
-    <Stepper.Provider className="space-y-8 p-6 border rounded-lg bg-card shadow-sm w-full max-w-2xl mx-auto">
+    <Stepper.Provider
+      labelOrientation="vertical"
+      className="space-y-8 p-6 border rounded-lg bg-card w-full max-w-2xl mx-auto"
+    >
       {({ methods }) => (
         <Fragment>
-          <WizardHeader />
+          <WizardHeader infoText={methods.current.description} />
 
           <Stepper.Navigation>
             {methods.all.map((step) => (
@@ -19,9 +22,8 @@ export const Wizard = () => {
                 key={step.id}
                 of={step.id}
                 onClick={() => methods.goTo(step.id)}
-                className="flex flex-col items-center flex-1"
+                className="flex flex-col items-center flex-1 text-center"
               >
-                <div>{utils.getIndex(step.id) + 1}</div>
                 <Stepper.Title>{step.title}</Stepper.Title>
               </Stepper.Step>
             ))}
