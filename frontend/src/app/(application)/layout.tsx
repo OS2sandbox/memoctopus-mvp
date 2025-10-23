@@ -1,4 +1,4 @@
-import { NavBar } from "@/components/ui/core/NavBar";
+import { NavBar } from "@/components/custom/nav/NavBar";
 
 import { Fragment, type ReactNode } from "react";
 
