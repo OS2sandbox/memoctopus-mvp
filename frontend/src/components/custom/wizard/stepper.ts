@@ -1,4 +1,4 @@
-import { defineStepper } from "@/components/ui/core/shadcn/stepper";
+import { defineStepper } from "@/components/core/shadcn/stepper";
 
 export enum StepId {
   UploadSpeechStep = "step-1",

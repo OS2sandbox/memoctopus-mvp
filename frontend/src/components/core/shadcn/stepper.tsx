@@ -4,7 +4,7 @@ import { Slot } from "@radix-ui/react-slot";
 import * as Stepperize from "@stepperize/react";
 import { cva, type VariantProps } from "class-variance-authority";
 
-import { Button } from "@/components/ui/core/shadcn/button";
+import { Button } from "@/components/core/shadcn/button";
 import { cn } from "@/lib/utils";
 
 import * as React from "react";

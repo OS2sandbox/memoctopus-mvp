@@ -1,11 +1,11 @@
 import { LucideMic } from "lucide-react";
 
-import { Button } from "@/components/ui/core/shadcn/button";
+import { Button } from "@/components/core/shadcn/button";
 import {
   Dialog,
   DialogContent,
   DialogTrigger,
-} from "@/components/ui/core/shadcn/dialog";
+} from "@/components/core/shadcn/dialog";
 
 /* TODO: Add recording functionality:
     - Integrate recording library

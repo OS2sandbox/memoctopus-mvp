@@ -1,5 +1,5 @@
+import { Button } from "@/components/core/shadcn/button";
 import { Stepper, useStepper } from "@/components/custom/wizard/stepper";
-import { Button } from "@/components/ui/core/shadcn/button";
 
 import { Activity } from "react";
 

@@ -1,6 +1,6 @@
+import { RecordDialog } from "@/components/custom/recording/RecordDialog";
 import { WizardContentPanel } from "@/components/custom/wizard/WizardContentPanel";
 import { WizardPanel } from "@/components/custom/wizard/WizardPanel";
-import { RecordDialog } from "@/components/ui/core/RecordDialog";
 
 export const SelectPromptStep = () => {
   return (

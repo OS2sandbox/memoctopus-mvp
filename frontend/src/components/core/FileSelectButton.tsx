@@ -6,13 +6,13 @@ import {
   LucideLoaderCircle,
 } from "lucide-react";
 
-import { StepId, useStepper } from "@/components/custom/wizard/stepper";
 import {
   Alert,
   AlertDescription,
   AlertTitle,
-} from "@/components/ui/core/shadcn/alert";
-import { Button } from "@/components/ui/core/shadcn/button";
+} from "@/components/core/shadcn/alert";
+import { Button } from "@/components/core/shadcn/button";
+import { StepId, useStepper } from "@/components/custom/wizard/stepper";
 
 import { Activity, type ChangeEvent, useRef, useState } from "react";
 
