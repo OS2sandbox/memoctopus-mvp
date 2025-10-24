@@ -13,7 +13,7 @@ import {
 import { Input } from "@/components/ui/core/shadcn/input";
 import { signIn, signUp } from "@/lib/auth-client";
 
-import { type FormEvent, useState } from "react";
+import { type FormEvent, Fragment, useState } from "react";
 
 enum Mode {
   SignUp,
@@ -165,7 +165,7 @@ export default function SignInPage() {
 
                 <p className="text-center text-xs text-muted-foreground mt-3">
                   {mode === Mode.SignIn ? (
-                    <>
+                    <Fragment>
                       Don’t have an account?{" "}
                       <button
                         type="button"
@@ -174,9 +174,9 @@ export default function SignInPage() {
                       >
                         Sign up
                       </button>
-                    </>
+                    </Fragment>
                   ) : (
-                    <>
+                    <Fragment>
                       Already have an account?{" "}
                       <button
                         type="button"
@@ -185,7 +185,7 @@ export default function SignInPage() {
                       >
                         Sign in
                       </button>
-                    </>
+                    </Fragment>
                   )}
                 </p>
               </FieldGroup>
