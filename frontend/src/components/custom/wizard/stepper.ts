@@ -1,30 +1,35 @@
 import { defineStepper } from "@/components/ui/core/shadcn/stepper";
 
-export enum Steps {
+export enum StepId {
   UploadSpeechStep = "step-1",
   SelectPromptStep = "step-2",
   EditAndConfirmStep = "step-3",
   ShareStep = "step-4",
 }
 
+export const defaultMetadata = {
+  file: null as File | null,
+  isCompleted: false,
+};
+
 export const { Stepper, utils, useStepper } = defineStepper(
   {
-    id: Steps.UploadSpeechStep,
+    id: StepId.UploadSpeechStep,
     title: "Tilføj tale",
     description: "Optag eller upload tale",
   },
   {
-    id: Steps.SelectPromptStep,
+    id: StepId.SelectPromptStep,
     title: "Vælg prompt",
     description: "Tilføj prompt og opsæt detaljer",
   },
   {
-    id: Steps.EditAndConfirmStep,
+    id: StepId.EditAndConfirmStep,
     title: "Rediger og godkend",
     description: "Gennemgå og godkend indholdet",
   },
   {
-    id: Steps.ShareStep,
+    id: StepId.ShareStep,
     title: "Del",
     description: "Hvordan vil du dele teksten?",
   },

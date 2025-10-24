@@ -1,4 +1,4 @@
-import { Steps, useStepper } from "@/components/custom/wizard/stepper";
+import { StepId, useStepper } from "@/components/custom/wizard/stepper";
 import { WizardContentPanel } from "@/components/custom/wizard/WizardContentPanel";
 import { WizardPanel } from "@/components/custom/wizard/WizardPanel";
 import { FileSelectButton } from "@/components/ui/core/FileSelectButton";
@@ -8,11 +8,11 @@ import { useWarnBeforeUnload } from "@/lib/hooks/use-warn-before-unload";
 
 export const UploadSpeechStep = () => {
   const { metadata } = useStepper();
-  const isUploaded = metadata[Steps.UploadSpeechStep]?.[
-    "isUploaded"
+  const fileUploaded = metadata[StepId.UploadSpeechStep]?.[
+    "isCompleted"
   ] as boolean;
 
-  useWarnBeforeUnload(isUploaded);
+  useWarnBeforeUnload(fileUploaded);
 
   return (
     <WizardPanel className="flex justify-center">
@@ -21,7 +21,7 @@ export const UploadSpeechStep = () => {
         <p className="text-sm text-muted-foreground">
           Du kan optage dit møde eller anden tale her på siden.
         </p>
-        <RecordDialog isRecordingDisabled={isUploaded} />
+        <RecordDialog isRecordingDisabled={fileUploaded} />
       </WizardContentPanel>
       <WizardContentPanel>
         <h2 className="text-lg font-semibold text-foreground">Upload tale</h2>
@@ -36,7 +36,7 @@ export const UploadSpeechStep = () => {
           Dine optagelser og uploads ligger i systemet i en uge, så du altid kan
           lave en opsummering.
         </p>
-        <Button disabled={isUploaded}>Find fil</Button>
+        <Button disabled={fileUploaded}>Find fil</Button>
       </WizardContentPanel>
     </WizardPanel>
   );

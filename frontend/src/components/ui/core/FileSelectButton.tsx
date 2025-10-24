@@ -2,7 +2,7 @@
 
 import { LucideCheck, LucideLoaderCircle } from "lucide-react";
 
-import { Steps, useStepper } from "@/components/custom/wizard/stepper";
+import { StepId, useStepper } from "@/components/custom/wizard/stepper";
 import { Button } from "@/components/ui/core/shadcn/button";
 
 import { Activity, type ChangeEvent, useRef, useState } from "react";
@@ -20,18 +20,18 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
   const [isUploading, setIsUploading] = useState<boolean>(false);
 
   const { setMetadata, metadata } = useStepper();
-  const selectedFile = metadata[Steps.UploadSpeechStep]?.[
+  const selectedFile = metadata[StepId.UploadSpeechStep]?.[
     "file"
   ] as File | null;
-  const isUploaded = metadata[Steps.UploadSpeechStep]?.[
-    "isUploaded"
+  const isUploaded = metadata[StepId.UploadSpeechStep]?.[
+    "isCompleted"
   ] as boolean;
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      const current = metadata[Steps.UploadSpeechStep] ?? {};
-      setMetadata(Steps.UploadSpeechStep, { ...current, file });
+      const current = metadata[StepId.UploadSpeechStep] ?? {};
+      setMetadata(StepId.UploadSpeechStep, { ...current, file });
       console.log("Selected file:", file.name);
     }
   };
@@ -49,8 +49,8 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
     window.setTimeout(() => {
       console.log("Finished uploading:", selectedFile?.name);
       setIsUploading(false);
-      const current = metadata[Steps.UploadSpeechStep] ?? {};
-      setMetadata(Steps.UploadSpeechStep, { ...current, isUploaded: true });
+      const current = metadata[StepId.UploadSpeechStep] ?? {};
+      setMetadata(StepId.UploadSpeechStep, { ...current, isCompleted: true });
     }, fakeUploadTime);
   };
 

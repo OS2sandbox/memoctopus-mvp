@@ -7,7 +7,7 @@ import { WizardHeader } from "@/components/custom/wizard/WizardHeader";
 import { WizardNavigation } from "@/components/custom/wizard/WizardNavigation";
 
 import { Fragment } from "react";
-import { Stepper, Steps } from "./stepper";
+import { defaultMetadata, StepId, Stepper } from "./stepper";
 
 // TODO: Implement validation and conditional step navigation
 export const Wizard = () => {
@@ -16,13 +16,19 @@ export const Wizard = () => {
       labelOrientation="vertical"
       className="space-y-8 p-6 border rounded-lg bg-card w-full max-w-5xl mx-auto"
       initialMetadata={{
-        [Steps.UploadSpeechStep]: {
-          file: null as File | null,
-          isUploaded: false,
+        [StepId.UploadSpeechStep]: {
+          ...defaultMetadata,
+          isCompleted: false,
         },
-        [Steps.SelectPromptStep]: {},
-        [Steps.EditAndConfirmStep]: {},
-        [Steps.ShareStep]: {},
+        [StepId.SelectPromptStep]: {
+          ...defaultMetadata,
+        },
+        [StepId.EditAndConfirmStep]: {
+          ...defaultMetadata,
+        },
+        [StepId.ShareStep]: {
+          ...defaultMetadata,
+        },
       }}
     >
       {({ methods }) => (
@@ -37,10 +43,10 @@ export const Wizard = () => {
           {
             // TODO: Make a factory for step panels
             methods.switch({
-              [Steps.UploadSpeechStep]: () => <UploadSpeechStep />,
-              [Steps.SelectPromptStep]: () => <SelectPromptStep />,
-              [Steps.EditAndConfirmStep]: () => <EditAndConfirmStep />,
-              [Steps.ShareStep]: () => <ShareStep />,
+              [StepId.UploadSpeechStep]: () => <UploadSpeechStep />,
+              [StepId.SelectPromptStep]: () => <SelectPromptStep />,
+              [StepId.EditAndConfirmStep]: () => <EditAndConfirmStep />,
+              [StepId.ShareStep]: () => <ShareStep />,
             })
           }
 
