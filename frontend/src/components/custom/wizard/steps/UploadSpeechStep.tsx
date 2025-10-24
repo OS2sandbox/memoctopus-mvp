@@ -1,6 +1,6 @@
 import { FileSelectButton } from "@/components/core/FileSelectButton";
+import { RecordDialog } from "@/components/core/recording/RecordDialog";
 import { Button } from "@/components/core/shadcn/button";
-import { RecordDialog } from "@/components/custom/recording/RecordDialog";
 import { StepId, useStepper } from "@/components/custom/wizard/stepper";
 import { WizardContentPanel } from "@/components/custom/wizard/WizardContentPanel";
 import { WizardPanel } from "@/components/custom/wizard/WizardPanel";
