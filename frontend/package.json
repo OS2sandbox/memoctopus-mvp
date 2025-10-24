@@ -8,9 +8,9 @@
     "start": "next start",
     "lint": "biome check",
     "lint:fix": "biome check --write",
-    "db:setup": "node scripts/setup-db.js",
-    "db:check": "node scripts/check-db.js",
-    "db:create-schema": "node scripts/create-schema.js",
+    "db:setup": "node src/lib/scripts/setup-db.js",
+    "db:check": "node src/lib/scripts/check-db.js",
+    "db:create-schema": "node src/lib/scripts/create-schema.js",
     "db:generate": "npx @better-auth/cli generate",
     "db:migrate": "npx @better-auth/cli migrate",
     "db:init": "npm run db:create-schema"
