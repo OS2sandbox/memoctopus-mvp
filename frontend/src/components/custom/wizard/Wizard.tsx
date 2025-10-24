@@ -4,7 +4,7 @@ import { FileSelectButton } from "@/components/ui/core/FileSelectButton";
 import { RecordDialog } from "@/components/ui/core/RecordDialog";
 import { Button } from "@/components/ui/core/shadcn/button";
 
-import { Fragment } from "react";
+import { Activity, Fragment } from "react";
 import { Stepper } from "./stepper";
 import { WizardPanel } from "./WizardPanel";
 
@@ -93,13 +93,18 @@ export const Wizard = () => {
             })
           }
 
-          <Stepper.Controls className="flex justify-between">
-            {!methods.isFirst && (
-              <Button onClick={methods.prev}>Tilbage</Button>
-            )}
-            <Button onClick={methods.isLast ? methods.reset : methods.next}>
-              {methods.isLast ? "Start forfra" : "Næste"}
-            </Button>
+          <Stepper.Controls className="flex justify-between items-center mt-6">
+            <div className="min-w-[120px]">
+              <Activity mode={!methods.isFirst ? "visible" : "hidden"}>
+                <Button onClick={methods.prev}>Tilbage</Button>
+              </Activity>
+            </div>
+
+            <div className="min-w-[120px] text-right">
+              <Button onClick={methods.isLast ? methods.reset : methods.next}>
+                {methods.isLast ? "Start forfra" : "Næste"}
+              </Button>
+            </div>
           </Stepper.Controls>
         </Fragment>
       )}
