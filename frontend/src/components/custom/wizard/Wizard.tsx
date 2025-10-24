@@ -1,12 +1,13 @@
-import { WizardContentPanel } from "@/components/custom/wizard/WizardContentPanel";
+import { EditAndConfirmStep } from "@/components/custom/wizard/steps/EditAndConfirmStep";
+import { SelectPromptStep } from "@/components/custom/wizard/steps/SelectPromptStep";
+import { ShareStep } from "@/components/custom/wizard/steps/ShareStep";
+import { UploadSpeechStep } from "@/components/custom/wizard/steps/UploadSpeechStep";
+import { WizardControls } from "@/components/custom/wizard/WizardControls";
 import { WizardHeader } from "@/components/custom/wizard/WizardHeader";
-import { FileSelectButton } from "@/components/ui/core/FileSelectButton";
-import { RecordDialog } from "@/components/ui/core/RecordDialog";
-import { Button } from "@/components/ui/core/shadcn/button";
+import { WizardNavigation } from "@/components/custom/wizard/WizardNavigation";
 
-import { Activity, Fragment } from "react";
+import { Fragment } from "react";
 import { Stepper } from "./stepper";
-import { WizardPanel } from "./WizardPanel";
 
 // TODO: Implement validation and conditional step navigation
 export const Wizard = () => {
@@ -14,6 +15,15 @@ export const Wizard = () => {
     <Stepper.Provider
       labelOrientation="vertical"
       className="space-y-8 p-6 border rounded-lg bg-card w-full max-w-5xl mx-auto"
+      initialMetadata={{
+        "step-1": {
+          file: null as File | null,
+          isUploaded: false,
+        },
+        "step-2": {},
+        "step-3": {},
+        "step-4": {},
+      }}
     >
       {({ methods }) => (
         <Fragment>
@@ -22,90 +32,19 @@ export const Wizard = () => {
             infoText={methods.current.description}
           />
 
-          <Stepper.Navigation>
-            {methods.all.map((step) => (
-              <Stepper.Step
-                key={step.id}
-                of={step.id}
-                onClick={() => methods.goTo(step.id)}
-                className="flex flex-col items-center flex-1 text-center"
-              >
-                <Stepper.Title>{step.title}</Stepper.Title>
-              </Stepper.Step>
-            ))}
-          </Stepper.Navigation>
+          <WizardNavigation />
+
           {
             // TODO: Make a factory for step panels
             methods.switch({
-              "step-1": () => (
-                <WizardPanel className="flex justify-center">
-                  <WizardContentPanel>
-                    <h2 className="text-lg font-semibold text-foreground">
-                      Optag tale
-                    </h2>
-                    <p className="text-sm text-muted-foreground">
-                      Du kan optage dit møde eller anden tale her på siden.
-                    </p>
-                    <RecordDialog />
-                  </WizardContentPanel>
-                  <WizardContentPanel>
-                    <h2 className="text-lg font-semibold text-foreground">
-                      Upload tale
-                    </h2>
-                    <p className="text-sm text-muted-foreground">
-                      Upload din egen optagelse af et møde eller anden tale her.
-                    </p>
-                    <FileSelectButton fileType={"audio/*"} />
-                  </WizardContentPanel>
-                  <WizardContentPanel>
-                    <h2 className="text-lg font-semibold text-foreground">
-                      Genbrug tale
-                    </h2>
-                    <p className="text-sm text-muted-foreground">
-                      Dine optagelser og uploads ligger i systemet i en uge, så
-                      du altid kan lave en opssummering.
-                    </p>
-                    <Button>Find fil</Button>
-                  </WizardContentPanel>
-                </WizardPanel>
-              ),
-              "step-2": () => (
-                <WizardPanel>
-                  <WizardContentPanel>
-                    <h2 className="text-lg font-semibold text-foreground">
-                      Vælg Prompt
-                    </h2>
-                    <RecordDialog />
-                    this is text
-                  </WizardContentPanel>
-                </WizardPanel>
-              ),
-              "step-3": () => (
-                <WizardPanel>
-                  <p>{methods.current.description}</p>
-                </WizardPanel>
-              ),
-              "step-4": () => (
-                <WizardPanel>
-                  <p>{methods.current.description}</p>
-                </WizardPanel>
-              ),
+              "step-1": () => <UploadSpeechStep />,
+              "step-2": () => <SelectPromptStep />,
+              "step-3": () => <EditAndConfirmStep />,
+              "step-4": () => <ShareStep />,
             })
           }
 
-          <Stepper.Controls className="flex justify-between items-center mt-6">
-            <div className="min-w-[120px]">
-              <Activity mode={!methods.isFirst ? "visible" : "hidden"}>
-                <Button onClick={methods.prev}>Tilbage</Button>
-              </Activity>
-            </div>
-
-            <div className="min-w-[120px] text-right">
-              <Button onClick={methods.isLast ? methods.reset : methods.next}>
-                {methods.isLast ? "Start forfra" : "Næste"}
-              </Button>
-            </div>
-          </Stepper.Controls>
+          <WizardControls />
         </Fragment>
       )}
     </Stepper.Provider>

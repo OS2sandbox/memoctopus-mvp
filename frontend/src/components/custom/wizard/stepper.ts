@@ -1,6 +1,6 @@
 import { defineStepper } from "@/components/ui/core/shadcn/stepper";
 
-export const { Stepper, utils } = defineStepper(
+export const { Stepper, utils, useStepper } = defineStepper(
   {
     id: "step-1",
     title: "Tilføj tale",

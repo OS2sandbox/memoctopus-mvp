@@ -2,6 +2,7 @@
 
 import { LucideCheck, LucideLoaderCircle } from "lucide-react";
 
+import { useStepper } from "@/components/custom/wizard/stepper";
 import { Button } from "@/components/ui/core/shadcn/button";
 
 import { Activity, type ChangeEvent, useRef, useState } from "react";
@@ -16,14 +17,17 @@ interface FileSelectButtonProps {
  */
 export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState<boolean>(false);
-  const [isUploaded, setIsUploaded] = useState<boolean>(false);
+
+  const { setMetadata, metadata } = useStepper();
+  const selectedFile = metadata["step-1"]?.["file"] as File | null;
+  const isUploaded = metadata["step-1"]?.["isUploaded"] as boolean;
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      setSelectedFile(file);
+      const current = metadata["step-1"] ?? {};
+      setMetadata("step-1", { ...current, file });
       console.log("Selected file:", file.name);
     }
   };
@@ -41,7 +45,8 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
     window.setTimeout(() => {
       console.log("Finished uploading:", selectedFile?.name);
       setIsUploading(false);
-      setIsUploaded(true);
+      const current = metadata["step-1"] ?? {};
+      setMetadata("step-1", { ...current, isUploaded: true });
     }, fakeUploadTime);
   };
 
@@ -64,7 +69,9 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
       </Button>
       <Activity mode={selectedFile?.name ? "visible" : "hidden"}>
         <div className="flex flex-row gap-2 items-center">
-          <Button onClick={handleUpload}>Upload</Button>
+          <Button onClick={handleUpload} disabled={isUploaded}>
+            Upload
+          </Button>
 
           {isUploading ? (
             <LucideLoaderCircle className="animate-spin" />

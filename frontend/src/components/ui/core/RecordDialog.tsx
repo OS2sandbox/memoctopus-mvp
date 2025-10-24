@@ -12,11 +12,17 @@ import {
     - Implement wavesurfer library for audio visualization
     - Add controls for start, stop, pause, and playback (maybe not in MVP)
  */
-export const RecordDialog = () => {
+
+interface RecordDialogProps {
+  isRecordingDisabled?: boolean;
+}
+export const RecordDialog = ({
+  isRecordingDisabled = false,
+}: RecordDialogProps) => {
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <Button size={"lg"}>
+        <Button size={"lg"} disabled={isRecordingDisabled}>
           <LucideMic /> Optag
         </Button>
       </DialogTrigger>
