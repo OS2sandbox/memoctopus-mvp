@@ -1,5 +1,7 @@
 "use client";
 
+import { LucideCheck, LucideLoaderCircle } from "lucide-react";
+
 import { Button } from "@/components/ui/core/shadcn/button";
 
 import { Activity, type ChangeEvent, useRef, useState } from "react";
@@ -14,13 +16,15 @@ interface FileSelectButtonProps {
  */
 export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [fileName, setFileName] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [isUploaded, setIsUploaded] = useState<boolean>(false);
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      setFileName(file.name);
-      console.log("Selected file:", file);
+      setSelectedFile(file);
+      console.log("Selected file:", file.name);
     }
   };
 
@@ -30,7 +34,15 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
 
   // TODO: insert upload logic here (backend)
   const handleUpload = () => {
-    return console.log("Uploading file:", fileName);
+    setIsUploading(true);
+
+    const fakeUploadTime = Math.random() * 2000 + 1500;
+
+    window.setTimeout(() => {
+      console.log("Finished uploading:", selectedFile?.name);
+      setIsUploading(false);
+      setIsUploaded(true);
+    }, fakeUploadTime);
   };
 
   return (
@@ -46,13 +58,20 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
       <Button
         variant="outline"
         onClick={handleClick}
-        className={fileName ? "text-gray-500" : ""}
+        className={selectedFile?.name ? "text-gray-500" : ""}
       >
-        {fileName ? fileName : "Vælg fil"}
+        {selectedFile?.name ? selectedFile?.name : "Vælg fil"}
       </Button>
+      <Activity mode={selectedFile?.name ? "visible" : "hidden"}>
+        <div className="flex flex-row gap-2 items-center">
+          <Button onClick={handleUpload}>Upload</Button>
 
-      <Activity mode={fileName ? "visible" : "hidden"}>
-        <Button onClick={handleUpload}>Upload</Button>
+          {isUploading ? (
+            <LucideLoaderCircle className="animate-spin" />
+          ) : isUploaded ? (
+            <LucideCheck className=" text-green-500" />
+          ) : null}
+        </div>
       </Activity>
     </div>
   );
