@@ -1,8 +1,17 @@
 "use client";
 
-import { LucideCheck, LucideLoaderCircle } from "lucide-react";
+import {
+  LucideAlertCircle,
+  LucideCheck,
+  LucideLoaderCircle,
+} from "lucide-react";
 
 import { StepId, useStepper } from "@/components/custom/wizard/stepper";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/core/shadcn/alert";
 import { Button } from "@/components/ui/core/shadcn/button";
 
 import { Activity, type ChangeEvent, useRef, useState } from "react";
@@ -13,11 +22,12 @@ interface FileSelectButtonProps {
 
 /**
  *
- * **fileType**: Optional string to specify the accepted file type (e.g., "audio/*", "image/*").
+ * @param fileType - Optional string to specify the accepted file type *(e.g., "audio/*", "image/*")*.
  */
 export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState<boolean>(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const { setMetadata, metadata } = useStepper();
   const selectedFile = metadata[StepId.UploadSpeechStep]?.[
@@ -40,17 +50,31 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
     inputRef.current?.click();
   };
 
+  // This is NOT the actual upload logic, just a simulation; a placeholder.
   // TODO: insert upload logic here (backend)
   const handleUpload = () => {
     setIsUploading(true);
+    setUploadError(null);
 
     const fakeUploadTime = Math.random() * 2000 + 1500;
+    const shouldFail = Math.random() < 0.3; // 30% chance to fail
 
     window.setTimeout(() => {
-      console.log("Finished uploading:", selectedFile?.name);
-      setIsUploading(false);
-      const current = metadata[StepId.UploadSpeechStep] ?? {};
-      setMetadata(StepId.UploadSpeechStep, { ...current, isCompleted: true });
+      try {
+        setIsUploading(false);
+
+        if (shouldFail) {
+          throw new Error("Network error: could not upload file.");
+        }
+
+        const current = metadata[StepId.UploadSpeechStep] ?? {};
+        setMetadata(StepId.UploadSpeechStep, { ...current, isCompleted: true });
+      } catch (error) {
+        setUploadError(
+          "Error occurred while uploading: " +
+            (error instanceof Error ? error.message : "Unknown error"),
+        );
+      }
     }, fakeUploadTime);
   };
 
@@ -71,19 +95,24 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
       >
         {selectedFile?.name ? selectedFile?.name : "Vælg fil"}
       </Button>
-      <Activity mode={selectedFile?.name ? "visible" : "hidden"}>
-        <div className="flex flex-row gap-2 items-center">
-          <Button onClick={handleUpload} disabled={isUploaded}>
-            Upload
-          </Button>
-
-          {isUploading ? (
-            <LucideLoaderCircle className="animate-spin" />
-          ) : isUploaded ? (
-            <LucideCheck className=" text-green-500" />
-          ) : null}
-        </div>
+      <Activity mode={uploadError ? "visible" : "hidden"}>
+        <Alert variant="destructive">
+          <LucideAlertCircle />
+          <AlertTitle>Upload failed</AlertTitle>
+          <AlertDescription>{uploadError}</AlertDescription>
+        </Alert>
       </Activity>
+      <div className="flex flex-row gap-2 items-center">
+        <Button onClick={handleUpload} disabled={isUploaded}>
+          Upload
+        </Button>
+
+        {isUploading ? (
+          <LucideLoaderCircle className="animate-spin" />
+        ) : isUploaded ? (
+          <LucideCheck className="text-green-500" />
+        ) : null}
+      </div>
     </div>
   );
 };

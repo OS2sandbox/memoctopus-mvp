@@ -7,9 +7,10 @@ export enum StepId {
   ShareStep = "step-4",
 }
 
+// TODO: isCompleted should be set for all steps (to false initially)
 export const defaultMetadata = {
   file: null as File | null,
-  isCompleted: false,
+  isCompleted: true,
 };
 
 export const { Stepper, utils, useStepper } = defineStepper(
