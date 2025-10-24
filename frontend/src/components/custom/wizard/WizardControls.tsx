@@ -1,11 +1,13 @@
-import { Stepper, useStepper } from "@/components/custom/wizard/stepper";
+import { Stepper, Steps, useStepper } from "@/components/custom/wizard/stepper";
 import { Button } from "@/components/ui/core/shadcn/button";
 
 import { Activity } from "react";
 
 export const WizardControls = () => {
   const { isFirst, prev, isLast, reset, next, metadata } = useStepper();
-  const isUploaded = metadata["step-1"]?.["isUploaded"] as boolean;
+  const isUploaded = metadata[Steps.UploadSpeechStep]?.[
+    "isUploaded"
+  ] as boolean;
 
   return (
     <Stepper.Controls className="flex justify-between items-center mt-6">
@@ -16,7 +18,7 @@ export const WizardControls = () => {
       </div>
 
       <div className="min-w-[120px] text-right">
-        <Button disabled={isUploaded} onClick={isLast ? reset : next}>
+        <Button disabled={!isUploaded} onClick={isLast ? reset : next}>
           {isLast ? "Start forfra" : "Næste"}
         </Button>
       </div>

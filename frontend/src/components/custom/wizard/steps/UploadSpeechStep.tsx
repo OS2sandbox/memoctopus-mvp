@@ -1,4 +1,4 @@
-import { useStepper } from "@/components/custom/wizard/stepper";
+import { Steps, useStepper } from "@/components/custom/wizard/stepper";
 import { WizardContentPanel } from "@/components/custom/wizard/WizardContentPanel";
 import { WizardPanel } from "@/components/custom/wizard/WizardPanel";
 import { FileSelectButton } from "@/components/ui/core/FileSelectButton";
@@ -8,7 +8,9 @@ import { useWarnBeforeUnload } from "@/lib/hooks/use-warn-before-unload";
 
 export const UploadSpeechStep = () => {
   const { metadata } = useStepper();
-  const isUploaded = metadata["step-1"]?.["isUploaded"] as boolean;
+  const isUploaded = metadata[Steps.UploadSpeechStep]?.[
+    "isUploaded"
+  ] as boolean;
 
   useWarnBeforeUnload(isUploaded);
 
