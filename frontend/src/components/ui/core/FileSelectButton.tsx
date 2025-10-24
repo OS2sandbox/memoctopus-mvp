@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/core/shadcn/button";
 
-import { type ChangeEvent, useRef, useState } from "react";
+import { Activity, type ChangeEvent, useRef, useState } from "react";
 
 interface FileSelectButtonProps {
   fileType?: string;
@@ -28,6 +28,11 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
     inputRef.current?.click();
   };
 
+  // TODO: insert upload logic here (backend)
+  const handleUpload = () => {
+    return console.log("Uploading file:", fileName);
+  };
+
   return (
     <div className="flex flex-col items-start gap-2">
       <input
@@ -38,15 +43,17 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
         className="hidden"
       />
 
-      <Button onClick={handleClick}>
-        {fileName ? "Vælg en ny fil" : "Vælg fil"}
+      <Button
+        variant="outline"
+        onClick={handleClick}
+        className={fileName ? "text-gray-500" : ""}
+      >
+        {fileName ? fileName : "Vælg fil"}
       </Button>
 
-      {fileName && (
-        <p className="text-sm text-muted-foreground">
-          Valgt fil: <span className="font-medium">{fileName}</span>
-        </p>
-      )}
+      <Activity mode={fileName ? "visible" : "hidden"}>
+        <Button onClick={handleUpload}>Upload</Button>
+      </Activity>
     </div>
   );
 };
