@@ -1,3 +1,4 @@
+import { useAudioLevels } from "@/lib/hooks/use-audio-levels";
 import { useWarnBeforeUnload } from "@/lib/hooks/use-warn-before-unload";
 
 import { useEffect, useRef, useState } from "react";
@@ -35,7 +36,9 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
   // timeout is 1 second, thus 1 increment per second
   const startTimer = () => {
     setTime(0);
-    window.setInterval(() => setTime((t) => t + 1), 1000);
+    timerRef.current = window.setInterval(() => {
+      setTime((prevTime) => prevTime + 1);
+    }, 1000);
   };
 
   const stopTimer = () => {
@@ -114,6 +117,8 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
     }
   };
 
+  const audioLevel = useAudioLevels(status === RecorderStatus.Recording);
+
   const reset = () => {
     setStatus(RecorderStatus.Idle);
     setError(null);
@@ -128,6 +133,7 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
   }, []);
 
   return {
+    audioLevel,
     status,
     isRecording: status === RecorderStatus.Recording,
     blob,
