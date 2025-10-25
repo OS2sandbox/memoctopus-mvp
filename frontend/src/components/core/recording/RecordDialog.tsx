@@ -1,5 +1,12 @@
-import { LucideMic, LucidePause, LucidePlay, LucideSquare } from "lucide-react";
+import {
+  LucideAlertCircle,
+  LucideMic,
+  LucidePause,
+  LucidePlay,
+  LucideSquare,
+} from "lucide-react";
 
+import { Alert, AlertTitle } from "@/components/core/shadcn/alert";
 import { Button } from "@/components/core/shadcn/button";
 import {
   Dialog,
@@ -11,6 +18,8 @@ import {
 import { StepId, useStepper } from "@/components/custom/wizard/stepper";
 import { RecorderStatus, useRecorder } from "@/lib/hooks/use-recorder";
 import { formatTime } from "@/lib/utils";
+
+import { Activity } from "react";
 
 interface RecordDialogProps {
   isRecordingDisabled?: boolean;
@@ -131,12 +140,12 @@ export const RecordDialog = ({
             preload="metadata"
           />
         )}
-        {
-          // TODO: Make a shadcn alert
-          error && (
-            <p className="text-sm text-destructive mt-4 text-center">{error}</p>
-          )
-        }
+        <Activity mode={error ? "visible" : "hidden"}>
+          <Alert variant="destructive">
+            <LucideAlertCircle />
+            <AlertTitle>{error}</AlertTitle>
+          </Alert>
+        </Activity>
       </DialogContent>
     </Dialog>
   );
