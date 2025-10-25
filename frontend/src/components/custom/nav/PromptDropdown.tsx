@@ -1,12 +1,12 @@
 "use client";
 
-import { Button } from "@/components/ui/core/shadcn/button";
+import { Button } from "@/components/core/shadcn/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/core/shadcn/dropdown-menu";
+} from "@/components/core/shadcn/dropdown-menu";
 
 import Link from "next/link";
 

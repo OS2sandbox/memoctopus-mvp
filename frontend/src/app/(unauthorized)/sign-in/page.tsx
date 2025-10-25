@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@/components/ui/core/shadcn/button";
+import { Button } from "@/components/core/shadcn/button";
 import {
   Field,
   FieldDescription,
@@ -9,8 +9,8 @@ import {
   FieldLegend,
   FieldSeparator,
   FieldSet,
-} from "@/components/ui/core/shadcn/field";
-import { Input } from "@/components/ui/core/shadcn/input";
+} from "@/components/core/shadcn/field";
+import { Input } from "@/components/core/shadcn/input";
 import { signIn, signUp } from "@/lib/auth-client";
 
 import { type FormEvent, Fragment, useState } from "react";

@@ -1,12 +1,12 @@
 "use client";
 
-import { Avatar, AvatarFallback } from "@/components/ui/core/shadcn/avatar";
-import { Button } from "@/components/ui/core/shadcn/button";
+import { Avatar, AvatarFallback } from "@/components/core/shadcn/avatar";
+import { Button } from "@/components/core/shadcn/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from "@/components/ui/core/shadcn/dropdown-menu";
+} from "@/components/core/shadcn/dropdown-menu";
 import { signOut, type User, useSession } from "@/lib/auth-client";
 import { getInitials } from "@/lib/utils";
 

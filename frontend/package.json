@@ -25,6 +25,7 @@
     "@radix-ui/react-separator": "^1.1.7",
     "@radix-ui/react-slot": "^1.2.3",
     "@stepperize/react": "^5.1.9",
+    "@wavesurfer/react": "^1.0.11",
     "better-auth": "latest",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
@@ -35,7 +36,8 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tailwind-merge": "^2.5.2",
-    "tailwindcss-animate": "^1.0.7"
+    "tailwindcss-animate": "^1.0.7",
+    "wavesurfer.js": "^7.11.0"
   },
   "devDependencies": {
     "@better-auth/cli": "latest",
