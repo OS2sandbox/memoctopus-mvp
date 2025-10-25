@@ -28,11 +28,9 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
   const { setMetadata, metadata } = useStepper();
-  const selectedFile = metadata[StepId.UploadSpeechStep]?.[
-    "file"
-  ] as File | null;
   const isUploaded = metadata[StepId.UploadSpeechStep]?.[
     "isCompleted"
   ] as boolean;
@@ -40,9 +38,8 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      const current = metadata[StepId.UploadSpeechStep] ?? {};
-      setMetadata(StepId.UploadSpeechStep, { ...current, file });
-      console.log("Selected file:", file.name);
+      setSelectedFile(file);
+      setMetadata(StepId.UploadSpeechStep, { ...selectedFile, file });
     }
   };
 

@@ -51,8 +51,13 @@ export const RecordDialog = ({
     stop,
     reset,
   } = useRecorder({
+    // TODO: should be done manually
     autoSave: (file) =>
-      setMetadata(StepId.UploadSpeechStep, { ...currentMetadata, file }),
+      setMetadata(StepId.UploadSpeechStep, {
+        ...currentMetadata,
+        file,
+        isCompleted: true,
+      }),
   });
 
   return (
