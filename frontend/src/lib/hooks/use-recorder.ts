@@ -74,7 +74,7 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
         setStatus(RecorderStatus.Stopped);
         stopTimer();
 
-        // TODO: Consider if we need autosave and just manual save options
+        // TODO: Consider if we need autosave or just manual save options
         autoSave?.(file);
       };
 

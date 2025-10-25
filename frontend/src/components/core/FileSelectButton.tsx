@@ -98,6 +98,7 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
       >
         {selectedFile?.name ? selectedFile?.name : "Vælg fil"}
       </Button>
+
       <Activity mode={uploadError ? "visible" : "hidden"}>
         <Alert variant="destructive">
           <LucideAlertCircle />
@@ -105,17 +106,20 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
           <AlertDescription>{uploadError}</AlertDescription>
         </Alert>
       </Activity>
-      <div className="flex flex-row gap-2 items-center">
-        <Button onClick={handleUpload} disabled={isUploaded}>
-          Upload
-        </Button>
 
-        {isUploading ? (
-          <LucideLoaderCircle className="animate-spin" />
-        ) : isUploaded ? (
-          <LucideCheck className="text-green-500" />
-        ) : null}
-      </div>
+      <Activity mode={selectedFile ? "visible" : "hidden"}>
+        <div className="flex flex-row gap-2 items-center">
+          <Button onClick={handleUpload} disabled={isUploaded}>
+            Upload
+          </Button>
+
+          {isUploading ? (
+            <LucideLoaderCircle className="animate-spin" />
+          ) : isUploaded ? (
+            <LucideCheck className="text-green-500" />
+          ) : null}
+        </div>
+      </Activity>
     </div>
   );
 };

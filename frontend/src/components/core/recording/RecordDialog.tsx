@@ -58,7 +58,6 @@ export const RecordDialog = ({
         <DialogHeader>
           <DialogTitle>Optag tale</DialogTitle>
         </DialogHeader>
-        ew
         <div className="relative flex items-center justify-center">
           <div
             className="absolute rounded-full bg-muted transition-transform duration-75 ease-out"
