@@ -29,11 +29,8 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
   const timerRef = useRef<number | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
 
-  // const level
-
   useWarnBeforeUnload(status === RecorderStatus.Recording);
 
-  // timeout is 1 second, thus 1 increment per second
   const startTimer = () => {
     setTime(0);
     timerRef.current = window.setInterval(() => {

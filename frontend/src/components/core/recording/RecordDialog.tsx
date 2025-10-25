@@ -8,20 +8,26 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/core/shadcn/dialog";
+import { StepId, useStepper } from "@/components/custom/wizard/stepper";
 import { RecorderStatus, useRecorder } from "@/lib/hooks/use-recorder";
-
-/* TODO: Add recording functionality:
-    - Integrate recording library
-    - Implement wavesurfer library for audio visualization
-    - Add controls for start, stop, pause, and playback (maybe not in MVP)
- */
+import { formatTime } from "@/lib/utils";
 
 interface RecordDialogProps {
   isRecordingDisabled?: boolean;
 }
+
+/* TODO: Add recording functionality:
+    - Implement wavesurfer library for audio visualization
+    - Consider whether to use Wavesurfer MicrophonePlugin or not
+ */
+
 export const RecordDialog = ({
   isRecordingDisabled = false,
 }: RecordDialogProps) => {
+  const { setMetadata, metadata } = useStepper();
+
+  const currentMetadata = metadata[StepId.UploadSpeechStep] ?? {};
+
   const {
     status,
     isRecording,
@@ -35,15 +41,10 @@ export const RecordDialog = ({
     resume,
     stop,
     reset,
-  } = useRecorder({ autoSave: (file) => console.log("Saved:", file) });
-
-  const formatTime = (seconds: number) => {
-    const m = Math.floor(seconds / 60)
-      .toString()
-      .padStart(2, "0");
-    const s = (seconds % 60).toString().padStart(2, "0");
-    return `${m}:${s}`;
-  };
+  } = useRecorder({
+    autoSave: (file) =>
+      setMetadata(StepId.UploadSpeechStep, { ...currentMetadata, file }),
+  });
 
   return (
     <Dialog>
@@ -75,14 +76,12 @@ export const RecordDialog = ({
             } transition-colors duration-300`}
           />
         </div>
-        {/* ⏱ Time counter */}
         <div className="text-sm text-muted-foreground">
           {status === RecorderStatus.Recording ||
           status === RecorderStatus.Paused
             ? `Tid: ${formatTime(time)}`
             : null}
         </div>
-        {/* 🔘 Control buttons */}
         <div className="flex gap-3">
           {status === RecorderStatus.Idle && (
             <Button onClick={start}>

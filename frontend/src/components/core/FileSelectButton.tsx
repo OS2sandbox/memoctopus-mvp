@@ -67,8 +67,11 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
           throw new Error("Network error: could not upload file.");
         }
 
-        const current = metadata[StepId.UploadSpeechStep] ?? {};
-        setMetadata(StepId.UploadSpeechStep, { ...current, isCompleted: true });
+        const currentMetadata = metadata[StepId.UploadSpeechStep] ?? {};
+        setMetadata(StepId.UploadSpeechStep, {
+          ...currentMetadata,
+          isCompleted: true,
+        });
       } catch (error) {
         setUploadError(
           "Error occurred while uploading: " +
