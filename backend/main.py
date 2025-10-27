@@ -9,9 +9,12 @@ load_dotenv()
 
 app = FastAPI()
 
-OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
-OPENAI_TRANSCRIPTION_URL = "https://api.openai.com/v1/audio/transcriptions"
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Construct full URLs from base URL
+OPENAI_CHAT_URL = f"{OPENAI_BASE_URL}/chat/completions"
+OPENAI_TRANSCRIPTION_URL = f"{OPENAI_BASE_URL}/audio/transcriptions"
 
 
 async def stream_openai_response(client: httpx.AsyncClient, url: str, body: dict, headers: dict):
