@@ -29,6 +29,7 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const currMetadata = useStepper().metadata[StepId.UploadSpeechStep] ?? {};
 
   const { setMetadata, metadata } = useStepper();
   const isUploaded = metadata[StepId.UploadSpeechStep]?.[
@@ -39,7 +40,7 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
     const file = event.target.files?.[0];
     if (file) {
       setSelectedFile(file);
-      setMetadata(StepId.UploadSpeechStep, { ...selectedFile, file });
+      setMetadata(StepId.UploadSpeechStep, { ...currMetadata, file });
     }
   };
 
@@ -91,6 +92,7 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
       <Button
         variant="outline"
         onClick={handleClick}
+        disabled={isUploaded}
         className={selectedFile?.name ? "text-gray-500" : ""}
       >
         {selectedFile?.name ? selectedFile?.name : "Vælg fil"}
