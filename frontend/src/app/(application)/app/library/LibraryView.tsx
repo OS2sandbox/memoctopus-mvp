@@ -1,12 +1,15 @@
+import { PromptTable } from "@/components/custom/prompt-library/PromptTable";
+
 export const LibraryView = () => {
   return (
-    <main className="min-h-screen flex flex-col items-center px-6 py-16 space-y-12">
-      <p>
-        Lorem ipsum dolor sit amet, consectetur adipiscing elit. Phasellus
-        convallis cursus luctus. Nunc sed mi quam. Maecenas pharetra dapibus
-        massa nec molestie. Praesent placerat elit vel accumsan elementum. In
-        hac habitasse platea dictumst.
-      </p>
+    <main className="min-h-screen flex flex-col items-center px-6 py-16 space-y-6">
+      <h1 className="text-2xl font-semibold">Prompt-bibliotek</h1>
+      <div className="flex flex-col w-full items-center justify-center pb-4">
+        <p>Find et prompt og tilføj det til dine prompts.</p>
+        <p>Du kan også oprette et nyt prompt.</p>
+      </div>
+
+      <PromptTable />
     </main>
   );
 };
