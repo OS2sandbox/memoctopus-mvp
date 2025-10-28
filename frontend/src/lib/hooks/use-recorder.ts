@@ -31,6 +31,14 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
 
   useWarnBeforeUnload(status === RecorderStatus.Recording);
 
+  const stopActiveStream = () => {
+    const stream = streamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+  };
+
   const startTimer = () => {
     setTime(0);
     timerRef.current = window.setInterval(() => {
@@ -68,9 +76,6 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
         setBlob(blob);
         setFile(file);
         setUrl(url);
-
-        stream.getTracks().forEach((track) => track.stop());
-
         setStatus(RecorderStatus.Stopped);
         stopTimer();
 
@@ -108,17 +113,25 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
   };
 
   const stop = () => {
-    if (mediaRecorderRef.current && status !== RecorderStatus.Idle) {
-      mediaRecorderRef.current.stop();
+    const rec = mediaRecorderRef.current;
+
+    if (rec && status !== RecorderStatus.Idle) {
+      rec.stop();
+      stopActiveStream();
       stopTimer();
     }
   };
 
-  const audioLevel = useAudioLevels(status === RecorderStatus.Recording);
+  const audioLevel = useAudioLevels(streamRef.current);
 
   const reset = () => {
+    stopTimer();
+    stopActiveStream();
+
     setStatus(RecorderStatus.Idle);
     setError(null);
+
+    if (url) URL.revokeObjectURL(url);
     setUrl(null);
     setFile(null);
     setBlob(null);
@@ -126,7 +139,10 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
   };
 
   useEffect(() => {
-    return () => stopTimer();
+    return () => {
+      stopTimer();
+      stopActiveStream();
+    };
   }, []);
 
   return {

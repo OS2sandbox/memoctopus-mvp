@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 
-export const useAudioLevels = (isRecording: boolean): number => {
+export const useAudioLevels = (stream: MediaStream | null): number => {
   const [audioLevel, setAudioLevel] = useState(0);
 
   useEffect(() => {
-    if (!isRecording) return;
+    if (!stream) return;
 
     const setupAudio = async (): Promise<() => void> => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -32,8 +32,9 @@ export const useAudioLevels = (isRecording: boolean): number => {
 
       return (): void => {
         source.disconnect();
+        stream.getTracks().forEach((track) => track.stop());
         analyser.disconnect();
-        audioContext.close();
+        audioContext.close().catch(console.error);
       };
     };
 
@@ -42,7 +43,7 @@ export const useAudioLevels = (isRecording: boolean): number => {
     return () => {
       cleanupPromise.then((cleanup) => cleanup()).catch(console.error);
     };
-  }, [isRecording]);
+  }, [stream]);
 
   return audioLevel;
 };
