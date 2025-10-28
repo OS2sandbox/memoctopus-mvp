@@ -26,6 +26,7 @@
     "@radix-ui/react-slot": "^1.2.3",
     "@radix-ui/react-switch": "^1.2.6",
     "@stepperize/react": "^5.1.9",
+    "@tanstack/react-table": "^8.21.3",
     "@wavesurfer/react": "^1.0.11",
     "better-auth": "latest",
     "class-variance-authority": "^0.7.0",

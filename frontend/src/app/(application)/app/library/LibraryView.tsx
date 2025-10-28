@@ -1,4 +1,4 @@
-import { PromptTable } from "@/components/custom/prompt-library/PromptTable";
+import { PromptTable } from "@/components/custom/prompt-library/table/PromptTable";
 
 export const LibraryView = () => {
   return (
