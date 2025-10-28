@@ -1,9 +1,9 @@
+import { FileSelectButton } from "@/components/core/FileSelectButton";
+import { RecordDialog } from "@/components/core/recording/RecordDialog";
+import { Button } from "@/components/core/shadcn/button";
 import { StepId, useStepper } from "@/components/custom/wizard/stepper";
 import { WizardContentPanel } from "@/components/custom/wizard/WizardContentPanel";
 import { WizardPanel } from "@/components/custom/wizard/WizardPanel";
-import { FileSelectButton } from "@/components/ui/core/FileSelectButton";
-import { RecordDialog } from "@/components/ui/core/RecordDialog";
-import { Button } from "@/components/ui/core/shadcn/button";
 import { useWarnBeforeUnload } from "@/lib/hooks/use-warn-before-unload";
 
 export const UploadSpeechStep = () => {
