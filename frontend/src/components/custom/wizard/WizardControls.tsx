@@ -14,6 +14,7 @@ export const WizardControls = () => {
     useStepper();
   const isCompleted = metadata[current.id]?.["isCompleted"] as boolean;
   const currentFile = metadata[current.id]?.["file"] as boolean;
+  const isFirstStep = current.id === StepId.UploadSpeechStep;
 
   return (
     <Stepper.Controls className="flex justify-between items-center mt-6">
@@ -24,7 +25,7 @@ export const WizardControls = () => {
       </div>
 
       <div className="min-w-[120px] text-right flex gap-2 justify-end">
-        <Activity mode={currentFile ? "visible" : "hidden"}>
+        <Activity mode={currentFile && isFirstStep ? "visible" : "hidden"}>
           <Button
             variant="destructive"
             onClick={() =>
