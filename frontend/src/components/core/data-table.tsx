@@ -22,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/core/shadcn/table";
-import { AddPromptDialog } from "@/components/custom/prompt-library/AddPromptDialog";
+import { PromptDialog } from "@/components/custom/prompt-library/PromptDialog";
 import type { Prompt } from "@/components/custom/prompt-library/table/Columns";
 
 import { useState } from "react";
@@ -64,7 +64,7 @@ export function DataTable<TData, TValue>({
           }
           className="max-w-xs"
         />
-        {onAdd && <AddPromptDialog onAdd={onAdd as (data: Prompt) => void} />}
+        {onAdd && <PromptDialog onSubmit={onAdd as (data: Prompt) => void} />}
       </div>
 
       <div className="rounded-md border">

@@ -10,6 +10,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/core/shadcn/tooltip";
+import { PromptDialog } from "@/components/custom/prompt-library/PromptDialog";
 import { ViewPromptAction } from "@/components/custom/prompt-library/ViewPromptAction";
 import { type User, useSession } from "@/lib/auth-client";
 
@@ -33,11 +34,13 @@ export interface Prompt {
 interface getColumnsProps {
   handleToggleFavorite: (id: string, checked: boolean) => void;
   handleDeletePrompt: (id: string) => void;
+  handleUpdatePrompt: (prompt: Prompt) => void;
 }
 
 export const getColumns = ({
   handleToggleFavorite,
   handleDeletePrompt,
+  handleUpdatePrompt,
 }: getColumnsProps): ColumnDef<Prompt>[] => [
   {
     accessorKey: "isFavorite",
@@ -96,9 +99,15 @@ export const getColumns = ({
           <Tooltip>
             <TooltipTrigger asChild>
               <span className="inline-flex">
-                <Button variant="ghost" size="icon" disabled={!canEditOrDelete}>
-                  <LucidePencil />
-                </Button>
+                <PromptDialog
+                  editOpts={{ initialPrompt: prompt }}
+                  onSubmit={handleUpdatePrompt}
+                  trigger={
+                    <Button disabled={!canEditOrDelete} variant="ghost">
+                      <LucidePencil />
+                    </Button>
+                  }
+                />
               </span>
             </TooltipTrigger>
             <TooltipContent>

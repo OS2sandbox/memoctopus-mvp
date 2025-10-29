@@ -38,21 +38,35 @@ export const PromptTable = () => {
     },
   ]);
 
+  // Placeholder for favorite toggle functionality
   const handleToggleFavorite = (id: string, checked: boolean) => {
     setPrompts((prev) =>
       prev.map((p) => (p.id === id ? { ...p, isFavorite: checked } : p)),
     );
   };
 
+  // Placeholder for delete functionality
   const handleDeletePrompt = (id: string) => {
     setPrompts((prev) => prev.filter((p) => p.id !== id));
   };
 
-  const columns = getColumns({ handleToggleFavorite, handleDeletePrompt });
-
+  // Placeholder for add functionality
   const handleAddPrompt = (newPrompt: Prompt) => {
     setPrompts((prev) => [...prev, newPrompt]);
   };
+
+  // Placeholder for update functionality
+  const handleUpdatePrompt = (updatedPrompt: Prompt) => {
+    setPrompts((prev) =>
+      prev.map((p) => (p.id === updatedPrompt.id ? updatedPrompt : p)),
+    );
+  };
+
+  const columns = getColumns({
+    handleToggleFavorite,
+    handleDeletePrompt,
+    handleUpdatePrompt,
+  });
 
   return (
     <section className="space-y-4 w-full max-w-5xl">

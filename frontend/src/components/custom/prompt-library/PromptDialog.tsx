@@ -1,7 +1,7 @@
 // 'frontend/src/components/custom/prompt-library/AddPromptDialog.tsx'
 "use client";
 
-import { LucideAlertCircle, LucidePlus } from "lucide-react";
+import { LucideAlertCircle, LucidePencil, LucidePlus } from "lucide-react";
 
 import { Alert, AlertTitle } from "@/components/core/shadcn/alert";
 import { Button } from "@/components/core/shadcn/button";
@@ -34,7 +34,7 @@ import {
 } from "@/components/custom/prompt-library/table/Columns";
 import { type User, useSession } from "@/lib/auth-client";
 
-import { Activity, useState } from "react";
+import { Activity, type ReactNode, useState } from "react";
 
 const DEFAULT_PROMPT: Prompt = {
   id: "",
@@ -45,64 +45,80 @@ const DEFAULT_PROMPT: Prompt = {
   isFavorite: false,
 };
 
-interface AddPromptDialogProps {
-  onAdd: (data: Prompt) => void;
+// if editOpts is provided, the dialog will be in edit mode
+interface PromptDialogProps {
+  editOpts?: {
+    initialPrompt: Prompt;
+  };
+  onSubmit: (data: Prompt) => void;
+  trigger?: ReactNode;
 }
 
 // TODO: Make the dialog required and validate the fields
 
-export const AddPromptDialog = ({ onAdd }: AddPromptDialogProps) => {
-  const [prompt, setPrompt] = useState<Prompt>(DEFAULT_PROMPT);
-  const [open, setOpen] = useState<boolean>(false);
+export const PromptDialog = ({
+  editOpts,
+  onSubmit,
+  trigger,
+}: PromptDialogProps) => {
+  const { initialPrompt } = editOpts || {};
+
+  const isEditMode = !!initialPrompt;
+  const [prompt, setPrompt] = useState<Prompt>(initialPrompt ?? DEFAULT_PROMPT);
+  const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const { data: session } = useSession();
   const user = session?.user as User | null;
-
   const PromptCategoryOptions = Object.values(PromptCategory);
 
   const validatePrompt = (p: Prompt): string | null => {
-    if (!p.name.trim() || !p.text.trim())
+    if (!p.name.trim() || !p.text.trim()) {
       return "Tekstfelter kan ikke være tomme.";
+    }
     return null;
   };
 
-  const handleAdd = () => {
+  const handleSubmit = () => {
     const validationError = validatePrompt(prompt);
-
     if (validationError) {
       setError(validationError);
       return;
     }
 
-    const id = Math.random().toString(36).slice(2);
+    const id = isEditMode ? prompt.id : Math.random().toString(36).slice(2);
 
     const newPrompt: Prompt = {
       ...prompt,
       id,
       creator: {
-        id: user.id,
-        name: user.name,
+        id: user?.id ?? "",
+        name: user?.name ?? "",
       },
     };
 
-    onAdd(newPrompt);
-    setOpen(false);
+    onSubmit(newPrompt);
     setError(null);
-    setPrompt(DEFAULT_PROMPT);
+    setOpen(false);
+    if (!isEditMode) setPrompt(DEFAULT_PROMPT);
   };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button>
-          <LucidePlus />
-          Tilføj prompt
-        </Button>
+        {trigger ?? (
+          <Button variant={isEditMode ? "secondary" : "default"}>
+            {isEditMode ? <LucidePencil /> : <LucidePlus />}
+            {isEditMode ? "Rediger prompt" : "Tilføj prompt"}
+          </Button>
+        )}
       </DialogTrigger>
+
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Opret ny prompt</DialogTitle>
+          <DialogTitle>
+            {isEditMode ? "Rediger prompt" : "Opret ny prompt"}
+          </DialogTitle>
         </DialogHeader>
 
         <FieldSet>
@@ -159,6 +175,7 @@ export const AddPromptDialog = ({ onAdd }: AddPromptDialogProps) => {
             </Field>
           </FieldGroup>
         </FieldSet>
+
         <DialogFooter className="sm:justify-between">
           <div className="mr-auto">
             <Activity mode={error ? "visible" : "hidden"}>
@@ -166,14 +183,14 @@ export const AddPromptDialog = ({ onAdd }: AddPromptDialogProps) => {
                 variant="destructive"
                 className="p-0 px-2 py-1.5 justify-start items-center w-fit"
               >
-                <LucideAlertCircle className={"mb-1"} />
+                <LucideAlertCircle className="mb-1" />
                 <AlertTitle>{error}</AlertTitle>
               </Alert>
             </Activity>
           </div>
 
-          <Button onClick={handleAdd} disabled={!user || !user.id}>
-            Tilføj
+          <Button onClick={handleSubmit} disabled={!user || !user.id}>
+            {isEditMode ? "Gem ændringer" : "Tilføj"}
           </Button>
         </DialogFooter>
       </DialogContent>
