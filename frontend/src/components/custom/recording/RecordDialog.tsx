@@ -25,11 +25,6 @@ interface RecordDialogProps {
   isRecordingDisabled?: boolean;
 }
 
-/* TODO: Add recording functionality:
-    - Implement wavesurfer library for audio visualization
-    - Consider whether to use Wavesurfer MicrophonePlugin or not
- */
-
 export const RecordDialog = ({
   isRecordingDisabled = false,
 }: RecordDialogProps) => {
@@ -51,7 +46,6 @@ export const RecordDialog = ({
     stop,
     reset,
   } = useRecorder({
-    // TODO: should be done manually
     autoSave: (file) =>
       setMetadata(StepId.UploadSpeechStep, {
         ...currentMetadata,

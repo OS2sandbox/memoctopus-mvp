@@ -1,10 +1,11 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
-import { Eye, Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/core/shadcn/button";
 import { Switch } from "@/components/core/shadcn/switch";
+import { ViewPromptAction } from "@/components/custom/prompt-library/ViewPromptAction";
 import { type User, useSession } from "@/lib/auth-client";
 
 export interface Prompt {
@@ -13,6 +14,7 @@ export interface Prompt {
   creator: Pick<User, "name" | "id">;
   category: string;
   isFavorite: boolean;
+  text: string;
 }
 
 export const getColumns = (
@@ -63,9 +65,7 @@ export const getColumns = (
 
       return (
         <div className="flex items-center justify-center gap-1">
-          <Button variant="ghost" size="icon">
-            <Eye className="h-4 w-4" />
-          </Button>
+          <ViewPromptAction promptText={prompt.text} />
 
           {canEditOrDelete && (
             <Button variant="ghost" size="icon">

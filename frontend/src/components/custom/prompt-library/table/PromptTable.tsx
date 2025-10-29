@@ -16,6 +16,7 @@ export const PromptTable = () => {
       creator: { id: "123", name: "Party Lars" },
       category: "Beslutningsreferat",
       isFavorite: true,
+      text: "Lav et beslutningsreferat for mødet afholdt den 12. marts 2024, hvor følgende punkter blev diskuteret: budgetgodkendelse, projektstatus og kommende arrangementer.",
     },
     {
       id: "2",
@@ -23,6 +24,7 @@ export const PromptTable = () => {
       creator: { id: "123", name: "Party Lars" },
       category: "API",
       isFavorite: false,
+      text: "Lorem Ipsum Dolor Sit Amet",
     },
     {
       id: "3",
@@ -30,6 +32,7 @@ export const PromptTable = () => {
       creator: { id: "1234", name: "Camilla Nielsen" },
       category: "To do liste",
       isFavorite: false,
+      text: "Lorem Ipsum Dolor Sit Amet 2",
     },
   ]);
 
