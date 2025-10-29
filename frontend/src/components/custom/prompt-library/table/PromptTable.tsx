@@ -44,10 +44,14 @@ export const PromptTable = () => {
 
   const columns = getColumns(handleToggleFavorite);
 
+  const handleAddPrompt = (newPrompt: Prompt) => {
+    setPrompts((prev) => [...prev, newPrompt]);
+  };
+
   return (
     <section className="space-y-4 w-full max-w-5xl">
       <h2 className="text-2xl font-semibold">Prompt-bibliotek</h2>
-      <DataTable columns={columns} data={prompts} />
+      <DataTable columns={columns} data={prompts} onAdd={handleAddPrompt} />
     </section>
   );
 };

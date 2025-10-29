@@ -1,6 +1,5 @@
 "use client";
 
-import { Dialog } from "@radix-ui/react-dialog";
 import {
   type ColumnDef,
   type ColumnFiltersState,
@@ -12,10 +11,8 @@ import {
   type SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import { LucidePlus } from "lucide-react";
 
 import { Button } from "@/components/core/shadcn/button";
-import { DialogContent, DialogTrigger } from "@/components/core/shadcn/dialog";
 import { Input } from "@/components/core/shadcn/input";
 import {
   Table,
@@ -25,17 +22,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/core/shadcn/table";
+import { AddPromptDialog } from "@/components/custom/prompt-library/AddPromptDialog";
+import type { Prompt } from "@/components/custom/prompt-library/table/Columns";
 
 import { useState } from "react";
 
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
+  onAdd?: (column: TData) => void;
 }
 
 export function DataTable<TData, TValue>({
   columns,
   data,
+  onAdd,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -63,15 +64,7 @@ export function DataTable<TData, TValue>({
           }
           className="max-w-xs"
         />
-        <Dialog>
-          <DialogTrigger asChild>
-            <Button>
-              <LucidePlus />
-              Tilføj prompt
-            </Button>
-          </DialogTrigger>
-          <DialogContent></DialogContent>
-        </Dialog>
+        {onAdd && <AddPromptDialog onAdd={onAdd as (data: Prompt) => void} />}
       </div>
 
       <div className="rounded-md border">
