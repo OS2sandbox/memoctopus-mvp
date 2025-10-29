@@ -2,11 +2,10 @@ import { LucideCheck, LucideClipboardCopy, LucideEye } from "lucide-react";
 
 import { Button } from "@/components/core/shadcn/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogTrigger,
-} from "@/components/core/shadcn/dialog";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/core/shadcn/popover";
 
 import { Fragment, useState } from "react";
 
@@ -27,15 +26,15 @@ export const ViewPromptAction = ({ promptText }: ViewPromptActionProps) => {
   };
 
   return (
-    <Dialog>
-      <DialogTrigger>
+    <Popover>
+      <PopoverTrigger>
         <Button variant="ghost" size="icon">
           <LucideEye />
         </Button>
-      </DialogTrigger>
-      <DialogContent>
-        <p>{promptText}</p>
-        <DialogFooter>
+      </PopoverTrigger>
+      <PopoverContent>
+        <p className={"text-sm"}>{promptText}</p>
+        <div className={"flex justify-start mt-4 items-center"}>
           <Button size="sm" onClick={handleCopy}>
             {copied ? (
               <Fragment>
@@ -49,8 +48,8 @@ export const ViewPromptAction = ({ promptText }: ViewPromptActionProps) => {
               </Fragment>
             )}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 };

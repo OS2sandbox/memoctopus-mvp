@@ -1,5 +1,6 @@
 "use client";
 
+import { Dialog } from "@radix-ui/react-dialog";
 import {
   type ColumnDef,
   type ColumnFiltersState,
@@ -11,8 +12,10 @@ import {
   type SortingState,
   useReactTable,
 } from "@tanstack/react-table";
+import { LucidePlus } from "lucide-react";
 
 import { Button } from "@/components/core/shadcn/button";
+import { DialogContent, DialogTrigger } from "@/components/core/shadcn/dialog";
 import { Input } from "@/components/core/shadcn/input";
 import {
   Table,
@@ -60,6 +63,15 @@ export function DataTable<TData, TValue>({
           }
           className="max-w-xs"
         />
+        <Dialog>
+          <DialogTrigger asChild>
+            <Button>
+              <LucidePlus />
+              Tilføj prompt
+            </Button>
+          </DialogTrigger>
+          <DialogContent></DialogContent>
+        </Dialog>
       </div>
 
       <div className="rounded-md border">
