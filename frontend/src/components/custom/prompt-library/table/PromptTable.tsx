@@ -45,7 +45,7 @@ export const PromptTable = () => {
   const columns = getColumns(handleToggleFavorite);
 
   return (
-    <section className="space-y-4">
+    <section className="space-y-4 w-full max-w-5xl">
       <h2 className="text-2xl font-semibold">Prompt-bibliotek</h2>
       <DataTable columns={columns} data={prompts} />
     </section>

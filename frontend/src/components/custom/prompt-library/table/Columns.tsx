@@ -1,10 +1,15 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
-import { Pencil, Trash2 } from "lucide-react";
+import { LucidePencil, LucideTrash2 } from "lucide-react";
 
 import { Button } from "@/components/core/shadcn/button";
 import { Switch } from "@/components/core/shadcn/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/core/shadcn/tooltip";
 import { ViewPromptAction } from "@/components/custom/prompt-library/ViewPromptAction";
 import { type User, useSession } from "@/lib/auth-client";
 
@@ -55,7 +60,6 @@ export const getColumns = (
   },
   {
     id: "actions",
-    header: "Handlinger",
     cell: ({ row }) => {
       const { data: session } = useSession();
       const user = session?.user as User | null;
@@ -63,21 +67,47 @@ export const getColumns = (
 
       const canEditOrDelete = prompt.creator.id === user?.id;
 
+      // abstract into separate component/factory
       return (
-        <div className="flex items-center justify-center gap-1">
-          <ViewPromptAction promptText={prompt.text} />
+        <div className="flex items-center justify-end">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <ViewPromptAction promptText={prompt.text} />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Se prompt</TooltipContent>
+          </Tooltip>
 
-          {canEditOrDelete && (
-            <Button variant="ghost" size="icon">
-              <Pencil className="h-4 w-4" />
-            </Button>
-          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <Button variant="ghost" size="icon" disabled={!canEditOrDelete}>
+                  <LucidePencil />
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              {canEditOrDelete
+                ? "Rediger prompt"
+                : "Du kan kun redigere dine egne prompts"}
+            </TooltipContent>
+          </Tooltip>
 
-          {canEditOrDelete && (
-            <Button variant="ghost" size="icon">
-              <Trash2 className="h-4 w-4 text-destructive" />
-            </Button>
-          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                <Button variant="ghost" size="icon" disabled={!canEditOrDelete}>
+                  <LucideTrash2 />
+                </Button>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              {canEditOrDelete
+                ? "Slet prompt"
+                : "Du kan kun slette dine egne prompts"}
+            </TooltipContent>
+          </Tooltip>
         </div>
       );
     },

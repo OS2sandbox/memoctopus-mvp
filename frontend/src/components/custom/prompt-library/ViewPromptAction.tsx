@@ -15,6 +15,7 @@ interface ViewPromptActionProps {
 }
 export const ViewPromptAction = ({ promptText }: ViewPromptActionProps) => {
   const [copied, setCopied] = useState(false);
+
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(promptText);
@@ -29,7 +30,7 @@ export const ViewPromptAction = ({ promptText }: ViewPromptActionProps) => {
     <Dialog>
       <DialogTrigger>
         <Button variant="ghost" size="icon">
-          <LucideEye className="h-4 w-4" />
+          <LucideEye />
         </Button>
       </DialogTrigger>
       <DialogContent>
