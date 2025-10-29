@@ -8,6 +8,7 @@ import {
 
 import { useState } from "react";
 
+// TODO: add enum for categories
 export const PromptTable = () => {
   const [prompts, setPrompts] = useState<Prompt[]>([
     {

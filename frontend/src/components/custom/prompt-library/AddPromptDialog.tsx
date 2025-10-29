@@ -27,7 +27,10 @@ import {
   SelectValue,
 } from "@/components/core/shadcn/select";
 import { Textarea } from "@/components/core/shadcn/textarea";
-import type { Prompt } from "@/components/custom/prompt-library/table/Columns";
+import {
+  type Prompt,
+  PromptCategory,
+} from "@/components/custom/prompt-library/table/Columns";
 import { type User, useSession } from "@/lib/auth-client";
 
 import { useState } from "react";
@@ -36,7 +39,7 @@ const DEFAULT_PROMPT: Prompt = {
   id: "",
   name: "",
   text: "",
-  category: "",
+  category: PromptCategory.Beslutningsreferat,
   creator: { id: "", name: "" },
   isFavorite: false,
 };
@@ -54,6 +57,8 @@ export const AddPromptDialog = ({ onAdd }: AddPromptDialogProps) => {
   const { data: session } = useSession();
   const user = session?.user as User | null;
 
+  const PromptCategoryOptions = Object.values(PromptCategory);
+
   const handleAdd = () => {
     const id = Math.random().toString(36).slice(2);
 
@@ -66,7 +71,6 @@ export const AddPromptDialog = ({ onAdd }: AddPromptDialogProps) => {
       },
     };
 
-    console.log("Adding prompt:", newPrompt);
     onAdd(newPrompt);
     setOpen(false);
     setPrompt(DEFAULT_PROMPT);
@@ -104,7 +108,10 @@ export const AddPromptDialog = ({ onAdd }: AddPromptDialogProps) => {
               <FieldLabel>Kategori</FieldLabel>
               <Select
                 onValueChange={(c) =>
-                  setPrompt((prev) => ({ ...prev, category: c }))
+                  setPrompt((prev) => ({
+                    ...prev,
+                    category: c as PromptCategory,
+                  }))
                 }
                 value={prompt.category}
               >
@@ -112,9 +119,11 @@ export const AddPromptDialog = ({ onAdd }: AddPromptDialogProps) => {
                   <SelectValue placeholder="Vælg kategori" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="møde">Mødereferat</SelectItem>
-                  <SelectItem value="api">API input</SelectItem>
-                  <SelectItem value="beslutning">Beslutningsreferat</SelectItem>
+                  {PromptCategoryOptions.map((category) => (
+                    <SelectItem key={category} value={category}>
+                      {category}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </Field>

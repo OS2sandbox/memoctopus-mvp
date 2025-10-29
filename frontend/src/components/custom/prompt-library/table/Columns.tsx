@@ -13,11 +13,19 @@ import {
 import { ViewPromptAction } from "@/components/custom/prompt-library/ViewPromptAction";
 import { type User, useSession } from "@/lib/auth-client";
 
+export enum PromptCategory {
+  Beslutningsreferat = "Beslutningsreferat",
+  API = "API",
+  ToDoListe = "To do liste",
+  DetaljeretReferat = "Detaljeret referat",
+  KortReferat = "Kort referat",
+}
+
 export interface Prompt {
   id: string;
   name: string;
   creator: Pick<User, "name" | "id">;
-  category: string;
+  category: PromptCategory;
   isFavorite: boolean;
   text: string;
 }
