@@ -30,9 +30,15 @@ export interface Prompt {
   text: string;
 }
 
-export const getColumns = (
-  handleToggleFavorite: (id: string, checked: boolean) => void,
-): ColumnDef<Prompt>[] => [
+interface getColumnsProps {
+  handleToggleFavorite: (id: string, checked: boolean) => void;
+  handleDeletePrompt: (id: string) => void;
+}
+
+export const getColumns = ({
+  handleToggleFavorite,
+  handleDeletePrompt,
+}: getColumnsProps): ColumnDef<Prompt>[] => [
   {
     accessorKey: "isFavorite",
     header: "Favorit",
@@ -105,7 +111,12 @@ export const getColumns = (
           <Tooltip>
             <TooltipTrigger asChild>
               <span className="inline-flex">
-                <Button variant="ghost" size="icon" disabled={!canEditOrDelete}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={!canEditOrDelete}
+                  onClick={() => handleDeletePrompt(prompt.id)}
+                >
                   <LucideTrash2 />
                 </Button>
               </span>

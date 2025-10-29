@@ -4,6 +4,7 @@ import { DataTable } from "@/components/core/data-table";
 import {
   getColumns,
   type Prompt,
+  PromptCategory,
 } from "@/components/custom/prompt-library/table/Columns";
 
 import { useState } from "react";
@@ -15,7 +16,7 @@ export const PromptTable = () => {
       id: "1",
       name: "Festudvalget på orto",
       creator: { id: "123", name: "Party Lars" },
-      category: "Beslutningsreferat",
+      category: PromptCategory.Beslutningsreferat,
       isFavorite: true,
       text: "Lav et beslutningsreferat for mødet afholdt den 12. marts 2024, hvor følgende punkter blev diskuteret: budgetgodkendelse, projektstatus og kommende arrangementer.",
     },
@@ -23,7 +24,7 @@ export const PromptTable = () => {
       id: "2",
       name: "EPJ input - venter på API",
       creator: { id: "123", name: "Party Lars" },
-      category: "API",
+      category: PromptCategory.API,
       isFavorite: false,
       text: "Lorem Ipsum Dolor Sit Amet",
     },
@@ -31,7 +32,7 @@ export const PromptTable = () => {
       id: "3",
       name: "Festudvalget på Tarm",
       creator: { id: "1234", name: "Camilla Nielsen" },
-      category: "To do liste",
+      category: PromptCategory.ToDoListe,
       isFavorite: false,
       text: "Lorem Ipsum Dolor Sit Amet 2",
     },
@@ -43,7 +44,11 @@ export const PromptTable = () => {
     );
   };
 
-  const columns = getColumns(handleToggleFavorite);
+  const handleDeletePrompt = (id: string) => {
+    setPrompts((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  const columns = getColumns({ handleToggleFavorite, handleDeletePrompt });
 
   const handleAddPrompt = (newPrompt: Prompt) => {
     setPrompts((prev) => [...prev, newPrompt]);
