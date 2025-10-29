@@ -1,8 +1,9 @@
 // 'frontend/src/components/custom/prompt-library/AddPromptDialog.tsx'
 "use client";
 
-import { LucidePlus } from "lucide-react";
+import { LucideAlertCircle, LucidePlus } from "lucide-react";
 
+import { Alert, AlertTitle } from "@/components/core/shadcn/alert";
 import { Button } from "@/components/core/shadcn/button";
 import {
   Dialog,
@@ -33,7 +34,7 @@ import {
 } from "@/components/custom/prompt-library/table/Columns";
 import { type User, useSession } from "@/lib/auth-client";
 
-import { useState } from "react";
+import { Activity, useState } from "react";
 
 const DEFAULT_PROMPT: Prompt = {
   id: "",
@@ -53,13 +54,27 @@ interface AddPromptDialogProps {
 export const AddPromptDialog = ({ onAdd }: AddPromptDialogProps) => {
   const [prompt, setPrompt] = useState<Prompt>(DEFAULT_PROMPT);
   const [open, setOpen] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
 
   const { data: session } = useSession();
   const user = session?.user as User | null;
 
   const PromptCategoryOptions = Object.values(PromptCategory);
 
+  const validatePrompt = (p: Prompt): string | null => {
+    if (!p.name.trim() || !p.text.trim())
+      return "Tekstfelter kan ikke være tomme.";
+    return null;
+  };
+
   const handleAdd = () => {
+    const validationError = validatePrompt(prompt);
+
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
     const id = Math.random().toString(36).slice(2);
 
     const newPrompt: Prompt = {
@@ -73,6 +88,7 @@ export const AddPromptDialog = ({ onAdd }: AddPromptDialogProps) => {
 
     onAdd(newPrompt);
     setOpen(false);
+    setError(null);
     setPrompt(DEFAULT_PROMPT);
   };
 
@@ -91,7 +107,7 @@ export const AddPromptDialog = ({ onAdd }: AddPromptDialogProps) => {
 
         <FieldSet>
           <FieldGroup className="flex flex-col gap-4">
-            <Field>
+            <Field data-invalid={!!error && !prompt.name.trim()}>
               <FieldLabel>Titel</FieldLabel>
               <Input
                 id="name"
@@ -128,7 +144,7 @@ export const AddPromptDialog = ({ onAdd }: AddPromptDialogProps) => {
               </Select>
             </Field>
 
-            <Field>
+            <Field data-invalid={!!error && !prompt.text.trim()}>
               <FieldLabel>Prompt tekst</FieldLabel>
               <Textarea
                 id="text"
@@ -143,8 +159,19 @@ export const AddPromptDialog = ({ onAdd }: AddPromptDialogProps) => {
             </Field>
           </FieldGroup>
         </FieldSet>
+        <DialogFooter className="sm:justify-between">
+          <div className="mr-auto">
+            <Activity mode={error ? "visible" : "hidden"}>
+              <Alert
+                variant="destructive"
+                className="p-0 px-2 py-1.5 justify-start items-center w-fit"
+              >
+                <LucideAlertCircle className={"mb-1"} />
+                <AlertTitle>{error}</AlertTitle>
+              </Alert>
+            </Activity>
+          </div>
 
-        <DialogFooter>
           <Button onClick={handleAdd} disabled={!user || !user.id}>
             Tilføj
           </Button>
