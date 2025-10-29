@@ -1,6 +1,6 @@
 "use client";
 
-import { DataTable } from "@/components/core/data-table";
+import { DataTable, type DataTableScope } from "@/components/core/data-table";
 import {
   getColumns,
   type Prompt,
@@ -38,6 +38,8 @@ export const PromptTable = () => {
     },
   ]);
 
+  const [scope, setScope] = useState<DataTableScope | null>(null);
+
   // Placeholder for favorite toggle functionality
   const handleToggleFavorite = (id: string, checked: boolean) => {
     setPrompts((prev) =>
@@ -71,7 +73,12 @@ export const PromptTable = () => {
   return (
     <section className="space-y-4 w-full max-w-5xl">
       <h2 className="text-2xl font-semibold">Prompt-bibliotek</h2>
-      <DataTable columns={columns} data={prompts} onAdd={handleAddPrompt} />
+      <DataTable
+        columns={columns}
+        data={prompts}
+        onAdd={handleAddPrompt}
+        scopeOpts={{ scope: scope, onScopeChange: setScope }}
+      />
     </section>
   );
 };

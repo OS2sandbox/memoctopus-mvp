@@ -3,6 +3,7 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { LucidePencil, LucideTrash2 } from "lucide-react";
 
+import { DataTableScope } from "@/components/core/data-table";
 import { Button } from "@/components/core/shadcn/button";
 import { Switch } from "@/components/core/shadcn/switch";
 import {
@@ -67,9 +68,18 @@ export const getColumns = ({
     ),
   },
   {
-    accessorKey: "creator.name",
+    accessorKey: "creator",
     header: "Oprettet af",
     cell: ({ row }) => <span>{row.original.creator.name}</span>,
+    filterFn: (row, filterValue) => {
+      const { data: session } = useSession();
+      const user = session?.user as User | null;
+
+      const creator = row.original.creator;
+      if (filterValue === DataTableScope.MyItems) return creator.id === user.id;
+      // For "My Organization", implement organization logic as needed (waiting for backend support)
+      return true;
+    },
   },
   {
     accessorKey: "category",
@@ -78,13 +88,13 @@ export const getColumns = ({
   {
     id: "actions",
     cell: ({ row }) => {
+      const prompt = row.original;
       const { data: session } = useSession();
       const user = session?.user as User | null;
-      const prompt = row.original;
 
       const canEditOrDelete = prompt.creator.id === user?.id;
 
-      // abstract into separate component/factory
+      // TODO: abstract into separate component/factory
       return (
         <div className="flex items-center justify-end">
           <Tooltip>
