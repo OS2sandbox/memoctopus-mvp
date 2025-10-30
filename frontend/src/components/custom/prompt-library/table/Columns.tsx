@@ -1,4 +1,5 @@
 "use client";
+"use no memo";
 
 import type { ColumnDef } from "@tanstack/react-table";
 import { LucidePencil, LucideTrash2 } from "lucide-react";
