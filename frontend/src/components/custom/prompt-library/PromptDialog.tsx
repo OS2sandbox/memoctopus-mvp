@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/core/shadcn/select";
 import { Textarea } from "@/components/core/shadcn/textarea";
+import { PromptHelpPanel } from "@/components/custom/prompt-library/PromptHelpPanel";
 import {
   type Prompt,
   PromptCategory,
@@ -68,7 +69,7 @@ export const PromptDialog = ({
   onSubmit,
   trigger,
 }: PromptDialogProps) => {
-  const { initialPrompt } = editOpts || {};
+  const { initialPrompt } = editOpts ?? {};
 
   const isEditMode = !!initialPrompt;
   const [prompt, setPrompt] = useState<Prompt>(initialPrompt ?? DEFAULT_PROMPT);
@@ -168,7 +169,10 @@ export const PromptDialog = ({
             </Field>
 
             <Field data-invalid={!!error && !prompt.text.trim()}>
-              <FieldLabel>Prompt tekst</FieldLabel>
+              <div className="flex items-center justify-between">
+                <FieldLabel>Prompt tekst</FieldLabel>
+                <PromptHelpPanel />
+              </div>
               <Textarea
                 id="text"
                 value={prompt.text}
