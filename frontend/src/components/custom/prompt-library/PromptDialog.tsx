@@ -55,8 +55,6 @@ interface PromptDialogProps {
   trigger?: ReactNode;
 }
 
-// TODO: Make the dialog required and validate the fields
-
 /**
  *
  * @param editOpts - Optional editing options; **if provided, the dialog operates in edit mode.**

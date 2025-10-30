@@ -23,7 +23,7 @@ const twoDigits = new Intl.NumberFormat("en-US", {
   useGrouping: false,
 });
 
-// There's dayjs but it's overkill for this simple task
+// There's dayjs, but it's overkill for this simple task
 export function formatTime(
   seconds: number,
   opts?: { showHours: boolean },

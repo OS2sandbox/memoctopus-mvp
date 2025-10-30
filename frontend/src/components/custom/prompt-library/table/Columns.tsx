@@ -1,4 +1,6 @@
 "use client";
+// Known issue that React Compiler is not supported by TanStack table yet:
+// https://nextjs.org/docs/app/api-reference/config/next-config-js/reactCompiler
 "use no memo";
 
 import type { ColumnDef } from "@tanstack/react-table";
