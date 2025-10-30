@@ -23,12 +23,12 @@ const twoDigits = new Intl.NumberFormat("en-US", {
   useGrouping: false,
 });
 
-// There's dayjs but it's overkill for this simple task
+// There's dayjs, but it's overkill for this simple task
 export function formatTime(
   seconds: number,
   opts?: { showHours: boolean },
 ): string {
-  const total = Math.max(0, Math.floor(seconds || 0));
+  const total = Math.max(0, Math.floor(seconds ?? 0));
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
   const s = total % 60;

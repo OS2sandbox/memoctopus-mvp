@@ -5,9 +5,9 @@ import { ProfileOverview } from "@/components/custom/profile/ProfileOverview";
 
 import Link from "next/link";
 
-export function NavBar() {
+export const NavBar = () => {
   return (
-    <nav className="border-b border-border bg-background">
+    <nav className="fixed top-0 left-0 right-0 z-10 border-b border-border bg-background">
       <div
         className="
           container mx-auto grid h-16 grid-cols-[1fr_auto_1fr]
@@ -40,4 +40,4 @@ export function NavBar() {
       </div>
     </nav>
   );
-}
+};

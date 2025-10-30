@@ -1,4 +1,4 @@
-import { RecordDialog } from "@/components/core/recording/RecordDialog";
+import { RecordDialog } from "@/components/custom/recording/RecordDialog";
 import { WizardContentPanel } from "@/components/custom/wizard/WizardContentPanel";
 import { WizardPanel } from "@/components/custom/wizard/WizardPanel";
 
