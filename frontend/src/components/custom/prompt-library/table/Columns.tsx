@@ -14,7 +14,7 @@ import {
 } from "@/components/core/shadcn/tooltip";
 import { PromptDialog } from "@/components/custom/prompt-library/PromptDialog";
 import { ViewPromptAction } from "@/components/custom/prompt-library/ViewPromptAction";
-import { type User, useSession } from "@/lib/auth-client";
+import type { User } from "@/lib/auth-client";
 
 export enum PromptCategory {
   Beslutningsreferat = "Beslutningsreferat",
@@ -37,12 +37,14 @@ interface getColumnsProps {
   handleToggleFavorite: (id: string, checked: boolean) => void;
   handleDeletePrompt: (id: string) => void;
   handleUpdatePrompt: (prompt: Prompt) => void;
+  currentUser: User | null;
 }
 
 export const getColumns = ({
   handleToggleFavorite,
   handleDeletePrompt,
   handleUpdatePrompt,
+  currentUser,
 }: getColumnsProps): ColumnDef<Prompt>[] => [
   {
     accessorKey: "isFavorite",
@@ -72,12 +74,11 @@ export const getColumns = ({
     accessorKey: "creator",
     header: "Oprettet af",
     cell: ({ row }) => <span>{row.original.creator.name}</span>,
-    filterFn: (row, filterValue) => {
-      const { data: session } = useSession();
-      const user = session?.user as User | null;
-
+    filterFn: (row, _columnId, filterValue) => {
       const creator = row.original.creator;
-      if (filterValue === DataTableScope.MyItems) return creator.id === user.id;
+      if (filterValue === DataTableScope.MyItems) {
+        return creator.id === currentUser?.id;
+      }
       // For "My Organization", implement organization logic as needed (waiting for backend support)
       return true;
     },
@@ -90,10 +91,8 @@ export const getColumns = ({
     id: "actions",
     cell: ({ row }) => {
       const prompt = row.original;
-      const { data: session } = useSession();
-      const user = session?.user as User | null;
 
-      const canEditOrDelete = prompt.creator.id === user?.id;
+      const canEditOrDelete = prompt.creator.id === currentUser?.id;
 
       // TODO: abstract into separate component/factory
       return (

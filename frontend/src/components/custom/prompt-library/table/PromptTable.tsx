@@ -6,6 +6,7 @@ import {
   type Prompt,
   PromptCategory,
 } from "@/components/custom/prompt-library/table/Columns";
+import { type User, useSession } from "@/lib/auth-client";
 
 import { useState } from "react";
 
@@ -64,10 +65,14 @@ export const PromptTable = () => {
     );
   };
 
+  const { data: session } = useSession();
+  const user = session?.user as User | null;
+
   const columns = getColumns({
     handleToggleFavorite,
     handleDeletePrompt,
     handleUpdatePrompt,
+    currentUser: user,
   });
 
   return (
