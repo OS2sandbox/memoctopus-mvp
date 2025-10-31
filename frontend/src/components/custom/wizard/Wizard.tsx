@@ -9,7 +9,7 @@ import { WizardNavigation } from "@/components/custom/wizard/WizardNavigation";
 import { Fragment } from "react";
 import { defaultMetadata, StepId, Stepper } from "./stepper";
 
-// TODO: Implement validation and conditional step navigation
+// TODO: Fragment metadata into a separate file; metadata.ts for example
 export const Wizard = () => {
   return (
     <Stepper.Provider
@@ -25,6 +25,8 @@ export const Wizard = () => {
         },
         [StepId.EditAndConfirmStep]: {
           ...defaultMetadata,
+          isCompleted: false,
+          transcript: "",
         },
         [StepId.ShareStep]: {
           ...defaultMetadata,
