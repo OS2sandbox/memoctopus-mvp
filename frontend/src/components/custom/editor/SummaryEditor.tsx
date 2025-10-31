@@ -6,11 +6,13 @@ import { useState } from "react";
 interface SummaryEditorProps {
   initialContent?: string;
   onApprove: (html: string) => void;
+  editable?: boolean;
 }
 
 export const SummaryEditor = ({
   initialContent = "",
   onApprove,
+  editable = true,
 }: SummaryEditorProps) => {
   const [content, setContent] = useState(initialContent);
 
@@ -33,6 +35,7 @@ export const SummaryEditor = ({
         content={content}
         onChange={setContent}
         placeholder="Redigér dit resumé her..."
+        editable={editable}
       />
 
       <div className="flex justify-end gap-2 pt-4">
