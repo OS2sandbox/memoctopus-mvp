@@ -9,12 +9,14 @@ export const EditAndConfirmStep = () => {
   return (
     <WizardPanel>
       <SummaryEditor
-        onApprove={() => {
+        onApprove={(content) => {
           setMetadata(StepId.EditAndConfirmStep, {
             ...currentMetadata,
             isCompleted: true,
+            transcript: content,
           });
         }}
+        initialContent={currentMetadata["transcript"]}
       />
     </WizardPanel>
   );

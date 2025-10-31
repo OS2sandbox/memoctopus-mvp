@@ -1,33 +1,34 @@
 import { Button } from "@/components/core/shadcn/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogTrigger,
+} from "@/components/core/shadcn/dialog";
 import { MinimalTiptap } from "@/components/core/shadcn/minimal-tiptap";
+import { getVisibleTextLength } from "@/lib/utils";
 
 import { useState } from "react";
 
 interface SummaryEditorProps {
   initialContent?: string;
   onApprove: (html: string) => void;
-  editable?: boolean;
 }
 
+// TODO: Remove the "Godkend" button and handle it on "Næste" instead with a warning dialog
 export const SummaryEditor = ({
   initialContent = "",
   onApprove,
-  editable = true,
 }: SummaryEditorProps) => {
+  const [open, setOpen] = useState(false);
   const [content, setContent] = useState(initialContent);
-
-  const getVisibleTextLength = (html: string): number => {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, "text/html");
-    const text = doc.body.textContent?.trim() ?? "";
-    return text.length;
-  };
+  const [isEditable, setIsEditable] = useState(true);
 
   const handleApprove = () => {
     onApprove(content);
+    setIsEditable(false);
+    setOpen(false);
   };
-
-  console.log(content);
 
   return (
     <div className="space-y-4">
@@ -35,16 +36,33 @@ export const SummaryEditor = ({
         content={content}
         onChange={setContent}
         placeholder="Redigér dit resumé her..."
-        editable={editable}
+        editable={isEditable}
+        className={!isEditable ? "bg-gray-100" : ""}
       />
-
       <div className="flex justify-end gap-2 pt-4">
-        <Button
-          disabled={!content || getVisibleTextLength(content) <= 0}
-          onClick={handleApprove}
-        >
-          Godkend
-        </Button>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger asChild>
+            <Button
+              disabled={
+                !content || getVisibleTextLength(content) <= 0 || !isEditable
+              }
+            >
+              Godkend
+            </Button>
+          </DialogTrigger>
+          <DialogContent showCloseButton={false}>
+            <div className="p-5 space-y-2">
+              <p>Er du sikker på, at du vil godkende dette resumé?</p>
+              <p>Når du godkender, kan du ikke redigere det yderligere.</p>
+            </div>
+            <DialogFooter>
+              <Button variant="secondary" onClick={() => setOpen(false)}>
+                Annuller
+              </Button>
+              <Button onClick={handleApprove}>Godkend</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );
