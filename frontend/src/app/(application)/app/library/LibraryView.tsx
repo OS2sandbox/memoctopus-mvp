@@ -1,5 +1,5 @@
-import { PromptCategory } from "@/components/custom/prompt-library/table/Columns";
-import { PromptTable } from "@/components/custom/prompt-library/table/PromptTable";
+import { PromptCategory } from "@/lib/constants";
+import { PromptTable } from "@/lib/ui/custom/prompt-library/table/PromptTable";
 
 export const LibraryView = () => {
   const mockPrompts = [

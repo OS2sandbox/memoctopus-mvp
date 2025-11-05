@@ -1,0 +1,70 @@
+"use client";
+
+import type { User } from "@/lib/auth-client";
+import { FilterMode } from "@/lib/constants";
+import type { DataTableScope } from "@/lib/ui/core/data-table";
+import type { Prompt } from "@/lib/ui/custom/prompt-library/table/Columns";
+
+import { useState } from "react";
+
+export interface PromptTableOptions {
+  currentUser: User | null;
+  tableMode?: FilterMode[];
+  data: Prompt[];
+  className?: string;
+}
+
+export const usePromptTable = ({
+  currentUser,
+  tableMode,
+  data,
+}: Omit<PromptTableOptions, "className">) => {
+  const [prompts, setPrompts] = useState<Prompt[]>(data);
+
+  const [scope, setScope] = useState<DataTableScope | null>(null);
+
+  const handleToggleFavorite = (id: string, checked: boolean) =>
+    setPrompts((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, isFavorite: checked } : p)),
+    );
+
+  const handleDeletePrompt = (id: string) =>
+    setPrompts((prev) => prev.filter((p) => p.id !== id));
+
+  const handleAddPrompt = (newPrompt: Prompt) =>
+    setPrompts((prev) => [...prev, newPrompt]);
+
+  const handleUpdatePrompt = (updatedPrompt: Prompt) =>
+    setPrompts((prev) =>
+      prev.map((p) => (p.id === updatedPrompt.id ? updatedPrompt : p)),
+    );
+
+  const filteredPrompts = prompts.filter((prompt) => {
+    if (tableMode?.length === 0 || !tableMode) return true;
+
+    const result = tableMode.some((mode) => {
+      switch (mode) {
+        case FilterMode.Mine:
+          return prompt.creator.id === currentUser?.id;
+
+        case FilterMode.Favorites:
+          return prompt.isFavorite;
+
+        default:
+          return false;
+      }
+    });
+
+    return result;
+  });
+
+  return {
+    prompts: filteredPrompts,
+    scope,
+    setScope,
+    handleToggleFavorite,
+    handleDeletePrompt,
+    handleAddPrompt,
+    handleUpdatePrompt,
+  };
+};

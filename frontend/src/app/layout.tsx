@@ -5,7 +5,7 @@ import "./globals.css";
 
 import type { ReactNode } from "react";
 
-import { Providers } from "@/components/providers";
+import { Providers } from "@/lib/ui/providers";
 import { cn } from "@/lib/utils";
 
 const inter = Inter({ subsets: ["latin"] });
