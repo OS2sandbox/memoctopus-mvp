@@ -4,7 +4,7 @@ import { type NextRequest, NextResponse } from "next/server";
 
 // const DISABLE_AUTH = process.env["DISABLE_AUTH"] === "true"
 // acts as a gatekeeper for protected routes; authorization gate
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const session = getSessionCookie(request);
 
   if (session) {
