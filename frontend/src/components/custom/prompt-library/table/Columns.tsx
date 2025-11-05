@@ -15,7 +15,7 @@ import {
   TooltipTrigger,
 } from "@/components/core/shadcn/tooltip";
 import { PromptDialog } from "@/components/custom/prompt-library/PromptDialog";
-import { ViewPromptAction } from "@/components/custom/prompt-library/ViewPromptAction";
+import { ViewPromptAction } from "@/components/custom/prompt-library/table/ViewPromptAction";
 import type { User } from "@/lib/auth-client";
 
 export enum PromptCategory {
