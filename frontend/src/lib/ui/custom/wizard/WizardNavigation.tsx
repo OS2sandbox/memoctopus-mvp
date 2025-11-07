@@ -1,9 +1,11 @@
-import { type StepId, Stepper, useStepper, utils } from "./stepper";
+import type { STEP_ID } from "@/lib/constants";
+
+import { Stepper, useStepper, utils } from "./stepper";
 
 export const WizardNavigation = () => {
   const { all, goTo, current, metadata } = useStepper();
 
-  const canGoToStep = (targetId: StepId) => {
+  const canGoToStep = (targetId: STEP_ID) => {
     const targetMeta = metadata[targetId];
     const currentHasBeenCompleted =
       utils.getNext(current.id).id === targetId &&

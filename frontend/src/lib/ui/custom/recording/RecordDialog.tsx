@@ -6,6 +6,7 @@ import {
   LucideSquare,
 } from "lucide-react";
 
+import { STEP_ID } from "@/lib/constants";
 import { RecorderStatus, useRecorder } from "@/lib/hooks/use-recorder";
 import { Alert, AlertTitle } from "@/lib/ui/core/shadcn/alert";
 import { Button } from "@/lib/ui/core/shadcn/button";
@@ -16,7 +17,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/lib/ui/core/shadcn/dialog";
-import { StepId, useStepper } from "@/lib/ui/custom/wizard/stepper";
+import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { formatTime } from "@/lib/utils";
 
 import { Activity } from "react";
@@ -30,7 +31,7 @@ export const RecordDialog = ({
 }: RecordDialogProps) => {
   const { setMetadata, metadata } = useStepper();
 
-  const currentMetadata = metadata[StepId.UploadSpeechStep] ?? {};
+  const currentMetadata = metadata[STEP_ID.UploadSpeechStep] ?? {};
 
   const {
     status,
@@ -47,7 +48,7 @@ export const RecordDialog = ({
     reset,
   } = useRecorder({
     autoSave: (file) =>
-      setMetadata(StepId.UploadSpeechStep, {
+      setMetadata(STEP_ID.UploadSpeechStep, {
         ...currentMetadata,
         file,
         isCompleted: true,

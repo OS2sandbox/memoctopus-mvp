@@ -27,7 +27,7 @@ import {
 } from "@/lib/ui/core/shadcn/table";
 import { PromptDialog } from "@/lib/ui/custom/prompt-library/PromptDialog";
 
-import { useState } from "react";
+import { Activity, useState } from "react";
 
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
@@ -38,6 +38,7 @@ interface DataTableProps<TData, TValue> {
     scope: DATA_TABLE_SCOPE | null;
     filterModes?: FILTER_MODE[];
   };
+  onRowClick?: (entry: TData) => void;
 }
 
 // TODO: Must be made more generic to be reusable
@@ -46,6 +47,7 @@ export function DataTable<TData, TValue>({
   data,
   onAdd,
   scopeOpts,
+  onRowClick,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -114,7 +116,10 @@ export function DataTable<TData, TValue>({
           )}
         </div>
 
-        {onAdd && <PromptDialog onSubmit={onAdd as (data: Prompt) => void} />}
+        {/* TODO: Make this generic, then base it on type */}
+        <Activity mode={onAdd ? "visible" : "hidden"}>
+          <PromptDialog onSubmit={onAdd as (data: Prompt) => void} />
+        </Activity>
       </div>
 
       <div className="rounded-md border">
@@ -139,7 +144,15 @@ export function DataTable<TData, TValue>({
           <TableBody>
             {table.getRowModel().rows?.length ? (
               table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id}>
+                <TableRow
+                  key={row.id}
+                  onClick={() => onRowClick?.(row.original)}
+                  className={
+                    onRowClick
+                      ? "cursor-pointer hover:bg-muted/50 transition-colors"
+                      : undefined
+                  }
+                >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>
                       {flexRender(

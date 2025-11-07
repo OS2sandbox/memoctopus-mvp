@@ -6,13 +6,14 @@ import {
   LucideLoaderCircle,
 } from "lucide-react";
 
+import { STEP_ID } from "@/lib/constants";
 import {
   Alert,
   AlertDescription,
   AlertTitle,
 } from "@/lib/ui/core/shadcn/alert";
 import { Button } from "@/lib/ui/core/shadcn/button";
-import { StepId, useStepper } from "@/lib/ui/custom/wizard/stepper";
+import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 
 import { Activity, type ChangeEvent, useRef, useState } from "react";
 
@@ -29,10 +30,10 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const currMetadata = useStepper().metadata[StepId.UploadSpeechStep] ?? {};
+  const currMetadata = useStepper().metadata[STEP_ID.UploadSpeechStep] ?? {};
 
   const { setMetadata, metadata } = useStepper();
-  const isUploaded = metadata[StepId.UploadSpeechStep]?.[
+  const isUploaded = metadata[STEP_ID.UploadSpeechStep]?.[
     "isCompleted"
   ] as boolean;
 
@@ -40,7 +41,7 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
     const file = event.target.files?.[0];
     if (file) {
       setSelectedFile(file);
-      setMetadata(StepId.UploadSpeechStep, { ...currMetadata, file });
+      setMetadata(STEP_ID.UploadSpeechStep, { ...currMetadata, file });
     }
   };
 
@@ -65,8 +66,8 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
           throw new Error("Network error: could not upload file.");
         }
 
-        const currentMetadata = metadata[StepId.UploadSpeechStep] ?? {};
-        setMetadata(StepId.UploadSpeechStep, {
+        const currentMetadata = metadata[STEP_ID.UploadSpeechStep] ?? {};
+        setMetadata(STEP_ID.UploadSpeechStep, {
           ...currentMetadata,
           isCompleted: true,
         });

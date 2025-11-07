@@ -1,14 +1,15 @@
+import { STEP_ID } from "@/lib/constants";
 import { useWarnBeforeUnload } from "@/lib/hooks/use-warn-before-unload";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { FileSelectButton } from "@/lib/ui/custom/FileSelectButton";
 import { RecordDialog } from "@/lib/ui/custom/recording/RecordDialog";
-import { StepId, useStepper } from "@/lib/ui/custom/wizard/stepper";
+import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardContentPanel } from "@/lib/ui/custom/wizard/WizardContentPanel";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
 
 export const UploadSpeechStep = () => {
   const { metadata } = useStepper();
-  const fileUploaded = metadata[StepId.UploadSpeechStep]?.[
+  const fileUploaded = metadata[STEP_ID.UploadSpeechStep]?.[
     "isCompleted"
   ] as boolean;
 

@@ -1,7 +1,8 @@
 import { LucideTrash } from "lucide-react";
 
+import { STEP_ID } from "@/lib/constants";
 import { Button } from "@/lib/ui/core/shadcn/button";
-import { StepId, Stepper, useStepper } from "@/lib/ui/custom/wizard/stepper";
+import { Stepper, useStepper } from "@/lib/ui/custom/wizard/stepper";
 
 import { Activity } from "react";
 
@@ -10,7 +11,7 @@ export const WizardControls = () => {
     useStepper();
   const isCompleted = metadata[current.id]?.["isCompleted"] as boolean;
   const currentFile = metadata[current.id]?.["file"] as boolean;
-  const isFirstStep = current.id === StepId.UploadSpeechStep;
+  const isFirstStep = current.id === STEP_ID.UploadSpeechStep;
 
   return (
     <Stepper.Controls className="flex justify-between items-center mt-6">
@@ -25,7 +26,7 @@ export const WizardControls = () => {
           <Button
             variant="destructive"
             onClick={() =>
-              setMetadata(StepId.UploadSpeechStep, {
+              setMetadata(STEP_ID.UploadSpeechStep, {
                 file: null,
                 isCompleted: false,
               })

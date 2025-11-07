@@ -1,3 +1,5 @@
+import { STEP_ID } from "@/lib/constants";
+import type { Prompt } from "@/lib/schemas/prompt";
 import { EditAndConfirmStep } from "@/lib/ui/custom/wizard/steps/EditAndConfirmStep";
 import { SelectPromptStep } from "@/lib/ui/custom/wizard/steps/SelectPromptStep";
 import { ShareStep } from "@/lib/ui/custom/wizard/steps/ShareStep";
@@ -7,7 +9,7 @@ import { WizardHeader } from "@/lib/ui/custom/wizard/WizardHeader";
 import { WizardNavigation } from "@/lib/ui/custom/wizard/WizardNavigation";
 
 import { Fragment } from "react";
-import { defaultMetadata, StepId, Stepper } from "./stepper";
+import { defaultMetadata, Stepper } from "./stepper";
 
 // TODO: Fragment metadata into a separate file; metadata.ts for example
 export const Wizard = () => {
@@ -16,19 +18,22 @@ export const Wizard = () => {
       labelOrientation="vertical"
       className="space-y-8 p-6 border rounded-lg bg-card w-full max-w-5xl mx-auto"
       initialMetadata={{
-        [StepId.UploadSpeechStep]: {
+        [STEP_ID.UploadSpeechStep]: {
           ...defaultMetadata,
           isCompleted: false,
+          file: null as File | null,
         },
-        [StepId.SelectPromptStep]: {
+        [STEP_ID.SelectPromptStep]: {
           ...defaultMetadata,
+          isCompleted: false,
+          prompt: null as Prompt | null,
         },
-        [StepId.EditAndConfirmStep]: {
+        [STEP_ID.EditAndConfirmStep]: {
           ...defaultMetadata,
           isCompleted: false,
           transcript: "",
         },
-        [StepId.ShareStep]: {
+        [STEP_ID.ShareStep]: {
           ...defaultMetadata,
         },
       }}
@@ -45,10 +50,10 @@ export const Wizard = () => {
           {
             // TODO: Make a factory for step panels
             methods.switch({
-              [StepId.UploadSpeechStep]: () => <UploadSpeechStep />,
-              [StepId.SelectPromptStep]: () => <SelectPromptStep />,
-              [StepId.EditAndConfirmStep]: () => <EditAndConfirmStep />,
-              [StepId.ShareStep]: () => <ShareStep />,
+              [STEP_ID.UploadSpeechStep]: () => <UploadSpeechStep />,
+              [STEP_ID.SelectPromptStep]: () => <SelectPromptStep />,
+              [STEP_ID.EditAndConfirmStep]: () => <EditAndConfirmStep />,
+              [STEP_ID.ShareStep]: () => <ShareStep />,
             })
           }
 

@@ -1,11 +1,5 @@
+import { STEP_ID } from "@/lib/constants";
 import { defineStepper } from "@/lib/ui/core/shadcn/stepper";
-
-export enum StepId {
-  UploadSpeechStep = "step-1",
-  SelectPromptStep = "step-2",
-  EditAndConfirmStep = "step-3",
-  ShareStep = "step-4",
-}
 
 // TODO: isCompleted should be set for all steps (to false initially)
 export const defaultMetadata = {
@@ -15,22 +9,22 @@ export const defaultMetadata = {
 
 export const { Stepper, utils, useStepper } = defineStepper(
   {
-    id: StepId.UploadSpeechStep,
+    id: STEP_ID.UploadSpeechStep,
     title: "Tilføj tale",
     description: "Optag eller upload tale",
   },
   {
-    id: StepId.SelectPromptStep,
+    id: STEP_ID.SelectPromptStep,
     title: "Vælg prompt",
     description: "Tilføj prompt og opsæt detaljer",
   },
   {
-    id: StepId.EditAndConfirmStep,
+    id: STEP_ID.EditAndConfirmStep,
     title: "Rediger og godkend",
     description: "Gennemgå og godkend indholdet",
   },
   {
-    id: StepId.ShareStep,
+    id: STEP_ID.ShareStep,
     title: "Del",
     description: "Hvordan vil du dele teksten?",
   },

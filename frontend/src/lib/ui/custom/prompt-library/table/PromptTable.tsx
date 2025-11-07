@@ -1,6 +1,7 @@
 "use client";
 
 import { useSession } from "@/lib/auth-client";
+import type { Prompt } from "@/lib/schemas/prompt";
 import { DataTable } from "@/lib/ui/core/data-table";
 import {
   type PromptTableOptions,
@@ -14,6 +15,7 @@ export const PromptTable = ({
   tableMode,
   className,
   HideAddButton,
+  onRowClick,
 }: Omit<PromptTableOptions, "currentUser">) => {
   const { data: session } = useSession();
   const user = session?.user ?? null;
@@ -38,7 +40,7 @@ export const PromptTable = ({
   return (
     <section className={cn("space-y-4 w-full max-w-5xl", className)}>
       <h2 className="text-2xl font-semibold">Prompt-bibliotek</h2>
-      <DataTable
+      <DataTable<Prompt, typeof columns>
         columns={columns}
         data={prompts}
         {...(!HideAddButton && { onAdd: handleAddPrompt })}
@@ -47,6 +49,7 @@ export const PromptTable = ({
           onScopeChange: setScope,
           filterModes: tableMode ?? [],
         }}
+        {...(onRowClick && { onRowClick: onRowClick })}
       />
     </section>
   );

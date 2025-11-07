@@ -12,6 +12,7 @@ export interface PromptTableOptions {
   HideAddButton?: boolean;
   data: Prompt[];
   className?: string;
+  onRowClick?: (prompt: Prompt) => void;
 }
 
 export const usePromptTable = ({

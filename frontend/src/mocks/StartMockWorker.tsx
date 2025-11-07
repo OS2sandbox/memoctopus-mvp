@@ -9,7 +9,11 @@ export function StartMockWorker({ children }: { children: ReactNode }) {
     async function enableMocks() {
       if (process.env.NODE_ENV === "development") {
         import("@/mocks/browser").then(({ worker }) => {
-          void worker.start();
+          void worker.start({
+            onUnhandledRequest(req) {
+              if (req.url.includes("localhost:8000")) return;
+            },
+          });
         });
       }
 
