@@ -4,7 +4,7 @@
 import { LucideAlertCircle, LucidePencil, LucidePlus } from "lucide-react";
 
 import { type User, useSession } from "@/lib/auth-client";
-import { PromptCategory } from "@/lib/constants";
+import { PROMPT_CATEGORY } from "@/lib/constants";
 import type { Prompt } from "@/lib/schemas/prompt";
 import { Alert, AlertTitle } from "@/lib/ui/core/shadcn/alert";
 import { Button } from "@/lib/ui/core/shadcn/button";
@@ -39,7 +39,7 @@ const DEFAULT_PROMPT: Prompt = {
   id: "",
   name: "",
   text: "",
-  category: PromptCategory.Beslutningsreferat,
+  category: PROMPT_CATEGORY.Beslutningsreferat,
   creator: { id: "", name: "" },
   isFavorite: false,
 };
@@ -74,7 +74,7 @@ export const PromptDialog = ({
 
   const { data: session } = useSession();
   const user = session?.user as User | null;
-  const PromptCategoryOptions = Object.values(PromptCategory);
+  const PromptCategoryOptions = Object.values(PROMPT_CATEGORY);
 
   const validatePrompt = (p: Prompt): string | null => {
     if (!p.name.trim() || !p.text.trim()) {
@@ -146,7 +146,7 @@ export const PromptDialog = ({
                 onValueChange={(c) =>
                   setPrompt((prev) => ({
                     ...prev,
-                    category: c as PromptCategory,
+                    category: c as PROMPT_CATEGORY,
                   }))
                 }
                 value={prompt.category}

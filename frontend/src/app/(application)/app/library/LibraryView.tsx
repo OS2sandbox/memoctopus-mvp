@@ -3,13 +3,27 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { getPrompts } from "@/lib/api/prompts";
+import { Spinner } from "@/lib/ui/core/shadcn/spinner";
 import { PromptTable } from "@/lib/ui/custom/prompt-library/table/PromptTable";
 
 export const LibraryView = () => {
-  const query = useQuery({ queryKey: ["prompts"], queryFn: getPrompts });
-  const mockPrompts = query.data ?? [];
+  const { data, status } = useQuery({
+    queryKey: ["prompts"],
+    queryFn: getPrompts,
+  });
 
-  console.log("Prompts data:", mockPrompts);
+  const renderContent = () => {
+    switch (status) {
+      case "error":
+        return <p>Der opstod en fejl ved hentning af prompts.</p>;
+      case "pending":
+        return <Spinner />;
+      case "success":
+        return <PromptTable data={data} />;
+      default:
+        return null;
+    }
+  };
 
   return (
     <main className="min-h-screen flex flex-col items-center px-6 py-16 space-y-6">
@@ -18,8 +32,7 @@ export const LibraryView = () => {
         <p>Find et prompt og tilføj det til dine prompts.</p>
         <p>Du kan også oprette et nyt prompt.</p>
       </div>
-
-      <PromptTable data={mockPrompts} />
+      {renderContent()}
     </main>
   );
 };

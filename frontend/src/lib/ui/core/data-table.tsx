@@ -12,7 +12,7 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 
-import { FilterMode } from "@/lib/constants";
+import { DATA_TABLE_SCOPE, FILTER_MODE } from "@/lib/constants";
 import type { Prompt } from "@/lib/schemas/prompt";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { Checkbox } from "@/lib/ui/core/shadcn/checkbox";
@@ -29,19 +29,14 @@ import { PromptDialog } from "@/lib/ui/custom/prompt-library/PromptDialog";
 
 import { useState } from "react";
 
-export enum DataTableScope {
-  MyItems = "my_items",
-  MyOrganization = "my_organization",
-}
-
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
   onAdd?: (column: TData) => void;
   scopeOpts?: {
-    onScopeChange: (scope: DataTableScope | null) => void;
-    scope: DataTableScope | null;
-    filterModes?: FilterMode[];
+    onScopeChange: (scope: DATA_TABLE_SCOPE | null) => void;
+    scope: DATA_TABLE_SCOPE | null;
+    filterModes?: FILTER_MODE[];
   };
 }
 
@@ -57,7 +52,7 @@ export function DataTable<TData, TValue>({
 
   const { onScopeChange, scope, filterModes } = scopeOpts ?? {};
 
-  const toggleScope = (value: DataTableScope) => {
+  const toggleScope = (value: DATA_TABLE_SCOPE) => {
     const scopeValue = scope === value ? null : value;
     onScopeChange?.(scopeValue);
     table.getColumn("creator")?.setFilterValue(scopeValue);
@@ -96,18 +91,20 @@ export function DataTable<TData, TValue>({
               <div className="flex items-center gap-4">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <Checkbox
-                    checked={scope === DataTableScope.MyItems}
-                    onCheckedChange={() => toggleScope(DataTableScope.MyItems)}
-                    disabled={filterModes?.includes(FilterMode.Mine)}
+                    checked={scope === DATA_TABLE_SCOPE.MyItems}
+                    onCheckedChange={() =>
+                      toggleScope(DATA_TABLE_SCOPE.MyItems)
+                    }
+                    disabled={filterModes?.includes(FILTER_MODE.Mine)}
                   />
                   <span>Mig</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <Checkbox
                     disabled={true}
-                    checked={scope === DataTableScope.MyOrganization}
+                    checked={scope === DATA_TABLE_SCOPE.MyOrganization}
                     onCheckedChange={() =>
-                      toggleScope(DataTableScope.MyOrganization)
+                      toggleScope(DATA_TABLE_SCOPE.MyOrganization)
                     }
                   />
                   <span>Min afdeling</span>

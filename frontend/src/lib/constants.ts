@@ -1,4 +1,4 @@
-export enum PromptCategory {
+export enum PROMPT_CATEGORY {
   Beslutningsreferat = "Beslutningsreferat",
   API = "API",
   ToDoListe = "To do liste",
@@ -6,7 +6,12 @@ export enum PromptCategory {
   KortReferat = "Kort referat",
 }
 
-export enum FilterMode {
+export enum FILTER_MODE {
   Mine = "onlyMine",
   Favorites = "onlyFavorites",
+}
+
+export enum DATA_TABLE_SCOPE {
+  MyItems = "my_items",
+  MyOrganization = "my_organization",
 }

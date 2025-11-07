@@ -11,7 +11,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { LucidePencil, LucideTrash2 } from "lucide-react";
 
 import type { User } from "@/lib/auth-client";
-import { DataTableScope } from "@/lib/ui/core/data-table";
+import { DATA_TABLE_SCOPE } from "@/lib/constants";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { Switch } from "@/lib/ui/core/shadcn/switch";
 import {
@@ -65,7 +65,7 @@ export const getColumns = ({
     cell: ({ row }) => <span>{row.original.creator.name}</span>,
     filterFn: (row, _columnId, filterValue) => {
       const creator = row.original.creator;
-      if (filterValue === DataTableScope.MyItems) {
+      if (filterValue === DATA_TABLE_SCOPE.MyItems) {
         return creator.id === currentUser?.id;
       }
       // For "My Organization", implement organization logic as needed (waiting for backend support)

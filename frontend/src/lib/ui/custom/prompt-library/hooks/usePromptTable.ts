@@ -1,15 +1,15 @@
 "use client";
 
 import type { User } from "@/lib/auth-client";
-import { FilterMode } from "@/lib/constants";
+import { type DATA_TABLE_SCOPE, FILTER_MODE } from "@/lib/constants";
 import type { Prompt } from "@/lib/schemas/prompt";
-import type { DataTableScope } from "@/lib/ui/core/data-table";
 
 import { useState } from "react";
 
 export interface PromptTableOptions {
   currentUser: User | null;
-  tableMode?: FilterMode[];
+  tableMode?: FILTER_MODE[];
+  HideAddButton?: boolean;
   data: Prompt[];
   className?: string;
 }
@@ -18,10 +18,10 @@ export const usePromptTable = ({
   currentUser,
   tableMode,
   data,
-}: Omit<PromptTableOptions, "className">) => {
+}: Omit<PromptTableOptions, "className" | "HideAddButton">) => {
   const [prompts, setPrompts] = useState<Prompt[]>(data);
 
-  const [scope, setScope] = useState<DataTableScope | null>(null);
+  const [scope, setScope] = useState<DATA_TABLE_SCOPE | null>(null);
 
   const handleToggleFavorite = (id: string, checked: boolean) =>
     setPrompts((prev) =>
@@ -44,10 +44,10 @@ export const usePromptTable = ({
 
     const result = tableMode.some((mode) => {
       switch (mode) {
-        case FilterMode.Mine:
+        case FILTER_MODE.Mine:
           return prompt.creator.id === currentUser?.id;
 
-        case FilterMode.Favorites:
+        case FILTER_MODE.Favorites:
           return prompt.isFavorite;
 
         default:

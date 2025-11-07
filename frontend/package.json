@@ -60,7 +60,7 @@
     "@tiptap/starter-kit": "^3.9.1",
     "@wavesurfer/react": "^1.0.11",
     "better-auth": "latest",
-    "class-variance-authority": "^0.7.0",
+    "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "^16.6.1",
     "lucide-react": "^0.469.0",
