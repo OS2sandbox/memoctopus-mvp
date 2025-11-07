@@ -5,6 +5,7 @@ import { LucideAlertCircle, LucidePencil, LucidePlus } from "lucide-react";
 
 import { type User, useSession } from "@/lib/auth-client";
 import { PromptCategory } from "@/lib/constants";
+import type { Prompt } from "@/lib/schemas/prompt";
 import { Alert, AlertTitle } from "@/lib/ui/core/shadcn/alert";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import {
@@ -31,7 +32,6 @@ import {
 } from "@/lib/ui/core/shadcn/select";
 import { Textarea } from "@/lib/ui/core/shadcn/textarea";
 import { PromptHelpPanel } from "@/lib/ui/custom/prompt-library/PromptHelpPanel";
-import type { Prompt } from "@/lib/ui/custom/prompt-library/table/Columns";
 
 import { Activity, type ReactNode, useState } from "react";
 

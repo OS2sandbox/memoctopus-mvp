@@ -2,7 +2,8 @@
 
 // Known issue that React Compiler is not supported by TanStack table yet:
 // https://nextjs.org/docs/app/api-reference/config/next-config-js/reactCompiler
-import type { PromptCategory } from "@/lib/constants";
+
+import type { Prompt } from "@/lib/schemas/prompt";
 
 ("use no memo");
 
@@ -20,15 +21,6 @@ import {
 } from "@/lib/ui/core/shadcn/tooltip";
 import { PromptDialog } from "@/lib/ui/custom/prompt-library/PromptDialog";
 import { ViewPromptAction } from "@/lib/ui/custom/prompt-library/table/ViewPromptAction";
-
-export interface Prompt {
-  id: string;
-  name: string;
-  creator: Pick<User, "name" | "id">;
-  category: PromptCategory;
-  isFavorite: boolean;
-  text: string;
-}
 
 interface getColumnsProps {
   handleToggleFavorite: (id: string, checked: boolean) => void;

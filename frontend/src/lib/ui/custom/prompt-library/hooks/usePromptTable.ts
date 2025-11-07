@@ -2,8 +2,8 @@
 
 import type { User } from "@/lib/auth-client";
 import { FilterMode } from "@/lib/constants";
+import type { Prompt } from "@/lib/schemas/prompt";
 import type { DataTableScope } from "@/lib/ui/core/data-table";
-import type { Prompt } from "@/lib/ui/custom/prompt-library/table/Columns";
 
 import { useState } from "react";
 

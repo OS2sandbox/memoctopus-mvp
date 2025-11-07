@@ -13,6 +13,7 @@ import {
 } from "@tanstack/react-table";
 
 import { FilterMode } from "@/lib/constants";
+import type { Prompt } from "@/lib/schemas/prompt";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { Checkbox } from "@/lib/ui/core/shadcn/checkbox";
 import { Input } from "@/lib/ui/core/shadcn/input";
@@ -25,7 +26,6 @@ import {
   TableRow,
 } from "@/lib/ui/core/shadcn/table";
 import { PromptDialog } from "@/lib/ui/custom/prompt-library/PromptDialog";
-import type { Prompt } from "@/lib/ui/custom/prompt-library/table/Columns";
 
 import { useState } from "react";
 
@@ -117,7 +117,6 @@ export function DataTable<TData, TValue>({
           )}
         </div>
 
-        {/* Add prompt button */}
         {onAdd && <PromptDialog onSubmit={onAdd as (data: Prompt) => void} />}
       </div>
 
