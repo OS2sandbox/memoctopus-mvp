@@ -4,6 +4,8 @@ import {useStepper} from "@/lib/ui/custom/wizard/stepper";
 import {STEP_ID} from "@/lib/constants";
 import {Button} from "@/lib/ui/core/shadcn/button";
 import {Prompt} from "@/lib/schemas/prompt";
+import {Input} from "@/lib/ui/core/shadcn/input";
+import {Title} from "@radix-ui/react-dialog";
 
 interface HandleExportPDFProps {
     content: string;
@@ -21,6 +23,12 @@ export const ShareStep = () => {
 
   return (
       <WizardPanel>
+          <Title>
+                Eksportér din opsummering
+          </Title>
+          <Input type={"text"} placeholder={"Navngiv opsummering..."}>
+              {prompt.name}
+          </Input>
           <Button
               onClick={() => handleExportPDF({ content: content, fileName: prompt.name })}>
               PDF export test

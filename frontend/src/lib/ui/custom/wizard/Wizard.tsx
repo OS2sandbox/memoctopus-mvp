@@ -13,6 +13,7 @@ import { defaultMetadata, Stepper } from "./stepper";
 
 // TODO: Fragment metadata into a separate file; metadata.ts for example
 export const Wizard = () => {
+
   return (
     <Stepper.Provider
       labelOrientation="vertical"
@@ -20,17 +21,14 @@ export const Wizard = () => {
       initialMetadata={{
         [STEP_ID.UploadSpeechStep]: {
           ...defaultMetadata,
-          isCompleted: false,
           file: null as File | null,
         },
         [STEP_ID.SelectPromptStep]: {
           ...defaultMetadata,
-          isCompleted: false,
           prompt: null as Prompt | null,
         },
         [STEP_ID.EditAndConfirmStep]: {
           ...defaultMetadata,
-          isCompleted: false,
           editedSummary: "",
         },
         [STEP_ID.ShareStep]: {

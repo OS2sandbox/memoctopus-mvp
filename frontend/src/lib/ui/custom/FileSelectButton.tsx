@@ -6,7 +6,7 @@ import { STEP_ID } from "@/lib/constants";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 
-import { Activity, type ChangeEvent, useRef, useState } from "react";
+import { Activity, type ChangeEvent, useRef } from "react";
 
 interface FileSelectButtonProps {
   fileType?: string;
@@ -18,8 +18,8 @@ interface FileSelectButtonProps {
  */
 export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const currMetadata = useStepper().metadata[STEP_ID.UploadSpeechStep] ?? {};
+  const currFile = currMetadata["file"] as File | undefined;
 
   const { setMetadata, metadata } = useStepper();
   const isUploaded = metadata[STEP_ID.UploadSpeechStep]?.[
@@ -29,7 +29,6 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      setSelectedFile(file);
       setMetadata(STEP_ID.UploadSpeechStep, { ...currMetadata, file });
     }
   };
@@ -72,12 +71,12 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
         variant="outline"
         onClick={handleClick}
         disabled={isUploaded}
-        className={selectedFile?.name ? "text-gray-500" : ""}
+        className={currFile?.name ? "text-gray-500" : ""}
       >
-        {selectedFile?.name ? selectedFile?.name : "Vælg fil"}
+        {currFile?.name ? currFile?.name : "Vælg fil"}
       </Button>
 
-      <Activity mode={selectedFile ? "visible" : "hidden"}>
+      <Activity mode={currFile ? "visible" : "hidden"}>
         <div className="flex flex-row gap-2 items-center">
           <Button onClick={handleUpload} disabled={isUploaded}>
             Upload
