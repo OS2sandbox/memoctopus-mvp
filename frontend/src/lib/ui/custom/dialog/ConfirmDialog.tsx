@@ -38,9 +38,9 @@ export const ConfirmDialog = ({
         <DialogTrigger asChild>{trigger}</DialogTrigger>
       </Activity>
       <DialogContent
-          onInteractOutside={(e) => e.preventDefault()}
-          onEscapeKeyDown={(e) => e.preventDefault()}
-          showCloseButton={false}
+        onInteractOutside={(e) => e.preventDefault()}
+        onEscapeKeyDown={(e) => e.preventDefault()}
+        showCloseButton={false}
       >
         <VisuallyHidden>
           <DialogTitle>Bekræft prompt-valg</DialogTitle>

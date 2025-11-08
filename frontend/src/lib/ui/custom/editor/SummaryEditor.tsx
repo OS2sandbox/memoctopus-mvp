@@ -11,9 +11,9 @@ interface SummaryEditorProps {
 }
 
 /*
-* TODO:
-*  - Remove the "Godkend" button and handle it on "Næste" instead with a warning dialog
-*  - sanitize html content before sending it to the parent component
+ * TODO:
+ *  - Remove the "Godkend" button and handle it on "Næste" instead with a warning dialog
+ *  - sanitize html content before sending it to the parent component
  */
 export const SummaryEditor = ({
   initialContent = "",
@@ -27,7 +27,7 @@ export const SummaryEditor = ({
     onApprove(content);
     setIsEditable(false);
     setOpen(false);
-  }
+  };
 
   const triggerDisabled =
     !content || getVisibleTextLength(content) <= 0 || !isEditable;

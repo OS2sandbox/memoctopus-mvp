@@ -13,7 +13,6 @@ import { defaultMetadata, Stepper } from "./stepper";
 
 // TODO: Fragment metadata into a separate file; metadata.ts for example
 export const Wizard = () => {
-
   return (
     <Stepper.Provider
       labelOrientation="vertical"

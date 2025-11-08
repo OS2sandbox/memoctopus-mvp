@@ -6,7 +6,6 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["!!frontend/public/**"],
     "ignoreUnknown": false
   },
   "formatter": {
