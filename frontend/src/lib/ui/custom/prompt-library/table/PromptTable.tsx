@@ -8,7 +8,7 @@ import { Spinner } from "@/lib/ui/core/shadcn/spinner";
 import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
 import { usePromptTable } from "@/lib/ui/custom/prompt-library/hooks/usePromptTable";
 import { getColumns } from "@/lib/ui/custom/prompt-library/table/Columns";
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/utils/utils";
 
 import { Fragment, useEffect, useState } from "react";
 

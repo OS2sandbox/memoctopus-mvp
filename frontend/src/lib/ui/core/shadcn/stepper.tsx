@@ -5,7 +5,7 @@ import * as Stepperize from "@stepperize/react";
 import { cva, type VariantProps } from "class-variance-authority";
 
 import { Button } from "@/lib/ui/core/shadcn/button";
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/utils/utils";
 
 import * as React from "react";
 

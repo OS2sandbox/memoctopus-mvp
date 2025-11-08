@@ -1,7 +1,7 @@
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { MinimalTiptap } from "@/lib/ui/core/shadcn/minimal-tiptap";
 import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
-import { getVisibleTextLength } from "@/lib/utils";
+import { getVisibleTextLength } from "@/lib/utils/utils";
 
 import { useState } from "react";
 
@@ -10,7 +10,11 @@ interface SummaryEditorProps {
   onApprove: (html: string) => void;
 }
 
-// TODO: Remove the "Godkend" button and handle it on "Næste" instead with a warning dialog
+/*
+* TODO:
+*  - Remove the "Godkend" button and handle it on "Næste" instead with a warning dialog
+*  - sanitize html content before sending it to the parent component
+ */
 export const SummaryEditor = ({
   initialContent = "",
   onApprove,
@@ -23,7 +27,7 @@ export const SummaryEditor = ({
     onApprove(content);
     setIsEditable(false);
     setOpen(false);
-  };
+  }
 
   const triggerDisabled =
     !content || getVisibleTextLength(content) <= 0 || !isEditable;

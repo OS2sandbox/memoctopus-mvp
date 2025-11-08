@@ -4,7 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 
 import { Label } from "@/lib/ui/core/shadcn/label";
 import { Separator } from "@/lib/ui/core/shadcn/separator";
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/utils/utils";
 
 import { useMemo } from "react";
 

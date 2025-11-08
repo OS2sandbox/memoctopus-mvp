@@ -8,7 +8,7 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@/lib/ui/core/shadcn/dropdown-menu";
-import { getInitials } from "@/lib/utils";
+import { getInitials } from "@/lib/utils/utils";
 
 import { useRouter } from "next/navigation";
 
