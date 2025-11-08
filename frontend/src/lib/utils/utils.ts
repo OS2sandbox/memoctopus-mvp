@@ -2,6 +2,7 @@ import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { jsPDF } from "jspdf";
 import "@/lib/fonts/Roboto-normal"
+import {formatToSafeFileName} from "@/lib/utils/regex-rule-formatter/formatters";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -55,14 +56,13 @@ export const getVisibleTextLength = (html: string): number => {
 };
 
 interface ExportToPDFProps {
-    fileName?: string;
+    fileName: string;
     html: string;
 }
 
 // https://raw.githack.com/parallax/jsPDF/master/fontconverter/fontconverter.html
 export const exportToPDF = ({ fileName, html }: ExportToPDFProps) => {
-    const safeName =
-        fileName?.trim() || `summary-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    const safeName = formatToSafeFileName({ fileName: fileName });
 
     const pdf = new jsPDF({
         orientation: "portrait",
