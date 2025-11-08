@@ -19,8 +19,6 @@ export const ShareStep = () => {
     const content: string = metadata[STEP_ID.EditAndConfirmStep]?.["editedSummary"];
     const prompt: Prompt = metadata[STEP_ID.SelectPromptStep]?.["prompt"];
 
-    console.log("prompt", prompt);
-
   return (
       <WizardPanel>
           <Button
