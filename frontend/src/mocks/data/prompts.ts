@@ -16,7 +16,7 @@ export const mockPrompts: Prompt[] = [
     name: "Festudvalget på Tarm",
     creator: { id: "1234", name: "Camilla Nielsen" },
     category: PROMPT_CATEGORY.ToDoListe,
-    isFavorite: true,
+    isFavorite: false,
     text: "Lorem Ipsum Dolor Sit Amet 2",
   },
   {
@@ -34,5 +34,13 @@ export const mockPrompts: Prompt[] = [
     category: PROMPT_CATEGORY.ToDoListe,
     isFavorite: false,
     text: "Lorem Ipsum Dolor Sit Amet 3124124",
+  },
+  {
+    id: "5",
+    name: "engelsk til dansk",
+    creator: { id: "1234", name: "Camilla Nielsen" },
+    category: PROMPT_CATEGORY.KortReferat,
+    isFavorite: true,
+    text: "generer et kort referat af denne engelske tekst på dansk",
   },
 ];

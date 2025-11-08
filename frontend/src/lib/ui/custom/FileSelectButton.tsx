@@ -1,17 +1,8 @@
 "use client";
 
-import {
-  LucideAlertCircle,
-  LucideCheck,
-  LucideLoaderCircle,
-} from "lucide-react";
+import { LucideCheck } from "lucide-react";
 
 import { STEP_ID } from "@/lib/constants";
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from "@/lib/ui/core/shadcn/alert";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 
@@ -27,8 +18,6 @@ interface FileSelectButtonProps {
  */
 export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [isUploading, setIsUploading] = useState<boolean>(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const currMetadata = useStepper().metadata[STEP_ID.UploadSpeechStep] ?? {};
 
@@ -52,33 +41,22 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
   // This is NOT the actual upload logic, just a simulation; a placeholder.
   // TODO: insert upload logic here (backend)
   const handleUpload = () => {
-    setIsUploading(true);
-    setUploadError(null);
-
-    const fakeUploadTime = Math.random() * 2000 + 1500;
-    const shouldFail = Math.random() < 0.3; // 30% chance to fail
-
-    window.setTimeout(() => {
-      try {
-        setIsUploading(false);
-
-        if (shouldFail) {
-          throw new Error("Network error: could not upload file.");
-        }
-
-        const currentMetadata = metadata[STEP_ID.UploadSpeechStep] ?? {};
-        setMetadata(STEP_ID.UploadSpeechStep, {
-          ...currentMetadata,
-          isCompleted: true,
-        });
-      } catch (error) {
-        setUploadError(
-          "Error occurred while uploading: " +
-            (error instanceof Error ? error.message : "Unknown error"),
-        );
-      }
-    }, fakeUploadTime);
+    const currentMetadata = metadata[STEP_ID.UploadSpeechStep] ?? {};
+    setMetadata(STEP_ID.UploadSpeechStep, {
+      ...currentMetadata,
+      isCompleted: true,
+    });
   };
+
+  /*
+  <Activity mode={uploadError ? "visible" : "hidden"}>
+        <Alert variant="destructive">
+          <LucideAlertCircle />
+          <AlertTitle>Upload failed</AlertTitle>
+          <AlertDescription>{uploadError}</AlertDescription>
+        </Alert>
+      </Activity>
+   */
 
   return (
     <div className="flex flex-col items-start gap-2">
@@ -99,25 +77,12 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
         {selectedFile?.name ? selectedFile?.name : "Vælg fil"}
       </Button>
 
-      <Activity mode={uploadError ? "visible" : "hidden"}>
-        <Alert variant="destructive">
-          <LucideAlertCircle />
-          <AlertTitle>Upload failed</AlertTitle>
-          <AlertDescription>{uploadError}</AlertDescription>
-        </Alert>
-      </Activity>
-
       <Activity mode={selectedFile ? "visible" : "hidden"}>
         <div className="flex flex-row gap-2 items-center">
           <Button onClick={handleUpload} disabled={isUploaded}>
             Upload
           </Button>
-
-          {isUploading ? (
-            <LucideLoaderCircle className="animate-spin" />
-          ) : isUploaded ? (
-            <LucideCheck className="text-green-500" />
-          ) : null}
+          {isUploaded ? <LucideCheck className="text-green-500" /> : null}
         </div>
       </Activity>
     </div>

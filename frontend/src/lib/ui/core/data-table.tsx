@@ -146,7 +146,14 @@ export function DataTable<TData, TValue>({
               table.getRowModel().rows.map((row) => (
                 <TableRow
                   key={row.id}
-                  onClick={() => onRowClick?.(row.original)}
+                  onClick={(e) => {
+                    const target = e.target as HTMLElement;
+
+                    if (target.closest("button, a, input, [role='button']"))
+                      return;
+
+                    onRowClick?.(row.original);
+                  }}
                   className={
                     onRowClick
                       ? "cursor-pointer hover:bg-muted/50 transition-colors"

@@ -31,7 +31,7 @@ export const Wizard = () => {
         [STEP_ID.EditAndConfirmStep]: {
           ...defaultMetadata,
           isCompleted: false,
-          transcript: "",
+          summary: "",
         },
         [STEP_ID.ShareStep]: {
           ...defaultMetadata,

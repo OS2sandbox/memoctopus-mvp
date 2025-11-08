@@ -1,8 +1,11 @@
+import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
+
 import { Button } from "@/lib/ui/core/shadcn/button";
 import {
   Dialog,
   DialogContent,
   DialogFooter,
+  DialogTitle,
   DialogTrigger,
 } from "@/lib/ui/core/shadcn/dialog";
 
@@ -14,6 +17,7 @@ interface ConfirmDialogProps {
   onConfirm: () => void;
   children: ReactNode;
   trigger?: ReactNode;
+  footerDisabled?: boolean;
 }
 
 /**
@@ -26,6 +30,7 @@ export const ConfirmDialog = ({
   onConfirm,
   children,
   trigger,
+  footerDisabled,
 }: ConfirmDialogProps) => {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -33,12 +38,21 @@ export const ConfirmDialog = ({
         <DialogTrigger asChild>{trigger}</DialogTrigger>
       </Activity>
       <DialogContent showCloseButton={false}>
+        <VisuallyHidden>
+          <DialogTitle>Bekræft prompt-valg</DialogTitle>
+        </VisuallyHidden>
         <div className="p-5 space-y-2">{children}</div>
         <DialogFooter>
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>
+          <Button
+            disabled={footerDisabled}
+            variant="secondary"
+            onClick={() => onOpenChange(false)}
+          >
             Annuller
           </Button>
-          <Button onClick={onConfirm}>Godkend</Button>
+          <Button disabled={footerDisabled} onClick={onConfirm}>
+            Godkend
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

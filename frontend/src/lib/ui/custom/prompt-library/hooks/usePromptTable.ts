@@ -1,25 +1,16 @@
 "use client";
 
-import type { User } from "@/lib/auth-client";
 import { type DATA_TABLE_SCOPE, FILTER_MODE } from "@/lib/constants";
 import type { Prompt } from "@/lib/schemas/prompt";
+import type { PromptTableProps } from "@/lib/ui/custom/prompt-library/table/PromptTable";
 
 import { useState } from "react";
-
-export interface PromptTableOptions {
-  currentUser: User | null;
-  tableMode?: FILTER_MODE[];
-  hideAddButton?: boolean;
-  data: Prompt[];
-  className?: string;
-  onRowClick?: (prompt: Prompt) => void;
-}
 
 export const usePromptTable = ({
   currentUser,
   tableMode,
   data,
-}: Omit<PromptTableOptions, "className" | "hideAddButton">) => {
+}: Omit<PromptTableProps, "className" | "hideAddButton" | "isProcessing">) => {
   const [prompts, setPrompts] = useState<Prompt[]>(data);
 
   const [scope, setScope] = useState<DATA_TABLE_SCOPE | null>(null);

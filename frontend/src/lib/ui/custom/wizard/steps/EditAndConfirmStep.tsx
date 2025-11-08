@@ -14,10 +14,10 @@ export const EditAndConfirmStep = () => {
           setMetadata(STEP_ID.EditAndConfirmStep, {
             ...editConfirmMetadata,
             isCompleted: true,
-            transcript: content,
+            summary: content,
           });
         }}
-        initialContent={editConfirmMetadata["transcript"]}
+        initialContent={editConfirmMetadata["summary"]}
       />
     </WizardPanel>
   );

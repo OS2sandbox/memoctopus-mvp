@@ -2,10 +2,11 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { getPrompts } from "@/lib/api/prompts";
 import {
-  type TranscribeAudioProps,
-  transcribeAudio,
+  type TranscribeAndSummarizeProps,
+  transcribeAndSummarize,
 } from "@/lib/api/transcription";
 import { FILTER_MODE, STEP_ID } from "@/lib/constants";
+import { useCurrentUser } from "@/lib/hooks/use-current-user";
 import type { Prompt } from "@/lib/schemas/prompt";
 import { Spinner } from "@/lib/ui/core/shadcn/spinner";
 import { PromptTable } from "@/lib/ui/custom/prompt-library/table/PromptTable";
@@ -13,14 +14,16 @@ import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
 
 export const SelectPromptStep = () => {
-  const { metadata, setMetadata } = useStepper();
+  const { metadata, setMetadata, next } = useStepper();
   const selectPromptMetadata = metadata[STEP_ID.SelectPromptStep] ?? {};
   const selectedPrompt: Prompt | undefined = selectPromptMetadata["prompt"];
 
-  const { mutate: transcribe } = useMutation({
-    mutationFn: ({ file, prompt }: TranscribeAudioProps) =>
-      transcribeAudio({ file: file, prompt: prompt }),
-    onSuccess: (transcription) => {
+  const { user } = useCurrentUser();
+
+  const { mutate: summarize, status: summaryStatus } = useMutation({
+    mutationFn: ({ file, prompt }: TranscribeAndSummarizeProps) =>
+      transcribeAndSummarize({ file: file, prompt: prompt }),
+    onSuccess: (summary) => {
       setMetadata(STEP_ID.SelectPromptStep, {
         ...selectPromptMetadata,
         isCompleted: selectedPrompt,
@@ -28,12 +31,14 @@ export const SelectPromptStep = () => {
 
       setMetadata(STEP_ID.EditAndConfirmStep, {
         ...selectPromptMetadata,
-        transcript: transcription.text,
+        summary: summary,
       });
+
+      next();
     },
   });
 
-  const { data, status } = useQuery({
+  const { data: prompts, status } = useQuery({
     queryKey: ["prompts"],
     queryFn: getPrompts,
   });
@@ -44,7 +49,7 @@ export const SelectPromptStep = () => {
       prompt: entry,
     });
 
-    transcribe({
+    summarize({
       file: metadata[STEP_ID.UploadSpeechStep]?.["file"],
       prompt: entry.text,
     });
@@ -61,10 +66,14 @@ export const SelectPromptStep = () => {
       case "success": {
         return (
           <PromptTable
-            data={data}
+            data={prompts}
             hideAddButton={true}
-            onRowClick={handleOnRowClick}
+            rowClickConfig={{
+              onRowClick: handleOnRowClick,
+              status: summaryStatus,
+            }}
             tableMode={[FILTER_MODE.Favorites, FILTER_MODE.Mine]}
+            currentUser={user}
           />
         );
       }
