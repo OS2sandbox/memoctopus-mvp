@@ -1,11 +1,5 @@
-import { Button } from "@/lib/ui/core/shadcn/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogTrigger,
-} from "@/lib/ui/core/shadcn/dialog";
 import { MinimalTiptap } from "@/lib/ui/core/shadcn/minimal-tiptap";
+import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
 import { getVisibleTextLength } from "@/lib/utils";
 
 import { useState } from "react";
@@ -40,29 +34,18 @@ export const SummaryEditor = ({
         className={!isEditable ? "bg-gray-100" : ""}
       />
       <div className="flex justify-end gap-2 pt-4">
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild>
-            <Button
-              disabled={
-                !content || getVisibleTextLength(content) <= 0 || !isEditable
-              }
-            >
-              Godkend
-            </Button>
-          </DialogTrigger>
-          <DialogContent showCloseButton={false}>
-            <div className="p-5 space-y-2">
-              <p>Er du sikker på, at du vil godkende dette resumé?</p>
-              <p>Når du godkender, kan du ikke redigere det yderligere.</p>
-            </div>
-            <DialogFooter>
-              <Button variant="secondary" onClick={() => setOpen(false)}>
-                Annuller
-              </Button>
-              <Button onClick={handleApprove}>Godkend</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <ConfirmDialog
+          open={open}
+          onOpenChange={setOpen}
+          onConfirm={handleApprove}
+          triggerLabel={"Godkend"}
+          triggerDisabled={
+            !content || getVisibleTextLength(content) <= 0 || !isEditable
+          }
+        >
+          <p>Er du sikker på, at du vil godkende dette resumé?</p>
+          <p>Når du godkender, kan du ikke redigere det yderligere.</p>
+        </ConfirmDialog>
       </div>
     </div>
   );
