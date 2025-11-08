@@ -51,7 +51,7 @@ export const RecordDialog = ({
       setMetadata(STEP_ID.UploadSpeechStep, {
         ...currentMetadata,
         file,
-        isCompleted: true,
+        isCompleted: file,
       }),
   });
 

@@ -19,7 +19,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/lib/ui/core/shadcn/tooltip";
-import { PromptDialog } from "@/lib/ui/custom/prompt-library/PromptDialog";
+import { PromptDialog } from "@/lib/ui/custom/dialog/PromptDialog";
 import { ViewPromptAction } from "@/lib/ui/custom/prompt-library/table/ViewPromptAction";
 
 interface getColumnsProps {

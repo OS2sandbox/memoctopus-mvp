@@ -9,7 +9,7 @@ import { useState } from "react";
 export interface PromptTableOptions {
   currentUser: User | null;
   tableMode?: FILTER_MODE[];
-  HideAddButton?: boolean;
+  hideAddButton?: boolean;
   data: Prompt[];
   className?: string;
   onRowClick?: (prompt: Prompt) => void;
@@ -19,7 +19,7 @@ export const usePromptTable = ({
   currentUser,
   tableMode,
   data,
-}: Omit<PromptTableOptions, "className" | "HideAddButton">) => {
+}: Omit<PromptTableOptions, "className" | "hideAddButton">) => {
   const [prompts, setPrompts] = useState<Prompt[]>(data);
 
   const [scope, setScope] = useState<DATA_TABLE_SCOPE | null>(null);

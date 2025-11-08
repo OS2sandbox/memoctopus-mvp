@@ -14,7 +14,7 @@ export const PromptTable = ({
   data,
   tableMode,
   className,
-  HideAddButton,
+  hideAddButton,
   onRowClick,
 }: Omit<PromptTableOptions, "currentUser">) => {
   const { data: session } = useSession();
@@ -43,7 +43,7 @@ export const PromptTable = ({
       <DataTable<Prompt, typeof columns>
         columns={columns}
         data={prompts}
-        {...(!HideAddButton && { onAdd: handleAddPrompt })}
+        {...(!hideAddButton && { onAdd: handleAddPrompt })}
         scopeOpts={{
           scope,
           onScopeChange: setScope,

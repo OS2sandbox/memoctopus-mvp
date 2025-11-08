@@ -25,7 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/lib/ui/core/shadcn/table";
-import { PromptDialog } from "@/lib/ui/custom/prompt-library/PromptDialog";
+import { PromptDialog } from "@/lib/ui/custom/dialog/PromptDialog";
 
 import { Activity, useState } from "react";
 
