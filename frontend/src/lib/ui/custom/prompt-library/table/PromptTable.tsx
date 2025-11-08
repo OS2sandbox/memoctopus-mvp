@@ -3,12 +3,15 @@
 import { useSession } from "@/lib/auth-client";
 import type { Prompt } from "@/lib/schemas/prompt";
 import { DataTable } from "@/lib/ui/core/data-table";
+import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
 import {
   type PromptTableOptions,
   usePromptTable,
 } from "@/lib/ui/custom/prompt-library/hooks/usePromptTable";
 import { getColumns } from "@/lib/ui/custom/prompt-library/table/Columns";
 import { cn } from "@/lib/utils";
+
+import { useState } from "react";
 
 export const PromptTable = ({
   data,
@@ -19,6 +22,21 @@ export const PromptTable = ({
 }: Omit<PromptTableOptions, "currentUser">) => {
   const { data: session } = useSession();
   const user = session?.user ?? null;
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
+
+  const handleRowClick = (prompt: Prompt) => {
+    setSelectedPrompt(prompt);
+    setConfirmOpen(true);
+  };
+
+  const handleConfirm = () => {
+    if (selectedPrompt && onRowClick) {
+      onRowClick(selectedPrompt);
+    }
+
+    setConfirmOpen(false);
+  };
 
   const {
     prompts,
@@ -49,8 +67,17 @@ export const PromptTable = ({
           onScopeChange: setScope,
           filterModes: tableMode ?? [],
         }}
-        {...(onRowClick && { onRowClick: onRowClick })}
+        onRowClick={handleRowClick}
       />
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={() => setConfirmOpen((open) => !open)}
+        onConfirm={handleConfirm}
+      >
+        <p>Er du sikker på, at du vil vælge denne prompt?</p>
+        <p>Transkriberingen påbegynder, idet du godkender.</p>
+      </ConfirmDialog>
     </section>
   );
 };

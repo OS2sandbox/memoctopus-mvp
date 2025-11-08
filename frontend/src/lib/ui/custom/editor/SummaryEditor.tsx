@@ -1,3 +1,4 @@
+import { Button } from "@/lib/ui/core/shadcn/button";
 import { MinimalTiptap } from "@/lib/ui/core/shadcn/minimal-tiptap";
 import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
 import { getVisibleTextLength } from "@/lib/utils";
@@ -24,6 +25,9 @@ export const SummaryEditor = ({
     setOpen(false);
   };
 
+  const triggerDisabled =
+    !content || getVisibleTextLength(content) <= 0 || !isEditable;
+
   return (
     <div className="space-y-4">
       <MinimalTiptap
@@ -38,10 +42,7 @@ export const SummaryEditor = ({
           open={open}
           onOpenChange={setOpen}
           onConfirm={handleApprove}
-          triggerLabel={"Godkend"}
-          triggerDisabled={
-            !content || getVisibleTextLength(content) <= 0 || !isEditable
-          }
+          trigger={<Button disabled={triggerDisabled}>Godkend</Button>}
         >
           <p>Er du sikker på, at du vil godkende dette resumé?</p>
           <p>Når du godkender, kan du ikke redigere det yderligere.</p>
