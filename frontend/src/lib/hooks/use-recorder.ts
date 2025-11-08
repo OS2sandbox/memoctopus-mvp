@@ -16,6 +16,7 @@ interface UseRecorderProps {
   onError?: (error: Error) => void;
 }
 
+// TODO: Implement useReducer here
 export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
   const [status, setStatus] = useState<RecorderStatus>(RecorderStatus.Idle);
   const [error, setError] = useState<string | null>(null);
