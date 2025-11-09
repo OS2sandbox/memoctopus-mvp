@@ -20,7 +20,9 @@ export function ProfileOverview() {
 
   const initials = getInitials(user?.name);
 
-  // TODO: Add avatarImage later
+  /* TODO: Add avatarImage later
+   *  - add organization later when Microsoft Entra is implemented
+   */
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
