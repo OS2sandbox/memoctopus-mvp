@@ -7,11 +7,29 @@ import { Stepper, useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { Activity } from "react";
 
 export const WizardControls = () => {
-  const { isFirst, prev, isLast, reset, next, metadata, current, setMetadata } =
-    useStepper();
+  const {
+    isFirst,
+    prev,
+    isLast,
+    reset,
+    next,
+    metadata,
+    current,
+    setMetadata,
+    resetMetadata,
+  } = useStepper();
   const isCompleted = metadata[current.id]?.["isCompleted"] as boolean;
   const currentFile = metadata[current.id]?.["file"] as boolean;
   const isFirstStep = current.id === STEP_ID.UploadSpeechStep;
+
+  const onNextClick = () => {
+    if (isLast) {
+      reset();
+      resetMetadata(true);
+    } else {
+      next();
+    }
+  };
 
   return (
     <Stepper.Controls className="flex justify-between items-center mt-6">
@@ -37,9 +55,17 @@ export const WizardControls = () => {
           </Button>
         </Activity>
 
-        <Button disabled={!isCompleted} onClick={isLast ? reset : next}>
-          {isLast ? "Start forfra" : "Næste"}
-        </Button>
+        <Activity
+          mode={
+            current.id === STEP_ID.EditAndConfirmStep && !isCompleted
+              ? "hidden"
+              : "visible"
+          }
+        >
+          <Button disabled={!isLast && !isCompleted} onClick={onNextClick}>
+            {isLast ? "Start forfra" : "Næste"}
+          </Button>
+        </Activity>
       </div>
     </Stepper.Controls>
   );

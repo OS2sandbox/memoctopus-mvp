@@ -8,29 +8,27 @@ import { useState } from "react";
 interface SummaryEditorProps {
   initialContent?: string;
   onApprove: (html: string) => void;
+  disabled?: boolean;
 }
 
-/*
- * TODO:
+/* TODO:
  *  - Remove the "Godkend" button and handle it on "Næste" instead with a warning dialog
- *  - sanitize html content before sending it to the parent component
  */
 export const SummaryEditor = ({
   initialContent = "",
   onApprove,
+  disabled = false,
 }: SummaryEditorProps) => {
   const [open, setOpen] = useState(false);
   const [content, setContent] = useState(initialContent);
-  const [isEditable, setIsEditable] = useState(true);
 
   const handleApprove = () => {
-    onApprove(content);
-    setIsEditable(false);
     setOpen(false);
+    onApprove(content);
   };
 
   const triggerDisabled =
-    !content || getVisibleTextLength(content) <= 0 || !isEditable;
+    !content || getVisibleTextLength(content) <= 0 || disabled;
 
   return (
     <div className="space-y-4">
@@ -38,8 +36,8 @@ export const SummaryEditor = ({
         content={content}
         onChange={setContent}
         placeholder="Redigér dit resumé her..."
-        editable={isEditable}
-        className={!isEditable ? "bg-gray-100" : ""}
+        editable={!disabled}
+        className={disabled ? "bg-gray-100" : ""}
       />
       <div className="flex justify-end gap-2 pt-4">
         <ConfirmDialog

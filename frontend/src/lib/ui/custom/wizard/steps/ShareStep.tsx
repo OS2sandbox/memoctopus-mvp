@@ -30,6 +30,8 @@ export const ShareStep = () => {
   const [fileName, setFileName] = useState("");
   const [exportedFormat, setExportedFormat] = useState(EXPORT_FORMAT.PDF);
 
+  const safeFileName = handleSafeFileName({ fileName: undefined });
+
   const exportFormatHandler = () => {
     switch (exportedFormat) {
       case EXPORT_FORMAT.PDF: {
@@ -42,9 +44,9 @@ export const ShareStep = () => {
   };
 
   return (
-    <WizardPanel className="items-center">
+    <WizardPanel>
       <WizardContentPanel className={"mx-auto gap-2"}>
-        <FieldSet className="mb-3">
+        <FieldSet>
           <FieldLegend>Eksportér opsummering</FieldLegend>
 
           <Field orientation="vertical">
@@ -52,7 +54,7 @@ export const ShareStep = () => {
             <FieldContent>
               <Input
                 id="fileName"
-                placeholder={handleSafeFileName({ fileName: undefined })}
+                placeholder={safeFileName}
                 value={fileName}
                 onInput={(e) => setFileName(e.currentTarget.value)}
               />
@@ -62,7 +64,7 @@ export const ShareStep = () => {
             </FieldContent>
           </Field>
 
-          <Field orientation="vertical" className="w-24">
+          <Field orientation="vertical" className="w-20">
             <FieldLabel htmlFor="exportFormat">Format</FieldLabel>
             <FieldContent>
               <FormatDropdownMenu
@@ -74,7 +76,7 @@ export const ShareStep = () => {
         </FieldSet>
         <Separator />
         <Button className="self-end" onClick={() => exportFormatHandler()}>
-          Eksporter
+          Eksportér
         </Button>
       </WizardContentPanel>
     </WizardPanel>

@@ -33,7 +33,11 @@ export const FormatDropdownMenu = ({
         <Separator />
 
         {Object.values(EXPORT_FORMAT).map((format) => (
-          <DropdownMenuItem onClick={() => onSelect(format)} key={format}>
+          <DropdownMenuItem
+            disabled={EXPORT_FORMAT.EMAIL === format}
+            onClick={() => onSelect(format)}
+            key={format}
+          >
             {format}
           </DropdownMenuItem>
         ))}
