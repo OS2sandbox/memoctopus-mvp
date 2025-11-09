@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["!frontend/public/**"]
+    "includes": ["**", "!public/**"]
   },
   "formatter": {
     "enabled": true,
