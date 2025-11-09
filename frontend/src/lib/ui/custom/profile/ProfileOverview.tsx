@@ -22,7 +22,7 @@ export function ProfileOverview() {
 
   // TODO: Add avatarImage later
   return (
-    <DropdownMenu>
+    <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <Avatar>
           <AvatarFallback>{initials}</AvatarFallback>
