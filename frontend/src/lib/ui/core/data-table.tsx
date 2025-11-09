@@ -13,7 +13,6 @@ import {
 } from "@tanstack/react-table";
 
 import { DATA_TABLE_SCOPE, FILTER_MODE } from "@/lib/constants";
-import type { Prompt } from "@/lib/schemas/prompt";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { Checkbox } from "@/lib/ui/core/shadcn/checkbox";
 import { Input } from "@/lib/ui/core/shadcn/input";
@@ -25,27 +24,26 @@ import {
   TableHeader,
   TableRow,
 } from "@/lib/ui/core/shadcn/table";
-import { PromptDialog } from "@/lib/ui/custom/dialog/PromptDialog";
 
-import { Activity, useState } from "react";
+import { type ReactNode, useState } from "react";
 
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
-  onAdd?: (column: TData) => void;
+  onRowClick?: (entry: TData) => void;
+  addButton?: ReactNode;
   scopeOpts?: {
     onScopeChange: (scope: DATA_TABLE_SCOPE | null) => void;
     scope: DATA_TABLE_SCOPE | null;
     filterModes?: FILTER_MODE[];
   };
-  onRowClick?: (entry: TData) => void;
 }
 
 // TODO: Must be made more generic to be reusable
 export function DataTable<TData, TValue>({
   columns,
   data,
-  onAdd,
+  addButton,
   scopeOpts,
   onRowClick,
 }: DataTableProps<TData, TValue>) {
@@ -115,11 +113,7 @@ export function DataTable<TData, TValue>({
             </div>
           )}
         </div>
-
-        {/* TODO: Make this generic, then base it on type */}
-        <Activity mode={onAdd ? "visible" : "hidden"}>
-          <PromptDialog onSubmit={onAdd as (data: Prompt) => void} />
-        </Activity>
+        {addButton}
       </div>
 
       <div className="rounded-md border">
