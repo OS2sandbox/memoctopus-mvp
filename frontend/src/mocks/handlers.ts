@@ -4,7 +4,7 @@ import {
   type Prompt,
   PromptSchema,
   PromptWithIdSchema,
-} from "@/lib/schemas/prompt";
+} from "@/mocks/schemas/prompt";
 import { loadPrompts, savePrompts } from "@/mocks/utils";
 
 export const handlers = [

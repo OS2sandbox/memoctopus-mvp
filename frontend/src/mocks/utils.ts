@@ -1,5 +1,5 @@
-import { type Prompt, PromptWithIdSchema } from "@/lib/schemas/prompt";
 import { mockPrompts } from "@/mocks/data/prompts";
+import { type Prompt, PromptWithIdSchema } from "@/mocks/schemas/prompt";
 
 const STORAGE_KEY = "mock_prompts_store";
 

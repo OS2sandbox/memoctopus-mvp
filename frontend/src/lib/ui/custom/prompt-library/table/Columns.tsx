@@ -3,7 +3,7 @@
 // Known issue that React Compiler is not supported by TanStack table yet:
 // https://nextjs.org/docs/app/api-reference/config/next-config-js/reactCompiler
 
-import type { Prompt } from "@/lib/schemas/prompt";
+import type { Prompt } from "@/mocks/schemas/prompt";
 
 ("use no memo");
 

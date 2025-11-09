@@ -7,11 +7,11 @@ import {
 } from "@/lib/api/transcription";
 import { FILTER_MODE, STEP_ID } from "@/lib/constants";
 import { useCurrentUser } from "@/lib/hooks/use-current-user";
-import type { Prompt } from "@/lib/schemas/prompt";
 import { Spinner } from "@/lib/ui/core/shadcn/spinner";
 import { PromptTable } from "@/lib/ui/custom/prompt-library/table/PromptTable";
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
+import type { Prompt } from "@/mocks/schemas/prompt";
 
 export const SelectPromptStep = () => {
   const { metadata, setMetadata, next } = useStepper();

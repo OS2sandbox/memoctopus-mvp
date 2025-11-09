@@ -1,4 +1,4 @@
-import { type Prompt, PromptWithIdSchema } from "@/lib/schemas/prompt";
+import { type Prompt, PromptWithIdSchema } from "@/mocks/schemas/prompt";
 
 export const getPrompts = async (): Promise<Prompt[]> => {
   const res = await fetch("/api/prompts");

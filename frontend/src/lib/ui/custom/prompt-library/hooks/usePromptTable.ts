@@ -1,8 +1,8 @@
 "use client";
 
 import { type DATA_TABLE_SCOPE, FILTER_MODE } from "@/lib/constants";
-import type { Prompt } from "@/lib/schemas/prompt";
 import type { PromptTableProps } from "@/lib/ui/custom/prompt-library/table/PromptTable";
+import type { Prompt } from "@/mocks/schemas/prompt";
 
 import { useState } from "react";
 

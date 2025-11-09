@@ -47,16 +47,6 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
     });
   };
 
-  /*
-  <Activity mode={uploadError ? "visible" : "hidden"}>
-        <Alert variant="destructive">
-          <LucideAlertCircle />
-          <AlertTitle>Upload failed</AlertTitle>
-          <AlertDescription>{uploadError}</AlertDescription>
-        </Alert>
-      </Activity>
-   */
-
   return (
     <div className="flex flex-col items-start gap-2">
       <input
