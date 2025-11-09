@@ -1,7 +1,16 @@
-import { STEP_ID } from "@/lib/constants";
+import { EXPORT_FORMAT, STEP_ID } from "@/lib/constants";
 import { Button } from "@/lib/ui/core/shadcn/button";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/lib/ui/core/shadcn/field";
 import { Input } from "@/lib/ui/core/shadcn/input";
-import { ExportFormatDropdownMenu } from "@/lib/ui/custom/ExportFormatDropdownMenu";
+import { Separator } from "@/lib/ui/core/shadcn/separator";
+import { FormatDropdownMenu } from "@/lib/ui/custom/ExportFormatDropdownMenu";
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardContentPanel } from "@/lib/ui/custom/wizard/WizardContentPanel";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
@@ -24,27 +33,47 @@ export const ShareStep = () => {
     metadata[STEP_ID.EditAndConfirmStep]?.["editedSummary"];
 
   const [fileName, setFileName] = useState("");
-
-  const handleFormatSelect = (format: string) => {
-    console.log("Selected format:", format);
-  };
+  const [exportedFormat, setExportedFormat] = useState(EXPORT_FORMAT.PDF);
 
   return (
-    <WizardPanel>
-      <WizardContentPanel className={"max-w-full"}>
-        <Input
-          placeholder={"Navngiv opsummering..."}
-          onInput={(t) => setFileName(t.currentTarget.value)}
-          value={fileName}
-          className={"max-w-sm"}
-        ></Input>
-        <ExportFormatDropdownMenu onSelect={handleFormatSelect} />
+    <WizardPanel className="items-center">
+      <WizardContentPanel className={"mx-auto gap-2"}>
+        <FieldSet className="mb-3">
+          <FieldLegend>Eksportér opsummering</FieldLegend>
+
+          <Field orientation="vertical">
+            <FieldLabel htmlFor="fileName">Filnavn</FieldLabel>
+            <FieldContent>
+              <Input
+                id="fileName"
+                placeholder="Navngiv opsummering..."
+                value={fileName}
+                onInput={(e) => setFileName(e.currentTarget.value)}
+              />
+              <FieldDescription>
+                Hvis filnavn udeladt, bruges nuværende data og tid som filnavn.
+              </FieldDescription>
+            </FieldContent>
+          </Field>
+
+          <Field orientation="vertical" className="w-24">
+            <FieldLabel htmlFor="exportFormat">Format</FieldLabel>
+            <FieldContent>
+              <FormatDropdownMenu
+                selected={exportedFormat}
+                onSelect={setExportedFormat}
+              />
+            </FieldContent>
+          </Field>
+        </FieldSet>
+        <Separator />
         <Button
+          className="self-end"
           onClick={() =>
             handleExportPDF({ content: content, fileName: fileName })
           }
         >
-          PDF export test
+          Eksporter
         </Button>
       </WizardContentPanel>
     </WizardPanel>

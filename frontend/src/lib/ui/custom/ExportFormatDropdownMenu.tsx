@@ -1,5 +1,6 @@
 import { DropdownMenuTrigger } from "@radix-ui/react-dropdown-menu";
 
+import { EXPORT_FORMAT } from "@/lib/constants";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import {
   DropdownMenu,
@@ -9,35 +10,20 @@ import {
 } from "@/lib/ui/core/shadcn/dropdown-menu";
 import { Separator } from "@/lib/ui/core/shadcn/separator";
 
-import { useState } from "react";
-
-export enum ExportFormat {
-  PDF = "PDF",
-  DOCX = "DOCX",
-  EMAIL = "Email",
+interface EXPORT_FORMATDropdownMenuProps {
+  onSelect: (format: EXPORT_FORMAT) => void;
+  selected: EXPORT_FORMAT;
 }
 
-interface ExportFormatDropdownMenuProps {
-  onSelect: (format: ExportFormat) => void;
-}
-
-export const ExportFormatDropdownMenu = ({
+export const FormatDropdownMenu = ({
   onSelect,
-}: ExportFormatDropdownMenuProps) => {
-  const [selectedFormat, setSelectedFormat] = useState<ExportFormat | null>(
-    null,
-  );
-
-  const handleFormatSelect = (format: ExportFormat) => {
-    setSelectedFormat(format);
-    onSelect(format);
-  };
-
+  selected,
+}: EXPORT_FORMATDropdownMenuProps) => {
   return (
-    <DropdownMenu>
+    <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <Button variant="outline">
-          {selectedFormat ? selectedFormat : "Vælg eksportformat"}
+          {selected ? selected : "Vælg eksportformat"}
         </Button>
       </DropdownMenuTrigger>
 
@@ -46,11 +32,8 @@ export const ExportFormatDropdownMenu = ({
 
         <Separator />
 
-        {Object.values(ExportFormat).map((format) => (
-          <DropdownMenuItem
-            onClick={() => handleFormatSelect(format)}
-            key={format}
-          >
+        {Object.values(EXPORT_FORMAT).map((format) => (
+          <DropdownMenuItem onClick={() => onSelect(format)} key={format}>
             {format}
           </DropdownMenuItem>
         ))}
