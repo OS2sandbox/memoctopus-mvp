@@ -13,8 +13,8 @@ export const EditAndConfirmStep = () => {
         onApprove={(content) => {
           setMetadata(STEP_ID.EditAndConfirmStep, {
             ...editConfirmMetadata,
-            isCompleted: true,
-            summary: content,
+            isCompleted: content && content.length > 0,
+            editedSummary: content,
           });
         }}
         initialContent={editConfirmMetadata["summary"]}

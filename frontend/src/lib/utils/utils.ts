@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import "@/lib/fonts/Roboto-normal";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -36,12 +37,18 @@ export function formatTime(
   if (opts?.showHours || h > 0) {
     return `${twoDigits.format(h)}:${twoDigits.format(m)}:${twoDigits.format(s)}`;
   }
-  return `${twoDigits.format(m)}:${twoDigits.format(s)}`;
+
+  const result = `${twoDigits.format(m)}:${twoDigits.format(s)}`;
+
+  return result;
 }
 
 export const getVisibleTextLength = (html: string): number => {
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, "text/html");
   const text = doc.body.textContent?.trim() ?? "";
-  return text.length;
+
+  const result = text.length;
+
+  return result;
 };

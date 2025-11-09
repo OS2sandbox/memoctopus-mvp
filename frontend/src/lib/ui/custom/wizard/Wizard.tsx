@@ -20,18 +20,15 @@ export const Wizard = () => {
       initialMetadata={{
         [STEP_ID.UploadSpeechStep]: {
           ...defaultMetadata,
-          isCompleted: false,
           file: null as File | null,
         },
         [STEP_ID.SelectPromptStep]: {
           ...defaultMetadata,
-          isCompleted: false,
           prompt: null as Prompt | null,
         },
         [STEP_ID.EditAndConfirmStep]: {
           ...defaultMetadata,
-          isCompleted: false,
-          summary: "",
+          editedSummary: "",
         },
         [STEP_ID.ShareStep]: {
           ...defaultMetadata,

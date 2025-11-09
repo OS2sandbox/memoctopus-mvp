@@ -18,7 +18,7 @@ import {
   DialogTrigger,
 } from "@/lib/ui/core/shadcn/dialog";
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
-import { formatTime } from "@/lib/utils";
+import { formatTime } from "@/lib/utils/utils";
 
 import { Activity } from "react";
 

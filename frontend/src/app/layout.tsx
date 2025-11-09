@@ -8,7 +8,7 @@ import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import type { ReactNode } from "react";
 
 import { ReactQueryProvider } from "@/app/providers/ReactQueryProvider";
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/utils/utils";
 import { StartMockWorker } from "@/mocks/StartMockWorker";
 
 const inter = Inter({ subsets: ["latin"] });

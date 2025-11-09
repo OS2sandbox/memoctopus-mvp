@@ -22,7 +22,7 @@ import {
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { Separator } from "@/lib/ui/core/shadcn/separator";
 import { Toggle } from "@/lib/ui/core/shadcn/toggle";
-import { cn } from "@/lib/utils";
+import { cn } from "@/lib/utils/utils";
 
 import { useEffect } from "react";
 

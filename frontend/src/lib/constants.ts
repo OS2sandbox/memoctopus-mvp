@@ -22,3 +22,9 @@ export enum STEP_ID {
   EditAndConfirmStep = "step-3",
   ShareStep = "step-4",
 }
+
+export enum EXPORT_FORMAT {
+  PDF = "PDF",
+  DOCX = "DOCX",
+  EMAIL = "Email",
+}

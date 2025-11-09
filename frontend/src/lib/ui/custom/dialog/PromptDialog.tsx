@@ -1,4 +1,3 @@
-// 'frontend/src/ui/custom/prompt-library/AddPromptDialog.tsx'
 "use client";
 
 import { LucideAlertCircle, LucidePencil, LucidePlus } from "lucide-react";
