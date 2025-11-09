@@ -6,7 +6,7 @@ import { UploadSpeechStep } from "@/lib/ui/custom/wizard/steps/UploadSpeechStep"
 import { WizardControls } from "@/lib/ui/custom/wizard/WizardControls";
 import { WizardHeader } from "@/lib/ui/custom/wizard/WizardHeader";
 import { WizardNavigation } from "@/lib/ui/custom/wizard/WizardNavigation";
-import type { Prompt } from "@/mocks/schemas/prompt";
+import type { Prompt } from "@/shared/schemas/prompt";
 
 import { Fragment } from "react";
 import { defaultMetadata, Stepper } from "./stepper";

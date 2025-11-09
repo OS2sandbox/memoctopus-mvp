@@ -30,7 +30,7 @@ import {
 } from "@/lib/ui/core/shadcn/select";
 import { Textarea } from "@/lib/ui/core/shadcn/textarea";
 import { PromptHelpPanel } from "@/lib/ui/custom/prompt-library/PromptHelpPanel";
-import type { Prompt } from "@/mocks/schemas/prompt";
+import type { Prompt } from "@/shared/schemas/prompt";
 
 import { Activity, type ReactNode, useState } from "react";
 

@@ -1,5 +1,5 @@
 import { mockPrompts } from "@/mocks/data/prompts";
-import { type Prompt, PromptWithIdSchema } from "@/mocks/schemas/prompt";
+import { type Prompt, PromptSchema } from "@/shared/schemas/prompt";
 
 const STORAGE_KEY = "mock_prompts_store";
 
@@ -11,7 +11,7 @@ export const loadPrompts = (): Prompt[] => {
   }
   try {
     const parsed = JSON.parse(raw);
-    return PromptWithIdSchema.array().parse(parsed);
+    return PromptSchema.array().parse(parsed);
   } catch {
     return structuredClone(mockPrompts);
   }

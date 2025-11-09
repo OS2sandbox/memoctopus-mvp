@@ -1,20 +1,19 @@
 "use client";
 
-import type { User } from "@/lib/auth-client";
 import type { FILTER_MODE } from "@/lib/constants";
+import { useCurrentUser } from "@/lib/hooks/use-current-user";
 import { DataTable } from "@/lib/ui/core/data-table";
 import { Spinner } from "@/lib/ui/core/shadcn/spinner";
 import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
 import { PromptDialog } from "@/lib/ui/custom/dialog/PromptDialog";
 import { usePromptTable } from "@/lib/ui/custom/prompt-library/hooks/usePromptTable";
-import { getColumns } from "@/lib/ui/custom/prompt-library/table/Columns";
+import { getPromptColumns } from "@/lib/ui/custom/prompt-library/table/PromptColumns";
 import { cn } from "@/lib/utils/utils";
-import type { Prompt } from "@/mocks/schemas/prompt";
+import type { Prompt } from "@/shared/schemas/prompt";
 
 import { Fragment, useEffect, useState } from "react";
 
 export interface PromptTableProps {
-  currentUser: User | null;
   tableMode?: FILTER_MODE[];
   hideAddButton?: boolean;
   data: Prompt[];
@@ -30,11 +29,12 @@ export const PromptTable = ({
   tableMode,
   className,
   hideAddButton,
-  currentUser,
   rowClickConfig,
 }: PromptTableProps) => {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
+
+  const { user } = useCurrentUser();
 
   const { onRowClick, status } = rowClickConfig || {};
 
@@ -57,13 +57,13 @@ export const PromptTable = ({
     handleDeletePrompt,
     handleAddPrompt,
     handleUpdatePrompt,
-  } = usePromptTable({ currentUser, tableMode: tableMode ?? [], data });
+  } = usePromptTable({ tableMode: tableMode ?? [], data });
 
-  const columns = getColumns({
+  const columns = getPromptColumns({
     handleToggleFavorite,
     handleDeletePrompt,
     handleUpdatePrompt,
-    currentUser,
+    user,
   });
 
   useEffect(() => {
@@ -76,8 +76,7 @@ export const PromptTable = ({
   const addButton = <PromptDialog onSubmit={handleAddPrompt} />;
 
   return (
-    <section className={cn("space-y-4 w-full max-w-5xl", className)}>
-      <h2 className="text-2xl font-semibold">Prompt-bibliotek</h2>
+    <div className={cn("space-y-4 w-full max-w-5xl", className)}>
       <DataTable<Prompt, typeof columns>
         columns={columns}
         data={prompts}
@@ -108,6 +107,6 @@ export const PromptTable = ({
           </Fragment>
         )}
       </ConfirmDialog>
-    </section>
+    </div>
   );
 };

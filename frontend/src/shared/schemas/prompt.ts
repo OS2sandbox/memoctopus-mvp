@@ -7,7 +7,7 @@ const CreatorSchema = z.object({
   name: z.string(),
 });
 
-export const PromptSchema = z.object({
+export const PromptDTOSchema = z.object({
   id: z.string().optional(),
   name: z.string(),
   creator: CreatorSchema,
@@ -16,8 +16,9 @@ export const PromptSchema = z.object({
   text: z.string(),
 });
 
-export const PromptWithIdSchema = PromptSchema.extend({
+export const PromptSchema = PromptDTOSchema.extend({
   id: z.string(),
 });
 
-export type Prompt = z.infer<typeof PromptWithIdSchema>;
+export type PromptDTO = z.infer<typeof PromptDTOSchema>;
+export type Prompt = z.infer<typeof PromptSchema>;

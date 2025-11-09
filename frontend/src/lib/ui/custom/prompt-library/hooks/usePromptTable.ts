@@ -1,16 +1,18 @@
 "use client";
 
 import { type DATA_TABLE_SCOPE, FILTER_MODE } from "@/lib/constants";
+import { useCurrentUser } from "@/lib/hooks/use-current-user";
 import type { PromptTableProps } from "@/lib/ui/custom/prompt-library/table/PromptTable";
-import type { Prompt } from "@/mocks/schemas/prompt";
+import type { Prompt } from "@/shared/schemas/prompt";
 
 import { useState } from "react";
 
 export const usePromptTable = ({
-  currentUser,
   tableMode,
   data,
 }: Omit<PromptTableProps, "className" | "hideAddButton" | "isProcessing">) => {
+  const { user } = useCurrentUser();
+
   const [prompts, setPrompts] = useState<Prompt[]>(data);
 
   const [scope, setScope] = useState<DATA_TABLE_SCOPE | null>(null);
@@ -37,7 +39,7 @@ export const usePromptTable = ({
     const result = tableMode.some((mode) => {
       switch (mode) {
         case FILTER_MODE.Mine:
-          return prompt.creator.id === currentUser?.id;
+          return prompt.creator.id === user?.id;
 
         case FILTER_MODE.Favorites:
           return prompt.isFavorite;

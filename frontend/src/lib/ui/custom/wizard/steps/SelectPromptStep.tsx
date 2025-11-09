@@ -6,19 +6,16 @@ import {
   transcribeAndSummarize,
 } from "@/lib/api/transcription";
 import { FILTER_MODE, STEP_ID } from "@/lib/constants";
-import { useCurrentUser } from "@/lib/hooks/use-current-user";
 import { Spinner } from "@/lib/ui/core/shadcn/spinner";
 import { PromptTable } from "@/lib/ui/custom/prompt-library/table/PromptTable";
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
-import type { Prompt } from "@/mocks/schemas/prompt";
+import type { Prompt } from "@/shared/schemas/prompt";
 
 export const SelectPromptStep = () => {
   const { metadata, setMetadata, next } = useStepper();
   const selectPromptMetadata = metadata[STEP_ID.SelectPromptStep] ?? {};
   const selectedPrompt: Prompt | undefined = selectPromptMetadata["prompt"];
-
-  const { user } = useCurrentUser();
 
   const { mutate: summarize, status: summaryStatus } = useMutation({
     mutationFn: ({ file, prompt }: TranscribeAndSummarizeProps) =>
@@ -73,7 +70,6 @@ export const SelectPromptStep = () => {
               status: summaryStatus,
             }}
             tableMode={[FILTER_MODE.Favorites, FILTER_MODE.Mine]}
-            currentUser={user}
           />
         );
       }

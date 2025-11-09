@@ -1,11 +1,11 @@
 "use client";
 
-// Known issue that React Compiler is not supported by TanStack table yet:
-// https://nextjs.org/docs/app/api-reference/config/next-config-js/reactCompiler
-
-import type { Prompt } from "@/mocks/schemas/prompt";
-
 ("use no memo");
+
+import type { Prompt } from "@/shared/schemas/prompt";
+// Known issue that React Compiler is not supported by TanStack table yet:
+
+// https://nextjs.org/docs/app/api-reference/config/next-config-js/reactCompiler
 
 import type { ColumnDef } from "@tanstack/react-table";
 import { LucidePencil, LucideTrash2 } from "lucide-react";
@@ -22,19 +22,19 @@ import {
 import { PromptDialog } from "@/lib/ui/custom/dialog/PromptDialog";
 import { ViewPromptAction } from "@/lib/ui/custom/prompt-library/table/ViewPromptAction";
 
-interface getColumnsProps {
+interface GetPromptColumnsProps {
   handleToggleFavorite: (id: string, checked: boolean) => void;
   handleDeletePrompt: (id: string) => void;
   handleUpdatePrompt: (prompt: Prompt) => void;
-  currentUser: User | null;
+  user: User;
 }
 
-export const getColumns = ({
+export const getPromptColumns = ({
   handleToggleFavorite,
   handleDeletePrompt,
   handleUpdatePrompt,
-  currentUser,
-}: getColumnsProps): ColumnDef<Prompt>[] => [
+  user,
+}: GetPromptColumnsProps): ColumnDef<Prompt>[] => [
   {
     accessorKey: "isFavorite",
     header: "Favorit",
@@ -66,7 +66,7 @@ export const getColumns = ({
     filterFn: (row, _columnId, filterValue) => {
       const creator = row.original.creator;
       if (filterValue === DATA_TABLE_SCOPE.MyItems) {
-        return creator.id === currentUser?.id;
+        return creator.id === user?.id;
       }
       // For "My Organization", implement organization logic as needed (waiting for backend support)
       return true;
@@ -81,7 +81,7 @@ export const getColumns = ({
     cell: ({ row }) => {
       const prompt = row.original;
 
-      const canEditOrDelete = prompt.creator.id === currentUser?.id;
+      const canEditOrDelete = prompt.creator.id === user?.id;
 
       // TODO: abstract into separate component/factory
       return (

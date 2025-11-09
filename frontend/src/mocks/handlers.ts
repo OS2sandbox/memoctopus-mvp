@@ -1,11 +1,11 @@
 import { HttpResponse, http } from "msw";
 
+import { loadPrompts, savePrompts } from "@/mocks/utils";
 import {
   type Prompt,
+  PromptDTOSchema,
   PromptSchema,
-  PromptWithIdSchema,
-} from "@/mocks/schemas/prompt";
-import { loadPrompts, savePrompts } from "@/mocks/utils";
+} from "@/shared/schemas/prompt";
 
 export const handlers = [
   http.get("/api/prompts", () => {
@@ -33,7 +33,7 @@ export const handlers = [
 
   http.post("/api/prompts", async ({ request }) => {
     const body = await request.json();
-    const promptDTO = PromptSchema.parse(body);
+    const promptDTO = PromptDTOSchema.parse(body);
     const prompts = loadPrompts();
 
     const Prompt: Prompt = {
@@ -53,7 +53,7 @@ export const handlers = [
 
   http.put("/api/prompts/:id", async ({ params, request }) => {
     const body = await request.json();
-    const promptDTO = PromptWithIdSchema.parse(body);
+    const promptDTO = PromptSchema.parse(body);
 
     const updatedPrompts = loadPrompts().map((prompt) =>
       prompt.id === params["id"] ? { ...prompt, ...promptDTO } : prompt,
@@ -74,7 +74,7 @@ export const handlers = [
 
   http.delete("/api/prompts", async ({ request }) => {
     const body = await request.json();
-    const promptDTO = PromptSchema.parse(body);
+    const promptDTO = PromptDTOSchema.parse(body);
     const prompts = loadPrompts();
 
     const updated = prompts.filter((p) => p.id !== promptDTO.id);
