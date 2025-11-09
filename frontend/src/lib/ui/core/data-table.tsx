@@ -39,7 +39,6 @@ interface DataTableProps<TData, TValue> {
   };
 }
 
-// TODO: Must be made more generic to be reusable
 export function DataTable<TData, TValue>({
   columns,
   data,
