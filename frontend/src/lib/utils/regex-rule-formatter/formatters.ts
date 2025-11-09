@@ -1,37 +1,18 @@
 import { ruleFormatter } from "@/lib/utils/regex-rule-formatter/RuleFormatter";
 import type { RuleDefinition } from "@/lib/utils/regex-rule-formatter/types";
 
-const safeNameRules: readonly RuleDefinition[] = [
-  {
-    name: "normalizeUnicode",
-    apply: (v) => v.normalize("NFKD"),
-  },
-  {
-    name: "replaceNonAlphanumeric",
-    apply: (v) => v.replace(/[^\p{L}\p{N}]+/gu, "-"),
-  },
-  {
-    name: "trimHyphens",
-    apply: (v) => v.replace(/^-+|-+$/g, ""),
-  },
-  {
-    name: "collapseHyphens",
-    apply: (v) => v.replace(/-+/g, "-"),
-  },
-  {
-    name: "toLowerCase",
-    apply: (v) => v.toLowerCase(),
-  },
-];
-
-interface SafeNameProps {
-  fileName: string;
+interface ComposeFormatRules {
+  content: string;
+  rules: readonly RuleDefinition[];
 }
 
-export const formatToSafeFileName = ({ fileName }: SafeNameProps): string => {
+export const composeFormatRules = ({
+  content,
+  rules,
+}: ComposeFormatRules): string => {
   const composeResult = ruleFormatter({
-    value: fileName,
-    rules: safeNameRules,
+    value: content,
+    rules: rules,
   });
 
   return composeResult;

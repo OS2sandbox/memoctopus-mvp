@@ -14,18 +14,13 @@ import { FormatDropdownMenu } from "@/lib/ui/custom/ExportFormatDropdownMenu";
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardContentPanel } from "@/lib/ui/custom/wizard/WizardContentPanel";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
-import { exportToPDF } from "@/lib/utils/utils";
+import { exportToDocx } from "@/lib/utils/export/exportToDocx";
+import {
+  exportToPdf,
+  handleSafeFileName,
+} from "@/lib/utils/export/exportToPdf";
 
 import { useState } from "react";
-
-interface HandleExportPDFProps {
-  content: string;
-  fileName: string;
-}
-
-const handleExportPDF = ({ content, fileName }: HandleExportPDFProps) => {
-  exportToPDF({ html: content, fileName: fileName });
-};
 
 export const ShareStep = () => {
   const { metadata } = useStepper();
@@ -34,6 +29,17 @@ export const ShareStep = () => {
 
   const [fileName, setFileName] = useState("");
   const [exportedFormat, setExportedFormat] = useState(EXPORT_FORMAT.PDF);
+
+  const exportFormatHandler = () => {
+    switch (exportedFormat) {
+      case EXPORT_FORMAT.PDF: {
+        return exportToPdf({ html: content, fileName: fileName });
+      }
+      case EXPORT_FORMAT.DOCX: {
+        return exportToDocx({ html: content, fileName: fileName });
+      }
+    }
+  };
 
   return (
     <WizardPanel className="items-center">
@@ -46,7 +52,7 @@ export const ShareStep = () => {
             <FieldContent>
               <Input
                 id="fileName"
-                placeholder="Navngiv opsummering..."
+                placeholder={handleSafeFileName({ fileName: undefined })}
                 value={fileName}
                 onInput={(e) => setFileName(e.currentTarget.value)}
               />
@@ -67,12 +73,7 @@ export const ShareStep = () => {
           </Field>
         </FieldSet>
         <Separator />
-        <Button
-          className="self-end"
-          onClick={() =>
-            handleExportPDF({ content: content, fileName: fileName })
-          }
-        >
+        <Button className="self-end" onClick={() => exportFormatHandler()}>
           Eksporter
         </Button>
       </WizardContentPanel>

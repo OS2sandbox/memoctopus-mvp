@@ -8,6 +8,6 @@ interface RuleFormatterProps {
 export const ruleFormatter = ({ value, rules }: RuleFormatterProps): string => {
   const result = !value
     ? ""
-    : rules.reduce((acc, rule) => rule.apply(acc), value);
+    : rules.reduce((acc, rule) => rule.apply({ value: acc }), value);
   return result;
 };
