@@ -38,3 +38,10 @@ export function formatTime(
   }
   return `${twoDigits.format(m)}:${twoDigits.format(s)}`;
 }
+
+export const getVisibleTextLength = (html: string): number => {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, "text/html");
+  const text = doc.body.textContent?.trim() ?? "";
+  return text.length;
+};
