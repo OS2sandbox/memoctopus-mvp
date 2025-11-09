@@ -1,4 +1,5 @@
 import Link from "@tiptap/extension-link";
+import { Markdown } from "@tiptap/markdown";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import {
@@ -53,6 +54,7 @@ function MinimalTiptap({
           keepAttributes: false,
         },
       }),
+      Markdown,
       Link.configure({
         openOnClick: false,
         linkOnPaste: true,
@@ -64,9 +66,11 @@ function MinimalTiptap({
       }),
     ],
     content,
+    contentType: "markdown",
     editable,
     onUpdate: ({ editor }) => {
-      onChange?.(editor.getHTML());
+      const markdown = editor.getMarkdown();
+      onChange?.(markdown);
     },
     editorProps: {
       attributes: {
