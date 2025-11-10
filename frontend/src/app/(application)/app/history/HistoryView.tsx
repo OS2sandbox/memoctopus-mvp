@@ -12,7 +12,7 @@ export const HistoryView = () => {
       id: "1",
       userId: user?.id || "unknown",
       createdAt: new Date(),
-      title: "lolcat prompt",
+      title: "test entry 1",
       assets: [{ kind: "text", text: "lol" }],
     },
   ];
