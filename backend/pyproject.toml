@@ -9,6 +9,8 @@ dependencies = [
     "httpx>=0.27.0",
     "python-dotenv>=1.0.0",
     "python-multipart>=0.0.9",
+    "asyncpg>=0.29.0",
+    "databases[postgresql]>=0.9.0",
 ]
 
 [tool.hatch.build.targets.wheel]

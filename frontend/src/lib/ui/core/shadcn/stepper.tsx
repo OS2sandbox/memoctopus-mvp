@@ -56,6 +56,8 @@ const defineStepper = <const Steps extends Stepperize.Step[]>(
         tracking = false,
         children,
         className,
+        initialStep,
+        initialMetadata,
         ...props
       }) => {
         return (
@@ -63,8 +65,8 @@ const defineStepper = <const Steps extends Stepperize.Step[]>(
             value={{ variant, labelOrientation, tracking }}
           >
             <Scoped
-              initialStep={props.initialStep}
-              initialMetadata={props.initialMetadata}
+              initialStep={initialStep}
+              initialMetadata={initialMetadata}
             >
               <StepperContainer className={className} {...props}>
                 {children}

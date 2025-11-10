@@ -1,5 +1,7 @@
 "use client";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
+import { createPrompt, updatePrompt, deletePrompt } from "@/lib/api/prompts";
 import { DATA_TABLE_SCOPE } from "@/lib/constants";
 import { useCurrentUser } from "@/lib/hooks/use-current-user";
 import type { PromptTableProps } from "@/lib/ui/custom/prompt-library/table/PromptTable";
@@ -12,28 +14,54 @@ export const usePromptTable = ({
   data,
 }: Omit<PromptTableProps, "className" | "hideAddButton" | "isProcessing">) => {
   const user = useCurrentUser();
-
-  const [prompts, setPrompts] = useState<Prompt[]>(data);
+  const queryClient = useQueryClient();
 
   const [scope, setScope] = useState<DATA_TABLE_SCOPE | null>(null);
 
-  const handleToggleFavorite = (id: string, checked: boolean) =>
-    setPrompts((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, isFavorite: checked } : p)),
-    );
+  // Mutation for creating prompts
+  const createMutation = useMutation({
+    mutationFn: createPrompt,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["prompts"] });
+    },
+  });
 
-  const handleDeletePrompt = (id: string) =>
-    setPrompts((prev) => prev.filter((p) => p.id !== id));
+  // Mutation for updating prompts
+  const updateMutation = useMutation({
+    mutationFn: ({ id, ...prompt }: Prompt) => updatePrompt(id, prompt),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["prompts"] });
+    },
+  });
 
-  const handleAddPrompt = (newPrompt: Prompt) =>
-    setPrompts((prev) => [...prev, newPrompt]);
+  // Mutation for deleting prompts
+  const deleteMutation = useMutation({
+    mutationFn: deletePrompt,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["prompts"] });
+    },
+  });
 
-  const handleUpdatePrompt = (updatedPrompt: Prompt) =>
-    setPrompts((prev) =>
-      prev.map((p) => (p.id === updatedPrompt.id ? updatedPrompt : p)),
-    );
+  const handleToggleFavorite = (id: string, checked: boolean) => {
+    const prompt = data.find((p) => p.id === id);
+    if (prompt) {
+      updateMutation.mutate({ ...prompt, isFavorite: checked });
+    }
+  };
 
-  const filteredPrompts = prompts.filter((prompt) => {
+  const handleDeletePrompt = (id: string) => {
+    deleteMutation.mutate(id);
+  };
+
+  const handleAddPrompt = (newPrompt: Omit<Prompt, "id">) => {
+    createMutation.mutate(newPrompt);
+  };
+
+  const handleUpdatePrompt = (updatedPrompt: Prompt) => {
+    updateMutation.mutate(updatedPrompt);
+  };
+
+  const filteredPrompts = data.filter((prompt) => {
     if (tableMode?.length === 0 || !tableMode) return true;
 
     const result = tableMode.some((mode) => {
