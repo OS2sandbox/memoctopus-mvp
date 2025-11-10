@@ -334,9 +334,35 @@ curl http://localhost:8000/health
 
 ```
 backend/
-├── main.py              # FastAPI application
-├── pyproject.toml       # Project dependencies
-├── .env.example         # Environment variable template
-├── .env                 # Your environment variables (not in git)
-└── README.md           # This file
+├── main.py                   # FastAPI application entry point
+├── auth.py                   # Authentication middleware (better-auth session validation)
+├── database.py               # Database connection setup (asyncpg/databases)
+├── models.py                 # Pydantic models for API validation
+├── routers/
+│   └── prompts.py           # Prompt library CRUD endpoints
+├── db/
+│   └── migrations/          # Database migrations (managed by dbmate)
+│       ├── 20251110143000_create_better_auth_tables.sql
+│       ├── 20251110143452_create_prompts_table.sql
+│       └── 20251110145950_add_user_prompt_favorites.sql
+├── pyproject.toml           # Project dependencies (managed by uv)
+├── uv.lock                  # Dependency lock file
+├── .env.example             # Environment variable template
+├── .env                     # Your environment variables (not in git)
+└── README.md               # This file
 ```
+
+## Database Schema
+
+### better-auth Tables
+- **user**: User accounts (id, name, email, emailVerified, image, timestamps)
+- **session**: User sessions (id, token, expiresAt, userId, ipAddress, userAgent)
+- **account**: Authentication providers (id, accountId, providerId, userId, tokens, password)
+- **verification**: Email verification tokens
+
+### Application Tables
+- **prompts**: User prompt templates (id, name, creator_id, creator_name, category, text, timestamps)
+- **user_prompt_favorites**: Per-user favorite prompts junction table (user_id, prompt_id)
+
+### Migrations
+All migrations are managed using dbmate and stored in `db/migrations/`. Each migration includes both `migrate:up` and `migrate:down` sections for rollback support.
