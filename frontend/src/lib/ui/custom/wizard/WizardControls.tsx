@@ -1,8 +1,15 @@
 import { LucideTrash } from "lucide-react";
 
+import { createHistoryEntry } from "@/lib/api/history-entry";
+import { useSession } from "@/lib/auth-client";
 import { STEP_ID } from "@/lib/constants";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { Stepper, useStepper } from "@/lib/ui/custom/wizard/stepper";
+import type {
+  FileAudio,
+  HistoryEntryDTO,
+  Transcript,
+} from "@/shared/schemas/history";
 
 import { Activity } from "react";
 
@@ -19,16 +26,55 @@ export const WizardControls = () => {
     resetMetadata,
   } = useStepper();
   const isCompleted = metadata[current.id]?.["isCompleted"] as boolean;
-  const currentFile = metadata[current.id]?.["file"] as boolean;
+  const currentFile = metadata[STEP_ID.UploadSpeechStep]?.["file"];
   const isFirstStep = current.id === STEP_ID.UploadSpeechStep;
 
-  const onNextClick = () => {
-    if (isLast) {
-      reset();
-      resetMetadata(true);
-    } else {
-      next();
+  const { data: session } = useSession();
+  const user = session?.user ?? null;
+
+  const onSaveClick = async () => {
+    const file: File = metadata[STEP_ID.UploadSpeechStep]?.["file"];
+    const transcript: string =
+      metadata[STEP_ID.EditAndConfirmStep]?.["editedSummary"];
+
+    const historyEntryFile: FileAudio = {
+      storage: "file",
+      kind: "audio",
+      file: {
+        name: file.name,
+        size: file.size,
+        type: file.type,
+      },
+    };
+
+    const historyEntryTranscript: Transcript = {
+      kind: "text",
+      text: transcript,
+    };
+
+    const title: string = metadata[STEP_ID.ShareStep]?.["title"];
+
+    console.log("Creating history entry with data:", {
+      userId: user?.id,
+      title: title,
+      assets: [historyEntryFile, historyEntryTranscript],
+    });
+
+    if (!user?.id || !title || !file || !transcript) {
+      console.error("Missing required data for history entry.");
+      return;
     }
+
+    const historyEntry: HistoryEntryDTO = {
+      userId: user?.id,
+      title: title,
+      assets: [historyEntryFile, historyEntryTranscript],
+    };
+
+    await createHistoryEntry(historyEntry);
+
+    reset();
+    resetMetadata(true);
   };
 
   return (
@@ -62,8 +108,11 @@ export const WizardControls = () => {
               : "visible"
           }
         >
-          <Button disabled={!isLast && !isCompleted} onClick={onNextClick}>
-            {isLast ? "Start forfra" : "Næste"}
+          <Button
+            disabled={!isLast && !isCompleted}
+            onClick={!isLast ? next : onSaveClick}
+          >
+            {isLast ? "Gem" : "Næste"}
           </Button>
         </Activity>
       </div>

@@ -1,4 +1,5 @@
 import { EXPORT_FORMAT, STEP_ID } from "@/lib/constants";
+import { useWarnBeforeUnload } from "@/lib/hooks/use-warn-before-unload";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import {
   Field,
@@ -15,32 +16,42 @@ import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardContentPanel } from "@/lib/ui/custom/wizard/WizardContentPanel";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
 import { exportToDocx } from "@/lib/utils/export/exportToDocx";
-import {
-  exportToPdf,
-  handleSafeFileName,
-} from "@/lib/utils/export/exportToPdf";
+import { exportToPdf } from "@/lib/utils/export/exportToPdf";
+import { handleSafeFileName } from "@/lib/utils/utils";
 
 import { useState } from "react";
 
 export const ShareStep = () => {
-  const { metadata } = useStepper();
-  const content: string =
-    metadata[STEP_ID.EditAndConfirmStep]?.["editedSummary"];
+  useWarnBeforeUnload(true);
 
-  const [fileName, setFileName] = useState("");
+  const { metadata, setMetadata, current } = useStepper();
+  const currentMetadata = metadata[current.id];
+  const content: string = currentMetadata?.["editedTranscript"];
+
   const [exportedFormat, setExportedFormat] = useState(EXPORT_FORMAT.PDF);
 
-  const safeFileName = handleSafeFileName({ fileName: undefined });
+  const defaultFileName = handleSafeFileName({});
+  const title = currentMetadata?.["title"]?.trim() ?? "";
+  const finalFileName =
+    title.length > 0
+      ? handleSafeFileName({ fileName: title })
+      : defaultFileName;
 
   const exportFormatHandler = () => {
     switch (exportedFormat) {
       case EXPORT_FORMAT.PDF: {
-        return exportToPdf({ html: content, fileName: fileName });
+        return exportToPdf({ content: content, fileName: finalFileName });
       }
       case EXPORT_FORMAT.DOCX: {
-        return exportToDocx({ html: content, fileName: fileName });
+        return exportToDocx({ content: content, fileName: finalFileName });
       }
     }
+  };
+
+  const handleOnInput = (val: string) => {
+    setMetadata(STEP_ID.ShareStep, {
+      title: val,
+    });
   };
 
   return (
@@ -54,9 +65,9 @@ export const ShareStep = () => {
             <FieldContent>
               <Input
                 id="fileName"
-                placeholder={safeFileName}
-                value={fileName}
-                onInput={(e) => setFileName(e.currentTarget.value)}
+                placeholder={defaultFileName}
+                value={title}
+                onInput={(e) => handleOnInput(e.currentTarget.value)}
               />
               <FieldDescription>
                 Hvis filnavn udeladt, bruges nuværende data og tid som filnavn.

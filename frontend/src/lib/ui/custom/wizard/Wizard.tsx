@@ -32,6 +32,7 @@ export const Wizard = () => {
         },
         [STEP_ID.ShareStep]: {
           ...defaultMetadata,
+          title: "",
         },
       }}
     >

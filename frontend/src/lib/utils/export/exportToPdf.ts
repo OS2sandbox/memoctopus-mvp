@@ -18,7 +18,7 @@ export const handleSafeFileName = ({ fileName }: HandleSafeFileNameProps) => {
 
 // https://raw.githack.com/parallax/jsPDF/master/fontconverter/fontconverter.html
 // TODO: temporary. must be handled in server-side for better pdf support
-export const exportToPdf = ({ fileName, html }: ExportFileProps) => {
+export const exportToPdf = ({ fileName, content }: ExportFileProps) => {
   const safeName = handleSafeFileName({ fileName: fileName });
 
   const pdf = new jsPDF({
@@ -29,7 +29,7 @@ export const exportToPdf = ({ fileName, html }: ExportFileProps) => {
 
   // TODO: temporary: jsPDF should be able to set font, but I couldn't get it to work with HTML for now
   const wrapper = document.createElement("div");
-  wrapper.innerHTML = html;
+  wrapper.innerHTML = content;
   wrapper.style.fontFamily = "Roboto, sans-serif";
   wrapper.style.fontSize = "12pt";
   wrapper.style.lineHeight = "1.4";
