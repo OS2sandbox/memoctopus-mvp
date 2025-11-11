@@ -33,9 +33,10 @@ export const PromptTable = ({
 
   const user = useCurrentUser();
 
-  const { onRowClick, status } = rowClickConfig || {};
+  const { onRowClick, status } = rowClickConfig ?? {};
 
   const handleRowClick = (prompt: Prompt) => {
+    if (!rowClickConfig) return;
     setSelectedPrompt(prompt);
     setConfirmOpen(true);
   };

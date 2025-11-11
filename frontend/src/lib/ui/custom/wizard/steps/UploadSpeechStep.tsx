@@ -30,21 +30,20 @@ export const UploadSpeechStep = () => {
       <WizardContentPanel>
         <h2 className="text-lg font-semibold text-foreground">Upload tale</h2>
         <p className="text-sm text-muted-foreground">
-          Upload din egen optagelse af et møde eller anden tale her.
+          Anvend din egen optagelse af et møde eller anden tale her.
         </p>
         <FileSelectButton fileType={"audio/*"} />
       </WizardContentPanel>
       <WizardContentPanel>
         <h2 className="text-lg font-semibold text-foreground">Genbrug tale</h2>
         <p className="text-sm text-muted-foreground">
-          Dine optagelser og uploads ligger i systemet i en uge, så du altid kan
-          lave en opsummering.
+          Find opsummeringer og prompter fra tidligere sessioner.
         </p>
         <Button
           onClick={() => router.push("/app/history")}
           disabled={fileUploaded}
         >
-          Find fil
+          Find
         </Button>
       </WizardContentPanel>
     </WizardPanel>
