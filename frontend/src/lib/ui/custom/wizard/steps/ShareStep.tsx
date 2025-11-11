@@ -1,4 +1,5 @@
 import { EXPORT_FORMAT, STEP_ID } from "@/lib/constants";
+import { useWarnBeforeUnload } from "@/lib/hooks/use-warn-before-unload";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import {
   Field,
@@ -15,36 +16,57 @@ import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardContentPanel } from "@/lib/ui/custom/wizard/WizardContentPanel";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
 import { exportToDocx } from "@/lib/utils/export/exportToDocx";
-import {
-  exportToPdf,
-  handleSafeFileName,
-} from "@/lib/utils/export/exportToPdf";
+import { exportToPdf } from "@/lib/utils/export/exportToPdf";
 
 import { useState } from "react";
 
 export const ShareStep = () => {
-  const { metadata } = useStepper();
-  const content: string =
-    metadata[STEP_ID.EditAndConfirmStep]?.["editedSummary"];
+  useWarnBeforeUnload(true);
 
-  const [fileName, setFileName] = useState("");
+  const { metadata, setMetadata, current } = useStepper();
+  const currentMetadata = metadata[current.id];
+  const content: string = currentMetadata?.["editedTranscript"];
+
+  const defaultTitle = metadata[STEP_ID.EditAndConfirmStep]?.["title"];
+  const [titleInput, setTitleInput] = useState("");
+
   const [exportedFormat, setExportedFormat] = useState(EXPORT_FORMAT.PDF);
 
+  const exportHandlers = {
+    [EXPORT_FORMAT.PDF]: exportToPdf,
+    [EXPORT_FORMAT.DOCX]: exportToDocx,
+  } as const;
+
   const exportFormatHandler = () => {
-    switch (exportedFormat) {
-      case EXPORT_FORMAT.PDF: {
-        return exportToPdf({ html: content, fileName: fileName });
+    try {
+      const finalTitle =
+        titleInput.trim().length > 0 ? titleInput : defaultTitle;
+      const exportHandler = exportHandlers[exportedFormat];
+
+      if (!exportHandler) {
+        new Error(`export format not supported: ${exportedFormat}`);
       }
-      case EXPORT_FORMAT.DOCX: {
-        return exportToDocx({ html: content, fileName: fileName });
-      }
+
+      setMetadata(STEP_ID.ShareStep, {
+        title: finalTitle,
+        isCompleted: true,
+      });
+
+      const result = exportHandler({
+        content,
+        fileName: finalTitle,
+      });
+
+      return result;
+    } catch (error) {
+      console.error(error);
     }
   };
 
   return (
-    <WizardPanel className="items-center">
+    <WizardPanel>
       <WizardContentPanel className={"mx-auto gap-2"}>
-        <FieldSet className="mb-3">
+        <FieldSet>
           <FieldLegend>Eksportér opsummering</FieldLegend>
 
           <Field orientation="vertical">
@@ -52,17 +74,18 @@ export const ShareStep = () => {
             <FieldContent>
               <Input
                 id="fileName"
-                placeholder={handleSafeFileName({ fileName: undefined })}
-                value={fileName}
-                onInput={(e) => setFileName(e.currentTarget.value)}
+                placeholder={defaultTitle}
+                value={titleInput}
+                onInput={(e) => setTitleInput(e.currentTarget.value)}
               />
               <FieldDescription>
-                Hvis filnavn udeladt, bruges nuværende data og tid som filnavn.
+                Hvis filnavn udeladt, anvendes nuværende dato filnavn og titel I
+                historik.
               </FieldDescription>
             </FieldContent>
           </Field>
 
-          <Field orientation="vertical" className="w-24">
+          <Field orientation="vertical" className="w-20">
             <FieldLabel htmlFor="exportFormat">Format</FieldLabel>
             <FieldContent>
               <FormatDropdownMenu
@@ -74,7 +97,7 @@ export const ShareStep = () => {
         </FieldSet>
         <Separator />
         <Button className="self-end" onClick={() => exportFormatHandler()}>
-          Eksporter
+          Eksportér
         </Button>
       </WizardContentPanel>
     </WizardPanel>

@@ -3,7 +3,6 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { getPrompts } from "@/lib/api/prompts";
-import { useCurrentUser } from "@/lib/hooks/use-current-user";
 import { Spinner } from "@/lib/ui/core/shadcn/spinner";
 import { PromptTable } from "@/lib/ui/custom/prompt-library/table/PromptTable";
 
@@ -13,8 +12,6 @@ export const LibraryView = () => {
     queryFn: getPrompts,
   });
 
-  const { user } = useCurrentUser();
-
   const renderContent = () => {
     switch (status) {
       case "error":
@@ -22,7 +19,7 @@ export const LibraryView = () => {
       case "pending":
         return <Spinner />;
       case "success":
-        return <PromptTable data={data} currentUser={user} />;
+        return <PromptTable data={data} />;
       default:
         return null;
     }

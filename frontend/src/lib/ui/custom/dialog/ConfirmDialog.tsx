@@ -33,7 +33,7 @@ export const ConfirmDialog = ({
   footerDisabled,
 }: ConfirmDialogProps) => {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} modal={false} onOpenChange={onOpenChange}>
       <Activity mode={trigger ? "visible" : "hidden"}>
         <DialogTrigger asChild>{trigger}</DialogTrigger>
       </Activity>

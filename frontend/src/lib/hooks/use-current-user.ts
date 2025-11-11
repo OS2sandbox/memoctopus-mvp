@@ -1,8 +1,15 @@
 import { useSession } from "@/lib/auth-client";
 
 export const useCurrentUser = () => {
-  const { data: session } = useSession();
-  const result = session?.user ?? null;
+  const { data: session, isPending, error } = useSession();
 
-  return result;
+  if (isPending) {
+    throw new Error("useCurrentUser used while session is loading");
+  }
+
+  if (error || !session?.user) {
+    throw new Error("User is required but not authenticated");
+  }
+
+  return session.user;
 };

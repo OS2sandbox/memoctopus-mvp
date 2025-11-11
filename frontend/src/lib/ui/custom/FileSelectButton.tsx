@@ -47,16 +47,6 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
     });
   };
 
-  /*
-  <Activity mode={uploadError ? "visible" : "hidden"}>
-        <Alert variant="destructive">
-          <LucideAlertCircle />
-          <AlertTitle>Upload failed</AlertTitle>
-          <AlertDescription>{uploadError}</AlertDescription>
-        </Alert>
-      </Activity>
-   */
-
   return (
     <div className="flex flex-col items-start gap-2">
       <input
@@ -79,7 +69,7 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
       <Activity mode={currFile ? "visible" : "hidden"}>
         <div className="flex flex-row gap-2 items-center">
           <Button onClick={handleUpload} disabled={isUploaded}>
-            Upload
+            Anvend
           </Button>
           {isUploaded ? <LucideCheck className="text-green-500" /> : null}
         </div>

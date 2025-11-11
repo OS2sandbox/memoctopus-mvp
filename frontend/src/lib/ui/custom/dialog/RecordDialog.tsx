@@ -20,7 +20,7 @@ import {
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { formatTime } from "@/lib/utils/utils";
 
-import { Activity } from "react";
+import { Activity, Fragment, useState } from "react";
 
 interface RecordDialogProps {
   isRecordingDisabled?: boolean;
@@ -30,8 +30,16 @@ export const RecordDialog = ({
   isRecordingDisabled = false,
 }: RecordDialogProps) => {
   const { setMetadata, metadata } = useStepper();
+  const [open, setOpen] = useState(false);
 
   const currentMetadata = metadata[STEP_ID.UploadSpeechStep] ?? {};
+  const handleAutoSave = (file: File) => {
+    setMetadata(STEP_ID.UploadSpeechStep, {
+      ...currentMetadata,
+      file,
+      isCompleted: file,
+    });
+  };
 
   const {
     status,
@@ -47,16 +55,11 @@ export const RecordDialog = ({
     stop,
     reset,
   } = useRecorder({
-    autoSave: (file) =>
-      setMetadata(STEP_ID.UploadSpeechStep, {
-        ...currentMetadata,
-        file,
-        isCompleted: file,
-      }),
+    autoSave: (file) => handleAutoSave(file),
   });
 
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button size={"lg"} disabled={isRecordingDisabled}>
           <LucideMic /> Optag
@@ -99,7 +102,7 @@ export const RecordDialog = ({
           )}
 
           {status === RecorderStatus.Recording && (
-            <>
+            <Fragment>
               <Button onClick={pause} variant="secondary">
                 <LucidePause className="mr-2 h-4 w-4" />
                 Pause
@@ -108,11 +111,11 @@ export const RecordDialog = ({
                 <LucideSquare className="mr-2 h-4 w-4" />
                 Stop
               </Button>
-            </>
+            </Fragment>
           )}
 
           {status === RecorderStatus.Paused && (
-            <>
+            <Fragment>
               <Button onClick={resume}>
                 <LucidePlay className="mr-2 h-4 w-4" />
                 Fortsæt
@@ -121,15 +124,16 @@ export const RecordDialog = ({
                 <LucideSquare className="mr-2 h-4 w-4" />
                 Stop
               </Button>
-            </>
+            </Fragment>
           )}
 
           {status === RecorderStatus.Stopped && (
-            <>
+            <Fragment>
               <Button onClick={reset} variant="outline">
                 Ny optagelse
               </Button>
-            </>
+              <Button onClick={() => setOpen(false)}>Anvend</Button>
+            </Fragment>
           )}
         </div>
         {url && status === RecorderStatus.Stopped && (

@@ -12,8 +12,7 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 
-import { DATA_TABLE_SCOPE, FILTER_MODE } from "@/lib/constants";
-import type { Prompt } from "@/lib/schemas/prompt";
+import { DATA_TABLE_SCOPE } from "@/lib/constants";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { Checkbox } from "@/lib/ui/core/shadcn/checkbox";
 import { Input } from "@/lib/ui/core/shadcn/input";
@@ -25,34 +24,35 @@ import {
   TableHeader,
   TableRow,
 } from "@/lib/ui/core/shadcn/table";
-import { PromptDialog } from "@/lib/ui/custom/dialog/PromptDialog";
+import { cn } from "@/lib/utils/utils";
 
-import { Activity, useState } from "react";
+import { type ReactNode, useState } from "react";
 
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
-  onAdd?: (column: TData) => void;
+  onRowClick?: (entry: TData) => void;
+  addButton?: ReactNode;
   scopeOpts?: {
     onScopeChange: (scope: DATA_TABLE_SCOPE | null) => void;
     scope: DATA_TABLE_SCOPE | null;
-    filterModes?: FILTER_MODE[];
+    scopeModes?: DATA_TABLE_SCOPE[];
   };
-  onRowClick?: (entry: TData) => void;
+  className?: string;
 }
 
-// TODO: Must be made more generic to be reusable
 export function DataTable<TData, TValue>({
   columns,
   data,
-  onAdd,
+  addButton,
   scopeOpts,
   onRowClick,
+  className,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
 
-  const { onScopeChange, scope, filterModes } = scopeOpts ?? {};
+  const { onScopeChange, scope, scopeModes } = scopeOpts ?? {};
 
   const toggleScope = (value: DATA_TABLE_SCOPE) => {
     const scopeValue = scope === value ? null : value;
@@ -73,7 +73,7 @@ export function DataTable<TData, TValue>({
   });
 
   return (
-    <div className="space-y-4">
+    <div className={cn("space-y-4 w-full", className)}>
       <div className="flex items-start justify-between">
         <div className="flex flex-col gap-3">
           <Input
@@ -97,13 +97,13 @@ export function DataTable<TData, TValue>({
                     onCheckedChange={() =>
                       toggleScope(DATA_TABLE_SCOPE.MyItems)
                     }
-                    disabled={filterModes?.includes(FILTER_MODE.Mine)}
+                    disabled={scopeModes?.includes(DATA_TABLE_SCOPE.MyItems)}
                   />
                   <span>Mig</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <Checkbox
-                    disabled={true}
+                    disabled={true} // microsoft entra not implemented yet
                     checked={scope === DATA_TABLE_SCOPE.MyOrganization}
                     onCheckedChange={() =>
                       toggleScope(DATA_TABLE_SCOPE.MyOrganization)
@@ -115,11 +115,7 @@ export function DataTable<TData, TValue>({
             </div>
           )}
         </div>
-
-        {/* TODO: Make this generic, then base it on type */}
-        <Activity mode={onAdd ? "visible" : "hidden"}>
-          <PromptDialog onSubmit={onAdd as (data: Prompt) => void} />
-        </Activity>
+        {addButton}
       </div>
 
       <div className="rounded-md border">
@@ -174,9 +170,9 @@ export function DataTable<TData, TValue>({
               <TableRow>
                 <TableCell
                   colSpan={columns.length}
-                  className="h-24 text-center"
+                  className="h-12 text-center text-gray-500"
                 >
-                  Ingen resultater fundet
+                  Ingen resultater fundet.
                 </TableCell>
               </TableRow>
             )}

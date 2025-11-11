@@ -1,5 +1,5 @@
 import { setupWorker } from "msw/browser";
 
-import { handlers } from "@/mocks/handlers";
+import { historyEntryHandlers, promptHandlers } from "@/mocks/handlers";
 
-export const worker = setupWorker(...handlers);
+export const worker = setupWorker(...promptHandlers, ...historyEntryHandlers);

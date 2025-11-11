@@ -7,11 +7,11 @@ import { composeFormatRules } from "@/lib/utils/regex-rule-formatter/formatters"
 import { htmlToTextRules } from "@/lib/utils/regex-rule-formatter/rules";
 
 // TODO: temporary. must be handled in server-side for better docx support
-export const exportToDocx = async ({ fileName, html }: ExportFileProps) => {
+export const exportToDocx = async ({ fileName, content }: ExportFileProps) => {
   const safeName = handleSafeFileName({ fileName: fileName });
 
   const textContent = composeFormatRules({
-    content: html,
+    content: content,
     rules: htmlToTextRules,
   });
 

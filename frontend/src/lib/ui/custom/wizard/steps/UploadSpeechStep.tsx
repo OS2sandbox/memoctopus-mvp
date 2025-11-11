@@ -7,7 +7,10 @@ import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardContentPanel } from "@/lib/ui/custom/wizard/WizardContentPanel";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
 
+import { useRouter } from "next/navigation";
+
 export const UploadSpeechStep = () => {
+  const router = useRouter();
   const { metadata } = useStepper();
   const fileUploaded = metadata[STEP_ID.UploadSpeechStep]?.[
     "isCompleted"
@@ -37,7 +40,12 @@ export const UploadSpeechStep = () => {
           Dine optagelser og uploads ligger i systemet i en uge, så du altid kan
           lave en opsummering.
         </p>
-        <Button disabled={fileUploaded}>Find fil</Button>
+        <Button
+          onClick={() => router.push("/app/history")}
+          disabled={fileUploaded}
+        >
+          Find fil
+        </Button>
       </WizardContentPanel>
     </WizardPanel>
   );

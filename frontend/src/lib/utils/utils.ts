@@ -2,6 +2,9 @@ import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 import "@/lib/fonts/Roboto-normal";
 
+import { composeFormatRules } from "@/lib/utils/regex-rule-formatter/formatters";
+import { safeNameRules } from "@/lib/utils/regex-rule-formatter/rules";
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
@@ -49,6 +52,18 @@ export const getVisibleTextLength = (html: string): number => {
   const text = doc.body.textContent?.trim() ?? "";
 
   const result = text.length;
+
+  return result;
+};
+
+interface HandleSafeFileNameProps {
+  fileName?: string | undefined;
+}
+
+export const handleSafeFileName = ({ fileName }: HandleSafeFileNameProps) => {
+  const result = fileName?.trim()
+    ? composeFormatRules({ content: fileName, rules: safeNameRules })
+    : `opsummering-${new Date().toISOString().replace(/[:.]/g, "-")}`;
 
   return result;
 };

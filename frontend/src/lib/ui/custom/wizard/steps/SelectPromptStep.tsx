@@ -5,20 +5,17 @@ import {
   type TranscribeAndSummarizeProps,
   transcribeAndSummarize,
 } from "@/lib/api/transcription";
-import { FILTER_MODE, STEP_ID } from "@/lib/constants";
-import { useCurrentUser } from "@/lib/hooks/use-current-user";
-import type { Prompt } from "@/lib/schemas/prompt";
+import { DATA_TABLE_SCOPE, STEP_ID } from "@/lib/constants";
 import { Spinner } from "@/lib/ui/core/shadcn/spinner";
 import { PromptTable } from "@/lib/ui/custom/prompt-library/table/PromptTable";
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
+import type { Prompt } from "@/shared/schemas/prompt";
 
 export const SelectPromptStep = () => {
   const { metadata, setMetadata, next } = useStepper();
   const selectPromptMetadata = metadata[STEP_ID.SelectPromptStep] ?? {};
   const selectedPrompt: Prompt | undefined = selectPromptMetadata["prompt"];
-
-  const { user } = useCurrentUser();
 
   const { mutate: summarize, status: summaryStatus } = useMutation({
     mutationFn: ({ file, prompt }: TranscribeAndSummarizeProps) =>
@@ -72,8 +69,7 @@ export const SelectPromptStep = () => {
               onRowClick: handleOnRowClick,
               status: summaryStatus,
             }}
-            tableMode={[FILTER_MODE.Favorites, FILTER_MODE.Mine]}
-            currentUser={user}
+            tableMode={[DATA_TABLE_SCOPE.MyFavorites, DATA_TABLE_SCOPE.MyItems]}
           />
         );
       }

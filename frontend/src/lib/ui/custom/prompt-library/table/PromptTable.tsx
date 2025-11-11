@@ -1,23 +1,21 @@
 "use client";
 
-import type { User } from "@/lib/auth-client";
-import type { FILTER_MODE } from "@/lib/constants";
-import type { Prompt } from "@/lib/schemas/prompt";
+import type { DATA_TABLE_SCOPE } from "@/lib/constants";
+import { useCurrentUser } from "@/lib/hooks/use-current-user";
 import { DataTable } from "@/lib/ui/core/data-table";
 import { Spinner } from "@/lib/ui/core/shadcn/spinner";
 import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
+import { PromptDialog } from "@/lib/ui/custom/dialog/PromptDialog";
 import { usePromptTable } from "@/lib/ui/custom/prompt-library/hooks/usePromptTable";
-import { getColumns } from "@/lib/ui/custom/prompt-library/table/Columns";
-import { cn } from "@/lib/utils/utils";
+import { getPromptColumns } from "@/lib/ui/custom/prompt-library/table/PromptColumns";
+import type { Prompt } from "@/shared/schemas/prompt";
 
 import { Fragment, useEffect, useState } from "react";
 
 export interface PromptTableProps {
-  currentUser: User | null;
-  tableMode?: FILTER_MODE[];
+  tableMode?: DATA_TABLE_SCOPE[];
   hideAddButton?: boolean;
   data: Prompt[];
-  className?: string;
   rowClickConfig?: {
     onRowClick: (prompt: Prompt) => void;
     status: string;
@@ -27,13 +25,13 @@ export interface PromptTableProps {
 export const PromptTable = ({
   data,
   tableMode,
-  className,
   hideAddButton,
-  currentUser,
   rowClickConfig,
 }: PromptTableProps) => {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
+
+  const user = useCurrentUser();
 
   const { onRowClick, status } = rowClickConfig || {};
 
@@ -56,13 +54,13 @@ export const PromptTable = ({
     handleDeletePrompt,
     handleAddPrompt,
     handleUpdatePrompt,
-  } = usePromptTable({ currentUser, tableMode: tableMode ?? [], data });
+  } = usePromptTable({ tableMode: tableMode ?? [], data });
 
-  const columns = getColumns({
+  const columns = getPromptColumns({
     handleToggleFavorite,
     handleDeletePrompt,
     handleUpdatePrompt,
-    currentUser,
+    user,
   });
 
   useEffect(() => {
@@ -72,17 +70,19 @@ export const PromptTable = ({
     }
   }, [status, confirmOpen, selectedPrompt]);
 
+  const addButton = <PromptDialog onSubmit={handleAddPrompt} />;
+
   return (
-    <section className={cn("space-y-4 w-full max-w-5xl", className)}>
-      <h2 className="text-2xl font-semibold">Prompt-bibliotek</h2>
+    <Fragment>
       <DataTable<Prompt, typeof columns>
         columns={columns}
+        className={"max-w-4xl"}
         data={prompts}
-        {...(!hideAddButton && { onAdd: handleAddPrompt })}
+        {...(!hideAddButton && { addButton: addButton })}
         scopeOpts={{
           scope,
           onScopeChange: setScope,
-          filterModes: tableMode ?? [],
+          scopeModes: tableMode ?? [],
         }}
         onRowClick={handleRowClick}
       />
@@ -99,12 +99,12 @@ export const PromptTable = ({
             <Spinner />
           </div>
         ) : (
-          <Fragment>
+          <div>
             <p>Er du sikker på, at du vil vælge denne prompt?</p>
             <p>Transkriberingen påbegynder, idet du godkender.</p>
-          </Fragment>
+          </div>
         )}
       </ConfirmDialog>
-    </section>
+    </Fragment>
   );
 };
