@@ -59,7 +59,6 @@
     "@tiptap/pm": "^3.9.1",
     "@tiptap/react": "^3.9.1",
     "@tiptap/starter-kit": "^3.9.1",
-    "@wavesurfer/react": "^1.0.11",
     "better-auth": "latest",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

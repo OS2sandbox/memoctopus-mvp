@@ -32,6 +32,13 @@ export const RecordDialog = ({
   const { setMetadata, metadata } = useStepper();
 
   const currentMetadata = metadata[STEP_ID.UploadSpeechStep] ?? {};
+  const handleAutoSave = (file: File) => {
+    setMetadata(STEP_ID.UploadSpeechStep, {
+      ...currentMetadata,
+      file,
+      isCompleted: file,
+    });
+  };
 
   const {
     status,
@@ -47,12 +54,7 @@ export const RecordDialog = ({
     stop,
     reset,
   } = useRecorder({
-    autoSave: (file) =>
-      setMetadata(STEP_ID.UploadSpeechStep, {
-        ...currentMetadata,
-        file,
-        isCompleted: file,
-      }),
+    autoSave: (file) => handleAutoSave(file),
   });
 
   return (

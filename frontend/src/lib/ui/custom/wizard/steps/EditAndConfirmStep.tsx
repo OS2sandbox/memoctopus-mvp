@@ -18,7 +18,7 @@ export const EditAndConfirmStep = () => {
             ...editConfirmMetadata,
             isCompleted: content && content.length > 0,
             editedSummary: content,
-            title: handleSafeFileName({}),
+            title: handleSafeFileName({ fileName: undefined }),
           });
           next();
         }}

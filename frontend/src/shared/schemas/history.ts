@@ -1,22 +1,13 @@
 import { z } from "zod";
 
+import { PromptSchema } from "@/shared/schemas/prompt";
+
 export const TranscriptSchema = z.object({
   kind: z.literal("text"),
   text: z.string().min(1),
 });
 
-export const FileAudioSchema = z.object({
-  storage: z.literal("file"),
-  kind: z.literal("audio"),
-  file: z.object({
-    name: z.string(),
-    size: z.number().positive(),
-    type: z.string(),
-  }),
-  durationSec: z.number().positive().optional(),
-});
-
-export const HistoryAssetSchema = z.union([TranscriptSchema, FileAudioSchema]);
+export const HistoryAssetSchema = z.union([TranscriptSchema, PromptSchema]);
 
 export const HistoryEntrySchema = z.object({
   id: z.string(),
@@ -32,6 +23,5 @@ export const HistoryEntryDTOSchema = HistoryEntrySchema.omit({
 });
 
 export type HistoryEntry = z.infer<typeof HistoryEntrySchema>;
-export type FileAudio = z.infer<typeof FileAudioSchema>;
 export type Transcript = z.infer<typeof TranscriptSchema>;
 export type HistoryEntryDTO = z.infer<typeof HistoryEntryDTOSchema>;

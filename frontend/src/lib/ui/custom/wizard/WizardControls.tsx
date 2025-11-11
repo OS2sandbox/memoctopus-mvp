@@ -4,14 +4,12 @@ import { createHistoryEntry } from "@/lib/api/history-entry";
 import { useSession } from "@/lib/auth-client";
 import { STEP_ID } from "@/lib/constants";
 import { Button } from "@/lib/ui/core/shadcn/button";
+import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
 import { Stepper, useStepper } from "@/lib/ui/custom/wizard/stepper";
-import type {
-  FileAudio,
-  HistoryEntryDTO,
-  Transcript,
-} from "@/shared/schemas/history";
+import type { HistoryEntryDTO, Transcript } from "@/shared/schemas/history";
+import type { Prompt } from "@/shared/schemas/prompt";
 
-import { Activity } from "react";
+import { Activity, useState } from "react";
 
 export const WizardControls = () => {
   const {
@@ -29,52 +27,46 @@ export const WizardControls = () => {
   const currentFile = metadata[STEP_ID.UploadSpeechStep]?.["file"];
   const isFirstStep = current.id === STEP_ID.UploadSpeechStep;
 
+  const [open, setOpen] = useState(false);
+
   const { data: session } = useSession();
   const user = session?.user ?? null;
 
+  const onResetClick = () => {
+    reset();
+    resetMetadata(true);
+  };
+
   const onSaveClick = async () => {
-    const file: File = metadata[STEP_ID.UploadSpeechStep]?.["file"];
     const transcript: string =
       metadata[STEP_ID.EditAndConfirmStep]?.["editedSummary"];
 
-    const historyEntryFile: FileAudio = {
-      storage: "file",
-      kind: "audio",
-      file: {
-        name: file.name,
-        size: file.size,
-        type: file.type,
-      },
-    };
+    const prompt: Prompt = metadata[STEP_ID.SelectPromptStep]?.["prompt"];
 
     const historyEntryTranscript: Transcript = {
       kind: "text",
       text: transcript,
     };
 
-    const title: string = metadata[STEP_ID.ShareStep]?.["title"];
-
-    console.log("Creating history entry with data:", {
-      userId: user?.id,
-      title: title,
-      assets: [historyEntryFile, historyEntryTranscript],
-    });
-
-    if (!user?.id || !title || !file || !transcript) {
-      console.error("Missing required data for history entry.");
-      return;
-    }
+    const title: string = metadata[STEP_ID.EditAndConfirmStep]?.["title"];
 
     const historyEntry: HistoryEntryDTO = {
       userId: user?.id,
       title: title,
-      assets: [historyEntryFile, historyEntryTranscript],
+      assets: [prompt, historyEntryTranscript],
     };
+
+    // TODO: remove log
+    console.log("Creating history entry with data:", historyEntry);
+
+    if (!user?.id || !title || !transcript) {
+      console.error("Missing required data for history entry.");
+      return;
+    }
 
     await createHistoryEntry(historyEntry);
 
-    reset();
-    resetMetadata(true);
+    onResetClick();
   };
 
   return (
@@ -108,12 +100,26 @@ export const WizardControls = () => {
               : "visible"
           }
         >
-          <Button
-            disabled={!isLast && !isCompleted}
-            onClick={!isLast ? next : onSaveClick}
-          >
-            {isLast ? "Gem" : "Næste"}
-          </Button>
+          {!isLast ? (
+            <Button
+              disabled={!isLast && !isCompleted}
+              onClick={!isLast ? next : onSaveClick}
+            >
+              {isLast ? "Gem" : "Næste"}
+            </Button>
+          ) : (
+            <ConfirmDialog
+              open={open}
+              onOpenChange={setOpen}
+              onConfirm={onSaveClick}
+              trigger={<Button>Gem og nulstil</Button>}
+            >
+              <p>Er du sikker på, at du vil gemme og nulstille?</p>
+              <p>
+                Idet du godkender, vil prompt og opsummering gemmes I historik.
+              </p>
+            </ConfirmDialog>
+          )}
         </Activity>
       </div>
     </Stepper.Controls>

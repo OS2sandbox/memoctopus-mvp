@@ -44,19 +44,22 @@ export const ShareStep = () => {
       const exportHandler = exportHandlers[exportedFormat];
 
       if (!exportHandler) {
-        throw new Error(`export format not supported: ${exportedFormat}`);
+        new Error(`export format not supported: ${exportedFormat}`);
       }
 
       setMetadata(STEP_ID.ShareStep, {
         title: finalTitle,
+        isCompleted: true,
       });
 
-      return exportHandler({
+      const result = exportHandler({
         content,
         fileName: finalTitle,
       });
+
+      return result;
     } catch (error) {
-      console.error("Error during export:", error);
+      console.error(error);
     }
   };
 
@@ -76,7 +79,8 @@ export const ShareStep = () => {
                 onInput={(e) => setTitleInput(e.currentTarget.value)}
               />
               <FieldDescription>
-                Hvis filnavn udeladt, bruges nuværende data og tid som filnavn.
+                Hvis filnavn udeladt, anvendes nuværende dato filnavn og titel I
+                historik.
               </FieldDescription>
             </FieldContent>
           </Field>
