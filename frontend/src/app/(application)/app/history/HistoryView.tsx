@@ -28,10 +28,12 @@ export const HistoryView = () => {
   return (
     <main className="min-h-screen flex flex-col items-center px-6 py-16 space-y-12">
       <section className="min-h-screen flex flex-col items-center px-6 py-16 space-y-6">
-        <h1 className="text-2xl font-semibold">Prompt-bibliotek</h1>
-        <div className="flex flex-col w-full items-center justify-center pb-4">
-          <p>Find et prompt og tilføj det til dine prompts.</p>
-          <p>Du kan også oprette et nyt prompt.</p>
+        <h1 className="text-2xl font-semibold">Historik</h1>
+        <div className="flex flex-col w-full items-center gap-1 justify-center pb-4">
+          <p>Find dine gemte prompter og opsummeringer.</p>
+          <p className="text-gray-500 text-sm">
+            historik ældre end 7 dage slettes.
+          </p>
         </div>
         {renderContent()}
       </section>
