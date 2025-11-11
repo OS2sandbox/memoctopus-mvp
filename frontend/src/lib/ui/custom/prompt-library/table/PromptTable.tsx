@@ -1,6 +1,6 @@
 "use client";
 
-import type { FILTER_MODE } from "@/lib/constants";
+import type { DATA_TABLE_SCOPE } from "@/lib/constants";
 import { useCurrentUser } from "@/lib/hooks/use-current-user";
 import { DataTable } from "@/lib/ui/core/data-table";
 import { Spinner } from "@/lib/ui/core/shadcn/spinner";
@@ -14,7 +14,7 @@ import type { Prompt } from "@/shared/schemas/prompt";
 import { Fragment, useEffect, useState } from "react";
 
 export interface PromptTableProps {
-  tableMode?: FILTER_MODE[];
+  tableMode?: DATA_TABLE_SCOPE[];
   hideAddButton?: boolean;
   data: Prompt[];
   className?: string;
@@ -84,7 +84,7 @@ export const PromptTable = ({
         scopeOpts={{
           scope,
           onScopeChange: setScope,
-          filterModes: tableMode ?? [],
+          scopeModes: tableMode ?? [],
         }}
         onRowClick={handleRowClick}
       />

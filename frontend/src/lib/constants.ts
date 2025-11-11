@@ -6,14 +6,10 @@ export enum PROMPT_CATEGORY {
   KortReferat = "Kort referat",
 }
 
-export enum FILTER_MODE {
-  Mine = "onlyMine",
-  Favorites = "onlyFavorites",
-}
-
 export enum DATA_TABLE_SCOPE {
   MyItems = "my_items",
   MyOrganization = "my_organization",
+  MyFavorites = "my_favorites",
 }
 
 export enum STEP_ID {

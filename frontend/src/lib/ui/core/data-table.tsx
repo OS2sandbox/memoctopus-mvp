@@ -12,7 +12,7 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 
-import { DATA_TABLE_SCOPE, FILTER_MODE } from "@/lib/constants";
+import { DATA_TABLE_SCOPE } from "@/lib/constants";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { Checkbox } from "@/lib/ui/core/shadcn/checkbox";
 import { Input } from "@/lib/ui/core/shadcn/input";
@@ -35,7 +35,7 @@ interface DataTableProps<TData, TValue> {
   scopeOpts?: {
     onScopeChange: (scope: DATA_TABLE_SCOPE | null) => void;
     scope: DATA_TABLE_SCOPE | null;
-    filterModes?: FILTER_MODE[];
+    scopeModes?: DATA_TABLE_SCOPE[];
   };
 }
 
@@ -49,7 +49,7 @@ export function DataTable<TData, TValue>({
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
 
-  const { onScopeChange, scope, filterModes } = scopeOpts ?? {};
+  const { onScopeChange, scope, scopeModes } = scopeOpts ?? {};
 
   const toggleScope = (value: DATA_TABLE_SCOPE) => {
     const scopeValue = scope === value ? null : value;
@@ -94,13 +94,13 @@ export function DataTable<TData, TValue>({
                     onCheckedChange={() =>
                       toggleScope(DATA_TABLE_SCOPE.MyItems)
                     }
-                    disabled={filterModes?.includes(FILTER_MODE.Mine)}
+                    disabled={scopeModes?.includes(DATA_TABLE_SCOPE.MyItems)}
                   />
                   <span>Mig</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <Checkbox
-                    disabled={true}
+                    disabled={true} // microsoft entra not implemented yet
                     checked={scope === DATA_TABLE_SCOPE.MyOrganization}
                     onCheckedChange={() =>
                       toggleScope(DATA_TABLE_SCOPE.MyOrganization)

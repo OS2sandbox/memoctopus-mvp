@@ -5,7 +5,7 @@ import {
   type TranscribeAndSummarizeProps,
   transcribeAndSummarize,
 } from "@/lib/api/transcription";
-import { FILTER_MODE, STEP_ID } from "@/lib/constants";
+import { DATA_TABLE_SCOPE, STEP_ID } from "@/lib/constants";
 import { Spinner } from "@/lib/ui/core/shadcn/spinner";
 import { PromptTable } from "@/lib/ui/custom/prompt-library/table/PromptTable";
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
@@ -69,7 +69,7 @@ export const SelectPromptStep = () => {
               onRowClick: handleOnRowClick,
               status: summaryStatus,
             }}
-            tableMode={[FILTER_MODE.Favorites, FILTER_MODE.Mine]}
+            tableMode={[DATA_TABLE_SCOPE.MyFavorites, DATA_TABLE_SCOPE.MyItems]}
           />
         );
       }

@@ -1,6 +1,6 @@
 "use client";
 
-import { type DATA_TABLE_SCOPE, FILTER_MODE } from "@/lib/constants";
+import { DATA_TABLE_SCOPE } from "@/lib/constants";
 import { useCurrentUser } from "@/lib/hooks/use-current-user";
 import type { PromptTableProps } from "@/lib/ui/custom/prompt-library/table/PromptTable";
 import type { Prompt } from "@/shared/schemas/prompt";
@@ -38,10 +38,10 @@ export const usePromptTable = ({
 
     const result = tableMode.some((mode) => {
       switch (mode) {
-        case FILTER_MODE.Mine:
+        case DATA_TABLE_SCOPE.MyItems:
           return prompt.creator.id === user?.id;
 
-        case FILTER_MODE.Favorites:
+        case DATA_TABLE_SCOPE.MyFavorites:
           return prompt.isFavorite;
 
         default:
