@@ -1,4 +1,4 @@
-import type { z } from "zod/index";
+import type { z } from "zod";
 
 import type { STORAGE_KEY } from "@/mocks/constants";
 

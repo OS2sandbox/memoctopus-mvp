@@ -38,35 +38,39 @@ export const WizardControls = () => {
   };
 
   const onSaveClick = async () => {
-    const transcript: string =
-      metadata[STEP_ID.EditAndConfirmStep]?.["editedSummary"];
+    try {
+      const transcript: string =
+        metadata[STEP_ID.EditAndConfirmStep]?.["editedSummary"];
 
-    const prompt: Prompt = metadata[STEP_ID.SelectPromptStep]?.["prompt"];
+      const prompt: Prompt = metadata[STEP_ID.SelectPromptStep]?.["prompt"];
 
-    const historyEntryTranscript: Transcript = {
-      kind: "text",
-      text: transcript,
-    };
+      const historyEntryTranscript: Transcript = {
+        kind: "text",
+        text: transcript,
+      };
 
-    const title: string = metadata[STEP_ID.EditAndConfirmStep]?.["title"];
+      const title: string = metadata[STEP_ID.EditAndConfirmStep]?.["title"];
 
-    const historyEntry: HistoryEntryDTO = {
-      userId: user?.id,
-      title: title,
-      assets: [prompt, historyEntryTranscript],
-    };
+      if (!user?.id || !title || !transcript) {
+        new Error("Missing required data for history entry.");
+        return;
+      }
 
-    // TODO: remove log
-    console.log("Creating history entry with data:", historyEntry);
+      const historyEntry: HistoryEntryDTO = {
+        userId: user?.id,
+        title: title,
+        assets: [prompt, historyEntryTranscript],
+      };
 
-    if (!user?.id || !title || !transcript) {
-      console.error("Missing required data for history entry.");
-      return;
+      // TODO: remove log
+      console.log("Creating history entry with data:", historyEntry);
+
+      await createHistoryEntry(historyEntry);
+
+      onResetClick();
+    } catch (error) {
+      console.error("Error saving history entry:", error);
     }
-
-    await createHistoryEntry(historyEntry);
-
-    onResetClick();
   };
 
   return (

@@ -6,7 +6,10 @@ import {
   saveHistoryEntries,
   savePrompts,
 } from "@/mocks/utils/utils";
-import { HistoryEntryDTOSchema } from "@/shared/schemas/history";
+import {
+  type HistoryEntry,
+  HistoryEntryDTOSchema,
+} from "@/shared/schemas/history";
 import {
   type Prompt,
   PromptDTOSchema,
@@ -15,7 +18,7 @@ import {
 
 export const historyEntryHandlers = [
   http.get("/api/history", () => {
-    const entries = loadHistoryEntries();
+    const entries = loadHistoryEntries([]);
 
     const result = HttpResponse.json(entries, { status: 200 });
 
@@ -26,7 +29,7 @@ export const historyEntryHandlers = [
     const body = await request.json();
     const parsed = HistoryEntryDTOSchema.parse(body);
 
-    const entries = loadHistoryEntries() ?? [];
+    const entries = loadHistoryEntries([]);
 
     const newEntry: HistoryEntry = {
       ...parsed,

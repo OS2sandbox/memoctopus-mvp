@@ -34,7 +34,7 @@ export const PromptTable = ({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
 
-  const { user } = useCurrentUser();
+  const user = useCurrentUser();
 
   const { onRowClick, status } = rowClickConfig || {};
 

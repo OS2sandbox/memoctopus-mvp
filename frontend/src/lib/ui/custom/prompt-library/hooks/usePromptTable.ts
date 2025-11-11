@@ -11,7 +11,7 @@ export const usePromptTable = ({
   tableMode,
   data,
 }: Omit<PromptTableProps, "className" | "hideAddButton" | "isProcessing">) => {
-  const { user } = useCurrentUser();
+  const user = useCurrentUser();
 
   const [prompts, setPrompts] = useState<Prompt[]>(data);
 

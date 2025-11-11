@@ -23,10 +23,11 @@ export const savePrompts = (data: Prompt[]) =>
     data,
   });
 
-export const loadHistoryEntries = () => {
+export const loadHistoryEntries = (fallbackData: HistoryEntry[]) => {
   const result = loadMockSessionData<HistoryEntry>({
     storageKey: STORAGE_KEY.MOCK_HISTORY_STORE,
     schema: HistoryEntrySchema,
+    fallbackData: fallbackData,
   });
 
   return result;
