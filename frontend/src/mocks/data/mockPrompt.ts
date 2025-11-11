@@ -1,8 +1,7 @@
 import { PROMPT_CATEGORY } from "@/lib/constants";
 import type { Prompt } from "@/shared/schemas/prompt";
 
-// TODO: turn this into json
-export const mockPrompts: Prompt[] = [
+export const mockPrompt: Prompt[] = [
   {
     id: "1",
     name: "Festudvalget på orto",

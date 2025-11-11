@@ -1,21 +1,29 @@
 "use client";
 
-import { useCurrentUser } from "@/lib/hooks/use-current-user";
+import { useQuery } from "@tanstack/react-query";
+
+import { getHistoryEntries } from "@/lib/api/history-entry";
+import { Spinner } from "@/lib/ui/core/shadcn/spinner";
 import { HistoryTable } from "@/lib/ui/custom/history/table/HistoryTable";
-import type { HistoryEntry } from "@/shared/schemas/history";
 
 export const HistoryView = () => {
-  const { user } = useCurrentUser();
+  const { data, status } = useQuery({
+    queryKey: ["historyEntries"],
+    queryFn: getHistoryEntries,
+  });
 
-  const data: HistoryEntry[] = [
-    {
-      id: "1",
-      userId: user?.id || "unknown",
-      createdAt: new Date(),
-      title: "test entry 1",
-      assets: [{ kind: "text", text: "lol" }],
-    },
-  ];
+  const renderContent = () => {
+    switch (status) {
+      case "error":
+        return <p>Der opstod en fejl ved hentning af historik.</p>;
+      case "pending":
+        return <Spinner />;
+      case "success":
+        return <HistoryTable data={data}></HistoryTable>;
+      default:
+        return null;
+    }
+  };
 
   return (
     <main className="min-h-screen flex flex-col items-center px-6 py-16 space-y-12">
@@ -25,7 +33,7 @@ export const HistoryView = () => {
           <p>Find et prompt og tilføj det til dine prompts.</p>
           <p>Du kan også oprette et nyt prompt.</p>
         </div>
-        <HistoryTable data={data}></HistoryTable>
+        {renderContent()}
       </section>
     </main>
   );

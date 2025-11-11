@@ -1,13 +1,49 @@
 import { HttpResponse, http } from "msw";
 
-import { loadPrompts, savePrompts } from "@/mocks/utils";
+import {
+  loadHistoryEntries,
+  loadPrompts,
+  saveHistoryEntries,
+  savePrompts,
+} from "@/mocks/utils/utils";
+import { HistoryEntryDTOSchema } from "@/shared/schemas/history";
 import {
   type Prompt,
   PromptDTOSchema,
   PromptSchema,
 } from "@/shared/schemas/prompt";
 
-export const handlers = [
+export const historyEntryHandlers = [
+  http.get("/api/history", () => {
+    const entries = loadHistoryEntries();
+
+    const result = HttpResponse.json(entries, { status: 200 });
+
+    return result;
+  }),
+
+  http.post("/api/history", async ({ request }) => {
+    const body = await request.json();
+    const parsed = HistoryEntryDTOSchema.parse(body);
+
+    const entries = loadHistoryEntries() ?? [];
+
+    const newEntry: HistoryEntry = {
+      ...parsed,
+      id: crypto.randomUUID(),
+      createdAt: new Date(),
+    };
+
+    saveHistoryEntries([newEntry, ...entries]);
+
+    const result = HttpResponse.json(newEntry, { status: 201 });
+    console.log("Created new history entry:", newEntry);
+
+    return result;
+  }),
+];
+
+export const promptHandlers = [
   http.get("/api/prompts", () => {
     const prompts = loadPrompts();
     const result = HttpResponse.json(prompts);
@@ -74,7 +110,7 @@ export const handlers = [
 
   http.delete("/api/prompts", async ({ request }) => {
     const body = await request.json();
-    const promptDTO = PromptDTOSchema.parse(body);
+    const promptDTO = PromptSchema.parse(body);
     const prompts = loadPrompts();
 
     const updated = prompts.filter((p) => p.id !== promptDTO.id);

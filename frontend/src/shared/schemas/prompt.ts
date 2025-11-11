@@ -7,8 +7,8 @@ const CreatorSchema = z.object({
   name: z.string(),
 });
 
-export const PromptDTOSchema = z.object({
-  id: z.string().optional(),
+export const PromptSchema = z.object({
+  id: z.string(),
   name: z.string(),
   creator: CreatorSchema,
   category: z.enum(PROMPT_CATEGORY),
@@ -16,8 +16,8 @@ export const PromptDTOSchema = z.object({
   text: z.string(),
 });
 
-export const PromptSchema = PromptDTOSchema.extend({
-  id: z.string(),
+export const PromptDTOSchema = PromptSchema.omit({
+  id: true,
 });
 
 export type PromptDTO = z.infer<typeof PromptDTOSchema>;
