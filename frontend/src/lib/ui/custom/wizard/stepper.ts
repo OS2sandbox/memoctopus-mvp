@@ -20,8 +20,8 @@ export const { Stepper, utils, useStepper } = defineStepper(
   },
   {
     id: STEP_ID.EditAndConfirmStep,
-    title: "Rediger og godkend",
-    description: "Gennemgå og godkend indholdet",
+    title: "Redigér",
+    description: "Gennemgå og godkend opsummeringen",
   },
   {
     id: STEP_ID.ShareStep,

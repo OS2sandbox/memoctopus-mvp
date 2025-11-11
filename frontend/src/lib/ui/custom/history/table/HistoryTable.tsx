@@ -22,7 +22,7 @@ export const HistoryTable = ({ data, className }: HistoryTableProps) => {
   });
 
   return (
-    <div className={cn("space-y-4 w-full max-w-5xl", className)}>
+    <div className={cn("space-y-4 w-full max-w-3xl", className)}>
       <DataTable columns={columns} data={data} />
     </div>
   );
