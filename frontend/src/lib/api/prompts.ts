@@ -1,7 +1,12 @@
-import { type Prompt, PromptWithIdSchema, PromptSchema } from "@/lib/schemas/prompt";
 import { authClient } from "@/lib/auth-client";
+import {
+  type Prompt,
+  type PromptDTO,
+  PromptSchema,
+} from "@/shared/schemas/prompt";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE_URL =
+  process.env["NEXT_PUBLIC_API_URL"] || "http://localhost:8000";
 
 // Helper to create headers with auth token from session
 async function getAuthHeaders(): Promise<HeadersInit> {
@@ -25,18 +30,20 @@ export const getPrompts = async (): Promise<Prompt[]> => {
     headers,
   });
 
+  console.log("Fetch prompts response status:", headers);
+
   if (!res.ok) {
     throw new Error(`Failed to fetch prompts: ${res.statusText}`);
   }
 
   const json = await res.json();
 
-  const result = PromptWithIdSchema.array().parse(json);
+  const result = PromptSchema.array().parse(json);
 
   return result;
 };
 
-export const createPrompt = async (prompt: Omit<Prompt, "id">): Promise<Prompt> => {
+export const createPrompt = async (prompt: PromptDTO): Promise<Prompt> => {
   const headers = await getAuthHeaders();
 
   const res = await fetch(`${API_BASE_URL}/api/prompts`, {
@@ -51,12 +58,15 @@ export const createPrompt = async (prompt: Omit<Prompt, "id">): Promise<Prompt> 
 
   const json = await res.json();
 
-  const result = PromptWithIdSchema.parse(json);
+  const result = PromptSchema.parse(json);
 
   return result;
 };
 
-export const updatePrompt = async (id: string, prompt: Omit<Prompt, "id">): Promise<Prompt> => {
+export const updatePrompt = async (
+  id: string,
+  prompt: PromptDTO,
+): Promise<Prompt> => {
   const headers = await getAuthHeaders();
 
   const res = await fetch(`${API_BASE_URL}/api/prompts/${id}`, {
@@ -71,7 +81,7 @@ export const updatePrompt = async (id: string, prompt: Omit<Prompt, "id">): Prom
 
   const json = await res.json();
 
-  const result = PromptWithIdSchema.parse(json);
+  const result = PromptSchema.parse(json);
 
   return result;
 };

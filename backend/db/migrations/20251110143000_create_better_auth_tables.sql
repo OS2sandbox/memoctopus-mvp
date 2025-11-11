@@ -1,6 +1,6 @@
 -- migrate:up
 -- Better-auth authentication tables
-CREATE TABLE "user" (
+CREATE TABLE IF NOT EXISTS "user" (
   id TEXT NOT NULL PRIMARY KEY,
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE,
@@ -10,7 +10,7 @@ CREATE TABLE "user" (
   "updatedAt" TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
-CREATE TABLE session (
+CREATE TABLE IF NOT EXISTS "session" (
   id TEXT NOT NULL PRIMARY KEY,
   "expiresAt" TIMESTAMPTZ NOT NULL,
   token TEXT NOT NULL UNIQUE,
@@ -21,7 +21,7 @@ CREATE TABLE session (
   "userId" TEXT NOT NULL REFERENCES "user" (id) ON DELETE CASCADE
 );
 
-CREATE TABLE account (
+CREATE TABLE IF NOT EXISTS "account" (
   id TEXT NOT NULL PRIMARY KEY,
   "accountId" TEXT NOT NULL,
   "providerId" TEXT NOT NULL,
@@ -37,7 +37,7 @@ CREATE TABLE account (
   "updatedAt" TIMESTAMPTZ NOT NULL
 );
 
-CREATE TABLE verification (
+CREATE TABLE IF NOT EXISTS "verification" (
   id TEXT NOT NULL PRIMARY KEY,
   identifier TEXT NOT NULL,
   value TEXT NOT NULL,

@@ -11,5 +11,7 @@ export const useCurrentUser = () => {
     throw new Error("User is required but not authenticated");
   }
 
+  console.log("Current user:", session.user);
+
   return session.user;
 };

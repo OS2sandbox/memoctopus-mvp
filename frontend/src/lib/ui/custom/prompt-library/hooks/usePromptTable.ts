@@ -1,7 +1,7 @@
 "use client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { createPrompt, updatePrompt, deletePrompt } from "@/lib/api/prompts";
+import { createPrompt, deletePrompt, updatePrompt } from "@/lib/api/prompts";
 import { DATA_TABLE_SCOPE } from "@/lib/constants";
 import { useCurrentUser } from "@/lib/hooks/use-current-user";
 import type { PromptTableProps } from "@/lib/ui/custom/prompt-library/table/PromptTable";
@@ -18,7 +18,6 @@ export const usePromptTable = ({
 
   const [scope, setScope] = useState<DATA_TABLE_SCOPE | null>(null);
 
-  // Mutation for creating prompts
   const createMutation = useMutation({
     mutationFn: createPrompt,
     onSuccess: () => {
@@ -26,7 +25,6 @@ export const usePromptTable = ({
     },
   });
 
-  // Mutation for updating prompts
   const updateMutation = useMutation({
     mutationFn: ({ id, ...prompt }: Prompt) => updatePrompt(id, prompt),
     onSuccess: () => {
@@ -34,7 +32,6 @@ export const usePromptTable = ({
     },
   });
 
-  // Mutation for deleting prompts
   const deleteMutation = useMutation({
     mutationFn: deletePrompt,
     onSuccess: () => {
