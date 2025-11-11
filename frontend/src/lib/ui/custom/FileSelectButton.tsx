@@ -69,7 +69,7 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
       <Activity mode={currFile ? "visible" : "hidden"}>
         <div className="flex flex-row gap-2 items-center">
           <Button onClick={handleUpload} disabled={isUploaded}>
-            Upload
+            Anvend
           </Button>
           {isUploaded ? <LucideCheck className="text-green-500" /> : null}
         </div>
