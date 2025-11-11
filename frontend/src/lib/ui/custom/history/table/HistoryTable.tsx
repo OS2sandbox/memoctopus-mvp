@@ -7,17 +7,18 @@ interface HistoryTableProps {
 }
 
 export const HistoryTable = ({ data }: HistoryTableProps) => {
+  // placeholders for action handlers until integrated with backend logic
   const columns = getHistoryColumns({
     handleGenerate: (promptText: string) => {
       console.log("Generate clicked for:", promptText);
     },
-    handleDownloadAudio: (promptText: string) => {
-      console.log("Download Audio clicked for:", promptText);
+    handleCopyPrompt: (promptText: string) => {
+      console.log("Copy Prompt clicked for:", promptText);
     },
     handleDownloadText: (promptText: string) => {
       console.log("Download Text clicked for:", promptText);
     },
   });
 
-  return <DataTable className={"max-w-2xl"} columns={columns} data={data} />;
+  return <DataTable className={"max-w-4xl"} columns={columns} data={data} />;
 };

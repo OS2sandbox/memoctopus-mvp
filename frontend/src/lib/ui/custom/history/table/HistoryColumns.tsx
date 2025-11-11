@@ -1,5 +1,9 @@
 import type { ColumnDef } from "@tanstack/react-table";
-import { LucideDownload, LucideFileDown, LucideFileText } from "lucide-react";
+import {
+  LucideClipboardCopy,
+  LucideFileDown,
+  LucideFileText,
+} from "lucide-react";
 
 import { Button } from "@/lib/ui/core/shadcn/button";
 import {
@@ -11,13 +15,13 @@ import type { HistoryEntry } from "@/shared/schemas/history";
 
 interface GetHistoryColumnsProps {
   handleGenerate: (promptText: string) => void;
-  handleDownloadAudio: (promptText: string) => void;
+  handleCopyPrompt: (promptText: string) => void;
   handleDownloadText: (promptText: string) => void;
 }
 
 export const getHistoryColumns = ({
   handleGenerate,
-  handleDownloadAudio,
+  handleCopyPrompt,
   handleDownloadText,
 }: GetHistoryColumnsProps): ColumnDef<HistoryEntry>[] => [
   {
@@ -65,13 +69,13 @@ export const getHistoryColumns = ({
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={() => handleDownloadAudio(entry.id)}
+                  onClick={() => handleCopyPrompt(entry.id)}
                 >
-                  <LucideDownload />
+                  <LucideClipboardCopy />
                 </Button>
               </span>
             </TooltipTrigger>
-            <TooltipContent>Hent lydfil</TooltipContent>
+            <TooltipContent>Kopiér opsummering</TooltipContent>
           </Tooltip>
 
           <Tooltip>

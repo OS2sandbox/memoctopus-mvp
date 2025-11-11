@@ -76,6 +76,7 @@ export const PromptTable = ({
     <Fragment>
       <DataTable<Prompt, typeof columns>
         columns={columns}
+        className={"max-w-4xl"}
         data={prompts}
         {...(!hideAddButton && { addButton: addButton })}
         scopeOpts={{
