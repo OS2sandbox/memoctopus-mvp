@@ -22,5 +22,4 @@ export enum STEP_ID {
 export enum EXPORT_FORMAT {
   PDF = "PDF",
   DOCX = "DOCX",
-  EMAIL = "Email",
 }

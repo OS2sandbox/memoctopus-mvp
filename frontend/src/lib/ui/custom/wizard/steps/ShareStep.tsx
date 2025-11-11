@@ -17,7 +17,6 @@ import { WizardContentPanel } from "@/lib/ui/custom/wizard/WizardContentPanel";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
 import { exportToDocx } from "@/lib/utils/export/exportToDocx";
 import { exportToPdf } from "@/lib/utils/export/exportToPdf";
-import { handleSafeFileName } from "@/lib/utils/utils";
 
 import { useState } from "react";
 
@@ -28,30 +27,37 @@ export const ShareStep = () => {
   const currentMetadata = metadata[current.id];
   const content: string = currentMetadata?.["editedTranscript"];
 
+  const defaultTitle = metadata[STEP_ID.EditAndConfirmStep]?.["title"];
+  const [titleInput, setTitleInput] = useState("");
+
   const [exportedFormat, setExportedFormat] = useState(EXPORT_FORMAT.PDF);
 
-  const defaultFileName = handleSafeFileName({});
-  const title = currentMetadata?.["title"]?.trim() ?? "";
-  const finalFileName =
-    title.length > 0
-      ? handleSafeFileName({ fileName: title })
-      : defaultFileName;
+  const exportHandlers = {
+    [EXPORT_FORMAT.PDF]: exportToPdf,
+    [EXPORT_FORMAT.DOCX]: exportToDocx,
+  } as const;
 
   const exportFormatHandler = () => {
-    switch (exportedFormat) {
-      case EXPORT_FORMAT.PDF: {
-        return exportToPdf({ content: content, fileName: finalFileName });
-      }
-      case EXPORT_FORMAT.DOCX: {
-        return exportToDocx({ content: content, fileName: finalFileName });
-      }
-    }
-  };
+    try {
+      const finalTitle =
+        titleInput.trim().length > 0 ? titleInput : defaultTitle;
+      const exportHandler = exportHandlers[exportedFormat];
 
-  const handleOnInput = (val: string) => {
-    setMetadata(STEP_ID.ShareStep, {
-      title: val,
-    });
+      if (!exportHandler) {
+        throw new Error(`export format not supported: ${exportedFormat}`);
+      }
+
+      setMetadata(STEP_ID.ShareStep, {
+        title: finalTitle,
+      });
+
+      return exportHandler({
+        content,
+        fileName: finalTitle,
+      });
+    } catch (error) {
+      console.error("Error during export:", error);
+    }
   };
 
   return (
@@ -65,9 +71,9 @@ export const ShareStep = () => {
             <FieldContent>
               <Input
                 id="fileName"
-                placeholder={defaultFileName}
-                value={title}
-                onInput={(e) => handleOnInput(e.currentTarget.value)}
+                placeholder={defaultTitle}
+                value={titleInput}
+                onInput={(e) => setTitleInput(e.currentTarget.value)}
               />
               <FieldDescription>
                 Hvis filnavn udeladt, bruges nuværende data og tid som filnavn.
