@@ -8,7 +8,6 @@ import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
 import { PromptDialog } from "@/lib/ui/custom/dialog/PromptDialog";
 import { usePromptTable } from "@/lib/ui/custom/prompt-library/hooks/usePromptTable";
 import { getPromptColumns } from "@/lib/ui/custom/prompt-library/table/PromptColumns";
-import { cn } from "@/lib/utils/utils";
 import type { Prompt } from "@/shared/schemas/prompt";
 
 import { Fragment, useEffect, useState } from "react";
@@ -17,7 +16,6 @@ export interface PromptTableProps {
   tableMode?: DATA_TABLE_SCOPE[];
   hideAddButton?: boolean;
   data: Prompt[];
-  className?: string;
   rowClickConfig?: {
     onRowClick: (prompt: Prompt) => void;
     status: string;
@@ -27,7 +25,6 @@ export interface PromptTableProps {
 export const PromptTable = ({
   data,
   tableMode,
-  className,
   hideAddButton,
   rowClickConfig,
 }: PromptTableProps) => {
@@ -76,7 +73,7 @@ export const PromptTable = ({
   const addButton = <PromptDialog onSubmit={handleAddPrompt} />;
 
   return (
-    <div className={cn("space-y-4 w-full max-w-5xl", className)}>
+    <Fragment>
       <DataTable<Prompt, typeof columns>
         columns={columns}
         data={prompts}
@@ -101,12 +98,12 @@ export const PromptTable = ({
             <Spinner />
           </div>
         ) : (
-          <Fragment>
+          <div>
             <p>Er du sikker på, at du vil vælge denne prompt?</p>
             <p>Transkriberingen påbegynder, idet du godkender.</p>
-          </Fragment>
+          </div>
         )}
       </ConfirmDialog>
-    </div>
+    </Fragment>
   );
 };

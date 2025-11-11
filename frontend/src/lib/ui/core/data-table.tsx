@@ -24,6 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/lib/ui/core/shadcn/table";
+import { cn } from "@/lib/utils/utils";
 
 import { type ReactNode, useState } from "react";
 
@@ -37,6 +38,7 @@ interface DataTableProps<TData, TValue> {
     scope: DATA_TABLE_SCOPE | null;
     scopeModes?: DATA_TABLE_SCOPE[];
   };
+  className?: string;
 }
 
 export function DataTable<TData, TValue>({
@@ -45,6 +47,7 @@ export function DataTable<TData, TValue>({
   addButton,
   scopeOpts,
   onRowClick,
+  className,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -70,7 +73,7 @@ export function DataTable<TData, TValue>({
   });
 
   return (
-    <div className="space-y-4">
+    <div className={cn("space-y-4 w-full", className)}>
       <div className="flex items-start justify-between">
         <div className="flex flex-col gap-3">
           <Input

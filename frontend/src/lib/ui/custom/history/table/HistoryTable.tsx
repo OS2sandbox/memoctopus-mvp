@@ -1,14 +1,12 @@
 import { DataTable } from "@/lib/ui/core/data-table";
 import { getHistoryColumns } from "@/lib/ui/custom/history/table/HistoryColumns";
-import { cn } from "@/lib/utils/utils";
 import type { HistoryEntry } from "@/shared/schemas/history";
 
 interface HistoryTableProps {
   data: HistoryEntry[];
-  className?: string;
 }
 
-export const HistoryTable = ({ data, className }: HistoryTableProps) => {
+export const HistoryTable = ({ data }: HistoryTableProps) => {
   const columns = getHistoryColumns({
     handleGenerate: (promptText: string) => {
       console.log("Generate clicked for:", promptText);
@@ -21,9 +19,5 @@ export const HistoryTable = ({ data, className }: HistoryTableProps) => {
     },
   });
 
-  return (
-    <div className={cn("space-y-4 w-full max-w-3xl", className)}>
-      <DataTable columns={columns} data={data} />
-    </div>
-  );
+  return <DataTable className={"max-w-2xl"} columns={columns} data={data} />;
 };
