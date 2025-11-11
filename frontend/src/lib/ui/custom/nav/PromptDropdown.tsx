@@ -13,7 +13,7 @@ import Link from "next/link";
 // TODO: Make a new component for dropdown menu items with description
 export function PromptDropdown() {
   return (
-    <DropdownMenu>
+    <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <Button variant="outline">Prompts</Button>
       </DropdownMenuTrigger>

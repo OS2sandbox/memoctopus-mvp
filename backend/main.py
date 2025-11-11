@@ -7,17 +7,36 @@ from typing import Optional
 
 from starlette.middleware.cors import CORSMiddleware
 
+from database import connect_db, disconnect_db
+from routers import prompts
+
 load_dotenv()
 
 app = FastAPI()
+
+
+# Database lifecycle events
+@app.on_event("startup")
+async def startup():
+    """Connect to database on startup."""
+    await connect_db()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Disconnect from database on shutdown."""
+    await disconnect_db()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# Include routers
+app.include_router(prompts.router)
 
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")

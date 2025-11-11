@@ -23,7 +23,7 @@ export const ViewPromptAction = ({ promptText }: ViewPromptActionProps) => {
 
   return (
     <Popover>
-      <PopoverTrigger>
+      <PopoverTrigger asChild>
         <Button variant="ghost" size="icon">
           <LucideEye />
         </Button>
