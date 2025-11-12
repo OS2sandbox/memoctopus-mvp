@@ -1,4 +1,4 @@
-import { LucideTrash } from "lucide-react";
+import { LucideSave, LucideTrash } from "lucide-react";
 
 import { createHistoryEntry } from "@/lib/api/history-entry";
 import { useSession } from "@/lib/auth-client";
@@ -116,7 +116,11 @@ export const WizardControls = () => {
               open={open}
               onOpenChange={setOpen}
               onConfirm={onSaveClick}
-              trigger={<Button>Gem og nulstil</Button>}
+              trigger={
+                <Button className={"bg-green-600 hover:bg-green-700"}>
+                  <LucideSave /> Gem og nulstil
+                </Button>
+              }
             >
               <p>Er du sikker på, at du vil gemme og nulstille?</p>
               <p>
