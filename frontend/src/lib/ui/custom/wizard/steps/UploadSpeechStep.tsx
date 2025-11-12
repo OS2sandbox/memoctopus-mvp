@@ -35,9 +35,11 @@ export const UploadSpeechStep = () => {
         <FileSelectButton fileType={"audio/*"} />
       </WizardContentPanel>
       <WizardContentPanel>
-        <h2 className="text-lg font-semibold text-foreground">Genbrug tale</h2>
+        <h2 className="text-lg font-semibold text-foreground">
+          Tidligere sessioner
+        </h2>
         <p className="text-sm text-muted-foreground">
-          Find opsummeringer og prompter fra tidligere sessioner.
+          Hent opsummeringer og prompter fra tidligere sessioner.
         </p>
         <Button
           onClick={() => router.push("/app/history")}
