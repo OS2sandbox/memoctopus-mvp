@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { PROMPT_CATEGORY } from "@/lib/constants";
+import { MAX_PROMPT_LENGTH, MIN_PROMPT_LENGTH } from "@/shared/constants";
 
 const CreatorSchema = z.object({
   id: z.string(),
@@ -13,7 +14,7 @@ export const PromptSchema = z.object({
   creator: CreatorSchema,
   category: z.enum(PROMPT_CATEGORY),
   isFavorite: z.boolean(),
-  text: z.string(),
+  text: z.string().trim().min(MIN_PROMPT_LENGTH).max(MAX_PROMPT_LENGTH),
 });
 
 export const PromptDTOSchema = PromptSchema.omit({
