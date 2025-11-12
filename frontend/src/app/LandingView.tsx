@@ -3,10 +3,19 @@
 import { useSession } from "@/lib/auth-client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 
 export const LandingView = () => {
-  const { data: session } = useSession();
+  const { data: session, isPending } = useSession();
   const isAuthenticated = !!session?.user;
+  const router = useRouter();
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      router.push("/app");
+    }
+  }, [isAuthenticated, router]);
 
   return (
     <div className="flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center p-24">
@@ -14,31 +23,23 @@ export const LandingView = () => {
         <h1 className="text-4xl font-bold mb-8 text-center">
           Welcome to MemOctopus
         </h1>
-        {isAuthenticated ? (
-          <div className="flex flex-col items-center gap-4">
-            <p className="text-lg text-muted-foreground text-center">
-              You are signed in! Click below to access your dashboard.
-            </p>
-            <Link
-              href="/app"
-              className="rounded-md bg-primary px-6 py-3 text-primary-foreground hover:bg-primary/90 transition-colors"
-            >
-              Go to Dashboard
-            </Link>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center gap-4">
-            <p className="text-lg text-muted-foreground text-center">
-              Please sign in to continue
-            </p>
+        <div className="flex flex-col items-center gap-4">
+          <p className="text-lg text-muted-foreground text-center">
+            {isPending
+              ? "Tjekker, om du er logget ind..."
+              : isAuthenticated
+                ? "Fører dig til dashboard..."
+                : "Venligst log ind for at fortsætte."}
+          </p>
+          {!isPending && !isAuthenticated && (
             <Link
               href="/sign-in"
               className="rounded-md bg-primary px-6 py-3 text-primary-foreground hover:bg-primary/90 transition-colors"
             >
-              Sign In
+              Log ind
             </Link>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
