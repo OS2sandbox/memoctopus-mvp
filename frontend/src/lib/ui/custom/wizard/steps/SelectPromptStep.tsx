@@ -25,10 +25,10 @@ export const SelectPromptStep = () => {
         ...selectPromptMetadata,
         isCompleted: selectedPrompt,
       });
-
       setMetadata(STEP_ID.EditAndConfirmStep, {
         ...selectPromptMetadata,
         summary: summary,
+        isCompleted: false,
       });
 
       next();
