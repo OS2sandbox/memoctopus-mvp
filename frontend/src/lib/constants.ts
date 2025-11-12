@@ -23,3 +23,8 @@ export enum EXPORT_FORMAT {
   PDF = "PDF",
   DOCX = "DOCX",
 }
+
+export enum AUTH_MODE {
+  SignUp,
+  SignIn,
+}

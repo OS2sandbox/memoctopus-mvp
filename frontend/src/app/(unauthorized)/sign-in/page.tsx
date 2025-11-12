@@ -1,6 +1,8 @@
 "use client";
 
 import { signIn, signUp } from "@/lib/auth-client";
+import { AUTH_MODE } from "@/lib/constants";
+import { useAuthForm } from "@/lib/hooks/use-auth-form";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import {
   Field,
@@ -13,30 +15,19 @@ import {
 } from "@/lib/ui/core/shadcn/field";
 import { Input } from "@/lib/ui/core/shadcn/input";
 
-import { type FormEvent, Fragment, useState } from "react";
+import { type FormEvent, Fragment } from "react";
 
-enum Mode {
-  SignUp,
-  SignIn,
-}
-
-// TODO: Maybe use shadcn card instead
 export default function SignInPage() {
-  const [isLoading, setIsLoading] = useState(false);
-  const [mode, setMode] = useState<Mode>(Mode.SignIn);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const { state, actions } = useAuthForm();
 
-  // quite ugly but only used for testing currently
+  const { isLoading, mode, email, password, name, error } = state;
+
   const handleEmailAuth = async (e: FormEvent) => {
     e.preventDefault();
-    setIsLoading(true);
-    setError(null);
+    actions.authStart();
 
     switch (mode) {
-      case Mode.SignIn: {
+      case AUTH_MODE.SignIn: {
         const { error } = await signIn.email({
           email,
           password,
@@ -44,13 +35,12 @@ export default function SignInPage() {
           callbackURL: "/app",
         });
         if (error) {
-          console.error("Sign-in error:", error.message);
-          setError("Authentication failed. Please check your input.");
+          actions.authError("Authentication failed. Please check your input.");
         }
-        console.log("success");
+        actions.setLoading(false);
         break;
       }
-      case Mode.SignUp: {
+      case AUTH_MODE.SignUp: {
         const { error: signUpError } = await signUp.email({
           name,
           email,
@@ -65,23 +55,23 @@ export default function SignInPage() {
         });
 
         if (signUpError || signInError) {
-          setError("Authentication failed. Please check your input.");
+          actions.authError("Authentication failed. Please check your input.");
         }
+        actions.setLoading(false);
         break;
       }
     }
-    setIsLoading(false);
   };
 
   const handleSocialSignIn = async () => {
-    setIsLoading(true);
+    actions.setLoading(true);
     const { error } = await signIn.social({
       provider: "microsoft",
       callbackURL: "/app",
     });
     if (error?.message)
-      setError("Authentication failed. Please check your input.");
-    setIsLoading(false);
+      actions.authError("Social sign-in failed. Please try again.");
+    actions.setLoading(false);
   };
 
   return (
@@ -92,7 +82,7 @@ export default function SignInPage() {
             Welcome to MemOctopus
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            {mode === Mode.SignIn
+            {mode === AUTH_MODE.SignIn
               ? "Sign in to your account"
               : "Create your account"}
           </p>
@@ -106,20 +96,20 @@ export default function SignInPage() {
             <FieldSet>
               <FieldLegend>Email Authentication</FieldLegend>
               <FieldDescription>
-                {mode === Mode.SignUp
+                {mode === AUTH_MODE.SignUp
                   ? "Fill in your details to register."
                   : "Enter your credentials to sign in."}
               </FieldDescription>
 
               <FieldGroup>
-                {mode === Mode.SignUp && (
+                {mode === AUTH_MODE.SignUp && (
                   <Field>
                     <FieldLabel htmlFor="name">Full Name</FieldLabel>
                     <Input
                       id="name"
                       type="text"
                       value={name}
-                      onChange={(e) => setName(e.target.value)}
+                      onChange={(e) => actions.setName(e.target.value)}
                       placeholder="Jane Doe"
                       required
                     />
@@ -131,7 +121,7 @@ export default function SignInPage() {
                     id="email"
                     type="email"
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => actions.setEmail(e.target.value)}
                     placeholder="janedoe@domain.com"
                     required
                   />
@@ -142,7 +132,7 @@ export default function SignInPage() {
                     id="password"
                     type="password"
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={(e) => actions.setPassword(e.target.value)}
                     placeholder="••••••••"
                     required
                   />
@@ -157,19 +147,19 @@ export default function SignInPage() {
                   <Button type="submit" disabled={isLoading} className="w-full">
                     {isLoading
                       ? "Processing..."
-                      : mode === Mode.SignUp
+                      : mode === AUTH_MODE.SignUp
                         ? "Sign Up"
                         : "Sign In"}
                   </Button>
                 </Field>
 
                 <p className="text-center text-xs text-muted-foreground mt-3">
-                  {mode === Mode.SignIn ? (
+                  {mode === AUTH_MODE.SignIn ? (
                     <Fragment>
                       Don’t have an account?{" "}
                       <button
                         type="button"
-                        onClick={() => setMode(Mode.SignUp)}
+                        onClick={() => actions.setMode(AUTH_MODE.SignUp)}
                         className="underline"
                       >
                         Sign up
@@ -180,7 +170,7 @@ export default function SignInPage() {
                       Already have an account?{" "}
                       <button
                         type="button"
-                        onClick={() => setMode(Mode.SignIn)}
+                        onClick={() => actions.setMode(AUTH_MODE.SignIn)}
                         className="underline"
                       >
                         Sign in
