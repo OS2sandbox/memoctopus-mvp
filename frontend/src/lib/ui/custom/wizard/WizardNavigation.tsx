@@ -6,12 +6,22 @@ export const WizardNavigation = () => {
   const { all, goTo, current, metadata } = useStepper();
 
   const canGoToStep = (targetId: STEP_ID) => {
-    const targetMeta = metadata[targetId];
-    const currentHasBeenCompleted =
-      utils.getNext(current.id).id === targetId &&
-      metadata[current.id]?.["isCompleted"] === true;
+    const isCurrentCompleted: boolean = metadata[current.id]?.["isCompleted"];
+    const isGoingForward =
+      all.findIndex((s) => s.id === targetId) >
+      all.findIndex((s) => s.id === current.id);
 
-    return targetMeta?.["isCompleted"] === true || currentHasBeenCompleted;
+    if (isGoingForward && !isCurrentCompleted) {
+      return false;
+    }
+
+    const target = metadata[targetId];
+    const currentHasBeenCompleted =
+      utils.getNext(current.id).id === targetId && isCurrentCompleted;
+
+    const result = target?.["isCompleted"] || currentHasBeenCompleted;
+
+    return result;
   };
 
   return (
