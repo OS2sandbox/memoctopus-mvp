@@ -92,7 +92,9 @@ export const PromptTable = ({
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         onConfirm={handleConfirm}
-        footerDisabled={status === "pending"}
+        footerOpts={{
+          footerDisabled: status === "pending",
+        }}
       >
         {status === "pending" ? (
           <div className="flex flex-col items-center space-y-3">

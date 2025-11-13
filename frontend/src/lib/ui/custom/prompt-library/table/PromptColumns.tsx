@@ -1,5 +1,7 @@
 "use client";
 
+import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
+
 ("use no memo");
 
 import type { Prompt } from "@/shared/schemas/prompt";
@@ -21,6 +23,8 @@ import {
 } from "@/lib/ui/core/shadcn/tooltip";
 import { PromptDialog } from "@/lib/ui/custom/dialog/PromptDialog";
 import { ViewPromptAction } from "@/lib/ui/custom/prompt-library/table/ViewPromptAction";
+
+import { useState } from "react";
 
 interface GetPromptColumnsProps {
   handleToggleFavorite: (id: string, checked: boolean) => void;
@@ -80,12 +84,13 @@ export const getPromptColumns = ({
     id: "actions",
     cell: ({ row }) => {
       const prompt = row.original;
+      const [open, setOpen] = useState(false);
 
       const canEditOrDelete = prompt.creator.id === user?.id;
 
       // TODO: abstract into separate component/factory
       return (
-        <div className="flex items-center justify-end">
+        <div data-row-action className="flex items-center justify-end">
           <Tooltip>
             <TooltipTrigger asChild>
               <span className="inline-flex">
@@ -118,16 +123,28 @@ export const getPromptColumns = ({
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  disabled={!canEditOrDelete}
-                  onClick={() => handleDeletePrompt(prompt.id)}
-                >
-                  <LucideTrash2 />
-                </Button>
-              </span>
+              <ConfirmDialog
+                open={open}
+                onOpenChange={setOpen}
+                onConfirm={() => handleDeletePrompt(prompt.id)}
+                trigger={
+                  <span className="inline-flex">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      disabled={!canEditOrDelete}
+                    >
+                      <LucideTrash2 />
+                    </Button>
+                  </span>
+                }
+                footerOpts={{
+                  isConfirmDestructive: true,
+                }}
+              >
+                <p>Er du sikker, at du vil slette denne prompt?</p>
+                <p>Idet du bekræfter, kan du ikke tilbagekalde prompten.</p>
+              </ConfirmDialog>
             </TooltipTrigger>
             <TooltipContent>
               {canEditOrDelete

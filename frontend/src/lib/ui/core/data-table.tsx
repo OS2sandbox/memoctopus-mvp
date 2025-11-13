@@ -60,6 +60,13 @@ export function DataTable<TData, TValue>({
     table.getColumn("creator")?.setFilterValue(scopeValue);
   };
 
+  const shouldIgnoreRowClick = (target: HTMLElement) => {
+    const result = target.closest(
+      "button, a, input, [role='button'], [data-row-action]",
+    );
+    return result;
+  };
+
   const table = useReactTable({
     data,
     columns,
@@ -145,8 +152,7 @@ export function DataTable<TData, TValue>({
                   onClick={(e) => {
                     const target = e.target as HTMLElement;
 
-                    if (target.closest("button, a, input, [role='button']"))
-                      return;
+                    if (shouldIgnoreRowClick(target)) return;
 
                     onRowClick?.(row.original);
                   }}
