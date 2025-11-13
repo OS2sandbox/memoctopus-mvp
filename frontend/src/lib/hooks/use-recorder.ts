@@ -1,36 +1,25 @@
+import { RECORDER_STATUS } from "@/lib/constants";
 import { useAudioLevels } from "@/lib/hooks/use-audio-levels";
+import { useRecorderState } from "@/lib/hooks/use-recorder-state";
 import { useWarnBeforeUnload } from "@/lib/hooks/use-warn-before-unload";
 
-import { useEffect, useRef, useState } from "react";
-
-export enum RecorderStatus {
-  Idle = "idle",
-  Recording = "recording",
-  Stopped = "stopped",
-  Paused = "paused",
-  Error = "error",
-}
+import { useEffect, useRef } from "react";
 
 interface UseRecorderProps {
   autoSave?: (file: File) => void;
   onError?: (error: Error) => void;
 }
 
-// TODO: Implement useReducer here
 export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
-  const [status, setStatus] = useState<RecorderStatus>(RecorderStatus.Idle);
-  const [error, setError] = useState<string | null>(null);
-  const [url, setUrl] = useState<string | null>(null);
-  const [file, setFile] = useState<File | null>(null);
-  const [blob, setBlob] = useState<Blob | null>(null);
-  const [time, setTime] = useState<number>(0);
+  const { state, actions } = useRecorderState();
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<number | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
+  const timeRef = useRef<number>(0);
 
-  useWarnBeforeUnload(status === RecorderStatus.Recording);
+  useWarnBeforeUnload(state.status === RECORDER_STATUS.Recording);
 
   const stopActiveStream = () => {
     const stream = streamRef.current;
@@ -41,9 +30,11 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
   };
 
   const startTimer = () => {
-    setTime(0);
+    timeRef.current = 0;
+    actions.setTime(0);
     timerRef.current = window.setInterval(() => {
-      setTime((prevTime) => prevTime + 1);
+      timeRef.current += 1;
+      actions.setTime(timeRef.current);
     }, 1000);
   };
 
@@ -74,10 +65,7 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
         });
         const url = URL.createObjectURL(blob);
 
-        setBlob(blob);
-        setFile(file);
-        setUrl(url);
-        setStatus(RecorderStatus.Stopped);
+        actions.stopRecording({ blob, file, url });
         stopTimer();
 
         // TODO: Consider if we need autosave or just manual save options
@@ -85,14 +73,13 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
       };
 
       recorder.start();
-      setStatus(RecorderStatus.Recording);
+      actions.startRecording();
       startTimer();
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Microphone access denied.";
 
-      setError(message);
-      setStatus(RecorderStatus.Error);
+      actions.setError(message);
       onError?.(error instanceof Error ? error : new Error(message));
     }
   };
@@ -101,7 +88,7 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
     if (mediaRecorderRef.current?.state === "recording") {
       mediaRecorderRef.current.pause();
       stopTimer();
-      setStatus(RecorderStatus.Paused);
+      actions.pauseRecording();
     }
   };
 
@@ -109,14 +96,14 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
     if (mediaRecorderRef.current?.state === "paused") {
       mediaRecorderRef.current.resume();
       startTimer();
-      setStatus(RecorderStatus.Recording);
+      actions.resumeRecording();
     }
   };
 
   const stop = () => {
     const rec = mediaRecorderRef.current;
 
-    if (rec && status !== RecorderStatus.Idle) {
+    if (rec && state.status !== RECORDER_STATUS.Idle) {
       rec.stop();
       stopActiveStream();
       stopTimer();
@@ -129,14 +116,8 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
     stopTimer();
     stopActiveStream();
 
-    setStatus(RecorderStatus.Idle);
-    setError(null);
-
-    if (url) URL.revokeObjectURL(url);
-    setUrl(null);
-    setFile(null);
-    setBlob(null);
-    setTime(0);
+    if (state.url) URL.revokeObjectURL(state.url);
+    actions.resetRecorder();
   };
 
   useEffect(() => {
@@ -148,13 +129,13 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
 
   return {
     audioLevel,
-    status,
-    isRecording: status === RecorderStatus.Recording,
-    blob,
-    file,
-    url,
-    time,
-    error,
+    status: state.status,
+    isRecording: state.status === RECORDER_STATUS.Recording,
+    blob: state.blob,
+    file: state.file,
+    url: state.url,
+    time: state.time,
+    error: state.error,
 
     start,
     pause,

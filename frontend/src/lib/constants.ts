@@ -28,3 +28,11 @@ export enum AUTH_MODE {
   SignUp,
   SignIn,
 }
+
+export enum RECORDER_STATUS {
+  Idle = "idle",
+  Recording = "recording",
+  Stopped = "stopped",
+  Paused = "paused",
+  Error = "error",
+}
