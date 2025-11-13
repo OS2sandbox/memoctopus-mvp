@@ -56,10 +56,17 @@ export const WizardControls = () => {
         return;
       }
 
+      // Transform prompt into PromptAsset format
+      const promptAsset = {
+        kind: "prompt" as const,
+        promptId: prompt.id,
+        text: prompt.text,
+      };
+
       const historyEntry: HistoryEntryDTO = {
         userId: user?.id,
         title: title,
-        assets: [prompt, historyEntryTranscript],
+        assets: [promptAsset, historyEntryTranscript],
       };
 
       // TODO: remove log
