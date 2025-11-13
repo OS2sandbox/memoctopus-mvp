@@ -1,10 +1,10 @@
+import { getAuthAndCsrfHeaders } from "@/lib/api/csrf";
 import { authClient } from "@/lib/auth-client";
 import {
   type Prompt,
   type PromptDTO,
   PromptSchema,
 } from "@/shared/schemas/prompt";
-import { getAuthAndCsrfHeaders } from "@/lib/api/csrf";
 
 const API_BASE_URL =
   process.env["NEXT_PUBLIC_API_URL"] || "http://localhost:8000";

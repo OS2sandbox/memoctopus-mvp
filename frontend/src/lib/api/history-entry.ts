@@ -1,10 +1,10 @@
+import { getAuthAndCsrfHeaders } from "@/lib/api/csrf";
+import { authClient } from "@/lib/auth-client";
 import {
   type HistoryEntry,
   type HistoryEntryDTO,
   HistoryEntrySchema,
 } from "@/shared/schemas/history";
-import { authClient } from "@/lib/auth-client";
-import { getAuthAndCsrfHeaders } from "@/lib/api/csrf";
 
 const API_BASE_URL =
   process.env["NEXT_PUBLIC_API_URL"] || "http://localhost:8000";

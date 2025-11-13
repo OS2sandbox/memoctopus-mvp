@@ -23,8 +23,8 @@ export const PromptAssetSchema = z.object({
 });
 
 export const HistoryAssetSchema = z.union([
-    TranscriptSchema,
-    PromptAssetSchema,
+  TranscriptSchema,
+  PromptAssetSchema,
 ]);
 
 export const HistoryEntrySchema = z.object({
