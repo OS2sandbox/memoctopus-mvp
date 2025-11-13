@@ -9,7 +9,6 @@ from starlette.middleware.cors import CORSMiddleware
 
 from database import connect_db, disconnect_db
 from routers import prompts, history, export
-from csrf import CSRFMiddleware, create_csrf_token_for_session
 from auth import get_current_user, AuthenticatedUser
 
 load_dotenv()
@@ -36,9 +35,6 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
-
-# Add CSRF protection middleware
-app.add_middleware(CSRFMiddleware)
 
 # Include routers
 app.include_router(prompts.router)
@@ -183,29 +179,3 @@ async def audio_transcriptions(
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy"}
-
-
-@app.get("/api/csrf-token")
-async def get_csrf_token_endpoint(request: Request):
-    """
-    Get CSRF token for the current session.
-
-    Returns:
-        dict: Contains the CSRF token
-
-    Raises:
-        HTTPException: 401 if not authenticated
-    """
-    from fastapi import HTTPException
-
-    # Get session token from header or cookie
-    session_token = request.headers.get("X-Session-Token") or request.cookies.get("better_auth_session_token")
-
-    if not session_token:
-        raise HTTPException(status_code=401, detail="No session token")
-
-    try:
-        csrf_token = await create_csrf_token_for_session(session_token)
-        return {"csrfToken": csrf_token}
-    except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e))

@@ -1,4 +1,3 @@
-import { getAuthAndCsrfHeaders } from "@/lib/api/csrf";
 import { authClient } from "@/lib/auth-client";
 import {
   type HistoryEntry,
@@ -47,7 +46,7 @@ export const getHistoryEntries = async (): Promise<HistoryEntry[]> => {
 export const createHistoryEntry = async (
   entry: HistoryEntryDTO,
 ): Promise<HistoryEntry> => {
-  const headers = await getAuthAndCsrfHeaders();
+  const headers = await getAuthHeaders();
 
   const res = await fetch(`${API_BASE_URL}/api/history`, {
     method: "POST",
@@ -68,7 +67,7 @@ export const createHistoryEntry = async (
 };
 
 export const deleteHistoryEntry = async (id: string): Promise<void> => {
-  const headers = await getAuthAndCsrfHeaders();
+  const headers = await getAuthHeaders();
 
   const res = await fetch(`${API_BASE_URL}/api/history/${id}`, {
     method: "DELETE",

@@ -36,3 +36,8 @@ export enum RECORDER_STATUS {
   Paused = "paused",
   Error = "error",
 }
+
+export enum HISTORY_ENTRY_KIND {
+  PROMPT = "prompt",
+  TRANSCRIPT = "transcript",
+}

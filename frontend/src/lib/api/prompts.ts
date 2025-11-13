@@ -1,4 +1,3 @@
-import { getAuthAndCsrfHeaders } from "@/lib/api/csrf";
 import { authClient } from "@/lib/auth-client";
 import {
   type Prompt,
@@ -45,7 +44,7 @@ export const getPrompts = async (): Promise<Prompt[]> => {
 };
 
 export const createPrompt = async (prompt: PromptDTO): Promise<Prompt> => {
-  const headers = await getAuthAndCsrfHeaders();
+  const headers = await getAuthHeaders();
 
   const res = await fetch(`${API_BASE_URL}/api/prompts`, {
     method: "POST",
@@ -68,7 +67,7 @@ export const updatePrompt = async (
   id: string,
   prompt: PromptDTO,
 ): Promise<Prompt> => {
-  const headers = await getAuthAndCsrfHeaders();
+  const headers = await getAuthHeaders();
 
   const res = await fetch(`${API_BASE_URL}/api/prompts/${id}`, {
     method: "PUT",
@@ -88,7 +87,7 @@ export const updatePrompt = async (
 };
 
 export const deletePrompt = async (id: string): Promise<void> => {
-  const headers = await getAuthAndCsrfHeaders();
+  const headers = await getAuthHeaders();
 
   const res = await fetch(`${API_BASE_URL}/api/prompts/${id}`, {
     method: "DELETE",

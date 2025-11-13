@@ -8,8 +8,12 @@ import {
 } from "@/shared/constants";
 
 export const TranscriptSchema = z.object({
-  kind: z.literal("text"),
-  text: z.string().trim().min(MIN_TRANSCRIPT_LENGTH).max(MAX_TRANSCRIPT_LENGTH),
+  kind: z.literal("transcript"),
+  text: z
+    .string()
+    .trim()
+    .min(5, "Transcript text must be at least 5 characters")
+    .max(100000, "Transcript text must not exceed 100,000 characters"),
 });
 
 export const PromptAssetSchema = z.object({
