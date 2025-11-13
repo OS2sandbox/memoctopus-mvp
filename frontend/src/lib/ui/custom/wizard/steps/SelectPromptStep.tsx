@@ -18,17 +18,21 @@ export const SelectPromptStep = () => {
   const selectedPrompt: Prompt | undefined = selectPromptMetadata["prompt"];
 
   const { mutate: summarize, status: summaryStatus } = useMutation({
-    mutationFn: ({ file, prompt }: TranscribeAndSummarizeProps) =>
-      transcribeAndSummarize({ file: file, prompt: prompt }),
+    mutationFn: ({ file, prompt, category }: TranscribeAndSummarizeProps) =>
+      transcribeAndSummarize({
+        file: file,
+        prompt: prompt,
+        category: category,
+      }),
     onSuccess: (summary) => {
       setMetadata(STEP_ID.SelectPromptStep, {
         ...selectPromptMetadata,
         isCompleted: selectedPrompt,
       });
-
       setMetadata(STEP_ID.EditAndConfirmStep, {
         ...selectPromptMetadata,
         summary: summary,
+        isCompleted: false,
       });
 
       next();
@@ -49,6 +53,7 @@ export const SelectPromptStep = () => {
     summarize({
       file: metadata[STEP_ID.UploadSpeechStep]?.["file"],
       prompt: entry.text,
+      category: entry.category,
     });
   };
 

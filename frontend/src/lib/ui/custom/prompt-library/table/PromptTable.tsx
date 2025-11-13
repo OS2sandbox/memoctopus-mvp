@@ -33,9 +33,10 @@ export const PromptTable = ({
 
   const user = useCurrentUser();
 
-  const { onRowClick, status } = rowClickConfig || {};
+  const { onRowClick, status } = rowClickConfig ?? {};
 
   const handleRowClick = (prompt: Prompt) => {
+    if (!rowClickConfig) return;
     setSelectedPrompt(prompt);
     setConfirmOpen(true);
   };
@@ -91,7 +92,9 @@ export const PromptTable = ({
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         onConfirm={handleConfirm}
-        footerDisabled={status === "pending"}
+        footerOpts={{
+          footerDisabled: status === "pending",
+        }}
       >
         {status === "pending" ? (
           <div className="flex flex-col items-center space-y-3">

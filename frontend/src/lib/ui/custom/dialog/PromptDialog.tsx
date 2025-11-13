@@ -107,17 +107,19 @@ export const PromptDialog = ({
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={setOpen} modal={false}>
       <DialogTrigger asChild>
-        {trigger ?? (
-          <Button variant={isEditMode ? "secondary" : "default"}>
-            {isEditMode ? <LucidePencil /> : <LucidePlus />}
-            {isEditMode ? "Rediger prompt" : "Tilføj prompt"}
-          </Button>
-        )}
+        <div data-row-action>
+          {trigger ?? (
+            <Button variant={isEditMode ? "secondary" : "default"}>
+              {isEditMode ? <LucidePencil /> : <LucidePlus />}
+              {isEditMode ? "Rediger prompt" : "Tilføj prompt"}
+            </Button>
+          )}
+        </div>
       </DialogTrigger>
 
-      <DialogContent>
+      <DialogContent data-row-action>
         <DialogHeader>
           <DialogTitle>
             {isEditMode ? "Rediger prompt" : "Opret ny prompt"}

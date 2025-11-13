@@ -17,7 +17,12 @@ interface ConfirmDialogProps {
   onConfirm: () => void;
   children: ReactNode;
   trigger?: ReactNode;
-  footerDisabled?: boolean;
+  footerOpts?: {
+    footerDisabled?: boolean;
+    confirmText?: string;
+    cancelText?: string;
+    isConfirmDestructive?: boolean;
+  };
 }
 
 /**
@@ -30,8 +35,11 @@ export const ConfirmDialog = ({
   onConfirm,
   children,
   trigger,
-  footerDisabled,
+  footerOpts,
 }: ConfirmDialogProps) => {
+  const { footerDisabled, confirmText, isConfirmDestructive, cancelText } =
+    footerOpts ?? {};
+
   return (
     <Dialog open={open} modal={false} onOpenChange={onOpenChange}>
       <Activity mode={trigger ? "visible" : "hidden"}>
@@ -52,10 +60,14 @@ export const ConfirmDialog = ({
             variant="secondary"
             onClick={() => onOpenChange(false)}
           >
-            Annuller
+            {cancelText ? cancelText : "Annuller"}
           </Button>
-          <Button disabled={footerDisabled} onClick={onConfirm}>
-            Godkend
+          <Button
+            disabled={footerDisabled}
+            variant={isConfirmDestructive ? "destructive" : undefined}
+            onClick={onConfirm}
+          >
+            {confirmText ? confirmText : "Godkend"}
           </Button>
         </DialogFooter>
       </DialogContent>

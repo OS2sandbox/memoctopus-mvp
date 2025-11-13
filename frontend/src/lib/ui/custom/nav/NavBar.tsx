@@ -1,6 +1,5 @@
 "use client";
 
-import { PromptDropdown } from "@/lib/ui/custom/nav/PromptDropdown";
 import { ProfileOverview } from "@/lib/ui/custom/profile/ProfileOverview";
 
 import Link from "next/link";
@@ -14,18 +13,23 @@ export const NavBar = () => {
         </Link>
 
         <div className="flex justify-center items-center gap-6">
-          <PromptDropdown />
           <Link
-            href="/app/about"
+            href="/app/library"
             className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
           >
-            Om
+            Prompter
           </Link>
           <Link
             href="/app/history"
             className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
           >
             Historik
+          </Link>
+          <Link
+            href="/app/about"
+            className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Om
           </Link>
         </div>
 

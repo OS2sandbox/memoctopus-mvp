@@ -28,7 +28,7 @@ export const ViewPromptAction = ({ promptText }: ViewPromptActionProps) => {
           <LucideEye />
         </Button>
       </PopoverTrigger>
-      <PopoverContent>
+      <PopoverContent className={"max-h-64 overflow-y-auto"}>
         <p className={"text-sm"}>{promptText}</p>
         <div className={"flex justify-start mt-4 items-center"}>
           <Button size="sm" onClick={handleCopy}>

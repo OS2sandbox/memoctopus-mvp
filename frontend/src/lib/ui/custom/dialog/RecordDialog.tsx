@@ -6,8 +6,8 @@ import {
   LucideSquare,
 } from "lucide-react";
 
-import { STEP_ID } from "@/lib/constants";
-import { RecorderStatus, useRecorder } from "@/lib/hooks/use-recorder";
+import { RECORDER_STATUS, STEP_ID } from "@/lib/constants";
+import { useRecorder } from "@/lib/hooks/use-recorder";
 import { Alert, AlertTitle } from "@/lib/ui/core/shadcn/alert";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import {
@@ -88,20 +88,20 @@ export const RecordDialog = ({
           />
         </div>
         <div className="text-sm text-muted-foreground">
-          {status === RecorderStatus.Recording ||
-          status === RecorderStatus.Paused
+          {status === RECORDER_STATUS.Recording ||
+          status === RECORDER_STATUS.Paused
             ? `Tid: ${formatTime(time)}`
             : null}
         </div>
         <div className="flex gap-3">
-          {status === RecorderStatus.Idle && (
+          {status === RECORDER_STATUS.Idle && (
             <Button onClick={start}>
               <LucidePlay className="mr-2 h-4 w-4" />
               Start
             </Button>
           )}
 
-          {status === RecorderStatus.Recording && (
+          {status === RECORDER_STATUS.Recording && (
             <Fragment>
               <Button onClick={pause} variant="secondary">
                 <LucidePause className="mr-2 h-4 w-4" />
@@ -114,7 +114,7 @@ export const RecordDialog = ({
             </Fragment>
           )}
 
-          {status === RecorderStatus.Paused && (
+          {status === RECORDER_STATUS.Paused && (
             <Fragment>
               <Button onClick={resume}>
                 <LucidePlay className="mr-2 h-4 w-4" />
@@ -127,7 +127,7 @@ export const RecordDialog = ({
             </Fragment>
           )}
 
-          {status === RecorderStatus.Stopped && (
+          {status === RECORDER_STATUS.Stopped && (
             <Fragment>
               <Button onClick={reset} variant="outline">
                 Ny optagelse
@@ -136,7 +136,7 @@ export const RecordDialog = ({
             </Fragment>
           )}
         </div>
-        {url && status === RecorderStatus.Stopped && (
+        {url && status === RECORDER_STATUS.Stopped && (
           <audio
             src={url}
             controls

@@ -1,3 +1,5 @@
+import type { PROMPT_CATEGORY } from "@/lib/constants";
+
 export interface TranscribeAudioProps {
   file: File;
 }
@@ -25,19 +27,21 @@ export const transcribeAudio = async ({ file }: TranscribeAudioProps) => {
 export interface SummarizeTranscriptionProps {
   transcription: string;
   prompt: string;
+  category: PROMPT_CATEGORY;
 }
 
 // TODO: RTFM
 export const summarizeTranscription = async ({
   transcription,
   prompt,
+  category,
 }: SummarizeTranscriptionProps) => {
   const body = {
     model: "gpt-5-nano",
     messages: [
       {
         role: "system",
-        content: prompt,
+        content: `You are a transcription summarization assistant specializing in ${category}: ${prompt}`,
       },
       {
         role: "user",
@@ -69,17 +73,20 @@ export const summarizeTranscription = async ({
 export interface TranscribeAndSummarizeProps {
   file: File;
   prompt: string;
+  category: PROMPT_CATEGORY;
 }
 
 export const transcribeAndSummarize = async ({
   file,
   prompt,
+  category,
 }: TranscribeAndSummarizeProps) => {
   const transcription = await transcribeAudio({ file });
 
   const { summary } = await summarizeTranscription({
     transcription: transcription.text,
     prompt,
+    category: category,
   });
 
   return summary;
