@@ -10,11 +10,15 @@ const CreatorSchema = z.object({
 
 export const PromptSchema = z.object({
   id: z.string(),
-  name: z.string(),
+  name: z
+    .string()
+    .trim()
+    .min(5, "Prompt name must be at least 5 characters")
+    .max(200, "Prompt name must not exceed 200 characters"),
   creator: CreatorSchema,
   category: z.enum(PROMPT_CATEGORY),
   isFavorite: z.boolean(),
-  text: z.string().trim().min(MIN_PROMPT_LENGTH).max(MAX_PROMPT_LENGTH),
+  text: z.string().trim().min(MIN_PROMPT_LENGTH, `Prompt text must be at least ${MIN_PROMPT_LENGTH} characters`).max(MAX_PROMPT_LENGTH, `"Prompt text must not exceed ${MAX_PROMPT_LENGTH} characters"`),
 });
 
 export const PromptDTOSchema = PromptSchema.omit({

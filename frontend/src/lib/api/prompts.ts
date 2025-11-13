@@ -4,11 +4,12 @@ import {
   type PromptDTO,
   PromptSchema,
 } from "@/shared/schemas/prompt";
+import { getAuthAndCsrfHeaders } from "@/lib/api/csrf";
 
 const API_BASE_URL =
   process.env["NEXT_PUBLIC_API_URL"] || "http://localhost:8000";
 
-// Helper to create headers with auth token from session
+// Helper to create headers with auth token from session (for read-only requests)
 async function getAuthHeaders(): Promise<HeadersInit> {
   const headers: HeadersInit = {
     "Content-Type": "application/json",
@@ -44,7 +45,7 @@ export const getPrompts = async (): Promise<Prompt[]> => {
 };
 
 export const createPrompt = async (prompt: PromptDTO): Promise<Prompt> => {
-  const headers = await getAuthHeaders();
+  const headers = await getAuthAndCsrfHeaders();
 
   const res = await fetch(`${API_BASE_URL}/api/prompts`, {
     method: "POST",
@@ -67,7 +68,7 @@ export const updatePrompt = async (
   id: string,
   prompt: PromptDTO,
 ): Promise<Prompt> => {
-  const headers = await getAuthHeaders();
+  const headers = await getAuthAndCsrfHeaders();
 
   const res = await fetch(`${API_BASE_URL}/api/prompts/${id}`, {
     method: "PUT",
@@ -87,7 +88,7 @@ export const updatePrompt = async (
 };
 
 export const deletePrompt = async (id: string): Promise<void> => {
-  const headers = await getAuthHeaders();
+  const headers = await getAuthAndCsrfHeaders();
 
   const res = await fetch(`${API_BASE_URL}/api/prompts/${id}`, {
     method: "DELETE",
