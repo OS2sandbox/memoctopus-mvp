@@ -12,7 +12,6 @@ interface SummaryEditorProps {
   disabled?: boolean;
 }
 
-// TODO: Update ConfirmDialog to be clearer
 export const SummaryEditor = ({
   initialContent = "",
   onApprove,
@@ -47,7 +46,7 @@ export const SummaryEditor = ({
           trigger={<Button disabled={triggerDisabled}>Godkend</Button>}
         >
           <p>Er du sikker på, at du vil godkende dette resumé?</p>
-          <p>Når du godkender, kan du ikke redigere det yderligere.</p>
+          <p>Idet du godkender, kan du ikke redigere yderligere.</p>
         </ConfirmDialog>
       </div>
     </div>

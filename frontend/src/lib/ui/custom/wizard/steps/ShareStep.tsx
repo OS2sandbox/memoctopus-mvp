@@ -70,7 +70,7 @@ export const ShareStep = () => {
           <FieldLegend>Eksportér opsummering</FieldLegend>
 
           <Field orientation="vertical">
-            <FieldLabel htmlFor="fileName">Filnavn</FieldLabel>
+            <FieldLabel>Filnavn</FieldLabel>
             <FieldContent>
               <Input
                 id="fileName"
@@ -86,7 +86,7 @@ export const ShareStep = () => {
           </Field>
 
           <Field orientation="vertical" className="w-20">
-            <FieldLabel htmlFor="exportFormat">Format</FieldLabel>
+            <FieldLabel>Format</FieldLabel>
             <FieldContent>
               <ExportFormatSelect
                 selected={exportedFormat}
