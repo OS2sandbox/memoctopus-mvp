@@ -8,7 +8,8 @@ from typing import Optional
 from starlette.middleware.cors import CORSMiddleware
 
 from database import connect_db, disconnect_db
-from routers import prompts
+from routers import prompts, history, export
+from auth import get_current_user, AuthenticatedUser
 
 load_dotenv()
 
@@ -37,6 +38,8 @@ app.add_middleware(
 
 # Include routers
 app.include_router(prompts.router)
+app.include_router(history.router)
+app.include_router(export.router)
 
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")

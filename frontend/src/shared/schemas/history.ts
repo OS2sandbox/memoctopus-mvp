@@ -2,18 +2,48 @@ import { z } from "zod";
 
 import {
   MAX_HISTORY_TITLE_LENGTH,
+  MAX_PROMPT_LENGTH,
   MAX_TRANSCRIPT_LENGTH,
   MIN_HISTORY_TITLE_LENGTH,
+  MIN_PROMPT_LENGTH,
   MIN_TRANSCRIPT_LENGTH,
 } from "@/shared/constants";
-import { PromptSchema } from "@/shared/schemas/prompt";
 
 export const TranscriptSchema = z.object({
-  kind: z.literal("text"),
-  text: z.string().trim().min(MIN_TRANSCRIPT_LENGTH).max(MAX_TRANSCRIPT_LENGTH),
+  kind: z.literal("transcript"),
+  text: z
+    .string()
+    .trim()
+    .min(
+      MIN_TRANSCRIPT_LENGTH,
+      `Transcript text must be at least ${MIN_TRANSCRIPT_LENGTH} characters`,
+    )
+    .max(
+      MAX_TRANSCRIPT_LENGTH,
+      `Transcript text must not exceed ${MAX_TRANSCRIPT_LENGTH} characters`,
+    ),
 });
 
-export const HistoryAssetSchema = z.union([TranscriptSchema, PromptSchema]);
+export const PromptAssetSchema = z.object({
+  kind: z.literal("prompt"),
+  promptId: z.string(),
+  text: z
+    .string()
+    .trim()
+    .min(
+      MIN_PROMPT_LENGTH,
+      `Summary text must be at least ${MIN_PROMPT_LENGTH} characters`,
+    )
+    .max(
+      MAX_PROMPT_LENGTH,
+      `Summary text must not exceed ${MAX_PROMPT_LENGTH} characters`,
+    ),
+});
+
+export const HistoryAssetSchema = z.union([
+  TranscriptSchema,
+  PromptAssetSchema,
+]);
 
 export const HistoryEntrySchema = z.object({
   id: z.string(),
@@ -22,8 +52,14 @@ export const HistoryEntrySchema = z.object({
   title: z
     .string()
     .trim()
-    .min(MIN_HISTORY_TITLE_LENGTH)
-    .max(MAX_HISTORY_TITLE_LENGTH),
+    .min(
+      MIN_HISTORY_TITLE_LENGTH,
+      `History entry title must be at least ${MIN_HISTORY_TITLE_LENGTH} characters`,
+    )
+    .max(
+      MAX_HISTORY_TITLE_LENGTH,
+      `History entry title must not exceed ${MAX_HISTORY_TITLE_LENGTH} characters`,
+    ),
   assets: z.array(HistoryAssetSchema).min(1),
 });
 

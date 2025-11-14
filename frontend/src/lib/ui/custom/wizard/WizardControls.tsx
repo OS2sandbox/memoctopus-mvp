@@ -2,7 +2,7 @@ import { LucideSave, LucideTrash } from "lucide-react";
 
 import { createHistoryEntry } from "@/lib/api/history-entry";
 import { useSession } from "@/lib/auth-client";
-import { STEP_ID } from "@/lib/constants";
+import { HISTORY_ENTRY_KIND, STEP_ID } from "@/lib/constants";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
 import { Stepper, useStepper } from "@/lib/ui/custom/wizard/stepper";
@@ -44,8 +44,8 @@ export const WizardControls = () => {
 
       const prompt: Prompt = metadata[STEP_ID.SelectPromptStep]?.["prompt"];
 
-      const historyEntryTranscript: Transcript = {
-        kind: "text",
+      const transcriptAsset: Transcript = {
+        kind: HISTORY_ENTRY_KIND.TRANSCRIPT,
         text: transcript,
       };
 
@@ -56,14 +56,18 @@ export const WizardControls = () => {
         return;
       }
 
-      const historyEntry: HistoryEntryDTO = {
-        userId: user?.id,
-        title: title,
-        assets: [prompt, historyEntryTranscript],
+      // Transform prompt into PromptAsset format
+      const promptAsset = {
+        kind: HISTORY_ENTRY_KIND.PROMPT,
+        promptId: prompt.id,
+        text: prompt.text,
       };
 
-      // TODO: remove log
-      console.log("Creating history entry with data:", historyEntry);
+      const historyEntry: HistoryEntryDTO = {
+        userId: user.id,
+        title: title,
+        assets: [promptAsset, transcriptAsset],
+      };
 
       await createHistoryEntry(historyEntry);
 

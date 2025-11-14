@@ -1,3 +1,6 @@
+import { useMutation } from "@tanstack/react-query";
+
+import { downloadExport, type ExportRequest } from "@/lib/api/export";
 import { EXPORT_FORMAT, STEP_ID } from "@/lib/constants";
 import { useWarnBeforeUnload } from "@/lib/hooks/use-warn-before-unload";
 import { Button } from "@/lib/ui/core/shadcn/button";
@@ -11,53 +14,50 @@ import {
 } from "@/lib/ui/core/shadcn/field";
 import { Input } from "@/lib/ui/core/shadcn/input";
 import { Separator } from "@/lib/ui/core/shadcn/separator";
+import { Spinner } from "@/lib/ui/core/shadcn/spinner";
 import { FormatDropdownMenu } from "@/lib/ui/custom/ExportFormatDropdownMenu";
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardContentPanel } from "@/lib/ui/custom/wizard/WizardContentPanel";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
-import { exportToDocx } from "@/lib/utils/export/exportToDocx";
-import { exportToPdf } from "@/lib/utils/export/exportToPdf";
 
 import { useState } from "react";
 
 export const ShareStep = () => {
   useWarnBeforeUnload(true);
 
-  const { metadata, setMetadata, current } = useStepper();
-  const currentMetadata = metadata[current.id];
-  const content: string = currentMetadata?.["editedTranscript"];
+  const { metadata, setMetadata } = useStepper();
+  const content: string =
+    metadata[STEP_ID.EditAndConfirmStep]?.["editedSummary"];
 
   const defaultTitle = metadata[STEP_ID.EditAndConfirmStep]?.["title"];
   const [titleInput, setTitleInput] = useState("");
 
   const [exportedFormat, setExportedFormat] = useState(EXPORT_FORMAT.PDF);
 
-  const exportHandlers = {
-    [EXPORT_FORMAT.PDF]: exportToPdf,
-    [EXPORT_FORMAT.DOCX]: exportToDocx,
-  } as const;
+  const exportMutation = useMutation({
+    mutationFn: async ({ format, markdown, fileName = "" }: ExportRequest) =>
+      downloadExport({ format, markdown, fileName }),
+  });
 
   const exportFormatHandler = () => {
     try {
       const finalTitle =
         titleInput.trim().length > 0 ? titleInput : defaultTitle;
-      const exportHandler = exportHandlers[exportedFormat];
-
-      if (!exportHandler) {
-        new Error(`export format not supported: ${exportedFormat}`);
-      }
 
       setMetadata(STEP_ID.ShareStep, {
         title: finalTitle,
         isCompleted: true,
       });
 
-      const result = exportHandler({
-        content,
-        fileName: finalTitle,
-      });
+      if (!content) {
+        new Error("No content to export");
+      }
 
-      return result;
+      exportMutation.mutate({
+        format: exportedFormat,
+        markdown: content.trim(),
+        fileName: finalTitle.trim(),
+      });
     } catch (error) {
       console.error(error);
     }
@@ -97,7 +97,7 @@ export const ShareStep = () => {
         </FieldSet>
         <Separator />
         <Button className="self-end" onClick={() => exportFormatHandler()}>
-          Eksportér
+          {exportMutation.isPending ? <Spinner /> : "Eksportér"}
         </Button>
       </WizardContentPanel>
     </WizardPanel>

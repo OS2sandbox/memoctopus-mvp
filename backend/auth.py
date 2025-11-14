@@ -1,5 +1,5 @@
 from fastapi import HTTPException, Cookie, Depends, Header
-from typing import Optional, Dict
+from typing import Optional
 from database import get_database, Database
 
 

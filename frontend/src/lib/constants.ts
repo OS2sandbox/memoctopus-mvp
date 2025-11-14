@@ -20,8 +20,8 @@ export enum STEP_ID {
 }
 
 export enum EXPORT_FORMAT {
-  PDF = "PDF",
-  DOCX = "DOCX",
+  PDF = "pdf",
+  DOCX = "docx",
 }
 
 export enum AUTH_MODE {
@@ -35,4 +35,9 @@ export enum RECORDER_STATUS {
   Stopped = "stopped",
   Paused = "paused",
   Error = "error",
+}
+
+export enum HISTORY_ENTRY_KIND {
+  PROMPT = "prompt",
+  TRANSCRIPT = "transcript",
 }

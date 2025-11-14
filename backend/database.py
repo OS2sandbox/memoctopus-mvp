@@ -28,3 +28,8 @@ async def disconnect_db():
 def get_database() -> Database:
     """Get the database instance for dependency injection."""
     return database
+
+
+def get_database_instance() -> Database:
+    """Get the global database instance for use in middleware."""
+    return database

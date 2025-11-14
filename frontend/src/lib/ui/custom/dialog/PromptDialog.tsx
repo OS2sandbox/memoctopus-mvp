@@ -75,17 +75,39 @@ export const PromptDialog = ({
   const user = session?.user as User | null;
   const PromptCategoryOptions = Object.values(PROMPT_CATEGORY);
 
-  const validatePrompt = (p: Prompt): string | null => {
-    if (!p.name.trim() || !p.text.trim()) {
-      return "Tekstfelter kan ikke være tomme.";
+  const [validationErrors, setValidationErrors] = useState<{
+    name?: string;
+    text?: string;
+  }>({});
+
+  const validatePrompt = (p: Prompt): boolean => {
+    const errors: { name?: string; text?: string } = {};
+    const trimmedName = p.name.trim();
+    const trimmedText = p.text.trim();
+
+    if (trimmedName.length === 0) {
+      errors.name = "Titel kan ikke være tom";
+    } else if (trimmedName.length < 5) {
+      errors.name = "Titel skal være mindst 5 tegn";
+    } else if (trimmedName.length > 200) {
+      errors.name = "Titel må ikke overstige 200 tegn";
     }
-    return null;
+
+    if (trimmedText.length === 0) {
+      errors.text = "Prompt tekst kan ikke være tom";
+    } else if (trimmedText.length < 5) {
+      errors.text = "Prompt tekst skal være mindst 5 tegn";
+    } else if (trimmedText.length > 4000) {
+      errors.text = "Prompt tekst må ikke overstige 4000 tegn";
+    }
+
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
   };
 
   const handleSubmit = () => {
-    const validationError = validatePrompt(prompt);
-    if (validationError) {
-      setError(validationError);
+    const isValid = validatePrompt(prompt);
+    if (!isValid) {
       return;
     }
 
@@ -102,6 +124,7 @@ export const PromptDialog = ({
 
     onSubmit(newPrompt);
     setError(null);
+    setValidationErrors({});
     setOpen(false);
     if (!isEditMode) setPrompt(DEFAULT_PROMPT);
   };
@@ -128,8 +151,13 @@ export const PromptDialog = ({
 
         <FieldSet>
           <FieldGroup className="flex flex-col gap-4">
-            <Field data-invalid={!!error && !prompt.name.trim()}>
-              <FieldLabel>Titel</FieldLabel>
+            <Field data-invalid={!!validationErrors.name}>
+              <div className="flex items-center justify-between">
+                <FieldLabel>Titel</FieldLabel>
+                <span className="text-xs text-muted-foreground">
+                  {prompt.name.trim().length}/200
+                </span>
+              </div>
               <Input
                 id="name"
                 value={prompt.name}
@@ -139,6 +167,11 @@ export const PromptDialog = ({
                 placeholder="F.eks. Statusmøde på Orto"
                 required
               />
+              {validationErrors.name && (
+                <p className="text-xs text-destructive mt-1">
+                  {validationErrors.name}
+                </p>
+              )}
             </Field>
 
             <Field>
@@ -165,10 +198,15 @@ export const PromptDialog = ({
               </Select>
             </Field>
 
-            <Field data-invalid={!!error && !prompt.text.trim()}>
+            <Field data-invalid={!!validationErrors.text}>
               <div className="flex items-center justify-between">
                 <FieldLabel>Prompt tekst</FieldLabel>
-                <PromptHelpPanel />
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    {prompt.text.trim().length}/4000
+                  </span>
+                  <PromptHelpPanel />
+                </div>
               </div>
               <Textarea
                 id="text"
@@ -180,6 +218,11 @@ export const PromptDialog = ({
                 className="min-h-[120px]"
                 required
               />
+              {validationErrors.text && (
+                <p className="text-xs text-destructive mt-1">
+                  {validationErrors.text}
+                </p>
+              )}
             </Field>
           </FieldGroup>
         </FieldSet>
