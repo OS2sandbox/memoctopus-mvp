@@ -38,6 +38,10 @@ interface DataTableProps<TData, TValue> {
     scope: DATA_TABLE_SCOPE | null;
     scopeModes?: DATA_TABLE_SCOPE[];
   };
+  searchConfig?: {
+    placeholder?: string;
+    filterKey: keyof TData;
+  };
   className?: string;
 }
 
@@ -48,11 +52,13 @@ export function DataTable<TData, TValue>({
   scopeOpts,
   onRowClick,
   className,
+  searchConfig,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
 
   const { onScopeChange, scope, scopeModes } = scopeOpts ?? {};
+  const { filterKey, placeholder } = searchConfig ?? {};
 
   const toggleScope = (value: DATA_TABLE_SCOPE) => {
     const scopeValue = scope === value ? null : value;
@@ -83,14 +89,18 @@ export function DataTable<TData, TValue>({
     <div className={cn("space-y-4 w-full", className)}>
       <div className="flex items-start justify-between">
         <div className="flex flex-col gap-3">
-          <Input
-            placeholder="Søg efter prompt..."
-            value={(table.getColumn("name")?.getFilterValue() as string) ?? ""}
-            onChange={(e) =>
-              table.getColumn("name")?.setFilterValue(e.target.value)
-            }
-            className="max-w-xs"
-          />
+          {searchConfig && typeof filterKey === "string" && (
+            <Input
+              placeholder={placeholder}
+              value={
+                (table.getColumn(filterKey)?.getFilterValue() as string) ?? ""
+              }
+              onChange={(e) =>
+                table.getColumn(filterKey)?.setFilterValue(e.target.value)
+              }
+              className="max-w-xs"
+            />
+          )}
 
           {scopeOpts && (
             <div className="flex flex-row gap-3">

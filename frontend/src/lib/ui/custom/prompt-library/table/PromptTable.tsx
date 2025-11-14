@@ -1,5 +1,7 @@
 "use client";
 
+import type { ColumnDef } from "@tanstack/react-table";
+
 import type { DATA_TABLE_SCOPE } from "@/lib/constants";
 import { useCurrentUser } from "@/lib/hooks/use-current-user";
 import { DataTable } from "@/lib/ui/core/data-table";
@@ -57,7 +59,7 @@ export const PromptTable = ({
     handleUpdatePrompt,
   } = usePromptTable({ tableMode: tableMode ?? [], data });
 
-  const columns = getPromptColumns({
+  const columns: ColumnDef<Prompt>[] = getPromptColumns({
     handleToggleFavorite,
     handleDeletePrompt,
     handleUpdatePrompt,
@@ -71,7 +73,7 @@ export const PromptTable = ({
     }
   }, [status, confirmOpen, selectedPrompt]);
 
-  const addButton = <PromptDialog onSubmit={handleAddPrompt} />;
+  const addDialog = <PromptDialog onSubmit={handleAddPrompt} />;
 
   return (
     <Fragment>
@@ -79,13 +81,17 @@ export const PromptTable = ({
         columns={columns}
         className={"max-w-4xl"}
         data={prompts}
-        {...(!hideAddButton && { addButton: addButton })}
+        {...(!hideAddButton && { addButton: addDialog })}
         scopeOpts={{
           scope,
           onScopeChange: setScope,
           scopeModes: tableMode ?? [],
         }}
         onRowClick={handleRowClick}
+        searchConfig={{
+          filterKey: "name",
+          placeholder: "Søg efter prompt...",
+        }}
       />
 
       <ConfirmDialog

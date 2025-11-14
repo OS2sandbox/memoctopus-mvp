@@ -20,5 +20,12 @@ export const HistoryTable = ({ data }: HistoryTableProps) => {
     },
   });
 
-  return <DataTable className={"max-w-4xl"} columns={columns} data={data} />;
+  return (
+    <DataTable<HistoryEntry, typeof columns>
+      className={"max-w-4xl"}
+      columns={columns}
+      data={data}
+      searchConfig={{ filterKey: "title", placeholder: "Søg i historik..." }}
+    />
+  );
 };
