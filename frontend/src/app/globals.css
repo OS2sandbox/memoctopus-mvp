@@ -61,6 +61,19 @@
   }
 }
 
+@layer components {
+  /* Custom prose overrides for TipTap */
+  .prose-tiptap h1 {
+    @apply text-2xl font-bold;
+  }
+  .prose-tiptap h2 {
+    @apply text-xl font-semibold;
+  }
+  .prose-tiptap h3 {
+    @apply text-lg font-medium;
+  }
+}
+
 @layer base {
   * {
     @apply border-border;

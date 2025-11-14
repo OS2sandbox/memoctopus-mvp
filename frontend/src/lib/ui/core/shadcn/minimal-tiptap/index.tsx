@@ -78,7 +78,7 @@ function MinimalTiptap({
     editorProps: {
       attributes: {
         class: cn(
-          "prose max-w-none prose-sm sm:prose-base lg:prose-lg",
+          "prose prose-tiptap max-w-none",
           "focus:outline-none min-h-[200px] p-4 border-0",
         ),
       },
