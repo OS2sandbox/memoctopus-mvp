@@ -1,5 +1,5 @@
 export const MIN_TRANSCRIPT_LENGTH = 10;
-export const MAX_TRANSCRIPT_LENGTH = 50000;
+export const MAX_TRANSCRIPT_LENGTH = 5000;
 
 export const MIN_PROMPT_LENGTH = 10;
 export const MAX_PROMPT_LENGTH = 4000;

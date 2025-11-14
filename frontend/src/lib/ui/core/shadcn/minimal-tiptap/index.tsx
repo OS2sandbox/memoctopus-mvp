@@ -1,3 +1,4 @@
+import CharacterCount from "@tiptap/extension-character-count";
 import Link from "@tiptap/extension-link";
 import { Markdown } from "@tiptap/markdown";
 import { EditorContent, useEditor } from "@tiptap/react";
@@ -25,7 +26,7 @@ import { Separator } from "@/lib/ui/core/shadcn/separator";
 import { Toggle } from "@/lib/ui/core/shadcn/toggle";
 import { cn } from "@/lib/utils/utils";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 interface MinimalTiptapProps {
   content?: string;
@@ -33,6 +34,7 @@ interface MinimalTiptapProps {
   placeholder?: string;
   editable?: boolean;
   className?: string;
+  charLimit?: number; // optional character limit
 }
 
 function MinimalTiptap({
@@ -41,18 +43,15 @@ function MinimalTiptap({
   placeholder = "Start typing...",
   editable = true,
   className,
+  charLimit,
 }: MinimalTiptapProps) {
+  const [charCount, setCharCount] = useState(0);
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
-        bulletList: {
-          keepMarks: true,
-          keepAttributes: false,
-        },
-        orderedList: {
-          keepMarks: true,
-          keepAttributes: false,
-        },
+        bulletList: { keepMarks: true, keepAttributes: false },
+        orderedList: { keepMarks: true, keepAttributes: false },
       }),
       Markdown,
       Link.configure({
@@ -64,6 +63,9 @@ function MinimalTiptap({
             "text-blue-600 underline underline-offset-2 hover:text-blue-700",
         },
       }),
+      CharacterCount.configure({
+        limit: charLimit,
+      }),
     ],
     content,
     contentType: "markdown",
@@ -71,6 +73,7 @@ function MinimalTiptap({
     onUpdate: ({ editor }) => {
       const markdown = editor.getMarkdown();
       onChange?.(markdown);
+      setCharCount(editor.storage.characterCount.characters());
     },
     editorProps: {
       attributes: {
@@ -88,9 +91,10 @@ function MinimalTiptap({
     editor.setEditable(editable);
   }, [editable, editor]);
 
-  if (!editor) {
-    return null;
-  }
+  if (!editor) return null;
+
+  const limit = charLimit ?? null;
+  const overLimit = limit !== null && charCount > limit;
 
   return (
     <div className={cn("border rounded-lg overflow-hidden", className)}>
@@ -105,7 +109,6 @@ function MinimalTiptap({
         >
           <Bold className="h-4 w-4" />
         </Toggle>
-
         <Toggle
           size="sm"
           pressed={editor.isActive("italic")}
@@ -116,7 +119,6 @@ function MinimalTiptap({
         >
           <Italic className="h-4 w-4" />
         </Toggle>
-
         <Toggle
           size="sm"
           pressed={editor.isActive("strike")}
@@ -127,7 +129,6 @@ function MinimalTiptap({
         >
           <Strikethrough className="h-4 w-4" />
         </Toggle>
-
         <Toggle
           size="sm"
           pressed={editor.isActive("code")}
@@ -151,7 +152,6 @@ function MinimalTiptap({
         >
           <Heading1 className="h-4 w-4" />
         </Toggle>
-
         <Toggle
           size="sm"
           pressed={editor.isActive("heading", { level: 2 })}
@@ -162,7 +162,6 @@ function MinimalTiptap({
         >
           <Heading2 className="h-4 w-4" />
         </Toggle>
-
         <Toggle
           size="sm"
           pressed={editor.isActive("heading", { level: 3 })}
@@ -186,7 +185,6 @@ function MinimalTiptap({
         >
           <List className="h-4 w-4" />
         </Toggle>
-
         <Toggle
           size="sm"
           pressed={editor.isActive("orderedList")}
@@ -197,7 +195,6 @@ function MinimalTiptap({
         >
           <ListOrdered className="h-4 w-4" />
         </Toggle>
-
         <Toggle
           size="sm"
           pressed={editor.isActive("blockquote")}
@@ -230,7 +227,6 @@ function MinimalTiptap({
         >
           <Undo className="h-4 w-4" />
         </Button>
-
         <Button
           variant="ghost"
           size="sm"
@@ -248,24 +244,17 @@ function MinimalTiptap({
           onClick={() => {
             const previousUrl = editor.getAttributes("link")["href"];
             const url = window.prompt("Indsæt link:", previousUrl || "");
-
-            // If user pressed cancel
             if (url === null) return;
-
-            // If user entered empty string → remove link
             if (url === "") {
               editor.chain().focus().unsetLink().run();
               return;
             }
-
-            // Otherwise, set or update link
             editor.chain().focus().setLink({ href: url }).run();
           }}
           disabled={!editable}
         >
           <LucideLink className="h-4 w-4" />
         </Button>
-
         <Button
           variant="ghost"
           size="sm"
@@ -277,6 +266,17 @@ function MinimalTiptap({
       </div>
 
       <EditorContent editor={editor} placeholder={placeholder} />
+
+      <div className="flex justify-end gap-4 px-4 py-2 text-xs text-muted-foreground">
+        <span
+          className={cn(
+            limit !== null && overLimit && "text-red-600 font-medium",
+          )}
+        >
+          Karakterer: {charCount}
+          {limit !== null && ` / ${limit}`}
+        </span>
+      </div>
     </div>
   );
 }

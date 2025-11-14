@@ -2,18 +2,17 @@ import { Button } from "@/lib/ui/core/shadcn/button";
 import { MinimalTiptap } from "@/lib/ui/core/shadcn/minimal-tiptap";
 import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
 import { getVisibleTextLength } from "@/lib/utils/utils";
+import { MAX_TRANSCRIPT_LENGTH } from "@/shared/constants";
 
 import { useState } from "react";
 
 interface SummaryEditorProps {
   initialContent?: string;
-  onApprove: (html: string) => void;
+  onApprove: (markdown: string) => void;
   disabled?: boolean;
 }
 
-/* TODO:
- *  - Remove the "Godkend" button and handle it on "Næste" instead with a warning dialog
- */
+// TODO: Update ConfirmDialog to be clearer
 export const SummaryEditor = ({
   initialContent = "",
   onApprove,
@@ -38,6 +37,7 @@ export const SummaryEditor = ({
         placeholder="Redigér dit resumé her..."
         editable={!disabled}
         className={disabled ? "bg-gray-100" : ""}
+        charLimit={MAX_TRANSCRIPT_LENGTH}
       />
       <div className="flex justify-end gap-2 pt-4">
         <ConfirmDialog

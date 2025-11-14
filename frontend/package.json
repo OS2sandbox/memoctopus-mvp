@@ -39,6 +39,7 @@
     "@tiptap/extension-blockquote": "^3.9.1",
     "@tiptap/extension-bold": "^3.9.1",
     "@tiptap/extension-bullet-list": "^3.9.1",
+    "@tiptap/extension-character-count": "^3.10.7",
     "@tiptap/extension-code": "^3.9.1",
     "@tiptap/extension-code-block": "^3.9.1",
     "@tiptap/extension-document": "^3.9.1",
