@@ -10,7 +10,7 @@ import {
 } from "@/lib/ui/core/shadcn/dropdown-menu";
 import { Separator } from "@/lib/ui/core/shadcn/separator";
 
-interface EXPORT_FORMATDropdownMenuProps {
+interface FormatDropdownMenuProps {
   onSelect: (format: EXPORT_FORMAT) => void;
   selected: EXPORT_FORMAT;
 }
@@ -18,7 +18,7 @@ interface EXPORT_FORMATDropdownMenuProps {
 export const FormatDropdownMenu = ({
   onSelect,
   selected,
-}: EXPORT_FORMATDropdownMenuProps) => {
+}: FormatDropdownMenuProps) => {
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>

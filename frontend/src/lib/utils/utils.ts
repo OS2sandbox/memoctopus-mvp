@@ -1,6 +1,5 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
-import "@/lib/fonts/Roboto-normal";
 
 import { composeFormatRules } from "@/lib/utils/regex-rule-formatter/formatters";
 import { safeNameRules } from "@/lib/utils/regex-rule-formatter/rules";

@@ -1,27 +1,10 @@
-import { authClient } from "@/lib/auth-client";
+import { getAuthHeaders } from "@/lib/api/utils";
+import { API_BASE_URL } from "@/shared/constants";
 import {
   type HistoryEntry,
   type HistoryEntryDTO,
   HistoryEntrySchema,
 } from "@/shared/schemas/history";
-
-const API_BASE_URL =
-  process.env["NEXT_PUBLIC_API_URL"] || "http://localhost:8000";
-
-// Helper to create headers with auth token from session (for read-only requests)
-async function getAuthHeaders(): Promise<HeadersInit> {
-  const headers: HeadersInit = {
-    "Content-Type": "application/json",
-  };
-
-  // Get session token from better-auth
-  const session = await authClient.getSession();
-  if (session?.data?.session?.token) {
-    headers["X-Session-Token"] = session.data.session.token;
-  }
-
-  return headers;
-}
 
 export const getHistoryEntries = async (): Promise<HistoryEntry[]> => {
   const headers = await getAuthHeaders();

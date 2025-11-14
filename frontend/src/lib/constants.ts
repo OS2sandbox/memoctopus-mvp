@@ -20,8 +20,8 @@ export enum STEP_ID {
 }
 
 export enum EXPORT_FORMAT {
-  PDF = "PDF",
-  DOCX = "DOCX",
+  PDF = "pdf",
+  DOCX = "docx",
 }
 
 export enum AUTH_MODE {
