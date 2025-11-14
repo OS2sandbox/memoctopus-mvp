@@ -15,7 +15,7 @@ import {
 import { Input } from "@/lib/ui/core/shadcn/input";
 import { Separator } from "@/lib/ui/core/shadcn/separator";
 import { Spinner } from "@/lib/ui/core/shadcn/spinner";
-import { FormatDropdownMenu } from "@/lib/ui/custom/ExportFormatDropdownMenu";
+import { ExportFormatSelect } from "@/lib/ui/custom/ExportFormatSelect";
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardContentPanel } from "@/lib/ui/custom/wizard/WizardContentPanel";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
@@ -88,7 +88,7 @@ export const ShareStep = () => {
           <Field orientation="vertical" className="w-20">
             <FieldLabel htmlFor="exportFormat">Format</FieldLabel>
             <FieldContent>
-              <FormatDropdownMenu
+              <ExportFormatSelect
                 selected={exportedFormat}
                 onSelect={setExportedFormat}
               />
