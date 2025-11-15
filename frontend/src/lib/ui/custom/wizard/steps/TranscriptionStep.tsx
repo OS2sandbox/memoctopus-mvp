@@ -1,16 +1,15 @@
 import { STEP_ID } from "@/lib/constants";
 import { Spinner } from "@/lib/ui/core/shadcn/spinner";
-import { SummaryEditor } from "@/lib/ui/custom/editor/SummaryEditor";
+import { TranscriptionEditor } from "@/lib/ui/custom/editor/TranscriptionEditor";
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
-import { handleSafeFileName } from "@/lib/utils/utils";
 
-export const EditAndConfirmStep = () => {
+export const TranscriptionStep = () => {
   const { metadata, setMetadata, next } = useStepper();
-  const editConfirmMetadata = metadata[STEP_ID.EditAndConfirmStep] ?? {};
-  const isCompleted = editConfirmMetadata["isCompleted"] as boolean;
-  const isLoading = editConfirmMetadata["isLoading"] as boolean;
-  const hasError = editConfirmMetadata["error"] as boolean;
+  const transcriptionMetadata = metadata[STEP_ID.TranscriptionStep] ?? {};
+  const isCompleted = transcriptionMetadata["isCompleted"] as boolean;
+  const isLoading = transcriptionMetadata["isLoading"] as boolean;
+  const hasError = transcriptionMetadata["error"] as boolean;
 
   if (isLoading) {
     return (
@@ -19,7 +18,7 @@ export const EditAndConfirmStep = () => {
           <div className="flex items-center gap-3 p-4 border rounded-lg bg-muted/50">
             <Spinner className="size-5" />
             <span className="text-sm text-muted-foreground">
-              Opsummerer din transskribering...
+              Transskriberer din lydfil...
             </span>
           </div>
           {/* Skeleton loading animation */}
@@ -43,7 +42,7 @@ export const EditAndConfirmStep = () => {
       <WizardPanel>
         <div className="p-4 border border-destructive rounded-lg bg-destructive/10">
           <p className="text-destructive font-medium">
-            Der opstod en fejl ved opsummering af din transskribering.
+            Der opstod en fejl ved transskribering af din lydfil.
           </p>
           <p className="text-sm text-muted-foreground mt-2">
             Prøv venligst igen.
@@ -55,18 +54,17 @@ export const EditAndConfirmStep = () => {
 
   return (
     <WizardPanel>
-      <SummaryEditor
+      <TranscriptionEditor
         disabled={isCompleted}
         onApprove={(content) => {
-          setMetadata(STEP_ID.EditAndConfirmStep, {
-            ...editConfirmMetadata,
+          setMetadata(STEP_ID.TranscriptionStep, {
+            ...transcriptionMetadata,
             isCompleted: content && content.length > 0,
-            editedSummary: content,
-            title: handleSafeFileName({ fileName: undefined }),
+            editedTranscription: content,
           });
           next();
         }}
-        initialContent={editConfirmMetadata["summary"]}
+        initialContent={transcriptionMetadata["transcription"]}
       />
     </WizardPanel>
   );

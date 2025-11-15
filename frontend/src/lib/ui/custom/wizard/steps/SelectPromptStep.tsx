@@ -2,8 +2,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { getPrompts } from "@/lib/api/prompts";
 import {
-  type TranscribeAndSummarizeProps,
-  transcribeAndSummarize,
+  type SummarizeTranscriptionProps,
+  summarizeTranscription,
 } from "@/lib/api/transcription";
 import { DATA_TABLE_SCOPE, STEP_ID } from "@/lib/constants";
 import { Spinner } from "@/lib/ui/core/shadcn/spinner";
@@ -17,25 +17,38 @@ export const SelectPromptStep = () => {
   const selectPromptMetadata = metadata[STEP_ID.SelectPromptStep] ?? {};
   const selectedPrompt: Prompt | undefined = selectPromptMetadata["prompt"];
 
+  // Get the edited or original transcription from the previous step
+  const transcriptionMetadata = metadata[STEP_ID.TranscriptionStep] ?? {};
+  const transcription =
+    (transcriptionMetadata["editedTranscription"] as string) ||
+    (transcriptionMetadata["transcription"] as string);
+
   const { mutate: summarize, status: summaryStatus } = useMutation({
-    mutationFn: ({ file, prompt, category }: TranscribeAndSummarizeProps) =>
-      transcribeAndSummarize({
-        file: file,
+    mutationFn: ({
+      transcription,
+      prompt,
+      category,
+    }: SummarizeTranscriptionProps) =>
+      summarizeTranscription({
+        transcription: transcription,
         prompt: prompt,
         category: category,
       }),
-    onSuccess: (summary) => {
-      setMetadata(STEP_ID.SelectPromptStep, {
-        ...selectPromptMetadata,
-        isCompleted: selectedPrompt,
-      });
+    onSuccess: (result) => {
+      // Keep SelectPromptStep metadata as-is (prompt and isCompleted are already set)
       setMetadata(STEP_ID.EditAndConfirmStep, {
-        ...selectPromptMetadata,
-        summary: summary,
+        summary: result.summary,
         isCompleted: false,
+        isLoading: false,
       });
-
-      next();
+    },
+    onError: () => {
+      setMetadata(STEP_ID.EditAndConfirmStep, {
+        summary: "",
+        isCompleted: false,
+        isLoading: false,
+        error: true,
+      });
     },
   });
 
@@ -48,10 +61,21 @@ export const SelectPromptStep = () => {
     setMetadata(STEP_ID.SelectPromptStep, {
       ...selectPromptMetadata,
       prompt: entry,
+      isCompleted: true,
     });
 
+    // Navigate to next step immediately and show loading state
+    setMetadata(STEP_ID.EditAndConfirmStep, {
+      summary: "",
+      isCompleted: false,
+      isLoading: true,
+      error: false,
+    });
+    next();
+
+    // Then start summarization
     summarize({
-      file: metadata[STEP_ID.UploadSpeechStep]?.["file"],
+      transcription: transcription,
       prompt: entry.text,
       category: entry.category,
     });
@@ -72,7 +96,6 @@ export const SelectPromptStep = () => {
             hideAddButton={true}
             rowClickConfig={{
               onRowClick: handleOnRowClick,
-              status: summaryStatus,
             }}
             tableMode={[DATA_TABLE_SCOPE.MyFavorites, DATA_TABLE_SCOPE.MyItems]}
           />

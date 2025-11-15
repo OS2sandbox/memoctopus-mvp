@@ -14,9 +14,10 @@ export enum DATA_TABLE_SCOPE {
 
 export enum STEP_ID {
   UploadSpeechStep = "step-1",
-  SelectPromptStep = "step-2",
-  EditAndConfirmStep = "step-3",
-  ShareStep = "step-4",
+  TranscriptionStep = "step-2",
+  SelectPromptStep = "step-3",
+  EditAndConfirmStep = "step-4",
+  ShareStep = "step-5",
 }
 
 export enum EXPORT_FORMAT {

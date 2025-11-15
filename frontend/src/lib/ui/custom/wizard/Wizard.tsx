@@ -2,6 +2,7 @@ import { STEP_ID } from "@/lib/constants";
 import { EditAndConfirmStep } from "@/lib/ui/custom/wizard/steps/EditAndConfirmStep";
 import { SelectPromptStep } from "@/lib/ui/custom/wizard/steps/SelectPromptStep";
 import { ShareStep } from "@/lib/ui/custom/wizard/steps/ShareStep";
+import { TranscriptionStep } from "@/lib/ui/custom/wizard/steps/TranscriptionStep";
 import { UploadSpeechStep } from "@/lib/ui/custom/wizard/steps/UploadSpeechStep";
 import { WizardControls } from "@/lib/ui/custom/wizard/WizardControls";
 import { WizardHeader } from "@/lib/ui/custom/wizard/WizardHeader";
@@ -21,6 +22,14 @@ export const Wizard = () => {
         [STEP_ID.UploadSpeechStep]: {
           ...defaultMetadata,
           file: null as File | null,
+          shouldTranscribe: false,
+        },
+        [STEP_ID.TranscriptionStep]: {
+          ...defaultMetadata,
+          transcription: "",
+          editedTranscription: "",
+          isLoading: false,
+          error: false,
         },
         [STEP_ID.SelectPromptStep]: {
           ...defaultMetadata,
@@ -30,6 +39,9 @@ export const Wizard = () => {
           ...defaultMetadata,
           editedSummary: "",
           title: "",
+          summary: "",
+          isLoading: false,
+          error: false,
         },
         [STEP_ID.ShareStep]: {
           ...defaultMetadata,
@@ -50,6 +62,7 @@ export const Wizard = () => {
             // TODO: Make a factory for step panels
             methods.switch({
               [STEP_ID.UploadSpeechStep]: () => <UploadSpeechStep />,
+              [STEP_ID.TranscriptionStep]: () => <TranscriptionStep />,
               [STEP_ID.SelectPromptStep]: () => <SelectPromptStep />,
               [STEP_ID.EditAndConfirmStep]: () => <EditAndConfirmStep />,
               [STEP_ID.ShareStep]: () => <ShareStep />,

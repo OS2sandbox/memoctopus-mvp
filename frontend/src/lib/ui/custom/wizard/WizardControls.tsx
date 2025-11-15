@@ -39,20 +39,32 @@ export const WizardControls = () => {
 
   const onSaveClick = async () => {
     try {
-      const transcript: string =
+      // Get the raw transcription
+      const rawTranscription: string =
+        metadata[STEP_ID.TranscriptionStep]?.["editedTranscription"] ||
+        metadata[STEP_ID.TranscriptionStep]?.["transcription"];
+
+      // Get the edited summary
+      const summary: string =
         metadata[STEP_ID.EditAndConfirmStep]?.["editedSummary"];
 
       const prompt: Prompt = metadata[STEP_ID.SelectPromptStep]?.["prompt"];
 
+      // Save summary as transcript asset (this is the main content)
       const transcriptAsset: Transcript = {
         kind: HISTORY_ENTRY_KIND.TRANSCRIPT,
-        text: transcript,
+        text: summary,
       };
 
       const title: string = metadata[STEP_ID.EditAndConfirmStep]?.["title"];
 
-      if (!user?.id || !title || !transcript) {
-        new Error("Missing required data for history entry.");
+      if (!user?.id || !title || !summary || !prompt) {
+        console.error("Missing required data for history entry:", {
+          userId: user?.id,
+          title,
+          summary: summary ? "present" : "missing",
+          prompt: prompt ? "present" : "missing",
+        });
         return;
       }
 
@@ -63,6 +75,8 @@ export const WizardControls = () => {
         text: prompt.text,
       };
 
+      // TODO: In the future, we might want to also save the raw transcription
+      // as a separate asset type if the schema supports it
       const historyEntry: HistoryEntryDTO = {
         userId: user.id,
         title: title,
@@ -111,7 +125,17 @@ export const WizardControls = () => {
           {!isLast ? (
             <Button
               disabled={!isLast && !isCompleted}
-              onClick={!isLast ? next : onSaveClick}
+              onClick={() => {
+                if (current.id === STEP_ID.UploadSpeechStep) {
+                  // Trigger transcription before moving to next step
+                  setMetadata(STEP_ID.UploadSpeechStep, {
+                    ...metadata[STEP_ID.UploadSpeechStep],
+                    shouldTranscribe: true,
+                  });
+                } else {
+                  next();
+                }
+              }}
             >
               {isLast ? "Gem" : "Næste"}
             </Button>

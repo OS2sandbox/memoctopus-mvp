@@ -14,6 +14,11 @@ export const { Stepper, utils, useStepper } = defineStepper(
     description: "Optag eller upload tale",
   },
   {
+    id: STEP_ID.TranscriptionStep,
+    title: "Transskribering",
+    description: "Gennemgå og redigér transskribering",
+  },
+  {
     id: STEP_ID.SelectPromptStep,
     title: "Prompt",
     description: "Tilføj prompt og opsæt detaljer",
