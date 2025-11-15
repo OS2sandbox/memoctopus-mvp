@@ -25,8 +25,8 @@ export const getHistoryColumns = ({
   handleDownloadText,
 }: GetHistoryColumnsProps): ColumnDef<HistoryEntry>[] => [
   {
-    accessorKey: "name",
-    header: "Navn",
+    accessorKey: "title",
+    header: "Titel",
     cell: ({ row }) => (
       <div className="font-medium text-foreground">{row.original.title}</div>
     ),

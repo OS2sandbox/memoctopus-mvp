@@ -24,7 +24,7 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
   const stopActiveStream = () => {
     const stream = streamRef.current;
     if (stream) {
-      stream.getTracks().forEach((t) => t.stop());
+      for (const track of stream.getTracks()) track.stop();
       streamRef.current = null;
     }
   };

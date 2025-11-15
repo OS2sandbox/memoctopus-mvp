@@ -4,7 +4,7 @@ import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
 
 ("use no memo");
 
-import type { Prompt } from "@/shared/schemas/prompt";
+import type { Prompt, PromptDTO } from "@/shared/schemas/prompt";
 // Known issue that React Compiler is not supported by TanStack table yet:
 
 // https://nextjs.org/docs/app/api-reference/config/next-config-js/reactCompiler
@@ -29,7 +29,7 @@ import { useState } from "react";
 interface GetPromptColumnsProps {
   handleToggleFavorite: (id: string, checked: boolean) => void;
   handleDeletePrompt: (id: string) => void;
-  handleUpdatePrompt: (prompt: Prompt) => void;
+  handleUpdatePrompt: (promptId: string, dto: PromptDTO) => void;
   user: User;
 }
 
@@ -105,7 +105,7 @@ export const getPromptColumns = ({
               <span className="inline-flex">
                 <PromptDialog
                   editOpts={{ initialPrompt: prompt }}
-                  onSubmit={handleUpdatePrompt}
+                  onSubmit={(dto) => handleUpdatePrompt(prompt.id, dto)}
                   trigger={
                     <Button disabled={!canEditOrDelete} variant="ghost">
                       <LucidePencil />

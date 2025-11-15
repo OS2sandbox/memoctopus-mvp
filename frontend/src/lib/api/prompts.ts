@@ -13,8 +13,6 @@ export const getPrompts = async (): Promise<Prompt[]> => {
     headers,
   });
 
-  console.log("Fetch prompts response status:", headers);
-
   if (!res.ok) {
     throw new Error(`Failed to fetch prompts: ${res.statusText}`);
   }
