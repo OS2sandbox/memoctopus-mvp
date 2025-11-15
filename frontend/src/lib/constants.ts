@@ -1,9 +1,24 @@
 export enum PROMPT_CATEGORY {
   Beslutningsreferat = "Beslutningsreferat",
   API = "API",
-  ToDoListe = "To do liste",
+  ToDoListe = "Todo-liste",
   DetaljeretReferat = "Detaljeret referat",
   KortReferat = "Kort referat",
+
+  // Formelle referater
+  Moedereferat = "Mødereferat",
+  Handlingsreferat = "Handlingsreferat", //  (to-do orienteret)
+  Diskussionsreferat = "Diskussionsreferat", // (med centrale drøftelser og argumenter)
+
+  // Uformelle eller korte opsamlinger
+  Moedenoter = "Mødenoter", // (uformelt)
+  Statusnotat = "Statusnotat", // (fx stand-up, teammøder)
+
+  // Mødespecifikke referater
+  ReferatFraBorgermoeder = "Referat fra borgermøder",
+  ReferatFraMUSSamtaler = "Referat fra MUS-samtaler",
+  DokumentationsorienteredeOpsamlinger = "Dokumentationsorienterede opsamlinger",
+  Dokumentationsuddrag = "Dokumentationsuddrag", // (til udfyldelse af felter i et bestemt system)
 }
 
 export enum DATA_TABLE_SCOPE {
