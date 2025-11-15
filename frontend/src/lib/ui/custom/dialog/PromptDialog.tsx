@@ -59,13 +59,6 @@ interface PromptDialogProps {
   trigger?: ReactNode;
 }
 
-/**
- *
- * @param editOpts - Optional editing options; **if provided, the dialog operates in edit mode.**
- * @param onSubmit - Callback function invoked upon form submission with the prompt data.
- * @param trigger - Optional custom trigger element for opening the dialog, overriding the default button.
- * @returns A PromptDialog component for creating or editing prompts.
- */
 export const PromptDialog = ({
   editOpts,
   onSubmit,
@@ -86,7 +79,7 @@ export const PromptDialog = ({
 
   const PromptCategoryOptions = Object.values(PROMPT_CATEGORY);
 
-  const updatePrompt = <K extends keyof Prompt>(key: K, value: Prompt[K]) =>
+  const updatePrompt = <K extends keyof PromptForm>(key: K, value: Prompt[K]) =>
     setPrompt((prev) => ({ ...prev, [key]: value }));
 
   const handleSubmit = () => {
