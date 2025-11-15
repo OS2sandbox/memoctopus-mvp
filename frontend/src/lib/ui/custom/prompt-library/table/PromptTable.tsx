@@ -75,13 +75,18 @@ export const PromptTable = ({
 
   const addDialog = <PromptDialog onSubmit={handleAddPrompt} />;
 
+  const addButtonConfig = {
+    addButton: addDialog,
+    ...(hideAddButton ? { onlyIfSearchEmpty: true } : {}),
+  };
+
   return (
     <Fragment>
       <DataTable<Prompt, typeof columns>
         columns={columns}
         className={"max-w-4xl"}
         data={prompts}
-        {...(!hideAddButton && { addButton: addDialog })}
+        addButtonConfig={addButtonConfig}
         scopeOpts={{
           scope,
           onScopeChange: setScope,

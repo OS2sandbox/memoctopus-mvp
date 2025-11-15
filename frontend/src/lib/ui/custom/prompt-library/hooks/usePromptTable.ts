@@ -5,7 +5,7 @@ import { createPrompt, deletePrompt, updatePrompt } from "@/lib/api/prompts";
 import { DATA_TABLE_SCOPE } from "@/lib/constants";
 import { useCurrentUser } from "@/lib/hooks/use-current-user";
 import type { PromptTableProps } from "@/lib/ui/custom/prompt-library/table/PromptTable";
-import type { Prompt } from "@/shared/schemas/prompt";
+import type { Prompt, PromptDTO } from "@/shared/schemas/prompt";
 
 import { useState } from "react";
 
@@ -21,21 +21,21 @@ export const usePromptTable = ({
   const createMutation = useMutation({
     mutationFn: createPrompt,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["prompts"] });
+      void queryClient.invalidateQueries({ queryKey: ["prompts"] });
     },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, ...prompt }: Prompt) => updatePrompt(id, prompt),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["prompts"] });
+      void queryClient.invalidateQueries({ queryKey: ["prompts"] });
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: deletePrompt,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["prompts"] });
+      void queryClient.invalidateQueries({ queryKey: ["prompts"] });
     },
   });
 
@@ -50,12 +50,12 @@ export const usePromptTable = ({
     deleteMutation.mutate(id);
   };
 
-  const handleAddPrompt = (newPrompt: Omit<Prompt, "id">) => {
+  const handleAddPrompt = (newPrompt: PromptDTO) => {
     createMutation.mutate(newPrompt);
   };
 
-  const handleUpdatePrompt = (updatedPrompt: Prompt) => {
-    updateMutation.mutate(updatedPrompt);
+  const handleUpdatePrompt = (id: string, updatedPrompt: PromptDTO) => {
+    updateMutation.mutate({ ...updatedPrompt, id });
   };
 
   const filteredPrompts = data.filter((prompt) => {
