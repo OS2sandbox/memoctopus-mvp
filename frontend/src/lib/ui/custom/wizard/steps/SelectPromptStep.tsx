@@ -57,7 +57,6 @@ export const SelectPromptStep = () => {
     });
   };
 
-  // TODO: Repeated code. This should definitely be a hook
   const renderContent = () => {
     switch (status) {
       case "error":

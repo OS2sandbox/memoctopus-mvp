@@ -32,7 +32,10 @@ interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
   onRowClick?: (entry: TData) => void;
-  addButton?: ReactNode;
+  addButtonConfig?: {
+    addButton: ReactNode;
+    onlyIfSearchEmpty?: boolean;
+  };
   scopeOpts?: {
     onScopeChange: (scope: DATA_TABLE_SCOPE | null) => void;
     scope: DATA_TABLE_SCOPE | null;
@@ -48,7 +51,7 @@ interface DataTableProps<TData, TValue> {
 export function DataTable<TData, TValue>({
   columns,
   data,
-  addButton,
+  addButtonConfig,
   scopeOpts,
   onRowClick,
   className,
@@ -59,6 +62,7 @@ export function DataTable<TData, TValue>({
 
   const { onScopeChange, scope, scopeModes } = scopeOpts ?? {};
   const { filterKey, placeholder } = searchConfig ?? {};
+  const { addButton, onlyIfSearchEmpty } = addButtonConfig ?? {};
 
   const toggleScope = (value: DATA_TABLE_SCOPE) => {
     const scopeValue = scope === value ? null : value;
@@ -132,7 +136,7 @@ export function DataTable<TData, TValue>({
             </div>
           )}
         </div>
-        {addButton}
+        {!onlyIfSearchEmpty ? addButton : null}
       </div>
 
       <div className="rounded-md border">
@@ -186,9 +190,12 @@ export function DataTable<TData, TValue>({
               <TableRow>
                 <TableCell
                   colSpan={columns.length}
-                  className="h-12 text-center text-gray-500"
+                  className="h-12 text-center  text-gray-500"
                 >
-                  Ingen resultater fundet.
+                  <div className={"flex flex-col items-center pb-2 pt-2 gap-3"}>
+                    Ingen resultater fundet.
+                    {addButton}
+                  </div>
                 </TableCell>
               </TableRow>
             )}
