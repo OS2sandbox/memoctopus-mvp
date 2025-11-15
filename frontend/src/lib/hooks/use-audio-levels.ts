@@ -32,7 +32,7 @@ export const useAudioLevels = (stream: MediaStream | null): number => {
 
       return (): void => {
         source.disconnect();
-        stream.getTracks().forEach((track) => track.stop());
+        for (const track of stream.getTracks()) track.stop();
         analyser.disconnect();
         audioContext.close().catch(console.error);
       };

@@ -66,7 +66,6 @@
     "clsx": "^2.1.1",
     "dotenv": "^16.6.1",
     "file-saver": "^2.0.5",
-    "html-to-docx": "^1.8.0",
     "lucide-react": "^0.469.0",
     "motion": "^12.23.24",
     "next": "^16.0.0",
@@ -79,7 +78,7 @@
   },
   "devDependencies": {
     "@better-auth/cli": "latest",
-    "@biomejs/biome": "2.2.6",
+    "@biomejs/biome": "latest",
     "@tailwindcss/typography": "^0.5.19",
     "@types/file-saver": "^2.0.7",
     "@types/html-to-docx": "^1.8.0",
