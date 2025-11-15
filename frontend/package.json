@@ -26,7 +26,7 @@
     "@radix-ui/react-popover": "^1.1.15",
     "@radix-ui/react-select": "^2.2.6",
     "@radix-ui/react-separator": "^1.1.7",
-    "@radix-ui/react-slot": "^1.2.3",
+    "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-switch": "^1.2.6",
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-toggle": "^1.1.10",
@@ -79,6 +79,7 @@
   "devDependencies": {
     "@better-auth/cli": "latest",
     "@biomejs/biome": "latest",
+    "@tailwindcss/postcss": "^4.1.17",
     "@tailwindcss/typography": "^0.5.19",
     "@types/file-saver": "^2.0.7",
     "@types/html-to-docx": "^1.8.0",
@@ -89,8 +90,7 @@
     "autoprefixer": "^10.4.20",
     "babel-plugin-react-compiler": "^1.0.0",
     "msw": "^2.12.0",
-    "postcss": "^8.4.47",
-    "tailwindcss": "^3.4.11",
+    "tailwindcss": "^4.1.17",
     "typescript": "^5.9.3"
   },
   "msw": {
