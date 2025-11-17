@@ -77,7 +77,7 @@ export const PromptDialog = ({
 
   const user = useCurrentUser();
 
-  const PromptCategoryOptions = Object.values(PROMPT_CATEGORY);
+  const PromptCategories = Object.values(PROMPT_CATEGORY);
 
   const updatePrompt = <K extends keyof PromptForm>(key: K, value: Prompt[K]) =>
     setPrompt((prev) => ({ ...prev, [key]: value }));
@@ -158,8 +158,8 @@ export const PromptDialog = ({
                 <SelectTrigger id="category">
                   <SelectValue placeholder="Vælg kategori" />
                 </SelectTrigger>
-                <SelectContent>
-                  {PromptCategoryOptions.map((category) => (
+                <SelectContent className={"max-h-72"}>
+                  {PromptCategories.map((category) => (
                     <SelectItem key={category} value={category}>
                       {category}
                     </SelectItem>
