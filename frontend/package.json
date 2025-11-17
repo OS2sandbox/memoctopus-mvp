@@ -14,7 +14,8 @@
     "db:create-schema": "node src/lib/scripts/create-schema.js",
     "db:generate": "npx @better-auth/cli generate",
     "db:migrate": "npx @better-auth/cli migrate",
-    "db:init": "npm run db:create-schema"
+    "db:init": "npm run db:create-schema",
+    "prepare": "husky"
   },
   "dependencies": {
     "@daveyplate/better-auth-ui": "latest",
@@ -81,6 +82,7 @@
     "@biomejs/biome": "latest",
     "@commitlint/cli": "^20.1.0",
     "@commitlint/config-conventional": "^20.0.0",
+    "@commitlint/types": "^20.0.0",
     "@tailwindcss/postcss": "^4.1.17",
     "@tailwindcss/typography": "^0.5.19",
     "@types/file-saver": "^2.0.7",
@@ -91,6 +93,7 @@
     "@types/react-dom": "^19.2.2",
     "autoprefixer": "^10.4.20",
     "babel-plugin-react-compiler": "^1.0.0",
+    "husky": "^9.1.7",
     "msw": "^2.12.0",
     "tailwindcss": "^4.1.17",
     "typescript": "^5.9.3"
