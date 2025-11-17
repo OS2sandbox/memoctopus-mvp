@@ -1,4 +1,4 @@
-import { DataTable } from "@/lib/ui/core/data-table";
+import { DataTable } from "@/lib/ui/core/shadcn/data-table/data-table";
 import { getHistoryColumns } from "@/lib/ui/custom/history/table/HistoryColumns";
 import type { HistoryEntry } from "@/shared/schemas/history";
 

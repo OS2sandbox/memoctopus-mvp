@@ -13,7 +13,7 @@ import { useState } from "react";
 export const usePromptTable = ({
   tableMode,
   data,
-}: Omit<PromptTableProps, "className" | "hideAddButton" | "isProcessing">) => {
+}: Pick<PromptTableProps, "tableMode" | "data">) => {
   const user = useCurrentUser();
   const queryClient = useQueryClient();
 
