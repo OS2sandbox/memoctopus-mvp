@@ -22,7 +22,7 @@ export const PromptHelpPanel = () => {
     <Sheet isModal={true}>
       <SheetTrigger asChild>
         <Button variant="ghost" size="icon" className="ml-2">
-          <LucideHelpCircle />
+          <LucideHelpCircle className={"text-black"} />
         </Button>
       </SheetTrigger>
 
