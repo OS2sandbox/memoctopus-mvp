@@ -40,16 +40,16 @@ export async function downloadExport({
     markdown,
     fileName,
   });
+
   const url = URL.createObjectURL(blob);
   try {
     const a = document.createElement("a");
-    a.href = url;
     a.download = filename;
-    a.style.display = "none";
-    document.body.appendChild(a);
+    a.href = url;
     a.click();
-    a.remove();
   } finally {
-    URL.revokeObjectURL(url);
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 200);
   }
 }
