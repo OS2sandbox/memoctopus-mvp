@@ -6,12 +6,12 @@ export enum PROMPT_CATEGORY {
   KortReferat = "Kort referat",
 
   // Formelle referater
-  Moedereferat = "Mødereferat",
+  Mødereferat = "Mødereferat",
   Handlingsreferat = "Handlingsreferat", //  (to-do orienteret)
   Diskussionsreferat = "Diskussionsreferat", // (med centrale drøftelser og argumenter)
 
   // Uformelle eller korte opsamlinger
-  Moedenoter = "Mødenoter", // (uformelt)
+  Mødenoter = "Mødenoter", // (uformelt)
   Statusnotat = "Statusnotat", // (fx stand-up, teammøder)
 
   // Mødespecifikke referater
