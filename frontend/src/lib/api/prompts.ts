@@ -1,10 +1,10 @@
-import { getAuthHeaders } from "@/lib/api/utils";
-import { API_BASE_URL } from "@/shared/constants";
+import { API_BASE_URL } from "@/lib/constants";
 import {
   type Prompt,
   type PromptDTO,
   PromptSchema,
-} from "@/shared/schemas/prompt";
+} from "@/lib/schemas/prompt";
+import { getAuthHeaders } from "@/lib/utils/utils";
 
 export const getPrompts = async (): Promise<Prompt[]> => {
   const headers = await getAuthHeaders();

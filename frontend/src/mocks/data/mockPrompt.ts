@@ -1,5 +1,5 @@
 import { PROMPT_CATEGORY } from "@/lib/constants";
-import type { Prompt } from "@/shared/schemas/prompt";
+import type { Prompt } from "@/lib/schemas/prompt";
 
 export const mockPrompt: Prompt[] = [
   {

@@ -8,6 +8,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 
 import type { User } from "@/lib/auth-client";
 import { DATA_TABLE_SCOPE } from "@/lib/constants";
+import type { Prompt, PromptDTO } from "@/lib/schemas/prompt";
 import { Switch } from "@/lib/ui/core/shadcn/switch";
 import {
   Tooltip,
@@ -17,7 +18,6 @@ import {
 import { DeletePromptAction } from "@/lib/ui/custom/prompt-library/table/action/DeletePromptAction";
 import { EditPromptAction } from "@/lib/ui/custom/prompt-library/table/action/EditPromptAction";
 import { ViewPromptAction } from "@/lib/ui/custom/prompt-library/table/action/ViewPromptAction";
-import type { Prompt, PromptDTO } from "@/shared/schemas/prompt";
 
 interface GetPromptColumnsProps {
   handleToggleFavorite: (id: string, checked: boolean) => void;

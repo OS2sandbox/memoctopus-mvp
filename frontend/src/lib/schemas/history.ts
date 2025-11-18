@@ -7,7 +7,7 @@ import {
   MIN_ASSET_NAME_LENGTH,
   MIN_PROMPT_LENGTH,
   MIN_TRANSCRIPT_LENGTH,
-} from "@/shared/constants";
+} from "@/lib/constants";
 
 export const TranscriptSchema = z.object({
   kind: z.literal("transcript"),

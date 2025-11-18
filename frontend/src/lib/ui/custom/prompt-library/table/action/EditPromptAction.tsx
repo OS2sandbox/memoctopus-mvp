@@ -2,9 +2,9 @@
 
 import { LucidePencil } from "lucide-react";
 
+import type { Prompt, PromptDTO } from "@/lib/schemas/prompt";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { PromptDialog } from "@/lib/ui/custom/dialog/PromptDialog";
-import type { Prompt, PromptDTO } from "@/shared/schemas/prompt";
 
 interface EditPromptActionProps {
   prompt: Prompt;

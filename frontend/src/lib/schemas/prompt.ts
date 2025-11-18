@@ -1,12 +1,12 @@
 import { z } from "zod";
 
-import { PROMPT_CATEGORY } from "@/lib/constants";
 import {
   MAX_ASSET_NAME_LENGTH,
   MAX_PROMPT_LENGTH,
   MIN_ASSET_NAME_LENGTH,
   MIN_PROMPT_LENGTH,
-} from "@/shared/constants";
+  PROMPT_CATEGORY,
+} from "@/lib/constants";
 
 const CreatorSchema = z.object({
   id: z.string(),

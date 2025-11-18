@@ -5,8 +5,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createPrompt, deletePrompt, updatePrompt } from "@/lib/api/prompts";
 import { DATA_TABLE_SCOPE } from "@/lib/constants";
 import { useCurrentUser } from "@/lib/hooks/use-current-user";
+import type { PromptDTO } from "@/lib/schemas/prompt";
 import type { PromptTableProps } from "@/lib/ui/custom/prompt-library/table/PromptTable";
-import type { PromptDTO } from "@/shared/schemas/prompt";
 
 import { useState } from "react";
 

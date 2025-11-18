@@ -5,6 +5,7 @@ import {
   LucideFileText,
 } from "lucide-react";
 
+import type { HistoryEntry } from "@/lib/schemas/history";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import type { TableAction } from "@/lib/ui/core/shadcn/data-table/types";
 import {
@@ -12,7 +13,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/lib/ui/core/shadcn/tooltip";
-import type { HistoryEntry } from "@/shared/schemas/history";
 
 interface GetHistoryColumnsProps {
   handleGenerate: (promptText: string) => void;

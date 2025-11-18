@@ -6,11 +6,11 @@ import {
   transcribeAndSummarize,
 } from "@/lib/api/transcription";
 import { DATA_TABLE_SCOPE, STEP_ID } from "@/lib/constants";
+import type { Prompt } from "@/lib/schemas/prompt";
 import { Spinner } from "@/lib/ui/core/shadcn/spinner";
 import { PromptTable } from "@/lib/ui/custom/prompt-library/table/PromptTable";
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
-import type { Prompt } from "@/shared/schemas/prompt";
 
 export const SelectPromptStep = () => {
   const { metadata, setMetadata, next } = useStepper();

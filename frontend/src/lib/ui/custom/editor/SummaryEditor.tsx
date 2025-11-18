@@ -1,8 +1,8 @@
+import { MAX_TRANSCRIPT_LENGTH } from "@/lib/constants";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { MinimalTiptap } from "@/lib/ui/core/shadcn/minimal-tiptap";
 import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
 import { getVisibleTextLength } from "@/lib/utils/utils";
-import { MAX_TRANSCRIPT_LENGTH } from "@/shared/constants";
 
 import { useState } from "react";
 

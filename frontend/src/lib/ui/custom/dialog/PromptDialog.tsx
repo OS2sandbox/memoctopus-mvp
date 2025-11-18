@@ -2,8 +2,13 @@
 
 import { LucideAlertCircle, LucidePencil, LucidePlus } from "lucide-react";
 
-import { PROMPT_CATEGORY } from "@/lib/constants";
+import {
+  MAX_ASSET_NAME_LENGTH,
+  MAX_PROMPT_LENGTH,
+  PROMPT_CATEGORY,
+} from "@/lib/constants";
 import { useCurrentUser } from "@/lib/hooks/use-current-user";
+import type { Prompt, PromptDTO } from "@/lib/schemas/prompt";
 import { Alert, AlertTitle } from "@/lib/ui/core/shadcn/alert";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import {
@@ -30,9 +35,7 @@ import {
 } from "@/lib/ui/core/shadcn/select";
 import { Textarea } from "@/lib/ui/core/shadcn/textarea";
 import { PromptHelpPanel } from "@/lib/ui/custom/prompt-library/PromptHelpPanel";
-import { MAX_ASSET_NAME_LENGTH, MAX_PROMPT_LENGTH } from "@/shared/constants";
-import type { Prompt, PromptDTO } from "@/shared/schemas/prompt";
-import { validatePromptDTO } from "@/shared/utils";
+import { validatePromptDTO } from "@/lib/utils/utils";
 
 import { Activity, type ReactNode, useState } from "react";
 

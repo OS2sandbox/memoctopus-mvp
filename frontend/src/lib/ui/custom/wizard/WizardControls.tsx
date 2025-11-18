@@ -3,11 +3,11 @@ import { LucideSave, LucideTrash } from "lucide-react";
 import { createHistoryEntry } from "@/lib/api/history-entry";
 import { useSession } from "@/lib/auth-client";
 import { HISTORY_ENTRY_KIND, STEP_ID } from "@/lib/constants";
+import type { HistoryEntryDTO, Transcript } from "@/lib/schemas/history";
+import type { Prompt } from "@/lib/schemas/prompt";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
 import { Stepper, useStepper } from "@/lib/ui/custom/wizard/stepper";
-import type { HistoryEntryDTO, Transcript } from "@/shared/schemas/history";
-import type { Prompt } from "@/shared/schemas/prompt";
 
 import { Activity, useState } from "react";
 
