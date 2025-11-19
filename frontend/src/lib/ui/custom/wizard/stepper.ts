@@ -10,8 +10,8 @@ export const defaultMetadata = {
 export const { Stepper, utils, useStepper } = defineStepper(
   {
     id: STEP_ID.UploadSpeechStep,
-    title: "Tale",
-    description: "Optag eller upload tale",
+    title: "Samtale",
+    description: "Vælg om du vil optage, uploade eller genbruge en samtale",
   },
   {
     id: STEP_ID.SelectPromptStep,

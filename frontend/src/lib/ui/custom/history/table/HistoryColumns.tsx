@@ -1,9 +1,5 @@
 import type { ColumnDef } from "@tanstack/react-table";
-import {
-  LucideClipboardCopy,
-  LucideFileDown,
-  LucideFileText,
-} from "lucide-react";
+import { LucideFileDown, LucideFileText } from "lucide-react";
 
 import type { HistoryEntry } from "@/lib/schemas/history";
 import { Button } from "@/lib/ui/core/shadcn/button";
@@ -15,21 +11,21 @@ import {
 } from "@/lib/ui/core/shadcn/tooltip";
 
 interface GetHistoryColumnsProps {
-  handleGenerate: (promptText: string) => void;
-  handleCopyPrompt: (promptText: string) => void;
-  handleDownloadText: (promptText: string) => void;
+  handleGenerateTranscript: (promptText: string) => void;
+  handleDownloadTranscript: (promptText: string) => void;
+  handleDownloadSummary: (promptText: string) => void;
 }
 
 const enum HISTORY_ACTION_TYPE {
-  GENERATE = "generate",
-  COPY_PROMPT = "copy_prompt",
-  DOWNLOAD_TEXT = "download_text",
+  GENERATE_TRANSCRIPT = "generate_transcript",
+  DOWNLOAD_TRANSCRIPT = "download_transcript",
+  DOWNLOAD_SUMMARY = "download_summary",
 }
 
 export const getHistoryColumns = ({
-  handleGenerate,
-  handleCopyPrompt,
-  handleDownloadText,
+  handleGenerateTranscript,
+  handleDownloadTranscript,
+  handleDownloadSummary,
 }: GetHistoryColumnsProps): ColumnDef<HistoryEntry>[] => [
   {
     accessorKey: "title",
@@ -54,38 +50,38 @@ export const getHistoryColumns = ({
 
       const actions: TableAction<HISTORY_ACTION_TYPE>[] = [
         {
-          key: HISTORY_ACTION_TYPE.GENERATE,
+          key: HISTORY_ACTION_TYPE.GENERATE_TRANSCRIPT,
           component: (
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => handleGenerate(entry.id)}
+              onClick={() => handleGenerateTranscript(entry.id)}
             >
               <LucideFileText />
             </Button>
           ),
-          tooltipText: "Generer ny opsummering",
+          tooltipText: "Generer ny transskription",
         },
         {
-          key: HISTORY_ACTION_TYPE.COPY_PROMPT,
+          key: HISTORY_ACTION_TYPE.DOWNLOAD_TRANSCRIPT,
           component: (
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => handleCopyPrompt(entry.id)}
+              onClick={() => handleDownloadTranscript(entry.id)}
             >
-              <LucideClipboardCopy />
+              <LucideFileText />
             </Button>
           ),
-          tooltipText: "Kopiér prompt",
+          tooltipText: "Hent transskription",
         },
         {
-          key: HISTORY_ACTION_TYPE.DOWNLOAD_TEXT,
+          key: HISTORY_ACTION_TYPE.DOWNLOAD_SUMMARY,
           component: (
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => handleDownloadText(entry.id)}
+              onClick={() => handleDownloadSummary(entry.id)}
             >
               <LucideFileDown />
             </Button>
