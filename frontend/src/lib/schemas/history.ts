@@ -68,6 +68,9 @@ export const HistoryEntryDTOSchema = HistoryEntrySchema.omit({
   createdAt: true,
 });
 
+export const HistoryEntryUpdateDTOSchema = HistoryEntryDTOSchema.partial();
+
 export type HistoryEntry = z.infer<typeof HistoryEntrySchema>;
 export type Transcript = z.infer<typeof TranscriptSchema>;
 export type HistoryEntryDTO = z.infer<typeof HistoryEntryDTOSchema>;
+export type HistoryEntryUpdateDTO = z.infer<typeof HistoryEntryUpdateDTOSchema>;

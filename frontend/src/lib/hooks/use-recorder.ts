@@ -70,7 +70,6 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
         actions.stopRecording({ blob, file, url });
         stopTimer();
 
-        // TODO: Consider if we need autosave or just manual save options
         autoSave?.(file);
       };
 
