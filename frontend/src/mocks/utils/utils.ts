@@ -1,14 +1,11 @@
+import { type HistoryEntry, HistoryEntrySchema } from "@/lib/schemas/history";
+import { type Prompt, PromptSchema } from "@/lib/schemas/prompt";
 import { STORAGE_KEY } from "@/mocks/constants";
 import { mockPrompt } from "@/mocks/data/mockPrompt";
 import {
   loadMockSessionData,
   saveMockSessionData,
 } from "@/mocks/utils/mockSessionData";
-import {
-  type HistoryEntry,
-  HistoryEntrySchema,
-} from "@/shared/schemas/history";
-import { type Prompt, PromptSchema } from "@/shared/schemas/prompt";
 
 export const loadPrompts = (): Prompt[] =>
   loadMockSessionData({

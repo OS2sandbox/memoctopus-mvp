@@ -1,3 +1,4 @@
+import { MAX_TRANSCRIPT_LENGTH } from "@/lib/constants";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import { MinimalTiptap } from "@/lib/ui/core/shadcn/minimal-tiptap";
 import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
@@ -7,13 +8,10 @@ import { useState } from "react";
 
 interface SummaryEditorProps {
   initialContent?: string;
-  onApprove: (html: string) => void;
+  onApprove: (markdown: string) => void;
   disabled?: boolean;
 }
 
-/* TODO:
- *  - Remove the "Godkend" button and handle it on "Næste" instead with a warning dialog
- */
 export const SummaryEditor = ({
   initialContent = "",
   onApprove,
@@ -38,6 +36,7 @@ export const SummaryEditor = ({
         placeholder="Redigér dit resumé her..."
         editable={!disabled}
         className={disabled ? "bg-gray-100" : ""}
+        charLimit={MAX_TRANSCRIPT_LENGTH}
       />
       <div className="flex justify-end gap-2 pt-4">
         <ConfirmDialog
@@ -47,7 +46,7 @@ export const SummaryEditor = ({
           trigger={<Button disabled={triggerDisabled}>Godkend</Button>}
         >
           <p>Er du sikker på, at du vil godkende dette resumé?</p>
-          <p>Når du godkender, kan du ikke redigere det yderligere.</p>
+          <p>Idet du godkender, kan du ikke redigere yderligere.</p>
         </ConfirmDialog>
       </div>
     </div>

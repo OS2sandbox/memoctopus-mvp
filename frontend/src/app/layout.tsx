@@ -25,11 +25,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={cn(inter.className, "pt-20")}>
-        <ReactQueryProvider>
-          <StartMockWorker>{children}</StartMockWorker>
-          <ReactQueryDevtools initialIsOpen={false} />
-        </ReactQueryProvider>
+      <body className={cn(inter.className)}>
+        <div className="pt-20 min-h-screen flex flex-col">
+          <ReactQueryProvider>
+            <StartMockWorker>{children}</StartMockWorker>
+            <ReactQueryDevtools initialIsOpen={false} />
+          </ReactQueryProvider>
+        </div>
       </body>
     </html>
   );

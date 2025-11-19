@@ -24,7 +24,7 @@ export const auth = betterAuth({
   //   },
   // } : {},
   session: {
-    expiresIn: 60 * 60 * 24 * 7, // 7 days
-    updateAge: 60 * 60 * 24, // 1 day
+    expiresIn: 86_400 * 7, // 7 days
+    updateAge: 86_400, // 1 day
   },
 });

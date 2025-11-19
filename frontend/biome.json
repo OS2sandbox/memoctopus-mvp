@@ -1,9 +1,14 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.2.6/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.3.6/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
     "useIgnoreFile": true
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
   },
   "files": {
     "ignoreUnknown": false,
@@ -24,7 +29,8 @@
         "noExtraBooleanCast": "error",
         "noUselessCatch": "error",
         "noUselessEscapeInRegex": "error",
-        "useOptionalChain": "error"
+        "useOptionalChain": "error",
+        "noForEach": "error"
       },
       "correctness": {
         "noConstAssign": "error",
@@ -55,7 +61,10 @@
       },
       "style": {
         "noRestrictedImports": "error",
-        "useImportType": "error"
+        "useImportType": "error",
+        "useConst": "error",
+        "useForOf": "error",
+        "noParameterAssign": "error"
       },
       "suspicious": {
         "noAsyncPromiseExecutor": "error",

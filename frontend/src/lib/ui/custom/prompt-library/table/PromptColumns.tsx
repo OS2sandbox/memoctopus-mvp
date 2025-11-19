@@ -1,36 +1,35 @@
 "use client";
 
-import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
+import type { TableAction } from "@/lib/ui/core/shadcn/data-table/types";
 
 ("use no memo");
 
-import type { Prompt } from "@/shared/schemas/prompt";
-// Known issue that React Compiler is not supported by TanStack table yet:
-
-// https://nextjs.org/docs/app/api-reference/config/next-config-js/reactCompiler
-
 import type { ColumnDef } from "@tanstack/react-table";
-import { LucidePencil, LucideTrash2 } from "lucide-react";
 
 import type { User } from "@/lib/auth-client";
 import { DATA_TABLE_SCOPE } from "@/lib/constants";
-import { Button } from "@/lib/ui/core/shadcn/button";
+import type { Prompt, PromptDTO } from "@/lib/schemas/prompt";
 import { Switch } from "@/lib/ui/core/shadcn/switch";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/lib/ui/core/shadcn/tooltip";
-import { PromptDialog } from "@/lib/ui/custom/dialog/PromptDialog";
-import { ViewPromptAction } from "@/lib/ui/custom/prompt-library/table/ViewPromptAction";
-
-import { useState } from "react";
+import { DeletePromptAction } from "@/lib/ui/custom/prompt-library/table/action/DeletePromptAction";
+import { EditPromptAction } from "@/lib/ui/custom/prompt-library/table/action/EditPromptAction";
+import { ViewPromptAction } from "@/lib/ui/custom/prompt-library/table/action/ViewPromptAction";
 
 interface GetPromptColumnsProps {
   handleToggleFavorite: (id: string, checked: boolean) => void;
   handleDeletePrompt: (id: string) => void;
-  handleUpdatePrompt: (prompt: Prompt) => void;
+  handleUpdatePrompt: (promptId: string, dto: PromptDTO) => void;
   user: User;
+}
+
+enum PROMPT_ACTION_TYPE {
+  View = "view",
+  Edit = "edit",
+  Delete = "delete",
 }
 
 export const getPromptColumns = ({
@@ -72,7 +71,6 @@ export const getPromptColumns = ({
       if (filterValue === DATA_TABLE_SCOPE.MyItems) {
         return creator.id === user?.id;
       }
-      // For "My Organization", implement organization logic as needed (waiting for backend support)
       return true;
     },
   },
@@ -84,74 +82,47 @@ export const getPromptColumns = ({
     id: "actions",
     cell: ({ row }) => {
       const prompt = row.original;
-      const [open, setOpen] = useState(false);
+      const isMutable = prompt.creator.id === user?.id;
 
-      const canEditOrDelete = prompt.creator.id === user?.id;
+      const actions: TableAction<PROMPT_ACTION_TYPE>[] = [
+        {
+          key: PROMPT_ACTION_TYPE.View,
+          component: <ViewPromptAction promptText={prompt.text} />,
+          tooltipText: "Se prompt",
+        },
+        {
+          key: PROMPT_ACTION_TYPE.Edit,
+          component: (
+            <EditPromptAction
+              prompt={prompt}
+              canEdit={isMutable}
+              onUpdate={(dto) => handleUpdatePrompt(prompt.id, dto)}
+            />
+          ),
+          tooltipText: "Rediger prompt",
+        },
+        {
+          key: PROMPT_ACTION_TYPE.Delete,
+          component: (
+            <DeletePromptAction
+              canDelete={isMutable}
+              onDelete={() => handleDeletePrompt(prompt.id)}
+            />
+          ),
+          tooltipText: "Slet prompt",
+        },
+      ];
 
-      // TODO: abstract into separate component/factory
       return (
         <div data-row-action className="flex items-center justify-end">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <ViewPromptAction promptText={prompt.text} />
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>Se prompt</TooltipContent>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <PromptDialog
-                  editOpts={{ initialPrompt: prompt }}
-                  onSubmit={handleUpdatePrompt}
-                  trigger={
-                    <Button disabled={!canEditOrDelete} variant="ghost">
-                      <LucidePencil />
-                    </Button>
-                  }
-                />
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>
-              {canEditOrDelete
-                ? "Rediger prompt"
-                : "Du kan kun redigere dine egne prompts"}
-            </TooltipContent>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <ConfirmDialog
-                open={open}
-                onOpenChange={setOpen}
-                onConfirm={() => handleDeletePrompt(prompt.id)}
-                trigger={
-                  <span className="inline-flex">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      disabled={!canEditOrDelete}
-                    >
-                      <LucideTrash2 />
-                    </Button>
-                  </span>
-                }
-                footerOpts={{
-                  isConfirmDestructive: true,
-                }}
-              >
-                <p>Er du sikker, at du vil slette denne prompt?</p>
-                <p>Idet du bekræfter, kan du ikke tilbagekalde prompten.</p>
-              </ConfirmDialog>
-            </TooltipTrigger>
-            <TooltipContent>
-              {canEditOrDelete
-                ? "Slet prompt"
-                : "Du kan kun slette dine egne prompts"}
-            </TooltipContent>
-          </Tooltip>
+          {actions.map(({ key, component, tooltipText }) => (
+            <Tooltip key={key}>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">{component}</span>
+              </TooltipTrigger>
+              <TooltipContent>{tooltipText}</TooltipContent>
+            </Tooltip>
+          ))}
         </div>
       );
     },

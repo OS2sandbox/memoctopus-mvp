@@ -2,8 +2,13 @@
 
 import { LucideAlertCircle, LucidePencil, LucidePlus } from "lucide-react";
 
-import { type User, useSession } from "@/lib/auth-client";
-import { PROMPT_CATEGORY } from "@/lib/constants";
+import {
+  MAX_ASSET_NAME_LENGTH,
+  MAX_PROMPT_LENGTH,
+  PROMPT_CATEGORY,
+} from "@/lib/constants";
+import { useCurrentUser } from "@/lib/hooks/use-current-user";
+import type { Prompt, PromptDTO } from "@/lib/schemas/prompt";
 import { Alert, AlertTitle } from "@/lib/ui/core/shadcn/alert";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import {
@@ -30,16 +35,21 @@ import {
 } from "@/lib/ui/core/shadcn/select";
 import { Textarea } from "@/lib/ui/core/shadcn/textarea";
 import { PromptHelpPanel } from "@/lib/ui/custom/prompt-library/PromptHelpPanel";
-import type { Prompt } from "@/shared/schemas/prompt";
+import { validatePromptDTO } from "@/lib/utils/utils";
 
 import { Activity, type ReactNode, useState } from "react";
 
-const DEFAULT_PROMPT: Prompt = {
-  id: "",
+type PromptForm = {
+  name: string;
+  text: string;
+  category: PROMPT_CATEGORY;
+  isFavorite: boolean;
+};
+
+const DEFAULT_PROMPT = {
   name: "",
   text: "",
   category: PROMPT_CATEGORY.Beslutningsreferat,
-  creator: { id: "", name: "" },
   isFavorite: false,
 };
 
@@ -48,17 +58,10 @@ interface PromptDialogProps {
   editOpts?: {
     initialPrompt: Prompt;
   };
-  onSubmit: (data: Prompt) => void;
+  onSubmit: (data: PromptDTO, opts?: { promptId?: string }) => void;
   trigger?: ReactNode;
 }
 
-/**
- *
- * @param editOpts - Optional editing options; **if provided, the dialog operates in edit mode.**
- * @param onSubmit - Callback function invoked upon form submission with the prompt data.
- * @param trigger - Optional custom trigger element for opening the dialog, overriding the default button.
- * @returns A PromptDialog component for creating or editing prompts.
- */
 export const PromptDialog = ({
   editOpts,
   onSubmit,
@@ -67,65 +70,40 @@ export const PromptDialog = ({
   const { initialPrompt } = editOpts ?? {};
 
   const isEditMode = !!initialPrompt;
-  const [prompt, setPrompt] = useState<Prompt>(initialPrompt ?? DEFAULT_PROMPT);
+  const [prompt, setPrompt] = useState<PromptForm>(
+    !isEditMode ? DEFAULT_PROMPT : initialPrompt,
+  );
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [validationErrors, setValidationErrors] =
+    useState<Record<string, string[]>>();
 
-  const { data: session } = useSession();
-  const user = session?.user as User | null;
-  const PromptCategoryOptions = Object.values(PROMPT_CATEGORY);
+  const user = useCurrentUser();
 
-  const [validationErrors, setValidationErrors] = useState<{
-    name?: string;
-    text?: string;
-  }>({});
+  const PromptCategories = Object.values(PROMPT_CATEGORY);
 
-  const validatePrompt = (p: Prompt): boolean => {
-    const errors: { name?: string; text?: string } = {};
-    const trimmedName = p.name.trim();
-    const trimmedText = p.text.trim();
-
-    if (trimmedName.length === 0) {
-      errors.name = "Titel kan ikke være tom";
-    } else if (trimmedName.length < 5) {
-      errors.name = "Titel skal være mindst 5 tegn";
-    } else if (trimmedName.length > 200) {
-      errors.name = "Titel må ikke overstige 200 tegn";
-    }
-
-    if (trimmedText.length === 0) {
-      errors.text = "Prompt tekst kan ikke være tom";
-    } else if (trimmedText.length < 5) {
-      errors.text = "Prompt tekst skal være mindst 5 tegn";
-    } else if (trimmedText.length > 4000) {
-      errors.text = "Prompt tekst må ikke overstige 4000 tegn";
-    }
-
-    setValidationErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
+  const updatePrompt = <K extends keyof PromptForm>(key: K, value: Prompt[K]) =>
+    setPrompt((prev) => ({ ...prev, [key]: value }));
 
   const handleSubmit = () => {
-    const isValid = validatePrompt(prompt);
-    if (!isValid) {
+    const dto: PromptDTO = {
+      ...prompt,
+      creator: { id: user.id, name: user.name },
+    };
+
+    const { valid, errors, data } = validatePromptDTO({ data: dto });
+
+    if (!valid) {
+      setValidationErrors(errors);
       return;
     }
 
-    const id = isEditMode ? prompt.id : Math.random().toString(36).slice(2);
+    onSubmit(data!, isEditMode ? { promptId: initialPrompt.id } : undefined);
 
-    const newPrompt: Prompt = {
-      ...prompt,
-      id,
-      creator: {
-        id: user?.id ?? "",
-        name: user?.name ?? "",
-      },
-    };
-
-    onSubmit(newPrompt);
-    setError(null);
     setValidationErrors({});
+    setError(null);
     setOpen(false);
+
     if (!isEditMode) setPrompt(DEFAULT_PROMPT);
   };
 
@@ -151,25 +129,23 @@ export const PromptDialog = ({
 
         <FieldSet>
           <FieldGroup className="flex flex-col gap-4">
-            <Field data-invalid={!!validationErrors.name}>
+            <Field data-invalid={!!validationErrors?.["name"]}>
               <div className="flex items-center justify-between">
                 <FieldLabel>Titel</FieldLabel>
                 <span className="text-xs text-muted-foreground">
-                  {prompt.name.trim().length}/200
+                  {prompt.name.trim().length}/{MAX_ASSET_NAME_LENGTH}
                 </span>
               </div>
               <Input
                 id="name"
                 value={prompt.name}
-                onChange={(e) =>
-                  setPrompt((prev) => ({ ...prev, name: e.target.value }))
-                }
+                onChange={(e) => updatePrompt("name", e.target.value)}
                 placeholder="F.eks. Statusmøde på Orto"
                 required
               />
-              {validationErrors.name && (
+              {validationErrors?.["name"]?.[0] && (
                 <p className="text-xs text-destructive mt-1">
-                  {validationErrors.name}
+                  {validationErrors["name"][0]}
                 </p>
               )}
             </Field>
@@ -178,18 +154,15 @@ export const PromptDialog = ({
               <FieldLabel>Kategori</FieldLabel>
               <Select
                 onValueChange={(c) =>
-                  setPrompt((prev) => ({
-                    ...prev,
-                    category: c as PROMPT_CATEGORY,
-                  }))
+                  updatePrompt("category", c as PROMPT_CATEGORY)
                 }
                 value={prompt.category}
               >
                 <SelectTrigger id="category">
                   <SelectValue placeholder="Vælg kategori" />
                 </SelectTrigger>
-                <SelectContent>
-                  {PromptCategoryOptions.map((category) => (
+                <SelectContent className={"max-h-72"}>
+                  {PromptCategories.map((category) => (
                     <SelectItem key={category} value={category}>
                       {category}
                     </SelectItem>
@@ -198,12 +171,12 @@ export const PromptDialog = ({
               </Select>
             </Field>
 
-            <Field data-invalid={!!validationErrors.text}>
+            <Field data-invalid={!!validationErrors?.["text"]}>
               <div className="flex items-center justify-between">
                 <FieldLabel>Prompt tekst</FieldLabel>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">
-                    {prompt.text.trim().length}/4000
+                    {prompt.text.trim().length}/{MAX_PROMPT_LENGTH}
                   </span>
                   <PromptHelpPanel />
                 </div>
@@ -211,16 +184,14 @@ export const PromptDialog = ({
               <Textarea
                 id="text"
                 value={prompt.text}
-                onChange={(e) =>
-                  setPrompt((prev) => ({ ...prev, text: e.target.value }))
-                }
+                onChange={(e) => updatePrompt("text", e.target.value)}
                 placeholder="Skriv promptens indhold her..."
                 className="min-h-[120px]"
                 required
               />
-              {validationErrors.text && (
+              {validationErrors?.["text"]?.[0] && (
                 <p className="text-xs text-destructive mt-1">
-                  {validationErrors.text}
+                  {validationErrors["text"][0]}
                 </p>
               )}
             </Field>

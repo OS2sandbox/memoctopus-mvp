@@ -18,13 +18,11 @@ export const LandingView = () => {
   }, [isAuthenticated, router]);
 
   return (
-    <div className="flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center p-24">
-      <div className="z-10 max-w-5xl w-full items-center justify-between font-mono text-sm">
-        <h1 className="text-4xl font-bold mb-8 text-center">
-          Welcome to MemOctopus
-        </h1>
+    <div className="flex items-center justify-center p-24">
+      <div className="z-10 max-w-5xl w-full text-center">
+        <h1 className="text-4xl font-bold mb-8">Welcome to MemOctopus</h1>
         <div className="flex flex-col items-center gap-4">
-          <p className="text-lg text-muted-foreground text-center">
+          <p className="text-lg text-muted-foreground">
             {isPending
               ? "Tjekker, om du er logget ind..."
               : isAuthenticated

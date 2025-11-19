@@ -1,14 +1,16 @@
 "use client";
 
+import type { ColumnDef } from "@tanstack/react-table";
+
 import type { DATA_TABLE_SCOPE } from "@/lib/constants";
 import { useCurrentUser } from "@/lib/hooks/use-current-user";
-import { DataTable } from "@/lib/ui/core/data-table";
+import type { Prompt } from "@/lib/schemas/prompt";
+import { DataTable } from "@/lib/ui/core/shadcn/data-table/data-table";
 import { Spinner } from "@/lib/ui/core/shadcn/spinner";
 import { ConfirmDialog } from "@/lib/ui/custom/dialog/ConfirmDialog";
 import { PromptDialog } from "@/lib/ui/custom/dialog/PromptDialog";
-import { usePromptTable } from "@/lib/ui/custom/prompt-library/hooks/usePromptTable";
 import { getPromptColumns } from "@/lib/ui/custom/prompt-library/table/PromptColumns";
-import type { Prompt } from "@/shared/schemas/prompt";
+import { usePromptTable } from "@/lib/ui/custom/prompt-library/table/usePromptTable";
 
 import { Fragment, useEffect, useState } from "react";
 
@@ -57,7 +59,7 @@ export const PromptTable = ({
     handleUpdatePrompt,
   } = usePromptTable({ tableMode: tableMode ?? [], data });
 
-  const columns = getPromptColumns({
+  const columns: ColumnDef<Prompt>[] = getPromptColumns({
     handleToggleFavorite,
     handleDeletePrompt,
     handleUpdatePrompt,
@@ -71,7 +73,12 @@ export const PromptTable = ({
     }
   }, [status, confirmOpen, selectedPrompt]);
 
-  const addButton = <PromptDialog onSubmit={handleAddPrompt} />;
+  const addDialog = <PromptDialog onSubmit={handleAddPrompt} />;
+
+  const addButtonConfig = {
+    addButton: addDialog,
+    ...(hideAddButton ? { onlyIfSearchEmpty: true } : {}),
+  };
 
   return (
     <Fragment>
@@ -79,13 +86,17 @@ export const PromptTable = ({
         columns={columns}
         className={"max-w-4xl"}
         data={prompts}
-        {...(!hideAddButton && { addButton: addButton })}
+        addButtonConfig={addButtonConfig}
         scopeOpts={{
           scope,
           onScopeChange: setScope,
           scopeModes: tableMode ?? [],
         }}
         onRowClick={handleRowClick}
+        searchConfig={{
+          filterKey: "name",
+          placeholder: "Søg efter prompt...",
+        }}
       />
 
       <ConfirmDialog

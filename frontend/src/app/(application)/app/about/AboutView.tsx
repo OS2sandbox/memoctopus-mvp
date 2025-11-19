@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-// Just a template to fill out the about page for now
+// Just a template to fill out the about page for now; the info is incorrect.
 export const AboutView = () => {
   return (
     <main className="min-h-screen flex flex-col items-center px-6 py-16 space-y-12">

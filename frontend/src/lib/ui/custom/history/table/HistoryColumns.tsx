@@ -5,18 +5,25 @@ import {
   LucideFileText,
 } from "lucide-react";
 
+import type { HistoryEntry } from "@/lib/schemas/history";
 import { Button } from "@/lib/ui/core/shadcn/button";
+import type { TableAction } from "@/lib/ui/core/shadcn/data-table/types";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/lib/ui/core/shadcn/tooltip";
-import type { HistoryEntry } from "@/shared/schemas/history";
 
 interface GetHistoryColumnsProps {
   handleGenerate: (promptText: string) => void;
   handleCopyPrompt: (promptText: string) => void;
   handleDownloadText: (promptText: string) => void;
+}
+
+const enum HISTORY_ACTION_TYPE {
+  GENERATE = "generate",
+  COPY_PROMPT = "copy_prompt",
+  DOWNLOAD_TEXT = "download_text",
 }
 
 export const getHistoryColumns = ({
@@ -25,8 +32,8 @@ export const getHistoryColumns = ({
   handleDownloadText,
 }: GetHistoryColumnsProps): ColumnDef<HistoryEntry>[] => [
   {
-    accessorKey: "name",
-    header: "Navn",
+    accessorKey: "title",
+    header: "Titel",
     cell: ({ row }) => (
       <div className="font-medium text-foreground">{row.original.title}</div>
     ),
@@ -45,53 +52,58 @@ export const getHistoryColumns = ({
     cell: ({ row }) => {
       const entry = row.original;
 
-      // TODO: abstract into separate component/factory
+      const actions: TableAction<HISTORY_ACTION_TYPE>[] = [
+        {
+          key: HISTORY_ACTION_TYPE.GENERATE,
+          component: (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => handleGenerate(entry.id)}
+            >
+              <LucideFileText />
+            </Button>
+          ),
+          tooltipText: "Generer ny opsummering",
+        },
+        {
+          key: HISTORY_ACTION_TYPE.COPY_PROMPT,
+          component: (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => handleCopyPrompt(entry.id)}
+            >
+              <LucideClipboardCopy />
+            </Button>
+          ),
+          tooltipText: "Kopiér prompt",
+        },
+        {
+          key: HISTORY_ACTION_TYPE.DOWNLOAD_TEXT,
+          component: (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => handleDownloadText(entry.id)}
+            >
+              <LucideFileDown />
+            </Button>
+          ),
+          tooltipText: "Hent opsummering",
+        },
+      ];
+
       return (
-        <div className="flex items-center justify-end">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleGenerate(entry.id)}
-                >
-                  <LucideFileText />
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>Generer ny opsummering</TooltipContent>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleCopyPrompt(entry.id)}
-                >
-                  <LucideClipboardCopy />
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>Kopiér opsummering</TooltipContent>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => handleDownloadText(entry.id)}
-                >
-                  <LucideFileDown />
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>Hent opsummering</TooltipContent>
-          </Tooltip>
+        <div data-row-action className="flex items-center justify-end">
+          {actions.map(({ key, component, tooltipText }) => (
+            <Tooltip key={key}>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">{component}</span>
+              </TooltipTrigger>
+              <TooltipContent>{tooltipText}</TooltipContent>
+            </Tooltip>
+          ))}
         </div>
       );
     },

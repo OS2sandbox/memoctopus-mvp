@@ -1,20 +1,20 @@
 import { HttpResponse, http } from "msw";
 
 import {
+  type HistoryEntry,
+  HistoryEntryDTOSchema,
+} from "@/lib/schemas/history";
+import {
+  type Prompt,
+  PromptDTOSchema,
+  PromptSchema,
+} from "@/lib/schemas/prompt";
+import {
   loadHistoryEntries,
   loadPrompts,
   saveHistoryEntries,
   savePrompts,
 } from "@/mocks/utils/utils";
-import {
-  type HistoryEntry,
-  HistoryEntryDTOSchema,
-} from "@/shared/schemas/history";
-import {
-  type Prompt,
-  PromptDTOSchema,
-  PromptSchema,
-} from "@/shared/schemas/prompt";
 
 export const historyEntryHandlers = [
   http.get("/api/history", () => {

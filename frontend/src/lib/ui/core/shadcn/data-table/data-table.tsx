@@ -32,11 +32,18 @@ interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
   onRowClick?: (entry: TData) => void;
-  addButton?: ReactNode;
+  addButtonConfig?: {
+    addButton: ReactNode;
+    onlyIfSearchEmpty?: boolean;
+  };
   scopeOpts?: {
     onScopeChange: (scope: DATA_TABLE_SCOPE | null) => void;
     scope: DATA_TABLE_SCOPE | null;
     scopeModes?: DATA_TABLE_SCOPE[];
+  };
+  searchConfig?: {
+    placeholder?: string;
+    filterKey: keyof TData;
   };
   className?: string;
 }
@@ -44,15 +51,18 @@ interface DataTableProps<TData, TValue> {
 export function DataTable<TData, TValue>({
   columns,
   data,
-  addButton,
+  addButtonConfig,
   scopeOpts,
   onRowClick,
   className,
+  searchConfig,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
 
   const { onScopeChange, scope, scopeModes } = scopeOpts ?? {};
+  const { filterKey, placeholder } = searchConfig ?? {};
+  const { addButton, onlyIfSearchEmpty } = addButtonConfig ?? {};
 
   const toggleScope = (value: DATA_TABLE_SCOPE) => {
     const scopeValue = scope === value ? null : value;
@@ -83,14 +93,18 @@ export function DataTable<TData, TValue>({
     <div className={cn("space-y-4 w-full", className)}>
       <div className="flex items-start justify-between">
         <div className="flex flex-col gap-3">
-          <Input
-            placeholder="Søg efter prompt..."
-            value={(table.getColumn("name")?.getFilterValue() as string) ?? ""}
-            onChange={(e) =>
-              table.getColumn("name")?.setFilterValue(e.target.value)
-            }
-            className="max-w-xs"
-          />
+          {searchConfig && typeof filterKey === "string" && (
+            <Input
+              placeholder={placeholder}
+              value={
+                (table.getColumn(filterKey)?.getFilterValue() as string) ?? ""
+              }
+              onChange={(e) =>
+                table.getColumn(filterKey)?.setFilterValue(e.target.value)
+              }
+              className="max-w-xs"
+            />
+          )}
 
           {scopeOpts && (
             <div className="flex flex-row gap-3">
@@ -122,7 +136,7 @@ export function DataTable<TData, TValue>({
             </div>
           )}
         </div>
-        {addButton}
+        {!onlyIfSearchEmpty ? addButton : null}
       </div>
 
       <div className="rounded-md border">
@@ -176,9 +190,12 @@ export function DataTable<TData, TValue>({
               <TableRow>
                 <TableCell
                   colSpan={columns.length}
-                  className="h-12 text-center text-gray-500"
+                  className="h-12 text-center  text-gray-500"
                 >
-                  Ingen resultater fundet.
+                  <div className={"flex flex-col items-center pb-2 pt-2 gap-3"}>
+                    Ingen resultater fundet.
+                    {addButton}
+                  </div>
                 </TableCell>
               </TableRow>
             )}

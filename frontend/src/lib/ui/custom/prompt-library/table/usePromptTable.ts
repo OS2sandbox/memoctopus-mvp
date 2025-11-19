@@ -1,18 +1,19 @@
 "use client";
+
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { createPrompt, deletePrompt, updatePrompt } from "@/lib/api/prompts";
 import { DATA_TABLE_SCOPE } from "@/lib/constants";
 import { useCurrentUser } from "@/lib/hooks/use-current-user";
+import type { PromptDTO } from "@/lib/schemas/prompt";
 import type { PromptTableProps } from "@/lib/ui/custom/prompt-library/table/PromptTable";
-import type { Prompt } from "@/shared/schemas/prompt";
 
 import { useState } from "react";
 
 export const usePromptTable = ({
   tableMode,
   data,
-}: Omit<PromptTableProps, "className" | "hideAddButton" | "isProcessing">) => {
+}: Pick<PromptTableProps, "tableMode" | "data">) => {
   const user = useCurrentUser();
   const queryClient = useQueryClient();
 
@@ -21,60 +22,65 @@ export const usePromptTable = ({
   const createMutation = useMutation({
     mutationFn: createPrompt,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["prompts"] });
+      void queryClient.invalidateQueries({ queryKey: ["prompts"] });
     },
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, ...prompt }: Prompt) => updatePrompt(id, prompt),
+    mutationFn: ({ id, dto }: { id: string; dto: PromptDTO }) =>
+      updatePrompt(id, dto),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["prompts"] });
+      void queryClient.invalidateQueries({ queryKey: ["prompts"] });
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: deletePrompt,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["prompts"] });
+      void queryClient.invalidateQueries({ queryKey: ["prompts"] });
     },
   });
 
   const handleToggleFavorite = (id: string, checked: boolean) => {
     const prompt = data.find((p) => p.id === id);
-    if (prompt) {
-      updateMutation.mutate({ ...prompt, isFavorite: checked });
-    }
+    if (!prompt) return;
+
+    const dto: PromptDTO = {
+      name: prompt.name,
+      text: prompt.text,
+      category: prompt.category,
+      creator: prompt.creator,
+      isFavorite: checked,
+    };
+
+    updateMutation.mutate({ id, dto });
   };
 
   const handleDeletePrompt = (id: string) => {
     deleteMutation.mutate(id);
   };
 
-  const handleAddPrompt = (newPrompt: Omit<Prompt, "id">) => {
-    createMutation.mutate(newPrompt);
+  const handleAddPrompt = (dto: PromptDTO) => {
+    createMutation.mutate(dto);
   };
 
-  const handleUpdatePrompt = (updatedPrompt: Prompt) => {
-    updateMutation.mutate(updatedPrompt);
+  const handleUpdatePrompt = (id: string, dto: PromptDTO) => {
+    updateMutation.mutate({ id, dto });
   };
 
   const filteredPrompts = data.filter((prompt) => {
     if (tableMode?.length === 0 || !tableMode) return true;
 
-    const result = tableMode.some((mode) => {
+    return tableMode.some((mode) => {
       switch (mode) {
         case DATA_TABLE_SCOPE.MyItems:
           return prompt.creator.id === user?.id;
-
         case DATA_TABLE_SCOPE.MyFavorites:
           return prompt.isFavorite;
-
         default:
           return false;
       }
     });
-
-    return result;
   });
 
   return {

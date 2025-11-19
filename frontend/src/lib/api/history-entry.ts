@@ -1,10 +1,10 @@
-import { getAuthHeaders } from "@/lib/api/utils";
-import { API_BASE_URL } from "@/shared/constants";
+import { API_BASE_URL } from "@/lib/constants";
 import {
   type HistoryEntry,
   type HistoryEntryDTO,
   HistoryEntrySchema,
-} from "@/shared/schemas/history";
+} from "@/lib/schemas/history";
+import { getAuthHeaders } from "@/lib/utils/utils";
 
 export const getHistoryEntries = async (): Promise<HistoryEntry[]> => {
   const headers = await getAuthHeaders();

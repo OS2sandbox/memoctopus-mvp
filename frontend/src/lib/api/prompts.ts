@@ -1,10 +1,10 @@
-import { getAuthHeaders } from "@/lib/api/utils";
-import { API_BASE_URL } from "@/shared/constants";
+import { API_BASE_URL } from "@/lib/constants";
 import {
   type Prompt,
   type PromptDTO,
   PromptSchema,
-} from "@/shared/schemas/prompt";
+} from "@/lib/schemas/prompt";
+import { getAuthHeaders } from "@/lib/utils/utils";
 
 export const getPrompts = async (): Promise<Prompt[]> => {
   const headers = await getAuthHeaders();
@@ -12,8 +12,6 @@ export const getPrompts = async (): Promise<Prompt[]> => {
   const res = await fetch(`${API_BASE_URL}/api/prompts`, {
     headers,
   });
-
-  console.log("Fetch prompts response status:", headers);
 
   if (!res.ok) {
     throw new Error(`Failed to fetch prompts: ${res.statusText}`);

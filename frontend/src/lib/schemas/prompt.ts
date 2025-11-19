@@ -1,12 +1,12 @@
 import { z } from "zod";
 
-import { PROMPT_CATEGORY } from "@/lib/constants";
 import {
   MAX_ASSET_NAME_LENGTH,
   MAX_PROMPT_LENGTH,
   MIN_ASSET_NAME_LENGTH,
   MIN_PROMPT_LENGTH,
-} from "@/shared/constants";
+  PROMPT_CATEGORY,
+} from "@/lib/constants";
 
 const CreatorSchema = z.object({
   id: z.string(),
@@ -20,11 +20,11 @@ export const PromptSchema = z.object({
     .trim()
     .min(
       MIN_ASSET_NAME_LENGTH,
-      `Prompt name must be at least ${MIN_ASSET_NAME_LENGTH} characters`,
+      `Promptens navn skal være mindst ${MIN_ASSET_NAME_LENGTH} tegn`,
     )
     .max(
       MAX_ASSET_NAME_LENGTH,
-      `Prompt name must not exceed ${MAX_ASSET_NAME_LENGTH} characters`,
+      `Promptens navn må ikke overgå ${MAX_ASSET_NAME_LENGTH} tegn`,
     ),
   creator: CreatorSchema,
   category: z.enum(PROMPT_CATEGORY),
@@ -34,11 +34,11 @@ export const PromptSchema = z.object({
     .trim()
     .min(
       MIN_PROMPT_LENGTH,
-      `Prompt text must be at least ${MIN_PROMPT_LENGTH} characters`,
+      `Promptens tekst skal være mindst ${MIN_PROMPT_LENGTH} tegn`,
     )
     .max(
       MAX_PROMPT_LENGTH,
-      `"Prompt text must not exceed ${MAX_PROMPT_LENGTH} characters"`,
+      `Promptens tekst må ikke overgå ${MAX_PROMPT_LENGTH} tegn`,
     ),
 });
 

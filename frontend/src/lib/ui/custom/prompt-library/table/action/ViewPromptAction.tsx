@@ -1,3 +1,5 @@
+"use client";
+
 import { LucideCheck, LucideClipboardCopy, LucideEye } from "lucide-react";
 
 import { Button } from "@/lib/ui/core/shadcn/button";

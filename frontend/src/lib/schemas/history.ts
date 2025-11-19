@@ -1,13 +1,13 @@
 import { z } from "zod";
 
 import {
-  MAX_HISTORY_TITLE_LENGTH,
+  MAX_ASSET_NAME_LENGTH,
   MAX_PROMPT_LENGTH,
   MAX_TRANSCRIPT_LENGTH,
-  MIN_HISTORY_TITLE_LENGTH,
+  MIN_ASSET_NAME_LENGTH,
   MIN_PROMPT_LENGTH,
   MIN_TRANSCRIPT_LENGTH,
-} from "@/shared/constants";
+} from "@/lib/constants";
 
 export const TranscriptSchema = z.object({
   kind: z.literal("transcript"),
@@ -53,12 +53,12 @@ export const HistoryEntrySchema = z.object({
     .string()
     .trim()
     .min(
-      MIN_HISTORY_TITLE_LENGTH,
-      `History entry title must be at least ${MIN_HISTORY_TITLE_LENGTH} characters`,
+      MIN_ASSET_NAME_LENGTH,
+      `History entry title must be at least ${MIN_ASSET_NAME_LENGTH} characters`,
     )
     .max(
-      MAX_HISTORY_TITLE_LENGTH,
-      `History entry title must not exceed ${MAX_HISTORY_TITLE_LENGTH} characters`,
+      MAX_ASSET_NAME_LENGTH,
+      `History entry title must not exceed ${MAX_ASSET_NAME_LENGTH} characters`,
     ),
   assets: z.array(HistoryAssetSchema).min(1),
 });

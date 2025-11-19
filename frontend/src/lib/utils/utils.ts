@@ -1,6 +1,9 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { z } from "zod";
 
+import { authClient } from "@/lib/auth-client";
+import { type PromptDTO, PromptDTOSchema } from "@/lib/schemas/prompt";
 import { composeFormatRules } from "@/lib/utils/regex-rule-formatter/formatters";
 import { safeNameRules } from "@/lib/utils/regex-rule-formatter/rules";
 
@@ -26,7 +29,6 @@ const twoDigits = new Intl.NumberFormat("en-US", {
   useGrouping: false,
 });
 
-// There's dayjs, but it's overkill for this simple task
 export function formatTime(
   seconds: number,
   opts?: { showHours: boolean },
@@ -66,3 +68,45 @@ export const handleSafeFileName = ({ fileName }: HandleSafeFileNameProps) => {
 
   return result;
 };
+
+interface ValidatePromptDtoProps {
+  data: PromptDTO;
+}
+
+export type ValidationResult = {
+  valid: boolean;
+  errors: Record<string, string[]>;
+  data?: PromptDTO;
+};
+
+export const validatePromptDTO = ({
+  data,
+}: ValidatePromptDtoProps): ValidationResult => {
+  const result = PromptDTOSchema.safeParse(data);
+
+  if (!result.success) {
+    return {
+      valid: false,
+      errors: z.flattenError(result.error).fieldErrors,
+    };
+  }
+
+  return {
+    valid: true,
+    errors: {},
+    data: result.data,
+  };
+};
+
+export async function getAuthHeaders(): Promise<HeadersInit> {
+  const headers: HeadersInit = {
+    "Content-Type": "application/json",
+  };
+
+  const session = await authClient.getSession();
+  if (session?.data?.session?.token) {
+    headers["X-Session-Token"] = session.data.session.token;
+  }
+
+  return headers;
+}

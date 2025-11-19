@@ -1,6 +1,6 @@
-import { DataTable } from "@/lib/ui/core/data-table";
+import type { HistoryEntry } from "@/lib/schemas/history";
+import { DataTable } from "@/lib/ui/core/shadcn/data-table/data-table";
 import { getHistoryColumns } from "@/lib/ui/custom/history/table/HistoryColumns";
-import type { HistoryEntry } from "@/shared/schemas/history";
 
 interface HistoryTableProps {
   data: HistoryEntry[];
@@ -20,5 +20,12 @@ export const HistoryTable = ({ data }: HistoryTableProps) => {
     },
   });
 
-  return <DataTable className={"max-w-4xl"} columns={columns} data={data} />;
+  return (
+    <DataTable<HistoryEntry, typeof columns>
+      className={"max-w-4xl"}
+      columns={columns}
+      data={data}
+      searchConfig={{ filterKey: "title", placeholder: "Søg i historik..." }}
+    />
+  );
 };

@@ -1,7 +1,6 @@
 name: CI
+
 on:
-  push:
-    branches: ["main"] # If we introduce "dev" branch for safety net, add it here
   pull_request:
     branches: ["main"]
 
@@ -11,9 +10,12 @@ jobs:
     strategy:
       matrix:
         node: [23.x]
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -26,6 +28,10 @@ jobs:
 
       - name: Lint
         run: npm run lint --if-present
+        working-directory: frontend
+
+      - name: Commitlint
+        run: npx commitlint --from=origin/main --to=HEAD
         working-directory: frontend
 
       - name: Typecheck / Build

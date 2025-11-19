@@ -1,7 +1,5 @@
-import { getAuthHeaders } from "@/lib/api/utils";
-import type { EXPORT_FORMAT } from "@/lib/constants";
-import { handleSafeFileName } from "@/lib/utils/utils";
-import { API_BASE_URL } from "@/shared/constants";
+import { API_BASE_URL, type EXPORT_FORMAT } from "@/lib/constants";
+import { getAuthHeaders, handleSafeFileName } from "@/lib/utils/utils";
 
 export interface ExportRequest {
   format: EXPORT_FORMAT;
@@ -42,16 +40,16 @@ export async function downloadExport({
     markdown,
     fileName,
   });
+
   const url = URL.createObjectURL(blob);
   try {
     const a = document.createElement("a");
-    a.href = url;
     a.download = filename;
-    a.style.display = "none";
-    document.body.appendChild(a);
+    a.href = url;
     a.click();
-    a.remove();
   } finally {
-    URL.revokeObjectURL(url);
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 200);
   }
 }
