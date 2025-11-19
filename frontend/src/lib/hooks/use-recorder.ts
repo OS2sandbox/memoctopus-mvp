@@ -29,9 +29,11 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
     }
   };
 
-  const startTimer = () => {
-    timeRef.current = 0;
-    actions.setTime(0);
+  const startTimer = (reset: boolean = true) => {
+    if (reset) {
+      timeRef.current = 0;
+      actions.setTime(0);
+    }
     timerRef.current = window.setInterval(() => {
       timeRef.current += 1;
       actions.setTime(timeRef.current);
@@ -95,7 +97,7 @@ export const useRecorder = ({ autoSave, onError }: UseRecorderProps) => {
   const resume = () => {
     if (mediaRecorderRef.current?.state === "paused") {
       mediaRecorderRef.current.resume();
-      startTimer();
+      startTimer(false);
       actions.resumeRecording();
     }
   };
