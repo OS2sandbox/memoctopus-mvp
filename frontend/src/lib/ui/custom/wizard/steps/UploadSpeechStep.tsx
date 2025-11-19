@@ -1,6 +1,8 @@
 import { STEP_ID } from "@/lib/constants";
 import { useWarnBeforeUnload } from "@/lib/hooks/use-warn-before-unload";
 import { Button } from "@/lib/ui/core/shadcn/button";
+import { Checkbox } from "@/lib/ui/core/shadcn/checkbox";
+import { Label } from "@/lib/ui/core/shadcn/label";
 import { RecordDialog } from "@/lib/ui/custom/dialog/RecordDialog";
 import { FileSelectButton } from "@/lib/ui/custom/FileSelectButton";
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
@@ -32,6 +34,19 @@ export const UploadSpeechStep = () => {
         <p className="text-sm text-muted-foreground">
           Anvend din egen optagelse af et møde eller anden tale her.
         </p>
+        <div className="flex flex-col gap-6 mb-5">
+          <div className="flex items-center gap-3">
+            <Checkbox
+              disabled={fileUploaded}
+              id="gpdr-filter"
+              className={"h-5 w-5"}
+            />
+            <Label htmlFor="gdpr-filter" className="text-gray-400 font-normal">
+              Slet personoplysninger i transskriptionen og opsummeringen
+              (GDPR-filter)
+            </Label>
+          </div>
+        </div>
         <FileSelectButton fileType={"audio/*"} />
       </WizardContentPanel>
       <WizardContentPanel>
