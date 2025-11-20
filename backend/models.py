@@ -117,6 +117,11 @@ class PromptAsset(BaseModel):
             raise ValueError('Prompt summary text must not exceed 50,000 characters')
         return v
 
+class HistoryEntryUpdate(BaseModel):
+    """Partial update model for history entries."""
+    title: Optional[str] = None
+    assets: Optional[List[TranscriptAsset | PromptAsset]] = None
+
 
 class HistoryEntryCreate(BaseModel):
     """Model for creating a history entry."""

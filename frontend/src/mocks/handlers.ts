@@ -16,6 +16,8 @@ import {
   savePrompts,
 } from "@/mocks/utils/utils";
 
+// This is just for mocking purposes and should not be used in production
+
 export const historyEntryHandlers = [
   http.get("/api/history", () => {
     const entries = loadHistoryEntries([]);

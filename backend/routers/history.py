@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 import json
 
-from models import HistoryEntryCreate, HistoryEntryResponse, TranscriptAsset, PromptAsset
+from models import HistoryEntryCreate, HistoryEntryUpdate, HistoryEntryResponse, TranscriptAsset, PromptAsset
 from auth import get_current_user, AuthenticatedUser
 from database import get_database, Database
 
@@ -74,6 +74,120 @@ async def get_history_entries(
 
     return entries
 
+@router.patch(
+    "/{entry_id}",
+    response_model=HistoryEntryResponse,
+    response_model_by_alias=True,
+)
+async def update_history_entry(
+        entry_id: str,
+        update: HistoryEntryUpdate,
+        current_user: AuthenticatedUser = Depends(get_current_user),
+        db: Database = Depends(get_database),
+):
+    """
+    Partially update a history entry (title and\/or assets) for the current user.
+    If `assets` is provided, existing assets are replaced.
+    """
+    # 1\) Ensure entry exists and belongs to user
+    select_query = """
+       SELECT
+           he.id,
+           he.user_id,
+           he.title,
+           he.created_at,
+           COALESCE(
+               json_agg(
+               json_build_object(
+                       'kind', ha.asset_kind,
+                       'data', ha.asset_data
+               )
+               ORDER BY ha.created_at
+                       ) FILTER (WHERE ha.id IS NOT NULL),
+               '[]'::json
+           ) as assets
+       FROM history_entries he
+                LEFT JOIN history_assets ha ON he.id = ha.history_entry_id
+       WHERE he.id = :entry_id AND he.user_id = :user_id
+       GROUP BY he.id, he.user_id, he.title, he.created_at \
+       """
+    row = await db.fetch_one(
+        query=select_query,
+        values={"entry_id": entry_id, "user_id": current_user.id},
+    )
+
+    if not row:
+        raise HTTPException(status_code=404, detail="History entry not found")
+
+    # 2\) Update title if provided
+    new_title = row["title"]
+    if update.title is not None:
+        new_title = update.title.strip()
+        title_query = """
+                      UPDATE history_entries
+                      SET title = :title
+                      WHERE id = :entry_id AND user_id = :user_id \
+                      """
+        await db.execute(
+            query=title_query,
+            values={
+                "title": new_title,
+                "entry_id": entry_id,
+                "user_id": current_user.id,
+            },
+        )
+
+    # 3\) Replace assets if provided
+    final_assets: List[TranscriptAsset | PromptAsset] = []
+
+    if update.assets is not None:
+        # Clear existing assets
+        delete_assets_query = """
+                              DELETE FROM history_assets
+                              WHERE history_entry_id = :entry_id \
+                              """
+        await db.execute(
+            query=delete_assets_query,
+            values={"entry_id": entry_id},
+        )
+
+        # Insert new assets
+        insert_asset_query = """
+                             INSERT INTO history_assets (history_entry_id, asset_kind, asset_data)
+                             VALUES (:history_entry_id, :asset_kind, :asset_data) \
+                             """
+        for asset in update.assets:
+            await db.execute(
+                query=insert_asset_query,
+                values={
+                    "history_entry_id": entry_id,
+                    "asset_kind": asset.kind.value,
+                    "asset_data": json.dumps(asset.model_dump(mode="json")),
+                },
+            )
+        final_assets = update.assets
+    else:
+        # If assets not updated, parse existing ones from the row
+        assets_data = row["assets"]
+        if isinstance(assets_data, str):
+            assets_data = json.loads(assets_data)
+
+        for asset in assets_data:
+            asset_kind = asset["kind"]
+            asset_data = asset["data"]
+            if asset_kind == "transcript":
+                final_assets.append(TranscriptAsset(**asset_data))
+            elif asset_kind == "prompt":
+                final_assets.append(PromptAsset(**asset_data))
+
+    # 4\) Return updated entry
+    return HistoryEntryResponse(
+        id=str(row["id"]),
+        user_id=row["user_id"],
+        title=new_title,
+        assets=final_assets,
+        created_at=row["created_at"],
+    )
 
 @router.get("/{entry_id}", response_model=HistoryEntryResponse, response_model_by_alias=True)
 async def get_history_entry(

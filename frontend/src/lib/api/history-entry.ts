@@ -3,6 +3,7 @@ import {
   type HistoryEntry,
   type HistoryEntryDTO,
   HistoryEntrySchema,
+  type HistoryEntryUpdateDTO,
 } from "@/lib/schemas/history";
 import { getAuthHeaders } from "@/lib/utils/utils";
 
@@ -21,8 +22,6 @@ export const getHistoryEntries = async (): Promise<HistoryEntry[]> => {
 
   const result = HistoryEntrySchema.array().parse(json);
 
-  console.log("Fetched history entries:", result);
-
   return result;
 };
 
@@ -40,6 +39,35 @@ export const createHistoryEntry = async (
   if (!res.ok) {
     const errorText = await res.text();
     throw new Error(`Failed to create history entry: ${errorText}`);
+  }
+
+  const json = await res.json();
+
+  const result = HistoryEntrySchema.parse(json);
+
+  return result;
+};
+
+interface UpdateHistoryEntryProps {
+  id: string;
+  update: HistoryEntryUpdateDTO;
+}
+
+export const updateHistoryEntry = async ({
+  id,
+  update,
+}: UpdateHistoryEntryProps): Promise<HistoryEntry> => {
+  const headers = await getAuthHeaders();
+
+  const res = await fetch(`${API_BASE_URL}/api/history/${id}`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify(update),
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Failed to update history entry: ${errorText}`);
   }
 
   const json = await res.json();

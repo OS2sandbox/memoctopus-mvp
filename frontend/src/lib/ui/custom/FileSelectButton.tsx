@@ -37,8 +37,6 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
     inputRef.current?.click();
   };
 
-  // This is NOT the actual upload logic, just a simulation; a placeholder.
-  // TODO: insert upload logic here (backend)
   const handleUpload = () => {
     const currentMetadata = metadata[STEP_ID.UploadSpeechStep] ?? {};
     setMetadata(STEP_ID.UploadSpeechStep, {

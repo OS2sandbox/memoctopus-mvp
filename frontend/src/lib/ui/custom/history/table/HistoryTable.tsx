@@ -8,14 +8,15 @@ interface HistoryTableProps {
 
 export const HistoryTable = ({ data }: HistoryTableProps) => {
   // placeholders for action handlers until integrated with backend logic
+
   const columns = getHistoryColumns({
-    handleGenerate: (promptText: string) => {
+    handleGenerateTranscript: (promptText: string) => {
       console.log("Generate clicked for:", promptText);
     },
-    handleCopyPrompt: (promptText: string) => {
+    handleDownloadTranscript: (promptText: string) => {
       console.log("Copy Prompt clicked for:", promptText);
     },
-    handleDownloadText: (promptText: string) => {
+    handleDownloadSummary: (promptText: string) => {
       console.log("Download Text clicked for:", promptText);
     },
   });
