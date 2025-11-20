@@ -1,4 +1,4 @@
-import type { PROMPT_CATEGORY } from "@/lib/constants";
+import { API_BASE_URL, type PROMPT_CATEGORY } from "@/lib/constants";
 
 export interface TranscribeAudioProps {
   file: File;
@@ -10,7 +10,7 @@ export const transcribeAudio = async ({ file }: TranscribeAudioProps) => {
   formData.append("model", "whisper-1");
 
   // I ONLY use absolute URL here because MSW is running and intercepting relative URLs; to be changed
-  const res = await fetch("http://localhost:8000/v1/audio/transcriptions", {
+  const res = await fetch(`${API_BASE_URL}/v1/audio/transcriptions`, {
     method: "POST",
     body: formData,
   });
@@ -49,8 +49,7 @@ export const summarizeTranscription = async ({
       },
     ],
   };
-
-  const res = await fetch("http://localhost:8000/v1/chat/completions", {
+  const res = await fetch(`${API_BASE_URL}/v1/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

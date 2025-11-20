@@ -22,8 +22,6 @@ export const getHistoryEntries = async (): Promise<HistoryEntry[]> => {
 
   const result = HistoryEntrySchema.array().parse(json);
 
-  console.log("Fetched history entries:", result);
-
   return result;
 };
 
