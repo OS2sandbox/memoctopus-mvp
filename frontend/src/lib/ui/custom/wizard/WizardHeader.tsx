@@ -5,7 +5,7 @@ interface WizardHeaderProps {
 
 export const WizardHeader = ({
   title = "Tale til tekst",
-  infoText = "Gennemgå hvert trin for at uploade, skrive prompt, godkende og dele.",
+  infoText = "Gennemgå hvert trin for at uploade, vælge skabelon, godkende og dele.",
 }: WizardHeaderProps) => (
   <div className="text-center">
     <h2 className="text-2xl font-semibold">{title}</h2>

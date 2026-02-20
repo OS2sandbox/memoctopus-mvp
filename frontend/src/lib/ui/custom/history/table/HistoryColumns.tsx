@@ -1,31 +1,58 @@
 import type { ColumnDef } from "@tanstack/react-table";
-import { LucideFileDown, LucideFileText } from "lucide-react";
+import {
+  LucideCheck,
+  LucideClipboardCopy,
+  LucideFileText,
+  LucidePlus,
+} from "lucide-react";
 
 import type { HistoryEntry } from "@/lib/schemas/history";
 import { Button } from "@/lib/ui/core/shadcn/button";
-import type { TableAction } from "@/lib/ui/core/shadcn/data-table/types";
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/lib/ui/core/shadcn/tooltip";
 
-interface GetHistoryColumnsProps {
-  handleGenerateTranscript: (promptText: string) => void;
-  handleDownloadTranscript: (promptText: string) => void;
-  handleDownloadSummary: (promptText: string) => void;
+import { useState } from "react";
+
+interface CopyButtonProps {
+  onClick: () => Promise<void>;
+  icon: React.ReactNode;
+  tooltipText: string;
 }
 
-const enum HISTORY_ACTION_TYPE {
-  GENERATE_TRANSCRIPT = "generate_transcript",
-  DOWNLOAD_TRANSCRIPT = "download_transcript",
-  DOWNLOAD_SUMMARY = "download_summary",
+const CopyButton = ({ onClick, icon, tooltipText }: CopyButtonProps) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleClick = async () => {
+    await onClick();
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="icon" onClick={handleClick}>
+          {copied ? <LucideCheck className="text-green-600" /> : icon}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{copied ? "Kopieret!" : tooltipText}</TooltipContent>
+    </Tooltip>
+  );
+};
+
+interface GetHistoryColumnsProps {
+  handleGenerateNewSummary: (entryId: string) => void;
+  handleCopyTranscription: (entry: HistoryEntry) => Promise<void>;
+  handleCopySummary: (entry: HistoryEntry) => Promise<void>;
 }
 
 export const getHistoryColumns = ({
-  handleGenerateTranscript,
-  handleDownloadTranscript,
-  handleDownloadSummary,
+  handleGenerateNewSummary,
+  handleCopyTranscription,
+  handleCopySummary,
 }: GetHistoryColumnsProps): ColumnDef<HistoryEntry>[] => [
   {
     accessorKey: "title",
@@ -48,58 +75,32 @@ export const getHistoryColumns = ({
     cell: ({ row }) => {
       const entry = row.original;
 
-      const actions: TableAction<HISTORY_ACTION_TYPE>[] = [
-        {
-          key: HISTORY_ACTION_TYPE.GENERATE_TRANSCRIPT,
-          component: (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => handleGenerateTranscript(entry.id)}
-            >
-              <LucideFileText />
-            </Button>
-          ),
-          tooltipText: "Generer ny transskription",
-        },
-        {
-          key: HISTORY_ACTION_TYPE.DOWNLOAD_TRANSCRIPT,
-          component: (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => handleDownloadTranscript(entry.id)}
-            >
-              <LucideFileText />
-            </Button>
-          ),
-          tooltipText: "Hent transskription",
-        },
-        {
-          key: HISTORY_ACTION_TYPE.DOWNLOAD_SUMMARY,
-          component: (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => handleDownloadSummary(entry.id)}
-            >
-              <LucideFileDown />
-            </Button>
-          ),
-          tooltipText: "Hent opsummering",
-        },
-      ];
-
       return (
         <div data-row-action className="flex items-center justify-end">
-          {actions.map(({ key, component, tooltipText }) => (
-            <Tooltip key={key}>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">{component}</span>
-              </TooltipTrigger>
-              <TooltipContent>{tooltipText}</TooltipContent>
-            </Tooltip>
-          ))}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => handleGenerateNewSummary(entry.id)}
+              >
+                <LucidePlus />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Generer nyt referat</TooltipContent>
+          </Tooltip>
+
+          <CopyButton
+            onClick={() => handleCopyTranscription(entry)}
+            icon={<LucideFileText />}
+            tooltipText="Kopiér transskribering"
+          />
+
+          <CopyButton
+            onClick={() => handleCopySummary(entry)}
+            icon={<LucideClipboardCopy />}
+            tooltipText="Kopiér referat"
+          />
         </div>
       );
     },

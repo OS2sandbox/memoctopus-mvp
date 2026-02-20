@@ -32,6 +32,7 @@ interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
   onRowClick?: (entry: TData) => void;
+  selectedRowId?: string | undefined;
   addButtonConfig?: {
     addButton: ReactNode;
     onlyIfSearchEmpty?: boolean;
@@ -54,6 +55,7 @@ export function DataTable<TData, TValue>({
   addButtonConfig,
   scopeOpts,
   onRowClick,
+  selectedRowId,
   className,
   searchConfig,
 }: DataTableProps<TData, TValue>) {
@@ -160,32 +162,37 @@ export function DataTable<TData, TValue>({
 
           <TableBody>
             {table.getRowModel().rows?.length ? (
-              table.getRowModel().rows.map((row) => (
-                <TableRow
-                  key={row.id}
-                  onClick={(e) => {
-                    const target = e.target as HTMLElement;
+              table.getRowModel().rows.map((row) => {
+                const rowData = row.original as { id?: string };
+                const isSelected =
+                  selectedRowId && rowData.id === selectedRowId;
+                return (
+                  <TableRow
+                    key={row.id}
+                    onClick={(e) => {
+                      const target = e.target as HTMLElement;
 
-                    if (shouldIgnoreRowClick(target)) return;
+                      if (shouldIgnoreRowClick(target)) return;
 
-                    onRowClick?.(row.original);
-                  }}
-                  className={
-                    onRowClick
-                      ? "cursor-pointer hover:bg-muted/50 transition-colors"
-                      : undefined
-                  }
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext(),
-                      )}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))
+                      onRowClick?.(row.original);
+                    }}
+                    className={cn(
+                      onRowClick &&
+                        "cursor-pointer hover:bg-muted/50 transition-colors",
+                      isSelected && "bg-primary/10 border-l-2 border-l-primary",
+                    )}
+                  >
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>
+                        {flexRender(
+                          cell.column.columnDef.cell,
+                          cell.getContext(),
+                        )}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                );
+              })
             ) : (
               <TableRow>
                 <TableCell

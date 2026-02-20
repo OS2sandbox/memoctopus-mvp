@@ -49,7 +49,6 @@ export const usePromptTable = ({
       name: prompt.name,
       text: prompt.text,
       category: prompt.category,
-      creator: prompt.creator,
       isFavorite: checked,
     };
 

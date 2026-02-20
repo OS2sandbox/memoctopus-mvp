@@ -15,7 +15,7 @@ export const LibraryView = () => {
   const renderContent = () => {
     switch (status) {
       case "error":
-        return <p>Der opstod en fejl ved hentning af prompts.</p>;
+        return <p>Der opstod en fejl ved hentning af skabeloner.</p>;
       case "pending":
         return <Spinner />;
       case "success":
@@ -27,10 +27,10 @@ export const LibraryView = () => {
 
   return (
     <section className="min-h-screen flex flex-col items-center px-6 py-16 space-y-6">
-      <h1 className="text-2xl font-semibold">Prompt-bibliotek</h1>
+      <h1 className="text-2xl font-semibold">Skabeloner</h1>
       <div className="flex flex-col w-full items-center justify-center pb-4">
-        <p>Find en prompt og tilføj det til dine prompter.</p>
-        <p>Du kan også oprette et nyt prompt.</p>
+        <p>Find en skabelon og tilføj det til dine skabeloner.</p>
+        <p>Du kan også oprette en ny skabelon.</p>
       </div>
       {renderContent()}
     </section>

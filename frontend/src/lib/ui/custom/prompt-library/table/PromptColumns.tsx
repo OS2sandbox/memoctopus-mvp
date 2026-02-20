@@ -88,7 +88,7 @@ export const getPromptColumns = ({
         {
           key: PROMPT_ACTION_TYPE.View,
           component: <ViewPromptAction promptText={prompt.text} />,
-          tooltipText: "Se prompt",
+          tooltipText: "Se skabelon",
         },
         {
           key: PROMPT_ACTION_TYPE.Edit,
@@ -99,7 +99,7 @@ export const getPromptColumns = ({
               onUpdate={(dto) => handleUpdatePrompt(prompt.id, dto)}
             />
           ),
-          tooltipText: "Rediger prompt",
+          tooltipText: "Rediger skabelon",
         },
         {
           key: PROMPT_ACTION_TYPE.Delete,
@@ -109,7 +109,7 @@ export const getPromptColumns = ({
               onDelete={() => handleDeletePrompt(prompt.id)}
             />
           ),
-          tooltipText: "Slet prompt",
+          tooltipText: "Slet skabelon",
         },
       ];
 

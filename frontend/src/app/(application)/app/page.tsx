@@ -1,9 +1,13 @@
 import { DashboardView } from "@/app/(application)/app/DashboardView";
 
+import { Suspense } from "react";
+
 export default function AppPage() {
   return (
     <main className="flex flex-col items-center justify-start min-h-screen">
-      <DashboardView />
+      <Suspense fallback={null}>
+        <DashboardView />
+      </Suspense>
     </main>
   );
 }

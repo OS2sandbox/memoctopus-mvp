@@ -40,10 +40,15 @@ export const PromptSchema = z.object({
       MAX_PROMPT_LENGTH,
       `Promptens tekst må ikke overgå ${MAX_PROMPT_LENGTH} tegn`,
     ),
+  createdAt: z.string().or(z.date()),
+  updatedAt: z.string().or(z.date()),
 });
 
 export const PromptDTOSchema = PromptSchema.omit({
   id: true,
+  creator: true,
+  createdAt: true,
+  updatedAt: true,
 });
 
 export type PromptDTO = z.infer<typeof PromptDTOSchema>;

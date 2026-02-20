@@ -1,10 +1,6 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 
 import { getPrompts } from "@/lib/api/prompts";
-import {
-  type TranscribeAndSummarizeProps,
-  transcribeAndSummarize,
-} from "@/lib/api/transcription";
 import { DATA_TABLE_SCOPE, STEP_ID } from "@/lib/constants";
 import type { Prompt } from "@/lib/schemas/prompt";
 import { Spinner } from "@/lib/ui/core/shadcn/spinner";
@@ -13,31 +9,9 @@ import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
 
 export const SelectPromptStep = () => {
-  const { metadata, setMetadata, next } = useStepper();
+  const { metadata, setMetadata } = useStepper();
   const selectPromptMetadata = metadata[STEP_ID.SelectPromptStep] ?? {};
   const selectedPrompt: Prompt | undefined = selectPromptMetadata["prompt"];
-
-  const { mutate: summarize, status: summaryStatus } = useMutation({
-    mutationFn: ({ file, prompt, category }: TranscribeAndSummarizeProps) =>
-      transcribeAndSummarize({
-        file: file,
-        prompt: prompt,
-        category: category,
-      }),
-    onSuccess: (summary) => {
-      setMetadata(STEP_ID.SelectPromptStep, {
-        ...selectPromptMetadata,
-        isCompleted: selectedPrompt,
-      });
-      setMetadata(STEP_ID.EditAndConfirmStep, {
-        ...selectPromptMetadata,
-        summary: summary,
-        isCompleted: false,
-      });
-
-      next();
-    },
-  });
 
   const { data: prompts, status } = useQuery({
     queryKey: ["prompts"],
@@ -48,19 +22,14 @@ export const SelectPromptStep = () => {
     setMetadata(STEP_ID.SelectPromptStep, {
       ...selectPromptMetadata,
       prompt: entry,
-    });
-
-    summarize({
-      file: metadata[STEP_ID.UploadSpeechStep]?.["file"],
-      prompt: entry.text,
-      category: entry.category,
+      isCompleted: true,
     });
   };
 
   const renderContent = () => {
     switch (status) {
       case "error":
-        return <p>Der opstod en fejl ved hentning af prompts.</p>;
+        return <p>Der opstod en fejl ved hentning af skabeloner.</p>;
       case "pending": {
         return <Spinner />;
       }
@@ -71,7 +40,7 @@ export const SelectPromptStep = () => {
             hideAddButton={true}
             rowClickConfig={{
               onRowClick: handleOnRowClick,
-              status: summaryStatus,
+              selectedPromptId: selectedPrompt?.id,
             }}
             tableMode={[DATA_TABLE_SCOPE.MyFavorites, DATA_TABLE_SCOPE.MyItems]}
           />

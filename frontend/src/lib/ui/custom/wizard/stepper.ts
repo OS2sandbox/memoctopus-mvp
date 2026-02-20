@@ -13,13 +13,18 @@ export const { Stepper, utils, useStepper } = defineStepper(
     description: "Vælg om du vil optage, uploade eller genbruge en samtale",
   },
   {
+    id: STEP_ID.TranscriptionStep,
+    title: "Transkriberet",
+    description: "Gennemgå og rediger transskriptionen",
+  },
+  {
     id: STEP_ID.SelectPromptStep,
-    title: "Prompt",
-    description: "Tilføj prompt og opsæt detaljer",
+    title: "Skabelon",
+    description: "Tilføj skabelon og opsæt detaljer",
   },
   {
     id: STEP_ID.EditAndConfirmStep,
-    title: "Godkend",
+    title: "Referat",
     description: "Gennemgå og godkend opsummeringen",
   },
   {
