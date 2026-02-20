@@ -75,10 +75,9 @@ VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8001/v1")
 VLLM_MODEL = os.getenv("VLLM_MODEL", "Qwen/Qwen3-0.6B")
 VLLM_CHAT_URL = f"{VLLM_BASE_URL}/chat/completions"
 
-# OpenAI for audio transcription only
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_TRANSCRIPTION_URL = f"{OPENAI_BASE_URL}/audio/transcriptions"
+# Local transcription service (NVIDIA Parakeet)
+TRANSCRIPTION_BASE_URL = os.getenv("TRANSCRIPTION_BASE_URL", "http://localhost:8003")
+TRANSCRIPTION_URL = f"{TRANSCRIPTION_BASE_URL}/v1/audio/transcriptions"
 
 
 async def stream_openai_response(client: httpx.AsyncClient, url: str, body: dict, headers: dict):
@@ -95,21 +94,6 @@ async def stream_openai_response(client: httpx.AsyncClient, url: str, body: dict
         async for chunk in response.aiter_bytes():
             yield chunk
 
-
-async def stream_openai_multipart_response(client: httpx.AsyncClient, url: str, files: dict, data: dict, headers: dict):
-    """
-    Stream SSE chunks from OpenAI multipart response.
-    """
-    async with client.stream(
-        "POST",
-        url,
-        files=files,
-        data=data,
-        headers=headers,
-        timeout=120.0
-    ) as response:
-        async for chunk in response.aiter_bytes():
-            yield chunk
 
 
 @app.post("/v1/chat/completions")
@@ -160,53 +144,25 @@ async def audio_transcriptions(
     stream: Optional[str] = Form(None)
 ):
     """
-    Passthrough endpoint for OpenAI audio transcriptions API.
-    Supports both regular JSON responses and SSE streaming.
-    Forwards the request directly to OpenAI without validation.
+    Passthrough endpoint for local transcription service (NVIDIA Parakeet).
+    Forwards the audio file to the transcription container and returns the result.
     """
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}"
-    }
-
-    # Read the file content
     file_content = await file.read()
 
-    # Prepare multipart form data
     files = {
         "file": (file.filename, file_content, file.content_type)
     }
 
-    data = {
-        "model": model
-    }
-
-    # Check if streaming is requested (stream can be "true" as string from form data)
-    is_streaming = stream and stream.lower() == "true"
-
-    if is_streaming:
-        data["stream"] = "true"
-
-    if is_streaming:
-        # Return streaming response with SSE content type
-        client = httpx.AsyncClient()
-        return StreamingResponse(
-            stream_openai_multipart_response(client, OPENAI_TRANSCRIPTION_URL, files, data, headers),
-            media_type="text/event-stream"
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            TRANSCRIPTION_URL,
+            files=files,
+            timeout=120.0
         )
-    else:
-        # Return regular JSON response
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                OPENAI_TRANSCRIPTION_URL,
-                files=files,
-                data=data,
-                headers=headers,
-                timeout=120.0
-            )
-            return JSONResponse(
-                content=response.json(),
-                status_code=response.status_code
-            )
+        return JSONResponse(
+            content=response.json(),
+            status_code=response.status_code
+        )
 
 
 @app.get("/health")

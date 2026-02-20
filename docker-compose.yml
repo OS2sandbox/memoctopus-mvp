@@ -9,7 +9,7 @@ services:
       - huggingface_cache:/root/.cache/huggingface
     ports:
       - "8001:8000"
-    command: --model ${VLLM_MODEL:-Qwen/Qwen3-0.6B} --gpu-memory-utilization 0.25 --max-num-seqs 32
+    command: --model ${VLLM_MODEL:-Qwen/Qwen3-0.6B} --gpu-memory-utilization 0.5 --max-num-seqs 32
     ipc: host
     deploy:
       resources:
@@ -42,6 +42,27 @@ services:
       - memoctopus-network
     restart: unless-stopped
 
+  transcription:
+    build:
+      context: ./transcription
+      dockerfile: Dockerfile
+    container_name: memoctopus-transcription
+    runtime: nvidia
+    volumes:
+      - nemo_cache:/root/.cache
+    ports:
+      - "8003:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - memoctopus-network
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
@@ -49,8 +70,7 @@ services:
     container_name: memoctopus-backend
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-memoctopus}?sslmode=disable
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      TRANSCRIPTION_BASE_URL: http://transcription:8000
       VLLM_BASE_URL: http://vllm:8000/v1
       VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen3-0.6B}
     ports:
@@ -59,6 +79,8 @@ services:
       postgres:
         condition: service_healthy
       vllm:
+        condition: service_started
+      transcription:
         condition: service_started
     networks:
       - memoctopus-network
@@ -87,6 +109,7 @@ services:
 volumes:
   postgres_data:
   huggingface_cache:
+  nemo_cache:
 
 networks:
   memoctopus-network:
