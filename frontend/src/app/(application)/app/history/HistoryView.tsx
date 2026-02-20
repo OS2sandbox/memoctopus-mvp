@@ -29,7 +29,7 @@ export const HistoryView = () => {
     <main className="min-h-screen flex flex-col items-center px-6 py-16 space-y-6">
       <h1 className="text-2xl font-semibold">Historik</h1>
       <div className="flex flex-col w-full items-center gap-1 justify-center pb-4">
-        <p>Find dine gemte prompter og opsummeringer.</p>
+        <p>Find dine gemte skabeloner og referater.</p>
         <p className="text-gray-500 text-sm">
           historik ældre end 7 dage slettes.
         </p>

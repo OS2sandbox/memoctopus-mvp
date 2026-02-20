@@ -14,10 +14,10 @@ export const NavBar = () => {
 
         <div className="flex justify-center items-center gap-6">
           <Link
-            href="/app/library"
+            href="/app/skabeloner"
             className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
           >
-            Prompter
+            Skabeloner
           </Link>
           <Link
             href="/app/history"

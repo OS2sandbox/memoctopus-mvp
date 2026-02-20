@@ -2,23 +2,20 @@ import { STEP_ID } from "@/lib/constants";
 import { MinimalTiptap } from "@/lib/ui/core/shadcn/minimal-tiptap";
 import { useStepper } from "@/lib/ui/custom/wizard/stepper";
 import { WizardPanel } from "@/lib/ui/custom/wizard/WizardPanel";
-import { getVisibleTextLength, handleSafeFileName } from "@/lib/utils/utils";
+import { getVisibleTextLength } from "@/lib/utils/utils";
 
-export const EditAndConfirmStep = () => {
+export const TranscriptionStep = () => {
   const { metadata, setMetadata } = useStepper();
-  const editConfirmMetadata = metadata[STEP_ID.EditAndConfirmStep] ?? {};
+  const stepMetadata = metadata[STEP_ID.TranscriptionStep] ?? {};
   const currentContent =
-    editConfirmMetadata["editedSummary"] ||
-    editConfirmMetadata["summary"] ||
-    "";
+    stepMetadata["editedTranscription"] || stepMetadata["transcription"] || "";
 
   const handleChange = (content: string) => {
     const hasContent = getVisibleTextLength(content) > 0;
-    setMetadata(STEP_ID.EditAndConfirmStep, {
-      ...editConfirmMetadata,
-      editedSummary: content,
+    setMetadata(STEP_ID.TranscriptionStep, {
+      ...stepMetadata,
+      editedTranscription: content,
       isCompleted: hasContent,
-      title: handleSafeFileName({ fileName: undefined }),
     });
   };
 
@@ -27,7 +24,7 @@ export const EditAndConfirmStep = () => {
       <MinimalTiptap
         content={currentContent}
         onChange={handleChange}
-        placeholder="Gennemgå og rediger referatet..."
+        placeholder="Gennemgå og rediger transskriptionen..."
         editable={true}
       />
     </WizardPanel>

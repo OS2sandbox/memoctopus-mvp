@@ -2,23 +2,39 @@ import type { HistoryEntry } from "@/lib/schemas/history";
 import { DataTable } from "@/lib/ui/core/shadcn/data-table/data-table";
 import { getHistoryColumns } from "@/lib/ui/custom/history/table/HistoryColumns";
 
+import { useRouter } from "next/navigation";
+
 interface HistoryTableProps {
   data: HistoryEntry[];
 }
 
 export const HistoryTable = ({ data }: HistoryTableProps) => {
-  // placeholders for action handlers until integrated with backend logic
+  const router = useRouter();
+
+  const handleGenerateNewSummary = (entryId: string) => {
+    router.push(`/app?fromHistory=${entryId}`);
+  };
+
+  const handleCopyTranscription = async (entry: HistoryEntry) => {
+    const transcriptAsset = entry.assets.find(
+      (asset) => asset.kind === "transcript",
+    );
+    if (transcriptAsset) {
+      await navigator.clipboard.writeText(transcriptAsset.text);
+    }
+  };
+
+  const handleCopySummary = async (entry: HistoryEntry) => {
+    const promptAsset = entry.assets.find((asset) => asset.kind === "prompt");
+    if (promptAsset) {
+      await navigator.clipboard.writeText(promptAsset.text);
+    }
+  };
 
   const columns = getHistoryColumns({
-    handleGenerateTranscript: (promptText: string) => {
-      console.log("Generate clicked for:", promptText);
-    },
-    handleDownloadTranscript: (promptText: string) => {
-      console.log("Copy Prompt clicked for:", promptText);
-    },
-    handleDownloadSummary: (promptText: string) => {
-      console.log("Download Text clicked for:", promptText);
-    },
+    handleGenerateNewSummary,
+    handleCopyTranscription,
+    handleCopySummary,
   });
 
   return (

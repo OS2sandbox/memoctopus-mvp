@@ -9,7 +9,6 @@ import type { ReactNode } from "react";
 
 import { ReactQueryProvider } from "@/app/providers/ReactQueryProvider";
 import { cn } from "@/lib/utils/utils";
-import { StartMockWorker } from "@/mocks/StartMockWorker";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -28,7 +27,7 @@ export default function RootLayout({
       <body className={cn(inter.className)}>
         <div className="pt-20 min-h-screen flex flex-col">
           <ReactQueryProvider>
-            <StartMockWorker>{children}</StartMockWorker>
+            {children}
             <ReactQueryDevtools initialIsOpen={false} />
           </ReactQueryProvider>
         </div>

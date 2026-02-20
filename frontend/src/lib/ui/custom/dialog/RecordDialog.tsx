@@ -39,6 +39,7 @@ export const RecordDialog = ({
       file,
       isCompleted: file,
     });
+    setOpen(false);
   };
 
   const {
@@ -128,12 +129,9 @@ export const RecordDialog = ({
           )}
 
           {status === RECORDER_STATUS.Stopped && (
-            <Fragment>
-              <Button onClick={reset} variant="outline">
-                Ny optagelse
-              </Button>
-              <Button onClick={() => setOpen(false)}>Anvend</Button>
-            </Fragment>
+            <Button onClick={reset} variant="outline">
+              Ny optagelse
+            </Button>
           )}
         </div>
         {url && status === RECORDER_STATUS.Stopped && (

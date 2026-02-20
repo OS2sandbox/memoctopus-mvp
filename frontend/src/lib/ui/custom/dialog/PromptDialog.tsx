@@ -6,6 +6,7 @@ import {
   MAX_ASSET_NAME_LENGTH,
   MAX_PROMPT_LENGTH,
   PROMPT_CATEGORY,
+  type PromptCategory,
 } from "@/lib/constants";
 import { useCurrentUser } from "@/lib/hooks/use-current-user";
 import type { Prompt, PromptDTO } from "@/lib/schemas/prompt";
@@ -42,14 +43,14 @@ import { Activity, type ReactNode, useState } from "react";
 type PromptForm = {
   name: string;
   text: string;
-  category: PROMPT_CATEGORY;
+  category: PromptCategory;
   isFavorite: boolean;
 };
 
-const DEFAULT_PROMPT = {
+const DEFAULT_PROMPT: PromptForm = {
   name: "",
   text: "",
-  category: PROMPT_CATEGORY.Beslutningsreferat,
+  category: "Beslutningsreferat",
   isFavorite: false,
 };
 
@@ -80,7 +81,7 @@ export const PromptDialog = ({
 
   const user = useCurrentUser();
 
-  const PromptCategories = Object.values(PROMPT_CATEGORY);
+  const PromptCategories = PROMPT_CATEGORY;
 
   const updatePrompt = <K extends keyof PromptForm>(key: K, value: Prompt[K]) =>
     setPrompt((prev) => ({ ...prev, [key]: value }));
@@ -88,7 +89,6 @@ export const PromptDialog = ({
   const handleSubmit = () => {
     const dto: PromptDTO = {
       ...prompt,
-      creator: { id: user.id, name: user.name },
     };
 
     const { valid, errors, data } = validatePromptDTO({ data: dto });
@@ -114,7 +114,7 @@ export const PromptDialog = ({
           {trigger ?? (
             <Button variant={isEditMode ? "secondary" : "default"}>
               {isEditMode ? <LucidePencil /> : <LucidePlus />}
-              {isEditMode ? "Rediger prompt" : "Tilføj prompt"}
+              {isEditMode ? "Rediger skabelon" : "Tilføj skabelon"}
             </Button>
           )}
         </div>
@@ -123,7 +123,7 @@ export const PromptDialog = ({
       <DialogContent data-row-action>
         <DialogHeader>
           <DialogTitle>
-            {isEditMode ? "Rediger prompt" : "Opret ny prompt"}
+            {isEditMode ? "Rediger skabelon" : "Opret ny skabelon"}
           </DialogTitle>
         </DialogHeader>
 
@@ -154,7 +154,7 @@ export const PromptDialog = ({
               <FieldLabel>Kategori</FieldLabel>
               <Select
                 onValueChange={(c) =>
-                  updatePrompt("category", c as PROMPT_CATEGORY)
+                  updatePrompt("category", c as PromptCategory)
                 }
                 value={prompt.category}
               >

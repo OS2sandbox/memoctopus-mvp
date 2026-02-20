@@ -1,25 +1,13 @@
-export enum PROMPT_CATEGORY {
-  Beslutningsreferat = "Beslutningsreferat",
-  API = "API",
-  ToDoListe = "Todo-liste",
-  DetaljeretReferat = "Detaljeret referat",
-  KortReferat = "Kort referat",
+// Must match backend PromptCategory enum exactly
+export const PROMPT_CATEGORY = [
+  "Beslutningsreferat",
+  "API",
+  "To do liste",
+  "Detaljeret referat",
+  "Kort referat",
+] as const;
 
-  // Formelle referater
-  Mødereferat = "Mødereferat",
-  Handlingsreferat = "Handlingsreferat", //  (to-do orienteret)
-  Diskussionsreferat = "Diskussionsreferat", // (med centrale drøftelser og argumenter)
-
-  // Uformelle eller korte opsamlinger
-  Mødenoter = "Mødenoter", // (uformelt)
-  Statusnotat = "Statusnotat", // (fx stand-up, teammøder)
-
-  // Mødespecifikke referater
-  ReferatFraBorgermoeder = "Referat fra borgermøder",
-  ReferatFraMUSSamtaler = "Referat fra MUS-samtaler",
-  DokumentationsorienteredeOpsamlinger = "Dokumentationsorienterede opsamlinger",
-  Dokumentationsuddrag = "Dokumentationsuddrag", // (til udfyldelse af felter i et bestemt system)
-}
+export type PromptCategory = (typeof PROMPT_CATEGORY)[number];
 
 export enum DATA_TABLE_SCOPE {
   MyItems = "my_items",
@@ -29,9 +17,10 @@ export enum DATA_TABLE_SCOPE {
 
 export enum STEP_ID {
   UploadSpeechStep = "step-1",
-  SelectPromptStep = "step-2",
-  EditAndConfirmStep = "step-3",
-  ShareStep = "step-4",
+  TranscriptionStep = "step-2",
+  SelectPromptStep = "step-3",
+  EditAndConfirmStep = "step-4",
+  ShareStep = "step-5",
 }
 
 export enum EXPORT_FORMAT {
@@ -66,4 +55,5 @@ export const MAX_PROMPT_LENGTH = 4000;
 export const MIN_ASSET_NAME_LENGTH = 1;
 export const MAX_ASSET_NAME_LENGTH = 100;
 
-export const API_BASE_URL = process.env["NEXT_PUBLIC_API_URL"];
+// Empty to use relative URLs - each API file specifies the correct path
+export const API_BASE_URL = "";

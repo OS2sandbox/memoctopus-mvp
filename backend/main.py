@@ -1,4 +1,6 @@
 import os
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, File, UploadFile, Form
 from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
@@ -7,26 +9,53 @@ from typing import Optional
 
 from starlette.middleware.cors import CORSMiddleware
 
-from database import connect_db, disconnect_db
+from database import connect_db, disconnect_db, get_database_instance
 from routers import prompts, history, export
 from auth import get_current_user, AuthenticatedUser
 
 load_dotenv()
 
-app = FastAPI()
+HISTORY_CLEANUP_INTERVAL_HOURS = 24
+HISTORY_RETENTION_DAYS = 7
 
 
-# Database lifecycle events
-@app.on_event("startup")
-async def startup():
-    """Connect to database on startup."""
+async def cleanup_old_history_entries():
+    """Delete history entries older than 7 days."""
+    db = get_database_instance()
+    query = """
+        DELETE FROM history_entries
+        WHERE created_at < NOW() - INTERVAL '7 days'
+    """
+    result = await db.execute(query)
+    print(f"History cleanup: deleted old entries")
+
+
+async def history_cleanup_task():
+    """Background task that periodically cleans up old history entries."""
+    while True:
+        try:
+            await cleanup_old_history_entries()
+        except Exception as e:
+            print(f"History cleanup error: {e}")
+        await asyncio.sleep(HISTORY_CLEANUP_INTERVAL_HOURS * 60 * 60)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan handler."""
     await connect_db()
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    """Disconnect from database on shutdown."""
+    cleanup_task = asyncio.create_task(history_cleanup_task())
+    yield
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     await disconnect_db()
+
+
+app = FastAPI(lifespan=lifespan)
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,11 +70,14 @@ app.include_router(prompts.router)
 app.include_router(history.router)
 app.include_router(export.router)
 
+# vLLM for chat completions
+VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8001/v1")
+VLLM_MODEL = os.getenv("VLLM_MODEL", "Qwen/Qwen3-0.6B")
+VLLM_CHAT_URL = f"{VLLM_BASE_URL}/chat/completions"
+
+# OpenAI for audio transcription only
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-# Construct full URLs from base URL
-OPENAI_CHAT_URL = f"{OPENAI_BASE_URL}/chat/completions"
 OPENAI_TRANSCRIPTION_URL = f"{OPENAI_BASE_URL}/audio/transcriptions"
 
 
@@ -83,15 +115,17 @@ async def stream_openai_multipart_response(client: httpx.AsyncClient, url: str, 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     """
-    Passthrough endpoint for OpenAI chat completions API.
+    Passthrough endpoint for vLLM chat completions API.
     Supports both regular JSON responses and SSE streaming.
-    Forwards the request body directly to OpenAI without validation.
+    Forwards the request body directly to vLLM without validation.
     """
     body = await request.json()
 
+    # Override model with configured vLLM model
+    body["model"] = VLLM_MODEL
+
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {OPENAI_API_KEY}"
     }
 
     # Check if streaming is requested
@@ -101,14 +135,14 @@ async def chat_completions(request: Request):
         # Return streaming response with SSE content type
         client = httpx.AsyncClient()
         return StreamingResponse(
-            stream_openai_response(client, OPENAI_CHAT_URL, body, headers),
+            stream_openai_response(client, VLLM_CHAT_URL, body, headers),
             media_type="text/event-stream"
         )
     else:
         # Return regular JSON response
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                OPENAI_CHAT_URL,
+                VLLM_CHAT_URL,
                 json=body,
                 headers=headers,
                 timeout=60.0

@@ -25,6 +25,24 @@ export const getHistoryEntries = async (): Promise<HistoryEntry[]> => {
   return result;
 };
 
+export const getHistoryEntry = async (id: string): Promise<HistoryEntry> => {
+  const headers = await getAuthHeaders();
+
+  const res = await fetch(`${API_BASE_URL}/api/history/${id}`, {
+    headers,
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch history entry: ${res.statusText}`);
+  }
+
+  const json = await res.json();
+
+  const result = HistoryEntrySchema.parse(json);
+
+  return result;
+};
+
 export const createHistoryEntry = async (
   entry: HistoryEntryDTO,
 ): Promise<HistoryEntry> => {
