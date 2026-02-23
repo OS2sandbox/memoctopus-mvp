@@ -9,10 +9,16 @@ export const transcribeAudio = async ({ file }: TranscribeAudioProps) => {
   formData.append("file", file);
   formData.append("model", "whisper-1");
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+
   const res = await fetch(`${API_BASE_URL}/api/v1/audio/transcriptions`, {
     method: "POST",
     body: formData,
+    signal: controller.signal,
   });
+
+  clearTimeout(timeoutId);
 
   if (!res.ok) {
     throw new Error("Failed to transcribe audio");

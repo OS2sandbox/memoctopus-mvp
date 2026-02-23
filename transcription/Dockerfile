@@ -10,9 +10,10 @@ WORKDIR /app
 # Install PyTorch with CUDA 12.4 support first
 RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu124
 
-# Install NeMo ASR toolkit and web framework
+# Install NeMo ASR toolkit, pyannote diarization, and web framework
 RUN pip install --no-cache-dir \
     'nemo_toolkit[asr]' \
+    'pyannote.audio' \
     fastapi \
     'uvicorn[standard]' \
     python-multipart
