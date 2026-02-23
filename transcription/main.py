@@ -279,10 +279,7 @@ async def transcribe(
         loop = asyncio.get_event_loop()
 
         if diarization_pipeline is not None:
-            import time
-
             # Run transcription (with timestamps) and diarization in parallel
-            t0 = time.monotonic()
             transcribe_future = loop.run_in_executor(
                 None, do_transcribe, wav_path, True
             )
@@ -290,16 +287,8 @@ async def transcribe(
                 None, do_diarize, wav_path
             )
 
-            async def timed(coro, label):
-                start = time.monotonic()
-                result = await coro
-                elapsed = time.monotonic() - start
-                print(f"[timing] {label}: {elapsed:.2f}s")
-                return result
-
             transcription_result, diarization_segments = await asyncio.gather(
-                timed(transcribe_future, "transcription"),
-                timed(diarize_future, "diarization"),
+                transcribe_future, diarize_future
             )
 
             # Merge transcription with speaker labels
