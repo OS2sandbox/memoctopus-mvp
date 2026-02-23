@@ -48,6 +48,8 @@ services:
       dockerfile: Dockerfile
     container_name: memoctopus-transcription
     runtime: nvidia
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
     volumes:
       - nemo_cache:/root/.cache
     ports:

@@ -195,7 +195,8 @@ export const WizardControls = () => {
             >
               {transcribeStatus === "pending" ? (
                 <>
-                  <Spinner className="mr-2" /> Transskriberer...
+                  <Spinner className="mr-2" /> Transskriberer og identificerer
+                  talere...
                 </>
               ) : summarizeStatus === "pending" ? (
                 <>
