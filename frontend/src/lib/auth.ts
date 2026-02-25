@@ -8,7 +8,11 @@ export const auth = betterAuth({
   secret:
     process.env["BETTER_AUTH_SECRET"] || "fallback-secret-key-for-development",
   baseURL: process.env["BETTER_AUTH_URL"] || "http://localhost:3000",
-  trustedOrigins: ["http://localhost:3000", "https://pedro.sikkerai.dk"],
+  trustedOrigins: [
+    "http://localhost:3000",
+    "https://pedro.sikkerai.dk",
+    "http://10.1.3.10:6767",
+  ],
   emailAndPassword: {
     enabled: true,
     requireEmailVerification: false,

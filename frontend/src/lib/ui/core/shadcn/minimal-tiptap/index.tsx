@@ -1,5 +1,9 @@
 import CharacterCount from "@tiptap/extension-character-count";
 import Link from "@tiptap/extension-link";
+import { Table } from "@tiptap/extension-table";
+import { TableCell } from "@tiptap/extension-table-cell";
+import { TableHeader } from "@tiptap/extension-table-header";
+import { TableRow } from "@tiptap/extension-table-row";
 import { Markdown } from "@tiptap/markdown";
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -63,6 +67,13 @@ function MinimalTiptap({
             "text-blue-600 underline underline-offset-2 hover:text-blue-700",
         },
       }),
+      Table.configure({
+        resizable: false,
+        HTMLAttributes: { class: "tiptap-table" },
+      }),
+      TableRow,
+      TableHeader,
+      TableCell,
       CharacterCount.configure({
         limit: charLimit,
       }),
