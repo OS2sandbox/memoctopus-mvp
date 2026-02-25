@@ -9,7 +9,7 @@ services:
       - huggingface_cache:/root/.cache/huggingface
     ports:
       - "8001:8000"
-    command: --model ${VLLM_MODEL:-Qwen/Qwen3-0.6B} --gpu-memory-utilization 0.5 --max-num-seqs 32
+    command: --model ${VLLM_MODEL:-openai/gpt-oss-20b} --gpu-memory-utilization 0.5 --max-num-seqs 32
     ipc: host
     deploy:
       resources:
