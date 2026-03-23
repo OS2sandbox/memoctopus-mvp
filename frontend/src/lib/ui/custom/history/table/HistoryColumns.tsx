@@ -9,50 +9,81 @@ import {
 import type { HistoryEntry } from "@/lib/schemas/history";
 import { Button } from "@/lib/ui/core/shadcn/button";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/lib/ui/core/shadcn/popover";
+import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/lib/ui/core/shadcn/tooltip";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 
-interface CopyButtonProps {
-  onClick: () => Promise<void>;
+interface ViewContentButtonProps {
+  content: string;
   icon: React.ReactNode;
   tooltipText: string;
 }
 
-const CopyButton = ({ onClick, icon, tooltipText }: CopyButtonProps) => {
+const ViewContentButton = ({
+  content,
+  icon,
+  tooltipText,
+}: ViewContentButtonProps) => {
   const [copied, setCopied] = useState(false);
 
-  const handleClick = async () => {
-    await onClick();
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(content);
     setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button variant="ghost" size="icon" onClick={handleClick}>
-          {copied ? <LucideCheck className="text-green-600" /> : icon}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>{copied ? "Kopieret!" : tooltipText}</TooltipContent>
-    </Tooltip>
+    <Popover>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <Button variant="ghost" size="icon">
+              {icon}
+            </Button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent>{tooltipText}</TooltipContent>
+      </Tooltip>
+      <PopoverContent className="max-h-64 overflow-y-auto w-80">
+        <p className="text-sm whitespace-pre-wrap">{content}</p>
+        <div className="flex justify-start mt-4 items-center">
+          <Button size="sm" onClick={handleCopy}>
+            {copied ? (
+              <Fragment>
+                <LucideCheck className="mr-2 h-4 w-4" />
+                <span>Kopieret!</span>
+              </Fragment>
+            ) : (
+              <Fragment>
+                <LucideClipboardCopy className="mr-2 h-4 w-4" />
+                <span>Kopier</span>
+              </Fragment>
+            )}
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 };
 
 interface GetHistoryColumnsProps {
   handleGenerateNewSummary: (entryId: string) => void;
-  handleCopyTranscription: (entry: HistoryEntry) => Promise<void>;
-  handleCopySummary: (entry: HistoryEntry) => Promise<void>;
+  getTranscriptionText: (entry: HistoryEntry) => string;
+  getSummaryText: (entry: HistoryEntry) => string;
 }
 
 export const getHistoryColumns = ({
   handleGenerateNewSummary,
-  handleCopyTranscription,
-  handleCopySummary,
+  getTranscriptionText,
+  getSummaryText,
 }: GetHistoryColumnsProps): ColumnDef<HistoryEntry>[] => [
   {
     accessorKey: "title",
@@ -74,6 +105,8 @@ export const getHistoryColumns = ({
     id: "actions",
     cell: ({ row }) => {
       const entry = row.original;
+      const transcriptionText = getTranscriptionText(entry);
+      const summaryText = getSummaryText(entry);
 
       return (
         <div data-row-action className="flex items-center justify-end">
@@ -90,17 +123,21 @@ export const getHistoryColumns = ({
             <TooltipContent>Generer nyt referat</TooltipContent>
           </Tooltip>
 
-          <CopyButton
-            onClick={() => handleCopyTranscription(entry)}
-            icon={<LucideFileText />}
-            tooltipText="Kopiér transskribering"
-          />
+          {transcriptionText && (
+            <ViewContentButton
+              content={transcriptionText}
+              icon={<LucideFileText />}
+              tooltipText="Se transskribering"
+            />
+          )}
 
-          <CopyButton
-            onClick={() => handleCopySummary(entry)}
-            icon={<LucideClipboardCopy />}
-            tooltipText="Kopiér referat"
-          />
+          {summaryText && (
+            <ViewContentButton
+              content={summaryText}
+              icon={<LucideClipboardCopy />}
+              tooltipText="Se referat"
+            />
+          )}
         </div>
       );
     },

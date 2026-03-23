@@ -15,26 +15,22 @@ export const HistoryTable = ({ data }: HistoryTableProps) => {
     router.push(`/app?fromHistory=${entryId}`);
   };
 
-  const handleCopyTranscription = async (entry: HistoryEntry) => {
-    const promptAsset = entry.assets.find((asset) => asset.kind === "prompt");
-    if (promptAsset) {
-      await navigator.clipboard.writeText(promptAsset.text);
-    }
-  };
-
-  const handleCopySummary = async (entry: HistoryEntry) => {
+  const getTranscriptionText = (entry: HistoryEntry): string => {
     const transcriptAsset = entry.assets.find(
       (asset) => asset.kind === "transcript",
     );
-    if (transcriptAsset) {
-      await navigator.clipboard.writeText(transcriptAsset.text);
-    }
+    return transcriptAsset?.text ?? "";
+  };
+
+  const getSummaryText = (entry: HistoryEntry): string => {
+    const promptAsset = entry.assets.find((asset) => asset.kind === "prompt");
+    return promptAsset?.text ?? "";
   };
 
   const columns = getHistoryColumns({
     handleGenerateNewSummary,
-    handleCopyTranscription,
-    handleCopySummary,
+    getTranscriptionText,
+    getSummaryText,
   });
 
   return (

@@ -50,6 +50,7 @@ services:
     runtime: nvidia
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
+      STT_MODEL: ${STT_MODEL:-nvidia/parakeet-rnnt-110m-da-dk}
     volumes:
       - nemo_cache:/root/.cache
     ports:

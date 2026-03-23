@@ -52,9 +52,10 @@ async def lifespan(app: FastAPI):
     global model, diarization_pipeline
     import nemo.collections.asr as nemo_asr
 
-    print("Loading NVIDIA Parakeet RNNT 110M Danish model...")
+    stt_model = os.environ.get("STT_MODEL", "nvidia/parakeet-rnnt-110m-da-dk")
+    print(f"Loading STT model: {stt_model}...")
     model = nemo_asr.models.ASRModel.from_pretrained(
-        model_name="nvidia/parakeet-rnnt-110m-da-dk"
+        model_name=stt_model
     )
     model.eval()
     print("Model loaded successfully.")
