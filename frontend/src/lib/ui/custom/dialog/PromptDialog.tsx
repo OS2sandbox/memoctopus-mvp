@@ -5,6 +5,7 @@ import { LucideAlertCircle, LucidePencil, LucidePlus } from "lucide-react";
 import {
   MAX_ASSET_NAME_LENGTH,
   MAX_PROMPT_LENGTH,
+  MIN_ASSET_NAME_LENGTH,
   PROMPT_CATEGORY,
   type PromptCategory,
 } from "@/lib/constants";
@@ -143,10 +144,17 @@ export const PromptDialog = ({
                 placeholder="F.eks. Statusmøde på Orto"
                 required
               />
-              {validationErrors?.["name"]?.[0] && (
+              {validationErrors?.["name"]?.[0] ? (
                 <p className="text-xs text-destructive mt-1">
                   {validationErrors["name"][0]}
                 </p>
+              ) : (
+                prompt.name.trim().length > 0 &&
+                prompt.name.trim().length < MIN_ASSET_NAME_LENGTH && (
+                  <p className="text-xs text-destructive mt-1">
+                    Navnet skal være mindst {MIN_ASSET_NAME_LENGTH} tegn
+                  </p>
+                )
               )}
             </Field>
 

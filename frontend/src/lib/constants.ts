@@ -52,7 +52,7 @@ export const MAX_TRANSCRIPT_LENGTH = 5000;
 export const MIN_PROMPT_LENGTH = 10;
 export const MAX_PROMPT_LENGTH = 4000;
 
-export const MIN_ASSET_NAME_LENGTH = 1;
+export const MIN_ASSET_NAME_LENGTH = 5;
 export const MAX_ASSET_NAME_LENGTH = 100;
 
 // Empty to use relative URLs - each API file specifies the correct path

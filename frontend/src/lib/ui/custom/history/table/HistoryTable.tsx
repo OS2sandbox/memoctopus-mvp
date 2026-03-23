@@ -16,18 +16,18 @@ export const HistoryTable = ({ data }: HistoryTableProps) => {
   };
 
   const handleCopyTranscription = async (entry: HistoryEntry) => {
+    const promptAsset = entry.assets.find((asset) => asset.kind === "prompt");
+    if (promptAsset) {
+      await navigator.clipboard.writeText(promptAsset.text);
+    }
+  };
+
+  const handleCopySummary = async (entry: HistoryEntry) => {
     const transcriptAsset = entry.assets.find(
       (asset) => asset.kind === "transcript",
     );
     if (transcriptAsset) {
       await navigator.clipboard.writeText(transcriptAsset.text);
-    }
-  };
-
-  const handleCopySummary = async (entry: HistoryEntry) => {
-    const promptAsset = entry.assets.find((asset) => asset.kind === "prompt");
-    if (promptAsset) {
-      await navigator.clipboard.writeText(promptAsset.text);
     }
   };
 
