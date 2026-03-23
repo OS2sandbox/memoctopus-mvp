@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { LucideSave, LucideTrash } from "lucide-react";
+import { LucideRotateCcw, LucideTrash } from "lucide-react";
 
 import { createHistoryEntry } from "@/lib/api/history-entry";
 import {
@@ -38,6 +38,7 @@ export const WizardControls = () => {
   const currentFile = metadata[STEP_ID.UploadSpeechStep]?.["file"];
   const isFirstStep = current.id === STEP_ID.UploadSpeechStep;
   const isSelectPromptStep = current.id === STEP_ID.SelectPromptStep;
+  const isEditAndConfirmStep = current.id === STEP_ID.EditAndConfirmStep;
 
   const { data: session } = useSession();
   const user = session?.user ?? null;
@@ -73,34 +74,7 @@ export const WizardControls = () => {
     },
   });
 
-  const handleNextClick = () => {
-    if (isFirstStep && currentFile) {
-      transcribe({ file: currentFile });
-    } else if (isSelectPromptStep) {
-      const selectedPrompt: Prompt | undefined =
-        metadata[STEP_ID.SelectPromptStep]?.["prompt"];
-      const transcription =
-        metadata[STEP_ID.TranscriptionStep]?.["editedTranscription"] ||
-        metadata[STEP_ID.TranscriptionStep]?.["transcription"];
-
-      if (selectedPrompt && transcription) {
-        summarize({
-          transcription,
-          prompt: selectedPrompt.text,
-          category: selectedPrompt.category,
-        });
-      }
-    } else {
-      next();
-    }
-  };
-
-  const onResetClick = () => {
-    reset();
-    resetMetadata(true);
-  };
-
-  const onSaveClick = async () => {
+  const saveToHistory = async () => {
     try {
       const transcript: string =
         metadata[STEP_ID.EditAndConfirmStep]?.["editedSummary"];
@@ -133,11 +107,39 @@ export const WizardControls = () => {
       };
 
       await createHistoryEntry(historyEntry);
-
-      onResetClick();
     } catch (error) {
       console.error("Error saving history entry:", error);
     }
+  };
+
+  const handleNextClick = async () => {
+    if (isFirstStep && currentFile) {
+      transcribe({ file: currentFile });
+    } else if (isSelectPromptStep) {
+      const selectedPrompt: Prompt | undefined =
+        metadata[STEP_ID.SelectPromptStep]?.["prompt"];
+      const transcription =
+        metadata[STEP_ID.TranscriptionStep]?.["editedTranscription"] ||
+        metadata[STEP_ID.TranscriptionStep]?.["transcription"];
+
+      if (selectedPrompt && transcription) {
+        summarize({
+          transcription,
+          prompt: selectedPrompt.text,
+          category: selectedPrompt.category,
+        });
+      }
+    } else if (isEditAndConfirmStep) {
+      await saveToHistory();
+      next();
+    } else {
+      next();
+    }
+  };
+
+  const onResetClick = () => {
+    reset();
+    resetMetadata(true);
   };
 
   return (
@@ -207,11 +209,8 @@ export const WizardControls = () => {
               )}
             </Button>
           ) : (
-            <Button
-              className={"bg-green-600 hover:bg-green-700"}
-              onClick={onSaveClick}
-            >
-              <LucideSave /> Gem og nulstil
+            <Button variant="outline" onClick={onResetClick}>
+              <LucideRotateCcw /> Nulstil
             </Button>
           )}
         </Activity>

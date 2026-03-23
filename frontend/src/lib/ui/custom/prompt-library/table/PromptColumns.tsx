@@ -5,11 +5,12 @@ import type { TableAction } from "@/lib/ui/core/shadcn/data-table/types";
 ("use no memo");
 
 import type { ColumnDef } from "@tanstack/react-table";
+import { LucideStar } from "lucide-react";
 
 import type { User } from "@/lib/auth-client";
 import { DATA_TABLE_SCOPE } from "@/lib/constants";
 import type { Prompt, PromptDTO } from "@/lib/schemas/prompt";
-import { Switch } from "@/lib/ui/core/shadcn/switch";
+import { Button } from "@/lib/ui/core/shadcn/button";
 import {
   Tooltip,
   TooltipContent,
@@ -44,12 +45,19 @@ export const getPromptColumns = ({
     cell: ({ row }) => {
       const prompt = row.original;
       return (
-        <Switch
-          checked={prompt.isFavorite}
-          onCheckedChange={(checked) =>
-            handleToggleFavorite(prompt.id, checked)
-          }
-        />
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => handleToggleFavorite(prompt.id, !prompt.isFavorite)}
+        >
+          <LucideStar
+            className={
+              prompt.isFavorite
+                ? "fill-yellow-400 text-yellow-400"
+                : "text-muted-foreground"
+            }
+          />
+        </Button>
       );
     },
     enableSorting: false,

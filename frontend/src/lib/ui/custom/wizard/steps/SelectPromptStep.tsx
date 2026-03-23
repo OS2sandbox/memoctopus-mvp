@@ -35,15 +35,23 @@ export const SelectPromptStep = () => {
       }
       case "success": {
         return (
-          <PromptTable
-            data={prompts}
-            hideAddButton={true}
-            rowClickConfig={{
-              onRowClick: handleOnRowClick,
-              selectedPromptId: selectedPrompt?.id,
-            }}
-            tableMode={[DATA_TABLE_SCOPE.MyFavorites, DATA_TABLE_SCOPE.MyItems]}
-          />
+          <div className="space-y-2">
+            <p className="text-sm text-muted-foreground text-center">
+              Vælg en skabelon ved at klikke på en række i tabellen.
+            </p>
+            <PromptTable
+              data={prompts}
+              hideAddButton={true}
+              rowClickConfig={{
+                onRowClick: handleOnRowClick,
+                selectedPromptId: selectedPrompt?.id,
+              }}
+              tableMode={[
+                DATA_TABLE_SCOPE.MyFavorites,
+                DATA_TABLE_SCOPE.MyItems,
+              ]}
+            />
+          </div>
         );
       }
       default:

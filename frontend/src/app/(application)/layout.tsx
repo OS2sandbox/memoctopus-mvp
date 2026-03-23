@@ -9,6 +9,9 @@ export default function ApplicationLayout({
     <Fragment>
       <NavBar />
       {children}
+      <footer className="fixed bottom-0 right-0 p-2 text-xs text-muted-foreground">
+        v{process.env["APP_VERSION"]}
+      </footer>
     </Fragment>
   );
 }
