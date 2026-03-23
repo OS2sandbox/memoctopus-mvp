@@ -9,7 +9,7 @@ services:
       - huggingface_cache:/root/.cache/huggingface
     ports:
       - "8001:8000"
-    command: --model ${VLLM_MODEL:-Qwen/Qwen3-0.6B} --gpu-memory-utilization 0.5 --max-num-seqs 32
+    command: --model ${VLLM_MODEL:-openai/gpt-oss-20b} --gpu-memory-utilization 0.5 --max-num-seqs 32
     ipc: host
     deploy:
       resources:
@@ -101,7 +101,7 @@ services:
       MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
       BACKEND_URL: http://backend:8000
     ports:
-      - "3000:3000"
+      - "80:3000"
     depends_on:
       - backend
     networks:

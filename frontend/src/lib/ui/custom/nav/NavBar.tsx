@@ -25,12 +25,6 @@ export const NavBar = () => {
           >
             Historik
           </Link>
-          <Link
-            href="/app/about"
-            className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Om
-          </Link>
         </div>
 
         <div className="flex justify-end items-center gap-3">

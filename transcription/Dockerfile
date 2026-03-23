@@ -7,16 +7,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install PyTorch with CUDA 12.4 support first
-RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu124
-
-# Install NeMo ASR toolkit, pyannote diarization, and web framework
+# Install everything in one pass so pip resolves torch only once
+# (nemo/pyannote may pull a newer torch than the cu124 index default,
+#  a two-step install causes a double download that can exhaust disk)
 RUN pip install --no-cache-dir \
     'nemo_toolkit[asr]' \
     'pyannote.audio' \
     fastapi \
     'uvicorn[standard]' \
-    python-multipart
+    python-multipart \
+    --extra-index-url https://download.pytorch.org/whl/cu124
 
 COPY main.py .
 

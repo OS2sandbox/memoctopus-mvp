@@ -71,6 +71,15 @@
   & h3 {
     @apply text-lg font-medium;
   }
+  & table.tiptap-table {
+    @apply w-full border-collapse my-4;
+  }
+  & table.tiptap-table th {
+    @apply border border-border bg-muted px-3 py-2 text-left font-semibold text-sm;
+  }
+  & table.tiptap-table td {
+    @apply border border-border px-3 py-2 text-sm;
+  }
 }
 
 @layer base {
