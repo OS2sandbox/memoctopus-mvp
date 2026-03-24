@@ -92,8 +92,11 @@ app = FastAPI(lifespan=lifespan)
 
 
 def convert_to_wav(input_path: str, output_path: str):
-    """Convert audio to 16kHz mono WAV using ffmpeg."""
-    subprocess.run(
+    """Convert audio to 16kHz mono WAV using ffmpeg.
+
+    Raises ValueError if ffmpeg fails or produces an empty file (#62).
+    """
+    result = subprocess.run(
         [
             "ffmpeg",
             "-i",
@@ -107,13 +110,37 @@ def convert_to_wav(input_path: str, output_path: str):
             output_path,
             "-y",
         ],
-        check=True,
         capture_output=True,
     )
 
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace")[:500]
+        raise ValueError(f"ffmpeg conversion failed: {stderr}")
+
+    # Validate output is not empty — a WAV header alone is 44 bytes (#62)
+    file_size = os.path.getsize(output_path)
+    if file_size <= 44:
+        raise ValueError(
+            f"ffmpeg produced an empty audio file ({file_size} bytes). "
+            "The input may be silent, corrupted, or in an unsupported format."
+        )
+
 
 def do_transcribe(audio_path: str, timestamps: bool = False) -> dict:
-    """Transcribe audio file. Runs synchronously (call from thread pool)."""
+    """Transcribe audio file. Runs synchronously (call from thread pool).
+
+    Freezes the encoder before transcription to ensure NeMo's
+    freeze/unfreeze lifecycle is satisfied (#63).
+    """
+    # Freeze encoder before transcription so NeMo can safely unfreeze it
+    # during _transcribe_on_end. Without this, calling unfreeze(partial=True)
+    # raises ValueError because the module was never frozen.
+    if hasattr(model, "encoder") and hasattr(model.encoder, "freeze"):
+        try:
+            model.encoder.freeze()
+        except Exception:
+            pass  # Already frozen or not applicable
+
     output = model.transcribe(
         [audio_path], return_hypotheses=timestamps, timestamps=timestamps
     )
@@ -270,12 +297,26 @@ async def transcribe(
         # Save uploaded file
         filename = file.filename or "audio"
         input_path = os.path.join(tmpdir, filename)
+        content = await file.read()
+
+        if not content:
+            return JSONResponse(
+                content={"error": "Uploaded file is empty."},
+                status_code=400,
+            )
+
         with open(input_path, "wb") as f:
-            f.write(await file.read())
+            f.write(content)
 
         # Convert to 16kHz mono WAV (NeMo expects this format)
         wav_path = os.path.join(tmpdir, "audio.wav")
-        convert_to_wav(input_path, wav_path)
+        try:
+            convert_to_wav(input_path, wav_path)
+        except ValueError as e:
+            return JSONResponse(
+                content={"error": str(e)},
+                status_code=422,
+            )
 
         loop = asyncio.get_event_loop()
 
@@ -309,12 +350,27 @@ async def transcribe(
                     if key in transcription_result:
                         result[key] = transcription_result[key]
 
+            # Validate non-empty transcription (#62)
+            if not result.get("text", "").strip():
+                return JSONResponse(
+                    content={"error": "Transcription produced empty output. The audio may be silent or unrecognizable."},
+                    status_code=422,
+                )
+
             return JSONResponse(content=result)
         else:
             # No diarization — plain transcription
             result = await loop.run_in_executor(
                 None, do_transcribe, wav_path, want_timestamps
             )
+
+            # Validate non-empty transcription (#62)
+            if not result.get("text", "").strip():
+                return JSONResponse(
+                    content={"error": "Transcription produced empty output. The audio may be silent or unrecognizable."},
+                    status_code=422,
+                )
+
             return JSONResponse(content=result)
 
 

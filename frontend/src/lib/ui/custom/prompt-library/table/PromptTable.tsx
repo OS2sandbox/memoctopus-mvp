@@ -13,6 +13,7 @@ import { usePromptTable } from "@/lib/ui/custom/prompt-library/table/usePromptTa
 export interface PromptTableProps {
   tableMode?: DATA_TABLE_SCOPE[];
   hideAddButton?: boolean;
+  hidePagination?: boolean;
   data: Prompt[];
   rowClickConfig?: {
     onRowClick: (prompt: Prompt) => void;
@@ -24,6 +25,7 @@ export const PromptTable = ({
   data,
   tableMode,
   hideAddButton,
+  hidePagination,
   rowClickConfig,
 }: PromptTableProps) => {
   const user = useCurrentUser();
@@ -65,6 +67,7 @@ export const PromptTable = ({
       className={"max-w-4xl"}
       data={prompts}
       addButtonConfig={addButtonConfig}
+      hidePagination={hidePagination}
       scopeOpts={{
         scope,
         onScopeChange: setScope,

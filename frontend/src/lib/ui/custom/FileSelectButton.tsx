@@ -53,9 +53,11 @@ export const FileSelectButton = ({ fileType }: FileSelectButtonProps) => {
         variant="outline"
         onClick={handleClick}
         disabled={isUploaded}
-        className={currFile?.name ? "text-gray-500" : ""}
+        className={`max-w-[300px] ${currFile?.name ? "text-gray-500" : ""}`}
       >
-        {currFile?.name ? currFile?.name : "Vælg fil"}
+        <span className="truncate block">
+          {currFile?.name ? currFile?.name : "Vælg fil"}
+        </span>
       </Button>
     </div>
   );

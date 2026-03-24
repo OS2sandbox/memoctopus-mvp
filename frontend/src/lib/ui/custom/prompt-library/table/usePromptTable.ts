@@ -60,11 +60,24 @@ export const usePromptTable = ({
   };
 
   const handleAddPrompt = (dto: PromptDTO) => {
-    createMutation.mutate(dto);
+    return new Promise<void>((resolve, reject) => {
+      createMutation.mutate(dto, {
+        onSuccess: () => resolve(),
+        onError: (error) => reject(error),
+      });
+    });
   };
 
   const handleUpdatePrompt = (id: string, dto: PromptDTO) => {
-    updateMutation.mutate({ id, dto });
+    return new Promise<void>((resolve, reject) => {
+      updateMutation.mutate(
+        { id, dto },
+        {
+          onSuccess: () => resolve(),
+          onError: (error) => reject(error),
+        },
+      );
+    });
   };
 
   const filteredPrompts = data.filter((prompt) => {
