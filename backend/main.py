@@ -115,6 +115,11 @@ async def chat_completions(request: Request):
     # Check if streaming is requested
     is_streaming = body.get("stream", False)
 
+    # Support optional API key for vLLM (#65)
+    vllm_api_key = os.getenv("VLLM_API_KEY", "").strip()
+    if vllm_api_key:
+        headers["Authorization"] = f"Bearer {vllm_api_key}"
+
     if is_streaming:
         # Return streaming response with SSE content type
         client = httpx.AsyncClient()
@@ -125,16 +130,34 @@ async def chat_completions(request: Request):
     else:
         # Return regular JSON response
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                VLLM_CHAT_URL,
-                json=body,
-                headers=headers,
-                timeout=60.0
-            )
-            return JSONResponse(
-                content=response.json(),
-                status_code=response.status_code
-            )
+            try:
+                response = await client.post(
+                    VLLM_CHAT_URL,
+                    json=body,
+                    headers=headers,
+                    timeout=120.0
+                )
+            except httpx.ConnectError:
+                return JSONResponse(
+                    content={"error": "Could not connect to LLM service."},
+                    status_code=502
+                )
+            except httpx.ReadTimeout:
+                return JSONResponse(
+                    content={"error": "LLM service timed out."},
+                    status_code=504
+                )
+
+            # Safely parse response
+            try:
+                content = response.json()
+            except Exception:
+                print(f"LLM service returned non-JSON: {response.text[:500]}")
+                return JSONResponse(
+                    content={"error": "LLM service returned an invalid response."},
+                    status_code=502
+                )
+            return JSONResponse(content=content, status_code=response.status_code)
 
 
 @app.post("/v1/audio/transcriptions")
@@ -154,15 +177,50 @@ async def audio_transcriptions(
     }
 
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            TRANSCRIPTION_URL,
-            files=files,
-            timeout=120.0
-        )
-        return JSONResponse(
-            content=response.json(),
-            status_code=response.status_code
-        )
+        try:
+            response = await client.post(
+                TRANSCRIPTION_URL,
+                files=files,
+                timeout=1800.0  # 30 min for large files (#60)
+            )
+        except httpx.ReadTimeout:
+            return JSONResponse(
+                content={"error": "Transcription service timed out. The audio file may be too large."},
+                status_code=504
+            )
+        except httpx.ConnectError:
+            return JSONResponse(
+                content={"error": "Could not connect to transcription service."},
+                status_code=502
+            )
+
+        # Safely parse response — transcription service may return non-JSON on error (#61)
+        if response.status_code != 200:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = {"error": f"Transcription service error (HTTP {response.status_code})", "raw": response.text[:500]}
+            print(f"Transcription service error: {response.status_code} — {response.text[:500]}")
+            return JSONResponse(content=error_body, status_code=response.status_code)
+
+        try:
+            content = response.json()
+        except Exception:
+            print(f"Transcription service returned non-JSON response: {response.text[:500]}")
+            return JSONResponse(
+                content={"error": "Transcription service returned an invalid response."},
+                status_code=502
+            )
+
+        # Validate transcription is not empty (#62)
+        transcription_text = content.get("text", "").strip() if isinstance(content, dict) else ""
+        if not transcription_text:
+            return JSONResponse(
+                content={"error": "Transcription returned empty output. The audio may be silent, corrupted, or in an unsupported format."},
+                status_code=422
+            )
+
+        return JSONResponse(content=content, status_code=200)
 
 
 @app.get("/health")

@@ -42,6 +42,7 @@ export const SelectPromptStep = () => {
             <PromptTable
               data={prompts}
               hideAddButton={true}
+              hidePagination={true}
               rowClickConfig={{
                 onRowClick: handleOnRowClick,
                 selectedPromptId: selectedPrompt?.id,

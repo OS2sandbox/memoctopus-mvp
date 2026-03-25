@@ -46,6 +46,7 @@ interface DataTableProps<TData, TValue> {
     placeholder?: string;
     filterKey: keyof TData;
   };
+  hidePagination?: boolean | undefined;
   className?: string;
 }
 
@@ -58,6 +59,7 @@ export function DataTable<TData, TValue>({
   selectedRowId,
   className,
   searchConfig,
+  hidePagination,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -210,24 +212,26 @@ export function DataTable<TData, TValue>({
         </Table>
       </div>
 
-      <div className="flex justify-end gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => table.previousPage()}
-          disabled={!table.getCanPreviousPage()}
-        >
-          Forrige
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => table.nextPage()}
-          disabled={!table.getCanNextPage()}
-        >
-          Næste
-        </Button>
-      </div>
+      {!hidePagination && (
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => table.previousPage()}
+            disabled={!table.getCanPreviousPage()}
+          >
+            Forrige
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => table.nextPage()}
+            disabled={!table.getCanNextPage()}
+          >
+            Næste
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

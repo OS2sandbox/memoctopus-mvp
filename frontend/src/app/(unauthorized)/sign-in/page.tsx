@@ -15,10 +15,12 @@ import {
 } from "@/lib/ui/core/shadcn/field";
 import { Input } from "@/lib/ui/core/shadcn/input";
 
+import { useRouter } from "next/navigation";
 import { type FormEvent, Fragment } from "react";
 
 export default function SignInPage() {
   const { state, actions } = useAuthForm();
+  const router = useRouter();
 
   const { isLoading, mode, email, password, name, error } = state;
 
@@ -32,12 +34,14 @@ export default function SignInPage() {
           email,
           password,
           rememberMe: true,
-          callbackURL: "/app",
         });
         if (error) {
-          actions.authError("Authentication failed. Please check your input.");
+          actions.authError(
+            "Kunne ikke logge ind. Tjek venligst dine oplysninger.",
+          );
+          return;
         }
-        actions.setLoading(false);
+        router.push("/app");
         break;
       }
       case AUTH_MODE.SignUp: {
@@ -47,20 +51,31 @@ export default function SignInPage() {
           password,
         });
 
+        if (signUpError) {
+          actions.authError(
+            "Kunne ikke oprette konto. E-mailen er muligvis allerede i brug.",
+          );
+          return;
+        }
+
+        // Only sign in if sign-up succeeded
         const { error: signInError } = await signIn.email({
           email,
           password,
           rememberMe: true,
-          callbackURL: "/app",
         });
 
-        if (signUpError || signInError) {
-          actions.authError("Authentication failed. Please check your input.");
+        if (signInError) {
+          actions.authError(
+            "Konto oprettet, men login mislykkedes. Prøv at logge ind.",
+          );
+          return;
         }
-        actions.setLoading(false);
+        router.push("/app");
         break;
       }
     }
+    actions.setLoading(false);
   };
 
   const handleSocialSignIn = async () => {

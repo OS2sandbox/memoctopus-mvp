@@ -60,7 +60,10 @@ interface PromptDialogProps {
   editOpts?: {
     initialPrompt: Prompt;
   };
-  onSubmit: (data: PromptDTO, opts?: { promptId?: string }) => void;
+  onSubmit: (
+    data: PromptDTO,
+    opts?: { promptId?: string },
+  ) => void | Promise<void>;
   trigger?: ReactNode;
 }
 
@@ -87,7 +90,7 @@ export const PromptDialog = ({
   const updatePrompt = <K extends keyof PromptForm>(key: K, value: Prompt[K]) =>
     setPrompt((prev) => ({ ...prev, [key]: value }));
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const dto: PromptDTO = {
       ...prompt,
     };
@@ -99,13 +102,20 @@ export const PromptDialog = ({
       return;
     }
 
-    onSubmit(data!, isEditMode ? { promptId: initialPrompt.id } : undefined);
-
-    setValidationErrors({});
-    setError(null);
-    setOpen(false);
-
-    if (!isEditMode) setPrompt(DEFAULT_PROMPT);
+    try {
+      await onSubmit(
+        data!,
+        isEditMode ? { promptId: initialPrompt.id } : undefined,
+      );
+      setValidationErrors({});
+      setError(null);
+      setOpen(false);
+      if (!isEditMode) setPrompt(DEFAULT_PROMPT);
+    } catch (e) {
+      const message =
+        e instanceof Error ? e.message : "Der opstod en fejl. Prøv igen.";
+      setError(message);
+    }
   };
 
   return (
