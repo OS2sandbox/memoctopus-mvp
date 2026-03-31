@@ -2,6 +2,17 @@ import { type NextRequest, NextResponse } from "next/server";
 
 const BACKEND_URL = process.env["BACKEND_URL"] || "http://localhost:8002";
 
+const HOP_BY_HOP_HEADERS = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
 export async function proxyToBackend(
   request: NextRequest,
   backendPath: string,
@@ -10,7 +21,7 @@ export async function proxyToBackend(
 
   const headers = new Headers();
   request.headers.forEach((value, key) => {
-    if (key.toLowerCase() !== "host") {
+    if (key.toLowerCase() !== "host" && !HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
       headers.set(key, value);
     }
   });

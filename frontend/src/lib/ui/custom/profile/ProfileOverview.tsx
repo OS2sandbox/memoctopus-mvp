@@ -38,10 +38,6 @@ export function ProfileOverview() {
       >
         <div className="flex flex-col space-y-2 text-left">
           <p className="font-semibold text-sm">{user?.name}</p>
-          <p className="text-sm text-muted-foreground leading-snug">
-            Ortopædkirurgisk <br />
-            Aalborg Universitetshospital
-          </p>
 
           <Button
             variant="default"
