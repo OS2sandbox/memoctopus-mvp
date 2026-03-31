@@ -21,14 +21,17 @@ export const auth = betterAuth({
     requireEmailVerification: false,
     minPasswordLength: 8,
   },
-  socialProviders: process.env["MICROSOFT_CLIENT_ID"] && process.env["MICROSOFT_CLIENT_SECRET"] ? {
-    microsoft: {
-      clientId: process.env["MICROSOFT_CLIENT_ID"] as string,
-      clientSecret: process.env["MICROSOFT_CLIENT_SECRET"] as string,
-      tenantId: process.env["MICROSOFT_TENANT_ID"] || "common",
-      prompt: "select_account",
-    },
-  } : {},
+  socialProviders:
+    process.env["MICROSOFT_CLIENT_ID"] && process.env["MICROSOFT_CLIENT_SECRET"]
+      ? {
+          microsoft: {
+            clientId: process.env["MICROSOFT_CLIENT_ID"] as string,
+            clientSecret: process.env["MICROSOFT_CLIENT_SECRET"] as string,
+            tenantId: process.env["MICROSOFT_TENANT_ID"] || "common",
+            prompt: "select_account",
+          },
+        }
+      : {},
   session: {
     expiresIn: 86_400 * 7, // 7 days
     updateAge: 86_400, // 1 day
