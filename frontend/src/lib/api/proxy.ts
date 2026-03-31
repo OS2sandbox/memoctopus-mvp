@@ -21,7 +21,10 @@ export async function proxyToBackend(
 
   const headers = new Headers();
   request.headers.forEach((value, key) => {
-    if (key.toLowerCase() !== "host" && !HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
+    if (
+      key.toLowerCase() !== "host" &&
+      !HOP_BY_HOP_HEADERS.has(key.toLowerCase())
+    ) {
       headers.set(key, value);
     }
   });
