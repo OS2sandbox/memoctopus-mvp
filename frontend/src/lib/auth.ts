@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { genericOAuth } from "better-auth/plugins";
 import { Pool } from "pg";
 
 const DEFAULT_TRUSTED_ORIGINS = [
@@ -14,6 +15,29 @@ const parseTrustedOrigins = (raw: string | undefined): string[] => {
     .filter(Boolean);
   return origins.length > 0 ? origins : DEFAULT_TRUSTED_ORIGINS;
 };
+
+const authentikEnabled = Boolean(
+  process.env["AUTHENTIK_CLIENT_ID"] &&
+    process.env["AUTHENTIK_CLIENT_SECRET"] &&
+    process.env["AUTHENTIK_DISCOVERY_URL"],
+);
+
+const plugins = authentikEnabled
+  ? [
+      genericOAuth({
+        config: [
+          {
+            providerId: "authentik",
+            clientId: process.env["AUTHENTIK_CLIENT_ID"] as string,
+            clientSecret: process.env["AUTHENTIK_CLIENT_SECRET"] as string,
+            discoveryUrl: process.env["AUTHENTIK_DISCOVERY_URL"] as string,
+            scopes: ["openid", "profile", "email"],
+            pkce: true,
+          },
+        ],
+      }),
+    ]
+  : [];
 
 export const auth = betterAuth({
   database: new Pool({
@@ -39,6 +63,13 @@ export const auth = betterAuth({
           },
         }
       : {},
+  account: {
+    accountLinking: {
+      enabled: true,
+      trustedProviders: ["authentik"],
+    },
+  },
+  plugins,
   session: {
     expiresIn: 86_400 * 7, // 7 days
     updateAge: 86_400, // 1 day

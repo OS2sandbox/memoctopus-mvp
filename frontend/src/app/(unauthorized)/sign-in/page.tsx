@@ -1,6 +1,6 @@
 "use client";
 
-import { signIn, signUp } from "@/lib/auth-client";
+import { authClient, signIn, signUp } from "@/lib/auth-client";
 import { AUTH_MODE } from "@/lib/constants";
 import { useAuthForm } from "@/lib/hooks/use-auth-form";
 import { Button } from "@/lib/ui/core/shadcn/button";
@@ -86,6 +86,20 @@ export default function SignInPage() {
     });
     if (error?.message)
       actions.authError("Social sign-in failed. Please try again.");
+    actions.setLoading(false);
+  };
+
+  const authentikEnabled =
+    process.env["NEXT_PUBLIC_AUTHENTIK_ENABLED"] === "true";
+
+  const handleAuthentikSignIn = async () => {
+    actions.setLoading(true);
+    const { error } = await authClient.signIn.oauth2({
+      providerId: "authentik",
+      callbackURL: "/app",
+    });
+    if (error?.message)
+      actions.authError("Authentik sign-in failed. Please try again.");
     actions.setLoading(false);
   };
 
@@ -221,6 +235,17 @@ export default function SignInPage() {
                   </svg>
                   Microsoft
                 </Button>
+                {authentikEnabled && (
+                  <Button
+                    type="button"
+                    onClick={handleAuthentikSignIn}
+                    variant="outline"
+                    disabled={isLoading}
+                    className="w-full"
+                  >
+                    Continue with Authentik
+                  </Button>
+                )}
               </FieldGroup>
             </FieldSet>
           </FieldGroup>

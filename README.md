@@ -74,6 +74,16 @@ Applikationen er nu tilgængelig på:
 - Backend API: http://localhost:8000
 - vLLM API: http://localhost:8001
 
+## Autentificering
+
+Memoctopus bruger [Better Auth](https://www.better-auth.com) og understøtter følgende login-metoder:
+
+- **E-mail / adgangskode** — aktiveret som standard
+- **Microsoft** — valgfri, konfigureres via `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` / `MICROSOFT_TENANT_ID`
+- **Authentik (OIDC)** — valgfri single sign-on via en selvhostet Authentik-instans. Se [docs/authentik-setup.md](docs/authentik-setup.md) for fuld opsætning
+
+Alle SSO-udbydere er opt-in pr. deployment — hvis de tilhørende miljøvariabler ikke er sat, vises de ikke på login-siden.
+
 ## Arkitektur
 
 ### Backend
