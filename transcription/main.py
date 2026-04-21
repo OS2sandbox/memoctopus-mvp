@@ -67,7 +67,9 @@ async def lifespan(app: FastAPI):
 
     stt_model = os.environ.get("STT_MODEL", "nvidia/parakeet-rnnt-110m-da-dk")
     print(f"Loading STT model: {stt_model}...")
-    model = nemo_asr.models.ASRModel.from_pretrained(
+    # NeMo 2.7+ bug: ASRModel.from_pretrained() fails to resolve the concrete
+    # subclass from config, so we use EncDecRNNTBPEModel directly.
+    model = nemo_asr.models.EncDecRNNTBPEModel.from_pretrained(
         model_name=stt_model
     )
     model.eval()

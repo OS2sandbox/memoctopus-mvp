@@ -9,7 +9,7 @@ services:
       - huggingface_cache:/root/.cache/huggingface
     ports:
       - "8001:8000"
-    command: --model ${VLLM_MODEL:-openai/gpt-oss-20b} --gpu-memory-utilization 0.5 --max-num-seqs 32
+    command: --model ${VLLM_MODEL:-Qwen/Qwen3-0.6B} --gpu-memory-utilization 0.5 --max-num-seqs 32
     ipc: host
     deploy:
       resources:
@@ -50,7 +50,6 @@ services:
     runtime: nvidia
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
-      STT_MODEL: ${STT_MODEL:-nvidia/parakeet-rnnt-110m-da-dk}
     volumes:
       - nemo_cache:/root/.cache
     ports:
@@ -101,11 +100,27 @@ services:
       TRUSTED_ORIGINS: ${TRUSTED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
       MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
+      MICROSOFT_TENANT_ID: ${MICROSOFT_TENANT_ID:-}
       BACKEND_URL: http://backend:8000
-    ports:
-      - "80:3000"
+    expose:
+      - "3000"
     depends_on:
       - backend
+    networks:
+      - memoctopus-network
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: memoctopus-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - frontend
     networks:
       - memoctopus-network
     restart: unless-stopped
