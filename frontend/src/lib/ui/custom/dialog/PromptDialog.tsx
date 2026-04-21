@@ -131,10 +131,7 @@ export const PromptDialog = ({
         </div>
       </DialogTrigger>
 
-      <DialogContent
-        data-row-action
-        className="flex max-h-[90vh] flex-col"
-      >
+      <DialogContent data-row-action className="flex max-h-[90vh] flex-col">
         <DialogHeader>
           <DialogTitle>
             {isEditMode ? "Rediger skabelon" : "Opret ny skabelon"}
