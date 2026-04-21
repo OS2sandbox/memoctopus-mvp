@@ -1,6 +1,20 @@
 import { betterAuth } from "better-auth";
 import { Pool } from "pg";
 
+const DEFAULT_TRUSTED_ORIGINS = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+];
+
+const parseTrustedOrigins = (raw: string | undefined): string[] => {
+  if (!raw) return DEFAULT_TRUSTED_ORIGINS;
+  const origins = raw
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+  return origins.length > 0 ? origins : DEFAULT_TRUSTED_ORIGINS;
+};
+
 export const auth = betterAuth({
   database: new Pool({
     connectionString: process.env["DATABASE_URL"],
@@ -8,12 +22,7 @@ export const auth = betterAuth({
   secret:
     process.env["BETTER_AUTH_SECRET"] || "fallback-secret-key-for-development",
   baseURL: process.env["BETTER_AUTH_URL"] || "http://localhost:3000",
-  trustedOrigins: [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://pedro.sikkerai.dk",
-    "http://10.1.3.10:6767",
-  ],
+  trustedOrigins: parseTrustedOrigins(process.env["TRUSTED_ORIGINS"]),
   emailAndPassword: {
     enabled: true,
     requireEmailVerification: false,
