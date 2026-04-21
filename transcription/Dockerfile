@@ -12,7 +12,7 @@ WORKDIR /app
 #  a two-step install causes a double download that can exhaust disk)
 RUN pip install --no-cache-dir \
     'nemo_toolkit[asr]' \
-    'pyannote.audio' \
+    'pyannote.audio>=3.3.2' \
     fastapi \
     'uvicorn[standard]' \
     python-multipart \
