@@ -131,14 +131,17 @@ export const PromptDialog = ({
         </div>
       </DialogTrigger>
 
-      <DialogContent data-row-action>
+      <DialogContent
+        data-row-action
+        className="flex max-h-[90vh] flex-col"
+      >
         <DialogHeader>
           <DialogTitle>
             {isEditMode ? "Rediger skabelon" : "Opret ny skabelon"}
           </DialogTitle>
         </DialogHeader>
 
-        <FieldSet>
+        <FieldSet className="min-h-0 flex-1 overflow-y-auto">
           <FieldGroup className="flex flex-col gap-4">
             <Field data-invalid={!!validationErrors?.["name"]}>
               <div className="flex items-center justify-between">
