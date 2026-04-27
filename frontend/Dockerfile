@@ -17,6 +17,10 @@ RUN npm ci
 FROM base AS builder
 WORKDIR /app
 
+ENV NEXT_PUBLIC_AUTHENTIK_ENABLED=true
+ENV NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED=false
+ENV NEXT_PUBLIC_MICROSOFT_ENABLED=false
+
 # Copy dependencies from deps stage
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
