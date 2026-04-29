@@ -18,6 +18,14 @@ import { Input } from "@/lib/ui/core/shadcn/input";
 import { useRouter } from "next/navigation";
 import { type FormEvent, Fragment } from "react";
 
+const emailPasswordEnabled =
+  process.env["NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED"] !== "false";
+const microsoftEnabled =
+  process.env["NEXT_PUBLIC_MICROSOFT_ENABLED"] !== "false";
+const authentikEnabled =
+  process.env["NEXT_PUBLIC_AUTHENTIK_ENABLED"] === "true";
+const anySocialEnabled = microsoftEnabled || authentikEnabled;
+
 export default function SignInPage() {
   const { state, actions } = useAuthForm();
   const router = useRouter();
@@ -89,9 +97,6 @@ export default function SignInPage() {
     actions.setLoading(false);
   };
 
-  const authentikEnabled =
-    process.env["NEXT_PUBLIC_AUTHENTIK_ENABLED"] === "true";
-
   const handleAuthentikSignIn = async () => {
     actions.setLoading(true);
     const { error } = await authClient.signIn.oauth2({
@@ -103,6 +108,8 @@ export default function SignInPage() {
     actions.setLoading(false);
   };
 
+  const noMethodsEnabled = !emailPasswordEnabled && !anySocialEnabled;
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <div className="w-full max-w-md space-y-8">
@@ -111,145 +118,174 @@ export default function SignInPage() {
             Welcome to MemOctopus
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            {mode === AUTH_MODE.SignIn
-              ? "Sign in to your account"
-              : "Create your account"}
+            {emailPasswordEnabled
+              ? mode === AUTH_MODE.SignIn
+                ? "Sign in to your account"
+                : "Create your account"
+              : "Sign in to your account"}
           </p>
         </div>
 
-        <form
-          onSubmit={handleEmailAuth}
-          className="rounded-lg border border-border bg-card p-8 shadow-sm"
-        >
-          <FieldGroup>
-            <FieldSet>
-              <FieldLegend>Email Authentication</FieldLegend>
-              <FieldDescription>
-                {mode === AUTH_MODE.SignUp
-                  ? "Fill in your details to register."
-                  : "Enter your credentials to sign in."}
-              </FieldDescription>
-
-              <FieldGroup>
-                {mode === AUTH_MODE.SignUp && (
-                  <Field>
-                    <FieldLabel htmlFor="name">Full Name</FieldLabel>
-                    <Input
-                      id="name"
-                      type="text"
-                      value={name}
-                      onChange={(e) => actions.setName(e.target.value)}
-                      placeholder="Jane Doe"
-                      required
-                    />
-                  </Field>
-                )}
-                <Field>
-                  <FieldLabel htmlFor="email">Email</FieldLabel>
-                  <Input
-                    id="email"
-                    type="email"
-                    value={email}
-                    onChange={(e) => actions.setEmail(e.target.value)}
-                    placeholder="janedoe@domain.com"
-                    required
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="password">Password</FieldLabel>
-                  <Input
-                    id="password"
-                    type="password"
-                    value={password}
-                    onChange={(e) => actions.setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    required
-                  />
+        {noMethodsEnabled ? (
+          <div className="rounded-lg border border-border bg-card p-8 shadow-sm text-center">
+            <p className="text-sm text-muted-foreground">
+              No sign-in methods are enabled. Please contact your administrator.
+            </p>
+          </div>
+        ) : (
+          <form
+            onSubmit={handleEmailAuth}
+            className="rounded-lg border border-border bg-card p-8 shadow-sm"
+          >
+            <FieldGroup>
+              {emailPasswordEnabled && (
+                <FieldSet>
+                  <FieldLegend>Email Authentication</FieldLegend>
                   <FieldDescription>
-                    Minimum 8 characters recommended.
+                    {mode === AUTH_MODE.SignUp
+                      ? "Fill in your details to register."
+                      : "Enter your credentials to sign in."}
                   </FieldDescription>
-                </Field>
 
-                {error && <p className="text-sm text-red-500 mt-2">{error}</p>}
+                  <FieldGroup>
+                    {mode === AUTH_MODE.SignUp && (
+                      <Field>
+                        <FieldLabel htmlFor="name">Full Name</FieldLabel>
+                        <Input
+                          id="name"
+                          type="text"
+                          value={name}
+                          onChange={(e) => actions.setName(e.target.value)}
+                          placeholder="Jane Doe"
+                          required
+                        />
+                      </Field>
+                    )}
+                    <Field>
+                      <FieldLabel htmlFor="email">Email</FieldLabel>
+                      <Input
+                        id="email"
+                        type="email"
+                        value={email}
+                        onChange={(e) => actions.setEmail(e.target.value)}
+                        placeholder="janedoe@domain.com"
+                        required
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel htmlFor="password">Password</FieldLabel>
+                      <Input
+                        id="password"
+                        type="password"
+                        value={password}
+                        onChange={(e) => actions.setPassword(e.target.value)}
+                        placeholder="••••••••"
+                        required
+                      />
+                      <FieldDescription>
+                        Minimum 8 characters recommended.
+                      </FieldDescription>
+                    </Field>
 
-                <Field orientation="horizontal">
-                  <Button type="submit" disabled={isLoading} className="w-full">
-                    {isLoading
-                      ? "Processing..."
-                      : mode === AUTH_MODE.SignUp
-                        ? "Sign Up"
-                        : "Sign In"}
-                  </Button>
-                </Field>
+                    {error && (
+                      <p className="text-sm text-red-500 mt-2">{error}</p>
+                    )}
 
-                <p className="text-center text-xs text-muted-foreground mt-3">
-                  {mode === AUTH_MODE.SignIn ? (
-                    <Fragment>
-                      Don’t have an account?{" "}
-                      <button
-                        type="button"
-                        onClick={() => actions.setMode(AUTH_MODE.SignUp)}
-                        className="underline"
+                    <Field orientation="horizontal">
+                      <Button
+                        type="submit"
+                        disabled={isLoading}
+                        className="w-full"
                       >
-                        Sign up
-                      </button>
-                    </Fragment>
-                  ) : (
-                    <Fragment>
-                      Already have an account?{" "}
-                      <button
-                        type="button"
-                        onClick={() => actions.setMode(AUTH_MODE.SignIn)}
-                        className="underline"
-                      >
-                        Sign in
-                      </button>
-                    </Fragment>
+                        {isLoading
+                          ? "Processing..."
+                          : mode === AUTH_MODE.SignUp
+                            ? "Sign Up"
+                            : "Sign In"}
+                      </Button>
+                    </Field>
+
+                    <p className="text-center text-xs text-muted-foreground mt-3">
+                      {mode === AUTH_MODE.SignIn ? (
+                        <Fragment>
+                          Don’t have an account?{" "}
+                          <button
+                            type="button"
+                            onClick={() => actions.setMode(AUTH_MODE.SignUp)}
+                            className="underline"
+                          >
+                            Sign up
+                          </button>
+                        </Fragment>
+                      ) : (
+                        <Fragment>
+                          Already have an account?{" "}
+                          <button
+                            type="button"
+                            onClick={() => actions.setMode(AUTH_MODE.SignIn)}
+                            className="underline"
+                          >
+                            Sign in
+                          </button>
+                        </Fragment>
+                      )}
+                    </p>
+                  </FieldGroup>
+                </FieldSet>
+              )}
+
+              {emailPasswordEnabled && anySocialEnabled && <FieldSeparator />}
+
+              {anySocialEnabled && (
+                <FieldSet>
+                  <FieldLegend>
+                    {emailPasswordEnabled
+                      ? "Or continue with"
+                      : "Continue with"}
+                  </FieldLegend>
+                  {!emailPasswordEnabled && error && (
+                    <p className="text-sm text-red-500 mt-2">{error}</p>
                   )}
-                </p>
-              </FieldGroup>
-            </FieldSet>
-
-            <FieldSeparator />
-
-            <FieldSet>
-              <FieldLegend>Or continue with</FieldLegend>
-              <FieldGroup>
-                <Button
-                  type="button"
-                  onClick={handleSocialSignIn}
-                  variant="outline"
-                  disabled={isLoading}
-                  className="w-full flex items-center justify-center gap-2"
-                >
-                  <svg
-                    className="h-5 w-5"
-                    viewBox="0 0 23 23"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path fill="#f25022" d="M1 1h10v10H1z" />
-                    <path fill="#00a4ef" d="M12 1h10v10H12z" />
-                    <path fill="#7fba00" d="M1 12h10v10H1z" />
-                    <path fill="#ffb900" d="M12 12h10v10H12z" />
-                  </svg>
-                  Microsoft
-                </Button>
-                {authentikEnabled && (
-                  <Button
-                    type="button"
-                    onClick={handleAuthentikSignIn}
-                    variant="outline"
-                    disabled={isLoading}
-                    className="w-full"
-                  >
-                    Continue with Authentik
-                  </Button>
-                )}
-              </FieldGroup>
-            </FieldSet>
-          </FieldGroup>
-        </form>
+                  <FieldGroup>
+                    {microsoftEnabled && (
+                      <Button
+                        type="button"
+                        onClick={handleSocialSignIn}
+                        variant="outline"
+                        disabled={isLoading}
+                        className="w-full flex items-center justify-center gap-2"
+                      >
+                        <svg
+                          className="h-5 w-5"
+                          viewBox="0 0 23 23"
+                          fill="none"
+                          xmlns="http://www.w3.org/2000/svg"
+                        >
+                          <path fill="#f25022" d="M1 1h10v10H1z" />
+                          <path fill="#00a4ef" d="M12 1h10v10H12z" />
+                          <path fill="#7fba00" d="M1 12h10v10H1z" />
+                          <path fill="#ffb900" d="M12 12h10v10H12z" />
+                        </svg>
+                        Microsoft
+                      </Button>
+                    )}
+                    {authentikEnabled && (
+                      <Button
+                        type="button"
+                        onClick={handleAuthentikSignIn}
+                        variant="outline"
+                        disabled={isLoading}
+                        className="w-full"
+                      >
+                        Continue with Authentik
+                      </Button>
+                    )}
+                  </FieldGroup>
+                </FieldSet>
+              )}
+            </FieldGroup>
+          </form>
+        )}
       </div>
     </div>
   );

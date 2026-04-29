@@ -16,11 +16,23 @@ const parseTrustedOrigins = (raw: string | undefined): string[] => {
   return origins.length > 0 ? origins : DEFAULT_TRUSTED_ORIGINS;
 };
 
-const authentikEnabled = Boolean(
-  process.env["AUTHENTIK_CLIENT_ID"] &&
-    process.env["AUTHENTIK_CLIENT_SECRET"] &&
-    process.env["AUTHENTIK_DISCOVERY_URL"],
-);
+const emailPasswordEnabled =
+  process.env["NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED"] !== "false";
+
+const microsoftEnabled =
+  process.env["NEXT_PUBLIC_MICROSOFT_ENABLED"] !== "false" &&
+  Boolean(
+    process.env["MICROSOFT_CLIENT_ID"] &&
+      process.env["MICROSOFT_CLIENT_SECRET"],
+  );
+
+const authentikEnabled =
+  process.env["NEXT_PUBLIC_AUTHENTIK_ENABLED"] === "true" &&
+  Boolean(
+    process.env["AUTHENTIK_CLIENT_ID"] &&
+      process.env["AUTHENTIK_CLIENT_SECRET"] &&
+      process.env["AUTHENTIK_DISCOVERY_URL"],
+  );
 
 const plugins = authentikEnabled
   ? [
@@ -48,21 +60,20 @@ export const auth = betterAuth({
   baseURL: process.env["BETTER_AUTH_URL"] || "http://localhost:3000",
   trustedOrigins: parseTrustedOrigins(process.env["TRUSTED_ORIGINS"]),
   emailAndPassword: {
-    enabled: true,
+    enabled: emailPasswordEnabled,
     requireEmailVerification: false,
     minPasswordLength: 8,
   },
-  socialProviders:
-    process.env["MICROSOFT_CLIENT_ID"] && process.env["MICROSOFT_CLIENT_SECRET"]
-      ? {
-          microsoft: {
-            clientId: process.env["MICROSOFT_CLIENT_ID"] as string,
-            clientSecret: process.env["MICROSOFT_CLIENT_SECRET"] as string,
-            tenantId: process.env["MICROSOFT_TENANT_ID"] || "common",
-            prompt: "select_account",
-          },
-        }
-      : {},
+  socialProviders: microsoftEnabled
+    ? {
+        microsoft: {
+          clientId: process.env["MICROSOFT_CLIENT_ID"] as string,
+          clientSecret: process.env["MICROSOFT_CLIENT_SECRET"] as string,
+          tenantId: process.env["MICROSOFT_TENANT_ID"] || "common",
+          prompt: "select_account",
+        },
+      }
+    : {},
   account: {
     accountLinking: {
       enabled: true,

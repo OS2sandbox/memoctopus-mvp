@@ -95,6 +95,19 @@ docker compose up -d --build frontend
 - **JWKS / signature errors at userinfo** — the Authentik provider has no signing key assigned. Go back and pick an RSA key.
 - **404 on the discovery URL** — the application slug in the URL does not match the Authentik application slug.
 
+## Making Authentik the only login method
+
+If you want Authentik to be the sole entry point — i.e. block users from registering via the email/password form or signing in with Microsoft — set the other provider toggles to `false` in your `.env`:
+
+```env
+NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED=false
+NEXT_PUBLIC_MICROSOFT_ENABLED=false
+```
+
+Both toggles gate the provider on the server *and* hide it in the UI, so a disabled provider truly cannot create or authenticate accounts. Rebuild the frontend image after changing them.
+
+Note: any users that previously registered via email/password will be locked out unless their email also exists in Authentik (in which case account linking will reconnect them on first Authentik sign-in).
+
 ## Account linking
 
 When an Authentik user signs in with an email that already exists in Memoctopus (e.g. they previously registered via email/password), the accounts are linked automatically. There is no duplicate user — the existing user gains a second login method. This is safe because Authentik reports verified emails.
@@ -105,4 +118,4 @@ If you do not want Authentik users to be able to link onto pre-existing password
 
 - The integration uses **PKCE** and **state**, both mandatory.
 - **Do not** commit your real `AUTHENTIK_*` values to the shared repository. Each deployment defines its own in its private `.env`.
-- The server side only registers the Authentik provider when all three of `AUTHENTIK_CLIENT_ID`, `AUTHENTIK_CLIENT_SECRET`, `AUTHENTIK_DISCOVERY_URL` are present. The `NEXT_PUBLIC_AUTHENTIK_ENABLED` flag is purely for UX — it toggles the button visibility and cannot itself grant access.
+- The Authentik provider is registered server-side only when all three of `AUTHENTIK_CLIENT_ID`, `AUTHENTIK_CLIENT_SECRET`, `AUTHENTIK_DISCOVERY_URL` are present **and** `NEXT_PUBLIC_AUTHENTIK_ENABLED=true`. Setting the flag without creds does not grant access; clearing the flag fully disables the provider on both client and server.
