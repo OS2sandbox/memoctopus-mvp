@@ -19,8 +19,9 @@ RUN echo 'torch==2.6.0+cu124' > /tmp/constraints.txt && \
     pip install --no-cache-dir \
     --constraint /tmp/constraints.txt \
     'pyannote.audio>=3.3,<4.0' \
+    'huggingface_hub<1.0' \
     'silero-vad' \
-    httpx \
+    'httpx<0.28' \
     soundfile \
     numpy \
     fastapi \

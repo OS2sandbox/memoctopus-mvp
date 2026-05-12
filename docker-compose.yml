@@ -23,16 +23,20 @@ services:
     restart: unless-stopped
 
   vllm-asr:
-    image: vllm/vllm-openai:v0.19.1
+    build:
+      context: ./vllm-asr
+      dockerfile: Dockerfile
+    image: memoctopus-vllm-asr:v0.19.1
     container_name: memoctopus-vllm-asr
     runtime: nvidia
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
     volumes:
       - huggingface_cache:/root/.cache/huggingface
     ports:
       - "8004:8000"
-    command: --model ${HVISKE_MODEL:-syvai/hviske-v5.1} --trust-remote-code --task transcription --gpu-memory-utilization 0.3 --max-num-seqs 8 --dtype bfloat16
+    command: --model ${HVISKE_MODEL:-syvai/hviske-v5.1} --trust-remote-code --gpu-memory-utilization 0.3 --max-num-seqs 8 --dtype bfloat16
     ipc: host
     deploy:
       resources:
@@ -73,10 +77,16 @@ services:
     runtime: nvidia
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
+      # Force pyannote to use cached weights without round-tripping to HF for
+      # etag checks. The diarization model is gated and the token may not have
+      # access on every deployment — but the weights are already cached in the
+      # shared huggingface_cache volume from prior deployments.
+      HF_HUB_OFFLINE: "1"
       VLLM_ASR_BASE_URL: http://vllm-asr:8000/v1
       HVISKE_MODEL: ${HVISKE_MODEL:-syvai/hviske-v5.1}
     volumes:
-      - transcription_cache:/root/.cache
+      - huggingface_cache:/root/.cache/huggingface
+      - transcription_cache:/root/.cache/torch
     ports:
       - "8003:8000"
     depends_on:

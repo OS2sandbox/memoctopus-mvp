@@ -23,7 +23,6 @@ from fastapi.responses import JSONResponse
 
 diarization_pipeline = None
 vad_model = None
-vllm_client: Optional[httpx.AsyncClient] = None
 
 VLLM_ASR_BASE_URL = os.environ.get("VLLM_ASR_BASE_URL", "http://vllm-asr:8000/v1").rstrip("/")
 HVISKE_MODEL = os.environ.get("HVISKE_MODEL", "syvai/hviske-v5.1")
@@ -39,7 +38,7 @@ VLLM_REQUEST_TIMEOUT_S = float(os.environ.get("VLLM_REQUEST_TIMEOUT_S", "300"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global diarization_pipeline, vad_model, vllm_client
+    global diarization_pipeline, vad_model
 
     print(f"Loading silero-vad...")
     from silero_vad import load_silero_vad
@@ -47,11 +46,7 @@ async def lifespan(app: FastAPI):
     vad_model = load_silero_vad()
     print("Silero VAD loaded.")
 
-    vllm_client = httpx.AsyncClient(
-        base_url=VLLM_ASR_BASE_URL,
-        timeout=httpx.Timeout(VLLM_REQUEST_TIMEOUT_S),
-    )
-    print(f"vLLM ASR client targeting {VLLM_ASR_BASE_URL} (model={HVISKE_MODEL}).")
+    print(f"vLLM ASR target: {VLLM_ASR_BASE_URL} (model={HVISKE_MODEL}).")
 
     hf_token = os.environ.get("HF_TOKEN", "").strip()
     if hf_token:
@@ -59,9 +54,12 @@ async def lifespan(app: FastAPI):
             from pyannote.audio import Pipeline
 
             print("Loading pyannote speaker diarization pipeline...")
+            # pyannote 3.x uses `use_auth_token` (renamed to `token` in 4.x).
+            # The kwarg flows down to huggingface_hub.hf_hub_download, so we
+            # pin huggingface_hub<1.0 in the Dockerfile to keep that path.
             diarization_pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-community-1",
-                token=hf_token,
+                use_auth_token=hf_token,
             )
 
             import torch
@@ -77,11 +75,7 @@ async def lifespan(app: FastAPI):
     else:
         print("HF_TOKEN not set — speaker diarization disabled.")
 
-    try:
-        yield
-    finally:
-        if vllm_client is not None:
-            await vllm_client.aclose()
+    yield
 
 
 app = FastAPI(lifespan=lifespan)
@@ -290,26 +284,35 @@ def _parse_vllm_response(payload: dict) -> dict:
     return out
 
 
-async def _transcribe_chunk_via_vllm(chunk_path: str) -> dict:
-    """POST one chunk to vLLM's /v1/audio/transcriptions and parse the response."""
-    if vllm_client is None:
-        raise RuntimeError("vLLM ASR client not initialised")
-
+def _transcribe_chunk_via_vllm_sync(chunk_path: str) -> dict:
+    """Sync POST to vLLM. Called via asyncio.to_thread for concurrency.
+    Uses a fresh httpx.Client per call because httpx.Client is not
+    thread-safe and the ASR fan-out runs N concurrent threads."""
     with open(chunk_path, "rb") as f:
         chunk_bytes = f.read()
 
     files = {"file": (os.path.basename(chunk_path), chunk_bytes, "audio/wav")}
-    data = [
-        ("model", HVISKE_MODEL),
-        ("language", "da"),
-        ("response_format", "verbose_json"),
-        ("timestamp_granularities[]", "word"),
-        ("timestamp_granularities[]", "segment"),
-    ]
+    # hviske-v5.1 in vLLM 0.19.1 only supports response_format=json (no
+    # verbose_json, no word/segment timestamps). Diarization merge falls back
+    # to chunk-level speaker assignment since each VAD-produced chunk is one
+    # continuous speech segment.
+    data = {
+        "model": HVISKE_MODEL,
+        "language": "da",
+        "response_format": "json",
+    }
 
-    resp = await vllm_client.post("/audio/transcriptions", files=files, data=data)
+    with httpx.Client(
+        base_url=VLLM_ASR_BASE_URL,
+        timeout=httpx.Timeout(VLLM_REQUEST_TIMEOUT_S),
+    ) as client:
+        resp = client.post("/audio/transcriptions", files=files, data=data)
     resp.raise_for_status()
     return _parse_vllm_response(resp.json())
+
+
+async def _transcribe_chunk_via_vllm(chunk_path: str) -> dict:
+    return await asyncio.to_thread(_transcribe_chunk_via_vllm_sync, chunk_path)
 
 
 async def do_transcribe(wav_path: str, timestamps: bool = False) -> dict:
