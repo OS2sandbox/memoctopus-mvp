@@ -147,6 +147,11 @@ def convert_to_wav(input_path: str, output_path: str):
 CHUNK_LENGTH_S = float(os.environ.get("CHUNK_LENGTH_S", "30"))
 CHUNK_OVERLAP_S = float(os.environ.get("CHUNK_OVERLAP_S", "2"))
 CHUNK_THRESHOLD_S = float(os.environ.get("CHUNK_THRESHOLD_S", "60"))
+# Chunks of long audio are transcribed in a single NeMo batched call rather
+# than one transcribe() per chunk — repeated single-item calls churn the
+# encoder freeze/unfreeze lifecycle and accumulate CUDA stream-ordering
+# issues that caused "illegal memory access" crashes on >~3min audio.
+CHUNK_BATCH_SIZE = int(os.environ.get("CHUNK_BATCH_SIZE", "4"))
 
 
 def _probe_duration(wav_path: str) -> float:
@@ -260,19 +265,13 @@ def _merge_chunk_results(
     return merged
 
 
-def _transcribe_one(audio_path: str, timestamps: bool) -> dict:
-    """Single-pass NeMo transcription. Used directly for short audio and as
-    the per-chunk primitive for long audio."""
-    output = model.transcribe(
-        [audio_path], return_hypotheses=timestamps, timestamps=timestamps
-    )
-    hyp = output[0]
-
+def _parse_hypothesis(hyp, timestamps: bool) -> dict:
+    """Extract a result dict from a single NeMo Hypothesis (or plain string)."""
     if not timestamps:
         text = hyp.text if hasattr(hyp, "text") else str(hyp)
         return {"text": text}
 
-    # With return_hypotheses=True, output may be nested [[Hypothesis]]
+    # With return_hypotheses=True, an entry may itself be a list (beams)
     if isinstance(hyp, list):
         hyp = hyp[0]
 
@@ -301,6 +300,35 @@ def _transcribe_one(audio_path: str, timestamps: bool) -> dict:
             result["word_timestamps"] = ts["word"]
 
     return result
+
+
+def _transcribe_many(
+    audio_paths: list[str], timestamps: bool, batch_size: int
+) -> list[dict]:
+    """Batched NeMo transcription. One transcribe() call → one encoder
+    freeze/unfreeze cycle, one set of CUDA stream events, one DataLoader
+    setup. Returns one result dict per input path."""
+    outputs = model.transcribe(
+        audio_paths,
+        batch_size=batch_size,
+        return_hypotheses=timestamps,
+        timestamps=timestamps,
+    )
+    # With return_hypotheses=True, NeMo sometimes returns
+    # [best_hypotheses, all_beam_hypotheses]; collapse to the best list.
+    if (
+        len(outputs) == 2
+        and isinstance(outputs[0], list)
+        and isinstance(outputs[1], list)
+        and len(outputs[0]) == len(audio_paths)
+    ):
+        outputs = outputs[0]
+    return [_parse_hypothesis(h, timestamps) for h in outputs]
+
+
+def _transcribe_one(audio_path: str, timestamps: bool) -> dict:
+    """Single-pass NeMo transcription. Thin wrapper over _transcribe_many."""
+    return _transcribe_many([audio_path], timestamps, batch_size=1)[0]
 
 
 def do_transcribe(audio_path: str, timestamps: bool = False) -> dict:
@@ -335,17 +363,27 @@ def do_transcribe(audio_path: str, timestamps: bool = False) -> dict:
         if not chunks:
             return _transcribe_one(audio_path, timestamps)
 
-        chunk_results: list[dict] = []
-        chunk_starts: list[float] = []
-        for idx, (chunk_path, start_sec) in enumerate(chunks):
-            # Request timestamps per chunk so we can dedup overlap, even if
-            # the caller didn't ask for them.
-            chunk_results.append(_transcribe_one(chunk_path, True))
-            chunk_starts.append(start_sec)
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            if (idx + 1) % 8 == 0:
-                gc.collect()
+        chunk_paths = [c[0] for c in chunks]
+        chunk_starts = [c[1] for c in chunks]
+
+        # Single batched call: one encoder freeze/unfreeze cycle, one
+        # transcribe() lifecycle, NeMo-managed batching. The previous
+        # per-chunk loop churned the encoder lifecycle N times and
+        # accumulated CUDA stream-ordering issues that surfaced as
+        # "illegal memory access" on long audio. Timestamps are forced
+        # on so _merge_chunk_results can dedup overlap regions; if the
+        # caller didn't request them, we strip below.
+        chunk_results = _transcribe_many(
+            chunk_paths, True, batch_size=CHUNK_BATCH_SIZE
+        )
+
+        if torch.cuda.is_available():
+            # Wait for all chunk kernels to finish before releasing
+            # allocator blocks — empty_cache() without synchronize() can
+            # free memory still referenced by in-flight kernels.
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+        gc.collect()
 
     merged = _merge_chunk_results(chunk_results, chunk_starts, CHUNK_OVERLAP_S)
     if not timestamps:
