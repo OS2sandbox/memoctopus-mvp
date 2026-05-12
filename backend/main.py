@@ -72,10 +72,10 @@ app.include_router(export.router)
 
 # vLLM for chat completions
 VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8001/v1")
-VLLM_MODEL = os.getenv("VLLM_MODEL", "Qwen/Qwen3-0.6B")
+VLLM_MODEL = os.getenv("VLLM_MODEL", "Qwen/Qwen3.6-27B")
 VLLM_CHAT_URL = f"{VLLM_BASE_URL}/chat/completions"
 
-# Local transcription service (NVIDIA Parakeet)
+# Local transcription service (silero-VAD + vLLM syvai/hviske-v5.1 + pyannote diarization)
 TRANSCRIPTION_BASE_URL = os.getenv("TRANSCRIPTION_BASE_URL", "http://localhost:8003")
 TRANSCRIPTION_URL = f"{TRANSCRIPTION_BASE_URL}/v1/audio/transcriptions"
 

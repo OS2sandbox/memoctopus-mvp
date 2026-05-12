@@ -18,8 +18,11 @@ RUN echo 'torch==2.6.0+cu124' > /tmp/constraints.txt && \
     --index-url https://download.pytorch.org/whl/cu124 && \
     pip install --no-cache-dir \
     --constraint /tmp/constraints.txt \
-    'nemo_toolkit[asr]' \
     'pyannote.audio>=3.3,<4.0' \
+    'silero-vad' \
+    httpx \
+    soundfile \
+    numpy \
     fastapi \
     'uvicorn[standard]' \
     python-multipart \

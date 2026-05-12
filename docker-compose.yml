@@ -1,7 +1,7 @@
 services:
-  vllm:
-    image: vllm/vllm-openai:latest
-    container_name: memoctopus-vllm
+  vllm-chat:
+    image: vllm/vllm-openai:v0.19.1
+    container_name: memoctopus-vllm-chat
     runtime: nvidia
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
@@ -9,7 +9,30 @@ services:
       - huggingface_cache:/root/.cache/huggingface
     ports:
       - "8001:8000"
-    command: --model ${VLLM_MODEL:-Qwen/Qwen3-0.6B} --gpu-memory-utilization 0.5 --max-num-seqs 32
+    command: --model ${VLLM_MODEL:-Qwen/Qwen3.6-27B} --gpu-memory-utilization 0.45 --max-num-seqs 32 --dtype bfloat16
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - memoctopus-network
+    restart: unless-stopped
+
+  vllm-asr:
+    image: vllm/vllm-openai:v0.19.1
+    container_name: memoctopus-vllm-asr
+    runtime: nvidia
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    ports:
+      - "8004:8000"
+    command: --model ${HVISKE_MODEL:-syvai/hviske-v5.1} --trust-remote-code --task transcription --gpu-memory-utilization 0.3 --max-num-seqs 8 --dtype bfloat16
     ipc: host
     deploy:
       resources:
@@ -50,10 +73,15 @@ services:
     runtime: nvidia
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
+      VLLM_ASR_BASE_URL: http://vllm-asr:8000/v1
+      HVISKE_MODEL: ${HVISKE_MODEL:-syvai/hviske-v5.1}
     volumes:
-      - nemo_cache:/root/.cache
+      - transcription_cache:/root/.cache
     ports:
       - "8003:8000"
+    depends_on:
+      vllm-asr:
+        condition: service_started
     deploy:
       resources:
         reservations:
@@ -73,14 +101,14 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-memoctopus}?sslmode=disable
       TRANSCRIPTION_BASE_URL: http://transcription:8000
-      VLLM_BASE_URL: http://vllm:8000/v1
-      VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen3-0.6B}
+      VLLM_BASE_URL: http://vllm-chat:8000/v1
+      VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen3.6-27B}
     ports:
       - "8002:8000"
     depends_on:
       postgres:
         condition: service_healthy
-      vllm:
+      vllm-chat:
         condition: service_started
       transcription:
         condition: service_started
@@ -134,7 +162,7 @@ services:
 volumes:
   postgres_data:
   huggingface_cache:
-  nemo_cache:
+  transcription_cache:
 
 networks:
   memoctopus-network:
