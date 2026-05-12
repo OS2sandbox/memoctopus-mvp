@@ -77,11 +77,6 @@ services:
     runtime: nvidia
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
-      # Force pyannote to use cached weights without round-tripping to HF for
-      # etag checks. The diarization model is gated and the token may not have
-      # access on every deployment — but the weights are already cached in the
-      # shared huggingface_cache volume from prior deployments.
-      HF_HUB_OFFLINE: "1"
       VLLM_ASR_BASE_URL: http://vllm-asr:8000/v1
       HVISKE_MODEL: ${HVISKE_MODEL:-syvai/hviske-v5.1}
     volumes:

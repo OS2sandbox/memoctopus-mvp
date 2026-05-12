@@ -21,6 +21,32 @@ import httpx
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
+# PyTorch 2.6 changed the default of `torch.load(weights_only=...)` from
+# False to True. pyannote 3.1 ships pickle files referencing many of its own
+# internal classes (`Specifications`, `TorchVersion`, etc.), each of which
+# the new safe-loader rejects unless allowlisted explicitly. Rather than
+# chase the allowlist class-by-class, force weights_only=False on every
+# torch.load call. Safe because we're only loading model weights we
+# downloaded from pyannote's official HF repo.
+try:
+    import torch
+
+    _orig_torch_load = torch.load
+
+    def _torch_load_weights_only_false(*args, **kwargs):
+        kwargs["weights_only"] = False
+        return _orig_torch_load(*args, **kwargs)
+
+    torch.load = _torch_load_weights_only_false
+    # Some libraries (e.g. lightning, pyannote internals) capture a reference
+    # to torch.load at import time. Patch the underlying serialization module
+    # too so late imports still pick up the override.
+    import torch.serialization
+    torch.serialization.load = _torch_load_weights_only_false
+    print("torch.load shim active (weights_only=False forced).")
+except Exception as e:
+    print(f"Note: torch.load shim skipped ({e}).")
+
 diarization_pipeline = None
 vad_model = None
 
@@ -57,8 +83,16 @@ async def lifespan(app: FastAPI):
             # pyannote 3.x uses `use_auth_token` (renamed to `token` in 4.x).
             # The kwarg flows down to huggingface_hub.hf_hub_download, so we
             # pin huggingface_hub<1.0 in the Dockerfile to keep that path.
+            #
+            # speaker-diarization-3.1 is pinned because community-1's HEAD
+            # config requires pyannote.audio 4.x (uses VBxClustering with a
+            # `plda` param), and we're on 3.x due to the torchaudio>=2.8
+            # constraint that doesn't have cu124 wheels.
+            diarization_model = os.environ.get(
+                "DIARIZATION_MODEL", "pyannote/speaker-diarization-3.1"
+            )
             diarization_pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-community-1",
+                diarization_model,
                 use_auth_token=hf_token,
             )
 
@@ -318,9 +352,10 @@ async def _transcribe_chunk_via_vllm(chunk_path: str) -> dict:
 async def do_transcribe(wav_path: str, timestamps: bool = False) -> dict:
     """VAD-chunk a 16 kHz mono WAV, transcribe each chunk via vLLM, merge.
 
-    `timestamps` controls only the *response shape*: word/segment timestamps
-    are always requested from vLLM (the diarization merge needs them), but
-    are stripped from the response when the caller didn't ask for them.
+    Returns {text, words?, word_timestamps?, segments?, chunks?}. `chunks`
+    is a list of {start, end, text} entries — used by the diarization merge
+    when hviske doesn't return per-word timestamps so each speech segment
+    can still be assigned a speaker label.
     """
     segments = await asyncio.to_thread(_vad_segments, wav_path)
 
@@ -330,11 +365,13 @@ async def do_transcribe(wav_path: str, timestamps: bool = False) -> dict:
     with tempfile.TemporaryDirectory() as chunk_dir:
         chunk_paths: list[str] = []
         chunk_starts: list[float] = []
+        chunk_ends: list[float] = []
         for idx, (start_s, end_s) in enumerate(segments):
             chunk_path = os.path.join(chunk_dir, f"chunk_{idx:05d}.wav")
             await asyncio.to_thread(_export_chunk, wav_path, start_s, end_s, chunk_path)
             chunk_paths.append(chunk_path)
             chunk_starts.append(start_s)
+            chunk_ends.append(end_s)
 
         sem = asyncio.Semaphore(ASR_CONCURRENCY)
 
@@ -345,8 +382,18 @@ async def do_transcribe(wav_path: str, timestamps: bool = False) -> dict:
         chunk_results = await asyncio.gather(*(_run(p) for p in chunk_paths))
 
     merged = _merge_chunk_results(chunk_results, chunk_starts)
+    merged["chunks"] = [
+        {
+            "start": chunk_starts[i],
+            "end": chunk_ends[i],
+            "text": (chunk_results[i].get("text") or "").strip(),
+        }
+        for i in range(len(chunk_results))
+    ]
     if not timestamps:
-        return {"text": merged.get("text", "")}
+        # Keep `chunks` even when timestamps aren't requested so the
+        # diarization merge can fall back to chunk-level speaker assignment.
+        return {"text": merged.get("text", ""), "chunks": merged["chunks"]}
     return merged
 
 
@@ -366,20 +413,69 @@ def do_diarize(audio_path: str) -> list[dict]:
     return segments
 
 
+def _merge_by_chunks(
+    chunks: list[dict], diarization_segments: list[dict]
+) -> str:
+    """Assign each VAD chunk to the diarization speaker with maximum
+    time-overlap. Adjacent same-speaker chunks are joined into one block."""
+    speaker_order: dict[str, int] = {}
+    blocks: list[dict] = []
+
+    for ch in chunks:
+        text = (ch.get("text") or "").strip()
+        if not text:
+            continue
+        cs, ce = float(ch.get("start", 0)), float(ch.get("end", 0))
+
+        overlaps: dict[str, float] = {}
+        for seg in diarization_segments:
+            overlap = max(0.0, min(ce, seg["end"]) - max(cs, seg["start"]))
+            if overlap > 0:
+                overlaps[seg["speaker"]] = overlaps.get(seg["speaker"], 0.0) + overlap
+
+        if overlaps:
+            best = max(overlaps, key=overlaps.get)
+        else:
+            best = min(
+                diarization_segments,
+                key=lambda s: min(abs(cs - s["end"]), abs(s["start"] - ce)),
+            )["speaker"]
+
+        if best not in speaker_order:
+            speaker_order[best] = len(speaker_order) + 1
+
+        if blocks and blocks[-1]["speaker"] == best:
+            blocks[-1]["text"] += " " + text
+        else:
+            blocks.append({"speaker": best, "text": text})
+
+    return "\n\n".join(
+        f"**Speaker {speaker_order[b['speaker']]}:** {b['text']}" for b in blocks
+    )
+
+
 def merge_transcription_and_diarization(
     transcription: dict, diarization_segments: list[dict]
 ) -> str:
-    """Merge word timestamps with pyannote speaker segments.
+    """Merge transcription with pyannote speaker segments.
 
-    Returns markdown-formatted text with speaker labels like:
+    Prefers per-word timestamps when available; otherwise falls back to
+    chunk-level assignment using the VAD chunk time ranges. Returns
+    markdown like:
     **Speaker 1:** text here
 
     **Speaker 2:** other text here
     """
+    if not diarization_segments:
+        return transcription.get("text", "")
+
     word_timestamps = transcription.get("word_timestamps", [])
 
-    if not word_timestamps or not diarization_segments:
-        return transcription.get("text", "")
+    if not word_timestamps:
+        chunks = transcription.get("chunks", []) or []
+        if not chunks:
+            return transcription.get("text", "")
+        return _merge_by_chunks(chunks, diarization_segments)
 
     speaker_order: dict[str, int] = {}
     labeled_words = []
