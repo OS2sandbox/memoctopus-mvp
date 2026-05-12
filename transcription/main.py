@@ -21,13 +21,9 @@ import httpx
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
-# PyTorch 2.6 changed the default of `torch.load(weights_only=...)` from
-# False to True. pyannote 3.1 ships pickle files referencing many of its own
-# internal classes (`Specifications`, `TorchVersion`, etc.), each of which
-# the new safe-loader rejects unless allowlisted explicitly. Rather than
-# chase the allowlist class-by-class, force weights_only=False on every
-# torch.load call. Safe because we're only loading model weights we
-# downloaded from pyannote's official HF repo.
+# PyTorch 2.6 changed `torch.load`'s default `weights_only` from False to True.
+# pyannote 3.x ships pickled checkpoints referencing internal classes that the
+# new safe-loader rejects. Force False so pyannote can load its weights.
 try:
     import torch
 
@@ -38,39 +34,27 @@ try:
         return _orig_torch_load(*args, **kwargs)
 
     torch.load = _torch_load_weights_only_false
-    # Some libraries (e.g. lightning, pyannote internals) capture a reference
-    # to torch.load at import time. Patch the underlying serialization module
-    # too so late imports still pick up the override.
     import torch.serialization
     torch.serialization.load = _torch_load_weights_only_false
-    print("torch.load shim active (weights_only=False forced).")
 except Exception as e:
     print(f"Note: torch.load shim skipped ({e}).")
 
 diarization_pipeline = None
-vad_model = None
 
 VLLM_ASR_BASE_URL = os.environ.get("VLLM_ASR_BASE_URL", "http://vllm-asr:8000/v1").rstrip("/")
 HVISKE_MODEL = os.environ.get("HVISKE_MODEL", "syvai/hviske-v5.1")
 
-# hviske-v5.1 has an effective audio ceiling of 31 s. Cap chunks under that with
-# margin to absorb VAD boundary jitter.
-VAD_MAX_CHUNK_S = float(os.environ.get("VAD_MAX_CHUNK_S", "28.0"))
-VAD_MIN_SILENCE_MS = int(os.environ.get("VAD_MIN_SILENCE_MS", "300"))
-VAD_MIN_SPEECH_MS = int(os.environ.get("VAD_MIN_SPEECH_MS", "250"))
-ASR_CONCURRENCY = int(os.environ.get("ASR_CONCURRENCY", "4"))
+# hviske-v5.1 has an effective audio ceiling of 31 s. Cap chunks under that.
+CHUNK_MAX_S = float(os.environ.get("CHUNK_MAX_S", "28.0"))
+# Fallback chunk size when diarization is disabled.
+CHUNK_FALLBACK_S = float(os.environ.get("CHUNK_FALLBACK_S", "28.0"))
+ASR_CONCURRENCY = int(os.environ.get("ASR_CONCURRENCY", "32"))
 VLLM_REQUEST_TIMEOUT_S = float(os.environ.get("VLLM_REQUEST_TIMEOUT_S", "300"))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global diarization_pipeline, vad_model
-
-    print(f"Loading silero-vad...")
-    from silero_vad import load_silero_vad
-
-    vad_model = load_silero_vad()
-    print("Silero VAD loaded.")
+    global diarization_pipeline
 
     print(f"vLLM ASR target: {VLLM_ASR_BASE_URL} (model={HVISKE_MODEL}).")
 
@@ -79,32 +63,28 @@ async def lifespan(app: FastAPI):
         try:
             from pyannote.audio import Pipeline
 
-            print("Loading pyannote speaker diarization pipeline...")
-            # pyannote 3.x uses `use_auth_token` (renamed to `token` in 4.x).
-            # The kwarg flows down to huggingface_hub.hf_hub_download, so we
-            # pin huggingface_hub<1.0 in the Dockerfile to keep that path.
-            #
-            # speaker-diarization-3.1 is pinned because community-1's HEAD
-            # config requires pyannote.audio 4.x (uses VBxClustering with a
-            # `plda` param), and we're on 3.x due to the torchaudio>=2.8
-            # constraint that doesn't have cu124 wheels.
             diarization_model = os.environ.get(
-                "DIARIZATION_MODEL", "pyannote/speaker-diarization-3.1"
+                "DIARIZATION_MODEL", "pyannote/speaker-diarization-community-1"
             )
-            diarization_pipeline = Pipeline.from_pretrained(
-                diarization_model,
-                use_auth_token=hf_token,
-            )
-
+            print(f"Loading pyannote diarization pipeline: {diarization_model}...")
+            # pyannote 4.x uses `token=`. Fall back to `use_auth_token=` for
+            # any pinned 3.x environment.
+            try:
+                diarization_pipeline = Pipeline.from_pretrained(
+                    diarization_model,
+                    token=hf_token,
+                )
+            except TypeError:
+                diarization_pipeline = Pipeline.from_pretrained(
+                    diarization_model,
+                    use_auth_token=hf_token,
+                )
             import torch
-
             if torch.cuda.is_available():
                 diarization_pipeline.to(torch.device("cuda"))
-
-            print("Pyannote diarization pipeline loaded successfully.")
+            print("Pyannote diarization pipeline loaded.")
         except Exception as e:
             print(f"Warning: Failed to load pyannote diarization pipeline: {e}")
-            print("Speaker diarization will be unavailable.")
             diarization_pipeline = None
     else:
         print("HF_TOKEN not set — speaker diarization disabled.")
@@ -116,424 +96,147 @@ app = FastAPI(lifespan=lifespan)
 
 
 def convert_to_wav(input_path: str, output_path: str):
-    """Convert audio to 16kHz mono WAV using ffmpeg.
-
-    Raises ValueError if ffmpeg fails or produces an empty file (#62).
-    """
+    """Convert audio to 16 kHz mono WAV using ffmpeg."""
     result = subprocess.run(
-        [
-            "ffmpeg",
-            "-i",
-            input_path,
-            "-ar",
-            "16000",
-            "-ac",
-            "1",
-            "-f",
-            "wav",
-            output_path,
-            "-y",
-        ],
+        ["ffmpeg", "-i", input_path, "-ar", "16000", "-ac", "1", "-f", "wav", output_path, "-y"],
         capture_output=True,
     )
-
     if result.returncode != 0:
         stderr = result.stderr.decode(errors="replace")[:500]
         raise ValueError(f"ffmpeg conversion failed: {stderr}")
-
-    file_size = os.path.getsize(output_path)
-    if file_size <= 44:
-        raise ValueError(
-            f"ffmpeg produced an empty audio file ({file_size} bytes). "
-            "The input may be silent, corrupted, or in an unsupported format."
-        )
+    if os.path.getsize(output_path) <= 44:
+        raise ValueError("ffmpeg produced an empty audio file.")
 
 
 def _probe_duration(wav_path: str) -> float:
     import soundfile as sf
-
     info = sf.info(wav_path)
     return float(info.frames) / float(info.samplerate)
 
 
-def _vad_segments(wav_path: str) -> list[tuple[float, float]]:
-    """Run silero-vad on a 16 kHz mono WAV. Return non-overlapping
-    (start_s, end_s) tuples, each <= VAD_MAX_CHUNK_S."""
-    import numpy as np
-    import soundfile as sf
-    import torch
-    from silero_vad import get_speech_timestamps
-
-    audio, sr = sf.read(wav_path, dtype="float32", always_2d=False)
-    if audio.ndim > 1:
-        audio = audio.mean(axis=1)
-    if sr != 16000:
-        raise ValueError(f"VAD expects 16 kHz audio, got {sr} Hz")
-
-    tensor = torch.from_numpy(np.ascontiguousarray(audio))
-    raw = get_speech_timestamps(
-        tensor,
-        vad_model,
-        sampling_rate=16000,
-        min_silence_duration_ms=VAD_MIN_SILENCE_MS,
-        min_speech_duration_ms=VAD_MIN_SPEECH_MS,
-        return_seconds=True,
-    )
-
-    if not raw:
-        # No speech detected; transcribe whole file as one chunk so the
-        # caller still gets an attempt (and the empty-text guard downstream
-        # surfaces a clean 422).
-        return [(0.0, float(len(audio)) / 16000.0)]
-
-    segments: list[tuple[float, float]] = []
-    for seg in raw:
-        start = float(seg["start"])
-        end = float(seg["end"])
-        # Split anything over VAD_MAX_CHUNK_S into equal-ish pieces.
-        span = end - start
-        if span <= VAD_MAX_CHUNK_S:
-            segments.append((start, end))
-            continue
-        n_pieces = int(span // VAD_MAX_CHUNK_S) + 1
-        piece = span / n_pieces
-        for k in range(n_pieces):
-            segments.append((start + k * piece, start + (k + 1) * piece))
-
-    return segments
+def _split_long(start: float, end: float, max_s: float) -> list[tuple[float, float]]:
+    """Split a segment longer than max_s into roughly equal pieces."""
+    span = end - start
+    if span <= max_s:
+        return [(start, end)]
+    n = int(span // max_s) + 1
+    piece = span / n
+    return [(start + k * piece, start + (k + 1) * piece) for k in range(n)]
 
 
 def _export_chunk(wav_path: str, start_s: float, end_s: float, out_path: str):
-    """Slice [start_s, end_s) of a 16 kHz mono WAV into a new WAV."""
     import soundfile as sf
-
     info = sf.info(wav_path)
     sr = info.samplerate
     start_frame = max(0, int(start_s * sr))
     end_frame = min(info.frames, int(end_s * sr))
     if end_frame <= start_frame:
         end_frame = min(info.frames, start_frame + 1)
-    data, _ = sf.read(
-        wav_path,
-        start=start_frame,
-        frames=end_frame - start_frame,
-        dtype="float32",
-        always_2d=False,
-    )
+    data, _ = sf.read(wav_path, start=start_frame, frames=end_frame - start_frame,
+                      dtype="float32", always_2d=False)
     sf.write(out_path, data, sr, subtype="PCM_16")
 
 
-def _merge_chunk_results(
-    chunk_results: list[dict], chunk_starts: list[float]
-) -> dict:
-    """Shift per-chunk timestamps to absolute time and concatenate.
-
-    VAD-produced chunks are non-overlapping, so no dedup is required —
-    every word from every chunk is kept and its timestamps offset by the
-    chunk start.
-    """
-    merged_word_timestamps: list[dict] = []
-    merged_words: list[dict] = []
-    merged_segments: list[dict] = []
-
-    for i, result in enumerate(chunk_results):
-        offset = chunk_starts[i]
-
-        wts_src = result.get("word_timestamps", []) or []
-        words_src = result.get("words", []) or []
-        segments_src = result.get("segments", []) or []
-        aligned = len(words_src) == len(wts_src)
-
-        for j, wt in enumerate(wts_src):
-            abs_start = float(wt.get("start", 0)) + offset
-            abs_end = float(wt.get("end", 0)) + offset
-            merged_word_timestamps.append({**wt, "start": abs_start, "end": abs_end})
-            if aligned:
-                merged_words.append(words_src[j])
-
-        for seg in segments_src:
-            abs_start = float(seg.get("start", 0)) + offset
-            abs_end = float(seg.get("end", 0)) + offset
-            merged_segments.append({**seg, "start": abs_start, "end": abs_end})
-
-    text = " ".join(
-        str(wt.get("word", "")).strip()
-        for wt in merged_word_timestamps
-        if str(wt.get("word", "")).strip()
-    )
-
-    # Fall back to concatenating per-chunk text if no word timestamps came back.
-    if not text:
-        text = " ".join(
-            str(r.get("text", "")).strip() for r in chunk_results if r.get("text")
-        ).strip()
-
-    merged: dict = {"text": text}
-    if merged_words:
-        merged["words"] = merged_words
-    if merged_word_timestamps:
-        merged["word_timestamps"] = merged_word_timestamps
-    if merged_segments:
-        merged["segments"] = merged_segments
-    return merged
+def _parse_vllm_response(payload: dict) -> str:
+    return (payload.get("text") or "").strip()
 
 
-def _parse_vllm_response(payload: dict) -> dict:
-    """Normalise a vLLM verbose_json transcription response into the same
-    shape `_merge_chunk_results` expects: {text, words?, word_timestamps?, segments?}.
-    """
-    out: dict = {"text": payload.get("text", "")}
-
-    words_raw = payload.get("words") or []
-    if words_raw:
-        word_ts = []
-        words_list = []
-        for w in words_raw:
-            word_text = w.get("word") if isinstance(w, dict) else None
-            if word_text is None:
-                continue
-            entry = {
-                "word": word_text,
-                "start": float(w.get("start", 0)),
-                "end": float(w.get("end", 0)),
-            }
-            word_ts.append(entry)
-            words_list.append({"word": word_text})
-        if word_ts:
-            out["word_timestamps"] = word_ts
-            out["words"] = words_list
-
-    segments_raw = payload.get("segments") or []
-    if segments_raw:
-        out["segments"] = [
-            {
-                "start": float(s.get("start", 0)),
-                "end": float(s.get("end", 0)),
-                "text": s.get("text", ""),
-            }
-            for s in segments_raw
-            if isinstance(s, dict)
-        ]
-
-    return out
-
-
-def _transcribe_chunk_via_vllm_sync(chunk_path: str) -> dict:
-    """Sync POST to vLLM. Called via asyncio.to_thread for concurrency.
-    Uses a fresh httpx.Client per call because httpx.Client is not
-    thread-safe and the ASR fan-out runs N concurrent threads."""
+def _transcribe_chunk_sync(chunk_path: str) -> str:
+    """Sync POST to vLLM. Called via asyncio.to_thread for concurrency."""
     with open(chunk_path, "rb") as f:
         chunk_bytes = f.read()
-
     files = {"file": (os.path.basename(chunk_path), chunk_bytes, "audio/wav")}
-    # hviske-v5.1 in vLLM 0.19.1 only supports response_format=json (no
-    # verbose_json, no word/segment timestamps). Diarization merge falls back
-    # to chunk-level speaker assignment since each VAD-produced chunk is one
-    # continuous speech segment.
-    data = {
-        "model": HVISKE_MODEL,
-        "language": "da",
-        "response_format": "json",
-    }
-
-    with httpx.Client(
-        base_url=VLLM_ASR_BASE_URL,
-        timeout=httpx.Timeout(VLLM_REQUEST_TIMEOUT_S),
-    ) as client:
+    data = {"model": HVISKE_MODEL, "language": "da", "response_format": "json"}
+    with httpx.Client(base_url=VLLM_ASR_BASE_URL,
+                      timeout=httpx.Timeout(VLLM_REQUEST_TIMEOUT_S)) as client:
         resp = client.post("/audio/transcriptions", files=files, data=data)
     resp.raise_for_status()
     return _parse_vllm_response(resp.json())
 
 
-async def _transcribe_chunk_via_vllm(chunk_path: str) -> dict:
-    return await asyncio.to_thread(_transcribe_chunk_via_vllm_sync, chunk_path)
+def do_diarize(audio_path: str) -> list[dict]:
+    """Run pyannote diarization. Returns [{speaker, start, end}, ...].
 
-
-async def do_transcribe(wav_path: str, timestamps: bool = False) -> dict:
-    """VAD-chunk a 16 kHz mono WAV, transcribe each chunk via vLLM, merge.
-
-    Returns {text, words?, word_timestamps?, segments?, chunks?}. `chunks`
-    is a list of {start, end, text} entries — used by the diarization merge
-    when hviske doesn't return per-word timestamps so each speech segment
-    can still be assigned a speaker label.
+    Supports both the pyannote 4.x SpeakerDiarizationOutput (two-tuple
+    `(turn, speaker)` iterator) and 3.x Annotation.itertracks(yield_label=True)
+    (three-tuple `(turn, track, label)`).
     """
-    segments = await asyncio.to_thread(_vad_segments, wav_path)
+    result = diarization_pipeline(audio_path)
+    sd = getattr(result, "speaker_diarization", result)
+    out: list[dict] = []
+    try:
+        # pyannote 4.x: iterates as (turn, speaker)
+        for turn, speaker in sd:
+            out.append({"speaker": speaker, "start": turn.start, "end": turn.end})
+    except (TypeError, ValueError):
+        # pyannote 3.x: Annotation
+        for turn, _, speaker in sd.itertracks(yield_label=True):
+            out.append({"speaker": speaker, "start": turn.start, "end": turn.end})
+    return out
 
-    if not segments:
-        return {"text": ""}
 
+def _segments_from_diarization(diar: list[dict]) -> list[dict]:
+    """Convert diarization turns into ASR chunks, splitting any longer than
+    CHUNK_MAX_S so they fit hviske's 31 s ceiling."""
+    chunks: list[dict] = []
+    for seg in diar:
+        for s, e in _split_long(seg["start"], seg["end"], CHUNK_MAX_S):
+            chunks.append({"speaker": seg["speaker"], "start": s, "end": e})
+    return chunks
+
+
+def _fallback_segments(audio_duration: float) -> list[dict]:
+    """Fixed-size chunks when diarization isn't available."""
+    chunks: list[dict] = []
+    t = 0.0
+    while t < audio_duration:
+        end = min(t + CHUNK_FALLBACK_S, audio_duration)
+        chunks.append({"speaker": None, "start": t, "end": end})
+        t = end
+    return chunks
+
+
+async def _transcribe_segments(wav_path: str, segments: list[dict]) -> list[dict]:
+    """Slice + transcribe in parallel. Returns segments with `text` filled in."""
     with tempfile.TemporaryDirectory() as chunk_dir:
-        chunk_paths: list[str] = []
-        chunk_starts: list[float] = []
-        chunk_ends: list[float] = []
-        for idx, (start_s, end_s) in enumerate(segments):
-            chunk_path = os.path.join(chunk_dir, f"chunk_{idx:05d}.wav")
-            await asyncio.to_thread(_export_chunk, wav_path, start_s, end_s, chunk_path)
-            chunk_paths.append(chunk_path)
-            chunk_starts.append(start_s)
-            chunk_ends.append(end_s)
+        paths: list[str] = []
+        for idx, seg in enumerate(segments):
+            p = os.path.join(chunk_dir, f"chunk_{idx:05d}.wav")
+            await asyncio.to_thread(_export_chunk, wav_path, seg["start"], seg["end"], p)
+            paths.append(p)
 
         sem = asyncio.Semaphore(ASR_CONCURRENCY)
 
-        async def _run(path: str) -> dict:
+        async def _run(path: str) -> str:
             async with sem:
-                return await _transcribe_chunk_via_vllm(path)
+                return await asyncio.to_thread(_transcribe_chunk_sync, path)
 
-        chunk_results = await asyncio.gather(*(_run(p) for p in chunk_paths))
-
-    merged = _merge_chunk_results(chunk_results, chunk_starts)
-    merged["chunks"] = [
-        {
-            "start": chunk_starts[i],
-            "end": chunk_ends[i],
-            "text": (chunk_results[i].get("text") or "").strip(),
-        }
-        for i in range(len(chunk_results))
-    ]
-    if not timestamps:
-        # Keep `chunks` even when timestamps aren't requested so the
-        # diarization merge can fall back to chunk-level speaker assignment.
-        return {"text": merged.get("text", ""), "chunks": merged["chunks"]}
-    return merged
+        texts = await asyncio.gather(*(_run(p) for p in paths))
+    return [{**seg, "text": t} for seg, t in zip(segments, texts)]
 
 
-def do_diarize(audio_path: str) -> list[dict]:
-    """Run pyannote diarization on audio file. Returns list of {speaker, start, end}."""
-    result = diarization_pipeline(audio_path)
-    # pyannote 4.x returns DiarizeOutput with .speaker_diarization attribute
-    # pyannote 3.x returns Annotation directly
-    annotation = getattr(result, "speaker_diarization", result)
-    segments = []
-    for turn, _, speaker in annotation.itertracks(yield_label=True):
-        segments.append({
-            "speaker": speaker,
-            "start": turn.start,
-            "end": turn.end,
-        })
-    return segments
+def _render(segments: list[dict]) -> str:
+    """Build the final transcript. With speakers: markdown labels per block,
+    adjacent same-speaker chunks merged. Without speakers: plain text join."""
+    if not segments:
+        return ""
+    if all(seg.get("speaker") is None for seg in segments):
+        return " ".join(s["text"] for s in segments if s.get("text")).strip()
 
-
-def _merge_by_chunks(
-    chunks: list[dict], diarization_segments: list[dict]
-) -> str:
-    """Assign each VAD chunk to the diarization speaker with maximum
-    time-overlap. Adjacent same-speaker chunks are joined into one block."""
-    speaker_order: dict[str, int] = {}
+    order: dict[str, int] = {}
     blocks: list[dict] = []
-
-    for ch in chunks:
-        text = (ch.get("text") or "").strip()
+    for seg in segments:
+        text = (seg.get("text") or "").strip()
         if not text:
             continue
-        cs, ce = float(ch.get("start", 0)), float(ch.get("end", 0))
-
-        overlaps: dict[str, float] = {}
-        for seg in diarization_segments:
-            overlap = max(0.0, min(ce, seg["end"]) - max(cs, seg["start"]))
-            if overlap > 0:
-                overlaps[seg["speaker"]] = overlaps.get(seg["speaker"], 0.0) + overlap
-
-        if overlaps:
-            best = max(overlaps, key=overlaps.get)
-        else:
-            best = min(
-                diarization_segments,
-                key=lambda s: min(abs(cs - s["end"]), abs(s["start"] - ce)),
-            )["speaker"]
-
-        if best not in speaker_order:
-            speaker_order[best] = len(speaker_order) + 1
-
-        if blocks and blocks[-1]["speaker"] == best:
+        spk = seg.get("speaker") or "?"
+        if spk not in order:
+            order[spk] = len(order) + 1
+        if blocks and blocks[-1]["speaker"] == spk:
             blocks[-1]["text"] += " " + text
         else:
-            blocks.append({"speaker": best, "text": text})
-
-    return "\n\n".join(
-        f"**Speaker {speaker_order[b['speaker']]}:** {b['text']}" for b in blocks
-    )
-
-
-def merge_transcription_and_diarization(
-    transcription: dict, diarization_segments: list[dict]
-) -> str:
-    """Merge transcription with pyannote speaker segments.
-
-    Prefers per-word timestamps when available; otherwise falls back to
-    chunk-level assignment using the VAD chunk time ranges. Returns
-    markdown like:
-    **Speaker 1:** text here
-
-    **Speaker 2:** other text here
-    """
-    if not diarization_segments:
-        return transcription.get("text", "")
-
-    word_timestamps = transcription.get("word_timestamps", [])
-
-    if not word_timestamps:
-        chunks = transcription.get("chunks", []) or []
-        if not chunks:
-            return transcription.get("text", "")
-        return _merge_by_chunks(chunks, diarization_segments)
-
-    speaker_order: dict[str, int] = {}
-    labeled_words = []
-
-    for wt in word_timestamps:
-        word = wt.get("word", "")
-        ws = wt.get("start", 0)
-        we = wt.get("end", 0)
-
-        speaker_overlaps: dict[str, float] = {}
-        for seg in diarization_segments:
-            overlap = max(0, min(we, seg["end"]) - max(ws, seg["start"]))
-            if overlap > 0:
-                speaker_overlaps[seg["speaker"]] = (
-                    speaker_overlaps.get(seg["speaker"], 0) + overlap
-                )
-
-        if speaker_overlaps:
-            best_speaker = max(speaker_overlaps, key=speaker_overlaps.get)
-        else:
-            best_speaker = min(
-                diarization_segments,
-                key=lambda s: min(abs(ws - s["end"]), abs(s["start"] - we)),
-            )["speaker"]
-
-        if best_speaker not in speaker_order:
-            speaker_order[best_speaker] = len(speaker_order) + 1
-
-        labeled_words.append({"word": word, "speaker": best_speaker})
-
-    blocks = []
-    current_speaker = None
-    current_words: list[str] = []
-
-    for lw in labeled_words:
-        if lw["speaker"] != current_speaker:
-            if current_words:
-                blocks.append({
-                    "speaker": current_speaker,
-                    "text": " ".join(current_words),
-                })
-            current_speaker = lw["speaker"]
-            current_words = [lw["word"]]
-        else:
-            current_words.append(lw["word"])
-
-    if current_words:
-        blocks.append({
-            "speaker": current_speaker,
-            "text": " ".join(current_words),
-        })
-
-    parts = []
-    for block in blocks:
-        speaker_num = speaker_order[block["speaker"]]
-        parts.append(f"**Speaker {speaker_num}:** {block['text']}")
-
-    return "\n\n".join(parts)
+            blocks.append({"speaker": spk, "text": text})
+    return "\n\n".join(f"**Speaker {order[b['speaker']]}:** {b['text']}" for b in blocks)
 
 
 @app.post("/v1/audio/transcriptions")
@@ -543,25 +246,18 @@ async def transcribe(
     stream: Optional[str] = Form(None),
     timestamps: Optional[str] = Form(None),
 ):
-    """
-    Transcribe audio using syvai/hviske-v5.1 served by vLLM, with silero-VAD
-    chunking and pyannote speaker diarization.
+    """Transcribe audio using pyannote diarization for segmentation (when
+    available) and syvai/hviske-v5.1 served by vLLM for ASR."""
+    import time as _t
 
-    Accepts the same multipart form interface as OpenAI Whisper API.
-    Pass timestamps=true to get word-level and segment-level timestamps.
-    """
     want_timestamps = timestamps and timestamps.lower() == "true"
 
     with tempfile.TemporaryDirectory() as tmpdir:
         filename = file.filename or "audio"
         input_path = os.path.join(tmpdir, filename)
         content = await file.read()
-
         if not content:
-            return JSONResponse(
-                content={"error": "Uploaded file is empty."},
-                status_code=400,
-            )
+            return JSONResponse(content={"error": "Uploaded file is empty."}, status_code=400)
 
         with open(input_path, "wb") as f:
             f.write(content)
@@ -570,45 +266,37 @@ async def transcribe(
         try:
             convert_to_wav(input_path, wav_path)
         except ValueError as e:
-            return JSONResponse(
-                content={"error": str(e)},
-                status_code=422,
-            )
+            return JSONResponse(content={"error": str(e)}, status_code=422)
 
         loop = asyncio.get_event_loop()
+        t_start = _t.perf_counter()
 
         try:
             if diarization_pipeline is not None:
-                # Run diarization in a thread (pyannote is blocking) in
-                # parallel with the (async) vLLM transcription fan-out.
-                diarization_task = loop.run_in_executor(
-                    None, do_diarize, wav_path
-                )
-                transcription_result = await do_transcribe(wav_path, True)
-                diarization_segments = await diarization_task
-
-                try:
-                    merged_text = merge_transcription_and_diarization(
-                        transcription_result, diarization_segments
-                    )
-                except Exception as e:
-                    print(f"Warning: Diarization merge failed: {e}")
-                    merged_text = transcription_result.get("text", "")
-
-                result = {"text": merged_text}
-
-                if want_timestamps:
-                    for key in ("words", "segments", "word_timestamps"):
-                        if key in transcription_result:
-                            result[key] = transcription_result[key]
+                t_d0 = _t.perf_counter()
+                diar = await loop.run_in_executor(None, do_diarize, wav_path)
+                t_diar = _t.perf_counter() - t_d0
+                segments = _segments_from_diarization(diar)
             else:
-                result = await do_transcribe(wav_path, want_timestamps)
+                duration = await asyncio.to_thread(_probe_duration, wav_path)
+                segments = _fallback_segments(duration)
+                t_diar = 0.0
+
+            if not segments:
+                return JSONResponse(
+                    content={"error": "No speech detected."},
+                    status_code=422,
+                )
+
+            t_a0 = _t.perf_counter()
+            segments = await _transcribe_segments(wav_path, segments)
+            t_asr = _t.perf_counter() - t_a0
+
+            text = _render(segments)
         except httpx.HTTPStatusError as e:
             body = e.response.text[:500] if e.response is not None else ""
             return JSONResponse(
-                content={
-                    "error": f"vLLM ASR request failed ({e.response.status_code}): {body}"
-                },
+                content={"error": f"vLLM ASR request failed ({e.response.status_code}): {body}"},
                 status_code=502,
             )
         except httpx.RequestError as e:
@@ -617,12 +305,27 @@ async def transcribe(
                 status_code=503,
             )
 
-        if not result.get("text", "").strip():
+        wall = _t.perf_counter() - t_start
+        print(
+            f"[transcribe] segments={len(segments)} "
+            f"diarize={t_diar:.2f}s asr={t_asr:.2f}s wall={wall:.2f}s "
+            f"concurrency={ASR_CONCURRENCY}",
+            flush=True,
+        )
+
+        if not text.strip():
             return JSONResponse(
-                content={"error": "Transcription produced empty output. The audio may be silent or unrecognizable."},
+                content={"error": "Transcription produced empty output."},
                 status_code=422,
             )
 
+        result = {"text": text}
+        if want_timestamps:
+            result["segments"] = [
+                {"start": s["start"], "end": s["end"],
+                 "speaker": s.get("speaker"), "text": s.get("text", "")}
+                for s in segments
+            ]
         return JSONResponse(content=result)
 
 
@@ -630,7 +333,6 @@ async def transcribe(
 async def health():
     return {
         "status": "healthy",
-        "vad_loaded": vad_model is not None,
         "vllm_asr_base_url": VLLM_ASR_BASE_URL,
         "hviske_model": HVISKE_MODEL,
         "diarization_loaded": diarization_pipeline is not None,
