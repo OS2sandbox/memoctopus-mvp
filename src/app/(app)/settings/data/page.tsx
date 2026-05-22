@@ -1,7 +1,17 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { DangerSection } from '@/components/compliance/DangerSection';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 
 interface UsageData {
   meetingCount: number;
@@ -17,8 +27,12 @@ function formatBytes(bytes: number): string {
 }
 
 export default function SettingsDataPage() {
+  const router = useRouter();
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showAccountDeleteDialog, setShowAccountDeleteDialog] = useState(false);
+  const [accountDeleteInput, setAccountDeleteInput] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
 
   useEffect(() => {
     fetch('/api/account/usage')
@@ -29,29 +43,23 @@ export default function SettingsDataPage() {
   }, []);
 
   async function deleteAllAudio() {
-    const confirmed = window.confirm(
-      'Dette sletter alle lydfiler permanent. Transskriptioner og referater bevares. Fortsæt?',
-    );
-    if (!confirmed) return;
     await fetch('/api/account/audio', { method: 'DELETE' });
     window.location.reload();
   }
 
   async function deleteAllSensitive() {
-    const confirmed = window.confirm(
-      'Dette kører "Slet følsomt indhold" på alle dine møder. Referaterne bevares. Fortsæt?',
-    );
-    if (!confirmed) return;
-    window.location.href = '/api/account/sensitive';
+    await fetch('/api/account/sensitive', { method: 'DELETE' });
+    window.location.reload();
   }
 
-  async function deleteAccount() {
-    const confirmed = window.confirm(
-      'Dette sletter hele din konto og alt indhold permanent. Kan ikke fortrydes. Skriv "slet min konto" for at bekræfte.',
-    );
-    if (!confirmed) return;
+  function deleteAccount() {
+    setShowAccountDeleteDialog(true);
+  }
+
+  async function confirmDeleteAccount() {
+    setDeletingAccount(true);
     await fetch('/api/account', { method: 'DELETE' });
-    window.location.href = '/login';
+    router.push('/login');
   }
 
   return (
@@ -165,6 +173,57 @@ export default function SettingsDataPage() {
           onAction={deleteAccount}
         />
       </section>
+
+      {/* Account delete confirmation dialog */}
+      <Dialog
+        open={showAccountDeleteDialog}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShowAccountDeleteDialog(false);
+            setAccountDeleteInput('');
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Slet konto</DialogTitle>
+            <DialogDescription>
+              Skriv &apos;slet min konto&apos; for at bekræfte
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <input
+              type="text"
+              value={accountDeleteInput}
+              onChange={(e) => setAccountDeleteInput(e.target.value)}
+              placeholder="slet min konto"
+              className="w-full rounded-[var(--radius)] border border-[var(--line)] bg-transparent px-3 py-2 text-[var(--ink)] outline-none focus:border-[var(--danger)]"
+              style={{ fontSize: 'var(--t-small)' }}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setShowAccountDeleteDialog(false);
+                setAccountDeleteInput('');
+              }}
+              disabled={deletingAccount}
+            >
+              Fortryd
+            </Button>
+            <Button
+              variant="danger-ghost"
+              size="sm"
+              onClick={confirmDeleteAccount}
+              disabled={accountDeleteInput !== 'slet min konto' || deletingAccount}
+            >
+              {deletingAccount ? 'Sletter…' : 'Slet konto permanent'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

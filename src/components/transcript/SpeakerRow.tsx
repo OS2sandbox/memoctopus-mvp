@@ -1,26 +1,36 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { TranscriptSegment } from '@/types';
 import { formatDuration } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
 
 interface SpeakerRowProps {
   segment: TranscriptSegment;
   index: number;
   onUpdate: (index: number, segment: TranscriptSegment) => void;
+  onRenameAll: (from: string, to: string) => void;
+  speakerSegmentCount: number;
 }
 
-export function SpeakerRow({ segment, index, onUpdate }: SpeakerRowProps) {
-  const [editingSpeaker, setEditingSpeaker] = useState(false);
-  const [speakerValue, setSpeakerValue] = useState(segment.speaker);
+export function SpeakerRow({ segment, index, onUpdate, onRenameAll, speakerSegmentCount }: SpeakerRowProps) {
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  function commitSpeaker() {
-    setEditingSpeaker(false);
-    if (speakerValue.trim()) {
-      onUpdate(index, { ...segment, speaker: speakerValue.trim() });
-    } else {
-      setSpeakerValue(segment.speaker);
+  useEffect(() => {
+    if (renameOpen) {
+      setRenameValue(segment.speaker);
+      setTimeout(() => inputRef.current?.focus(), 0);
     }
+  }, [renameOpen, segment.speaker]);
+
+  function commitRename() {
+    const trimmed = renameValue.trim();
+    if (trimmed && trimmed !== segment.speaker) {
+      onRenameAll(segment.speaker, trimmed);
+    }
+    setRenameOpen(false);
   }
 
   function handleTextChange(text: string) {
@@ -30,38 +40,64 @@ export function SpeakerRow({ segment, index, onUpdate }: SpeakerRowProps) {
   return (
     <div className="flex gap-0 py-4">
       {/* Left rail: speaker + timestamp */}
-      <div className="w-24 shrink-0 pr-4 pt-0.5">
+      <div className="w-24 shrink-0 pr-4 pt-0.5 relative">
         <span
           className="block text-[var(--muted)] tabular-nums mb-0.5"
           style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}
         >
           {formatDuration(segment.start)}
         </span>
-        {editingSpeaker ? (
-          <input
-            className="w-full bg-transparent outline-none border-b border-[var(--accent)] text-[var(--ink)] pb-0.5"
-            style={{ fontSize: 'var(--t-small)', fontWeight: 500 }}
-            value={speakerValue}
-            onChange={(e) => setSpeakerValue(e.target.value)}
-            onBlur={commitSpeaker}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') commitSpeaker();
-              if (e.key === 'Escape') {
-                setSpeakerValue(segment.speaker);
-                setEditingSpeaker(false);
-              }
-            }}
-            autoFocus
-          />
-        ) : (
-          <button
-            className="text-[var(--ink-2)] hover:text-[var(--accent)] transition-colors text-left w-full truncate"
-            style={{ fontSize: 'var(--t-small)', fontWeight: 500 }}
-            onClick={() => setEditingSpeaker(true)}
-            title="Klik for at redigere talerens navn"
+        <button
+          className="text-[var(--ink-2)] hover:text-[var(--accent)] transition-colors text-left w-full truncate"
+          style={{ fontSize: 'var(--t-small)', fontWeight: 500 }}
+          onClick={() => setRenameOpen((v) => !v)}
+          title="Klik for at omdøbe taleren"
+        >
+          {segment.speaker}
+        </button>
+
+        {renameOpen && (
+          <div
+            className="absolute left-0 z-10 rounded-[var(--radius)] border border-[var(--line-strong)] bg-[var(--surface)] shadow-md"
+            style={{ top: '100%', minWidth: 220, padding: '12px 14px' }}
           >
-            {segment.speaker}
-          </button>
+            <p className="font-medium text-[var(--ink)] mb-0.5" style={{ fontSize: 'var(--t-small)' }}>
+              Omdøb &quot;{segment.speaker}&quot;
+            </p>
+            <p className="text-[var(--muted)] mb-3" style={{ fontSize: 'var(--t-micro)' }}>
+              Bruges i {speakerSegmentCount} {speakerSegmentCount === 1 ? 'segment' : 'segmenter'}
+            </p>
+            <input
+              ref={inputRef}
+              type="text"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitRename();
+                if (e.key === 'Escape') setRenameOpen(false);
+              }}
+              className="w-full border border-[var(--line-strong)] rounded-[var(--radius-sm)] px-2 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] outline-none focus:border-[var(--accent)]"
+              style={{ fontSize: 'var(--t-small)' }}
+            />
+            <div className="flex gap-2 mt-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setRenameOpen(false)}
+                className="flex-1"
+              >
+                Annullér
+              </Button>
+              <Button
+                size="sm"
+                onClick={commitRename}
+                disabled={!renameValue.trim()}
+                className="flex-1"
+              >
+                Omdøb alle
+              </Button>
+            </div>
+          </div>
         )}
       </div>
 

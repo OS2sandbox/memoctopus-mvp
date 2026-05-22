@@ -1,14 +1,110 @@
 'use client';
 
-import React from 'react';
-import { useParams } from 'next/navigation';
-import Link from 'next/link';
+import React, { useEffect, useRef, useState } from 'react';
+import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { ProcessStrip } from '@/components/layout/ProcessStrip';
+import { RedactDialog } from '@/components/compliance/RedactDialog';
 
 export default function MeetingSettingsPage() {
   const params = useParams();
   const id = params.id as string;
+  const router = useRouter();
+
+  // Meeting title + rename state
+  const [meetingTitle, setMeetingTitle] = useState<string>('');
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Dialog open states
+  const [redactOpen, setRedactOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Fetch meeting title on mount
+  useEffect(() => {
+    fetch(`/api/meetings/${id}`)
+      .then((res) => res.json())
+      .then((data) => {
+        const title = data?.title ?? '';
+        setMeetingTitle(title);
+        setRenameValue(title);
+      })
+      .catch(() => {
+        // silently ignore; title stays empty
+      });
+  }, [id]);
+
+  // Focus the input when rename mode activates
+  useEffect(() => {
+    if (isRenaming) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [isRenaming]);
+
+  function startRenaming() {
+    setRenameValue(meetingTitle);
+    setIsRenaming(true);
+  }
+
+  function cancelRenaming() {
+    setIsRenaming(false);
+    setRenameValue(meetingTitle);
+  }
+
+  async function commitRename() {
+    const trimmed = renameValue.trim();
+    if (!trimmed || trimmed === meetingTitle) {
+      cancelRenaming();
+      return;
+    }
+    try {
+      await fetch(`/api/meetings/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: trimmed }),
+      });
+      setMeetingTitle(trimmed);
+    } catch {
+      // silently ignore; revert to original title
+    } finally {
+      setIsRenaming(false);
+    }
+  }
+
+  function handleRenameKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitRename();
+    } else if (e.key === 'Escape') {
+      cancelRenaming();
+    }
+  }
+
+  async function handleRedactConfirm() {
+    await fetch(`/api/meetings/${id}/redact`, { method: 'POST' });
+    router.push('/arkiv');
+  }
+
+  async function handleDelete() {
+    setIsDeleting(true);
+    try {
+      await fetch(`/api/meetings/${id}`, { method: 'DELETE' });
+      router.push('/arkiv');
+    } catch {
+      setIsDeleting(false);
+    }
+  }
 
   return (
     <div>
@@ -26,19 +122,21 @@ export default function MeetingSettingsPage() {
             title="Omdøb møde"
             description="Skift titlen på dette møde."
           >
-            <Button variant="outline" size="sm" asChild>
-              <Link href="#rename">Omdøb</Link>
-            </Button>
-          </SettingRow>
-
-          {/* Export raw data */}
-          <SettingRow
-            title="Eksportér rå data"
-            description="Download en zip med lyd og transskriptionsfil."
-          >
-            <Button variant="outline" size="sm" asChild>
-              <a href={`/api/meetings/${id}/export-raw`}>Download zip</a>
-            </Button>
+            {isRenaming ? (
+              <input
+                ref={inputRef}
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={commitRename}
+                onKeyDown={handleRenameKeyDown}
+                className="rounded border border-[var(--line)] bg-[var(--surface)] px-2 py-1 text-sm text-[var(--ink)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
+                style={{ minWidth: 200 }}
+              />
+            ) : (
+              <Button variant="outline" size="sm" onClick={startRenaming}>
+                Omdøb
+              </Button>
+            )}
           </SettingRow>
 
           {/* Redact sensitive content */}
@@ -46,8 +144,8 @@ export default function MeetingSettingsPage() {
             title="Slet følsomt indhold"
             description="Slet lyd, rå transskription og PII permanent. Referatet beholdes."
           >
-            <Button variant="danger-ghost" size="sm" asChild>
-              <Link href={`/meeting/${id}/settings#redact`}>Slet følsomt indhold</Link>
+            <Button variant="danger-ghost" size="sm" onClick={() => setRedactOpen(true)}>
+              Slet følsomt indhold
             </Button>
           </SettingRow>
 
@@ -56,12 +154,41 @@ export default function MeetingSettingsPage() {
             title="Slet hele mødet"
             description="Slet mødet og alt tilhørende indhold permanent."
           >
-            <Button variant="danger-ghost" size="sm" asChild>
-              <Link href={`/meeting/${id}/settings#delete`}>Slet mødet</Link>
+            <Button variant="danger-ghost" size="sm" onClick={() => setDeleteOpen(true)}>
+              Slet mødet
             </Button>
           </SettingRow>
         </div>
       </div>
+
+      {/* Redact dialog */}
+      <RedactDialog
+        open={redactOpen}
+        onOpenChange={setRedactOpen}
+        meetingTitle={meetingTitle}
+        onConfirm={handleRedactConfirm}
+      />
+
+      {/* Delete meeting dialog */}
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Slet dette møde?</DialogTitle>
+            <DialogDescription>
+              Alt indhold slettes permanent — lyd, transskription og referat.
+              Denne handling kan ikke fortrydes.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setDeleteOpen(false)} disabled={isDeleting}>
+              Annullér
+            </Button>
+            <Button variant="destructive" size="sm" onClick={handleDelete} disabled={isDeleting}>
+              Slet møde
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

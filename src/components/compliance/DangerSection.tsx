@@ -1,4 +1,6 @@
-import React from 'react';
+'use client';
+
+import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 
 interface DangerSectionProps {
@@ -18,6 +20,17 @@ export function DangerSection({
   onAction,
   disabled,
 }: DangerSectionProps) {
+  const [confirming, setConfirming] = useState(false);
+
+  function handleCancel() {
+    setConfirming(false);
+  }
+
+  function handleConfirm() {
+    setConfirming(false);
+    onAction();
+  }
+
   return (
     <div
       className="rounded-[var(--radius)] border px-6 py-5"
@@ -34,6 +47,11 @@ export function DangerSection({
           <p className="mt-1 text-[var(--ink-2)]" style={{ fontSize: 'var(--t-small)' }}>
             {description}
           </p>
+          {confirming && (
+            <p className="mt-2 text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
+              Er du sikker? Dette kan ikke fortrydes.
+            </p>
+          )}
           {retentionNote && (
             <p
               className="mt-2 text-[var(--muted)]"
@@ -43,15 +61,26 @@ export function DangerSection({
             </p>
           )}
         </div>
-        <Button
-          variant="danger-ghost"
-          size="sm"
-          onClick={onAction}
-          disabled={disabled}
-          className="shrink-0"
-        >
-          {actionLabel}
-        </Button>
+        {confirming ? (
+          <div className="flex shrink-0 gap-2">
+            <Button variant="ghost" size="sm" onClick={handleCancel}>
+              Fortryd
+            </Button>
+            <Button variant="danger-ghost" size="sm" onClick={handleConfirm}>
+              Ja, slet
+            </Button>
+          </div>
+        ) : (
+          <Button
+            variant="danger-ghost"
+            size="sm"
+            onClick={() => setConfirming(true)}
+            disabled={disabled}
+            className="shrink-0"
+          >
+            {actionLabel}
+          </Button>
+        )}
       </div>
     </div>
   );

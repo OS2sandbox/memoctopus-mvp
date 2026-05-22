@@ -66,10 +66,10 @@ export async function POST(req: NextRequest) {
     // Save transcript
     const transcript = await queryUserSchemaOne<{ id: string }>(
       session.user.id,
-      `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at)
-       VALUES ($1, $2, $3, NOW())
+      `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements)
+       VALUES ($1, $2, $3, NOW(), $4)
        RETURNING id`,
-      [meetingId, rawText, JSON.stringify(cleanedSegments)],
+      [meetingId, rawText, JSON.stringify(cleanedSegments), JSON.stringify(replacements)],
     );
 
     // Mark meeting as ready for review

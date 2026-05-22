@@ -36,9 +36,10 @@ export default async function TranscriptReviewPage({ params }: PageProps) {
     raw_text: string;
     segments: unknown;
     pii_removed_at: string | null;
+    pii_replacements: unknown;
   }>(
     session.user.id,
-    'SELECT id, raw_text, segments, pii_removed_at FROM transcripts WHERE meeting_id = $1 ORDER BY id DESC LIMIT 1',
+    'SELECT id, raw_text, segments, pii_removed_at, pii_replacements FROM transcripts WHERE meeting_id = $1 ORDER BY id DESC LIMIT 1',
     [id],
   );
 
@@ -60,7 +61,9 @@ export default async function TranscriptReviewPage({ params }: PageProps) {
     ? (transcript.segments as TranscriptSegment[])
     : [];
 
-  const piiReplacements: PiiReplacement[] = [];
+  const piiReplacements: PiiReplacement[] = Array.isArray(transcript.pii_replacements)
+    ? (transcript.pii_replacements as PiiReplacement[])
+    : [];
 
   return (
     <div>

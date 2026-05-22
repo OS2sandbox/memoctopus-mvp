@@ -273,25 +273,20 @@ export function RecordingScreen({ meetingId }: RecordingScreenProps) {
             </Button>
 
             {/* Primary circular stop button */}
-            <button
-              onClick={stopAndSave}
-              style={{
-                width: 72, height: 72, borderRadius: '50%',
-                backgroundColor: 'var(--ink)', border: 'none', cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}
-              aria-label="Stop og gem"
-            >
-              <span style={{ width: 18, height: 18, backgroundColor: 'white', borderRadius: 3, display: 'block' }} />
-            </button>
-
-            <Button
-              variant="outline"
-              onClick={stopAndSave}
-              style={{ height: 44, minWidth: 90 }}
-            >
-              Stop &amp; gem
-            </Button>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+              <button
+                onClick={stopAndSave}
+                style={{
+                  width: 72, height: 72, borderRadius: '50%',
+                  backgroundColor: 'var(--ink)', border: 'none', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+                aria-label="Stop og gem"
+              >
+                <span style={{ width: 18, height: 18, backgroundColor: 'white', borderRadius: 3, display: 'block' }} />
+              </button>
+              <span style={{ fontSize: 'var(--t-micro)', color: 'var(--muted)' }}>Stop &amp; gem</span>
+            </div>
           </>
         )}
 

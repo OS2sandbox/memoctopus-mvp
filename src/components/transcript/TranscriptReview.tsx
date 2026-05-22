@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
@@ -34,9 +34,32 @@ export function TranscriptReview({
   const [error, setError] = useState<string | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
 
+  const speakerCounts = segments.reduce<Record<string, number>>((acc, seg) => {
+    acc[seg.speaker] = (acc[seg.speaker] ?? 0) + 1;
+    return acc;
+  }, {});
+
   function handleSegmentUpdate(index: number, updated: TranscriptSegment) {
     setSegments((prev) => prev.map((s, i) => (i === index ? updated : s)));
   }
+
+  const handleRenameAll = useCallback(
+    async (from: string, to: string) => {
+      setSegments((prev) =>
+        prev.map((seg) => (seg.speaker === from ? { ...seg, speaker: to } : seg)),
+      );
+      try {
+        await fetch(`/api/meetings/${meetingId}/transcript/speakers`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from, to }),
+        });
+      } catch {
+        // optimistic update already applied; persist failure is non-critical
+      }
+    },
+    [meetingId],
+  );
 
   async function proceedToMinutes() {
     setIsGenerating(true);
@@ -96,7 +119,7 @@ export function TranscriptReview({
             Transskription
           </h1>
           <p className="mb-6 text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
-            Ret eventuelle fejl. Klik på et talernavn for at omdøbe taleren.
+            Ret eventuelle fejl. Klik på et talernavn for at omdøbe alle segmenter for den taler.
           </p>
 
           <div className="divide-y divide-[var(--line)]">
@@ -106,7 +129,14 @@ export function TranscriptReview({
               </p>
             ) : (
               segments.map((seg, i) => (
-                <SpeakerRow key={i} segment={seg} index={i} onUpdate={handleSegmentUpdate} />
+                <SpeakerRow
+                  key={i}
+                  segment={seg}
+                  index={i}
+                  onUpdate={handleSegmentUpdate}
+                  onRenameAll={handleRenameAll}
+                  speakerSegmentCount={speakerCounts[seg.speaker] ?? 1}
+                />
               ))
             )}
           </div>
@@ -160,7 +190,7 @@ export function TranscriptReview({
             <button
               className="w-full text-center text-[var(--muted)] hover:text-[var(--danger)] transition-colors"
               style={{ fontSize: 'var(--t-small)' }}
-              onClick={() => router.push(`/meeting/${meetingId}/settings#redact`)}
+              onClick={() => router.push(`/meeting/${meetingId}/settings`)}
             >
               Slet følsomt indhold nu →
             </button>
@@ -174,7 +204,7 @@ export function TranscriptReview({
           <DialogHeader>
             <DialogTitle>Generér referat?</DialogTitle>
             <DialogDescription>
-              Claude vil nu udarbejde et referat baseret på transskriptionen. Du kan redigere det bagefter.
+              Modellen vil nu udarbejde et referat baseret på transskriptionen. Du kan redigere det bagefter.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
