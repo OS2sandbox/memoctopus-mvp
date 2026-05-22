@@ -1,16 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { NextRequest } from 'next/server';
 
 vi.mock('next/headers', () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
 
 vi.mock('@/lib/auth', () => ({
-  auth: {
-    api: {
-      getSession: vi.fn(),
-    },
-  },
+  auth: { api: { getSession: vi.fn() } },
 }));
 
 vi.mock('@/lib/db/user-schema', () => ({
@@ -21,23 +16,15 @@ vi.mock('@/lib/db/user-schema', () => ({
 import { GET, PATCH, DELETE } from './route';
 import { auth } from '@/lib/auth';
 import { queryUserSchema, queryUserSchemaOne } from '@/lib/db/user-schema';
+import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockQueryMany = vi.mocked(queryUserSchema);
 const mockQueryOne = vi.mocked(queryUserSchemaOne);
 
-const FAKE_SESSION = { user: { id: 'user-123' } };
 const MEETING_ID = 'meet-abc';
 const PARAMS = { params: Promise.resolve({ id: MEETING_ID }) };
-
-function makeReq(method: string, body?: unknown): NextRequest {
-  return new NextRequest(`http://localhost/api/meetings/${MEETING_ID}`, {
-    method,
-    ...(body !== undefined
-      ? { body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } }
-      : {}),
-  });
-}
+const BASE_URL = `http://localhost/api/meetings/${MEETING_ID}`;
 
 // ─── GET /api/meetings/[id] ───────────────────────────────────────────────────
 
@@ -49,7 +36,7 @@ describe('GET /api/meetings/[id]', () => {
 
   it('returns 401 when not authenticated', async () => {
     mockGetSession.mockResolvedValueOnce(null);
-    const res = await GET(makeReq('GET'), PARAMS);
+    const res = await GET(makeJsonReq(BASE_URL, 'GET'), PARAMS);
     expect(res.status).toBe(401);
   });
 
@@ -58,7 +45,7 @@ describe('GET /api/meetings/[id]', () => {
     const meeting = { id: MEETING_ID, title: 'Møde', status: 'done' };
     mockQueryOne.mockResolvedValueOnce(meeting as never);
 
-    const res = await GET(makeReq('GET'), PARAMS);
+    const res = await GET(makeJsonReq(BASE_URL, 'GET'), PARAMS);
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual(meeting);
@@ -68,7 +55,7 @@ describe('GET /api/meetings/[id]', () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce(null as never);
 
-    const res = await GET(makeReq('GET'), PARAMS);
+    const res = await GET(makeJsonReq(BASE_URL, 'GET'), PARAMS);
 
     expect(res.status).toBe(404);
     expect((await res.json()).error).toBe('Not found');
@@ -85,7 +72,7 @@ describe('PATCH /api/meetings/[id] — status update', () => {
 
   it('returns 401 when not authenticated', async () => {
     mockGetSession.mockResolvedValueOnce(null);
-    const res = await PATCH(makeReq('PATCH', { status: 'done' }), PARAMS);
+    const res = await PATCH(makeJsonReq(BASE_URL, 'PATCH', { status: 'done' }), PARAMS);
     expect(res.status).toBe(401);
   });
 
@@ -95,7 +82,7 @@ describe('PATCH /api/meetings/[id] — status update', () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
       mockQueryOne.mockResolvedValueOnce({} as never);
 
-      const res = await PATCH(makeReq('PATCH', { status }), PARAMS);
+      const res = await PATCH(makeJsonReq(BASE_URL, 'PATCH', { status }), PARAMS);
       expect(res.status).toBe(200);
       expect((await res.json()).ok).toBe(true);
     },
@@ -104,7 +91,7 @@ describe('PATCH /api/meetings/[id] — status update', () => {
   it('returns 400 for an invalid status value', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
 
-    const res = await PATCH(makeReq('PATCH', { status: 'invalid-status' }), PARAMS);
+    const res = await PATCH(makeJsonReq(BASE_URL, 'PATCH', { status: 'invalid-status' }), PARAMS);
     expect(res.status).toBe(400);
   });
 
@@ -112,7 +99,7 @@ describe('PATCH /api/meetings/[id] — status update', () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({} as never);
 
-    await PATCH(makeReq('PATCH', { status: 'done' }), PARAMS);
+    await PATCH(makeJsonReq(BASE_URL, 'PATCH', { status: 'done' }), PARAMS);
 
     const [userId, , params] = mockQueryOne.mock.calls[0];
     expect(userId).toBe('user-123');
@@ -122,13 +109,13 @@ describe('PATCH /api/meetings/[id] — status update', () => {
   it('returns 400 when body has neither status nor minutesId+content', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
 
-    const res = await PATCH(makeReq('PATCH', { unrelated: true }), PARAMS);
+    const res = await PATCH(makeJsonReq(BASE_URL, 'PATCH', { unrelated: true }), PARAMS);
     expect(res.status).toBe(400);
     expect((await res.json()).error).toBe('Nothing to update');
   });
 });
 
-// ─── PATCH /api/meetings/[id] — minutes save ──────────────────────────────────
+// ─── PATCH /api/meetings/[id] — minutes content save ──────────────────────────
 
 describe('PATCH /api/meetings/[id] — minutes content save', () => {
   beforeEach(() => {
@@ -145,41 +132,37 @@ describe('PATCH /api/meetings/[id] — minutes content save', () => {
 
   it('saves new version and returns incremented version number', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    // First call: fetch current minutes
+    // DB call sequence: fetch current → archive to versions → update → fetch new version row
     mockQueryOne.mockResolvedValueOnce({ id: 'min-1', version: 3, content: {} } as never);
-    // Second call: insert into minute_versions
     mockQueryOne.mockResolvedValueOnce({} as never);
-    // Third call: update minutes
     mockQueryOne.mockResolvedValueOnce({} as never);
-    // Fourth call: fetch new version row
     mockQueryOne.mockResolvedValueOnce({ id: 'ver-1', content: {}, created_at: new Date().toISOString() } as never);
 
-    const res = await PATCH(makeReq('PATCH', minutesBody), PARAMS);
+    const res = await PATCH(makeJsonReq(BASE_URL, 'PATCH', minutesBody), PARAMS);
 
     expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.version).toBe(4); // 3 + 1
+    expect((await res.json()).version).toBe(4); // 3 + 1
   });
 
   it('returns 404 when the minutes record does not exist', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce(null as never);
 
-    const res = await PATCH(makeReq('PATCH', minutesBody), PARAMS);
+    const res = await PATCH(makeJsonReq(BASE_URL, 'PATCH', minutesBody), PARAMS);
     expect(res.status).toBe(404);
   });
 
   it('archives the old content before updating', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     const oldContent = { sections: [{ key: 'k', label: 'L', content: 'Old.' }] };
+    // DB call sequence: fetch current → archive to versions → update → fetch new version row
     mockQueryOne.mockResolvedValueOnce({ id: 'min-1', version: 1, content: oldContent } as never);
     mockQueryOne.mockResolvedValueOnce({} as never);
     mockQueryOne.mockResolvedValueOnce({} as never);
     mockQueryOne.mockResolvedValueOnce({} as never);
 
-    await PATCH(makeReq('PATCH', minutesBody), PARAMS);
+    await PATCH(makeJsonReq(BASE_URL, 'PATCH', minutesBody), PARAMS);
 
-    // Second DB call should be the version insert with old content
     const [, insertSql, insertParams] = mockQueryOne.mock.calls[1];
     expect(insertSql).toMatch(/INSERT INTO minute_versions/i);
     expect(insertParams).toContain(JSON.stringify(oldContent));
@@ -197,7 +180,7 @@ describe('DELETE /api/meetings/[id]', () => {
 
   it('returns 401 when not authenticated', async () => {
     mockGetSession.mockResolvedValueOnce(null);
-    const res = await DELETE(makeReq('DELETE'), PARAMS);
+    const res = await DELETE(makeJsonReq(BASE_URL, 'DELETE'), PARAMS);
     expect(res.status).toBe(401);
   });
 
@@ -206,7 +189,7 @@ describe('DELETE /api/meetings/[id]', () => {
     mockQueryMany.mockResolvedValueOnce([] as never);
     mockQueryOne.mockResolvedValueOnce({} as never);
 
-    const res = await DELETE(makeReq('DELETE'), PARAMS);
+    const res = await DELETE(makeJsonReq(BASE_URL, 'DELETE'), PARAMS);
     expect(res.status).toBe(200);
     expect((await res.json()).ok).toBe(true);
   });
@@ -216,7 +199,7 @@ describe('DELETE /api/meetings/[id]', () => {
     mockQueryMany.mockResolvedValueOnce([] as never);
     mockQueryOne.mockResolvedValueOnce({} as never);
 
-    await DELETE(makeReq('DELETE'), PARAMS);
+    await DELETE(makeJsonReq(BASE_URL, 'DELETE'), PARAMS);
 
     const [, softDeleteSql] = mockQueryMany.mock.calls[0];
     expect(softDeleteSql).toMatch(/UPDATE audio_files SET deleted_at/i);
@@ -230,7 +213,7 @@ describe('DELETE /api/meetings/[id]', () => {
     mockQueryMany.mockResolvedValueOnce([] as never);
     mockQueryOne.mockResolvedValueOnce({} as never);
 
-    await DELETE(makeReq('DELETE'), PARAMS);
+    await DELETE(makeJsonReq(BASE_URL, 'DELETE'), PARAMS);
 
     const [, , audioParams] = mockQueryMany.mock.calls[0];
     expect(audioParams).toContain(MEETING_ID);

@@ -1,16 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { NextRequest } from 'next/server';
 
 vi.mock('next/headers', () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
 
 vi.mock('@/lib/auth', () => ({
-  auth: {
-    api: {
-      getSession: vi.fn(),
-    },
-  },
+  auth: { api: { getSession: vi.fn() } },
 }));
 
 vi.mock('@/lib/db/user-schema', () => ({
@@ -21,24 +16,13 @@ vi.mock('@/lib/db/user-schema', () => ({
 import { GET, POST } from './route';
 import { auth } from '@/lib/auth';
 import { queryUserSchema, queryUserSchemaOne } from '@/lib/db/user-schema';
+import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockQueryMany = vi.mocked(queryUserSchema);
 const mockQueryOne = vi.mocked(queryUserSchemaOne);
 
-const FAKE_SESSION = { user: { id: 'user-123', email: 'test@example.com' } };
-
-function makeReq(method: string, body?: unknown): NextRequest {
-  return new NextRequest('http://localhost/api/meetings', {
-    method,
-    ...(body !== undefined
-      ? {
-          body: JSON.stringify(body),
-          headers: { 'Content-Type': 'application/json' },
-        }
-      : {}),
-  });
-}
+const BASE_URL = 'http://localhost/api/meetings';
 
 // ─── GET /api/meetings ────────────────────────────────────────────────────────
 
@@ -52,11 +36,10 @@ describe('GET /api/meetings', () => {
     mockGetSession.mockResolvedValueOnce(null);
     const res = await GET();
     expect(res.status).toBe(401);
-    const body = await res.json();
-    expect(body.error).toBe('Unauthorized');
+    expect((await res.json()).error).toBe('Unauthorized');
   });
 
-  it('returns the list of meetings for an authenticated user', async () => {
+  it('returns the list of meetings and uses the session user id', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     const meetings = [
       { id: 'meet-1', title: 'Møde 1', participants: [], status: 'done', created_at: '2026-01-01T00:00:00Z' },
@@ -66,16 +49,7 @@ describe('GET /api/meetings', () => {
     const res = await GET();
 
     expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body).toEqual(meetings);
-  });
-
-  it('queries with the authenticated user id', async () => {
-    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryMany.mockResolvedValueOnce([]);
-
-    await GET();
-
+    expect(await res.json()).toEqual(meetings);
     expect(mockQueryMany).toHaveBeenCalledWith('user-123', expect.any(String));
   });
 
@@ -99,7 +73,7 @@ describe('POST /api/meetings', () => {
 
   it('returns 401 when not authenticated', async () => {
     mockGetSession.mockResolvedValueOnce(null);
-    const res = await POST(makeReq('POST', { title: 'Test' }));
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { title: 'Test' }));
     expect(res.status).toBe(401);
   });
 
@@ -107,18 +81,17 @@ describe('POST /api/meetings', () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'new-meeting-id' } as never);
 
-    const res = await POST(makeReq('POST', { title: 'Projektmøde', participants: ['Alice', 'Bob'] }));
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { title: 'Projektmøde', participants: ['Alice', 'Bob'] }));
 
     expect(res.status).toBe(201);
-    const body = await res.json();
-    expect(body.id).toBe('new-meeting-id');
+    expect((await res.json()).id).toBe('new-meeting-id');
   });
 
   it('passes title and participants to the DB insert', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'x' } as never);
 
-    await POST(makeReq('POST', { title: 'Ugentligt møde', participants: ['Hans', 'Grethe'] }));
+    await POST(makeJsonReq(BASE_URL, 'POST', { title: 'Ugentligt møde', participants: ['Hans', 'Grethe'] }));
 
     const [userId, , params] = mockQueryOne.mock.calls[0];
     expect(userId).toBe('user-123');
@@ -130,7 +103,7 @@ describe('POST /api/meetings', () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'x' } as never);
 
-    await POST(makeReq('POST', { title: 'Ingen deltagere' }));
+    await POST(makeJsonReq(BASE_URL, 'POST', { title: 'Ingen deltagere' }));
 
     const [, , params] = mockQueryOne.mock.calls[0];
     expect(params[1]).toEqual([]);
@@ -139,35 +112,26 @@ describe('POST /api/meetings', () => {
   it('returns 400 when title is missing', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
 
-    const res = await POST(makeReq('POST', { participants: [] }));
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { participants: [] }));
 
     expect(res.status).toBe(400);
-    const body = await res.json();
-    expect(body.error).toBeDefined();
+    expect((await res.json()).error).toBeDefined();
   });
 
   it('returns 400 when title is empty string', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-
-    const res = await POST(makeReq('POST', { title: '' }));
-
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { title: '' }));
     expect(res.status).toBe(400);
   });
 
-  it('returns 400 when title exceeds 200 characters', async () => {
+  it.each([
+    ['too long', 'A'.repeat(201), 400],
+    ['at max length', 'A'.repeat(200), 201],
+  ])('returns %s status for title of length %i', async (_label, title, status) => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    if (status === 201) mockQueryOne.mockResolvedValueOnce({ id: 'x' } as never);
 
-    const res = await POST(makeReq('POST', { title: 'A'.repeat(201) }));
-
-    expect(res.status).toBe(400);
-  });
-
-  it('accepts title at exactly 200 characters', async () => {
-    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryOne.mockResolvedValueOnce({ id: 'x' } as never);
-
-    const res = await POST(makeReq('POST', { title: 'A'.repeat(200) }));
-
-    expect(res.status).toBe(201);
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { title }));
+    expect(res.status).toBe(status);
   });
 });

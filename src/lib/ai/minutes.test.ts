@@ -118,8 +118,9 @@ describe('suggestTemplate', () => {
     await suggestTemplate(longSegments, sampleTemplates);
 
     const userContent = mockCreate.mock.calls[0][0].messages[0].content as string;
-    // Extract just the transcript portion (between "Transskription:\n" and the next "\n\n")
-    const transcriptPart = userContent.split('Transskription:\n')[1].split('\n\nReturner JSON:')[0];
+    const parts = userContent.split('Transskription:\n');
+    expect(parts).toHaveLength(2);
+    const transcriptPart = parts[1].split('\n\nReturner JSON:')[0];
     expect(transcriptPart.length).toBeLessThanOrEqual(3000);
   });
 
@@ -219,9 +220,9 @@ describe('generateMinutes', () => {
     await generateMinutes(sampleSegments, sampleSections);
 
     const userContent = mockCreate.mock.calls[0][0].messages[0].content as string;
-    expect(userContent).toContain('"deltagere"');
-    expect(userContent).toContain('"Deltagere"');
-    expect(userContent).toContain('"beslutninger"');
+    expect(userContent).toContain(JSON.stringify('deltagere'));
+    expect(userContent).toContain(JSON.stringify('Deltagere'));
+    expect(userContent).toContain(JSON.stringify('beslutninger'));
   });
 
   it('marks required sections as påkrævet in the prompt', async () => {

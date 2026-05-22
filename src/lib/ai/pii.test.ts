@@ -185,7 +185,6 @@ describe('removePiiFromSegments', () => {
     const { cleanedSegments } = await removePiiFromSegments(segments);
 
     expect(cleanedSegments[0].text).toBe('Clean line.');
-    // Second segment falls back to original
     expect(cleanedSegments[1].text).toBe('Second line.');
   });
 

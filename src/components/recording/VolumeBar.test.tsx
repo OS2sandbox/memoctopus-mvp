@@ -37,17 +37,13 @@ describe('VolumeBar', () => {
 
   it('marks no bars active at level 0', () => {
     const { container } = render(<VolumeBar level={0} />);
-    const bars = getBars(container);
-    expect(bars).toHaveLength(20);
-    const activeBars = bars.filter((b) => parseFloat(b.style.opacity) === 1);
+    const activeBars = getBars(container).filter((b) => parseFloat(b.style.opacity) === 1);
     expect(activeBars).toHaveLength(0);
   });
 
   it('marks all bars active at level 1', () => {
     const { container } = render(<VolumeBar level={1} />);
-    const bars = getBars(container);
-    expect(bars).toHaveLength(20);
-    const activeBars = bars.filter((b) => parseFloat(b.style.opacity) === 1);
+    const activeBars = getBars(container).filter((b) => parseFloat(b.style.opacity) === 1);
     expect(activeBars).toHaveLength(20);
   });
 

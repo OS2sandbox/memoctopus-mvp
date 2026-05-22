@@ -35,11 +35,10 @@ vi.mock('@/lib/audio/storage', () => ({
 import { POST } from './route';
 import { auth } from '@/lib/auth';
 import { queryUserSchemaOne } from '@/lib/db/user-schema';
+import { FAKE_SESSION } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockQueryOne = vi.mocked(queryUserSchemaOne);
-
-const FAKE_SESSION = { user: { id: 'user-123' } };
 
 function makeFormRequest(meetingId: string | null, includeFile = true): NextRequest {
   const form = new FormData();
@@ -80,7 +79,7 @@ describe('POST /api/transcribe', () => {
 
   it('returns 404 when meeting does not belong to user', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryOne.mockResolvedValueOnce(null as never); // meeting lookup returns null
+    mockQueryOne.mockResolvedValueOnce(null as never);
 
     const res = await POST(makeFormRequest('meet-1'));
     expect(res.status).toBe(404);
@@ -89,16 +88,11 @@ describe('POST /api/transcribe', () => {
 
   it('returns transcriptId, segmentCount, piiReplacementCount on success', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    // meeting lookup
-    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never);
-    // mark processing
-    mockQueryOne.mockResolvedValueOnce({} as never);
-    // save audio_files record
-    mockQueryOne.mockResolvedValueOnce({} as never);
-    // save transcript, return id
-    mockQueryOne.mockResolvedValueOnce({ id: 'transcript-123' } as never);
-    // mark review
-    mockQueryOne.mockResolvedValueOnce({} as never);
+    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never); // meeting lookup
+    mockQueryOne.mockResolvedValueOnce({} as never); // mark processing
+    mockQueryOne.mockResolvedValueOnce({} as never); // insert audio_files
+    mockQueryOne.mockResolvedValueOnce({ id: 'transcript-123' } as never); // insert transcript
+    mockQueryOne.mockResolvedValueOnce({} as never); // mark review
 
     const res = await POST(makeFormRequest('meet-1'));
 
@@ -111,9 +105,10 @@ describe('POST /api/transcribe', () => {
 
   it('resets meeting status to recording on transcription error', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    // Default: all queries return {} so .catch() always has a real promise
-    mockQueryOne.mockResolvedValue({} as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never); // meeting lookup
+    mockQueryOne.mockResolvedValueOnce({} as never); // mark processing
+    mockQueryOne.mockResolvedValueOnce({} as never); // insert audio_files
+    mockQueryOne.mockResolvedValueOnce({} as never); // reset to recording (catch)
 
     const { getTranscriptionProvider } = await import('@/lib/ai/transcription');
     vi.mocked(getTranscriptionProvider).mockReturnValueOnce({

@@ -10,11 +10,11 @@ import {
   audioFileExists,
 } from './storage';
 
-const tmpRoot = path.join(os.tmpdir(), `referat-test-${Date.now()}`);
+let tmpRoot: string;
 
 beforeEach(async () => {
+  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'referat-test-'));
   process.env.AUDIO_STORAGE_PATH = tmpRoot;
-  await fs.mkdir(tmpRoot, { recursive: true });
 });
 
 afterEach(async () => {
@@ -39,8 +39,7 @@ describe('ensureUserAudioDir', () => {
   it('creates nested path when storage root does not yet exist', async () => {
     process.env.AUDIO_STORAGE_PATH = path.join(tmpRoot, 'deep', 'nested');
     await ensureUserAudioDir('user-xyz');
-    const dir = path.join(tmpRoot, 'deep', 'nested', 'user-xyz');
-    const stat = await fs.stat(dir);
+    const stat = await fs.stat(path.join(tmpRoot, 'deep', 'nested', 'user-xyz'));
     expect(stat.isDirectory()).toBe(true);
   });
 });
@@ -102,7 +101,6 @@ describe('readAudioFile', () => {
   });
 
   it('throws ENOENT when file does not exist', async () => {
-    await ensureUserAudioDir('u1');
     await expect(readAudioFile('u1', 'missing.webm')).rejects.toThrow();
   });
 });
@@ -118,7 +116,6 @@ describe('deleteAudioFile', () => {
   });
 
   it('does not throw when the file is already gone (idempotent)', async () => {
-    await ensureUserAudioDir('u1');
     await expect(deleteAudioFile('u1', 'ghost.webm')).resolves.not.toThrow();
   });
 });
@@ -133,7 +130,6 @@ describe('audioFileExists', () => {
   });
 
   it('returns false for a missing file', async () => {
-    await ensureUserAudioDir('u1');
     expect(await audioFileExists('u1', 'nope.webm')).toBe(false);
   });
 });

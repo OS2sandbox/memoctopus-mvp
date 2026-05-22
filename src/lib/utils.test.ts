@@ -151,11 +151,10 @@ describe('formatDateTime', () => {
     expect(result).toContain('2024');
   });
 
-  it('produces shorter format than formatDate (abbreviated month)', () => {
-    const dateOnly = formatDate(new Date('2024-01-15T12:00:00Z'));
-    const dateTime = formatDateTime(new Date('2024-01-15T12:00:00Z'));
-    // formatDate uses long month, formatDateTime uses short
-    expect(dateOnly.length).toBeGreaterThan(dateTime.split(' ').slice(0, 2).join(' ').length - 5);
+  it('uses abbreviated month while formatDate uses full month name', () => {
+    const date = new Date('2024-01-15T12:00:00Z');
+    expect(formatDate(date)).toMatch(/januar/i);
+    expect(formatDateTime(date)).not.toMatch(/januar/i);
   });
 });
 
