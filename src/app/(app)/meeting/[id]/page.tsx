@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { queryUserSchemaOne } from '@/lib/db/user-schema';
 import { RecordingScreen } from '@/components/recording/RecordingScreen';
+import { ProcessStrip } from '@/components/layout/ProcessStrip';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -29,11 +30,7 @@ export default async function MeetingRecordPage({ params }: PageProps) {
 
   return (
     <div>
-      <div className="border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3">
-        <div className="mx-auto max-w-[720px]">
-          <p className="text-sm font-medium text-[var(--ink)]">{meeting.title}</p>
-        </div>
-      </div>
+      <ProcessStrip meetingId={id} activePhase="recording" />
       <RecordingScreen meetingId={id} />
     </div>
   );

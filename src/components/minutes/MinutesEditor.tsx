@@ -2,16 +2,8 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { MinutesContent, MinutesSection } from '@/types';
-import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
 import { SaveStatus, SaveState } from '@/components/layout/SaveStatus';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { VersionHistory } from './VersionHistory';
 
 interface VersionRecord {
@@ -72,9 +64,7 @@ export function MinutesEditor({
 
   function updateSection(key: string, text: string) {
     setContent((prev) => ({
-      sections: prev.sections.map((s) =>
-        s.key === key ? { ...s, content: text } : s,
-      ),
+      sections: prev.sections.map((s) => (s.key === key ? { ...s, content: text } : s)),
     }));
     isDirtyRef.current = true;
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -99,67 +89,105 @@ export function MinutesEditor({
   }
 
   return (
-    <div className="mx-auto max-w-[960px] px-4 py-8">
-      <div className="flex items-center justify-between gap-4 mb-6">
+    <div className="mx-auto max-w-[720px] px-6 py-12">
+      {/* Page header */}
+      <div className="flex items-start justify-between mb-12">
         <div>
-          <h1 className="text-xl font-semibold text-[var(--ink)]">Referat</h1>
-          <p className="mt-0.5 text-sm text-[var(--muted)]">
-            Version {version} · Gemmes automatisk
+          <h1
+            style={{ fontSize: 'var(--t-h1)', fontWeight: 300, color: 'var(--ink)', margin: 0 }}
+          >
+            Referat
+          </h1>
+          <p className="mt-1 text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
+            Version {version}
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 mt-1">
           <SaveStatus state={saveState} />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowHistory(true)}
-          >
-            Versionshistorik
+          <Button variant="ghost" size="sm" onClick={() => setShowHistory(true)}>
+            Historik
           </Button>
           <Button
             variant="default"
             size="sm"
-            onClick={() => window.location.href = `/meeting/${meetingId}/share`}
+            onClick={() => (window.location.href = `/meeting/${meetingId}/export`)}
           >
             Eksportér
           </Button>
         </div>
       </div>
 
-      <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--surface)] divide-y divide-[var(--line)]">
-        {content.sections.map((section: MinutesSection, i: number) => (
-          <div key={section.key} className="px-6 py-5">
-            <label
-              htmlFor={`section-${section.key}`}
-              className="block text-sm font-semibold text-[var(--ink)] mb-2"
+      {/* Sections — borderless textareas, document feel */}
+      <div className="space-y-12">
+        {content.sections.map((section: MinutesSection) => (
+          <div key={section.key}>
+            <h2
+              className="mb-3 font-medium text-[var(--ink)]"
+              style={{ fontSize: 'var(--t-h2)' }}
             >
               {section.label}
-            </label>
-            <Textarea
+            </h2>
+            <textarea
               id={`section-${section.key}`}
               value={section.content}
               onChange={(e) => updateSection(section.key, e.target.value)}
-              placeholder={`Skriv ${section.label.toLowerCase()} her...`}
-              className="min-h-[120px] text-sm leading-relaxed"
+              placeholder={`Skriv ${section.label.toLowerCase()} her…`}
               rows={Math.max(4, Math.ceil(section.content.length / 80))}
+              style={{
+                width: '100%',
+                resize: 'vertical',
+                border: 'none',
+                borderBottom: '1px solid transparent',
+                background: 'transparent',
+                outline: 'none',
+                color: 'var(--ink)',
+                fontSize: 'var(--t-body)',
+                lineHeight: 1.7,
+                padding: '0 0 8px',
+                fontFamily: 'inherit',
+                transition: 'border-color 0.1s',
+              }}
+              onFocus={(e) => (e.target.style.borderBottomColor = 'var(--line-strong)')}
+              onBlur={(e) => (e.target.style.borderBottomColor = 'transparent')}
+              className="placeholder:text-[var(--muted-2)]"
             />
           </div>
         ))}
       </div>
 
-      {/* Version history dialog */}
-      <Dialog open={showHistory} onOpenChange={setShowHistory}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Versionshistorik</DialogTitle>
-          </DialogHeader>
-          <VersionHistory
-            versions={versions}
-            currentVersion={version}
-            onRestore={handleRestore}
-          />
-        </DialogContent>
-      </Dialog>
+      {/* Version history — rendered as a right-side sheet via CSS */}
+      {showHistory && (
+        <div
+          className="fixed inset-y-0 right-0 z-50 w-80 bg-[var(--surface)] border-l border-[var(--line)] shadow-lg flex flex-col"
+          style={{ animation: 'slide-in-from-right 0.15s ease' }}
+        >
+          <style>{`
+            @keyframes slide-in-from-right {
+              from { transform: translateX(100%); }
+              to   { transform: translateX(0); }
+            }
+          `}</style>
+          <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--line)]">
+            <span className="font-medium text-[var(--ink)]" style={{ fontSize: 'var(--t-body)' }}>
+              Versionshistorik
+            </span>
+            <button
+              onClick={() => setShowHistory(false)}
+              className="text-[var(--muted)] hover:text-[var(--ink)] transition-colors"
+              aria-label="Luk"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <VersionHistory
+              versions={versions}
+              currentVersion={version}
+              onRestore={handleRestore}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

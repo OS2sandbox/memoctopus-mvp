@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { queryUserSchemaOne, queryUserSchema } from '@/lib/db/user-schema';
 import { MinutesEditor } from '@/components/minutes/MinutesEditor';
+import { ProcessStrip } from '@/components/layout/ProcessStrip';
 import { MinutesContent } from '@/types';
 
 interface PageProps {
@@ -39,15 +40,18 @@ export default async function MinutesPage({ params }: PageProps) {
 
   if (!minutesRow) {
     return (
-      <div className="mx-auto max-w-[720px] px-4 py-8">
-        <h1 className="text-xl font-semibold text-[var(--ink)]">Ingen referat endnu</h1>
-        <p className="mt-2 text-sm text-[var(--muted)]">
-          Gå tilbage til{' '}
-          <a href={`/meeting/${id}/review`} className="text-[var(--accent)]">
-            transskriptionsvisningen
-          </a>{' '}
-          for at generere et referat.
-        </p>
+      <div>
+        <ProcessStrip meetingId={id} activePhase="minutes" completedPhases={['recording', 'review']} />
+        <div className="mx-auto max-w-[720px] px-6 py-12">
+          <h1 className="text-xl font-semibold text-[var(--ink)]">Ingen referat endnu</h1>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Gå tilbage til{' '}
+            <a href={`/meeting/${id}/review`} className="text-[var(--accent)]">
+              transskriptionsvisningen
+            </a>{' '}
+            for at generere et referat.
+          </p>
+        </div>
       </div>
     );
   }
@@ -66,21 +70,7 @@ export default async function MinutesPage({ params }: PageProps) {
 
   return (
     <div>
-      <div className="border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3">
-        <div className="mx-auto max-w-[960px]">
-          <p className="text-sm font-medium text-[var(--ink)]">{meeting.title}</p>
-          <nav className="flex gap-4 mt-1">
-            {['Optagelse', 'Gennemsyn', 'Referat', 'Eksport'].map((step, i) => (
-              <span
-                key={step}
-                className={`text-xs ${i === 2 ? 'text-[var(--accent)] font-medium' : 'text-[var(--muted)]'}`}
-              >
-                {step}
-              </span>
-            ))}
-          </nav>
-        </div>
-      </div>
+      <ProcessStrip meetingId={id} activePhase="minutes" completedPhases={['recording', 'review']} />
       <MinutesEditor
         meetingId={id}
         minutesId={minutesRow.id}

@@ -240,14 +240,20 @@ export function RecordingScreen({ meetingId }: RecordingScreenProps) {
 
       {/* Silence warning */}
       {showSilenceWarning && recordingState === 'recording' && (
-        <div className="mb-6 rounded-[var(--radius)] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        <div
+          className="mb-6 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--ink-2)]"
+          style={{ backgroundColor: 'var(--danger-wash)', borderColor: 'var(--warn)' }}
+        >
           Vi kan ikke høre noget — er mikrofonen tændt?
         </div>
       )}
 
       {/* Error */}
       {error && (
-        <div className="mb-6 rounded-[var(--radius)] border border-red-200 bg-red-50 px-4 py-3 text-sm text-[var(--danger)]">
+        <div
+          className="mb-6 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--danger)]"
+          style={{ backgroundColor: 'var(--danger-wash)', borderColor: 'var(--danger)' }}
+        >
           {error}
         </div>
       )}
