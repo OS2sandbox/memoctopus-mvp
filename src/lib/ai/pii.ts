@@ -1,9 +1,11 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { Mistral } from '@mistralai/mistralai';
 import { PiiResult, PiiReplacement } from '@/types';
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
-});
+let client: Mistral | null = null;
+function getClient() {
+  if (!client) client = new Mistral({ apiKey: process.env.MISTRAL_API_KEY! });
+  return client;
+}
 
 const PII_SYSTEM_PROMPT = `Du er en dansk GDPR-assistent der identificerer og fjerner personhenførbare oplysninger (PII) fra mødetransskriptioner.
 
@@ -35,11 +37,10 @@ Returner JSON i dette format:
 }`;
 
 export async function removePii(text: string): Promise<PiiResult> {
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 8096,
-    system: PII_SYSTEM_PROMPT,
+  const response = await getClient().chat.complete({
+    model: 'mistral-large-latest',
     messages: [
+      { role: 'system', content: PII_SYSTEM_PROMPT },
       {
         role: 'user',
         content: `Identificer og fjern al PII fra følgende transskription. Returner kun JSON uden markdown code blocks:\n\n${text}`,
@@ -47,21 +48,13 @@ export async function removePii(text: string): Promise<PiiResult> {
     ],
   });
 
-  const content = response.content[0];
-  if (content.type !== 'text') {
-    throw new Error('Unexpected response type from Claude');
-  }
+  const raw = (response.choices?.[0]?.message?.content as string) ?? '';
 
   try {
-    // Strip markdown code fences if present
-    const raw = content.text.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
-    const parsed = JSON.parse(raw) as {
+    const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+    const parsed = JSON.parse(cleaned) as {
       cleanedText: string;
-      replacements: Array<{
-        original: string;
-        replacement: string;
-        type: string;
-      }>;
+      replacements: Array<{ original: string; replacement: string; type: string }>;
     };
 
     const replacements: PiiReplacement[] = parsed.replacements.map((r) => ({
@@ -70,17 +63,10 @@ export async function removePii(text: string): Promise<PiiResult> {
       type: r.type as PiiReplacement['type'],
     }));
 
-    return {
-      cleanedText: parsed.cleanedText,
-      replacements,
-    };
+    return { cleanedText: parsed.cleanedText, replacements };
   } catch {
-    // If parsing fails, return the raw text as-is with no replacements
     console.error('Failed to parse PII response, returning original text');
-    return {
-      cleanedText: text,
-      replacements: [],
-    };
+    return { cleanedText: text, replacements: [] };
   }
 }
 
@@ -93,16 +79,12 @@ export async function removePiiFromSegments(
   const fullText = segments.map((s) => `[${s.speaker}]: ${s.text}`).join('\n');
   const result = await removePii(fullText);
 
-  // Re-parse the cleaned segments
   const cleanedLines = result.cleanedText.split('\n');
   const cleanedSegments = segments.map((seg, i) => {
     const line = cleanedLines[i];
     if (!line) return seg;
     const match = line.match(/^\[[^\]]+\]:\s(.+)$/);
-    return {
-      ...seg,
-      text: match ? match[1] : seg.text,
-    };
+    return { ...seg, text: match ? match[1] : seg.text };
   });
 
   return { cleanedSegments, replacements: result.replacements };
