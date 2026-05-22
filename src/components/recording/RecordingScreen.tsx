@@ -200,110 +200,97 @@ export function RecordingScreen({ meetingId }: RecordingScreenProps) {
   const elapsedFormatted = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
   return (
-    <div className="mx-auto max-w-[720px] px-4 py-8">
-      <h1 className="text-xl font-semibold text-[var(--ink)] mb-8">Optagelse</h1>
-
-      {/* GDPR notice — above record button */}
-      <div className="rounded-[var(--radius)] border border-[var(--line)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--ink-2)] mb-8">
-        <strong className="font-medium">Databeskyttelse:</strong> Denne optagelse behandles på
-        dine vegne. Personoplysninger fjernes automatisk inden referatet udarbejdes.
-        Lydfilen slettes efter transskribering. Behandlingen sker i overensstemmelse med GDPR.
-      </div>
-
-      {/* Timer */}
-      <div className="text-center mb-6">
-        <span
-          className="text-5xl font-mono tabular-nums tracking-tight text-[var(--ink)]"
-          style={{ fontVariantNumeric: 'tabular-nums' }}
-        >
-          {elapsedFormatted}
-        </span>
-        {elapsed > 0 && (
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Estimeret størrelse: {formatFileSize(estimatedSize)}
-          </p>
-        )}
-      </div>
-
-      {/* Volume meter */}
-      <div className="flex justify-center mb-8">
-        {recordingState === 'recording' ? (
-          <VolumeBar level={volumeLevel} />
-        ) : (
-          <div className="h-8 flex items-center">
-            <span className="text-sm text-[var(--muted)]">
-              {recordingState === 'paused' ? 'Pauset' : recordingState === 'stopped' ? 'Stoppet' : ''}
-            </span>
-          </div>
-        )}
-      </div>
-
-      {/* Silence warning */}
-      {showSilenceWarning && recordingState === 'recording' && (
-        <div
-          className="mb-6 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--ink-2)]"
-          style={{ backgroundColor: 'var(--danger-wash)', borderColor: 'var(--warn)' }}
-        >
-          Vi kan ikke høre noget — er mikrofonen tændt?
-        </div>
-      )}
-
+    <div className="mx-auto max-w-[720px] px-6 py-12">
       {/* Error */}
       {error && (
         <div
-          className="mb-6 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--danger)]"
+          className="mb-8 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--danger)]"
           style={{ backgroundColor: 'var(--danger-wash)', borderColor: 'var(--danger)' }}
         >
           {error}
         </div>
       )}
 
-      {/* Buttons */}
-      <div className="flex gap-3 justify-center mb-4">
+      {/* Header row: timer + file info left; volume meter right */}
+      <div className="flex items-end justify-between mb-10">
+        <div>
+          <span
+            className="text-[var(--ink)] tabular-nums"
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: '56px',
+              fontWeight: 500,
+              lineHeight: 1,
+              letterSpacing: '-0.03em',
+            }}
+          >
+            {elapsedFormatted}
+          </span>
+          <p
+            className="mt-1 text-[var(--muted)]"
+            style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}
+          >
+            {elapsed > 0 ? `${formatFileSize(estimatedSize)} · webm/opus` : 'Klar til optagelse'}
+          </p>
+        </div>
+        <VolumeBar level={recordingState === 'recording' ? volumeLevel : 0} barCount={24} />
+      </div>
+
+      {/* Silence warning — inline amber stripe */}
+      {showSilenceWarning && recordingState === 'recording' && (
+        <div
+          className="mb-6 rounded-[var(--radius-sm)] px-3 py-2 text-sm text-[var(--ink-2)]"
+          style={{ backgroundColor: 'color-mix(in oklch, var(--warn) 10%, white)', borderLeft: '3px solid var(--warn)' }}
+        >
+          Vi kan ikke høre noget — er mikrofonen tændt?
+        </div>
+      )}
+
+      {/* Controls row */}
+      <div className="flex items-center justify-center gap-6 mb-8">
         {recordingState === 'idle' && (
-          <Button onClick={startRecording} size="lg" className="min-w-[160px]">
-            Start optagelse
-          </Button>
+          <button
+            onClick={startRecording}
+            style={{
+              width: 72, height: 72, borderRadius: '50%',
+              backgroundColor: 'var(--ink)', border: 'none', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+            aria-label="Start optagelse"
+          >
+            <span style={{ width: 22, height: 22, borderRadius: '50%', backgroundColor: 'white', display: 'block' }} />
+          </button>
         )}
 
-        {recordingState === 'recording' && (
+        {(recordingState === 'recording' || recordingState === 'paused') && (
           <>
             <Button
-              onClick={pauseRecording}
-              variant="secondary"
-              size="lg"
-              className="min-w-[160px]"
+              variant="outline"
+              onClick={recordingState === 'recording' ? pauseRecording : resumeRecording}
+              style={{ height: 44, minWidth: 90 }}
             >
-              Pause
+              {recordingState === 'recording' ? 'Pause' : 'Fortsæt'}
             </Button>
-            <Button
-              onClick={stopAndSave}
-              variant="default"
-              size="lg"
-              className="min-w-[160px]"
-            >
-              Stop og gem
-            </Button>
-          </>
-        )}
 
-        {recordingState === 'paused' && (
-          <>
-            <Button
-              onClick={resumeRecording}
-              variant="secondary"
-              size="lg"
-              className="min-w-[160px]"
-            >
-              Fortsæt
-            </Button>
-            <Button
+            {/* Primary circular stop button */}
+            <button
               onClick={stopAndSave}
-              variant="default"
-              size="lg"
-              className="min-w-[160px]"
+              style={{
+                width: 72, height: 72, borderRadius: '50%',
+                backgroundColor: 'var(--ink)', border: 'none', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+              aria-label="Stop og gem"
             >
-              Stop og gem
+              <span style={{ width: 18, height: 18, backgroundColor: 'white', borderRadius: 3, display: 'block' }} />
+            </button>
+
+            <Button
+              variant="outline"
+              onClick={stopAndSave}
+              style={{ height: 44, minWidth: 90 }}
+            >
+              Stop &amp; gem
             </Button>
           </>
         )}
@@ -311,29 +298,38 @@ export function RecordingScreen({ meetingId }: RecordingScreenProps) {
         {(recordingState === 'stopped' || isUploading) && (
           <div className="flex items-center gap-2 text-sm text-[var(--muted)]">
             <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
-            {isUploading ? 'Uploader og transskriberer...' : 'Behandler...'}
+            {isUploading ? 'Uploader og transskriberer…' : 'Behandler…'}
           </div>
         )}
       </div>
 
-      {/* Tab-switch notice */}
+      {/* Tab-switch reassurance */}
       {(recordingState === 'recording' || recordingState === 'paused') && (
-        <p className="text-center text-sm text-[var(--muted)] mb-6">
+        <p className="text-center text-[var(--muted)] mb-8" style={{ fontSize: 'var(--t-small)' }}>
           Du kan trygt skifte fane. Optagelsen fortsætter.
         </p>
       )}
 
       {/* Cancel link */}
       {recordingState !== 'stopped' && !isUploading && (
-        <div className="text-center">
+        <div className="text-center mb-8">
           <button
             onClick={() => setShowCancelDialog(true)}
-            className="text-sm text-[var(--muted)] hover:text-[var(--danger)] underline underline-offset-2 transition-colors"
+            className="text-[var(--muted)] hover:text-[var(--danger)] underline underline-offset-2 transition-colors"
+            style={{ fontSize: 'var(--t-small)' }}
           >
             Annullér og slet
           </button>
         </div>
       )}
+
+      {/* Compliance footer */}
+      <p
+        className="text-center text-[var(--muted)]"
+        style={{ fontSize: 'var(--t-micro)', fontFamily: 'var(--font-mono)' }}
+      >
+        Lyden slettes automatisk efter 14 dage · PII fjernes inden referatet udarbejdes
+      </p>
 
       {/* Cancel confirm dialog */}
       <Dialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>

@@ -30,7 +30,6 @@ export function TranscriptReview({
 }: TranscriptReviewProps) {
   const router = useRouter();
   const [segments, setSegments] = useState(initialSegments);
-  const [showPiiPanel, setShowPiiPanel] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -76,102 +75,98 @@ export function TranscriptReview({
   };
 
   return (
-    <div className="mx-auto max-w-[960px] px-4 py-8">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-xl font-semibold text-[var(--ink)]">Gennemse transskription</h1>
-          <p className="mt-1 text-sm text-[var(--muted)]">
-            Ret eventuelle fejl. Klik på et talernavn for at omdøbe taleren.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {piiReplacements.length > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowPiiPanel(true)}
-            >
-              {piiReplacements.length} PII fjernet
-            </Button>
-          )}
-          <Button
-            onClick={() => setShowConfirm(true)}
-            disabled={isGenerating || segments.length === 0}
-          >
-            {isGenerating ? 'Genererer...' : 'Generér referat'}
-          </Button>
-        </div>
-      </div>
-
+    <div className="mx-auto max-w-[1040px] px-6 py-12">
       {error && (
         <div
-          className="mb-4 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--danger)]"
+          className="mb-6 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--danger)]"
           style={{ backgroundColor: 'var(--danger-wash)', borderColor: 'var(--danger)' }}
         >
           {error}
         </div>
       )}
 
-      {/* Transcript */}
-      <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--surface)] divide-y divide-[var(--line)]">
-        {segments.length === 0 ? (
-          <p className="px-4 py-8 text-center text-sm text-[var(--muted)]">
-            Ingen transskription fundet.
+      {/* Two-column layout: transcript left, PII panel + actions right */}
+      <div className="flex gap-8 items-start">
+        {/* Transcript — main column */}
+        <div className="flex-1 min-w-0">
+          <h1
+            className="mb-6 font-medium text-[var(--ink)]"
+            style={{ fontSize: 'var(--t-h2)' }}
+          >
+            Transskription
+          </h1>
+          <p className="mb-6 text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
+            Ret eventuelle fejl. Klik på et talernavn for at omdøbe taleren.
           </p>
-        ) : (
-          <div className="px-4">
-            {segments.map((seg, i) => (
-              <SpeakerRow key={i} segment={seg} index={i} onUpdate={handleSegmentUpdate} />
-            ))}
+
+          <div className="divide-y divide-[var(--line)]">
+            {segments.length === 0 ? (
+              <p className="py-8 text-center text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
+                Ingen transskription fundet.
+              </p>
+            ) : (
+              segments.map((seg, i) => (
+                <SpeakerRow key={i} segment={seg} index={i} onUpdate={handleSegmentUpdate} />
+              ))
+            )}
           </div>
-        )}
-      </div>
+        </div>
 
-      <div className="mt-6 flex justify-end">
-        <Button
-          onClick={() => setShowConfirm(true)}
-          disabled={isGenerating || segments.length === 0}
-          size="lg"
-        >
-          {isGenerating ? 'Genererer referat...' : 'Godkend og generér referat'}
-        </Button>
-      </div>
-
-      {/* PII panel */}
-      <Dialog open={showPiiPanel} onOpenChange={setShowPiiPanel}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Fjernede personoplysninger</DialogTitle>
-            <DialogDescription>
-              Disse oplysninger er erstattet med anonymiserede placeholders.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[60vh] overflow-y-auto space-y-2 mt-2">
-            {piiReplacements.map((r, i) => (
-              <div
-                key={i}
-                className="flex items-center justify-between gap-2 py-2 border-b border-[var(--line)] last:border-0"
-              >
-                <div>
-                  <span className="text-sm font-medium text-[var(--ink)] line-through mr-2">
-                    {r.original}
-                  </span>
-                  <span className="text-sm text-[var(--muted)]">→ {r.replacement}</span>
-                </div>
-                <Badge variant={piiTypeVariant(r.type)} className="shrink-0">
-                  {typeLabels[r.type] ?? r.type}
-                </Badge>
+        {/* Right sticky panel */}
+        <div className="w-80 shrink-0 sticky top-20">
+          {/* PII replacements */}
+          {piiReplacements.length > 0 && (
+            <div className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] mb-4 overflow-hidden">
+              <div className="px-4 py-3 border-b border-[var(--line)]">
+                <p className="font-medium text-[var(--ink)]" style={{ fontSize: 'var(--t-small)' }}>
+                  {piiReplacements.length} PII fjernet
+                </p>
               </div>
-            ))}
-          </div>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setShowPiiPanel(false)}>
-              Luk
+              <div className="divide-y divide-[var(--line)] max-h-64 overflow-y-auto">
+                {piiReplacements.map((r, i) => (
+                  <div key={i} className="flex items-center justify-between gap-2 px-4 py-2.5">
+                    <div>
+                      <span
+                        className="line-through text-[var(--muted)]"
+                        style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}
+                      >
+                        {r.original}
+                      </span>
+                      <span
+                        className="ml-1.5 text-[var(--ink-2)]"
+                        style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}
+                      >
+                        {r.replacement}
+                      </span>
+                    </div>
+                    <Badge variant={piiTypeVariant(r.type)} className="shrink-0 text-[10px]">
+                      {typeLabels[r.type] ?? r.type}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="space-y-2">
+            <Button
+              className="w-full"
+              onClick={() => setShowConfirm(true)}
+              disabled={isGenerating || segments.length === 0}
+            >
+              {isGenerating ? 'Genererer…' : 'Generér referat'}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            <button
+              className="w-full text-center text-[var(--muted)] hover:text-[var(--danger)] transition-colors"
+              style={{ fontSize: 'var(--t-small)' }}
+              onClick={() => router.push(`/meeting/${meetingId}/settings#redact`)}
+            >
+              Slet følsomt indhold nu →
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* Confirm dialog */}
       <Dialog open={showConfirm} onOpenChange={setShowConfirm}>
@@ -179,12 +174,11 @@ export function TranscriptReview({
           <DialogHeader>
             <DialogTitle>Generér referat?</DialogTitle>
             <DialogDescription>
-              Claude vil nu udarbejde et referat baseret på transskriptionen. Du kan redigere det
-              bagefter.
+              Claude vil nu udarbejde et referat baseret på transskriptionen. Du kan redigere det bagefter.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="secondary" onClick={() => setShowConfirm(false)}>
+            <Button variant="ghost" onClick={() => setShowConfirm(false)}>
               Annullér
             </Button>
             <Button

@@ -21,39 +21,47 @@ interface VersionHistoryProps {
 export function VersionHistory({ versions, currentVersion, onRestore }: VersionHistoryProps) {
   if (versions.length === 0) {
     return (
-      <p className="text-sm text-[var(--muted)] py-4 text-center">
+      <p className="px-5 py-6 text-center text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
         Ingen versionshistorik endnu.
       </p>
     );
   }
 
   return (
-    <div className="space-y-3">
-      <p className="text-xs text-[var(--muted)] mb-2">
-        Versioner gemmes i 7 dage. Nuværende version: {currentVersion}
+    <div>
+      <p
+        className="px-5 py-3 text-[var(--muted)] border-b border-[var(--line)]"
+        style={{ fontSize: 'var(--t-micro)', fontFamily: 'var(--font-mono)' }}
+      >
+        Nuværende version: {currentVersion} · Bevares i 7 dage
       </p>
-      {versions.map((v, i) => (
-        <div
-          key={v.id}
-          className="flex items-center justify-between gap-2 py-2 border-b border-[var(--line)] last:border-0"
-        >
-          <div>
-            <span className="text-sm font-medium text-[var(--ink)]">
-              Version {versions.length - i}
-            </span>
-            <span className="ml-2 text-xs text-[var(--muted)]">
-              {formatDateTime(v.createdAt)}
-            </span>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onRestore(v.content)}
+      <div className="divide-y divide-[var(--line)]">
+        {versions.map((v, i) => (
+          <div
+            key={v.id}
+            className="flex items-center justify-between gap-2 px-5 py-3"
           >
-            Gendan
-          </Button>
-        </div>
-      ))}
+            <div>
+              <span className="font-medium text-[var(--ink)]" style={{ fontSize: 'var(--t-small)' }}>
+                Version {versions.length - i}
+              </span>
+              <span
+                className="ml-2 text-[var(--muted)]"
+                style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}
+              >
+                {formatDateTime(v.createdAt)}
+              </span>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onRestore(v.content)}
+            >
+              Gendan
+            </Button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
