@@ -1,0 +1,135 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #fafaf8;
+  --surface: #ffffff;
+  --surface-2: #f4f4f2;
+  --border: #e5e5e2;
+  --border-strong: #ccccc8;
+  --text: #0f0f0e;
+  --text-2: #3d3d3a;
+  --text-muted: #737370;
+  --accent: #1d4ed8;
+  --accent-hover: #1e40af;
+  --accent-soft: #eff6ff;
+  --success: #16a34a;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --radius: 4px;
+  --radius-lg: 8px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--text);
+  background-color: var(--bg);
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Focus visible */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Links */
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* Headings */
+h1, h2, h3, h4 {
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+/* Form elements */
+button, input, textarea, select {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Animations */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.animate-spin {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes zoom-in {
+  from { transform: translate(-50%, -50%) scale(0.96); }
+  to { transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes zoom-out {
+  from { transform: translate(-50%, -50%) scale(1); }
+  to { transform: translate(-50%, -50%) scale(0.96); }
+}
+@keyframes slide-in-from-top {
+  from { transform: translate(-50%, calc(-50% - 8px)); }
+  to { transform: translate(-50%, -50%); }
+}
+
+.data-\[state\=open\]\:animate-in[data-state=open] {
+  animation: fade-in 0.15s ease;
+}
+.data-\[state\=closed\]\:animate-out[data-state=closed] {
+  animation: fade-out 0.1s ease;
+}
+.data-\[state\=open\]\:fade-in-0[data-state=open] {
+  opacity: 1;
+}
+.data-\[state\=closed\]\:fade-out-0[data-state=closed] {
+  opacity: 0;
+}
+.data-\[state\=open\]\:zoom-in-95[data-state=open] {
+  transform: translate(-50%, -50%) scale(1);
+}
+.data-\[state\=closed\]\:zoom-out-95[data-state=closed] {
+  transform: translate(-50%, -50%) scale(0.96);
+}
