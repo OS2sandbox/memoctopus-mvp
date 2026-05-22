@@ -21,9 +21,16 @@ export function TopBar({ user }: TopBarProps) {
   const pathname = usePathname();
 
   const nav = [
-    { href: '/dashboard', label: 'Oversigt' },
+    { href: '/', label: 'Optag', exact: true },
+    { href: '/arkiv', label: 'Arkiv' },
     { href: '/templates', label: 'Skabeloner' },
+    { href: '/settings/data', label: 'Data' },
   ];
+
+  function isActive(href: string, exact?: boolean) {
+    if (exact) return pathname === href;
+    return pathname.startsWith(href);
+  }
 
   async function handleSignOut() {
     await fetch('/api/auth/sign-out', { method: 'POST' });
@@ -31,24 +38,37 @@ export function TopBar({ user }: TopBarProps) {
   }
 
   return (
-    <header className="sticky top-0 z-40 border-b border-[var(--border)] bg-[var(--surface)]">
-      <div className="mx-auto flex h-14 max-w-[960px] items-center justify-between px-4">
-        {/* Logo */}
-        <Link href="/dashboard" className="flex items-center gap-2">
-          <span className="text-base font-semibold text-[var(--text)]">Referat</span>
+    <header className="sticky top-0 z-40 border-b border-[var(--line)] bg-[var(--surface)]">
+      <div className="mx-auto flex h-14 max-w-[1040px] items-center justify-between px-6">
+        {/* Wordmark */}
+        <Link
+          href="/"
+          className="shrink-0"
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: '17px',
+            fontWeight: 500,
+            letterSpacing: '-0.04em',
+            color: 'var(--ink)',
+            textDecoration: 'none',
+          }}
+        >
+          memoctopus
+          <span style={{ color: 'var(--accent)', margin: '0 0.25em' }}>·</span>
+          referat
         </Link>
 
         {/* Nav */}
-        <nav className="hidden md:flex items-center gap-1">
+        <nav className="hidden md:flex items-center gap-0.5">
           {nav.map((item) => (
             <Link
               key={item.href}
               href={item.href}
               className={cn(
                 'px-3 py-1.5 rounded-[var(--radius)] text-sm transition-colors',
-                pathname.startsWith(item.href)
-                  ? 'bg-[var(--accent-soft)] text-[var(--accent)] font-medium'
-                  : 'text-[var(--text-2)] hover:text-[var(--text)] hover:bg-[var(--surface-2)]',
+                isActive(item.href, item.exact)
+                  ? 'bg-[var(--accent-wash)] text-[var(--accent-ink)] font-medium'
+                  : 'text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--surface-2)]',
               )}
             >
               {item.label}
@@ -60,22 +80,28 @@ export function TopBar({ user }: TopBarProps) {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="sm" className="gap-2">
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--accent-soft)] text-xs font-semibold text-[var(--accent)]">
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--surface-2)] text-xs font-semibold text-[var(--ink-2)] border border-[var(--line-strong)]">
                 {user.name.charAt(0).toUpperCase()}
               </span>
-              <span className="hidden md:block text-sm text-[var(--text-2)]">
+              <span className="hidden md:block text-sm text-[var(--ink-2)]">
                 {user.name}
               </span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             <div className="px-2 py-1.5">
-              <p className="text-sm font-medium text-[var(--text)]">{user.name}</p>
-              <p className="text-xs text-[var(--text-muted)]">{user.email}</p>
+              <p className="text-sm font-medium text-[var(--ink)]">{user.name}</p>
+              <p className="text-xs text-[var(--muted)]">{user.email}</p>
             </div>
             <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link href="/settings/data" className="cursor-pointer">
+                Indstillinger
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
             <DropdownMenuItem
-              className="text-[var(--danger)] focus:text-[var(--danger)] focus:bg-red-50"
+              className="text-[var(--danger)] focus:text-[var(--danger)] focus:bg-[var(--danger-wash)]"
               onClick={handleSignOut}
             >
               Log ud

@@ -9,27 +9,14 @@ describe('SaveStatus', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('shows "Gemmer..." when state is saving', () => {
+  it('shows "Gemmer…" when state is saving', () => {
     render(<SaveStatus state="saving" />);
-    expect(screen.getByText('Gemmer...')).toBeInTheDocument();
+    expect(screen.getByText('Gemmer…')).toBeInTheDocument();
   });
 
-  it('shows a spinner icon when saving', () => {
-    const { container } = render(<SaveStatus state="saving" />);
-    const spinner = container.querySelector('.animate-spin');
-    expect(spinner).toBeInTheDocument();
-  });
-
-  it('shows "Gemt" when state is saved', () => {
+  it('shows "Gemt" when state is saved (just saved)', () => {
     render(<SaveStatus state="saved" />);
     expect(screen.getByText('Gemt')).toBeInTheDocument();
-  });
-
-  it('shows a checkmark SVG when saved', () => {
-    const { container } = render(<SaveStatus state="saved" />);
-    // Checkmark path has d="M2 6l3 3 5-5"
-    const path = container.querySelector('path[d="M2 6l3 3 5-5"]');
-    expect(path).toBeInTheDocument();
   });
 
   it('shows "Fejl ved gemning" when state is error', () => {
@@ -37,39 +24,37 @@ describe('SaveStatus', () => {
     expect(screen.getByText('Fejl ved gemning')).toBeInTheDocument();
   });
 
-  it('shows a warning icon (circle + exclamation) when error', () => {
-    const { container } = render(<SaveStatus state="error" />);
-    const circle = container.querySelector('circle');
-    expect(circle).toBeInTheDocument();
-  });
-
-  it('does not show a spinner when saved', () => {
-    const { container } = render(<SaveStatus state="saved" />);
-    expect(container.querySelector('.animate-spin')).toBeNull();
-  });
-
-  it('does not show a spinner when error', () => {
-    const { container } = render(<SaveStatus state="error" />);
-    expect(container.querySelector('.animate-spin')).toBeNull();
-  });
-
   it('applies a custom className', () => {
     const { container } = render(<SaveStatus state="saving" className="extra-class" />);
     expect(container.firstChild).toHaveClass('extra-class');
   });
 
-  it('applies the muted color class when saving', () => {
+  it('applies muted color when saving', () => {
     const { container } = render(<SaveStatus state="saving" />);
-    expect(container.firstChild).toHaveClass('text-[var(--text-muted)]');
+    expect(container.firstChild).toHaveClass('text-[var(--muted)]');
   });
 
-  it('applies the success color class when saved', () => {
+  it('applies muted color when saved', () => {
     const { container } = render(<SaveStatus state="saved" />);
-    expect(container.firstChild).toHaveClass('text-[var(--success)]');
+    expect(container.firstChild).toHaveClass('text-[var(--muted)]');
   });
 
-  it('applies the danger color class when error', () => {
+  it('applies danger color when error', () => {
     const { container } = render(<SaveStatus state="error" />);
     expect(container.firstChild).toHaveClass('text-[var(--danger)]');
+  });
+
+  it('renders no spinner for any state', () => {
+    for (const state of ['saving', 'saved', 'error'] as const) {
+      const { container } = render(<SaveStatus state={state} />);
+      expect(container.querySelector('.animate-spin')).toBeNull();
+    }
+  });
+
+  it('renders no SVG icons', () => {
+    for (const state of ['saving', 'saved', 'error'] as const) {
+      const { container } = render(<SaveStatus state={state} />);
+      expect(container.querySelector('svg')).toBeNull();
+    }
   });
 });

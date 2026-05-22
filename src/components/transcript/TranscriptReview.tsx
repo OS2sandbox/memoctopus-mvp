@@ -80,8 +80,8 @@ export function TranscriptReview({
       {/* Header */}
       <div className="flex items-start justify-between gap-4 mb-6">
         <div>
-          <h1 className="text-xl font-semibold text-[var(--text)]">Gennemse transskription</h1>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">
+          <h1 className="text-xl font-semibold text-[var(--ink)]">Gennemse transskription</h1>
+          <p className="mt-1 text-sm text-[var(--muted)]">
             Ret eventuelle fejl. Klik på et talernavn for at omdøbe taleren.
           </p>
         </div>
@@ -111,9 +111,9 @@ export function TranscriptReview({
       )}
 
       {/* Transcript */}
-      <div className="rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] divide-y divide-[var(--border)]">
+      <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--surface)] divide-y divide-[var(--line)]">
         {segments.length === 0 ? (
-          <p className="px-4 py-8 text-center text-sm text-[var(--text-muted)]">
+          <p className="px-4 py-8 text-center text-sm text-[var(--muted)]">
             Ingen transskription fundet.
           </p>
         ) : (
@@ -148,13 +148,13 @@ export function TranscriptReview({
             {piiReplacements.map((r, i) => (
               <div
                 key={i}
-                className="flex items-center justify-between gap-2 py-2 border-b border-[var(--border)] last:border-0"
+                className="flex items-center justify-between gap-2 py-2 border-b border-[var(--line)] last:border-0"
               >
                 <div>
-                  <span className="text-sm font-medium text-[var(--text)] line-through mr-2">
+                  <span className="text-sm font-medium text-[var(--ink)] line-through mr-2">
                     {r.original}
                   </span>
-                  <span className="text-sm text-[var(--text-muted)]">→ {r.replacement}</span>
+                  <span className="text-sm text-[var(--muted)]">→ {r.replacement}</span>
                 </div>
                 <Badge variant={piiTypeVariant(r.type)} className="shrink-0">
                   {typeLabels[r.type] ?? r.type}

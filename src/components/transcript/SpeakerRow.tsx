@@ -29,15 +29,15 @@ export function SpeakerRow({ segment, index, onUpdate }: SpeakerRowProps) {
   }
 
   return (
-    <div className="flex gap-4 py-4 border-b border-[var(--border)] last:border-0">
+    <div className="flex gap-4 py-4 border-b border-[var(--line)] last:border-0">
       {/* Time + speaker */}
       <div className="w-32 flex-shrink-0 pt-1">
-        <span className="block text-xs text-[var(--text-muted)] font-mono tabular-nums mb-1">
+        <span className="block text-xs text-[var(--muted)] font-mono tabular-nums mb-1">
           {formatDuration(segment.start)}
         </span>
         {editingSpeaker ? (
           <input
-            className="w-full text-xs font-medium border-b border-[var(--accent)] bg-transparent text-[var(--text)] outline-none pb-0.5"
+            className="w-full text-xs font-medium border-b border-[var(--accent)] bg-transparent text-[var(--ink)] outline-none pb-0.5"
             value={speakerValue}
             onChange={(e) => setSpeakerValue(e.target.value)}
             onBlur={commitSpeaker}
@@ -52,7 +52,7 @@ export function SpeakerRow({ segment, index, onUpdate }: SpeakerRowProps) {
           />
         ) : (
           <button
-            className="text-xs font-medium text-[var(--text-2)] hover:text-[var(--accent)] transition-colors text-left w-full"
+            className="text-xs font-medium text-[var(--ink-2)] hover:text-[var(--accent)] transition-colors text-left w-full"
             onClick={() => setEditingSpeaker(true)}
             title="Klik for at redigere talerens navn"
           >

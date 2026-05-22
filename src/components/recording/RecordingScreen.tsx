@@ -182,7 +182,7 @@ export function RecordingScreen({ meetingId }: RecordingScreenProps) {
     }
     // Delete the meeting
     await fetch(`/api/meetings/${meetingId}`, { method: 'DELETE' });
-    router.push('/dashboard');
+    router.push('/');
   }
 
   useEffect(() => {
@@ -201,10 +201,10 @@ export function RecordingScreen({ meetingId }: RecordingScreenProps) {
 
   return (
     <div className="mx-auto max-w-[720px] px-4 py-8">
-      <h1 className="text-xl font-semibold text-[var(--text)] mb-8">Optagelse</h1>
+      <h1 className="text-xl font-semibold text-[var(--ink)] mb-8">Optagelse</h1>
 
       {/* GDPR notice — above record button */}
-      <div className="rounded-[var(--radius)] border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--text-2)] mb-8">
+      <div className="rounded-[var(--radius)] border border-[var(--line)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--ink-2)] mb-8">
         <strong className="font-medium">Databeskyttelse:</strong> Denne optagelse behandles på
         dine vegne. Personoplysninger fjernes automatisk inden referatet udarbejdes.
         Lydfilen slettes efter transskribering. Behandlingen sker i overensstemmelse med GDPR.
@@ -213,13 +213,13 @@ export function RecordingScreen({ meetingId }: RecordingScreenProps) {
       {/* Timer */}
       <div className="text-center mb-6">
         <span
-          className="text-5xl font-mono tabular-nums tracking-tight text-[var(--text)]"
+          className="text-5xl font-mono tabular-nums tracking-tight text-[var(--ink)]"
           style={{ fontVariantNumeric: 'tabular-nums' }}
         >
           {elapsedFormatted}
         </span>
         {elapsed > 0 && (
-          <p className="mt-1 text-sm text-[var(--text-muted)]">
+          <p className="mt-1 text-sm text-[var(--muted)]">
             Estimeret størrelse: {formatFileSize(estimatedSize)}
           </p>
         )}
@@ -231,7 +231,7 @@ export function RecordingScreen({ meetingId }: RecordingScreenProps) {
           <VolumeBar level={volumeLevel} />
         ) : (
           <div className="h-8 flex items-center">
-            <span className="text-sm text-[var(--text-muted)]">
+            <span className="text-sm text-[var(--muted)]">
               {recordingState === 'paused' ? 'Pauset' : recordingState === 'stopped' ? 'Stoppet' : ''}
             </span>
           </div>
@@ -303,7 +303,7 @@ export function RecordingScreen({ meetingId }: RecordingScreenProps) {
         )}
 
         {(recordingState === 'stopped' || isUploading) && (
-          <div className="flex items-center gap-2 text-sm text-[var(--text-muted)]">
+          <div className="flex items-center gap-2 text-sm text-[var(--muted)]">
             <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
             {isUploading ? 'Uploader og transskriberer...' : 'Behandler...'}
           </div>
@@ -312,7 +312,7 @@ export function RecordingScreen({ meetingId }: RecordingScreenProps) {
 
       {/* Tab-switch notice */}
       {(recordingState === 'recording' || recordingState === 'paused') && (
-        <p className="text-center text-sm text-[var(--text-muted)] mb-6">
+        <p className="text-center text-sm text-[var(--muted)] mb-6">
           Du kan trygt skifte fane. Optagelsen fortsætter.
         </p>
       )}
@@ -322,7 +322,7 @@ export function RecordingScreen({ meetingId }: RecordingScreenProps) {
         <div className="text-center">
           <button
             onClick={() => setShowCancelDialog(true)}
-            className="text-sm text-[var(--text-muted)] hover:text-[var(--danger)] underline underline-offset-2 transition-colors"
+            className="text-sm text-[var(--muted)] hover:text-[var(--danger)] underline underline-offset-2 transition-colors"
           >
             Annullér og slet
           </button>

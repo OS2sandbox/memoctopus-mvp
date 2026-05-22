@@ -44,8 +44,8 @@ export default async function TranscriptReviewPage({ params }: PageProps) {
   if (!transcript) {
     return (
       <div className="mx-auto max-w-[720px] px-4 py-8">
-        <h1 className="text-xl font-semibold text-[var(--text)]">Ingen transskription</h1>
-        <p className="mt-2 text-sm text-[var(--text-muted)]">
+        <h1 className="text-xl font-semibold text-[var(--ink)]">Ingen transskription</h1>
+        <p className="mt-2 text-sm text-[var(--muted)]">
           Transskriptionen er endnu ikke tilgængelig. Prøv at genindlæse siden.
         </p>
       </div>
@@ -62,14 +62,14 @@ export default async function TranscriptReviewPage({ params }: PageProps) {
 
   return (
     <div>
-      <div className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+      <div className="border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3">
         <div className="mx-auto max-w-[960px]">
-          <p className="text-sm font-medium text-[var(--text)]">{meeting.title}</p>
+          <p className="text-sm font-medium text-[var(--ink)]">{meeting.title}</p>
           <nav className="flex gap-4 mt-1">
             {['Optagelse', 'Gennemsyn', 'Referat', 'Eksport'].map((step, i) => (
               <span
                 key={step}
-                className={`text-xs ${i === 1 ? 'text-[var(--accent)] font-medium' : 'text-[var(--text-muted)]'}`}
+                className={`text-xs ${i === 1 ? 'text-[var(--accent)] font-medium' : 'text-[var(--muted)]'}`}
               >
                 {step}
               </span>

@@ -68,10 +68,10 @@ describe('VolumeBar', () => {
     });
   });
 
-  it('inactive bars use the border-strong CSS variable for color', () => {
+  it('inactive bars use the line-strong CSS variable for color', () => {
     const { container } = render(<VolumeBar level={0} />);
     getBars(container).forEach((b) => {
-      expect(b.style.backgroundColor).toBe('var(--border-strong)');
+      expect(b.style.backgroundColor).toBe('var(--line-strong)');
     });
   });
 

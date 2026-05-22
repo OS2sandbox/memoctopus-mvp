@@ -21,7 +21,7 @@ interface VersionHistoryProps {
 export function VersionHistory({ versions, currentVersion, onRestore }: VersionHistoryProps) {
   if (versions.length === 0) {
     return (
-      <p className="text-sm text-[var(--text-muted)] py-4 text-center">
+      <p className="text-sm text-[var(--muted)] py-4 text-center">
         Ingen versionshistorik endnu.
       </p>
     );
@@ -29,19 +29,19 @@ export function VersionHistory({ versions, currentVersion, onRestore }: VersionH
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-[var(--text-muted)] mb-2">
+      <p className="text-xs text-[var(--muted)] mb-2">
         Versioner gemmes i 7 dage. Nuværende version: {currentVersion}
       </p>
       {versions.map((v, i) => (
         <div
           key={v.id}
-          className="flex items-center justify-between gap-2 py-2 border-b border-[var(--border)] last:border-0"
+          className="flex items-center justify-between gap-2 py-2 border-b border-[var(--line)] last:border-0"
         >
           <div>
-            <span className="text-sm font-medium text-[var(--text)]">
+            <span className="text-sm font-medium text-[var(--ink)]">
               Version {versions.length - i}
             </span>
-            <span className="ml-2 text-xs text-[var(--text-muted)]">
+            <span className="ml-2 text-xs text-[var(--muted)]">
               {formatDateTime(v.createdAt)}
             </span>
           </div>

@@ -34,7 +34,7 @@ describe('GET /api/meetings', () => {
 
   it('returns 401 when not authenticated', async () => {
     mockGetSession.mockResolvedValueOnce(null);
-    const res = await GET();
+    const res = await GET(makeJsonReq(BASE_URL, 'GET'));
     expect(res.status).toBe(401);
     expect((await res.json()).error).toBe('Unauthorized');
   });
@@ -46,7 +46,7 @@ describe('GET /api/meetings', () => {
     ];
     mockQueryMany.mockResolvedValueOnce(meetings as never);
 
-    const res = await GET();
+    const res = await GET(makeJsonReq(BASE_URL, 'GET'));
 
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual(meetings);
@@ -57,9 +57,18 @@ describe('GET /api/meetings', () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryMany.mockResolvedValueOnce([]);
 
-    const res = await GET();
+    const res = await GET(makeJsonReq(BASE_URL, 'GET'));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([]);
+  });
+
+  it('returns { count } when ?count=1 is passed', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockQueryMany.mockResolvedValueOnce([{ count: '42' }] as never);
+
+    const res = await GET(makeJsonReq(`${BASE_URL}?count=1`, 'GET'));
+    expect(res.status).toBe(200);
+    expect((await res.json()).count).toBe(42);
   });
 });
 

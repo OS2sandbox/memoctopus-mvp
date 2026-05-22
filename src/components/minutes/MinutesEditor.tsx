@@ -102,8 +102,8 @@ export function MinutesEditor({
     <div className="mx-auto max-w-[960px] px-4 py-8">
       <div className="flex items-center justify-between gap-4 mb-6">
         <div>
-          <h1 className="text-xl font-semibold text-[var(--text)]">Referat</h1>
-          <p className="mt-0.5 text-sm text-[var(--text-muted)]">
+          <h1 className="text-xl font-semibold text-[var(--ink)]">Referat</h1>
+          <p className="mt-0.5 text-sm text-[var(--muted)]">
             Version {version} · Gemmes automatisk
           </p>
         </div>
@@ -126,12 +126,12 @@ export function MinutesEditor({
         </div>
       </div>
 
-      <div className="rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] divide-y divide-[var(--border)]">
+      <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--surface)] divide-y divide-[var(--line)]">
         {content.sections.map((section: MinutesSection, i: number) => (
           <div key={section.key} className="px-6 py-5">
             <label
               htmlFor={`section-${section.key}`}
-              className="block text-sm font-semibold text-[var(--text)] mb-2"
+              className="block text-sm font-semibold text-[var(--ink)] mb-2"
             >
               {section.label}
             </label>

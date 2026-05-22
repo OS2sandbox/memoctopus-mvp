@@ -29,9 +29,9 @@ export default async function MeetingRecordPage({ params }: PageProps) {
 
   return (
     <div>
-      <div className="border-b border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+      <div className="border-b border-[var(--line)] bg-[var(--surface)] px-4 py-3">
         <div className="mx-auto max-w-[720px]">
-          <p className="text-sm font-medium text-[var(--text)]">{meeting.title}</p>
+          <p className="text-sm font-medium text-[var(--ink)]">{meeting.title}</p>
         </div>
       </div>
       <RecordingScreen meetingId={id} />

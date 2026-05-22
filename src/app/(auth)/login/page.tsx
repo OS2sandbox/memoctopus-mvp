@@ -41,7 +41,7 @@ export default function LoginPage() {
         const d = await res.json();
         throw new Error(d.message ?? d.error ?? 'Forkert e-mail eller adgangskode');
       }
-      router.push('/dashboard');
+      router.push('/');
       router.refresh();
     } catch (err) {
       setServerError(err instanceof Error ? err.message : 'Noget gik galt');
@@ -52,13 +52,24 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-[var(--bg)] px-4">
       <div className="w-full max-w-sm">
-        {/* Logo */}
+        {/* Wordmark */}
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-semibold text-[var(--text)]">Referat</h1>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">Log ind på din konto</p>
+          <p
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: '17px',
+              fontWeight: 500,
+              letterSpacing: '-0.04em',
+              color: 'var(--ink)',
+              margin: 0,
+            }}
+          >
+            memoctopus<span style={{ color: 'var(--accent)', margin: '0 0.25em' }}>·</span>referat
+          </p>
+          <p className="mt-2 text-sm text-[var(--muted)]">Log ind på din konto</p>
         </div>
 
-        <div className="bg-[var(--surface)] rounded-[var(--radius-lg)] border border-[var(--border)] p-6">
+        <div className="bg-[var(--surface)] rounded-[var(--radius)] border border-[var(--line)] p-6">
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="email">E-mail</Label>
@@ -90,18 +101,21 @@ export default function LoginPage() {
             </div>
 
             {serverError && (
-              <div className="rounded-[var(--radius)] border border-red-200 bg-red-50 px-3 py-2 text-sm text-[var(--danger)]">
+              <div
+                className="rounded-[var(--radius)] border px-3 py-2 text-sm text-[var(--danger)]"
+                style={{ backgroundColor: 'var(--danger-wash)', borderColor: 'var(--danger)' }}
+              >
                 {serverError}
               </div>
             )}
 
             <Button type="submit" className="w-full" disabled={isSubmitting}>
-              {isSubmitting ? 'Logger ind...' : 'Log ind'}
+              {isSubmitting ? 'Logger ind…' : 'Log ind'}
             </Button>
           </form>
         </div>
 
-        <p className="mt-4 text-center text-sm text-[var(--text-muted)]">
+        <p className="mt-4 text-center text-sm text-[var(--muted)]">
           Har du ikke en konto?{' '}
           <Link href="/register" className="text-[var(--accent)] hover:underline">
             Opret konto

@@ -9,9 +9,18 @@ const createSchema = z.object({
   participants: z.array(z.string()).optional().default([]),
 });
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const countOnly = new URL(req.url).searchParams.get('count') === '1';
+  if (countOnly) {
+    const rows = await queryUserSchema<{ count: string }>(
+      session.user.id,
+      'SELECT COUNT(*)::text AS count FROM meetings',
+    );
+    return NextResponse.json({ count: parseInt(rows[0]?.count ?? '0', 10) });
+  }
 
   const meetings = await queryUserSchema(
     session.user.id,

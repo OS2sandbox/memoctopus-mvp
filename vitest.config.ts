@@ -7,6 +7,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    // @ts-ignore — valid Vitest option, not in Next.js tsconfig types
     environmentMatchGlobs: [['src/components/**/*.test.tsx', 'jsdom']],
     setupFiles: ['./src/test/setup.ts'],
     coverage: {
