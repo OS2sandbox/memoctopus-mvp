@@ -10,10 +10,11 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const body = await req.json();
-  const { meetingId, transcriptId, segments } = body as {
+  const { meetingId, transcriptId, segments, customPrompt } = body as {
     meetingId: string;
     transcriptId: string;
     segments: TranscriptSegment[];
+    customPrompt?: string;
   };
 
   if (!meetingId || !transcriptId) {
@@ -79,7 +80,7 @@ export async function POST(req: NextRequest) {
   templateStructure = chosenTemplate.structure as TemplateStructure;
 
   // Generate minutes
-  const minutesContent = await generateMinutes(transcriptSegments, templateStructure.sections);
+  const minutesContent = await generateMinutes(transcriptSegments, templateStructure.sections, customPrompt);
 
   // Save minutes
   const minutesRow = await queryUserSchemaOne<{ id: string }>(

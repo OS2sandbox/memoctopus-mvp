@@ -67,6 +67,7 @@ Returner JSON:
 export async function generateMinutes(
   transcript: TranscriptSegment[],
   templateSections: TemplateSectionDef[],
+  customPrompt?: string,
 ): Promise<MinutesContent> {
   const transcriptText = transcript
     .map((s) => `[${s.speaker}] (${formatTime(s.start)}): ${s.text}`)
@@ -86,7 +87,7 @@ export async function generateMinutes(
       {
         role: 'user',
         content: `Udarbejd et mødereferat baseret på denne transskription.
-
+${customPrompt ? `\nBrugerens instruktion til referatet: ${customPrompt}\n` : ''}
 Referat skal have følgende sektioner:
 ${sectionDescriptions}
 

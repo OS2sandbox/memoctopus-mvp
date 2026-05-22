@@ -6,14 +6,6 @@ import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 
 interface TranscriptReviewProps {
   meetingId: string;
@@ -32,7 +24,7 @@ export function TranscriptReview({
   const [segments, setSegments] = useState(initialSegments);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showConfirm, setShowConfirm] = useState(false);
+  const [customPrompt, setCustomPrompt] = useState('');
 
   const speakerCounts = segments.reduce<Record<string, number>>((acc, seg) => {
     acc[seg.speaker] = (acc[seg.speaker] ?? 0) + 1;
@@ -68,7 +60,7 @@ export function TranscriptReview({
       const res = await fetch('/api/minutes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ meetingId, transcriptId, segments }),
+        body: JSON.stringify({ meetingId, transcriptId, segments, customPrompt: customPrompt.trim() || undefined }),
       });
       if (!res.ok) {
         const data = await res.json();
@@ -178,50 +170,65 @@ export function TranscriptReview({
             </div>
           )}
 
+          {/* Custom summarisation prompt */}
+          <div className="mb-4">
+            <p className="font-medium text-[var(--ink)] mb-2" style={{ fontSize: 'var(--t-small)' }}>
+              Tilpas referatet
+            </p>
+            <textarea
+              value={customPrompt}
+              onChange={(e) => setCustomPrompt(e.target.value)}
+              placeholder="Hvad vil du fokusere på? F.eks. 'kun beslutninger' eller 'kort punktliste'"
+              rows={3}
+              className="w-full border border-[var(--line)] rounded-[var(--radius)] px-3 py-2 bg-[var(--surface)] text-[var(--ink)] outline-none focus:border-[var(--accent)] resize-none placeholder:text-[var(--muted-2)]"
+              style={{ fontSize: 'var(--t-small)' }}
+            />
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {['Kun beslutninger', 'Kort opsummering', 'Handlingspunkter', 'Fuld detalje'].map((chip) => (
+                <button
+                  key={chip}
+                  onClick={() => setCustomPrompt((p) => p === chip ? '' : chip)}
+                  className="rounded-full border px-2.5 py-0.5 transition-colors"
+                  style={{
+                    fontSize: 'var(--t-micro)',
+                    borderColor: customPrompt === chip ? 'var(--accent)' : 'var(--line)',
+                    color: customPrompt === chip ? 'var(--accent)' : 'var(--muted)',
+                  }}
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Actions */}
           <div className="space-y-2">
             <Button
               className="w-full"
-              onClick={() => setShowConfirm(true)}
+              onClick={proceedToMinutes}
               disabled={isGenerating || segments.length === 0}
             >
               {isGenerating ? 'Genererer…' : 'Generér referat'}
             </Button>
-            <button
-              className="w-full text-center text-[var(--muted)] hover:text-[var(--danger)] transition-colors"
-              style={{ fontSize: 'var(--t-small)' }}
+            <div
+              className="w-full rounded-[var(--radius)] border px-4 py-3 flex items-center justify-between gap-3 cursor-pointer hover:bg-[var(--danger-wash)] transition-colors"
+              style={{ borderColor: 'var(--danger)', backgroundColor: 'var(--danger-wash)' }}
               onClick={() => router.push(`/meeting/${meetingId}/settings`)}
+              role="button"
             >
-              Slet følsomt indhold nu →
-            </button>
+              <div>
+                <p className="font-medium" style={{ fontSize: 'var(--t-small)', color: 'var(--danger)' }}>
+                  Slet følsomt indhold
+                </p>
+                <p style={{ fontSize: 'var(--t-micro)', color: 'var(--danger)', opacity: 0.7 }}>
+                  Fjern lyd og rå transskription permanent
+                </p>
+              </div>
+              <span style={{ color: 'var(--danger)', fontSize: 'var(--t-small)' }}>→</span>
+            </div>
           </div>
         </div>
       </div>
-
-      {/* Confirm dialog */}
-      <Dialog open={showConfirm} onOpenChange={setShowConfirm}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Generér referat?</DialogTitle>
-            <DialogDescription>
-              Modellen vil nu udarbejde et referat baseret på transskriptionen. Du kan redigere det bagefter.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setShowConfirm(false)}>
-              Annullér
-            </Button>
-            <Button
-              onClick={() => {
-                setShowConfirm(false);
-                proceedToMinutes();
-              }}
-            >
-              Generér referat
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
