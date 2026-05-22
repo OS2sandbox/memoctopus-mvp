@@ -1,0 +1,132 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { NextRequest } from 'next/server';
+
+vi.mock('next/headers', () => ({
+  headers: vi.fn().mockResolvedValue(new Headers()),
+}));
+
+vi.mock('@/lib/auth', () => ({
+  auth: { api: { getSession: vi.fn() } },
+}));
+
+vi.mock('@/lib/db/user-schema', () => ({
+  queryUserSchemaOne: vi.fn(),
+}));
+
+vi.mock('@/lib/ai/transcription', () => ({
+  getTranscriptionProvider: vi.fn(() => ({
+    transcribe: vi.fn().mockResolvedValue([
+      { speaker: 'Taler 1', start: 0, end: 5, text: 'Hej verden.' },
+    ]),
+  })),
+}));
+
+vi.mock('@/lib/ai/pii', () => ({
+  removePiiFromSegments: vi.fn().mockResolvedValue({
+    cleanedSegments: [{ speaker: 'Taler 1', start: 0, end: 5, text: 'Hej verden.' }],
+    replacements: [],
+  }),
+}));
+
+vi.mock('@/lib/audio/storage', () => ({
+  saveAudioFile: vi.fn().mockResolvedValue({ filename: 'test.webm', sizeBytes: 100 }),
+}));
+
+import { POST } from './route';
+import { auth } from '@/lib/auth';
+import { queryUserSchemaOne } from '@/lib/db/user-schema';
+
+const mockGetSession = vi.mocked(auth.api.getSession);
+const mockQueryOne = vi.mocked(queryUserSchemaOne);
+
+const FAKE_SESSION = { user: { id: 'user-123' } };
+
+function makeFormRequest(meetingId: string | null, includeFile = true): NextRequest {
+  const form = new FormData();
+  if (meetingId !== null) form.append('meetingId', meetingId);
+  if (includeFile) {
+    form.append('audio', new File(['audio bytes'], 'recording.webm', { type: 'audio/webm' }));
+  }
+  form.append('duration', '30');
+  return new NextRequest('http://localhost/api/transcribe', { method: 'POST', body: form });
+}
+
+// ─── POST /api/transcribe ─────────────────────────────────────────────────────
+
+describe('POST /api/transcribe', () => {
+  beforeEach(() => {
+    mockGetSession.mockReset();
+    mockQueryOne.mockReset();
+  });
+
+  it('returns 401 when not authenticated', async () => {
+    mockGetSession.mockResolvedValueOnce(null);
+    const res = await POST(makeFormRequest('meet-1'));
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 400 when audio file is missing', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    const res = await POST(makeFormRequest('meet-1', false));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/missing/i);
+  });
+
+  it('returns 400 when meetingId is missing', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    const res = await POST(makeFormRequest(null));
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 when meeting does not belong to user', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockQueryOne.mockResolvedValueOnce(null as never); // meeting lookup returns null
+
+    const res = await POST(makeFormRequest('meet-1'));
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toMatch(/not found/i);
+  });
+
+  it('returns transcriptId, segmentCount, piiReplacementCount on success', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    // meeting lookup
+    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never);
+    // mark processing
+    mockQueryOne.mockResolvedValueOnce({} as never);
+    // save audio_files record
+    mockQueryOne.mockResolvedValueOnce({} as never);
+    // save transcript, return id
+    mockQueryOne.mockResolvedValueOnce({ id: 'transcript-123' } as never);
+    // mark review
+    mockQueryOne.mockResolvedValueOnce({} as never);
+
+    const res = await POST(makeFormRequest('meet-1'));
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.transcriptId).toBe('transcript-123');
+    expect(body.segmentCount).toBe(1);
+    expect(body.piiReplacementCount).toBe(0);
+  });
+
+  it('resets meeting status to recording on transcription error', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    // Default: all queries return {} so .catch() always has a real promise
+    mockQueryOne.mockResolvedValue({} as never);
+    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never); // meeting lookup
+
+    const { getTranscriptionProvider } = await import('@/lib/ai/transcription');
+    vi.mocked(getTranscriptionProvider).mockReturnValueOnce({
+      transcribe: vi.fn().mockRejectedValueOnce(new Error('Whisper failed')),
+    });
+
+    const res = await POST(makeFormRequest('meet-1'));
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toBe('Whisper failed');
+
+    const resetCall = mockQueryOne.mock.calls.find(
+      ([, sql]) => typeof sql === 'string' && sql.includes("'recording'"),
+    );
+    expect(resetCall).toBeDefined();
+  });
+});
