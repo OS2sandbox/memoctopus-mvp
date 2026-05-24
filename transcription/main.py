@@ -50,6 +50,7 @@ CHUNK_MAX_S = float(os.environ.get("CHUNK_MAX_S", "28.0"))
 CHUNK_FALLBACK_S = float(os.environ.get("CHUNK_FALLBACK_S", "28.0"))
 ASR_CONCURRENCY = int(os.environ.get("ASR_CONCURRENCY", "32"))
 VLLM_REQUEST_TIMEOUT_S = float(os.environ.get("VLLM_REQUEST_TIMEOUT_S", "300"))
+VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "").strip()
 
 
 @asynccontextmanager
@@ -142,13 +143,17 @@ def _parse_vllm_response(payload: dict) -> str:
 
 
 def _transcribe_chunk_sync(chunk_path: str) -> str:
-    """Sync POST to vLLM. Called via asyncio.to_thread for concurrency."""
+    headers = {}
+    if VLLM_API_KEY:
+        headers["Authorization"] = f"Bearer {VLLM_API_KEY}"
+    
     with open(chunk_path, "rb") as f:
         chunk_bytes = f.read()
     files = {"file": (os.path.basename(chunk_path), chunk_bytes, "audio/wav")}
     data = {"model": HVISKE_MODEL, "language": "da", "response_format": "json"}
     with httpx.Client(base_url=VLLM_ASR_BASE_URL,
-                      timeout=httpx.Timeout(VLLM_REQUEST_TIMEOUT_S)) as client:
+                      timeout=httpx.Timeout(VLLM_REQUEST_TIMEOUT_S),
+                      headers=headers) as client:
         resp = client.post("/audio/transcriptions", files=files, data=data)
     resp.raise_for_status()
     return _parse_vllm_response(resp.json())
