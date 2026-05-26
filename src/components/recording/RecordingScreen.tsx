@@ -349,171 +349,171 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
   // ── Active recording / idle ───────────────────────────────────────────────────
   return (
     <div className="mx-auto px-6 py-12" style={{ maxWidth: showLivePanel ? 1040 : 720 }}>
-      {/* Controls section */}
-      <div style={{ maxWidth: 720, margin: '0 auto', marginBottom: showLivePanel ? 32 : 0 }}>
-        {error && (
-          <div
-            className="mb-8 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--danger)]"
-            style={{ backgroundColor: 'var(--danger-wash)', borderColor: 'var(--danger)' }}
-          >
-            {error}
-          </div>
-        )}
+      <div className={showLivePanel ? 'flex gap-8 items-start' : ''}>
 
-        <div className="flex items-end justify-between mb-10">
-          <div>
-            <span
-              className="text-[var(--ink)] tabular-nums"
-              style={{ fontFamily: 'var(--font-mono)', fontSize: '56px', fontWeight: 500, lineHeight: 1, letterSpacing: '-0.03em' }}
+        {/* Controls — sticky left column when live, centered column when idle */}
+        <div className={showLivePanel ? 'w-72 shrink-0 sticky top-6' : ''}>
+          {error && (
+            <div
+              className="mb-8 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--danger)]"
+              style={{ backgroundColor: 'var(--danger-wash)', borderColor: 'var(--danger)' }}
             >
-              {elapsedFormatted}
-            </span>
-            <p className="mt-1 text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}>
-              {elapsed > 0 ? `${formatFileSize(estimatedSize)} · webm/opus` : 'Klar til optagelse'}
-            </p>
-          </div>
-          <VolumeBar level={recordingState === 'recording' ? volumeLevel : 0} barCount={24} />
-        </div>
-
-        {showSilenceWarning && recordingState === 'recording' && (
-          <div
-            className="mb-6 rounded-[var(--radius-sm)] px-3 py-2 text-sm text-[var(--ink-2)]"
-            style={{ backgroundColor: 'color-mix(in oklch, var(--warn) 10%, white)', borderLeft: '3px solid var(--warn)' }}
-          >
-            Vi kan ikke høre noget — er mikrofonen tændt?
-          </div>
-        )}
-
-        <div className="flex items-center justify-center gap-6 mb-8">
-          {recordingState === 'idle' && (
-            <button
-              onClick={startRecording}
-              style={{ width: 72, height: 72, borderRadius: '50%', backgroundColor: 'var(--ink)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-              aria-label="Start optagelse"
-            >
-              <span style={{ width: 22, height: 22, borderRadius: '50%', backgroundColor: 'white', display: 'block' }} />
-            </button>
+              {error}
+            </div>
           )}
+
+          <div className="flex items-end justify-between mb-10">
+            <div>
+              <span
+                className="text-[var(--ink)] tabular-nums"
+                style={{ fontFamily: 'var(--font-mono)', fontSize: '56px', fontWeight: 500, lineHeight: 1, letterSpacing: '-0.03em' }}
+              >
+                {elapsedFormatted}
+              </span>
+              <p className="mt-1 text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}>
+                {elapsed > 0 ? `${formatFileSize(estimatedSize)} · webm/opus` : 'Klar til optagelse'}
+              </p>
+            </div>
+            <VolumeBar level={recordingState === 'recording' ? volumeLevel : 0} barCount={24} />
+          </div>
+
+          {showSilenceWarning && recordingState === 'recording' && (
+            <div
+              className="mb-6 rounded-[var(--radius-sm)] px-3 py-2 text-sm text-[var(--ink-2)]"
+              style={{ backgroundColor: 'color-mix(in oklch, var(--warn) 10%, white)', borderLeft: '3px solid var(--warn)' }}
+            >
+              Vi kan ikke høre noget — er mikrofonen tændt?
+            </div>
+          )}
+
+          <div className="flex items-center justify-center gap-6 mb-8">
+            {recordingState === 'idle' && (
+              <button
+                onClick={startRecording}
+                style={{ width: 72, height: 72, borderRadius: '50%', backgroundColor: 'var(--ink)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                aria-label="Start optagelse"
+              >
+                <span style={{ width: 22, height: 22, borderRadius: '50%', backgroundColor: 'white', display: 'block' }} />
+              </button>
+            )}
+
+            {(recordingState === 'recording' || recordingState === 'paused') && (
+              <>
+                <Button variant="outline" onClick={recordingState === 'recording' ? pauseRecording : resumeRecording} style={{ height: 44, minWidth: 90 }}>
+                  {recordingState === 'recording' ? 'Pause' : 'Fortsæt'}
+                </Button>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                  <button
+                    onClick={stopAndSave}
+                    style={{ width: 72, height: 72, borderRadius: '50%', backgroundColor: 'var(--ink)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    aria-label="Stop og gem"
+                  >
+                    <span style={{ width: 18, height: 18, backgroundColor: 'white', borderRadius: 3, display: 'block' }} />
+                  </button>
+                  <span style={{ fontSize: 'var(--t-micro)', color: 'var(--muted)' }}>Stop &amp; gem</span>
+                </div>
+              </>
+            )}
+
+            {(recordingState === 'stopped' || isUploading) && (
+              <div className="flex items-center gap-2 text-sm text-[var(--muted)]">
+                <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
+                {isUploading ? 'Uploader og transskriberer…' : 'Behandler…'}
+              </div>
+            )}
+          </div>
 
           {(recordingState === 'recording' || recordingState === 'paused') && (
-            <>
-              <Button variant="outline" onClick={recordingState === 'recording' ? pauseRecording : resumeRecording} style={{ height: 44, minWidth: 90 }}>
-                {recordingState === 'recording' ? 'Pause' : 'Fortsæt'}
-              </Button>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-                <button
-                  onClick={stopAndSave}
-                  style={{ width: 72, height: 72, borderRadius: '50%', backgroundColor: 'var(--ink)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                  aria-label="Stop og gem"
-                >
-                  <span style={{ width: 18, height: 18, backgroundColor: 'white', borderRadius: 3, display: 'block' }} />
-                </button>
-                <span style={{ fontSize: 'var(--t-micro)', color: 'var(--muted)' }}>Stop &amp; gem</span>
-              </div>
-            </>
+            <p className="text-center text-[var(--muted)] mb-8" style={{ fontSize: 'var(--t-small)' }}>
+              Du kan trygt skifte fane. Optagelsen fortsætter.
+            </p>
           )}
 
-          {(recordingState === 'stopped' || isUploading) && (
-            <div className="flex items-center gap-2 text-sm text-[var(--muted)]">
-              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
-              {isUploading ? 'Uploader og transskriberer…' : 'Behandler…'}
+          {recordingState !== 'stopped' && !isUploading && (
+            <div className="text-center mb-8">
+              <button
+                onClick={() => setShowCancelDialog(true)}
+                className="text-[var(--muted)] hover:text-[var(--danger)] underline underline-offset-2 transition-colors"
+                style={{ fontSize: 'var(--t-small)' }}
+              >
+                Annullér og slet
+              </button>
             </div>
           )}
-        </div>
 
-        {(recordingState === 'recording' || recordingState === 'paused') && (
-          <p className="text-center text-[var(--muted)] mb-8" style={{ fontSize: 'var(--t-small)' }}>
-            Du kan trygt skifte fane. Optagelsen fortsætter.
+          <p className="text-center text-[var(--muted)]" style={{ fontSize: 'var(--t-micro)', fontFamily: 'var(--font-mono)' }}>
+            Lyden slettes automatisk efter 14 dage · PII fjernes inden referatet udarbejdes
           </p>
-        )}
-
-        {recordingState !== 'stopped' && !isUploading && (
-          <div className="text-center mb-8">
-            <button
-              onClick={() => setShowCancelDialog(true)}
-              className="text-[var(--muted)] hover:text-[var(--danger)] underline underline-offset-2 transition-colors"
-              style={{ fontSize: 'var(--t-small)' }}
-            >
-              Annullér og slet
-            </button>
-          </div>
-        )}
-
-        <p className="text-center text-[var(--muted)]" style={{ fontSize: 'var(--t-micro)', fontFamily: 'var(--font-mono)' }}>
-          Lyden slettes automatisk efter 14 dage · PII fjernes inden referatet udarbejdes
-        </p>
-      </div>
-
-      {/* Live panel */}
-      {showLivePanel && (
-        <div className="flex gap-6 items-start">
-          {/* Live transcript — chat-like */}
-          <div className="flex-1 min-w-0">
-            <p className="font-medium text-[var(--ink)] mb-3" style={{ fontSize: 'var(--t-small)' }}>
-              Live transskription
-            </p>
-            <div
-              className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] overflow-y-auto"
-              style={{ maxHeight: 360, padding: '12px 16px' }}
-            >
-              {liveSegments.length === 0 ? (
-                <p className="text-[var(--muted)] italic" style={{ fontSize: 'var(--t-small)', fontFamily: 'var(--font-mono)' }}>
-                  Lytter…
-                </p>
-              ) : (
-                <div className="space-y-3">
-                  {liveSegments.map((seg, i) => (
-                    <div key={i} className="flex gap-2">
-                      <span
-                        className="shrink-0 text-[var(--muted)] tabular-nums"
-                        style={{ fontSize: 'var(--t-micro)', fontFamily: 'var(--font-mono)', paddingTop: 2, minWidth: 48 }}
-                      >
-                        {seg.speaker}
-                      </span>
-                      <p className="text-[var(--ink)]" style={{ fontSize: 'var(--t-small)', lineHeight: 1.6 }}>
-                        {seg.text}
-                      </p>
-                    </div>
-                  ))}
-                  <div ref={transcriptEndRef} />
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Topics panel */}
-          <div className="w-64 shrink-0">
-            <p className="font-medium text-[var(--ink)] mb-3" style={{ fontSize: 'var(--t-small)' }}>
-              Mødeoverblik
-            </p>
-            <div className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] overflow-hidden">
-              {topics.length === 0 ? (
-                <p
-                  className="text-[var(--muted)] italic px-4 py-3"
-                  style={{ fontSize: 'var(--t-small)', fontFamily: 'var(--font-mono)' }}
-                >
-                  Lytter…
-                </p>
-              ) : (
-                <div className="divide-y divide-[var(--line)]">
-                  {topics.map((t, i) => (
-                    <div key={i} className="px-4 py-3">
-                      <p className="font-medium text-[var(--ink)] mb-1.5" style={{ fontSize: 'var(--t-small)' }}>
-                        {t.topic}
-                      </p>
-                      {t.followUps.map((q, j) => (
-                        <p key={j} className="text-[var(--muted)] mb-1 last:mb-0" style={{ fontSize: 'var(--t-micro)' }}>
-                          → {q}
-                        </p>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
         </div>
-      )}
+
+        {/* Right column: topics at top, transcript below */}
+        {showLivePanel && (
+          <div className="flex-1 min-w-0">
+            {/* Topics — always at the top of this column */}
+            <div className="mb-4">
+              <p className="font-medium text-[var(--ink)] mb-2" style={{ fontSize: 'var(--t-small)' }}>
+                Mødeoverblik
+              </p>
+              <div className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] overflow-hidden">
+                {topics.length === 0 ? (
+                  <p className="text-[var(--muted)] italic px-4 py-3" style={{ fontSize: 'var(--t-small)', fontFamily: 'var(--font-mono)' }}>
+                    Lytter…
+                  </p>
+                ) : (
+                  <div className="divide-y divide-[var(--line)]">
+                    {topics.map((t, i) => (
+                      <div key={i} className="px-4 py-3">
+                        <p className="font-medium text-[var(--ink)] mb-1.5" style={{ fontSize: 'var(--t-small)' }}>
+                          {t.topic}
+                        </p>
+                        {t.followUps.map((q, j) => (
+                          <p key={j} className="text-[var(--muted)] mb-1 last:mb-0" style={{ fontSize: 'var(--t-micro)' }}>
+                            → {q}
+                          </p>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Live transcript — grows below topics */}
+            <div>
+              <p className="font-medium text-[var(--ink)] mb-2" style={{ fontSize: 'var(--t-small)' }}>
+                Live transskription
+              </p>
+              <div
+                className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] overflow-y-auto"
+                style={{ maxHeight: 400, padding: '12px 16px' }}
+              >
+                {liveSegments.length === 0 ? (
+                  <p className="text-[var(--muted)] italic" style={{ fontSize: 'var(--t-small)', fontFamily: 'var(--font-mono)' }}>
+                    Lytter…
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {liveSegments.map((seg, i) => (
+                      <div key={i} className="flex gap-2">
+                        <span
+                          className="shrink-0 text-[var(--muted)] tabular-nums"
+                          style={{ fontSize: 'var(--t-micro)', fontFamily: 'var(--font-mono)', paddingTop: 2, minWidth: 48 }}
+                        >
+                          {seg.speaker}
+                        </span>
+                        <p className="text-[var(--ink)]" style={{ fontSize: 'var(--t-small)', lineHeight: 1.6 }}>
+                          {seg.text}
+                        </p>
+                      </div>
+                    ))}
+                    <div ref={transcriptEndRef} />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Dialogs */}
       <Dialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
