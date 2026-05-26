@@ -136,20 +136,21 @@ export function MinutesEditor({
               style={{
                 width: '100%',
                 resize: 'vertical',
-                border: 'none',
-                borderBottom: '1px solid transparent',
-                background: 'transparent',
+                border: '1px solid var(--line)',
+                borderRadius: 'var(--radius)',
+                background: 'var(--surface)',
                 outline: 'none',
                 color: 'var(--ink)',
                 fontSize: 'var(--t-body)',
                 lineHeight: 1.7,
-                padding: '0 0 8px',
+                padding: '10px 12px',
                 fontFamily: 'inherit',
-                transition: 'border-color 0.1s',
+                transition: 'border-color 0.15s',
+                cursor: 'text',
               }}
-              onFocus={(e) => (e.target.style.borderBottomColor = 'var(--line-strong)')}
-              onBlur={(e) => (e.target.style.borderBottomColor = 'transparent')}
-              className="placeholder:text-[var(--muted-2)]"
+              onFocus={(e) => (e.target.style.borderColor = 'var(--accent)')}
+              onBlur={(e) => (e.target.style.borderColor = 'var(--line)')}
+              className="placeholder:text-[var(--muted-2)] hover:border-[var(--line-strong)]"
             />
           </div>
         ))}
