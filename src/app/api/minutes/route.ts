@@ -89,6 +89,13 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Replace any existing minutes for this meeting (minute_versions cascade-deletes)
+  await queryUserSchemaOne(
+    session.user.id,
+    'DELETE FROM minutes WHERE meeting_id = $1',
+    [meetingId],
+  );
+
   // Save minutes
   const minutesRow = await queryUserSchemaOne<{ id: string }>(
     session.user.id,
