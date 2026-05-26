@@ -14,6 +14,16 @@ import {
 import { VolumeBar } from './VolumeBar';
 import { formatDuration, formatFileSize } from '@/lib/utils';
 
+interface LiveSegment {
+  speaker: string;
+  text: string;
+}
+
+interface TopicItem {
+  topic: string;
+  followUps: string[];
+}
+
 interface RecordingScreenProps {
   meetingId: string;
   existingRecording?: { durationSeconds: number | null; sizeBytes: number };
@@ -21,9 +31,11 @@ interface RecordingScreenProps {
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
 
-const BYTES_PER_SECOND_ESTIMATE = 16_000; // ~16 KB/s for webm/opus
+const BYTES_PER_SECOND_ESTIMATE = 16_000;
 const SILENCE_THRESHOLD_SECONDS = 5;
 const SILENCE_VOLUME_THRESHOLD = 0.02;
+const LIVE_CHUNK_INTERVAL = 15_000;
+const TOPIC_INTERVAL = 25_000;
 
 export function RecordingScreen({ meetingId, existingRecording }: RecordingScreenProps) {
   const router = useRouter();
@@ -33,9 +45,20 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
   const [showSilenceWarning, setShowSilenceWarning] = useState(false);
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [showOverwriteDialog, setShowOverwriteDialog] = useState(false);
-  const [isOverwriting, setIsOverwriting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isOverwriting, setIsOverwriting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Live transcription
+  const [liveSegments, setLiveSegments] = useState<LiveSegment[]>([]);
+  const [topics, setTopics] = useState<TopicItem[]>([]);
+  const liveSegmentsRef = useRef<LiveSegment[]>([]);
+  const headerChunkRef = useRef<Blob | null>(null);
+  const lastChunkIndexRef = useRef(0);
+  const mimeTypeRef = useRef('audio/webm');
+  const chunkIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const topicIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const transcriptEndRef = useRef<HTMLDivElement | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -48,7 +71,6 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
   const pausedDurationRef = useRef<number>(0);
   const pauseStartRef = useRef<number>(0);
 
-  // Volume polling via AnalyserNode
   const pollVolume = useCallback(() => {
     if (!analyserRef.current) return;
     const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
@@ -60,26 +82,70 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
     }
     const rms = Math.sqrt(sum / dataArray.length);
     setVolumeLevel(Math.min(1, rms * 4));
-
     if (rms < SILENCE_VOLUME_THRESHOLD) {
       silenceTimerRef.current += 1 / 60;
-      if (silenceTimerRef.current >= SILENCE_THRESHOLD_SECONDS) {
-        setShowSilenceWarning(true);
-      }
+      if (silenceTimerRef.current >= SILENCE_THRESHOLD_SECONDS) setShowSilenceWarning(true);
     } else {
       silenceTimerRef.current = 0;
       setShowSilenceWarning(false);
     }
-
     animFrameRef.current = requestAnimationFrame(pollVolume);
   }, []);
 
+  function resetLiveState() {
+    liveSegmentsRef.current = [];
+    setLiveSegments([]);
+    setTopics([]);
+    lastChunkIndexRef.current = 0;
+    headerChunkRef.current = null;
+  }
+
+  async function sendLiveChunk() {
+    const chunks = chunksRef.current;
+    const from = lastChunkIndexRef.current;
+    const newChunks = chunks.slice(from);
+    if (newChunks.length < 5 || !headerChunkRef.current) return;
+    lastChunkIndexRef.current = chunks.length;
+
+    const parts = from === 0 ? newChunks : [headerChunkRef.current, ...newChunks];
+    const blob = new Blob(parts, { type: mimeTypeRef.current });
+    const ext = mimeTypeRef.current.includes('mp4') ? 'm4a' : 'webm';
+    const form = new FormData();
+    form.append('audio', blob, `live.${ext}`);
+
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/live-transcribe`, { method: 'POST', body: form });
+      if (!res.ok) return;
+      const data = await res.json() as { segments?: LiveSegment[] };
+      const segs = data.segments ?? [];
+      if (segs.length > 0) {
+        liveSegmentsRef.current = [...liveSegmentsRef.current, ...segs];
+        setLiveSegments([...liveSegmentsRef.current]);
+        setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+      }
+    } catch {}
+  }
+
+  async function refreshTopics() {
+    if (liveSegmentsRef.current.length === 0) return;
+    const text = liveSegmentsRef.current.map((s) => `[${s.speaker}]: ${s.text}`).join('\n');
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/topics`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transcript: text }),
+      });
+      if (!res.ok) return;
+      const data = await res.json() as { topics?: TopicItem[] };
+      setTopics(data.topics ?? []);
+    } catch {}
+  }
+
   async function startRecording() {
     setError(null);
+    resetLiveState();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      // Set up audio analyser
       const ctx = new AudioContext();
       const source = ctx.createMediaStreamSource(stream);
       const analyser = ctx.createAnalyser();
@@ -91,28 +157,32 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : 'audio/webm';
+      mimeTypeRef.current = mimeType;
+
       const recorder = new MediaRecorder(stream, { mimeType });
       mediaRecorderRef.current = recorder;
       chunksRef.current = [];
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
+        if (e.data.size > 0) {
+          if (chunksRef.current.length === 0) headerChunkRef.current = e.data;
+          chunksRef.current.push(e.data);
+        }
       };
 
-      recorder.start(1000); // collect chunks every second
+      recorder.start(1000);
       startTimeRef.current = Date.now();
       pausedDurationRef.current = 0;
-
       setRecordingState('recording');
       setElapsed(0);
 
       timerRef.current = setInterval(() => {
-        setElapsed(
-          Math.floor((Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000),
-        );
+        setElapsed(Math.floor((Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000));
       }, 500);
 
       animFrameRef.current = requestAnimationFrame(pollVolume);
+      chunkIntervalRef.current = setInterval(sendLiveChunk, LIVE_CHUNK_INTERVAL);
+      topicIntervalRef.current = setInterval(refreshTopics, TOPIC_INTERVAL);
     } catch {
       setError('Kunne ikke få adgang til mikrofonen. Tjek at tilladelsen er givet i browseren.');
     }
@@ -135,18 +205,22 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
     animFrameRef.current = requestAnimationFrame(pollVolume);
   }
 
-  async function stopAndSave() {
-    if (!mediaRecorderRef.current) return;
-
-    const recorder = mediaRecorderRef.current;
+  function clearIntervals() {
     if (timerRef.current) clearInterval(timerRef.current);
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    if (chunkIntervalRef.current) clearInterval(chunkIntervalRef.current);
+    if (topicIntervalRef.current) clearInterval(topicIntervalRef.current);
+  }
+
+  async function stopAndSave() {
+    if (!mediaRecorderRef.current) return;
+    const recorder = mediaRecorderRef.current;
+    clearIntervals();
 
     await new Promise<void>((resolve) => {
       recorder.onstop = () => resolve();
       recorder.stop();
     });
-
     recorder.stream.getTracks().forEach((t) => t.stop());
     audioContextRef.current?.close();
 
@@ -166,7 +240,6 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
         const data = await res.json();
         throw new Error(data.error ?? 'Upload fejlede');
       }
-
       router.push(`/meeting/${meetingId}/review`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt under upload');
@@ -189,31 +262,31 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
 
   async function cancelRecording() {
     if (mediaRecorderRef.current) {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      clearIntervals();
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current.stream.getTracks().forEach((t) => t.stop());
       audioContextRef.current?.close();
     }
-    // Delete the meeting
     await fetch(`/api/meetings/${meetingId}`, { method: 'DELETE' });
     router.push('/');
   }
 
   useEffect(() => {
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      clearIntervals();
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const estimatedSize = elapsed * BYTES_PER_SECOND_ESTIMATE;
-
   const hours = Math.floor(elapsed / 3600);
   const minutes = Math.floor((elapsed % 3600) / 60);
   const seconds = elapsed % 60;
   const elapsedFormatted = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
+  const showLivePanel = recordingState === 'recording' || recordingState === 'paused' || liveSegments.length > 0;
+
+  // ── Completed state (navigated back after recording) ─────────────────────────
   if (existingRecording && recordingState === 'idle') {
     const dur = existingRecording.durationSeconds;
     const durFormatted = dur != null ? formatDuration(dur) : null;
@@ -273,134 +346,176 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
     );
   }
 
+  // ── Active recording / idle ───────────────────────────────────────────────────
   return (
-    <div className="mx-auto max-w-[720px] px-6 py-12">
-      {/* Error */}
-      {error && (
-        <div
-          className="mb-8 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--danger)]"
-          style={{ backgroundColor: 'var(--danger-wash)', borderColor: 'var(--danger)' }}
-        >
-          {error}
-        </div>
-      )}
-
-      {/* Header row: timer + file info left; volume meter right */}
-      <div className="flex items-end justify-between mb-10">
-        <div>
-          <span
-            className="text-[var(--ink)] tabular-nums"
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '56px',
-              fontWeight: 500,
-              lineHeight: 1,
-              letterSpacing: '-0.03em',
-            }}
+    <div className="mx-auto px-6 py-12" style={{ maxWidth: showLivePanel ? 1040 : 720 }}>
+      {/* Controls section */}
+      <div style={{ maxWidth: 720, margin: '0 auto', marginBottom: showLivePanel ? 32 : 0 }}>
+        {error && (
+          <div
+            className="mb-8 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--danger)]"
+            style={{ backgroundColor: 'var(--danger-wash)', borderColor: 'var(--danger)' }}
           >
-            {elapsedFormatted}
-          </span>
-          <p
-            className="mt-1 text-[var(--muted)]"
-            style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}
-          >
-            {elapsed > 0 ? `${formatFileSize(estimatedSize)} · webm/opus` : 'Klar til optagelse'}
-          </p>
-        </div>
-        <VolumeBar level={recordingState === 'recording' ? volumeLevel : 0} barCount={24} />
-      </div>
-
-      {/* Silence warning — inline amber stripe */}
-      {showSilenceWarning && recordingState === 'recording' && (
-        <div
-          className="mb-6 rounded-[var(--radius-sm)] px-3 py-2 text-sm text-[var(--ink-2)]"
-          style={{ backgroundColor: 'color-mix(in oklch, var(--warn) 10%, white)', borderLeft: '3px solid var(--warn)' }}
-        >
-          Vi kan ikke høre noget — er mikrofonen tændt?
-        </div>
-      )}
-
-      {/* Controls row */}
-      <div className="flex items-center justify-center gap-6 mb-8">
-        {recordingState === 'idle' && (
-          <button
-            onClick={startRecording}
-            style={{
-              width: 72, height: 72, borderRadius: '50%',
-              backgroundColor: 'var(--ink)', border: 'none', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}
-            aria-label="Start optagelse"
-          >
-            <span style={{ width: 22, height: 22, borderRadius: '50%', backgroundColor: 'white', display: 'block' }} />
-          </button>
-        )}
-
-        {(recordingState === 'recording' || recordingState === 'paused') && (
-          <>
-            <Button
-              variant="outline"
-              onClick={recordingState === 'recording' ? pauseRecording : resumeRecording}
-              style={{ height: 44, minWidth: 90 }}
-            >
-              {recordingState === 'recording' ? 'Pause' : 'Fortsæt'}
-            </Button>
-
-            {/* Primary circular stop button */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-              <button
-                onClick={stopAndSave}
-                style={{
-                  width: 72, height: 72, borderRadius: '50%',
-                  backgroundColor: 'var(--ink)', border: 'none', cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}
-                aria-label="Stop og gem"
-              >
-                <span style={{ width: 18, height: 18, backgroundColor: 'white', borderRadius: 3, display: 'block' }} />
-              </button>
-              <span style={{ fontSize: 'var(--t-micro)', color: 'var(--muted)' }}>Stop &amp; gem</span>
-            </div>
-          </>
-        )}
-
-        {(recordingState === 'stopped' || isUploading) && (
-          <div className="flex items-center gap-2 text-sm text-[var(--muted)]">
-            <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
-            {isUploading ? 'Uploader og transskriberer…' : 'Behandler…'}
+            {error}
           </div>
         )}
+
+        <div className="flex items-end justify-between mb-10">
+          <div>
+            <span
+              className="text-[var(--ink)] tabular-nums"
+              style={{ fontFamily: 'var(--font-mono)', fontSize: '56px', fontWeight: 500, lineHeight: 1, letterSpacing: '-0.03em' }}
+            >
+              {elapsedFormatted}
+            </span>
+            <p className="mt-1 text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}>
+              {elapsed > 0 ? `${formatFileSize(estimatedSize)} · webm/opus` : 'Klar til optagelse'}
+            </p>
+          </div>
+          <VolumeBar level={recordingState === 'recording' ? volumeLevel : 0} barCount={24} />
+        </div>
+
+        {showSilenceWarning && recordingState === 'recording' && (
+          <div
+            className="mb-6 rounded-[var(--radius-sm)] px-3 py-2 text-sm text-[var(--ink-2)]"
+            style={{ backgroundColor: 'color-mix(in oklch, var(--warn) 10%, white)', borderLeft: '3px solid var(--warn)' }}
+          >
+            Vi kan ikke høre noget — er mikrofonen tændt?
+          </div>
+        )}
+
+        <div className="flex items-center justify-center gap-6 mb-8">
+          {recordingState === 'idle' && (
+            <button
+              onClick={startRecording}
+              style={{ width: 72, height: 72, borderRadius: '50%', backgroundColor: 'var(--ink)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              aria-label="Start optagelse"
+            >
+              <span style={{ width: 22, height: 22, borderRadius: '50%', backgroundColor: 'white', display: 'block' }} />
+            </button>
+          )}
+
+          {(recordingState === 'recording' || recordingState === 'paused') && (
+            <>
+              <Button variant="outline" onClick={recordingState === 'recording' ? pauseRecording : resumeRecording} style={{ height: 44, minWidth: 90 }}>
+                {recordingState === 'recording' ? 'Pause' : 'Fortsæt'}
+              </Button>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                <button
+                  onClick={stopAndSave}
+                  style={{ width: 72, height: 72, borderRadius: '50%', backgroundColor: 'var(--ink)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  aria-label="Stop og gem"
+                >
+                  <span style={{ width: 18, height: 18, backgroundColor: 'white', borderRadius: 3, display: 'block' }} />
+                </button>
+                <span style={{ fontSize: 'var(--t-micro)', color: 'var(--muted)' }}>Stop &amp; gem</span>
+              </div>
+            </>
+          )}
+
+          {(recordingState === 'stopped' || isUploading) && (
+            <div className="flex items-center gap-2 text-sm text-[var(--muted)]">
+              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
+              {isUploading ? 'Uploader og transskriberer…' : 'Behandler…'}
+            </div>
+          )}
+        </div>
+
+        {(recordingState === 'recording' || recordingState === 'paused') && (
+          <p className="text-center text-[var(--muted)] mb-8" style={{ fontSize: 'var(--t-small)' }}>
+            Du kan trygt skifte fane. Optagelsen fortsætter.
+          </p>
+        )}
+
+        {recordingState !== 'stopped' && !isUploading && (
+          <div className="text-center mb-8">
+            <button
+              onClick={() => setShowCancelDialog(true)}
+              className="text-[var(--muted)] hover:text-[var(--danger)] underline underline-offset-2 transition-colors"
+              style={{ fontSize: 'var(--t-small)' }}
+            >
+              Annullér og slet
+            </button>
+          </div>
+        )}
+
+        <p className="text-center text-[var(--muted)]" style={{ fontSize: 'var(--t-micro)', fontFamily: 'var(--font-mono)' }}>
+          Lyden slettes automatisk efter 14 dage · PII fjernes inden referatet udarbejdes
+        </p>
       </div>
 
-      {/* Tab-switch reassurance */}
-      {(recordingState === 'recording' || recordingState === 'paused') && (
-        <p className="text-center text-[var(--muted)] mb-8" style={{ fontSize: 'var(--t-small)' }}>
-          Du kan trygt skifte fane. Optagelsen fortsætter.
-        </p>
-      )}
+      {/* Live panel */}
+      {showLivePanel && (
+        <div className="flex gap-6 items-start">
+          {/* Live transcript — chat-like */}
+          <div className="flex-1 min-w-0">
+            <p className="font-medium text-[var(--ink)] mb-3" style={{ fontSize: 'var(--t-small)' }}>
+              Live transskription
+            </p>
+            <div
+              className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] overflow-y-auto"
+              style={{ maxHeight: 360, padding: '12px 16px' }}
+            >
+              {liveSegments.length === 0 ? (
+                <p className="text-[var(--muted)] italic" style={{ fontSize: 'var(--t-small)', fontFamily: 'var(--font-mono)' }}>
+                  Lytter…
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {liveSegments.map((seg, i) => (
+                    <div key={i} className="flex gap-2">
+                      <span
+                        className="shrink-0 text-[var(--muted)] tabular-nums"
+                        style={{ fontSize: 'var(--t-micro)', fontFamily: 'var(--font-mono)', paddingTop: 2, minWidth: 48 }}
+                      >
+                        {seg.speaker}
+                      </span>
+                      <p className="text-[var(--ink)]" style={{ fontSize: 'var(--t-small)', lineHeight: 1.6 }}>
+                        {seg.text}
+                      </p>
+                    </div>
+                  ))}
+                  <div ref={transcriptEndRef} />
+                </div>
+              )}
+            </div>
+          </div>
 
-      {/* Cancel link */}
-      {recordingState !== 'stopped' && !isUploading && (
-        <div className="text-center mb-8">
-          <button
-            onClick={() => setShowCancelDialog(true)}
-            className="text-[var(--muted)] hover:text-[var(--danger)] underline underline-offset-2 transition-colors"
-            style={{ fontSize: 'var(--t-small)' }}
-          >
-            Annullér og slet
-          </button>
+          {/* Topics panel */}
+          <div className="w-64 shrink-0">
+            <p className="font-medium text-[var(--ink)] mb-3" style={{ fontSize: 'var(--t-small)' }}>
+              Mødeoverblik
+            </p>
+            <div className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] overflow-hidden">
+              {topics.length === 0 ? (
+                <p
+                  className="text-[var(--muted)] italic px-4 py-3"
+                  style={{ fontSize: 'var(--t-small)', fontFamily: 'var(--font-mono)' }}
+                >
+                  Lytter…
+                </p>
+              ) : (
+                <div className="divide-y divide-[var(--line)]">
+                  {topics.map((t, i) => (
+                    <div key={i} className="px-4 py-3">
+                      <p className="font-medium text-[var(--ink)] mb-1.5" style={{ fontSize: 'var(--t-small)' }}>
+                        {t.topic}
+                      </p>
+                      {t.followUps.map((q, j) => (
+                        <p key={j} className="text-[var(--muted)] mb-1 last:mb-0" style={{ fontSize: 'var(--t-micro)' }}>
+                          → {q}
+                        </p>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Compliance footer */}
-      <p
-        className="text-center text-[var(--muted)]"
-        style={{ fontSize: 'var(--t-micro)', fontFamily: 'var(--font-mono)' }}
-      >
-        Lyden slettes automatisk efter 14 dage · PII fjernes inden referatet udarbejdes
-      </p>
-
-      {/* Cancel confirm dialog */}
+      {/* Dialogs */}
       <Dialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
         <DialogContent>
           <DialogHeader>
@@ -410,11 +525,24 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="secondary" onClick={() => setShowCancelDialog(false)}>
-              Tilbage
-            </Button>
-            <Button variant="destructive" onClick={cancelRecording}>
-              Slet og annullér
+            <Button variant="secondary" onClick={() => setShowCancelDialog(false)}>Tilbage</Button>
+            <Button variant="destructive" onClick={cancelRecording}>Slet og annullér</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showOverwriteDialog} onOpenChange={setShowOverwriteDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Optag igen?</DialogTitle>
+            <DialogDescription>
+              Den eksisterende optagelse og transskription overskrives. Eventuelt referat slettes ikke, men vil være baseret på den nye transskription.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowOverwriteDialog(false)} disabled={isOverwriting}>Annullér</Button>
+            <Button variant="destructive" onClick={confirmOverwrite} disabled={isOverwriting}>
+              {isOverwriting ? 'Forbereder…' : 'Ja, optag igen'}
             </Button>
           </DialogFooter>
         </DialogContent>
