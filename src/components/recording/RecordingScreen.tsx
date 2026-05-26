@@ -16,6 +16,7 @@ import { formatDuration, formatFileSize } from '@/lib/utils';
 
 interface RecordingScreenProps {
   meetingId: string;
+  existingRecording?: { durationSeconds: number | null; sizeBytes: number };
 }
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
@@ -24,13 +25,15 @@ const BYTES_PER_SECOND_ESTIMATE = 16_000; // ~16 KB/s for webm/opus
 const SILENCE_THRESHOLD_SECONDS = 5;
 const SILENCE_VOLUME_THRESHOLD = 0.02;
 
-export function RecordingScreen({ meetingId }: RecordingScreenProps) {
+export function RecordingScreen({ meetingId, existingRecording }: RecordingScreenProps) {
   const router = useRouter();
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [volumeLevel, setVolumeLevel] = useState(0);
   const [showSilenceWarning, setShowSilenceWarning] = useState(false);
   const [showCancelDialog, setShowCancelDialog] = useState(false);
+  const [showOverwriteDialog, setShowOverwriteDialog] = useState(false);
+  const [isOverwriting, setIsOverwriting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -172,6 +175,18 @@ export function RecordingScreen({ meetingId }: RecordingScreenProps) {
     }
   }
 
+  async function confirmOverwrite() {
+    setIsOverwriting(true);
+    await fetch(`/api/meetings/${meetingId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'recording' }),
+    });
+    setShowOverwriteDialog(false);
+    setIsOverwriting(false);
+    startRecording();
+  }
+
   async function cancelRecording() {
     if (mediaRecorderRef.current) {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -198,6 +213,65 @@ export function RecordingScreen({ meetingId }: RecordingScreenProps) {
   const minutes = Math.floor((elapsed % 3600) / 60);
   const seconds = elapsed % 60;
   const elapsedFormatted = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+
+  if (existingRecording && recordingState === 'idle') {
+    const dur = existingRecording.durationSeconds;
+    const durFormatted = dur != null ? formatDuration(dur) : null;
+    const sizeFormatted = formatFileSize(existingRecording.sizeBytes);
+
+    return (
+      <div className="mx-auto max-w-[720px] px-6 py-12">
+        <div className="mb-10">
+          <p className="text-[var(--muted)] mb-1" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}>
+            Optagelse gemt
+          </p>
+          <span
+            className="text-[var(--ink)] tabular-nums"
+            style={{ fontFamily: 'var(--font-mono)', fontSize: '56px', fontWeight: 500, lineHeight: 1, letterSpacing: '-0.03em' }}
+          >
+            {durFormatted ?? '—'}
+          </span>
+          {sizeFormatted && (
+            <p className="mt-1 text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}>
+              {sizeFormatted} · webm/opus
+            </p>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3">
+          <Button onClick={() => router.push(`/meeting/${meetingId}/review`)}>
+            Gå til Gennemgang →
+          </Button>
+          <Button variant="outline" onClick={() => setShowOverwriteDialog(true)}>
+            Optag igen
+          </Button>
+        </div>
+
+        <p className="mt-12 text-center text-[var(--muted)]" style={{ fontSize: 'var(--t-micro)', fontFamily: 'var(--font-mono)' }}>
+          Lyden slettes automatisk efter 14 dage · PII fjernes inden referatet udarbejdes
+        </p>
+
+        <Dialog open={showOverwriteDialog} onOpenChange={setShowOverwriteDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Optag igen?</DialogTitle>
+              <DialogDescription>
+                Den eksisterende optagelse og transskription overskrives. Eventuelt referat slettes ikke, men vil være baseret på den nye transskription.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setShowOverwriteDialog(false)} disabled={isOverwriting}>
+                Annullér
+              </Button>
+              <Button variant="destructive" onClick={confirmOverwrite} disabled={isOverwriting}>
+                {isOverwriting ? 'Forbereder…' : 'Ja, optag igen'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-[720px] px-6 py-12">
