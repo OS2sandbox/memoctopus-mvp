@@ -27,9 +27,6 @@ export default async function TranscriptReviewPage({ params }: PageProps) {
   if (meeting.status === 'recording' || meeting.status === 'processing') {
     redirect(`/meeting/${id}`);
   }
-  if (meeting.status === 'minutes' || meeting.status === 'done') {
-    redirect(`/meeting/${id}/minutes`);
-  }
 
   const transcript = await queryUserSchemaOne<{
     id: string;
@@ -67,7 +64,15 @@ export default async function TranscriptReviewPage({ params }: PageProps) {
 
   return (
     <div>
-      <ProcessStrip meetingId={id} activePhase="review" completedPhases={['recording']} />
+      <ProcessStrip
+        meetingId={id}
+        activePhase="review"
+        completedPhases={
+          meeting.status === 'minutes' || meeting.status === 'done'
+            ? ['recording', 'minutes']
+            : ['recording']
+        }
+      />
       <TranscriptReview
         meetingId={id}
         transcriptId={transcript.id}

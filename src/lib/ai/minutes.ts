@@ -122,6 +122,55 @@ Skriv indholdet i sektionerne som klart, præcist dansk. Brug punktlister hvor d
   }
 }
 
+export async function generateMinutesFreeform(
+  transcript: TranscriptSegment[],
+  customPrompt: string,
+): Promise<MinutesContent> {
+  const transcriptText = transcript
+    .map((s) => `[${s.speaker}] (${formatTime(s.start)}): ${s.text}`)
+    .join('\n');
+
+  const response = await getClient().chat.complete({
+    model: 'mistral-large-latest',
+    messages: [
+      { role: 'system', content: MINUTES_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `Udarbejd et mødereferat baseret på denne transskription.
+
+Brugerens instruktion: ${customPrompt}
+
+Beslut selv hvilke sektioner referatet skal have baseret på transskriptionen og brugerens instruktion. Brug 2–6 sektioner der passer til indholdet.
+
+Transskription:
+${transcriptText}
+
+Returner JSON med denne struktur:
+{
+  "sections": [
+    {
+      "key": "sektionsnøgle",
+      "label": "Sektionsoverskrift",
+      "content": "Sektionens indhold som markdown-tekst"
+    }
+  ]
+}
+
+Skriv indholdet som klart, præcist dansk. Brug punktlister hvor det er relevant.`,
+      },
+    ],
+  });
+
+  const raw = (response.choices?.[0]?.message?.content as string) ?? '';
+
+  try {
+    const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+    return JSON.parse(cleaned) as MinutesContent;
+  } catch {
+    return { sections: [] };
+  }
+}
+
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);

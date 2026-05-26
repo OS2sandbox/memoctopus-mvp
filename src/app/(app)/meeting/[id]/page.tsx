@@ -22,12 +22,6 @@ export default async function MeetingRecordPage({ params }: PageProps) {
 
   if (!meeting) notFound();
 
-  // If already processed, redirect to appropriate page
-  if (meeting.status === 'review') redirect(`/meeting/${id}/review`);
-  if (meeting.status === 'minutes' || meeting.status === 'done') {
-    redirect(`/meeting/${id}/minutes`);
-  }
-
   return (
     <div>
       <ProcessStrip meetingId={id} activePhase="recording" />

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { queryUserSchemaOne, queryUserSchema } from '@/lib/db/user-schema';
-import { suggestTemplate, generateMinutes } from '@/lib/ai/minutes';
+import { suggestTemplate, generateMinutes, generateMinutesFreeform } from '@/lib/ai/minutes';
 import { TranscriptSegment, TemplateStructure } from '@/types';
 
 export async function POST(req: NextRequest) {
@@ -49,38 +49,45 @@ export async function POST(req: NextRequest) {
 
   const transcriptSegments = (transcript.segments as TranscriptSegment[]) ?? [];
 
-  // Load available templates
-  const templates = await queryUserSchema<{
-    id: string;
-    name: string;
-    description: string;
-    structure: unknown;
-    is_default: boolean;
-  }>(
-    session.user.id,
-    'SELECT id, name, description, structure, is_default FROM templates',
-  );
+  let minutesContent;
+  let templateId: string | null = null;
 
-  // Suggest template
-  const suggestion = await suggestTemplate(
-    transcriptSegments,
-    templates.map((t) => ({ id: t.id, name: t.name, description: t.description })),
-  );
+  if (customPrompt) {
+    // User gave instructions — let the AI decide sections and content freely
+    minutesContent = await generateMinutesFreeform(transcriptSegments, customPrompt);
+  } else {
+    // No prompt — pick a template and generate structured minutes
+    const templates = await queryUserSchema<{
+      id: string;
+      name: string;
+      description: string;
+      structure: unknown;
+      is_default: boolean;
+    }>(
+      session.user.id,
+      'SELECT id, name, description, structure, is_default FROM templates',
+    );
 
-  // Find template structure
-  let templateId = suggestion.templateId;
-  let templateStructure: TemplateStructure;
+    const suggestion = await suggestTemplate(
+      transcriptSegments,
+      templates.map((t) => ({ id: t.id, name: t.name, description: t.description })),
+    );
 
-  const chosenTemplate = templates.find((t) => t.id === templateId) ?? templates.find((t) => t.is_default) ?? templates[0];
-  if (!chosenTemplate) {
-    return NextResponse.json({ error: 'No templates available' }, { status: 500 });
+    const chosenTemplate =
+      templates.find((t) => t.id === suggestion.templateId) ??
+      templates.find((t) => t.is_default) ??
+      templates[0];
+
+    if (!chosenTemplate) {
+      return NextResponse.json({ error: 'No templates available' }, { status: 500 });
+    }
+
+    templateId = chosenTemplate.id;
+    minutesContent = await generateMinutes(
+      transcriptSegments,
+      (chosenTemplate.structure as TemplateStructure).sections,
+    );
   }
-
-  templateId = chosenTemplate.id;
-  templateStructure = chosenTemplate.structure as TemplateStructure;
-
-  // Generate minutes
-  const minutesContent = await generateMinutes(transcriptSegments, templateStructure.sections, customPrompt);
 
   // Save minutes
   const minutesRow = await queryUserSchemaOne<{ id: string }>(
@@ -98,8 +105,5 @@ export async function POST(req: NextRequest) {
     [meetingId],
   );
 
-  return NextResponse.json({
-    minutesId: minutesRow!.id,
-    templateSuggestion: suggestion,
-  });
+  return NextResponse.json({ minutesId: minutesRow!.id });
 }
