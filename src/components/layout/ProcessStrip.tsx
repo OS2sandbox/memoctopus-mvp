@@ -17,9 +17,10 @@ interface ProcessStripProps {
   meetingId: string;
   activePhase: ProcessPhase;
   completedPhases?: ProcessPhase[];
+  onTabChange?: (tab: ProcessPhase) => void;
 }
 
-export function ProcessStrip({ meetingId, activePhase, completedPhases = [] }: ProcessStripProps) {
+export function ProcessStrip({ meetingId, activePhase, completedPhases = [], onTabChange }: ProcessStripProps) {
   const activeIndex = PHASES.findIndex((p) => p.key === activePhase);
 
   return (
@@ -61,13 +62,23 @@ export function ProcessStrip({ meetingId, activePhase, completedPhases = [] }: P
                 </span>
               )}
               {isReachable ? (
-                <Link
-                  href={`/meeting/${meetingId}${phase.path}`}
-                  className="flex items-center h-full hover:bg-[var(--surface-2)] transition-colors rounded-[var(--radius-sm)]"
-                  aria-current={isActive ? 'step' : undefined}
-                >
-                  {inner}
-                </Link>
+                onTabChange ? (
+                  <button
+                    onClick={() => onTabChange(phase.key)}
+                    className="flex items-center h-full hover:bg-[var(--surface-2)] transition-colors rounded-[var(--radius-sm)]"
+                    aria-current={isActive ? 'step' : undefined}
+                  >
+                    {inner}
+                  </button>
+                ) : (
+                  <Link
+                    href={`/meeting/${meetingId}${phase.path}`}
+                    className="flex items-center h-full hover:bg-[var(--surface-2)] transition-colors rounded-[var(--radius-sm)]"
+                    aria-current={isActive ? 'step' : undefined}
+                  >
+                    {inner}
+                  </Link>
+                )
               ) : (
                 <span className="flex items-center h-full">{inner}</span>
               )}
