@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
@@ -12,6 +12,7 @@ interface TranscriptReviewProps {
   transcriptId: string;
   initialSegments: TranscriptSegment[];
   piiReplacements: PiiReplacement[];
+  audioUrl?: string;
 }
 
 export function TranscriptReview({
@@ -19,12 +20,60 @@ export function TranscriptReview({
   transcriptId,
   initialSegments,
   piiReplacements,
+  audioUrl,
 }: TranscriptReviewProps) {
   const router = useRouter();
   const [segments, setSegments] = useState(initialSegments);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [customPrompt, setCustomPrompt] = useState('');
+
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const onTime = () => setCurrentTime(audio.currentTime);
+    const onMeta = () => setDuration(audio.duration);
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    const onEnded = () => setIsPlaying(false);
+    audio.addEventListener('timeupdate', onTime);
+    audio.addEventListener('loadedmetadata', onMeta);
+    audio.addEventListener('play', onPlay);
+    audio.addEventListener('pause', onPause);
+    audio.addEventListener('ended', onEnded);
+    return () => {
+      audio.removeEventListener('timeupdate', onTime);
+      audio.removeEventListener('loadedmetadata', onMeta);
+      audio.removeEventListener('play', onPlay);
+      audio.removeEventListener('pause', onPause);
+      audio.removeEventListener('ended', onEnded);
+    };
+  }, []);
+
+  function seekTo(time: number) {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = time;
+    audio.play();
+  }
+
+  function togglePlay() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (isPlaying) audio.pause();
+    else audio.play();
+  }
+
+  function fmt(secs: number) {
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }
 
   const speakerCounts = segments.reduce<Record<string, number>>((acc, seg) => {
     acc[seg.speaker] = (acc[seg.speaker] ?? 0) + 1;
@@ -114,6 +163,64 @@ export function TranscriptReview({
             Ret eventuelle fejl. Klik på et talernavn for at omdøbe alle segmenter for den taler.
           </p>
 
+          {/* Audio player */}
+          {audioUrl && (
+            <>
+              <audio ref={audioRef} src={audioUrl} preload="metadata" />
+              <div
+                className="mb-6 flex items-center gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--surface)] px-4 py-2.5"
+              >
+                <button
+                  type="button"
+                  onClick={togglePlay}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: '50%',
+                    background: 'var(--ink)',
+                    color: 'white',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: 11,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                  title={isPlaying ? 'Pause' : 'Afspil'}
+                >
+                  {isPlaying ? '⏸' : '▶'}
+                </button>
+                <span
+                  className="tabular-nums text-[var(--muted)] shrink-0"
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}
+                >
+                  {fmt(currentTime)}
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={duration || 1}
+                  step={0.5}
+                  value={currentTime}
+                  onChange={(e) => {
+                    const t = parseFloat(e.target.value);
+                    if (audioRef.current) audioRef.current.currentTime = t;
+                    setCurrentTime(t);
+                  }}
+                  className="flex-1"
+                  style={{ accentColor: 'var(--accent)' }}
+                />
+                <span
+                  className="tabular-nums text-[var(--muted)] shrink-0"
+                  style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}
+                >
+                  {fmt(duration)}
+                </span>
+              </div>
+            </>
+          )}
+
           <div className="divide-y divide-[var(--line)]">
             {segments.length === 0 ? (
               <p className="py-8 text-center text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
@@ -128,6 +235,7 @@ export function TranscriptReview({
                   onUpdate={handleSegmentUpdate}
                   onRenameAll={handleRenameAll}
                   speakerSegmentCount={speakerCounts[seg.speaker] ?? 1}
+                  onSeek={audioUrl ? seekTo : undefined}
                 />
               ))
             )}

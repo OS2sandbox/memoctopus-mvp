@@ -11,9 +11,10 @@ interface SpeakerRowProps {
   onUpdate: (index: number, segment: TranscriptSegment) => void;
   onRenameAll: (from: string, to: string) => void;
   speakerSegmentCount: number;
+  onSeek?: (time: number) => void;
 }
 
-export function SpeakerRow({ segment, index, onUpdate, onRenameAll, speakerSegmentCount }: SpeakerRowProps) {
+export function SpeakerRow({ segment, index, onUpdate, onRenameAll, speakerSegmentCount, onSeek }: SpeakerRowProps) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -41,12 +42,28 @@ export function SpeakerRow({ segment, index, onUpdate, onRenameAll, speakerSegme
     <div className="flex gap-0 py-4">
       {/* Left rail: speaker + timestamp */}
       <div className="w-24 shrink-0 pr-4 pt-0.5 relative">
-        <span
-          className="block text-[var(--muted)] tabular-nums mb-0.5"
-          style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}
-        >
-          {formatDuration(segment.start)}
-        </span>
+        {onSeek ? (
+          <button
+            type="button"
+            className="block tabular-nums mb-0.5 text-left group"
+            style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)', color: 'var(--muted)', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+            title="Lyt til dette segment"
+            onClick={() => onSeek(segment.start)}
+          >
+            <span className="group-hover:text-[var(--accent)] transition-colors">
+              {formatDuration(segment.start)}
+            </span>
+            {' '}
+            <span className="opacity-0 group-hover:opacity-100 transition-opacity" style={{ fontSize: 9 }}>▶</span>
+          </button>
+        ) : (
+          <span
+            className="block text-[var(--muted)] tabular-nums mb-0.5"
+            style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}
+          >
+            {formatDuration(segment.start)}
+          </span>
+        )}
         <button
           className="text-[var(--ink-2)] hover:text-[var(--accent)] transition-colors text-left w-full truncate"
           style={{ fontSize: 'var(--t-small)', fontWeight: 500 }}

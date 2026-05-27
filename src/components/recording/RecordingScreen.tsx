@@ -239,7 +239,7 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
     if (recorder.state === 'paused') recorder.resume();
 
     await new Promise<void>((resolve) => {
-      recorder.addEventListener('stop', resolve, { once: true });
+      recorder.addEventListener('stop', () => resolve(), { once: true });
       recorder.stop();
     });
     recorder.stream.getTracks().forEach((t) => t.stop());

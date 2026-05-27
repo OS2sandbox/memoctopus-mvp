@@ -67,6 +67,7 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
           transcriptId={transcript.id}
           initialSegments={transcript.segments}
           piiReplacements={transcript.piiReplacements}
+          audioUrl={audioFile ? `/api/meetings/${meetingId}/audio` : undefined}
         />
       )}
 
