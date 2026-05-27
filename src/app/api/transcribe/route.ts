@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       transcriptId: transcript!.id,
-      segmentCount: cleanedSegments.length,
+      segments: cleanedSegments,
       piiReplacementCount: replacements.length,
     });
   } catch (err) {

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -39,6 +39,7 @@ const TOPIC_INTERVAL = 25_000;
 
 export function RecordingScreen({ meetingId, existingRecording }: RecordingScreenProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [volumeLevel, setVolumeLevel] = useState(0);
@@ -192,18 +193,34 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
     if (!mediaRecorderRef.current) return;
     mediaRecorderRef.current.pause();
     pauseStartRef.current = Date.now();
-    setRecordingState('paused');
+    if (timerRef.current) clearInterval(timerRef.current);
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     setVolumeLevel(0);
+    setRecordingState('paused');
   }
 
   function resumeRecording() {
     if (!mediaRecorderRef.current) return;
     mediaRecorderRef.current.resume();
     pausedDurationRef.current += Date.now() - pauseStartRef.current;
-    setRecordingState('recording');
+    timerRef.current = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000));
+    }, 500);
     animFrameRef.current = requestAnimationFrame(pollVolume);
+    setRecordingState('recording');
   }
+
+  // Auto-start when navigated here from the home page record button
+  const didAutostart = useRef(false);
+  useEffect(() => {
+    if (didAutostart.current) return;
+    if (existingRecording) return;
+    if (searchParams.get('autostart') === '1') {
+      didAutostart.current = true;
+      startRecording();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function clearIntervals() {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -239,6 +256,13 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error ?? 'Upload fejlede');
+      }
+      const { segments: finalSegments } = await res.json();
+      if (Array.isArray(finalSegments) && finalSegments.length > 0) {
+        liveSegmentsRef.current = finalSegments;
+        setLiveSegments(finalSegments);
+        setIsUploading(false);
+        await new Promise((r) => setTimeout(r, 1200));
       }
       router.push(`/meeting/${meetingId}/review`);
     } catch (err) {
@@ -348,11 +372,11 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
 
   // ── Active recording / idle ───────────────────────────────────────────────────
   return (
-    <div className="mx-auto px-6 py-12" style={{ maxWidth: showLivePanel ? 1040 : 720 }}>
-      <div className={showLivePanel ? 'flex gap-8 items-start' : ''}>
+    <div className="mx-auto px-6 py-12" style={{ maxWidth: 720 }}>
+      <div>
 
-        {/* Controls — sticky left column when live, centered column when idle */}
-        <div className={showLivePanel ? 'w-72 shrink-0 sticky top-6' : ''}>
+        {/* Controls */}
+        <div>
           {error && (
             <div
               className="mb-8 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--danger)]"
@@ -446,11 +470,11 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
           </p>
         </div>
 
-        {/* Right column: topics at top, transcript below */}
+        {/* Live panels — stacked below controls */}
         {showLivePanel && (
-          <div className="flex-1 min-w-0">
-            {/* Topics — always at the top of this column */}
-            <div className="mb-4">
+          <div className="mt-10 space-y-6">
+            {/* Topics */}
+            <div>
               <p className="font-medium text-[var(--ink)] mb-2" style={{ fontSize: 'var(--t-small)' }}>
                 Mødeoverblik
               </p>
@@ -480,9 +504,14 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
 
             {/* Live transcript — grows below topics */}
             <div>
-              <p className="font-medium text-[var(--ink)] mb-2" style={{ fontSize: 'var(--t-small)' }}>
-                Live transskription
-              </p>
+              <div className="flex items-baseline gap-2 mb-2">
+                <p className="font-medium text-[var(--ink)]" style={{ fontSize: 'var(--t-small)' }}>
+                  Live transskription
+                </p>
+                <p className="text-[var(--muted-2)]" style={{ fontSize: 'var(--t-micro)' }}>
+                  forhåndsvisning · endelig version vises i Gennemgang
+                </p>
+              </div>
               <div
                 className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] overflow-y-auto"
                 style={{ maxHeight: 400, padding: '12px 16px' }}

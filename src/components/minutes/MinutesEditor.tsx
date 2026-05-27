@@ -5,6 +5,7 @@ import { MinutesContent, MinutesSection } from '@/types';
 import { Button } from '@/components/ui/button';
 import { SaveStatus, SaveState } from '@/components/layout/SaveStatus';
 import { VersionHistory } from './VersionHistory';
+import { RichEditor } from './RichEditor';
 
 interface VersionRecord {
   id: string;
@@ -34,8 +35,10 @@ export function MinutesEditor({
   const [version, setVersion] = useState(initialVersion);
   const [versions, setVersions] = useState(initialVersions);
   const [showHistory, setShowHistory] = useState(false);
+  const [addingSection, setAddingSection] = useState(false);
+  const [newLabel, setNewLabel] = useState('');
+  const newLabelRef = useRef<HTMLInputElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isDirtyRef = useRef(false);
 
   const save = useCallback(
     async (contentToSave: MinutesContent) => {
@@ -54,7 +57,6 @@ export function MinutesEditor({
         }
         setSaveState('saved');
         setTimeout(() => setSaveState('idle'), 2000);
-        isDirtyRef.current = false;
       } catch {
         setSaveState('error');
       }
@@ -63,17 +65,14 @@ export function MinutesEditor({
   );
 
   function updateSection(key: string, text: string) {
-    setContent((prev) => ({
-      sections: prev.sections.map((s) => (s.key === key ? { ...s, content: text } : s)),
-    }));
-    isDirtyRef.current = true;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      setContent((current) => {
-        save(current);
-        return current;
-      });
-    }, AUTOSAVE_DELAY);
+    setContent((prev) => {
+      const next = {
+        sections: prev.sections.map((s) => (s.key === key ? { ...s, content: text } : s)),
+      };
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => save(next), AUTOSAVE_DELAY);
+      return next;
+    });
   }
 
   useEffect(() => {
@@ -81,6 +80,26 @@ export function MinutesEditor({
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
   }, []);
+
+  function openAddSection() {
+    setNewLabel('');
+    setAddingSection(true);
+    setTimeout(() => newLabelRef.current?.focus(), 0);
+  }
+
+  function commitAddSection() {
+    const label = newLabel.trim();
+    if (!label) { setAddingSection(false); return; }
+    const key = `custom_${Date.now()}`;
+    setContent((prev) => {
+      const next = { sections: [...prev.sections, { key, label, content: '' }] };
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => save(next), AUTOSAVE_DELAY);
+      return next;
+    });
+    setAddingSection(false);
+    setNewLabel('');
+  }
 
   function handleRestore(restoredContent: MinutesContent) {
     setContent(restoredContent);
@@ -90,7 +109,6 @@ export function MinutesEditor({
 
   return (
     <div className="mx-auto max-w-[720px] px-6 py-12">
-      {/* Page header */}
       <div className="flex items-start justify-between mb-12">
         <div>
           <h1
@@ -117,8 +135,7 @@ export function MinutesEditor({
         </div>
       </div>
 
-      {/* Sections — borderless textareas, document feel */}
-      <div className="space-y-12">
+      <div className="space-y-10">
         {content.sections.map((section: MinutesSection) => (
           <div key={section.key}>
             <h2
@@ -127,36 +144,101 @@ export function MinutesEditor({
             >
               {section.label}
             </h2>
-            <textarea
-              id={`section-${section.key}`}
+            <RichEditor
               value={section.content}
-              onChange={(e) => updateSection(section.key, e.target.value)}
+              onChange={(md) => updateSection(section.key, md)}
               placeholder={`Skriv ${section.label.toLowerCase()} her…`}
-              rows={Math.max(4, Math.ceil(section.content.length / 80))}
-              style={{
-                width: '100%',
-                resize: 'vertical',
-                border: '1px solid var(--line)',
-                borderRadius: 'var(--radius)',
-                background: 'var(--surface)',
-                outline: 'none',
-                color: 'var(--ink)',
-                fontSize: 'var(--t-body)',
-                lineHeight: 1.7,
-                padding: '10px 12px',
-                fontFamily: 'inherit',
-                transition: 'border-color 0.15s',
-                cursor: 'text',
-              }}
-              onFocus={(e) => (e.target.style.borderColor = 'var(--accent)')}
-              onBlur={(e) => (e.target.style.borderColor = 'var(--line)')}
-              className="placeholder:text-[var(--muted-2)] hover:border-[var(--line-strong)]"
             />
           </div>
         ))}
       </div>
 
-      {/* Version history — rendered as a right-side sheet via CSS */}
+      {/* Add section */}
+      <div className="mt-10">
+        {addingSection ? (
+          <div className="flex items-center gap-2">
+            <input
+              ref={newLabelRef}
+              type="text"
+              value={newLabel}
+              onChange={(e) => setNewLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitAddSection();
+                if (e.key === 'Escape') setAddingSection(false);
+              }}
+              placeholder="Navn på afsnit…"
+              style={{
+                flex: 1,
+                border: '1px solid var(--accent)',
+                borderRadius: 'var(--radius)',
+                background: 'var(--surface)',
+                outline: 'none',
+                padding: '6px 10px',
+                fontSize: 'var(--t-body)',
+                color: 'var(--ink)',
+              }}
+            />
+            <button
+              onClick={commitAddSection}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 'var(--radius)',
+                background: 'var(--ink)',
+                color: 'white',
+                fontSize: 'var(--t-small)',
+                fontWeight: 500,
+                border: 'none',
+                cursor: 'pointer',
+              }}
+            >
+              Tilføj
+            </button>
+            <button
+              onClick={() => setAddingSection(false)}
+              style={{
+                padding: '6px 10px',
+                borderRadius: 'var(--radius)',
+                background: 'transparent',
+                color: 'var(--muted)',
+                fontSize: 'var(--t-small)',
+                border: '1px solid var(--line)',
+                cursor: 'pointer',
+              }}
+            >
+              Annullér
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={openAddSection}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '6px 12px',
+              borderRadius: 'var(--radius)',
+              border: '1px dashed var(--line-strong)',
+              background: 'transparent',
+              color: 'var(--muted)',
+              fontSize: 'var(--t-small)',
+              cursor: 'pointer',
+              transition: 'color 0.15s, border-color 0.15s',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = 'var(--ink)';
+              e.currentTarget.style.borderColor = 'var(--ink-3)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = 'var(--muted)';
+              e.currentTarget.style.borderColor = 'var(--line-strong)';
+            }}
+          >
+            <span style={{ fontSize: 16, lineHeight: 1 }}>+</span>
+            Tilføj afsnit
+          </button>
+        )}
+      </div>
+
       {showHistory && (
         <div
           className="fixed inset-y-0 right-0 z-50 w-80 bg-[var(--surface)] border-l border-[var(--line)] shadow-lg flex flex-col"
