@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
+import fs from 'fs/promises';
 import { auth } from '@/lib/auth';
 import { queryUserSchemaOne } from '@/lib/db/user-schema';
-import { readAudioFile } from '@/lib/audio/storage';
+import { getAudioFilePath, createAudioReadStream } from '@/lib/audio/storage';
 import path from 'path';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -17,42 +18,65 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   );
   if (!row) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
-  let buffer: Buffer;
+  const filepath = getAudioFilePath(session.user.id, row.filename);
+
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
   try {
-    buffer = await readAudioFile(session.user.id, row.filename);
+    stat = await fs.stat(filepath);
   } catch {
     return NextResponse.json({ error: 'File not found' }, { status: 404 });
   }
 
+  const totalSize = stat.size;
   const ext = path.extname(row.filename).toLowerCase();
   const contentType =
     ext === '.mp4' ? 'audio/mp4' : ext === '.ogg' ? 'audio/ogg' : 'audio/webm';
 
-  const totalSize = buffer.byteLength;
   const rangeHeader = req.headers.get('range');
 
   if (rangeHeader) {
     const [, rangeStr] = rangeHeader.split('=');
     const [startStr, endStr] = rangeStr.split('-');
     const start = parseInt(startStr, 10);
-    const end = endStr ? parseInt(endStr, 10) : totalSize - 1;
-    const chunkLen = end - start + 1;
-    const ab = buffer.buffer as ArrayBuffer;
-    const chunk = ab.slice(buffer.byteOffset + start, buffer.byteOffset + start + chunkLen);
+    const end = endStr ? Math.min(parseInt(endStr, 10), totalSize - 1) : totalSize - 1;
+    const chunkSize = end - start + 1;
 
-    return new NextResponse(chunk, {
+    const stream = createAudioReadStream(session.user.id, row.filename, { start, end });
+    const readable = new ReadableStream({
+      start(controller) {
+        stream.on('data', (chunk) => controller.enqueue(chunk));
+        stream.on('end', () => controller.close());
+        stream.on('error', (err) => controller.error(err));
+      },
+      cancel() {
+        stream.destroy();
+      },
+    });
+
+    return new NextResponse(readable, {
       status: 206,
       headers: {
         'Content-Type': contentType,
         'Content-Range': `bytes ${start}-${end}/${totalSize}`,
         'Accept-Ranges': 'bytes',
-        'Content-Length': String(chunkLen),
+        'Content-Length': String(chunkSize),
       },
     });
   }
 
-  const ab = buffer.buffer as ArrayBuffer;
-  return new NextResponse(ab.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength), {
+  const stream = createAudioReadStream(session.user.id, row.filename);
+  const readable = new ReadableStream({
+    start(controller) {
+      stream.on('data', (chunk) => controller.enqueue(chunk));
+      stream.on('end', () => controller.close());
+      stream.on('error', (err) => controller.error(err));
+    },
+    cancel() {
+      stream.destroy();
+    },
+  });
+
+  return new NextResponse(readable, {
     status: 200,
     headers: {
       'Content-Type': contentType,

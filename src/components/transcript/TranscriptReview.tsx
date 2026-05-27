@@ -32,26 +32,37 @@ export function TranscriptReview({
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [audioError, setAudioError] = useState<string | null>(null);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
     const onTime = () => setCurrentTime(audio.currentTime);
-    const onMeta = () => setDuration(audio.duration);
+    const onMeta = () => {
+      if (isFinite(audio.duration)) setDuration(audio.duration);
+    };
+    const onDurationChange = () => {
+      if (isFinite(audio.duration)) setDuration(audio.duration);
+    };
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
     const onEnded = () => setIsPlaying(false);
+    const onError = () => setAudioError('Lydfilen kunne ikke indlæses');
     audio.addEventListener('timeupdate', onTime);
     audio.addEventListener('loadedmetadata', onMeta);
+    audio.addEventListener('durationchange', onDurationChange);
     audio.addEventListener('play', onPlay);
     audio.addEventListener('pause', onPause);
     audio.addEventListener('ended', onEnded);
+    audio.addEventListener('error', onError);
     return () => {
       audio.removeEventListener('timeupdate', onTime);
       audio.removeEventListener('loadedmetadata', onMeta);
+      audio.removeEventListener('durationchange', onDurationChange);
       audio.removeEventListener('play', onPlay);
       audio.removeEventListener('pause', onPause);
       audio.removeEventListener('ended', onEnded);
+      audio.removeEventListener('error', onError);
     };
   }, []);
 
@@ -59,14 +70,17 @@ export function TranscriptReview({
     const audio = audioRef.current;
     if (!audio) return;
     audio.currentTime = time;
-    audio.play();
+    audio.play().catch(() => setAudioError('Afspilning fejlede'));
   }
 
   function togglePlay() {
     const audio = audioRef.current;
     if (!audio) return;
-    if (isPlaying) audio.pause();
-    else audio.play();
+    if (isPlaying) {
+      audio.pause();
+    } else {
+      audio.play().catch(() => setAudioError('Afspilning fejlede'));
+    }
   }
 
   function fmt(secs: number) {
@@ -167,6 +181,11 @@ export function TranscriptReview({
           {audioUrl && (
             <>
               <audio ref={audioRef} src={audioUrl} preload="metadata" />
+              {audioError && (
+                <p className="mb-3 text-[var(--danger)]" style={{ fontSize: 'var(--t-micro)' }}>
+                  {audioError}
+                </p>
+              )}
               <div
                 className="mb-6 flex items-center gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--surface)] px-4 py-2.5"
               >
