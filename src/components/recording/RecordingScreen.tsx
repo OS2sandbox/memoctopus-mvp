@@ -16,6 +16,8 @@ import { formatDuration, formatFileSize } from '@/lib/utils';
 
 interface LiveSegment {
   speaker: string;
+  start: number;
+  end: number;
   text: string;
 }
 
@@ -114,11 +116,21 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
     const form = new FormData();
     form.append('audio', blob, `live.${ext}`);
 
+    // Compute how far into the recording this chunk starts.
+    // Whisper timestamps are relative to each chunk's start, so we offset them
+    // to make them recording-relative.
+    const elapsedSec = (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000;
+    const chunkOffset = Math.max(0, elapsedSec - newChunks.length);
+
     try {
       const res = await fetch(`/api/meetings/${meetingId}/live-transcribe`, { method: 'POST', body: form });
       if (!res.ok) return;
       const data = await res.json() as { segments?: LiveSegment[] };
-      const segs = data.segments ?? [];
+      const segs = (data.segments ?? []).map((seg) => ({
+        ...seg,
+        start: (seg.start ?? 0) + chunkOffset,
+        end: (seg.end ?? 0) + chunkOffset,
+      }));
       if (segs.length > 0) {
         liveSegmentsRef.current = [...liveSegmentsRef.current, ...segs];
         setLiveSegments([...liveSegmentsRef.current]);
