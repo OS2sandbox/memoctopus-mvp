@@ -71,6 +71,7 @@ export function TranscriptReview({
     const audio = audioRef.current;
     if (!audio) return;
     audio.currentTime = time;
+    setCurrentTime(time); // update waveform immediately; don't wait for timeupdate
     audio.play().catch(() => setAudioError('Afspilning fejlede'));
   }
 
