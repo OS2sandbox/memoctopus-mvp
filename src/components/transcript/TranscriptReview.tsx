@@ -4,6 +4,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
+import { WaveformPlayer } from './WaveformPlayer';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 
@@ -81,12 +82,6 @@ export function TranscriptReview({
     } else {
       audio.play().catch(() => setAudioError('Afspilning fejlede'));
     }
-  }
-
-  function fmt(secs: number) {
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m}:${s.toString().padStart(2, '0')}`;
   }
 
   const speakerCounts = segments.reduce<Record<string, number>>((acc, seg) => {
@@ -186,57 +181,14 @@ export function TranscriptReview({
                   {audioError}
                 </p>
               )}
-              <div
-                className="mb-6 flex items-center gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--surface)] px-4 py-2.5"
-              >
-                <button
-                  type="button"
-                  onClick={togglePlay}
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: '50%',
-                    background: 'var(--ink)',
-                    color: 'white',
-                    border: 'none',
-                    cursor: 'pointer',
-                    fontSize: 11,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                  }}
-                  title={isPlaying ? 'Pause' : 'Afspil'}
-                >
-                  {isPlaying ? '⏸' : '▶'}
-                </button>
-                <span
-                  className="tabular-nums text-[var(--muted)] shrink-0"
-                  style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}
-                >
-                  {fmt(currentTime)}
-                </span>
-                <input
-                  type="range"
-                  min={0}
-                  max={duration || 1}
-                  step={0.5}
-                  value={currentTime}
-                  onChange={(e) => {
-                    const t = parseFloat(e.target.value);
-                    if (audioRef.current) audioRef.current.currentTime = t;
-                    setCurrentTime(t);
-                  }}
-                  className="flex-1"
-                  style={{ accentColor: 'var(--accent)' }}
-                />
-                <span
-                  className="tabular-nums text-[var(--muted)] shrink-0"
-                  style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}
-                >
-                  {fmt(duration)}
-                </span>
-              </div>
+              <WaveformPlayer
+                audioUrl={audioUrl}
+                currentTime={currentTime}
+                duration={duration}
+                isPlaying={isPlaying}
+                onTogglePlay={togglePlay}
+                onSeek={seekTo}
+              />
             </>
           )}
 
