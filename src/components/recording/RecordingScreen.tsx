@@ -234,8 +234,12 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
     const recorder = mediaRecorderRef.current;
     clearIntervals();
 
+    // Resume before stopping so the recorder flushes its buffer into a
+    // final ondataavailable event — paused recorders may not do this reliably.
+    if (recorder.state === 'paused') recorder.resume();
+
     await new Promise<void>((resolve) => {
-      recorder.onstop = () => resolve();
+      recorder.addEventListener('stop', resolve, { once: true });
       recorder.stop();
     });
     recorder.stream.getTracks().forEach((t) => t.stop());
@@ -250,6 +254,11 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
       const formData = new FormData();
       formData.append('audio', blob, `recording.${mimeType.includes('mp4') ? 'm4a' : 'webm'}`);
       formData.append('meetingId', meetingId);
+      // Send live segments so the server can use them directly (with PII removal)
+      // instead of re-transcribing — keeps live preview and Gennemgang consistent.
+      if (liveSegmentsRef.current.length > 0) {
+        formData.append('liveSegments', JSON.stringify(liveSegmentsRef.current));
+      }
       formData.append('duration', String(elapsed));
 
       const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
@@ -372,11 +381,12 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
 
   // ── Active recording / idle ───────────────────────────────────────────────────
   return (
-    <div className="mx-auto px-6 py-12" style={{ maxWidth: 720 }}>
-      <div>
+    <div className="mx-auto px-6 py-12" style={{ maxWidth: showLivePanel ? 1040 : 720 }}>
+      <div className={showLivePanel ? 'flex gap-8 items-start' : ''}>
 
-        {/* Controls */}
-        <div>
+        {/* Main column: controls + live transcript */}
+        <div className="flex-1 min-w-0">
+          <div>
           {error && (
             <div
               className="mb-8 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--danger)]"
@@ -468,42 +478,11 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
           <p className="text-center text-[var(--muted)]" style={{ fontSize: 'var(--t-micro)', fontFamily: 'var(--font-mono)' }}>
             Lyden slettes automatisk efter 14 dage · PII fjernes inden referatet udarbejdes
           </p>
-        </div>
+          </div>
 
-        {/* Live panels — stacked below controls */}
-        {showLivePanel && (
-          <div className="mt-10 space-y-6">
-            {/* Topics */}
-            <div>
-              <p className="font-medium text-[var(--ink)] mb-2" style={{ fontSize: 'var(--t-small)' }}>
-                Mødeoverblik
-              </p>
-              <div className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] overflow-hidden">
-                {topics.length === 0 ? (
-                  <p className="text-[var(--muted)] italic px-4 py-3" style={{ fontSize: 'var(--t-small)', fontFamily: 'var(--font-mono)' }}>
-                    Lytter…
-                  </p>
-                ) : (
-                  <div className="divide-y divide-[var(--line)]">
-                    {topics.map((t, i) => (
-                      <div key={i} className="px-4 py-3">
-                        <p className="font-medium text-[var(--ink)] mb-1.5" style={{ fontSize: 'var(--t-small)' }}>
-                          {t.topic}
-                        </p>
-                        {t.followUps.map((q, j) => (
-                          <p key={j} className="text-[var(--muted)] mb-1 last:mb-0" style={{ fontSize: 'var(--t-micro)' }}>
-                            → {q}
-                          </p>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Live transcript — grows below topics */}
-            <div>
+          {/* Live transskription — below controls, inside main column */}
+          {showLivePanel && (
+            <div className="mt-8">
               <div className="flex items-baseline gap-2 mb-2">
                 <p className="font-medium text-[var(--ink)]" style={{ fontSize: 'var(--t-small)' }}>
                   Live transskription
@@ -539,6 +518,37 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
                   </div>
                 )}
               </div>
+            </div>
+          )}
+        </div>
+
+        {/* Mødeoverblik — narrow sticky sidebar */}
+        {showLivePanel && (
+          <div className="shrink-0 sticky top-6" style={{ width: 220 }}>
+            <p className="font-medium text-[var(--ink)] mb-2" style={{ fontSize: 'var(--t-small)' }}>
+              Mødeoverblik
+            </p>
+            <div className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] overflow-hidden">
+              {topics.length === 0 ? (
+                <p className="text-[var(--muted)] italic px-3 py-2" style={{ fontSize: 'var(--t-micro)', fontFamily: 'var(--font-mono)' }}>
+                  Lytter…
+                </p>
+              ) : (
+                <div className="divide-y divide-[var(--line)]">
+                  {topics.map((t, i) => (
+                    <div key={i} className="px-3 py-2">
+                      <p className="font-medium text-[var(--ink)] mb-1" style={{ fontSize: 'var(--t-micro)' }}>
+                        {t.topic}
+                      </p>
+                      {t.followUps.map((q, j) => (
+                        <p key={j} className="text-[var(--muted)] mb-0.5 last:mb-0" style={{ fontSize: 11 }}>
+                          → {q}
+                        </p>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}

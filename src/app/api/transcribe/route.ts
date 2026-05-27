@@ -5,6 +5,7 @@ import { queryUserSchemaOne } from '@/lib/db/user-schema';
 import { getTranscriptionProvider } from '@/lib/ai/transcription';
 import { removePiiFromSegments } from '@/lib/ai/pii';
 import { saveAudioFile } from '@/lib/audio/storage';
+import { TranscriptSegment } from '@/types';
 
 export async function POST(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -14,6 +15,7 @@ export async function POST(req: NextRequest) {
   const audioFile = formData.get('audio') as File | null;
   const meetingId = formData.get('meetingId') as string | null;
   const durationStr = formData.get('duration') as string | null;
+  const liveSegmentsJson = formData.get('liveSegments') as string | null;
 
   if (!audioFile || !meetingId) {
     return NextResponse.json({ error: 'Missing audio file or meetingId' }, { status: 400 });
@@ -54,12 +56,23 @@ export async function POST(req: NextRequest) {
       [meetingId, filename, sizeBytes, duration],
     );
 
-    // Transcribe
-    const provider = getTranscriptionProvider();
-    const segments = await provider.transcribe(buffer, mimeType);
+    // Use live segments when available — they already match what the user saw during
+    // recording, avoiding any surprise mismatch in Gennemgang. Fall back to full
+    // Whisper transcription when the live feed was empty or too short.
+    let rawSegments: TranscriptSegment[];
+    const liveSegments: TranscriptSegment[] | null = liveSegmentsJson
+      ? JSON.parse(liveSegmentsJson)
+      : null;
+
+    if (liveSegments && liveSegments.length >= 3) {
+      rawSegments = liveSegments;
+    } else {
+      const provider = getTranscriptionProvider();
+      rawSegments = await provider.transcribe(buffer, mimeType);
+    }
 
     // Remove PII
-    const { cleanedSegments, replacements } = await removePiiFromSegments(segments);
+    const { cleanedSegments, replacements } = await removePiiFromSegments(rawSegments);
 
     const rawText = cleanedSegments.map((s) => s.text).join(' ');
 
