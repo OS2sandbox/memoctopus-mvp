@@ -3,7 +3,7 @@ import { headers } from 'next/headers';
 import Link from 'next/link';
 import { auth } from '@/lib/auth';
 import { queryUserSchema } from '@/lib/db/user-schema';
-import { formatDate, statusLabel, statusVariant } from '@/lib/utils';
+import { formatDate, formatDuration, statusLabel, statusVariant } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { Meeting } from '@/types';
 
@@ -20,15 +20,28 @@ export default async function ArkivPage() {
     status: string;
     created_at: string;
     updated_at: string;
-  }>(session.user.id, `SELECT * FROM meetings ORDER BY created_at DESC LIMIT 200`);
+    duration_seconds: number | null;
+  }>(session.user.id, `
+    SELECT m.*, af.duration_seconds
+    FROM meetings m
+    LEFT JOIN (
+      SELECT DISTINCT ON (meeting_id) meeting_id, duration_seconds
+      FROM audio_files
+      WHERE deleted_at IS NULL
+      ORDER BY meeting_id, id DESC
+    ) af ON af.meeting_id = m.id
+    ORDER BY m.created_at DESC
+    LIMIT 200
+  `);
 
-  const meetings: Meeting[] = rows.map((r) => ({
+  const meetings = rows.map((r) => ({
     id: r.id,
     title: r.title,
     participants: r.participants,
     status: r.status as Meeting['status'],
     createdAt: new Date(r.created_at),
     updatedAt: new Date(r.updated_at),
+    durationSeconds: r.duration_seconds,
   }));
 
   function statusHref(m: Meeting) {
@@ -86,6 +99,9 @@ export default async function ArkivPage() {
                 </p>
                 <p className="mt-0.5 text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}>
                   {formatDate(m.createdAt)}
+                  {m.durationSeconds != null && (
+                    <> · {formatDuration(m.durationSeconds)}</>
+                  )}
                   {m.participants.length > 0 && (
                     <> · {m.participants.length} deltager{m.participants.length !== 1 ? 'e' : ''}</>
                   )}
