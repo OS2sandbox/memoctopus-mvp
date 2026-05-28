@@ -184,11 +184,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   // Run the authoritative batch scribe_v2 pass over everything recorded so far and
   // repaint the preview with real speaker labels. Used at every pause.
   async function diarizeSoFar(recorder: MediaRecorder) {
-    const mimeType = recorder.mimeType || mimeTypeRef.current;
-    const blob = new Blob(chunksRef.current, { type: mimeType });
-    if (blob.size < 10_000) return;
     setIsDiarizing(true);
     try {
+      const mimeType = recorder.mimeType || mimeTypeRef.current;
+      const blob = new Blob(chunksRef.current, { type: mimeType });
+      if (blob.size < 10_000) return;
       const formData = new FormData();
       formData.append('audio', blob, `segment.${extensionForMimeType(mimeType)}`);
       const res = await fetch(`/api/meetings/${meetingId}/live-transcribe`, { method: 'POST', body: formData });
@@ -337,6 +337,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     stopClarifyTimer();
     setVolumeLevel(0);
+    // Spin the pause button right away — it stays "loading" until diarization lands.
+    setIsDiarizing(true);
     setRecordingState('paused');
 
     // Close the live stream, flush the recorded tail, then pause the recorder.
@@ -610,7 +612,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           background: 'var(--accent-wash)',
           fontSize: 13.5, color: 'var(--ink-2)',
         }}>
-          Live-tekst er ikke tilgængelig lige nu. Optagelsen transskriberes og diariseres fuldt ud, når du sætter på pause eller gemmer.
+          Live-tekst er ikke tilgængelig lige nu. Optagelsen transskriberes fuldt ud, og talere genkendes, når du sætter på pause eller gemmer.
         </div>
       )}
 
@@ -653,7 +655,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                 background: recordingState === 'paused' ? 'var(--muted)' : (recordingState === 'recording' ? 'var(--keep)' : 'var(--muted-2)'),
                 animation: (recordingState === 'recording' || isDiarizing) ? 'protoPulse 1.4s ease-in-out infinite' : 'none',
               }} />
-              {isDiarizing ? 'diariserer talere…' : recordingState === 'recording' ? 'transskriberer live' : recordingState === 'paused' ? 'pause' : 'klar'}
+              {isDiarizing ? 'finder talere…' : recordingState === 'recording' ? 'transskriberer live' : recordingState === 'paused' ? 'pause' : 'klar'}
             </span>
             {recordingState === 'recording' && !isDiarizing && <span>· scribe v2 realtime</span>}
           </div>
@@ -845,14 +847,23 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             </button>
             <button
               onClick={recordingState === 'recording' ? pauseRecording : resumeRecording}
+              disabled={isDiarizing}
+              aria-busy={isDiarizing}
               style={{
                 width: 56, height: 56, borderRadius: 999,
-                background: 'var(--ink)', border: 'none', cursor: 'pointer',
+                background: 'var(--ink)', border: 'none',
+                cursor: isDiarizing ? 'default' : 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}
-              aria-label={recordingState === 'recording' ? 'Pause' : 'Fortsæt'}
+              aria-label={isDiarizing ? 'Finder talere…' : recordingState === 'recording' ? 'Pause' : 'Fortsæt'}
             >
-              {recordingState === 'recording' ? (
+              {isDiarizing ? (
+                <span style={{
+                  display: 'inline-block', width: 20, height: 20, borderRadius: 999,
+                  border: '2px solid var(--bg)', borderTopColor: 'transparent',
+                  animation: 'spin 0.8s linear infinite',
+                }} />
+              ) : recordingState === 'recording' ? (
                 <span style={{ display: 'flex', gap: 4 }}>
                   <span style={{ width: 4, height: 16, background: 'var(--bg)', borderRadius: 2 }} />
                   <span style={{ width: 4, height: 16, background: 'var(--bg)', borderRadius: 2 }} />
