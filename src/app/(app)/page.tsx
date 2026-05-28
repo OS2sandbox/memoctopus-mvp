@@ -140,9 +140,14 @@ export default function OptaqPage() {
                     color: 'var(--ink-2)', display: 'inline-flex', alignItems: 'center', gap: 6,
                   }}>
                     {p}
-                    <span
+                    <button
+                      type="button"
+                      aria-label={`Fjern ${p}`}
                       onClick={() => setParticipants(participants.filter((_, j) => j !== i))}
-                      style={{ color: 'var(--muted-2)', cursor: 'pointer' }}>×</span>
+                      style={{
+                        color: 'var(--muted-2)', cursor: 'pointer',
+                        background: 'none', border: 'none', padding: 0, font: 'inherit', lineHeight: 1,
+                      }}>×</button>
                   </span>
                 ))}
                 <input
@@ -225,9 +230,9 @@ export default function OptaqPage() {
             }}>
               <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--keep)', flexShrink: 0 }} />
               <div>
-                <div style={{ fontSize: 13.5, color: 'var(--ink)' }}>Hviske · klar</div>
+                <div style={{ fontSize: 13.5, color: 'var(--ink)' }}>Hviske · dansk tale-til-tekst</div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', marginTop: 2 }}>
-                  v5.3 · lokal · GPU 1
+                  lokal behandling · åben kildekode
                 </div>
               </div>
             </div>
@@ -237,11 +242,9 @@ export default function OptaqPage() {
               <div style={{
                 fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
                 marginBottom: 8, letterSpacing: 0.4,
-              }}>mikrofon · MacBook Pro</div>
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 22 }}>
-                {[6, 10, 16, 22, 14, 8, 12, 18, 14, 9, 6, 11, 17, 21, 13, 8, 10, 14, 18, 12, 8, 6, 9, 12].map((h, i) => (
-                  <span key={i} style={{ width: 2, height: h, background: 'var(--ink-2)', opacity: 0.7, display: 'block' }} />
-                ))}
+              }}>mikrofon</div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.6 }}>
+                der anmodes om adgang, når du starter en optagelse
               </div>
             </div>
 

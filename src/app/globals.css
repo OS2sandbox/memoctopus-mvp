@@ -118,6 +118,18 @@ button, input, textarea, select {
   font-size: inherit;
 }
 
+/* iOS Safari auto-zooms when focusing an input whose font-size is < 16px.
+   Bump class-styled controls to 16px on small screens to suppress that zoom.
+   (Inline font-size declarations in a few mono inputs intentionally win over
+   this — those are decorative and small by design.) */
+@media (max-width: 767px) {
+  input:not([style*="font-size"]),
+  textarea:not([style*="font-size"]),
+  select:not([style*="font-size"]) {
+    font-size: 16px;
+  }
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

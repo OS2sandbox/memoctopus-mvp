@@ -15,6 +15,8 @@ export function useIsMobile(breakpoint = 768): boolean {
   const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
+    // Guard for environments without matchMedia (jsdom test renders, etc.).
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
     const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
     const onChange = () => setIsMobile(mq.matches);
     onChange();
