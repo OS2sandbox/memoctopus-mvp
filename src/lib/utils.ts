@@ -48,6 +48,7 @@ export function statusLabel(status: string): string {
     review: 'Til gennemsyn',
     minutes: 'Referat',
     done: 'Afsluttet',
+    redacted: 'Anonymiseret',
   };
   return labels[status] ?? status;
 }
@@ -61,6 +62,7 @@ export function statusVariant(
     review: 'default',
     minutes: 'default',
     done: 'success',
+    redacted: 'secondary',
   };
   return map[status] ?? 'secondary';
 }

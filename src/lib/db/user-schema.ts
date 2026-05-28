@@ -25,10 +25,15 @@ export async function ensureUserSchema(userId: string): Promise<void> {
             AND n.nspname = '${schema}'
         ) THEN
           CREATE TYPE "${schema}".meeting_status
-            AS ENUM ('recording','processing','review','minutes','done');
+            AS ENUM ('recording','processing','review','minutes','done','redacted');
         END IF;
       END
       $$
+    `);
+
+    // Ensure 'redacted' exists on schemas created before it was added
+    await client.query(`
+      ALTER TYPE "${schema}".meeting_status ADD VALUE IF NOT EXISTS 'redacted'
     `);
 
     // templates
@@ -51,9 +56,22 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         title        TEXT NOT NULL,
         participants TEXT[] NOT NULL DEFAULT '{}',
         status       "${schema}".meeting_status NOT NULL DEFAULT 'recording',
+        redacted_at  TIMESTAMPTZ,
+        redacted_by  TEXT,
         created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
+    `);
+
+    // Ensure redaction columns exist on schemas created before they were added
+    await client.query(`
+      ALTER TABLE "${schema}".meetings
+      ADD COLUMN IF NOT EXISTS redacted_at TIMESTAMPTZ
+    `);
+
+    await client.query(`
+      ALTER TABLE "${schema}".meetings
+      ADD COLUMN IF NOT EXISTS redacted_by TEXT
     `);
 
     // audio_files

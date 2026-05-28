@@ -1,17 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { DangerSection } from '@/components/compliance/DangerSection';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
 
 interface UsageData {
   meetingCount: number;
@@ -27,12 +17,8 @@ function formatBytes(bytes: number): string {
 }
 
 export default function SettingsDataPage() {
-  const router = useRouter();
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showAccountDeleteDialog, setShowAccountDeleteDialog] = useState(false);
-  const [accountDeleteInput, setAccountDeleteInput] = useState('');
-  const [deletingAccount, setDeletingAccount] = useState(false);
 
   useEffect(() => {
     fetch('/api/account/usage')
@@ -50,16 +36,6 @@ export default function SettingsDataPage() {
   async function deleteAllSensitive() {
     await fetch('/api/account/sensitive', { method: 'DELETE' });
     window.location.reload();
-  }
-
-  function deleteAccount() {
-    setShowAccountDeleteDialog(true);
-  }
-
-  async function confirmDeleteAccount() {
-    setDeletingAccount(true);
-    await fetch('/api/account', { method: 'DELETE' });
-    router.push('/login');
   }
 
   return (
@@ -152,78 +128,6 @@ export default function SettingsDataPage() {
           onAction={deleteAllSensitive}
         />
       </section>
-
-      <div className="border-t border-[var(--line)] mb-16" />
-
-      {/* Section 4 — Delete account */}
-      <section>
-        <h2
-          className="font-medium text-[var(--ink)] mb-1"
-          style={{ fontSize: 'var(--t-h2)' }}
-        >
-          Slet konto
-        </h2>
-        <p className="text-[var(--muted)] mb-6" style={{ fontSize: 'var(--t-small)' }}>
-          Permanent sletning af alt indhold og din konto.
-        </p>
-        <DangerSection
-          title="Slet hele kontoen"
-          description="Sletter alle møder, referater, lydfiler og din konto permanent. Kan ikke fortrydes."
-          actionLabel="Slet konto"
-          onAction={deleteAccount}
-        />
-      </section>
-
-      {/* Account delete confirmation dialog */}
-      <Dialog
-        open={showAccountDeleteDialog}
-        onOpenChange={(open) => {
-          if (!open) {
-            setShowAccountDeleteDialog(false);
-            setAccountDeleteInput('');
-          }
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Slet konto</DialogTitle>
-            <DialogDescription>
-              Skriv &apos;slet min konto&apos; for at bekræfte
-            </DialogDescription>
-          </DialogHeader>
-          <div className="py-2">
-            <input
-              type="text"
-              value={accountDeleteInput}
-              onChange={(e) => setAccountDeleteInput(e.target.value)}
-              placeholder="slet min konto"
-              className="w-full rounded-[var(--radius)] border border-[var(--line)] bg-transparent px-3 py-2 text-[var(--ink)] outline-none focus:border-[var(--danger)]"
-              style={{ fontSize: 'var(--t-small)' }}
-            />
-          </div>
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setShowAccountDeleteDialog(false);
-                setAccountDeleteInput('');
-              }}
-              disabled={deletingAccount}
-            >
-              Fortryd
-            </Button>
-            <Button
-              variant="danger-ghost"
-              size="sm"
-              onClick={confirmDeleteAccount}
-              disabled={accountDeleteInput !== 'slet min konto' || deletingAccount}
-            >
-              {deletingAccount ? 'Sletter…' : 'Slet konto permanent'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

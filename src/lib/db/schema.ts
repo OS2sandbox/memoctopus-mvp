@@ -70,6 +70,7 @@ export const meetingStatusValues = [
   'review',
   'minutes',
   'done',
+  'redacted',
 ] as const;
 
 export type MeetingStatusValue = (typeof meetingStatusValues)[number];
