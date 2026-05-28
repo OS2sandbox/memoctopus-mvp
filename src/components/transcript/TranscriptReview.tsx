@@ -259,13 +259,47 @@ export function TranscriptReview({
   );
 
   function jumpToSegment(segmentIndex: number) {
-    const el = segmentRefs.current[segmentIndex];
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // Open the chapter containing this segment, close all others
+    if (chapters) {
+      const target = chapters.find((ch) => ch.segmentIndices.includes(segmentIndex));
+      if (target) setOpenChapters(new Set([target.id]));
     }
+
     if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
     setHighlightedSegment(segmentIndex);
     highlightTimerRef.current = setTimeout(() => setHighlightedSegment(null), 2000);
+
+    // Delay scroll to let the chapter open and render first
+    setTimeout(() => {
+      const el = segmentRefs.current[segmentIndex];
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 80);
+  }
+
+  function goToMatch(idx: number) {
+    if (matches.length === 0) return;
+    const clamped = ((idx % matches.length) + matches.length) % matches.length;
+    setMatchIndex(clamped);
+    jumpToSegment(matches[clamped]);
+  }
+
+  function replaceCurrentMatch() {
+    if (!search || !replace || matches.length === 0) return;
+    const effectiveIdx = matchIndex < 0 ? 0 : matchIndex;
+    const segIdx = matches[effectiveIdx];
+    const re = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    setSegments((prev) => prev.map((s, i) => i === segIdx ? { ...s, text: s.text.replace(re, replace) } : s));
+    setTimeout(() => {
+      if (matches.length > 1) goToMatch(effectiveIdx + 1);
+    }, 50);
+  }
+
+  function replaceAllMatches() {
+    if (!search || !replace || matches.length === 0) return;
+    const re = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    const matchSet = new Set(matches);
+    setSegments((prev) => prev.map((s, i) => matchSet.has(i) ? { ...s, text: s.text.replace(re, replace) } : s));
+    setMatchIndex(-1);
   }
 
   function togglePiiItem(i: number) {
@@ -331,6 +365,19 @@ export function TranscriptReview({
 
   // Chapters
   const [search, setSearch] = useState('');
+  const [replace, setReplace] = useState('');
+  const [showReplace, setShowReplace] = useState(false);
+  const [matchIndex, setMatchIndex] = useState(-1);
+
+  const matches = useMemo(() => {
+    if (!search.trim()) return [] as number[];
+    const q = search.toLowerCase();
+    return displaySegments.reduce<number[]>((acc, seg, idx) => {
+      if (seg.text.toLowerCase().includes(q) || seg.speaker.toLowerCase().includes(q)) acc.push(idx);
+      return acc;
+    }, []);
+  }, [search, displaySegments]);
+
   const [chapters, setChapters] = useState<TranscriptChapter[] | null>(
     initialChapters && initialChapters.length > 0 ? initialChapters : null,
   );
@@ -400,25 +447,70 @@ export function TranscriptReview({
             </h1>
           </div>
 
-          {/* Search */}
-          <div style={{
-            marginTop: 24, borderTop: '1px solid var(--line)',
-            display: 'flex', alignItems: 'center', gap: 8,
-            padding: '12px 0 0',
-            fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--muted)',
-          }}>
-            <span>⌕</span>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="søg i transskription"
-              style={{ flex: 1, color: 'var(--ink-2)', fontSize: 13, background: 'transparent', border: 'none', outline: 'none' }}
-            />
-            {search && (
-              <span
-                onClick={() => setSearch('')}
-                style={{ cursor: 'pointer', color: 'var(--muted-2)', fontFamily: 'var(--mono)', fontSize: 13 }}
-              >×</span>
+          {/* Search + Replace */}
+          <div style={{ marginTop: 24, borderTop: '1px solid var(--line)', fontFamily: 'var(--mono)', fontSize: 13 }}>
+            {/* Search row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 0 0', color: 'var(--muted)' }}>
+              <span style={{ fontSize: 16, color: 'var(--accent)' }}>⌕</span>
+              <input
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setMatchIndex(-1); }}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter') return;
+                  e.preventDefault();
+                  if (matches.length === 0) return;
+                  goToMatch(e.shiftKey
+                    ? (matchIndex <= 0 ? matches.length - 1 : matchIndex - 1)
+                    : matchIndex < 0 ? 0 : matchIndex + 1);
+                }}
+                placeholder="søg i transskription"
+                style={{ flex: 1, color: 'var(--ink-2)', fontSize: 13, background: 'transparent', border: 'none', outline: 'none' }}
+              />
+              {search && matches.length > 0 && (
+                <span style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+                  {matchIndex >= 0 ? matchIndex + 1 : '?'} / {matches.length}
+                </span>
+              )}
+              {search && matches.length === 0 && (
+                <span style={{ fontSize: 11, color: 'var(--danger)' }}>ingen</span>
+              )}
+              {search && matches.length > 0 && (
+                <>
+                  <button onClick={() => goToMatch(matchIndex <= 0 ? matches.length - 1 : matchIndex - 1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink-2)', fontSize: 12, padding: '0 2px', fontFamily: 'var(--mono)' }}>↑</button>
+                  <button onClick={() => goToMatch(matchIndex < 0 ? 0 : matchIndex + 1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink-2)', fontSize: 12, padding: '0 2px', fontFamily: 'var(--mono)' }}>↓</button>
+                </>
+              )}
+              <button
+                onClick={() => setShowReplace((v) => !v)}
+                title="Søg og erstat"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', fontFamily: 'var(--mono)', fontSize: 16, color: 'var(--accent)' }}
+              >⇄</button>
+              {search && (
+                <span onClick={() => { setSearch(''); setMatchIndex(-1); }} style={{ cursor: 'pointer', color: 'var(--muted-2)', fontSize: 13 }}>×</span>
+              )}
+            </div>
+            {/* Replace row */}
+            {showReplace && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0 4px', borderTop: '1px solid var(--line-2)', color: 'var(--muted)' }}>
+                <span style={{ opacity: 0 }}>⌕</span>
+                <input
+                  value={replace}
+                  onChange={(e) => setReplace(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); replaceCurrentMatch(); } }}
+                  placeholder="erstat med"
+                  style={{ flex: 1, color: 'var(--ink-2)', fontSize: 13, background: 'transparent', border: 'none', outline: 'none' }}
+                />
+                <button
+                  onClick={replaceCurrentMatch}
+                  disabled={!search || !replace || matches.length === 0}
+                  style={{ fontSize: 11, color: 'var(--ink-2)', background: 'none', border: '1px solid var(--line-2)', cursor: 'pointer', padding: '3px 8px', borderRadius: 'var(--radius)', fontFamily: 'var(--mono)', opacity: (!search || !replace || matches.length === 0) ? 0.4 : 1 }}
+                >erstat</button>
+                <button
+                  onClick={replaceAllMatches}
+                  disabled={!search || !replace || matches.length === 0}
+                  style={{ fontSize: 11, color: 'var(--ink-2)', background: 'none', border: '1px solid var(--line-2)', cursor: 'pointer', padding: '3px 8px', borderRadius: 'var(--radius)', fontFamily: 'var(--mono)', opacity: (!search || !replace || matches.length === 0) ? 0.4 : 1 }}
+                >erstat alle</button>
+              </div>
             )}
           </div>
 
@@ -436,11 +528,7 @@ export function TranscriptReview({
           {audioUrl && <audio ref={audioRef} src={audioUrl} preload="metadata" />}
 
           {/* Transcript — chapters or flat fallback */}
-          <div style={{
-            marginTop: 8, flex: 1, overflowY: 'auto',
-            maskImage: 'linear-gradient(to bottom, transparent 0%, black 6%)',
-            WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 6%)',
-          }}>
+          <div style={{ marginTop: 8, flex: 1, overflowY: 'auto' }}>
             {chaptersLoading && (
               <div style={{
                 padding: '24px 0', display: 'flex', alignItems: 'center', gap: 10,
@@ -468,18 +556,25 @@ export function TranscriptReview({
               return (
                 <div
                   key={ch.id}
-                  style={{
-                    borderTop: '1px solid var(--line)',
-                    background: hasMatch ? 'var(--accent-wash)' : 'transparent',
-                    transition: 'background 200ms',
-                  }}
+                  style={{ borderTop: '1px solid var(--line)' }}
                 >
                   <div
-                    onClick={() => setOpenChapters((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(ch.id)) next.delete(ch.id); else next.add(ch.id);
-                      return next;
-                    })}
+                    onClick={() => {
+                      const isNowOpen = !openChapters.has(ch.id);
+                      setOpenChapters((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(ch.id)) next.delete(ch.id); else next.add(ch.id);
+                        return next;
+                      });
+                      // If opening with an active search, jump to first match in this chapter
+                      if (isNowOpen && search.trim() && matches.length > 0) {
+                        const firstInChapter = ch.segmentIndices.find((si) => matches.includes(si));
+                        if (firstInChapter !== undefined) {
+                          const globalIdx = matches.indexOf(firstInChapter);
+                          setTimeout(() => goToMatch(globalIdx), 80);
+                        }
+                      }
+                    }}
                     style={{
                       padding: '20px 0', cursor: 'pointer',
                       display: 'grid', gridTemplateColumns: '24px 90px 1fr',
@@ -532,8 +627,17 @@ export function TranscriptReview({
                   </div>
                   {isOpen && (
                     <div style={{ paddingBottom: 18, maxHeight: 360, overflowY: 'auto' }}>
-                      {chSegs.map(({ seg, idx }) => (
-                        <div key={idx} ref={(el) => { segmentRefs.current[idx] = el; }}>
+                      {chSegs.map(({ seg, idx }) => {
+                        const isCurrentMatch = matchIndex >= 0 && matches[matchIndex] === idx;
+                        const isAnyMatch = search.trim() && matches.includes(idx);
+                        return (
+                        <div key={idx} ref={(el) => { segmentRefs.current[idx] = el; }} style={{
+                          borderRadius: 'var(--radius)',
+                          background: isCurrentMatch
+                            ? 'var(--accent-wash)'
+                            : isAnyMatch ? 'color-mix(in srgb, var(--accent) 6%, transparent)' : undefined,
+                          transition: 'background 150ms',
+                        }}>
                           <SpeakerRow
                             segment={seg}
                             index={idx}
@@ -545,7 +649,8 @@ export function TranscriptReview({
                             isHighlighted={highlightedSegment === idx}
                           />
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -865,6 +970,24 @@ export function TranscriptReview({
                   width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%',
                   background: 'var(--ink-2)', borderRadius: 2,
                 }} />
+                {/* Open chapter highlights — rendered on top of progress fill */}
+                {duration > 0 && chapters?.filter((ch) => openChapters.has(ch.id)).map((ch) => (
+                  <div key={ch.id} style={{
+                    position: 'absolute', top: 0, height: '100%',
+                    left: `${(ch.startTime / duration) * 100}%`,
+                    width: `${((ch.endTime - ch.startTime) / duration) * 100}%`,
+                    background: 'var(--accent)', borderRadius: 2,
+                  }}>
+                    <div style={{
+                      position: 'absolute', left: 0, top: '50%', transform: 'translate(-50%, -50%)',
+                      width: 2, height: 10, background: 'var(--accent)', borderRadius: 1,
+                    }} />
+                    <div style={{
+                      position: 'absolute', right: 0, top: '50%', transform: 'translate(50%, -50%)',
+                      width: 2, height: 10, background: 'var(--accent)', borderRadius: 1,
+                    }} />
+                  </div>
+                ))}
                 {duration > 0 && (
                   <div style={{
                     position: 'absolute', top: '50%', transform: 'translate(-50%, -50%)',

@@ -71,7 +71,7 @@ Regler:
       chapters: Array<{ title: string; summary: string; segmentIndices: number[] }>;
     };
 
-    return parsed.chapters.map((ch, i) => ({
+    const chapters = parsed.chapters.map((ch, i) => ({
       id: `ch-${i}`,
       title: ch.title,
       summary: ch.summary,
@@ -79,6 +79,13 @@ Regler:
       endTime: segments[ch.segmentIndices[ch.segmentIndices.length - 1]]?.end ?? 0,
       segmentIndices: ch.segmentIndices,
     }));
+
+    // Clamp each chapter's endTime to the next chapter's startTime to prevent overlap
+    for (let i = 0; i < chapters.length - 1; i++) {
+      chapters[i].endTime = Math.min(chapters[i].endTime, chapters[i + 1].startTime);
+    }
+
+    return chapters;
   } catch {
     return [
       {

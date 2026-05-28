@@ -30,25 +30,23 @@ export async function POST(req: NextRequest) {
   );
   if (!meeting) return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
 
-  // Update segments if provided
-  if (segments && segments.length > 0) {
-    const rawText = segments.map((s: TranscriptSegment) => s.text).join(' ');
-    await queryUserSchemaOne(
-      session.user.id,
-      'UPDATE transcripts SET raw_text = $1, segments = $2 WHERE id = $3',
-      [rawText, JSON.stringify(segments), transcriptId],
-    );
+  // Use the client-processed segments (with PII applied and manual edits) directly for generation.
+  // Do NOT write them back to DB — the DB keeps the raw uncensored transcript so PII toggling
+  // on the review page keeps working across navigations.
+  const transcriptSegments: TranscriptSegment[] = segments && segments.length > 0
+    ? segments
+    : await (async () => {
+        const transcript = await queryUserSchemaOne<{ segments: unknown }>(
+          session.user.id,
+          'SELECT segments FROM transcripts WHERE id = $1',
+          [transcriptId],
+        );
+        return (transcript?.segments as TranscriptSegment[]) ?? [];
+      })();
+
+  if (transcriptSegments.length === 0) {
+    return NextResponse.json({ error: 'Transcript not found' }, { status: 404 });
   }
-
-  // Get transcript
-  const transcript = await queryUserSchemaOne<{ segments: unknown }>(
-    session.user.id,
-    'SELECT segments FROM transcripts WHERE id = $1',
-    [transcriptId],
-  );
-  if (!transcript) return NextResponse.json({ error: 'Transcript not found' }, { status: 404 });
-
-  const transcriptSegments = (transcript.segments as TranscriptSegment[]) ?? [];
 
   let minutesContent;
   let templateId: string | null = null;
