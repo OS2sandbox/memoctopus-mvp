@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dialog';
 import { VolumeBar } from './VolumeBar';
 import { formatDuration, formatFileSize } from '@/lib/utils';
+import { pendingUpload } from '@/lib/pending-upload';
 
 interface LiveSegment {
   speaker: string;
@@ -260,37 +261,44 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
     setRecordingState('stopped');
     setIsUploading(true);
 
+    const mimeType = recorder.mimeType || 'audio/webm';
+    const blob = new Blob(chunksRef.current, { type: mimeType });
+
+    if (liveSegmentsRef.current.length >= 3) {
+      // Fast path: save live segments to DB immediately, then navigate.
+      // The audio blob is uploaded with a progress bar from Gennemgang.
+      try {
+        const res = await fetch(`/api/meetings/${meetingId}/save-transcript`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ segments: liveSegmentsRef.current }),
+        });
+        if (!res.ok) throw new Error('Kunne ikke gemme transskriptionen');
+      } catch {
+        // Even on failure, store what we have and navigate — Gennemgang handles recovery.
+      }
+      pendingUpload.set({ meetingId, blob, elapsed });
+      router.push(`/meeting/${meetingId}/review`);
+      return;
+    }
+
+    // Slow path: no live segments — run full Whisper transcription.
+    // Still navigate on error so the user is never stuck on the recording screen.
     try {
-      const mimeType = recorder.mimeType || 'audio/webm';
-      const blob = new Blob(chunksRef.current, { type: mimeType });
       const formData = new FormData();
       formData.append('audio', blob, `recording.${mimeType.includes('mp4') ? 'm4a' : 'webm'}`);
       formData.append('meetingId', meetingId);
-      // Send live segments so the server can use them directly (with PII removal)
-      // instead of re-transcribing — keeps live preview and Gennemgang consistent.
-      if (liveSegmentsRef.current.length > 0) {
-        formData.append('liveSegments', JSON.stringify(liveSegmentsRef.current));
-      }
       formData.append('duration', String(elapsed));
 
       const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
       if (!res.ok) {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         throw new Error(data.error ?? 'Upload fejlede');
       }
-      const { segments: finalSegments } = await res.json();
-      if (Array.isArray(finalSegments) && finalSegments.length > 0) {
-        liveSegmentsRef.current = finalSegments;
-        setLiveSegments(finalSegments);
-        setIsUploading(false);
-        await new Promise((r) => setTimeout(r, 1200));
-      }
-      router.push(`/meeting/${meetingId}/review`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt under upload');
-      setIsUploading(false);
-      setRecordingState('stopped');
     }
+    router.push(`/meeting/${meetingId}/review`);
   }
 
   async function confirmOverwrite() {

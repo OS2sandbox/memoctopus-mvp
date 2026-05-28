@@ -12,9 +12,11 @@ interface SpeakerRowProps {
   onRenameAll: (from: string, to: string) => void;
   speakerSegmentCount: number;
   onSeek?: (time: number) => void;
+  hasPii?: boolean;
+  isHighlighted?: boolean;
 }
 
-export function SpeakerRow({ segment, index, onUpdate, onRenameAll, speakerSegmentCount, onSeek }: SpeakerRowProps) {
+export const SpeakerRow = React.memo(function SpeakerRow({ segment, index, onUpdate, onRenameAll, speakerSegmentCount, onSeek, hasPii, isHighlighted }: SpeakerRowProps) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -39,7 +41,15 @@ export function SpeakerRow({ segment, index, onUpdate, onRenameAll, speakerSegme
   }
 
   return (
-    <div className="flex gap-0 py-4">
+    <div
+      className="flex gap-0 py-4 transition-all duration-300"
+      style={{
+        borderLeft: hasPii ? '3px solid var(--warning, #f59e0b)' : '3px solid transparent',
+        paddingLeft: hasPii ? '12px' : '0',
+        backgroundColor: isHighlighted ? 'color-mix(in srgb, var(--warning, #f59e0b) 10%, transparent)' : undefined,
+        borderRadius: isHighlighted ? 'var(--radius-sm)' : undefined,
+      }}
+    >
       {/* Left rail: speaker + timestamp */}
       <div className="w-24 shrink-0 pr-4 pt-0.5 relative">
         {onSeek ? (
@@ -141,4 +151,4 @@ export function SpeakerRow({ segment, index, onUpdate, onRenameAll, speakerSegme
       </div>
     </div>
   );
-}
+});

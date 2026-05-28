@@ -89,3 +89,17 @@ export async function removePiiFromSegments(
 
   return { cleanedSegments, replacements: result.replacements };
 }
+
+export async function detectPiiInSegments(
+  segments: Array<{ speaker: string; start: number; end: number; text: string }>,
+): Promise<{ replacements: PiiReplacement[] }> {
+  const fullText = segments.map((s) => `[${s.speaker}]: ${s.text}`).join('\n');
+  const result = await removePii(fullText);
+
+  const replacements: PiiReplacement[] = result.replacements.map((r) => {
+    const idx = segments.findIndex((seg) => seg.text.includes(r.original));
+    return { ...r, segmentIndex: idx >= 0 ? idx : undefined };
+  });
+
+  return { replacements };
+}
