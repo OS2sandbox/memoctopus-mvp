@@ -91,20 +91,13 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const row = await queryUserSchemaOne<{ filename: string }>(
+  const rows = await queryUserSchema<{ filename: string }>(
     session.user.id,
-    'SELECT filename FROM audio_files WHERE meeting_id = $1 AND deleted_at IS NULL LIMIT 1',
+    'UPDATE audio_files SET deleted_at = NOW() WHERE meeting_id = $1 AND deleted_at IS NULL RETURNING filename',
     [id],
   );
 
-  if (row) {
-    await queryUserSchema(
-      session.user.id,
-      'UPDATE audio_files SET deleted_at = NOW() WHERE meeting_id = $1 AND deleted_at IS NULL',
-      [id],
-    );
-    await deleteAudioFile(session.user.id, row.filename);
-  }
+  await Promise.all(rows.map((r) => deleteAudioFile(session.user.id, r.filename)));
 
   await queryUserSchema(
     session.user.id,

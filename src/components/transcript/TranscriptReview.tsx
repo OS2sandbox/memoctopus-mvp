@@ -269,7 +269,7 @@ export function TranscriptReview({
     setIsGenerating(true);
     setError(null);
     try {
-      const processedSegments = applySelectedPiiReplacements(segments, piiReplacements, checkedPii);
+      const processedSegments = displaySegments;
       const abort = new AbortController();
       const timeout = setTimeout(() => abort.abort(), 5 * 60 * 1000);
       let res: Response;

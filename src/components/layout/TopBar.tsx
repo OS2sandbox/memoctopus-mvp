@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -10,8 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
+import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
 
 interface TopBarProps {
   user: { name: string; email: string };
@@ -21,8 +20,6 @@ export function TopBar({ user }: TopBarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [showConfirm, setShowConfirm] = useState(false);
-  const [pendingHref, setPendingHref] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState(false);
 
   const nav = [
     { href: '/', label: 'Optag', exact: true },
@@ -30,9 +27,10 @@ export function TopBar({ user }: TopBarProps) {
     { href: '/settings/data', label: 'Data' },
   ];
 
-  // e.g. /meeting/abc123/review
-  const reviewMatch = pathname.match(/^\/meeting\/([^/]+)\/review$/);
-  const reviewMeetingId = reviewMatch?.[1] ?? null;
+  const reviewMeetingId = useMemo(
+    () => pathname.match(/^\/meeting\/([^/]+)\/review$/)?.[1] ?? null,
+    [pathname],
+  );
 
   function isActive(href: string, exact?: boolean) {
     if (exact) return pathname === href;
@@ -42,26 +40,8 @@ export function TopBar({ user }: TopBarProps) {
   function handleNavClick(e: React.MouseEvent, href: string) {
     if (reviewMeetingId && href === '/') {
       e.preventDefault();
-      setPendingHref(href);
       setShowConfirm(true);
     }
-  }
-
-  async function confirmDeleteAndNavigate() {
-    if (!reviewMeetingId || !pendingHref) return;
-    setDeleting(true);
-    try {
-      await fetch(`/api/meetings/${reviewMeetingId}/audio`, { method: 'DELETE' });
-    } finally {
-      setDeleting(false);
-    }
-    setShowConfirm(false);
-    router.push(pendingHref);
-  }
-
-  function cancelConfirm() {
-    setShowConfirm(false);
-    setPendingHref(null);
   }
 
   async function handleSignOut() {
@@ -71,24 +51,16 @@ export function TopBar({ user }: TopBarProps) {
 
   return (
     <>
-      <Dialog open={showConfirm} onOpenChange={(open) => { if (!open) cancelConfirm(); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Slet lydfil og forlad mødet?</DialogTitle>
-          </DialogHeader>
-          <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.6 }}>
-            Lydfilen slettes, og mødet nulstilles til optagelse. Du kan derefter starte en ny optagelse.
-          </p>
-          <DialogFooter>
-            <Button variant="ghost" onClick={cancelConfirm} disabled={deleting}>
-              Afbryd
-            </Button>
-            <Button variant="destructive" onClick={confirmDeleteAndNavigate} disabled={deleting}>
-              {deleting ? 'Sletter…' : 'Slet og forlad'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {reviewMeetingId && (
+        <DeleteAudioDialog
+          open={showConfirm}
+          onOpenChange={setShowConfirm}
+          meetingId={reviewMeetingId}
+          title="Slet lydfil og forlad mødet?"
+          confirmLabel="Slet og forlad"
+          onDeleted={() => router.push('/')}
+        />
+      )}
 
       <header style={{
         position: 'sticky', top: 0, zIndex: 40,
