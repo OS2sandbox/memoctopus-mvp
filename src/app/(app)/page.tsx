@@ -167,16 +167,15 @@ export default function OptaqPage() {
                 background: loading ? 'var(--ink-2)' : 'var(--ink)',
                 color: 'var(--bg)',
                 border: 'none', cursor: loading ? 'not-allowed' : 'pointer',
-                display: 'flex', flexDirection: 'column',
-                alignItems: 'center', justifyContent: 'center', gap: 14,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
                 boxShadow: '0 1px 0 var(--line-2)',
                 transition: 'background 150ms',
               }}
             >
-              <span style={{ width: 22, height: 22, borderRadius: 999, background: 'var(--bg)', display: 'block' }} />
               <span style={{
                 fontFamily: 'var(--mono)', fontSize: 13,
-                letterSpacing: 0.6, opacity: 0.85,
+                letterSpacing: 0.6, width: '100%', textAlign: 'center',
+                paddingInline: 16,
               }}>optag</span>
             </button>
             <div style={{

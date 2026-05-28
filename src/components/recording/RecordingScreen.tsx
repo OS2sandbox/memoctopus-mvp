@@ -587,44 +587,71 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       <div style={{
         marginTop: 20, paddingTop: 18, borderTop: '1px solid var(--line)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16,
+        position: 'relative',
       }}>
         {recordingState === 'idle' && (
-          <button
-            onClick={startRecording}
-            style={{
-              width: 56, height: 56, borderRadius: 999,
-              background: 'var(--ink)', border: 'none', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}
-            aria-label="Start optagelse"
-          >
-            <span style={{ width: 18, height: 18, borderRadius: 999, background: 'var(--bg)', display: 'block' }} />
-          </button>
-        )}
-
-        {(recordingState === 'recording' || recordingState === 'paused') && (
           <>
             <button
-              onClick={recordingState === 'recording' ? pauseRecording : resumeRecording}
-              style={{
-                fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
-                padding: '8px 14px', borderRadius: 'var(--radius)',
-                border: '1px solid var(--line-2)', background: 'transparent',
-                color: 'var(--ink)', cursor: 'pointer',
-              }}
-            >
-              {recordingState === 'recording' ? 'pause' : 'fortsæt'}
-            </button>
-            <button
-              onClick={stopAndSave}
+              onClick={startRecording}
               style={{
                 width: 56, height: 56, borderRadius: 999,
                 background: 'var(--ink)', border: 'none', cursor: 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}
-              aria-label="Stop og gem"
+              aria-label="Start optagelse"
             >
-              <span style={{ width: 14, height: 14, background: 'var(--bg)', display: 'block' }} />
+              <span style={{ width: 18, height: 18, borderRadius: 999, background: 'var(--bg)', display: 'block' }} />
+            </button>
+            <button
+              onClick={() => setShowCancelDialog(true)}
+              style={{
+                fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted-2)',
+                background: 'none', border: 'none', cursor: 'pointer',
+                textDecoration: 'underline', textUnderlineOffset: 3,
+                position: 'absolute', right: 48,
+              }}
+            >
+              annullér
+            </button>
+          </>
+        )}
+
+        {(recordingState === 'recording' || recordingState === 'paused') && (
+          <>
+            <button
+              onClick={() => setShowCancelDialog(true)}
+              style={{
+                fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted-2)',
+                background: 'none', border: 'none', cursor: 'pointer',
+                textDecoration: 'underline', textUnderlineOffset: 3,
+                position: 'absolute', left: 48,
+              }}
+            >
+              annullér
+            </button>
+            <button
+              onClick={recordingState === 'recording' ? pauseRecording : resumeRecording}
+              style={{
+                width: 56, height: 56, borderRadius: 999,
+                background: 'var(--ink)', border: 'none', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+              aria-label={recordingState === 'recording' ? 'Pause' : 'Fortsæt'}
+            >
+              {recordingState === 'recording' ? (
+                <span style={{ display: 'flex', gap: 4 }}>
+                  <span style={{ width: 4, height: 16, background: 'var(--bg)', borderRadius: 2 }} />
+                  <span style={{ width: 4, height: 16, background: 'var(--bg)', borderRadius: 2 }} />
+                </span>
+              ) : (
+                <span style={{
+                  width: 0, height: 0,
+                  borderTop: '8px solid transparent',
+                  borderBottom: '8px solid transparent',
+                  borderLeft: '14px solid var(--bg)',
+                  marginLeft: 3,
+                }} />
+              )}
             </button>
             <button
               onClick={stopAndSave}
@@ -633,9 +660,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                 padding: '8px 14px', borderRadius: 'var(--radius)',
                 border: '1px solid var(--line-2)', background: 'transparent',
                 color: 'var(--ink)', cursor: 'pointer',
+                position: 'absolute', right: 48,
               }}
             >
-              stop &amp; gem
+              gem &amp; fortsæt
             </button>
           </>
         )}
@@ -649,20 +677,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             }} />
             gemmer og navigerer…
           </div>
-        )}
-
-        {recordingState !== 'stopped' && !isUploading && (
-          <button
-            onClick={() => setShowCancelDialog(true)}
-            style={{
-              fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted-2)',
-              background: 'none', border: 'none', cursor: 'pointer',
-              textDecoration: 'underline', textUnderlineOffset: 3,
-              position: 'absolute', right: 48,
-            }}
-          >
-            annullér
-          </button>
         )}
       </div>
 
