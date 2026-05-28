@@ -93,37 +93,6 @@ function speakerLabel(speakerId: string): string {
   return `Taler ${num}`;
 }
 
-// ─── Whisper implementation ──────────────────────────────────────────────────
-
-export class WhisperProvider implements TranscriptionProvider {
-  private client: OpenAI;
-
-  constructor() {
-    this.client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY!,
-    });
-  }
-
-  async transcribe(audioBuffer: Buffer, mimeType: string): Promise<TranscriptSegment[]> {
-    const ext = mimeTypeToExt(mimeType);
-    const file = new File([new Uint8Array(audioBuffer)], `audio.${ext}`, { type: mimeType });
-
-    const response = await this.client.audio.transcriptions.create({
-      model: 'whisper-1',
-      file,
-      language: 'da',
-      response_format: 'verbose_json',
-      timestamp_granularities: ['segment'],
-    });
-
-    if (!response.segments || response.segments.length === 0) {
-      return [{ speaker: 'Taler 1', start: 0, end: 0, text: response.text }];
-    }
-
-    return segmentsWithHeuristicDiarization(response.segments);
-  }
-}
-
 // ─── Hviske-v5.1 implementation ──────────────────────────────────────────────
 // Talks to a vLLM instance serving syvai/hviske-v5.1 via its OpenAI-compatible
 // /v1/audio/transcriptions endpoint.
@@ -197,7 +166,6 @@ function mimeTypeToExt(mimeType: string): string {
 // ─── Active provider ──────────────────────────────────────────────────────────
 // TRANSCRIPTION_PROVIDER env var selects the provider:
 //   elevenlabs (default) — scribe_v2 with speaker diarization
-//   whisper              — OpenAI whisper-1 with heuristic diarization
 //   hviske               — syvai/hviske-v5.1 via vLLM
 
 let _provider: TranscriptionProvider | null = null;
@@ -206,7 +174,6 @@ export function getTranscriptionProvider(): TranscriptionProvider {
   if (!_provider) {
     const p = process.env.TRANSCRIPTION_PROVIDER;
     if (p === 'hviske') _provider = new HviskeProvider();
-    else if (p === 'whisper') _provider = new WhisperProvider();
     else _provider = new ElevenLabsProvider();
   }
   return _provider;

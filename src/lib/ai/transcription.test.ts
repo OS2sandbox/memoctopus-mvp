@@ -8,15 +8,16 @@ vi.mock('openai', () => ({
   },
 }));
 
-import { WhisperProvider, getTranscriptionProvider, setTranscriptionProvider } from './transcription';
+import { HviskeProvider, ElevenLabsProvider, getTranscriptionProvider, setTranscriptionProvider } from './transcription';
 
-// ─── WhisperProvider ──────────────────────────────────────────────────────────
+// ─── HviskeProvider ───────────────────────────────────────────────────────────
+// Exercises the shared OpenAI-compatible transcription path + heuristic diarization.
 
-describe('WhisperProvider.transcribe', () => {
-  let provider: WhisperProvider;
+describe('HviskeProvider.transcribe', () => {
+  let provider: HviskeProvider;
 
   beforeEach(() => {
-    provider = new WhisperProvider();
+    provider = new HviskeProvider();
     mockTranscriptionsCreate.mockReset();
   });
 
@@ -116,7 +117,7 @@ describe('WhisperProvider.transcribe', () => {
     expect(result[0].text).toBe('padded text');
   });
 
-  it('preserves start/end timestamps from Whisper segments', async () => {
+  it('preserves start/end timestamps from transcription segments', async () => {
     mockTranscriptionsCreate.mockResolvedValueOnce({
       text: 'x',
       segments: [{ start: 3.5, end: 7.2, text: 'Text' }],
@@ -147,7 +148,7 @@ describe('WhisperProvider.transcribe', () => {
     expect(call.file.name).toMatch(new RegExp(`\\.${ext}$`));
   });
 
-  it('sends language=da to Whisper', async () => {
+  it('sends language=da to the transcription API', async () => {
     mockTranscriptionsCreate.mockResolvedValueOnce({ text: '', segments: [] });
 
     await provider.transcribe(Buffer.from('a'), 'audio/webm');
@@ -169,10 +170,10 @@ describe('WhisperProvider.transcribe', () => {
 // ─── Provider singleton ───────────────────────────────────────────────────────
 
 describe('getTranscriptionProvider / setTranscriptionProvider', () => {
-  it('returns a WhisperProvider by default', () => {
+  it('returns an ElevenLabsProvider by default', () => {
     setTranscriptionProvider(null as never);
     const p = getTranscriptionProvider();
-    expect(p).toBeInstanceOf(WhisperProvider);
+    expect(p).toBeInstanceOf(ElevenLabsProvider);
   });
 
   it('returns the same instance on repeated calls', () => {

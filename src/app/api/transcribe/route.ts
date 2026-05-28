@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Create mode: no existing transcript — full pipeline (Whisper fallback + PII).
+  // Create mode: no existing transcript — full pipeline (transcription + PII).
   await queryUserSchemaOne(
     session.user.id,
     `UPDATE meetings SET status = 'processing', updated_at = NOW() WHERE id = $1`,

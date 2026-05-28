@@ -109,12 +109,12 @@ describe('POST /api/transcribe', () => {
 
     const { getTranscriptionProvider } = await import('@/lib/ai/transcription');
     vi.mocked(getTranscriptionProvider).mockReturnValueOnce({
-      transcribe: vi.fn().mockRejectedValueOnce(new Error('Whisper failed')),
+      transcribe: vi.fn().mockRejectedValueOnce(new Error('Transcription failed')),
     });
 
     const res = await POST(makeFormRequest('meet-1'));
     expect(res.status).toBe(500);
-    expect((await res.json()).error).toBe('Whisper failed');
+    expect((await res.json()).error).toBe('Transcription failed');
 
     const resetCall = mockQueryOne.mock.calls.find(
       ([, sql]) => typeof sql === 'string' && sql.includes("'recording'"),

@@ -2,15 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockComplete = vi.hoisted(() => vi.fn());
 
-vi.mock('@mistralai/mistralai', () => ({
-  Mistral: class {
-    chat = { complete: mockComplete };
+vi.mock('openai', () => ({
+  default: class {
+    chat = { completions: { create: mockComplete } };
   },
 }));
 
 import { removePii, removePiiFromSegments, detectPiiInSegments } from './pii';
 
-function mistralResponse(content: string) {
+function openaiResponse(content: string) {
   return { choices: [{ message: { content } }] };
 }
 
@@ -21,7 +21,7 @@ describe('removePii', () => {
 
   it('returns cleanedText and replacements from a valid response', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           cleanedText: 'Møde med [NAVN] om projektet.',
           replacements: [{ original: 'Lars Jensen', replacement: '[NAVN]', type: 'NAVN' }],
@@ -42,7 +42,7 @@ describe('removePii', () => {
 
   it('strips markdown code fences before parsing', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse('```json\n{"cleanedText":"clean","replacements":[]}\n```'),
+      openaiResponse('```json\n{"cleanedText":"clean","replacements":[]}\n```'),
     );
 
     const result = await removePii('clean');
@@ -51,7 +51,7 @@ describe('removePii', () => {
   });
 
   it('falls back to original text when JSON is invalid', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse('not valid json at all'));
+    mockComplete.mockResolvedValueOnce(openaiResponse('not valid json at all'));
 
     const result = await removePii('original text');
     expect(result.cleanedText).toBe('original text');
@@ -76,7 +76,7 @@ describe('removePii', () => {
 
   it('handles multiple replacement types', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           cleanedText: '[NAVN] bor på [KONTAKT], tlf. [KONTAKT]',
           replacements: [
@@ -95,7 +95,7 @@ describe('removePii', () => {
 
   it('handles empty replacements array', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(JSON.stringify({ cleanedText: 'No PII here.', replacements: [] })),
+      openaiResponse(JSON.stringify({ cleanedText: 'No PII here.', replacements: [] })),
     );
 
     const result = await removePii('No PII here.');
@@ -105,7 +105,7 @@ describe('removePii', () => {
 
   it('handles CPR-type replacements', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           cleanedText: 'CPR: [CPR]',
           replacements: [{ original: '010101-1234', replacement: '[CPR]', type: 'CPR' }],
@@ -118,9 +118,9 @@ describe('removePii', () => {
     expect(result.replacements[0].replacement).toBe('[CPR]');
   });
 
-  it('sends the text in the user message to Mistral', async () => {
+  it('sends the text in the user message to OpenAI', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(JSON.stringify({ cleanedText: 'hello', replacements: [] })),
+      openaiResponse(JSON.stringify({ cleanedText: 'hello', replacements: [] })),
     );
 
     await removePii('check this text');
@@ -132,7 +132,7 @@ describe('removePii', () => {
 
   it('sends the system prompt as first message', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(JSON.stringify({ cleanedText: 'x', replacements: [] })),
+      openaiResponse(JSON.stringify({ cleanedText: 'x', replacements: [] })),
     );
 
     await removePii('anything');
@@ -142,15 +142,15 @@ describe('removePii', () => {
     expect(call.messages[0].content).toContain('GDPR');
   });
 
-  it('uses mistral-large-latest model', async () => {
+  it('uses gpt-4o model', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(JSON.stringify({ cleanedText: 'x', replacements: [] })),
+      openaiResponse(JSON.stringify({ cleanedText: 'x', replacements: [] })),
     );
 
     await removePii('anything');
 
     const call = mockComplete.mock.calls[0][0];
-    expect(call.model).toBe('mistral-large-latest');
+    expect(call.model).toBe('gpt-4o');
   });
 });
 
@@ -166,7 +166,7 @@ describe('removePiiFromSegments', () => {
     ];
 
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           cleanedText: '[Taler 1]: [NAVN] er til stede.\n[Taler 2]: Goddag [NAVN].',
           replacements: [{ original: 'Lars Jensen', replacement: '[NAVN]', type: 'NAVN' }],
@@ -185,7 +185,7 @@ describe('removePiiFromSegments', () => {
     const segments = [{ speaker: 'Taler 1', start: 1.5, end: 3.2, text: 'Hej.' }];
 
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({ cleanedText: '[Taler 1]: Hej.', replacements: [] }),
       ),
     );
@@ -205,7 +205,7 @@ describe('removePiiFromSegments', () => {
 
     // Return only one line in cleaned text — second segment has no matching line
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({ cleanedText: '[Taler 1]: Clean line.', replacements: [] }),
       ),
     );
@@ -216,14 +216,14 @@ describe('removePiiFromSegments', () => {
     expect(cleanedSegments[1].text).toBe('Second line.');
   });
 
-  it('sends segments formatted as [Speaker]: text to Mistral', async () => {
+  it('sends segments formatted as [Speaker]: text to OpenAI', async () => {
     const segments = [
       { speaker: 'Taler 1', start: 0, end: 1, text: 'Hello.' },
       { speaker: 'Taler 2', start: 2, end: 3, text: 'World.' },
     ];
 
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({ cleanedText: '[Taler 1]: Hello.\n[Taler 2]: World.', replacements: [] }),
       ),
     );
@@ -240,7 +240,7 @@ describe('removePiiFromSegments', () => {
     const segments = [{ speaker: 'Taler 1', start: 0, end: 1, text: 'Kontakt Hans Nielsen.' }];
 
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           cleanedText: '[Taler 1]: Kontakt [NAVN].',
           replacements: [{ original: 'Hans Nielsen', replacement: '[NAVN]', type: 'NAVN' }],
@@ -266,7 +266,7 @@ describe('detectPiiInSegments', () => {
     ];
 
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           cleanedText: '[Taler 1]: [NAVN] er med.\n[Taler 2]: Tak for det.',
           replacements: [{ original: 'Lars Jensen', replacement: '[NAVN]', type: 'NAVN' }],
@@ -286,7 +286,7 @@ describe('detectPiiInSegments', () => {
     ];
 
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           cleanedText: '[Taler 1]: Hej verden.',
           replacements: [{ original: 'NonExistent', replacement: '[NAVN]', type: 'NAVN' }],
@@ -304,7 +304,7 @@ describe('detectPiiInSegments', () => {
     ];
 
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({ cleanedText: '[Taler 1]: Mødet starter nu.', replacements: [] }),
       ),
     );
@@ -315,7 +315,7 @@ describe('detectPiiInSegments', () => {
 
   it('returns empty array for empty segments input', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(JSON.stringify({ cleanedText: '', replacements: [] })),
+      openaiResponse(JSON.stringify({ cleanedText: '', replacements: [] })),
     );
 
     const { replacements } = await detectPiiInSegments([]);
@@ -329,7 +329,7 @@ describe('detectPiiInSegments', () => {
     ];
 
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           cleanedText: '[Taler 1]: Jeg hedder [NAVN].\n[Taler 2]: Og jeg er [NAVN].',
           replacements: [
