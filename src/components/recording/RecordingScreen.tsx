@@ -164,7 +164,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     };
     // Restart automatically if it stops (Chrome stops after ~60s of silence)
     r.onend = () => {
-      if (mediaRecorderRef.current?.state === 'recording') r.start();
+      if (recordingActiveRef.current && mediaRecorderRef.current?.state === 'recording') r.start();
     };
     recognitionRef.current = r;
     r.start();
@@ -197,7 +197,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   }
 
   async function transcribeSpeechSegment(audio: Float32Array) {
-    if (mediaRecorderRef.current?.state !== 'recording') return;
+    if (!recordingActiveRef.current || mediaRecorderRef.current?.state !== 'recording') return;
     const segStart = speechSegmentStartRef.current;
     const segEnd = (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000;
 
@@ -489,8 +489,16 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       recordingActiveRef.current = false;
       clearIntervals();
       audioContextRef.current?.close();
+      audioContextRef.current = null;
       vadRef.current?.destroy();
+      vadRef.current = null;
       recognitionRef.current?.abort();
+      recognitionRef.current = null;
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      mediaRecorderRef.current?.stream.getTracks().forEach((t) => t.stop());
+      mediaRecorderRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -667,8 +675,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           {/* Transcript rows */}
           <div style={{
             flex: 1, overflow: 'auto', padding: '14px 0',
-            maskImage: 'linear-gradient(to bottom, transparent 0%, black 18%)',
-            WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 18%)',
+            maskImage: 'linear-gradient(to bottom, black 82%, transparent 100%)',
+            WebkitMaskImage: 'linear-gradient(to bottom, black 82%, transparent 100%)',
           }}>
             {liveSegments.length === 0 && !interimText ? (
               <div style={{
