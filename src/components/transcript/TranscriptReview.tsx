@@ -331,23 +331,8 @@ export function TranscriptReview({
             </div>
           )}
 
-          {/* Audio player */}
-          {audioUrl && (
-            <div style={{ marginTop: 16 }}>
-              <audio ref={audioRef} src={audioUrl} preload="metadata" />
-              {audioError && (
-                <p style={{ fontSize: 11, color: 'var(--kill)', marginBottom: 8 }}>{audioError}</p>
-              )}
-              <WaveformPlayer
-                audioUrl={audioUrl}
-                currentTime={currentTime}
-                duration={duration}
-                isPlaying={isPlaying}
-                onTogglePlay={togglePlay}
-                onSeek={seekTo}
-              />
-            </div>
-          )}
+          {/* Hidden audio element — controlled by the bottom bar */}
+          {audioUrl && <audio ref={audioRef} src={audioUrl} preload="metadata" />}
 
           {/* Hint */}
           <p style={{ marginTop: 16, fontSize: 13, color: 'var(--muted)' }}>
