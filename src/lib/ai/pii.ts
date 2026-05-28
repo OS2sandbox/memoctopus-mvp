@@ -1,9 +1,9 @@
-import { Mistral } from '@mistralai/mistralai';
+import OpenAI from 'openai';
 import { PiiResult, PiiReplacement } from '@/types';
 
-let client: Mistral | null = null;
+let client: OpenAI | null = null;
 function getClient() {
-  if (!client) client = new Mistral({ apiKey: process.env.MISTRAL_API_KEY! });
+  if (!client) client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
   return client;
 }
 
@@ -37,8 +37,8 @@ Returner ALTID valid JSON i dette format:
 }`;
 
 export async function removePii(text: string): Promise<PiiResult> {
-  const response = await getClient().chat.complete({
-    model: 'mistral-large-latest',
+  const response = await getClient().chat.completions.create({
+    model: 'gpt-4o',
     messages: [
       { role: 'system', content: PII_SYSTEM_PROMPT },
       {
@@ -48,7 +48,7 @@ export async function removePii(text: string): Promise<PiiResult> {
     ],
   });
 
-  const raw = (response.choices?.[0]?.message?.content as string) ?? '';
+  const raw = response.choices[0]?.message?.content ?? '';
 
   try {
     const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();

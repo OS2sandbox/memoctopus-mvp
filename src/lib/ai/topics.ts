@@ -1,8 +1,8 @@
-import { Mistral } from '@mistralai/mistralai';
+import OpenAI from 'openai';
 
-let client: Mistral | null = null;
+let client: OpenAI | null = null;
 function getClient() {
-  if (!client) client = new Mistral({ apiKey: process.env.MISTRAL_API_KEY! });
+  if (!client) client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
   return client;
 }
 
@@ -12,8 +12,8 @@ export interface TopicItem {
 }
 
 export async function analyzeTopics(transcript: string): Promise<TopicItem[]> {
-  const response = await getClient().chat.complete({
-    model: 'mistral-small-latest',
+  const response = await getClient().chat.completions.create({
+    model: 'gpt-4o-mini',
     messages: [
       {
         role: 'user',
@@ -37,7 +37,7 @@ Maks 4 emner. Maks 2 opfølgningsspørgsmål per emne. Vær konkret og kortfatte
     ],
   });
 
-  const raw = (response.choices?.[0]?.message?.content as string) ?? '';
+  const raw = response.choices[0]?.message?.content ?? '';
   try {
     const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
     return (JSON.parse(cleaned) as { topics: TopicItem[] }).topics ?? [];

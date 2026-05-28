@@ -1,9 +1,9 @@
-import { Mistral } from '@mistralai/mistralai';
+import OpenAI from 'openai';
 import { TranscriptSegment, TemplateSuggestion, MinutesContent, TemplateSectionDef } from '@/types';
 
-let client: Mistral | null = null;
+let client: OpenAI | null = null;
 function getClient() {
-  if (!client) client = new Mistral({ apiKey: process.env.MISTRAL_API_KEY! });
+  if (!client) client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
   return client;
 }
 
@@ -26,8 +26,8 @@ export async function suggestTemplate(
     .map((t) => `- ${t.name} (id: ${t.id}): ${t.description}`)
     .join('\n');
 
-  const response = await getClient().chat.complete({
-    model: 'mistral-large-latest',
+  const response = await getClient().chat.completions.create({
+    model: 'gpt-4o',
     messages: [
       { role: 'system', content: MINUTES_SYSTEM_PROMPT },
       {
@@ -50,7 +50,7 @@ Returner JSON:
     ],
   });
 
-  const raw = (response.choices?.[0]?.message?.content as string) ?? '';
+  const raw = response.choices[0]?.message?.content ?? '';
 
   try {
     const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
@@ -80,8 +80,8 @@ export async function generateMinutes(
     )
     .join('\n');
 
-  const response = await getClient().chat.complete({
-    model: 'mistral-large-latest',
+  const response = await getClient().chat.completions.create({
+    model: 'gpt-4o',
     messages: [
       { role: 'system', content: MINUTES_SYSTEM_PROMPT },
       {
@@ -110,7 +110,7 @@ Skriv indholdet i sektionerne som klart, præcist dansk. Brug punktlister hvor d
     ],
   });
 
-  const raw = (response.choices?.[0]?.message?.content as string) ?? '';
+  const raw = response.choices[0]?.message?.content ?? '';
 
   try {
     const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
@@ -130,8 +130,8 @@ export async function generateMinutesFreeform(
     .map((s) => `[${s.speaker}] (${formatTime(s.start)}): ${s.text}`)
     .join('\n');
 
-  const response = await getClient().chat.complete({
-    model: 'mistral-large-latest',
+  const response = await getClient().chat.completions.create({
+    model: 'gpt-4o',
     messages: [
       { role: 'system', content: MINUTES_SYSTEM_PROMPT },
       {
@@ -161,7 +161,7 @@ Skriv indholdet som klart, præcist dansk. Brug punktlister hvor det er relevant
     ],
   });
 
-  const raw = (response.choices?.[0]?.message?.content as string) ?? '';
+  const raw = response.choices[0]?.message?.content ?? '';
 
   try {
     const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();

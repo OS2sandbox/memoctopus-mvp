@@ -7,6 +7,92 @@ export interface TranscriptionProvider {
   transcribe(audioBuffer: Buffer, mimeType: string): Promise<TranscriptSegment[]>;
 }
 
+// ─── ElevenLabs implementation ────────────────────────────────────────────────
+// Uses scribe_v2 with speaker diarization for accurate multi-speaker transcription.
+
+export class ElevenLabsProvider implements TranscriptionProvider {
+  async transcribe(audioBuffer: Buffer, mimeType: string): Promise<TranscriptSegment[]> {
+    const ext = mimeTypeToExt(mimeType);
+
+    const formData = new FormData();
+    formData.append('file', new Blob([new Uint8Array(audioBuffer)], { type: mimeType }), `audio.${ext}`);
+    formData.append('model_id', 'scribe_v2');
+    formData.append('diarize', 'true');
+    formData.append('language_code', 'da');
+    formData.append('timestamps_granularity', 'word');
+
+    const res = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+      method: 'POST',
+      headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY! },
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const err = await res.text().catch(() => res.statusText);
+      throw new Error(`ElevenLabs STT error ${res.status}: ${err}`);
+    }
+
+    const data = await res.json() as ElevenLabsSTTResponse;
+
+    if (!data.words || data.words.length === 0) {
+      return [{ speaker: 'Taler 1', start: 0, end: 0, text: data.text }];
+    }
+
+    return wordsToSegments(data.words);
+  }
+}
+
+interface ElevenLabsSTTResponse {
+  text: string;
+  words?: ElevenLabsWord[];
+}
+
+interface ElevenLabsWord {
+  text: string;
+  start: number;
+  end: number;
+  type: 'word' | 'spacing';
+  speaker_id?: string;
+}
+
+function wordsToSegments(words: ElevenLabsWord[]): TranscriptSegment[] {
+  const wordItems = words.filter((w) => w.type === 'word');
+  if (wordItems.length === 0) return [];
+
+  const segments: TranscriptSegment[] = [];
+  let speaker = speakerLabel(wordItems[0].speaker_id ?? 'speaker_0');
+  let start = wordItems[0].start;
+  let end = wordItems[0].end;
+  let texts: string[] = [wordItems[0].text];
+
+  for (let i = 1; i < wordItems.length; i++) {
+    const w = wordItems[i];
+    const sp = speakerLabel(w.speaker_id ?? 'speaker_0');
+
+    if (sp !== speaker || w.start - end > 2.5) {
+      segments.push({ speaker, start, end, text: texts.join(' ').trim() });
+      speaker = sp;
+      start = w.start;
+      texts = [w.text];
+    } else {
+      texts.push(w.text);
+    }
+    end = w.end;
+  }
+
+  if (texts.length > 0) {
+    segments.push({ speaker, start, end, text: texts.join(' ').trim() });
+  }
+
+  return segments.filter((s) => s.text);
+}
+
+function speakerLabel(speakerId: string): string {
+  const match = speakerId.match(/\d+/);
+  const num = match ? parseInt(match[0]) + 1 : 1;
+  return `Taler ${num}`;
+}
+
 // ─── Whisper implementation ──────────────────────────────────────────────────
 
 export class WhisperProvider implements TranscriptionProvider {
@@ -19,10 +105,7 @@ export class WhisperProvider implements TranscriptionProvider {
   }
 
   async transcribe(audioBuffer: Buffer, mimeType: string): Promise<TranscriptSegment[]> {
-    // Determine file extension from mime type
     const ext = mimeTypeToExt(mimeType);
-
-    // OpenAI SDK needs a File-like object
     const file = new File([new Uint8Array(audioBuffer)], `audio.${ext}`, { type: mimeType });
 
     const response = await this.client.audio.transcriptions.create({
@@ -52,7 +135,6 @@ export class HviskeProvider implements TranscriptionProvider {
 
   constructor() {
     this.client = new OpenAI({
-      // vLLM doesn't require a real key, but the SDK requires a non-empty string.
       apiKey: process.env.VLLM_API_KEY ?? 'no-key',
       baseURL: process.env.VLLM_URL ?? 'http://localhost:8001/v1',
     });
@@ -113,17 +195,19 @@ function mimeTypeToExt(mimeType: string): string {
 }
 
 // ─── Active provider ──────────────────────────────────────────────────────────
-// Set TRANSCRIPTION_PROVIDER=hviske (and VLLM_URL) to use hviske-v5.1.
-// Defaults to whisper-1 via OpenAI when unset.
+// TRANSCRIPTION_PROVIDER env var selects the provider:
+//   elevenlabs (default) — scribe_v2 with speaker diarization
+//   whisper              — OpenAI whisper-1 with heuristic diarization
+//   hviske               — syvai/hviske-v5.1 via vLLM
 
 let _provider: TranscriptionProvider | null = null;
 
 export function getTranscriptionProvider(): TranscriptionProvider {
   if (!_provider) {
-    _provider =
-      process.env.TRANSCRIPTION_PROVIDER === 'hviske'
-        ? new HviskeProvider()
-        : new WhisperProvider();
+    const p = process.env.TRANSCRIPTION_PROVIDER;
+    if (p === 'hviske') _provider = new HviskeProvider();
+    else if (p === 'whisper') _provider = new WhisperProvider();
+    else _provider = new ElevenLabsProvider();
   }
   return _provider;
 }

@@ -13,7 +13,6 @@ import {
 } from '@/components/ui/dialog';
 import { VolumeBar } from './VolumeBar';
 import { formatDuration, formatFileSize } from '@/lib/utils';
-import { pendingUpload } from '@/lib/pending-upload';
 
 interface LiveSegment {
   speaker: string;
@@ -35,10 +34,30 @@ interface RecordingScreenProps {
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
 
+interface MicVADInstance {
+  start(): void;
+  pause(): void;
+  destroy(): void;
+}
+
+interface SpeechRecognitionInstance extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((e: SpeechRecognitionEvent) => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+  abort(): void;
+}
+interface SpeechRecognitionEvent extends Event {
+  resultIndex: number;
+  results: { length: number; [i: number]: { isFinal: boolean; [j: number]: { transcript: string } } };
+}
+
 const BYTES_PER_SECOND_ESTIMATE = 16_000;
 const SILENCE_THRESHOLD_SECONDS = 5;
 const SILENCE_VOLUME_THRESHOLD = 0.02;
-const LIVE_CHUNK_INTERVAL = 15_000;
 const TOPIC_INTERVAL = 25_000;
 
 export function RecordingScreen({ meetingId, existingRecording, onNavigateToReview }: RecordingScreenProps) {
@@ -56,14 +75,25 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
   // Live transcription
   const [liveSegments, setLiveSegments] = useState<LiveSegment[]>([]);
+  const [interimText, setInterimText] = useState('');
   const [topics, setTopics] = useState<TopicItem[]>([]);
   const liveSegmentsRef = useRef<LiveSegment[]>([]);
-  const headerChunkRef = useRef<Blob | null>(null);
-  const lastChunkIndexRef = useRef(0);
   const mimeTypeRef = useRef('audio/webm');
-  const chunkIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const topicIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
+
+  const vadRef = useRef<MicVADInstance | null>(null);
+  const speechSegmentStartRef = useRef<number>(0);
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const interimTextRef = useRef('');
+  const recordingActiveRef = useRef(false);
+  // True while an ElevenLabs batch request is in-flight — freezes Web Speech API
+  // updates so the captured interim text stays visible as a placeholder.
+  const batchInFlightRef = useRef(false);
+  // Maps clip-local ElevenLabs speaker label → session-wide label (e.g. "Taler 1" → "Taler 2")
+  // so speaker identity stays consistent across clips even though each clip restarts at "Taler 1".
+  const speakerMapRef = useRef<Map<string, string>>(new Map());
+  const nextSpeakerRef = useRef(1);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -100,46 +130,145 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   function resetLiveState() {
     liveSegmentsRef.current = [];
     setLiveSegments([]);
+    interimTextRef.current = '';
+    setInterimText('');
+    batchInFlightRef.current = false;
+    speakerMapRef.current = new Map();
+    nextSpeakerRef.current = 1;
     setTopics([]);
-    lastChunkIndexRef.current = 0;
-    headerChunkRef.current = null;
   }
 
-  async function sendLiveChunk() {
-    const chunks = chunksRef.current;
-    const from = lastChunkIndexRef.current;
-    const newChunks = chunks.slice(from);
-    if (newChunks.length < 5 || !headerChunkRef.current) return;
-    lastChunkIndexRef.current = chunks.length;
+  // ── Web Speech API (interim display) ─────────────────────────────────────────
 
-    const parts = from === 0 ? newChunks : [headerChunkRef.current, ...newChunks];
-    const blob = new Blob(parts, { type: mimeTypeRef.current });
-    const ext = mimeTypeRef.current.includes('mp4') ? 'm4a' : 'webm';
-    const form = new FormData();
-    form.append('audio', blob, `live.${ext}`);
-
-    // Compute how far into the recording this chunk starts.
-    // Whisper timestamps are relative to each chunk's start, so we offset them
-    // to make them recording-relative.
-    const elapsedSec = (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000;
-    const chunkOffset = Math.max(0, elapsedSec - newChunks.length);
-
-    try {
-      const res = await fetch(`/api/meetings/${meetingId}/live-transcribe`, { method: 'POST', body: form });
-      if (!res.ok) return;
-      const data = await res.json() as { segments?: LiveSegment[] };
-      const segs = (data.segments ?? []).map((seg) => ({
-        ...seg,
-        start: (seg.start ?? 0) + chunkOffset,
-        end: (seg.end ?? 0) + chunkOffset,
-      }));
-      if (segs.length > 0) {
-        liveSegmentsRef.current = [...liveSegmentsRef.current, ...segs];
-        setLiveSegments([...liveSegmentsRef.current]);
+  function initSpeechRecognition() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SR = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
+    if (!SR) return;
+    const r = new SR() as SpeechRecognitionInstance;
+    r.continuous = true;
+    r.interimResults = true;
+    r.lang = 'da-DK';
+    r.onresult = (e: SpeechRecognitionEvent) => {
+      // While ElevenLabs batch is in-flight, freeze interim so the captured text
+      // stays visible as a placeholder instead of being overwritten by a new session.
+      if (batchInFlightRef.current) return;
+      let text = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        text += e.results[i][0].transcript;
+      }
+      if (text) {
+        interimTextRef.current = text;
+        setInterimText(text);
         setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
       }
-    } catch {}
+    };
+    // Restart automatically if it stops (Chrome stops after ~60s of silence)
+    r.onend = () => {
+      if (recordingActiveRef.current && mediaRecorderRef.current?.state === 'recording') r.start();
+    };
+    recognitionRef.current = r;
+    r.start();
   }
+
+  // ── VAD + live transcription ──────────────────────────────────────────────────
+
+  function float32ToWav(audio: Float32Array, sampleRate: number): Blob {
+    const dataLen = audio.length * 2;
+    const buf = new ArrayBuffer(44 + dataLen);
+    const v = new DataView(buf);
+    const str = (off: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+    str(0, 'RIFF'); v.setUint32(4, 36 + dataLen, true);
+    str(8, 'WAVE'); str(12, 'fmt ');
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    str(36, 'data'); v.setUint32(40, dataLen, true);
+    for (let i = 0; i < audio.length; i++) {
+      v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, audio[i])) * 0x7FFF, true);
+    }
+    return new Blob([buf], { type: 'audio/wav' });
+  }
+
+  function resolveSessionSpeaker(clipLabel: string): string {
+    if (!speakerMapRef.current.has(clipLabel)) {
+      speakerMapRef.current.set(clipLabel, `Taler ${nextSpeakerRef.current++}`);
+    }
+    return speakerMapRef.current.get(clipLabel)!;
+  }
+
+  async function transcribeSpeechSegment(audio: Float32Array) {
+    if (!recordingActiveRef.current || mediaRecorderRef.current?.state !== 'recording') return;
+    const segStart = speechSegmentStartRef.current;
+    const segEnd = (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000;
+
+    batchInFlightRef.current = true;
+    const formData = new FormData();
+    formData.append('audio', float32ToWav(audio, 16_000), 'segment.wav');
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/live-transcribe`, { method: 'POST', body: formData });
+      if (!res.ok) return;
+      const data = await res.json() as {
+        text: string;
+        segments: Array<{ speaker: string; start: number; end: number; text: string }>;
+      };
+      if (!data.text?.trim()) return;
+
+      // Clear interim display now that we have the confirmed text
+      interimTextRef.current = '';
+      setInterimText('');
+
+      // Use ElevenLabs diarized segments if available; fall back to one flat segment
+      const newSegs: LiveSegment[] = data.segments?.length
+        ? data.segments.map((s) => ({
+            speaker: resolveSessionSpeaker(s.speaker),
+            start: segStart + s.start,
+            end: segStart + s.end,
+            text: s.text,
+          }))
+        : [{ speaker: '—', start: segStart, end: segEnd, text: data.text.trim() }];
+
+      liveSegmentsRef.current = [...liveSegmentsRef.current, ...newSegs];
+      setLiveSegments([...liveSegmentsRef.current]);
+      setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+    } catch (err) {
+      console.error('[transcribe] error:', err);
+    } finally {
+      batchInFlightRef.current = false;
+    }
+  }
+
+  async function initVAD(stream: MediaStream) {
+    try {
+      const vad = await import('@ricky0123/vad-web');
+      const micvad = await vad.MicVAD.new({
+        stream,
+        baseAssetPath: '/',
+        onnxWASMBasePath: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/',
+        onSpeechStart: () => {
+          speechSegmentStartRef.current =
+            (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000;
+        },
+        onSpeechEnd: (audio: Float32Array) => { void transcribeSpeechSegment(audio); },
+      }) as unknown as MicVADInstance;
+
+      // Recording may have stopped (or been paused) while ONNX was loading — close the ghost AudioContext and bail
+      if (!recordingActiveRef.current) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (micvad as any).audioContext?.close();
+        return;
+      }
+
+      vadRef.current = micvad;
+      // Only start VAD if the recorder is actively recording, not paused
+      if (mediaRecorderRef.current?.state === 'recording') {
+        micvad.start();
+      }
+    } catch (err) {
+      console.error('[VAD] init failed:', err);
+    }
+  }
+
+  // ── Recording lifecycle ───────────────────────────────────────────────────────
 
   async function refreshTopics() {
     if (liveSegmentsRef.current.length === 0) return;
@@ -159,15 +288,31 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   async function startRecording() {
     setError(null);
     resetLiveState();
+    // Tracked outside try so the catch can release it if setup fails after getUserMedia
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const ctx = new AudioContext();
-      const source = ctx.createMediaStreamSource(stream);
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 512;
-      source.connect(analyser);
-      audioContextRef.current = ctx;
-      analyserRef.current = analyser;
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      // Volume meter — non-critical. If the Web Audio API can't open the hardware device
+      // (e.g. macOS CoreAudio in a bad state), recording still proceeds without the bar.
+      try {
+        const ctx = new AudioContext();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        ctx.createMediaStreamSource(stream).connect(analyser);
+        audioContextRef.current = ctx;
+        analyserRef.current = analyser;
+        // Chrome may start the context suspended (autoplay policy / autostart path).
+        await ctx.resume();
+        // Auto-recover if the system later suspends the context (e.g. macOS CoreAudio reset).
+        ctx.onstatechange = () => {
+          if (ctx.state === 'suspended' && recordingActiveRef.current) void ctx.resume();
+        };
+      } catch (audioErr) {
+        console.warn('[startRecording] AudioContext unavailable, volume meter disabled:', audioErr);
+        audioContextRef.current = null;
+        analyserRef.current = null;
+      }
 
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
@@ -179,15 +324,13 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       chunksRef.current = [];
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          if (chunksRef.current.length === 0) headerChunkRef.current = e.data;
-          chunksRef.current.push(e.data);
-        }
+        if (e.data.size > 0) chunksRef.current.push(e.data);
       };
 
       recorder.start(1000);
       startTimeRef.current = Date.now();
       pausedDurationRef.current = 0;
+      recordingActiveRef.current = true;
       setRecordingState('recording');
       setElapsed(0);
 
@@ -196,16 +339,35 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       }, 500);
 
       animFrameRef.current = requestAnimationFrame(pollVolume);
-      chunkIntervalRef.current = setInterval(sendLiveChunk, LIVE_CHUNK_INTERVAL);
       topicIntervalRef.current = setInterval(refreshTopics, TOPIC_INTERVAL);
-    } catch {
-      setError('Kunne ikke få adgang til mikrofonen. Tjek at tilladelsen er givet i browseren.');
+
+      void initVAD(stream);
+      initSpeechRecognition();
+    } catch (err) {
+      // Release the mic if we acquired it but failed during setup — otherwise it stays locked
+      stream?.getTracks().forEach((t) => t.stop());
+      audioContextRef.current?.close();
+      audioContextRef.current = null;
+      analyserRef.current = null;
+      console.error('[startRecording]', err);
+
+      if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
+        setError('Mikrofonens tilladelse er afvist. Tillad adgang i browserens adresselinje og prøv igen.');
+      } else if (err instanceof DOMException && (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError')) {
+        setError('Ingen mikrofon fundet. Er en mikrofon tilsluttet? På Mac: kør "sudo killall coreaudiod" i Terminal og prøv igen.');
+      } else {
+        setError(`Optagelse fejlede: ${err instanceof Error ? err.message : String(err)}. Prøv at genindlæse siden.`);
+      }
     }
   }
 
   function pauseRecording() {
     if (!mediaRecorderRef.current) return;
     mediaRecorderRef.current.pause();
+    vadRef.current?.pause();
+    recognitionRef.current?.abort();
+    // Suspend the AudioContext so it releases the hardware and stops generating errors
+    void audioContextRef.current?.suspend();
     pauseStartRef.current = Date.now();
     if (timerRef.current) clearInterval(timerRef.current);
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
@@ -213,14 +375,18 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     setRecordingState('paused');
   }
 
-  function resumeRecording() {
+  async function resumeRecording() {
     if (!mediaRecorderRef.current) return;
+    // Await the resume so the AudioContext is fully running before pollVolume starts reading
+    await audioContextRef.current?.resume();
     mediaRecorderRef.current.resume();
+    vadRef.current?.start();
+    initSpeechRecognition();
     pausedDurationRef.current += Date.now() - pauseStartRef.current;
     timerRef.current = setInterval(() => {
       setElapsed(Math.floor((Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000));
     }, 500);
-    animFrameRef.current = requestAnimationFrame(pollVolume);
+    if (analyserRef.current) animFrameRef.current = requestAnimationFrame(pollVolume);
     setRecordingState('recording');
   }
 
@@ -239,14 +405,20 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   function clearIntervals() {
     if (timerRef.current) clearInterval(timerRef.current);
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    if (chunkIntervalRef.current) clearInterval(chunkIntervalRef.current);
     if (topicIntervalRef.current) clearInterval(topicIntervalRef.current);
   }
 
   async function stopAndSave() {
     if (!mediaRecorderRef.current) return;
     const recorder = mediaRecorderRef.current;
+    recordingActiveRef.current = false;
     clearIntervals();
+    audioContextRef.current?.close();
+    audioContextRef.current = null;
+    vadRef.current?.destroy();
+    vadRef.current = null;
+    recognitionRef.current?.abort();
+    recognitionRef.current = null;
 
     // Resume before stopping so the recorder flushes its buffer into a
     // final ondataavailable event — paused recorders may not do this reliably.
@@ -257,7 +429,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       recorder.stop();
     });
     recorder.stream.getTracks().forEach((t) => t.stop());
-    audioContextRef.current?.close();
 
     setRecordingState('stopped');
     setIsUploading(true);
@@ -265,26 +436,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     const mimeType = recorder.mimeType || 'audio/webm';
     const blob = new Blob(chunksRef.current, { type: mimeType });
 
-    if (liveSegmentsRef.current.length >= 3) {
-      // Fast path: save live segments to DB immediately, then navigate.
-      // The audio blob is uploaded with a progress bar from Gennemgang.
-      try {
-        const res = await fetch(`/api/meetings/${meetingId}/save-transcript`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ segments: liveSegmentsRef.current }),
-        });
-        if (!res.ok) throw new Error('Kunne ikke gemme transskriptionen');
-      } catch {
-        // Even on failure, store what we have and navigate — Gennemgang handles recovery.
-      }
-      pendingUpload.set({ meetingId, blob, elapsed });
-      router.push(`/meeting/${meetingId}/review`);
-      return;
-    }
-
-    // Slow path: no live segments — run full Whisper transcription.
-    // Still navigate on error so the user is never stuck on the recording screen.
+    // Always run ElevenLabs batch transcription with speaker diarization.
+    // The live WebSocket segments were preview-only; the batch result is authoritative.
     try {
       const formData = new FormData();
       formData.append('audio', blob, `recording.${mimeType.includes('mp4') ? 'm4a' : 'webm'}`);
@@ -293,7 +446,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
       const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
+        const data = await res.json().catch(() => ({})) as { error?: string };
         throw new Error(data.error ?? 'Upload fejlede');
       }
     } catch (err) {
@@ -316,10 +469,16 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
   async function cancelRecording() {
     if (mediaRecorderRef.current) {
+      recordingActiveRef.current = false;
       clearIntervals();
+      audioContextRef.current?.close();
+      audioContextRef.current = null;
+      vadRef.current?.destroy();
+      vadRef.current = null;
+      recognitionRef.current?.abort();
+      recognitionRef.current = null;
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current.stream.getTracks().forEach((t) => t.stop());
-      audioContextRef.current?.close();
     }
     await fetch(`/api/meetings/${meetingId}`, { method: 'DELETE' });
     router.push('/');
@@ -327,7 +486,19 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
   useEffect(() => {
     return () => {
+      recordingActiveRef.current = false;
       clearIntervals();
+      audioContextRef.current?.close();
+      audioContextRef.current = null;
+      vadRef.current?.destroy();
+      vadRef.current = null;
+      recognitionRef.current?.abort();
+      recognitionRef.current = null;
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      mediaRecorderRef.current?.stream.getTracks().forEach((t) => t.stop());
+      mediaRecorderRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -405,7 +576,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   }
 
   // ── Active recording / idle ───────────────────────────────────────────────────
-  const uniqueSpeakers = Array.from(new Set(liveSegments.map((s) => s.speaker)));
+  const uniqueSpeakers = Array.from(new Set(liveSegments.map((s) => s.speaker).filter((s) => s !== '—')));
   const speakerCount = (sp: string) => liveSegments.filter((s) => s.speaker === sp).length;
   const fmtSec = (s: number) => {
     const m = Math.floor(s / 60), sec = Math.floor(s % 60);
@@ -496,18 +667,18 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                 background: recordingState === 'paused' ? 'var(--muted)' : (recordingState === 'recording' ? 'var(--keep)' : 'var(--muted-2)'),
                 animation: recordingState === 'recording' ? 'protoPulse 1.4s ease-in-out infinite' : 'none',
               }} />
-              {recordingState === 'recording' ? 'hviske transskriberer' : recordingState === 'paused' ? 'pause' : 'klar'}
+              {recordingState === 'recording' ? 'transskriberer live' : recordingState === 'paused' ? 'pause' : 'klar'}
             </span>
-            {recordingState === 'recording' && <span>· ~3 sek. forsinkelse</span>}
+            {recordingState === 'recording' && <span>· elevenlabs scribe_v2</span>}
           </div>
 
           {/* Transcript rows */}
           <div style={{
             flex: 1, overflow: 'auto', padding: '14px 0',
-            maskImage: 'linear-gradient(to bottom, transparent 0%, black 18%)',
-            WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 18%)',
+            maskImage: 'linear-gradient(to bottom, black 82%, transparent 100%)',
+            WebkitMaskImage: 'linear-gradient(to bottom, black 82%, transparent 100%)',
           }}>
-            {liveSegments.length === 0 ? (
+            {liveSegments.length === 0 && !interimText ? (
               <div style={{
                 padding: '20px 18px', fontFamily: 'var(--mono)', fontSize: 12.5,
                 color: 'var(--muted)', fontStyle: 'italic',
@@ -515,31 +686,57 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                 {recordingState === 'idle' ? 'Tryk optag for at starte…' : 'Lytter…'}
               </div>
             ) : (
-              liveSegments.map((seg, i) => {
-                const isLast = i === liveSegments.length - 1;
-                return (
-                  <div key={i} style={{
+              <>
+                {liveSegments.map((seg, i) => {
+                  const showSpeaker = seg.speaker !== '—';
+                  return (
+                    <div key={i} style={{
+                      display: 'grid', gridTemplateColumns: '60px 90px 1fr 20px',
+                      gap: 12, padding: '5px 18px',
+                      opacity: 0.5 + Math.min(0.5, i * 0.06),
+                      fontFamily: 'var(--mono)', fontSize: 12.5, lineHeight: 1.65,
+                    }}>
+                      <span style={{ color: 'var(--accent)' }}>{fmtSec(seg.start)}</span>
+                      <span style={{ color: 'var(--ink)', fontWeight: 500 }}>
+                        {showSpeaker ? `${seg.speaker.toLowerCase()}:` : '·'}
+                      </span>
+                      <span style={{ color: 'var(--ink-2)' }}>{seg.text}</span>
+                      <span style={{ color: 'var(--muted-2)', textAlign: 'right' }}>★</span>
+                    </div>
+                  );
+                })}
+                {/* Interim row: Web Speech API live text, replaced by ElevenLabs batch */}
+                {interimText && recordingState === 'recording' && (
+                  <div style={{
                     display: 'grid', gridTemplateColumns: '60px 90px 1fr 20px',
                     gap: 12, padding: '5px 18px',
-                    opacity: 0.5 + Math.min(0.5, i * 0.06),
+                    opacity: 0.75,
                     fontFamily: 'var(--mono)', fontSize: 12.5, lineHeight: 1.65,
                   }}>
-                    <span style={{ color: 'var(--accent)' }}>{fmtSec(seg.start)}</span>
-                    <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{seg.speaker.toLowerCase()}:</span>
-                    <span style={{ color: 'var(--ink-2)' }}>
-                      {seg.text}
-                      {isLast && recordingState === 'recording' && (
-                        <span style={{
-                          display: 'inline-block', width: 7, height: 14,
-                          background: 'var(--accent)', verticalAlign: 'middle', marginLeft: 3,
-                          animation: 'protoBlink 0.9s steps(2) infinite',
-                        }} />
-                      )}
+                    <span style={{ color: 'var(--accent)' }}>{fmtSec(speechSegmentStartRef.current)}</span>
+                    <span style={{ color: 'var(--ink)', fontWeight: 500 }}>·</span>
+                    <span style={{ color: 'var(--ink-2)', fontStyle: 'italic' }}>
+                      {interimText}
+                      <span style={{
+                        display: 'inline-block', width: 7, height: 14,
+                        background: 'var(--accent)', verticalAlign: 'middle', marginLeft: 3,
+                        animation: 'protoBlink 0.9s steps(2) infinite',
+                      }} />
                     </span>
-                    <span style={{ color: 'var(--muted-2)', textAlign: 'right' }}>★</span>
+                    <span />
                   </div>
-                );
-              })
+                )}
+                {/* Cursor on last confirmed segment when no interim text */}
+                {!interimText && recordingState === 'recording' && liveSegments.length > 0 && (
+                  <div style={{ padding: '2px 18px' }}>
+                    <span style={{
+                      display: 'inline-block', width: 7, height: 14,
+                      background: 'var(--accent)', verticalAlign: 'middle',
+                      animation: 'protoBlink 0.9s steps(2) infinite',
+                    }} />
+                  </div>
+                )}
+              </>
             )}
             <div ref={transcriptEndRef} />
           </div>
@@ -548,7 +745,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         {/* Sidebar */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 28, paddingLeft: 8, overflow: 'auto' }}>
 
-          {/* Speakers */}
+          {/* Speakers (only shown after batch processing; live has no speaker labels) */}
           {uniqueSpeakers.length > 0 && (
             <div>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>
@@ -679,7 +876,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
               border: '2px solid var(--accent)', borderTopColor: 'transparent',
               animation: 'spin 0.8s linear infinite',
             }} />
-            gemmer og navigerer…
+            transskriberer og gemmer…
           </div>
         )}
       </div>

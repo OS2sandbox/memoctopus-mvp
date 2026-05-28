@@ -1,9 +1,9 @@
-import { Mistral } from '@mistralai/mistralai';
+import OpenAI from 'openai';
 import { TranscriptSegment } from '@/types';
 
-let client: Mistral | null = null;
+let client: OpenAI | null = null;
 function getClient() {
-  if (!client) client = new Mistral({ apiKey: process.env.MISTRAL_API_KEY! });
+  if (!client) client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
   return client;
 }
 
@@ -31,8 +31,8 @@ export async function groupIntoChapters(segments: TranscriptSegment[]): Promise<
     .map((s, i) => `[${i}] ${fmt(s.start)} [${s.speaker}]: ${s.text}`)
     .join('\n');
 
-  const response = await getClient().chat.complete({
-    model: 'mistral-large-latest',
+  const response = await getClient().chat.completions.create({
+    model: 'gpt-4o',
     messages: [
       {
         role: 'user',
@@ -64,10 +64,12 @@ Regler:
     ],
   });
 
-  const raw = (response.choices?.[0]?.message?.content as string) ?? '';
+  const raw = response.choices[0]?.message?.content ?? '';
   try {
-    const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
-    const parsed = JSON.parse(cleaned) as {
+    // Extract the JSON object even if the model wraps it in prose or markdown fences
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('No JSON object found in response');
+    const parsed = JSON.parse(jsonMatch[0]) as {
       chapters: Array<{ title: string; summary: string; segmentIndices: number[] }>;
     };
 
