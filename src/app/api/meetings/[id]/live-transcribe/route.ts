@@ -7,6 +7,10 @@ interface Params {
   params: Promise<{ id: string }>;
 }
 
+// Diarization checkpoint: runs the batch scribe_v2 pass (with speaker diarization)
+// over the audio recorded so far and returns labeled segments WITHOUT persisting
+// anything. Called when the user pauses, to repaint the live preview with real
+// speakers. The final authoritative transcript is still produced by /api/transcribe.
 export async function POST(req: NextRequest, { params }: Params) {
   const { id: _id } = await params;
   const session = await auth.api.getSession({ headers: await headers() });
@@ -18,7 +22,7 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   const buffer = Buffer.from(await audioFile.arrayBuffer());
 
-  // Ignore tiny chunks — not enough audio to transcribe meaningfully
+  // Ignore tiny clips — not enough audio to transcribe meaningfully
   if (buffer.length < 10_000) return NextResponse.json({ segments: [], text: '' });
 
   try {

@@ -12,13 +12,11 @@ export async function POST(req: NextRequest, { params }: Params) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const res = await fetch('https://api.elevenlabs.io/v1/speech-to-text/get-realtime-token', {
+  // Single-use, 15-minute token for the realtime Scribe WebSocket. Consumed on connect,
+  // so each WS connection (initial + every reconnect/resume) needs a fresh one.
+  const res = await fetch('https://api.elevenlabs.io/v1/single-use-token/realtime_scribe', {
     method: 'POST',
-    headers: {
-      'xi-api-key': process.env.ELEVENLABS_API_KEY!,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ model_id: 'scribe_v2_realtime' }),
+    headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY! },
   });
 
   if (!res.ok) {

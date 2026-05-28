@@ -15,7 +15,6 @@ export async function POST(req: NextRequest) {
   const audioFile = formData.get('audio') as File | null;
   const meetingId = formData.get('meetingId') as string | null;
   const durationStr = formData.get('duration') as string | null;
-  const liveSegmentsJson = formData.get('liveSegments') as string | null;
   // When provided: update an existing transcript (audio + PII only, no re-transcription)
   const transcriptId = formData.get('transcriptId') as string | null;
 
@@ -94,17 +93,11 @@ export async function POST(req: NextRequest) {
       [meetingId, filename, sizeBytes, duration],
     );
 
-    let rawSegments: TranscriptSegment[];
-    const liveSegments: TranscriptSegment[] | null = liveSegmentsJson
-      ? JSON.parse(liveSegmentsJson)
-      : null;
-
-    if (liveSegments && liveSegments.length >= 3) {
-      rawSegments = liveSegments;
-    } else {
-      const provider = getTranscriptionProvider();
-      rawSegments = await provider.transcribe(buffer, mimeType);
-    }
+    // Always re-run the authoritative batch scribe_v2 pass over the full audio.
+    // The realtime stream is preview-only and not reliably diarized, so live
+    // segments are never trusted as the final transcript.
+    const provider = getTranscriptionProvider();
+    const rawSegments: TranscriptSegment[] = await provider.transcribe(buffer, mimeType);
 
     const { replacements } = await detectPiiInSegments(rawSegments);
     const rawText = rawSegments.map((s) => s.text).join(' ');
