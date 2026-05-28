@@ -85,6 +85,11 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       ADD COLUMN IF NOT EXISTS pii_replacements JSONB NOT NULL DEFAULT '[]'
     `);
 
+    await client.query(`
+      ALTER TABLE "${schema}".transcripts
+      ADD COLUMN IF NOT EXISTS chapters JSONB NOT NULL DEFAULT '[]'
+    `);
+
     // minutes
     await client.query(`
       CREATE TABLE IF NOT EXISTS "${schema}".minutes (

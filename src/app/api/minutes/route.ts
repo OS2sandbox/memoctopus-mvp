@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { queryUserSchemaOne, queryUserSchema } from '@/lib/db/user-schema';
 import { suggestTemplate, generateMinutes, generateMinutesFreeform } from '@/lib/ai/minutes';
+import { deleteAudioFile } from '@/lib/audio/storage';
 import { TranscriptSegment, TemplateStructure } from '@/types';
 
 export async function POST(req: NextRequest) {
@@ -111,6 +112,23 @@ export async function POST(req: NextRequest) {
     `UPDATE meetings SET status = 'minutes', updated_at = NOW() WHERE id = $1`,
     [meetingId],
   );
+
+  // Delete audio files (GDPR — audio no longer needed once minutes are generated)
+  try {
+    const audioFiles = await queryUserSchema<{ filename: string }>(
+      session.user.id,
+      'SELECT filename FROM audio_files WHERE meeting_id = $1 AND deleted_at IS NULL',
+      [meetingId],
+    );
+    await queryUserSchema(
+      session.user.id,
+      'UPDATE audio_files SET deleted_at = NOW() WHERE meeting_id = $1 AND deleted_at IS NULL',
+      [meetingId],
+    );
+    await Promise.all(audioFiles.map((f) => deleteAudioFile(session.user.id, f.filename)));
+  } catch {
+    // Non-fatal — minutes are saved; audio cleanup can be retried later
+  }
 
   return NextResponse.json({ minutesId: minutesRow!.id });
 }

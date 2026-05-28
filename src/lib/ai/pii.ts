@@ -22,7 +22,8 @@ Regler:
 2. Bevar organisationsnavne og stednavne MED MINDRE de bruges til at identificere en specifik person
 3. Bevar datoer og tidspunkter
 4. Bevar rollebetegnelser (f.eks. "direktøren", "formanden") med mindre de direkte identificerer en person
-5. Returner ALTID valid JSON
+5. Bevar taler-etiketter i formatet [Navn]: i starten af linjer — disse er tekniske identifikatorer, ikke PII
+6. Returner ALTID valid JSON
 
 Returner JSON i dette format:
 {

@@ -1,6 +1,22 @@
 import { queryUserSchemaOne, queryUserSchema } from '@/lib/db/user-schema';
 import { TranscriptSegment, PiiReplacement, MinutesContent } from '@/types';
 import type { ProcessPhase } from '@/components/layout/ProcessStrip';
+import type { TranscriptChapter } from '@/lib/ai/chapters';
+
+// Run once per user per process — adds columns that may be missing on existing schemas.
+const migratedUsers = new Set<string>();
+async function ensureColumns(userId: string) {
+  if (migratedUsers.has(userId)) return;
+  try {
+    await queryUserSchema(
+      userId,
+      `ALTER TABLE transcripts ADD COLUMN IF NOT EXISTS chapters JSONB NOT NULL DEFAULT '[]'`,
+    );
+  } catch {
+    // Non-fatal — page still loads; client will generate chapters via API if column is absent
+  }
+  migratedUsers.add(userId);
+}
 
 export interface MeetingPageData {
   meeting: { id: string; status: string; title: string };
@@ -11,6 +27,7 @@ export interface MeetingPageData {
     segments: TranscriptSegment[];
     piiRemovedAt: string | null;
     piiReplacements: PiiReplacement[];
+    chapters: TranscriptChapter[];
   } | null;
   minutes: {
     id: string;
@@ -25,6 +42,8 @@ export async function getMeetingPageData(
   userId: string,
   meetingId: string,
 ): Promise<MeetingPageData | null> {
+  await ensureColumns(userId);
+
   const meeting = await queryUserSchemaOne<{ id: string; status: string; title: string }>(
     userId,
     'SELECT id, status, title FROM meetings WHERE id = $1',
@@ -55,6 +74,23 @@ export async function getMeetingPageData(
     ? { durationSeconds: audioFileRow.duration_seconds, sizeBytes: audioFileRow.size_bytes }
     : null;
 
+  // Load chapters separately so a missing column (migration not yet applied) degrades gracefully.
+  let savedChapters: TranscriptChapter[] = [];
+  if (transcriptRow) {
+    try {
+      const chaptersRow = await queryUserSchemaOne<{ chapters: unknown }>(
+        userId,
+        'SELECT chapters FROM transcripts WHERE meeting_id = $1 ORDER BY id DESC LIMIT 1',
+        [meetingId],
+      );
+      if (Array.isArray(chaptersRow?.chapters)) {
+        savedChapters = chaptersRow.chapters as TranscriptChapter[];
+      }
+    } catch {
+      // Column absent — client will generate chapters via API
+    }
+  }
+
   const transcript = transcriptRow
     ? {
         id: transcriptRow.id,
@@ -66,6 +102,7 @@ export async function getMeetingPageData(
         piiReplacements: Array.isArray(transcriptRow.pii_replacements)
           ? (transcriptRow.pii_replacements as PiiReplacement[])
           : [],
+        chapters: savedChapters,
       }
     : null;
 

@@ -13,6 +13,9 @@ interface TranscriptReviewProps {
   initialSegments: TranscriptSegment[];
   piiReplacements: PiiReplacement[];
   audioUrl?: string;
+  audioDurationSeconds?: number | null;
+  audioDeleted?: boolean;
+  initialChapters?: TranscriptChapter[];
 }
 
 type UploadStatus = 'idle' | 'uploading' | 'processing' | 'done' | 'error';
@@ -46,6 +49,9 @@ export function TranscriptReview({
   initialSegments,
   piiReplacements: initialPiiReplacements,
   audioUrl: initialAudioUrl,
+  audioDurationSeconds,
+  audioDeleted = false,
+  initialChapters,
 }: TranscriptReviewProps) {
   const router = useRouter();
   const [segments, setSegments] = useState(initialSegments);
@@ -68,7 +74,7 @@ export function TranscriptReview({
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
+  const [duration, setDuration] = useState(audioDurationSeconds ?? 0);
   const [audioError, setAudioError] = useState<string | null>(null);
 
   // Background audio upload (from pending upload store)
@@ -147,10 +153,10 @@ export function TranscriptReview({
     if (!audio) return;
     const onTime = () => setCurrentTime(audio.currentTime);
     const onMeta = () => {
-      if (isFinite(audio.duration)) setDuration(audio.duration);
+      if (isFinite(audio.duration) && audio.duration > 0) setDuration(audio.duration);
     };
     const onDurationChange = () => {
-      if (isFinite(audio.duration)) setDuration(audio.duration);
+      if (isFinite(audio.duration) && audio.duration > 0) setDuration(audio.duration);
     };
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
@@ -163,6 +169,10 @@ export function TranscriptReview({
     audio.addEventListener('pause', onPause);
     audio.addEventListener('ended', onEnded);
     audio.addEventListener('error', onError);
+    // Metadata may have loaded before listeners were attached (e.g. from cache)
+    if (audio.readyState >= HTMLMediaElement.HAVE_METADATA && isFinite(audio.duration) && audio.duration > 0) {
+      setDuration(audio.duration);
+    }
     return () => {
       audio.removeEventListener('timeupdate', onTime);
       audio.removeEventListener('loadedmetadata', onMeta);
@@ -172,7 +182,8 @@ export function TranscriptReview({
       audio.removeEventListener('ended', onEnded);
       audio.removeEventListener('error', onError);
     };
-  }, []);
+  // Re-run when audioUrl changes so listeners attach to any newly created audio element
+  }, [audioUrl]);
 
   const seekTo = useCallback((time: number) => {
     const audio = audioRef.current;
@@ -295,15 +306,25 @@ export function TranscriptReview({
 
   // Chapters
   const [search, setSearch] = useState('');
-  const [chapters, setChapters] = useState<TranscriptChapter[] | null>(null);
+  const [chapters, setChapters] = useState<TranscriptChapter[] | null>(
+    initialChapters && initialChapters.length > 0 ? initialChapters : null,
+  );
   const [chaptersLoading, setChaptersLoading] = useState(false);
-  const [openChapters, setOpenChapters] = useState<Set<string>>(new Set());
+  const [openChapters, setOpenChapters] = useState<Set<string>>(
+    () => initialChapters && initialChapters.length > 0 ? new Set([initialChapters[0].id]) : new Set(),
+  );
 
-  const updateChapterTitle = useCallback((id: string, title: string) => {
-    setChapters((prev) => prev ? prev.map((ch) => ch.id === id ? { ...ch, title } : ch) : prev);
-  }, []);
+  const saveChapters = useCallback((updated: TranscriptChapter[]) => {
+    fetch(`/api/meetings/${meetingId}/chapters`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chapters: updated }),
+    }).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meetingId]);
 
   useEffect(() => {
+    if (initialChapters && initialChapters.length > 0) return;
     if (initialSegments.length === 0) return;
     setChaptersLoading(true);
     fetch(`/api/meetings/${meetingId}/chapters`, {
@@ -451,8 +472,13 @@ export function TranscriptReview({
                         onClick={(e) => e.stopPropagation()}
                         onBlur={(e) => {
                           const t = e.currentTarget.textContent?.trim() ?? '';
-                          if (t) updateChapterTitle(ch.id, t);
-                          else e.currentTarget.textContent = ch.title;
+                          if (t && t !== ch.title) {
+                            const updated = (chapters ?? []).map((c) => c.id === ch.id ? { ...c, title: t } : c);
+                            setChapters(updated);
+                            saveChapters(updated);
+                          } else if (!t) {
+                            e.currentTarget.textContent = ch.title;
+                          }
                         }}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
@@ -719,14 +745,18 @@ export function TranscriptReview({
           {/* Compliance */}
           <div style={{
             marginTop: 24, padding: '14px 16px', borderRadius: 'var(--radius)',
-            border: '1px solid color-mix(in oklch, var(--kill) 25%, var(--line-2))',
-            background: 'var(--kill-wash)',
+            border: audioDeleted
+              ? '1px solid color-mix(in oklch, var(--accent) 25%, var(--line-2))'
+              : '1px solid color-mix(in oklch, var(--kill) 25%, var(--line-2))',
+            background: audioDeleted ? 'var(--accent-wash)' : 'var(--kill-wash)',
           }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--kill)', letterSpacing: 0.3, marginBottom: 6 }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: audioDeleted ? 'var(--accent)' : 'var(--kill)', letterSpacing: 0.3, marginBottom: 6 }}>
               § compliance · automatisk
             </div>
             <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.6 }}>
-              Lydfilen slettes automatisk når referatet genereres.
+              {audioDeleted
+                ? 'Lydfilen er slettet. Referatet genereres fra transkription og dine redigeringer.'
+                : 'Lydfilen slettes automatisk når referatet genereres.'}
             </div>
           </div>
 
@@ -795,9 +825,18 @@ export function TranscriptReview({
               }} />
             </div>
             <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
-              {Math.floor(duration / 60).toString().padStart(2, '0')}:{Math.floor(duration % 60).toString().padStart(2, '0')}
+              {duration > 0
+                ? `${Math.floor(duration / 60).toString().padStart(2, '0')}:${Math.floor(duration % 60).toString().padStart(2, '0')}`
+                : '--:--'}
             </span>
           </>
+        ) : audioDeleted ? (
+          <span style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--accent)' }}>
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
+              <path d="M2 4h12M5 4V2.5A.5.5 0 015.5 2h5a.5.5 0 01.5.5V4M6 7v5M10 7v5M3 4l.8 9.1A.5.5 0 004.3 13.6h7.4a.5.5 0 00.5-.5L13 4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            lydfil slettet
+          </span>
         ) : (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}>
             {(uploadStatus === 'uploading' || uploadStatus === 'processing') && (
