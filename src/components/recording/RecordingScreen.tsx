@@ -413,7 +413,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   };
 
   return (
-    <div style={{ minHeight: 'calc(100vh - 56px - 47px)', padding: '32px 48px 24px', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: 'calc(100vh - 56px - 47px)', padding: '32px 48px 64px', display: 'flex', flexDirection: 'column' }}>
 
       {/* Header row */}
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 28 }}>
@@ -502,7 +502,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           </div>
 
           {/* Transcript rows */}
-          <div style={{ flex: 1, overflow: 'auto', padding: '14px 0' }}>
+          <div style={{
+            flex: 1, overflow: 'auto', padding: '14px 0',
+            maskImage: 'linear-gradient(to bottom, transparent 0%, black 18%)',
+            WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 18%)',
+          }}>
             {liveSegments.length === 0 ? (
               <div style={{
                 padding: '20px 18px', fontFamily: 'var(--mono)', fontSize: 12.5,

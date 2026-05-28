@@ -92,6 +92,7 @@ export function TranscriptReview({
     const pending = pendingUpload.get();
     if (!pending || pending.meetingId !== meetingId) return;
     pendingUpload.clear();
+    if (pending.elapsed > 0) setDuration((d) => (d > 0 ? d : pending.elapsed));
     startAudioUpload(pending.blob, pending.elapsed);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -189,6 +190,25 @@ export function TranscriptReview({
     };
   // Re-run when audioUrl changes so listeners attach to any newly created audio element
   }, [audioUrl]);
+
+  // Fallback: decode via AudioContext to get duration when audio element reports Infinity (webm streams)
+  useEffect(() => {
+    if (!audioUrl || duration > 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(audioUrl);
+        if (!res.ok || cancelled) return;
+        const buf = await res.arrayBuffer();
+        if (cancelled) return;
+        const actx = new AudioContext();
+        const decoded = await actx.decodeAudioData(buf);
+        actx.close();
+        if (!cancelled && decoded.duration > 0) setDuration(decoded.duration);
+      } catch { /* non-critical */ }
+    })();
+    return () => { cancelled = true; };
+  }, [audioUrl, duration]);
 
   const seekTo = useCallback((time: number) => {
     const audio = audioRef.current;
@@ -366,11 +386,11 @@ export function TranscriptReview({
   }
 
   return (
-    <div style={{ minHeight: 'calc(100vh - 56px - 47px - 56px)' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', minHeight: 'calc(100vh - 56px - 47px - 56px)' }}>
+    <div style={{ height: 'calc(100vh - 56px - 47px - 56px)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', height: '100%' }}>
 
         {/* ── Left: Transcript ────────────────────────────────────────── */}
-        <div style={{ padding: '32px 40px', overflow: 'visible' }}>
+        <div style={{ padding: '32px 40px 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
           {/* Header */}
           <div>
@@ -416,7 +436,11 @@ export function TranscriptReview({
           {audioUrl && <audio ref={audioRef} src={audioUrl} preload="metadata" />}
 
           {/* Transcript — chapters or flat fallback */}
-          <div style={{ marginTop: 8 }}>
+          <div style={{
+            marginTop: 8, flex: 1, overflowY: 'auto',
+            maskImage: 'linear-gradient(to bottom, transparent 0%, black 6%)',
+            WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 6%)',
+          }}>
             {chaptersLoading && (
               <div style={{
                 padding: '24px 0', display: 'flex', alignItems: 'center', gap: 10,
@@ -507,7 +531,7 @@ export function TranscriptReview({
                     </div>
                   </div>
                   {isOpen && (
-                    <div style={{ paddingBottom: 18 }}>
+                    <div style={{ paddingBottom: 18, maxHeight: 360, overflowY: 'auto' }}>
                       {chSegs.map(({ seg, idx }) => (
                         <div key={idx} ref={(el) => { segmentRefs.current[idx] = el; }}>
                           <SpeakerRow
@@ -529,7 +553,7 @@ export function TranscriptReview({
             })}
 
             {!chaptersLoading && !chapters && (
-              <div style={{ borderTop: '1px solid var(--line)' }}>
+              <div style={{ borderTop: '1px solid var(--line)', maxHeight: 480, overflowY: 'auto' }}>
                 {segments.length === 0 ? (
                   <p style={{ padding: '32px 0', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
                     Ingen transskription fundet.
@@ -816,18 +840,41 @@ export function TranscriptReview({
               {Math.floor(currentTime / 60).toString().padStart(2, '0')}:{Math.floor(currentTime % 60).toString().padStart(2, '0')}
             </span>
             <div
-              style={{ flex: 1, height: 2, background: 'var(--line-2)', position: 'relative', borderRadius: 1, cursor: 'pointer' }}
-              onClick={(e) => {
-                const rect = e.currentTarget.getBoundingClientRect();
-                const pct = (e.clientX - rect.left) / rect.width;
-                seekTo(pct * duration);
+              style={{ flex: 1, height: 20, display: 'flex', alignItems: 'center', cursor: 'pointer', position: 'relative' }}
+              onMouseDown={(e) => {
+                const bar = e.currentTarget;
+                const seek = (clientX: number) => {
+                  if (duration <= 0) return;
+                  const rect = bar.getBoundingClientRect();
+                  const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+                  seekTo(pct * duration);
+                };
+                seek(e.clientX);
+                const onMove = (ev: MouseEvent) => seek(ev.clientX);
+                const onUp = () => {
+                  window.removeEventListener('mousemove', onMove);
+                  window.removeEventListener('mouseup', onUp);
+                };
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', onUp);
               }}
             >
-              <div style={{
-                position: 'absolute', left: 0, top: 0, height: '100%',
-                width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%',
-                background: 'var(--ink-2)', borderRadius: 1,
-              }} />
+              <div style={{ position: 'absolute', left: 0, right: 0, height: 3, background: 'var(--line-2)', borderRadius: 2 }}>
+                <div style={{
+                  position: 'absolute', left: 0, top: 0, height: '100%',
+                  width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%',
+                  background: 'var(--ink-2)', borderRadius: 2,
+                }} />
+                {duration > 0 && (
+                  <div style={{
+                    position: 'absolute', top: '50%', transform: 'translate(-50%, -50%)',
+                    left: `${(currentTime / duration) * 100}%`,
+                    width: 10, height: 10, borderRadius: 999,
+                    background: 'var(--ink)', border: '2px solid var(--surface)',
+                    boxShadow: '0 0 0 1px var(--ink-2)',
+                  }} />
+                )}
+              </div>
             </div>
             <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
               {duration > 0
