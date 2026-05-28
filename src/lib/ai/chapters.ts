@@ -66,8 +66,10 @@ Regler:
 
   const raw = response.choices[0]?.message?.content ?? '';
   try {
-    const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
-    const parsed = JSON.parse(cleaned) as {
+    // Extract the JSON object even if the model wraps it in prose or markdown fences
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('No JSON object found in response');
+    const parsed = JSON.parse(jsonMatch[0]) as {
       chapters: Array<{ title: string; summary: string; segmentIndices: number[] }>;
     };
 
