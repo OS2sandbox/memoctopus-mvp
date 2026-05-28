@@ -22,10 +22,7 @@ vi.mock('@/lib/ai/transcription', () => ({
 }));
 
 vi.mock('@/lib/ai/pii', () => ({
-  removePiiFromSegments: vi.fn().mockResolvedValue({
-    cleanedSegments: [{ speaker: 'Taler 1', start: 0, end: 5, text: 'Hej verden.' }],
-    replacements: [],
-  }),
+  detectPiiInSegments: vi.fn().mockResolvedValue({ replacements: [] }),
 }));
 
 vi.mock('@/lib/audio/storage', () => ({
@@ -86,7 +83,7 @@ describe('POST /api/transcribe', () => {
     expect((await res.json()).error).toMatch(/not found/i);
   });
 
-  it('returns transcriptId, segmentCount, piiReplacementCount on success', async () => {
+  it('returns transcriptId, segments, piiReplacementCount on success', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never); // meeting lookup
     mockQueryOne.mockResolvedValueOnce({} as never); // mark processing
@@ -99,7 +96,7 @@ describe('POST /api/transcribe', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.transcriptId).toBe('transcript-123');
-    expect(body.segmentCount).toBe(1);
+    expect(body.segments).toHaveLength(1);
     expect(body.piiReplacementCount).toBe(0);
   });
 

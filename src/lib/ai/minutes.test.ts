@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockCreate = vi.hoisted(() => vi.fn());
+const mockComplete = vi.hoisted(() => vi.fn());
 
-vi.mock('@anthropic-ai/sdk', () => ({
-  default: class Anthropic {
-    messages = { create: mockCreate };
+vi.mock('@mistralai/mistralai', () => ({
+  Mistral: class {
+    chat = { complete: mockComplete };
   },
 }));
 
-import { suggestTemplate, generateMinutes } from './minutes';
+import { suggestTemplate, generateMinutes, generateMinutesFreeform } from './minutes';
 import type { TranscriptSegment, TemplateSectionDef } from '@/types';
 
 const sampleSegments: TranscriptSegment[] = [
@@ -27,24 +27,25 @@ const sampleSections: TemplateSectionDef[] = [
   { key: 'noter', label: 'Noter', required: false },
 ];
 
+function mistralResponse(content: string) {
+  return { choices: [{ message: { content } }] };
+}
+
 // ─── suggestTemplate ──────────────────────────────────────────────────────────
 
 describe('suggestTemplate', () => {
-  beforeEach(() => mockCreate.mockReset());
+  beforeEach(() => mockComplete.mockReset());
 
-  it('returns the suggested template from Claude', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            templateId: 'tmpl-1',
-            templateName: 'Bestyrelsesmøde',
-            explanation: 'Passer til en bestyrelse.',
-          }),
-        },
-      ],
-    });
+  it('returns the suggested template from Mistral', async () => {
+    mockComplete.mockResolvedValueOnce(
+      mistralResponse(
+        JSON.stringify({
+          templateId: 'tmpl-1',
+          templateName: 'Bestyrelsesmøde',
+          explanation: 'Passer til en bestyrelse.',
+        }),
+      ),
+    );
 
     const result = await suggestTemplate(sampleSegments, sampleTemplates);
 
@@ -54,23 +55,18 @@ describe('suggestTemplate', () => {
   });
 
   it('strips markdown code fences before parsing', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [
-        {
-          type: 'text',
-          text: '```json\n{"templateId":"tmpl-2","templateName":"Personalemøde","explanation":"X"}\n```',
-        },
-      ],
-    });
+    mockComplete.mockResolvedValueOnce(
+      mistralResponse(
+        '```json\n{"templateId":"tmpl-2","templateName":"Personalemøde","explanation":"X"}\n```',
+      ),
+    );
 
     const result = await suggestTemplate(sampleSegments, sampleTemplates);
     expect(result.templateId).toBe('tmpl-2');
   });
 
   it('falls back gracefully when JSON parse fails', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: 'text', text: 'invalid json' }],
-    });
+    mockComplete.mockResolvedValueOnce(mistralResponse('invalid json'));
 
     const result = await suggestTemplate(sampleSegments, sampleTemplates);
 
@@ -80,22 +76,10 @@ describe('suggestTemplate', () => {
   });
 
   it('falls back with "Standard" when templates array is empty', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: 'text', text: 'bad json' }],
-    });
+    mockComplete.mockResolvedValueOnce(mistralResponse('bad json'));
 
     const result = await suggestTemplate(sampleSegments, []);
     expect(result.templateName).toBe('Standard');
-  });
-
-  it('throws when Claude returns non-text content', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: 'tool_use', id: 'x', name: 'fn', input: {} }],
-    });
-
-    await expect(suggestTemplate(sampleSegments, sampleTemplates)).rejects.toThrow(
-      'Unexpected response from Claude',
-    );
   });
 
   it('truncates transcript to 3000 chars in the prompt', async () => {
@@ -106,61 +90,77 @@ describe('suggestTemplate', () => {
       text: 'Dette er en lang sætning der fylder meget i transskriptionen.',
     }));
 
-    mockCreate.mockResolvedValueOnce({
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({ templateId: null, templateName: 'Standard', explanation: 'x' }),
-        },
-      ],
-    });
+    mockComplete.mockResolvedValueOnce(
+      mistralResponse(
+        JSON.stringify({ templateId: null, templateName: 'Standard', explanation: 'x' }),
+      ),
+    );
 
     await suggestTemplate(longSegments, sampleTemplates);
 
-    const userContent = mockCreate.mock.calls[0][0].messages[0].content as string;
+    const call = mockComplete.mock.calls[0][0];
+    const userContent = call.messages[1].content as string;
     const parts = userContent.split('Transskription:\n');
     expect(parts).toHaveLength(2);
     const transcriptPart = parts[1].split('\n\nReturner JSON:')[0];
     expect(transcriptPart.length).toBeLessThanOrEqual(3000);
   });
 
-  it('uses ephemeral cache_control on the system prompt', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({ templateId: null, templateName: 'X', explanation: 'y' }),
-        },
-      ],
-    });
+  it('includes template names and descriptions in the prompt', async () => {
+    mockComplete.mockResolvedValueOnce(
+      mistralResponse(JSON.stringify({ templateId: 'tmpl-1', templateName: 'X', explanation: 'y' })),
+    );
 
     await suggestTemplate(sampleSegments, sampleTemplates);
 
-    const system = mockCreate.mock.calls[0][0].system as Array<{ cache_control?: { type: string } }>;
-    expect(system[0].cache_control?.type).toBe('ephemeral');
+    const call = mockComplete.mock.calls[0][0];
+    const userContent = call.messages[1].content as string;
+    expect(userContent).toContain('Bestyrelsesmøde');
+    expect(userContent).toContain('Personalemøde');
+    expect(userContent).toContain('tmpl-1');
+  });
+
+  it('includes transcript text in the prompt', async () => {
+    mockComplete.mockResolvedValueOnce(
+      mistralResponse(JSON.stringify({ templateId: null, templateName: 'X', explanation: 'y' })),
+    );
+
+    await suggestTemplate(sampleSegments, sampleTemplates);
+
+    const call = mockComplete.mock.calls[0][0];
+    const userContent = call.messages[1].content as string;
+    expect(userContent).toContain('Vi åbner mødet.');
+  });
+
+  it('uses mistral-large-latest model', async () => {
+    mockComplete.mockResolvedValueOnce(
+      mistralResponse(JSON.stringify({ templateId: null, templateName: 'X', explanation: 'y' })),
+    );
+
+    await suggestTemplate(sampleSegments, sampleTemplates);
+
+    const call = mockComplete.mock.calls[0][0];
+    expect(call.model).toBe('mistral-large-latest');
   });
 });
 
 // ─── generateMinutes ──────────────────────────────────────────────────────────
 
 describe('generateMinutes', () => {
-  beforeEach(() => mockCreate.mockReset());
+  beforeEach(() => mockComplete.mockReset());
 
-  it('returns sections from Claude response', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            sections: [
-              { key: 'deltagere', label: 'Deltagere', content: '- Taler 1\n- Taler 2' },
-              { key: 'beslutninger', label: 'Beslutninger', content: 'Ingen.' },
-              { key: 'noter', label: 'Noter', content: '' },
-            ],
-          }),
-        },
-      ],
-    });
+  it('returns sections from Mistral response', async () => {
+    mockComplete.mockResolvedValueOnce(
+      mistralResponse(
+        JSON.stringify({
+          sections: [
+            { key: 'deltagere', label: 'Deltagere', content: '- Taler 1\n- Taler 2' },
+            { key: 'beslutninger', label: 'Beslutninger', content: 'Ingen.' },
+            { key: 'noter', label: 'Noter', content: '' },
+          ],
+        }),
+      ),
+    );
 
     const result = await generateMinutes(sampleSegments, sampleSections);
 
@@ -170,25 +170,18 @@ describe('generateMinutes', () => {
   });
 
   it('strips markdown code fences before parsing', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [
-        {
-          type: 'text',
-          text: '```json\n{"sections":[{"key":"k","label":"L","content":"C"}]}\n```',
-        },
-      ],
-    });
+    mockComplete.mockResolvedValueOnce(
+      mistralResponse(
+        '```json\n{"sections":[{"key":"k","label":"L","content":"C"}]}\n```',
+      ),
+    );
 
-    const result = await generateMinutes(sampleSegments, [
-      { key: 'k', label: 'L', required: true },
-    ]);
+    const result = await generateMinutes(sampleSegments, [{ key: 'k', label: 'L', required: true }]);
     expect(result.sections[0].content).toBe('C');
   });
 
   it('falls back to empty sections matching the template when JSON parse fails', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: 'text', text: 'not valid json' }],
-    });
+    mockComplete.mockResolvedValueOnce(mistralResponse('not valid json'));
 
     const result = await generateMinutes(sampleSegments, sampleSections);
 
@@ -197,68 +190,173 @@ describe('generateMinutes', () => {
     expect(result.sections.map((s) => s.key)).toEqual(sampleSections.map((s) => s.key));
   });
 
-  it('throws when Claude returns non-text content', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: 'tool_use', id: 'x', name: 'fn', input: {} }],
-    });
-
-    await expect(generateMinutes(sampleSegments, sampleSections)).rejects.toThrow(
-      'Unexpected response from Claude',
-    );
-  });
-
   it('includes section keys and labels in the prompt', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({ sections: [] }),
-        },
-      ],
-    });
+    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
 
     await generateMinutes(sampleSegments, sampleSections);
 
-    const userContent = mockCreate.mock.calls[0][0].messages[0].content as string;
-    expect(userContent).toContain(JSON.stringify('deltagere'));
-    expect(userContent).toContain(JSON.stringify('Deltagere'));
-    expect(userContent).toContain(JSON.stringify('beslutninger'));
+    const call = mockComplete.mock.calls[0][0];
+    const userContent = call.messages[1].content as string;
+    expect(userContent).toContain('"deltagere"');
+    expect(userContent).toContain('"Deltagere"');
+    expect(userContent).toContain('"beslutninger"');
   });
 
   it('marks required sections as påkrævet in the prompt', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: 'text', text: JSON.stringify({ sections: [] }) }],
-    });
+    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
 
     await generateMinutes(sampleSegments, sampleSections);
 
-    const userContent = mockCreate.mock.calls[0][0].messages[0].content as string;
+    const call = mockComplete.mock.calls[0][0];
+    const userContent = call.messages[1].content as string;
     expect(userContent).toContain('påkrævet');
   });
 
   it('includes formatted timestamps in the transcript', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: 'text', text: JSON.stringify({ sections: [] }) }],
-    });
+    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
 
     await generateMinutes(
       [{ speaker: 'Taler 1', start: 65, end: 70, text: 'Hej' }],
       sampleSections,
     );
 
-    const userContent = mockCreate.mock.calls[0][0].messages[0].content as string;
+    const call = mockComplete.mock.calls[0][0];
+    const userContent = call.messages[1].content as string;
     // 65 seconds = 1:05
     expect(userContent).toContain('1:05');
   });
 
-  it('uses ephemeral cache_control on the system prompt', async () => {
-    mockCreate.mockResolvedValueOnce({
-      content: [{ type: 'text', text: JSON.stringify({ sections: [] }) }],
-    });
+  it('includes section descriptions when present', async () => {
+    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
 
     await generateMinutes(sampleSegments, sampleSections);
 
-    const system = mockCreate.mock.calls[0][0].system as Array<{ cache_control?: { type: string } }>;
-    expect(system[0].cache_control?.type).toBe('ephemeral');
+    const call = mockComplete.mock.calls[0][0];
+    const userContent = call.messages[1].content as string;
+    expect(userContent).toContain('Vigtige beslutninger');
+  });
+
+  it('sends customPrompt in user message when provided', async () => {
+    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+
+    await generateMinutes(sampleSegments, sampleSections, 'Fokus på beslutninger');
+
+    const call = mockComplete.mock.calls[0][0];
+    const userContent = call.messages[1].content as string;
+    expect(userContent).toContain('Fokus på beslutninger');
+  });
+
+  it('uses mistral-large-latest model', async () => {
+    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+
+    await generateMinutes(sampleSegments, sampleSections);
+
+    const call = mockComplete.mock.calls[0][0];
+    expect(call.model).toBe('mistral-large-latest');
+  });
+
+  it('returns all section keys and labels from template in fallback', async () => {
+    mockComplete.mockResolvedValueOnce(mistralResponse('bad json'));
+
+    const result = await generateMinutes(sampleSegments, sampleSections);
+    expect(result.sections.map((s) => s.label)).toEqual(
+      sampleSections.map((s) => s.label),
+    );
+  });
+});
+
+// ─── generateMinutesFreeform ──────────────────────────────────────────────────
+
+describe('generateMinutesFreeform', () => {
+  beforeEach(() => mockComplete.mockReset());
+
+  it('returns sections from Mistral response', async () => {
+    mockComplete.mockResolvedValueOnce(
+      mistralResponse(
+        JSON.stringify({
+          sections: [
+            { key: 'resumé', label: 'Resumé', content: 'Mødet omhandlede projektstatus.' },
+            { key: 'handlinger', label: 'Handlinger', content: '- Opdater status.' },
+          ],
+        }),
+      ),
+    );
+
+    const result = await generateMinutesFreeform(sampleSegments, 'Fokus på handlingspunkter');
+
+    expect(result.sections).toHaveLength(2);
+    expect(result.sections[0].key).toBe('resumé');
+    expect(result.sections[0].content).toBe('Mødet omhandlede projektstatus.');
+  });
+
+  it('strips markdown code fences before parsing', async () => {
+    mockComplete.mockResolvedValueOnce(
+      mistralResponse(
+        '```json\n{"sections":[{"key":"s","label":"S","content":"C"}]}\n```',
+      ),
+    );
+
+    const result = await generateMinutesFreeform(sampleSegments, 'kort referat');
+    expect(result.sections[0].content).toBe('C');
+  });
+
+  it('falls back to empty sections array when JSON parse fails', async () => {
+    mockComplete.mockResolvedValueOnce(mistralResponse('not valid json'));
+
+    const result = await generateMinutesFreeform(sampleSegments, 'prompt');
+    expect(result.sections).toHaveLength(0);
+  });
+
+  it('includes custom prompt in user message', async () => {
+    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+
+    await generateMinutesFreeform(sampleSegments, 'Lav et kortfattet referat');
+
+    const call = mockComplete.mock.calls[0][0];
+    const userContent = call.messages[1].content as string;
+    expect(userContent).toContain('Lav et kortfattet referat');
+  });
+
+  it('includes transcript text in the prompt', async () => {
+    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+
+    await generateMinutesFreeform(sampleSegments, 'prompt');
+
+    const call = mockComplete.mock.calls[0][0];
+    const userContent = call.messages[1].content as string;
+    expect(userContent).toContain('Vi åbner mødet.');
+  });
+
+  it('includes formatted timestamps in the prompt', async () => {
+    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+
+    await generateMinutesFreeform(
+      [{ speaker: 'Taler 1', start: 125, end: 130, text: 'Punkt to' }],
+      'referat',
+    );
+
+    const call = mockComplete.mock.calls[0][0];
+    const userContent = call.messages[1].content as string;
+    // 125 seconds = 2:05
+    expect(userContent).toContain('2:05');
+  });
+
+  it('uses mistral-large-latest model', async () => {
+    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+
+    await generateMinutesFreeform(sampleSegments, 'prompt');
+
+    const call = mockComplete.mock.calls[0][0];
+    expect(call.model).toBe('mistral-large-latest');
+  });
+
+  it('instructs Mistral to decide sections itself', async () => {
+    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+
+    await generateMinutesFreeform(sampleSegments, 'prompt');
+
+    const call = mockComplete.mock.calls[0][0];
+    const userContent = call.messages[1].content as string;
+    expect(userContent).toContain('Beslut selv hvilke sektioner');
   });
 });
