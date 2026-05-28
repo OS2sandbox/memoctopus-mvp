@@ -66,15 +66,19 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
         )}
 
         {/* Format choice */}
-        <div style={{ marginTop: 40 }}>
+        <div style={{ marginTop: 40 }} role="radiogroup" aria-label="Eksportformat">
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 12 }}>format</div>
           {FORMATS.map((f) => {
             const sel = f.key === selected;
             return (
-              <div
+              <button
                 key={f.key}
+                type="button"
+                role="radio"
+                aria-checked={sel}
                 onClick={() => setSelected(f.key)}
                 style={{
+                  width: '100%', textAlign: 'left', font: 'inherit', color: 'inherit',
                   padding: '18px 20px',
                   display: 'grid', gridTemplateColumns: '20px 1fr auto',
                   gap: 16, alignItems: 'center',
@@ -100,7 +104,7 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)' }}>{f.file}</div>
                   <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted-2)', marginTop: 3 }}>{f.meta}</div>
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>

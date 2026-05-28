@@ -14,6 +14,7 @@ import {
 import { VolumeBar } from './VolumeBar';
 import { formatDuration, formatFileSize } from '@/lib/utils';
 import { useIsMobile } from '@/lib/use-is-mobile';
+import { pickRecordingMimeType, extensionForMimeType } from '@/lib/audio/recording-format';
 
 interface LiveSegment {
   speaker: string;
@@ -74,6 +75,9 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const [isUploading, setIsUploading] = useState(false);
   const [isOverwriting, setIsOverwriting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // True once we detect the browser has no Web Speech API (e.g. iOS Safari) —
+  // the batch transcript still works, but the live interim captions won't show.
+  const [liveCaptionsUnavailable, setLiveCaptionsUnavailable] = useState(false);
 
   // Live transcription
   const [liveSegments, setLiveSegments] = useState<LiveSegment[]>([]);
@@ -145,7 +149,9 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   function initSpeechRecognition() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const SR = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
-    if (!SR) return;
+    // iOS Safari and some others have no Web Speech API — record still works,
+    // but there are no live interim captions. Surface that to the user once.
+    if (!SR) { setLiveCaptionsUnavailable(true); return; }
     const r = new SR() as SpeechRecognitionInstance;
     r.continuous = true;
     r.interimResults = true;
@@ -284,7 +290,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       if (!res.ok) return;
       const data = await res.json() as { topics?: TopicItem[] };
       setTopics(data.topics ?? []);
-    } catch {}
+    } catch (err) {
+      // Live topics are a non-critical enhancement — keep recording, just log.
+      console.error('[topics] refresh failed:', err);
+    }
   }
 
   async function startRecording() {
@@ -316,12 +325,14 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         analyserRef.current = null;
       }
 
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-      mimeTypeRef.current = mimeType;
+      // Pick a mime type the browser can actually record (iOS Safari needs mp4,
+      // not webm). Empty string → let MediaRecorder choose its own default.
+      const mimeType = pickRecordingMimeType();
+      mimeTypeRef.current = mimeType || 'audio/webm';
 
-      const recorder = new MediaRecorder(stream, { mimeType });
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
       mediaRecorderRef.current = recorder;
       chunksRef.current = [];
 
@@ -442,7 +453,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     // The live WebSocket segments were preview-only; the batch result is authoritative.
     try {
       const formData = new FormData();
-      formData.append('audio', blob, `recording.${mimeType.includes('mp4') ? 'm4a' : 'webm'}`);
+      formData.append('audio', blob, `recording.${extensionForMimeType(mimeType)}`);
       formData.append('meetingId', meetingId);
       formData.append('duration', String(elapsed));
 
@@ -630,6 +641,18 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           fontSize: 13.5, color: 'var(--kill)',
         }}>
           {error}
+        </div>
+      )}
+
+      {/* Live captions unavailable (e.g. iOS Safari) — recording still works */}
+      {liveCaptionsUnavailable && (recordingState === 'recording' || recordingState === 'paused') && (
+        <div style={{
+          marginTop: 16, padding: '10px 14px', borderRadius: 'var(--radius)',
+          borderLeft: '3px solid var(--accent)',
+          background: 'var(--accent-wash)',
+          fontSize: 13.5, color: 'var(--ink-2)',
+        }}>
+          Live-undertekster vises ikke i denne browser. Optagelsen transskriberes fuldt ud, når du gemmer.
         </div>
       )}
 

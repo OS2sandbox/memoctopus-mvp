@@ -253,8 +253,9 @@ export function TranscriptReview({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ from, to }),
         });
-      } catch {
+      } catch (err) {
         // optimistic update already applied; persist failure is non-critical
+        console.error('[speakers] rename persist failed:', err);
       }
     },
     [meetingId],
@@ -393,7 +394,7 @@ export function TranscriptReview({
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chapters: updated }),
-    }).catch(() => {});
+    }).catch((err) => console.error('[chapters] save failed:', err));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meetingId]);
 
@@ -412,7 +413,7 @@ export function TranscriptReview({
         setChapters(chs.length > 0 ? chs : null);
         if (chs.length > 0) setOpenChapters(new Set([chs[0].id]));
       })
-      .catch(() => {})
+      .catch((err) => console.error('[chapters] generate failed:', err))
       .finally(() => setChaptersLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -756,6 +757,12 @@ export function TranscriptReview({
                 <div
                   key={i}
                   onClick={() => { if (r.segmentIndex !== undefined) jumpToSegment(r.segmentIndex); }}
+                  role={r.segmentIndex !== undefined ? 'button' : undefined}
+                  tabIndex={r.segmentIndex !== undefined ? 0 : undefined}
+                  onKeyDown={(e) => {
+                    if (r.segmentIndex === undefined) return;
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jumpToSegment(r.segmentIndex); }
+                  }}
                   style={{
                     padding: '12px 0',
                     borderTop: i === 0 ? '1px solid var(--line-2)' : '1px solid var(--line)',
@@ -763,16 +770,20 @@ export function TranscriptReview({
                     gap: 12, alignItems: 'flex-start', cursor: 'pointer',
                   }}
                 >
-                  <span
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={checkedPii.has(i)}
+                    aria-label={`Anonymisér "${r.original}"`}
                     onClick={(e) => { e.stopPropagation(); togglePiiItem(i); }}
                     style={{
-                      width: 16, height: 16, borderRadius: 3, marginTop: 3, cursor: 'pointer', flexShrink: 0,
+                      width: 16, height: 16, borderRadius: 3, marginTop: 3, cursor: 'pointer', flexShrink: 0, padding: 0,
                       border: '1px solid ' + (checkedPii.has(i) ? 'var(--accent)' : 'var(--line-2)'),
                       background: checkedPii.has(i) ? 'var(--accent)' : 'var(--bg)',
                       color: '#fff', fontSize: 11, fontWeight: 600,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                     }}
-                  >{checkedPii.has(i) ? '✓' : ''}</span>
+                  >{checkedPii.has(i) ? '✓' : ''}</button>
                   <div>
                     <div style={{
                       fontFamily: 'var(--mono)', fontSize: 13.5, color: 'var(--ink)',
