@@ -2,23 +2,21 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { Button } from '@/components/ui/button';
 
-type ExportFormat = 'pdf' | 'docx' | 'md';
+type ExportFormat = 'pdf' | 'md';
 
-const FORMATS: { key: ExportFormat; label: string; description: string; ext: string }[] = [
-  { key: 'pdf', label: 'PDF', description: 'Til arkivering og distribution. Kan ikke redigeres.', ext: 'pdf' },
-  { key: 'docx', label: 'Word', description: 'Redigerbart .docx til videre bearbejdning.', ext: 'docx' },
-  { key: 'md', label: 'Markdown', description: 'Ren tekst — egnet til Notion, Obsidian og andre.', ext: 'md' },
+const FORMATS: { key: ExportFormat; label: string; description: string; file: string; meta: string }[] = [
+  { key: 'pdf', label: 'PDF', description: 'Til arkivering og distribution. Kan ikke redigeres.', file: 'referat.pdf', meta: '2 sider · A4' },
+  { key: 'md', label: 'Markdown', description: 'Ren tekst — egnet til Notion, Obsidian og andre.', file: 'referat.md', meta: '~3 KB · UTF-8' },
 ];
 
 export function ExportTab({ meetingId }: { meetingId: string }) {
   const [selected, setSelected] = useState<ExportFormat>('pdf');
   const [exporting, setExporting] = useState(false);
+  const [downloaded, setDownloaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fmt = FORMATS.find((f) => f.key === selected)!;
-  const filename = `referat.${fmt.ext}`;
 
   async function handleExport() {
     setExporting(true);
@@ -33,9 +31,10 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = filename;
+      a.download = fmt.file;
       a.click();
       URL.revokeObjectURL(url);
+      setDownloaded(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt');
     } finally {
@@ -44,69 +43,140 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
   }
 
   return (
-    <div className="mx-auto max-w-[720px] px-6 py-12">
-      <h1 style={{ fontSize: 'var(--t-h1)', fontWeight: 300, color: 'var(--ink)', margin: '0 0 8px' }}>
-        Eksportér referat
-      </h1>
-      <p className="text-[var(--muted)] mb-10" style={{ fontSize: 'var(--t-small)' }}>
-        Vælg format og download.
-      </p>
+    <div style={{ minHeight: 'calc(100vh - 56px - 47px)', padding: '64px 32px' }}>
+      <div style={{ maxWidth: 780, margin: '0 auto' }}>
 
-      {error && (
-        <div
-          className="mb-6 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--danger)]"
-          style={{ backgroundColor: 'var(--danger-wash)', borderColor: 'var(--danger)' }}
-        >
-          {error}
-        </div>
-      )}
+        {/* Header */}
+        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>04 · eksport</div>
+        <h1 style={{ fontWeight: 300, fontSize: 42, lineHeight: 1.04, letterSpacing: '-0.025em', margin: '8px 0 0' }}>
+          Klar til <em style={{ fontStyle: 'italic' }}>aflevering</em>.
+        </h1>
 
-      <div className="border border-[var(--line)] rounded-[var(--radius)] overflow-hidden divide-y divide-[var(--line)] mb-8">
-        {FORMATS.map((f) => {
-          const isSelected = selected === f.key;
-          return (
-            <label
-              key={f.key}
-              className="flex items-center gap-4 px-5 py-4 cursor-pointer transition-colors"
-              style={{ backgroundColor: isSelected ? 'var(--accent-wash)' : 'var(--surface)' }}
-            >
-              <input
-                type="radio"
-                name="format"
-                value={f.key}
-                checked={isSelected}
-                onChange={() => setSelected(f.key)}
-                style={{ accentColor: 'var(--accent)', width: 16, height: 16 }}
-              />
-              <div className="flex-1">
-                <span className="font-medium text-[var(--ink)]" style={{ fontSize: 'var(--t-body)' }}>
-                  {f.label}
-                </span>
-                <span className="ml-3 text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
-                  {f.description}
-                </span>
-              </div>
-              <span
-                className="text-[var(--muted-2)] shrink-0"
-                style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}
+        {/* Error */}
+        {error && (
+          <div style={{
+            marginTop: 20, padding: '12px 16px', borderRadius: 'var(--radius)',
+            background: 'var(--kill-wash)', borderLeft: '3px solid var(--kill)',
+            fontSize: 13.5, color: 'var(--kill)',
+          }}>
+            {error}
+          </div>
+        )}
+
+        {/* Format choice */}
+        <div style={{ marginTop: 40 }}>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 12 }}>format</div>
+          {FORMATS.map((f) => {
+            const sel = f.key === selected;
+            return (
+              <div
+                key={f.key}
+                onClick={() => setSelected(f.key)}
+                style={{
+                  padding: '18px 20px',
+                  display: 'grid', gridTemplateColumns: '20px 1fr auto',
+                  gap: 16, alignItems: 'center',
+                  border: '1px solid ' + (sel ? 'var(--accent)' : 'var(--line-2)'),
+                  background: sel ? 'var(--accent-wash)' : 'transparent',
+                  borderRadius: 'var(--radius)',
+                  marginBottom: 10, cursor: 'pointer',
+                  transition: 'background 120ms, border-color 120ms',
+                }}
               >
-                {`referat.${f.ext}`}
-              </span>
-            </label>
-          );
-        })}
-      </div>
+                <span style={{
+                  width: 16, height: 16, borderRadius: 999,
+                  border: '1px solid ' + (sel ? 'var(--accent)' : 'var(--line-2)'),
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                }}>
+                  {sel && <span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--accent)', display: 'block' }} />}
+                </span>
+                <div>
+                  <div style={{ fontSize: 16, color: 'var(--ink)', fontWeight: 500 }}>{f.label}</div>
+                  <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 3 }}>{f.description}</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)' }}>{f.file}</div>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted-2)', marginTop: 3 }}>{f.meta}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
 
-      <div className="flex items-center gap-6">
-        <div className="text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
-          <p>Indeholder ingen rå tale, lyd eller PII.</p>
-          <Link href={`/meeting/${meetingId}/settings`} className="text-[var(--accent)] hover:underline">
-            Slet kilder nu →
+        {/* Bottom row */}
+        <div style={{ marginTop: 24, display: 'flex', alignItems: 'center', gap: 20 }}>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
+            lydfil slettet ved generering<br />
+            <span style={{ color: 'var(--muted-2)' }}>transskription bevares i arkivet</span>
+          </div>
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            style={{
+              marginLeft: 'auto', padding: '12px 22px',
+              background: 'var(--accent)', color: '#fff',
+              border: '1px solid var(--accent)',
+              borderRadius: 'var(--radius)', cursor: exporting ? 'not-allowed' : 'pointer',
+              fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
+              opacity: exporting ? 0.7 : 1,
+            }}
+          >
+            {exporting ? 'genererer…' : `download ${fmt.file}`}
+          </button>
+        </div>
+
+        {/* Compliance note */}
+        <div style={{
+          marginTop: 32, paddingTop: 20, borderTop: '1px solid var(--line)',
+          fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
+          display: 'flex', justifyContent: 'space-between',
+        }}>
+          <span>indeholder ingen rå tale, lyd eller personoplysninger</span>
+          <Link
+            href={`/meeting/${meetingId}/review`}
+            style={{
+              color: 'var(--ink-2)', textDecoration: 'underline',
+              textDecorationColor: 'var(--line-2)', textUnderlineOffset: 3,
+            }}
+          >
+            ↶ tilbage til referat
           </Link>
         </div>
-        <Button onClick={handleExport} disabled={exporting} className="shrink-0">
-          {exporting ? 'Genererer…' : `Download ${filename}`}
-        </Button>
+
+        {/* Post-download confirmation */}
+        {downloaded && (
+          <div style={{
+            marginTop: 32, padding: '20px 24px',
+            border: '1px dashed var(--line-2)', borderRadius: 'var(--radius)',
+            background: 'var(--bg-2)',
+            display: 'flex', alignItems: 'center', gap: 16,
+          }}>
+            <span style={{
+              width: 28, height: 28, borderRadius: 999, background: 'var(--keep)',
+              color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 14, fontWeight: 600, flexShrink: 0,
+            }}>✓</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14.5, color: 'var(--ink)' }}>
+                {fmt.file} downloadet
+              </div>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>
+                referatet ligger i arkivet
+              </div>
+            </div>
+            <Link
+              href="/"
+              style={{
+                fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
+                padding: '8px 14px', borderRadius: 'var(--radius)',
+                border: '1px solid var(--line-2)', background: 'transparent',
+                color: 'var(--ink)', textDecoration: 'none',
+              }}
+            >
+              nyt møde →
+            </Link>
+          </div>
+        )}
       </div>
     </div>
   );

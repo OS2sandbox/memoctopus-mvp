@@ -5,8 +5,6 @@ import { useRouter } from 'next/navigation';
 import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
 import { WaveformPlayer } from './WaveformPlayer';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { pendingUpload } from '@/lib/pending-upload';
 
 interface TranscriptReviewProps {
@@ -285,12 +283,6 @@ export function TranscriptReview({
     ANDEN_PII: 'Andet',
   };
 
-  const piiTypeVariant = (type: string) => {
-    if (type === 'CPR') return 'destructive' as const;
-    if (type === 'NAVN') return 'default' as const;
-    return 'secondary' as const;
-  };
-
   const piiSegmentIndices = useMemo(
     () => new Set(
       piiReplacements
@@ -301,37 +293,50 @@ export function TranscriptReview({
   );
 
   return (
-    <div className="mx-auto max-w-[1040px] px-6 py-12">
-      {error && (
-        <div
-          className="mb-6 rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--danger)]"
-          style={{ backgroundColor: 'var(--danger-wash)', borderColor: 'var(--danger)' }}
-        >
-          {error}
-        </div>
-      )}
+    <div style={{ minHeight: 'calc(100vh - 56px - 47px - 56px)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', minHeight: 'calc(100vh - 56px - 47px - 56px)' }}>
 
-      <div className="flex gap-8 items-start">
-        {/* Transcript — main column */}
-        <div className="flex-1 min-w-0">
-          <h1
-            className="mb-6 font-medium text-[var(--ink)]"
-            style={{ fontSize: 'var(--t-h2)' }}
-          >
-            Transskription
-          </h1>
-          <p className="mb-6 text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
-            Ret eventuelle fejl. Klik på et talernavn for at omdøbe alle segmenter for den taler.
-          </p>
+        {/* ── Left: Transcript ────────────────────────────────────────── */}
+        <div style={{ padding: '32px 40px', overflow: 'visible' }}>
 
-          {/* Audio player — only shown once audio is available */}
+          {/* Header */}
+          <div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>02 · gennemgang</div>
+            <h1 style={{ fontWeight: 300, fontSize: 36, lineHeight: 1.04, letterSpacing: '-0.025em', margin: '6px 0 0' }}>
+              Tjek og <em style={{ fontStyle: 'italic' }}>godkend</em>.
+            </h1>
+          </div>
+
+          {/* Search */}
+          <div style={{
+            marginTop: 24, borderTop: '1px solid var(--line)',
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '12px 0 0',
+            fontFamily: 'var(--mono)', fontSize: 13, color: 'var(--muted)',
+          }}>
+            <span>⌕</span>
+            <input
+              placeholder="søg i transskription"
+              style={{ flex: 1, color: 'var(--ink-2)', fontSize: 13, background: 'transparent', border: 'none', outline: 'none' }}
+            />
+          </div>
+
+          {error && (
+            <div style={{
+              marginTop: 16, padding: '12px 16px', borderRadius: 'var(--radius)',
+              background: 'var(--kill-wash)', borderLeft: '3px solid var(--kill)',
+              fontSize: 13.5, color: 'var(--kill)',
+            }}>
+              {error}
+            </div>
+          )}
+
+          {/* Audio player */}
           {audioUrl && (
-            <>
+            <div style={{ marginTop: 16 }}>
               <audio ref={audioRef} src={audioUrl} preload="metadata" />
               {audioError && (
-                <p className="mb-3 text-[var(--danger)]" style={{ fontSize: 'var(--t-micro)' }}>
-                  {audioError}
-                </p>
+                <p style={{ fontSize: 11, color: 'var(--kill)', marginBottom: 8 }}>{audioError}</p>
               )}
               <WaveformPlayer
                 audioUrl={audioUrl}
@@ -341,12 +346,18 @@ export function TranscriptReview({
                 onTogglePlay={togglePlay}
                 onSeek={seekTo}
               />
-            </>
+            </div>
           )}
 
-          <div className="divide-y divide-[var(--line)]">
+          {/* Hint */}
+          <p style={{ marginTop: 16, fontSize: 13, color: 'var(--muted)' }}>
+            Ret eventuelle fejl. Klik på et talernavn for at omdøbe alle segmenter for den taler.
+          </p>
+
+          {/* Transcript rows */}
+          <div style={{ marginTop: 8, borderTop: '1px solid var(--line)' }}>
             {segments.length === 0 ? (
-              <p className="py-8 text-center text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
+              <p style={{ padding: '32px 0', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
                 Ingen transskription fundet.
               </p>
             ) : (
@@ -371,210 +382,239 @@ export function TranscriptReview({
           </div>
         </div>
 
-        {/* Right sticky panel */}
-        <div className="w-80 shrink-0 sticky top-20">
+        {/* ── Right sidebar ─────────────────────────────────────────── */}
+        <div style={{
+          borderLeft: '1px solid var(--line)', background: 'var(--bg-2)',
+          padding: '32px 24px', position: 'sticky', top: 103,
+          height: 'calc(100vh - 56px - 47px - 56px)', overflow: 'auto',
+          display: 'flex', flexDirection: 'column', gap: 0,
+        }}>
 
-          {/* Audio upload progress */}
+          {/* Upload progress */}
           {(uploadStatus === 'uploading' || uploadStatus === 'processing') && (
-            <div
-              className="mb-4 border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] overflow-hidden"
-            >
-              <div className="px-4 py-3">
-                <div className="flex items-center justify-between mb-2">
-                  <p className="font-medium text-[var(--ink)]" style={{ fontSize: 'var(--t-small)' }}>
-                    {uploadStatus === 'uploading' ? 'Uploader lydoptagelse' : 'Analyserer PII'}
-                  </p>
-                  <span className="text-[var(--muted)] tabular-nums" style={{ fontSize: 'var(--t-micro)' }}>
-                    {uploadStatus === 'uploading' ? `${uploadProgress}%` : ''}
-                  </span>
-                </div>
-                {/* Progress bar */}
-                <div
-                  className="w-full rounded-full overflow-hidden"
-                  style={{ height: 6, backgroundColor: 'var(--line)' }}
-                >
-                  <div
-                    className="h-full rounded-full transition-all duration-300"
-                    style={{
-                      width: uploadStatus === 'processing' ? '100%' : `${uploadProgress}%`,
-                      backgroundColor: 'var(--accent)',
-                      transition: uploadStatus === 'processing'
-                        ? 'width 0.3s, background-color 0.3s'
-                        : 'width 0.3s',
-                      animation: uploadStatus === 'processing' ? 'pulse 1.5s ease-in-out infinite' : 'none',
-                    }}
-                  />
-                </div>
-                <p className="mt-1.5 text-[var(--muted)]" style={{ fontSize: 'var(--t-micro)' }}>
-                  {uploadStatus === 'uploading'
-                    ? 'Lydfilen uploades — afspilleren er klar når det er færdigt'
-                    : 'Søger efter personhenvisninger…'}
-                </p>
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 8 }}>
+                {uploadStatus === 'uploading' ? 'uploader lydoptagelse' : 'analyserer personoplysninger'}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-2)' }}>
+                  {uploadStatus === 'uploading' ? 'upload' : 'PII-analyse'}
+                </span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)' }}>
+                  {uploadStatus === 'uploading' ? `${uploadProgress}%` : '…'}
+                </span>
+              </div>
+              <div style={{ height: 4, background: 'var(--line-2)', borderRadius: 2, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', borderRadius: 2,
+                  width: uploadStatus === 'processing' ? '100%' : `${uploadProgress}%`,
+                  background: 'var(--accent)',
+                  transition: 'width 0.3s',
+                  animation: uploadStatus === 'processing' ? 'protoPulse 1.5s ease-in-out infinite' : 'none',
+                }} />
               </div>
             </div>
           )}
 
           {uploadStatus === 'error' && (
-            <div
-              className="mb-4 border rounded-[var(--radius)] px-4 py-3"
-              style={{ borderColor: 'var(--danger)', backgroundColor: 'var(--danger-wash)' }}
-            >
-              <p className="font-medium" style={{ fontSize: 'var(--t-small)', color: 'var(--danger)' }}>
-                Upload fejlede
-              </p>
-              <p className="mt-0.5" style={{ fontSize: 'var(--t-micro)', color: 'var(--danger)', opacity: 0.8 }}>
-                {uploadError}
-              </p>
-              <p className="mt-1" style={{ fontSize: 'var(--t-micro)', color: 'var(--danger)', opacity: 0.7 }}>
-                Du kan stadig generere referat fra transskriptionen.
-              </p>
+            <div style={{
+              marginBottom: 16, padding: '12px 14px', borderRadius: 'var(--radius)',
+              background: 'var(--kill-wash)', border: '1px solid color-mix(in oklch, var(--kill) 30%, var(--line-2))',
+            }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--kill)', marginBottom: 4 }}>upload fejlede</div>
+              <div style={{ fontSize: 12.5, color: 'var(--kill)', opacity: 0.8 }}>{uploadError}</div>
+              <div style={{ fontSize: 11, color: 'var(--kill)', opacity: 0.7, marginTop: 4 }}>Du kan stadig generere referat.</div>
             </div>
           )}
 
-          {/* PII checklist */}
+          {/* Følsom info (PII checklist) */}
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>følsom info</div>
+          <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 6, lineHeight: 1.5 }}>
+            {piiReplacements.length === 0
+              ? (uploadStatus === 'uploading' || uploadStatus === 'processing')
+                ? 'Analyse klar når lyden er uploadet.'
+                : 'Ingen personoplysninger fundet.'
+              : <>Hviske har fundet <strong style={{ color: 'var(--ink)' }}>{piiReplacements.length} ting</strong>, der kan være personoplysninger.</>
+            }
+          </div>
+
           {piiReplacements.length > 0 && (
-            <div className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] mb-4 overflow-hidden">
-              <div className="px-4 py-3 border-b border-[var(--line)]">
-                <p className="font-medium text-[var(--ink)]" style={{ fontSize: 'var(--t-small)' }}>
-                  Personhenvisninger fundet
-                </p>
-                <p className="text-[var(--muted)] mt-0.5" style={{ fontSize: 'var(--t-micro)' }}>
-                  Vælg hvad der skal fjernes inden referatet genereres
-                </p>
-              </div>
-              <div className="divide-y divide-[var(--line)] max-h-72 overflow-y-auto">
-                {piiReplacements.map((r, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center gap-2 px-3 py-2.5 cursor-pointer hover:bg-[var(--surface-2)] transition-colors group"
-                    onClick={() => {
-                      if (r.segmentIndex !== undefined) jumpToSegment(r.segmentIndex);
+            <div style={{ marginTop: 18 }}>
+              {piiReplacements.map((r, i) => (
+                <div
+                  key={i}
+                  onClick={() => { if (r.segmentIndex !== undefined) jumpToSegment(r.segmentIndex); }}
+                  style={{
+                    padding: '12px 0',
+                    borderTop: i === 0 ? '1px solid var(--line-2)' : '1px solid var(--line)',
+                    display: 'grid', gridTemplateColumns: '20px 1fr auto',
+                    gap: 12, alignItems: 'flex-start', cursor: 'pointer',
+                  }}
+                >
+                  <span
+                    onClick={(e) => { e.stopPropagation(); togglePiiItem(i); }}
+                    style={{
+                      width: 16, height: 16, borderRadius: 3, marginTop: 3, cursor: 'pointer', flexShrink: 0,
+                      border: '1px solid ' + (checkedPii.has(i) ? 'var(--accent)' : 'var(--line-2)'),
+                      background: checkedPii.has(i) ? 'var(--accent)' : 'var(--bg)',
+                      color: '#fff', fontSize: 11, fontWeight: 600,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
                     }}
-                    title={r.segmentIndex !== undefined ? 'Gå til segment i transskription' : undefined}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={checkedPii.has(i)}
-                      onChange={() => togglePiiItem(i)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="shrink-0 cursor-pointer accent-[var(--accent)]"
-                      style={{ width: 15, height: 15 }}
-                    />
-                    <span
-                      className="flex-1 min-w-0 truncate text-[var(--ink)]"
-                      style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}
-                    >
-                      {r.original}
-                    </span>
-                    <Badge variant={piiTypeVariant(r.type)} className="shrink-0 text-[10px]">
+                  >{checkedPii.has(i) ? '✓' : ''}</span>
+                  <div>
+                    <div style={{
+                      fontFamily: 'var(--mono)', fontSize: 13.5, color: 'var(--ink)',
+                      textDecoration: checkedPii.has(i) ? 'line-through' : 'none',
+                      textDecorationColor: 'var(--accent)', textDecorationThickness: 1,
+                    }}>{r.original}</div>
+                    <div style={{
+                      marginTop: 3, fontFamily: 'var(--mono)', fontSize: 10.5,
+                      color: 'var(--muted)', letterSpacing: 0.3,
+                    }}>
                       {typeLabels[r.type] ?? r.type}
-                    </Badge>
-                    {r.segmentIndex !== undefined && (
-                      <span
-                        className="shrink-0 opacity-0 group-hover:opacity-60 transition-opacity text-[var(--muted)]"
-                        style={{ fontSize: 11 }}
-                        aria-hidden
-                      >
-                        ↗
-                      </span>
-                    )}
+                    </div>
                   </div>
-                ))}
-              </div>
-              <div className="px-4 py-2.5 border-t border-[var(--line)] flex items-center justify-between gap-2">
-                <div className="flex gap-2">
-                  <button
-                    onClick={checkAll}
-                    className="text-[var(--accent)] hover:underline"
-                    style={{ fontSize: 'var(--t-micro)' }}
-                  >
-                    Marker alle
-                  </button>
-                  <span className="text-[var(--muted)]" style={{ fontSize: 'var(--t-micro)' }}>·</span>
-                  <button
-                    onClick={uncheckAll}
-                    className="text-[var(--muted)] hover:text-[var(--ink)] hover:underline"
-                    style={{ fontSize: 'var(--t-micro)' }}
-                  >
-                    Fravælg alle
-                  </button>
+                  {r.segmentIndex !== undefined && (
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)', paddingTop: 3 }}>vis →</span>
+                  )}
                 </div>
-                <span className="text-[var(--muted)]" style={{ fontSize: 'var(--t-micro)' }}>
-                  {checkedPii.size}/{piiReplacements.length} markeret
-                </span>
+              ))}
+              <div style={{
+                padding: '8px 0', borderTop: '1px solid var(--line-2)',
+                display: 'flex', gap: 10,
+                fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)',
+              }}>
+                <button onClick={checkAll} style={{ color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 11, fontFamily: 'var(--mono)' }}>marker alle</button>
+                <span>·</span>
+                <button onClick={uncheckAll} style={{ color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 11, fontFamily: 'var(--mono)' }}>fravælg alle</button>
+                <span style={{ marginLeft: 'auto' }}>{checkedPii.size}/{piiReplacements.length}</span>
               </div>
             </div>
           )}
 
-          {/* Placeholder while upload is in progress and no PII found yet */}
-          {piiReplacements.length === 0 && (uploadStatus === 'uploading' || uploadStatus === 'processing') && (
-            <div
-              className="mb-4 border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] px-4 py-3"
-            >
-              <p className="text-[var(--muted)]" style={{ fontSize: 'var(--t-micro)' }}>
-                PII-analyse klar når lyden er uploadet.
-              </p>
-            </div>
-          )}
-
-          {/* Custom summarisation prompt */}
-          <div className="mb-4">
-            <p className="font-medium text-[var(--ink)] mb-2" style={{ fontSize: 'var(--t-small)' }}>
-              Tilpas referatet
-            </p>
+          {/* Skabelon / prompt */}
+          <div style={{ marginTop: 28 }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>skabelon</div>
+            {['Standard', 'Beslutninger', 'Handlepunkter', 'Fuld detalje'].map((s) => (
+              <div
+                key={s}
+                onClick={() => setCustomPrompt((p) => p === s ? '' : s)}
+                style={{
+                  padding: '8px 10px', marginBottom: 4,
+                  border: '1px solid ' + (customPrompt === s ? 'var(--accent)' : 'var(--line)'),
+                  background: customPrompt === s ? 'var(--accent-wash)' : 'transparent',
+                  borderRadius: 'var(--radius)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 12,
+                  color: customPrompt === s ? 'var(--accent)' : 'var(--ink-2)',
+                }}
+              >
+                <span>{s}</span>
+              </div>
+            ))}
             <textarea
               value={customPrompt}
               onChange={(e) => setCustomPrompt(e.target.value)}
-              placeholder="Hvad vil du fokusere på? F.eks. 'kun beslutninger' eller 'kort punktliste'"
-              rows={3}
-              className="w-full border border-[var(--line)] rounded-[var(--radius)] px-3 py-2 bg-[var(--surface)] text-[var(--ink)] outline-none focus:border-[var(--accent)] resize-none placeholder:text-[var(--muted-2)]"
-              style={{ fontSize: 'var(--t-small)' }}
+              placeholder="Eller beskriv selv referatet…"
+              rows={2}
+              style={{
+                width: '100%', marginTop: 8, minHeight: 60,
+                fontFamily: 'var(--mono)', fontSize: 11.5,
+                color: 'var(--ink)', lineHeight: 1.6,
+                background: 'var(--bg)', border: '1px solid var(--line-2)',
+                borderRadius: 'var(--radius)', padding: '8px 10px',
+                resize: 'vertical', outline: 'none',
+              }}
             />
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {['Kun beslutninger', 'Kort opsummering', 'Handlingspunkter', 'Fuld detalje'].map((chip) => (
-                <button
-                  key={chip}
-                  onClick={() => setCustomPrompt((p) => p === chip ? '' : chip)}
-                  className="rounded-full border px-2.5 py-0.5 transition-colors"
-                  style={{
-                    fontSize: 'var(--t-micro)',
-                    borderColor: customPrompt === chip ? 'var(--accent)' : 'var(--line)',
-                    color: customPrompt === chip ? 'var(--accent)' : 'var(--muted)',
-                  }}
-                >
-                  {chip}
-                </button>
-              ))}
+          </div>
+
+          {/* Compliance */}
+          <div style={{
+            marginTop: 24, padding: '14px 16px', borderRadius: 'var(--radius)',
+            border: '1px solid color-mix(in oklch, var(--kill) 25%, var(--line-2))',
+            background: 'var(--kill-wash)',
+          }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--kill)', letterSpacing: 0.3, marginBottom: 6 }}>
+              § compliance · automatisk
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.6 }}>
+              Lydfilen slettes automatisk når referatet genereres.
             </div>
           </div>
 
-          {/* Actions */}
-          <div className="space-y-2">
-            <Button
-              className="w-full"
-              onClick={proceedToMinutes}
-              disabled={isGenerating || segments.length === 0}
-            >
-              {isGenerating ? 'Genererer…' : 'Generér referat'}
-            </Button>
-            <div
-              className="w-full rounded-[var(--radius)] border px-4 py-3 flex items-center justify-between gap-3 cursor-pointer hover:bg-[var(--danger-wash)] transition-colors"
-              style={{ borderColor: 'var(--danger)', backgroundColor: 'var(--danger-wash)' }}
-              onClick={() => router.push(`/meeting/${meetingId}/settings`)}
-              role="button"
-            >
-              <div>
-                <p className="font-medium" style={{ fontSize: 'var(--t-small)', color: 'var(--danger)' }}>
-                  Slet følsomt indhold
-                </p>
-                <p style={{ fontSize: 'var(--t-micro)', color: 'var(--danger)', opacity: 0.7 }}>
-                  Fjern lyd og rå transskription permanent
-                </p>
-              </div>
-              <span style={{ color: 'var(--danger)', fontSize: 'var(--t-small)' }}>→</span>
-            </div>
+          {/* Generate button */}
+          <button
+            onClick={proceedToMinutes}
+            disabled={isGenerating || segments.length === 0}
+            style={{
+              marginTop: 12, width: '100%', padding: '12px 16px',
+              background: 'var(--accent)', color: '#fff',
+              border: '1px solid var(--accent)', borderRadius: 'var(--radius)',
+              fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
+              cursor: isGenerating || segments.length === 0 ? 'not-allowed' : 'pointer',
+              opacity: isGenerating || segments.length === 0 ? 0.5 : 1,
+            }}
+          >
+            {isGenerating ? 'genererer…' : 'generér referat →'}
+          </button>
+          <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', textAlign: 'center' }}>
+            kan altid redigeres bagefter
           </div>
         </div>
+      </div>
+
+      {/* Sticky bottom player */}
+      <div style={{
+        position: 'sticky', bottom: 0,
+        height: 56, borderTop: '1px solid var(--line)',
+        background: 'var(--surface)',
+        display: 'flex', alignItems: 'center', gap: 16,
+        padding: '0 32px', zIndex: 5,
+      }}>
+        {audioUrl ? (
+          <>
+            <button
+              onClick={togglePlay}
+              style={{
+                width: 32, height: 32, borderRadius: 999, background: 'var(--ink)',
+                border: 'none', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}
+            >
+              {isPlaying
+                ? <span style={{ width: 10, height: 12, display: 'flex', gap: 3 }}>
+                    <span style={{ width: 3, height: '100%', background: 'var(--bg)', display: 'block' }} />
+                    <span style={{ width: 3, height: '100%', background: 'var(--bg)', display: 'block' }} />
+                  </span>
+                : <span style={{ width: 0, height: 0, borderTop: '5px solid transparent', borderBottom: '5px solid transparent', borderLeft: '8px solid var(--bg)', marginLeft: 2 }} />
+              }
+            </button>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-2)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+              {Math.floor(currentTime / 60).toString().padStart(2, '0')}:{Math.floor(currentTime % 60).toString().padStart(2, '0')}
+            </span>
+            <div
+              style={{ flex: 1, height: 2, background: 'var(--line-2)', position: 'relative', borderRadius: 1, cursor: 'pointer' }}
+              onClick={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const pct = (e.clientX - rect.left) / rect.width;
+                seekTo(pct * duration);
+              }}
+            >
+              <div style={{
+                position: 'absolute', left: 0, top: 0, height: '100%',
+                width: duration > 0 ? `${(currentTime / duration) * 100}%` : '0%',
+                background: 'var(--ink-2)', borderRadius: 1,
+              }} />
+            </div>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+              {Math.floor(duration / 60).toString().padStart(2, '0')}:{Math.floor(duration % 60).toString().padStart(2, '0')}
+            </span>
+          </>
+        ) : (
+          <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}>
+            {uploadStatus === 'uploading' ? `uploader lydfil… ${uploadProgress}%` : uploadStatus === 'processing' ? 'analyserer…' : 'ingen lydfil'}
+          </span>
+        )}
       </div>
     </div>
   );

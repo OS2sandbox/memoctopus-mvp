@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, KeyboardEvent } from 'react';
+import React, { useState, useEffect, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
@@ -21,8 +21,8 @@ export default function OptaqPage() {
 
   function handleKeyDown(e: KeyboardEvent) {
     const tag = (e.target as HTMLElement).tagName;
-    if (tag === 'INPUT') return;
-    if (e.key === 'r' || e.key === 'R') startRecording();
+    if (/input|textarea/i.test(tag)) return;
+    if (e.key === 'r' || e.key === 'R') { e.preventDefault(); startRecording(); }
     if (e.key === 'u' || e.key === 'U') document.getElementById('upload-input')?.click();
   }
 
@@ -33,18 +33,14 @@ export default function OptaqPage() {
       const body: Record<string, unknown> = {
         title: title.trim() || `Møde · ${new Intl.DateTimeFormat('da', { day: 'numeric', month: 'long' }).format(new Date())}`,
       };
-      if (participants.length > 0) {
-        body.participants = participants;
-      }
+      if (participants.length > 0) body.participants = participants;
       const res = await fetch('/api/meetings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       const data = await res.json();
-      if (data.id) {
-        router.push(`/meeting/${data.id}?autostart=1`);
-      }
+      if (data.id) router.push(`/meeting/${data.id}?autostart=1`);
     } catch {
       setLoading(false);
     }
@@ -57,7 +53,7 @@ export default function OptaqPage() {
 
   return (
     <div
-      style={{ minHeight: 'calc(100vh - 56px)', padding: '64px 48px 96px' }}
+      style={{ minHeight: 'calc(100vh - 56px)', padding: '64px 48px 96px', outline: 'none' }}
       onKeyDown={handleKeyDown}
       tabIndex={-1}
     >
@@ -77,18 +73,18 @@ export default function OptaqPage() {
             <span>DIGITAL SUVERÆNITET</span>
           </div>
           <h1 style={{
-            fontWeight: 300, fontSize: 'clamp(40px, 5vw, 64px)', lineHeight: 1.04,
-            letterSpacing: '-0.03em', margin: 0, textWrap: 'balance',
+            fontWeight: 300, fontSize: 64, lineHeight: 1.04,
+            letterSpacing: '-0.03em', margin: 0, textWrap: 'balance' as const,
           }}>
             Møde til <em style={{ fontStyle: 'italic', color: 'var(--accent)', fontWeight: 300 }}>referat</em>.
           </h1>
-          <p style={{
-            marginTop: 18, fontSize: 17, color: 'var(--ink-2)', lineHeight: 1.6,
+          <div style={{
+            fontSize: 17, color: 'var(--ink-2)', lineHeight: 1.6,
             maxWidth: 520, margin: '18px auto 0',
           }}>
             Dansk AI — kørt lokalt, frigivet åbent.<br />
             Ingen data forlader din maskine.
-          </p>
+          </div>
         </div>
 
         {/* 3-column grid */}
@@ -99,18 +95,18 @@ export default function OptaqPage() {
         }}>
 
           {/* LEFT — optional meeting details */}
-          <div>
+          <div style={{ opacity: 0.95 }}>
+            {/* Eyebrow */}
             <div style={{
-              display: 'flex', justifyContent: 'space-between',
               fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)',
-              letterSpacing: 0.4, marginBottom: 18,
+              letterSpacing: 0.4, display: 'flex', justifyContent: 'space-between',
             }}>
               <span>mødedetaljer</span>
               <span style={{ color: 'var(--muted-2)' }}>valgfrit · kan tilføjes senere</span>
             </div>
 
             {/* Title input */}
-            <div style={{ paddingBottom: 8, borderBottom: '1px solid var(--line)' }}>
+            <div style={{ marginTop: 18, paddingBottom: 8, borderBottom: '1px solid var(--line)' }}>
               <input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
@@ -173,6 +169,7 @@ export default function OptaqPage() {
                 border: 'none', cursor: loading ? 'not-allowed' : 'pointer',
                 display: 'flex', flexDirection: 'column',
                 alignItems: 'center', justifyContent: 'center', gap: 14,
+                boxShadow: '0 1px 0 var(--line-2)',
                 transition: 'background 150ms',
               }}
             >
@@ -186,11 +183,14 @@ export default function OptaqPage() {
               marginTop: 22, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)',
             }}>
               eller{' '}
-              <label htmlFor="upload-input" style={{
-                color: 'var(--ink-2)', textDecoration: 'underline',
-                textDecorationColor: 'var(--line-2)', textUnderlineOffset: 3,
-                cursor: 'pointer',
-              }}>
+              <label
+                htmlFor="upload-input"
+                style={{
+                  color: 'var(--ink-2)', textDecoration: 'underline',
+                  textDecorationColor: 'var(--line-2)', textUnderlineOffset: 3,
+                  cursor: 'pointer',
+                }}
+              >
                 upload lydfil →
               </label>
               <input
@@ -199,23 +199,23 @@ export default function OptaqPage() {
                 accept="audio/*,video/*"
                 style={{ display: 'none' }}
                 onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) router.push('/meeting/new?mode=upload');
+                  if (e.target.files?.[0]) router.push('/meeting/new?mode=upload');
                 }}
               />
             </div>
           </div>
 
           {/* RIGHT — status + compliance */}
-          <div>
+          <div style={{ opacity: 0.95 }}>
+            {/* Eyebrow */}
             <div style={{
               fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)',
-              letterSpacing: 0.4, marginBottom: 14,
+              letterSpacing: 0.4,
             }}>status</div>
 
             {/* Hviske status */}
             <div style={{
-              paddingBottom: 14,
+              marginTop: 14, paddingBottom: 14,
               borderBottom: '1px solid var(--line)',
               display: 'flex', alignItems: 'center', gap: 10,
             }}>
@@ -223,7 +223,7 @@ export default function OptaqPage() {
               <div>
                 <div style={{ fontSize: 13.5, color: 'var(--ink)' }}>Hviske · klar</div>
                 <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', marginTop: 2 }}>
-                  whisper-1 · openai · sky
+                  v5.3 · lokal · GPU 1
                 </div>
               </div>
             </div>
@@ -233,7 +233,7 @@ export default function OptaqPage() {
               <div style={{
                 fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
                 marginBottom: 8, letterSpacing: 0.4,
-              }}>mikrofon · MacBook</div>
+              }}>mikrofon · MacBook Pro</div>
               <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 22 }}>
                 {[6, 10, 16, 22, 14, 8, 12, 18, 14, 9, 6, 11, 17, 21, 13, 8, 10, 14, 18, 12, 8, 6, 9, 12].map((h, i) => (
                   <span key={i} style={{ width: 2, height: h, background: 'var(--ink-2)', opacity: 0.7, display: 'block' }} />
@@ -259,13 +259,12 @@ export default function OptaqPage() {
           </div>
         </div>
 
-        {/* Footer hint */}
+        {/* Footer hint — right-aligned, archive link only */}
         <div style={{
           marginTop: 96, paddingTop: 24, borderTop: '1px solid var(--line)',
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          display: 'flex', justifyContent: 'flex-end',
           fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
         }}>
-          <span>[R] optag straks · [U] upload lydfil</span>
           {meetingCount != null && meetingCount > 0 ? (
             <Link
               href="/arkiv"
@@ -277,7 +276,7 @@ export default function OptaqPage() {
               se {meetingCount} tidligere møder i arkivet →
             </Link>
           ) : (
-            <span style={{ color: 'var(--muted-2)' }}>ingen tidligere møder</span>
+            <span>ingen tidligere møder</span>
           )}
         </div>
       </div>
