@@ -24,9 +24,9 @@ interface LiveSegment {
   text: string;
 }
 
-interface TopicItem {
-  topic: string;
-  followUps: string[];
+interface ClarificationItem {
+  question: string;
+  context?: string;
 }
 
 interface RecordingScreenProps {
@@ -40,7 +40,10 @@ type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
 const BYTES_PER_SECOND_ESTIMATE = 16_000;
 const SILENCE_THRESHOLD_SECONDS = 5;
 const SILENCE_VOLUME_THRESHOLD = 0.02;
-const TOPIC_INTERVAL = 25_000;
+// How often, while recording, we re-analyze the transcript for things to clarify.
+const CLARIFY_INTERVAL_MS = 25_000;
+// Tick cadence for the countdown bar to the next clarification refresh.
+const CLARIFY_TICK_MS = 250;
 
 export function RecordingScreen({ meetingId, existingRecording, onNavigateToReview }: RecordingScreenProps) {
   const router = useRouter();
@@ -65,10 +68,14 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   // Live transcription
   const [liveSegments, setLiveSegments] = useState<LiveSegment[]>([]);
   const [interimText, setInterimText] = useState('');
-  const [topics, setTopics] = useState<TopicItem[]>([]);
+  const [clarifications, setClarifications] = useState<ClarificationItem[]>([]);
+  // Fraction (0–1) of time remaining until the next clarification refresh, for the
+  // reverse countdown bar. Starts full (1) and drains to 0, then resets.
+  const [clarifyRemaining, setClarifyRemaining] = useState(1);
   const liveSegmentsRef = useRef<LiveSegment[]>([]);
   const mimeTypeRef = useRef('audio/webm');
-  const topicIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const clarifyTickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const nextClarifyAtRef = useRef<number>(0);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
 
   const interimTextRef = useRef('');
@@ -120,7 +127,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     utteranceStartRef.current = null;
     setLiveCaptionsUnavailable(false);
     setIsDiarizing(false);
-    setTopics([]);
+    setClarifications([]);
+    setClarifyRemaining(1);
   }
 
   // ── Live transcription (ElevenLabs realtime) ─────────────────────────────────
@@ -203,22 +211,44 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
   // ── Recording lifecycle ───────────────────────────────────────────────────────
 
-  async function refreshTopics() {
+  async function refreshClarifications() {
     if (liveSegmentsRef.current.length === 0) return;
-    const text = liveSegmentsRef.current.map((s) => `[${s.speaker}]: ${s.text}`).join('\n');
+    const text = liveSegmentsRef.current.map((s) => s.text).join(' ');
     try {
-      const res = await fetch(`/api/meetings/${meetingId}/topics`, {
+      const res = await fetch(`/api/meetings/${meetingId}/clarifications`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ transcript: text }),
       });
       if (!res.ok) return;
-      const data = await res.json() as { topics?: TopicItem[] };
-      setTopics(data.topics ?? []);
+      const data = await res.json() as { clarifications?: ClarificationItem[] };
+      setClarifications(data.clarifications ?? []);
     } catch (err) {
-      // Live topics are a non-critical enhancement — keep recording, just log.
-      console.error('[topics] refresh failed:', err);
+      // Live clarifications are a non-critical enhancement — keep recording, just log.
+      console.error('[clarifications] refresh failed:', err);
     }
+  }
+
+  // Drive the countdown bar and fire a refresh when it reaches zero. Runs only
+  // while actively recording (started/stopped alongside the recorder).
+  function startClarifyTimer() {
+    nextClarifyAtRef.current = Date.now() + CLARIFY_INTERVAL_MS;
+    setClarifyRemaining(1);
+    clarifyTickRef.current = setInterval(() => {
+      const remaining = nextClarifyAtRef.current - Date.now();
+      if (remaining <= 0) {
+        nextClarifyAtRef.current = Date.now() + CLARIFY_INTERVAL_MS;
+        setClarifyRemaining(1);
+        void refreshClarifications();
+      } else {
+        setClarifyRemaining(remaining / CLARIFY_INTERVAL_MS);
+      }
+    }, CLARIFY_TICK_MS);
+  }
+
+  function stopClarifyTimer() {
+    if (clarifyTickRef.current) clearInterval(clarifyTickRef.current);
+    clarifyTickRef.current = null;
   }
 
   async function startRecording() {
@@ -277,7 +307,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       }, 500);
 
       animFrameRef.current = requestAnimationFrame(pollVolume);
-      topicIntervalRef.current = setInterval(refreshTopics, TOPIC_INTERVAL);
+      startClarifyTimer();
 
       void startRealtime(stream);
     } catch (err) {
@@ -305,6 +335,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     pauseStartRef.current = Date.now();
     if (timerRef.current) clearInterval(timerRef.current);
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    stopClarifyTimer();
     setVolumeLevel(0);
     setRecordingState('paused');
 
@@ -331,6 +362,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       setElapsed(Math.floor((Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000));
     }, 500);
     if (analyserRef.current) animFrameRef.current = requestAnimationFrame(pollVolume);
+    startClarifyTimer();
     setRecordingState('recording');
     void startRealtime(recorder.stream);
   }
@@ -350,7 +382,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   function clearIntervals() {
     if (timerRef.current) clearInterval(timerRef.current);
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    if (topicIntervalRef.current) clearInterval(topicIntervalRef.current);
+    stopClarifyTimer();
   }
 
   async function stopAndSave() {
@@ -718,20 +750,47 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             </div>
           )}
 
-          {/* Live key points */}
-          {topics.length > 0 && (
+          {/* Live clarifications — things worth nailing down, refreshed on a countdown */}
+          {(recordingState === 'recording' || clarifications.length > 0) && (
             <div>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>
-                nøglepunkter · live
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10,
+                fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4,
+              }}>
+                <span style={{ flexShrink: 0 }}>afklar · live</span>
+                {recordingState === 'recording' && (
+                  <span
+                    style={{ flex: 1, height: 2, background: 'var(--line)', borderRadius: 999, overflow: 'hidden' }}
+                    aria-hidden
+                  >
+                    <span style={{
+                      display: 'block', height: '100%',
+                      width: `${Math.round(clarifyRemaining * 100)}%`,
+                      background: 'var(--accent)', opacity: 0.6,
+                      transition: 'width 0.25s linear',
+                    }} />
+                  </span>
+                )}
               </div>
-              {topics.map((t, i) => (
-                <div key={i} style={{
+              {clarifications.length > 0 ? (
+                clarifications.map((c, i) => (
+                  <div key={i} style={{ padding: '8px 0', borderTop: '1px solid var(--line)' }}>
+                    <div style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.45 }}>{c.question}</div>
+                    {c.context && (
+                      <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', marginTop: 3 }}>
+                        {c.context}
+                      </div>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <div style={{
                   padding: '8px 0', borderTop: '1px solid var(--line)',
-                  fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.5,
+                  fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)', fontStyle: 'italic',
                 }}>
-                  {t.topic}
+                  leder efter punkter at afklare…
                 </div>
-              ))}
+              )}
             </div>
           )}
 

@@ -2,16 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockComplete = vi.hoisted(() => vi.fn());
 
-vi.mock('@mistralai/mistralai', () => ({
-  Mistral: class {
-    chat = { complete: mockComplete };
+vi.mock('openai', () => ({
+  default: class {
+    chat = { completions: { create: mockComplete } };
   },
 }));
 
 import { groupIntoChapters } from './chapters';
 import type { TranscriptSegment } from '@/types';
 
-function mistralResponse(content: string) {
+function openaiResponse(content: string) {
   return { choices: [{ message: { content } }] };
 }
 
@@ -41,7 +41,7 @@ describe('groupIntoChapters', () => {
 
   it('returns chapters with ids prefixed ch-', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           chapters: [
             { title: 'Åbning', summary: 'Mødet åbnes.', segmentIndices: [0, 1, 2] },
@@ -57,7 +57,7 @@ describe('groupIntoChapters', () => {
 
   it('maps chapter titles and summaries from response', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           chapters: [
             { title: 'Budgetgennemgang', summary: 'Diskussion af budget.', segmentIndices: [0, 1, 2] },
@@ -74,7 +74,7 @@ describe('groupIntoChapters', () => {
 
   it('derives startTime from the first segment in each chapter', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           chapters: [
             { title: 'Del 1', summary: 's1', segmentIndices: [0, 1] },
@@ -92,7 +92,7 @@ describe('groupIntoChapters', () => {
 
   it('derives endTime from the last segment in each chapter', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           chapters: [
             { title: 'Del 1', summary: 's1', segmentIndices: [0, 1] },
@@ -109,7 +109,7 @@ describe('groupIntoChapters', () => {
 
   it('clamps previous chapter endTime to next chapter startTime to prevent overlap', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           chapters: [
             { title: 'Del 1', summary: 's1', segmentIndices: [0, 1] },
@@ -127,7 +127,7 @@ describe('groupIntoChapters', () => {
 
   it('stores segmentIndices from the response', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           chapters: [
             { title: 'Del 1', summary: 's', segmentIndices: [0, 1] },
@@ -144,7 +144,7 @@ describe('groupIntoChapters', () => {
   });
 
   it('falls back to a single chapter covering all segments when JSON is invalid', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse('not valid json at all'));
+    mockComplete.mockResolvedValueOnce(openaiResponse('not valid json at all'));
 
     const result = await groupIntoChapters(shortMeeting);
 
@@ -156,7 +156,7 @@ describe('groupIntoChapters', () => {
 
   it('strips markdown code fences before parsing', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         '```json\n{"chapters":[{"title":"T","summary":"S","segmentIndices":[0,1,2]}]}\n```',
       ),
     );
@@ -165,20 +165,20 @@ describe('groupIntoChapters', () => {
     expect(result[0].title).toBe('T');
   });
 
-  it('uses mistral-large-latest model', async () => {
+  it('uses gpt-4o model', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(JSON.stringify({ chapters: [{ title: 'T', summary: 'S', segmentIndices: [0, 1, 2] }] })),
+      openaiResponse(JSON.stringify({ chapters: [{ title: 'T', summary: 'S', segmentIndices: [0, 1, 2] }] })),
     );
 
     await groupIntoChapters(shortMeeting);
 
     const call = mockComplete.mock.calls[0][0];
-    expect(call.model).toBe('mistral-large-latest');
+    expect(call.model).toBe('gpt-4o');
   });
 
   it('includes segment indices in the prompt', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(JSON.stringify({ chapters: [{ title: 'T', summary: 'S', segmentIndices: [0, 1, 2] }] })),
+      openaiResponse(JSON.stringify({ chapters: [{ title: 'T', summary: 'S', segmentIndices: [0, 1, 2] }] })),
     );
 
     await groupIntoChapters(shortMeeting);
@@ -196,7 +196,7 @@ describe('groupIntoChapters', () => {
     ];
 
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(JSON.stringify({ chapters: [{ title: 'T', summary: 'S', segmentIndices: [0] }] })),
+      openaiResponse(JSON.stringify({ chapters: [{ title: 'T', summary: 'S', segmentIndices: [0] }] })),
     );
 
     await groupIntoChapters(shortSegments);
@@ -208,7 +208,7 @@ describe('groupIntoChapters', () => {
 
   it('uses chapter range "3–6" for long meetings (≥ 30 min)', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           chapters: longMeeting.map((_, i) => ({ title: `K${i}`, summary: 'S', segmentIndices: [i] })).slice(0, 4),
         }),
@@ -223,7 +223,7 @@ describe('groupIntoChapters', () => {
   });
 
   it('fallback chapter startTime and endTime cover full meeting', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse('bad json'));
+    mockComplete.mockResolvedValueOnce(openaiResponse('bad json'));
 
     const result = await groupIntoChapters(shortMeeting);
 

@@ -1,7 +1,7 @@
 # Referat
 
 Next.js app for recording meetings, generating transcripts, and producing
-summaries (referater). Uses Whisper or hviske-v5.1 for speech-to-text and
+summaries (referater). Uses ElevenLabs scribe_v2 or hviske-v5.1 for speech-to-text and
 OpenAI/Anthropic for chapter, topic, and minutes generation.
 
 ## Setup

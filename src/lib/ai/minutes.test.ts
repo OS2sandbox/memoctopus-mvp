@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockComplete = vi.hoisted(() => vi.fn());
 
-vi.mock('@mistralai/mistralai', () => ({
-  Mistral: class {
-    chat = { complete: mockComplete };
+vi.mock('openai', () => ({
+  default: class {
+    chat = { completions: { create: mockComplete } };
   },
 }));
 
@@ -27,7 +27,7 @@ const sampleSections: TemplateSectionDef[] = [
   { key: 'noter', label: 'Noter', required: false },
 ];
 
-function mistralResponse(content: string) {
+function openaiResponse(content: string) {
   return { choices: [{ message: { content } }] };
 }
 
@@ -36,9 +36,9 @@ function mistralResponse(content: string) {
 describe('suggestTemplate', () => {
   beforeEach(() => mockComplete.mockReset());
 
-  it('returns the suggested template from Mistral', async () => {
+  it('returns the suggested template from OpenAI', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           templateId: 'tmpl-1',
           templateName: 'Bestyrelsesmøde',
@@ -56,7 +56,7 @@ describe('suggestTemplate', () => {
 
   it('strips markdown code fences before parsing', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         '```json\n{"templateId":"tmpl-2","templateName":"Personalemøde","explanation":"X"}\n```',
       ),
     );
@@ -66,7 +66,7 @@ describe('suggestTemplate', () => {
   });
 
   it('falls back gracefully when JSON parse fails', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse('invalid json'));
+    mockComplete.mockResolvedValueOnce(openaiResponse('invalid json'));
 
     const result = await suggestTemplate(sampleSegments, sampleTemplates);
 
@@ -76,7 +76,7 @@ describe('suggestTemplate', () => {
   });
 
   it('falls back with "Standard" when templates array is empty', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse('bad json'));
+    mockComplete.mockResolvedValueOnce(openaiResponse('bad json'));
 
     const result = await suggestTemplate(sampleSegments, []);
     expect(result.templateName).toBe('Standard');
@@ -91,7 +91,7 @@ describe('suggestTemplate', () => {
     }));
 
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({ templateId: null, templateName: 'Standard', explanation: 'x' }),
       ),
     );
@@ -108,7 +108,7 @@ describe('suggestTemplate', () => {
 
   it('includes template names and descriptions in the prompt', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(JSON.stringify({ templateId: 'tmpl-1', templateName: 'X', explanation: 'y' })),
+      openaiResponse(JSON.stringify({ templateId: 'tmpl-1', templateName: 'X', explanation: 'y' })),
     );
 
     await suggestTemplate(sampleSegments, sampleTemplates);
@@ -122,7 +122,7 @@ describe('suggestTemplate', () => {
 
   it('includes transcript text in the prompt', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(JSON.stringify({ templateId: null, templateName: 'X', explanation: 'y' })),
+      openaiResponse(JSON.stringify({ templateId: null, templateName: 'X', explanation: 'y' })),
     );
 
     await suggestTemplate(sampleSegments, sampleTemplates);
@@ -132,15 +132,15 @@ describe('suggestTemplate', () => {
     expect(userContent).toContain('Vi åbner mødet.');
   });
 
-  it('uses mistral-large-latest model', async () => {
+  it('uses gpt-4o model', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(JSON.stringify({ templateId: null, templateName: 'X', explanation: 'y' })),
+      openaiResponse(JSON.stringify({ templateId: null, templateName: 'X', explanation: 'y' })),
     );
 
     await suggestTemplate(sampleSegments, sampleTemplates);
 
     const call = mockComplete.mock.calls[0][0];
-    expect(call.model).toBe('mistral-large-latest');
+    expect(call.model).toBe('gpt-4o');
   });
 });
 
@@ -149,9 +149,9 @@ describe('suggestTemplate', () => {
 describe('generateMinutes', () => {
   beforeEach(() => mockComplete.mockReset());
 
-  it('returns sections from Mistral response', async () => {
+  it('returns sections from OpenAI response', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           sections: [
             { key: 'deltagere', label: 'Deltagere', content: '- Taler 1\n- Taler 2' },
@@ -171,7 +171,7 @@ describe('generateMinutes', () => {
 
   it('strips markdown code fences before parsing', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         '```json\n{"sections":[{"key":"k","label":"L","content":"C"}]}\n```',
       ),
     );
@@ -181,7 +181,7 @@ describe('generateMinutes', () => {
   });
 
   it('falls back to empty sections matching the template when JSON parse fails', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse('not valid json'));
+    mockComplete.mockResolvedValueOnce(openaiResponse('not valid json'));
 
     const result = await generateMinutes(sampleSegments, sampleSections);
 
@@ -191,7 +191,7 @@ describe('generateMinutes', () => {
   });
 
   it('includes section keys and labels in the prompt', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
 
     await generateMinutes(sampleSegments, sampleSections);
 
@@ -203,7 +203,7 @@ describe('generateMinutes', () => {
   });
 
   it('marks required sections as påkrævet in the prompt', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
 
     await generateMinutes(sampleSegments, sampleSections);
 
@@ -213,7 +213,7 @@ describe('generateMinutes', () => {
   });
 
   it('includes formatted timestamps in the transcript', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
 
     await generateMinutes(
       [{ speaker: 'Taler 1', start: 65, end: 70, text: 'Hej' }],
@@ -227,7 +227,7 @@ describe('generateMinutes', () => {
   });
 
   it('includes section descriptions when present', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
 
     await generateMinutes(sampleSegments, sampleSections);
 
@@ -237,7 +237,7 @@ describe('generateMinutes', () => {
   });
 
   it('sends customPrompt in user message when provided', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
 
     await generateMinutes(sampleSegments, sampleSections, 'Fokus på beslutninger');
 
@@ -246,17 +246,17 @@ describe('generateMinutes', () => {
     expect(userContent).toContain('Fokus på beslutninger');
   });
 
-  it('uses mistral-large-latest model', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+  it('uses gpt-4o model', async () => {
+    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
 
     await generateMinutes(sampleSegments, sampleSections);
 
     const call = mockComplete.mock.calls[0][0];
-    expect(call.model).toBe('mistral-large-latest');
+    expect(call.model).toBe('gpt-4o');
   });
 
   it('returns all section keys and labels from template in fallback', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse('bad json'));
+    mockComplete.mockResolvedValueOnce(openaiResponse('bad json'));
 
     const result = await generateMinutes(sampleSegments, sampleSections);
     expect(result.sections.map((s) => s.label)).toEqual(
@@ -270,9 +270,9 @@ describe('generateMinutes', () => {
 describe('generateMinutesFreeform', () => {
   beforeEach(() => mockComplete.mockReset());
 
-  it('returns sections from Mistral response', async () => {
+  it('returns sections from OpenAI response', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         JSON.stringify({
           sections: [
             { key: 'resumé', label: 'Resumé', content: 'Mødet omhandlede projektstatus.' },
@@ -291,7 +291,7 @@ describe('generateMinutesFreeform', () => {
 
   it('strips markdown code fences before parsing', async () => {
     mockComplete.mockResolvedValueOnce(
-      mistralResponse(
+      openaiResponse(
         '```json\n{"sections":[{"key":"s","label":"S","content":"C"}]}\n```',
       ),
     );
@@ -301,14 +301,14 @@ describe('generateMinutesFreeform', () => {
   });
 
   it('falls back to empty sections array when JSON parse fails', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse('not valid json'));
+    mockComplete.mockResolvedValueOnce(openaiResponse('not valid json'));
 
     const result = await generateMinutesFreeform(sampleSegments, 'prompt');
     expect(result.sections).toHaveLength(0);
   });
 
   it('includes custom prompt in user message', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
 
     await generateMinutesFreeform(sampleSegments, 'Lav et kortfattet referat');
 
@@ -318,7 +318,7 @@ describe('generateMinutesFreeform', () => {
   });
 
   it('includes transcript text in the prompt', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
 
     await generateMinutesFreeform(sampleSegments, 'prompt');
 
@@ -328,7 +328,7 @@ describe('generateMinutesFreeform', () => {
   });
 
   it('includes formatted timestamps in the prompt', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
 
     await generateMinutesFreeform(
       [{ speaker: 'Taler 1', start: 125, end: 130, text: 'Punkt to' }],
@@ -341,17 +341,17 @@ describe('generateMinutesFreeform', () => {
     expect(userContent).toContain('2:05');
   });
 
-  it('uses mistral-large-latest model', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+  it('uses gpt-4o model', async () => {
+    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
 
     await generateMinutesFreeform(sampleSegments, 'prompt');
 
     const call = mockComplete.mock.calls[0][0];
-    expect(call.model).toBe('mistral-large-latest');
+    expect(call.model).toBe('gpt-4o');
   });
 
-  it('instructs Mistral to decide sections itself', async () => {
-    mockComplete.mockResolvedValueOnce(mistralResponse(JSON.stringify({ sections: [] })));
+  it('instructs OpenAI to decide sections itself', async () => {
+    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
 
     await generateMinutesFreeform(sampleSegments, 'prompt');
 
