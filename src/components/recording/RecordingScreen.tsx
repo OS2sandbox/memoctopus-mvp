@@ -15,6 +15,7 @@ import { VolumeBar } from './VolumeBar';
 import { formatDuration, formatFileSize } from '@/lib/utils';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { pickRecordingMimeType, extensionForMimeType } from '@/lib/audio/recording-format';
+import { RealtimeTranscriptionStream } from '@/lib/audio/realtime-stream';
 
 interface LiveSegment {
   speaker: string;
@@ -36,27 +37,6 @@ interface RecordingScreenProps {
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
 
-interface MicVADInstance {
-  start(): void;
-  pause(): void;
-  destroy(): void;
-}
-
-interface SpeechRecognitionInstance extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onresult: ((e: SpeechRecognitionEvent) => void) | null;
-  onend: (() => void) | null;
-  start(): void;
-  stop(): void;
-  abort(): void;
-}
-interface SpeechRecognitionEvent extends Event {
-  resultIndex: number;
-  results: { length: number; [i: number]: { isFinal: boolean; [j: number]: { transcript: string } } };
-}
-
 const BYTES_PER_SECOND_ESTIMATE = 16_000;
 const SILENCE_THRESHOLD_SECONDS = 5;
 const SILENCE_VOLUME_THRESHOLD = 0.02;
@@ -75,9 +55,12 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const [isUploading, setIsUploading] = useState(false);
   const [isOverwriting, setIsOverwriting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // True once we detect the browser has no Web Speech API (e.g. iOS Safari) —
-  // the batch transcript still works, but the live interim captions won't show.
+  // True if the realtime live-text stream can't connect — the batch transcript
+  // still works, but the live interim captions won't show.
   const [liveCaptionsUnavailable, setLiveCaptionsUnavailable] = useState(false);
+  // True while a batch diarization pass is running (on pause) — the preview is
+  // being repainted with authoritative speaker labels.
+  const [isDiarizing, setIsDiarizing] = useState(false);
 
   // Live transcription
   const [liveSegments, setLiveSegments] = useState<LiveSegment[]>([]);
@@ -88,18 +71,14 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const topicIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
 
-  const vadRef = useRef<MicVADInstance | null>(null);
-  const speechSegmentStartRef = useRef<number>(0);
-  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const interimTextRef = useRef('');
   const recordingActiveRef = useRef(false);
-  // True while an ElevenLabs batch request is in-flight — freezes Web Speech API
-  // updates so the captured interim text stays visible as a placeholder.
-  const batchInFlightRef = useRef(false);
-  // Maps clip-local ElevenLabs speaker label → session-wide label (e.g. "Taler 1" → "Taler 2")
-  // so speaker identity stays consistent across clips even though each clip restarts at "Taler 1".
-  const speakerMapRef = useRef<Map<string, string>>(new Map());
-  const nextSpeakerRef = useRef(1);
+  // Live transcription stream (ElevenLabs realtime). Text-only preview; speakers
+  // are filled in by the batch diarization pass at pause / save.
+  const streamRef = useRef<RealtimeTranscriptionStream | null>(null);
+  // Elapsed-seconds mark when the current utterance's first partial arrived, so a
+  // committed line gets a sensible start time in the preview.
+  const utteranceStartRef = useRef<number | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -138,141 +117,87 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     setLiveSegments([]);
     interimTextRef.current = '';
     setInterimText('');
-    batchInFlightRef.current = false;
-    speakerMapRef.current = new Map();
-    nextSpeakerRef.current = 1;
+    utteranceStartRef.current = null;
+    setLiveCaptionsUnavailable(false);
+    setIsDiarizing(false);
     setTopics([]);
   }
 
-  // ── Web Speech API (interim display) ─────────────────────────────────────────
+  // ── Live transcription (ElevenLabs realtime) ─────────────────────────────────
 
-  function initSpeechRecognition() {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SR = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
-    // iOS Safari and some others have no Web Speech API — record still works,
-    // but there are no live interim captions. Surface that to the user once.
-    if (!SR) { setLiveCaptionsUnavailable(true); return; }
-    const r = new SR() as SpeechRecognitionInstance;
-    r.continuous = true;
-    r.interimResults = true;
-    r.lang = 'da-DK';
-    r.onresult = (e: SpeechRecognitionEvent) => {
-      // While ElevenLabs batch is in-flight, freeze interim so the captured text
-      // stays visible as a placeholder instead of being overwritten by a new session.
-      if (batchInFlightRef.current) return;
-      let text = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        text += e.results[i][0].transcript;
-      }
-      if (text) {
+  function currentElapsed(): number {
+    return Math.max(0, (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000);
+  }
+
+  // Open the realtime stream for live text-only preview. Speakers are blank ("—")
+  // until the batch diarization pass runs at pause / save.
+  async function startRealtime(stream: MediaStream) {
+    const ctl = new RealtimeTranscriptionStream(meetingId, {
+      onPartial: (text) => {
+        setLiveCaptionsUnavailable(false);
+        if (interimTextRef.current === '' && utteranceStartRef.current === null) {
+          utteranceStartRef.current = currentElapsed();
+        }
         interimTextRef.current = text;
         setInterimText(text);
         setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
-      }
-    };
-    // Restart automatically if it stops (Chrome stops after ~60s of silence)
-    r.onend = () => {
-      if (recordingActiveRef.current && mediaRecorderRef.current?.state === 'recording') r.start();
-    };
-    recognitionRef.current = r;
-    r.start();
+      },
+      onCommitted: (text) => {
+        setLiveCaptionsUnavailable(false);
+        const seg: LiveSegment = {
+          speaker: '—',
+          start: utteranceStartRef.current ?? currentElapsed(),
+          end: currentElapsed(),
+          text,
+        };
+        utteranceStartRef.current = null;
+        interimTextRef.current = '';
+        setInterimText('');
+        liveSegmentsRef.current = [...liveSegmentsRef.current, seg];
+        setLiveSegments([...liveSegmentsRef.current]);
+        setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+      },
+      onError: () => { setLiveCaptionsUnavailable(true); },
+    });
+    streamRef.current = ctl;
+    await ctl.start(stream);
   }
 
-  // ── VAD + live transcription ──────────────────────────────────────────────────
-
-  function float32ToWav(audio: Float32Array, sampleRate: number): Blob {
-    const dataLen = audio.length * 2;
-    const buf = new ArrayBuffer(44 + dataLen);
-    const v = new DataView(buf);
-    const str = (off: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
-    str(0, 'RIFF'); v.setUint32(4, 36 + dataLen, true);
-    str(8, 'WAVE'); str(12, 'fmt ');
-    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-    v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
-    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
-    str(36, 'data'); v.setUint32(40, dataLen, true);
-    for (let i = 0; i < audio.length; i++) {
-      v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, audio[i])) * 0x7FFF, true);
-    }
-    return new Blob([buf], { type: 'audio/wav' });
+  // Flush the recorder's buffered tail into chunksRef before reading it.
+  function flushRecorder(recorder: MediaRecorder): Promise<void> {
+    if (recorder.state !== 'recording') return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const onData = () => { recorder.removeEventListener('dataavailable', onData); resolve(); };
+      recorder.addEventListener('dataavailable', onData);
+      recorder.requestData();
+    });
   }
 
-  function resolveSessionSpeaker(clipLabel: string): string {
-    if (!speakerMapRef.current.has(clipLabel)) {
-      speakerMapRef.current.set(clipLabel, `Taler ${nextSpeakerRef.current++}`);
-    }
-    return speakerMapRef.current.get(clipLabel)!;
-  }
-
-  async function transcribeSpeechSegment(audio: Float32Array) {
-    if (!recordingActiveRef.current || mediaRecorderRef.current?.state !== 'recording') return;
-    const segStart = speechSegmentStartRef.current;
-    const segEnd = (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000;
-
-    batchInFlightRef.current = true;
-    const formData = new FormData();
-    formData.append('audio', float32ToWav(audio, 16_000), 'segment.wav');
+  // Run the authoritative batch scribe_v2 pass over everything recorded so far and
+  // repaint the preview with real speaker labels. Used at every pause.
+  async function diarizeSoFar(recorder: MediaRecorder) {
+    const mimeType = recorder.mimeType || mimeTypeRef.current;
+    const blob = new Blob(chunksRef.current, { type: mimeType });
+    if (blob.size < 10_000) return;
+    setIsDiarizing(true);
     try {
+      const formData = new FormData();
+      formData.append('audio', blob, `segment.${extensionForMimeType(mimeType)}`);
       const res = await fetch(`/api/meetings/${meetingId}/live-transcribe`, { method: 'POST', body: formData });
       if (!res.ok) return;
-      const data = await res.json() as {
-        text: string;
-        segments: Array<{ speaker: string; start: number; end: number; text: string }>;
-      };
-      if (!data.text?.trim()) return;
-
-      // Clear interim display now that we have the confirmed text
-      interimTextRef.current = '';
-      setInterimText('');
-
-      // Use ElevenLabs diarized segments if available; fall back to one flat segment
-      const newSegs: LiveSegment[] = data.segments?.length
-        ? data.segments.map((s) => ({
-            speaker: resolveSessionSpeaker(s.speaker),
-            start: segStart + s.start,
-            end: segStart + s.end,
-            text: s.text,
-          }))
-        : [{ speaker: '—', start: segStart, end: segEnd, text: data.text.trim() }];
-
-      liveSegmentsRef.current = [...liveSegmentsRef.current, ...newSegs];
-      setLiveSegments([...liveSegmentsRef.current]);
-      setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+      const data = await res.json() as { segments: LiveSegment[]; text: string };
+      if (data.segments?.length) {
+        liveSegmentsRef.current = data.segments;
+        setLiveSegments(data.segments);
+        interimTextRef.current = '';
+        setInterimText('');
+        utteranceStartRef.current = null;
+      }
     } catch (err) {
-      console.error('[transcribe] error:', err);
+      // Diarization is a checkpoint nicety — keep the realtime preview on failure.
+      console.error('[diarize] failed:', err);
     } finally {
-      batchInFlightRef.current = false;
-    }
-  }
-
-  async function initVAD(stream: MediaStream) {
-    try {
-      const vad = await import('@ricky0123/vad-web');
-      const micvad = await vad.MicVAD.new({
-        stream,
-        baseAssetPath: '/',
-        onnxWASMBasePath: 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/',
-        onSpeechStart: () => {
-          speechSegmentStartRef.current =
-            (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000;
-        },
-        onSpeechEnd: (audio: Float32Array) => { void transcribeSpeechSegment(audio); },
-      }) as unknown as MicVADInstance;
-
-      // Recording may have stopped (or been paused) while ONNX was loading — close the ghost AudioContext and bail
-      if (!recordingActiveRef.current) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (micvad as any).audioContext?.close();
-        return;
-      }
-
-      vadRef.current = micvad;
-      // Only start VAD if the recorder is actively recording, not paused
-      if (mediaRecorderRef.current?.state === 'recording') {
-        micvad.start();
-      }
-    } catch (err) {
-      console.error('[VAD] init failed:', err);
+      setIsDiarizing(false);
     }
   }
 
@@ -354,8 +279,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       animFrameRef.current = requestAnimationFrame(pollVolume);
       topicIntervalRef.current = setInterval(refreshTopics, TOPIC_INTERVAL);
 
-      void initVAD(stream);
-      initSpeechRecognition();
+      void startRealtime(stream);
     } catch (err) {
       // Release the mic if we acquired it but failed during setup — otherwise it stays locked
       stream?.getTracks().forEach((t) => t.stop());
@@ -374,33 +298,41 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     }
   }
 
-  function pauseRecording() {
+  async function pauseRecording() {
     if (!mediaRecorderRef.current) return;
-    mediaRecorderRef.current.pause();
-    vadRef.current?.pause();
-    recognitionRef.current?.abort();
-    // Suspend the AudioContext so it releases the hardware and stops generating errors
-    void audioContextRef.current?.suspend();
+    const recorder = mediaRecorderRef.current;
+    // Freeze the clock + meter immediately so the UI feels responsive.
     pauseStartRef.current = Date.now();
     if (timerRef.current) clearInterval(timerRef.current);
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     setVolumeLevel(0);
     setRecordingState('paused');
+
+    // Close the live stream, flush the recorded tail, then pause the recorder.
+    await streamRef.current?.stop();
+    streamRef.current = null;
+    await flushRecorder(recorder);
+    recorder.pause();
+    // Suspend the AudioContext so it releases the hardware and stops generating errors
+    void audioContextRef.current?.suspend();
+
+    // Repaint the preview with authoritative speaker labels.
+    await diarizeSoFar(recorder);
   }
 
   async function resumeRecording() {
     if (!mediaRecorderRef.current) return;
+    const recorder = mediaRecorderRef.current;
     // Await the resume so the AudioContext is fully running before pollVolume starts reading
     await audioContextRef.current?.resume();
-    mediaRecorderRef.current.resume();
-    vadRef.current?.start();
-    initSpeechRecognition();
+    recorder.resume();
     pausedDurationRef.current += Date.now() - pauseStartRef.current;
     timerRef.current = setInterval(() => {
       setElapsed(Math.floor((Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000));
     }, 500);
     if (analyserRef.current) animFrameRef.current = requestAnimationFrame(pollVolume);
     setRecordingState('recording');
+    void startRealtime(recorder.stream);
   }
 
   // Auto-start when navigated here from the home page record button
@@ -426,12 +358,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     const recorder = mediaRecorderRef.current;
     recordingActiveRef.current = false;
     clearIntervals();
+    await streamRef.current?.stop();
+    streamRef.current = null;
     audioContextRef.current?.close();
     audioContextRef.current = null;
-    vadRef.current?.destroy();
-    vadRef.current = null;
-    recognitionRef.current?.abort();
-    recognitionRef.current = null;
 
     // Resume before stopping so the recorder flushes its buffer into a
     // final ondataavailable event — paused recorders may not do this reliably.
@@ -484,12 +414,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     if (mediaRecorderRef.current) {
       recordingActiveRef.current = false;
       clearIntervals();
+      void streamRef.current?.stop();
+      streamRef.current = null;
       audioContextRef.current?.close();
       audioContextRef.current = null;
-      vadRef.current?.destroy();
-      vadRef.current = null;
-      recognitionRef.current?.abort();
-      recognitionRef.current = null;
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current.stream.getTracks().forEach((t) => t.stop());
     }
@@ -501,12 +429,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     return () => {
       recordingActiveRef.current = false;
       clearIntervals();
+      void streamRef.current?.stop();
+      streamRef.current = null;
       audioContextRef.current?.close();
       audioContextRef.current = null;
-      vadRef.current?.destroy();
-      vadRef.current = null;
-      recognitionRef.current?.abort();
-      recognitionRef.current = null;
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
@@ -652,7 +578,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           background: 'var(--accent-wash)',
           fontSize: 13.5, color: 'var(--ink-2)',
         }}>
-          Live-undertekster vises ikke i denne browser. Optagelsen transskriberes fuldt ud, når du gemmer.
+          Live-tekst er ikke tilgængelig lige nu. Optagelsen transskriberes og diariseres fuldt ud, når du sætter på pause eller gemmer.
         </div>
       )}
 
@@ -693,11 +619,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
               <span style={{
                 width: 7, height: 7, borderRadius: 999, flexShrink: 0,
                 background: recordingState === 'paused' ? 'var(--muted)' : (recordingState === 'recording' ? 'var(--keep)' : 'var(--muted-2)'),
-                animation: recordingState === 'recording' ? 'protoPulse 1.4s ease-in-out infinite' : 'none',
+                animation: (recordingState === 'recording' || isDiarizing) ? 'protoPulse 1.4s ease-in-out infinite' : 'none',
               }} />
-              {recordingState === 'recording' ? 'transskriberer live' : recordingState === 'paused' ? 'pause' : 'klar'}
+              {isDiarizing ? 'diariserer talere…' : recordingState === 'recording' ? 'transskriberer live' : recordingState === 'paused' ? 'pause' : 'klar'}
             </span>
-            {recordingState === 'recording' && <span>· elevenlabs scribe_v2</span>}
+            {recordingState === 'recording' && !isDiarizing && <span>· scribe v2 realtime</span>}
           </div>
 
           {/* Transcript rows */}
@@ -733,7 +659,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                     </div>
                   );
                 })}
-                {/* Interim row: Web Speech API live text, replaced by ElevenLabs batch */}
+                {/* Interim row: realtime partial text, finalized into a committed segment */}
                 {interimText && recordingState === 'recording' && (
                   <div style={{
                     display: 'grid', gridTemplateColumns: isMobile ? '44px 64px 1fr 14px' : '60px 90px 1fr 20px',
@@ -741,7 +667,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                     opacity: 0.75,
                     fontFamily: 'var(--mono)', fontSize: 12.5, lineHeight: 1.65,
                   }}>
-                    <span style={{ color: 'var(--accent)' }}>{fmtSec(speechSegmentStartRef.current)}</span>
+                    <span style={{ color: 'var(--accent)' }}>{fmtSec(utteranceStartRef.current ?? elapsed)}</span>
                     <span style={{ color: 'var(--ink)', fontWeight: 500 }}>·</span>
                     <span style={{ color: 'var(--ink-2)', fontStyle: 'italic' }}>
                       {interimText}
