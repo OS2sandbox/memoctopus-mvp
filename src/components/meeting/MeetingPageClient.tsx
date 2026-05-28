@@ -58,6 +58,7 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
               ? { durationSeconds: audioFile.durationSeconds, sizeBytes: audioFile.sizeBytes }
               : undefined
           }
+          onNavigateToReview={() => switchTab('review')}
         />
       )}
 

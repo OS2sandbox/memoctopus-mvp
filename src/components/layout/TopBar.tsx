@@ -21,7 +21,6 @@ export function TopBar({ user }: TopBarProps) {
   const nav = [
     { href: '/', label: 'Optag', exact: true },
     { href: '/arkiv', label: 'Arkiv' },
-    { href: '/templates', label: 'Skabeloner' },
     { href: '/settings/data', label: 'Data' },
   ];
 

@@ -17,6 +17,15 @@ interface TranscriptReviewProps {
 
 type UploadStatus = 'idle' | 'uploading' | 'processing' | 'done' | 'error';
 
+interface TranscriptChapter {
+  id: string;
+  title: string;
+  summary: string;
+  startTime: number;
+  endTime: number;
+  segmentIndices: number[];
+}
+
 function applySelectedPiiReplacements(
   segs: TranscriptSegment[],
   replacements: PiiReplacement[],
@@ -42,7 +51,8 @@ export function TranscriptReview({
   const [segments, setSegments] = useState(initialSegments);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [customPrompt, setCustomPrompt] = useState('');
+  const [activeKeywords, setActiveKeywords] = useState<Set<string>>(new Set());
+  const [customText, setCustomText] = useState('');
 
   // PII checklist: all items checked by default
   const [piiReplacements, setPiiReplacements] = useState<PiiReplacement[]>(initialPiiReplacements);
@@ -255,7 +265,7 @@ export function TranscriptReview({
             meetingId,
             transcriptId,
             segments: processedSegments,
-            customPrompt: customPrompt.trim() || undefined,
+            customPrompt: [...Array.from(activeKeywords), customText.trim()].filter(Boolean).join(', ') || undefined,
           }),
           signal: abort.signal,
         });
@@ -283,6 +293,35 @@ export function TranscriptReview({
     ANDEN_PII: 'Andet',
   };
 
+  // Chapters
+  const [search, setSearch] = useState('');
+  const [chapters, setChapters] = useState<TranscriptChapter[] | null>(null);
+  const [chaptersLoading, setChaptersLoading] = useState(false);
+  const [openChapters, setOpenChapters] = useState<Set<string>>(new Set());
+
+  const updateChapterTitle = useCallback((id: string, title: string) => {
+    setChapters((prev) => prev ? prev.map((ch) => ch.id === id ? { ...ch, title } : ch) : prev);
+  }, []);
+
+  useEffect(() => {
+    if (initialSegments.length === 0) return;
+    setChaptersLoading(true);
+    fetch(`/api/meetings/${meetingId}/chapters`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ segments: initialSegments }),
+    })
+      .then((r) => (r.ok ? r.json() : { chapters: [] }))
+      .then((data) => {
+        const chs = (data.chapters ?? []) as TranscriptChapter[];
+        setChapters(chs.length > 0 ? chs : null);
+        if (chs.length > 0) setOpenChapters(new Set([chs[0].id]));
+      })
+      .catch(() => {})
+      .finally(() => setChaptersLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const piiSegmentIndices = useMemo(
     () => new Set(
       piiReplacements
@@ -291,6 +330,14 @@ export function TranscriptReview({
     ),
     [piiReplacements],
   );
+
+  function fmtTime(seconds: number): string {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  }
 
   return (
     <div style={{ minHeight: 'calc(100vh - 56px - 47px - 56px)' }}>
@@ -303,7 +350,7 @@ export function TranscriptReview({
           <div>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>02 · gennemgang</div>
             <h1 style={{ fontWeight: 300, fontSize: 36, lineHeight: 1.04, letterSpacing: '-0.025em', margin: '6px 0 0' }}>
-              Tjek og <em style={{ fontStyle: 'italic' }}>godkend</em>.
+              Tjek og <em style={{ fontStyle: 'italic', color: 'var(--accent)' }}>godkend</em>.
             </h1>
           </div>
 
@@ -316,9 +363,17 @@ export function TranscriptReview({
           }}>
             <span>⌕</span>
             <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
               placeholder="søg i transskription"
               style={{ flex: 1, color: 'var(--ink-2)', fontSize: 13, background: 'transparent', border: 'none', outline: 'none' }}
             />
+            {search && (
+              <span
+                onClick={() => setSearch('')}
+                style={{ cursor: 'pointer', color: 'var(--muted-2)', fontFamily: 'var(--mono)', fontSize: 13 }}
+              >×</span>
+            )}
           </div>
 
           {error && (
@@ -334,35 +389,137 @@ export function TranscriptReview({
           {/* Hidden audio element — controlled by the bottom bar */}
           {audioUrl && <audio ref={audioRef} src={audioUrl} preload="metadata" />}
 
-          {/* Hint */}
-          <p style={{ marginTop: 16, fontSize: 13, color: 'var(--muted)' }}>
-            Ret eventuelle fejl. Klik på et talernavn for at omdøbe alle segmenter for den taler.
-          </p>
+          {/* Transcript — chapters or flat fallback */}
+          <div style={{ marginTop: 8 }}>
+            {chaptersLoading && (
+              <div style={{
+                padding: '24px 0', display: 'flex', alignItems: 'center', gap: 10,
+                fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)',
+                borderTop: '1px solid var(--line)',
+              }}>
+                <span style={{
+                  width: 14, height: 14, borderRadius: 999, flexShrink: 0,
+                  border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)',
+                  display: 'inline-block', animation: 'spin 0.8s linear infinite',
+                }} />
+                grupperer transskription…
+              </div>
+            )}
 
-          {/* Transcript rows */}
-          <div style={{ marginTop: 8, borderTop: '1px solid var(--line)' }}>
-            {segments.length === 0 ? (
-              <p style={{ padding: '32px 0', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
-                Ingen transskription fundet.
-              </p>
-            ) : (
-              segments.map((seg, i) => (
+            {!chaptersLoading && chapters && chapters.map((ch) => {
+              const isOpen = openChapters.has(ch.id);
+              const chSegs = ch.segmentIndices
+                .map((idx) => ({ seg: segments[idx], idx }))
+                .filter(({ seg }) => !!seg);
+              const q = search.toLowerCase();
+              const hasMatch = !!q && chSegs.some(
+                ({ seg }) => seg.text.toLowerCase().includes(q) || seg.speaker.toLowerCase().includes(q),
+              );
+              return (
                 <div
-                  key={i}
-                  ref={(el) => { segmentRefs.current[i] = el; }}
+                  key={ch.id}
+                  style={{
+                    borderTop: '1px solid var(--line)',
+                    background: hasMatch ? 'var(--accent-wash)' : 'transparent',
+                    transition: 'background 200ms',
+                  }}
                 >
-                  <SpeakerRow
-                    segment={seg}
-                    index={i}
-                    onUpdate={handleSegmentUpdate}
-                    onRenameAll={handleRenameAll}
-                    speakerSegmentCount={speakerCounts[seg.speaker] ?? 1}
-                    onSeek={audioUrl ? seekTo : undefined}
-                    hasPii={piiSegmentIndices.has(i)}
-                    isHighlighted={highlightedSegment === i}
-                  />
+                  <div
+                    onClick={() => setOpenChapters((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(ch.id)) next.delete(ch.id); else next.add(ch.id);
+                      return next;
+                    })}
+                    style={{
+                      padding: '20px 0', cursor: 'pointer',
+                      display: 'grid', gridTemplateColumns: '24px 90px 1fr',
+                      gap: 16, alignItems: 'baseline',
+                    }}
+                  >
+                    <span style={{
+                      fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
+                      transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)',
+                      transition: 'transform 160ms', display: 'inline-block',
+                    }}>▸</span>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--accent)' }}>
+                      {fmtTime(ch.startTime)} — {fmtTime(ch.endTime)}
+                    </span>
+                    <div>
+                      <div
+                        contentEditable
+                        suppressContentEditableWarning
+                        onClick={(e) => e.stopPropagation()}
+                        onBlur={(e) => {
+                          const t = e.currentTarget.textContent?.trim() ?? '';
+                          if (t) updateChapterTitle(ch.id, t);
+                          else e.currentTarget.textContent = ch.title;
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
+                          if (e.key === 'Escape') { e.currentTarget.textContent = ch.title; e.currentTarget.blur(); }
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.borderBottomColor = 'var(--line-2)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.borderBottomColor = 'transparent'; }}
+                        style={{
+                          fontSize: 17, color: 'var(--ink)', fontWeight: 500, letterSpacing: '-0.005em',
+                          outline: 'none', cursor: 'text', display: 'inline-block',
+                          borderBottom: '1px dashed transparent',
+                        }}
+                      >
+                        {ch.title}
+                      </div>
+                      {!isOpen && (
+                        <div style={{ marginTop: 6, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: '60ch' }}>
+                          {ch.summary}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {isOpen && (
+                    <div style={{ paddingBottom: 18 }}>
+                      {chSegs.map(({ seg, idx }) => (
+                        <div key={idx} ref={(el) => { segmentRefs.current[idx] = el; }}>
+                          <SpeakerRow
+                            segment={seg}
+                            index={idx}
+                            onUpdate={handleSegmentUpdate}
+                            onRenameAll={handleRenameAll}
+                            speakerSegmentCount={speakerCounts[seg.speaker] ?? 1}
+                            onSeek={audioUrl ? seekTo : undefined}
+                            hasPii={piiSegmentIndices.has(idx)}
+                            isHighlighted={highlightedSegment === idx}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              ))
+              );
+            })}
+
+            {!chaptersLoading && !chapters && (
+              <div style={{ borderTop: '1px solid var(--line)' }}>
+                {segments.length === 0 ? (
+                  <p style={{ padding: '32px 0', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
+                    Ingen transskription fundet.
+                  </p>
+                ) : (
+                  segments.map((seg, i) => (
+                    <div key={i} ref={(el) => { segmentRefs.current[i] = el; }}>
+                      <SpeakerRow
+                        segment={seg}
+                        index={i}
+                        onUpdate={handleSegmentUpdate}
+                        onRenameAll={handleRenameAll}
+                        speakerSegmentCount={speakerCounts[seg.speaker] ?? 1}
+                        onSeek={audioUrl ? seekTo : undefined}
+                        hasPii={piiSegmentIndices.has(i)}
+                        isHighlighted={highlightedSegment === i}
+                      />
+                    </div>
+                  ))
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -477,40 +634,86 @@ export function TranscriptReview({
             </div>
           )}
 
-          {/* Skabelon / prompt */}
+          {/* Keywords / prompt */}
           <div style={{ marginTop: 28 }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>skabelon</div>
-            {['Standard', 'Beslutninger', 'Handlepunkter', 'Fuld detalje'].map((s) => (
-              <div
-                key={s}
-                onClick={() => setCustomPrompt((p) => p === s ? '' : s)}
-                style={{
-                  padding: '8px 10px', marginBottom: 4,
-                  border: '1px solid ' + (customPrompt === s ? 'var(--accent)' : 'var(--line)'),
-                  background: customPrompt === s ? 'var(--accent-wash)' : 'transparent',
-                  borderRadius: 'var(--radius)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  cursor: 'pointer', fontFamily: 'var(--mono)', fontSize: 12,
-                  color: customPrompt === s ? 'var(--accent)' : 'var(--ink-2)',
-                }}
-              >
-                <span>{s}</span>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>fokus</div>
+
+            {/* Inactive keyword chips — above the textarea */}
+            {['Standard', 'Beslutninger', 'Handlepunkter', 'Fuld detalje'].some((k) => !activeKeywords.has(k)) && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                {['Standard', 'Beslutninger', 'Handlepunkter', 'Fuld detalje']
+                  .filter((k) => !activeKeywords.has(k))
+                  .map((keyword) => (
+                    <button
+                      key={keyword}
+                      onClick={() => setActiveKeywords((prev) => { const n = new Set(prev); n.add(keyword); return n; })}
+                      style={{
+                        padding: '4px 10px',
+                        border: '1px solid var(--line)',
+                        borderRadius: 999,
+                        background: 'transparent',
+                        fontFamily: 'var(--mono)', fontSize: 11.5,
+                        color: 'var(--ink-2)',
+                        cursor: 'pointer',
+                        transition: 'border-color 120ms, color 120ms',
+                      }}
+                    >
+                      {keyword}
+                    </button>
+                  ))}
               </div>
-            ))}
-            <textarea
-              value={customPrompt}
-              onChange={(e) => setCustomPrompt(e.target.value)}
-              placeholder="Eller beskriv selv referatet…"
-              rows={2}
-              style={{
-                width: '100%', marginTop: 8, minHeight: 60,
-                fontFamily: 'var(--mono)', fontSize: 11.5,
-                color: 'var(--ink)', lineHeight: 1.6,
-                background: 'var(--bg)', border: '1px solid var(--line-2)',
-                borderRadius: 'var(--radius)', padding: '8px 10px',
-                resize: 'vertical', outline: 'none',
-              }}
-            />
+            )}
+
+            {/* Textarea with active keywords inside */}
+            <div style={{
+              border: '1px solid var(--line-2)',
+              borderRadius: 'var(--radius)',
+              background: 'var(--bg)',
+            }}>
+              {activeKeywords.size > 0 && (
+                <div style={{
+                  padding: '8px 10px', display: 'flex', flexWrap: 'wrap', gap: 6,
+                  borderBottom: '1px solid var(--line)',
+                }}>
+                  {['Standard', 'Beslutninger', 'Handlepunkter', 'Fuld detalje']
+                    .filter((k) => activeKeywords.has(k))
+                    .map((keyword) => (
+                      <button
+                        key={keyword}
+                        onClick={() => setActiveKeywords((prev) => { const n = new Set(prev); n.delete(keyword); return n; })}
+                        style={{
+                          padding: '3px 8px',
+                          border: '1px solid var(--accent)',
+                          borderRadius: 999,
+                          background: 'var(--accent-wash)',
+                          fontFamily: 'var(--mono)', fontSize: 11.5,
+                          color: 'var(--accent)',
+                          cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', gap: 5,
+                        }}
+                      >
+                        {keyword}
+                        <span style={{ fontSize: 13, lineHeight: 1, opacity: 0.7 }}>×</span>
+                      </button>
+                    ))}
+                </div>
+              )}
+              <textarea
+                value={customText}
+                onChange={(e) => setCustomText(e.target.value)}
+                placeholder={activeKeywords.size === 0 ? 'Beskriv referatet…' : 'Tilføj instruktioner…'}
+                rows={2}
+                style={{
+                  width: '100%', minHeight: 60,
+                  fontFamily: 'var(--mono)', fontSize: 11.5,
+                  color: 'var(--ink)', lineHeight: 1.6,
+                  background: 'transparent', border: 'none',
+                  padding: '8px 10px',
+                  resize: 'vertical', outline: 'none',
+                  display: 'block',
+                }}
+              />
+            </div>
           </div>
 
           {/* Compliance */}
@@ -543,7 +746,7 @@ export function TranscriptReview({
             {isGenerating ? 'genererer…' : 'generér referat →'}
           </button>
           <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', textAlign: 'center' }}>
-            kan altid redigeres bagefter
+            transkription kan stadig redigeres efter
           </div>
         </div>
       </div>

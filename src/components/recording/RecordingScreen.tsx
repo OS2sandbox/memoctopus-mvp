@@ -30,6 +30,7 @@ interface TopicItem {
 interface RecordingScreenProps {
   meetingId: string;
   existingRecording?: { durationSeconds: number | null; sizeBytes: number };
+  onNavigateToReview?: () => void;
 }
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
@@ -40,7 +41,7 @@ const SILENCE_VOLUME_THRESHOLD = 0.02;
 const LIVE_CHUNK_INTERVAL = 15_000;
 const TOPIC_INTERVAL = 25_000;
 
-export function RecordingScreen({ meetingId, existingRecording }: RecordingScreenProps) {
+export function RecordingScreen({ meetingId, existingRecording, onNavigateToReview }: RecordingScreenProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
@@ -361,7 +362,7 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 32 }}>
           <button
-            onClick={() => router.push(`/meeting/${meetingId}/review`)}
+            onClick={() => onNavigateToReview?.()}
             style={{
               fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
               padding: '8px 14px', borderRadius: 'var(--radius)',
