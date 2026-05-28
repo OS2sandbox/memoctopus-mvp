@@ -10,8 +10,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
 
 interface TopBarProps {
   user: { name: string; email: string };
@@ -38,55 +36,67 @@ export function TopBar({ user }: TopBarProps) {
   }
 
   return (
-    <header className="sticky top-0 z-40 border-b border-[var(--line)] bg-[var(--surface)]">
-      <div className="mx-auto flex h-14 max-w-[1040px] items-center justify-between px-6">
-        {/* Wordmark */}
-        <Link
-          href="/"
-          className="shrink-0"
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: '17px',
-            fontWeight: 500,
-            letterSpacing: '-0.04em',
-            color: 'var(--ink)',
-            textDecoration: 'none',
-          }}
-        >
-          memoctopus
-          <span style={{ color: 'var(--accent)', margin: '0 0.25em' }}>·</span>
-          referat
-        </Link>
+    <header style={{
+      position: 'sticky', top: 0, zIndex: 40,
+      height: 56, borderBottom: '1px solid var(--line)',
+      background: 'var(--bg)',
+      display: 'flex', alignItems: 'center',
+      padding: '0 32px', gap: 28,
+    }}>
+      {/* Wordmark */}
+      <Link
+        href="/"
+        style={{
+          fontFamily: 'var(--mono)', fontWeight: 500, fontSize: 14,
+          letterSpacing: '-0.03em', color: 'var(--ink)',
+          textDecoration: 'none', flexShrink: 0,
+        }}
+      >
+        memoctopus<span style={{ color: 'var(--accent)', padding: '0 5px' }}>·</span>referat
+      </Link>
 
-        {/* Nav */}
-        <nav className="hidden md:flex items-center gap-0.5">
-          {nav.map((item) => (
+      {/* Nav */}
+      <nav style={{ display: 'flex', gap: 22, marginLeft: 28 }}>
+        {nav.map((item) => {
+          const active = isActive(item.href, item.exact);
+          return (
             <Link
               key={item.href}
               href={item.href}
-              className={cn(
-                'px-3 py-1.5 rounded-[var(--radius)] text-sm transition-colors',
-                isActive(item.href, item.exact)
-                  ? 'bg-[var(--accent-wash)] text-[var(--accent-ink)] font-medium'
-                  : 'text-[var(--ink-2)] hover:text-[var(--ink)] hover:bg-[var(--surface-2)]',
-              )}
+              style={{
+                fontSize: 13.5,
+                color: active ? 'var(--ink)' : 'var(--muted)',
+                fontWeight: active ? 500 : 400,
+                textDecoration: 'none',
+                transition: 'color 120ms',
+              }}
             >
               {item.label}
             </Link>
-          ))}
-        </nav>
+          );
+        })}
+      </nav>
 
-        {/* User menu */}
+      {/* User menu */}
+      <div style={{ marginLeft: 'auto' }}>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" className="gap-2">
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--surface-2)] text-xs font-semibold text-[var(--ink-2)] border border-[var(--line-strong)]">
+            <button style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: 'none', border: 'none', cursor: 'pointer',
+              padding: '4px 0',
+            }}>
+              <span style={{
+                width: 28, height: 28, borderRadius: 999,
+                border: '1px solid var(--line-2)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--ink-2)',
+                flexShrink: 0,
+              }}>
                 {user.name.charAt(0).toUpperCase()}
               </span>
-              <span className="hidden md:block text-sm text-[var(--ink-2)]">
-                {user.name}
-              </span>
-            </Button>
+              <span style={{ fontSize: 13, color: 'var(--ink-2)' }}>{user.name}</span>
+            </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             <div className="px-2 py-1.5">
