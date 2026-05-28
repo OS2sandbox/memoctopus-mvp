@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import fs from 'fs/promises';
 import { auth } from '@/lib/auth';
-import { queryUserSchemaOne } from '@/lib/db/user-schema';
-import { getAudioFilePath, createAudioReadStream } from '@/lib/audio/storage';
+import { queryUserSchema, queryUserSchemaOne } from '@/lib/db/user-schema';
+import { getAudioFilePath, createAudioReadStream, deleteAudioFile } from '@/lib/audio/storage';
 import path from 'path';
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -84,4 +84,33 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       'Content-Length': String(totalSize),
     },
   });
+}
+
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const row = await queryUserSchemaOne<{ filename: string }>(
+    session.user.id,
+    'SELECT filename FROM audio_files WHERE meeting_id = $1 AND deleted_at IS NULL LIMIT 1',
+    [id],
+  );
+
+  if (row) {
+    await queryUserSchema(
+      session.user.id,
+      'UPDATE audio_files SET deleted_at = NOW() WHERE meeting_id = $1 AND deleted_at IS NULL',
+      [id],
+    );
+    await deleteAudioFile(session.user.id, row.filename);
+  }
+
+  await queryUserSchema(
+    session.user.id,
+    "UPDATE meetings SET status = 'recording', updated_at = NOW() WHERE id = $1",
+    [id],
+  );
+
+  return NextResponse.json({ ok: true });
 }

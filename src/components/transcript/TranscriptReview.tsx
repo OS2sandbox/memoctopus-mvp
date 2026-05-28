@@ -65,6 +65,11 @@ export function TranscriptReview({
   const [checkedPii, setCheckedPii] = useState<Set<number>>(
     () => new Set(initialPiiReplacements.map((_, i) => i)),
   );
+  const displaySegments = useMemo(
+    () => applySelectedPiiReplacements(segments, piiReplacements, checkedPii),
+    [segments, piiReplacements, checkedPii],
+  );
+
   const [highlightedSegment, setHighlightedSegment] = useState<number | null>(null);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const segmentRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -430,7 +435,7 @@ export function TranscriptReview({
             {!chaptersLoading && chapters && chapters.map((ch) => {
               const isOpen = openChapters.has(ch.id);
               const chSegs = ch.segmentIndices
-                .map((idx) => ({ seg: segments[idx], idx }))
+                .map((idx) => ({ seg: displaySegments[idx], idx }))
                 .filter(({ seg }) => !!seg);
               const q = search.toLowerCase();
               const hasMatch = !!q && chSegs.some(
@@ -530,7 +535,7 @@ export function TranscriptReview({
                     Ingen transskription fundet.
                   </p>
                 ) : (
-                  segments.map((seg, i) => (
+                  displaySegments.map((seg, i) => (
                     <div key={i} ref={(el) => { segmentRefs.current[i] = el; }}>
                       <SpeakerRow
                         segment={seg}
@@ -632,7 +637,7 @@ export function TranscriptReview({
                   <div>
                     <div style={{
                       fontFamily: 'var(--mono)', fontSize: 13.5, color: 'var(--ink)',
-                      textDecoration: checkedPii.has(i) ? 'line-through' : 'none',
+                      textDecorationLine: checkedPii.has(i) ? 'line-through' : 'none',
                       textDecorationColor: 'var(--accent)', textDecorationThickness: 1,
                     }}>{r.original}</div>
                     <div style={{
