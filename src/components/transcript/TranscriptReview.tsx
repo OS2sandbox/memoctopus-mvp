@@ -596,8 +596,19 @@ export function TranscriptReview({
             </span>
           </>
         ) : (
-          <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}>
-            {uploadStatus === 'uploading' ? `uploader lydfil… ${uploadProgress}%` : uploadStatus === 'processing' ? 'analyserer…' : 'ingen lydfil'}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}>
+            {(uploadStatus === 'uploading' || uploadStatus === 'processing') && (
+              <span style={{
+                width: 14, height: 14, borderRadius: 999, flexShrink: 0,
+                border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)',
+                display: 'inline-block', animation: 'spin 0.8s linear infinite',
+              }} />
+            )}
+            {uploadStatus === 'uploading'
+              ? `uploader lydfil… ${uploadProgress}%`
+              : uploadStatus === 'processing'
+              ? 'analyserer personoplysninger…'
+              : 'ingen lydfil'}
           </span>
         )}
       </div>
