@@ -2,6 +2,7 @@
 
 import React from 'react';
 import Link from 'next/link';
+import { useIsMobile } from '@/lib/use-is-mobile';
 
 export type ProcessPhase = 'recording' | 'review' | 'minutes' | 'export';
 
@@ -22,12 +23,14 @@ interface ProcessStripProps {
 
 export function ProcessStrip({ meetingId, activePhase, completedPhases = [], onTabChange, meetingTitle }: ProcessStripProps) {
   const activeIndex = PHASES.findIndex((p) => p.key === activePhase);
+  const isMobile = useIsMobile();
 
   return (
     <div style={{
-      padding: '14px 32px', borderBottom: '1px solid var(--line)',
+      padding: isMobile ? '12px 16px' : '14px 32px', borderBottom: '1px solid var(--line)',
       display: 'flex', alignItems: 'center', gap: 6,
       background: 'var(--bg)', fontFamily: 'var(--mono)', fontSize: 12,
+      overflowX: 'auto', whiteSpace: 'nowrap',
     }}>
       {PHASES.map((phase, i) => {
         const isActive = phase.key === activePhase;

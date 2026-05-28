@@ -6,6 +6,7 @@ import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
 import { WaveformPlayer } from './WaveformPlayer';
 import { pendingUpload } from '@/lib/pending-upload';
+import { useIsMobile } from '@/lib/use-is-mobile';
 
 interface TranscriptReviewProps {
   meetingId: string;
@@ -54,6 +55,7 @@ export function TranscriptReview({
   initialChapters,
 }: TranscriptReviewProps) {
   const router = useRouter();
+  const isMobile = useIsMobile();
   const [segments, setSegments] = useState(initialSegments);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -433,16 +435,20 @@ export function TranscriptReview({
   }
 
   return (
-    <div style={{ height: 'calc(100vh - 56px - 47px - 56px)' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', height: '100%' }}>
+    <div style={{ height: isMobile ? 'auto' : 'calc(100vh - 56px - 47px - 56px)' }}>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: isMobile ? '1fr' : '1fr 360px',
+        height: isMobile ? 'auto' : '100%',
+      }}>
 
         {/* ── Left: Transcript ────────────────────────────────────────── */}
-        <div style={{ padding: '32px 40px 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ padding: isMobile ? '24px 20px 0' : '32px 40px 0', display: 'flex', flexDirection: 'column', overflow: isMobile ? 'visible' : 'hidden' }}>
 
           {/* Header */}
           <div>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>02 · gennemgang</div>
-            <h1 style={{ fontWeight: 300, fontSize: 36, lineHeight: 1.04, letterSpacing: '-0.025em', margin: '6px 0 0' }}>
+            <h1 style={{ fontWeight: 300, fontSize: isMobile ? 28 : 36, lineHeight: 1.04, letterSpacing: '-0.025em', margin: '6px 0 0' }}>
               Tjek og <em style={{ fontStyle: 'italic', color: 'var(--accent)' }}>godkend</em>.
             </h1>
           </div>
@@ -686,9 +692,13 @@ export function TranscriptReview({
 
         {/* ── Right sidebar ─────────────────────────────────────────── */}
         <div style={{
-          borderLeft: '1px solid var(--line)', background: 'var(--bg-2)',
-          padding: '32px 24px', position: 'sticky', top: 103,
-          height: 'calc(100vh - 56px - 47px - 56px)', overflow: 'auto',
+          borderLeft: isMobile ? 'none' : '1px solid var(--line)',
+          borderTop: isMobile ? '1px solid var(--line)' : 'none',
+          background: 'var(--bg-2)',
+          padding: isMobile ? '24px 20px' : '32px 24px',
+          position: isMobile ? 'static' : 'sticky', top: isMobile ? undefined : 103,
+          height: isMobile ? 'auto' : 'calc(100vh - 56px - 47px - 56px)',
+          overflow: isMobile ? 'visible' : 'auto',
           display: 'flex', flexDirection: 'column', gap: 0,
         }}>
 
@@ -920,8 +930,8 @@ export function TranscriptReview({
         position: 'sticky', bottom: 0,
         height: 56, borderTop: '1px solid var(--line)',
         background: 'var(--surface)',
-        display: 'flex', alignItems: 'center', gap: 16,
-        padding: '0 32px', zIndex: 5,
+        display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 16,
+        padding: isMobile ? '0 16px' : '0 32px', zIndex: 5,
       }}>
         {audioUrl ? (
           <>

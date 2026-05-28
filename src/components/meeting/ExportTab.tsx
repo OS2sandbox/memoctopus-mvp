@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
+import { useIsMobile } from '@/lib/use-is-mobile';
 
 type ExportFormat = 'pdf' | 'md';
 
@@ -11,6 +12,7 @@ const FORMATS: { key: ExportFormat; label: string; description: string; file: st
 ];
 
 export function ExportTab({ meetingId }: { meetingId: string }) {
+  const isMobile = useIsMobile();
   const [selected, setSelected] = useState<ExportFormat>('pdf');
   const [exporting, setExporting] = useState(false);
   const [downloaded, setDownloaded] = useState(false);
@@ -43,12 +45,12 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
   }
 
   return (
-    <div style={{ minHeight: 'calc(100vh - 56px - 47px)', padding: '64px 32px' }}>
+    <div style={{ minHeight: 'calc(100vh - 56px - 47px)', padding: isMobile ? '40px 20px' : '64px 32px' }}>
       <div style={{ maxWidth: 780, margin: '0 auto' }}>
 
         {/* Header */}
         <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>04 · eksport</div>
-        <h1 style={{ fontWeight: 300, fontSize: 42, lineHeight: 1.04, letterSpacing: '-0.025em', margin: '8px 0 0' }}>
+        <h1 style={{ fontWeight: 300, fontSize: isMobile ? 32 : 42, lineHeight: 1.04, letterSpacing: '-0.025em', margin: '8px 0 0' }}>
           Klar til <em style={{ fontStyle: 'italic' }}>aflevering</em>.
         </h1>
 
@@ -104,7 +106,7 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
         </div>
 
         {/* Bottom row */}
-        <div style={{ marginTop: 24, display: 'flex', alignItems: 'center', gap: 20 }}>
+        <div style={{ marginTop: 24, display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
             lydfil slettet ved generering<br />
             <span style={{ color: 'var(--muted-2)' }}>transskription bevares i arkivet</span>
@@ -130,6 +132,7 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
           marginTop: 32, paddingTop: 20, borderTop: '1px solid var(--line)',
           fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
           display: 'flex', justifyContent: 'space-between',
+          flexWrap: 'wrap', gap: 12,
         }}>
           <span>indeholder ingen rå tale, lyd eller personoplysninger</span>
           <Link

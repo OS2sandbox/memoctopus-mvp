@@ -63,6 +63,13 @@ html {
   background: var(--bg);
 }
 
+/* Stop fixed-width inline layouts from forcing a horizontal scroll on phones.
+   `clip` (not `hidden`) avoids creating a scroll container, so it doesn't
+   break the sticky TopBar / ProcessStrip / audio player. */
+html, body {
+  overflow-x: clip;
+}
+
 body {
   --font-mono: var(--font-geist-mono), ui-monospace, 'SF Mono', monospace;
   font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;

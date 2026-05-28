@@ -3,9 +3,11 @@
 import React, { useState, useEffect, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useIsMobile } from '@/lib/use-is-mobile';
 
 export default function OptaqPage() {
   const router = useRouter();
+  const isMobile = useIsMobile();
   const [title, setTitle] = useState('');
   const [participants, setParticipants] = useState<string[]>([]);
   const [adding, setAdding] = useState('');
@@ -53,7 +55,7 @@ export default function OptaqPage() {
 
   return (
     <div
-      style={{ minHeight: 'calc(100vh - 56px)', padding: '64px 48px 96px', outline: 'none' }}
+      style={{ minHeight: 'calc(100vh - 56px)', padding: isMobile ? '40px 20px 64px' : '64px 48px 96px', outline: 'none' }}
       onKeyDown={handleKeyDown}
       tabIndex={-1}
     >
@@ -62,7 +64,8 @@ export default function OptaqPage() {
         {/* Hero */}
         <div style={{ textAlign: 'center' }}>
           <div style={{
-            display: 'inline-flex', gap: 20, marginBottom: 32,
+            display: 'inline-flex', flexWrap: 'wrap', justifyContent: 'center',
+            gap: isMobile ? 10 : 20, marginBottom: isMobile ? 24 : 32,
             fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)',
             letterSpacing: 0.8,
           }}>
@@ -73,13 +76,13 @@ export default function OptaqPage() {
             <span>DIGITAL SUVERÆNITET</span>
           </div>
           <h1 style={{
-            fontWeight: 300, fontSize: 64, lineHeight: 1.04,
+            fontWeight: 300, fontSize: isMobile ? 40 : 64, lineHeight: 1.04,
             letterSpacing: '-0.03em', margin: 0, textWrap: 'balance' as const,
           }}>
             Møde til <em style={{ fontStyle: 'italic', color: 'var(--accent)', fontWeight: 300 }}>referat</em>.
           </h1>
           <div style={{
-            fontSize: 17, color: 'var(--ink-2)', lineHeight: 1.6,
+            fontSize: isMobile ? 15 : 17, color: 'var(--ink-2)', lineHeight: 1.6,
             maxWidth: 520, margin: '18px auto 0',
           }}>
             Dansk AI — kørt lokalt, frigivet åbent.<br />
@@ -89,13 +92,15 @@ export default function OptaqPage() {
 
         {/* 3-column grid */}
         <div style={{
-          marginTop: 72,
-          display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 56,
+          marginTop: isMobile ? 40 : 72,
+          display: 'grid',
+          gridTemplateColumns: isMobile ? '1fr' : '1fr auto 1fr',
+          gap: isMobile ? 40 : 56,
           alignItems: 'center',
         }}>
 
           {/* LEFT — optional meeting details */}
-          <div style={{ opacity: 0.95 }}>
+          <div style={{ opacity: 0.95, order: isMobile ? 2 : 0 }}>
             {/* Eyebrow */}
             <div style={{
               fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)',
@@ -158,7 +163,7 @@ export default function OptaqPage() {
           </div>
 
           {/* CENTER — record button */}
-          <div style={{ textAlign: 'center' }}>
+          <div style={{ textAlign: 'center', order: isMobile ? 1 : 0 }}>
             <button
               onClick={startRecording}
               disabled={loading}
@@ -205,7 +210,7 @@ export default function OptaqPage() {
           </div>
 
           {/* RIGHT — status + compliance */}
-          <div style={{ opacity: 0.95 }}>
+          <div style={{ opacity: 0.95, order: isMobile ? 3 : 0 }}>
             {/* Eyebrow */}
             <div style={{
               fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)',
@@ -260,7 +265,7 @@ export default function OptaqPage() {
 
         {/* Footer hint — right-aligned, archive link only */}
         <div style={{
-          marginTop: 96, paddingTop: 24, borderTop: '1px solid var(--line)',
+          marginTop: isMobile ? 56 : 96, paddingTop: 24, borderTop: '1px solid var(--line)',
           display: 'flex', justifyContent: 'flex-end',
           fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
         }}>
