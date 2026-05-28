@@ -75,8 +75,8 @@ export default function NewMeetingPage() {
 
   return (
     <div className="mx-auto max-w-[720px] px-4 py-8">
-      <h1 className="text-xl font-semibold text-[var(--text)] mb-1">Nyt møde</h1>
-      <p className="text-sm text-[var(--text-muted)] mb-8">
+      <h1 className="text-xl font-semibold text-[var(--ink)] mb-1">Nyt møde</h1>
+      <p className="text-sm text-[var(--muted)] mb-8">
         Udfyld oplysningerne og vælg om du vil optage nu eller uploade en lydfil.
       </p>
 
@@ -99,7 +99,7 @@ export default function NewMeetingPage() {
         <div className="space-y-1.5">
           <Label htmlFor="participants">
             Deltagere{' '}
-            <span className="text-[var(--text-muted)] font-normal">(valgfri, kommasepareret)</span>
+            <span className="text-[var(--muted)] font-normal">(valgfri, kommasepareret)</span>
           </Label>
           <Input
             id="participants"
@@ -117,8 +117,8 @@ export default function NewMeetingPage() {
               onClick={() => setUploadMode('record')}
               className={`flex-1 rounded-[var(--radius)] border px-4 py-3 text-left text-sm transition-colors ${
                 uploadMode === 'record'
-                  ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
-                  : 'border-[var(--border)] bg-[var(--surface)] text-[var(--text-2)] hover:bg-[var(--surface-2)]'
+                  ? 'border-[var(--accent)] bg-[var(--accent-wash)] text-[var(--accent)]'
+                  : 'border-[var(--line)] bg-[var(--surface)] text-[var(--ink-2)] hover:bg-[var(--surface-2)]'
               }`}
             >
               <span className="font-medium block">Optag nu</span>
@@ -129,8 +129,8 @@ export default function NewMeetingPage() {
               onClick={() => setUploadMode('upload')}
               className={`flex-1 rounded-[var(--radius)] border px-4 py-3 text-left text-sm transition-colors ${
                 uploadMode === 'upload'
-                  ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]'
-                  : 'border-[var(--border)] bg-[var(--surface)] text-[var(--text-2)] hover:bg-[var(--surface-2)]'
+                  ? 'border-[var(--accent)] bg-[var(--accent-wash)] text-[var(--accent)]'
+                  : 'border-[var(--line)] bg-[var(--surface)] text-[var(--ink-2)] hover:bg-[var(--surface-2)]'
               }`}
             >
               <span className="font-medium block">Upload lydfil</span>
@@ -148,10 +148,10 @@ export default function NewMeetingPage() {
               type="file"
               accept="audio/*"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              className="block w-full text-sm text-[var(--text-2)] file:mr-3 file:py-2 file:px-3 file:rounded-[var(--radius)] file:border file:border-[var(--border)] file:bg-[var(--surface-2)] file:text-sm file:font-medium file:text-[var(--text)] hover:file:bg-[var(--border)] file:cursor-pointer cursor-pointer"
+              className="block w-full text-sm text-[var(--ink-2)] file:mr-3 file:py-2 file:px-3 file:rounded-[var(--radius)] file:border file:border-[var(--line)] file:bg-[var(--surface-2)] file:text-sm file:font-medium file:text-[var(--ink)] hover:file:bg-[var(--line)] file:cursor-pointer cursor-pointer"
             />
             {!file && (
-              <p className="text-xs text-[var(--text-muted)]">
+              <p className="text-xs text-[var(--muted)]">
                 Vælg en lydfil fra din computer.
               </p>
             )}
@@ -159,7 +159,10 @@ export default function NewMeetingPage() {
         )}
 
         {error && (
-          <div className="rounded-[var(--radius)] border border-red-200 bg-red-50 px-4 py-3 text-sm text-[var(--danger)]">
+          <div
+            className="rounded-[var(--radius)] border px-4 py-3 text-sm text-[var(--danger)]"
+            style={{ backgroundColor: 'var(--danger-wash)', borderColor: 'var(--danger)' }}
+          >
             {error}
           </div>
         )}
@@ -168,7 +171,7 @@ export default function NewMeetingPage() {
           <Button
             type="button"
             variant="secondary"
-            onClick={() => router.push('/dashboard')}
+            onClick={() => router.push('/')}
           >
             Annullér
           </Button>

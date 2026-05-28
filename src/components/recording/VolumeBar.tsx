@@ -26,7 +26,7 @@ export function VolumeBar({ level, barCount = 20 }: VolumeBarProps) {
               height: `${Math.min(100, Math.max(15, heightPct))}%`,
               backgroundColor: isActive
                 ? `var(--accent)`
-                : `var(--border-strong)`,
+                : `var(--line-strong)`,
               opacity: isActive ? 1 : 0.5,
             }}
           />

@@ -1,0 +1,284 @@
+'use client';
+
+import React, { useState, useEffect, KeyboardEvent } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+
+export default function OptaqPage() {
+  const router = useRouter();
+  const [title, setTitle] = useState('');
+  const [participants, setParticipants] = useState<string[]>([]);
+  const [adding, setAdding] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [meetingCount, setMeetingCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    fetch('/api/meetings?count=1')
+      .then((r) => r.json())
+      .then((d) => setMeetingCount(d.count ?? null))
+      .catch(() => {});
+  }, []);
+
+  function handleKeyDown(e: KeyboardEvent) {
+    const tag = (e.target as HTMLElement).tagName;
+    if (/input|textarea/i.test(tag)) return;
+    if (e.key === 'r' || e.key === 'R') { e.preventDefault(); startRecording(); }
+    if (e.key === 'u' || e.key === 'U') document.getElementById('upload-input')?.click();
+  }
+
+  async function startRecording() {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const body: Record<string, unknown> = {
+        title: title.trim() || `Møde · ${new Intl.DateTimeFormat('da', { day: 'numeric', month: 'long' }).format(new Date())}`,
+      };
+      if (participants.length > 0) body.participants = participants;
+      const res = await fetch('/api/meetings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.id) router.push(`/meeting/${data.id}?autostart=1`);
+    } catch {
+      setLoading(false);
+    }
+  }
+
+  function addParticipant() {
+    const v = adding.trim();
+    if (v) { setParticipants([...participants, v]); setAdding(''); }
+  }
+
+  return (
+    <div
+      style={{ minHeight: 'calc(100vh - 56px)', padding: '64px 48px 96px', outline: 'none' }}
+      onKeyDown={handleKeyDown}
+      tabIndex={-1}
+    >
+      <div style={{ maxWidth: 1240, margin: '0 auto' }}>
+
+        {/* Hero */}
+        <div style={{ textAlign: 'center' }}>
+          <div style={{
+            display: 'inline-flex', gap: 20, marginBottom: 32,
+            fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)',
+            letterSpacing: 0.8,
+          }}>
+            <span>OPEN SOURCE</span>
+            <span style={{ color: 'var(--muted-2)' }}>·</span>
+            <span>LOKAL BEHANDLING</span>
+            <span style={{ color: 'var(--muted-2)' }}>·</span>
+            <span>DIGITAL SUVERÆNITET</span>
+          </div>
+          <h1 style={{
+            fontWeight: 300, fontSize: 64, lineHeight: 1.04,
+            letterSpacing: '-0.03em', margin: 0, textWrap: 'balance' as const,
+          }}>
+            Møde til <em style={{ fontStyle: 'italic', color: 'var(--accent)', fontWeight: 300 }}>referat</em>.
+          </h1>
+          <div style={{
+            fontSize: 17, color: 'var(--ink-2)', lineHeight: 1.6,
+            maxWidth: 520, margin: '18px auto 0',
+          }}>
+            Dansk AI — kørt lokalt, frigivet åbent.<br />
+            Ingen data forlader din maskine.
+          </div>
+        </div>
+
+        {/* 3-column grid */}
+        <div style={{
+          marginTop: 72,
+          display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 56,
+          alignItems: 'center',
+        }}>
+
+          {/* LEFT — optional meeting details */}
+          <div style={{ opacity: 0.95 }}>
+            {/* Eyebrow */}
+            <div style={{
+              fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)',
+              letterSpacing: 0.4, display: 'flex', justifyContent: 'space-between',
+            }}>
+              <span>mødedetaljer</span>
+              <span style={{ color: 'var(--muted-2)' }}>valgfrit · kan tilføjes senere</span>
+            </div>
+
+            {/* Title input */}
+            <div style={{ marginTop: 18, paddingBottom: 8, borderBottom: '1px solid var(--line)' }}>
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') startRecording(); }}
+                placeholder="Hvad handler mødet om?"
+                style={{
+                  width: '100%', fontSize: 19, color: 'var(--ink)',
+                  fontWeight: 300, padding: '4px 0',
+                  background: 'transparent', border: 'none', outline: 'none',
+                }}
+              />
+            </div>
+
+            {/* Deltagere chips */}
+            <div style={{ marginTop: 24 }}>
+              <div style={{
+                fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
+                marginBottom: 8, letterSpacing: 0.4,
+              }}>deltagere</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {participants.map((p, i) => (
+                  <span key={i} style={{
+                    fontFamily: 'var(--mono)', fontSize: 12,
+                    padding: '4px 10px', borderRadius: 999,
+                    border: '1px solid var(--line-2)', background: 'var(--bg-2)',
+                    color: 'var(--ink-2)', display: 'inline-flex', alignItems: 'center', gap: 6,
+                  }}>
+                    {p}
+                    <span
+                      onClick={() => setParticipants(participants.filter((_, j) => j !== i))}
+                      style={{ color: 'var(--muted-2)', cursor: 'pointer' }}>×</span>
+                  </span>
+                ))}
+                <input
+                  value={adding}
+                  onChange={(e) => setAdding(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addParticipant(); } }}
+                  placeholder="+ tilføj"
+                  style={{
+                    fontFamily: 'var(--mono)', fontSize: 12,
+                    padding: '4px 10px', borderRadius: 999,
+                    border: '1px dashed var(--line-2)',
+                    color: 'var(--ink-2)', width: 90,
+                    background: 'transparent', outline: 'none',
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* CENTER — record button */}
+          <div style={{ textAlign: 'center' }}>
+            <button
+              onClick={startRecording}
+              disabled={loading}
+              style={{
+                width: 200, height: 200, borderRadius: 999,
+                background: loading ? 'var(--ink-2)' : 'var(--ink)',
+                color: 'var(--bg)',
+                border: 'none', cursor: loading ? 'not-allowed' : 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 1px 0 var(--line-2)',
+                transition: 'background 150ms',
+              }}
+            >
+              <span style={{
+                fontFamily: 'var(--mono)', fontSize: 13,
+                letterSpacing: 0.6, width: '100%', textAlign: 'center',
+                paddingInline: 16,
+              }}>optag</span>
+            </button>
+            <div style={{
+              marginTop: 22, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)',
+            }}>
+              eller{' '}
+              <label
+                htmlFor="upload-input"
+                style={{
+                  color: 'var(--ink-2)', textDecoration: 'underline',
+                  textDecorationColor: 'var(--line-2)', textUnderlineOffset: 3,
+                  cursor: 'pointer',
+                }}
+              >
+                upload lydfil →
+              </label>
+              <input
+                id="upload-input"
+                type="file"
+                accept="audio/*,video/*"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  if (e.target.files?.[0]) router.push('/meeting/new?mode=upload');
+                }}
+              />
+            </div>
+          </div>
+
+          {/* RIGHT — status + compliance */}
+          <div style={{ opacity: 0.95 }}>
+            {/* Eyebrow */}
+            <div style={{
+              fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)',
+              letterSpacing: 0.4,
+            }}>status</div>
+
+            {/* Hviske status */}
+            <div style={{
+              marginTop: 14, paddingBottom: 14,
+              borderBottom: '1px solid var(--line)',
+              display: 'flex', alignItems: 'center', gap: 10,
+            }}>
+              <span style={{ width: 7, height: 7, borderRadius: 999, background: 'var(--keep)', flexShrink: 0 }} />
+              <div>
+                <div style={{ fontSize: 13.5, color: 'var(--ink)' }}>Hviske · klar</div>
+                <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', marginTop: 2 }}>
+                  v5.3 · lokal · GPU 1
+                </div>
+              </div>
+            </div>
+
+            {/* Mic status */}
+            <div style={{ marginTop: 18 }}>
+              <div style={{
+                fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
+                marginBottom: 8, letterSpacing: 0.4,
+              }}>mikrofon · MacBook Pro</div>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 22 }}>
+                {[6, 10, 16, 22, 14, 8, 12, 18, 14, 9, 6, 11, 17, 21, 13, 8, 10, 14, 18, 12, 8, 6, 9, 12].map((h, i) => (
+                  <span key={i} style={{ width: 2, height: h, background: 'var(--ink-2)', opacity: 0.7, display: 'block' }} />
+                ))}
+              </div>
+            </div>
+
+            {/* Compliance */}
+            <div style={{ marginTop: 24 }}>
+              <div style={{
+                fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
+                marginBottom: 10, letterSpacing: 0.4,
+              }}>§ databehandling</div>
+              <div style={{
+                fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
+                lineHeight: 1.8, letterSpacing: 0.2,
+              }}>
+                lyden gemmes lokalt på din enhed<br />
+                slettes automatisk efter 14 dage<br />
+                personoplysninger fjernes inden referat
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer hint — right-aligned, archive link only */}
+        <div style={{
+          marginTop: 96, paddingTop: 24, borderTop: '1px solid var(--line)',
+          display: 'flex', justifyContent: 'flex-end',
+          fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
+        }}>
+          {meetingCount != null && meetingCount > 0 ? (
+            <Link
+              href="/arkiv"
+              style={{
+                color: 'var(--ink-2)', textDecoration: 'underline',
+                textDecorationColor: 'var(--line-2)', textUnderlineOffset: 3,
+              }}
+            >
+              se {meetingCount} tidligere møder i arkivet →
+            </Link>
+          ) : (
+            <span>ingen tidligere møder</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

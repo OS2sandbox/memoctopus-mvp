@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 
@@ -49,6 +50,18 @@ export async function deleteAudioFile(userId: string, filename: string): Promise
       throw err;
     }
   }
+}
+
+export function getAudioFilePath(userId: string, filename: string): string {
+  return path.join(getUserAudioDir(userId), filename);
+}
+
+export function createAudioReadStream(
+  userId: string,
+  filename: string,
+  opts?: { start?: number; end?: number },
+): fsSync.ReadStream {
+  return fsSync.createReadStream(getAudioFilePath(userId, filename), opts);
 }
 
 export async function audioFileExists(userId: string, filename: string): Promise<boolean> {

@@ -11,15 +11,19 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-          'bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] active:bg-[var(--accent-hover)]',
+          'bg-[var(--accent)] text-white hover:bg-[var(--accent-ink)] active:bg-[var(--accent-ink)]',
         secondary:
-          'bg-[var(--surface-2)] text-[var(--text)] hover:bg-[var(--border-strong)] border border-[var(--border)]',
+          'bg-[var(--surface-2)] text-[var(--ink)] hover:bg-[var(--line-strong)] border border-[var(--line)]',
         outline:
-          'border border-[var(--border-strong)] bg-transparent text-[var(--text)] hover:bg-[var(--surface-2)]',
-        ghost: 'bg-transparent text-[var(--text)] hover:bg-[var(--surface-2)]',
+          'border border-[var(--line-strong)] bg-transparent text-[var(--ink)] hover:bg-[var(--surface-2)]',
+        ghost:
+          'bg-transparent text-[var(--ink)] hover:bg-[var(--surface-2)]',
         destructive:
-          'bg-[var(--danger)] text-white hover:bg-red-700',
-        link: 'bg-transparent text-[var(--accent)] underline-offset-4 hover:underline p-0 h-auto min-h-0',
+          'bg-[var(--danger)] text-white hover:opacity-90',
+        'danger-ghost':
+          'bg-transparent text-[var(--danger)] border border-[var(--danger)] hover:bg-[var(--danger-wash)] active:bg-[var(--danger-wash)]',
+        link:
+          'bg-transparent text-[var(--accent)] underline-offset-4 hover:underline p-0 h-auto min-h-0',
       },
       size: {
         default: 'h-11 min-h-[44px] px-4 py-2 text-sm rounded-[var(--radius)]',

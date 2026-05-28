@@ -1,22 +1,54 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #fafaf8;
-  --surface: #ffffff;
-  --surface-2: #f4f4f2;
-  --border: #e5e5e2;
-  --border-strong: #ccccc8;
-  --text: #0f0f0e;
-  --text-2: #3d3d3a;
-  --text-muted: #737370;
-  --accent: #1d4ed8;
-  --accent-hover: #1e40af;
-  --accent-soft: #eff6ff;
-  --success: #16a34a;
-  --warning: #d97706;
-  --danger: #dc2626;
-  --radius: 4px;
-  --radius-lg: 8px;
+  /* Surface */
+  --bg:           #ffffff;
+  --bg-2:         #f6f6f6;
+  --surface:      #ffffff;
+  --surface-2:    #f6f6f6;
+  --sunk:         #efefef;
+  --surface-sunk: #efefef;
+
+  /* Ink */
+  --ink:          #111111;
+  --ink-2:        #333333;
+  --muted:        #888888;
+  --muted-2:      #bbbbbb;
+
+  /* Hairlines */
+  --line:         #e4e4e4;
+  --line-2:       #cccccc;
+  --line-strong:  #cccccc;
+
+  /* Accent — vivid syv.ai blue */
+  --accent:       oklch(0.46 0.28 264);
+  --accent-ink:   oklch(0.32 0.20 264);
+  --accent-wash:  oklch(0.97 0.05 264);
+
+  /* Signal */
+  --kill:         oklch(0.52 0.17 25);
+  --kill-wash:    oklch(0.97 0.018 25);
+  --keep:         oklch(0.50 0.11 155);
+  --danger:       oklch(0.52 0.17 25);
+  --danger-wash:  oklch(0.97 0.018 25);
+  --warn:         oklch(0.65 0.13 75);
+  --ok:           oklch(0.50 0.11 155);
+
+  /* Geometry */
+  --radius-sm: 3px;
+  --radius:    4px;
+  --radius-lg: 6px;
+
+  /* Type ramp (px, fixed) */
+  --t-display:  44px;
+  --t-h1:       28px;
+  --t-h2:       20px;
+  --t-body:     15px;
+  --t-small:    13px;
+  --t-micro:    11px;
+
+  /* Mono font shorthand */
+  --mono: var(--font-geist-mono), ui-monospace, 'SF Mono', monospace;
 }
 
 *,
@@ -28,18 +60,27 @@
 html {
   font-size: 16px;
   -webkit-text-size-adjust: 100%;
+  background: var(--bg);
 }
 
 body {
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  font-size: 1rem;
+  --font-mono: var(--font-geist-mono), ui-monospace, 'SF Mono', monospace;
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  font-size: var(--t-body);
   line-height: 1.6;
-  color: var(--text);
+  color: var(--ink);
   background-color: var(--bg);
   margin: 0;
   padding: 0;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.003em;
+}
+
+/* Selection */
+::selection {
+  background: var(--accent-wash);
+  color: var(--ink);
 }
 
 /* Focus visible */
@@ -61,7 +102,7 @@ a:hover {
 h1, h2, h3, h4 {
   font-weight: 600;
   line-height: 1.3;
-  color: var(--text);
+  color: var(--ink);
 }
 
 /* Form elements */
@@ -79,11 +120,11 @@ button, input, textarea, select {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
+  background: var(--line-strong);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
+  background: var(--muted);
 }
 
 /* Animations */
@@ -102,34 +143,25 @@ button, input, textarea, select {
   from { opacity: 1; }
   to { opacity: 0; }
 }
-@keyframes zoom-in {
-  from { transform: translate(-50%, -50%) scale(0.96); }
-  to { transform: translate(-50%, -50%) scale(1); }
+
+@keyframes protoPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
-@keyframes zoom-out {
-  from { transform: translate(-50%, -50%) scale(1); }
-  to { transform: translate(-50%, -50%) scale(0.96); }
-}
-@keyframes slide-in-from-top {
-  from { transform: translate(-50%, calc(-50% - 8px)); }
-  to { transform: translate(-50%, -50%); }
+@keyframes protoBlink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
 }
 
 .data-\[state\=open\]\:animate-in[data-state=open] {
-  animation: fade-in 0.15s ease;
+  animation: fade-in 0.08s ease;
 }
 .data-\[state\=closed\]\:animate-out[data-state=closed] {
-  animation: fade-out 0.1s ease;
+  animation: fade-out 0.08s ease;
 }
 .data-\[state\=open\]\:fade-in-0[data-state=open] {
   opacity: 1;
 }
 .data-\[state\=closed\]\:fade-out-0[data-state=closed] {
   opacity: 0;
-}
-.data-\[state\=open\]\:zoom-in-95[data-state=open] {
-  transform: translate(-50%, -50%) scale(1);
-}
-.data-\[state\=closed\]\:zoom-out-95[data-state=closed] {
-  transform: translate(-50%, -50%) scale(0.96);
 }

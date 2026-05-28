@@ -74,6 +74,19 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     return NextResponse.json({ version: newVersion, newVersion: versionRow });
   }
 
+  // Handle title rename
+  if (body.title !== undefined) {
+    const titleSchema = z.object({ title: z.string().min(1) });
+    const parsed = titleSchema.safeParse(body);
+    if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    await queryUserSchemaOne(
+      session.user.id,
+      'UPDATE meetings SET title = $1, updated_at = NOW() WHERE id = $2',
+      [parsed.data.title, id],
+    );
+    return NextResponse.json({ ok: true });
+  }
+
   // Handle status update
   if (body.status) {
     const statusSchema = z.object({ status: z.enum(['recording', 'processing', 'review', 'minutes', 'done']) });

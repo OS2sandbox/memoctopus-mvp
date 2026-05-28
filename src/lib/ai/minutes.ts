@@ -1,11 +1,11 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { Mistral } from '@mistralai/mistralai';
 import { TranscriptSegment, TemplateSuggestion, MinutesContent, TemplateSectionDef } from '@/types';
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
-});
-
-// ─── System prompt (cached) ──────────────────────────────────────────────────
+let client: Mistral | null = null;
+function getClient() {
+  if (!client) client = new Mistral({ apiKey: process.env.MISTRAL_API_KEY! });
+  return client;
+}
 
 const MINUTES_SYSTEM_PROMPT = `Du er en dansk mødesekretær der udarbejder professionelle mødereferater.
 
@@ -17,8 +17,6 @@ Du skriver:
 
 Returner ALTID valid JSON uden markdown code blocks.`;
 
-// ─── Template suggestion ─────────────────────────────────────────────────────
-
 export async function suggestTemplate(
   transcript: TranscriptSegment[],
   availableTemplates: Array<{ id: string; name: string; description: string }>,
@@ -28,17 +26,10 @@ export async function suggestTemplate(
     .map((t) => `- ${t.name} (id: ${t.id}): ${t.description}`)
     .join('\n');
 
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 512,
-    system: [
-      {
-        type: 'text',
-        text: MINUTES_SYSTEM_PROMPT,
-        cache_control: { type: 'ephemeral' },
-      },
-    ],
+  const response = await getClient().chat.complete({
+    model: 'mistral-large-latest',
     messages: [
+      { role: 'system', content: MINUTES_SYSTEM_PROMPT },
       {
         role: 'user',
         content: `Baseret på denne transskription, hvilken skabelon passer bedst?
@@ -59,14 +50,11 @@ Returner JSON:
     ],
   });
 
-  const content = response.content[0];
-  if (content.type !== 'text') {
-    throw new Error('Unexpected response from Claude');
-  }
+  const raw = (response.choices?.[0]?.message?.content as string) ?? '';
 
   try {
-    const raw = content.text.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
-    return JSON.parse(raw) as TemplateSuggestion;
+    const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+    return JSON.parse(cleaned) as TemplateSuggestion;
   } catch {
     return {
       templateId: null,
@@ -76,13 +64,14 @@ Returner JSON:
   }
 }
 
-// ─── Minutes generation ──────────────────────────────────────────────────────
-
 export async function generateMinutes(
   transcript: TranscriptSegment[],
   templateSections: TemplateSectionDef[],
+  customPrompt?: string,
 ): Promise<MinutesContent> {
-  const transcriptText = transcript.map((s) => `[${s.speaker}] (${formatTime(s.start)}): ${s.text}`).join('\n');
+  const transcriptText = transcript
+    .map((s) => `[${s.speaker}] (${formatTime(s.start)}): ${s.text}`)
+    .join('\n');
 
   const sectionDescriptions = templateSections
     .map(
@@ -91,21 +80,14 @@ export async function generateMinutes(
     )
     .join('\n');
 
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 4096,
-    system: [
-      {
-        type: 'text',
-        text: MINUTES_SYSTEM_PROMPT,
-        cache_control: { type: 'ephemeral' },
-      },
-    ],
+  const response = await getClient().chat.complete({
+    model: 'mistral-large-latest',
     messages: [
+      { role: 'system', content: MINUTES_SYSTEM_PROMPT },
       {
         role: 'user',
         content: `Udarbejd et mødereferat baseret på denne transskription.
-
+${customPrompt ? `\nBrugerens instruktion til referatet: ${customPrompt}\n` : ''}
 Referat skal have følgende sektioner:
 ${sectionDescriptions}
 
@@ -128,27 +110,66 @@ Skriv indholdet i sektionerne som klart, præcist dansk. Brug punktlister hvor d
     ],
   });
 
-  const content = response.content[0];
-  if (content.type !== 'text') {
-    throw new Error('Unexpected response from Claude');
-  }
+  const raw = (response.choices?.[0]?.message?.content as string) ?? '';
 
   try {
-    const raw = content.text.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
-    return JSON.parse(raw) as MinutesContent;
+    const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+    return JSON.parse(cleaned) as MinutesContent;
   } catch {
-    // Return empty sections matching the template
     return {
-      sections: templateSections.map((s) => ({
-        key: s.key,
-        label: s.label,
-        content: '',
-      })),
+      sections: templateSections.map((s) => ({ key: s.key, label: s.label, content: '' })),
     };
   }
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+export async function generateMinutesFreeform(
+  transcript: TranscriptSegment[],
+  customPrompt: string,
+): Promise<MinutesContent> {
+  const transcriptText = transcript
+    .map((s) => `[${s.speaker}] (${formatTime(s.start)}): ${s.text}`)
+    .join('\n');
+
+  const response = await getClient().chat.complete({
+    model: 'mistral-large-latest',
+    messages: [
+      { role: 'system', content: MINUTES_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `Udarbejd et mødereferat baseret på denne transskription.
+
+Brugerens instruktion: ${customPrompt}
+
+Beslut selv hvilke sektioner referatet skal have baseret på transskriptionen og brugerens instruktion. Brug 2–6 sektioner der passer til indholdet.
+
+Transskription:
+${transcriptText}
+
+Returner JSON med denne struktur:
+{
+  "sections": [
+    {
+      "key": "sektionsnøgle",
+      "label": "Sektionsoverskrift",
+      "content": "Sektionens indhold som markdown-tekst"
+    }
+  ]
+}
+
+Skriv indholdet som klart, præcist dansk. Brug punktlister hvor det er relevant.`,
+      },
+    ],
+  });
+
+  const raw = (response.choices?.[0]?.message?.content as string) ?? '';
+
+  try {
+    const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+    return JSON.parse(cleaned) as MinutesContent;
+  } catch {
+    return { sections: [] };
+  }
+}
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);

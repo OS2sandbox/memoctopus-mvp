@@ -2,17 +2,10 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { MinutesContent, MinutesSection } from '@/types';
-import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
 import { SaveStatus, SaveState } from '@/components/layout/SaveStatus';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { VersionHistory } from './VersionHistory';
+import { RichEditor } from './RichEditor';
 
 interface VersionRecord {
   id: string;
@@ -42,8 +35,10 @@ export function MinutesEditor({
   const [version, setVersion] = useState(initialVersion);
   const [versions, setVersions] = useState(initialVersions);
   const [showHistory, setShowHistory] = useState(false);
+  const [addingSection, setAddingSection] = useState(false);
+  const [newLabel, setNewLabel] = useState('');
+  const newLabelRef = useRef<HTMLInputElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isDirtyRef = useRef(false);
 
   const save = useCallback(
     async (contentToSave: MinutesContent) => {
@@ -62,7 +57,6 @@ export function MinutesEditor({
         }
         setSaveState('saved');
         setTimeout(() => setSaveState('idle'), 2000);
-        isDirtyRef.current = false;
       } catch {
         setSaveState('error');
       }
@@ -71,19 +65,14 @@ export function MinutesEditor({
   );
 
   function updateSection(key: string, text: string) {
-    setContent((prev) => ({
-      sections: prev.sections.map((s) =>
-        s.key === key ? { ...s, content: text } : s,
-      ),
-    }));
-    isDirtyRef.current = true;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      setContent((current) => {
-        save(current);
-        return current;
-      });
-    }, AUTOSAVE_DELAY);
+    setContent((prev) => {
+      const next = {
+        sections: prev.sections.map((s) => (s.key === key ? { ...s, content: text } : s)),
+      };
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => save(next), AUTOSAVE_DELAY);
+      return next;
+    });
   }
 
   useEffect(() => {
@@ -92,6 +81,26 @@ export function MinutesEditor({
     };
   }, []);
 
+  function openAddSection() {
+    setNewLabel('');
+    setAddingSection(true);
+    setTimeout(() => newLabelRef.current?.focus(), 0);
+  }
+
+  function commitAddSection() {
+    const label = newLabel.trim();
+    if (!label) { setAddingSection(false); return; }
+    const key = `custom_${Date.now()}`;
+    setContent((prev) => {
+      const next = { sections: [...prev.sections, { key, label, content: '' }] };
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => save(next), AUTOSAVE_DELAY);
+      return next;
+    });
+    setAddingSection(false);
+    setNewLabel('');
+  }
+
   function handleRestore(restoredContent: MinutesContent) {
     setContent(restoredContent);
     setShowHistory(false);
@@ -99,67 +108,169 @@ export function MinutesEditor({
   }
 
   return (
-    <div className="mx-auto max-w-[960px] px-4 py-8">
-      <div className="flex items-center justify-between gap-4 mb-6">
+    <div className="mx-auto max-w-[720px] px-6 py-12">
+      <div className="flex items-start justify-between mb-12">
         <div>
-          <h1 className="text-xl font-semibold text-[var(--text)]">Referat</h1>
-          <p className="mt-0.5 text-sm text-[var(--text-muted)]">
-            Version {version} · Gemmes automatisk
+          <h1
+            style={{ fontSize: 'var(--t-h1)', fontWeight: 300, color: 'var(--ink)', margin: 0 }}
+          >
+            Referat
+          </h1>
+          <p className="mt-1 text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
+            Version {version}
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 mt-1">
           <SaveStatus state={saveState} />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowHistory(true)}
-          >
-            Versionshistorik
+          <Button variant="ghost" size="sm" onClick={() => setShowHistory(true)}>
+            Historik
           </Button>
           <Button
             variant="default"
             size="sm"
-            onClick={() => window.location.href = `/meeting/${meetingId}/share`}
+            onClick={() => (window.location.href = `/meeting/${meetingId}/export`)}
           >
             Eksportér
           </Button>
         </div>
       </div>
 
-      <div className="rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] divide-y divide-[var(--border)]">
-        {content.sections.map((section: MinutesSection, i: number) => (
-          <div key={section.key} className="px-6 py-5">
-            <label
-              htmlFor={`section-${section.key}`}
-              className="block text-sm font-semibold text-[var(--text)] mb-2"
+      <div className="space-y-10">
+        {content.sections.map((section: MinutesSection) => (
+          <div key={section.key}>
+            <h2
+              className="mb-3 font-medium text-[var(--ink)]"
+              style={{ fontSize: 'var(--t-h2)' }}
             >
               {section.label}
-            </label>
-            <Textarea
-              id={`section-${section.key}`}
+            </h2>
+            <RichEditor
               value={section.content}
-              onChange={(e) => updateSection(section.key, e.target.value)}
-              placeholder={`Skriv ${section.label.toLowerCase()} her...`}
-              className="min-h-[120px] text-sm leading-relaxed"
-              rows={Math.max(4, Math.ceil(section.content.length / 80))}
+              onChange={(md) => updateSection(section.key, md)}
+              placeholder={`Skriv ${section.label.toLowerCase()} her…`}
             />
           </div>
         ))}
       </div>
 
-      {/* Version history dialog */}
-      <Dialog open={showHistory} onOpenChange={setShowHistory}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Versionshistorik</DialogTitle>
-          </DialogHeader>
-          <VersionHistory
-            versions={versions}
-            currentVersion={version}
-            onRestore={handleRestore}
-          />
-        </DialogContent>
-      </Dialog>
+      {/* Add section */}
+      <div className="mt-10">
+        {addingSection ? (
+          <div className="flex items-center gap-2">
+            <input
+              ref={newLabelRef}
+              type="text"
+              value={newLabel}
+              onChange={(e) => setNewLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitAddSection();
+                if (e.key === 'Escape') setAddingSection(false);
+              }}
+              placeholder="Navn på afsnit…"
+              style={{
+                flex: 1,
+                border: '1px solid var(--accent)',
+                borderRadius: 'var(--radius)',
+                background: 'var(--surface)',
+                outline: 'none',
+                padding: '6px 10px',
+                fontSize: 'var(--t-body)',
+                color: 'var(--ink)',
+              }}
+            />
+            <button
+              onClick={commitAddSection}
+              style={{
+                padding: '6px 14px',
+                borderRadius: 'var(--radius)',
+                background: 'var(--ink)',
+                color: 'white',
+                fontSize: 'var(--t-small)',
+                fontWeight: 500,
+                border: 'none',
+                cursor: 'pointer',
+              }}
+            >
+              Tilføj
+            </button>
+            <button
+              onClick={() => setAddingSection(false)}
+              style={{
+                padding: '6px 10px',
+                borderRadius: 'var(--radius)',
+                background: 'transparent',
+                color: 'var(--muted)',
+                fontSize: 'var(--t-small)',
+                border: '1px solid var(--line)',
+                cursor: 'pointer',
+              }}
+            >
+              Annullér
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={openAddSection}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '6px 12px',
+              borderRadius: 'var(--radius)',
+              border: '1px dashed var(--line-strong)',
+              background: 'transparent',
+              color: 'var(--muted)',
+              fontSize: 'var(--t-small)',
+              cursor: 'pointer',
+              transition: 'color 0.15s, border-color 0.15s',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = 'var(--ink)';
+              e.currentTarget.style.borderColor = 'var(--ink-3)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = 'var(--muted)';
+              e.currentTarget.style.borderColor = 'var(--line-strong)';
+            }}
+          >
+            <span style={{ fontSize: 16, lineHeight: 1 }}>+</span>
+            Tilføj afsnit
+          </button>
+        )}
+      </div>
+
+      {showHistory && (
+        <div
+          className="fixed inset-y-0 right-0 z-50 w-80 bg-[var(--surface)] border-l border-[var(--line)] shadow-lg flex flex-col"
+          style={{ animation: 'slide-in-from-right 0.15s ease' }}
+        >
+          <style>{`
+            @keyframes slide-in-from-right {
+              from { transform: translateX(100%); }
+              to   { transform: translateX(0); }
+            }
+          `}</style>
+          <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--line)]">
+            <span className="font-medium text-[var(--ink)]" style={{ fontSize: 'var(--t-body)' }}>
+              Versionshistorik
+            </span>
+            <button
+              onClick={() => setShowHistory(false)}
+              className="text-[var(--muted)] hover:text-[var(--ink)] transition-colors"
+              aria-label="Luk"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <VersionHistory
+              versions={versions}
+              currentVersion={version}
+              onRestore={handleRestore}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

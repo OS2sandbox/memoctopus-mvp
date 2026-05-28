@@ -31,7 +31,8 @@ export interface MinutesSection {
 export interface PiiReplacement {
   original: string;
   replacement: string;
-  type: 'NAVN' | 'CPR' | 'ADRESSE' | 'TELEFON' | 'EMAIL' | 'OTHER';
+  type: 'NAVN' | 'CPR' | 'ADRESSE' | 'TELEFON' | 'EMAIL' | 'OTHER' | 'ANDEN_PII';
+  segmentIndex?: number;
 }
 
 export interface PiiResult {

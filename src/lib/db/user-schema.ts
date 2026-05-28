@@ -71,12 +71,23 @@ export async function ensureUserSchema(userId: string): Promise<void> {
     // transcripts
     await client.query(`
       CREATE TABLE IF NOT EXISTS "${schema}".transcripts (
-        id             TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-        meeting_id     TEXT NOT NULL REFERENCES "${schema}".meetings(id) ON DELETE CASCADE,
-        raw_text       TEXT NOT NULL DEFAULT '',
-        segments       JSONB NOT NULL DEFAULT '[]',
-        pii_removed_at TIMESTAMPTZ
+        id               TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        meeting_id       TEXT NOT NULL REFERENCES "${schema}".meetings(id) ON DELETE CASCADE,
+        raw_text         TEXT NOT NULL DEFAULT '',
+        segments         JSONB NOT NULL DEFAULT '[]',
+        pii_removed_at   TIMESTAMPTZ,
+        pii_replacements JSONB NOT NULL DEFAULT '[]'
       )
+    `);
+
+    await client.query(`
+      ALTER TABLE "${schema}".transcripts
+      ADD COLUMN IF NOT EXISTS pii_replacements JSONB NOT NULL DEFAULT '[]'
+    `);
+
+    await client.query(`
+      ALTER TABLE "${schema}".transcripts
+      ADD COLUMN IF NOT EXISTS chapters JSONB NOT NULL DEFAULT '[]'
     `);
 
     // minutes
