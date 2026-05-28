@@ -87,6 +87,9 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const interimTextRef = useRef('');
   const recordingActiveRef = useRef(false);
+  // True while an ElevenLabs batch request is in-flight — freezes Web Speech API
+  // updates so the captured interim text stays visible as a placeholder.
+  const batchInFlightRef = useRef(false);
   // Maps clip-local ElevenLabs speaker label → session-wide label (e.g. "Taler 1" → "Taler 2")
   // so speaker identity stays consistent across clips even though each clip restarts at "Taler 1".
   const speakerMapRef = useRef<Map<string, string>>(new Map());
@@ -129,6 +132,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     setLiveSegments([]);
     interimTextRef.current = '';
     setInterimText('');
+    batchInFlightRef.current = false;
     speakerMapRef.current = new Map();
     nextSpeakerRef.current = 1;
     setTopics([]);
@@ -145,6 +149,9 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     r.interimResults = true;
     r.lang = 'da-DK';
     r.onresult = (e: SpeechRecognitionEvent) => {
+      // While ElevenLabs batch is in-flight, freeze interim so the captured text
+      // stays visible as a placeholder instead of being overwritten by a new session.
+      if (batchInFlightRef.current) return;
       let text = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
         text += e.results[i][0].transcript;
@@ -190,11 +197,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   }
 
   async function transcribeSpeechSegment(audio: Float32Array) {
-    console.log('[transcribe] called, recorder state:', mediaRecorderRef.current?.state);
     if (mediaRecorderRef.current?.state !== 'recording') return;
     const segStart = speechSegmentStartRef.current;
     const segEnd = (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000;
 
+    batchInFlightRef.current = true;
     const formData = new FormData();
     formData.append('audio', float32ToWav(audio, 16_000), 'segment.wav');
     try {
@@ -225,6 +232,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
     } catch (err) {
       console.error('[transcribe] error:', err);
+    } finally {
+      batchInFlightRef.current = false;
     }
   }
 
@@ -242,7 +251,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         onSpeechEnd: (audio: Float32Array) => { void transcribeSpeechSegment(audio); },
       }) as unknown as MicVADInstance;
 
-      // Recording may have stopped while ONNX was loading — close the ghost AudioContext and bail
+      // Recording may have stopped (or been paused) while ONNX was loading — close the ghost AudioContext and bail
       if (!recordingActiveRef.current) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (micvad as any).audioContext?.close();
@@ -250,7 +259,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       }
 
       vadRef.current = micvad;
-      micvad.start();
+      // Only start VAD if the recorder is actively recording, not paused
+      if (mediaRecorderRef.current?.state === 'recording') {
+        micvad.start();
+      }
     } catch (err) {
       console.error('[VAD] init failed:', err);
     }
@@ -276,16 +288,31 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   async function startRecording() {
     setError(null);
     resetLiveState();
+    // Tracked outside try so the catch can release it if setup fails after getUserMedia
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      // Create AudioContext immediately so volume polling starts right away (not blocked by VAD/ONNX load)
-      const ctx = new AudioContext();
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 512;
-      ctx.createMediaStreamSource(stream).connect(analyser);
-      audioContextRef.current = ctx;
-      analyserRef.current = analyser;
+      // Volume meter — non-critical. If the Web Audio API can't open the hardware device
+      // (e.g. macOS CoreAudio in a bad state), recording still proceeds without the bar.
+      try {
+        const ctx = new AudioContext();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        ctx.createMediaStreamSource(stream).connect(analyser);
+        audioContextRef.current = ctx;
+        analyserRef.current = analyser;
+        // Chrome may start the context suspended (autoplay policy / autostart path).
+        await ctx.resume();
+        // Auto-recover if the system later suspends the context (e.g. macOS CoreAudio reset).
+        ctx.onstatechange = () => {
+          if (ctx.state === 'suspended' && recordingActiveRef.current) void ctx.resume();
+        };
+      } catch (audioErr) {
+        console.warn('[startRecording] AudioContext unavailable, volume meter disabled:', audioErr);
+        audioContextRef.current = null;
+        analyserRef.current = null;
+      }
 
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
@@ -316,8 +343,21 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
       void initVAD(stream);
       initSpeechRecognition();
-    } catch {
-      setError('Kunne ikke få adgang til mikrofonen. Tjek at tilladelsen er givet i browseren.');
+    } catch (err) {
+      // Release the mic if we acquired it but failed during setup — otherwise it stays locked
+      stream?.getTracks().forEach((t) => t.stop());
+      audioContextRef.current?.close();
+      audioContextRef.current = null;
+      analyserRef.current = null;
+      console.error('[startRecording]', err);
+
+      if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
+        setError('Mikrofonens tilladelse er afvist. Tillad adgang i browserens adresselinje og prøv igen.');
+      } else if (err instanceof DOMException && (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError')) {
+        setError('Ingen mikrofon fundet. Er en mikrofon tilsluttet? På Mac: kør "sudo killall coreaudiod" i Terminal og prøv igen.');
+      } else {
+        setError(`Optagelse fejlede: ${err instanceof Error ? err.message : String(err)}. Prøv at genindlæse siden.`);
+      }
     }
   }
 
@@ -326,6 +366,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     mediaRecorderRef.current.pause();
     vadRef.current?.pause();
     recognitionRef.current?.abort();
+    // Suspend the AudioContext so it releases the hardware and stops generating errors
+    void audioContextRef.current?.suspend();
     pauseStartRef.current = Date.now();
     if (timerRef.current) clearInterval(timerRef.current);
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
@@ -333,8 +375,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     setRecordingState('paused');
   }
 
-  function resumeRecording() {
+  async function resumeRecording() {
     if (!mediaRecorderRef.current) return;
+    // Await the resume so the AudioContext is fully running before pollVolume starts reading
+    await audioContextRef.current?.resume();
     mediaRecorderRef.current.resume();
     vadRef.current?.start();
     initSpeechRecognition();
