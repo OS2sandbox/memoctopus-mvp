@@ -13,14 +13,16 @@
     "db:studio": "drizzle-kit studio",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "copy-vad-assets": "node -e \"const fs=require('fs'),p='node_modules/@ricky0123/vad-web/dist/';['vad.worklet.bundle.min.js','silero_vad_legacy.onnx','silero_vad_v5.onnx'].forEach(f=>{try{fs.copyFileSync(p+f,'public/'+f);console.log('Copied',f)}catch(e){console.warn('Could not copy',f,e.message)}})\"",
+    "postinstall": "npm run copy-vad-assets"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@better-auth/core": "^1.6.11",
     "@better-auth/drizzle-adapter": "^1.6.11",
     "@hookform/resolvers": "^3.9.1",
-    "@mistralai/mistralai": "^2.2.1",
+    "@ricky0123/vad-web": "^0.0.22",
     "@radix-ui/react-dialog": "^1.1.4",
     "@radix-ui/react-dropdown-menu": "^2.1.4",
     "@radix-ui/react-label": "^2.1.1",
@@ -39,6 +41,7 @@
     "jspdf": "^4.2.1",
     "next": "15.5.18",
     "openai": "^4.95.1",
+    "onnxruntime-web": "1.14.0",
     "pg": "^8.14.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

@@ -3,20 +3,9 @@
 import React, { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
 
-interface TopBarProps {
-  user: { name: string; email: string };
-}
-
-export function TopBar({ user }: TopBarProps) {
+export function TopBar() {
   const pathname = usePathname();
   const router = useRouter();
   const [showConfirm, setShowConfirm] = useState(false);
@@ -42,11 +31,6 @@ export function TopBar({ user }: TopBarProps) {
       e.preventDefault();
       setShowConfirm(true);
     }
-  }
-
-  async function handleSignOut() {
-    await fetch('/api/auth/sign-out', { method: 'POST' });
-    window.location.href = '/login';
   }
 
   return (
@@ -104,49 +88,6 @@ export function TopBar({ user }: TopBarProps) {
             );
           })}
         </nav>
-
-        {/* User menu */}
-        <div style={{ marginLeft: 'auto' }}>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                background: 'none', border: 'none', cursor: 'pointer',
-                padding: '4px 0',
-              }}>
-                <span style={{
-                  width: 28, height: 28, borderRadius: 999,
-                  border: '1px solid var(--line-2)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--ink-2)',
-                  flexShrink: 0,
-                }}>
-                  {user.name.charAt(0).toUpperCase()}
-                </span>
-                <span style={{ fontSize: 13, color: 'var(--ink-2)' }}>{user.name}</span>
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <div className="px-2 py-1.5">
-                <p className="text-sm font-medium text-[var(--ink)]">{user.name}</p>
-                <p className="text-xs text-[var(--muted)]">{user.email}</p>
-              </div>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem asChild>
-                <Link href="/settings/data" className="cursor-pointer">
-                  Indstillinger
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-[var(--danger)] focus:text-[var(--danger)] focus:bg-[var(--danger-wash)]"
-                onClick={handleSignOut}
-              >
-                Log ud
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
       </header>
     </>
   );

@@ -216,11 +216,17 @@ export function getUserSchemaName(userId: string): string {
 
 // ─── Per-user query helpers ─────────────────────────────────────────────────
 
+const initializedSchemas = new Set<string>();
+
 export async function queryUserSchema<T = Record<string, unknown>>(
   userId: string,
   sql: string,
   params: unknown[] = [],
 ): Promise<T[]> {
+  if (!initializedSchemas.has(userId)) {
+    await ensureUserSchema(userId);
+    initializedSchemas.add(userId);
+  }
   const client = await pool.connect();
   try {
     const schema = schemaName(userId);

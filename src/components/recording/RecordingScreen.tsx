@@ -13,7 +13,6 @@ import {
 } from '@/components/ui/dialog';
 import { VolumeBar } from './VolumeBar';
 import { formatDuration, formatFileSize } from '@/lib/utils';
-import { pendingUpload } from '@/lib/pending-upload';
 
 interface LiveSegment {
   speaker: string;
@@ -38,7 +37,6 @@ type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
 const BYTES_PER_SECOND_ESTIMATE = 16_000;
 const SILENCE_THRESHOLD_SECONDS = 5;
 const SILENCE_VOLUME_THRESHOLD = 0.02;
-const LIVE_CHUNK_INTERVAL = 15_000;
 const TOPIC_INTERVAL = 25_000;
 
 export function RecordingScreen({ meetingId, existingRecording, onNavigateToReview }: RecordingScreenProps) {
@@ -58,10 +56,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const [liveSegments, setLiveSegments] = useState<LiveSegment[]>([]);
   const [topics, setTopics] = useState<TopicItem[]>([]);
   const liveSegmentsRef = useRef<LiveSegment[]>([]);
-  const headerChunkRef = useRef<Blob | null>(null);
-  const lastChunkIndexRef = useRef(0);
   const mimeTypeRef = useRef('audio/webm');
-  const chunkIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const topicIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -101,45 +96,9 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     liveSegmentsRef.current = [];
     setLiveSegments([]);
     setTopics([]);
-    lastChunkIndexRef.current = 0;
-    headerChunkRef.current = null;
   }
 
-  async function sendLiveChunk() {
-    const chunks = chunksRef.current;
-    const from = lastChunkIndexRef.current;
-    const newChunks = chunks.slice(from);
-    if (newChunks.length < 5 || !headerChunkRef.current) return;
-    lastChunkIndexRef.current = chunks.length;
-
-    const parts = from === 0 ? newChunks : [headerChunkRef.current, ...newChunks];
-    const blob = new Blob(parts, { type: mimeTypeRef.current });
-    const ext = mimeTypeRef.current.includes('mp4') ? 'm4a' : 'webm';
-    const form = new FormData();
-    form.append('audio', blob, `live.${ext}`);
-
-    // Compute how far into the recording this chunk starts.
-    // Whisper timestamps are relative to each chunk's start, so we offset them
-    // to make them recording-relative.
-    const elapsedSec = (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000;
-    const chunkOffset = Math.max(0, elapsedSec - newChunks.length);
-
-    try {
-      const res = await fetch(`/api/meetings/${meetingId}/live-transcribe`, { method: 'POST', body: form });
-      if (!res.ok) return;
-      const data = await res.json() as { segments?: LiveSegment[] };
-      const segs = (data.segments ?? []).map((seg) => ({
-        ...seg,
-        start: (seg.start ?? 0) + chunkOffset,
-        end: (seg.end ?? 0) + chunkOffset,
-      }));
-      if (segs.length > 0) {
-        liveSegmentsRef.current = [...liveSegmentsRef.current, ...segs];
-        setLiveSegments([...liveSegmentsRef.current]);
-        setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
-      }
-    } catch {}
-  }
+  // ── Recording lifecycle ───────────────────────────────────────────────────────
 
   async function refreshTopics() {
     if (liveSegmentsRef.current.length === 0) return;
@@ -179,10 +138,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       chunksRef.current = [];
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          if (chunksRef.current.length === 0) headerChunkRef.current = e.data;
-          chunksRef.current.push(e.data);
-        }
+        if (e.data.size > 0) chunksRef.current.push(e.data);
       };
 
       recorder.start(1000);
@@ -196,7 +152,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       }, 500);
 
       animFrameRef.current = requestAnimationFrame(pollVolume);
-      chunkIntervalRef.current = setInterval(sendLiveChunk, LIVE_CHUNK_INTERVAL);
       topicIntervalRef.current = setInterval(refreshTopics, TOPIC_INTERVAL);
     } catch {
       setError('Kunne ikke få adgang til mikrofonen. Tjek at tilladelsen er givet i browseren.');
@@ -239,7 +194,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   function clearIntervals() {
     if (timerRef.current) clearInterval(timerRef.current);
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    if (chunkIntervalRef.current) clearInterval(chunkIntervalRef.current);
     if (topicIntervalRef.current) clearInterval(topicIntervalRef.current);
   }
 
@@ -265,26 +219,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     const mimeType = recorder.mimeType || 'audio/webm';
     const blob = new Blob(chunksRef.current, { type: mimeType });
 
-    if (liveSegmentsRef.current.length >= 3) {
-      // Fast path: save live segments to DB immediately, then navigate.
-      // The audio blob is uploaded with a progress bar from Gennemgang.
-      try {
-        const res = await fetch(`/api/meetings/${meetingId}/save-transcript`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ segments: liveSegmentsRef.current }),
-        });
-        if (!res.ok) throw new Error('Kunne ikke gemme transskriptionen');
-      } catch {
-        // Even on failure, store what we have and navigate — Gennemgang handles recovery.
-      }
-      pendingUpload.set({ meetingId, blob, elapsed });
-      router.push(`/meeting/${meetingId}/review`);
-      return;
-    }
-
-    // Slow path: no live segments — run full Whisper transcription.
-    // Still navigate on error so the user is never stuck on the recording screen.
+    // Always run ElevenLabs batch transcription with speaker diarization.
+    // The live WebSocket segments were preview-only; the batch result is authoritative.
     try {
       const formData = new FormData();
       formData.append('audio', blob, `recording.${mimeType.includes('mp4') ? 'm4a' : 'webm'}`);
@@ -293,7 +229,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
       const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
+        const data = await res.json().catch(() => ({})) as { error?: string };
         throw new Error(data.error ?? 'Upload fejlede');
       }
     } catch (err) {
@@ -405,7 +341,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   }
 
   // ── Active recording / idle ───────────────────────────────────────────────────
-  const uniqueSpeakers = Array.from(new Set(liveSegments.map((s) => s.speaker)));
+  const uniqueSpeakers = Array.from(new Set(liveSegments.map((s) => s.speaker).filter((s) => s !== '—')));
   const speakerCount = (sp: string) => liveSegments.filter((s) => s.speaker === sp).length;
   const fmtSec = (s: number) => {
     const m = Math.floor(s / 60), sec = Math.floor(s % 60);
@@ -496,9 +432,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                 background: recordingState === 'paused' ? 'var(--muted)' : (recordingState === 'recording' ? 'var(--keep)' : 'var(--muted-2)'),
                 animation: recordingState === 'recording' ? 'protoPulse 1.4s ease-in-out infinite' : 'none',
               }} />
-              {recordingState === 'recording' ? 'hviske transskriberer' : recordingState === 'paused' ? 'pause' : 'klar'}
+              {recordingState === 'recording' ? 'optager' : recordingState === 'paused' ? 'pause' : 'klar'}
             </span>
-            {recordingState === 'recording' && <span>· ~3 sek. forsinkelse</span>}
           </div>
 
           {/* Transcript rows */}
@@ -517,6 +452,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             ) : (
               liveSegments.map((seg, i) => {
                 const isLast = i === liveSegments.length - 1;
+                const showSpeaker = seg.speaker !== '—';
                 return (
                   <div key={i} style={{
                     display: 'grid', gridTemplateColumns: '60px 90px 1fr 20px',
@@ -525,7 +461,9 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                     fontFamily: 'var(--mono)', fontSize: 12.5, lineHeight: 1.65,
                   }}>
                     <span style={{ color: 'var(--accent)' }}>{fmtSec(seg.start)}</span>
-                    <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{seg.speaker.toLowerCase()}:</span>
+                    <span style={{ color: 'var(--ink)', fontWeight: 500 }}>
+                      {showSpeaker ? `${seg.speaker.toLowerCase()}:` : '·'}
+                    </span>
                     <span style={{ color: 'var(--ink-2)' }}>
                       {seg.text}
                       {isLast && recordingState === 'recording' && (
@@ -548,7 +486,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         {/* Sidebar */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 28, paddingLeft: 8, overflow: 'auto' }}>
 
-          {/* Speakers */}
+          {/* Speakers (only shown after batch processing; live has no speaker labels) */}
           {uniqueSpeakers.length > 0 && (
             <div>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>
@@ -679,7 +617,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
               border: '2px solid var(--accent)', borderTopColor: 'transparent',
               animation: 'spin 0.8s linear infinite',
             }} />
-            gemmer og navigerer…
+            transskriberer og gemmer…
           </div>
         )}
       </div>
