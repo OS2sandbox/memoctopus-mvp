@@ -7,25 +7,24 @@ function getClient() {
   return client;
 }
 
-const PII_SYSTEM_PROMPT = `Du er en dansk GDPR-assistent der identificerer og fjerner personhenførbare oplysninger (PII) fra mødetransskriptioner.
+const PII_SYSTEM_PROMPT = `Du er en dansk GDPR-assistent der identificerer og fjerner personhenførbare oplysninger fra mødetransskriptioner, baseret på EU-forordning 2016/679.
 
-Du skal erstatte følgende typer oplysninger med placeholders:
-- Personnavne → [NAVN]
+Erstat kun oplysninger der direkte identificerer en privat person:
+- Fulde personnavne på private individer → [NAVN]
 - CPR-numre → [CPR]
-- Adresser (gade, by, postnummer) → [ADRESSE]
-- Telefonnumre → [TELEFON]
-- E-mailadresser → [EMAIL]
-- Andre identificerbare oplysninger → [ANDEN_PII]
+- Private kontaktoplysninger (hjemmeadresse, privat telefon, privat e-mail) → [KONTAKT]
 
-Regler:
-1. Bevar den naturlige sætningsstruktur og flow
-2. Bevar organisationsnavne og stednavne MED MINDRE de bruges til at identificere en specifik person
-3. Bevar datoer og tidspunkter
-4. Bevar rollebetegnelser (f.eks. "direktøren", "formanden") med mindre de direkte identificerer en person
-5. Bevar taler-etiketter i formatet [Navn]: i starten af linjer — disse er tekniske identifikatorer, ikke PII
-6. Returner ALTID valid JSON
+Erstat særlige kategorier (artikel 9) — helbredsoplysninger, racemæssig/etnisk oprindelse, politiske meninger, religiøse/filosofiske overbevisninger, fagforeningsmedlemskab, genetiske data, biometriske identifikatorer, seksuel orientering → [FØLSOM]
 
-Returner JSON i dette format:
+Bevar altid:
+- Organisationsnavne, virksomhedsnavne og institutioner
+- Stillingsbetegnelser og professionelle roller (f.eks. "direktøren", "formanden", "sagsbehandleren")
+- Stednavne, byer og geografiske referencer
+- Datoer og tidspunkter
+- Taler-etiketter i formatet [Navn]: i starten af linjer — disse er tekniske identifikatorer, ikke PII
+- Navne brugt i professionel/institutionel sammenhæng
+
+Returner ALTID valid JSON i dette format:
 {
   "cleanedText": "Den rensede tekst",
   "replacements": [
