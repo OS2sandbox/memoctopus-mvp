@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dialog';
 import { VolumeBar } from './VolumeBar';
 import { formatDuration, formatFileSize } from '@/lib/utils';
+import { useIsMobile } from '@/lib/use-is-mobile';
 
 interface LiveSegment {
   speaker: string;
@@ -63,6 +64,7 @@ const TOPIC_INTERVAL = 25_000;
 export function RecordingScreen({ meetingId, existingRecording, onNavigateToReview }: RecordingScreenProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const isMobile = useIsMobile();
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
   const [elapsed, setElapsed] = useState(0);
   const [volumeLevel, setVolumeLevel] = useState(0);
@@ -517,11 +519,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     const durFormatted = dur != null ? formatDuration(dur) : null;
 
     return (
-      <div style={{ minHeight: 'calc(100vh - 56px - 47px)', padding: '32px 48px 24px', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ minHeight: 'calc(100vh - 56px - 47px)', padding: isMobile ? '24px 20px 24px' : '32px 48px 24px', display: 'flex', flexDirection: 'column' }}>
         <div>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>01 · optagelse</div>
           <div style={{
-            fontFamily: 'var(--mono)', fontSize: 64, fontWeight: 500,
+            fontFamily: 'var(--mono)', fontSize: isMobile ? 44 : 64, fontWeight: 500,
             letterSpacing: '-0.04em', color: 'var(--ink)',
             fontVariantNumeric: 'tabular-nums', lineHeight: 1, marginTop: 8,
           }}>
@@ -584,14 +586,14 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   };
 
   return (
-    <div style={{ height: 'calc(100vh - 56px - 47px)', padding: '32px 48px 64px', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: isMobile ? 'auto' : 'calc(100vh - 56px - 47px)', minHeight: isMobile ? 'calc(100vh - 56px - 47px)' : undefined, padding: isMobile ? '24px 20px 40px' : '32px 48px 64px', display: 'flex', flexDirection: 'column' }}>
 
       {/* Header row */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 28 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: isMobile ? 16 : 28, flexWrap: 'wrap' }}>
         <div>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>01 · optagelse</div>
           <div style={{
-            fontFamily: 'var(--mono)', fontSize: 64, fontWeight: 500,
+            fontFamily: 'var(--mono)', fontSize: isMobile ? 44 : 64, fontWeight: 500,
             letterSpacing: '-0.04em', color: 'var(--ink)',
             fontVariantNumeric: 'tabular-nums', lineHeight: 1, marginTop: 8,
           }}>
@@ -603,7 +605,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         <div style={{ paddingBottom: 6 }}>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', marginBottom: 8, letterSpacing: 0.4 }}>signal</div>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 30 }}>
-            {Array.from({ length: 36 }).map((_, i) => {
+            {Array.from({ length: isMobile ? 20 : 36 }).map((_, i) => {
               const barHeight = recordingState === 'recording'
                 ? Math.max(4, Math.round(volumeLevel * 28 + Math.sin(i * 0.8 + elapsed) * 4))
                 : 4;
@@ -645,8 +647,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
       {/* Body — transcript + sidebar */}
       <div style={{
-        marginTop: 28, display: 'grid', gridTemplateColumns: '1fr 280px',
-        gap: 32, flex: 1, overflow: 'hidden',
+        marginTop: 28, display: 'grid',
+        gridTemplateColumns: isMobile ? '1fr' : '1fr 280px',
+        gap: isMobile ? 24 : 32, flex: 1,
+        overflow: isMobile ? 'visible' : 'hidden',
+        minHeight: isMobile ? 320 : undefined,
       }}>
 
         {/* Transcript stream */}
@@ -691,7 +696,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                   const showSpeaker = seg.speaker !== '—';
                   return (
                     <div key={i} style={{
-                      display: 'grid', gridTemplateColumns: '60px 90px 1fr 20px',
+                      display: 'grid', gridTemplateColumns: isMobile ? '44px 64px 1fr 14px' : '60px 90px 1fr 20px',
                       gap: 12, padding: '5px 18px',
                       opacity: 0.5 + Math.min(0.5, i * 0.06),
                       fontFamily: 'var(--mono)', fontSize: 12.5, lineHeight: 1.65,
@@ -708,7 +713,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                 {/* Interim row: Web Speech API live text, replaced by ElevenLabs batch */}
                 {interimText && recordingState === 'recording' && (
                   <div style={{
-                    display: 'grid', gridTemplateColumns: '60px 90px 1fr 20px',
+                    display: 'grid', gridTemplateColumns: isMobile ? '44px 64px 1fr 14px' : '60px 90px 1fr 20px',
                     gap: 12, padding: '5px 18px',
                     opacity: 0.75,
                     fontFamily: 'var(--mono)', fontSize: 12.5, lineHeight: 1.65,
@@ -809,7 +814,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                 fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted-2)',
                 background: 'none', border: 'none', cursor: 'pointer',
                 textDecoration: 'underline', textUnderlineOffset: 3,
-                position: 'absolute', right: 48,
+                position: 'absolute', right: isMobile ? 16 : 48,
               }}
             >
               annullér
@@ -825,7 +830,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                 fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted-2)',
                 background: 'none', border: 'none', cursor: 'pointer',
                 textDecoration: 'underline', textUnderlineOffset: 3,
-                position: 'absolute', left: 48,
+                position: 'absolute', left: isMobile ? 16 : 48,
               }}
             >
               annullér
@@ -861,7 +866,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                 padding: '8px 14px', borderRadius: 'var(--radius)',
                 border: '1px solid var(--line-2)', background: 'transparent',
                 color: 'var(--ink)', cursor: 'pointer',
-                position: 'absolute', right: 48,
+                position: 'absolute', right: isMobile ? 16 : 48,
               }}
             >
               gem &amp; fortsæt

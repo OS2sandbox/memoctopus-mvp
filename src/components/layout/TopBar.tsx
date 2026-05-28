@@ -4,10 +4,12 @@ import React, { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
+import { useIsMobile } from '@/lib/use-is-mobile';
 
 export function TopBar() {
   const pathname = usePathname();
   const router = useRouter();
+  const isMobile = useIsMobile();
   const [showConfirm, setShowConfirm] = useState(false);
 
   const nav = [
@@ -51,7 +53,7 @@ export function TopBar() {
         height: 56, borderBottom: '1px solid var(--line)',
         background: 'var(--bg)',
         display: 'flex', alignItems: 'center',
-        padding: '0 32px', gap: 28,
+        padding: isMobile ? '0 16px' : '0 32px', gap: isMobile ? 16 : 28,
       }}>
         {/* Wordmark */}
         <Link
@@ -67,7 +69,7 @@ export function TopBar() {
         </Link>
 
         {/* Nav */}
-        <nav style={{ display: 'flex', gap: 22, marginLeft: 28 }}>
+        <nav style={{ display: 'flex', gap: isMobile ? 16 : 22, marginLeft: isMobile ? 0 : 28 }}>
           {nav.map((item) => {
             const active = isActive(item.href, item.exact);
             return (

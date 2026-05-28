@@ -109,7 +109,7 @@ export function MinutesEditor({
 
   return (
     <div className="mx-auto max-w-[720px] px-6 py-12">
-      <div className="flex items-start justify-between mb-12">
+      <div className="flex flex-wrap items-start justify-between gap-4 mb-12">
         <div>
           <h1
             style={{ fontSize: 'var(--t-h1)', fontWeight: 300, color: 'var(--ink)', margin: 0 }}
@@ -241,7 +241,7 @@ export function MinutesEditor({
 
       {showHistory && (
         <div
-          className="fixed inset-y-0 right-0 z-50 w-80 bg-[var(--surface)] border-l border-[var(--line)] shadow-lg flex flex-col"
+          className="fixed inset-y-0 right-0 z-50 w-80 max-w-full bg-[var(--surface)] border-l border-[var(--line)] shadow-lg flex flex-col"
           style={{ animation: 'slide-in-from-right 0.15s ease' }}
         >
           <style>{`

@@ -60,7 +60,7 @@ export default function SettingsDataPage() {
         {loading ? (
           <p className="text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>Indlæser…</p>
         ) : usage ? (
-          <div className="flex gap-12">
+          <div className="flex flex-wrap gap-x-12 gap-y-6">
             <Stat
               label="Møder i alt"
               value={usage.meetingCount.toString()}
