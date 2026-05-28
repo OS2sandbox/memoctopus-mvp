@@ -579,13 +579,6 @@ export function RecordingScreen({ meetingId, existingRecording }: RecordingScree
             </div>
           )}
 
-          {/* Compliance note */}
-          <div style={{ marginTop: 'auto', paddingTop: 16 }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', lineHeight: 1.8 }}>
-              lyden slettes automatisk efter 14 dage<br />
-              PII fjernes inden referatet udarbejdes
-            </div>
-          </div>
         </div>
       </div>
 
