@@ -4,6 +4,7 @@ import React, { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { ProcessStrip, ProcessPhase } from '@/components/layout/ProcessStrip';
 import { RecordingScreen } from '@/components/recording/RecordingScreen';
+import { MeetingBotScreen } from '@/components/recording/MeetingBotScreen';
 import { TranscriptReview } from '@/components/transcript/TranscriptReview';
 import { MinutesEditor } from '@/components/minutes/MinutesEditor';
 import { ExportTab } from '@/components/meeting/ExportTab';
@@ -48,6 +49,7 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
   })();
 
   const isCompleted = meeting.status !== 'recording' && meeting.status !== 'processing';
+  const isTeamsMeeting = meeting.source === 'teams';
 
   return (
     <>
@@ -66,7 +68,14 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
         onTabChange={switchTab}
       />
 
-      {activeTab === 'recording' && (
+      {activeTab === 'recording' && isTeamsMeeting && (
+        <MeetingBotScreen
+          meetingId={meetingId}
+          meetingUrl={meeting.meetingUrl ?? ''}
+        />
+      )}
+
+      {activeTab === 'recording' && !isTeamsMeeting && (
         <RecordingScreen
           meetingId={meetingId}
           existingRecording={

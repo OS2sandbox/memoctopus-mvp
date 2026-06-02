@@ -7,6 +7,8 @@ import { z } from 'zod';
 const createSchema = z.object({
   title: z.string().min(1).max(200),
   participants: z.array(z.string()).optional().default([]),
+  source: z.enum(['local', 'teams']).default('local'),
+  meetingUrl: z.string().url().optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -40,14 +42,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { title, participants } = parsed.data;
+  const { title, participants, source, meetingUrl } = parsed.data;
+
+  const initialStatus = source === 'teams' ? 'joining' : 'recording';
 
   const meeting = await queryUserSchemaOne<{ id: string }>(
     session.user.id,
-    `INSERT INTO meetings (title, participants, status)
-     VALUES ($1, $2, 'recording')
+    `INSERT INTO meetings (title, participants, status, source, meeting_url)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING id`,
-    [title, participants],
+    [title, participants, initialStatus, source, meetingUrl ?? null],
   );
 
   return NextResponse.json({ id: meeting!.id }, { status: 201 });

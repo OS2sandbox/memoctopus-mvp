@@ -1,0 +1,44 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AUDIO_STORAGE_PATH=/audio-storage
+      - BOT_SERVICE_URL=http://bot-service:3001
+      - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+    volumes:
+      - audio-storage:/audio-storage
+    depends_on:
+      bot-service:
+        condition: service_healthy
+    restart: unless-stopped
+
+  bot-service:
+    build:
+      context: ./bot-service
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - NEXT_APP_URL=http://app:3000
+      - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
+    shm_size: "2gb"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  audio-storage:
