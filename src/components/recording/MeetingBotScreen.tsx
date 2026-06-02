@@ -266,30 +266,6 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
             </div>
           </div>
 
-          {/* Signal meter */}
-          {!isMobile && (
-            <div style={{ paddingBottom: 6 }}>
-              <div style={{
-                fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)',
-                letterSpacing: 0.4, marginBottom: 8,
-              }}>mødelyd</div>
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 28 }}>
-                {Array.from({ length: 32 }).map((_, i) => {
-                  const seed = (i * 7 + elapsed) % 24;
-                  const h = BAR_HEIGHTS[seed];
-                  return (
-                    <span key={i} style={{
-                      width: 2,
-                      height: (isConnecting || isPaused || isProcessing) ? 4 : h,
-                      background: 'var(--ink-2)',
-                      opacity: 0.75,
-                      display: 'inline-block',
-                    }} />
-                  );
-                })}
-              </div>
-            </div>
-          )}
 
           {/* Storage estimate */}
           <div style={{ marginLeft: isMobile ? 0 : 'auto', textAlign: 'right' }}>

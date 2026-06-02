@@ -48,12 +48,14 @@ export class TeamsMeetingBot {
 
   private async _launch(): Promise<void> {
     this.browser = await chromium.launch({
-      headless: false,
+      headless: true,
       executablePath: process.env.CHROMIUM_PATH || undefined,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--hide-scrollbars',
         '--disable-blink-features=AutomationControlled',
         '--use-fake-ui-for-media-stream',
         '--use-fake-device-for-media-stream',
@@ -325,6 +327,17 @@ export class TeamsMeetingBot {
       // Exclude the bot itself from the list
       const botName = this.config.botName;
       const filtered = (names as string[]).filter((n: string) => n && n !== botName);
+
+      // Auto-leave when the bot is the last one in the call
+      if (
+        filtered.length === 0 &&
+        this.participants.length > 0 &&
+        (this.status === 'recording' || this.status === 'paused')
+      ) {
+        void this.stop();
+        return;
+      }
+
       if (filtered.length > 0) {
         // Merge new names into existing list (deduplicate)
         const merged = Array.from(new Set([...this.participants, ...filtered]));

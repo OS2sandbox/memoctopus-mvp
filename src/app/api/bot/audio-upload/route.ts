@@ -91,13 +91,20 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true });
   } catch (err) {
+    console.error('Bot audio transcription error:', err);
+    // Even on failure, move to review with an empty transcript so the UI can navigate.
+    // Reverting to 'recording' would trap the UI in processing indefinitely.
     await queryUserSchemaOne(
       userId,
-      `UPDATE meetings SET status = 'recording', updated_at = NOW() WHERE id = $1`,
+      `INSERT INTO transcripts (meeting_id, raw_text, segments) VALUES ($1, '', '[]')
+       ON CONFLICT DO NOTHING`,
       [meetingId],
     ).catch(() => {});
-
-    console.error('Bot audio transcription error:', err);
+    await queryUserSchemaOne(
+      userId,
+      `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,
+      [meetingId],
+    ).catch(() => {});
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Transcription failed' },
       { status: 500 },

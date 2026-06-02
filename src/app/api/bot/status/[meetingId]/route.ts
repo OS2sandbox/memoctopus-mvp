@@ -45,6 +45,15 @@ export async function GET(
   });
 
   if (!res.ok) {
+    // Session may be gone after bot service restart, but meeting could already be at review
+    if (meeting.status === 'review') {
+      return NextResponse.json({
+        status: 'processing',
+        meetingStatus: 'review',
+        participants: meeting.participants ?? [],
+        elapsed: 0,
+      });
+    }
     return NextResponse.json({ error: 'Bot service unreachable' }, { status: 502 });
   }
 
