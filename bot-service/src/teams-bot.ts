@@ -27,7 +27,9 @@ export class TeamsMeetingBot {
 
   private elapsedTimer: ReturnType<typeof setInterval> | null = null;
   private participantTimer: ReturnType<typeof setInterval> | null = null;
+  private aloneTimer: ReturnType<typeof setTimeout> | null = null;
   private audioChunks: Buffer[] = [];
+  private hadActiveTracks = false;
   private onEndedCallback: (() => void) | null = null;
 
   constructor(config: BotSessionConfig) {
@@ -83,6 +85,17 @@ export class TeamsMeetingBot {
     // AudioContext recording pipeline.
     await this.page.addInitScript(() => {
       const OrigRTC = window.RTCPeerConnection;
+      // Set of RTCPeerConnections that have carried at least one audio track.
+      // Used to detect when all remote peers have disconnected.
+      const audioPcs = new Set<RTCPeerConnection>();
+      let hadAudioPeer = false;
+
+      const checkAllPeersGone = () => {
+        if (!hadAudioPeer || audioPcs.size > 0) return;
+        const cb = (window as unknown as Record<string, unknown>).__botAllPeersLeft as (() => void) | undefined;
+        if (cb) cb();
+      };
+
       function PatchedRTC(
         this: RTCPeerConnection,
         ...args: ConstructorParameters<typeof RTCPeerConnection>
@@ -90,6 +103,17 @@ export class TeamsMeetingBot {
         const pc = new OrigRTC(...(args as [RTCConfiguration?]));
         pc.addEventListener('track', (event: RTCTrackEvent) => {
           if (event.track.kind !== 'audio') return;
+          // Track this connection as an audio peer
+          if (!audioPcs.has(pc)) {
+            audioPcs.add(pc);
+            hadAudioPeer = true;
+            pc.addEventListener('connectionstatechange', () => {
+              if (pc.connectionState === 'closed' || pc.connectionState === 'failed') {
+                audioPcs.delete(pc);
+                checkAllPeersGone();
+              }
+            });
+          }
           for (const stream of event.streams) {
             const el = document.createElement('audio');
             el.autoplay = true;
@@ -99,6 +123,7 @@ export class TeamsMeetingBot {
             (el.dataset as DOMStringMap & { botCaptured: string }).botCaptured = 'true';
             el.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;';
             document.body.appendChild(el);
+            el.play().catch(() => {});
           }
         });
         return pc;
@@ -278,9 +303,33 @@ export class TeamsMeetingBot {
       void this._handleMeetingEnded();
     });
 
+    // Fired by the RTCPeerConnection patch when all audio peers close their connections.
+    // We schedule a stop with a 15-second grace window so brief reconnections don't
+    // cause a premature exit.
+    await page.exposeFunction('__botAllPeersLeft', () => {
+      if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+        if (!this.aloneTimer) {
+          console.log('[bot] All audio peers disconnected — will stop in 15 s unless someone rejoins');
+          this.aloneTimer = setTimeout(() => {
+            this.aloneTimer = null;
+            if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+              console.log('[bot] Grace period elapsed — alone in meeting, stopping');
+              void this.stop();
+            }
+          }, 15_000);
+        }
+      }
+    });
+
     await page.evaluate(() => {
       try {
         const ctx = new AudioContext();
+        // AudioContext starts suspended in headless Chrome even with the autoplay flag.
+        ctx.resume().catch(() => {});
+        ctx.onstatechange = () => {
+          if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+        };
+
         const dest = ctx.createMediaStreamDestination();
 
         const connectEl = (el: HTMLAudioElement) => {
@@ -303,16 +352,27 @@ export class TeamsMeetingBot {
         });
         audioObs.observe(document.body, { childList: true, subtree: true });
 
-        const recorder = new MediaRecorder(dest.stream, {
-          mimeType: 'audio/webm;codecs=opus',
-          audioBitsPerSecond: 128_000,
-        });
+        // Pick the best supported mimeType
+        const mimeType = ['audio/webm;codecs=opus', 'audio/webm', ''].find(
+          (m) => m === '' || MediaRecorder.isTypeSupported(m),
+        ) ?? '';
+        const recorderOpts: MediaRecorderOptions = { audioBitsPerSecond: 128_000 };
+        if (mimeType) recorderOpts.mimeType = mimeType;
+        const recorder = new MediaRecorder(dest.stream, recorderOpts);
+        console.log('[bot] MediaRecorder mimeType:', recorder.mimeType);
 
         recorder.ondataavailable = async (e: BlobEvent) => {
           if (e.data.size === 0) return;
           const ab = await e.data.arrayBuffer();
-          const b64 = btoa(String.fromCharCode(...new Uint8Array(ab)));
-          (window as unknown as Record<string, (s: string) => void>).__botAudioChunk(b64);
+          // Chunked base64 encoding — spreading a large Uint8Array into
+          // String.fromCharCode blows the call stack at ~480 KB (30 s × 128 kbps).
+          const bytes = new Uint8Array(ab);
+          let binary = '';
+          const CHUNK = 0x8000;
+          for (let i = 0; i < bytes.length; i += CHUNK) {
+            binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)));
+          }
+          (window as unknown as Record<string, (s: string) => void>).__botAudioChunk(btoa(binary));
         };
 
         recorder.start(30_000); // 30-second timeslices
@@ -480,6 +540,7 @@ export class TeamsMeetingBot {
 
   private _stopParticipantPolling(): void {
     if (this.participantTimer) { clearInterval(this.participantTimer); this.participantTimer = null; }
+    if (this.aloneTimer) { clearTimeout(this.aloneTimer); this.aloneTimer = null; }
   }
 
   private async _pollParticipants(): Promise<void> {
@@ -487,18 +548,42 @@ export class TeamsMeetingBot {
     try {
       // Primary: check if Leave button is still visible — if gone, we were kicked or meeting ended
       const leaveVisible = await this.page.locator(LEAVE_BTN).first().isVisible().catch(() => false);
-      if (!leaveVisible && this.participants.length > 0 && (this.status === 'recording' || this.status === 'paused')) {
+      if (!leaveVisible && this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
         console.log('[bot] Leave button gone — kicked or meeting ended');
         void this.stop();
         return;
       }
 
-      // Seed participants from injected audio element count when name selectors fail
-      const audioCount = await this.page.evaluate(
-        () => document.querySelectorAll('audio[data-bot-captured]').length,
-      ).catch(() => 0);
-      if (audioCount > 0 && this.participants.length === 0) {
-        this.participants = ['__audio_detected__'];
+      // Count remote audio tracks that are still live. When this transitions from > 0
+      // to 0 we know all participants have left (the RTCPeerConnection patch also fires
+      // __botAllPeersLeft for the same condition via connection state events).
+      const liveTrackCount = await this.page.evaluate(() => {
+        let n = 0;
+        document.querySelectorAll<HTMLAudioElement>('audio[data-bot-captured]').forEach((el) => {
+          const s = el.srcObject;
+          if (s instanceof MediaStream) n += s.getAudioTracks().filter((t) => t.readyState === 'live').length;
+        });
+        return n;
+      }).catch(() => -1);
+
+      if (liveTrackCount > 0) {
+        this.hadActiveTracks = true;
+        if (this.participants.length === 0) this.participants = ['__audio_detected__'];
+        // Cancel any pending alone-timer since audio tracks are still live
+        if (this.aloneTimer) { clearTimeout(this.aloneTimer); this.aloneTimer = null; }
+      } else if (liveTrackCount === 0 && this.hadActiveTracks
+          && (this.status === 'recording' || this.status === 'paused')
+          && !this.aloneTimer) {
+        // Schedule a stop after a 15-second grace period so brief renegotiations
+        // don't cause a premature exit.
+        console.log('[bot] No live remote tracks — will stop in 15 s unless tracks return');
+        this.aloneTimer = setTimeout(() => {
+          this.aloneTimer = null;
+          if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+            console.log('[bot] Grace period elapsed — alone in meeting, stopping');
+            void this.stop();
+          }
+        }, 15_000);
       }
 
       // Best-effort: extract participant names from roster (may not work on all Teams variants)
@@ -516,15 +601,7 @@ export class TeamsMeetingBot {
         return [];
       }).catch(() => [] as string[]);
 
-      const botName = this.config.botName;
-      const filtered = (names as string[]).filter((n) => n && n !== botName);
-
-      if (filtered.length === 0 && this.participants.filter((p) => p !== '__audio_detected__').length > 0
-          && (this.status === 'recording' || this.status === 'paused')) {
-        void this.stop();
-        return;
-      }
-
+      const filtered = (names as string[]).filter((n) => n && n !== this.config.botName);
       if (filtered.length > 0) {
         this.participants = Array.from(new Set([...this.participants, ...filtered]));
       }
