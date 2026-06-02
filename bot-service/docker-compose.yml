@@ -1,0 +1,10 @@
+services:
+  bot-service:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      BOT_INTERNAL_SECRET: ${BOT_INTERNAL_SECRET}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
+    restart: unless-stopped
+    shm_size: '2gb'

@@ -26,9 +26,24 @@ export async function POST(req: NextRequest) {
   if (meeting.source !== 'teams') return NextResponse.json({ error: 'Not a Teams meeting' }, { status: 400 });
   if (!meeting.meeting_url) return NextResponse.json({ error: 'No meeting URL' }, { status: 400 });
 
-  // If a session already exists, return it
-  if (meeting.bot_session) {
-    return NextResponse.json({ sessionId: meeting.bot_session });
+  // Atomically claim the slot — only one concurrent request can proceed
+  const claimed = await queryUserSchemaOne<{ id: string }>(
+    session.user.id,
+    `UPDATE meetings SET bot_session = 'creating', updated_at = NOW()
+     WHERE id = $1 AND (bot_session IS NULL OR bot_session = '')
+     RETURNING id`,
+    [meetingId],
+  );
+
+  if (!claimed) {
+    // Another request already claimed it — wait briefly and return whatever was set
+    await new Promise((r) => setTimeout(r, 500));
+    const existing = await queryUserSchemaOne<{ bot_session: string }>(
+      session.user.id,
+      'SELECT bot_session FROM meetings WHERE id = $1',
+      [meetingId],
+    );
+    return NextResponse.json({ sessionId: existing?.bot_session ?? '' });
   }
 
   const botServiceUrl = process.env.BOT_SERVICE_URL;

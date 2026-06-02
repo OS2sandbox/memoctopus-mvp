@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "concurrently -n next,bot -c blue,green \"next dev -p 3004\" \"npm --prefix bot-service run dev\"",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -58,6 +58,7 @@
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.0.2",
     "@vitest/coverage-v8": "^4.1.7",
+    "concurrently": "^10.0.3",
     "drizzle-kit": "^0.31.1",
     "jsdom": "^29.1.1",
     "tailwindcss": "^4.1.6",

@@ -39,6 +39,10 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       ALTER TYPE "${schema}".meeting_status ADD VALUE IF NOT EXISTS 'joining'
     `);
 
+    await client.query(`
+      ALTER TYPE "${schema}".meeting_status ADD VALUE IF NOT EXISTS 'cancelled'
+    `);
+
     await client.query('BEGIN');
 
     // templates

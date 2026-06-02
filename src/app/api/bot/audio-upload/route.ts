@@ -13,6 +13,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // Handle no-recording notification from bot (JSON, no audio file)
+  const contentType = req.headers.get('content-type') ?? '';
+  if (contentType.includes('application/json')) {
+    const body = await req.json() as { meetingId?: string; userId?: string; hasRecording?: boolean };
+    if (!body.meetingId || !body.userId || body.hasRecording !== false) {
+      return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+    }
+    await queryUserSchemaOne(
+      body.userId,
+      `UPDATE meetings SET status = 'cancelled', updated_at = NOW() WHERE id = $1`,
+      [body.meetingId],
+    ).catch(() => {});
+    return NextResponse.json({ ok: true });
+  }
+
   const formData = await req.formData();
   const audioFile = formData.get('audio') as File | null;
   const meetingId = formData.get('meetingId') as string | null;

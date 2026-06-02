@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "3002:3000"
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
@@ -13,7 +13,7 @@ services:
       - AUDIO_STORAGE_PATH=/audio-storage
       - BOT_SERVICE_URL=http://bot-service:3001
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
-      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3002}
     volumes:
       - audio-storage:/audio-storage
     depends_on:

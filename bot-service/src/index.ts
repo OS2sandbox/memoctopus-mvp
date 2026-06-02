@@ -1,3 +1,8 @@
+import dotenv from 'dotenv';
+import path from 'path';
+// Load root .env.local so BOT_INTERNAL_SECRET and other vars are available in dev
+dotenv.config({ path: path.resolve(__dirname, '../../.env.local') });
+
 import express, { Request, Response, NextFunction } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { TeamsMeetingBot, BotSessionConfig } from './teams-bot';
@@ -5,7 +10,7 @@ import { TeamsMeetingBot, BotSessionConfig } from './teams-bot';
 const app = express();
 app.use(express.json());
 
-const PORT = parseInt(process.env.PORT ?? '3001', 10);
+const PORT = parseInt(process.env.BOT_PORT ?? '3001', 10);
 const INTERNAL_SECRET = process.env.BOT_INTERNAL_SECRET ?? '';
 const NEXT_APP_URL = process.env.NEXT_APP_URL ?? 'http://localhost:3000';
 

@@ -28,7 +28,6 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
   const [elapsed, setElapsed] = useState(0);
   const [participants, setParticipants] = useState<string[]>([]);
   const [controlLoading, setControlLoading] = useState(false);
-  const [sessionStarted, setSessionStarted] = useState(false);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -59,7 +58,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
 
       if (newStatus !== statusRef.current) {
         if (newStatus === 'optager' && statusRef.current === 'forbinder') {
-          setElapsed(0);
+          setElapsed(data.elapsed ?? 0);
           startTimer();
         } else if (newStatus === 'optager' && statusRef.current === 'pause') {
           startTimer();
@@ -71,7 +70,13 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
         setStatus(newStatus);
       }
 
-      // When meeting status is 'review', transcription is done — navigate
+      // Navigate based on terminal meeting status
+      if (data.meetingStatus === 'cancelled') {
+        stopPolling();
+        stopTimer();
+        router.push('/');
+        return;
+      }
       if (data.meetingStatus === 'review') {
         stopPolling();
         stopTimer();
@@ -82,20 +87,24 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
     }
   }, [meetingId, startTimer, stopTimer, stopPolling, router]);
 
-  // Start bot session on mount (only when ?join=1)
+  // Start bot session on mount (only when ?join=1).
+  // AbortController ensures only one request survives in React Strict Mode's
+  // double-mount cycle — the cleanup cancels the first, the second completes.
   useEffect(() => {
     const shouldJoin = searchParams.get('join') === '1';
-    if (!shouldJoin || sessionStarted) return;
+    if (!shouldJoin) return;
 
-    setSessionStarted(true);
+    const controller = new AbortController();
     fetch('/api/bot/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ meetingId }),
-    }).catch(() => {
-      setStatus('error');
+      signal: controller.signal,
+    }).catch((err: unknown) => {
+      if (err instanceof Error && err.name !== 'AbortError') setStatus('error');
     });
-  }, [meetingId, searchParams, sessionStarted]);
+    return () => controller.abort();
+  }, [meetingId, searchParams]);
 
   // Begin polling as soon as the component mounts
   useEffect(() => {

@@ -26,6 +26,16 @@ export async function GET(
 
   if (!meeting) return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
 
+  // Cancelled (no recording made) — tell client to go home
+  if (meeting.status === 'cancelled') {
+    return NextResponse.json({
+      status: 'forbinder',
+      meetingStatus: 'cancelled',
+      participants: [],
+      elapsed: 0,
+    });
+  }
+
   // If no bot session yet (still joining pre-bot-start) or already at review+
   if (!meeting.bot_session) {
     return NextResponse.json({
