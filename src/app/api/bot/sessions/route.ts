@@ -36,20 +36,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Bot service not configured' }, { status: 503 });
   }
 
-  const res = await fetch(`${botServiceUrl}/sessions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.BOT_INTERNAL_SECRET ?? ''}`,
-    },
-    body: JSON.stringify({
-      meetingUrl: meeting.meeting_url,
-      meetingId,
-      userId: session.user.id,
-      botName: 'Memoctopus',
-      callbackUrl: `${process.env.NEXT_PUBLIC_APP_URL ?? ''}/api/bot/audio-upload`,
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${botServiceUrl}/sessions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${process.env.BOT_INTERNAL_SECRET ?? ''}`,
+      },
+      body: JSON.stringify({
+        meetingUrl: meeting.meeting_url,
+        meetingId,
+        userId: session.user.id,
+        botName: 'Memoctopus',
+        callbackUrl: `${process.env.NEXT_PUBLIC_APP_URL ?? ''}/api/bot/audio-upload`,
+      }),
+    });
+  } catch (err) {
+    console.error('Bot service unreachable:', err);
+    return NextResponse.json({ error: 'Bot service unreachable' }, { status: 503 });
+  }
 
   if (!res.ok) {
     const err = await res.text();

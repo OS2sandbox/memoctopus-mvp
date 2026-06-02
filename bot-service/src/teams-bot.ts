@@ -160,7 +160,7 @@ export class TeamsMeetingBot {
           if (e.data.size === 0) return;
           const ab = await e.data.arrayBuffer();
           const b64 = btoa(String.fromCharCode(...new Uint8Array(ab)));
-          (window as unknown as Record<string, unknown>).__botAudioChunk(b64);
+          (window as unknown as Record<string, (s: string) => void>).__botAudioChunk(b64);
         };
 
         recorder.start(30_000); // 30-second timeslices
@@ -175,7 +175,7 @@ export class TeamsMeetingBot {
           if (ended) {
             obs.disconnect();
             recorder.stop();
-            (window as unknown as Record<string, unknown>).__botMeetingEnded();
+            (window as unknown as Record<string, () => void>).__botMeetingEnded();
           }
         });
         obs.observe(document.body, { childList: true, subtree: true });

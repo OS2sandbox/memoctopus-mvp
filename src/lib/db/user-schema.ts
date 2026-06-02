@@ -9,12 +9,10 @@ export async function ensureUserSchema(userId: string): Promise<void> {
   const client = await pool.connect();
 
   try {
-    await client.query('BEGIN');
-
-    // Create schema
+    // Create schema and enum outside of any transaction — ALTER TYPE ADD VALUE
+    // cannot run inside a transaction block on PostgreSQL < 12.
     await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
 
-    // meeting_status enum — create per-schema
     await client.query(`
       DO $$
       BEGIN
@@ -31,7 +29,8 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       $$
     `);
 
-    // Ensure values added after initial schema creation exist
+    // Ensure values added after initial schema creation exist.
+    // Must run outside a transaction block.
     await client.query(`
       ALTER TYPE "${schema}".meeting_status ADD VALUE IF NOT EXISTS 'redacted'
     `);
@@ -39,6 +38,8 @@ export async function ensureUserSchema(userId: string): Promise<void> {
     await client.query(`
       ALTER TYPE "${schema}".meeting_status ADD VALUE IF NOT EXISTS 'joining'
     `);
+
+    await client.query('BEGIN');
 
     // templates
     await client.query(`
@@ -253,7 +254,9 @@ export function getUserSchemaName(userId: string): string {
 
 // ─── Per-user query helpers ─────────────────────────────────────────────────
 
-const initializedSchemas = new Set<string>();
+const globalForSchema = globalThis as unknown as { initializedSchemas: Set<string> | undefined };
+if (!globalForSchema.initializedSchemas) globalForSchema.initializedSchemas = new Set<string>();
+const initializedSchemas = globalForSchema.initializedSchemas;
 
 export async function queryUserSchema<T = Record<string, unknown>>(
   userId: string,

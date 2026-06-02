@@ -70,7 +70,7 @@ app.post('/sessions', requireAuth, async (req: Request, res: Response): Promise<
 
 // GET /sessions/:id — get session status
 app.get('/sessions/:id', requireAuth, (req: Request, res: Response): void => {
-  const session = sessions.get(req.params.id);
+  const session = sessions.get(req.params.id as string);
   if (!session) {
     res.status(404).json({ error: 'Session not found' });
     return;
@@ -86,7 +86,7 @@ app.get('/sessions/:id', requireAuth, (req: Request, res: Response): void => {
 
 // POST /sessions/:id/pause
 app.post('/sessions/:id/pause', requireAuth, (req: Request, res: Response): void => {
-  const session = sessions.get(req.params.id);
+  const session = sessions.get(req.params.id as string);
   if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
   session.bot.pause();
   res.json({ ok: true });
@@ -94,7 +94,7 @@ app.post('/sessions/:id/pause', requireAuth, (req: Request, res: Response): void
 
 // POST /sessions/:id/resume
 app.post('/sessions/:id/resume', requireAuth, (req: Request, res: Response): void => {
-  const session = sessions.get(req.params.id);
+  const session = sessions.get(req.params.id as string);
   if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
   session.bot.resume();
   res.json({ ok: true });
@@ -102,7 +102,7 @@ app.post('/sessions/:id/resume', requireAuth, (req: Request, res: Response): voi
 
 // POST /sessions/:id/stop — stop and trigger audio upload
 app.post('/sessions/:id/stop', requireAuth, async (req: Request, res: Response): Promise<void> => {
-  const session = sessions.get(req.params.id);
+  const session = sessions.get(req.params.id as string);
   if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
 
   // Respond immediately; upload happens asynchronously
@@ -115,13 +115,13 @@ app.post('/sessions/:id/stop', requireAuth, async (req: Request, res: Response):
 
 // DELETE /sessions/:id — abort without uploading
 app.delete('/sessions/:id', requireAuth, async (req: Request, res: Response): Promise<void> => {
-  const session = sessions.get(req.params.id);
+  const session = sessions.get(req.params.id as string);
   if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
 
   res.json({ ok: true });
 
   await session.bot.abort().catch(() => {});
-  sessions.delete(req.params.id);
+  sessions.delete(req.params.id as string);
 });
 
 // ─── Health check ────────────────────────────────────────────────────────────

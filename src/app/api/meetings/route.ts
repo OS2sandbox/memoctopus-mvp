@@ -46,13 +46,22 @@ export async function POST(req: NextRequest) {
 
   const initialStatus = source === 'teams' ? 'joining' : 'recording';
 
-  const meeting = await queryUserSchemaOne<{ id: string }>(
-    session.user.id,
-    `INSERT INTO meetings (title, participants, status, source, meeting_url)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id`,
-    [title, participants, initialStatus, source, meetingUrl ?? null],
-  );
+  let meeting: { id: string } | null;
+  try {
+    meeting = await queryUserSchemaOne<{ id: string }>(
+      session.user.id,
+      `INSERT INTO meetings (title, participants, status, source, meeting_url)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id`,
+      [title, participants, initialStatus, source, meetingUrl ?? null],
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[POST /api/meetings] DB error:', err);
+    return NextResponse.json({ error: 'Database error', detail: msg }, { status: 500 });
+  }
 
-  return NextResponse.json({ id: meeting!.id }, { status: 201 });
+  if (!meeting) return NextResponse.json({ error: 'Insert failed' }, { status: 500 });
+
+  return NextResponse.json({ id: meeting.id }, { status: 201 });
 }

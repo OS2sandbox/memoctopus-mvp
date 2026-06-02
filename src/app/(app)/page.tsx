@@ -14,6 +14,7 @@ export default function OptaqPage() {
   const [loading, setLoading] = useState(false);
   const [meetingLink, setMeetingLink] = useState('');
   const [linkLoading, setLinkLoading] = useState(false);
+  const [linkError, setLinkError] = useState('');
   const [meetingCount, setMeetingCount] = useState<number | null>(null);
 
   useEffect(() => {
@@ -53,6 +54,7 @@ export default function OptaqPage() {
   async function joinMeeting(link: string) {
     if (linkLoading) return;
     setLinkLoading(true);
+    setLinkError('');
     try {
       const dateStr = new Intl.DateTimeFormat('da', { day: 'numeric', month: 'long' }).format(new Date());
       const res = await fetch('/api/meetings', {
@@ -65,8 +67,21 @@ export default function OptaqPage() {
         }),
       });
       const data = await res.json();
-      if (data.id) router.push(`/meeting/${data.id}?join=1`);
+      if (!res.ok) {
+        setLinkError(res.status === 400
+          ? 'Ugyldigt mødelink. Indsæt et gyldigt Teams-link.'
+          : 'Noget gik galt. Prøv igen.');
+        setLinkLoading(false);
+        return;
+      }
+      if (!data.id) {
+        setLinkError('Noget gik galt. Prøv igen.');
+        setLinkLoading(false);
+        return;
+      }
+      router.push(`/meeting/${data.id}?join=1`);
     } catch {
+      setLinkError('Noget gik galt. Prøv igen.');
       setLinkLoading(false);
     }
   }
@@ -233,7 +248,7 @@ export default function OptaqPage() {
               >
                 <input
                   value={meetingLink}
-                  onChange={(e) => setMeetingLink(e.target.value)}
+                  onChange={(e) => { setMeetingLink(e.target.value); if (linkError) setLinkError(''); }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && meetingLink.trim()) {
                       e.preventDefault();
@@ -264,6 +279,12 @@ export default function OptaqPage() {
                   {linkLoading ? '…' : '→'}
                 </button>
               </div>
+              {linkError && (
+                <div style={{
+                  marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11,
+                  color: 'var(--error, #e05252)', textAlign: 'center',
+                }}>{linkError}</div>
+              )}
             </div>
 
             <div style={{
