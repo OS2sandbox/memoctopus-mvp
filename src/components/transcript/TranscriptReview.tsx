@@ -17,6 +17,7 @@ interface TranscriptReviewProps {
   audioDurationSeconds?: number | null;
   audioDeleted?: boolean;
   initialChapters?: TranscriptChapter[];
+  participants?: string[];
 }
 
 type UploadStatus = 'idle' | 'uploading' | 'processing' | 'done' | 'error';
@@ -53,6 +54,7 @@ export function TranscriptReview({
   audioDurationSeconds,
   audioDeleted = false,
   initialChapters,
+  participants,
 }: TranscriptReviewProps) {
   const router = useRouter();
   const isMobile = useIsMobile();
@@ -535,7 +537,7 @@ export function TranscriptReview({
           {audioUrl && <audio ref={audioRef} src={audioUrl} preload="metadata" />}
 
           {/* Transcript — chapters or flat fallback */}
-          <div style={{ marginTop: 8, flex: 1, overflowY: 'auto' }}>
+          <div style={{ marginTop: 8, flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {chaptersLoading && (
               <div style={{
                 padding: '24px 0', display: 'flex', alignItems: 'center', gap: 10,
@@ -563,7 +565,10 @@ export function TranscriptReview({
               return (
                 <div
                   key={ch.id}
-                  style={{ borderTop: '1px solid var(--line)' }}
+                  style={{
+                    borderTop: '1px solid var(--line)',
+                    ...(isOpen ? { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' } : {}),
+                  }}
                 >
                   <div
                     onClick={() => {
@@ -633,7 +638,7 @@ export function TranscriptReview({
                     </div>
                   </div>
                   {isOpen && (
-                    <div style={{ paddingBottom: 18, maxHeight: 360, overflowY: 'auto' }}>
+                    <div style={{ paddingBottom: 18, flex: 1, overflowY: 'auto' }}>
                       {chSegs.map(({ seg, idx }) => {
                         const isCurrentMatch = matchIndex >= 0 && matches[matchIndex] === idx;
                         const isAnyMatch = search.trim() && matches.includes(idx);
@@ -665,7 +670,7 @@ export function TranscriptReview({
             })}
 
             {!chaptersLoading && !chapters && (
-              <div style={{ borderTop: '1px solid var(--line)', maxHeight: 480, overflowY: 'auto' }}>
+              <div style={{ borderTop: '1px solid var(--line)', flex: 1, overflowY: 'auto' }}>
                 {segments.length === 0 ? (
                   <p style={{ padding: '32px 0', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
                     Ingen transskription fundet.
@@ -811,6 +816,21 @@ export function TranscriptReview({
                 <span>·</span>
                 <button onClick={uncheckAll} style={{ color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 11, fontFamily: 'var(--mono)' }}>fravælg alle</button>
                 <span style={{ marginLeft: 'auto' }}>{checkedPii.size}/{piiReplacements.length}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Participants from Teams meeting */}
+          {participants && participants.length > 0 && (
+            <div style={{ marginTop: 28 }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 8 }}>deltagere</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {participants.map((name, i) => (
+                  <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--muted-2)', flexShrink: 0, display: 'inline-block' }} />
+                    {name}
+                  </div>
+                ))}
               </div>
             </div>
           )}

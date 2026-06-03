@@ -417,6 +417,7 @@ export class TeamsMeetingBot {
 
     // Fired by the RTCPeerConnection patch when a new audio peer joins.
     // Cancels any pending alone-timer so a reconnecting participant doesn't trigger a stop.
+    // Also resets RTP tracking so idle-detection restarts cleanly for the new peer.
     await page.exposeFunction('__botPeerRejoined', () => {
       if (this.aloneTimer) {
         clearTimeout(this.aloneTimer);
@@ -428,8 +429,20 @@ export class TeamsMeetingBot {
       console.log('[bot] New audio peer joined — cancelled alone timer');
     });
 
+    // Fired by the tile observer when multiple participant tiles are visible.
+    // Unlike __botPeerRejoined, this does NOT reset RTP tracking — we only want
+    // to cancel any pending departure and confirm presence, not restart idle counters.
+    await page.exposeFunction('__botPresenceConfirmed', () => {
+      if (this.aloneTimer) {
+        clearTimeout(this.aloneTimer);
+        this.aloneTimer = null;
+      }
+      this.aloneCheckCount = 0;
+      console.log('[bot] Participant tiles visible — presence confirmed, cancelled alone timer');
+    });
+
     // Fired by the RTCPeerConnection patch when all audio peers close their connections
-    // or when the roster DOM observer detects only the bot remains.
+    // or when the audio silence detector confirms sustained near-silence.
     // We schedule a stop with a 5-second grace window so brief reconnections don't
     // cause a premature exit.
     await page.exposeFunction('__botAllPeersLeft', () => {
@@ -515,17 +528,56 @@ export class TeamsMeetingBot {
 
         (window as unknown as Record<string, unknown>).__mediaRecorder = recorder;
 
-        // Video tile observer — Teams sets data-tid="video-item-container-{DisplayName}"
-        // on every participant's tile in the main stage. This is present whether or not
-        // the participants panel is open, making it the most reliable departure signal.
+        // Video tile observer — used purely as a PRESENCE signal.
+        // Tries multiple known Teams data-tid selectors for participant tiles. When any
+        // selector finds > 1 tiles, calls __botPresenceConfirmed to cancel any pending
+        // alone timer. Departure detection is handled by checkAllPeersGone(), live track
+        // polling, RTP idle, and the audio silence detector below — not by this observer.
+        const TILE_SELECTORS = [
+          '[data-tid^="video-item-container-"]',
+          '[data-tid="calling-roster-cell"]',
+          '[data-tid^="roster-participant-"]',
+          '[data-tid="participant-roster-item"]',
+        ];
+        let tileDebounce: ReturnType<typeof setTimeout> | null = null;
         const tileObs = new MutationObserver(() => {
-          const tiles = document.querySelectorAll('[data-tid^="video-item-container-"]');
-          if (tiles.length <= 1) {
-            // Bot's tile or fewer remain — all other participants have left
-            (window as unknown as Record<string, (() => void) | undefined>).__botAllPeersLeft?.();
-          }
+          if (tileDebounce) return;
+          tileDebounce = setTimeout(() => {
+            tileDebounce = null;
+            for (const sel of TILE_SELECTORS) {
+              if (document.querySelectorAll(sel).length > 1) {
+                (window as unknown as Record<string, (() => void) | undefined>).__botPresenceConfirmed?.();
+                break;
+              }
+            }
+          }, 500);
         });
         tileObs.observe(document.body, { childList: true, subtree: true });
+
+        // Audio silence detector — reliable fallback for "alone in meeting" when the SFU
+        // keeps RTC connections and tracks alive after all participants leave.
+        // Reads from the mixed recording stream every 2 s. Average frequency energy < 2/255
+        // for 60 consecutive checks (2 min) means no meaningful audio → fires __botAllPeersLeft.
+        try {
+          const silenceAnalyser = ctx.createAnalyser();
+          silenceAnalyser.fftSize = 256;
+          ctx.createMediaStreamSource(dest.stream).connect(silenceAnalyser);
+          const silenceFreqData = new Uint8Array(silenceAnalyser.frequencyBinCount);
+          let silenceChecks = 0;
+          const silenceInterval = setInterval(() => {
+            silenceAnalyser.getByteFrequencyData(silenceFreqData);
+            const avgEnergy = silenceFreqData.reduce((s: number, v: number) => s + v, 0) / silenceFreqData.length;
+            if (avgEnergy < 2) {
+              if (++silenceChecks >= 60) {
+                clearInterval(silenceInterval);
+                (window as unknown as Record<string, (() => void) | undefined>).__botAllPeersLeft?.();
+              }
+            } else {
+              silenceChecks = 0;
+            }
+          }, 2000);
+          (window as unknown as Record<string, unknown>).__botSilenceInterval = silenceInterval;
+        } catch { /* non-fatal — silence detection is a best-effort fallback */ }
 
         // Watch for meeting-ended or kicked state
         const endObs = new MutationObserver(() => {
@@ -790,14 +842,31 @@ export class TeamsMeetingBot {
         }
       }
 
-      // Extract participant names from video tile data-tid attributes.
-      // Teams renders every participant tile as data-tid="video-item-container-{DisplayName}".
+      // Extract participant names by trying multiple Teams DOM selector patterns.
+      // Teams' exact data-tid attributes vary across versions; we try several and use
+      // whichever returns results. Names are read from data-tid, aria-label, or inner text.
       const rosterResult = await this.page.evaluate(() => {
-        const tiles = Array.from(document.querySelectorAll('[data-tid^="video-item-container-"]'));
-        const names = tiles
-          .map((el) => (el.getAttribute('data-tid') ?? '').replace('video-item-container-', '').trim())
-          .filter(Boolean);
-        return { names, rosterCount: tiles.length > 0 ? tiles.length : -1 };
+        const selectors: Array<{ sel: string; nameFrom: 'data-tid' | 'aria-label' | 'text' | 'data-tid-suffix' }> = [
+          { sel: '[data-tid^="video-item-container-"]', nameFrom: 'data-tid-suffix' },
+          { sel: '[data-tid="calling-roster-cell"]', nameFrom: 'text' },
+          { sel: '[data-tid^="roster-participant-"]', nameFrom: 'aria-label' },
+          { sel: '[data-tid="participant-roster-item"]', nameFrom: 'text' },
+        ];
+        for (const { sel, nameFrom } of selectors) {
+          const els = Array.from(document.querySelectorAll(sel));
+          if (els.length === 0) continue;
+          const names = els.map((el) => {
+            if (nameFrom === 'data-tid-suffix') {
+              return (el.getAttribute('data-tid') ?? '').replace('video-item-container-', '').trim();
+            }
+            if (nameFrom === 'aria-label') {
+              return (el.getAttribute('aria-label') ?? '').trim();
+            }
+            return ((el as HTMLElement).innerText ?? '').split('\n')[0].trim();
+          }).filter(Boolean);
+          if (names.length > 0) return { names, rosterCount: els.length };
+        }
+        return { names: [] as string[], rosterCount: -1 };
       }).catch(() => ({ names: [] as string[], rosterCount: -1 }));
 
       const { names, rosterCount } = rosterResult as { names: string[]; rosterCount: number };

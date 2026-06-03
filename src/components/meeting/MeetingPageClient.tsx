@@ -105,6 +105,7 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
           audioDurationSeconds={audioFile?.durationSeconds}
           audioDeleted={!audioFile && meeting.status !== 'recording' && meeting.status !== 'processing' && meeting.status !== 'review'}
           initialChapters={transcript.chapters}
+          participants={meeting.participants}
         />
       )}
 
