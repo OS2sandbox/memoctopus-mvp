@@ -148,7 +148,11 @@ export class TeamsMeetingBot {
 
     console.log('[bot] navigating to', this.config.meetingUrl);
     await page.goto(this.config.meetingUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    await page.waitForTimeout(4000);
+    // Wait for Teams to render its initial UI rather than sleeping a fixed 4 s.
+    await page.waitForSelector(
+      'button:has-text("Continue on this browser"), button[data-tid="prejoin-join-button"], button[aria-label="Join now"]',
+      { timeout: 8000 },
+    ).catch(() => {});
     await snap('01-landed');
     console.log('[bot] landed, url=', page.url(), 'title=', await page.title());
 
@@ -218,6 +222,20 @@ export class TeamsMeetingBot {
       console.log('[bot] turned camera off');
     }
 
+    // Mute microphone — prevents the bot from sending audio back to participants
+    // (feedback loop) and from appearing as a speaking participant in Teams.
+    const micBtn = page.locator([
+      'button[aria-label="Turn off microphone"]',
+      'button[aria-label="Mute microphone"]',
+      'button[aria-label="Microphone on, click to mute"]',
+      'button[aria-label="Sluk mikrofon"]',
+      'button[data-tid="toggle-mute"]',
+    ].join(', ')).first();
+    if (await micBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await micBtn.click().catch(() => {});
+      console.log('[bot] muted microphone');
+    }
+
     // Click "Join now"
     const joinSelectors = [
       'button[data-tid="prejoin-join-button"]',
@@ -244,7 +262,11 @@ export class TeamsMeetingBot {
       fs.writeFileSync('/tmp/bot-page-no-join.html', htmlFail);
       throw new Error('Could not find join button');
     }
-    await page.waitForTimeout(4000);
+    // Wait for the lobby/meeting UI to appear rather than sleeping a fixed 4 s.
+    await page.waitForSelector(
+      `${LEAVE_BTN}, [data-tid="lobby-section"], [aria-label="Lobby"]`,
+      { timeout: 8000 },
+    ).catch(() => {});
     await snap('03-after-join');
 
     // Race: admitted (Leave button appears) vs denied vs timeout (5 min)
@@ -289,6 +311,31 @@ export class TeamsMeetingBot {
     console.log('[bot] in meeting, proceeding to audio capture, url=', page.url());
 
     await this._startAudioCapture();
+
+    // Teams sometimes re-enables the mic after admission — mute again inside the call.
+    const inCallMicBtn = page.locator([
+      'button[data-tid="microphone-button"]',
+      'button[aria-label="Mute"]',
+      'button[aria-label="Slå lyden fra"]',
+      'button[aria-label="Mute microphone"]',
+    ].join(', ')).first();
+    if (await inCallMicBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await inCallMicBtn.click().catch(() => {});
+      console.log('[bot] muted microphone in-call');
+    }
+
+    // Open the participants panel so the roster selectors in _pollParticipants()
+    // find real names — the panel DOM nodes only exist when the panel is open.
+    const participantsBtn = page.locator([
+      'button[data-tid="participants-button"]',
+      'button[aria-label="Show participants"]',
+      'button[aria-label="Vis deltagere"]',
+      'button[aria-label="People"]',
+    ].join(', ')).first();
+    if (await participantsBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await participantsBtn.click().catch(() => {});
+      console.log('[bot] opened participants panel');
+    }
   }
 
   private async _startAudioCapture(): Promise<void> {
@@ -332,15 +379,20 @@ export class TeamsMeetingBot {
 
         const dest = ctx.createMediaStreamDestination();
 
+        // createMediaStreamSource routes the MediaStream directly into the graph,
+        // bypassing the audio-element playback requirement that silently fails in
+        // headless Chrome (no real audio output device → element never decoded).
+        const connectedStreams = new Set<MediaStream>();
         const connectEl = (el: HTMLAudioElement) => {
-          try {
-            const src = ctx.createMediaElementSource(el);
-            src.connect(dest);
-          } catch { /* already connected */ }
+          const stream = el.srcObject;
+          if (!(stream instanceof MediaStream)) return;
+          if (connectedStreams.has(stream)) return;
+          connectedStreams.add(stream);
+          ctx.createMediaStreamSource(stream).connect(dest);
         };
 
-        // Connect all existing audio elements (including RTCPeerConnection-injected ones)
-        document.querySelectorAll<HTMLAudioElement>('audio').forEach(connectEl);
+        // Connect all existing bot-captured audio elements
+        document.querySelectorAll<HTMLAudioElement>('audio[data-bot-captured]').forEach(connectEl);
 
         // Connect new elements added by the RTCPeerConnection hook as participants join
         const audioObs = new MutationObserver(() => {
