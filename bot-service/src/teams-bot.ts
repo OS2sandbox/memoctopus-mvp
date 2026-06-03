@@ -79,6 +79,20 @@ export class TeamsMeetingBot {
 
     this.page = await this.context.newPage();
 
+    // Silence the bot's outgoing microphone at the WebRTC level.
+    // --use-fake-ui-for-media-stream provides a fake audio device that can produce
+    // audible tones/clicks. Intercepting getUserMedia lets us disable the audio
+    // track before Teams ever adds it to an RTCPeerConnection, so the bot always
+    // transmits silence regardless of what the Teams UI shows.
+    await this.page.addInitScript(() => {
+      const origGUM = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = async (constraints?: MediaStreamConstraints) => {
+        const stream = await origGUM(constraints ?? {});
+        stream.getAudioTracks().forEach((t) => { t.enabled = false; });
+        return stream;
+      };
+    });
+
     // Patch RTCPeerConnection before any page scripts load so we capture every
     // remote audio track Teams creates. Each track gets a hidden <audio> element
     // with data-bot-captured="true" that _startAudioCapture() connects to the
@@ -343,7 +357,10 @@ export class TeamsMeetingBot {
       await inCallMicBtn.click().catch(() => {});
       console.log('[bot] muted microphone in-call via button');
     } else {
-      // Fallback: Ctrl+Shift+M is Teams' universal mute toggle
+      // Fallback: Ctrl+Shift+M is Teams' universal mute toggle.
+      // Ensure the page has focus so the keyboard shortcut registers.
+      await page.bringToFront().catch(() => {});
+      await page.locator('body').click({ position: { x: 10, y: 10 } }).catch(() => {});
       await page.keyboard.press('Control+Shift+M').catch(() => {});
       console.log('[bot] muted microphone in-call via Ctrl+Shift+M');
     }

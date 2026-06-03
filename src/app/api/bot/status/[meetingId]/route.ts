@@ -88,9 +88,12 @@ export async function GET(
     );
   }
 
+  const rawParticipants: string[] = botState.participants ?? meeting.participants ?? [];
+  const participants = rawParticipants.filter((p: string) => p !== '__audio_detected__');
+
   return NextResponse.json({
     status: uiStatus,
-    participants: botState.participants ?? meeting.participants ?? [],
+    participants,
     elapsed: botState.elapsed ?? 0,
     meetingStatus: meeting.status,
   });

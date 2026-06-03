@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n next,bot -c blue,green \"next dev -p 3004\" \"npm --prefix bot-service run dev\"",
+    "predev": "lsof -ti :3005 | xargs kill -9 2>/dev/null || true",
+    "dev": "concurrently --kill-others -n next,bot -c blue,green \"next dev -p 3004\" \"npm --prefix bot-service run dev\"",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

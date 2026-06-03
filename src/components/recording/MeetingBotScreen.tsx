@@ -9,7 +9,7 @@ interface MeetingBotScreenProps {
   meetingUrl: string;
 }
 
-type BotStatus = 'forbinder' | 'optager' | 'pause' | 'processing' | 'error';
+type BotStatus = 'forbinder' | 'optager' | 'pause' | 'processing' | 'error' | 'cancelled';
 
 const BAR_HEIGHTS = [4, 8, 14, 22, 18, 10, 6, 12, 20, 26, 22, 16, 8, 11, 20, 24, 18, 12, 8, 14, 20, 16, 10, 8];
 
@@ -54,6 +54,20 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
       const data = await res.json();
       const newStatus: BotStatus = data.status as BotStatus;
 
+      // Terminal states — handle first before any status update
+      if (data.meetingStatus === 'cancelled') {
+        stopPolling();
+        stopTimer();
+        setStatus('cancelled');
+        return;
+      }
+      if (data.meetingStatus === 'review') {
+        stopPolling();
+        stopTimer();
+        router.push(`/meeting/${meetingId}/review`);
+        return;
+      }
+
       setParticipants(data.participants ?? []);
 
       if (newStatus !== statusRef.current) {
@@ -68,19 +82,6 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
           stopTimer();
         }
         setStatus(newStatus);
-      }
-
-      // Navigate based on terminal meeting status
-      if (data.meetingStatus === 'cancelled') {
-        stopPolling();
-        stopTimer();
-        router.push('/');
-        return;
-      }
-      if (data.meetingStatus === 'review') {
-        stopPolling();
-        stopTimer();
-        router.push(`/meeting/${meetingId}/review`);
       }
     } catch {
       // non-fatal — keep polling
@@ -166,6 +167,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
   const isPaused = status === 'pause';
   const isProcessing = status === 'processing';
   const isRecording = status === 'optager';
+  const isCancelled = status === 'cancelled';
 
   const statusMeta = {
     forbinder: { dot: 'var(--accent)', label: 'forbinder til mødet…', pulse: true },
@@ -173,9 +175,12 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
     pause:     { dot: 'var(--muted)',  label: 'sat på pause',         pulse: false },
     processing:{ dot: 'var(--accent)', label: 'behandler optagelse…', pulse: true },
     error:     { dot: 'var(--kill)',   label: 'fejl ved forbindelse',  pulse: false },
+    cancelled: { dot: 'var(--muted)',  label: 'møde afbrudt',         pulse: false },
   }[status];
 
-  const noticeKicker = isConnecting
+  const noticeKicker = isCancelled
+    ? 'AFBRUDT'
+    : isConnecting
     ? 'RINGER OP'
     : isPaused
     ? 'PÅ PAUSE'
@@ -183,7 +188,9 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
     ? 'BEHANDLER'
     : 'OPTAGER MØDET';
 
-  const noticeBody = isConnecting
+  const noticeBody = isCancelled
+    ? 'Mødet blev afbrudt og ingen optagelse blev gemt.'
+    : isConnecting
     ? 'Memoctopus ringer op til mødet og venter på at blive lukket ind…'
     : isPaused
     ? 'Optagelsen er sat på pause. Tryk fortsæt for at optage igen.'
@@ -398,7 +405,22 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
           marginTop: 36, paddingTop: 22, borderTop: '1px solid var(--line)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16,
         }}>
-          {isConnecting && (
+          {isCancelled && (
+            <button
+              onClick={() => router.push('/')}
+              style={{
+                fontSize: 13.5, fontWeight: 500, padding: '11px 18px',
+                borderRadius: 'var(--radius)', border: '1px solid var(--line-2)',
+                background: 'var(--ink)', color: 'var(--bg)',
+                cursor: 'pointer',
+                display: 'inline-flex', alignItems: 'center', gap: 8, lineHeight: 1,
+              }}
+            >
+              ← gå til forsiden
+            </button>
+          )}
+
+          {isConnecting && !isCancelled && (
             <button
               onClick={handleAbort}
               disabled={controlLoading}
@@ -504,7 +526,9 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
           marginTop: 16, textAlign: 'center',
           fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
         }}>
-          {isConnecting
+          {isCancelled
+            ? ''
+            : isConnecting
             ? 'forbinder…'
             : isProcessing
             ? 'navigerer til gennemgang når transskriptionen er klar…'
