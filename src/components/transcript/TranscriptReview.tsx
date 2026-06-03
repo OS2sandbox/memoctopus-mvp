@@ -59,8 +59,19 @@ export function TranscriptReview({
   const [segments, setSegments] = useState(initialSegments);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [editableParticipants, setEditableParticipants] = useState<string[]>(participants ?? []);
+  const [editableParticipants, setEditableParticipants] = useState<string[]>(() => {
+    if (typeof window === 'undefined') return participants ?? [];
+    try {
+      const saved = sessionStorage.getItem(`participants-${meetingId}`);
+      if (saved) return JSON.parse(saved) as string[];
+    } catch { /* ignore */ }
+    return participants ?? [];
+  });
   const [newParticipantInput, setNewParticipantInput] = useState('');
+
+  useEffect(() => {
+    try { sessionStorage.setItem(`participants-${meetingId}`, JSON.stringify(editableParticipants)); } catch { /* ignore */ }
+  }, [editableParticipants, meetingId]);
   const [activeKeywords, setActiveKeywords] = useState<Set<string>>(new Set());
   const [customText, setCustomText] = useState('');
 

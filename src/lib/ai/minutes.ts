@@ -128,6 +128,7 @@ Skriv indholdet i sektionerne som klart, præcist dansk. Brug punktlister hvor d
   }
 
   if (participants && participants.length > 0) {
+    content.sections = content.sections.filter((s) => s.key !== 'deltagere');
     content.sections.unshift({
       key: 'deltagere',
       label: 'Deltagere',
@@ -193,6 +194,7 @@ Skriv indholdet som klart, præcist dansk. Brug punktlister hvor det er relevant
   }
 
   if (participants && participants.length > 0) {
+    content.sections = content.sections.filter((s) => s.key !== 'deltagere');
     content.sections.unshift({
       key: 'deltagere',
       label: 'Deltagere',
