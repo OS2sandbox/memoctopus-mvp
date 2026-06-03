@@ -515,49 +515,17 @@ export class TeamsMeetingBot {
 
         (window as unknown as Record<string, unknown>).__mediaRecorder = recorder;
 
-        // Participant panel observer — fires the moment a participant row is removed.
-        // This is faster than polling and works even when track/RTC states are masked
-        // by the Teams relay server keeping connections alive.
-        const watchRosterPanel = (panel: Element) => {
-          const rosterObs = new MutationObserver(() => {
-            const win2 = window as unknown as Record<string, (() => void) | undefined>;
-            // Count visible participant rows
-            const rowSelectors = [
-              '[data-tid="calling-roster-content"] [data-tid="participant-item"]',
-              '[data-tid="calling-roster-content"] [class*="participantItem"]',
-              '[data-tid="calling-roster-content"] > div',
-            ];
-            let count = -1;
-            for (const sel of rowSelectors) {
-              const els = panel.querySelectorAll(sel);
-              if (els.length > 0) { count = els.length; break; }
-            }
-            // Also check the header count badge as a cross-reference
-            const header = document.querySelector('[data-tid="calling-roster-header"]');
-            if (header) {
-              const m = (header.textContent ?? '').match(/\d+/);
-              if (m) count = parseInt(m[0], 10);
-            }
-            if (count === 1) win2.__botAllPeersLeft?.();
-          });
-          rosterObs.observe(panel, { childList: true, subtree: true });
-        };
-
-        const existingPanel = document.querySelector(
-          '[data-tid="calling-roster-content"], [data-tid="participant-list"]',
-        );
-        if (existingPanel) {
-          watchRosterPanel(existingPanel);
-        } else {
-          // Panel opens after the bot joins — wait for it to appear
-          const panelWatcher = new MutationObserver(() => {
-            const panel = document.querySelector(
-              '[data-tid="calling-roster-content"], [data-tid="participant-list"]',
-            );
-            if (panel) { panelWatcher.disconnect(); watchRosterPanel(panel); }
-          });
-          panelWatcher.observe(document.body, { childList: true, subtree: true });
-        }
+        // Video tile observer — Teams sets data-tid="video-item-container-{DisplayName}"
+        // on every participant's tile in the main stage. This is present whether or not
+        // the participants panel is open, making it the most reliable departure signal.
+        const tileObs = new MutationObserver(() => {
+          const tiles = document.querySelectorAll('[data-tid^="video-item-container-"]');
+          if (tiles.length <= 1) {
+            // Bot's tile or fewer remain — all other participants have left
+            (window as unknown as Record<string, (() => void) | undefined>).__botAllPeersLeft?.();
+          }
+        });
+        tileObs.observe(document.body, { childList: true, subtree: true });
 
         // Watch for meeting-ended or kicked state
         const endObs = new MutationObserver(() => {
@@ -800,8 +768,11 @@ export class TeamsMeetingBot {
           } else if (rtpPackets > this.lastRtpPackets) {
             this.lastRtpPackets = rtpPackets;
             this.rtpIdleChecks = 0;
-            // Packets are flowing — someone is still in the call; cancel any pending timer
-            if (this.aloneTimer) { clearTimeout(this.aloneTimer); this.aloneTimer = null; }
+            // Packets flowing — reset idle counter but do NOT cancel aloneTimer here:
+            // Teams' SFU sends comfort-noise keepalives even when everyone has left,
+            // so flowing packets are not a reliable "someone is present" signal.
+            // aloneTimer is only cancelled by __botPeerRejoined (new audio track) or
+            // when the video tile roster confirms non-alone state.
           } else {
             // No new packets this poll
             this.rtpIdleChecks++;
@@ -819,102 +790,14 @@ export class TeamsMeetingBot {
         }
       }
 
-      // Best-effort: extract participant names and count from roster panel.
-      // The panel is open (opened in _joinMeeting) so its DOM nodes are present.
+      // Extract participant names from video tile data-tid attributes.
+      // Teams renders every participant tile as data-tid="video-item-container-{DisplayName}".
       const rosterResult = await this.page.evaluate(() => {
-        // Try to read participant item display names — multiple selector strategies for
-        // different Teams web versions and locales.
-        const nameSelectors = [
-          '[data-tid="calling-roster-content"] [data-tid="participant-item-display-name"]',
-          '[data-tid="participant-list"] [class*="displayName"]',
-          '[id="roster-section"] [class*="participantName"]',
-          '.ts-calling-screen [class*="participantName"]',
-          // Additional selectors for newer Teams web versions
-          '[data-tid="calling-roster-content"] [data-tid="participant-item"] [class*="name" i]',
-          '[data-tid="calling-roster-content"] [data-tid="participant-item"] span:first-child',
-          '[class*="rosterSection"] [class*="name"]',
-          '[class*="participantsList"] [class*="name"]',
-        ];
-        let names: string[] = [];
-        for (const sel of nameSelectors) {
-          const els = Array.from(document.querySelectorAll(sel));
-          if (els.length > 0) {
-            names = els.map((el) => el.textContent?.trim() ?? '').filter(Boolean);
-            break;
-          }
-        }
-
-        // Fallback: extract first meaningful text from each participant row directly.
-        // Teams often nests the name in the first non-empty span inside the item.
-        if (names.length === 0) {
-          const items = document.querySelectorAll('[data-tid="participant-item"]');
-          if (items.length > 0) {
-            const extracted: string[] = [];
-            items.forEach((item) => {
-              // Walk spans to find the first one that looks like a name (not an icon/status word)
-              const spans = Array.from(item.querySelectorAll('span'));
-              const uiWords = /^(muted|unmuted|presenter|attendee|video|off|on|\d+)$/i;
-              for (const span of spans) {
-                const text = span.textContent?.trim() ?? '';
-                if (text && text.length > 1 && !uiWords.test(text)) {
-                  extracted.push(text);
-                  break;
-                }
-              }
-            });
-            if (extracted.length > 0) names = extracted;
-          }
-        }
-
-        // Also scrape names from video tiles visible in the main meeting grid.
-        // These are present even when the roster panel is closed.
-        if (names.length === 0) {
-          const tileNameSelectors = [
-            '[data-tid="video-tile-display-name"]',
-            '[data-tid="display-name"]',
-            '[class*="videoTile"] [class*="displayName"]',
-            '[class*="videoTile"] [class*="name"]',
-            '[class*="stageTile"] [class*="name"]',
-          ];
-          for (const sel of tileNameSelectors) {
-            const els = Array.from(document.querySelectorAll(sel));
-            if (els.length > 0) {
-              names = els.map((el) => el.textContent?.trim() ?? '').filter(Boolean);
-              break;
-            }
-          }
-        }
-
-        // Try to get total participant count (including unnamed items).
-        // Teams shows a count in the panel header or as numbered list items.
-        let rosterCount = -1;
-        const countSelectors = [
-          '[data-tid="calling-roster-header"]',
-          '[data-tid="participants-button"] [class*="count"]',
-          '[aria-label*="participants" i]',
-          '[aria-label*="deltagere" i]',
-        ];
-        for (const sel of countSelectors) {
-          const el = document.querySelector(sel);
-          if (el) {
-            const match = (el.textContent ?? '').match(/\d+/);
-            if (match) { rosterCount = parseInt(match[0]); break; }
-          }
-        }
-        // Fallback: count distinct participant rows in the panel
-        if (rosterCount < 0) {
-          const rowSelectors = [
-            '[data-tid="calling-roster-content"] [data-tid="participant-item"]',
-            '[data-tid="calling-roster-content"] [class*="participantItem"]',
-            '[data-tid="calling-roster-content"] > div',
-          ];
-          for (const sel of rowSelectors) {
-            const els = document.querySelectorAll(sel);
-            if (els.length > 0) { rosterCount = els.length; break; }
-          }
-        }
-
-        return { names, rosterCount };
+        const tiles = Array.from(document.querySelectorAll('[data-tid^="video-item-container-"]'));
+        const names = tiles
+          .map((el) => (el.getAttribute('data-tid') ?? '').replace('video-item-container-', '').trim())
+          .filter(Boolean);
+        return { names, rosterCount: tiles.length > 0 ? tiles.length : -1 };
       }).catch(() => ({ names: [] as string[], rosterCount: -1 }));
 
       const { names, rosterCount } = rosterResult as { names: string[]; rosterCount: number };
@@ -925,12 +808,14 @@ export class TeamsMeetingBot {
         this.participants = Array.from(new Set([...this.participants, ...filtered]));
       }
 
-      // Roster-based alone detection: if count dropped to 1 (just the bot) after
+      // Roster-based alone detection: if count dropped to ≤1 (just the bot or empty) after
       // we previously had other participants, increment the consecutive-alone counter.
       // After 2 consecutive polls (≈4 s), start the grace timer.
       if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
         const hadRealNames = this.participants.filter((p) => p !== '__audio_detected__').length > 0;
-        const definitelyAlone = rosterCount === 1
+        // rosterCount 0 = no tiles at all (everyone left, bot tile also gone)
+        // rosterCount 1 = only the bot's own tile remains
+        const definitelyAlone = (rosterCount >= 0 && rosterCount <= 1)
           || (rosterCount < 0 && filtered.length === 0 && hadRealNames);
         const definitelyNotAlone = rosterCount > 1 || filtered.length > 0;
 
@@ -949,6 +834,9 @@ export class TeamsMeetingBot {
           }
         } else if (definitelyNotAlone) {
           this.aloneCheckCount = 0;
+          // Video tiles confirm others are present — cancel any pending alone timer.
+          // This is the reliable cancellation path (unlike RTP which keeps flowing via SFU).
+          if (this.aloneTimer) { clearTimeout(this.aloneTimer); this.aloneTimer = null; }
         }
       }
     } catch { /* ignore — page may be navigating */ }
