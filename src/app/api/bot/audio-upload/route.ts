@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { queryUserSchemaOne } from '@/lib/db/user-schema';
 import { getTranscriptionProvider } from '@/lib/ai/transcription';
 import { detectPiiInSegments } from '@/lib/ai/pii';
+import { groupIntoChapters } from '@/lib/ai/chapters';
 import { saveAudioFile } from '@/lib/audio/storage';
 import type { TranscriptSegment, PiiReplacement } from '@/types';
 
@@ -95,13 +96,23 @@ export async function POST(req: NextRequest) {
     } catch (piiErr) {
       console.error('Bot audio PII detection failed (non-fatal):', piiErr);
     }
+
+    // Generate chapters server-side so the review page has them immediately on load.
+    // Runs after PII so both features complete before the meeting moves to 'review'.
+    let chapters: Awaited<ReturnType<typeof groupIntoChapters>> = [];
+    try {
+      chapters = await groupIntoChapters(rawSegments);
+    } catch (chapErr) {
+      console.error('Bot audio chapters generation failed (non-fatal):', chapErr);
+    }
+
     const rawText = rawSegments.map((s) => s.text).join(' ');
 
     await queryUserSchemaOne(
       userId,
-      `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements)
-       VALUES ($1, $2, $3, NULL, $4)`,
-      [meetingId, rawText, JSON.stringify(rawSegments), JSON.stringify(piiReplacements)],
+      `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements, chapters)
+       VALUES ($1, $2, $3, NULL, $4, $5)`,
+      [meetingId, rawText, JSON.stringify(rawSegments), JSON.stringify(piiReplacements), JSON.stringify(chapters)],
     );
 
     await queryUserSchemaOne(
