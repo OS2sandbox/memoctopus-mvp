@@ -460,12 +460,8 @@ export class TeamsMeetingBot {
           if (ctx.state === 'suspended') ctx.resume().catch(() => {});
         };
 
-        // Audio graph: sources → analyser → dest (recorder)
-        // The analyser is used for long-silence fallback detection (see below).
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 256;
+        // Audio graph: sources → dest (recorder)
         const dest = ctx.createMediaStreamDestination();
-        analyser.connect(dest);
 
         // createMediaStreamSource routes the MediaStream directly into the graph,
         // bypassing the audio-element playback requirement that silently fails in
@@ -476,38 +472,8 @@ export class TeamsMeetingBot {
           if (!(stream instanceof MediaStream)) return;
           if (connectedStreams.has(stream)) return;
           connectedStreams.add(stream);
-          ctx.createMediaStreamSource(stream).connect(analyser);
+          ctx.createMediaStreamSource(stream).connect(dest);
         };
-
-        // Long-silence fallback — Teams routes audio through a relay that keeps
-        // RTC connections alive even after every participant has left, so peer
-        // state and track-ended events are unreliable departure signals.
-        // 60 checks × 5 s = 5 minutes of unbroken silence → trigger leave.
-        // This is intentionally conservative: normal pauses, muted speakers, and
-        // screen-share-only segments all produce silence without meaning everyone
-        // has left. Five minutes of complete silence reliably means an empty room.
-        const silenceData = new Uint8Array(analyser.frequencyBinCount);
-        let hadAudio = false;
-        let silenceChecks = 0;
-        setInterval(() => {
-          analyser.getByteTimeDomainData(silenceData);
-          let maxDev = 0;
-          for (let i = 0; i < silenceData.length; i++) {
-            const dev = Math.abs(silenceData[i] - 128);
-            if (dev > maxDev) maxDev = dev;
-          }
-          const win = window as unknown as Record<string, (() => void) | undefined>;
-          if (maxDev > 5) {
-            hadAudio = true;
-            silenceChecks = 0;
-          } else if (hadAudio) {
-            silenceChecks++;
-            if (silenceChecks >= 60) {
-              silenceChecks = 0;
-              win.__botAllPeersLeft?.();
-            }
-          }
-        }, 5000);
 
         // Connect all existing bot-captured audio elements
         document.querySelectorAll<HTMLAudioElement>('audio[data-bot-captured]').forEach(connectEl);
