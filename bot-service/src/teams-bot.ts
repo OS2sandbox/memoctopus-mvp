@@ -31,6 +31,8 @@ export class TeamsMeetingBot {
   private audioChunks: Buffer[] = [];
   private hadActiveTracks = false;
   private aloneCheckCount = 0;
+  private lastRtpPackets = -1;
+  private rtpIdleChecks = 0;
   private onEndedCallback: (() => void) | null = null;
 
   constructor(config: BotSessionConfig) {
@@ -103,6 +105,9 @@ export class TeamsMeetingBot {
       // Set of RTCPeerConnections that have carried at least one audio track.
       // Used to detect when all remote peers have disconnected.
       const audioPcs = new Set<RTCPeerConnection>();
+      // Flat list exposed to Node.js so _pollParticipants can call getStats() on each PC.
+      const audioPcsList: RTCPeerConnection[] = [];
+      (window as unknown as Record<string, unknown>).__botAudioPcs = audioPcsList;
       let hadAudioPeer = false;
 
       // Check whether all known audio peers are gone — either via RTC state changes
@@ -140,6 +145,7 @@ export class TeamsMeetingBot {
           // Track this connection as an audio peer
           if (!audioPcs.has(pc)) {
             audioPcs.add(pc);
+            audioPcsList.push(pc);
             hadAudioPeer = true;
             // Notify Node.js side so it can cancel any pending alone-timer
             const rejoinCb = (window as unknown as Record<string, unknown>).__botPeerRejoined as (() => void) | undefined;
@@ -417,6 +423,8 @@ export class TeamsMeetingBot {
         this.aloneTimer = null;
       }
       this.aloneCheckCount = 0;
+      this.lastRtpPackets = -1;
+      this.rtpIdleChecks = 0;
       console.log('[bot] New audio peer joined — cancelled alone timer');
     });
 
@@ -794,6 +802,55 @@ export class TeamsMeetingBot {
             void this.stop();
           }
         }, 5_000);
+      }
+
+      // RTP packet count check — more reliable than track readyState because Teams'
+      // SFU stops forwarding audio packets to the bot when no participants remain,
+      // even though it keeps the RTC connection alive. Muted participants still
+      // cause packets to flow (comfort noise / keep-alive), so this correctly
+      // distinguishes "muted but present" from "everyone left".
+      // 15 polls × 2 s = 30 s of zero new packets → start the alone timer.
+      if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+        const rtpPackets = await this.page.evaluate(async () => {
+          const pcs = ((window as unknown as Record<string, unknown>).__botAudioPcs ?? []) as RTCPeerConnection[];
+          let total = 0;
+          for (const pc of pcs) {
+            if (pc.connectionState === 'closed') continue;
+            try {
+              const report = await pc.getStats();
+              report.forEach((s) => {
+                if (s.type === 'inbound-rtp' && (s as Record<string, unknown>).kind === 'audio') {
+                  total += ((s as Record<string, unknown>).packetsReceived as number | undefined) ?? 0;
+                }
+              });
+            } catch { /* ignore */ }
+          }
+          return total;
+        }).catch(() => -1);
+
+        if (rtpPackets >= 0) {
+          if (this.lastRtpPackets < 0) {
+            this.lastRtpPackets = rtpPackets; // first reading — just initialise
+          } else if (rtpPackets > this.lastRtpPackets) {
+            this.lastRtpPackets = rtpPackets;
+            this.rtpIdleChecks = 0;
+            // Packets are flowing — someone is still in the call; cancel any pending timer
+            if (this.aloneTimer) { clearTimeout(this.aloneTimer); this.aloneTimer = null; }
+          } else {
+            // No new packets this poll
+            this.rtpIdleChecks++;
+            if (this.rtpIdleChecks >= 15 && !this.aloneTimer) {
+              console.log('[bot] No new inbound RTP audio packets for ~30 s — will stop in 5 s');
+              this.aloneTimer = setTimeout(() => {
+                this.aloneTimer = null;
+                if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+                  console.log('[bot] RTP idle confirmed — alone in meeting, stopping');
+                  void this.stop();
+                }
+              }, 5_000);
+            }
+          }
+        }
       }
 
       // Best-effort: extract participant names and count from roster panel.
