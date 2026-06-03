@@ -33,6 +33,7 @@ export class TeamsMeetingBot {
   private aloneCheckCount = 0;
   private lastRtpPackets = -1;
   private rtpIdleChecks = 0;
+  private rtpAudioIdleChecks = 0;
   private onEndedCallback: (() => void) | null = null;
 
   constructor(config: BotSessionConfig) {
@@ -426,6 +427,7 @@ export class TeamsMeetingBot {
       this.aloneCheckCount = 0;
       this.lastRtpPackets = -1;
       this.rtpIdleChecks = 0;
+      this.rtpAudioIdleChecks = 0;
       console.log('[bot] New audio peer joined — cancelled alone timer');
     });
 
@@ -438,6 +440,7 @@ export class TeamsMeetingBot {
         this.aloneTimer = null;
       }
       this.aloneCheckCount = 0;
+      this.rtpAudioIdleChecks = 0;
       console.log('[bot] Participant tiles visible — presence confirmed, cancelled alone timer');
     });
 
@@ -560,13 +563,15 @@ export class TeamsMeetingBot {
         // Audio silence detector — silenceAnalyser sits in the signal path (sources →
         // silenceAnalyser → dest) so we can read energy directly without needing to
         // create a new source from dest.stream (which fails in headless Chrome).
+        // Threshold of 15 corresponds to ~-91 dBFS average — below real audio (even quiet
+        // presence gives 20-60) but above true digital silence (0-5). 30 × 2 s = 60 s.
         const silenceFreqData = new Uint8Array(silenceAnalyser.frequencyBinCount);
         let silenceChecks = 0;
         const silenceInterval = setInterval(() => {
           silenceAnalyser.getByteFrequencyData(silenceFreqData);
           const avgEnergy = silenceFreqData.reduce((s: number, v: number) => s + v, 0) / silenceFreqData.length;
-          if (avgEnergy < 2) {
-            if (++silenceChecks >= 60) {
+          if (avgEnergy < 15) {
+            if (++silenceChecks >= 30) {
               clearInterval(silenceInterval);
               (window as unknown as Record<string, (() => void) | undefined>).__botAllPeersLeft?.();
             }
@@ -787,16 +792,16 @@ export class TeamsMeetingBot {
         }, 5_000);
       }
 
-      // RTP packet count check — more reliable than track readyState because Teams'
-      // SFU stops forwarding audio packets to the bot when no participants remain,
-      // even though it keeps the RTC connection alive. Muted participants still
-      // cause packets to flow (comfort noise / keep-alive), so this correctly
-      // distinguishes "muted but present" from "everyone left".
-      // 15 polls × 2 s = 30 s of zero new packets → start the alone timer.
+      // RTP packet + audio level check.
+      // audioLevel (0–1 linear RMS) is the most sensitive departure signal:
+      // SFU comfort noise is near-zero (< 0.002) while any real presence — even a
+      // silently listening participant — shows at least slight background noise (> 0.002).
+      // Packet counting is a secondary check for when audioLevel is unavailable.
       if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
-        const rtpPackets = await this.page.evaluate(async () => {
+        const rtpResult = await this.page.evaluate(async () => {
           const pcs = ((window as unknown as Record<string, unknown>).__botAudioPcs ?? []) as RTCPeerConnection[];
           let total = 0;
+          let maxAudioLevel = -1;
           for (const pc of pcs) {
             if (pc.connectionState === 'closed') continue;
             try {
@@ -804,12 +809,35 @@ export class TeamsMeetingBot {
               report.forEach((s) => {
                 if (s.type === 'inbound-rtp' && (s as Record<string, unknown>).kind === 'audio') {
                   total += ((s as Record<string, unknown>).packetsReceived as number | undefined) ?? 0;
+                  const lvl = (s as Record<string, unknown>).audioLevel as number | undefined;
+                  if (lvl !== undefined && lvl > maxAudioLevel) maxAudioLevel = lvl;
                 }
               });
             } catch { /* ignore */ }
           }
-          return total;
-        }).catch(() => -1);
+          return { total, maxAudioLevel };
+        }).catch(() => ({ total: -1, maxAudioLevel: -1 }));
+
+        const { total: rtpPackets, maxAudioLevel } = rtpResult as { total: number; maxAudioLevel: number };
+
+        // Audio level idle — 30 polls × 2 s = 60 s near-silence → start alone timer.
+        if (maxAudioLevel >= 0) {
+          if (maxAudioLevel < 0.002) {
+            this.rtpAudioIdleChecks++;
+            if (this.rtpAudioIdleChecks >= 30 && !this.aloneTimer) {
+              console.log('[bot] Near-zero audio level for ~60 s — will stop in 5 s');
+              this.aloneTimer = setTimeout(() => {
+                this.aloneTimer = null;
+                if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+                  console.log('[bot] Audio level idle confirmed — alone in meeting, stopping');
+                  void this.stop();
+                }
+              }, 5_000);
+            }
+          } else {
+            this.rtpAudioIdleChecks = 0;
+          }
+        }
 
         if (rtpPackets >= 0) {
           if (this.lastRtpPackets < 0) {
@@ -817,13 +845,9 @@ export class TeamsMeetingBot {
           } else if (rtpPackets > this.lastRtpPackets) {
             this.lastRtpPackets = rtpPackets;
             this.rtpIdleChecks = 0;
-            // Packets flowing — reset idle counter but do NOT cancel aloneTimer here:
-            // Teams' SFU sends comfort-noise keepalives even when everyone has left,
-            // so flowing packets are not a reliable "someone is present" signal.
-            // aloneTimer is only cancelled by __botPeerRejoined (new audio track) or
-            // when the video tile roster confirms non-alone state.
+            // Packets flowing — do NOT cancel aloneTimer: Teams SFU sends comfort-noise
+            // keepalives even after everyone leaves, so flowing packets don't mean presence.
           } else {
-            // No new packets this poll
             this.rtpIdleChecks++;
             if (this.rtpIdleChecks >= 15 && !this.aloneTimer) {
               console.log('[bot] No new inbound RTP audio packets for ~30 s — will stop in 5 s');
@@ -848,6 +872,10 @@ export class TeamsMeetingBot {
           { sel: '[data-tid="calling-roster-cell"]', nameFrom: 'text' },
           { sel: '[data-tid^="roster-participant-"]', nameFrom: 'aria-label' },
           { sel: '[data-tid="participant-roster-item"]', nameFrom: 'text' },
+          { sel: '[data-cid="roster-participant"]', nameFrom: 'text' },
+          { sel: '[data-tid="meeting-roster-item"]', nameFrom: 'text' },
+          { sel: '[data-tid^="participant-pane-entry-"]', nameFrom: 'aria-label' },
+          { sel: '[data-tid="roster-section"] [aria-label]', nameFrom: 'aria-label' },
         ];
         for (const { sel, nameFrom } of selectors) {
           const els = Array.from(document.querySelectorAll(sel));
@@ -863,6 +891,23 @@ export class TeamsMeetingBot {
           }).filter(Boolean);
           if (names.length > 0) return { names, rosterCount: els.length };
         }
+
+        // Broad fallback: scan the participant panel container for list items.
+        const panelContainer = (
+          document.querySelector('[data-tid="participant-pane"]') ??
+          document.querySelector('[data-tid="roster"]') ??
+          document.querySelector('[aria-label="Participants"]') ??
+          document.querySelector('[aria-label="People"]') ??
+          document.querySelector('[aria-label="Deltagere"]')
+        );
+        if (panelContainer) {
+          const items = Array.from(panelContainer.querySelectorAll('[role="listitem"], [role="option"], [role="treeitem"]'));
+          if (items.length > 0) {
+            const names = items.map((el) => (el as HTMLElement).innerText.split('\n')[0].trim()).filter(Boolean);
+            if (names.length > 0) return { names, rosterCount: items.length };
+          }
+        }
+
         return { names: [] as string[], rosterCount: -1 };
       }).catch(() => ({ names: [] as string[], rosterCount: -1 }));
 
