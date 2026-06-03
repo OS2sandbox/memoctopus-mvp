@@ -473,19 +473,22 @@ export class TeamsMeetingBot {
           if (ctx.state === 'suspended') ctx.resume().catch(() => {});
         };
 
-        // Audio graph: sources → dest (recorder)
+        // Audio graph: sources → silenceAnalyser → dest (recorder)
+        // Placing the analyser in the signal path lets us read energy directly
+        // without calling createMediaStreamSource(dest.stream), which fails silently
+        // in headless Chrome (no audio output device → stream is unreadable).
         const dest = ctx.createMediaStreamDestination();
+        const silenceAnalyser = ctx.createAnalyser();
+        silenceAnalyser.fftSize = 256;
+        silenceAnalyser.connect(dest);
 
-        // createMediaStreamSource routes the MediaStream directly into the graph,
-        // bypassing the audio-element playback requirement that silently fails in
-        // headless Chrome (no real audio output device → element never decoded).
         const connectedStreams = new Set<MediaStream>();
         const connectEl = (el: HTMLAudioElement) => {
           const stream = el.srcObject;
           if (!(stream instanceof MediaStream)) return;
           if (connectedStreams.has(stream)) return;
           connectedStreams.add(stream);
-          ctx.createMediaStreamSource(stream).connect(dest);
+          ctx.createMediaStreamSource(stream).connect(silenceAnalyser);
         };
 
         // Connect all existing bot-captured audio elements
@@ -554,30 +557,24 @@ export class TeamsMeetingBot {
         });
         tileObs.observe(document.body, { childList: true, subtree: true });
 
-        // Audio silence detector — reliable fallback for "alone in meeting" when the SFU
-        // keeps RTC connections and tracks alive after all participants leave.
-        // Reads from the mixed recording stream every 2 s. Average frequency energy < 2/255
-        // for 60 consecutive checks (2 min) means no meaningful audio → fires __botAllPeersLeft.
-        try {
-          const silenceAnalyser = ctx.createAnalyser();
-          silenceAnalyser.fftSize = 256;
-          ctx.createMediaStreamSource(dest.stream).connect(silenceAnalyser);
-          const silenceFreqData = new Uint8Array(silenceAnalyser.frequencyBinCount);
-          let silenceChecks = 0;
-          const silenceInterval = setInterval(() => {
-            silenceAnalyser.getByteFrequencyData(silenceFreqData);
-            const avgEnergy = silenceFreqData.reduce((s: number, v: number) => s + v, 0) / silenceFreqData.length;
-            if (avgEnergy < 2) {
-              if (++silenceChecks >= 60) {
-                clearInterval(silenceInterval);
-                (window as unknown as Record<string, (() => void) | undefined>).__botAllPeersLeft?.();
-              }
-            } else {
-              silenceChecks = 0;
+        // Audio silence detector — silenceAnalyser sits in the signal path (sources →
+        // silenceAnalyser → dest) so we can read energy directly without needing to
+        // create a new source from dest.stream (which fails in headless Chrome).
+        const silenceFreqData = new Uint8Array(silenceAnalyser.frequencyBinCount);
+        let silenceChecks = 0;
+        const silenceInterval = setInterval(() => {
+          silenceAnalyser.getByteFrequencyData(silenceFreqData);
+          const avgEnergy = silenceFreqData.reduce((s: number, v: number) => s + v, 0) / silenceFreqData.length;
+          if (avgEnergy < 2) {
+            if (++silenceChecks >= 60) {
+              clearInterval(silenceInterval);
+              (window as unknown as Record<string, (() => void) | undefined>).__botAllPeersLeft?.();
             }
-          }, 2000);
-          (window as unknown as Record<string, unknown>).__botSilenceInterval = silenceInterval;
-        } catch { /* non-fatal — silence detection is a best-effort fallback */ }
+          } else {
+            silenceChecks = 0;
+          }
+        }, 2000);
+        (window as unknown as Record<string, unknown>).__botSilenceInterval = silenceInterval;
 
         // Watch for meeting-ended or kicked state
         const endObs = new MutationObserver(() => {

@@ -61,6 +61,8 @@ export function TranscriptReview({
   const [segments, setSegments] = useState(initialSegments);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editableParticipants, setEditableParticipants] = useState<string[]>(participants ?? []);
+  const [newParticipantInput, setNewParticipantInput] = useState('');
   const [activeKeywords, setActiveKeywords] = useState<Set<string>>(new Set());
   const [customText, setCustomText] = useState('');
 
@@ -340,6 +342,7 @@ export function TranscriptReview({
             meetingId,
             transcriptId,
             segments: processedSegments,
+            participants: editableParticipants.filter(Boolean),
             customPrompt: [...Array.from(activeKeywords), customText.trim()].filter(Boolean).join(', ') || undefined,
           }),
           signal: abort.signal,
@@ -354,6 +357,7 @@ export function TranscriptReview({
       router.push(`/meeting/${meetingId}/minutes`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt');
+    } finally {
       setIsGenerating(false);
     }
   }
@@ -820,20 +824,51 @@ export function TranscriptReview({
             </div>
           )}
 
-          {/* Participants from Teams meeting */}
-          {participants && participants.length > 0 && (
-            <div style={{ marginTop: 28 }}>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 8 }}>deltagere</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {participants.map((name, i) => (
-                  <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--muted-2)', flexShrink: 0, display: 'inline-block' }} />
-                    {name}
-                  </div>
-                ))}
-              </div>
+          {/* Deltagere — editable list included in referat */}
+          <div style={{ marginTop: 28 }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 8 }}>deltagere</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {editableParticipants.map((name, i) => (
+                <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--muted-2)', flexShrink: 0, display: 'inline-block' }} />
+                  <span style={{ flex: 1 }}>{name}</span>
+                  <button
+                    onClick={() => setEditableParticipants((prev) => prev.filter((_, j) => j !== i))}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted-2)', fontSize: 14, padding: '0 2px', lineHeight: 1 }}
+                    title="Fjern deltager"
+                  >×</button>
+                </div>
+              ))}
             </div>
-          )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: editableParticipants.length > 0 ? 8 : 0 }}>
+              <input
+                value={newParticipantInput}
+                onChange={(e) => setNewParticipantInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newParticipantInput.trim()) {
+                    e.preventDefault();
+                    setEditableParticipants((prev) => [...prev, newParticipantInput.trim()]);
+                    setNewParticipantInput('');
+                  }
+                }}
+                placeholder="tilføj deltager"
+                style={{
+                  flex: 1, fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-2)',
+                  background: 'transparent', border: 'none', outline: 'none',
+                  borderBottom: '1px solid var(--line-2)', padding: '2px 0',
+                }}
+              />
+              {newParticipantInput.trim() && (
+                <button
+                  onClick={() => {
+                    setEditableParticipants((prev) => [...prev, newParticipantInput.trim()]);
+                    setNewParticipantInput('');
+                  }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: 11, fontFamily: 'var(--mono)', padding: 0 }}
+                >+ tilføj</button>
+              )}
+            </div>
+          </div>
 
           {/* Keywords / prompt */}
           <div style={{ marginTop: 28 }}>

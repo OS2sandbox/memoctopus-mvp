@@ -68,6 +68,7 @@ export async function generateMinutes(
   transcript: TranscriptSegment[],
   templateSections: TemplateSectionDef[],
   customPrompt?: string,
+  participants?: string[],
 ): Promise<MinutesContent> {
   const transcriptText = transcript
     .map((s) => `[${s.speaker}] (${formatTime(s.start)}): ${s.text}`)
@@ -80,6 +81,10 @@ export async function generateMinutes(
     )
     .join('\n');
 
+  const participantLine = participants && participants.length > 0
+    ? `\nDeltagere i mødet: ${participants.join(', ')}\n`
+    : '';
+
   const response = await getClient().chat.completions.create({
     model: 'gpt-4o',
     messages: [
@@ -87,7 +92,7 @@ export async function generateMinutes(
       {
         role: 'user',
         content: `Udarbejd et mødereferat baseret på denne transskription.
-${customPrompt ? `\nBrugerens instruktion til referatet: ${customPrompt}\n` : ''}
+${participantLine}${customPrompt ? `\nBrugerens instruktion til referatet: ${customPrompt}\n` : ''}
 Referat skal have følgende sektioner:
 ${sectionDescriptions}
 
@@ -112,23 +117,39 @@ Skriv indholdet i sektionerne som klart, præcist dansk. Brug punktlister hvor d
 
   const raw = response.choices[0]?.message?.content ?? '';
 
+  let content: MinutesContent;
   try {
     const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
-    return JSON.parse(cleaned) as MinutesContent;
+    content = JSON.parse(cleaned) as MinutesContent;
   } catch {
-    return {
+    content = {
       sections: templateSections.map((s) => ({ key: s.key, label: s.label, content: '' })),
     };
   }
+
+  if (participants && participants.length > 0) {
+    content.sections.unshift({
+      key: 'deltagere',
+      label: 'Deltagere',
+      content: participants.map((p) => `- ${p}`).join('\n'),
+    });
+  }
+
+  return content;
 }
 
 export async function generateMinutesFreeform(
   transcript: TranscriptSegment[],
   customPrompt: string,
+  participants?: string[],
 ): Promise<MinutesContent> {
   const transcriptText = transcript
     .map((s) => `[${s.speaker}] (${formatTime(s.start)}): ${s.text}`)
     .join('\n');
+
+  const participantLine = participants && participants.length > 0
+    ? `\nDeltagere i mødet: ${participants.join(', ')}\n`
+    : '';
 
   const response = await getClient().chat.completions.create({
     model: 'gpt-4o',
@@ -137,7 +158,7 @@ export async function generateMinutesFreeform(
       {
         role: 'user',
         content: `Udarbejd et mødereferat baseret på denne transskription.
-
+${participantLine}
 Brugerens instruktion: ${customPrompt}
 
 Beslut selv hvilke sektioner referatet skal have baseret på transskriptionen og brugerens instruktion. Brug 2–6 sektioner der passer til indholdet.
@@ -163,12 +184,23 @@ Skriv indholdet som klart, præcist dansk. Brug punktlister hvor det er relevant
 
   const raw = response.choices[0]?.message?.content ?? '';
 
+  let content: MinutesContent;
   try {
     const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
-    return JSON.parse(cleaned) as MinutesContent;
+    content = JSON.parse(cleaned) as MinutesContent;
   } catch {
-    return { sections: [] };
+    content = { sections: [] };
   }
+
+  if (participants && participants.length > 0) {
+    content.sections.unshift({
+      key: 'deltagere',
+      label: 'Deltagere',
+      content: participants.map((p) => `- ${p}`).join('\n'),
+    });
+  }
+
+  return content;
 }
 
 function formatTime(seconds: number): string {
