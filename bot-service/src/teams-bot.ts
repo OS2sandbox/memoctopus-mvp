@@ -34,6 +34,7 @@ export class TeamsMeetingBot {
   private lastRtpPackets = -1;
   private rtpIdleChecks = 0;
   private rtpAudioIdleChecks = 0;
+  private buttonCount = -1;
   private onEndedCallback: (() => void) | null = null;
 
   constructor(config: BotSessionConfig) {
@@ -428,6 +429,7 @@ export class TeamsMeetingBot {
       this.lastRtpPackets = -1;
       this.rtpIdleChecks = 0;
       this.rtpAudioIdleChecks = 0;
+      this.buttonCount = -1;
       console.log('[bot] New audio peer joined — cancelled alone timer');
     });
 
@@ -756,6 +758,60 @@ export class TeamsMeetingBot {
         console.log('[bot] Leave button gone — kicked or meeting ended');
         void this.stop();
         return;
+      }
+
+      // Participants button aria-label contains the live headcount, e.g. "Show participants (2)".
+      // This is the most reliable departure signal because it reflects Teams' own UI state
+      // and is unaffected by the SFU keeping RTC connections/packets alive after peers leave.
+      const rawButtonCount = await this.page.evaluate(() => {
+        const selectors = [
+          'button[data-tid="participants-button"]',
+          'button[aria-label*="participant" i]',
+          'button[aria-label*="deltager" i]',
+          'button[aria-label*="people" i]',
+          '[data-tid="participants-button"]',
+        ];
+        for (const sel of selectors) {
+          const btn = document.querySelector(sel);
+          if (!btn) continue;
+          const label = btn.getAttribute('aria-label') ?? '';
+          const m = label.match(/\((\d+)\)/);
+          if (m) return parseInt(m[1], 10);
+          // Fallback: numeric badge inside the button
+          const badge = btn.querySelector('[class*="count" i], [class*="badge" i]');
+          if (badge) {
+            const n = parseInt((badge as HTMLElement).innerText, 10);
+            if (!isNaN(n)) return n;
+          }
+        }
+        return -1;
+      }).catch(() => -1) as number;
+
+      if (rawButtonCount >= 0) {
+        const prevCount = this.buttonCount;
+        this.buttonCount = rawButtonCount;
+
+        // Teams counts ALL participants including the bot itself, so ≤1 means bot is alone.
+        const botAlone = rawButtonCount <= 1;
+        const hadOthers = prevCount > 1;
+
+        if (botAlone && hadOthers && this.hadActiveTracks
+            && (this.status === 'recording' || this.status === 'paused')
+            && !this.aloneTimer) {
+          console.log(`[bot] Participant button count dropped to ${rawButtonCount} — stopping in 3 s`);
+          this.aloneTimer = setTimeout(() => {
+            this.aloneTimer = null;
+            if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+              console.log('[bot] Confirmed alone (button count) — stopping');
+              void this.stop();
+            }
+          }, 3_000);
+        } else if (!botAlone && this.aloneTimer) {
+          // Someone joined back
+          clearTimeout(this.aloneTimer);
+          this.aloneTimer = null;
+          this.aloneCheckCount = 0;
+        }
       }
 
       // Count remote audio tracks that are still live. When this transitions from > 0
