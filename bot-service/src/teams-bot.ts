@@ -130,15 +130,15 @@ export class TeamsMeetingBot {
             });
           }
           for (const stream of event.streams) {
+            // Keep element only as a stream container for liveTrackCount checks.
+            // muted=true prevents the remote audio from playing back through the
+            // browser's virtual output device and looping into the fake microphone.
             const el = document.createElement('audio');
-            el.autoplay = true;
-            el.muted = false;
-            el.volume = 1.0;
+            el.muted = true;
             el.srcObject = stream;
             (el.dataset as DOMStringMap & { botCaptured: string }).botCaptured = 'true';
             el.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;';
             document.body.appendChild(el);
-            el.play().catch(() => {});
           }
         });
         return pc;
@@ -384,7 +384,18 @@ export class TeamsMeetingBot {
       }
     });
 
-    // Fired by the RTCPeerConnection patch when all audio peers close their connections.
+    // Fired by the silence detector when audio resumes after a silent period,
+    // so a quiet-then-loud-again meeting doesn't accidentally trigger a stop.
+    await page.exposeFunction('__botAudioResumed', () => {
+      if (this.aloneTimer) {
+        clearTimeout(this.aloneTimer);
+        this.aloneTimer = null;
+        console.log('[bot] Audio resumed — cancelled alone timer');
+      }
+    });
+
+    // Fired by the RTCPeerConnection patch when all audio peers close their connections,
+    // or by the silence detector after 90 s of continuous silence.
     // We schedule a stop with a 15-second grace window so brief reconnections don't
     // cause a premature exit.
     await page.exposeFunction('__botAllPeersLeft', () => {
@@ -411,7 +422,13 @@ export class TeamsMeetingBot {
           if (ctx.state === 'suspended') ctx.resume().catch(() => {});
         };
 
+        // Audio graph: sources → analyser → dest (recorder)
+        // The analyser sits in-line so silence detection sees the same mixed audio
+        // that the MediaRecorder records, without any extra routing.
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
         const dest = ctx.createMediaStreamDestination();
+        analyser.connect(dest);
 
         // createMediaStreamSource routes the MediaStream directly into the graph,
         // bypassing the audio-element playback requirement that silently fails in
@@ -422,8 +439,37 @@ export class TeamsMeetingBot {
           if (!(stream instanceof MediaStream)) return;
           if (connectedStreams.has(stream)) return;
           connectedStreams.add(stream);
-          ctx.createMediaStreamSource(stream).connect(dest);
+          ctx.createMediaStreamSource(stream).connect(analyser);
         };
+
+        // Silence detection — Teams routes audio through a relay server, so the
+        // bot's RTCPeerConnection stays 'connected' even when all participants leave.
+        // The only reliable signal is that the relay stops forwarding audio.
+        // 18 checks × 5 s = 90 s of continuous silence triggers the alone-timer.
+        const silenceData = new Uint8Array(analyser.frequencyBinCount);
+        let hadAudio = false;
+        let silenceChecks = 0;
+        setInterval(() => {
+          analyser.getByteTimeDomainData(silenceData);
+          let maxDev = 0;
+          for (let i = 0; i < silenceData.length; i++) {
+            const dev = Math.abs(silenceData[i] - 128);
+            if (dev > maxDev) maxDev = dev;
+          }
+          const win = window as unknown as Record<string, (() => void) | undefined>;
+          if (maxDev > 5) { // Signal above noise floor — audio present
+            const wasInSilence = hadAudio && silenceChecks > 0;
+            hadAudio = true;
+            silenceChecks = 0;
+            if (wasInSilence) win.__botAudioResumed?.(); // Cancel any pending alone-timer
+          } else if (hadAudio) { // Silence after having had real audio
+            silenceChecks++;
+            if (silenceChecks >= 18) {
+              silenceChecks = 0; // Reset so we don't fire again until next silence period
+              win.__botAllPeersLeft?.();
+            }
+          }
+        }, 5000);
 
         // Connect all existing bot-captured audio elements
         document.querySelectorAll<HTMLAudioElement>('audio[data-bot-captured]').forEach(connectEl);
