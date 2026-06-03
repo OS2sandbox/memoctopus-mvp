@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
 import { WaveformPlayer } from './WaveformPlayer';
@@ -56,7 +55,6 @@ export function TranscriptReview({
   initialChapters,
   participants,
 }: TranscriptReviewProps) {
-  const router = useRouter();
   const isMobile = useIsMobile();
   const [segments, setSegments] = useState(initialSegments);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -354,7 +352,7 @@ export function TranscriptReview({
         const data = await res.json();
         throw new Error(data.error ?? 'Kunne ikke generere referat');
       }
-      router.push(`/meeting/${meetingId}/minutes`);
+      window.location.href = `/meeting/${meetingId}/minutes`;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt');
     } finally {
