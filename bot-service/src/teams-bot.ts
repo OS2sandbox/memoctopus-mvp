@@ -924,6 +924,7 @@ export class TeamsMeetingBot {
       // whichever returns results. Names are read from data-tid, aria-label, or inner text.
       const rosterResult = await this.page.evaluate(() => {
         const selectors: Array<{ sel: string; nameFrom: 'data-tid' | 'aria-label' | 'text' | 'data-tid-suffix' }> = [
+          // Roster panel entries (group calls / meetings with panel open)
           { sel: '[data-tid^="video-item-container-"]', nameFrom: 'data-tid-suffix' },
           { sel: '[data-tid="calling-roster-cell"]', nameFrom: 'text' },
           { sel: '[data-tid^="roster-participant-"]', nameFrom: 'aria-label' },
@@ -932,6 +933,11 @@ export class TeamsMeetingBot {
           { sel: '[data-tid="meeting-roster-item"]', nameFrom: 'text' },
           { sel: '[data-tid^="participant-pane-entry-"]', nameFrom: 'aria-label' },
           { sel: '[data-tid="roster-section"] [aria-label]', nameFrom: 'aria-label' },
+          // Video stage display names (1-on-1 calls show the other person's name here)
+          { sel: '[data-tid="tile-display-name"]', nameFrom: 'text' },
+          { sel: '[data-tid^="calling-roster-tile-"]', nameFrom: 'text' },
+          { sel: '[data-tid="call-roster-entry"]', nameFrom: 'text' },
+          { sel: '[class*="displayName"]', nameFrom: 'text' },
         ];
         for (const { sel, nameFrom } of selectors) {
           const els = Array.from(document.querySelectorAll(sel));
@@ -964,10 +970,22 @@ export class TeamsMeetingBot {
           }
         }
 
+        // Last resort for 1-on-1 calls: parse the page title.
+        // Teams sets the title to "[Name] | Microsoft Teams" or "Call with [Name] | Microsoft Teams".
+        const title = document.title ?? '';
+        const titleMatch = title.match(/^(?:Call with\s+)?(.+?)\s*[|\-]\s*Microsoft Teams/i);
+        if (titleMatch?.[1]) {
+          return { names: [titleMatch[1].trim()], rosterCount: 1 };
+        }
+
         return { names: [] as string[], rosterCount: -1 };
       }).catch(() => ({ names: [] as string[], rosterCount: -1 }));
 
       const { names, rosterCount } = rosterResult as { names: string[]; rosterCount: number };
+
+      if (names.length > 0) {
+        console.log(`[bot] roster names found: ${JSON.stringify(names)} (rosterCount=${rosterCount})`);
+      }
 
       const filtered = names.filter((n) => n && n !== this.config.botName);
       if (filtered.length > 0) {
