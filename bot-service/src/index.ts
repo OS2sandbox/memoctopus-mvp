@@ -51,6 +51,18 @@ app.post('/sessions', requireAuth, async (req: Request, res: Response): Promise<
     return;
   }
 
+  // Reject anything that is clearly not a Teams meeting URL
+  let parsedUrl: URL;
+  try { parsedUrl = new URL(meetingUrl); } catch {
+    res.status(400).json({ error: 'Invalid meeting URL' });
+    return;
+  }
+  const validHost = parsedUrl.hostname === 'teams.microsoft.com' || parsedUrl.hostname === 'teams.live.com';
+  if (!validHost) {
+    res.status(400).json({ error: 'URL is not a Microsoft Teams meeting link' });
+    return;
+  }
+
   const sessionId = uuidv4();
 
   const config: BotSessionConfig = {

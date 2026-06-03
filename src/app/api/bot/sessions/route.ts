@@ -73,9 +73,17 @@ export async function POST(req: NextRequest) {
   }
 
   if (!res.ok) {
-    const err = await res.text();
-    console.error('Bot service error:', err);
-    return NextResponse.json({ error: 'Failed to start bot session' }, { status: 502 });
+    let errBody: { error?: string } = {};
+    try { errBody = await res.json(); } catch { /* ignore */ }
+    const errMsg = errBody.error ?? 'Failed to start bot session';
+    console.error('Bot service error:', errMsg);
+    // Undo the bot_session claim so the user can retry
+    await queryUserSchemaOne(
+      session.user.id,
+      `UPDATE meetings SET bot_session = NULL, updated_at = NOW() WHERE id = $1`,
+      [meetingId],
+    ).catch(() => {});
+    return NextResponse.json({ error: errMsg }, { status: res.status === 400 ? 400 : 502 });
   }
 
   const { sessionId } = await res.json();

@@ -30,6 +30,7 @@ export class TeamsMeetingBot {
   private aloneTimer: ReturnType<typeof setTimeout> | null = null;
   private audioChunks: Buffer[] = [];
   private hadActiveTracks = false;
+  private aloneCheckCount = 0;
   private onEndedCallback: (() => void) | null = null;
 
   constructor(config: BotSessionConfig) {
@@ -104,19 +105,27 @@ export class TeamsMeetingBot {
       const audioPcs = new Set<RTCPeerConnection>();
       let hadAudioPeer = false;
 
-      // Check whether all known audio peers are in a terminal/disconnected state.
-      // Teams often leaves connections at iceConnectionState='disconnected' rather
-      // than closing them cleanly, so we check both connectionState and iceConnectionState.
+      // Check whether all known audio peers are gone — either via RTC state changes
+      // or via audio track readyState. Teams routes through a relay so connection
+      // states often stay 'connected' after participants leave; track states are more
+      // reliable as a secondary signal.
       const checkAllPeersGone = () => {
         if (!hadAudioPeer || audioPcs.size === 0) return;
-        const allGone = [...audioPcs].every((pc) =>
+        const allConnectionsGone = [...audioPcs].every((pc) =>
           pc.connectionState === 'closed' ||
           pc.connectionState === 'failed' ||
           pc.iceConnectionState === 'disconnected' ||
           pc.iceConnectionState === 'failed' ||
           pc.iceConnectionState === 'closed',
         );
-        if (!allGone) return;
+        // Also trigger if every captured audio track has ended
+        const capturedEls = Array.from(document.querySelectorAll<HTMLAudioElement>('audio[data-bot-captured]'));
+        const allTracksEnded = capturedEls.length > 0 && capturedEls.every((el) => {
+          const s = el.srcObject;
+          if (!(s instanceof MediaStream)) return true;
+          return s.getAudioTracks().every((t) => t.readyState === 'ended');
+        });
+        if (!allConnectionsGone && !allTracksEnded) return;
         const cb = (window as unknown as Record<string, unknown>).__botAllPeersLeft as (() => void) | undefined;
         if (cb) cb();
       };
@@ -143,6 +152,11 @@ export class TeamsMeetingBot {
               checkAllPeersGone();
             });
           }
+          // Listen for the track itself ending — fired immediately when a participant
+          // leaves Teams (even via the relay). This is the fastest departure signal.
+          event.track.addEventListener('ended', () => {
+            setTimeout(checkAllPeersGone, 200);
+          });
           for (const stream of event.streams) {
             // Keep element only as a stream container for liveTrackCount checks.
             // muted=true prevents the remote audio from playing back through the
@@ -153,6 +167,10 @@ export class TeamsMeetingBot {
             (el.dataset as DOMStringMap & { botCaptured: string }).botCaptured = 'true';
             el.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;';
             document.body.appendChild(el);
+            // removetrack fires synchronously when the track is removed from the stream
+            stream.addEventListener('removetrack', () => {
+              setTimeout(checkAllPeersGone, 200);
+            });
           }
         });
         return pc;
@@ -397,8 +415,9 @@ export class TeamsMeetingBot {
       if (this.aloneTimer) {
         clearTimeout(this.aloneTimer);
         this.aloneTimer = null;
-        console.log('[bot] New audio peer joined — cancelled alone timer');
       }
+      this.aloneCheckCount = 0;
+      console.log('[bot] New audio peer joined — cancelled alone timer');
     });
 
     // Fired by the silence detector when audio resumes after a silent period,
@@ -416,16 +435,20 @@ export class TeamsMeetingBot {
     // We schedule a stop with a 15-second grace window so brief reconnections don't
     // cause a premature exit.
     await page.exposeFunction('__botAllPeersLeft', () => {
-      if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+      // Allow stopping if we've recorded something OR been in the meeting >60 s
+      // (handles the case where someone joins and immediately leaves before speaking).
+      const canStop = this.hadActiveTracks || this.elapsed > 60;
+      if (canStop && (this.status === 'recording' || this.status === 'paused')) {
         if (!this.aloneTimer) {
-          console.log('[bot] All audio peers disconnected — will stop in 15 s unless someone rejoins');
+          console.log('[bot] All audio peers disconnected — will stop in 5 s unless someone rejoins');
           this.aloneTimer = setTimeout(() => {
             this.aloneTimer = null;
-            if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+            const stillCanStop = this.hadActiveTracks || this.elapsed > 60;
+            if (stillCanStop && (this.status === 'recording' || this.status === 'paused')) {
               console.log('[bot] Grace period elapsed — alone in meeting, stopping');
               void this.stop();
             }
-          }, 15_000);
+          }, 5_000);
         }
       }
     });
@@ -462,10 +485,16 @@ export class TeamsMeetingBot {
         // Silence detection — Teams routes audio through a relay server, so the
         // bot's RTCPeerConnection stays 'connected' even when all participants leave.
         // The only reliable signal is that the relay stops forwarding audio.
-        // 18 checks × 5 s = 90 s of continuous silence triggers the alone-timer.
+        // 9 checks × 5 s = 45 s of continuous silence triggers the alone-timer.
+        // inSilencePeriod persists across the threshold reset so __botAudioResumed
+        // still fires if audio comes back within the 15 s grace window.
         const silenceData = new Uint8Array(analyser.frequencyBinCount);
         let hadAudio = false;
         let silenceChecks = 0;
+        let inSilencePeriod = false;
+        // Counts 5-second ticks where audio streams exist but no audio is heard.
+        // Guards against meetings where nobody ever speaks (relay sends silence).
+        let connectedNoAudioChecks = 0;
         setInterval(() => {
           analyser.getByteTimeDomainData(silenceData);
           let maxDev = 0;
@@ -475,14 +504,25 @@ export class TeamsMeetingBot {
           }
           const win = window as unknown as Record<string, (() => void) | undefined>;
           if (maxDev > 5) { // Signal above noise floor — audio present
-            const wasInSilence = hadAudio && silenceChecks > 0;
+            const wasInSilence = inSilencePeriod;
             hadAudio = true;
             silenceChecks = 0;
+            inSilencePeriod = false;
+            connectedNoAudioChecks = 0;
             if (wasInSilence) win.__botAudioResumed?.(); // Cancel any pending alone-timer
           } else if (hadAudio) { // Silence after having had real audio
+            inSilencePeriod = true;
             silenceChecks++;
-            if (silenceChecks >= 18) {
+            if (silenceChecks >= 3) {
               silenceChecks = 0; // Reset so we don't fire again until next silence period
+              win.__botAllPeersLeft?.();
+            }
+          } else if (connectedStreams.size > 0) {
+            // Streams are connected but audio has never been detected (all-silent meeting).
+            // After 2 min (24 × 5 s) give up and trigger the alone-timer.
+            connectedNoAudioChecks++;
+            if (connectedNoAudioChecks >= 24) {
+              connectedNoAudioChecks = 0;
               win.__botAllPeersLeft?.();
             }
           }
@@ -527,6 +567,50 @@ export class TeamsMeetingBot {
         recorder.start(30_000); // 30-second timeslices
 
         (window as unknown as Record<string, unknown>).__mediaRecorder = recorder;
+
+        // Participant panel observer — fires the moment a participant row is removed.
+        // This is faster than polling and works even when track/RTC states are masked
+        // by the Teams relay server keeping connections alive.
+        const watchRosterPanel = (panel: Element) => {
+          const rosterObs = new MutationObserver(() => {
+            const win2 = window as unknown as Record<string, (() => void) | undefined>;
+            // Count visible participant rows
+            const rowSelectors = [
+              '[data-tid="calling-roster-content"] [data-tid="participant-item"]',
+              '[data-tid="calling-roster-content"] [class*="participantItem"]',
+              '[data-tid="calling-roster-content"] > div',
+            ];
+            let count = -1;
+            for (const sel of rowSelectors) {
+              const els = panel.querySelectorAll(sel);
+              if (els.length > 0) { count = els.length; break; }
+            }
+            // Also check the header count badge as a cross-reference
+            const header = document.querySelector('[data-tid="calling-roster-header"]');
+            if (header) {
+              const m = (header.textContent ?? '').match(/\d+/);
+              if (m) count = parseInt(m[0], 10);
+            }
+            if (count === 1) win2.__botAllPeersLeft?.();
+          });
+          rosterObs.observe(panel, { childList: true, subtree: true });
+        };
+
+        const existingPanel = document.querySelector(
+          '[data-tid="calling-roster-content"], [data-tid="participant-list"]',
+        );
+        if (existingPanel) {
+          watchRosterPanel(existingPanel);
+        } else {
+          // Panel opens after the bot joins — wait for it to appear
+          const panelWatcher = new MutationObserver(() => {
+            const panel = document.querySelector(
+              '[data-tid="calling-roster-content"], [data-tid="participant-list"]',
+            );
+            if (panel) { panelWatcher.disconnect(); watchRosterPanel(panel); }
+          });
+          panelWatcher.observe(document.body, { childList: true, subtree: true });
+        }
 
         // Watch for meeting-ended or kicked state
         const endObs = new MutationObserver(() => {
@@ -686,7 +770,7 @@ export class TeamsMeetingBot {
 
   private _startParticipantPolling(): void {
     this._stopParticipantPolling();
-    this.participantTimer = setInterval(() => { void this._pollParticipants(); }, 5000);
+    this.participantTimer = setInterval(() => { void this._pollParticipants(); }, 2000);
   }
 
   private _stopParticipantPolling(): void {
@@ -719,6 +803,7 @@ export class TeamsMeetingBot {
 
       if (liveTrackCount > 0) {
         this.hadActiveTracks = true;
+        this.aloneCheckCount = 0;
         if (this.participants.length === 0) this.participants = ['__audio_detected__'];
         // Note: aloneTimer is NOT cancelled here — Teams can leave tracks in 'live'
         // state even after a participant disconnects. Cancellation is handled by
@@ -726,36 +811,149 @@ export class TeamsMeetingBot {
       } else if (liveTrackCount === 0 && this.hadActiveTracks
           && (this.status === 'recording' || this.status === 'paused')
           && !this.aloneTimer) {
-        // Schedule a stop after a 15-second grace period so brief renegotiations
+        // Schedule a stop after an 8-second grace period so brief renegotiations
         // don't cause a premature exit.
-        console.log('[bot] No live remote tracks — will stop in 15 s unless tracks return');
+        console.log('[bot] No live remote tracks — will stop in 5 s unless tracks return');
         this.aloneTimer = setTimeout(() => {
           this.aloneTimer = null;
           if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
             console.log('[bot] Grace period elapsed — alone in meeting, stopping');
             void this.stop();
           }
-        }, 15_000);
+        }, 5_000);
       }
 
-      // Best-effort: extract participant names from roster (may not work on all Teams variants)
-      const names = await this.page.evaluate(() => {
-        const selectors = [
+      // Best-effort: extract participant names and count from roster panel.
+      // The panel is open (opened in _joinMeeting) so its DOM nodes are present.
+      const rosterResult = await this.page.evaluate(() => {
+        // Try to read participant item display names — multiple selector strategies for
+        // different Teams web versions and locales.
+        const nameSelectors = [
           '[data-tid="calling-roster-content"] [data-tid="participant-item-display-name"]',
           '[data-tid="participant-list"] [class*="displayName"]',
           '[id="roster-section"] [class*="participantName"]',
           '.ts-calling-screen [class*="participantName"]',
+          // Additional selectors for newer Teams web versions
+          '[data-tid="calling-roster-content"] [data-tid="participant-item"] [class*="name" i]',
+          '[data-tid="calling-roster-content"] [data-tid="participant-item"] span:first-child',
+          '[class*="rosterSection"] [class*="name"]',
+          '[class*="participantsList"] [class*="name"]',
         ];
-        for (const sel of selectors) {
+        let names: string[] = [];
+        for (const sel of nameSelectors) {
           const els = Array.from(document.querySelectorAll(sel));
-          if (els.length > 0) return els.map((el) => el.textContent?.trim() ?? '').filter(Boolean);
+          if (els.length > 0) {
+            names = els.map((el) => el.textContent?.trim() ?? '').filter(Boolean);
+            break;
+          }
         }
-        return [];
-      }).catch(() => [] as string[]);
 
-      const filtered = (names as string[]).filter((n) => n && n !== this.config.botName);
+        // Fallback: extract first meaningful text from each participant row directly.
+        // Teams often nests the name in the first non-empty span inside the item.
+        if (names.length === 0) {
+          const items = document.querySelectorAll('[data-tid="participant-item"]');
+          if (items.length > 0) {
+            const extracted: string[] = [];
+            items.forEach((item) => {
+              // Walk spans to find the first one that looks like a name (not an icon/status word)
+              const spans = Array.from(item.querySelectorAll('span'));
+              const uiWords = /^(muted|unmuted|presenter|attendee|video|off|on|\d+)$/i;
+              for (const span of spans) {
+                const text = span.textContent?.trim() ?? '';
+                if (text && text.length > 1 && !uiWords.test(text)) {
+                  extracted.push(text);
+                  break;
+                }
+              }
+            });
+            if (extracted.length > 0) names = extracted;
+          }
+        }
+
+        // Also scrape names from video tiles visible in the main meeting grid.
+        // These are present even when the roster panel is closed.
+        if (names.length === 0) {
+          const tileNameSelectors = [
+            '[data-tid="video-tile-display-name"]',
+            '[data-tid="display-name"]',
+            '[class*="videoTile"] [class*="displayName"]',
+            '[class*="videoTile"] [class*="name"]',
+            '[class*="stageTile"] [class*="name"]',
+          ];
+          for (const sel of tileNameSelectors) {
+            const els = Array.from(document.querySelectorAll(sel));
+            if (els.length > 0) {
+              names = els.map((el) => el.textContent?.trim() ?? '').filter(Boolean);
+              break;
+            }
+          }
+        }
+
+        // Try to get total participant count (including unnamed items).
+        // Teams shows a count in the panel header or as numbered list items.
+        let rosterCount = -1;
+        const countSelectors = [
+          '[data-tid="calling-roster-header"]',
+          '[data-tid="participants-button"] [class*="count"]',
+          '[aria-label*="participants" i]',
+          '[aria-label*="deltagere" i]',
+        ];
+        for (const sel of countSelectors) {
+          const el = document.querySelector(sel);
+          if (el) {
+            const match = (el.textContent ?? '').match(/\d+/);
+            if (match) { rosterCount = parseInt(match[0]); break; }
+          }
+        }
+        // Fallback: count distinct participant rows in the panel
+        if (rosterCount < 0) {
+          const rowSelectors = [
+            '[data-tid="calling-roster-content"] [data-tid="participant-item"]',
+            '[data-tid="calling-roster-content"] [class*="participantItem"]',
+            '[data-tid="calling-roster-content"] > div',
+          ];
+          for (const sel of rowSelectors) {
+            const els = document.querySelectorAll(sel);
+            if (els.length > 0) { rosterCount = els.length; break; }
+          }
+        }
+
+        return { names, rosterCount };
+      }).catch(() => ({ names: [] as string[], rosterCount: -1 }));
+
+      const { names, rosterCount } = rosterResult as { names: string[]; rosterCount: number };
+
+      const filtered = names.filter((n) => n && n !== this.config.botName);
       if (filtered.length > 0) {
+        this.aloneCheckCount = 0;
         this.participants = Array.from(new Set([...this.participants, ...filtered]));
+      }
+
+      // Roster-based alone detection: if count dropped to 1 (just the bot) after
+      // we previously had other participants, increment the consecutive-alone counter.
+      // After 2 consecutive polls (≈4 s), start the grace timer.
+      if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+        const hadRealNames = this.participants.filter((p) => p !== '__audio_detected__').length > 0;
+        const definitelyAlone = rosterCount === 1
+          || (rosterCount < 0 && filtered.length === 0 && hadRealNames);
+        const definitelyNotAlone = rosterCount > 1 || filtered.length > 0;
+
+        if (definitelyAlone) {
+          this.aloneCheckCount++;
+          // At 2s polling, 2 consecutive "alone" reads = 4 s of confirmed solitude
+          if (this.aloneCheckCount >= 2 && !this.aloneTimer) {
+            console.log('[bot] Roster shows bot is alone — will stop in 5 s unless someone joins');
+            this.aloneTimer = setTimeout(() => {
+              this.aloneTimer = null;
+              if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+                console.log('[bot] Grace period elapsed — alone in meeting, stopping');
+                void this.stop();
+              }
+            }, 5_000);
+          }
+        } else if (definitelyNotAlone) {
+          this.aloneCheckCount = 0;
+        }
       }
     } catch { /* ignore — page may be navigating */ }
   }

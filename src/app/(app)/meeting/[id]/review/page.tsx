@@ -17,7 +17,7 @@ export default async function TranscriptReviewPage({ params }: PageProps) {
   const data = await getMeetingPageData(session.user.id, id);
   if (!data) notFound();
 
-  if (data.meeting.status === 'recording' || data.meeting.status === 'processing') {
+  if (data.meeting.status === 'recording') {
     redirect(`/meeting/${id}`);
   }
 

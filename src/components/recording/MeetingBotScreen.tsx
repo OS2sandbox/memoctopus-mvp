@@ -28,6 +28,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
   const [elapsed, setElapsed] = useState(0);
   const [participants, setParticipants] = useState<string[]>([]);
   const [controlLoading, setControlLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -101,6 +102,12 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ meetingId }),
       signal: controller.signal,
+    }).then(async (res) => {
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        setStatus('error');
+        setErrorMessage(body.error ?? 'Kunne ikke starte bot-session');
+      }
     }).catch((err: unknown) => {
       if (err instanceof Error && err.name !== 'AbortError') setStatus('error');
     });
@@ -190,6 +197,8 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
 
   const noticeBody = isCancelled
     ? 'Mødet blev afbrudt og ingen optagelse blev gemt.'
+    : status === 'error'
+    ? (errorMessage ?? 'Der opstod en fejl ved forbindelsen til mødet.')
     : isConnecting
     ? 'Memoctopus ringer op til mødet og venter på at blive lukket ind…'
     : isPaused

@@ -55,11 +55,20 @@ export async function GET(
   });
 
   if (!res.ok) {
-    // Session may be gone after bot service restart, but meeting could already be at review
+    // Bot session gone (service restart?) — return the DB-level meeting status so the
+    // client can continue polling without a console 502 error.
     if (meeting.status === 'review') {
       return NextResponse.json({
         status: 'processing',
         meetingStatus: 'review',
+        participants: meeting.participants ?? [],
+        elapsed: 0,
+      });
+    }
+    if (meeting.status === 'processing') {
+      return NextResponse.json({
+        status: 'processing',
+        meetingStatus: 'processing',
         participants: meeting.participants ?? [],
         elapsed: 0,
       });

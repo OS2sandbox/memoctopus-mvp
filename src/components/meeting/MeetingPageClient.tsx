@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { ProcessStrip, ProcessPhase } from '@/components/layout/ProcessStrip';
 import { RecordingScreen } from '@/components/recording/RecordingScreen';
@@ -23,6 +23,14 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
   const [showDeleteAudioDialog, setShowDeleteAudioDialog] = useState(false);
 
   const { meeting, audioFile, transcript, minutes } = data;
+
+  // Auto-refresh every 4 s while transcription is in progress so the page
+  // picks up the transcript as soon as the audio-upload route completes.
+  useEffect(() => {
+    if (meeting.status !== 'processing' || activeTab !== 'review') return;
+    const id = setInterval(() => router.refresh(), 4000);
+    return () => clearInterval(id);
+  }, [meeting.status, activeTab, router]);
 
   const switchTab = useCallback(
     (tab: ProcessPhase) => {
@@ -100,7 +108,25 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
         />
       )}
 
-      {activeTab === 'review' && !transcript && (
+      {activeTab === 'review' && !transcript && meeting.status === 'processing' && (
+        <div className="mx-auto max-w-[720px] px-6 py-12">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{
+              width: 8, height: 8, borderRadius: 999, background: 'var(--accent)', flexShrink: 0,
+              animation: 'processingPulse 1.4s ease-in-out infinite',
+            }} />
+            <h1 className="text-xl font-semibold text-[var(--ink)]">Transskription er i gang…</h1>
+          </div>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Lydfilen behandles. Siden opdateres automatisk når transskriptionen er klar.
+          </p>
+          <style>{`
+            @keyframes processingPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+          `}</style>
+        </div>
+      )}
+
+      {activeTab === 'review' && !transcript && meeting.status !== 'processing' && (
         <div className="mx-auto max-w-[720px] px-6 py-12">
           <h1 className="text-xl font-semibold text-[var(--ink)]">Ingen transskription</h1>
           <p className="mt-2 text-sm text-[var(--muted)]">

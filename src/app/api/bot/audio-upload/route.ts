@@ -3,7 +3,7 @@ import { queryUserSchemaOne } from '@/lib/db/user-schema';
 import { getTranscriptionProvider } from '@/lib/ai/transcription';
 import { detectPiiInSegments } from '@/lib/ai/pii';
 import { saveAudioFile } from '@/lib/audio/storage';
-import type { TranscriptSegment } from '@/types';
+import type { TranscriptSegment, PiiReplacement } from '@/types';
 
 // Called by the bot service — authenticated with BOT_INTERNAL_SECRET, not a user session.
 export async function POST(req: NextRequest) {
@@ -88,14 +88,20 @@ export async function POST(req: NextRequest) {
     const provider = getTranscriptionProvider();
     const rawSegments: TranscriptSegment[] = await provider.transcribe(buffer, mimeType);
 
-    const { replacements } = await detectPiiInSegments(rawSegments);
+    let piiReplacements: PiiReplacement[] = [];
+    try {
+      const piiResult = await detectPiiInSegments(rawSegments);
+      piiReplacements = piiResult.replacements;
+    } catch (piiErr) {
+      console.error('Bot audio PII detection failed (non-fatal):', piiErr);
+    }
     const rawText = rawSegments.map((s) => s.text).join(' ');
 
     await queryUserSchemaOne(
       userId,
       `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements)
        VALUES ($1, $2, $3, NULL, $4)`,
-      [meetingId, rawText, JSON.stringify(rawSegments), JSON.stringify(replacements)],
+      [meetingId, rawText, JSON.stringify(rawSegments), JSON.stringify(piiReplacements)],
     );
 
     await queryUserSchemaOne(
