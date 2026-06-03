@@ -90,8 +90,19 @@ export class TeamsMeetingBot {
       const audioPcs = new Set<RTCPeerConnection>();
       let hadAudioPeer = false;
 
+      // Check whether all known audio peers are in a terminal/disconnected state.
+      // Teams often leaves connections at iceConnectionState='disconnected' rather
+      // than closing them cleanly, so we check both connectionState and iceConnectionState.
       const checkAllPeersGone = () => {
-        if (!hadAudioPeer || audioPcs.size > 0) return;
+        if (!hadAudioPeer || audioPcs.size === 0) return;
+        const allGone = [...audioPcs].every((pc) =>
+          pc.connectionState === 'closed' ||
+          pc.connectionState === 'failed' ||
+          pc.iceConnectionState === 'disconnected' ||
+          pc.iceConnectionState === 'failed' ||
+          pc.iceConnectionState === 'closed',
+        );
+        if (!allGone) return;
         const cb = (window as unknown as Record<string, unknown>).__botAllPeersLeft as (() => void) | undefined;
         if (cb) cb();
       };
@@ -107,11 +118,15 @@ export class TeamsMeetingBot {
           if (!audioPcs.has(pc)) {
             audioPcs.add(pc);
             hadAudioPeer = true;
+            // Notify Node.js side so it can cancel any pending alone-timer
+            const rejoinCb = (window as unknown as Record<string, unknown>).__botPeerRejoined as (() => void) | undefined;
+            if (rejoinCb) rejoinCb();
             pc.addEventListener('connectionstatechange', () => {
-              if (pc.connectionState === 'closed' || pc.connectionState === 'failed') {
-                audioPcs.delete(pc);
-                checkAllPeersGone();
-              }
+              if (pc.connectionState === 'closed') audioPcs.delete(pc);
+              checkAllPeersGone();
+            });
+            pc.addEventListener('iceconnectionstatechange', () => {
+              checkAllPeersGone();
             });
           }
           for (const stream of event.streams) {
@@ -312,16 +327,25 @@ export class TeamsMeetingBot {
 
     await this._startAudioCapture();
 
-    // Teams sometimes re-enables the mic after admission — mute again inside the call.
-    const inCallMicBtn = page.locator([
+    // Teams sometimes re-enables the mic after lobby admission — mute as soon as
+    // the in-call toolbar renders. Wait up to 5 s for it to appear.
+    const inCallMicSel = [
       'button[data-tid="microphone-button"]',
+      'button[data-tid="toggle-mute"]',
       'button[aria-label="Mute"]',
-      'button[aria-label="Slå lyden fra"]',
       'button[aria-label="Mute microphone"]',
-    ].join(', ')).first();
-    if (await inCallMicBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      'button[aria-label="Sluk mikrofon"]',
+      'button[aria-label="Slå lyden fra"]',
+      'button[title="Mute microphone (Ctrl+Shift+M)"]',
+    ].join(', ');
+    const inCallMicBtn = page.locator(inCallMicSel).first();
+    if (await inCallMicBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
       await inCallMicBtn.click().catch(() => {});
-      console.log('[bot] muted microphone in-call');
+      console.log('[bot] muted microphone in-call via button');
+    } else {
+      // Fallback: Ctrl+Shift+M is Teams' universal mute toggle
+      await page.keyboard.press('Control+Shift+M').catch(() => {});
+      console.log('[bot] muted microphone in-call via Ctrl+Shift+M');
     }
 
     // Open the participants panel so the roster selectors in _pollParticipants()
@@ -348,6 +372,16 @@ export class TeamsMeetingBot {
 
     await page.exposeFunction('__botMeetingEnded', () => {
       void this._handleMeetingEnded();
+    });
+
+    // Fired by the RTCPeerConnection patch when a new audio peer joins.
+    // Cancels any pending alone-timer so a reconnecting participant doesn't trigger a stop.
+    await page.exposeFunction('__botPeerRejoined', () => {
+      if (this.aloneTimer) {
+        clearTimeout(this.aloneTimer);
+        this.aloneTimer = null;
+        console.log('[bot] New audio peer joined — cancelled alone timer');
+      }
     });
 
     // Fired by the RTCPeerConnection patch when all audio peers close their connections.
@@ -526,7 +560,9 @@ export class TeamsMeetingBot {
     });
     form.append('meetingId', this.config.meetingId);
     form.append('userId', this.config.userId);
-    form.append('participants', JSON.stringify(this.participants));
+    // Strip internal sentinel values before sending to the server
+    const realParticipants = this.participants.filter((p) => p !== '__audio_detected__');
+    form.append('participants', JSON.stringify(realParticipants));
 
     try {
       const res = await fetch(this.config.callbackUrl, {
@@ -621,8 +657,9 @@ export class TeamsMeetingBot {
       if (liveTrackCount > 0) {
         this.hadActiveTracks = true;
         if (this.participants.length === 0) this.participants = ['__audio_detected__'];
-        // Cancel any pending alone-timer since audio tracks are still live
-        if (this.aloneTimer) { clearTimeout(this.aloneTimer); this.aloneTimer = null; }
+        // Note: aloneTimer is NOT cancelled here — Teams can leave tracks in 'live'
+        // state even after a participant disconnects. Cancellation is handled by
+        // __botPeerRejoined which fires only when a genuinely new peer joins.
       } else if (liveTrackCount === 0 && this.hadActiveTracks
           && (this.status === 'recording' || this.status === 'paused')
           && !this.aloneTimer) {
