@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { chromium, Browser, BrowserContext, Page } from 'playwright';
+import { chromium, BrowserContext, Page } from 'playwright';
 
 export type BotStatus = 'joining' | 'recording' | 'paused' | 'ended' | 'error';
 
@@ -17,7 +17,6 @@ export interface BotSessionConfig {
 const LEAVE_BTN = '#hangup-button, button[data-tid="hangup-main-btn"], button[aria-label="Leave"], button[aria-label="Leave meeting"]';
 
 export class TeamsMeetingBot {
-  private browser: Browser | null = null;
   private context: BrowserContext | null = null;
   private page: Page | null = null;
   private config: BotSessionConfig;
@@ -785,7 +784,6 @@ export class TeamsMeetingBot {
     } catch { /* ignore */ }
     this.page = null;
     this.context = null;
-    this.browser = null;
 
     // Delete temp audio file and per-session Chromium profile
     if (this.audioFilePath) {
