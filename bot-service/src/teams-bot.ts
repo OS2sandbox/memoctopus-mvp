@@ -31,7 +31,6 @@ export class TeamsMeetingBot {
   private audioChunks: Buffer[] = [];
   private hadActiveTracks = false;
   private hadOtherParticipants = false;
-  private aloneCheckCount = 0;
   private lastRtpPackets = -1;
   private rtpIdleChecks = 0;
   private rtpAudioIdleChecks = 0;
@@ -427,7 +426,6 @@ export class TeamsMeetingBot {
         clearTimeout(this.aloneTimer);
         this.aloneTimer = null;
       }
-      this.aloneCheckCount = 0;
       this.lastRtpPackets = -1;
       this.rtpIdleChecks = 0;
       this.rtpAudioIdleChecks = 0;
@@ -443,7 +441,6 @@ export class TeamsMeetingBot {
         clearTimeout(this.aloneTimer);
         this.aloneTimer = null;
       }
-      this.aloneCheckCount = 0;
       this.rtpAudioIdleChecks = 0;
       console.log('[bot] Participant tiles visible — presence confirmed, cancelled alone timer');
     });
@@ -456,13 +453,13 @@ export class TeamsMeetingBot {
       // Allow stopping if we've recorded something OR been in the meeting >60 s
       // (handles the case where someone joins and immediately leaves before speaking).
       const canStop = this.hadActiveTracks || this.elapsed > 60;
-      if (canStop && (this.status === 'recording' || this.status === 'paused')) {
+      if (canStop && this.isActivelyRecording()) {
         if (!this.aloneTimer) {
           console.log('[bot] All audio peers disconnected — will stop in 5 s unless someone rejoins');
           this.aloneTimer = setTimeout(() => {
             this.aloneTimer = null;
             const stillCanStop = this.hadActiveTracks || this.elapsed > 60;
-            if (stillCanStop && (this.status === 'recording' || this.status === 'paused')) {
+            if (stillCanStop && this.isActivelyRecording()) {
               console.log('[bot] Grace period elapsed — alone in meeting, stopping');
               void this.stop();
             }
@@ -629,6 +626,10 @@ export class TeamsMeetingBot {
     }).catch(() => {});
   }
 
+  private isActivelyRecording(): boolean {
+    return this.status === 'recording' || this.status === 'paused';
+  }
+
   async stop(): Promise<void> {
     this.status = 'ended';
     this._stopElapsedTimer();
@@ -756,7 +757,7 @@ export class TeamsMeetingBot {
     try {
       // Primary: check if Leave button is still visible — if gone, we were kicked or meeting ended
       const leaveVisible = await this.page.locator(LEAVE_BTN).first().isVisible().catch(() => false);
-      if (!leaveVisible && this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+      if (!leaveVisible && this.hadActiveTracks && this.isActivelyRecording()) {
         console.log('[bot] Leave button gone — kicked or meeting ended');
         void this.stop();
         return;
@@ -800,14 +801,13 @@ export class TeamsMeetingBot {
         const hadOthers = prevCount > 1;
 
         if (botAlone && hadOthers && (this.hadActiveTracks || this.hadOtherParticipants)
-            && (this.status === 'recording' || this.status === 'paused')) {
+            && this.isActivelyRecording()) {
           console.log(`[bot] Participant button count dropped to ${rawButtonCount} — stopping`);
           void this.stop();
         } else if (!botAlone && this.aloneTimer) {
           // Someone joined back
           clearTimeout(this.aloneTimer);
           this.aloneTimer = null;
-          this.aloneCheckCount = 0;
         }
       }
 
@@ -825,20 +825,19 @@ export class TeamsMeetingBot {
 
       if (liveTrackCount > 0) {
         this.hadActiveTracks = true;
-        this.aloneCheckCount = 0;
         if (this.participants.length === 0) this.participants = ['__audio_detected__'];
         // Note: aloneTimer is NOT cancelled here — Teams can leave tracks in 'live'
         // state even after a participant disconnects. Cancellation is handled by
         // __botPeerRejoined which fires only when a genuinely new peer joins.
       } else if (liveTrackCount === 0 && this.hadActiveTracks
-          && (this.status === 'recording' || this.status === 'paused')
+          && this.isActivelyRecording()
           && !this.aloneTimer) {
         // Schedule a stop after an 8-second grace period so brief renegotiations
         // don't cause a premature exit.
         console.log('[bot] No live remote tracks — will stop in 5 s unless tracks return');
         this.aloneTimer = setTimeout(() => {
           this.aloneTimer = null;
-          if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+          if (this.hadActiveTracks && this.isActivelyRecording()) {
             console.log('[bot] Grace period elapsed — alone in meeting, stopping');
             void this.stop();
           }
@@ -850,7 +849,7 @@ export class TeamsMeetingBot {
       // SFU comfort noise is near-zero (< 0.002) while any real presence — even a
       // silently listening participant — shows at least slight background noise (> 0.002).
       // Packet counting is a secondary check for when audioLevel is unavailable.
-      if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+      if (this.hadActiveTracks && this.isActivelyRecording()) {
         const rtpResult = await this.page.evaluate(async () => {
           const pcs = ((window as unknown as Record<string, unknown>).__botAudioPcs ?? []) as RTCPeerConnection[];
           let total = 0;
@@ -881,7 +880,7 @@ export class TeamsMeetingBot {
               console.log('[bot] Near-zero audio level for ~60 s — will stop in 5 s');
               this.aloneTimer = setTimeout(() => {
                 this.aloneTimer = null;
-                if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+                if (this.hadActiveTracks && this.isActivelyRecording()) {
                   console.log('[bot] Audio level idle confirmed — alone in meeting, stopping');
                   void this.stop();
                 }
@@ -906,7 +905,7 @@ export class TeamsMeetingBot {
               console.log('[bot] No new inbound RTP audio packets for ~30 s — will stop in 5 s');
               this.aloneTimer = setTimeout(() => {
                 this.aloneTimer = null;
-                if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+                if (this.hadActiveTracks && this.isActivelyRecording()) {
                   console.log('[bot] RTP idle confirmed — alone in meeting, stopping');
                   void this.stop();
                 }
@@ -992,14 +991,11 @@ export class TeamsMeetingBot {
       const filtered = names.filter((n) => n && n !== this.config.botName);
       if (filtered.length > 0) {
         this.hadOtherParticipants = true;
-        this.aloneCheckCount = 0;
         this.participants = Array.from(new Set([...this.participants, ...filtered]));
       }
 
-      // Roster-based alone detection: if count dropped to ≤1 (just the bot or empty) after
-      // we previously had other participants, increment the consecutive-alone counter.
-      // After 2 consecutive polls (≈4 s), start the grace timer.
-      if ((this.hadActiveTracks || this.hadOtherParticipants) && (this.status === 'recording' || this.status === 'paused')) {
+      // Roster-based alone detection: stop immediately when count drops to ≤1 after others were present.
+      if ((this.hadActiveTracks || this.hadOtherParticipants) && this.isActivelyRecording()) {
         const hadRealNames = this.participants.filter((p) => p !== '__audio_detected__').length > 0;
         // rosterCount 0 = no tiles at all (everyone left, bot tile also gone)
         // rosterCount 1 = only the bot's own tile remains
@@ -1007,11 +1003,10 @@ export class TeamsMeetingBot {
           || (rosterCount < 0 && filtered.length === 0 && hadRealNames);
         const definitelyNotAlone = rosterCount > 1 || filtered.length > 0;
 
-        if (definitelyAlone && (this.status === 'recording' || this.status === 'paused')) {
+        if (definitelyAlone && this.isActivelyRecording()) {
           console.log('[bot] Roster shows bot is alone — stopping');
           void this.stop();
         } else if (definitelyNotAlone) {
-          this.aloneCheckCount = 0;
           // Video tiles confirm others are present — cancel any pending alone timer.
           // This is the reliable cancellation path (unlike RTP which keeps flowing via SFU).
           if (this.aloneTimer) { clearTimeout(this.aloneTimer); this.aloneTimer = null; }
