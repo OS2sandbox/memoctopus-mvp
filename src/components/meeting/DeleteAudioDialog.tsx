@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 
 interface DeleteAudioDialogProps {
@@ -32,6 +32,7 @@ export function DeleteAudioDialog({ open, onOpenChange, meetingId, title, confir
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
+          <DialogDescription className="sr-only">Bekræft sletning af lydfil</DialogDescription>
         </DialogHeader>
         <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.6 }}>
           Lydfilen slettes, og mødet nulstilles til optagelse.

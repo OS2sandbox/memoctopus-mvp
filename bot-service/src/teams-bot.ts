@@ -30,6 +30,7 @@ export class TeamsMeetingBot {
   private aloneTimer: ReturnType<typeof setTimeout> | null = null;
   private audioChunks: Buffer[] = [];
   private hadActiveTracks = false;
+  private hadOtherParticipants = false;
   private aloneCheckCount = 0;
   private lastRtpPackets = -1;
   private rtpIdleChecks = 0;
@@ -94,6 +95,7 @@ export class TeamsMeetingBot {
       navigator.mediaDevices.getUserMedia = async (constraints?: MediaStreamConstraints) => {
         const stream = await origGUM(constraints ?? {});
         stream.getAudioTracks().forEach((t) => { t.enabled = false; });
+        stream.getVideoTracks().forEach((t) => { t.stop(); });
         return stream;
       };
     });
@@ -777,8 +779,8 @@ export class TeamsMeetingBot {
           const label = btn.getAttribute('aria-label') ?? '';
           const m = label.match(/\((\d+)\)/);
           if (m) return parseInt(m[1], 10);
-          // Fallback: numeric badge inside the button
-          const badge = btn.querySelector('[class*="count" i], [class*="badge" i]');
+          // Fallback: numeric badge inside the button (Teams uses data-tid="toolbar-item-badge")
+          const badge = btn.querySelector('[class*="count" i], [class*="badge" i], [data-tid="toolbar-item-badge"]');
           if (badge) {
             const n = parseInt((badge as HTMLElement).innerText, 10);
             if (!isNaN(n)) return n;
@@ -791,21 +793,16 @@ export class TeamsMeetingBot {
         const prevCount = this.buttonCount;
         this.buttonCount = rawButtonCount;
 
+        if (rawButtonCount > 1) this.hadOtherParticipants = true;
+
         // Teams counts ALL participants including the bot itself, so ≤1 means bot is alone.
         const botAlone = rawButtonCount <= 1;
         const hadOthers = prevCount > 1;
 
-        if (botAlone && hadOthers && this.hadActiveTracks
-            && (this.status === 'recording' || this.status === 'paused')
-            && !this.aloneTimer) {
-          console.log(`[bot] Participant button count dropped to ${rawButtonCount} — stopping in 3 s`);
-          this.aloneTimer = setTimeout(() => {
-            this.aloneTimer = null;
-            if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
-              console.log('[bot] Confirmed alone (button count) — stopping');
-              void this.stop();
-            }
-          }, 3_000);
+        if (botAlone && hadOthers && (this.hadActiveTracks || this.hadOtherParticipants)
+            && (this.status === 'recording' || this.status === 'paused')) {
+          console.log(`[bot] Participant button count dropped to ${rawButtonCount} — stopping`);
+          void this.stop();
         } else if (!botAlone && this.aloneTimer) {
           // Someone joined back
           clearTimeout(this.aloneTimer);
@@ -924,6 +921,10 @@ export class TeamsMeetingBot {
       // whichever returns results. Names are read from data-tid, aria-label, or inner text.
       const rosterResult = await this.page.evaluate(() => {
         const selectors: Array<{ sel: string; nameFrom: 'data-tid' | 'aria-label' | 'text' | 'data-tid-suffix' }> = [
+          // Video stage tiles — data-stream-type="Video" elements carry data-tid="{participant name}"
+          // and are always present in DOM regardless of whether the roster panel is open.
+          // This is the most reliable selector for modern Teams web client.
+          { sel: '[data-stream-type="Video"]', nameFrom: 'data-tid' },
           // Roster panel entries (group calls / meetings with panel open)
           { sel: '[data-tid^="video-item-container-"]', nameFrom: 'data-tid-suffix' },
           { sel: '[data-tid="calling-roster-cell"]', nameFrom: 'text' },
@@ -951,7 +952,8 @@ export class TeamsMeetingBot {
             }
             return ((el as HTMLElement).innerText ?? '').split('\n')[0].trim();
           }).filter(Boolean);
-          if (names.length > 0) return { names, rosterCount: els.length };
+          const uniqueNames = [...new Set(names)];
+          if (uniqueNames.length > 0) return { names: uniqueNames, rosterCount: uniqueNames.length };
         }
 
         // Broad fallback: scan the participant panel container for list items.
@@ -989,6 +991,7 @@ export class TeamsMeetingBot {
 
       const filtered = names.filter((n) => n && n !== this.config.botName);
       if (filtered.length > 0) {
+        this.hadOtherParticipants = true;
         this.aloneCheckCount = 0;
         this.participants = Array.from(new Set([...this.participants, ...filtered]));
       }
@@ -996,7 +999,7 @@ export class TeamsMeetingBot {
       // Roster-based alone detection: if count dropped to ≤1 (just the bot or empty) after
       // we previously had other participants, increment the consecutive-alone counter.
       // After 2 consecutive polls (≈4 s), start the grace timer.
-      if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
+      if ((this.hadActiveTracks || this.hadOtherParticipants) && (this.status === 'recording' || this.status === 'paused')) {
         const hadRealNames = this.participants.filter((p) => p !== '__audio_detected__').length > 0;
         // rosterCount 0 = no tiles at all (everyone left, bot tile also gone)
         // rosterCount 1 = only the bot's own tile remains
@@ -1004,19 +1007,9 @@ export class TeamsMeetingBot {
           || (rosterCount < 0 && filtered.length === 0 && hadRealNames);
         const definitelyNotAlone = rosterCount > 1 || filtered.length > 0;
 
-        if (definitelyAlone) {
-          this.aloneCheckCount++;
-          // At 2s polling, 2 consecutive "alone" reads = 4 s of confirmed solitude
-          if (this.aloneCheckCount >= 2 && !this.aloneTimer) {
-            console.log('[bot] Roster shows bot is alone — will stop in 5 s unless someone joins');
-            this.aloneTimer = setTimeout(() => {
-              this.aloneTimer = null;
-              if (this.hadActiveTracks && (this.status === 'recording' || this.status === 'paused')) {
-                console.log('[bot] Grace period elapsed — alone in meeting, stopping');
-                void this.stop();
-              }
-            }, 5_000);
-          }
+        if (definitelyAlone && (this.status === 'recording' || this.status === 'paused')) {
+          console.log('[bot] Roster shows bot is alone — stopping');
+          void this.stop();
         } else if (definitelyNotAlone) {
           this.aloneCheckCount = 0;
           // Video tiles confirm others are present — cancel any pending alone timer.
