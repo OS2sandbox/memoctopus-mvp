@@ -16,7 +16,18 @@ export interface BotSessionConfig {
   internalSecret: string;
 }
 
-const LEAVE_BTN = '#hangup-button, button[data-tid="hangup-main-btn"], button[aria-label="Leave"], button[aria-label="Leave meeting"]';
+// aria-label="Leave" is intentionally omitted — it is too broad and matches the lobby's
+// "leave the lobby" cancel button, causing a false-positive before admission.
+// aria-label="Leave meeting" (and locale variants) is specific to the in-meeting toolbar.
+const LEAVE_BTN = [
+  '#hangup-button',
+  'button[data-tid="hangup-main-btn"]',
+  'button[data-tid="hangup-button"]',
+  'button[aria-label="Leave meeting"]',
+  'button[aria-label="Leave call"]',
+  'button[aria-label="Forlad møde"]',
+  'button[aria-label="Forlad opkald"]',
+].join(', ');
 
 export class TeamsMeetingBot {
   private context: BrowserContext | null = null;
@@ -42,6 +53,7 @@ export class TeamsMeetingBot {
   private rtpIdleChecks = 0;
   private rtpAudioIdleChecks = 0;
   private buttonCount = -1;
+  private leaveBtnGonePolls = 0;
   private onEndedCallback: (() => void) | null = null;
 
   constructor(config: BotSessionConfig) {
@@ -71,7 +83,7 @@ export class TeamsMeetingBot {
     this.context = await chromium.launchPersistentContext(this.userDataDir, {
       headless: true,
       executablePath: process.env.CHROMIUM_PATH || undefined,
-      permissions: ['microphone'],
+      permissions: ['microphone', 'camera'],
       userAgent:
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
       args: [
@@ -82,6 +94,13 @@ export class TeamsMeetingBot {
         '--hide-scrollbars',
         '--disable-blink-features=AutomationControlled',
         '--use-fake-ui-for-media-stream',
+        // Replace the built-in fake camera with a file-based device. When both
+        // audio and video use the built-in fake device, Chrome assigns id=11 to
+        // different RTP header extensions in each m-section, causing a BUNDLE
+        // collision that prevents the PeerConnection from completing. A file-based
+        // video capture device has different codec capability tables and avoids the
+        // id=11 conflict. /dev/null produces a black frame stream on Linux.
+        '--use-file-for-fake-video-capture=/dev/null',
         '--autoplay-policy=no-user-gesture-required',
         // Disables same-origin policy so the injected AudioContext can connect to
         // MediaStreams from cross-origin RTCPeerConnections. Acceptable here because
@@ -92,6 +111,17 @@ export class TeamsMeetingBot {
         '--ignore-certificate-errors',
         '--disk-cache-size=0',
         '--media-cache-size=0',
+        // Force all rendering into a single process. Without this, Teams' cross-origin
+        // iframes spin up separate renderer processes; in headless mode the IPC between
+        // those processes is unreliable and produces the {"isTrusted":true} unhandled
+        // rejections that break Teams' media initialisation. The roster selectors return
+        // rosterCount=-1 with this flag, but definitelyAlone ignores that case so
+        // departure detection still works via audio silence, button count and RTP idle.
+        '--renderer-process-limit=1',
+        // Disable extensions so Teams doesn't try to load background-page workers
+        // that fail to initialise in headless mode and emit spurious error events.
+        '--disable-extensions',
+        '--disable-component-extensions-with-background-pages',
         // Prevent CPU bursts when the tab loses "focus" in headless mode
         '--disable-backgrounding-occluded-windows',
         '--disable-background-timer-throttling',
@@ -107,17 +137,50 @@ export class TeamsMeetingBot {
 
     this.page = await this.context.newPage();
 
-    // Silence the bot's outgoing microphone at the WebRTC level.
-    // --use-fake-ui-for-media-stream provides a fake audio device that can produce
-    // audible tones/clicks. Intercepting getUserMedia lets us disable the audio
-    // track before Teams ever adds it to an RTCPeerConnection, so the bot always
-    // transmits silence regardless of what the Teams UI shows.
+    // Forward browser console and unhandled errors to Node stdout so they appear
+    // alongside bot logs. Errors show at [browser:error] to make them easy to grep.
+    this.page.on('console', (msg) => {
+      if (msg.type() === 'error' || msg.type() === 'warning') {
+        console.log(`[browser:${msg.type()}]`, msg.text());
+      }
+    });
+    this.page.on('pageerror', (err) => {
+      console.log('[browser:pageerror]', err.message);
+    });
+
+    // Short-circuit requests that Teams makes to third-party domains which respond
+    // without CORS headers. When these XHR calls fail, the browser fires a ProgressEvent
+    // on the XMLHttpRequest whose onerror handler Teams passes directly to Promise.reject —
+    // that event object serialises as {"isTrusted":true} in the unhandledrejection log.
+    // Returning an empty 200 prevents the rejection from ever being raised.
+    await this.page.route('**/admin.microsoft.com/**', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
+    );
+
+    // Patch getUserMedia so the bot transmits silence and no video.
+    //
+    // Audio: disabled (enabled=false) so the bot transmits silence.
+    //
+    // Video: disabled (enabled=false) rather than stopped. Calling t.stop() fires
+    // the 'ended' event which hits Teams' onended=reject handler, producing
+    // {"isTrusted":true} console noise and causing Teams to transiently render
+    // [data-tid="call-ended-title"] while it recovers — triggering endObs and briefly
+    // hiding the Leave button. With enabled=false the track stays alive silently,
+    // Teams adds it to the PeerConnection normally, and no rejection fires.
+    //
+    // The SDP BUNDLE id=11 collision (Chrome's fake camera and fake microphone both
+    // assign id=11 to different RTP header extensions) is prevented upstream by
+    // --use-file-for-fake-video-capture=/dev/null, which replaces the built-in fake
+    // camera with a file-based device that has different codec capability tables.
+    //
+    // Do NOT use video:false in constraints — Teams dereferences the video track
+    // unconditionally and crashes with "Failed to convert value to MediaStreamTrack".
     await this.page.addInitScript(() => {
       const origGUM = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
       navigator.mediaDevices.getUserMedia = async (constraints?: MediaStreamConstraints) => {
         const stream = await origGUM(constraints ?? {});
         stream.getAudioTracks().forEach((t) => { t.enabled = false; });
-        stream.getVideoTracks().forEach((t) => { t.stop(); });
+        stream.getVideoTracks().forEach((t) => { t.enabled = false; });
         return stream;
       };
     });
@@ -142,10 +205,13 @@ export class TeamsMeetingBot {
       // reliable as a secondary signal.
       const checkAllPeersGone = () => {
         if (!hadAudioPeer || audioPcs.size === 0) return;
+        // 'disconnected' is a transient ICE state (occurs during renegotiation)
+        // and must NOT be treated as "peer gone" — doing so causes false departures
+        // immediately after admission when ICE briefly hits 'disconnected' before
+        // settling to 'connected'. Only 'failed' and 'closed' are terminal.
         const allConnectionsGone = [...audioPcs].every((pc) =>
           pc.connectionState === 'closed' ||
           pc.connectionState === 'failed' ||
-          pc.iceConnectionState === 'disconnected' ||
           pc.iceConnectionState === 'failed' ||
           pc.iceConnectionState === 'closed',
         );
@@ -159,6 +225,46 @@ export class TeamsMeetingBot {
         if (!allConnectionsGone && !allTracksEnded) return;
         const cb = (window as unknown as Record<string, unknown>).__botAllPeersLeft as (() => void) | undefined;
         if (cb) cb();
+      };
+
+      // Redirect video addTrack/addTransceiver calls to throw-away PeerConnections so
+      // the meeting PC stays audio-only.  Chrome's fake device assigns conflicting RTP
+      // header extension id=11 values to the audio and video m-sections in a BUNDLE
+      // group; with video absent from the real PC the offer contains only one m-section
+      // and the collision cannot occur.  Teams receives real RTCRtpSender /
+      // RTCRtpTransceiver objects (from the throw-away PC) so its internal video-sender
+      // bookkeeping is satisfied without crashing.
+      const throwawayPCMap = new WeakMap<RTCPeerConnection, RTCPeerConnection>();
+      const getThrowawayPC = (pc: RTCPeerConnection): RTCPeerConnection => {
+        let t = throwawayPCMap.get(pc);
+        if (!t) { t = new OrigRTC(); throwawayPCMap.set(pc, t); }
+        return t;
+      };
+      const _origAddTrack = OrigRTC.prototype.addTrack;
+      OrigRTC.prototype.addTrack = function(
+        this: RTCPeerConnection, track: MediaStreamTrack, ...streams: MediaStream[]
+      ): RTCRtpSender {
+        if (track?.kind === 'video') {
+          console.log('[webrtc-patch] addTrack(video) → throw-away PC (avoiding BUNDLE id=11 collision)');
+          return _origAddTrack.call(getThrowawayPC(this), track, ...streams);
+        }
+        return _origAddTrack.call(this, track, ...streams);
+      };
+      // Some Teams versions use addTransceiver instead of addTrack for video setup.
+      const _origAddTransceiver = OrigRTC.prototype.addTransceiver as (
+        trackOrKind: MediaStreamTrack | string, init?: RTCRtpTransceiverInit
+      ) => RTCRtpTransceiver;
+      (OrigRTC.prototype as unknown as {
+        addTransceiver: (t: MediaStreamTrack | string, i?: RTCRtpTransceiverInit) => RTCRtpTransceiver
+      }).addTransceiver = function(
+        this: RTCPeerConnection, trackOrKind: MediaStreamTrack | string, init?: RTCRtpTransceiverInit
+      ): RTCRtpTransceiver {
+        const kind = typeof trackOrKind === 'string' ? trackOrKind : trackOrKind?.kind;
+        if (kind === 'video') {
+          console.log('[webrtc-patch] addTransceiver(video) → throw-away PC');
+          return _origAddTransceiver.call(getThrowawayPC(this), trackOrKind, init as RTCRtpTransceiverInit);
+        }
+        return _origAddTransceiver.call(this, trackOrKind, init as RTCRtpTransceiverInit);
       };
 
       function PatchedRTC(
@@ -351,11 +457,99 @@ export class TeamsMeetingBot {
     await snap('03-after-join');
 
     // Race: admitted (Leave button appears) vs denied vs timeout (5 min)
-    console.log('[bot] waiting for admission (may be in lobby)…');
+    {
+      const lobbyUrl = page.url();
+      const lobbyTitle = await page.title().catch(() => '');
+      const lobbyText = await page.evaluate(() => (document.body.innerText ?? '').slice(0, 300)).catch(() => '');
+      console.log('[bot] waiting for admission — url=', lobbyUrl, 'title=', lobbyTitle);
+      console.log('[bot] page preview:', lobbyText.replace(/\n/g, ' | '));
+    }
+    // Always snapshot at this point to help diagnose lobby vs meeting state
+    const lobbySnap = await page.screenshot({ fullPage: false }).catch(() => null);
+    if (lobbySnap) fs.writeFileSync('/tmp/bot-snap-lobby.png', lobbySnap);
+    console.log('[bot] lobby snapshot → /tmp/bot-snap-lobby.png');
+
     const joinResult = await Promise.race([
-      // Leave button is the reliable "I'm in the meeting" indicator
+      // Wait for the in-meeting hangup button (data-tid only — aria-label="Leave" also
+      // appears on the lobby's cancel button and causes a false-positive here).
+      // We then re-confirm the button is stable after the page finishes navigating.
       page.waitForSelector(LEAVE_BTN, { timeout: 300_000 })
-        .then(() => 'admitted' as const),
+        .then(async () => {
+          // Give Teams 2 s to finish post-join navigation before we declare admitted.
+          // Without this, the selector can match a transient button on the prejoin
+          // page before the SPA navigates to the actual meeting room.
+          await page.waitForTimeout(2000);
+
+          // If the page landed on the Teams WebRTC connection error screen
+          // ("Sorry, we couldn't connect you"), the Dismiss button there has
+          // data-tid="hangup-button" and matches LEAVE_BTN — but we're not actually
+          // in the meeting. Try clicking "Rejoin call" to retry the WebRTC connection.
+          // After each click we wait for LEAVE_BTN to reappear (up to 30 s) rather than
+          // a fixed sleep, because Teams cycles through loading→lobby→meeting states and
+          // a fixed 6 s window lands mid-transition with LEAVE_BTN absent, causing a
+          // false 'spurious' return.
+          const rejoinSel = [
+            'button:has-text("Rejoin call")',
+            'button:has-text("Try again")',
+            'button:has-text("Prøv igen")',
+            'button:has-text("Forsøg igen")',
+          ].join(', ');
+
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const bodyText = await page.evaluate(() =>
+              (document.body?.innerText ?? '').toLowerCase(),
+            ).catch(() => '');
+            if (!bodyText.includes("couldn't connect you") && !bodyText.includes("could not connect you")) break;
+
+            const rejoinBtn = page.locator(rejoinSel).first();
+            if (!await rejoinBtn.isVisible({ timeout: 1000 }).catch(() => false)) break;
+
+            console.log(`[bot] WebRTC connection error — clicking Rejoin call (attempt ${attempt + 1})`);
+            await rejoinBtn.click();
+            // Wait for the in-meeting hangup button to reappear (up to 30 s).
+            // Teams goes through loading → lobby → meeting before LEAVE_BTN becomes
+            // visible again; a fixed sleep would expire during this transition.
+            await page.waitForSelector(LEAVE_BTN, { timeout: 30_000 }).catch(() => {});
+            await page.waitForTimeout(1500);
+          }
+
+          const stillPresent = await page.locator(LEAVE_BTN).first().isVisible().catch(() => false);
+          console.log('[bot] hangup button found, still present after checks:', stillPresent, 'url=', page.url());
+          return stillPresent ? 'admitted' as const : 'spurious' as const;
+        }),
+
+      // Fast-path for the Teams WebRTC connection-error page ("Sorry, we couldn't
+      // connect you").  This page can appear if setLocalDescription fails on the
+      // meeting PC before the bot is admitted; in that case its "Dismiss" button
+      // does NOT have data-tid="hangup-button" in the light-meetings experience
+      // and never matches LEAVE_BTN, causing the main arm to timeout after 5 min.
+      // Detecting the error text directly lets us retry much faster.
+      page.waitForFunction(
+        () => {
+          const text = (document.body?.innerText ?? '').toLowerCase();
+          return text.includes("couldn't connect you") || text.includes("could not connect you");
+        },
+        undefined,
+        { timeout: 300_000 },
+      ).then(async () => {
+        const rejoinSel = [
+          'button:has-text("Rejoin call")',
+          'button:has-text("Try again")',
+          'button:has-text("Prøv igen")',
+          'button:has-text("Forsøg igen")',
+        ].join(', ');
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const rejoinBtn = page.locator(rejoinSel).first();
+          if (!await rejoinBtn.isVisible({ timeout: 2000 }).catch(() => false)) break;
+          console.log(`[bot] connection-error page — clicking Rejoin call (fast-path, attempt ${attempt + 1})`);
+          await rejoinBtn.click();
+          await page.waitForSelector(LEAVE_BTN, { timeout: 30_000 }).catch(() => {});
+          await page.waitForTimeout(1500);
+          const bodyText = await page.evaluate(() => (document.body?.innerText ?? '').toLowerCase()).catch(() => '');
+          if (!bodyText.includes("couldn't connect you") && !bodyText.includes("could not connect you")) break;
+        }
+        // After retries, the LEAVE_BTN arm or denial arm will resolve the race.
+      }).catch(() => {}),
 
       // Text-based denial detection
       page.waitForFunction(
@@ -383,8 +577,11 @@ export class TeamsMeetingBot {
     });
 
     if (joinResult !== 'admitted') {
-      console.log(`[bot] join failed: ${joinResult}`);
+      console.log(`[bot] join failed or spurious: ${joinResult}`);
       await snap(`04-join-${joinResult}`);
+      if (joinResult === 'spurious') {
+        throw new Error('Hangup button appeared then disappeared — page still navigating or join failed');
+      }
       throw new Error(`Entry ${joinResult} — host denied or meeting unreachable`);
     }
 
@@ -615,22 +812,43 @@ export class TeamsMeetingBot {
         }, 2000);
         (window as unknown as Record<string, unknown>).__botSilenceInterval = silenceInterval;
 
-        // Watch for meeting-ended or kicked state
+        // Watch for meeting-ended or kicked state.
+        // Selector is intentionally narrow: [aria-label*="ended" i] is too broad and
+        // matches transient Teams UI elements during the lobby→meeting transition, causing
+        // the bot to leave immediately after joining. Rely on the specific data-tid/class
+        // that Teams sets only when the meeting is genuinely over.
+        // endObsFired prevents the debounced callback from firing more than once
+        // if multiple DOM mutations arrive before the 300 ms timeout resolves.
+        let endObsFired = false;
         const endObs = new MutationObserver(() => {
-          const ended = document.querySelector(
-            '[data-tid="call-ended-title"], .ts-call-ended, [aria-label*="ended" i]',
-          );
-          const text = (document.body.innerText ?? '').toLowerCase();
-          const kicked =
-            text.includes("you were removed") ||
-            text.includes("you've been removed") ||
-            text.includes("removed from the meeting");
-          if (ended || kicked) {
+          if (endObsFired) return;
+          // Quick pre-check without innerText (cheap DOM query only).
+          const ended = document.querySelector('[data-tid="call-ended-title"], .ts-call-ended');
+          if (!ended) return;
+          // Defer the text check by 300 ms so Teams has time to finish rendering the
+          // error page text before we read innerText. Without this delay there is a
+          // race: the [data-tid="call-ended-title"] element is inserted in one DOM
+          // batch before the "couldn't connect you" text is injected in the next,
+          // causing the guard below to miss and fire __botMeetingEnded prematurely.
+          setTimeout(() => {
+            if (endObsFired) return;
+            const endedNow = document.querySelector('[data-tid="call-ended-title"], .ts-call-ended');
+            const text = (document.body.innerText ?? '').toLowerCase();
+            const kicked =
+              text.includes("you were removed") ||
+              text.includes("you've been removed") ||
+              text.includes("removed from the meeting");
+            if (!endedNow && !kicked) return;
+            // The Teams connection error page ("Sorry, we couldn't connect you") reuses
+            // [data-tid="call-ended-title"] — don't treat it as a genuine meeting end.
+            if (!kicked && (text.includes("couldn't connect you") || text.includes("could not connect you"))) return;
+            endObsFired = true;
+            console.log('[bot-browser] endObs triggered — ended:', !!endedNow, 'kicked:', kicked);
             endObs.disconnect();
             audioObs.disconnect();
             recorder.stop();
             (window as unknown as Record<string, () => void>).__botMeetingEnded();
-          }
+          }, 300);
         });
         endObs.observe(document.body, { childList: true, subtree: true });
       } catch (err) {
@@ -688,6 +906,21 @@ export class TeamsMeetingBot {
 
   private async _handleMeetingEnded(): Promise<void> {
     if (this.status === 'ended') return;
+    // Ignore signals that arrive before we're fully in the meeting — endObs can fire on
+    // transient DOM elements during the lobby→meeting transition while status is still 'joining'.
+    if (!this.isActivelyRecording()) {
+      console.log(`[bot] Ignoring meeting-ended signal in status '${this.status}' — not yet recording`);
+      return;
+    }
+    // Guard against false positives in the first 30 s after joining.
+    // Teams can transiently render [data-tid="call-ended-title"] during the
+    // lobby→meeting transition while the SPA re-initialises; endObs may fire
+    // before Teams finishes settling.  30 s is enough for Teams to stabilise.
+    // Genuine kicks (< 30 s) are an acceptable edge case.
+    if (this.elapsed < 30) {
+      console.log(`[bot] Ignoring early meeting-ended signal (elapsed=${this.elapsed}s) — may be transient`);
+      return;
+    }
     this.status = 'ended';
     this._stopElapsedTimer();
     this._stopParticipantPolling();
@@ -778,6 +1011,39 @@ export class TeamsMeetingBot {
       }
     });
 
+    // Click the Teams hangup button before closing the browser so Teams receives a
+    // clean "leave" signal. Without this, closing the browser abruptly leaves a ghost
+    // session in Teams that shows as "Leaving..." indefinitely and cannot be removed.
+    // Exception: skip the click when the page is showing the connection error screen
+    // ("Sorry, we couldn't connect you") — the "Dismiss" button on that page also
+    // matches LEAVE_BTN (data-tid="hangup-button") and clicking it sends a garbled
+    // leave signal that leaves Teams stuck in "Leaving..." permanently.
+    if (this.page) {
+      try {
+        const onErrorPage = await this.page.evaluate(() => {
+          const text = (document.body?.innerText ?? '').toLowerCase();
+          return text.includes("couldn't connect you") || text.includes("could not connect you");
+        }).catch(() => false);
+
+        if (onErrorPage) {
+          // Navigate away instead of clicking the Dismiss button — clicking it sends
+          // a garbled leave signal that leaves the Teams session stuck in "Leaving..."
+          // permanently. Navigating to about:blank triggers Teams' JS unload handler,
+          // which sends a proper disconnect signal to the signaling server.
+          console.log('[bot] error page — navigating away to trigger Teams disconnect signal');
+          await this.page.goto('about:blank', { timeout: 5000 }).catch(() => {});
+          await this.page.waitForTimeout(2000);
+        } else {
+          const leaveBtn = this.page.locator(LEAVE_BTN).first();
+          if (await leaveBtn.isVisible({ timeout: 2000 })) {
+            console.log('[bot] clicking leave button for clean Teams exit');
+            await leaveBtn.click();
+            await this.page.waitForTimeout(3000);
+          }
+        }
+      } catch { /* ignore — page may already be gone */ }
+    }
+
     try {
       await this.page?.close();
       await this.context?.close(); // also closes the underlying browser with launchPersistentContext
@@ -829,12 +1095,21 @@ export class TeamsMeetingBot {
     if (!this.page) return;
     this._resetWatchdog();
     try {
-      // Primary: check if Leave button is still visible — if gone, we were kicked or meeting ended
+      // Primary: check if Leave button is still visible — if gone, we were kicked or meeting ended.
+      // Require 2 consecutive polls (≈4 s) before stopping: Teams transiently hides the Leave
+      // button while recovering from the video-track stop() rejection, so a single missing poll
+      // is not reliable. Two consecutive polls confirms the button is genuinely gone.
       const leaveVisible = await this.page.locator(LEAVE_BTN).first().isVisible().catch(() => false);
       if (!leaveVisible && this.hadActiveTracks && this.isActivelyRecording()) {
-        console.log('[bot] Leave button gone — kicked or meeting ended');
-        void this.stop();
-        return;
+        this.leaveBtnGonePolls++;
+        if (this.leaveBtnGonePolls >= 2) {
+          console.log('[bot] Leave button gone for 2 consecutive polls — kicked or meeting ended');
+          void this.stop();
+          return;
+        }
+        console.log(`[bot] Leave button gone (poll ${this.leaveBtnGonePolls}/2) — waiting to confirm`);
+      } else {
+        this.leaveBtnGonePolls = 0;
       }
 
       // Participants button aria-label contains the live headcount, e.g. "Show participants (2)".
@@ -876,8 +1151,16 @@ export class TeamsMeetingBot {
 
         if (botAlone && hadOthers && (this.hadActiveTracks || this.hadOtherParticipants)
             && this.isActivelyRecording()) {
-          console.log(`[bot] Participant button count dropped to ${rawButtonCount} — stopping`);
-          void this.stop();
+          if (!this.aloneTimer) {
+            console.log(`[bot] Participant button count dropped to ${rawButtonCount} — will stop in 5 s`);
+            this.aloneTimer = setTimeout(() => {
+              this.aloneTimer = null;
+              if (this.isActivelyRecording()) {
+                console.log('[bot] Participant count alone confirmed — stopping');
+                void this.stop();
+              }
+            }, 5_000);
+          }
         } else if (!botAlone && this.aloneTimer) {
           // Someone joined back
           clearTimeout(this.aloneTimer);
@@ -1068,20 +1351,29 @@ export class TeamsMeetingBot {
         this.participants = Array.from(new Set([...this.participants, ...filtered]));
       }
 
-      // Roster-based alone detection: stop immediately when count drops to ≤1 after others were present.
+      // Roster-based alone detection: stop when count shows the bot is the only one left.
       if ((this.hadActiveTracks || this.hadOtherParticipants) && this.isActivelyRecording()) {
-        const hadRealNames = this.participants.filter((p) => p !== '__audio_detected__').length > 0;
-        // rosterCount 0 = no tiles at all (everyone left, bot tile also gone)
-        // rosterCount 1 = only the bot's own tile remains
-        // rosterCount < 0 means the roster selectors returned nothing — this can happen
-        // when Teams re-renders or the panel closes, so we do NOT treat missing data as
-        // "alone": the other departure signals (RTP idle, silence, button count) handle that.
-        const definitelyAlone = rosterCount >= 0 && rosterCount <= 1;
+        // rosterCount < 0  → selectors found nothing (re-render / panel closed); treat as no data
+        // rosterCount = 0  → truly empty roster
+        // rosterCount = 1  → exactly one entry; could be the bot itself OR one real participant
+        // rosterCount > 1  → multiple participants present
+        //
+        // filtered = names excluding the bot's own display name.
+        // definitelyAlone requires filtered.length === 0 so we don't stop when the ONE
+        // roster entry is the OTHER participant (which was the bug: 1 ≤ 1 fired even when
+        // the roster showed just the meeting host).
+        const definitelyAlone = rosterCount >= 0 && rosterCount <= 1 && filtered.length === 0;
         const definitelyNotAlone = rosterCount > 1 || filtered.length > 0;
 
-        if (definitelyAlone && this.isActivelyRecording()) {
-          console.log('[bot] Roster shows bot is alone — stopping');
-          void this.stop();
+        if (definitelyAlone && this.isActivelyRecording() && !this.aloneTimer) {
+          console.log(`[bot] Roster alone (rosterCount=${rosterCount}, filtered=${filtered.length}) — will stop in 5 s`);
+          this.aloneTimer = setTimeout(() => {
+            this.aloneTimer = null;
+            if (this.isActivelyRecording()) {
+              console.log('[bot] Roster alone confirmed — stopping');
+              void this.stop();
+            }
+          }, 5_000);
         } else if (definitelyNotAlone) {
           // Video tiles confirm others are present — cancel any pending alone timer.
           // This is the reliable cancellation path (unlike RTP which keeps flowing via SFU).
