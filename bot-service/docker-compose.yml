@@ -5,6 +5,11 @@ services:
       - "3001:3001"
     environment:
       BOT_INTERNAL_SECRET: ${BOT_INTERNAL_SECRET}
-      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
+      NEXT_APP_URL: ${NEXT_APP_URL:-http://localhost:3000}
+      BOT_MAX_SESSIONS: ${BOT_MAX_SESSIONS:-5}
     restart: unless-stopped
     shm_size: '2gb'
+    mem_limit: 6g
+    memswap_limit: 6g
+    oom_score_adj: 500
+    stop_grace_period: 120s

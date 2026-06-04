@@ -36,6 +36,7 @@ services:
     mem_limit: 6g
     memswap_limit: 6g
     oom_score_adj: 500
+    stop_grace_period: 120s
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
       interval: 10s
