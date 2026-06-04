@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { queryUserSchemaOne } from '@/lib/db/user-schema';
+import { getBotServiceConfig } from '@/lib/bot-service';
 
 export async function GET(
   req: NextRequest,
@@ -45,13 +46,13 @@ export async function GET(
     });
   }
 
-  const botServiceUrl = process.env.BOT_SERVICE_URL;
-  if (!botServiceUrl) {
+  const bot = getBotServiceConfig();
+  if (!bot) {
     return NextResponse.json({ error: 'Bot service not configured' }, { status: 503 });
   }
 
-  const res = await fetch(`${botServiceUrl}/sessions/${meeting.bot_session}`, {
-    headers: { Authorization: `Bearer ${process.env.BOT_INTERNAL_SECRET ?? ''}` },
+  const res = await fetch(`${bot.url}/sessions/${meeting.bot_session}`, {
+    headers: { Authorization: bot.authHeader },
   });
 
   if (!res.ok) {

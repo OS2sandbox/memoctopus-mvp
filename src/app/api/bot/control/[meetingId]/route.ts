@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { queryUserSchemaOne } from '@/lib/db/user-schema';
+import { getBotServiceConfig } from '@/lib/bot-service';
 import { z } from 'zod';
 
 const bodySchema = z.object({
@@ -32,16 +33,16 @@ export async function POST(
 
   if (!meeting) return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
 
-  const botServiceUrl = process.env.BOT_SERVICE_URL;
-  if (!botServiceUrl) {
+  const bot = getBotServiceConfig();
+  if (!bot) {
     return NextResponse.json({ error: 'Bot service not configured' }, { status: 503 });
   }
 
   if (action === 'abort') {
     if (meeting.bot_session) {
-      await fetch(`${botServiceUrl}/sessions/${meeting.bot_session}`, {
+      await fetch(`${bot.url}/sessions/${meeting.bot_session}`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${process.env.BOT_INTERNAL_SECRET ?? ''}` },
+        headers: { Authorization: bot.authHeader },
       }).catch(() => {});
     }
     // Mark meeting as recording so the UI can gracefully handle the abort
@@ -58,12 +59,12 @@ export async function POST(
   }
 
   const botEndpoint = action === 'stop'
-    ? `${botServiceUrl}/sessions/${meeting.bot_session}/stop`
-    : `${botServiceUrl}/sessions/${meeting.bot_session}/${action}`;
+    ? `${bot.url}/sessions/${meeting.bot_session}/stop`
+    : `${bot.url}/sessions/${meeting.bot_session}/${action}`;
 
   const res = await fetch(botEndpoint, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${process.env.BOT_INTERNAL_SECRET ?? ''}` },
+    headers: { Authorization: bot.authHeader },
   });
 
   if (!res.ok) {

@@ -72,30 +72,13 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       )
     `);
 
-    // Ensure redaction columns exist on schemas created before they were added
     await client.query(`
       ALTER TABLE "${schema}".meetings
-      ADD COLUMN IF NOT EXISTS redacted_at TIMESTAMPTZ
-    `);
-
-    await client.query(`
-      ALTER TABLE "${schema}".meetings
-      ADD COLUMN IF NOT EXISTS redacted_by TEXT
-    `);
-
-    await client.query(`
-      ALTER TABLE "${schema}".meetings
-      ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'local'
-    `);
-
-    await client.query(`
-      ALTER TABLE "${schema}".meetings
-      ADD COLUMN IF NOT EXISTS meeting_url TEXT
-    `);
-
-    await client.query(`
-      ALTER TABLE "${schema}".meetings
-      ADD COLUMN IF NOT EXISTS bot_session TEXT
+        ADD COLUMN IF NOT EXISTS redacted_at  TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS redacted_by  TEXT,
+        ADD COLUMN IF NOT EXISTS source       TEXT NOT NULL DEFAULT 'local',
+        ADD COLUMN IF NOT EXISTS meeting_url  TEXT,
+        ADD COLUMN IF NOT EXISTS bot_session  TEXT
     `);
 
     // audio_files

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { queryUserSchemaOne } from '@/lib/db/user-schema';
+import { getBotServiceConfig } from '@/lib/bot-service';
 
 export async function POST(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -46,18 +47,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ sessionId: existing?.bot_session ?? '' });
   }
 
-  const botServiceUrl = process.env.BOT_SERVICE_URL;
-  if (!botServiceUrl) {
+  const bot = getBotServiceConfig();
+  if (!bot) {
     return NextResponse.json({ error: 'Bot service not configured' }, { status: 503 });
   }
 
   let res: Response;
   try {
-    res = await fetch(`${botServiceUrl}/sessions`, {
+    res = await fetch(`${bot.url}/sessions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.BOT_INTERNAL_SECRET ?? ''}`,
+        Authorization: bot.authHeader,
       },
       body: JSON.stringify({
         meetingUrl: meeting.meeting_url,

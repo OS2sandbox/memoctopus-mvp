@@ -11,8 +11,6 @@ interface MeetingBotScreenProps {
 
 type BotStatus = 'forbinder' | 'optager' | 'pause' | 'processing' | 'error' | 'cancelled';
 
-const BAR_HEIGHTS = [4, 8, 14, 22, 18, 10, 6, 12, 20, 26, 22, 16, 8, 11, 20, 24, 18, 12, 8, 14, 20, 16, 10, 8];
-
 function fmtTime(s: number): string {
   const m = Math.floor(s / 60);
   const sec = s % 60;
@@ -33,6 +31,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusRef = useRef<BotStatus>('forbinder');
+  const participantsRef = useRef<string>('[]');
   statusRef.current = status;
 
   const stopTimer = useCallback(() => {
@@ -69,7 +68,11 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
         return;
       }
 
-      setParticipants(data.participants ?? []);
+      const newParticipantsJson = JSON.stringify(data.participants ?? []);
+      if (newParticipantsJson !== participantsRef.current) {
+        participantsRef.current = newParticipantsJson;
+        setParticipants(data.participants ?? []);
+      }
 
       if (newStatus !== statusRef.current) {
         if (newStatus === 'optager' && statusRef.current === 'forbinder') {
@@ -124,16 +127,20 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
     };
   }, [pollStatus, stopPolling, stopTimer]);
 
+  function sendControl(action: string) {
+    return fetch(`/api/bot/control/${meetingId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+  }
+
   async function handlePauseResume() {
     if (controlLoading) return;
     const action = status === 'optager' ? 'pause' : 'resume';
     setControlLoading(true);
     try {
-      await fetch(`/api/bot/control/${meetingId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
-      });
+      await sendControl(action);
       if (action === 'pause') { stopTimer(); setStatus('pause'); }
       else { startTimer(); setStatus('optager'); }
     } finally {
@@ -145,11 +152,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
     if (controlLoading) return;
     setControlLoading(true);
     try {
-      await fetch(`/api/bot/control/${meetingId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'stop' }),
-      });
+      await sendControl('stop');
       stopTimer();
       setStatus('processing');
     } finally {
@@ -162,11 +165,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
     setControlLoading(true);
     stopPolling();
     stopTimer();
-    await fetch(`/api/bot/control/${meetingId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'abort' }),
-    }).catch(() => {});
+    await sendControl('abort').catch(() => {});
     router.push('/');
   }
 
@@ -185,27 +184,26 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
     cancelled: { dot: 'var(--muted)',  label: 'møde afbrudt',         pulse: false },
   }[status];
 
-  const noticeKicker = isCancelled
-    ? 'AFBRUDT'
-    : isConnecting
-    ? 'RINGER OP'
-    : isPaused
-    ? 'PÅ PAUSE'
-    : isProcessing
-    ? 'BEHANDLER'
-    : 'OPTAGER MØDET';
+  const noticeKickerMap: Record<BotStatus, string> = {
+    cancelled: 'AFBRUDT',
+    forbinder: 'RINGER OP',
+    pause: 'PÅ PAUSE',
+    processing: 'BEHANDLER',
+    error: 'FEJL',
+    optager: 'OPTAGER MØDET',
+  };
+  const noticeKicker = noticeKickerMap[status];
 
-  const noticeBody = isCancelled
-    ? 'Mødet blev afbrudt og ingen optagelse blev gemt.'
-    : status === 'error'
+  const noticeBodyMap: Partial<Record<BotStatus, string>> = {
+    cancelled: 'Mødet blev afbrudt og ingen optagelse blev gemt.',
+    forbinder: 'Memoctopus ringer op til mødet og venter på at blive lukket ind…',
+    pause: 'Optagelsen er sat på pause. Tryk fortsæt for at optage igen.',
+    processing: 'Mødet er slut. Transskription og referat er ved at blive lavet — det tager et øjeblik…',
+    optager: 'Memoctopus optager mødet. Når du stopper, laves transskription og referat automatisk.',
+  };
+  const noticeBody = status === 'error'
     ? (errorMessage ?? 'Der opstod en fejl ved forbindelsen til mødet.')
-    : isConnecting
-    ? 'Memoctopus ringer op til mødet og venter på at blive lukket ind…'
-    : isPaused
-    ? 'Optagelsen er sat på pause. Tryk fortsæt for at optage igen.'
-    : isProcessing
-    ? 'Mødet er slut. Transskription og referat er ved at blive lavet — det tager et øjeblik…'
-    : 'Memoctopus optager mødet. Når du stopper, laves transskription og referat automatisk.';
+    : (noticeBodyMap[status] ?? '');
 
   const storageEstimate = ((elapsed / 60) * 1.6).toFixed(1);
 
@@ -371,8 +369,8 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
             </div>
 
             {/* Detected participant rows */}
-            {participants.map((p, i) => (
-              <div key={i} style={{
+            {participants.map((p) => (
+              <div key={p} style={{
                 padding: '9px 0', borderTop: '1px solid var(--line)',
                 display: 'flex', alignItems: 'center', gap: 10,
               }}>
