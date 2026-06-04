@@ -1,6 +1,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import FormData from 'form-data';
+import fetch from 'node-fetch';
 import { chromium, BrowserContext, Page } from 'playwright';
 
 export type BotStatus = 'joining' | 'recording' | 'paused' | 'ended' | 'error';
@@ -81,6 +83,10 @@ export class TeamsMeetingBot {
         '--disable-blink-features=AutomationControlled',
         '--use-fake-ui-for-media-stream',
         '--autoplay-policy=no-user-gesture-required',
+        // Disables same-origin policy so the injected AudioContext can connect to
+        // MediaStreams from cross-origin RTCPeerConnections. Acceptable here because
+        // this Chromium instance is headless, isolated per session, and only ever
+        // navigates to teams.microsoft.com URLs.
         '--disable-web-security',
         '--disable-features=VizDisplayCompositor',
         '--ignore-certificate-errors',
@@ -714,9 +720,6 @@ export class TeamsMeetingBot {
       return;
     }
 
-    const FormData = (await import('form-data')).default;
-    const fetch = (await import('node-fetch')).default;
-
     const form = new FormData();
     // Stream from disk — avoids holding the full recording in memory
     form.append('audio', fs.createReadStream(this.audioFilePath), {
@@ -748,7 +751,6 @@ export class TeamsMeetingBot {
   }
 
   private async _notifyNoRecording(): Promise<void> {
-    const fetch = (await import('node-fetch')).default;
     try {
       await fetch(this.config.callbackUrl, {
         method: 'POST',
