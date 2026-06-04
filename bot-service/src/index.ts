@@ -168,7 +168,6 @@ app.get('/health', (_req: Request, res: Response) => {
   const now = Date.now();
   const sessionDetails = [...sessions.values()].map((s) => ({
     id: s.id,
-    meetingId: s.meetingId,
     status: s.bot.status,
     elapsed: s.bot.elapsed,
     ageSeconds: Math.floor((now - s.createdAt.getTime()) / 1000),

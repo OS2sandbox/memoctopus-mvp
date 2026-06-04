@@ -906,7 +906,7 @@ export class TeamsMeetingBot {
       } else if (liveTrackCount === 0 && this.hadActiveTracks
           && this.isActivelyRecording()
           && !this.aloneTimer) {
-        // Schedule a stop after an 8-second grace period so brief renegotiations
+        // Schedule a stop after a 5-second grace period so brief renegotiations
         // don't cause a premature exit.
         console.log('[bot] No live remote tracks — will stop in 5 s unless tracks return');
         this.aloneTimer = setTimeout(() => {
