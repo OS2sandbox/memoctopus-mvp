@@ -92,12 +92,10 @@ export class TeamsMeetingBot {
         '--ignore-certificate-errors',
         '--disk-cache-size=0',
         '--media-cache-size=0',
-        '--renderer-process-limit=1',
+        // Prevent CPU bursts when the tab loses "focus" in headless mode
         '--disable-backgrounding-occluded-windows',
         '--disable-background-timer-throttling',
         '--disable-renderer-backgrounding',
-        '--disable-extensions',
-        '--disable-component-extensions-with-background-pages',
         '--disable-default-apps',
         '--disable-crash-reporter',
         '--noerrdialogs',
@@ -1075,8 +1073,10 @@ export class TeamsMeetingBot {
         const hadRealNames = this.participants.filter((p) => p !== '__audio_detected__').length > 0;
         // rosterCount 0 = no tiles at all (everyone left, bot tile also gone)
         // rosterCount 1 = only the bot's own tile remains
-        const definitelyAlone = (rosterCount >= 0 && rosterCount <= 1)
-          || (rosterCount < 0 && filtered.length === 0 && hadRealNames);
+        // rosterCount < 0 means the roster selectors returned nothing — this can happen
+        // when Teams re-renders or the panel closes, so we do NOT treat missing data as
+        // "alone": the other departure signals (RTP idle, silence, button count) handle that.
+        const definitelyAlone = rosterCount >= 0 && rosterCount <= 1;
         const definitelyNotAlone = rosterCount > 1 || filtered.length > 0;
 
         if (definitelyAlone && this.isActivelyRecording()) {
