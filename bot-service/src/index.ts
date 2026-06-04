@@ -11,7 +11,11 @@ const app = express();
 app.use(express.json());
 
 const PORT = parseInt(process.env.BOT_PORT ?? '3001', 10);
-const INTERNAL_SECRET = process.env.BOT_INTERNAL_SECRET ?? '';
+const INTERNAL_SECRET = process.env.BOT_INTERNAL_SECRET;
+if (!INTERNAL_SECRET) {
+  console.error('[bot-service] FATAL: BOT_INTERNAL_SECRET is not set. Refusing to start.');
+  process.exit(1);
+}
 const NEXT_APP_URL = process.env.NEXT_APP_URL ?? 'http://localhost:3000';
 const MAX_CONCURRENT_SESSIONS = parseInt(process.env.BOT_MAX_SESSIONS ?? '5', 10);
 
@@ -191,6 +195,28 @@ app.get('/health', (_req: Request, res: Response) => {
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`[bot-service] Listening on port ${PORT}`);
+});
+
+process.on('SIGTERM', () => {
+  console.log('[bot-service] SIGTERM received — draining sessions before exit');
+  server.close();
+
+  const shutdownTasks = [...sessions.values()].map(async (s) => {
+    try {
+      if (s.bot.status === 'recording' || s.bot.status === 'paused') {
+        await s.bot.stop();
+      } else if (s.bot.status === 'joining') {
+        await s.bot.abort();
+      }
+    } catch (err) {
+      console.error(`[bot-service] Shutdown error for session ${s.id}:`, err);
+    }
+  });
+
+  void Promise.allSettled(shutdownTasks).then(() => {
+    console.log('[bot-service] All sessions drained — exiting');
+    process.exit(0);
+  });
 });
