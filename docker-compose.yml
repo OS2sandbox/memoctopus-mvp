@@ -31,7 +31,11 @@ services:
       - PORT=3001
       - NEXT_APP_URL=http://app:3000
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
+      - BOT_MAX_SESSIONS=${BOT_MAX_SESSIONS:-5}
     shm_size: "2gb"
+    mem_limit: 6g
+    memswap_limit: 6g
+    oom_score_adj: 500
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
       interval: 10s

@@ -1,5 +1,7 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { chromium, Browser, BrowserContext, Page } from 'playwright';
-import { assembleWebM } from './audio-utils';
 
 export type BotStatus = 'joining' | 'recording' | 'paused' | 'ended' | 'error';
 
@@ -28,7 +30,11 @@ export class TeamsMeetingBot {
   private elapsedTimer: ReturnType<typeof setInterval> | null = null;
   private participantTimer: ReturnType<typeof setInterval> | null = null;
   private aloneTimer: ReturnType<typeof setTimeout> | null = null;
-  private audioChunks: Buffer[] = [];
+  private watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private audioFilePath: string = '';
+  private audioWriteStream: fs.WriteStream | null = null;
+  private audioChunkCount = 0;
+  private readonly userDataDir: string;
   private hadActiveTracks = false;
   private hadOtherParticipants = false;
   private lastRtpPackets = -1;
@@ -39,6 +45,7 @@ export class TeamsMeetingBot {
 
   constructor(config: BotSessionConfig) {
     this.config = config;
+    this.userDataDir = path.join(os.tmpdir(), `bot-${config.meetingId}-${Date.now()}`);
   }
 
   async start(): Promise<void> {
@@ -58,9 +65,14 @@ export class TeamsMeetingBot {
   }
 
   private async _launch(): Promise<void> {
-    this.browser = await chromium.launch({
+    // launchPersistentContext takes userDataDir as its first arg — Playwright does not
+    // allow --user-data-dir in the args array when using chromium.launch().
+    this.context = await chromium.launchPersistentContext(this.userDataDir, {
       headless: true,
       executablePath: process.env.CHROMIUM_PATH || undefined,
+      permissions: ['microphone'],
+      userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -73,13 +85,21 @@ export class TeamsMeetingBot {
         '--disable-web-security',
         '--disable-features=VizDisplayCompositor',
         '--ignore-certificate-errors',
+        '--disk-cache-size=0',
+        '--media-cache-size=0',
+        '--renderer-process-limit=1',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-background-timer-throttling',
+        '--disable-renderer-backgrounding',
+        '--disable-extensions',
+        '--disable-component-extensions-with-background-pages',
+        '--disable-default-apps',
+        '--disable-crash-reporter',
+        '--noerrdialogs',
+        '--disable-accelerated-2d-canvas',
+        '--disable-accelerated-video-decode',
+        '--disable-gpu-compositing',
       ],
-    });
-
-    this.context = await this.browser.newContext({
-      permissions: ['microphone'],
-      userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
     });
 
     this.page = await this.context.newPage();
@@ -191,9 +211,9 @@ export class TeamsMeetingBot {
 
   private async _joinMeeting(): Promise<void> {
     const page = this.page!;
-    const fs = await import('fs');
-
+    const debugSnapshots = process.env.BOT_DEBUG_SNAPSHOTS === '1';
     const snap = async (label: string) => {
+      if (!debugSnapshots) return;
       try {
         const buf = await page.screenshot({ fullPage: true });
         const p = `/tmp/bot-snap-${label}.png`;
@@ -314,8 +334,10 @@ export class TeamsMeetingBot {
     }
     if (!joined) {
       await snap('03-no-join-btn');
-      const htmlFail = await page.content().catch(() => '');
-      fs.writeFileSync('/tmp/bot-page-no-join.html', htmlFail);
+      if (debugSnapshots) {
+        const htmlFail = await page.content().catch(() => '');
+        fs.writeFileSync('/tmp/bot-page-no-join.html', htmlFail);
+      }
       throw new Error('Could not find join button');
     }
     // Wait for the lobby/meeting UI to appear rather than sleeping a fixed 4 s.
@@ -350,8 +372,10 @@ export class TeamsMeetingBot {
       ).then(() => 'denied' as const),
     ]).catch(async () => {
       await snap('04-lobby-timeout');
-      const htmlFb = await page.content().catch(() => '');
-      fs.writeFileSync('/tmp/bot-page-fallback.html', htmlFb);
+      if (debugSnapshots) {
+        const htmlFb = await page.content().catch(() => '');
+        fs.writeFileSync('/tmp/bot-page-fallback.html', htmlFb);
+      }
       return 'timeout' as const;
     });
 
@@ -362,8 +386,10 @@ export class TeamsMeetingBot {
     }
 
     await snap('05-in-meeting');
-    const htmlIn = await page.content().catch(() => '');
-    fs.writeFileSync('/tmp/bot-page-in-meeting.html', htmlIn);
+    if (debugSnapshots) {
+      const htmlIn = await page.content().catch(() => '');
+      fs.writeFileSync('/tmp/bot-page-in-meeting.html', htmlIn);
+    }
     console.log('[bot] in meeting, proceeding to audio capture, url=', page.url());
 
     await this._startAudioCapture();
@@ -409,9 +435,13 @@ export class TeamsMeetingBot {
   private async _startAudioCapture(): Promise<void> {
     const page = this.page!;
 
+    this.audioFilePath = path.join(os.tmpdir(), `bot-audio-${this.config.meetingId}-${Date.now()}.webm`);
+    this.audioWriteStream = fs.createWriteStream(this.audioFilePath);
+
     await page.exposeFunction('__botAudioChunk', (b64: string) => {
       const buf = Buffer.from(b64, 'base64');
-      this.audioChunks.push(buf);
+      this.audioChunkCount++;
+      this.audioWriteStream?.write(buf);
     });
 
     await page.exposeFunction('__botMeetingEnded', () => {
@@ -664,20 +694,36 @@ export class TeamsMeetingBot {
   }
 
   private async _uploadAudio(): Promise<void> {
-    if (this.audioChunks.length === 0) {
+    // Flush and close the write stream before reading
+    await new Promise<void>((resolve) => {
+      if (this.audioWriteStream) {
+        this.audioWriteStream.end(resolve);
+        this.audioWriteStream = null;
+      } else {
+        resolve();
+      }
+    });
+
+    if (this.audioChunkCount === 0 || !this.audioFilePath) {
       await this._notifyNoRecording();
       return;
     }
 
-    const audioBuffer = assembleWebM(this.audioChunks);
+    const fileSize = await fs.promises.stat(this.audioFilePath).then((s) => s.size).catch(() => 0);
+    if (fileSize === 0) {
+      await this._notifyNoRecording();
+      return;
+    }
 
     const FormData = (await import('form-data')).default;
     const fetch = (await import('node-fetch')).default;
 
     const form = new FormData();
-    form.append('audio', audioBuffer, {
+    // Stream from disk — avoids holding the full recording in memory
+    form.append('audio', fs.createReadStream(this.audioFilePath), {
       filename: 'recording.webm',
       contentType: 'audio/webm',
+      knownLength: fileSize,
     });
     form.append('meetingId', this.config.meetingId);
     form.append('userId', this.config.userId);
@@ -723,14 +769,30 @@ export class TeamsMeetingBot {
   }
 
   private async _cleanup(): Promise<void> {
+    // Close write stream if upload path didn't already do it
+    await new Promise<void>((resolve) => {
+      if (this.audioWriteStream) {
+        this.audioWriteStream.end(resolve);
+        this.audioWriteStream = null;
+      } else {
+        resolve();
+      }
+    });
+
     try {
       await this.page?.close();
-      await this.context?.close();
-      await this.browser?.close();
+      await this.context?.close(); // also closes the underlying browser with launchPersistentContext
     } catch { /* ignore */ }
     this.page = null;
     this.context = null;
     this.browser = null;
+
+    // Delete temp audio file and per-session Chromium profile
+    if (this.audioFilePath) {
+      await fs.promises.unlink(this.audioFilePath).catch(() => {});
+      this.audioFilePath = '';
+    }
+    await fs.promises.rm(this.userDataDir, { recursive: true, force: true }).catch(() => {});
   }
 
   private _startElapsedTimer(): void {
@@ -750,10 +812,24 @@ export class TeamsMeetingBot {
   private _stopParticipantPolling(): void {
     if (this.participantTimer) { clearInterval(this.participantTimer); this.participantTimer = null; }
     if (this.aloneTimer) { clearTimeout(this.aloneTimer); this.aloneTimer = null; }
+    this._stopWatchdog();
+  }
+
+  private _resetWatchdog(): void {
+    if (this.watchdogTimer) clearTimeout(this.watchdogTimer);
+    this.watchdogTimer = setTimeout(() => {
+      console.error('[bot] Watchdog: poll loop silent for 5 min — aborting hung session');
+      void this.abort();
+    }, 5 * 60 * 1000);
+  }
+
+  private _stopWatchdog(): void {
+    if (this.watchdogTimer) { clearTimeout(this.watchdogTimer); this.watchdogTimer = null; }
   }
 
   private async _pollParticipants(): Promise<void> {
     if (!this.page) return;
+    this._resetWatchdog();
     try {
       // Primary: check if Leave button is still visible — if gone, we were kicked or meeting ended
       const leaveVisible = await this.page.locator(LEAVE_BTN).first().isVisible().catch(() => false);

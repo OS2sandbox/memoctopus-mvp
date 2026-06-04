@@ -13,6 +13,7 @@ app.use(express.json());
 const PORT = parseInt(process.env.BOT_PORT ?? '3001', 10);
 const INTERNAL_SECRET = process.env.BOT_INTERNAL_SECRET ?? '';
 const NEXT_APP_URL = process.env.NEXT_APP_URL ?? 'http://localhost:3000';
+const MAX_CONCURRENT_SESSIONS = parseInt(process.env.BOT_MAX_SESSIONS ?? '5', 10);
 
 interface BotSession {
   id: string;
@@ -48,6 +49,22 @@ app.post('/sessions', requireAuth, async (req: Request, res: Response): Promise<
 
   if (!meetingUrl || !meetingId || !userId) {
     res.status(400).json({ error: 'Missing meetingUrl, meetingId, or userId' });
+    return;
+  }
+
+  // Evict ended sessions older than 1 hour to keep the Map clean
+  const oneHourAgo = Date.now() - 60 * 60 * 1000;
+  for (const [id, s] of sessions) {
+    if ((s.bot.status === 'ended' || s.bot.status === 'error') && s.createdAt.getTime() < oneHourAgo) {
+      sessions.delete(id);
+    }
+  }
+
+  const activeSessions = [...sessions.values()].filter(
+    (s) => s.bot.status !== 'ended' && s.bot.status !== 'error',
+  ).length;
+  if (activeSessions >= MAX_CONCURRENT_SESSIONS) {
+    res.status(429).json({ error: 'Too many concurrent sessions', max: MAX_CONCURRENT_SESSIONS });
     return;
   }
 
@@ -144,7 +161,32 @@ app.delete('/sessions/:id', requireAuth, async (req: Request, res: Response): Pr
 // ─── Health check ────────────────────────────────────────────────────────────
 
 app.get('/health', (_req: Request, res: Response) => {
-  res.json({ ok: true, sessions: sessions.size });
+  const now = Date.now();
+  const sessionDetails = [...sessions.values()].map((s) => ({
+    id: s.id,
+    meetingId: s.meetingId,
+    status: s.bot.status,
+    elapsed: s.bot.elapsed,
+    ageSeconds: Math.floor((now - s.createdAt.getTime()) / 1000),
+  }));
+
+  // Stuck: joining for more than 5 minutes (browser is likely hung)
+  const stuckJoining = sessionDetails.find((s) => s.status === 'joining' && s.ageSeconds > 300);
+  // Leaked: active session older than 6 hours
+  const leakedSession = sessionDetails.find(
+    (s) => s.status !== 'ended' && s.status !== 'error' && s.ageSeconds > 21_600,
+  );
+
+  const healthy = !stuckJoining && !leakedSession;
+  res.status(healthy ? 200 : 503).json({
+    ok: healthy,
+    sessions: sessions.size,
+    activeSessions: sessionDetails.filter((s) => s.status !== 'ended' && s.status !== 'error').length,
+    maxSessions: MAX_CONCURRENT_SESSIONS,
+    stuckJoining: stuckJoining?.id ?? null,
+    leakedSession: leakedSession?.id ?? null,
+    details: sessionDetails,
+  });
 });
 
 // ─── Start ───────────────────────────────────────────────────────────────────
