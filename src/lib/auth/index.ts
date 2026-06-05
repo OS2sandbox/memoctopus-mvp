@@ -2,7 +2,12 @@ import { betterAuth } from 'better-auth';
 import { genericOAuth } from 'better-auth/plugins';
 import { pool } from '@/lib/db';
 
-if (process.env.NODE_ENV === 'production') {
+// Skip the secret check during `npm run build` (NEXT_PHASE=phase-production-build)
+// because BETTER_AUTH_SECRET is only available as a runtime env var, not a build arg.
+if (
+  process.env.NODE_ENV === 'production' &&
+  process.env.NEXT_PHASE !== 'phase-production-build'
+) {
   if (!process.env.BETTER_AUTH_SECRET) {
     throw new Error('BETTER_AUTH_SECRET env var is required in production');
   }
