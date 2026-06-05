@@ -5,7 +5,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "ts-node-dev --respawn src/index.ts",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "playwright test"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
@@ -16,6 +17,7 @@
     "uuid": "^10.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.0",
     "@types/dotenv": "^6.1.1",
     "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
