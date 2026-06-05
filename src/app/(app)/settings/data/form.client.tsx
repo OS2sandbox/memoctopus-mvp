@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { DangerSection } from '@/components/compliance/DangerSection';
 
 interface UsageData {
@@ -17,6 +18,7 @@ function formatBytes(bytes: number): string {
 }
 
 export default function SettingsDataPage() {
+  const router = useRouter();
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -30,12 +32,12 @@ export default function SettingsDataPage() {
 
   async function deleteAllAudio() {
     await fetch('/api/account/audio', { method: 'DELETE' });
-    window.location.reload();
+    router.refresh();
   }
 
   async function deleteAllSensitive() {
     await fetch('/api/account/sensitive', { method: 'DELETE' });
-    window.location.reload();
+    router.refresh();
   }
 
   return (

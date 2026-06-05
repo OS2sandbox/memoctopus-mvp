@@ -1,3 +1,4 @@
+import { redirect } from 'next/navigation';
 import { headers } from 'next/headers';
 import Link from 'next/link';
 import { auth } from '@/lib/auth';
@@ -10,7 +11,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function ArkivPage() {
   const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return null;
+  if (!session) redirect('/');
 
   const rows = await queryUserSchema<{
     id: string;

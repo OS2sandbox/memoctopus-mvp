@@ -56,7 +56,7 @@ const reducer = (state: State, action: Action): State => {
 
 const initialState: State = {
   isLoading: false,
-  mode: AuthMode.SignIn,
+  mode: AuthMode.SignUp,
   email: '',
   password: '',
   name: '',

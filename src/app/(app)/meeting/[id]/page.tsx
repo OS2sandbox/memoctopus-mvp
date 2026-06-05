@@ -1,4 +1,4 @@
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { getMeetingPageData } from '@/lib/data/meeting-page';
@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
 export default async function MeetingRecordPage({ params }: PageProps) {
   const { id } = await params;
   const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return null;
+  if (!session) redirect('/');
 
   const data = await getMeetingPageData(session.user.id, id);
   if (!data) notFound();

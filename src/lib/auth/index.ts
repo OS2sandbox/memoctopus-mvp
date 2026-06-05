@@ -1,10 +1,14 @@
 import { betterAuth } from 'better-auth';
 import { pool } from '@/lib/db';
 
+if (!process.env.BETTER_AUTH_SECRET && process.env.NODE_ENV === 'production') {
+  throw new Error('BETTER_AUTH_SECRET env var is required in production');
+}
+
 export const auth = betterAuth({
   database: pool,
-  secret: process.env.BETTER_AUTH_SECRET || 'fallback-secret-key-for-development',
-  baseURL: process.env.BETTER_AUTH_URL || 'http://localhost:3000',
+  secret: process.env.BETTER_AUTH_SECRET || 'fallback-secret-key-for-development-only',
+  baseURL: process.env.BETTER_AUTH_URL || 'http://localhost:3004',
   trustedOrigins: [
     'http://localhost:3000',
     'http://127.0.0.1:3000',

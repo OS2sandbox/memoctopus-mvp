@@ -32,6 +32,13 @@ export function HeroForm() {
   const { isLoading, mode, email, password, name, error } = state;
   const isSignUp = mode === AuthMode.SignUp;
 
+  const handleMicrosoftSignIn = async () => {
+    actions.setLoading(true);
+    const { error } = await signIn.social({ provider: 'microsoft', callbackURL: from });
+    if (error?.message) actions.authError('Microsoft login mislykkedes. Prøv igen.');
+    actions.setLoading(false);
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     actions.authStart();
@@ -136,6 +143,25 @@ export function HeroForm() {
       <Button type="submit" disabled={isLoading} className="w-full" style={{ marginTop: 2 }}>
         {isLoading ? 'Behandler…' : isSignUp ? 'Opret konto' : 'Log ind'}
       </Button>
+
+      {process.env.NEXT_PUBLIC_MICROSOFT_ENABLED === 'true' && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '2px 0' }}>
+            <div style={{ flex: 1, height: 1, background: 'var(--line)' }} />
+            <span style={{ fontSize: 11.5, color: 'var(--muted)', fontFamily: 'var(--font-geist-mono)' }}>eller</span>
+            <div style={{ flex: 1, height: 1, background: 'var(--line)' }} />
+          </div>
+          <Button type="button" variant="outline" onClick={handleMicrosoftSignIn} disabled={isLoading} className="w-full">
+            <svg className="h-4 w-4" viewBox="0 0 23 23" fill="none">
+              <path fill="#f25022" d="M1 1h10v10H1z" />
+              <path fill="#00a4ef" d="M12 1h10v10H12z" />
+              <path fill="#7fba00" d="M1 12h10v10H1z" />
+              <path fill="#ffb900" d="M12 12h10v10H12z" />
+            </svg>
+            Fortsæt med Microsoft
+          </Button>
+        </>
+      )}
 
       <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '4px 0 0' }}>
         {isSignUp ? 'Har du allerede en konto? ' : 'Har du ikke en konto? '}

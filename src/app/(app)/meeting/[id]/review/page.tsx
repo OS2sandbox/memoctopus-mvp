@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
 export default async function TranscriptReviewPage({ params }: PageProps) {
   const { id } = await params;
   const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return null;
+  if (!session) redirect('/');
 
   const data = await getMeetingPageData(session.user.id, id);
   if (!data) notFound();
