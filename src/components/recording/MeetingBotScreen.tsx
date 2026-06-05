@@ -32,6 +32,8 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const statusRef = useRef<BotStatus>('forbinder');
   const participantsRef = useRef<string>('[]');
+  const consecutiveFailsRef = useRef(0);
+  const nextPollAtRef = useRef(0);
   statusRef.current = status;
 
   const stopTimer = useCallback(() => {
@@ -48,9 +50,16 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
   }, []);
 
   const pollStatus = useCallback(async () => {
+    if (Date.now() < nextPollAtRef.current) return;
     try {
       const res = await fetch(`/api/bot/status/${meetingId}`);
-      if (!res.ok) return;
+      if (!res.ok) {
+        consecutiveFailsRef.current++;
+        nextPollAtRef.current = Date.now() + Math.min(2000 * 2 ** consecutiveFailsRef.current, 30_000);
+        return;
+      }
+      consecutiveFailsRef.current = 0;
+      nextPollAtRef.current = 0;
       const data = await res.json();
       const newStatus: BotStatus = data.status as BotStatus;
 
@@ -74,11 +83,14 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
         setParticipants(data.participants ?? []);
       }
 
+      // Sync elapsed from bot service on every poll while recording — prevents drift
+      // if the component remounts or the transition was polled late.
+      if (newStatus === 'optager' && data.elapsed != null) {
+        setElapsed(prev => Math.max(prev, data.elapsed as number));
+      }
+
       if (newStatus !== statusRef.current) {
-        if (newStatus === 'optager' && statusRef.current === 'forbinder') {
-          setElapsed(data.elapsed ?? 0);
-          startTimer();
-        } else if (newStatus === 'optager' && statusRef.current === 'pause') {
+        if (newStatus === 'optager') {
           startTimer();
         } else if (newStatus === 'pause') {
           stopTimer();
@@ -88,7 +100,8 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
         setStatus(newStatus);
       }
     } catch {
-      // non-fatal — keep polling
+      consecutiveFailsRef.current++;
+      nextPollAtRef.current = Date.now() + Math.min(2000 * 2 ** consecutiveFailsRef.current, 30_000);
     }
   }, [meetingId, startTimer, stopTimer, stopPolling, router]);
 
@@ -459,44 +472,11 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
           {(isRecording || isPaused) && (
             <>
               {/* Pause / Fortsæt */}
+              {/* Pause / Play circle button */}
               <button
                 onClick={handlePauseResume}
                 disabled={controlLoading}
-                style={{
-                  fontSize: 13.5, fontWeight: 500, padding: '8px 14px',
-                  borderRadius: 'var(--radius)', border: '1px solid var(--line-2)',
-                  background: 'transparent', cursor: 'pointer',
-                  display: 'inline-flex', alignItems: 'center', gap: 8,
-                  lineHeight: 1, minWidth: 96, justifyContent: 'center',
-                  opacity: controlLoading ? 0.6 : 1,
-                }}
-              >
-                {isPaused ? (
-                  <>
-                    <span style={{
-                      width: 0, height: 0,
-                      borderTop: '5px solid transparent',
-                      borderBottom: '5px solid transparent',
-                      borderLeft: '8px solid currentColor',
-                    }} />
-                    fortsæt
-                  </>
-                ) : (
-                  <>
-                    <span style={{ display: 'inline-flex', gap: 2 }}>
-                      <span style={{ width: 3, height: 11, background: 'currentColor' }} />
-                      <span style={{ width: 3, height: 11, background: 'currentColor' }} />
-                    </span>
-                    pause
-                  </>
-                )}
-              </button>
-
-              {/* Stop circle */}
-              <button
-                onClick={handleStop}
-                disabled={controlLoading}
-                title="Stop & afslut"
+                title={isPaused ? 'Fortsæt optagelse' : 'Pause optagelse'}
                 style={{
                   width: 56, height: 56, borderRadius: 999,
                   background: 'var(--ink)', color: 'var(--bg)',
@@ -506,7 +486,20 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
                   flexShrink: 0,
                 }}
               >
-                <span style={{ width: 14, height: 14, background: 'var(--bg)', borderRadius: 1 }} />
+                {isPaused ? (
+                  <span style={{
+                    width: 0, height: 0,
+                    borderTop: '6px solid transparent',
+                    borderBottom: '6px solid transparent',
+                    borderLeft: '10px solid var(--bg)',
+                    marginLeft: 2,
+                  }} />
+                ) : (
+                  <span style={{ display: 'inline-flex', gap: 3 }}>
+                    <span style={{ width: 4, height: 14, background: 'var(--bg)' }} />
+                    <span style={{ width: 4, height: 14, background: 'var(--bg)' }} />
+                  </span>
+                )}
               </button>
 
               {/* Stop & afslut solid button */}

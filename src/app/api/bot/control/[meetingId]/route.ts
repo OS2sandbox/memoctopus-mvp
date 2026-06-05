@@ -43,6 +43,7 @@ export async function POST(
       await fetch(`${bot.url}/sessions/${meeting.bot_session}`, {
         method: 'DELETE',
         headers: { Authorization: bot.authHeader },
+        signal: AbortSignal.timeout(10_000),
       }).catch(() => {});
     }
     // Mark meeting as recording so the UI can gracefully handle the abort
@@ -65,6 +66,7 @@ export async function POST(
   const res = await fetch(botEndpoint, {
     method: 'POST',
     headers: { Authorization: bot.authHeader },
+    signal: AbortSignal.timeout(10_000),
   });
 
   if (!res.ok) {

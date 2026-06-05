@@ -8,7 +8,12 @@ export async function POST(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const { meetingId } = await req.json();
+  let meetingId: string | undefined;
+  try {
+    ({ meetingId } = await req.json());
+  } catch {
+    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+  }
   if (!meetingId) return NextResponse.json({ error: 'Missing meetingId' }, { status: 400 });
 
   const meeting = await queryUserSchemaOne<{
@@ -67,6 +72,7 @@ export async function POST(req: NextRequest) {
         botName: 'Memoctopus',
         callbackUrl: `${process.env.NEXT_PUBLIC_APP_URL ?? ''}/api/bot/audio-upload`,
       }),
+      signal: AbortSignal.timeout(10_000),
     });
   } catch (err) {
     console.error('Bot service unreachable:', err);

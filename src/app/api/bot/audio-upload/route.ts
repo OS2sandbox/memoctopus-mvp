@@ -39,6 +39,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
   }
 
+  const mimeType = audioFile.type || 'audio/webm';
+  if (!mimeType.startsWith('audio/') && !mimeType.startsWith('video/webm')) {
+    return NextResponse.json({ error: 'Invalid audio file type' }, { status: 400 });
+  }
+
   const meeting = await queryUserSchemaOne<{ id: string; status: string }>(
     userId,
     'SELECT id, status FROM meetings WHERE id = $1',
@@ -76,7 +81,6 @@ export async function POST(req: NextRequest) {
 
   try {
     const buffer = Buffer.from(await audioFile.arrayBuffer());
-    const mimeType = audioFile.type || 'audio/webm';
 
     const { filename, sizeBytes } = await saveAudioFile(userId, buffer, audioFile.name || 'recording.webm');
     await queryUserSchemaOne(
@@ -126,12 +130,16 @@ export async function POST(req: NextRequest) {
     console.error('Bot audio transcription error:', err);
     // Even on failure, move to review with an empty transcript so the UI can navigate.
     // Reverting to 'recording' would trap the UI in processing indefinitely.
-    await queryUserSchemaOne(
+    const inserted = await queryUserSchemaOne(
       userId,
       `INSERT INTO transcripts (meeting_id, raw_text, segments) VALUES ($1, '', '[]')
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING
+       RETURNING meeting_id`,
       [meetingId],
-    ).catch(() => {});
+    ).catch(() => null);
+    if (!inserted) {
+      console.warn('Bot audio: transcript already exists for meetingId:', meetingId, '— keeping existing');
+    }
     await queryUserSchemaOne(
       userId,
       `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,

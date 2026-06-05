@@ -53,6 +53,7 @@ export async function GET(
 
   const res = await fetch(`${bot.url}/sessions/${meeting.bot_session}`, {
     headers: { Authorization: bot.authHeader },
+    signal: AbortSignal.timeout(10_000),
   });
 
   if (!res.ok) {
