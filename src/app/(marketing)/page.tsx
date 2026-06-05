@@ -123,6 +123,7 @@ function Hero() {
           gridTemplateColumns: 'minmax(0, 1.05fr) minmax(320px, 0.95fr)',
           gap: 64,
           alignItems: 'center',
+          minHeight: '560px',
         }}>
           {/* Value column */}
           <div>

@@ -74,17 +74,19 @@ export function HeroForm() {
           {isSignUp ? 'Gratis at komme i gang — intet kort påkrævet.' : 'Log ind for at fortsætte.'}
         </p>
       </div>
-      <div style={{ visibility: isSignUp ? 'visible' : 'hidden' }}>
-        <Label htmlFor="hero-name" style={{ display: 'block', fontSize: 12.5, fontWeight: 500, color: 'var(--ink-2)', marginBottom: 6 }}>Navn</Label>
-        <Input
-          id="hero-name"
-          type="text"
-          value={name}
-          onChange={(e) => actions.setName(e.target.value)}
-          placeholder="Jane Doe"
-          required={isSignUp}
-        />
-      </div>
+      {isSignUp && (
+        <div>
+          <Label htmlFor="hero-name" style={{ display: 'block', fontSize: 12.5, fontWeight: 500, color: 'var(--ink-2)', marginBottom: 6 }}>Navn</Label>
+          <Input
+            id="hero-name"
+            type="text"
+            value={name}
+            onChange={(e) => actions.setName(e.target.value)}
+            placeholder="Jane Doe"
+            required
+          />
+        </div>
+      )}
       <div>
         <Label htmlFor="hero-email" style={{ display: 'block', fontSize: 12.5, fontWeight: 500, color: 'var(--ink-2)', marginBottom: 6 }}>E-mail</Label>
         <Input
