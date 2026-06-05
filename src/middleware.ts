@@ -9,6 +9,11 @@ export function middleware(req: NextRequest) {
     req.cookies.get('better-auth.session_token')?.value ||
     req.cookies.get('__Secure-better-auth.session_token')?.value;
 
+  // Legacy sign-in route — redirect to landing page.
+  if (pathname === '/sign-in') {
+    return NextResponse.redirect(new URL('/', req.url));
+  }
+
   // Landing page is public — authenticated users go straight to the dashboard.
   if (pathname === '/') {
     if (sessionToken) {
@@ -18,9 +23,9 @@ export function middleware(req: NextRequest) {
   }
 
   if (!sessionToken) {
-    const signInUrl = new URL('/sign-in', req.url);
-    signInUrl.searchParams.set('from', pathname);
-    return NextResponse.redirect(signInUrl);
+    const homeUrl = new URL('/', req.url);
+    homeUrl.searchParams.set('from', pathname);
+    return NextResponse.redirect(homeUrl);
   }
 
   return NextResponse.next();
@@ -28,6 +33,6 @@ export function middleware(req: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!sign-in|api/|_next/static|_next/image|favicon|public).*)',
+    '/((?!api/|_next/static|_next/image|favicon|public).*)',
   ],
 };

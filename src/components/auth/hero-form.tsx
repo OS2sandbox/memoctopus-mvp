@@ -6,7 +6,7 @@ import { AuthMode, useAuthForm } from '@/lib/hooks/use-auth-form';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import type { FormEvent } from 'react';
 
 function EyeIcon({ off }: { off: boolean }) {
@@ -27,6 +27,8 @@ export function HeroForm() {
   const { state, actions } = useAuthForm();
   const [showPassword, setShowPassword] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const from = searchParams.get('from') || '/dashboard';
   const { isLoading, mode, email, password, name, error } = state;
   const isSignUp = mode === AuthMode.SignUp;
 
@@ -52,11 +54,19 @@ export function HeroForm() {
         return;
       }
     }
-    router.push('/dashboard');
+    router.push(from);
   };
 
   return (
     <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ marginBottom: 4 }}>
+        <h2 style={{ fontWeight: 500, fontSize: 19, letterSpacing: '-0.02em', color: 'var(--ink)', margin: '0 0 4px' }}>
+          {isSignUp ? 'Opret din konto' : 'Velkommen tilbage'}
+        </h2>
+        <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>
+          {isSignUp ? 'Gratis at komme i gang — intet kort påkrævet.' : 'Log ind for at fortsætte.'}
+        </p>
+      </div>
       {isSignUp && (
         <div>
           <Label htmlFor="hero-name" style={{ display: 'block', fontSize: 12.5, fontWeight: 500, color: 'var(--ink-2)', marginBottom: 6 }}>Navn</Label>

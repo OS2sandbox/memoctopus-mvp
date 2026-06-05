@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { Suspense } from 'react';
 import { LogoMark } from '@/components/brand/logo-mark';
 import { HeroForm } from '@/components/auth/hero-form';
 
@@ -81,12 +81,12 @@ function Nav() {
         </nav>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 16 }}>
-          <Link
-            href="/sign-in"
+          <a
+            href="#hero"
             style={{ fontSize: 13.5, color: 'var(--ink-2)', textDecoration: 'none', whiteSpace: 'nowrap', transition: 'color 120ms ease' }}
           >
             Log ind
-          </Link>
+          </a>
           <a
             href="#hero"
             style={{
@@ -170,7 +170,7 @@ function Hero() {
             </div>
           </div>
 
-          {/* Sign-up form card */}
+          {/* Auth form card */}
           <div style={{
             background: 'var(--surface)',
             border: '1px solid var(--line)',
@@ -178,21 +178,9 @@ function Hero() {
             padding: '32px 30px',
             boxShadow: '0 1px 2px rgba(17,17,17,0.04), 0 22px 56px -30px rgba(17,17,17,0.18)',
           }}>
-            <div style={{ marginBottom: 20 }}>
-              <h2 style={{
-                fontWeight: 500,
-                fontSize: 19,
-                letterSpacing: '-0.02em',
-                color: 'var(--ink)',
-                margin: '0 0 4px',
-              }}>
-                Opret din konto
-              </h2>
-              <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>
-                Gratis at komme i gang — intet kort påkrævet.
-              </p>
-            </div>
-            <HeroForm />
+            <Suspense>
+              <HeroForm />
+            </Suspense>
           </div>
         </div>
       </Container>
@@ -349,9 +337,9 @@ function Footer() {
                 {label}
               </a>
             ))}
-            <Link href="/sign-in" style={{ fontSize: 13, color: 'var(--muted)', textDecoration: 'none', whiteSpace: 'nowrap' }}>
+            <a href="#hero" style={{ fontSize: 13, color: 'var(--muted)', textDecoration: 'none', whiteSpace: 'nowrap' }}>
               Log ind
-            </Link>
+            </a>
           </div>
         </div>
         <div style={{ height: 1, background: 'var(--line)', margin: '20px 0 0' }} />
