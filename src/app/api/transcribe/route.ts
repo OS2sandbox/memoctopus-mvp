@@ -5,7 +5,7 @@ import { queryUserSchemaOne } from '@/lib/db/user-schema';
 import { getTranscriptionProvider } from '@/lib/ai/transcription';
 import { detectPiiInSegments } from '@/lib/ai/pii';
 import { saveAudioFile } from '@/lib/audio/storage';
-import { TranscriptSegment } from '@/types';
+import { TranscriptSegment, PiiReplacement } from '@/types';
 
 export async function POST(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -55,7 +55,13 @@ export async function POST(req: NextRequest) {
         ? (existing.segments as TranscriptSegment[])
         : [];
 
-      const { replacements } = await detectPiiInSegments(rawSegments);
+      let replacements: PiiReplacement[] = [];
+      try {
+        const piiResult = await detectPiiInSegments(rawSegments);
+        replacements = piiResult.replacements;
+      } catch (piiErr) {
+        console.error('PII detection failed (non-fatal):', piiErr);
+      }
 
       await queryUserSchemaOne(
         session.user.id,
@@ -99,7 +105,13 @@ export async function POST(req: NextRequest) {
     const provider = getTranscriptionProvider();
     const rawSegments: TranscriptSegment[] = await provider.transcribe(buffer, mimeType);
 
-    const { replacements } = await detectPiiInSegments(rawSegments);
+    let replacements: PiiReplacement[] = [];
+    try {
+      const piiResult = await detectPiiInSegments(rawSegments);
+      replacements = piiResult.replacements;
+    } catch (piiErr) {
+      console.error('PII detection failed (non-fatal):', piiErr);
+    }
     const rawText = rawSegments.map((s) => s.text).join(' ');
 
     const transcript = await queryUserSchemaOne<{ id: string }>(

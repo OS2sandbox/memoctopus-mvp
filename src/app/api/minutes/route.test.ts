@@ -132,7 +132,7 @@ describe('POST /api/minutes', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(mockGenerateMinutesFreeform).toHaveBeenCalledWith(sampleSegments, 'Fokus på beslutninger');
+    expect(mockGenerateMinutesFreeform).toHaveBeenCalledWith(sampleSegments, 'Fokus på beslutninger', undefined);
     expect(mockGenerateMinutes).not.toHaveBeenCalled();
     expect(mockSuggestTemplate).not.toHaveBeenCalled();
   });

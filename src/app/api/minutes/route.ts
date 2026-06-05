@@ -11,11 +11,12 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const body = await req.json();
-  const { meetingId, transcriptId, segments, customPrompt } = body as {
+  const { meetingId, transcriptId, segments, customPrompt, participants } = body as {
     meetingId: string;
     transcriptId: string;
     segments: TranscriptSegment[];
     customPrompt?: string;
+    participants?: string[];
   };
 
   if (!meetingId || !transcriptId) {
@@ -53,7 +54,7 @@ export async function POST(req: NextRequest) {
 
   if (customPrompt) {
     // User gave instructions — let the AI decide sections and content freely
-    minutesContent = await generateMinutesFreeform(transcriptSegments, customPrompt);
+    minutesContent = await generateMinutesFreeform(transcriptSegments, customPrompt, participants);
   } else {
     // No prompt — pick a template and generate structured minutes
     const templates = await queryUserSchema<{
@@ -85,6 +86,8 @@ export async function POST(req: NextRequest) {
     minutesContent = await generateMinutes(
       transcriptSegments,
       (chosenTemplate.structure as TemplateStructure).sections,
+      undefined,
+      participants,
     );
   }
 

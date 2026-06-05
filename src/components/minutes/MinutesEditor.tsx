@@ -75,6 +75,15 @@ export function MinutesEditor({
     });
   }
 
+  function deleteSection(key: string) {
+    setContent((prev) => {
+      const next = { sections: prev.sections.filter((s) => s.key !== key) };
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => save(next), AUTOSAVE_DELAY);
+      return next;
+    });
+  }
+
   useEffect(() => {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -137,13 +146,33 @@ export function MinutesEditor({
 
       <div className="space-y-10">
         {content.sections.map((section: MinutesSection) => (
-          <div key={section.key}>
-            <h2
-              className="mb-3 font-medium text-[var(--ink)]"
-              style={{ fontSize: 'var(--t-h2)' }}
-            >
-              {section.label}
-            </h2>
+          <div key={section.key} className="group">
+            <div className="flex items-baseline justify-between mb-3">
+              <h2
+                className="font-medium text-[var(--ink)]"
+                style={{ fontSize: 'var(--t-h2)' }}
+              >
+                {section.label}
+              </h2>
+              <button
+                onClick={() => deleteSection(section.key)}
+                title="Slet afsnit"
+                style={{
+                  opacity: 0,
+                  transition: 'opacity 0.15s',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: 'var(--muted)',
+                  fontSize: 18,
+                  lineHeight: 1,
+                  padding: '0 4px',
+                }}
+                className="group-hover:!opacity-100 hover:!text-[var(--kill)]"
+              >
+                ×
+              </button>
+            </div>
             <RichEditor
               value={section.content}
               onChange={(md) => updateSection(section.key, md)}

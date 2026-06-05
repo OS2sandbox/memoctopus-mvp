@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
 import { WaveformPlayer } from './WaveformPlayer';
@@ -17,6 +16,7 @@ interface TranscriptReviewProps {
   audioDurationSeconds?: number | null;
   audioDeleted?: boolean;
   initialChapters?: TranscriptChapter[];
+  participants?: string[];
 }
 
 type UploadStatus = 'idle' | 'uploading' | 'processing' | 'done' | 'error';
@@ -53,12 +53,25 @@ export function TranscriptReview({
   audioDurationSeconds,
   audioDeleted = false,
   initialChapters,
+  participants,
 }: TranscriptReviewProps) {
-  const router = useRouter();
   const isMobile = useIsMobile();
   const [segments, setSegments] = useState(initialSegments);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editableParticipants, setEditableParticipants] = useState<string[]>(() => {
+    if (typeof window === 'undefined') return participants ?? [];
+    try {
+      const saved = sessionStorage.getItem(`participants-${meetingId}`);
+      if (saved) return JSON.parse(saved) as string[];
+    } catch { /* ignore */ }
+    return participants ?? [];
+  });
+  const [newParticipantInput, setNewParticipantInput] = useState('');
+
+  useEffect(() => {
+    try { sessionStorage.setItem(`participants-${meetingId}`, JSON.stringify(editableParticipants)); } catch { /* ignore */ }
+  }, [editableParticipants, meetingId]);
   const [activeKeywords, setActiveKeywords] = useState<Set<string>>(new Set());
   const [customText, setCustomText] = useState('');
 
@@ -338,6 +351,7 @@ export function TranscriptReview({
             meetingId,
             transcriptId,
             segments: processedSegments,
+            participants: editableParticipants.filter(Boolean),
             customPrompt: [...Array.from(activeKeywords), customText.trim()].filter(Boolean).join(', ') || undefined,
           }),
           signal: abort.signal,
@@ -349,9 +363,10 @@ export function TranscriptReview({
         const data = await res.json();
         throw new Error(data.error ?? 'Kunne ikke generere referat');
       }
-      router.push(`/meeting/${meetingId}/minutes`);
+      window.location.href = `/meeting/${meetingId}/minutes`;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt');
+    } finally {
       setIsGenerating(false);
     }
   }
@@ -535,7 +550,7 @@ export function TranscriptReview({
           {audioUrl && <audio ref={audioRef} src={audioUrl} preload="metadata" />}
 
           {/* Transcript — chapters or flat fallback */}
-          <div style={{ marginTop: 8, flex: 1, overflowY: 'auto' }}>
+          <div style={{ marginTop: 8, flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {chaptersLoading && (
               <div style={{
                 padding: '24px 0', display: 'flex', alignItems: 'center', gap: 10,
@@ -563,7 +578,10 @@ export function TranscriptReview({
               return (
                 <div
                   key={ch.id}
-                  style={{ borderTop: '1px solid var(--line)' }}
+                  style={{
+                    borderTop: '1px solid var(--line)',
+                    ...(isOpen ? { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' } : {}),
+                  }}
                 >
                   <div
                     onClick={() => {
@@ -633,7 +651,7 @@ export function TranscriptReview({
                     </div>
                   </div>
                   {isOpen && (
-                    <div style={{ paddingBottom: 18, maxHeight: 360, overflowY: 'auto' }}>
+                    <div style={{ paddingBottom: 18, flex: 1, overflowY: 'auto' }}>
                       {chSegs.map(({ seg, idx }) => {
                         const isCurrentMatch = matchIndex >= 0 && matches[matchIndex] === idx;
                         const isAnyMatch = search.trim() && matches.includes(idx);
@@ -665,7 +683,7 @@ export function TranscriptReview({
             })}
 
             {!chaptersLoading && !chapters && (
-              <div style={{ borderTop: '1px solid var(--line)', maxHeight: 480, overflowY: 'auto' }}>
+              <div style={{ borderTop: '1px solid var(--line)', flex: 1, overflowY: 'auto' }}>
                 {segments.length === 0 ? (
                   <p style={{ padding: '32px 0', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
                     Ingen transskription fundet.
@@ -814,6 +832,52 @@ export function TranscriptReview({
               </div>
             </div>
           )}
+
+          {/* Deltagere — editable list included in referat */}
+          <div style={{ marginTop: 28 }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 8 }}>deltagere</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {editableParticipants.map((name, i) => (
+                <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--muted-2)', flexShrink: 0, display: 'inline-block' }} />
+                  <span style={{ flex: 1 }}>{name}</span>
+                  <button
+                    onClick={() => setEditableParticipants((prev) => prev.filter((_, j) => j !== i))}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted-2)', fontSize: 14, padding: '0 2px', lineHeight: 1 }}
+                    title="Fjern deltager"
+                  >×</button>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: editableParticipants.length > 0 ? 8 : 0 }}>
+              <input
+                value={newParticipantInput}
+                onChange={(e) => setNewParticipantInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newParticipantInput.trim()) {
+                    e.preventDefault();
+                    setEditableParticipants((prev) => [...prev, newParticipantInput.trim()]);
+                    setNewParticipantInput('');
+                  }
+                }}
+                placeholder="tilføj deltager"
+                style={{
+                  flex: 1, fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-2)',
+                  background: 'transparent', border: 'none', outline: 'none',
+                  borderBottom: '1px solid var(--line-2)', padding: '2px 0',
+                }}
+              />
+              {newParticipantInput.trim() && (
+                <button
+                  onClick={() => {
+                    setEditableParticipants((prev) => [...prev, newParticipantInput.trim()]);
+                    setNewParticipantInput('');
+                  }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: 11, fontFamily: 'var(--mono)', padding: 0 }}
+                >+ tilføj</button>
+              )}
+            </div>
+          </div>
 
           {/* Keywords / prompt */}
           <div style={{ marginTop: 28 }}>

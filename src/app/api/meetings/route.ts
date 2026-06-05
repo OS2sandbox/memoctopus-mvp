@@ -7,6 +7,8 @@ import { z } from 'zod';
 const createSchema = z.object({
   title: z.string().min(1).max(200),
   participants: z.array(z.string()).optional().default([]),
+  source: z.enum(['local', 'teams']).default('local'),
+  meetingUrl: z.string().url().optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -40,15 +42,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { title, participants } = parsed.data;
+  const { title, participants, source, meetingUrl } = parsed.data;
 
-  const meeting = await queryUserSchemaOne<{ id: string }>(
-    session.user.id,
-    `INSERT INTO meetings (title, participants, status)
-     VALUES ($1, $2, 'recording')
-     RETURNING id`,
-    [title, participants],
-  );
+  const initialStatus = source === 'teams' ? 'joining' : 'recording';
 
-  return NextResponse.json({ id: meeting!.id }, { status: 201 });
+  let meeting: { id: string } | null;
+  try {
+    meeting = await queryUserSchemaOne<{ id: string }>(
+      session.user.id,
+      `INSERT INTO meetings (title, participants, status, source, meeting_url)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id`,
+      [title, participants, initialStatus, source, meetingUrl ?? null],
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[POST /api/meetings] DB error:', err);
+    return NextResponse.json({ error: 'Database error', detail: msg }, { status: 500 });
+  }
+
+  if (!meeting) return NextResponse.json({ error: 'Insert failed' }, { status: 500 });
+
+  return NextResponse.json({ id: meeting.id }, { status: 201 });
 }

@@ -9,12 +9,10 @@ export async function ensureUserSchema(userId: string): Promise<void> {
   const client = await pool.connect();
 
   try {
-    await client.query('BEGIN');
-
-    // Create schema
+    // Create schema and enum outside of any transaction — ALTER TYPE ADD VALUE
+    // cannot run inside a transaction block on PostgreSQL < 12.
     await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
 
-    // meeting_status enum — create per-schema
     await client.query(`
       DO $$
       BEGIN
@@ -25,16 +23,27 @@ export async function ensureUserSchema(userId: string): Promise<void> {
             AND n.nspname = '${schema}'
         ) THEN
           CREATE TYPE "${schema}".meeting_status
-            AS ENUM ('recording','processing','review','minutes','done','redacted');
+            AS ENUM ('joining','recording','processing','review','minutes','done','redacted');
         END IF;
       END
       $$
     `);
 
-    // Ensure 'redacted' exists on schemas created before it was added
+    // Ensure values added after initial schema creation exist.
+    // Must run outside a transaction block.
     await client.query(`
       ALTER TYPE "${schema}".meeting_status ADD VALUE IF NOT EXISTS 'redacted'
     `);
+
+    await client.query(`
+      ALTER TYPE "${schema}".meeting_status ADD VALUE IF NOT EXISTS 'joining'
+    `);
+
+    await client.query(`
+      ALTER TYPE "${schema}".meeting_status ADD VALUE IF NOT EXISTS 'cancelled'
+    `);
+
+    await client.query('BEGIN');
 
     // templates
     await client.query(`
@@ -63,15 +72,13 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       )
     `);
 
-    // Ensure redaction columns exist on schemas created before they were added
     await client.query(`
       ALTER TABLE "${schema}".meetings
-      ADD COLUMN IF NOT EXISTS redacted_at TIMESTAMPTZ
-    `);
-
-    await client.query(`
-      ALTER TABLE "${schema}".meetings
-      ADD COLUMN IF NOT EXISTS redacted_by TEXT
+        ADD COLUMN IF NOT EXISTS redacted_at  TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS redacted_by  TEXT,
+        ADD COLUMN IF NOT EXISTS source       TEXT NOT NULL DEFAULT 'local',
+        ADD COLUMN IF NOT EXISTS meeting_url  TEXT,
+        ADD COLUMN IF NOT EXISTS bot_session  TEXT
     `);
 
     // audio_files
@@ -234,7 +241,9 @@ export function getUserSchemaName(userId: string): string {
 
 // ─── Per-user query helpers ─────────────────────────────────────────────────
 
-const initializedSchemas = new Set<string>();
+const globalForSchema = globalThis as unknown as { initializedSchemas: Set<string> | undefined };
+if (!globalForSchema.initializedSchemas) globalForSchema.initializedSchemas = new Set<string>();
+const initializedSchemas = globalForSchema.initializedSchemas;
 
 export async function queryUserSchema<T = Record<string, unknown>>(
   userId: string,

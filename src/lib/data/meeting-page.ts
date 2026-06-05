@@ -19,7 +19,15 @@ async function ensureColumns(userId: string) {
 }
 
 export interface MeetingPageData {
-  meeting: { id: string; status: string; title: string };
+  meeting: {
+    id: string;
+    status: string;
+    title: string;
+    source: string;
+    meetingUrl: string | null;
+    botSession: string | null;
+    participants: string[];
+  };
   audioFile: { durationSeconds: number | null; sizeBytes: number } | null;
   transcript: {
     id: string;
@@ -44,9 +52,17 @@ export async function getMeetingPageData(
 ): Promise<MeetingPageData | null> {
   await ensureColumns(userId);
 
-  const meeting = await queryUserSchemaOne<{ id: string; status: string; title: string }>(
+  const meeting = await queryUserSchemaOne<{
+    id: string;
+    status: string;
+    title: string;
+    source: string;
+    meeting_url: string | null;
+    bot_session: string | null;
+    participants: string[];
+  }>(
     userId,
-    'SELECT id, status, title FROM meetings WHERE id = $1',
+    'SELECT id, status, title, source, meeting_url, bot_session, participants FROM meetings WHERE id = $1',
     [meetingId],
   );
   if (!meeting) return null;
@@ -139,11 +155,22 @@ export async function getMeetingPageData(
     }
   }
 
-  return { meeting, audioFile, transcript, minutes };
+  return {
+    meeting: {
+      ...meeting,
+      source: meeting.source ?? 'local',
+      meetingUrl: meeting.meeting_url ?? null,
+      botSession: meeting.bot_session ?? null,
+      participants: meeting.participants ?? [],
+    },
+    audioFile,
+    transcript,
+    minutes,
+  };
 }
 
 export function resolveInitialTab(status: string): ProcessPhase {
   if (status === 'minutes' || status === 'done') return 'minutes';
   if (status === 'review') return 'review';
-  return 'recording';
+  return 'recording'; // covers 'recording', 'joining', 'processing'
 }

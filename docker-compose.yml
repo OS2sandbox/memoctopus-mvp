@@ -1,0 +1,50 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3002:3000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AUDIO_STORAGE_PATH=/audio-storage
+      - BOT_SERVICE_URL=http://bot-service:3001
+      - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3002}
+    volumes:
+      - audio-storage:/audio-storage
+    depends_on:
+      bot-service:
+        condition: service_healthy
+    restart: unless-stopped
+
+  bot-service:
+    build:
+      context: ./bot-service
+      dockerfile: Dockerfile
+    # No public port binding — only the app service needs to reach this via
+    # the internal Docker network (http://bot-service:3001). Exposing it
+    # publicly would bypass the Next.js proxy and its auth checks.
+    environment:
+      - PORT=3001
+      - NEXT_APP_URL=http://app:3000
+      - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
+      - BOT_MAX_SESSIONS=${BOT_MAX_SESSIONS:-5}
+    shm_size: "2gb"
+    mem_limit: 6g
+    memswap_limit: 6g
+    oom_score_adj: 500
+    stop_grace_period: 120s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  audio-storage:

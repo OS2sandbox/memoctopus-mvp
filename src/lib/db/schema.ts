@@ -65,6 +65,7 @@ export const verifications = pgTable('verifications', {
 // Drizzle cannot target dynamic schema names, so we use raw SQL in user-schema.ts.
 
 export const meetingStatusValues = [
+  'joining',
   'recording',
   'processing',
   'review',
