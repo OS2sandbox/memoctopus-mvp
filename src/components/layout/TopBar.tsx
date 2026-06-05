@@ -5,12 +5,14 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
 import { useIsMobile } from '@/lib/use-is-mobile';
+import { signOut, useSession } from '@/lib/auth-client';
 
 export function TopBar() {
   const pathname = usePathname();
   const router = useRouter();
   const isMobile = useIsMobile();
   const [showConfirm, setShowConfirm] = useState(false);
+  const { data: session } = useSession();
 
   const nav = [
     { href: '/', label: 'Optag', exact: true },
@@ -90,6 +92,28 @@ export function TopBar() {
             );
           })}
         </nav>
+
+        {/* User / sign-out */}
+        {session?.user && (
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+            {!isMobile && (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)' }}>
+                {session.user.email}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => signOut().then(() => router.push('/sign-in'))}
+              style={{
+                fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)',
+                background: 'none', border: '1px solid var(--line)', borderRadius: 4,
+                padding: '3px 10px', cursor: 'pointer',
+              }}
+            >
+              log ud
+            </button>
+          </div>
+        )}
       </header>
     </>
   );
