@@ -227,45 +227,12 @@ export class TeamsMeetingBot {
         if (cb) cb();
       };
 
-      // Redirect video addTrack/addTransceiver calls to throw-away PeerConnections so
-      // the meeting PC stays audio-only.  Chrome's fake device assigns conflicting RTP
-      // header extension id=11 values to the audio and video m-sections in a BUNDLE
-      // group; with video absent from the real PC the offer contains only one m-section
-      // and the collision cannot occur.  Teams receives real RTCRtpSender /
-      // RTCRtpTransceiver objects (from the throw-away PC) so its internal video-sender
-      // bookkeeping is satisfied without crashing.
-      const throwawayPCMap = new WeakMap<RTCPeerConnection, RTCPeerConnection>();
-      const getThrowawayPC = (pc: RTCPeerConnection): RTCPeerConnection => {
-        let t = throwawayPCMap.get(pc);
-        if (!t) { t = new OrigRTC(); throwawayPCMap.set(pc, t); }
-        return t;
-      };
-      const _origAddTrack = OrigRTC.prototype.addTrack;
-      OrigRTC.prototype.addTrack = function(
-        this: RTCPeerConnection, track: MediaStreamTrack, ...streams: MediaStream[]
-      ): RTCRtpSender {
-        if (track?.kind === 'video') {
-          console.log('[webrtc-patch] addTrack(video) → throw-away PC (avoiding BUNDLE id=11 collision)');
-          return _origAddTrack.call(getThrowawayPC(this), track, ...streams);
-        }
-        return _origAddTrack.call(this, track, ...streams);
-      };
-      // Some Teams versions use addTransceiver instead of addTrack for video setup.
-      const _origAddTransceiver = OrigRTC.prototype.addTransceiver as (
-        trackOrKind: MediaStreamTrack | string, init?: RTCRtpTransceiverInit
-      ) => RTCRtpTransceiver;
-      (OrigRTC.prototype as unknown as {
-        addTransceiver: (t: MediaStreamTrack | string, i?: RTCRtpTransceiverInit) => RTCRtpTransceiver
-      }).addTransceiver = function(
-        this: RTCPeerConnection, trackOrKind: MediaStreamTrack | string, init?: RTCRtpTransceiverInit
-      ): RTCRtpTransceiver {
-        const kind = typeof trackOrKind === 'string' ? trackOrKind : trackOrKind?.kind;
-        if (kind === 'video') {
-          console.log('[webrtc-patch] addTransceiver(video) → throw-away PC');
-          return _origAddTransceiver.call(getThrowawayPC(this), trackOrKind, init as RTCRtpTransceiverInit);
-        }
-        return _origAddTransceiver.call(this, trackOrKind, init as RTCRtpTransceiverInit);
-      };
+      // Video tracks are allowed on the real PC — Teams' SSM requires getTransceivers()
+      // to return the video transceiver it created, so redirecting to a throw-away PC
+      // causes "Transceiver for modality=video is not found" → negotiation rejected →
+      // MediaDroppedError → instant disconnect. The BUNDLE id=11 collision is already
+      // prevented by --use-file-for-fake-video-capture=/dev/null (different codec tables),
+      // so no interception is needed here.
 
       function PatchedRTC(
         this: RTCPeerConnection,
