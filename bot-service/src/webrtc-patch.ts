@@ -1,13 +1,14 @@
 // Injected into every page via addInitScript before any Teams JS loads.
 // Must be self-contained — no imports, no closures over Node.js variables.
 export function installWebRTCPatch(): void {
+  const win = window as unknown as Record<string, unknown>;
   const OrigRTC = window.RTCPeerConnection;
 
   // Set of RTCPeerConnections that have carried at least one audio track.
   const audioPcs = new Set<RTCPeerConnection>();
-  // Exposed to Node.js so _pollParticipants can call getStats() on each PC.
+  // Flat list exposed to Node.js so _pollParticipants can call getStats() on each PC.
   const audioPcsList: RTCPeerConnection[] = [];
-  (window as unknown as Record<string, unknown>).__botAudioPcs = audioPcsList;
+  win.__botAudioPcs = audioPcsList;
   let hadAudioPeer = false;
 
   // Check whether all known audio peers are gone — either via RTC state changes
@@ -34,7 +35,7 @@ export function installWebRTCPatch(): void {
       return s.getAudioTracks().every((t) => t.readyState === 'ended');
     });
     if (!allConnectionsGone && !allTracksEnded) return;
-    const cb = (window as unknown as Record<string, unknown>).__botAllPeersLeft as (() => void) | undefined;
+    const cb = win.__botAllPeersLeft as (() => void) | undefined;
     if (cb) cb();
   };
 
@@ -91,21 +92,22 @@ export function installWebRTCPatch(): void {
         audioPcsList.push(pc);
         hadAudioPeer = true;
         // Notify Node.js side so it can cancel any pending alone-timer
-        const rejoinCb = (window as unknown as Record<string, unknown>).__botPeerRejoined as (() => void) | undefined;
+        const rejoinCb = win.__botPeerRejoined as (() => void) | undefined;
         if (rejoinCb) rejoinCb();
         pc.addEventListener('connectionstatechange', () => {
-          if (pc.connectionState === 'closed') audioPcs.delete(pc);
+          if (pc.connectionState === 'closed') {
+            audioPcs.delete(pc);
+            const idx = audioPcsList.indexOf(pc);
+            if (idx !== -1) audioPcsList.splice(idx, 1);
+            // Close the throw-away PC to free ICE/DTLS resources
+            throwawayPCMap.get(pc)?.close();
+          }
           checkAllPeersGone();
         });
         pc.addEventListener('iceconnectionstatechange', () => {
           checkAllPeersGone();
         });
       }
-      // Listen for the track itself ending — fired immediately when a participant
-      // leaves Teams (even via the relay). This is the fastest departure signal.
-      event.track.addEventListener('ended', () => {
-        setTimeout(checkAllPeersGone, 200);
-      });
       for (const stream of event.streams) {
         // Keep element only as a stream container for liveTrackCount checks.
         // muted=true prevents the remote audio from playing back through the
@@ -116,14 +118,20 @@ export function installWebRTCPatch(): void {
         (el.dataset as DOMStringMap & { botCaptured: string }).botCaptured = 'true';
         el.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;';
         document.body.appendChild(el);
-        // removetrack fires synchronously when the track is removed from the stream
-        stream.addEventListener('removetrack', () => {
+
+        const removeEl = () => {
+          el.parentNode?.removeChild(el);
           setTimeout(checkAllPeersGone, 200);
-        });
+        };
+        // Listen for the track itself ending — fired immediately when a participant
+        // leaves Teams (even via the relay). This is the fastest departure signal.
+        event.track.addEventListener('ended', removeEl);
+        // removetrack fires synchronously when the track is removed from the stream
+        stream.addEventListener('removetrack', removeEl);
       }
     });
     return pc;
   }
   PatchedRTC.prototype = OrigRTC.prototype;
-  (window as unknown as Record<string, unknown>).RTCPeerConnection = PatchedRTC;
+  win.RTCPeerConnection = PatchedRTC;
 }

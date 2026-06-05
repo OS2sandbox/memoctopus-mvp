@@ -85,102 +85,45 @@ test('addTransceiver("audio") is NOT redirected: audio transceiver stays on real
 
 // ---------------------------------------------------------------------------
 // Audio capture — remote audio track creates a [data-bot-captured] element
+// and registers the receiving PC in __botAudioPcs
 // ---------------------------------------------------------------------------
 
-test('remote audio track creates a hidden audio element', async ({ page }) => {
+test('remote audio loopback: captures audio element and registers PC', async ({ page }) => {
   // Establish a loopback between two PeerConnections in the same page.
   // pc1 sends audio → pc2 receives it and fires the 'track' event.
-  // The patched PatchedRTC listener should create an <audio data-bot-captured> element.
-  const capturedCount = await page.evaluate(async () => {
+  await page.evaluate(async () => {
     const pc1 = new RTCPeerConnection();
     const pc2 = new RTCPeerConnection();
-
     pc1.onicecandidate = (e) => { if (e.candidate) pc2.addIceCandidate(e.candidate); };
     pc2.onicecandidate = (e) => { if (e.candidate) pc1.addIceCandidate(e.candidate); };
-
     const ctx = new AudioContext();
     const dest = ctx.createMediaStreamDestination();
     const [audioTrack] = dest.stream.getAudioTracks();
     pc1.addTrack(audioTrack, dest.stream);
-
     const offer = await pc1.createOffer();
     await pc1.setLocalDescription(offer);
     await pc2.setRemoteDescription(offer);
     const answer = await pc2.createAnswer();
     await pc2.setLocalDescription(answer);
     await pc1.setRemoteDescription(answer);
+  });
 
-    // Wait for the track event to fire and the element to be appended.
-    await new Promise<void>((resolve) => {
-      const check = () => {
-        if (document.querySelector('audio[data-bot-captured]')) { resolve(); return; }
-        setTimeout(check, 50);
-      };
-      setTimeout(check, 50);
-      // Bail out after 5 s so the test fails cleanly rather than timing out.
-      setTimeout(resolve, 5000);
-    });
+  // Wait for the 'track' event to fire, the element to be appended, and the
+  // PC to be registered — page.waitForFunction throws with a clear timeout
+  // error if the condition isn't met, unlike a silent setTimeout bail-out.
+  await page.waitForFunction(
+    () => document.querySelector('audio[data-bot-captured]') !== null,
+    { timeout: 5000 },
+  );
 
-    return document.querySelectorAll('audio[data-bot-captured]').length;
+  const [capturedCount, pcCount] = await page.evaluate(() => {
+    const win = window as unknown as Record<string, unknown>;
+    return [
+      document.querySelectorAll('audio[data-bot-captured]').length,
+      (win.__botAudioPcs as RTCPeerConnection[]).length,
+    ];
   });
 
   expect(capturedCount).toBeGreaterThan(0);
-});
-
-test('remote audio PC is added to __botAudioPcs', async ({ page }) => {
-  const pcCount = await page.evaluate(async () => {
-    const pc1 = new RTCPeerConnection();
-    const pc2 = new RTCPeerConnection();
-
-    pc1.onicecandidate = (e) => { if (e.candidate) pc2.addIceCandidate(e.candidate); };
-    pc2.onicecandidate = (e) => { if (e.candidate) pc1.addIceCandidate(e.candidate); };
-
-    const ctx = new AudioContext();
-    const dest = ctx.createMediaStreamDestination();
-    const [audioTrack] = dest.stream.getAudioTracks();
-    pc1.addTrack(audioTrack, dest.stream);
-
-    const offer = await pc1.createOffer();
-    await pc1.setLocalDescription(offer);
-    await pc2.setRemoteDescription(offer);
-    const answer = await pc2.createAnswer();
-    await pc2.setLocalDescription(answer);
-    await pc1.setRemoteDescription(answer);
-
-    await new Promise<void>((resolve) => {
-      const pcs = (window as unknown as Record<string, unknown>).__botAudioPcs as RTCPeerConnection[];
-      const check = () => {
-        if (pcs.length > 0) { resolve(); return; }
-        setTimeout(check, 50);
-      };
-      setTimeout(check, 50);
-      setTimeout(resolve, 5000);
-    });
-
-    return ((window as unknown as Record<string, unknown>).__botAudioPcs as RTCPeerConnection[]).length;
-  });
-
   expect(pcCount).toBeGreaterThan(0);
-});
-
-// ---------------------------------------------------------------------------
-// Patch installation guard — detects if addInitScript call is removed
-// ---------------------------------------------------------------------------
-
-test('RTCPeerConnection is replaced by the patched version', async ({ page }) => {
-  // The patch replaces window.RTCPeerConnection with PatchedRTC.
-  // PatchedRTC.prototype === OrigRTC.prototype, so instanceof still works.
-  // But the constructor itself is a different function object — we can detect
-  // this by checking that addTrack/addTransceiver behave as patched.
-  const videoBypassed = await page.evaluate(() => {
-    const pc = new RTCPeerConnection();
-    const canvas = document.createElement('canvas');
-    const stream = canvas.captureStream(0);
-    const [videoTrack] = stream.getVideoTracks();
-    pc.addTrack(videoTrack, stream);
-    // If patch is installed, no video sender on real PC.
-    // If patch is absent, there would be exactly 1 video sender.
-    return pc.getSenders().filter((s) => s.track?.kind === 'video').length === 0;
-  });
-  expect(videoBypassed).toBe(true);
 });
