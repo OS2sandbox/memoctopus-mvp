@@ -456,7 +456,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       mediaRecorderRef.current.stream.getTracks().forEach((t) => t.stop());
     }
     await fetch(`/api/meetings/${meetingId}`, { method: 'DELETE' });
-    router.push('/');
+    router.push('/dashboard');
   }
 
   useEffect(() => {

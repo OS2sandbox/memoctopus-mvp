@@ -171,7 +171,7 @@ describe('MeetingBotScreen', () => {
     const abortBtn = screen.getByText('← afbryd');
     await act(async () => { fireEvent.click(abortBtn); });
 
-    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/'));
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/dashboard'));
 
     const controlCall = mockFetch.mock.calls.find(
       ([url]) => typeof url === 'string' && url.includes('/api/bot/control/'),

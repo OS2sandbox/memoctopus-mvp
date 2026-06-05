@@ -8,17 +8,37 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+      - BETTER_AUTH_URL=${BETTER_AUTH_URL}
+      - BETTER_AUTH_TRUSTED_ORIGINS=${BETTER_AUTH_TRUSTED_ORIGINS:-}
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - AUDIO_STORAGE_PATH=/audio-storage
       - BOT_SERVICE_URL=http://bot-service:3001
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
       - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3002}
+      - NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED=${NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED:-true}
+      - NEXT_PUBLIC_MICROSOFT_ENABLED=${NEXT_PUBLIC_MICROSOFT_ENABLED:-false}
+      - NEXT_PUBLIC_AUTHENTIK_ENABLED=${NEXT_PUBLIC_AUTHENTIK_ENABLED:-false}
+      - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
+      - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
+      - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-}
+      - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID:-}
+      - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET:-}
+      - AUTHENTIK_DISCOVERY_URL=${AUTHENTIK_DISCOVERY_URL:-}
     volumes:
       - audio-storage:/audio-storage
+    networks:
+      - internal
     depends_on:
       bot-service:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
   bot-service:
@@ -29,10 +49,12 @@ services:
     # the internal Docker network (http://bot-service:3001). Exposing it
     # publicly would bypass the Next.js proxy and its auth checks.
     environment:
-      - PORT=3001
+      - BOT_PORT=3001
       - NEXT_APP_URL=http://app:3000
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
       - BOT_MAX_SESSIONS=${BOT_MAX_SESSIONS:-5}
+    networks:
+      - internal
     shm_size: "2gb"
     mem_limit: 6g
     memswap_limit: 6g
@@ -45,6 +67,10 @@ services:
       retries: 3
       start_period: 15s
     restart: unless-stopped
+
+networks:
+  internal:
+    driver: bridge
 
 volumes:
   audio-storage:

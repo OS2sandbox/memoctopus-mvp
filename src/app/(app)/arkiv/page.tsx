@@ -1,3 +1,4 @@
+import { redirect } from 'next/navigation';
 import { headers } from 'next/headers';
 import Link from 'next/link';
 import { auth } from '@/lib/auth';
@@ -10,6 +11,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function ArkivPage() {
   const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) redirect('/');
 
   const rows = await queryUserSchema<{
     id: string;
@@ -77,7 +79,7 @@ export default async function ArkivPage() {
             Du har ikke optaget noget endnu.
           </p>
           <Link
-            href="/"
+            href="/dashboard"
             className="mt-4 inline-block text-sm text-[var(--accent)] hover:underline"
           >
             Start dit første møde →

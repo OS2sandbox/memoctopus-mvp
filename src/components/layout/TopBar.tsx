@@ -5,15 +5,17 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
 import { useIsMobile } from '@/lib/use-is-mobile';
+import { signOut, useSession } from '@/lib/auth-client';
 
 export function TopBar() {
   const pathname = usePathname();
   const router = useRouter();
   const isMobile = useIsMobile();
   const [showConfirm, setShowConfirm] = useState(false);
+  const { data: session } = useSession();
 
   const nav = [
-    { href: '/', label: 'Optag', exact: true },
+    { href: '/dashboard', label: 'Optag', exact: true },
     { href: '/arkiv', label: 'Arkiv' },
     { href: '/settings/data', label: 'Data' },
   ];
@@ -29,7 +31,7 @@ export function TopBar() {
   }
 
   function handleNavClick(e: React.MouseEvent, href: string) {
-    if (reviewMeetingId && href === '/') {
+    if (reviewMeetingId && href === '/dashboard') {
       e.preventDefault();
       setShowConfirm(true);
     }
@@ -44,7 +46,7 @@ export function TopBar() {
           meetingId={reviewMeetingId}
           title="Slet lydfil og forlad mødet?"
           confirmLabel="Slet og forlad"
-          onDeleted={() => router.push('/')}
+          onDeleted={() => router.push('/dashboard')}
         />
       )}
 
@@ -57,8 +59,8 @@ export function TopBar() {
       }}>
         {/* Wordmark */}
         <Link
-          href="/"
-          onClick={(e) => handleNavClick(e, '/')}
+          href="/dashboard"
+          onClick={(e) => handleNavClick(e, '/dashboard')}
           style={{
             fontFamily: 'var(--mono)', fontWeight: 500, fontSize: 14,
             letterSpacing: '-0.03em', color: 'var(--ink)',
@@ -90,6 +92,28 @@ export function TopBar() {
             );
           })}
         </nav>
+
+        {/* User / sign-out */}
+        {session?.user && (
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+            {!isMobile && (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)' }}>
+                {session.user.email}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => signOut().then(() => router.push('/'))}
+              style={{
+                fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)',
+                background: 'none', border: '1px solid var(--line)', borderRadius: 4,
+                padding: '3px 10px', cursor: 'pointer',
+              }}
+            >
+              log ud
+            </button>
+          </div>
+        )}
       </header>
     </>
   );
