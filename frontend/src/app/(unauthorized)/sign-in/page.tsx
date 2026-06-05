@@ -14,13 +14,29 @@ import {
   FieldSet,
 } from "@/lib/ui/core/shadcn/field";
 import { Input } from "@/lib/ui/core/shadcn/input";
+import { useRouter, useSearchParams } from "next/navigation";
+import { type FormEvent, Fragment, Suspense, useState } from "react";
 
-import { useRouter } from "next/navigation";
-import { type FormEvent, Fragment } from "react";
+function EyeIcon({ off }: { off: boolean }) {
+  return off ? (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19M6.61 6.61A18.5 18.5 0 0 0 2 12s3 8 10 8a9.12 9.12 0 0 0 5.39-1.61" />
+      <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24M1 1l22 22" />
+    </svg>
+  ) : (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 12s3-8 10-8 10 8 10 8-3 8-10 8-10-8-10-8Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
 
-export default function SignInPage() {
+function SignInForm() {
   const { state, actions } = useAuthForm();
+  const [showPassword, setShowPassword] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const from = searchParams.get("from") || "/app";
 
   const { isLoading, mode, email, password, name, error } = state;
 
@@ -30,48 +46,26 @@ export default function SignInPage() {
 
     switch (mode) {
       case AUTH_MODE.SignIn: {
-        const { error } = await signIn.email({
-          email,
-          password,
-          rememberMe: true,
-        });
+        const { error } = await signIn.email({ email, password, rememberMe: true });
         if (error) {
-          actions.authError(
-            "Kunne ikke logge ind. Tjek venligst dine oplysninger.",
-          );
+          actions.authError("Kunne ikke logge ind. Tjek venligst dine oplysninger.");
           return;
         }
-        router.push("/app");
+        router.push(from);
         break;
       }
       case AUTH_MODE.SignUp: {
-        const { error: signUpError } = await signUp.email({
-          name,
-          email,
-          password,
-        });
-
+        const { error: signUpError } = await signUp.email({ name, email, password });
         if (signUpError) {
-          actions.authError(
-            "Kunne ikke oprette konto. E-mailen er muligvis allerede i brug.",
-          );
+          actions.authError("Kunne ikke oprette konto. E-mailen er muligvis allerede i brug.");
           return;
         }
-
-        // Only sign in if sign-up succeeded
-        const { error: signInError } = await signIn.email({
-          email,
-          password,
-          rememberMe: true,
-        });
-
+        const { error: signInError } = await signIn.email({ email, password, rememberMe: true });
         if (signInError) {
-          actions.authError(
-            "Konto oprettet, men login mislykkedes. Prøv at logge ind.",
-          );
+          actions.authError("Konto oprettet, men login mislykkedes. Prøv at logge ind.");
           return;
         }
-        router.push("/app");
+        router.push(from);
         break;
       }
     }
@@ -80,12 +74,8 @@ export default function SignInPage() {
 
   const handleSocialSignIn = async () => {
     actions.setLoading(true);
-    const { error } = await signIn.social({
-      provider: "microsoft",
-      callbackURL: "/app",
-    });
-    if (error?.message)
-      actions.authError("Social sign-in failed. Please try again.");
+    const { error } = await signIn.social({ provider: "microsoft", callbackURL: from });
+    if (error?.message) actions.authError("Microsoft login mislykkedes. Prøv igen.");
     actions.setLoading(false);
   };
 
@@ -143,14 +133,25 @@ export default function SignInPage() {
                 </Field>
                 <Field>
                   <FieldLabel htmlFor="password">Password</FieldLabel>
-                  <Input
-                    id="password"
-                    type="password"
-                    value={password}
-                    onChange={(e) => actions.setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    required
-                  />
+                  <div className="relative">
+                    <Input
+                      id="password"
+                      type={showPassword ? "text" : "password"}
+                      value={password}
+                      onChange={(e) => actions.setPassword(e.target.value)}
+                      placeholder="••••••••"
+                      required
+                      className="pr-10"
+                    />
+                    <button
+                      type="button"
+                      aria-label="Toggle password visibility"
+                      onClick={() => setShowPassword((v) => !v)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <EyeIcon off={showPassword} />
+                    </button>
+                  </div>
                   <FieldDescription>
                     Minimum 8 characters recommended.
                   </FieldDescription>
@@ -171,7 +172,7 @@ export default function SignInPage() {
                 <p className="text-center text-xs text-muted-foreground mt-3">
                   {mode === AUTH_MODE.SignIn ? (
                     <Fragment>
-                      Don’t have an account?{" "}
+                      Don't have an account?{" "}
                       <button
                         type="button"
                         onClick={() => actions.setMode(AUTH_MODE.SignUp)}
@@ -227,5 +228,13 @@ export default function SignInPage() {
         </form>
       </div>
     </div>
+  );
+}
+
+export default function SignInPage() {
+  return (
+    <Suspense>
+      <SignInForm />
+    </Suspense>
   );
 }
