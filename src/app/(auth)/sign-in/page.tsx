@@ -121,24 +121,16 @@ export default function SignInPage() {
           {mode === AuthMode.SignIn ? (
             <>
               Har du ikke en konto?{' '}
-              <button
-                type="button"
-                onClick={() => actions.setMode(AuthMode.SignUp)}
-                style={{ color: 'var(--ink-2)', textDecoration: 'underline', background: 'none', border: 'none', cursor: 'pointer', font: 'inherit' }}
-              >
+              <Button variant="link" type="button" className="h-auto p-0 text-[12.5px]" onClick={() => actions.setMode(AuthMode.SignUp)}>
                 Opret konto
-              </button>
+              </Button>
             </>
           ) : (
             <>
               Har du allerede en konto?{' '}
-              <button
-                type="button"
-                onClick={() => actions.setMode(AuthMode.SignIn)}
-                style={{ color: 'var(--ink-2)', textDecoration: 'underline', background: 'none', border: 'none', cursor: 'pointer', font: 'inherit' }}
-              >
+              <Button variant="link" type="button" className="h-auto p-0 text-[12.5px]" onClick={() => actions.setMode(AuthMode.SignIn)}>
                 Log ind
-              </button>
+              </Button>
             </>
           )}
         </p>

@@ -1,4 +1,4 @@
-import { useReducer } from 'react';
+import { useMemo, useReducer } from 'react';
 
 export enum AuthMode {
   SignIn = 'sign-in',
@@ -66,7 +66,7 @@ const initialState: State = {
 export function useAuthForm() {
   const [state, dispatch] = useReducer(reducer, initialState);
 
-  const actions = {
+  const actions = useMemo(() => ({
     authStart: () => dispatch({ type: ACTION.AUTH_START }),
     authError: (msg: string) => dispatch({ type: ACTION.AUTH_ERROR, payload: msg }),
     setMode: (mode: AuthMode) => dispatch({ type: ACTION.SET_MODE, payload: mode }),
@@ -74,7 +74,7 @@ export function useAuthForm() {
     setPassword: (v: string) => dispatch({ type: ACTION.SET_PASSWORD, payload: v }),
     setName: (v: string) => dispatch({ type: ACTION.SET_NAME, payload: v }),
     setLoading: (v: boolean) => dispatch({ type: ACTION.SET_LOADING, payload: v }),
-  };
+  }), []);
 
   return { state, actions };
 }

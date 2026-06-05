@@ -103,7 +103,7 @@ export function TopBar() {
             )}
             <button
               type="button"
-              onClick={() => signOut().then(() => router.push('/sign-in')).catch(() => router.push('/sign-in'))}
+              onClick={() => signOut().finally(() => router.push('/sign-in'))}
               style={{
                 fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)',
                 background: 'none', border: '1px solid var(--line)', borderRadius: 4,
