@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { after, NextRequest, NextResponse } from 'next/server';
 import { queryUserSchemaOne } from '@/lib/db/user-schema';
 import { getTranscriptionProvider } from '@/lib/ai/transcription';
 import { detectPiiInSegments } from '@/lib/ai/pii';
@@ -51,7 +51,12 @@ export async function POST(req: NextRequest) {
   );
   if (!meeting) return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
 
-  // Merge detected participants into the meeting's participant list
+  // Read audio into memory now — the File object is tied to this request and won't
+  // be available after the response is sent.
+  const buffer = Buffer.from(await audioFile.arrayBuffer());
+  const originalFilename = audioFile.name || 'recording.webm';
+
+  // Merge detected participants (fast DB write — do before responding).
   if (participantsJson) {
     try {
       const detected: string[] = JSON.parse(participantsJson);
@@ -79,14 +84,34 @@ export async function POST(req: NextRequest) {
     [meetingId],
   );
 
-  try {
-    const buffer = Buffer.from(await audioFile.arrayBuffer());
+  // Schedule the slow pipeline (save → transcribe → PII → chapters → review) to run
+  // after this response is returned. This prevents the bot-service's HTTP request from
+  // hitting the proxy timeout (502) while waiting for transcription to finish.
+  after(async () => {
+    await _processAudio({ buffer, mimeType, meetingId, userId, originalFilename });
+  });
 
-    const { filename, sizeBytes } = await saveAudioFile(userId, buffer, audioFile.name || 'recording.webm');
+  return NextResponse.json({ ok: true });
+}
+
+async function _processAudio({
+  buffer,
+  mimeType,
+  meetingId,
+  userId,
+  originalFilename,
+}: {
+  buffer: Buffer;
+  mimeType: string;
+  meetingId: string;
+  userId: string;
+  originalFilename: string;
+}): Promise<void> {
+  try {
+    const { filename, sizeBytes } = await saveAudioFile(userId, buffer, originalFilename);
     await queryUserSchemaOne(
       userId,
-      `INSERT INTO audio_files (meeting_id, filename, size_bytes)
-       VALUES ($1, $2, $3)`,
+      `INSERT INTO audio_files (meeting_id, filename, size_bytes) VALUES ($1, $2, $3)`,
       [meetingId, filename, sizeBytes],
     );
 
@@ -101,8 +126,6 @@ export async function POST(req: NextRequest) {
       console.error('Bot audio PII detection failed (non-fatal):', piiErr);
     }
 
-    // Generate chapters server-side so the review page has them immediately on load.
-    // Runs after PII so both features complete before the meeting moves to 'review'.
     let chapters: Awaited<ReturnType<typeof groupIntoChapters>> = [];
     try {
       chapters = await groupIntoChapters(rawSegments);
@@ -124,12 +147,9 @@ export async function POST(req: NextRequest) {
       `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,
       [meetingId],
     );
-
-    return NextResponse.json({ ok: true });
   } catch (err) {
     console.error('Bot audio transcription error:', err);
     // Even on failure, move to review with an empty transcript so the UI can navigate.
-    // Reverting to 'recording' would trap the UI in processing indefinitely.
     const inserted = await queryUserSchemaOne(
       userId,
       `INSERT INTO transcripts (meeting_id, raw_text, segments) VALUES ($1, '', '[]')
@@ -145,9 +165,5 @@ export async function POST(req: NextRequest) {
       `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,
       [meetingId],
     ).catch(() => {});
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Transcription failed' },
-      { status: 500 },
-    );
   }
 }

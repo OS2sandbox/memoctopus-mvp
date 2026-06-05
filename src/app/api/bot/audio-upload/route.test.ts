@@ -1,6 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
+// Make next/server's `after()` execute its callback immediately in test scope
+// so assertions can observe the background pipeline's DB calls.
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next/server')>();
+  return { ...actual, after: (cb: () => Promise<void>) => { void cb(); } };
+});
+
+// Flush all pending microtasks so the `after()` callback fully completes before
+// test assertions run.
+const flushPromises = () => new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+
 vi.mock('@/lib/db/user-schema', () => ({
   queryUserSchemaOne: vi.fn(),
 }));
@@ -177,6 +188,7 @@ describe('POST /api/bot/audio-upload', () => {
       })(),
     });
     const res = await POST(req);
+    await flushPromises();
     expect(res.status).toBe(200);
     expect((await res.json()).ok).toBe(true);
 
@@ -217,6 +229,7 @@ describe('POST /api/bot/audio-upload', () => {
       })(),
     });
     await POST(req);
+    await flushPromises();
 
     const mergeCall = mockQueryOne.mock.calls.find(
       ([, sql]) => typeof sql === 'string' && /unnest/.test(sql),
@@ -242,6 +255,7 @@ describe('POST /api/bot/audio-upload', () => {
       })(),
     });
     const res = await POST(req);
+    await flushPromises();
     expect(res.status).toBe(200);
   });
 
@@ -262,10 +276,11 @@ describe('POST /api/bot/audio-upload', () => {
       })(),
     });
     const res = await POST(req);
+    await flushPromises();
     expect(res.status).toBe(200);
   });
 
-  it('on transcription failure: inserts empty transcript, sets review, returns 500', async () => {
+  it('on transcription failure: inserts empty transcript and sets review; POST still returns 200', async () => {
     mockTranscribe.mockRejectedValueOnce(new Error('Transcription failed'));
     mockQueryOne.mockResolvedValueOnce(MEETING as never); // meeting
     mockQueryOne.mockResolvedValueOnce(undefined as never); // set processing
@@ -285,8 +300,10 @@ describe('POST /api/bot/audio-upload', () => {
       })(),
     });
     const res = await POST(req);
-    expect(res.status).toBe(500);
-    expect((await res.json()).error).toBe('Transcription failed');
+    await flushPromises();
+    // Background processing fails but the HTTP response is always 200 — the error
+    // is logged server-side and the pipeline falls back to an empty transcript.
+    expect(res.status).toBe(200);
 
     const emptyTranscript = mockQueryOne.mock.calls.find(
       ([, sql]) => typeof sql === 'string' && /INSERT INTO transcripts/.test(sql) && /''\s*,\s*'\[\]'/.test(sql),
