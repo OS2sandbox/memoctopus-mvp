@@ -11,6 +11,10 @@ interface MeetingBotScreenProps {
 
 type BotStatus = 'forbinder' | 'optager' | 'pause' | 'processing' | 'error' | 'cancelled';
 
+function pollBackoffMs(attempt: number): number {
+  return Math.min(2000 * 2 ** attempt, 30_000);
+}
+
 function fmtTime(s: number): string {
   const m = Math.floor(s / 60);
   const sec = s % 60;
@@ -55,7 +59,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
       const res = await fetch(`/api/bot/status/${meetingId}`);
       if (!res.ok) {
         consecutiveFailsRef.current++;
-        nextPollAtRef.current = Date.now() + Math.min(2000 * 2 ** consecutiveFailsRef.current, 30_000);
+        nextPollAtRef.current = Date.now() + pollBackoffMs(consecutiveFailsRef.current);
         return;
       }
       consecutiveFailsRef.current = 0;
@@ -86,7 +90,8 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
       // Sync elapsed from bot service on every poll while recording — prevents drift
       // if the component remounts or the transition was polled late.
       if (newStatus === 'optager' && data.elapsed != null) {
-        setElapsed(prev => Math.max(prev, data.elapsed as number));
+        const serverElapsed = data.elapsed as number;
+        setElapsed(prev => serverElapsed > prev ? serverElapsed : prev);
       }
 
       if (newStatus !== statusRef.current) {
@@ -101,7 +106,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
       }
     } catch {
       consecutiveFailsRef.current++;
-      nextPollAtRef.current = Date.now() + Math.min(2000 * 2 ** consecutiveFailsRef.current, 30_000);
+      nextPollAtRef.current = Date.now() + pollBackoffMs(consecutiveFailsRef.current);
     }
   }, [meetingId, startTimer, stopTimer, stopPolling, router]);
 
@@ -471,7 +476,6 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
 
           {(isRecording || isPaused) && (
             <>
-              {/* Pause / Fortsæt */}
               {/* Pause / Play circle button */}
               <button
                 onClick={handlePauseResume}

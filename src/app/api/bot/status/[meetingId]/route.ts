@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { queryUserSchemaOne } from '@/lib/db/user-schema';
-import { getBotServiceConfig } from '@/lib/bot-service';
+import { getBotServiceConfig, botFetch } from '@/lib/bot-service';
 
 export async function GET(
   req: NextRequest,
@@ -51,10 +51,7 @@ export async function GET(
     return NextResponse.json({ error: 'Bot service not configured' }, { status: 503 });
   }
 
-  const res = await fetch(`${bot.url}/sessions/${meeting.bot_session}`, {
-    headers: { Authorization: bot.authHeader },
-    signal: AbortSignal.timeout(10_000),
-  });
+  const res = await botFetch(bot, `/sessions/${meeting.bot_session}`);
 
   if (!res.ok) {
     // Bot session gone (service restart?) — return the DB-level meeting status so the

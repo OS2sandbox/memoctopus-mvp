@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { queryUserSchemaOne } from '@/lib/db/user-schema';
-import { getBotServiceConfig } from '@/lib/bot-service';
+import { getBotServiceConfig, botFetch } from '@/lib/bot-service';
 import { z } from 'zod';
 
 const bodySchema = z.object({
@@ -40,11 +40,7 @@ export async function POST(
 
   if (action === 'abort') {
     if (meeting.bot_session) {
-      await fetch(`${bot.url}/sessions/${meeting.bot_session}`, {
-        method: 'DELETE',
-        headers: { Authorization: bot.authHeader },
-        signal: AbortSignal.timeout(10_000),
-      }).catch(() => {});
+      await botFetch(bot, `/sessions/${meeting.bot_session}`, { method: 'DELETE' }).catch(() => {});
     }
     // Mark meeting as recording so the UI can gracefully handle the abort
     await queryUserSchemaOne(
@@ -59,15 +55,11 @@ export async function POST(
     return NextResponse.json({ error: 'No active bot session' }, { status: 400 });
   }
 
-  const botEndpoint = action === 'stop'
-    ? `${bot.url}/sessions/${meeting.bot_session}/stop`
-    : `${bot.url}/sessions/${meeting.bot_session}/${action}`;
+  const botPath = action === 'stop'
+    ? `/sessions/${meeting.bot_session}/stop`
+    : `/sessions/${meeting.bot_session}/${action}`;
 
-  const res = await fetch(botEndpoint, {
-    method: 'POST',
-    headers: { Authorization: bot.authHeader },
-    signal: AbortSignal.timeout(10_000),
-  });
+  const res = await botFetch(bot, botPath, { method: 'POST' });
 
   if (!res.ok) {
     return NextResponse.json({ error: 'Bot control failed' }, { status: 502 });

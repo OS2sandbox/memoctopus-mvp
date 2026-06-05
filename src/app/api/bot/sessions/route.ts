@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { queryUserSchemaOne } from '@/lib/db/user-schema';
-import { getBotServiceConfig } from '@/lib/bot-service';
+import { getBotServiceConfig, botFetch } from '@/lib/bot-service';
 
 export async function POST(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -59,12 +59,9 @@ export async function POST(req: NextRequest) {
 
   let res: Response;
   try {
-    res = await fetch(`${bot.url}/sessions`, {
+    res = await botFetch(bot, '/sessions', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: bot.authHeader,
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         meetingUrl: meeting.meeting_url,
         meetingId,
@@ -72,7 +69,6 @@ export async function POST(req: NextRequest) {
         botName: 'Memoctopus',
         callbackUrl: `${process.env.NEXT_PUBLIC_APP_URL ?? ''}/api/bot/audio-upload`,
       }),
-      signal: AbortSignal.timeout(10_000),
     });
   } catch (err) {
     console.error('Bot service unreachable:', err);
