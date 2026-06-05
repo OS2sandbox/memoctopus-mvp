@@ -2,8 +2,13 @@ import { betterAuth } from 'better-auth';
 import { genericOAuth } from 'better-auth/plugins';
 import { pool } from '@/lib/db';
 
-if (!process.env.BETTER_AUTH_SECRET && process.env.NODE_ENV === 'production') {
-  throw new Error('BETTER_AUTH_SECRET env var is required in production');
+if (process.env.NODE_ENV === 'production') {
+  if (!process.env.BETTER_AUTH_SECRET) {
+    throw new Error('BETTER_AUTH_SECRET env var is required in production');
+  }
+  if (process.env.BETTER_AUTH_SECRET === 'change-me') {
+    throw new Error('BETTER_AUTH_SECRET must not be the default "change-me" value in production');
+  }
 }
 
 const emailPasswordEnabled = process.env.NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED !== 'false';

@@ -81,9 +81,12 @@ export function HeroForm() {
 
   if (noMethodsEnabled) {
     return (
-      <p style={{ fontSize: 13, color: 'var(--muted)', textAlign: 'center', margin: 0 }}>
-        Ingen login-metoder er aktiveret. Kontakt venligst din administrator.
-      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', padding: '16px 0' }}>
+        <span className="font-mono text-[13px]" style={{ color: 'var(--danger)' }}>!</span>
+        <p style={{ fontSize: 13, color: 'var(--muted)', textAlign: 'center', margin: 0 }}>
+          Ingen login-metoder er aktiveret. Kontakt venligst din administrator.
+        </p>
+      </div>
     );
   }
 
