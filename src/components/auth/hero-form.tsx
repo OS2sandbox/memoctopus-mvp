@@ -38,19 +38,26 @@ export function HeroForm() {
   const authentikEnabled = process.env.NEXT_PUBLIC_AUTHENTIK_ENABLED === 'true';
   const anySocialEnabled = microsoftEnabled || authentikEnabled;
 
-  const handleMicrosoftSignIn = async () => {
+  const handleSocialSignIn = async (
+    fn: () => Promise<{ error?: { message?: string } | null }>,
+    errorMsg: string,
+  ) => {
     actions.setLoading(true);
-    const { error } = await signIn.social({ provider: 'microsoft', callbackURL: from });
-    if (error?.message) actions.authError('Microsoft login mislykkedes. Prøv igen.');
-    actions.setLoading(false);
+    const { error } = await fn();
+    if (error?.message) actions.authError(errorMsg);
   };
 
-  const handleAuthentikSignIn = async () => {
-    actions.setLoading(true);
-    const { error } = await authClient.signIn.oauth2({ providerId: 'authentik', callbackURL: from });
-    if (error?.message) actions.authError('Authentik login mislykkedes. Prøv igen.');
-    actions.setLoading(false);
-  };
+  const handleMicrosoftSignIn = () =>
+    handleSocialSignIn(
+      () => signIn.social({ provider: 'microsoft', callbackURL: from }),
+      'Microsoft login mislykkedes. Prøv igen.',
+    );
+
+  const handleAuthentikSignIn = () =>
+    handleSocialSignIn(
+      () => authClient.signIn.oauth2({ providerId: 'authentik', callbackURL: from }),
+      'Authentik login mislykkedes. Prøv igen.',
+    );
 
   const noMethodsEnabled = !emailPasswordEnabled && !anySocialEnabled;
 

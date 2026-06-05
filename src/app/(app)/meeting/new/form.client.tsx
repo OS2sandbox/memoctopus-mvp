@@ -16,6 +16,11 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
+const AUDIO_MODES = [
+  { value: 'record' as const, label: 'Optag nu', description: 'Start optagelse med mikrofon' },
+  { value: 'upload' as const, label: 'Upload lydfil', description: 'MP3, WAV, M4A, WebM' },
+];
+
 export default function NewMeetingPage() {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -40,7 +45,6 @@ export default function NewMeetingPage() {
             .filter(Boolean)
         : [];
 
-      // Create meeting
       const res = await fetch('/api/meetings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -53,7 +57,6 @@ export default function NewMeetingPage() {
       const { id } = await res.json();
 
       if (uploadMode === 'upload' && file) {
-        // Upload existing file
         const formData = new FormData();
         formData.append('audio', file, file.name);
         formData.append('meetingId', id);
@@ -64,7 +67,6 @@ export default function NewMeetingPage() {
         }
         router.push(`/meeting/${id}/review`);
       } else {
-        // Go to recording screen
         router.push(`/meeting/${id}`);
       }
     } catch (err) {
@@ -81,7 +83,6 @@ export default function NewMeetingPage() {
       </p>
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-        {/* Title */}
         <div className="space-y-1.5">
           <Label htmlFor="title">Mødets titel</Label>
           <Input
@@ -95,7 +96,6 @@ export default function NewMeetingPage() {
           )}
         </div>
 
-        {/* Participants */}
         <div className="space-y-1.5">
           <Label htmlFor="participants">
             Deltagere{' '}
@@ -108,38 +108,27 @@ export default function NewMeetingPage() {
           />
         </div>
 
-        {/* Mode */}
         <div className="space-y-2">
           <Label>Lydkilde</Label>
           <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={() => setUploadMode('record')}
-              className={`flex-1 rounded-[var(--radius)] border px-4 py-3 text-left text-sm transition-colors ${
-                uploadMode === 'record'
-                  ? 'border-[var(--accent)] bg-[var(--accent-wash)] text-[var(--accent)]'
-                  : 'border-[var(--line)] bg-[var(--surface)] text-[var(--ink-2)] hover:bg-[var(--surface-2)]'
-              }`}
-            >
-              <span className="font-medium block">Optag nu</span>
-              <span className="text-xs opacity-75">Start optagelse med mikrofon</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setUploadMode('upload')}
-              className={`flex-1 rounded-[var(--radius)] border px-4 py-3 text-left text-sm transition-colors ${
-                uploadMode === 'upload'
-                  ? 'border-[var(--accent)] bg-[var(--accent-wash)] text-[var(--accent)]'
-                  : 'border-[var(--line)] bg-[var(--surface)] text-[var(--ink-2)] hover:bg-[var(--surface-2)]'
-              }`}
-            >
-              <span className="font-medium block">Upload lydfil</span>
-              <span className="text-xs opacity-75">MP3, WAV, M4A, WebM</span>
-            </button>
+            {AUDIO_MODES.map(({ value, label, description }) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setUploadMode(value)}
+                className={`flex-1 rounded-[var(--radius)] border px-4 py-3 text-left text-sm transition-colors ${
+                  uploadMode === value
+                    ? 'border-[var(--accent)] bg-[var(--accent-wash)] text-[var(--accent)]'
+                    : 'border-[var(--line)] bg-[var(--surface)] text-[var(--ink-2)] hover:bg-[var(--surface-2)]'
+                }`}
+              >
+                <span className="font-medium block">{label}</span>
+                <span className="text-xs opacity-75">{description}</span>
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* File upload */}
         {uploadMode === 'upload' && (
           <div className="space-y-1.5">
             <Label htmlFor="audioFile">Lydfil</Label>

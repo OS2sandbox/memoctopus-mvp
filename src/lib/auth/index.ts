@@ -52,7 +52,7 @@ export const auth = betterAuth({
     'http://localhost:3004',
     'http://127.0.0.1:3004',
     ...(process.env.BETTER_AUTH_TRUSTED_ORIGINS
-      ? process.env.BETTER_AUTH_TRUSTED_ORIGINS.split(',').map((s: string) => s.trim())
+      ? process.env.BETTER_AUTH_TRUSTED_ORIGINS.split(',').map((s) => s.trim())
       : []),
   ],
   user: {
