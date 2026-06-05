@@ -9,10 +9,18 @@ export function middleware(req: NextRequest) {
     req.cookies.get('better-auth.session_token')?.value ||
     req.cookies.get('__Secure-better-auth.session_token')?.value;
 
+  // Landing page is public — authenticated users go straight to the dashboard.
+  if (pathname === '/') {
+    if (sessionToken) {
+      return NextResponse.redirect(new URL('/dashboard', req.url));
+    }
+    return NextResponse.next();
+  }
+
   if (!sessionToken) {
-    const signIn = new URL('/sign-in', req.url);
-    signIn.searchParams.set('from', pathname);
-    return NextResponse.redirect(signIn);
+    const signInUrl = new URL('/sign-in', req.url);
+    signInUrl.searchParams.set('from', pathname);
+    return NextResponse.redirect(signInUrl);
   }
 
   return NextResponse.next();

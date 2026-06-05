@@ -1,25 +1,49 @@
 'use client';
 
+import { useState } from 'react';
 import { signIn, signUp } from '@/lib/auth-client';
 import { AuthMode, useAuthForm } from '@/lib/hooks/use-auth-form';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { LogoMark } from '@/components/brand/logo-mark';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { type FormEvent } from 'react';
+import type { FormEvent } from 'react';
+
+function EyeIcon({ off }: { off: boolean }) {
+  return off ? (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 10 8 10 8a18.5 18.5 0 0 1-2.16 3.19M6.61 6.61A18.5 18.5 0 0 0 2 12s3 8 10 8a9.12 9.12 0 0 0 5.39-1.61" />
+      <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24M1 1l22 22" />
+    </svg>
+  ) : (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 12s3-8 10-8 10 8 10 8-3 8-10 8-10-8-10-8Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+const FEATURES = [
+  'Optag møder direkte i browseren',
+  'Automatisk referat — på dansk',
+  'Følsom info markeres og fjernes',
+];
 
 export default function SignInPage() {
   const { state, actions } = useAuthForm();
+  const [showPassword, setShowPassword] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
-  const from = searchParams.get('from') || '/';
+  const from = searchParams.get('from') || '/dashboard';
   const { isLoading, mode, email, password, name, error } = state;
+  const isSignUp = mode === AuthMode.SignUp;
 
-  const handleEmailAuth = async (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     actions.authStart();
 
-    if (mode === AuthMode.SignIn) {
+    if (!isSignUp) {
       const { error } = await signIn.email({ email, password, rememberMe: true });
       if (error) {
         actions.authError('Kunne ikke logge ind. Tjek venligst dine oplysninger.');
@@ -49,118 +73,212 @@ export default function SignInPage() {
   };
 
   return (
-    <div className="w-full max-w-sm space-y-8">
-      <div className="text-center">
-        <div
-          style={{
-            fontFamily: 'var(--mono)',
+    <div
+      style={{
+        display: 'flex',
+        maxWidth: 880,
+        width: '100%',
+        minHeight: 560,
+        borderRadius: 12,
+        overflow: 'hidden',
+        border: '1px solid var(--line)',
+        boxShadow: '0 1px 2px rgba(17,17,17,.04), 0 24px 60px -28px rgba(17,17,17,.18)',
+      }}
+    >
+      {/* Left — brand panel (hidden on mobile) */}
+      <div
+        className="hidden sm:flex"
+        style={{
+          width: '50%',
+          background: 'var(--surface-2)',
+          borderRight: '1px solid var(--line)',
+          padding: '38px 36px',
+          flexDirection: 'column',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+          <LogoMark size={32} />
+          <span style={{
+            fontFamily: 'var(--font-geist-mono)',
             fontWeight: 500,
-            fontSize: 16,
+            fontSize: 15,
             letterSpacing: '-0.03em',
             color: 'var(--ink)',
-            marginBottom: 8,
-          }}
-        >
-          memoctopus<span style={{ color: 'var(--accent)', padding: '0 5px' }}>·</span>referat
+            whiteSpace: 'nowrap',
+          }}>
+            memoctopus<span style={{ color: 'var(--accent)', padding: '0 5px' }}>·</span>referat
+          </span>
         </div>
-        <p style={{ fontSize: 13.5, color: 'var(--ink-2)' }}>
-          {mode === AuthMode.SignIn ? 'Log ind på din konto' : 'Opret din konto'}
-        </p>
+
+        <div style={{ marginTop: 'auto' }}>
+          <h2 style={{
+            fontWeight: 400,
+            fontSize: 26,
+            lineHeight: 1.15,
+            letterSpacing: '-0.025em',
+            color: 'var(--ink)',
+            marginBottom: 22,
+            margin: '0 0 22px',
+          }}>
+            Fra optagelse<br />til færdigt referat.
+          </h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+            {FEATURES.map((f) => (
+              <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--accent)', flexShrink: 0 }} />
+                <span style={{ fontSize: 13, color: 'var(--ink-2)' }}>{f}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{
+            marginTop: 26,
+            fontFamily: 'var(--font-geist-mono)',
+            fontSize: 10.5,
+            color: 'var(--muted-2)',
+            letterSpacing: '0.3px',
+          }}>
+            ET PRODUKT FRA SYV.AI
+          </div>
+        </div>
       </div>
 
-      <form onSubmit={handleEmailAuth} className="space-y-4">
-        {mode === AuthMode.SignUp && (
-          <div className="space-y-1.5">
-            <Label htmlFor="name">Navn</Label>
+      {/* Right — form panel */}
+      <div style={{
+        flex: 1,
+        padding: 44,
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+      }}>
+        <div style={{ marginBottom: 24 }}>
+          <h1 style={{
+            fontWeight: 500,
+            fontSize: 21,
+            letterSpacing: '-0.02em',
+            color: 'var(--ink)',
+            margin: '0 0 6px',
+          }}>
+            {isSignUp ? 'Opret din konto' : 'Velkommen tilbage'}
+          </h1>
+          <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>
+            {isSignUp ? 'Kom i gang på under et minut.' : 'Log ind for at fortsætte.'}
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {isSignUp && (
+            <div>
+              <Label htmlFor="name" style={{ display: 'block', fontSize: 12.5, fontWeight: 500, color: 'var(--ink-2)', marginBottom: 6 }}>Navn</Label>
+              <Input
+                id="name"
+                type="text"
+                value={name}
+                onChange={(e) => actions.setName(e.target.value)}
+                placeholder="Jane Doe"
+                required
+              />
+            </div>
+          )}
+          <div>
+            <Label htmlFor="email" style={{ display: 'block', fontSize: 12.5, fontWeight: 500, color: 'var(--ink-2)', marginBottom: 6 }}>E-mail</Label>
             <Input
-              id="name"
-              type="text"
-              value={name}
-              onChange={(e) => actions.setName(e.target.value)}
-              placeholder="Jane Doe"
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => actions.setEmail(e.target.value)}
+              placeholder="jane@example.com"
               required
             />
           </div>
-        )}
-        <div className="space-y-1.5">
-          <Label htmlFor="email">E-mail</Label>
-          <Input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => actions.setEmail(e.target.value)}
-            placeholder="jane@example.com"
-            required
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="password">Adgangskode</Label>
-          <Input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => actions.setPassword(e.target.value)}
-            placeholder="••••••••"
-            required
-          />
-        </div>
+          <div>
+            <Label htmlFor="password" style={{ display: 'block', fontSize: 12.5, fontWeight: 500, color: 'var(--ink-2)', marginBottom: 6 }}>Adgangskode</Label>
+            <div style={{ position: 'relative' }}>
+              <Input
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => actions.setPassword(e.target.value)}
+                placeholder="••••••••"
+                required
+                style={{ paddingRight: 40 }}
+              />
+              <button
+                type="button"
+                aria-label="Vis adgangskode"
+                onClick={() => setShowPassword((v) => !v)}
+                style={{
+                  position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)',
+                  width: 26, height: 26, border: 'none', background: 'transparent',
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  color: 'var(--muted)', cursor: 'pointer', borderRadius: 3,
+                  transition: 'color 120ms ease',
+                }}
+              >
+                <EyeIcon off={showPassword} />
+              </button>
+            </div>
+          </div>
 
-        {error && (
-          <p style={{ fontSize: 13, color: 'var(--keep)' }}>{error}</p>
-        )}
+          {error && (
+            <div
+              className="flex items-start gap-2.5 rounded-[var(--radius)] px-3 py-2.5"
+              style={{
+                background: 'var(--danger-wash)',
+                border: '1px solid color-mix(in oklch, var(--danger) 22%, var(--line))',
+              }}
+            >
+              <span className="font-mono text-[13px] leading-5" style={{ color: 'var(--danger)' }}>!</span>
+              <span className="text-[13px] leading-snug" style={{ color: 'var(--danger)' }}>{error}</span>
+            </div>
+          )}
 
-        <Button type="submit" disabled={isLoading} className="w-full">
-          {isLoading
-            ? 'Behandler...'
-            : mode === AuthMode.SignUp
-              ? 'Opret konto'
-              : 'Log ind'}
-        </Button>
+          <Button type="submit" disabled={isLoading} className="w-full" style={{ marginTop: 2 }}>
+            {isLoading ? 'Behandler…' : isSignUp ? 'Opret konto' : 'Log ind'}
+          </Button>
 
-        <p style={{ textAlign: 'center', fontSize: 12.5, color: 'var(--muted)' }}>
-          {mode === AuthMode.SignIn ? (
+          {process.env.NEXT_PUBLIC_MICROSOFT_ENABLED === 'true' && (
             <>
-              Har du ikke en konto?{' '}
-              <Button variant="link" type="button" className="h-auto p-0 text-[12.5px]" onClick={() => actions.setMode(AuthMode.SignUp)}>
-                Opret konto
-              </Button>
-            </>
-          ) : (
-            <>
-              Har du allerede en konto?{' '}
-              <Button variant="link" type="button" className="h-auto p-0 text-[12.5px]" onClick={() => actions.setMode(AuthMode.SignIn)}>
-                Log ind
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '2px 0' }}>
+                <div style={{ flex: 1, height: 1, background: 'var(--line)' }} />
+                <span style={{ fontSize: 11.5, color: 'var(--muted)', fontFamily: 'var(--font-geist-mono)' }}>eller</span>
+                <div style={{ flex: 1, height: 1, background: 'var(--line)' }} />
+              </div>
+              <Button type="button" variant="outline" onClick={handleMicrosoftSignIn} disabled={isLoading} className="w-full">
+                <svg className="h-4 w-4" viewBox="0 0 23 23" fill="none">
+                  <path fill="#f25022" d="M1 1h10v10H1z" />
+                  <path fill="#00a4ef" d="M12 1h10v10H12z" />
+                  <path fill="#7fba00" d="M1 12h10v10H1z" />
+                  <path fill="#ffb900" d="M12 12h10v10H12z" />
+                </svg>
+                Fortsæt med Microsoft
               </Button>
             </>
           )}
-        </p>
-      </form>
 
-      {process.env.NEXT_PUBLIC_MICROSOFT_ENABLED === 'true' && (
-        <>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ flex: 1, height: 1, background: 'var(--line)' }} />
-            <span style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'var(--mono)' }}>eller</span>
-            <div style={{ flex: 1, height: 1, background: 'var(--line)' }} />
-          </div>
-
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handleMicrosoftSignIn}
-            disabled={isLoading}
-            className="w-full"
-          >
-            <svg className="h-4 w-4" viewBox="0 0 23 23" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path fill="#f25022" d="M1 1h10v10H1z" />
-              <path fill="#00a4ef" d="M12 1h10v10H12z" />
-              <path fill="#7fba00" d="M1 12h10v10H1z" />
-              <path fill="#ffb900" d="M12 12h10v10H12z" />
-            </svg>
-            Microsoft
-          </Button>
-        </>
-      )}
+          <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '4px 0 0' }}>
+            {isSignUp ? 'Har du allerede en konto? ' : 'Har du ikke en konto? '}
+            <button
+              type="button"
+              onClick={() => actions.setMode(isSignUp ? AuthMode.SignIn : AuthMode.SignUp)}
+              style={{
+                color: 'var(--accent)',
+                textDecoration: 'underline',
+                textDecorationColor: 'color-mix(in oklch, var(--accent) 35%, #fff)',
+                textUnderlineOffset: '2.5px',
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                font: 'inherit',
+                padding: 0,
+                fontSize: 12.5,
+                transition: 'color 120ms ease',
+              }}
+            >
+              {isSignUp ? 'Log ind' : 'Opret konto'}
+            </button>
+          </p>
+        </form>
+      </div>
     </div>
   );
 }

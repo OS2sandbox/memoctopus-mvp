@@ -172,7 +172,7 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
               </div>
             </div>
             <Link
-              href="/"
+              href="/dashboard"
               style={{
                 fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
                 padding: '8px 14px', borderRadius: 'var(--radius)',

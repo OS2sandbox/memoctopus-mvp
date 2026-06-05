@@ -1,5 +1,5 @@
-import { redirect } from 'next/navigation';
+import { DashboardWrapper } from './wrapper.client';
 
-export default function DashboardRedirect() {
-  redirect('/');
+export default function DashboardPage() {
+  return <DashboardWrapper />;
 }

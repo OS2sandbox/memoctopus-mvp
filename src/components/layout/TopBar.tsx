@@ -15,7 +15,7 @@ export function TopBar() {
   const { data: session } = useSession();
 
   const nav = [
-    { href: '/', label: 'Optag', exact: true },
+    { href: '/dashboard', label: 'Optag', exact: true },
     { href: '/arkiv', label: 'Arkiv' },
     { href: '/settings/data', label: 'Data' },
   ];
@@ -31,7 +31,7 @@ export function TopBar() {
   }
 
   function handleNavClick(e: React.MouseEvent, href: string) {
-    if (reviewMeetingId && href === '/') {
+    if (reviewMeetingId && href === '/dashboard') {
       e.preventDefault();
       setShowConfirm(true);
     }
@@ -46,7 +46,7 @@ export function TopBar() {
           meetingId={reviewMeetingId}
           title="Slet lydfil og forlad mødet?"
           confirmLabel="Slet og forlad"
-          onDeleted={() => router.push('/')}
+          onDeleted={() => router.push('/dashboard')}
         />
       )}
 
@@ -59,8 +59,8 @@ export function TopBar() {
       }}>
         {/* Wordmark */}
         <Link
-          href="/"
-          onClick={(e) => handleNavClick(e, '/')}
+          href="/dashboard"
+          onClick={(e) => handleNavClick(e, '/dashboard')}
           style={{
             fontFamily: 'var(--mono)', fontWeight: 500, fontSize: 14,
             letterSpacing: '-0.03em', color: 'var(--ink)',

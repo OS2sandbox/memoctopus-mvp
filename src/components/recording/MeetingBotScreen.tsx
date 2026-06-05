@@ -193,7 +193,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
     stopPolling();
     stopTimer();
     await sendControl('abort').catch(() => {});
-    router.push('/');
+    router.push('/dashboard');
   }
 
   const isConnecting = status === 'forbinder';

@@ -8,6 +8,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function TemplatesPage() {
   const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return null;
 
   const rows = await queryUserSchema<{
     id: string;
