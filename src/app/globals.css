@@ -85,10 +85,6 @@ body {
   letter-spacing: -0.003em;
 }
 
-/* Landing page feature cell hover */
-.feature-cell:hover {
-  background: var(--bg-2) !important;
-}
 
 /* Selection */
 ::selection {

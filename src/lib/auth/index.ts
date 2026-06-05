@@ -1,9 +1,41 @@
 import { betterAuth } from 'better-auth';
+import { genericOAuth } from 'better-auth/plugins';
 import { pool } from '@/lib/db';
 
 if (!process.env.BETTER_AUTH_SECRET && process.env.NODE_ENV === 'production') {
   throw new Error('BETTER_AUTH_SECRET env var is required in production');
 }
+
+const emailPasswordEnabled = process.env.NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED !== 'false';
+
+const microsoftEnabled =
+  process.env.NEXT_PUBLIC_MICROSOFT_ENABLED === 'true' &&
+  Boolean(process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET);
+
+const authentikEnabled =
+  process.env.NEXT_PUBLIC_AUTHENTIK_ENABLED === 'true' &&
+  Boolean(
+    process.env.AUTHENTIK_CLIENT_ID &&
+    process.env.AUTHENTIK_CLIENT_SECRET &&
+    process.env.AUTHENTIK_DISCOVERY_URL,
+  );
+
+const plugins = authentikEnabled
+  ? [
+      genericOAuth({
+        config: [
+          {
+            providerId: 'authentik',
+            clientId: process.env.AUTHENTIK_CLIENT_ID as string,
+            clientSecret: process.env.AUTHENTIK_CLIENT_SECRET as string,
+            discoveryUrl: process.env.AUTHENTIK_DISCOVERY_URL as string,
+            scopes: ['openid', 'profile', 'email'],
+            pkce: true,
+          },
+        ],
+      }),
+    ]
+  : [];
 
 export const auth = betterAuth({
   database: pool,
@@ -41,6 +73,10 @@ export const auth = betterAuth({
   },
   account: {
     modelName: 'accounts',
+    accountLinking: {
+      enabled: true,
+      trustedProviders: ['authentik'],
+    },
     fields: {
       accountId: 'account_id',
       providerId: 'provider_id',
@@ -63,21 +99,21 @@ export const auth = betterAuth({
     },
   },
   emailAndPassword: {
-    enabled: true,
+    enabled: emailPasswordEnabled,
     requireEmailVerification: false,
     minPasswordLength: 8,
   },
-  socialProviders:
-    process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET
-      ? {
-          microsoft: {
-            clientId: process.env.MICROSOFT_CLIENT_ID,
-            clientSecret: process.env.MICROSOFT_CLIENT_SECRET,
-            tenantId: process.env.MICROSOFT_TENANT_ID || 'common',
-            prompt: 'select_account',
-          },
-        }
-      : {},
+  socialProviders: microsoftEnabled
+    ? {
+        microsoft: {
+          clientId: process.env.MICROSOFT_CLIENT_ID as string,
+          clientSecret: process.env.MICROSOFT_CLIENT_SECRET as string,
+          tenantId: process.env.MICROSOFT_TENANT_ID || 'common',
+          prompt: 'select_account',
+        },
+      }
+    : {},
+  plugins,
 });
 
 export type Auth = typeof auth;
