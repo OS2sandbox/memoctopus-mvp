@@ -16,7 +16,7 @@ if (!INTERNAL_SECRET) {
   console.error('[bot-service] FATAL: BOT_INTERNAL_SECRET is not set. Refusing to start.');
   process.exit(1);
 }
-const NEXT_APP_URL = process.env.NEXT_APP_URL ?? 'http://localhost:3000';
+const NEXT_APP_URL = process.env.NEXT_APP_URL ?? 'http://localhost:3004';
 const MAX_CONCURRENT_SESSIONS = parseInt(process.env.BOT_MAX_SESSIONS ?? '5', 10);
 
 interface BotSession {
