@@ -5,12 +5,14 @@ import { AuthMode, useAuthForm } from '@/lib/hooks/use-auth-form';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { type FormEvent } from 'react';
 
 export default function SignInPage() {
   const { state, actions } = useAuthForm();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const from = searchParams.get('from') || '/';
   const { isLoading, mode, email, password, name, error } = state;
 
   const handleEmailAuth = async (e: FormEvent) => {
@@ -23,7 +25,7 @@ export default function SignInPage() {
         actions.authError('Kunne ikke logge ind. Tjek venligst dine oplysninger.');
         return;
       }
-      router.push('/');
+      router.push(from);
     } else {
       const { error: signUpError } = await signUp.email({ name, email, password });
       if (signUpError) {
@@ -35,14 +37,13 @@ export default function SignInPage() {
         actions.authError('Konto oprettet, men login mislykkedes. Prøv at logge ind.');
         return;
       }
-      router.push('/');
+      router.push(from);
     }
-    actions.setLoading(false);
   };
 
   const handleMicrosoftSignIn = async () => {
     actions.setLoading(true);
-    const { error } = await signIn.social({ provider: 'microsoft', callbackURL: '/' });
+    const { error } = await signIn.social({ provider: 'microsoft', callbackURL: from });
     if (error?.message) actions.authError('Microsoft login mislykkedes. Prøv igen.');
     actions.setLoading(false);
   };

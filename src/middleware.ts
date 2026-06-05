@@ -3,7 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // Check for a valid better-auth session cookie
+  // Presence check only — token validity is enforced by auth.api.getSession() in each route handler.
+  // This redirect is a UX guard, not a security gate.
   const sessionToken =
     req.cookies.get('better-auth.session_token')?.value ||
     req.cookies.get('__Secure-better-auth.session_token')?.value;
@@ -19,6 +20,6 @@ export async function middleware(req: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!sign-in|api/auth|_next/static|_next/image|favicon|public).*)',
+    '/((?!sign-in|api/|_next/static|_next/image|favicon|public).*)',
   ],
 };
