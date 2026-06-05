@@ -253,7 +253,51 @@ export class TeamsMeetingBot {
     await page.waitForTimeout(500);
     await snap('02-prejoin');
 
-    // Fill in the display name
+    // Turn off camera and mute mic as early as possible on the prejoin screen —
+    // before filling the name, so Teams reaches "Join now" with both already off.
+    // Only click buttons that indicate the device is currently ON (to avoid toggling
+    // something that is already off). The getUserMedia patch already disables tracks,
+    // but Teams' UI state is independent and can show the mic/camera as "on".
+
+    const cameraBtnSel = [
+      'button[aria-label="Turn off video"]',
+      'button[aria-label="Turn off camera"]',
+      'button[aria-label="Turn camera off"]',
+      'button[aria-label="Camera on, click to turn off"]',
+      'button[aria-label="Video on, click to turn off"]',
+      'button[aria-label="Sluk video"]',
+      'button[aria-label="Sluk kamera"]',
+      'button[data-tid="toggle-video"][aria-pressed="true"]',
+      'button[data-tid="camera-button"][aria-pressed="true"]',
+    ].join(', ');
+    const cameraBtn = page.locator(cameraBtnSel).first();
+    if (await cameraBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await cameraBtn.click().catch(() => {});
+      console.log('[bot] turned camera off (prejoin)');
+    } else {
+      console.log('[bot] camera off button not found — may already be off');
+    }
+
+    const micBtnSel = [
+      'button[aria-label="Turn off microphone"]',
+      'button[aria-label="Mute microphone"]',
+      'button[aria-label="Microphone on, click to mute"]',
+      'button[aria-label="Sluk mikrofon"]',
+      'button[data-tid="toggle-mute"][aria-pressed="true"]',
+      'button[data-tid="microphone-button"][aria-pressed="true"]',
+    ].join(', ');
+    const micBtn = page.locator(micBtnSel).first();
+    if (await micBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+      await micBtn.click().catch(() => {});
+      console.log('[bot] muted microphone (prejoin)');
+    } else {
+      // Keyboard fallback — Ctrl+Shift+M is Teams' global mute toggle.
+      // Fires even if the button selector didn't match (e.g. different locale or Teams version).
+      await page.keyboard.press('Control+Shift+M').catch(() => {});
+      console.log('[bot] muted microphone via Ctrl+Shift+M (prejoin fallback)');
+    }
+
+    // Fill in the display name after muting so Teams sees the final device state before join.
     const nameInput = page.locator(
       'input[data-tid="prejoin-display-name-input"], input[placeholder*="name" i], input[aria-label*="name" i]',
     ).first();
@@ -264,34 +308,6 @@ export class TeamsMeetingBot {
       await page.waitForTimeout(300);
     } else {
       console.log('[bot] name input not found');
-    }
-
-    // Turn off camera using the actual aria-label button (not the hidden checkbox input)
-    const cameraBtn = page.locator([
-      'button[aria-label="Turn off video"]',
-      'button[aria-label="Turn off camera"]',
-      'button[aria-label="Turn camera off"]',
-      'button[aria-label="Camera on, click to turn off"]',
-      'button[aria-label="Sluk video"]',
-      'button[aria-label="Sluk kamera"]',
-    ].join(', ')).first();
-    if (await cameraBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await cameraBtn.click().catch(() => {});
-      console.log('[bot] turned camera off');
-    }
-
-    // Mute microphone — prevents the bot from sending audio back to participants
-    // (feedback loop) and from appearing as a speaking participant in Teams.
-    const micBtn = page.locator([
-      'button[aria-label="Turn off microphone"]',
-      'button[aria-label="Mute microphone"]',
-      'button[aria-label="Microphone on, click to mute"]',
-      'button[aria-label="Sluk mikrofon"]',
-      'button[data-tid="toggle-mute"]',
-    ].join(', ')).first();
-    if (await micBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await micBtn.click().catch(() => {});
-      console.log('[bot] muted microphone');
     }
 
     // Click "Join now"
@@ -468,27 +484,39 @@ export class TeamsMeetingBot {
     await this._startAudioCapture();
 
     // Teams sometimes re-enables the mic after lobby admission — mute as soon as
-    // the in-call toolbar renders. Wait up to 5 s for it to appear.
-    const inCallMicSel = [
-      'button[data-tid="microphone-button"]',
-      'button[data-tid="toggle-mute"]',
+    // the in-call toolbar renders.
+    //
+    // Strategy: wait for ANY mic button (on or off) to appear, then read its state
+    // before acting. This avoids the race where the toolbar hasn't loaded yet and
+    // Ctrl+Shift+M fires blind, accidentally unmuting a mic the prejoin step silenced.
+    const inCallMicOnSel = [
+      'button[data-tid="microphone-button"][aria-pressed="true"]',
+      'button[data-tid="toggle-mute"][aria-pressed="true"]',
       'button[aria-label="Mute"]',
       'button[aria-label="Mute microphone"]',
+      'button[aria-label="Turn off microphone"]',
       'button[aria-label="Sluk mikrofon"]',
       'button[aria-label="Slå lyden fra"]',
       'button[title="Mute microphone (Ctrl+Shift+M)"]',
     ].join(', ');
-    const inCallMicBtn = page.locator(inCallMicSel).first();
-    if (await inCallMicBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await inCallMicBtn.click().catch(() => {});
+    const inCallMicOffSel = [
+      'button[data-tid="microphone-button"][aria-pressed="false"]',
+      'button[data-tid="toggle-mute"][aria-pressed="false"]',
+      'button[aria-label="Unmute"]',
+      'button[aria-label="Unmute microphone"]',
+      'button[aria-label="Turn on microphone"]',
+      'button[aria-label="Slå lyden til"]',
+    ].join(', ');
+
+    // Wait for the toolbar to render before reading state (up to 8 s).
+    await page.waitForSelector(`${inCallMicOnSel}, ${inCallMicOffSel}`, { timeout: 8000 }).catch(() => {});
+
+    const micIsOn = await page.locator(inCallMicOnSel).first().isVisible().catch(() => false);
+    if (micIsOn) {
+      await page.locator(inCallMicOnSel).first().click().catch(() => {});
       console.log('[bot] muted microphone in-call via button');
     } else {
-      // Fallback: Ctrl+Shift+M is Teams' universal mute toggle.
-      // Ensure the page has focus so the keyboard shortcut registers.
-      await page.bringToFront().catch(() => {});
-      await page.locator('body').click({ position: { x: 10, y: 10 } }).catch(() => {});
-      await page.keyboard.press('Control+Shift+M').catch(() => {});
-      console.log('[bot] muted microphone in-call via Ctrl+Shift+M');
+      console.log('[bot] microphone already muted in-call — skipping');
     }
 
     // Open the participants panel so the roster selectors in _pollParticipants()
