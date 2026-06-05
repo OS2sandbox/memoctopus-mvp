@@ -105,7 +105,6 @@ describe('HeroForm — mode toggle', () => {
     renderForm();
     fireEvent.click(screen.getByRole('button', { name: 'Log ind' }));
     await waitFor(() => {
-      // After toggling, submit button text changes to "Log ind"
       const submitBtn = screen.getByRole('button', { name: 'Log ind', hidden: false });
       expect(submitBtn).toHaveAttribute('type', 'submit');
     });

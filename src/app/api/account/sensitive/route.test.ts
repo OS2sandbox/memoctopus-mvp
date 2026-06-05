@@ -48,7 +48,6 @@ describe('DELETE /api/account/sensitive', () => {
   it('returns { processed, total } equal to the number of non-redacted meetings', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     const meetings = [{ id: 'meet-1' }, { id: 'meet-2' }, { id: 'meet-3' }];
-    // First call fetches the meeting list; subsequent calls are the 3 UPDATE groups per meeting.
     mockQueryMany
       .mockResolvedValueOnce(meetings as never)
       .mockResolvedValue([] as never);
