@@ -16,9 +16,17 @@ services:
       - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3002}
     volumes:
       - audio-storage:/audio-storage
+    networks:
+      - internal
     depends_on:
       bot-service:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
   bot-service:
@@ -29,10 +37,12 @@ services:
     # the internal Docker network (http://bot-service:3001). Exposing it
     # publicly would bypass the Next.js proxy and its auth checks.
     environment:
-      - PORT=3001
+      - BOT_PORT=3001
       - NEXT_APP_URL=http://app:3000
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
       - BOT_MAX_SESSIONS=${BOT_MAX_SESSIONS:-5}
+    networks:
+      - internal
     shm_size: "2gb"
     mem_limit: 6g
     memswap_limit: 6g
@@ -45,6 +55,10 @@ services:
       retries: 3
       start_period: 15s
     restart: unless-stopped
+
+networks:
+  internal:
+    driver: bridge
 
 volumes:
   audio-storage:
