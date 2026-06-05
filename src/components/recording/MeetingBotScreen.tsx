@@ -34,6 +34,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerStartMsRef = useRef<number>(0);
   const statusRef = useRef<BotStatus>('forbinder');
   const participantsRef = useRef<string>('[]');
   const consecutiveFailsRef = useRef(0);
@@ -46,7 +47,9 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
 
   const startTimer = useCallback(() => {
     stopTimer();
-    timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000);
+    timerRef.current = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - timerStartMsRef.current) / 1000));
+    }, 500);
   }, [stopTimer]);
 
   const stopPolling = useCallback(() => {
@@ -87,15 +90,17 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
         setParticipants(data.participants ?? []);
       }
 
-      // Sync elapsed from bot service on every poll while recording — prevents drift
-      // if the component remounts or the transition was polled late.
+      // Sync timer start reference from server on every recording poll so the
+      // Date.now()-based interval stays aligned regardless of JS timer drift.
       if (newStatus === 'optager' && data.elapsed != null) {
         const serverElapsed = data.elapsed as number;
-        setElapsed(prev => serverElapsed > prev ? serverElapsed : prev);
+        timerStartMsRef.current = Date.now() - serverElapsed * 1000;
+        setElapsed(serverElapsed);
       }
 
       if (newStatus !== statusRef.current) {
         if (newStatus === 'optager') {
+          timerStartMsRef.current = Date.now() - ((data.elapsed as number | null) ?? 0) * 1000;
           startTimer();
         } else if (newStatus === 'pause') {
           stopTimer();
@@ -160,7 +165,11 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
     try {
       await sendControl(action);
       if (action === 'pause') { stopTimer(); setStatus('pause'); }
-      else { startTimer(); setStatus('optager'); }
+      else {
+        timerStartMsRef.current = Date.now() - elapsed * 1000;
+        startTimer();
+        setStatus('optager');
+      }
     } finally {
       setControlLoading(false);
     }
@@ -245,18 +254,23 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
           gap: 12,
           marginBottom: 40,
         }}>
-          <button
-            onClick={handleAbort}
-            disabled={controlLoading}
-            style={{
-              fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-2)',
-              background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-              textDecoration: 'underline', textDecorationColor: 'var(--line-2)',
-              textUnderlineOffset: 3,
-            }}
-          >
-            ← afbryd
-          </button>
+          {!isRecording && !isPaused && (
+            <button
+              onClick={handleAbort}
+              disabled={controlLoading}
+              style={{
+                fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-2)',
+                background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                textDecoration: 'underline', textDecorationColor: 'var(--line-2)',
+                textUnderlineOffset: 3,
+              }}
+            >
+              ← afbryd
+            </button>
+          )}
+          {(isRecording || isPaused) && (
+            <div style={{ width: 1 }} />
+          )}
           {meetingUrl && (
             <span style={{
               display: 'inline-flex', alignItems: 'center', gap: 8,

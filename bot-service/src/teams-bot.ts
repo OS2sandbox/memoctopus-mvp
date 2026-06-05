@@ -41,6 +41,7 @@ export class TeamsMeetingBot {
   error: string | null = null;
 
   private elapsedTimer: ReturnType<typeof setInterval> | null = null;
+  private elapsedStartMs: number = 0;
   private participantTimer: ReturnType<typeof setInterval> | null = null;
   private aloneTimer: ReturnType<typeof setTimeout> | null = null;
   private watchdogTimer: ReturnType<typeof setTimeout> | null = null;
@@ -271,7 +272,7 @@ export class TeamsMeetingBot {
       'button[data-tid="camera-button"][aria-pressed="true"]',
     ].join(', ');
     const cameraBtn = page.locator(cameraBtnSel).first();
-    if (await cameraBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+    if (await cameraBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
       await cameraBtn.click().catch(() => {});
       console.log('[bot] turned camera off (prejoin)');
     } else {
@@ -287,7 +288,7 @@ export class TeamsMeetingBot {
       'button[data-tid="microphone-button"][aria-pressed="true"]',
     ].join(', ');
     const micBtn = page.locator(micBtnSel).first();
-    if (await micBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
+    if (await micBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
       await micBtn.click().catch(() => {});
       console.log('[bot] muted microphone (prejoin)');
     } else {
@@ -508,8 +509,8 @@ export class TeamsMeetingBot {
       'button[aria-label="Slå lyden til"]',
     ].join(', ');
 
-    // Wait for the toolbar to render before reading state (up to 8 s).
-    await page.waitForSelector(`${inCallMicOnSel}, ${inCallMicOffSel}`, { timeout: 8000 }).catch(() => {});
+    // Wait for the toolbar to render before reading state (up to 3 s).
+    await page.waitForSelector(`${inCallMicOnSel}, ${inCallMicOffSel}`, { timeout: 3000 }).catch(() => {});
 
     const micIsOn = await page.locator(inCallMicOnSel).first().isVisible().catch(() => false);
     if (micIsOn) {
@@ -738,7 +739,10 @@ export class TeamsMeetingBot {
             const kicked =
               text.includes("you were removed") ||
               text.includes("you've been removed") ||
-              text.includes("removed from the meeting");
+              text.includes("removed from the meeting") ||
+              text.includes("du blev fjernet") ||
+              text.includes("du er blevet fjernet") ||
+              text.includes("fjernet fra mødet");
             if (!endedNow && !kicked) return;
             // The Teams connection error page ("Sorry, we couldn't connect you") reuses
             // [data-tid="call-ended-title"] — don't treat it as a genuine meeting end.
@@ -962,7 +966,10 @@ export class TeamsMeetingBot {
 
   private _startElapsedTimer(): void {
     this._stopElapsedTimer();
-    this.elapsedTimer = setInterval(() => { this.elapsed += 1; }, 1000);
+    this.elapsedStartMs = Date.now() - this.elapsed * 1000;
+    this.elapsedTimer = setInterval(() => {
+      this.elapsed = Math.floor((Date.now() - this.elapsedStartMs) / 1000);
+    }, 500);
   }
 
   private _stopElapsedTimer(): void {
@@ -1001,7 +1008,7 @@ export class TeamsMeetingBot {
       // button while recovering from the video-track stop() rejection, so a single missing poll
       // is not reliable. Two consecutive polls confirms the button is genuinely gone.
       const leaveVisible = await this.page.locator(LEAVE_BTN).first().isVisible().catch(() => false);
-      if (!leaveVisible && this.hadActiveTracks && this.isActivelyRecording()) {
+      if (!leaveVisible && (this.hadActiveTracks || this.elapsed > 10) && this.isActivelyRecording()) {
         this.leaveBtnGonePolls++;
         if (this.leaveBtnGonePolls >= 2) {
           console.log('[bot] Leave button gone for 2 consecutive polls — kicked or meeting ended');
