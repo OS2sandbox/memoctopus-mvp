@@ -96,7 +96,7 @@ export async function GET(
     );
   }
 
-  const rawParticipants: string[] = botState.participants ?? meeting.participants ?? [];
+  const rawParticipants: string[] = botState.participants?.length ? botState.participants : (meeting.participants ?? []);
   const participants = rawParticipants.filter((p: string) => p !== '__audio_detected__');
 
   return NextResponse.json({

@@ -43,12 +43,11 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
 
 // POST /sessions — create and start a bot session
 app.post('/sessions', requireAuth, async (req: Request, res: Response): Promise<void> => {
-  const { meetingUrl, meetingId, userId, botName, callbackUrl } = req.body as {
+  const { meetingUrl, meetingId, userId, botName } = req.body as {
     meetingUrl: string;
     meetingId: string;
     userId: string;
     botName?: string;
-    callbackUrl?: string;
   };
 
   if (!meetingUrl || !meetingId || !userId) {
@@ -91,7 +90,8 @@ app.post('/sessions', requireAuth, async (req: Request, res: Response): Promise<
     meetingId,
     userId,
     botName: botName ?? 'Memoctopus',
-    callbackUrl: callbackUrl ?? `${NEXT_APP_URL}/api/bot/audio-upload`,
+    // Always derived server-side — never accepted from the caller to prevent SSRF
+    callbackUrl: `${NEXT_APP_URL}/api/bot/audio-upload`,
     internalSecret: INTERNAL_SECRET,
   };
 
@@ -198,24 +198,40 @@ const server = app.listen(PORT, () => {
   console.log(`[bot-service] Listening on port ${PORT}`);
 });
 
-process.on('SIGTERM', () => {
-  console.log('[bot-service] SIGTERM received — draining sessions before exit');
+// 90 s — comfortably inside the compose stop_grace_period: 120s
+const DRAIN_TIMEOUT_MS = 90_000;
+
+function shutdown(signal: string): void {
+  console.log(`[bot-service] ${signal} received — draining sessions before exit`);
   server.close();
 
-  const shutdownTasks = [...sessions.values()].map(async (s) => {
-    try {
-      if (s.bot.status === 'recording' || s.bot.status === 'paused') {
-        await s.bot.stop();
-      } else if (s.bot.status === 'joining') {
-        await s.bot.abort();
+  const drain = Promise.allSettled(
+    [...sessions.values()].map(async (s) => {
+      try {
+        if (s.bot.status === 'recording' || s.bot.status === 'paused') {
+          await s.bot.stop();
+        } else if (s.bot.status === 'joining') {
+          await s.bot.abort();
+        }
+      } catch (err) {
+        console.error(`[bot-service] Shutdown error for session ${s.id}:`, err);
       }
-    } catch (err) {
-      console.error(`[bot-service] Shutdown error for session ${s.id}:`, err);
-    }
-  });
+    }),
+  );
 
-  void Promise.allSettled(shutdownTasks).then(() => {
-    console.log('[bot-service] All sessions drained — exiting');
+  const timeout = new Promise<void>((resolve) =>
+    setTimeout(() => {
+      console.error('[bot-service] Drain timeout exceeded — forcing exit');
+      resolve();
+    }, DRAIN_TIMEOUT_MS),
+  );
+
+  void Promise.race([drain, timeout]).then(() => {
+    console.log('[bot-service] Exiting');
     process.exit(0);
   });
-});
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+// SIGINT (Ctrl-C in dev with ts-node-dev) — same drain so sessions aren't abandoned
+process.on('SIGINT', () => shutdown('SIGINT'));

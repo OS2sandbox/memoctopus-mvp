@@ -32,11 +32,17 @@ export async function POST(req: NextRequest) {
   if (meeting.source !== 'teams') return NextResponse.json({ error: 'Not a Teams meeting' }, { status: 400 });
   if (!meeting.meeting_url) return NextResponse.json({ error: 'No meeting URL' }, { status: 400 });
 
-  // Atomically claim the slot — only one concurrent request can proceed
+  // Atomically claim the slot — only one concurrent request can proceed.
+  // Also clears a 'creating' sentinel that's been stuck for >2 min (indicates
+  // the previous attempt crashed before it could reset bot_session to NULL).
   const claimed = await queryUserSchemaOne<{ id: string }>(
     session.user.id,
     `UPDATE meetings SET bot_session = 'creating', updated_at = NOW()
-     WHERE id = $1 AND (bot_session IS NULL OR bot_session = '')
+     WHERE id = $1
+       AND (
+         bot_session IS NULL OR bot_session = ''
+         OR (bot_session = 'creating' AND updated_at < NOW() - INTERVAL '2 minutes')
+       )
      RETURNING id`,
     [meetingId],
   );
@@ -67,7 +73,6 @@ export async function POST(req: NextRequest) {
         meetingId,
         userId: session.user.id,
         botName: 'Memoctopus',
-        callbackUrl: `${process.env.NEXT_PUBLIC_APP_URL ?? ''}/api/bot/audio-upload`,
       }),
     });
   } catch (err) {
