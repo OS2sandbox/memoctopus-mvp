@@ -29,13 +29,25 @@ vi.mock('@/lib/audio/storage', () => ({
   saveAudioFile: vi.fn().mockResolvedValue({ filename: 'test.webm', sizeBytes: 100 }),
 }));
 
+// Execute the after() callback synchronously in tests so we can assert on its effects.
+const afterCallbacks: Array<() => Promise<void>> = [];
+vi.mock('next/server', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('next/server')>();
+  return {
+    ...mod,
+    after: vi.fn((cb: () => Promise<void>) => { afterCallbacks.push(cb); }),
+  };
+});
+
 import { POST } from './route';
+import { after } from 'next/server';
 import { auth } from '@/lib/auth';
 import { queryUserSchemaOne } from '@/lib/db/user-schema';
 import { FAKE_SESSION } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockQueryOne = vi.mocked(queryUserSchemaOne);
+const mockAfter = vi.mocked(after);
 
 function makeFormRequest(meetingId: string | null, includeFile = true): NextRequest {
   const form = new FormData();
@@ -53,6 +65,8 @@ describe('POST /api/transcribe', () => {
   beforeEach(() => {
     mockGetSession.mockReset();
     mockQueryOne.mockReset();
+    mockAfter.mockReset();
+    afterCallbacks.length = 0;
   });
 
   it('returns 401 when not authenticated', async () => {
@@ -83,38 +97,69 @@ describe('POST /api/transcribe', () => {
     expect((await res.json()).error).toMatch(/not found/i);
   });
 
-  it('returns transcriptId, segments, piiReplacementCount on success', async () => {
+  it('returns 200 ok immediately (transcription runs in background)', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never); // meeting lookup
-    mockQueryOne.mockResolvedValueOnce({} as never); // mark processing
-    mockQueryOne.mockResolvedValueOnce({} as never); // insert audio_files
-    mockQueryOne.mockResolvedValueOnce({ id: 'transcript-123' } as never); // insert transcript
-    mockQueryOne.mockResolvedValueOnce({} as never); // mark review
+    mockQueryOne.mockResolvedValue({} as never); // all subsequent DB calls
 
     const res = await POST(makeFormRequest('meet-1'));
 
     expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.transcriptId).toBe('transcript-123');
-    expect(body.segments).toHaveLength(1);
-    expect(body.piiReplacementCount).toBe(0);
+    expect((await res.json()).ok).toBe(true);
   });
 
-  it('resets meeting status to recording on transcription error', async () => {
+  it('sets meeting status to processing before returning', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never); // meeting lookup
-    mockQueryOne.mockResolvedValueOnce({} as never); // mark processing
-    mockQueryOne.mockResolvedValueOnce({} as never); // insert audio_files
-    mockQueryOne.mockResolvedValueOnce({} as never); // reset to recording (catch)
+    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never);
+    mockQueryOne.mockResolvedValue({} as never);
+
+    await POST(makeFormRequest('meet-1'));
+
+    const processingCall = mockQueryOne.mock.calls.find(
+      ([, sql]) => typeof sql === 'string' && sql.includes("'processing'"),
+    );
+    expect(processingCall).toBeDefined();
+  });
+
+  it('queues a background job via after()', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never);
+    mockQueryOne.mockResolvedValue({} as never);
+
+    await POST(makeFormRequest('meet-1'));
+
+    expect(mockAfter).toHaveBeenCalledOnce();
+  });
+
+  it('background job: sets meeting to review after successful transcription', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never);
+    // save audio + set processing
+    mockQueryOne.mockResolvedValue({} as never);
+
+    await POST(makeFormRequest('meet-1'));
+
+    // Run the queued background callback
+    for (const cb of afterCallbacks) await cb();
+
+    const reviewCall = mockQueryOne.mock.calls.find(
+      ([, sql]) => typeof sql === 'string' && sql.includes("'review'"),
+    );
+    expect(reviewCall).toBeDefined();
+  });
+
+  it('background job: resets meeting status to recording on transcription error', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never);
+    mockQueryOne.mockResolvedValue({} as never);
 
     const { getTranscriptionProvider } = await import('@/lib/ai/transcription');
     vi.mocked(getTranscriptionProvider).mockReturnValueOnce({
       transcribe: vi.fn().mockRejectedValueOnce(new Error('Transcription failed')),
     });
 
-    const res = await POST(makeFormRequest('meet-1'));
-    expect(res.status).toBe(500);
-    expect((await res.json()).error).toBe('Transcription failed');
+    await POST(makeFormRequest('meet-1'));
+    for (const cb of afterCallbacks) await cb();
 
     const resetCall = mockQueryOne.mock.calls.find(
       ([, sql]) => typeof sql === 'string' && sql.includes("'recording'"),

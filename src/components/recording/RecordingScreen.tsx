@@ -16,6 +16,64 @@ import { formatDuration, formatFileSize } from '@/lib/utils';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { pickRecordingMimeType, extensionForMimeType } from '@/lib/audio/recording-format';
 
+// ── PCM live-transcription helpers ───────────────────────────────────────────
+
+// Commits words that agree at the same position across two consecutive
+// hypotheses. Works correctly only when each call receives the FULL accumulated
+// audio (so partial N is always a text prefix of partial N+1).
+class LocalAgreementMerger {
+  private prevWords: string[] = [];
+  private committed: string[] = [];
+
+  merge(newHyp: string): { committed: string; tail: string } {
+    const newWords = newHyp.trim() ? newHyp.trim().split(/\s+/) : [];
+    let agree = 0;
+    while (agree < this.prevWords.length && agree < newWords.length &&
+           this.prevWords[agree].toLowerCase() === newWords[agree].toLowerCase()) {
+      agree++;
+    }
+    for (let i = this.committed.length; i < agree; i++) {
+      this.committed.push(this.prevWords[i]);
+    }
+    this.prevWords = newWords;
+    return {
+      committed: this.committed.join(' '),
+      tail: newWords.slice(this.committed.length).join(' '),
+    };
+  }
+
+  forceCommit(): string {
+    for (let i = this.committed.length; i < this.prevWords.length; i++) {
+      this.committed.push(this.prevWords[i]);
+    }
+    const result = this.committed.join(' ');
+    this.reset();
+    return result;
+  }
+
+  reset() { this.prevWords = []; this.committed = []; }
+}
+
+function encodePcmToWav(frames: Int16Array[]): Blob {
+  const sampleRate = 16_000;
+  const totalSamples = frames.reduce((n, f) => n + f.length, 0);
+  const dataBytes = totalSamples * 2;
+  const buf = new ArrayBuffer(44 + dataBytes);
+  const v = new DataView(buf);
+  const ws = (off: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); v.setUint32(4, 36 + dataBytes, true);
+  ws(8, 'WAVE'); ws(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  ws(36, 'data'); v.setUint32(40, dataBytes, true);
+  let off = 44;
+  for (const frame of frames) {
+    for (let i = 0; i < frame.length; i++) { v.setInt16(off, frame[i], true); off += 2; }
+  }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
 interface LiveSegment {
   speaker: string;
   start: number;
@@ -36,52 +94,14 @@ interface RecordingScreenProps {
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
 
-// Mirrors the server demo's LocalAgreementMerger: words are only "committed"
-// when they appear in the same position across two consecutive hypotheses.
-// This filters Whisper hallucinations, which rarely repeat in the same position.
-class LocalAgreementMerger {
-  private lastTokens: string[] | null = null;
-  private committed: string[] = [];
-
-  merge(hyp: string): { tail: string[] } {
-    const newTokens = hyp.split(/\s+/).filter(Boolean);
-    if (this.lastTokens === null) {
-      this.lastTokens = newTokens;
-      return { tail: newTokens.slice(this.committed.length) };
-    }
-    let lcpLen = 0;
-    const minLen = Math.min(newTokens.length, this.lastTokens.length);
-    for (let i = 0; i < minLen; i++) {
-      if (newTokens[i] !== this.lastTokens[i]) break;
-      lcpLen++;
-    }
-    if (lcpLen > this.committed.length) {
-      this.committed.push(...newTokens.slice(this.committed.length, lcpLen));
-    }
-    const tail = newTokens.length >= this.committed.length
-      ? newTokens.slice(this.committed.length)
-      : [];
-    this.lastTokens = newTokens;
-    return { tail };
-  }
-
-  forceCommitRemaining(hyp: string): void {
-    const newTokens = hyp.split(/\s+/).filter(Boolean);
-    this.committed.push(...newTokens.slice(this.committed.length));
-  }
-
-  getCommittedText(): string { return this.committed.join(' '); }
-
-  reset(): void { this.lastTokens = null; this.committed = []; }
-}
-
 const BYTES_PER_SECOND_ESTIMATE = 16_000;
 const SILENCE_THRESHOLD_SECONDS = 5;
 const SILENCE_VOLUME_THRESHOLD = 0.02;
-// How often partials fire DURING active speech (mirrors the demo's 700ms interval).
+// How often quick partials fire during active speech (matches demo's 0.7 s interval).
 const PARTIAL_INTERVAL_MS = 700;
-// If a partial completed within this window before speech-end, reuse it (finalize-skip).
-const PARTIAL_SKIP_WINDOW_MS = PARTIAL_INTERVAL_MS + 300;
+// Maximum PCM frames per hviske call (16 kHz × 1024-sample frames = 64 ms/frame).
+// 15 s × 16 000 / 1024 ≈ 235 frames → ~480 KB WAV. Beyond this hviske times out.
+const MAX_PARTIAL_FRAMES = Math.ceil((16_000 * 15) / 1024);
 // How often, while recording, we re-analyze the transcript for things to clarify.
 const CLARIFY_INTERVAL_MS = 25_000;
 // Tick cadence for the countdown bar to the next clarification refresh.
@@ -127,20 +147,21 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const vadRef = useRef<any>(null);
   // Elapsed-seconds mark when VAD fires onSpeechStart, for accurate segment timestamps.
   const utteranceStartRef = useRef<number | null>(null);
-  // Guard against overlapping utterance fetches — background noise can fire onSpeechEnd
-  // repeatedly while a previous request is still in-flight, stacking up pending fetches
-  // that keep the interim indicator up indefinitely.
+  // Guard against overlapping utterance fetches.
   const utteranceInFlightRef = useRef(false);
-  const pendingUtteranceRef = useRef<{ audio: Float32Array; start: number } | null>(null);
+  // Queue of utterances that ended while a fetch was in-flight. Processed in order so
+  // nothing is dropped. Each item captures exact timing + PCM frame boundaries so a
+  // late finalization never bleeds into adjacent utterances.
+  const pendingUtterancesRef = useRef<Array<{ start: number; end: number; startFrame: number; endFrame: number }>>([]);
   const partialTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Timestamp (Date.now()) of the last completed context-window partial, used for finalize-skip.
-  const lastPartialTimeRef = useRef<number>(0);
-  // LocalAgreementMerger for the current utterance.
-  const mergerRef = useRef<LocalAgreementMerger | null>(null);
-  // MediaRecorder chunk index when the current utterance started (for utterance-based slicing).
-  const utteranceChunkStartRef = useRef<number>(0);
-  // Last hypothesis text from the most recent partial — used for finalize-skip.
-  const lastPartialHypRef = useRef<string>('');
+  // PCM accumulation for live transcription (16 kHz Int16 frames from the AudioWorklet).
+  const pcmFramesRef = useRef<Int16Array[]>([]);
+  // Frame index into pcmFramesRef where the current utterance started (with pre-roll).
+  const pcmSpeechStartFrameRef = useRef<number>(0);
+  // AudioWorkletNode that emits 16 kHz Int16 frames.
+  const pcmWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
+  // Tracks committed + tail display across consecutive partials of one utterance.
+  const mergerRef = useRef(new LocalAgreementMerger());
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -181,12 +202,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     setInterimText('');
     utteranceStartRef.current = null;
     utteranceInFlightRef.current = false;
-    pendingUtteranceRef.current = null;
+    pendingUtterancesRef.current = [];
     if (partialTimerRef.current) { clearInterval(partialTimerRef.current); partialTimerRef.current = null; }
-    lastPartialTimeRef.current = 0;
-    mergerRef.current = null;
-    utteranceChunkStartRef.current = 0;
-    lastPartialHypRef.current = '';
+    pcmFramesRef.current = [];
+    pcmSpeechStartFrameRef.current = 0;
+    mergerRef.current.reset();
     setLiveCaptionsUnavailable(false);
     setIsDiarizing(false);
     setClarifications([]);
@@ -199,49 +219,52 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     return Math.max(0, (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000);
   }
 
-  // Force-commit any remaining tail words and push the utterance as a new segment.
-  // Merger and utteranceStart are passed explicitly to avoid race conditions when
-  // a new onSpeechStart fires before an in-flight partial's finally-block runs.
-  function finalizeUtterance(merger: LocalAgreementMerger, utteranceStart: number, finalHyp: string) {
-    // Only clear global refs if they still belong to THIS utterance.
-    if (mergerRef.current === merger) {
-      mergerRef.current = null;
-      lastPartialHypRef.current = '';
-    }
+  // Push a finalized utterance into the live segments list. Splits multi-sentence text
+  // into separate segments using word-count-proportional timestamps so they don't overlap.
+  function commitUtterance(start: number, end: number, text: string) {
     interimTextRef.current = '';
     setInterimText('');
-    merger.forceCommitRemaining(finalHyp);
-    const text = merger.getCommittedText();
-    if (!text) return;
-    const seg: LiveSegment = { speaker: '—', start: utteranceStart, end: currentElapsed(), text };
-    const updated = [...liveSegmentsRef.current, seg];
+    if (!text.trim()) return;
+    const duration = Math.max(0.1, end - start);
+    const sentences = (text.trim().match(/[^.!?]+[.!?]+/g) ?? [text.trim()])
+      .map(s => s.trim()).filter(Boolean);
+    const wordCounts = sentences.map(s => s.split(/\s+/).filter(Boolean).length);
+    const totalWords = Math.max(1, wordCounts.reduce((a, b) => a + b, 0));
+    let elapsed = start;
+    const newSegs: LiveSegment[] = sentences.map((sentence, i) => {
+      const segEnd = elapsed + (wordCounts[i] / totalWords) * duration;
+      const seg: LiveSegment = { speaker: '—', start: elapsed, end: segEnd, text: sentence };
+      elapsed = segEnd;
+      return seg;
+    });
+    const updated = [...liveSegmentsRef.current, ...newSegs];
     liveSegmentsRef.current = updated;
     setLiveSegments(updated);
     setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
   }
 
-  // Start Silero VAD on the given stream. On each detected utterance, encodes the
-  // audio as WAV and POSTs it to the per-utterance endpoint for hviske transcription.
-  // Speakers are blank ("—") until the batch diarization pass at pause / save.
+  // Start Silero VAD on the given stream. Uses raw 16 kHz PCM frames from the AudioWorklet.
+  //   • Partials every 700 ms: growing window (speechStart → now), capped at 15 s.
+  //     Below the cap, LocalAgreementMerger locks in stable words across partials.
+  //     Above the cap, a sliding 15 s window is used and the merger is bypassed.
+  //   • Finalization on onSpeechEnd: sends the exact utterance audio, split into 15 s
+  //     chunks when necessary so hviske never exceeds its 12 s server timeout.
   async function startVAD(stream: MediaStream) {
     try {
       const { MicVAD } = await import('@ricky0123/vad-web');
 
-      // Fetch the audio recorded since utterance start, run through the provided merger,
-      // and update the interim display with committed+tail. Returns the raw hypothesis
-      // text so the caller can store it for finalize-skip.
-      async function sendContextWindow(merger: LocalAgreementMerger): Promise<string> {
-        const startIdx = utteranceChunkStartRef.current;
-        // WebM stores its EBML header only in chunk 0 — any slice missing it is unparseable.
-        const sliceChunks = startIdx > 0
-          ? [chunksRef.current[0], ...chunksRef.current.slice(startIdx)]
-          : chunksRef.current.slice(startIdx);
-        if (sliceChunks.length === 0) return '';
+      // Build WAV from PCM frames [fromFrame, toFrame). toFrame defaults to current length.
+      // Returns null if no frames are available (worklet not loaded).
+      function buildWavBlob(fromFrame: number, toFrame?: number): Blob | null {
+        const frames = pcmFramesRef.current.slice(fromFrame, toFrame);
+        if (frames.length === 0) return null;
+        return encodePcmToWav(frames);
+      }
 
-        const blob = new Blob(sliceChunks, { type: mimeTypeRef.current });
-        const ext = extensionForMimeType(mimeTypeRef.current);
+      // POST a WAV blob to the utterance endpoint and return the transcribed text.
+      async function postWav(blob: Blob): Promise<string> {
         const formData = new FormData();
-        formData.append('audio', blob, `utterance.${ext}`);
+        formData.append('audio', blob, 'utterance.wav');
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 15_000);
         try {
@@ -252,16 +275,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           });
           if (res.ok) {
             const data = await res.json() as { text: string };
-            const text = (data.text ?? '').trim();
-            if (text) {
-              const { tail } = merger.merge(text);
-              // Show committed words + volatile tail together as live interim.
-              const committed = merger.getCommittedText();
-              const live = [committed, tail.join(' ')].filter(Boolean).join(' ');
-              interimTextRef.current = live;
-              setInterimText(live);
-              return text;
-            }
+            return data.text ?? '';
           }
         } catch (err) {
           if (err instanceof Error && err.name !== 'AbortError') {
@@ -274,28 +288,97 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         return '';
       }
 
-      // Fires a partial transcription every PARTIAL_INTERVAL_MS while speech is active.
-      // Captures the merger at each tick to avoid races with a concurrent onSpeechStart.
+      // Finalize one utterance: send its exact audio (startFrame..endFrame), commit the
+      // result, then drain queued utterances. For long utterances (> MAX_PARTIAL_FRAMES)
+      // the audio is split into 15 s chunks so hviske never times out.
+      async function finalize(uStart: number, uEnd: number, startFrame: number, endFrame: number) {
+        utteranceInFlightRef.current = true;
+        // Capture the partial timer's last hypothesis as a fallback before resetting
+        // the merger. If postWav fails (network down, timeout), we commit the last
+        // known partial result instead of silently dropping the utterance.
+        const fallbackText = mergerRef.current.forceCommit();
+        try {
+          const totalFrames = endFrame - startFrame;
+
+          if (totalFrames <= MAX_PARTIAL_FRAMES) {
+            // Short path: single hviske call. Fall back to last partial on failure.
+            const wav = buildWavBlob(startFrame, endFrame);
+            const text = (wav ? await postWav(wav) : '') || fallbackText;
+            commitUtterance(uStart, uEnd, text);
+          } else {
+            // Long path: split into MAX_PARTIAL_FRAMES chunks and commit each.
+            // This ensures no single call exceeds the 15 s / 12 s server timeout.
+            const frameSecs = 1024 / 16_000;
+            let chunkStart = startFrame;
+            let chunkTimeStart = uStart;
+            while (chunkStart < endFrame) {
+              const chunkEnd = Math.min(chunkStart + MAX_PARTIAL_FRAMES, endFrame);
+              const chunkTimeEnd = chunkTimeStart + (chunkEnd - chunkStart) * frameSecs;
+              const wav = buildWavBlob(chunkStart, chunkEnd);
+              const text = wav ? await postWav(wav) : '';
+              if (text.trim()) commitUtterance(chunkTimeStart, chunkTimeEnd, text);
+              chunkStart = chunkEnd;
+              chunkTimeStart = chunkTimeEnd;
+            }
+          }
+
+          // Drain the ordered queue so no utterance is ever dropped.
+          const next = pendingUtterancesRef.current.shift();
+          if (next) {
+            await finalize(next.start, next.end, next.startFrame, next.endFrame);
+          } else {
+            // Queue empty and no active speech: trim old PCM frames to free memory.
+            // Only safe here because no frame indices are in use.
+            if (utteranceStartRef.current === null) {
+              const KEEP = 10; // ~640 ms safety buffer for the next utterance's pre-roll
+              const keepFrom = Math.max(0, pcmFramesRef.current.length - KEEP);
+              if (keepFrom > 0) {
+                pcmFramesRef.current = pcmFramesRef.current.slice(keepFrom);
+                pcmSpeechStartFrameRef.current = 0;
+              }
+            }
+          }
+        } finally {
+          utteranceInFlightRef.current = false;
+        }
+      }
+
       function startPartialTimer() {
         if (partialTimerRef.current) return;
         partialTimerRef.current = setInterval(() => {
           if (utteranceStartRef.current === null || utteranceInFlightRef.current) return;
-          if (chunksRef.current.length === 0) return;
-          // Capture now — a new onSpeechStart may overwrite mergerRef before the promise
-          // settles, so we pass the merger explicitly rather than reading it in finally.
-          const merger = mergerRef.current;
-          const uStart = utteranceStartRef.current;
-          if (!merger) return;
+          const speechStartFrame = pcmSpeechStartFrameRef.current;
+          const currentFrame = pcmFramesRef.current.length;
+          // Cap the partial window at MAX_PARTIAL_FRAMES so hviske never times out.
+          // When we exceed the cap, switch to a sliding window (most recent 15 s).
+          // The merger's "prefix" assumption breaks in sliding-window mode, so we reset
+          // it and show raw text — stable committed text takes over from there.
+          const framesInWindow = currentFrame - speechStartFrame;
+          const sliding = framesInWindow > MAX_PARTIAL_FRAMES;
+          const wavStartFrame = sliding
+            ? currentFrame - MAX_PARTIAL_FRAMES
+            : speechStartFrame;
+          if (sliding) mergerRef.current.reset();
+          const wav = buildWavBlob(wavStartFrame);
+          if (!wav) return;
           utteranceInFlightRef.current = true;
-          sendContextWindow(merger).then((hyp) => {
-            if (hyp) lastPartialHypRef.current = hyp;
+          postWav(wav).then((text) => {
+            if (utteranceStartRef.current === null) return; // utterance already ended
+            let display: string;
+            if (sliding) {
+              display = text || '…';
+            } else {
+              const { committed, tail } = mergerRef.current.merge(text);
+              display = committed && tail ? `${committed} ${tail}` : (committed || tail || '…');
+            }
+            interimTextRef.current = display;
+            setInterimText(display);
           }).finally(() => {
-            lastPartialTimeRef.current = Date.now();
             utteranceInFlightRef.current = false;
-            // Finalize-skip: speech ended while this partial was running — reuse hypothesis.
-            if (utteranceStartRef.current === null && pendingUtteranceRef.current) {
-              pendingUtteranceRef.current = null;
-              finalizeUtterance(merger, uStart, lastPartialHypRef.current);
+            // Drain any utterances that ended while this partial was in-flight.
+            const next = pendingUtterancesRef.current.shift();
+            if (next && utteranceStartRef.current === null) {
+              void finalize(next.start, next.end, next.startFrame, next.endFrame);
             }
           });
         }, PARTIAL_INTERVAL_MS);
@@ -314,70 +397,48 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         // Force single-threaded ORT — no SharedArrayBuffer (COOP/COEP) required.
         ortConfig: (ort: any) => { ort.env.wasm.numThreads = 1; },
         model: 'v5',
-        // Low silence timeout — partials every 700ms do the heavy lifting; endpoint
-        // detection just triggers the finalize-skip, not a new inference call.
-        redemptionMs: 150,
-        // 300ms pre-roll matches the demo — captures soft onsets (fricatives, low-energy
-        // first syllables) that don't quite cross the VAD threshold.
+        // 600ms silence before declaring speech end — matches demo's SILENCE_TIMEOUT_MS.
+        redemptionMs: 600,
+        // 300ms pre-roll captures soft onsets; we also manually include pre-roll frames
+        // when recording pcmSpeechStartFrameRef below.
         preSpeechPadMs: 300,
         positiveSpeechThreshold: 0.5,
         negativeSpeechThreshold: 0.35,
         onSpeechStart: () => {
-          const start = currentElapsed();
-          utteranceStartRef.current = start;
-          utteranceChunkStartRef.current = Math.max(0, chunksRef.current.length - 1);
-          mergerRef.current = new LocalAgreementMerger();
-          lastPartialHypRef.current = '';
+          utteranceStartRef.current = currentElapsed();
+          // Include ~300 ms of pre-roll (≈5 frames × 1024 samples @ 16 kHz) so hviske
+          // doesn't miss soft onsets at the start of the utterance.
+          const preRollFrames = Math.round(16_000 * 0.3 / 1024);
+          pcmSpeechStartFrameRef.current = Math.max(0, pcmFramesRef.current.length - preRollFrames);
+          mergerRef.current.reset();
           interimTextRef.current = '…';
           setInterimText('…');
           startPartialTimer();
         },
-        onSpeechEnd: async (audio: Float32Array) => {
+        onSpeechEnd: async () => {
           stopPartialTimer();
-          // Capture before going async — a new onSpeechStart could overwrite these.
-          const merger = mergerRef.current;
           const uStart = utteranceStartRef.current ?? currentElapsed();
+          const uEnd = currentElapsed();
+          const startFrame = pcmSpeechStartFrameRef.current;
+          // Snapshot the buffer length now so a late finalization never bleeds into
+          // the next utterance's audio.
+          const endFrame = pcmFramesRef.current.length;
           utteranceStartRef.current = null;
           interimTextRef.current = '';
           setInterimText('');
-          if (!merger) return;
-
-          // Finalize-skip: a recent partial already covers this utterance.
-          if (!utteranceInFlightRef.current && Date.now() - lastPartialTimeRef.current <= PARTIAL_SKIP_WINDOW_MS) {
-            finalizeUtterance(merger, uStart, lastPartialHypRef.current);
-            return;
-          }
 
           if (utteranceInFlightRef.current) {
-            // A partial is in flight — queue finalization for its finally-block.
-            pendingUtteranceRef.current = { audio, start: uStart };
+            // Push to queue — nothing is dropped even if multiple utterances pile up.
+            pendingUtterancesRef.current.push({ start: uStart, end: uEnd, startFrame, endFrame });
             return;
           }
 
-          utteranceInFlightRef.current = true;
-          try {
-            const hyp = await sendContextWindow(merger);
-            if (hyp) lastPartialHypRef.current = hyp;
-            finalizeUtterance(merger, uStart, lastPartialHypRef.current);
-            // Drain any utterances that ended while we were in flight.
-            while (pendingUtteranceRef.current) {
-              const next = pendingUtteranceRef.current;
-              pendingUtteranceRef.current = null;
-              const nextMerger = mergerRef.current;
-              if (!nextMerger) break;
-              const nextHyp = await sendContextWindow(nextMerger);
-              if (nextHyp) lastPartialHypRef.current = nextHyp;
-              finalizeUtterance(nextMerger, next.start, lastPartialHypRef.current);
-            }
-          } finally {
-            utteranceInFlightRef.current = false;
-          }
+          await finalize(uStart, uEnd, startFrame, endFrame);
         },
         onVADMisfire: () => {
           stopPartialTimer();
           utteranceStartRef.current = null;
-          mergerRef.current = null;
-          lastPartialHypRef.current = '';
+          mergerRef.current.reset();
           interimTextRef.current = '';
           setInterimText('');
         },
@@ -420,8 +481,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         interimTextRef.current = '';
         setInterimText('');
         utteranceStartRef.current = null;
-        mergerRef.current = null;
-        lastPartialHypRef.current = '';
       }
     } catch (err) {
       // Diarization is a checkpoint nicety — keep the realtime preview on failure.
@@ -483,13 +542,14 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: false },
       });
 
-      // Volume meter — non-critical. If the Web Audio API can't open the hardware device
-      // (e.g. macOS CoreAudio in a bad state), recording still proceeds without the bar.
+      // Volume meter + PCM capture worklet — non-critical. If Web Audio can't open the
+      // hardware device recording still proceeds; live captions will be unavailable.
       try {
         const ctx = new AudioContext();
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 512;
-        ctx.createMediaStreamSource(stream).connect(analyser);
+        const source = ctx.createMediaStreamSource(stream);
+        source.connect(analyser);
         audioContextRef.current = ctx;
         analyserRef.current = analyser;
         // Chrome may start the context suspended (autoplay policy / autostart path).
@@ -498,6 +558,25 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         ctx.onstatechange = () => {
           if (ctx.state === 'suspended' && recordingActiveRef.current) void ctx.resume();
         };
+
+        // PCM downsampler worklet — emits 16 kHz Int16 frames used for live transcription.
+        // Runs in the same AudioContext but fails independently; if unavailable the VAD still
+        // works but live captions won't fire (batch transcription is unaffected).
+        try {
+          await ctx.audioWorklet.addModule('/asr-worklet.js');
+          const workletNode = new AudioWorkletNode(ctx, 'asr-downsampler');
+          workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
+            pcmFramesRef.current.push(new Int16Array(e.data));
+          };
+          source.connect(workletNode);
+          // Chrome silently drops AudioWorklet nodes that have no downstream sink
+          // (https://github.com/WebAudio/web-audio-api/issues/345). Connecting to
+          // destination keeps the node alive in the audio graph without audible output.
+          workletNode.connect(ctx.destination);
+          pcmWorkletNodeRef.current = workletNode;
+        } catch (workletErr) {
+          console.warn('[startRecording] PCM worklet unavailable, live captions disabled:', workletErr);
+        }
       } catch (audioErr) {
         console.warn('[startRecording] AudioContext unavailable, volume meter disabled:', audioErr);
         audioContextRef.current = null;
@@ -618,6 +697,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     clearIntervals();
     vadRef.current?.destroy();
     vadRef.current = null;
+    pcmWorkletNodeRef.current?.disconnect();
+    pcmWorkletNodeRef.current = null;
     audioContextRef.current?.close();
     audioContextRef.current = null;
 
@@ -637,11 +718,32 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     const mimeType = recorder.mimeType || 'audio/webm';
     const blob = new Blob(chunksRef.current, { type: mimeType });
 
+    // Persist live segments immediately so the review page shows content while
+    // audio processing completes in the background. Pass transcriptId to the
+    // transcribe route so it takes the update path (PII only, no re-transcription).
+    let savedTranscriptId: string | null = null;
+    if (liveSegmentsRef.current.length > 0) {
+      try {
+        const saveRes = await fetch(`/api/meetings/${meetingId}/save-transcript`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ segments: liveSegmentsRef.current }),
+        });
+        if (saveRes.ok) {
+          const data = await saveRes.json() as { transcriptId: string };
+          savedTranscriptId = data.transcriptId;
+        }
+      } catch (saveErr) {
+        console.warn('[stopAndSave] live segment save failed, falling back to batch STT:', saveErr);
+      }
+    }
+
     try {
       const formData = new FormData();
       formData.append('audio', blob, `recording.${extensionForMimeType(mimeType)}`);
       formData.append('meetingId', meetingId);
       formData.append('duration', String(elapsed));
+      if (savedTranscriptId) formData.append('transcriptId', savedTranscriptId);
       const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
@@ -671,6 +773,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       clearIntervals();
       vadRef.current?.destroy();
       vadRef.current = null;
+      pcmWorkletNodeRef.current?.disconnect();
+      pcmWorkletNodeRef.current = null;
       audioContextRef.current?.close();
       audioContextRef.current = null;
       mediaRecorderRef.current.stop();
@@ -686,6 +790,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       clearIntervals();
       vadRef.current?.destroy();
       vadRef.current = null;
+      pcmWorkletNodeRef.current?.disconnect();
+      pcmWorkletNodeRef.current = null;
       audioContextRef.current?.close();
       audioContextRef.current = null;
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {

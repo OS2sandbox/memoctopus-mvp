@@ -116,7 +116,9 @@ export async function POST(req: NextRequest) {
   after(async () => {
     try {
       const provider = getTranscriptionProvider();
-      const rawSegments: TranscriptSegment[] = await provider.transcribe(buffer, mimeType);
+      // Pass the actual recording duration so timestamps reflect real wall-clock time,
+      // not a bitrate estimate (Chrome records at ~200 kbps, not the assumed 64 kbps).
+      const rawSegments: TranscriptSegment[] = await provider.transcribe(buffer, mimeType, duration ?? undefined);
 
       let replacements: PiiReplacement[] = [];
       try {

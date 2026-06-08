@@ -1,10 +1,10 @@
 import OpenAI from 'openai';
 import { TranscriptSegment } from '@/types';
 
-// ─── Interface ───────────────────────────────────────────────────────────────
+// ─── Interface ────────────────────────────────────────────────────────────────
 
 export interface TranscriptionProvider {
-  transcribe(audioBuffer: Buffer, mimeType: string): Promise<TranscriptSegment[]>;
+  transcribe(audioBuffer: Buffer, mimeType: string, durationSeconds?: number): Promise<TranscriptSegment[]>;
 }
 
 // ─── Hviske implementation ────────────────────────────────────────────────────
@@ -27,7 +27,7 @@ export class HviskeProvider implements TranscriptionProvider {
     this.language = process.env.ASR_LANGUAGE ?? 'da';
   }
 
-  async transcribe(audioBuffer: Buffer, mimeType: string): Promise<TranscriptSegment[]> {
+  async transcribe(audioBuffer: Buffer, mimeType: string, durationSeconds?: number): Promise<TranscriptSegment[]> {
     const ext = mimeTypeToExt(mimeType);
     const file = new File([new Uint8Array(audioBuffer)], `audio.${ext}`, { type: mimeType });
 
@@ -38,7 +38,13 @@ export class HviskeProvider implements TranscriptionProvider {
       response_format: 'json',
     });
 
-    return [{ speaker: 'Taler 1', start: 0, end: 0, text: response.text }];
+    const text = response.text?.trim() ?? '';
+    if (!text) return [];
+
+    // Prefer the caller-supplied duration (actual wall-clock recording time) over the
+    // buffer-size estimate, which is unreliable because browser bitrates vary widely.
+    const duration = durationSeconds ?? estimateAudioDurationSeconds(audioBuffer.length);
+    return splitIntoTimedSegments(text, duration);
   }
 
   async transcribeRaw(audioBuffer: Buffer, mimeType: string): Promise<string> {
@@ -50,10 +56,46 @@ export class HviskeProvider implements TranscriptionProvider {
       file,
       language: this.language,
       response_format: 'json',
-    });
+    }, { timeout: 12_000 });
 
     return response.text ?? '';
   }
+}
+
+// ─── Timestamp estimation ─────────────────────────────────────────────────────
+// hviske returns plain text without segment timestamps, so we estimate them from
+// audio buffer size and distribute proportionally by word count across sentences.
+
+function estimateAudioDurationSeconds(bufferBytes: number): number {
+  // WebM/Opus at ~64 kbps average ≈ 8 000 bytes/s
+  return Math.max(1, bufferBytes / 8_000);
+}
+
+function splitIntoTimedSegments(text: string, totalDurationSeconds: number): TranscriptSegment[] {
+  // Split on sentence boundaries, retaining the terminal punctuation
+  const sentences = (text.match(/[^.!?]+[.!?]+/g) ?? [text])
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  if (sentences.length === 0) {
+    return [{ speaker: 'Taler 1', start: 0, end: totalDurationSeconds, text }];
+  }
+
+  const wordCounts = sentences.map(s => s.split(/\s+/).filter(Boolean).length);
+  const totalWords = wordCounts.reduce((a, b) => a + b, 0);
+
+  let elapsed = 0;
+  return sentences.map((sentence, i) => {
+    const segDuration = (wordCounts[i] / Math.max(totalWords, 1)) * totalDurationSeconds;
+    const segment: TranscriptSegment = {
+      speaker: 'Taler 1',
+      start: elapsed,
+      end: elapsed + segDuration,
+      text: sentence,
+    };
+    elapsed += segDuration;
+    return segment;
+  });
 }
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
