@@ -91,21 +91,36 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Replace any existing minutes for this meeting (minute_versions cascade-deletes)
-  await queryUserSchemaOne(
+  // If minutes already exist, archive the current version and update in-place so history is preserved.
+  const existingMinutes = await queryUserSchemaOne<{ id: string; version: number; content: unknown }>(
     session.user.id,
-    'DELETE FROM minutes WHERE meeting_id = $1',
+    'SELECT id, version, content FROM minutes WHERE meeting_id = $1',
     [meetingId],
   );
 
-  // Save minutes
-  const minutesRow = await queryUserSchemaOne<{ id: string }>(
-    session.user.id,
-    `INSERT INTO minutes (meeting_id, template_id, content, version)
-     VALUES ($1, $2, $3, 1)
-     RETURNING id`,
-    [meetingId, templateId, JSON.stringify(minutesContent)],
-  );
+  let minutesRow: { id: string } | null;
+  if (existingMinutes) {
+    await queryUserSchemaOne(
+      session.user.id,
+      'INSERT INTO minute_versions (meeting_id, minutes_id, content) VALUES ($1, $2, $3)',
+      [meetingId, existingMinutes.id, JSON.stringify(existingMinutes.content)],
+    );
+    const newVersion = existingMinutes.version + 1;
+    await queryUserSchemaOne(
+      session.user.id,
+      'UPDATE minutes SET content = $1, version = $2, template_id = $3 WHERE id = $4',
+      [JSON.stringify(minutesContent), newVersion, templateId, existingMinutes.id],
+    );
+    minutesRow = { id: existingMinutes.id };
+  } else {
+    minutesRow = await queryUserSchemaOne<{ id: string }>(
+      session.user.id,
+      `INSERT INTO minutes (meeting_id, template_id, content, version)
+       VALUES ($1, $2, $3, 1)
+       RETURNING id`,
+      [meetingId, templateId, JSON.stringify(minutesContent)],
+    );
+  }
 
   // Update meeting status
   await queryUserSchemaOne(

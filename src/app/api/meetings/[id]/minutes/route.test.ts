@@ -135,15 +135,15 @@ describe('PATCH /api/meetings/[id]/minutes', () => {
   });
 
   it('returns the new version row in the response body', async () => {
-    const newVersionRow = { id: 'ver-42', content: validBody.content, created_at: '2025-01-01T00:00:00Z' };
+    const currentContent = { sections: [{ key: 'old', label: 'Old', content: 'Before.' }] };
+    const archiveMeta = { id: 'ver-42', created_at: '2025-01-01T00:00:00Z' };
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne
-      .mockResolvedValueOnce({ id: 'min-1', version: 10, content: {} } as never)
-      .mockResolvedValueOnce({} as never)
-      .mockResolvedValueOnce({} as never)
-      .mockResolvedValueOnce(newVersionRow as never);
+      .mockResolvedValueOnce({ id: 'min-1', version: 10, content: currentContent } as never) // SELECT current
+      .mockResolvedValueOnce(archiveMeta as never) // INSERT archive RETURNING id, created_at
+      .mockResolvedValueOnce({} as never); // UPDATE minutes
 
     const body = await (await PATCH(makeJsonReq(BASE_URL, 'PATCH', validBody), PARAMS)).json();
-    expect(body.newVersion).toEqual(newVersionRow);
+    expect(body.newVersion).toEqual({ ...archiveMeta, content: currentContent });
   });
 });

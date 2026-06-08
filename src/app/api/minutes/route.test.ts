@@ -94,14 +94,14 @@ describe('POST /api/minutes', () => {
     expect(res.status).toBe(404);
   });
 
-  it('generates minutes with template selection and returns minutesId', async () => {
+  it('generates minutes with template selection and returns minutesId (first time)', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never); // meeting lookup
     mockQueryMany.mockResolvedValueOnce(sampleTemplates as never); // templates
     mockSuggestTemplate.mockResolvedValueOnce({ templateId: 'tmpl-1', templateName: 'Bestyrelsesmøde', explanation: 'x' });
     mockGenerateMinutes.mockResolvedValueOnce(sampleMinutesContent);
-    mockQueryOne.mockResolvedValueOnce({} as never); // DELETE existing minutes
-    mockQueryOne.mockResolvedValueOnce({ id: 'min-new' } as never); // INSERT minutes
+    mockQueryOne.mockResolvedValueOnce(null as never); // SELECT existing minutes → none
+    mockQueryOne.mockResolvedValueOnce({ id: 'min-new' } as never); // INSERT minutes RETURNING id
     mockQueryOne.mockResolvedValueOnce({} as never); // UPDATE meeting status
     mockQueryMany.mockResolvedValueOnce([{ filename: 'audio.webm' }] as never); // audio files
     mockQueryMany.mockResolvedValueOnce([] as never); // UPDATE audio deleted_at
@@ -112,12 +112,31 @@ describe('POST /api/minutes', () => {
     expect((await res.json()).minutesId).toBe('min-new');
   });
 
+  it('preserves version history and returns same minutesId when regenerating', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never); // meeting lookup
+    mockQueryMany.mockResolvedValueOnce(sampleTemplates as never); // templates
+    mockSuggestTemplate.mockResolvedValueOnce({ templateId: 'tmpl-1', templateName: 'X', explanation: 'x' });
+    mockGenerateMinutes.mockResolvedValueOnce(sampleMinutesContent);
+    mockQueryOne.mockResolvedValueOnce({ id: 'min-existing', version: 2, content: { sections: [] } } as never); // SELECT existing
+    mockQueryOne.mockResolvedValueOnce({} as never); // INSERT archive into minute_versions
+    mockQueryOne.mockResolvedValueOnce({} as never); // UPDATE minutes
+    mockQueryOne.mockResolvedValueOnce({} as never); // UPDATE meeting status
+    mockQueryMany.mockResolvedValueOnce([] as never); // audio files
+    mockQueryMany.mockResolvedValueOnce([] as never); // UPDATE audio deleted_at
+
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { meetingId: 'meet-1', transcriptId: 'tid-1', segments: sampleSegments }));
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).minutesId).toBe('min-existing');
+  });
+
   it('calls generateMinutesFreeform when customPrompt is provided', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never);
     mockGenerateMinutesFreeform.mockResolvedValueOnce(sampleMinutesContent);
-    mockQueryOne.mockResolvedValueOnce({} as never); // DELETE
-    mockQueryOne.mockResolvedValueOnce({ id: 'min-free' } as never); // INSERT
+    mockQueryOne.mockResolvedValueOnce(null as never); // SELECT existing → none
+    mockQueryOne.mockResolvedValueOnce({ id: 'min-free' } as never); // INSERT minutes
     mockQueryOne.mockResolvedValueOnce({} as never); // UPDATE status
     mockQueryMany.mockResolvedValueOnce([] as never); // audio files
     mockQueryMany.mockResolvedValueOnce([] as never); // UPDATE audio
@@ -143,9 +162,9 @@ describe('POST /api/minutes', () => {
     mockQueryMany.mockResolvedValueOnce(sampleTemplates as never);
     mockSuggestTemplate.mockResolvedValueOnce({ templateId: 'tmpl-1', templateName: 'X', explanation: 'x' });
     mockGenerateMinutes.mockResolvedValueOnce(sampleMinutesContent);
-    mockQueryOne.mockResolvedValueOnce({} as never);
-    mockQueryOne.mockResolvedValueOnce({ id: 'min-1' } as never);
-    mockQueryOne.mockResolvedValueOnce({} as never);
+    mockQueryOne.mockResolvedValueOnce(null as never); // SELECT existing → none
+    mockQueryOne.mockResolvedValueOnce({ id: 'min-1' } as never); // INSERT minutes
+    mockQueryOne.mockResolvedValueOnce({} as never); // UPDATE status
     mockQueryMany.mockResolvedValueOnce([] as never);
     mockQueryMany.mockResolvedValueOnce([] as never);
 
@@ -160,8 +179,8 @@ describe('POST /api/minutes', () => {
     mockQueryMany.mockResolvedValueOnce(sampleTemplates as never);
     mockSuggestTemplate.mockResolvedValueOnce({ templateId: 'tmpl-1', templateName: 'X', explanation: 'x' });
     mockGenerateMinutes.mockResolvedValueOnce(sampleMinutesContent);
-    mockQueryOne.mockResolvedValueOnce({} as never); // DELETE
-    mockQueryOne.mockResolvedValueOnce({ id: 'min-1' } as never); // INSERT
+    mockQueryOne.mockResolvedValueOnce(null as never); // SELECT existing → none
+    mockQueryOne.mockResolvedValueOnce({ id: 'min-1' } as never); // INSERT minutes
     mockQueryOne.mockResolvedValueOnce({} as never); // UPDATE status
     mockQueryMany.mockResolvedValueOnce([] as never);
     mockQueryMany.mockResolvedValueOnce([] as never);
@@ -180,9 +199,9 @@ describe('POST /api/minutes', () => {
     mockQueryMany.mockResolvedValueOnce(sampleTemplates as never);
     mockSuggestTemplate.mockResolvedValueOnce({ templateId: 'non-existent', templateName: 'X', explanation: 'x' });
     mockGenerateMinutes.mockResolvedValueOnce(sampleMinutesContent);
-    mockQueryOne.mockResolvedValueOnce({} as never);
-    mockQueryOne.mockResolvedValueOnce({ id: 'min-1' } as never);
-    mockQueryOne.mockResolvedValueOnce({} as never);
+    mockQueryOne.mockResolvedValueOnce(null as never); // SELECT existing → none
+    mockQueryOne.mockResolvedValueOnce({ id: 'min-1' } as never); // INSERT minutes
+    mockQueryOne.mockResolvedValueOnce({} as never); // UPDATE status
     mockQueryMany.mockResolvedValueOnce([] as never);
     mockQueryMany.mockResolvedValueOnce([] as never);
 

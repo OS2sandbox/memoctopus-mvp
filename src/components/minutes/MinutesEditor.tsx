@@ -23,6 +23,119 @@ interface MinutesEditorProps {
 
 const AUTOSAVE_DELAY = 1500;
 
+function VersionDropdown({
+  version,
+  versions,
+  onSelect,
+}: {
+  version: number;
+  versions: VersionRecord[];
+  onSelect: (content: MinutesContent) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  if (versions.length === 0) {
+    return (
+      <p className="mt-1 text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
+        Version {version}
+      </p>
+    );
+  }
+
+  return (
+    <div ref={ref} className="relative mt-1">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          fontSize: 'var(--t-small)',
+          color: 'var(--muted)',
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          padding: 0,
+        }}
+      >
+        Version {version}
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 10 10"
+          fill="currentColor"
+          style={{ flexShrink: 0, transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : undefined }}
+        >
+          <path d="M1 3l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 4px)',
+            left: 0,
+            background: 'var(--surface)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--radius)',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
+            zIndex: 50,
+            minWidth: 170,
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: '7px 12px',
+              fontSize: 'var(--t-small)',
+              color: 'var(--ink)',
+              background: 'var(--fill)',
+            }}
+          >
+            <span>Version {version}</span>
+            <span style={{ fontSize: 'var(--t-micro)', color: 'var(--muted)' }}>nuværende</span>
+          </div>
+          {versions.map((v, i) => (
+            <button
+              key={v.id}
+              onClick={() => { onSelect(v.content); setOpen(false); }}
+              style={{
+                display: 'flex',
+                width: '100%',
+                textAlign: 'left',
+                padding: '7px 12px',
+                fontSize: 'var(--t-small)',
+                color: 'var(--ink)',
+                background: 'none',
+                border: 'none',
+                borderTop: '1px solid var(--line)',
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--fill)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+            >
+              Version {versions.length - i}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MinutesEditor({
   meetingId,
   minutesId,
@@ -110,6 +223,11 @@ export function MinutesEditor({
     setNewLabel('');
   }
 
+  function loadVersion(restoredContent: MinutesContent) {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    setContent(restoredContent);
+  }
+
   function handleRestore(restoredContent: MinutesContent) {
     setContent(restoredContent);
     setShowHistory(false);
@@ -125,9 +243,7 @@ export function MinutesEditor({
           >
             Referat
           </h1>
-          <p className="mt-1 text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
-            Version {version}
-          </p>
+          <VersionDropdown version={version} versions={versions} onSelect={loadVersion} />
         </div>
         <div className="flex items-center gap-3 mt-1">
           <SaveStatus state={saveState} />

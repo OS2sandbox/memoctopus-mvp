@@ -36,10 +36,10 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   const newVersion = current.version + 1;
 
-  // Archive current version
-  await queryUserSchemaOne(
+  // Archive current version — use RETURNING so we get exactly the row we inserted
+  const archivedVersion = await queryUserSchemaOne<{ id: string; created_at: string }>(
     session.user.id,
-    'INSERT INTO minute_versions (meeting_id, minutes_id, content) VALUES ($1, $2, $3)',
+    'INSERT INTO minute_versions (meeting_id, minutes_id, content) VALUES ($1, $2, $3) RETURNING id, created_at',
     [id, current.id, JSON.stringify(current.content)],
   );
 
@@ -50,15 +50,10 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     [JSON.stringify(content), newVersion, current.id],
   );
 
-  const latestVersion = await queryUserSchemaOne<{
-    id: string;
-    content: unknown;
-    created_at: string;
-  }>(
-    session.user.id,
-    'SELECT id, content, created_at FROM minute_versions WHERE minutes_id = $1 ORDER BY created_at DESC LIMIT 1',
-    [current.id],
-  );
-
-  return NextResponse.json({ version: newVersion, newVersion: latestVersion });
+  return NextResponse.json({
+    version: newVersion,
+    newVersion: archivedVersion
+      ? { id: archivedVersion.id, content: current.content, created_at: archivedVersion.created_at }
+      : null,
+  });
 }
