@@ -86,13 +86,15 @@ export function RichEditor({ value, onChange, placeholder }: RichEditorProps) {
     immediatelyRender: false,
   });
 
-  // Sync external value changes (e.g. version restore)
+  // Sync external value changes (e.g. version restore).
+  // emitUpdate=false prevents onUpdate from firing, which would otherwise
+  // trigger updateSection → autosave and create an unintended new version.
   useEffect(() => {
     if (!editor) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const current = (editor.storage as any).markdown.getMarkdown();
     if (current !== value) {
-      editor.commands.setContent(value);
+      editor.commands.setContent(value, { emitUpdate: false });
     }
   }, [value, editor]);
 
