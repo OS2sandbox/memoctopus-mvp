@@ -14,7 +14,7 @@ export async function GET() {
 
   const [audioRow] = await queryUserSchema<{ bytes: string; oldest: string | null }>(
     session.user.id,
-    `SELECT COALESCE(SUM(file_size_bytes), 0)::text AS bytes,
+    `SELECT COALESCE(SUM(af.size_bytes), 0)::text AS bytes,
             MIN(m.created_at)::text AS oldest
      FROM audio_files af
      JOIN meetings m ON m.id = af.meeting_id
