@@ -30,7 +30,10 @@ export default async function ArkivPage() {
       WHERE deleted_at IS NULL
       ORDER BY meeting_id, id DESC
     ) af ON af.meeting_id = m.id
-    WHERE m.status NOT IN ('recording', 'joining')
+    WHERE m.status != 'joining'
+      AND (m.status != 'recording' OR EXISTS (
+        SELECT 1 FROM transcripts t WHERE t.meeting_id = m.id
+      ))
     ORDER BY m.created_at DESC
     LIMIT 200
   `);
