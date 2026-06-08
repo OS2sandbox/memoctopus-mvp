@@ -99,11 +99,21 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
 
   await Promise.all(rows.map((r) => deleteAudioFile(session.user.id, r.filename)));
 
-  await queryUserSchema(
+  // Keep 'review' status when a transcript already exists so the transcript
+  // remains accessible. Only fall back to 'recording' when there is nothing to show.
+  const transcript = await queryUserSchemaOne<{ id: string }>(
     session.user.id,
-    "UPDATE meetings SET status = 'recording', updated_at = NOW() WHERE id = $1",
+    'SELECT id FROM transcripts WHERE meeting_id = $1 LIMIT 1',
     [id],
   );
 
-  return NextResponse.json({ ok: true });
+  await queryUserSchema(
+    session.user.id,
+    transcript
+      ? "UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1"
+      : "UPDATE meetings SET status = 'recording', updated_at = NOW() WHERE id = $1",
+    [id],
+  );
+
+  return NextResponse.json({ ok: true, hasTranscript: !!transcript });
 }

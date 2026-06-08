@@ -30,6 +30,7 @@ export default async function ArkivPage() {
       WHERE deleted_at IS NULL
       ORDER BY meeting_id, id DESC
     ) af ON af.meeting_id = m.id
+    WHERE m.status NOT IN ('recording', 'joining')
     ORDER BY m.created_at DESC
     LIMIT 200
   `);

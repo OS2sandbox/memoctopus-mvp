@@ -34,7 +34,7 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
 
   const switchTab = useCallback(
     (tab: ProcessPhase) => {
-      if (tab === 'recording' && activeTab === 'review') {
+      if (tab === 'recording' && activeTab === 'review' && !!audioFile) {
         setShowDeleteAudioDialog(true);
         return;
       }
@@ -45,7 +45,7 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
         tab === 'recording' ? `/meeting/${meetingId}` : `/meeting/${meetingId}/${tab}`,
       );
     },
-    [meetingId, activeTab],
+    [meetingId, activeTab, audioFile],
   );
 
   const completedPhases: ProcessPhase[] = (() => {
@@ -65,9 +65,20 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
         open={showDeleteAudioDialog}
         onOpenChange={setShowDeleteAudioDialog}
         meetingId={meetingId}
-        title="Slet lydfil og gå til optagelse?"
-        confirmLabel="Slet og gå til optagelse"
-        onDeleted={() => router.push(`/meeting/${meetingId}`)}
+        title={transcript ? 'Slet lydfil?' : 'Slet lydfil og gå til optagelse?'}
+        description={
+          transcript
+            ? 'Lydfilen slettes. Transskriptionen bevares.'
+            : 'Lydfilen slettes, og mødet nulstilles til optagelse.'
+        }
+        confirmLabel={transcript ? 'Slet lydfil' : 'Slet og gå til optagelse'}
+        onDeleted={() => {
+          if (transcript) {
+            router.refresh();
+          } else {
+            router.push(`/meeting/${meetingId}`);
+          }
+        }}
       />
       <ProcessStrip
         meetingId={meetingId}

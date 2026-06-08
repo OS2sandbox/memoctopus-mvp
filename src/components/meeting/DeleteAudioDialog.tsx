@@ -9,11 +9,12 @@ interface DeleteAudioDialogProps {
   onOpenChange: (open: boolean) => void;
   meetingId: string;
   title: string;
+  description?: string;
   confirmLabel: string;
   onDeleted: () => void;
 }
 
-export function DeleteAudioDialog({ open, onOpenChange, meetingId, title, confirmLabel, onDeleted }: DeleteAudioDialogProps) {
+export function DeleteAudioDialog({ open, onOpenChange, meetingId, title, description, confirmLabel, onDeleted }: DeleteAudioDialogProps) {
   const [deleting, setDeleting] = useState(false);
 
   async function handleConfirm() {
@@ -35,7 +36,7 @@ export function DeleteAudioDialog({ open, onOpenChange, meetingId, title, confir
           <DialogDescription className="sr-only">Bekræft sletning af lydfil</DialogDescription>
         </DialogHeader>
         <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.6 }}>
-          Lydfilen slettes, og mødet nulstilles til optagelse.
+          {description ?? 'Lydfilen slettes, og mødet nulstilles til optagelse.'}
         </p>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={deleting}>
