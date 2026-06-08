@@ -3,9 +3,8 @@ import { headers } from 'next/headers';
 import Link from 'next/link';
 import { auth } from '@/lib/auth';
 import { queryUserSchema } from '@/lib/db/user-schema';
-import { formatDate, formatDuration, statusLabel, statusVariant } from '@/lib/utils';
-import { Badge } from '@/components/ui/badge';
 import { Meeting } from '@/types';
+import { ArchiveMeetingRow } from '@/components/archive-meeting-row';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,13 +44,6 @@ export default async function ArkivPage() {
     durationSeconds: r.duration_seconds,
   }));
 
-  function statusHref(m: Meeting) {
-    if (m.status === 'recording' || m.status === 'processing') return `/meeting/${m.id}`;
-    if (m.status === 'review') return `/meeting/${m.id}/review`;
-    if (m.status === 'minutes') return `/meeting/${m.id}/minutes`;
-    return `/meeting/${m.id}/minutes`;
-  }
-
   return (
     <div className="mx-auto max-w-[1040px] px-6 py-12">
       {/* Header */}
@@ -89,29 +81,7 @@ export default async function ArkivPage() {
       ) : (
         <div className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] divide-y divide-[var(--line)]">
           {meetings.map((m) => (
-            <Link
-              key={m.id}
-              href={statusHref(m)}
-              className="flex items-center gap-4 px-5 py-4 hover:bg-[var(--surface-2)] transition-colors"
-            >
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-[var(--ink)] truncate" style={{ fontSize: 'var(--t-body)' }}>
-                  {m.title}
-                </p>
-                <p className="mt-0.5 text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}>
-                  {formatDate(m.createdAt)}
-                  {m.durationSeconds != null && (
-                    <> · {formatDuration(m.durationSeconds)}</>
-                  )}
-                  {m.participants.length > 0 && (
-                    <> · {m.participants.length} deltager{m.participants.length !== 1 ? 'e' : ''}</>
-                  )}
-                </p>
-              </div>
-              <Badge variant={statusVariant(m.status)}>
-                {statusLabel(m.status)}
-              </Badge>
-            </Link>
+            <ArchiveMeetingRow key={m.id} meeting={m} />
           ))}
         </div>
       )}
