@@ -167,6 +167,60 @@ describe('HviskeProvider.transcribe', () => {
   });
 });
 
+// ─── HviskeProvider.transcribeRaw ─────────────────────────────────────────────
+
+describe('HviskeProvider.transcribeRaw', () => {
+  let provider: HviskeProvider;
+
+  beforeEach(() => {
+    provider = new HviskeProvider();
+    mockTranscriptionsCreate.mockReset();
+  });
+
+  it('returns the text string from the API response', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'Hej verden' });
+
+    const result = await provider.transcribeRaw(Buffer.from('audio'), 'audio/wav');
+
+    expect(result).toBe('Hej verden');
+  });
+
+  it('returns empty string when API returns no text', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: '' });
+
+    const result = await provider.transcribeRaw(Buffer.from('audio'), 'audio/wav');
+
+    expect(result).toBe('');
+  });
+
+  it('uses response_format json (not verbose_json)', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'x' });
+
+    await provider.transcribeRaw(Buffer.from('a'), 'audio/wav');
+
+    const call = mockTranscriptionsCreate.mock.calls[0][0];
+    expect(call.response_format).toBe('json');
+  });
+
+  it('does not request timestamp_granularities', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'x' });
+
+    await provider.transcribeRaw(Buffer.from('a'), 'audio/wav');
+
+    const call = mockTranscriptionsCreate.mock.calls[0][0];
+    expect(call.timestamp_granularities).toBeUndefined();
+  });
+
+  it('sends the correct file extension for audio/wav', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'x' });
+
+    await provider.transcribeRaw(Buffer.from('a'), 'audio/wav');
+
+    const call = mockTranscriptionsCreate.mock.calls[0][0];
+    expect(call.file.name).toMatch(/\.wav$/);
+  });
+});
+
 // ─── Provider singleton ───────────────────────────────────────────────────────
 
 describe('getTranscriptionProvider / setTranscriptionProvider', () => {

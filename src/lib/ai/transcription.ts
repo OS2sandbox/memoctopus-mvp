@@ -93,9 +93,11 @@ function speakerLabel(speakerId: string): string {
   return `Taler ${num}`;
 }
 
-// ─── Hviske-v5.1 implementation ──────────────────────────────────────────────
-// Talks to a vLLM instance serving syvai/hviske-v5.1 via its OpenAI-compatible
-// /v1/audio/transcriptions endpoint.
+// ─── Hviske implementation ────────────────────────────────────────────────────
+// Talks to the hviske server via its OpenAI-compatible /v1/audio/transcriptions
+// endpoint. Two modes:
+//   transcribe()    — full batch call, returns diarized TranscriptSegment[]
+//   transcribeRaw() — lightweight call, returns plain text (for per-utterance live path)
 
 export class HviskeProvider implements TranscriptionProvider {
   private client: OpenAI;
@@ -104,10 +106,10 @@ export class HviskeProvider implements TranscriptionProvider {
 
   constructor() {
     this.client = new OpenAI({
-      apiKey: process.env.VLLM_API_KEY ?? 'no-key',
-      baseURL: process.env.VLLM_URL ?? 'http://localhost:8001/v1',
+      apiKey: process.env.HVISKE_API_KEY ?? 'no-key',
+      baseURL: process.env.HVISKE_URL ?? 'http://74.48.78.46:58780/v1',
     });
-    this.model = process.env.VLLM_MODEL ?? 'syvai/hviske-v5.1';
+    this.model = process.env.HVISKE_MODEL ?? 'syvai/hviske-v5.1';
     this.language = process.env.ASR_LANGUAGE ?? 'da';
   }
 
@@ -128,6 +130,20 @@ export class HviskeProvider implements TranscriptionProvider {
     }
 
     return [{ speaker: 'Taler 1', start: 0, end: 0, text: response.text }];
+  }
+
+  async transcribeRaw(audioBuffer: Buffer, mimeType: string): Promise<string> {
+    const ext = mimeTypeToExt(mimeType);
+    const file = new File([new Uint8Array(audioBuffer)], `audio.${ext}`, { type: mimeType });
+
+    const response = await this.client.audio.transcriptions.create({
+      model: this.model,
+      file,
+      language: this.language,
+      response_format: 'json',
+    });
+
+    return response.text ?? '';
   }
 }
 
@@ -166,7 +182,7 @@ function mimeTypeToExt(mimeType: string): string {
 // ─── Active provider ──────────────────────────────────────────────────────────
 // TRANSCRIPTION_PROVIDER env var selects the provider:
 //   elevenlabs (default) — scribe_v2 with speaker diarization
-//   hviske               — syvai/hviske-v5.1 via vLLM
+//   hviske               — syvai/hviske-v5.1 via hviske server
 
 let _provider: TranscriptionProvider | null = null;
 

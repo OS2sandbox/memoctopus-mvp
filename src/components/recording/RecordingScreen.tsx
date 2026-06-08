@@ -15,7 +15,6 @@ import { VolumeBar } from './VolumeBar';
 import { formatDuration, formatFileSize } from '@/lib/utils';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { pickRecordingMimeType, extensionForMimeType } from '@/lib/audio/recording-format';
-import { RealtimeTranscriptionStream } from '@/lib/audio/realtime-stream';
 
 interface LiveSegment {
   speaker: string;
@@ -58,8 +57,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const [isUploading, setIsUploading] = useState(false);
   const [isOverwriting, setIsOverwriting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // True if the realtime live-text stream can't connect — the batch transcript
-  // still works, but the live interim captions won't show.
+  // True if VAD setup fails or utterance transcription errors out — the batch
+  // transcript still works, but the live interim captions won't show.
   const [liveCaptionsUnavailable, setLiveCaptionsUnavailable] = useState(false);
   // True while a batch diarization pass is running (on pause) — the preview is
   // being repainted with authoritative speaker labels.
@@ -80,11 +79,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
   const interimTextRef = useRef('');
   const recordingActiveRef = useRef(false);
-  // Live transcription stream (ElevenLabs realtime). Text-only preview; speakers
-  // are filled in by the batch diarization pass at pause / save.
-  const streamRef = useRef<RealtimeTranscriptionStream | null>(null);
-  // Elapsed-seconds mark when the current utterance's first partial arrived, so a
-  // committed line gets a sensible start time in the preview.
+  // Silero VAD instance (created in startVAD, destroyed on stop/cancel).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vadRef = useRef<any>(null);
+  // Elapsed-seconds mark when VAD fires onSpeechStart, for accurate segment timestamps.
   const utteranceStartRef = useRef<number | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -131,44 +129,80 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     setClarifyRemaining(1);
   }
 
-  // ── Live transcription (ElevenLabs realtime) ─────────────────────────────────
+  // ── Live transcription (Silero VAD + hviske) ─────────────────────────────────
 
   function currentElapsed(): number {
     return Math.max(0, (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000);
   }
 
-  // Open the realtime stream for live text-only preview. Speakers are blank ("—")
-  // until the batch diarization pass runs at pause / save.
-  async function startRealtime(stream: MediaStream) {
-    const ctl = new RealtimeTranscriptionStream(meetingId, {
-      onPartial: (text) => {
-        setLiveCaptionsUnavailable(false);
-        if (interimTextRef.current === '' && utteranceStartRef.current === null) {
+  // Start Silero VAD on the given stream. On each detected utterance, encodes the
+  // audio as WAV and POSTs it to the per-utterance endpoint for hviske transcription.
+  // Speakers are blank ("—") until the batch diarization pass at pause / save.
+  async function startVAD(stream: MediaStream) {
+    try {
+      const { MicVAD, utils } = await import('@ricky0123/vad-web');
+      const vad = await MicVAD.new({
+        // Use existing getUserMedia stream — prevents a second mic permission prompt
+        // and keeps MediaRecorder's track alive when VAD is paused.
+        getStream: () => Promise.resolve(stream),
+        pauseStream: async () => {},
+        resumeStream: async (s) => s,
+        baseAssetPath: '/',
+        onnxWASMBasePath: '/',
+        // Force single-threaded ORT — avoids needing SharedArrayBuffer (COOP/COEP headers)
+        // and the .mjs pthread worker. VAD inference is fast enough to run on the main thread.
+        ortConfig: (ort: any) => { ort.env.wasm.numThreads = 1; },
+        onSpeechStart: () => {
           utteranceStartRef.current = currentElapsed();
-        }
-        interimTextRef.current = text;
-        setInterimText(text);
-        setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
-      },
-      onCommitted: (text) => {
-        setLiveCaptionsUnavailable(false);
-        const seg: LiveSegment = {
-          speaker: '—',
-          start: utteranceStartRef.current ?? currentElapsed(),
-          end: currentElapsed(),
-          text,
-        };
-        utteranceStartRef.current = null;
-        interimTextRef.current = '';
-        setInterimText('');
-        liveSegmentsRef.current = [...liveSegmentsRef.current, seg];
-        setLiveSegments([...liveSegmentsRef.current]);
-        setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
-      },
-      onError: () => { setLiveCaptionsUnavailable(true); },
-    });
-    streamRef.current = ctl;
-    await ctl.start(stream);
+          interimTextRef.current = '…';
+          setInterimText('…');
+        },
+        onSpeechEnd: async (audio: Float32Array) => {
+          const start = utteranceStartRef.current ?? currentElapsed();
+          utteranceStartRef.current = null;
+          const wavBuffer = utils.encodeWAV(audio);
+          const blob = new Blob([wavBuffer], { type: 'audio/wav' });
+          const formData = new FormData();
+          formData.append('audio', blob, 'utterance.wav');
+          try {
+            const res = await fetch(`/api/meetings/${meetingId}/utterance`, {
+              method: 'POST',
+              body: formData,
+            });
+            if (res.ok) {
+              const data = await res.json() as { text: string };
+              if (data.text) {
+                const seg: LiveSegment = {
+                  speaker: '—',
+                  start,
+                  end: currentElapsed(),
+                  text: data.text,
+                };
+                liveSegmentsRef.current = [...liveSegmentsRef.current, seg];
+                setLiveSegments([...liveSegmentsRef.current]);
+                setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+              }
+            }
+          } catch (err) {
+            console.error('[vad] utterance transcription failed:', err);
+            setLiveCaptionsUnavailable(true);
+          } finally {
+            interimTextRef.current = '';
+            setInterimText('');
+          }
+        },
+        onVADMisfire: () => {
+          utteranceStartRef.current = null;
+          interimTextRef.current = '';
+          setInterimText('');
+        },
+      });
+      vadRef.current = vad;
+      setLiveCaptionsUnavailable(false);
+    } catch (err) {
+      console.error('[startVAD] setup failed:', err);
+      setLiveCaptionsUnavailable(true);
+    }
   }
 
   // Flush the recorder's buffered tail into chunksRef before reading it.
@@ -309,7 +343,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       animFrameRef.current = requestAnimationFrame(pollVolume);
       startClarifyTimer();
 
-      void startRealtime(stream);
+      void startVAD(stream);
     } catch (err) {
       // Release the mic if we acquired it but failed during setup — otherwise it stays locked
       stream?.getTracks().forEach((t) => t.stop());
@@ -341,9 +375,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     setIsDiarizing(true);
     setRecordingState('paused');
 
-    // Close the live stream, flush the recorded tail, then pause the recorder.
-    await streamRef.current?.stop();
-    streamRef.current = null;
+    // Pause VAD processing, flush the recorded tail, then pause the recorder.
+    vadRef.current?.pause();
     await flushRecorder(recorder);
     recorder.pause();
     // Suspend the AudioContext so it releases the hardware and stops generating errors
@@ -366,7 +399,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     if (analyserRef.current) animFrameRef.current = requestAnimationFrame(pollVolume);
     startClarifyTimer();
     setRecordingState('recording');
-    void startRealtime(recorder.stream);
+    vadRef.current?.start();
   }
 
   // Auto-start when navigated here from the home page record button
@@ -392,8 +425,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     const recorder = mediaRecorderRef.current;
     recordingActiveRef.current = false;
     clearIntervals();
-    await streamRef.current?.stop();
-    streamRef.current = null;
+    vadRef.current?.destroy();
+    vadRef.current = null;
     audioContextRef.current?.close();
     audioContextRef.current = null;
 
@@ -448,8 +481,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     if (mediaRecorderRef.current) {
       recordingActiveRef.current = false;
       clearIntervals();
-      void streamRef.current?.stop();
-      streamRef.current = null;
+      vadRef.current?.destroy();
+      vadRef.current = null;
       audioContextRef.current?.close();
       audioContextRef.current = null;
       mediaRecorderRef.current.stop();
@@ -463,8 +496,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     return () => {
       recordingActiveRef.current = false;
       clearIntervals();
-      void streamRef.current?.stop();
-      streamRef.current = null;
+      vadRef.current?.destroy();
+      vadRef.current = null;
       audioContextRef.current?.close();
       audioContextRef.current = null;
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -657,7 +690,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
               }} />
               {isDiarizing ? 'finder talere…' : recordingState === 'recording' ? 'transskriberer live' : recordingState === 'paused' ? 'pause' : 'klar'}
             </span>
-            {recordingState === 'recording' && !isDiarizing && <span>· scribe v2 realtime</span>}
+            {recordingState === 'recording' && !isDiarizing && <span>· hviske live</span>}
           </div>
 
           {/* Transcript rows */}
