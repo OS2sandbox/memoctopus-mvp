@@ -91,6 +91,10 @@ export function TranscriptReview({
 
   // Audio player
   const [audioUrl, setAudioUrl] = useState(initialAudioUrl);
+  // Sync audioUrl when the prop changes (e.g. after router.refresh() post-deletion)
+  useEffect(() => {
+    setAudioUrl(initialAudioUrl);
+  }, [initialAudioUrl]);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);

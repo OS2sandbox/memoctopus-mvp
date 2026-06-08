@@ -99,14 +99,17 @@ async function _processTranscription({
     const rawText = rawSegments.map((s) => s.text).join(' ');
 
     if (transcriptId) {
-      // Replace the draft (live-preview) segments with the authoritative batch result.
-      await queryUserSchemaOne(
-        userId,
-        `UPDATE transcripts
-         SET raw_text = $1, segments = $2, pii_replacements = $3
-         WHERE id = $4`,
-        [rawText, JSON.stringify(rawSegments), JSON.stringify(replacements), transcriptId],
-      );
+      // Replace the draft (live-preview) segments with the authoritative batch result,
+      // but only if the batch produced content — empty results leave the draft intact.
+      if (rawSegments.length > 0) {
+        await queryUserSchemaOne(
+          userId,
+          `UPDATE transcripts
+           SET raw_text = $1, segments = $2, pii_replacements = $3
+           WHERE id = $4`,
+          [rawText, JSON.stringify(rawSegments), JSON.stringify(replacements), transcriptId],
+        );
+      }
     } else {
       await queryUserSchemaOne(
         userId,

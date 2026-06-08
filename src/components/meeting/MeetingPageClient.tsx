@@ -114,7 +114,7 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
           piiReplacements={transcript.piiReplacements}
           audioUrl={audioFile ? `/api/meetings/${meetingId}/audio` : undefined}
           audioDurationSeconds={audioFile?.durationSeconds}
-          audioDeleted={!audioFile && meeting.status !== 'recording' && meeting.status !== 'processing' && meeting.status !== 'review'}
+          audioDeleted={!audioFile && meeting.status !== 'recording' && meeting.status !== 'processing'}
           initialChapters={transcript.chapters}
           participants={meeting.participants}
         />

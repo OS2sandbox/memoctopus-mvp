@@ -44,18 +44,19 @@ describe('POST /api/meetings/[id]/save-transcript', () => {
 
   it('returns 404 when meeting not found', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryOne.mockResolvedValueOnce(null as never);
+    mockQueryOne.mockResolvedValueOnce(null as never); // meeting lookup → not found
 
     const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }), PARAMS);
     expect(res.status).toBe(404);
     expect((await res.json()).error).toBe('Meeting not found');
   });
 
-  it('returns 200 with transcriptId on success', async () => {
+  it('returns 200 with transcriptId when no prior transcript exists (insert path)', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never); // meeting lookup
-    mockQueryOne.mockResolvedValueOnce({ id: 'transcript-abc' } as never); // INSERT transcript
-    mockQueryOne.mockResolvedValueOnce({} as never); // UPDATE meetings status
+    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never);           // meeting lookup
+    mockQueryOne.mockResolvedValueOnce(null as never);                        // no existing transcript
+    mockQueryOne.mockResolvedValueOnce({ id: 'transcript-abc' } as never);   // INSERT transcript
+    mockQueryOne.mockResolvedValueOnce({} as never);                          // UPDATE meetings status
 
     const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }), PARAMS);
 
@@ -63,11 +64,35 @@ describe('POST /api/meetings/[id]/save-transcript', () => {
     expect((await res.json()).transcriptId).toBe('transcript-abc');
   });
 
+  it('returns 200 with existing transcriptId when prior transcript exists (update path)', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never);           // meeting lookup
+    mockQueryOne.mockResolvedValueOnce({ id: 'existing-tid' } as never);     // existing transcript found
+    mockQueryOne.mockResolvedValueOnce(undefined as never);                   // UPDATE transcript
+    mockQueryOne.mockResolvedValueOnce({} as never);                          // UPDATE meetings status
+
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }), PARAMS);
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).transcriptId).toBe('existing-tid');
+
+    // Should UPDATE, not INSERT
+    const updateCall = mockQueryOne.mock.calls.find(
+      ([, sql]) => typeof sql === 'string' && /UPDATE transcripts/.test(sql),
+    );
+    expect(updateCall).toBeDefined();
+    const insertCall = mockQueryOne.mock.calls.find(
+      ([, sql]) => typeof sql === 'string' && /INSERT INTO transcripts/.test(sql),
+    );
+    expect(insertCall).toBeUndefined();
+  });
+
   it('stores joined segment text as raw_text', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never);
-    mockQueryOne.mockResolvedValueOnce({ id: 'tid' } as never);
-    mockQueryOne.mockResolvedValueOnce({} as never);
+    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never);           // meeting lookup
+    mockQueryOne.mockResolvedValueOnce(null as never);                        // no existing transcript
+    mockQueryOne.mockResolvedValueOnce({ id: 'tid' } as never);              // INSERT transcript
+    mockQueryOne.mockResolvedValueOnce({} as never);                          // UPDATE meetings status
 
     await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }), PARAMS);
 
@@ -82,6 +107,7 @@ describe('POST /api/meetings/[id]/save-transcript', () => {
   it('sets meeting status to review after saving transcript', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never);
+    mockQueryOne.mockResolvedValueOnce(null as never);                        // no existing transcript
     mockQueryOne.mockResolvedValueOnce({ id: 'tid' } as never);
     mockQueryOne.mockResolvedValueOnce({} as never);
 
@@ -96,6 +122,7 @@ describe('POST /api/meetings/[id]/save-transcript', () => {
   it('handles empty segments array', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never);
+    mockQueryOne.mockResolvedValueOnce(null as never);                        // no existing transcript
     mockQueryOne.mockResolvedValueOnce({ id: 'tid' } as never);
     mockQueryOne.mockResolvedValueOnce({} as never);
 
@@ -106,6 +133,7 @@ describe('POST /api/meetings/[id]/save-transcript', () => {
   it('handles missing segments (defaults to empty)', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never);
+    mockQueryOne.mockResolvedValueOnce(null as never);                        // no existing transcript
     mockQueryOne.mockResolvedValueOnce({ id: 'tid' } as never);
     mockQueryOne.mockResolvedValueOnce({} as never);
 

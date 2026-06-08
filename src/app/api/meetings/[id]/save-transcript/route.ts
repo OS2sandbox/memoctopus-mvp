@@ -26,13 +26,32 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   const rawText = segments.map((s) => s.text).join(' ');
 
-  const transcript = await queryUserSchemaOne<{ id: string }>(
+  // Upsert: update existing transcript if one exists, otherwise insert.
+  // This prevents multiple transcript rows per meeting when re-recording.
+  const existing = await queryUserSchemaOne<{ id: string }>(
     session.user.id,
-    `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements)
-     VALUES ($1, $2, $3, NULL, $4)
-     RETURNING id`,
-    [meetingId, rawText, JSON.stringify(segments), JSON.stringify([])],
+    'SELECT id FROM transcripts WHERE meeting_id = $1 ORDER BY id DESC LIMIT 1',
+    [meetingId],
   );
+
+  let transcriptId: string;
+  if (existing) {
+    await queryUserSchemaOne(
+      session.user.id,
+      `UPDATE transcripts SET raw_text = $1, segments = $2 WHERE id = $3`,
+      [rawText, JSON.stringify(segments), existing.id],
+    );
+    transcriptId = existing.id;
+  } else {
+    const inserted = await queryUserSchemaOne<{ id: string }>(
+      session.user.id,
+      `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements)
+       VALUES ($1, $2, $3, NULL, $4)
+       RETURNING id`,
+      [meetingId, rawText, JSON.stringify(segments), JSON.stringify([])],
+    );
+    transcriptId = inserted!.id;
+  }
 
   await queryUserSchemaOne(
     session.user.id,
@@ -40,5 +59,5 @@ export async function POST(req: NextRequest, { params }: Params) {
     [meetingId],
   );
 
-  return NextResponse.json({ transcriptId: transcript!.id });
+  return NextResponse.json({ transcriptId });
 }
