@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { queryUserSchemaOne } from '@/lib/db/user-schema';
@@ -79,71 +79,76 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Create mode: no existing transcript — full pipeline (transcription + PII).
-  await queryUserSchemaOne(
-    session.user.id,
-    `UPDATE meetings SET status = 'processing', updated_at = NOW() WHERE id = $1`,
-    [meetingId],
-  );
+  // Create mode: save audio + set status immediately, then transcribe in the background
+  // so the client can navigate to the review page without waiting for the full STT pipeline.
+  let buffer: Buffer;
+  try {
+    buffer = Buffer.from(await audioFile.arrayBuffer());
+  } catch (err) {
+    return NextResponse.json({ error: 'Failed to read audio' }, { status: 400 });
+  }
+
+  const mimeType = audioFile.type || 'audio/webm';
+  const duration = durationStr ? parseInt(durationStr, 10) : null;
+  const userId = session.user.id;
 
   try {
-    const buffer = Buffer.from(await audioFile.arrayBuffer());
-    const mimeType = audioFile.type || 'audio/webm';
-    const duration = durationStr ? parseInt(durationStr, 10) : null;
-
-    const { filename, sizeBytes } = await saveAudioFile(session.user.id, buffer, audioFile.name);
+    const { filename, sizeBytes } = await saveAudioFile(userId, buffer, audioFile.name);
     await queryUserSchemaOne(
-      session.user.id,
+      userId,
       `INSERT INTO audio_files (meeting_id, filename, size_bytes, duration_seconds)
        VALUES ($1, $2, $3, $4)`,
       [meetingId, filename, sizeBytes, duration],
     );
-
-    // Always re-run the authoritative batch scribe_v2 pass over the full audio.
-    // The realtime stream is preview-only and not reliably diarized, so live
-    // segments are never trusted as the final transcript.
-    const provider = getTranscriptionProvider();
-    const rawSegments: TranscriptSegment[] = await provider.transcribe(buffer, mimeType);
-
-    let replacements: PiiReplacement[] = [];
-    try {
-      const piiResult = await detectPiiInSegments(rawSegments);
-      replacements = piiResult.replacements;
-    } catch (piiErr) {
-      console.error('PII detection failed (non-fatal):', piiErr);
-    }
-    const rawText = rawSegments.map((s) => s.text).join(' ');
-
-    const transcript = await queryUserSchemaOne<{ id: string }>(
-      session.user.id,
-      `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements)
-       VALUES ($1, $2, $3, NULL, $4)
-       RETURNING id`,
-      [meetingId, rawText, JSON.stringify(rawSegments), JSON.stringify(replacements)],
-    );
-
-    await queryUserSchemaOne(
-      session.user.id,
-      `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,
-      [meetingId],
-    );
-
-    return NextResponse.json({
-      transcriptId: transcript!.id,
-      segments: rawSegments,
-      piiReplacementCount: replacements.length,
-    });
   } catch (err) {
-    await queryUserSchemaOne(
-      session.user.id,
-      `UPDATE meetings SET status = 'recording', updated_at = NOW() WHERE id = $1`,
-      [meetingId],
-    ).catch(() => {});
-
-    console.error('Transcription error:', err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Transcription failed' },
-      { status: 500 },
-    );
+    console.error('Audio save error:', err);
+    return NextResponse.json({ error: 'Failed to save audio' }, { status: 500 });
   }
+
+  await queryUserSchemaOne(
+    userId,
+    `UPDATE meetings SET status = 'processing', updated_at = NOW() WHERE id = $1`,
+    [meetingId],
+  );
+
+  // Run the STT + PII pipeline after the response so the client isn't blocked.
+  // The review page polls every 4 s and will pick up the status change to 'review'.
+  after(async () => {
+    try {
+      const provider = getTranscriptionProvider();
+      const rawSegments: TranscriptSegment[] = await provider.transcribe(buffer, mimeType);
+
+      let replacements: PiiReplacement[] = [];
+      try {
+        const piiResult = await detectPiiInSegments(rawSegments);
+        replacements = piiResult.replacements;
+      } catch (piiErr) {
+        console.error('PII detection failed (non-fatal):', piiErr);
+      }
+      const rawText = rawSegments.map((s) => s.text).join(' ');
+
+      await queryUserSchemaOne<{ id: string }>(
+        userId,
+        `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements)
+         VALUES ($1, $2, $3, NULL, $4)
+         RETURNING id`,
+        [meetingId, rawText, JSON.stringify(rawSegments), JSON.stringify(replacements)],
+      );
+
+      await queryUserSchemaOne(
+        userId,
+        `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,
+        [meetingId],
+      );
+    } catch (err) {
+      console.error('Background transcription error:', err);
+      await queryUserSchemaOne(
+        userId,
+        `UPDATE meetings SET status = 'recording', updated_at = NOW() WHERE id = $1`,
+        [meetingId],
+      ).catch(() => {});
+    }
+  });
+
+  return NextResponse.json({ ok: true });
 }
