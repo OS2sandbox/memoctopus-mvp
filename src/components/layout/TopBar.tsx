@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
@@ -16,6 +16,7 @@ export function TopBar() {
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const { data: session } = useSession();
   const { hasAudio } = useReviewAudio();
+  const [isPending, startTransition] = useTransition();
 
   const nav = [
     { href: '/dashboard', label: 'Optag', exact: true },
@@ -33,12 +34,20 @@ export function TopBar() {
     return pathname.startsWith(href);
   }
 
+  function navigate(href: string) {
+    startTransition(() => {
+      router.push(href);
+    });
+  }
+
   function handleNavClick(e: React.MouseEvent, href: string) {
+    e.preventDefault();
     if (reviewMeetingId && hasAudio) {
-      e.preventDefault();
       setPendingHref(href);
       setShowConfirm(true);
+      return;
     }
+    navigate(href);
   }
 
   return (
@@ -53,7 +62,7 @@ export function TopBar() {
           meetingId={reviewMeetingId}
           title="Slet lydfil og forlad mødet?"
           confirmLabel="Slet og forlad"
-          onDeleted={() => router.push(pendingHref ?? '/dashboard')}
+          onDeleted={() => navigate(pendingHref ?? '/dashboard')}
         />
       )}
 
@@ -92,6 +101,7 @@ export function TopBar() {
                   fontWeight: active ? 500 : 400,
                   textDecoration: 'none',
                   transition: 'color 120ms',
+                  opacity: isPending ? 0.5 : 1,
                 }}
               >
                 {item.label}
@@ -122,6 +132,26 @@ export function TopBar() {
           </div>
         )}
       </header>
+
+      {isPending && (
+        <div style={{
+          position: 'fixed', top: 56, left: 0, right: 0,
+          height: 2, zIndex: 50, overflow: 'hidden',
+          background: 'var(--line)',
+        }}>
+          <div style={{
+            height: '100%',
+            background: 'var(--accent)',
+            animation: 'navBarSlide 1.2s ease-in-out infinite',
+          }} />
+          <style>{`
+            @keyframes navBarSlide {
+              0%   { margin-left: -60%; width: 60%; }
+              100% { margin-left: 100%; width: 60%; }
+            }
+          `}</style>
+        </div>
+      )}
     </>
   );
 }
