@@ -413,13 +413,37 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     const mimeType = recorder.mimeType || 'audio/webm';
     const blob = new Blob(chunksRef.current, { type: mimeType });
 
-    // Always run ElevenLabs batch transcription with speaker diarization.
-    // The live WebSocket segments were preview-only; the batch result is authoritative.
     try {
+      // Save live-preview segments as a draft transcript first. This ensures
+      // something is visible on the review page immediately while the authoritative
+      // batch transcription runs in the background on the server.
+      let savedTranscriptId: string | null = null;
+      if (liveSegmentsRef.current.length > 0) {
+        try {
+          const saveRes = await fetch(`/api/meetings/${meetingId}/save-transcript`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ segments: liveSegmentsRef.current }),
+          });
+          if (saveRes.ok) {
+            const data = await saveRes.json() as { transcriptId?: string };
+            savedTranscriptId = data.transcriptId ?? null;
+          }
+        } catch {
+          // Non-fatal — batch transcription will still create a transcript
+        }
+      }
+
+      // Upload audio for the authoritative batch transcription. The server saves
+      // the audio synchronously and runs transcription in the background, so this
+      // call returns quickly and the client can navigate to the review page.
       const formData = new FormData();
       formData.append('audio', blob, `recording.${extensionForMimeType(mimeType)}`);
       formData.append('meetingId', meetingId);
       formData.append('duration', String(elapsed));
+      if (savedTranscriptId) {
+        formData.append('transcriptId', savedTranscriptId);
+      }
 
       const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
       if (!res.ok) {
@@ -900,7 +924,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
               border: '2px solid var(--accent)', borderTopColor: 'transparent',
               animation: 'spin 0.8s linear infinite',
             }} />
-            transskriberer og gemmer…
+            gemmer optagelse…
           </div>
         )}
       </div>
