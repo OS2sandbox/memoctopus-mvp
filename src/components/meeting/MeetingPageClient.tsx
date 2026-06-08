@@ -10,6 +10,7 @@ import { MinutesEditor } from '@/components/minutes/MinutesEditor';
 import { ExportTab } from '@/components/meeting/ExportTab';
 import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
 import type { MeetingPageData } from '@/lib/data/meeting-page';
+import { useReviewAudio } from '@/lib/review-audio-context';
 
 interface MeetingPageClientProps {
   meetingId: string;
@@ -21,8 +22,14 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<ProcessPhase>(initialTab);
   const [showDeleteAudioDialog, setShowDeleteAudioDialog] = useState(false);
+  const { setHasAudio } = useReviewAudio();
 
   const { meeting, audioFile, transcript, minutes } = data;
+
+  useEffect(() => {
+    setHasAudio(activeTab === 'review' && !!audioFile);
+    return () => setHasAudio(false);
+  }, [activeTab, audioFile, setHasAudio]);
 
   // Auto-refresh every 4 s while transcription is in progress so the page
   // picks up the transcript as soon as the audio-upload route completes.

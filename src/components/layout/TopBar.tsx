@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { signOut, useSession } from '@/lib/auth-client';
+import { useReviewAudio } from '@/lib/review-audio-context';
 
 export function TopBar() {
   const pathname = usePathname();
@@ -14,6 +15,7 @@ export function TopBar() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const { data: session } = useSession();
+  const { hasAudio } = useReviewAudio();
 
   const nav = [
     { href: '/dashboard', label: 'Optag', exact: true },
@@ -32,7 +34,7 @@ export function TopBar() {
   }
 
   function handleNavClick(e: React.MouseEvent, href: string) {
-    if (reviewMeetingId) {
+    if (reviewMeetingId && hasAudio) {
       e.preventDefault();
       setPendingHref(href);
       setShowConfirm(true);
@@ -41,7 +43,7 @@ export function TopBar() {
 
   return (
     <>
-      {reviewMeetingId && (
+      {reviewMeetingId && hasAudio && (
         <DeleteAudioDialog
           open={showConfirm}
           onOpenChange={(open) => {
