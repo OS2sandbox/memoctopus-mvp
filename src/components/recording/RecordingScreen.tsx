@@ -36,9 +36,52 @@ interface RecordingScreenProps {
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
 
+// Mirrors the server demo's LocalAgreementMerger: words are only "committed"
+// when they appear in the same position across two consecutive hypotheses.
+// This filters Whisper hallucinations, which rarely repeat in the same position.
+class LocalAgreementMerger {
+  private lastTokens: string[] | null = null;
+  private committed: string[] = [];
+
+  merge(hyp: string): { tail: string[] } {
+    const newTokens = hyp.split(/\s+/).filter(Boolean);
+    if (this.lastTokens === null) {
+      this.lastTokens = newTokens;
+      return { tail: newTokens.slice(this.committed.length) };
+    }
+    let lcpLen = 0;
+    const minLen = Math.min(newTokens.length, this.lastTokens.length);
+    for (let i = 0; i < minLen; i++) {
+      if (newTokens[i] !== this.lastTokens[i]) break;
+      lcpLen++;
+    }
+    if (lcpLen > this.committed.length) {
+      this.committed.push(...newTokens.slice(this.committed.length, lcpLen));
+    }
+    const tail = newTokens.length >= this.committed.length
+      ? newTokens.slice(this.committed.length)
+      : [];
+    this.lastTokens = newTokens;
+    return { tail };
+  }
+
+  forceCommitRemaining(hyp: string): void {
+    const newTokens = hyp.split(/\s+/).filter(Boolean);
+    this.committed.push(...newTokens.slice(this.committed.length));
+  }
+
+  getCommittedText(): string { return this.committed.join(' '); }
+
+  reset(): void { this.lastTokens = null; this.committed = []; }
+}
+
 const BYTES_PER_SECOND_ESTIMATE = 16_000;
 const SILENCE_THRESHOLD_SECONDS = 5;
 const SILENCE_VOLUME_THRESHOLD = 0.02;
+// How often partials fire DURING active speech (mirrors the demo's 700ms interval).
+const PARTIAL_INTERVAL_MS = 700;
+// If a partial completed within this window before speech-end, reuse it (finalize-skip).
+const PARTIAL_SKIP_WINDOW_MS = PARTIAL_INTERVAL_MS + 300;
 // How often, while recording, we re-analyze the transcript for things to clarify.
 const CLARIFY_INTERVAL_MS = 25_000;
 // Tick cadence for the countdown bar to the next clarification refresh.
@@ -84,6 +127,20 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const vadRef = useRef<any>(null);
   // Elapsed-seconds mark when VAD fires onSpeechStart, for accurate segment timestamps.
   const utteranceStartRef = useRef<number | null>(null);
+  // Guard against overlapping utterance fetches — background noise can fire onSpeechEnd
+  // repeatedly while a previous request is still in-flight, stacking up pending fetches
+  // that keep the interim indicator up indefinitely.
+  const utteranceInFlightRef = useRef(false);
+  const pendingUtteranceRef = useRef<{ audio: Float32Array; start: number } | null>(null);
+  const partialTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Timestamp (Date.now()) of the last completed context-window partial, used for finalize-skip.
+  const lastPartialTimeRef = useRef<number>(0);
+  // LocalAgreementMerger for the current utterance.
+  const mergerRef = useRef<LocalAgreementMerger | null>(null);
+  // MediaRecorder chunk index when the current utterance started (for utterance-based slicing).
+  const utteranceChunkStartRef = useRef<number>(0);
+  // Last hypothesis text from the most recent partial — used for finalize-skip.
+  const lastPartialHypRef = useRef<string>('');
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -123,6 +180,13 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     interimTextRef.current = '';
     setInterimText('');
     utteranceStartRef.current = null;
+    utteranceInFlightRef.current = false;
+    pendingUtteranceRef.current = null;
+    if (partialTimerRef.current) { clearInterval(partialTimerRef.current); partialTimerRef.current = null; }
+    lastPartialTimeRef.current = 0;
+    mergerRef.current = null;
+    utteranceChunkStartRef.current = 0;
+    lastPartialHypRef.current = '';
     setLiveCaptionsUnavailable(false);
     setIsDiarizing(false);
     setClarifications([]);
@@ -135,69 +199,191 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     return Math.max(0, (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000);
   }
 
+  // Force-commit any remaining tail words and push the utterance as a new segment.
+  // Merger and utteranceStart are passed explicitly to avoid race conditions when
+  // a new onSpeechStart fires before an in-flight partial's finally-block runs.
+  function finalizeUtterance(merger: LocalAgreementMerger, utteranceStart: number, finalHyp: string) {
+    // Only clear global refs if they still belong to THIS utterance.
+    if (mergerRef.current === merger) {
+      mergerRef.current = null;
+      lastPartialHypRef.current = '';
+    }
+    interimTextRef.current = '';
+    setInterimText('');
+    merger.forceCommitRemaining(finalHyp);
+    const text = merger.getCommittedText();
+    if (!text) return;
+    const seg: LiveSegment = { speaker: '—', start: utteranceStart, end: currentElapsed(), text };
+    const updated = [...liveSegmentsRef.current, seg];
+    liveSegmentsRef.current = updated;
+    setLiveSegments(updated);
+    setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+  }
+
   // Start Silero VAD on the given stream. On each detected utterance, encodes the
   // audio as WAV and POSTs it to the per-utterance endpoint for hviske transcription.
   // Speakers are blank ("—") until the batch diarization pass at pause / save.
   async function startVAD(stream: MediaStream) {
     try {
-      const { MicVAD, utils } = await import('@ricky0123/vad-web');
+      const { MicVAD } = await import('@ricky0123/vad-web');
+
+      // Fetch the audio recorded since utterance start, run through the provided merger,
+      // and update the interim display with committed+tail. Returns the raw hypothesis
+      // text so the caller can store it for finalize-skip.
+      async function sendContextWindow(merger: LocalAgreementMerger): Promise<string> {
+        const startIdx = utteranceChunkStartRef.current;
+        // WebM stores its EBML header only in chunk 0 — any slice missing it is unparseable.
+        const sliceChunks = startIdx > 0
+          ? [chunksRef.current[0], ...chunksRef.current.slice(startIdx)]
+          : chunksRef.current.slice(startIdx);
+        if (sliceChunks.length === 0) return '';
+
+        const blob = new Blob(sliceChunks, { type: mimeTypeRef.current });
+        const ext = extensionForMimeType(mimeTypeRef.current);
+        const formData = new FormData();
+        formData.append('audio', blob, `utterance.${ext}`);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15_000);
+        try {
+          const res = await fetch(`/api/meetings/${meetingId}/utterance`, {
+            method: 'POST',
+            body: formData,
+            signal: controller.signal,
+          });
+          if (res.ok) {
+            const data = await res.json() as { text: string };
+            const text = (data.text ?? '').trim();
+            if (text) {
+              const { tail } = merger.merge(text);
+              // Show committed words + volatile tail together as live interim.
+              const committed = merger.getCommittedText();
+              const live = [committed, tail.join(' ')].filter(Boolean).join(' ');
+              interimTextRef.current = live;
+              setInterimText(live);
+              return text;
+            }
+          }
+        } catch (err) {
+          if (err instanceof Error && err.name !== 'AbortError') {
+            console.error('[vad] utterance transcription failed:', err);
+            setLiveCaptionsUnavailable(true);
+          }
+        } finally {
+          clearTimeout(timeout);
+        }
+        return '';
+      }
+
+      // Fires a partial transcription every PARTIAL_INTERVAL_MS while speech is active.
+      // Captures the merger at each tick to avoid races with a concurrent onSpeechStart.
+      function startPartialTimer() {
+        if (partialTimerRef.current) return;
+        partialTimerRef.current = setInterval(() => {
+          if (utteranceStartRef.current === null || utteranceInFlightRef.current) return;
+          if (chunksRef.current.length === 0) return;
+          // Capture now — a new onSpeechStart may overwrite mergerRef before the promise
+          // settles, so we pass the merger explicitly rather than reading it in finally.
+          const merger = mergerRef.current;
+          const uStart = utteranceStartRef.current;
+          if (!merger) return;
+          utteranceInFlightRef.current = true;
+          sendContextWindow(merger).then((hyp) => {
+            if (hyp) lastPartialHypRef.current = hyp;
+          }).finally(() => {
+            lastPartialTimeRef.current = Date.now();
+            utteranceInFlightRef.current = false;
+            // Finalize-skip: speech ended while this partial was running — reuse hypothesis.
+            if (utteranceStartRef.current === null && pendingUtteranceRef.current) {
+              pendingUtteranceRef.current = null;
+              finalizeUtterance(merger, uStart, lastPartialHypRef.current);
+            }
+          });
+        }, PARTIAL_INTERVAL_MS);
+      }
+
+      function stopPartialTimer() {
+        if (partialTimerRef.current) { clearInterval(partialTimerRef.current); partialTimerRef.current = null; }
+      }
+
       const vad = await MicVAD.new({
-        // Use existing getUserMedia stream — prevents a second mic permission prompt
-        // and keeps MediaRecorder's track alive when VAD is paused.
         getStream: () => Promise.resolve(stream),
         pauseStream: async () => {},
         resumeStream: async (s) => s,
         baseAssetPath: '/',
         onnxWASMBasePath: '/',
-        // Force single-threaded ORT — avoids needing SharedArrayBuffer (COOP/COEP headers)
-        // and the .mjs pthread worker. VAD inference is fast enough to run on the main thread.
+        // Force single-threaded ORT — no SharedArrayBuffer (COOP/COEP) required.
         ortConfig: (ort: any) => { ort.env.wasm.numThreads = 1; },
+        model: 'v5',
+        // Low silence timeout — partials every 700ms do the heavy lifting; endpoint
+        // detection just triggers the finalize-skip, not a new inference call.
+        redemptionMs: 150,
+        // 300ms pre-roll matches the demo — captures soft onsets (fricatives, low-energy
+        // first syllables) that don't quite cross the VAD threshold.
+        preSpeechPadMs: 300,
+        positiveSpeechThreshold: 0.5,
+        negativeSpeechThreshold: 0.35,
         onSpeechStart: () => {
-          utteranceStartRef.current = currentElapsed();
+          const start = currentElapsed();
+          utteranceStartRef.current = start;
+          utteranceChunkStartRef.current = Math.max(0, chunksRef.current.length - 1);
+          mergerRef.current = new LocalAgreementMerger();
+          lastPartialHypRef.current = '';
           interimTextRef.current = '…';
           setInterimText('…');
+          startPartialTimer();
         },
         onSpeechEnd: async (audio: Float32Array) => {
-          const start = utteranceStartRef.current ?? currentElapsed();
+          stopPartialTimer();
+          // Capture before going async — a new onSpeechStart could overwrite these.
+          const merger = mergerRef.current;
+          const uStart = utteranceStartRef.current ?? currentElapsed();
           utteranceStartRef.current = null;
-          const wavBuffer = utils.encodeWAV(audio);
-          const blob = new Blob([wavBuffer], { type: 'audio/wav' });
-          const formData = new FormData();
-          formData.append('audio', blob, 'utterance.wav');
+          interimTextRef.current = '';
+          setInterimText('');
+          if (!merger) return;
+
+          // Finalize-skip: a recent partial already covers this utterance.
+          if (!utteranceInFlightRef.current && Date.now() - lastPartialTimeRef.current <= PARTIAL_SKIP_WINDOW_MS) {
+            finalizeUtterance(merger, uStart, lastPartialHypRef.current);
+            return;
+          }
+
+          if (utteranceInFlightRef.current) {
+            // A partial is in flight — queue finalization for its finally-block.
+            pendingUtteranceRef.current = { audio, start: uStart };
+            return;
+          }
+
+          utteranceInFlightRef.current = true;
           try {
-            const res = await fetch(`/api/meetings/${meetingId}/utterance`, {
-              method: 'POST',
-              body: formData,
-            });
-            if (res.ok) {
-              const data = await res.json() as { text: string };
-              if (data.text) {
-                const seg: LiveSegment = {
-                  speaker: '—',
-                  start,
-                  end: currentElapsed(),
-                  text: data.text,
-                };
-                liveSegmentsRef.current = [...liveSegmentsRef.current, seg];
-                setLiveSegments([...liveSegmentsRef.current]);
-                setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
-              }
+            const hyp = await sendContextWindow(merger);
+            if (hyp) lastPartialHypRef.current = hyp;
+            finalizeUtterance(merger, uStart, lastPartialHypRef.current);
+            // Drain any utterances that ended while we were in flight.
+            while (pendingUtteranceRef.current) {
+              const next = pendingUtteranceRef.current;
+              pendingUtteranceRef.current = null;
+              const nextMerger = mergerRef.current;
+              if (!nextMerger) break;
+              const nextHyp = await sendContextWindow(nextMerger);
+              if (nextHyp) lastPartialHypRef.current = nextHyp;
+              finalizeUtterance(nextMerger, next.start, lastPartialHypRef.current);
             }
-          } catch (err) {
-            console.error('[vad] utterance transcription failed:', err);
-            setLiveCaptionsUnavailable(true);
           } finally {
-            interimTextRef.current = '';
-            setInterimText('');
+            utteranceInFlightRef.current = false;
           }
         },
         onVADMisfire: () => {
+          stopPartialTimer();
           utteranceStartRef.current = null;
+          mergerRef.current = null;
+          lastPartialHypRef.current = '';
           interimTextRef.current = '';
           setInterimText('');
         },
       });
       vadRef.current = vad;
+      vad.start();
       setLiveCaptionsUnavailable(false);
     } catch (err) {
       console.error('[startVAD] setup failed:', err);
@@ -234,6 +420,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         interimTextRef.current = '';
         setInterimText('');
         utteranceStartRef.current = null;
+        mergerRef.current = null;
+        lastPartialHypRef.current = '';
       }
     } catch (err) {
       // Diarization is a checkpoint nicety — keep the realtime preview on failure.
@@ -291,7 +479,9 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     // Tracked outside try so the catch can release it if setup fails after getUserMedia
     let stream: MediaStream | null = null;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: false },
+      });
 
       // Volume meter — non-critical. If the Web Audio API can't open the hardware device
       // (e.g. macOS CoreAudio in a bad state), recording still proceeds without the bar.
@@ -376,6 +566,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     setRecordingState('paused');
 
     // Pause VAD processing, flush the recorded tail, then pause the recorder.
+    if (partialTimerRef.current) { clearInterval(partialTimerRef.current); partialTimerRef.current = null; }
     vadRef.current?.pause();
     await flushRecorder(recorder);
     recorder.pause();
@@ -446,14 +637,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     const mimeType = recorder.mimeType || 'audio/webm';
     const blob = new Blob(chunksRef.current, { type: mimeType });
 
-    // Always run ElevenLabs batch transcription with speaker diarization.
-    // The live WebSocket segments were preview-only; the batch result is authoritative.
     try {
       const formData = new FormData();
       formData.append('audio', blob, `recording.${extensionForMimeType(mimeType)}`);
       formData.append('meetingId', meetingId);
       formData.append('duration', String(elapsed));
-
       const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };

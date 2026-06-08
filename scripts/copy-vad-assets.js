@@ -11,6 +11,7 @@ mkdirSync(pub, { recursive: true });
 const copies = [
   ['node_modules/@ricky0123/vad-web/dist/vad.worklet.bundle.min.js', 'public/vad.worklet.bundle.min.js'],
   ['node_modules/@ricky0123/vad-web/dist/silero_vad_legacy.onnx', 'public/silero_vad_legacy.onnx'],
+  ['node_modules/@ricky0123/vad-web/dist/silero_vad_v5.onnx', 'public/silero_vad_v5.onnx'],
   // onnxruntime-web needs both the .mjs entry modules and the .wasm binaries
   ['node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs', 'public/ort-wasm-simd-threaded.mjs'],
   ['node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm', 'public/ort-wasm-simd-threaded.wasm'],

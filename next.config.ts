@@ -10,6 +10,14 @@ const nextConfig: NextConfig = {
       config.resolve.fallback = { ...config.resolve.fallback, fs: false };
     }
     config.experiments = { ...config.experiments, asyncWebAssembly: true };
+    // onnxruntime-web uses dynamic require() internally for its WASM/backend
+    // loader — webpack can't statically analyze it, producing noisy "Critical
+    // dependency" warnings. The package loads WASM at runtime via fetch, so
+    // there is nothing for webpack to bundle; suppress the warnings.
+    config.ignoreWarnings = [
+      ...(config.ignoreWarnings ?? []),
+      { module: /onnxruntime-web/ },
+    ];
     return config;
   },
 };
