@@ -74,6 +74,31 @@ function encodePcmToWav(frames: Int16Array[]): Blob {
   return new Blob([buf], { type: 'audio/wav' });
 }
 
+// Encode a Float32Array slice (16 kHz, normalised −1..1) to a 16-bit PCM WAV blob.
+// Used for final utterance transcription from the VAD-provided audio, which is
+// guaranteed to be aligned with the VAD model's speech boundaries.
+function float32ToWavBlob(samples: Float32Array, startSample = 0, endSample?: number): Blob {
+  const src = samples.subarray(startSample, endSample);
+  const numSamples = src.length;
+  const dataBytes = numSamples * 2;
+  const buf = new ArrayBuffer(44 + dataBytes);
+  const v = new DataView(buf);
+  const ws = (off: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); v.setUint32(4, 36 + dataBytes, true);
+  ws(8, 'WAVE'); ws(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, 16_000, true); v.setUint32(28, 32_000, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  ws(36, 'data'); v.setUint32(40, dataBytes, true);
+  let off = 44;
+  for (let i = 0; i < numSamples; i++) {
+    const s = Math.max(-1, Math.min(1, src[i]));
+    v.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    off += 2;
+  }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
 interface LiveSegment {
   speaker: string;
   start: number;
@@ -149,10 +174,9 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const utteranceStartRef = useRef<number | null>(null);
   // Guard against overlapping utterance fetches.
   const utteranceInFlightRef = useRef(false);
-  // Queue of utterances that ended while a fetch was in-flight. Processed in order so
-  // nothing is dropped. Each item captures exact timing + PCM frame boundaries so a
-  // late finalization never bleeds into adjacent utterances.
-  const pendingUtterancesRef = useRef<Array<{ start: number; end: number; startFrame: number; endFrame: number }>>([]);
+  // Queue of utterances that ended while a fetch was in-flight. Stores the VAD-provided
+  // Float32 audio directly so frame-index drift between AudioContexts cannot corrupt them.
+  const pendingUtterancesRef = useRef<Array<{ start: number; end: number; audio: Float32Array }>>([]);
   const partialTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // PCM accumulation for live transcription (16 kHz Int16 frames from the AudioWorklet).
   const pcmFramesRef = useRef<Int16Array[]>([]);
@@ -288,36 +312,37 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         return '';
       }
 
-      // Finalize one utterance: send its exact audio (startFrame..endFrame), commit the
-      // result, then drain queued utterances. For long utterances (> MAX_PARTIAL_FRAMES)
-      // the audio is split into 15 s chunks so hviske never times out.
-      async function finalize(uStart: number, uEnd: number, startFrame: number, endFrame: number) {
+      // Finalize one utterance using the VAD-provided Float32Array. Using the library's
+      // own audio guarantees the segment boundaries match exactly what the VAD model
+      // analyzed — eliminating the clock-skew bug that occurred when using frame indices
+      // from a separate AudioContext. For utterances longer than 15 s the audio is split
+      // into chunks so hviske never exceeds its 12 s server timeout.
+      const MAX_SAMPLES_PER_CHUNK = 16_000 * 15; // 15 s at 16 kHz
+      async function finalize(uStart: number, uEnd: number, audio: Float32Array) {
         utteranceInFlightRef.current = true;
-        // Capture the partial timer's last hypothesis as a fallback before resetting
-        // the merger. If postWav fails (network down, timeout), we commit the last
-        // known partial result instead of silently dropping the utterance.
+        // Preserve the partial timer's last hypothesis as a fallback. If postWav fails
+        // (network blip, server restart), we commit the last known partial result rather
+        // than silently dropping the utterance.
         const fallbackText = mergerRef.current.forceCommit();
         try {
-          const totalFrames = endFrame - startFrame;
-
-          if (totalFrames <= MAX_PARTIAL_FRAMES) {
+          if (audio.length <= MAX_SAMPLES_PER_CHUNK) {
             // Short path: single hviske call. Fall back to last partial on failure.
-            const wav = buildWavBlob(startFrame, endFrame);
-            const text = (wav ? await postWav(wav) : '') || fallbackText;
+            const wav = float32ToWavBlob(audio);
+            const text = await postWav(wav) || fallbackText;
             commitUtterance(uStart, uEnd, text);
           } else {
-            // Long path: split into MAX_PARTIAL_FRAMES chunks and commit each.
-            // This ensures no single call exceeds the 15 s / 12 s server timeout.
-            const frameSecs = 1024 / 16_000;
-            let chunkStart = startFrame;
+            // Long path: split into 15 s chunks so hviske never times out.
+            const totalDuration = uEnd - uStart;
+            let sampleStart = 0;
             let chunkTimeStart = uStart;
-            while (chunkStart < endFrame) {
-              const chunkEnd = Math.min(chunkStart + MAX_PARTIAL_FRAMES, endFrame);
-              const chunkTimeEnd = chunkTimeStart + (chunkEnd - chunkStart) * frameSecs;
-              const wav = buildWavBlob(chunkStart, chunkEnd);
-              const text = wav ? await postWav(wav) : '';
+            while (sampleStart < audio.length) {
+              const sampleEnd = Math.min(sampleStart + MAX_SAMPLES_PER_CHUNK, audio.length);
+              const chunkDuration = ((sampleEnd - sampleStart) / audio.length) * totalDuration;
+              const chunkTimeEnd = chunkTimeStart + chunkDuration;
+              const wav = float32ToWavBlob(audio, sampleStart, sampleEnd);
+              const text = await postWav(wav);
               if (text.trim()) commitUtterance(chunkTimeStart, chunkTimeEnd, text);
-              chunkStart = chunkEnd;
+              sampleStart = sampleEnd;
               chunkTimeStart = chunkTimeEnd;
             }
           }
@@ -325,7 +350,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           // Drain the ordered queue so no utterance is ever dropped.
           const next = pendingUtterancesRef.current.shift();
           if (next) {
-            await finalize(next.start, next.end, next.startFrame, next.endFrame);
+            await finalize(next.start, next.end, next.audio);
           } else {
             // Queue empty and no active speech: trim old PCM frames to free memory.
             // Only safe here because no frame indices are in use.
@@ -378,7 +403,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             // Drain any utterances that ended while this partial was in-flight.
             const next = pendingUtterancesRef.current.shift();
             if (next && utteranceStartRef.current === null) {
-              void finalize(next.start, next.end, next.startFrame, next.endFrame);
+              void finalize(next.start, next.end, next.audio);
             }
           });
         }, PARTIAL_INTERVAL_MS);
@@ -415,25 +440,25 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           setInterimText('…');
           startPartialTimer();
         },
-        onSpeechEnd: async () => {
+        // The VAD library passes the complete utterance audio as a Float32Array at 16 kHz,
+        // including the configured preSpeechPadMs. Using this directly is more reliable
+        // than slicing pcmFramesRef by index, because both use different AudioContexts
+        // with independent clocks — the indices drift and produce wrong audio boundaries.
+        onSpeechEnd: async (audio: Float32Array) => {
           stopPartialTimer();
           const uStart = utteranceStartRef.current ?? currentElapsed();
           const uEnd = currentElapsed();
-          const startFrame = pcmSpeechStartFrameRef.current;
-          // Snapshot the buffer length now so a late finalization never bleeds into
-          // the next utterance's audio.
-          const endFrame = pcmFramesRef.current.length;
           utteranceStartRef.current = null;
           interimTextRef.current = '';
           setInterimText('');
 
           if (utteranceInFlightRef.current) {
             // Push to queue — nothing is dropped even if multiple utterances pile up.
-            pendingUtterancesRef.current.push({ start: uStart, end: uEnd, startFrame, endFrame });
+            pendingUtterancesRef.current.push({ start: uStart, end: uEnd, audio });
             return;
           }
 
-          await finalize(uStart, uEnd, startFrame, endFrame);
+          await finalize(uStart, uEnd, audio);
         },
         onVADMisfire: () => {
           stopPartialTimer();
