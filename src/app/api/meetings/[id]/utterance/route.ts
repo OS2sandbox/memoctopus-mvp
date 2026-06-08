@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
-import { getTranscriptionProvider, HviskeProvider } from '@/lib/ai/transcription';
+import { HviskeProvider } from '@/lib/ai/transcription';
 
 interface Params {
   params: Promise<{ id: string }>;
 }
 
 // Per-utterance transcription for the VAD-based live recording path.
-// Receives a single short WAV clip (one speech segment detected by Silero VAD
-// in the browser) and returns plain text. No DB write — the frontend accumulates
+// Always uses HviskeProvider directly — independent of TRANSCRIPTION_PROVIDER,
+// which controls only the final batch pass. No DB write: the frontend accumulates
 // live segments; the authoritative transcript is written by /api/transcribe at end.
 export async function POST(req: NextRequest, { params }: Params) {
   const { id: _id } = await params;
@@ -23,12 +23,8 @@ export async function POST(req: NextRequest, { params }: Params) {
   const buffer = Buffer.from(await audioFile.arrayBuffer());
   if (buffer.length < 2_000) return NextResponse.json({ text: '' });
 
-  const provider = getTranscriptionProvider();
-  if (!(provider instanceof HviskeProvider)) {
-    return NextResponse.json({ text: '' });
-  }
-
   try {
+    const provider = new HviskeProvider();
     const text = await provider.transcribeRaw(buffer, audioFile.type || 'audio/wav');
     return NextResponse.json({ text });
   } catch (err) {
