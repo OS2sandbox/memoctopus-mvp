@@ -12,6 +12,7 @@ export function TopBar() {
   const router = useRouter();
   const isMobile = useIsMobile();
   const [showConfirm, setShowConfirm] = useState(false);
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
   const { data: session } = useSession();
 
   const nav = [
@@ -31,8 +32,9 @@ export function TopBar() {
   }
 
   function handleNavClick(e: React.MouseEvent, href: string) {
-    if (reviewMeetingId && href === '/dashboard') {
+    if (reviewMeetingId) {
       e.preventDefault();
+      setPendingHref(href);
       setShowConfirm(true);
     }
   }
@@ -42,11 +44,14 @@ export function TopBar() {
       {reviewMeetingId && (
         <DeleteAudioDialog
           open={showConfirm}
-          onOpenChange={setShowConfirm}
+          onOpenChange={(open) => {
+            setShowConfirm(open);
+            if (!open) setPendingHref(null);
+          }}
           meetingId={reviewMeetingId}
           title="Slet lydfil og forlad mødet?"
           confirmLabel="Slet og forlad"
-          onDeleted={() => router.push('/dashboard')}
+          onDeleted={() => router.push(pendingHref ?? '/dashboard')}
         />
       )}
 
