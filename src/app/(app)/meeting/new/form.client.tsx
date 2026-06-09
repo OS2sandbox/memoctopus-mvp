@@ -8,6 +8,9 @@ import { z } from 'zod';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { createMeeting, saveAudio, saveTranscript, updateMeeting } from '@/lib/storage';
+import type { TranscriptSegment, PiiReplacement } from '@/types';
+import type { TranscriptChapter } from '@/lib/ai/chapters';
 
 const schema = z.object({
   title: z.string().min(2, 'Titel skal have mindst 2 tegn').max(200),
@@ -45,29 +48,41 @@ export default function NewMeetingPage() {
             .filter(Boolean)
         : [];
 
-      const res = await fetch('/api/meetings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: data.title, participants }),
+      const meeting = await createMeeting({
+        title: data.title,
+        participants: participants.length > 0 ? participants : undefined,
+        source: 'local',
+        status: 'recording',
       });
-      if (!res.ok) {
-        const d = await res.json();
-        throw new Error(d.error ?? 'Kunne ikke oprette møde');
-      }
-      const { id } = await res.json();
 
       if (uploadMode === 'upload' && file) {
+        await saveAudio(meeting.id, file, file.type || 'audio/webm');
+        await updateMeeting(meeting.id, { status: 'processing', audioSizeBytes: file.size });
+
         const formData = new FormData();
         formData.append('audio', file, file.name);
-        formData.append('meetingId', id);
-        const uploadRes = await fetch('/api/transcribe', { method: 'POST', body: formData });
-        if (!uploadRes.ok) {
-          const d = await uploadRes.json();
+        formData.append('meetingId', meeting.id);
+        const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
+        if (!res.ok) {
+          const d = await res.json();
           throw new Error(d.error ?? 'Upload fejlede');
         }
-        router.push(`/meeting/${id}/review`);
+        const result = await res.json() as {
+          segments: TranscriptSegment[];
+          piiReplacements: PiiReplacement[];
+          rawText: string;
+          chapters: TranscriptChapter[];
+        };
+        await saveTranscript(meeting.id, {
+          rawText: result.rawText,
+          segments: result.segments,
+          chapters: result.chapters ?? [],
+          piiReplacements: result.piiReplacements ?? [],
+        });
+        await updateMeeting(meeting.id, { status: 'review' });
+        router.push(`/meeting/${meeting.id}/review`);
       } else {
-        router.push(`/meeting/${id}`);
+        router.push(`/meeting/${meeting.id}?autostart=1`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt');
@@ -169,7 +184,7 @@ export default function NewMeetingPage() {
             disabled={isSubmitting || (uploadMode === 'upload' && !file)}
           >
             {isSubmitting
-              ? 'Opretter...'
+              ? uploadMode === 'upload' ? 'Behandler…' : 'Opretter...'
               : uploadMode === 'record'
               ? 'Start optagelse'
               : 'Upload og transskribér'}

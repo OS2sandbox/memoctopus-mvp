@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useIsMobile } from '@/lib/use-is-mobile';
+import { getMeeting, getMinutes } from '@/lib/storage';
 
 type ExportFormat = 'pdf' | 'md';
 
@@ -24,7 +25,14 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
     setExporting(true);
     setError(null);
     try {
-      const res = await fetch(`/api/export/${meetingId}?format=${selected}`);
+      const [meeting, minutes] = await Promise.all([getMeeting(meetingId), getMinutes(meetingId)]);
+      if (!minutes) throw new Error('Ingen referat fundet');
+
+      const res = await fetch(`/api/export/${meetingId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: meeting?.title ?? 'Referat', content: minutes.content, format: selected }),
+      });
       if (!res.ok) {
         const d = await res.json();
         throw new Error(d.error ?? 'Eksport fejlede');

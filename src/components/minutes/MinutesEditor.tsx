@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { SaveStatus, SaveState } from '@/components/layout/SaveStatus';
 import { VersionHistory } from './VersionHistory';
 import { RichEditor } from './RichEditor';
+import { saveMinutes } from '@/lib/storage';
 
 interface VersionRecord {
   id: string;
@@ -15,10 +16,10 @@ interface VersionRecord {
 
 interface MinutesEditorProps {
   meetingId: string;
-  minutesId: string;
   initialContent: MinutesContent;
   version: number;
   versions: VersionRecord[];
+  onSaved?: () => void;
 }
 
 const AUTOSAVE_DELAY = 1500;
@@ -138,10 +139,10 @@ function VersionDropdown({
 
 export function MinutesEditor({
   meetingId,
-  minutesId,
   initialContent,
   version: initialVersion,
   versions: initialVersions,
+  onSaved,
 }: MinutesEditorProps) {
   const [content, setContent] = useState<MinutesContent>(initialContent);
   const [saveState, setSaveState] = useState<SaveState>('idle');
@@ -157,24 +158,17 @@ export function MinutesEditor({
     async (contentToSave: MinutesContent) => {
       setSaveState('saving');
       try {
-        const res = await fetch(`/api/meetings/${meetingId}/minutes`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ minutesId, content: contentToSave }),
-        });
-        if (!res.ok) throw new Error('Save failed');
-        const data = await res.json();
-        setVersion(data.version);
-        if (data.newVersion) {
-          setVersions((v) => [data.newVersion, ...v]);
-        }
+        const saved = await saveMinutes(meetingId, contentToSave);
+        setVersion(saved.version);
+        setVersions(saved.versions);
         setSaveState('saved');
         setTimeout(() => setSaveState('idle'), 2000);
+        onSaved?.();
       } catch {
         setSaveState('error');
       }
     },
-    [meetingId, minutesId],
+    [meetingId, onSaved],
   );
 
   function updateSection(key: string, text: string) {

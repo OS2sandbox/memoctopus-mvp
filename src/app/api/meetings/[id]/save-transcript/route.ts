@@ -1,63 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
-import { queryUserSchemaOne } from '@/lib/db/user-schema';
-import { TranscriptSegment } from '@/types';
+import { NextResponse } from 'next/server';
 
-interface Params {
-  params: Promise<{ id: string }>;
-}
-
-export async function POST(req: NextRequest, { params }: Params) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const { id: meetingId } = await params;
-
-  const meeting = await queryUserSchemaOne<{ id: string }>(
-    session.user.id,
-    'SELECT id FROM meetings WHERE id = $1',
-    [meetingId],
-  );
-  if (!meeting) return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
-
-  const body = await req.json();
-  const segments: TranscriptSegment[] = body.segments ?? [];
-
-  const rawText = segments.map((s) => s.text).join(' ');
-
-  // Upsert: update existing transcript if one exists, otherwise insert.
-  // This prevents multiple transcript rows per meeting when re-recording.
-  const existing = await queryUserSchemaOne<{ id: string }>(
-    session.user.id,
-    'SELECT id FROM transcripts WHERE meeting_id = $1 ORDER BY id DESC LIMIT 1',
-    [meetingId],
-  );
-
-  let transcriptId: string;
-  if (existing) {
-    await queryUserSchemaOne(
-      session.user.id,
-      `UPDATE transcripts SET raw_text = $1, segments = $2 WHERE id = $3`,
-      [rawText, JSON.stringify(segments), existing.id],
-    );
-    transcriptId = existing.id;
-  } else {
-    const inserted = await queryUserSchemaOne<{ id: string }>(
-      session.user.id,
-      `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements)
-       VALUES ($1, $2, $3, NULL, $4)
-       RETURNING id`,
-      [meetingId, rawText, JSON.stringify(segments), JSON.stringify([])],
-    );
-    transcriptId = inserted!.id;
-  }
-
-  await queryUserSchemaOne(
-    session.user.id,
-    `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,
-    [meetingId],
-  );
-
-  return NextResponse.json({ transcriptId });
+// Transcript saving is handled client-side via IndexedDB.
+export async function POST() {
+  return NextResponse.json({ ok: true });
 }

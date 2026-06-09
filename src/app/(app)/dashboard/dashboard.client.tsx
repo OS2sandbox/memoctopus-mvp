@@ -4,6 +4,7 @@ import React, { useState, useEffect, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useIsMobile } from '@/lib/use-is-mobile';
+import { createMeeting, getAllMeetings } from '@/lib/storage';
 
 export default function OptaqPage() {
   const router = useRouter();
@@ -18,9 +19,8 @@ export default function OptaqPage() {
   const [meetingCount, setMeetingCount] = useState<number | null>(null);
 
   useEffect(() => {
-    fetch('/api/meetings?count=1')
-      .then((r) => r.json())
-      .then((d) => setMeetingCount(d.count ?? null))
+    getAllMeetings()
+      .then((meetings) => setMeetingCount(meetings.length))
       .catch(() => {});
   }, []);
 
@@ -35,17 +35,14 @@ export default function OptaqPage() {
     if (loading) return;
     setLoading(true);
     try {
-      const body: Record<string, unknown> = {
-        title: title.trim() || `Møde · ${new Intl.DateTimeFormat('da', { day: 'numeric', month: 'long' }).format(new Date())}`,
-      };
-      if (participants.length > 0) body.participants = participants;
-      const res = await fetch('/api/meetings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+      const meetingTitle = title.trim() || `Møde · ${new Intl.DateTimeFormat('da', { day: 'numeric', month: 'long' }).format(new Date())}`;
+      const meeting = await createMeeting({
+        title: meetingTitle,
+        participants: participants.length > 0 ? participants : undefined,
+        source: 'local',
+        status: 'recording',
       });
-      const data = await res.json();
-      if (data.id) router.push(`/meeting/${data.id}?autostart=1`);
+      router.push(`/meeting/${meeting.id}?autostart=1`);
     } catch {
       setLoading(false);
     }
@@ -57,29 +54,13 @@ export default function OptaqPage() {
     setLinkError('');
     try {
       const dateStr = new Intl.DateTimeFormat('da', { day: 'numeric', month: 'long' }).format(new Date());
-      const res = await fetch('/api/meetings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source: 'teams',
-          meetingUrl: link,
-          title: `Teams-møde · ${dateStr}`,
-        }),
+      const meeting = await createMeeting({
+        title: `Teams-møde · ${dateStr}`,
+        source: 'teams',
+        meetingUrl: link,
+        status: 'joining',
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setLinkError(res.status === 400
-          ? 'Ugyldigt mødelink. Indsæt et gyldigt Teams-link.'
-          : 'Noget gik galt. Prøv igen.');
-        setLinkLoading(false);
-        return;
-      }
-      if (!data.id) {
-        setLinkError('Noget gik galt. Prøv igen.');
-        setLinkLoading(false);
-        return;
-      }
-      router.push(`/meeting/${data.id}?join=1`);
+      router.push(`/meeting/${meeting.id}?join=1`);
     } catch {
       setLinkError('Noget gik galt. Prøv igen.');
       setLinkLoading(false);
@@ -139,7 +120,6 @@ export default function OptaqPage() {
 
           {/* LEFT — optional meeting details */}
           <div style={{ opacity: 0.95, order: isMobile ? 2 : 0 }}>
-            {/* Eyebrow */}
             <div style={{
               fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)',
               letterSpacing: 0.4, display: 'flex', justifyContent: 'space-between',
@@ -148,7 +128,6 @@ export default function OptaqPage() {
               <span style={{ color: 'var(--muted-2)' }}>valgfrit · kan tilføjes senere</span>
             </div>
 
-            {/* Title input */}
             <div style={{ marginTop: 18, paddingBottom: 8, borderBottom: '1px solid var(--line)' }}>
               <input
                 value={title}
@@ -163,7 +142,6 @@ export default function OptaqPage() {
               />
             </div>
 
-            {/* Deltagere chips */}
             <div style={{ marginTop: 24 }}>
               <div style={{
                 fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
@@ -315,13 +293,11 @@ export default function OptaqPage() {
 
           {/* RIGHT — status + compliance */}
           <div style={{ opacity: 0.95, order: isMobile ? 3 : 0 }}>
-            {/* Eyebrow */}
             <div style={{
               fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)',
               letterSpacing: 0.4,
             }}>status</div>
 
-            {/* Hviske status */}
             <div style={{
               marginTop: 14, paddingBottom: 14,
               borderBottom: '1px solid var(--line)',
@@ -336,7 +312,6 @@ export default function OptaqPage() {
               </div>
             </div>
 
-            {/* Mic status */}
             <div style={{ marginTop: 18 }}>
               <div style={{
                 fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
@@ -347,7 +322,6 @@ export default function OptaqPage() {
               </div>
             </div>
 
-            {/* Compliance */}
             <div style={{ marginTop: 24 }}>
               <div style={{
                 fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
@@ -365,7 +339,7 @@ export default function OptaqPage() {
           </div>
         </div>
 
-        {/* Footer hint — right-aligned, archive link only */}
+        {/* Footer hint */}
         <div style={{
           marginTop: isMobile ? 56 : 96, paddingTop: 24, borderTop: '1px solid var(--line)',
           display: 'flex', justifyContent: 'flex-end',

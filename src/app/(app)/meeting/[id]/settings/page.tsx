@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dialog';
 import { ProcessStrip } from '@/components/layout/ProcessStrip';
 import { RedactDialog } from '@/components/compliance/RedactDialog';
+import { getMeeting, updateMeeting, deleteMeeting, deleteAudio, getTranscript, saveTranscript } from '@/lib/storage';
 
 export default function MeetingSettingsPage() {
   const params = useParams();
@@ -32,16 +33,13 @@ export default function MeetingSettingsPage() {
 
   // Fetch meeting title on mount
   useEffect(() => {
-    fetch(`/api/meetings/${id}`)
-      .then((res) => res.json())
-      .then((data) => {
-        const title = data?.title ?? '';
+    getMeeting(id)
+      .then((m) => {
+        const title = m?.title ?? '';
         setMeetingTitle(title);
         setRenameValue(title);
       })
-      .catch(() => {
-        // silently ignore; title stays empty
-      });
+      .catch(() => {});
   }, [id]);
 
   // Focus the input when rename mode activates
@@ -69,11 +67,7 @@ export default function MeetingSettingsPage() {
       return;
     }
     try {
-      await fetch(`/api/meetings/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: trimmed }),
-      });
+      await updateMeeting(id, { title: trimmed });
       setMeetingTitle(trimmed);
     } catch {
       // silently ignore; revert to original title
@@ -92,14 +86,25 @@ export default function MeetingSettingsPage() {
   }
 
   async function handleRedactConfirm() {
-    await fetch(`/api/meetings/${id}/redact`, { method: 'POST' });
+    const transcript = await getTranscript(id);
+    if (transcript) {
+      await saveTranscript(id, {
+        rawText: '',
+        segments: [],
+        chapters: transcript.chapters,
+        piiReplacements: [],
+        piiRemovedAt: new Date().toISOString(),
+      });
+    }
+    await deleteAudio(id);
+    await updateMeeting(id, { status: 'redacted', audioDeleted: true });
     router.push('/arkiv');
   }
 
   async function handleDelete() {
     setIsDeleting(true);
     try {
-      await fetch(`/api/meetings/${id}`, { method: 'DELETE' });
+      await deleteMeeting(id);
       router.push('/arkiv');
     } catch {
       setIsDeleting(false);

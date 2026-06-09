@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { deleteAudio, updateMeeting } from '@/lib/storage';
 
 interface DeleteAudioDialogProps {
   open: boolean;
@@ -20,7 +21,8 @@ export function DeleteAudioDialog({ open, onOpenChange, meetingId, title, descri
   async function handleConfirm() {
     setDeleting(true);
     try {
-      await fetch(`/api/meetings/${meetingId}/audio`, { method: 'DELETE' });
+      await deleteAudio(meetingId);
+      await updateMeeting(meetingId, { audioDeleted: true });
       onDeleted();
     } finally {
       setDeleting(false);

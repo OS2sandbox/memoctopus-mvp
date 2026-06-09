@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { ProcessStrip, ProcessPhase } from '@/components/layout/ProcessStrip';
 import { RecordingScreen } from '@/components/recording/RecordingScreen';
@@ -9,39 +9,82 @@ import { TranscriptReview } from '@/components/transcript/TranscriptReview';
 import { MinutesEditor } from '@/components/minutes/MinutesEditor';
 import { ExportTab } from '@/components/meeting/ExportTab';
 import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
-import type { MeetingPageData } from '@/lib/data/meeting-page';
 import { useReviewAudio } from '@/lib/review-audio-context';
+import {
+  getMeeting,
+  getTranscript,
+  getMinutes,
+  getAudio,
+  StoredMeeting,
+  StoredTranscript,
+  StoredMinutes,
+} from '@/lib/storage';
 
 interface MeetingPageClientProps {
   meetingId: string;
   initialTab: ProcessPhase;
-  data: MeetingPageData;
 }
 
-export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageClientProps) {
+export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<ProcessPhase>(initialTab);
   const [showDeleteAudioDialog, setShowDeleteAudioDialog] = useState(false);
   const { setHasAudio } = useReviewAudio();
 
-  const { meeting, audioFile, transcript, minutes } = data;
+  const [meeting, setMeeting] = useState<StoredMeeting | null>(null);
+  const [transcript, setTranscript] = useState<StoredTranscript | null>(null);
+  const [minutes, setMinutes] = useState<StoredMinutes | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | undefined>(undefined);
+  const [loading, setLoading] = useState(true);
+  const audioBlobUrlRef = useRef<string | null>(null);
+
+  const loadData = useCallback(async () => {
+    const [m, t, min] = await Promise.all([
+      getMeeting(meetingId),
+      getTranscript(meetingId),
+      getMinutes(meetingId),
+    ]);
+    setMeeting(m);
+    setTranscript(t);
+    setMinutes(min);
+
+    if (m && !m.audioDeleted) {
+      const audioEntry = await getAudio(meetingId);
+      if (audioEntry) {
+        if (audioBlobUrlRef.current) URL.revokeObjectURL(audioBlobUrlRef.current);
+        const url = URL.createObjectURL(audioEntry.blob);
+        audioBlobUrlRef.current = url;
+        setAudioUrl(url);
+      } else {
+        if (audioBlobUrlRef.current) URL.revokeObjectURL(audioBlobUrlRef.current);
+        audioBlobUrlRef.current = null;
+        setAudioUrl(undefined);
+      }
+    } else {
+      if (audioBlobUrlRef.current) URL.revokeObjectURL(audioBlobUrlRef.current);
+      audioBlobUrlRef.current = null;
+      setAudioUrl(undefined);
+    }
+
+    setLoading(false);
+  }, [meetingId]);
 
   useEffect(() => {
-    setHasAudio(activeTab === 'review' && !!audioFile);
+    loadData();
+    return () => {
+      if (audioBlobUrlRef.current) URL.revokeObjectURL(audioBlobUrlRef.current);
+    };
+  }, [loadData]);
+
+  useEffect(() => {
+    const hasAudio = activeTab === 'review' && !!audioUrl;
+    setHasAudio(hasAudio);
     return () => setHasAudio(false);
-  }, [activeTab, audioFile, setHasAudio]);
-
-  // Auto-refresh every 4 s while transcription is in progress so the page
-  // picks up the transcript as soon as the audio-upload route completes.
-  useEffect(() => {
-    if (meeting.status !== 'processing' || activeTab !== 'review') return;
-    const id = setInterval(() => router.refresh(), 4000);
-    return () => clearInterval(id);
-  }, [meeting.status, activeTab, router]);
+  }, [activeTab, audioUrl, setHasAudio]);
 
   const switchTab = useCallback(
     (tab: ProcessPhase) => {
-      if (tab === 'recording' && activeTab === 'review' && !!audioFile) {
+      if (tab === 'recording' && activeTab === 'review' && !!audioUrl) {
         setShowDeleteAudioDialog(true);
         return;
       }
@@ -52,8 +95,32 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
         tab === 'recording' ? `/meeting/${meetingId}` : `/meeting/${meetingId}/${tab}`,
       );
     },
-    [meetingId, activeTab, audioFile],
+    [meetingId, activeTab, audioUrl],
   );
+
+  if (loading) {
+    return (
+      <div style={{ padding: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <span style={{
+          display: 'inline-block', width: 20, height: 20, borderRadius: 999,
+          border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)',
+          animation: 'spin 0.8s linear infinite',
+        }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  if (!meeting) {
+    return (
+      <div style={{ padding: '48px' }}>
+        <h1 style={{ fontSize: 'var(--t-h1)', fontWeight: 300 }}>Møde ikke fundet</h1>
+        <p style={{ marginTop: 8, color: 'var(--muted)' }}>
+          Dette møde eksisterer ikke i din lokale lagerplads.
+        </p>
+      </div>
+    );
+  }
 
   const completedPhases: ProcessPhase[] = (() => {
     const s = meeting.status;
@@ -65,6 +132,9 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
 
   const isCompleted = meeting.status !== 'recording' && meeting.status !== 'processing';
   const isTeamsMeeting = meeting.source === 'teams';
+  const audioFile = !meeting.audioDeleted && audioUrl
+    ? { durationSeconds: meeting.audioDurationSeconds, sizeBytes: meeting.audioSizeBytes }
+    : null;
 
   return (
     <>
@@ -80,10 +150,10 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
         }
         confirmLabel={transcript ? 'Slet lydfil' : 'Slet og gå til optagelse'}
         onDeleted={() => {
-          if (transcript) {
-            router.refresh();
-          } else {
-            router.push(`/meeting/${meetingId}`);
+          loadData();
+          if (!transcript) {
+            setActiveTab('recording');
+            window.history.replaceState(null, '', `/meeting/${meetingId}`);
           }
         }}
       />
@@ -110,20 +180,21 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
               : undefined
           }
           onNavigateToReview={() => switchTab('review')}
+          onRecordingComplete={loadData}
         />
       )}
 
       {activeTab === 'review' && transcript && (
         <TranscriptReview
           meetingId={meetingId}
-          transcriptId={transcript.id}
           initialSegments={transcript.segments}
           piiReplacements={transcript.piiReplacements}
-          audioUrl={audioFile ? `/api/meetings/${meetingId}/audio` : undefined}
+          audioUrl={audioUrl}
           audioDurationSeconds={audioFile?.durationSeconds}
-          audioDeleted={!audioFile && meeting.status !== 'recording' && meeting.status !== 'processing'}
+          audioDeleted={meeting.audioDeleted && meeting.status !== 'recording' && meeting.status !== 'processing'}
           initialChapters={transcript.chapters}
           participants={meeting.participants}
+          onDataChange={loadData}
         />
       )}
 
@@ -157,10 +228,10 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
       {activeTab === 'minutes' && minutes && (
         <MinutesEditor
           meetingId={meetingId}
-          minutesId={minutes.id}
           initialContent={minutes.content}
           version={minutes.version}
           versions={minutes.versions}
+          onSaved={loadData}
         />
       )}
 

@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -15,6 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { formatDate, formatDuration, statusLabel, statusVariant } from '@/lib/utils';
 import { Meeting } from '@/types';
+import { deleteMeeting } from '@/lib/storage';
 
 type ArchiveMeeting = Pick<Meeting, 'id' | 'title' | 'participants' | 'status' | 'createdAt'> & {
   durationSeconds: number | null;
@@ -26,8 +26,7 @@ function statusHref(m: ArchiveMeeting) {
   return `/meeting/${m.id}/minutes`;
 }
 
-export function ArchiveMeetingRow({ meeting }: { meeting: ArchiveMeeting }) {
-  const router = useRouter();
+export function ArchiveMeetingRow({ meeting, onDeleted }: { meeting: ArchiveMeeting; onDeleted?: () => void }) {
   const [hovered, setHovered] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -35,9 +34,9 @@ export function ArchiveMeetingRow({ meeting }: { meeting: ArchiveMeeting }) {
   async function handleDelete() {
     setIsDeleting(true);
     try {
-      await fetch(`/api/meetings/${meeting.id}`, { method: 'DELETE' });
+      await deleteMeeting(meeting.id);
       setDeleteOpen(false);
-      router.refresh();
+      onDeleted?.();
     } catch {
       setIsDeleting(false);
     }

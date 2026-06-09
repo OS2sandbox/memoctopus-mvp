@@ -4,12 +4,12 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
 import { WaveformPlayer } from './WaveformPlayer';
-import { pendingUpload } from '@/lib/pending-upload';
+import { saveTranscriptChapters, saveTranscriptSegments, saveMinutes, deleteAudio, updateMeeting } from '@/lib/storage';
+import type { MinutesContent } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
 
 interface TranscriptReviewProps {
   meetingId: string;
-  transcriptId: string;
   initialSegments: TranscriptSegment[];
   piiReplacements: PiiReplacement[];
   audioUrl?: string;
@@ -17,9 +17,8 @@ interface TranscriptReviewProps {
   audioDeleted?: boolean;
   initialChapters?: TranscriptChapter[];
   participants?: string[];
+  onDataChange?: () => void;
 }
-
-type UploadStatus = 'idle' | 'uploading' | 'processing' | 'done' | 'error';
 
 interface TranscriptChapter {
   id: string;
@@ -46,7 +45,6 @@ function applySelectedPiiReplacements(
 
 export function TranscriptReview({
   meetingId,
-  transcriptId,
   initialSegments,
   piiReplacements: initialPiiReplacements,
   audioUrl: initialAudioUrl,
@@ -54,6 +52,7 @@ export function TranscriptReview({
   audioDeleted = false,
   initialChapters,
   participants,
+  onDataChange,
 }: TranscriptReviewProps) {
   const isMobile = useIsMobile();
   const [segments, setSegments] = useState(initialSegments);
@@ -100,78 +99,6 @@ export function TranscriptReview({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(audioDurationSeconds ?? 0);
   const [audioError, setAudioError] = useState<string | null>(null);
-
-  // Background audio upload (from pending upload store)
-  const [uploadStatus, setUploadStatus] = useState<UploadStatus>('idle');
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-
-  // Kick off pending audio upload on first render
-  useEffect(() => {
-    const pending = pendingUpload.get();
-    if (!pending || pending.meetingId !== meetingId) return;
-    pendingUpload.clear();
-    if (pending.elapsed > 0) setDuration((d) => (d > 0 ? d : pending.elapsed));
-    startAudioUpload(pending.blob, pending.elapsed);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function startAudioUpload(blob: Blob, elapsed: number) {
-    setUploadStatus('uploading');
-    setUploadProgress(0);
-    setUploadError(null);
-
-    const mimeType = blob.type || 'audio/webm';
-    const formData = new FormData();
-    formData.append('audio', blob, `recording.${mimeType.includes('mp4') ? 'm4a' : 'webm'}`);
-    formData.append('meetingId', meetingId);
-    formData.append('transcriptId', transcriptId);
-    formData.append('duration', String(elapsed));
-
-    const xhr = new XMLHttpRequest();
-
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) {
-        setUploadProgress(Math.round((e.loaded / e.total) * 100));
-      }
-    };
-
-    xhr.upload.onload = () => {
-      // Bytes sent; server is now running PII detection
-      setUploadStatus('processing');
-      setUploadProgress(100);
-    };
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const data = JSON.parse(xhr.responseText) as { piiReplacements?: PiiReplacement[] };
-          const newReplacements = data.piiReplacements ?? [];
-          setPiiReplacements(newReplacements);
-          setCheckedPii(new Set(newReplacements.map((_, i) => i)));
-        } catch {
-          // PII data couldn't be parsed — not critical, continue without it
-        }
-        setAudioUrl(`/api/meetings/${meetingId}/audio`);
-        setUploadStatus('done');
-      } else {
-        let msg = 'Upload fejlede';
-        try {
-          msg = (JSON.parse(xhr.responseText) as { error?: string }).error ?? msg;
-        } catch { /* ignore */ }
-        setUploadStatus('error');
-        setUploadError(msg);
-      }
-    };
-
-    xhr.onerror = () => {
-      setUploadStatus('error');
-      setUploadError('Netværksfejl under upload af lydfil');
-    };
-
-    xhr.open('POST', '/api/transcribe');
-    xhr.send(formData);
-  }
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -261,21 +188,15 @@ export function TranscriptReview({
 
   const handleRenameAll = useCallback(
     async (from: string, to: string) => {
-      setSegments((prev) =>
-        prev.map((seg) => (seg.speaker === from ? { ...seg, speaker: to } : seg)),
-      );
+      const updated = segments.map((seg) => (seg.speaker === from ? { ...seg, speaker: to } : seg));
+      setSegments(updated);
       try {
-        await fetch(`/api/meetings/${meetingId}/transcript/speakers`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from, to }),
-        });
+        await saveTranscriptSegments(meetingId, updated);
       } catch (err) {
-        // optimistic update already applied; persist failure is non-critical
         console.error('[speakers] rename persist failed:', err);
       }
     },
-    [meetingId],
+    [meetingId, segments],
   );
 
   function jumpToSegment(segmentIndex: number) {
@@ -352,8 +273,6 @@ export function TranscriptReview({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            meetingId,
-            transcriptId,
             segments: processedSegments,
             participants: editableParticipants.filter(Boolean),
             customPrompt: [...Array.from(activeKeywords), customText.trim()].filter(Boolean).join(', ') || undefined,
@@ -367,6 +286,11 @@ export function TranscriptReview({
         const data = await res.json();
         throw new Error(data.error ?? 'Kunne ikke generere referat');
       }
+      const data = await res.json() as { content: MinutesContent; templateId?: string };
+      await saveMinutes(meetingId, data.content, data.templateId);
+      await deleteAudio(meetingId);
+      await updateMeeting(meetingId, { status: 'minutes', audioDeleted: true });
+      onDataChange?.();
       window.location.href = `/meeting/${meetingId}/minutes`;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt');
@@ -409,12 +333,7 @@ export function TranscriptReview({
   );
 
   const saveChapters = useCallback((updated: TranscriptChapter[]) => {
-    fetch(`/api/meetings/${meetingId}/chapters`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chapters: updated }),
-    }).catch((err) => console.error('[chapters] save failed:', err));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    saveTranscriptChapters(meetingId, updated).catch((err) => console.error('[chapters] save failed:', err));
   }, [meetingId]);
 
   useEffect(() => {
@@ -430,7 +349,10 @@ export function TranscriptReview({
       .then((data) => {
         const chs = (data.chapters ?? []) as TranscriptChapter[];
         setChapters(chs.length > 0 ? chs : null);
-        if (chs.length > 0) setOpenChapters(new Set([chs[0].id]));
+        if (chs.length > 0) {
+          setOpenChapters(new Set([chs[0].id]));
+          saveTranscriptChapters(meetingId, chs).catch(() => {});
+        }
       })
       .catch((err) => console.error('[chapters] generate failed:', err))
       .finally(() => setChaptersLoading(false));
@@ -725,50 +647,11 @@ export function TranscriptReview({
           display: 'flex', flexDirection: 'column', gap: 0,
         }}>
 
-          {/* Upload progress */}
-          {(uploadStatus === 'uploading' || uploadStatus === 'processing') && (
-            <div style={{ marginBottom: 20 }}>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 8 }}>
-                {uploadStatus === 'uploading' ? 'uploader lydoptagelse' : 'analyserer personoplysninger'}
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-2)' }}>
-                  {uploadStatus === 'uploading' ? 'upload' : 'PII-analyse'}
-                </span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)' }}>
-                  {uploadStatus === 'uploading' ? `${uploadProgress}%` : '…'}
-                </span>
-              </div>
-              <div style={{ height: 4, background: 'var(--line-2)', borderRadius: 2, overflow: 'hidden' }}>
-                <div style={{
-                  height: '100%', borderRadius: 2,
-                  width: uploadStatus === 'processing' ? '100%' : `${uploadProgress}%`,
-                  background: 'var(--accent)',
-                  transition: 'width 0.3s',
-                  animation: uploadStatus === 'processing' ? 'protoPulse 1.5s ease-in-out infinite' : 'none',
-                }} />
-              </div>
-            </div>
-          )}
-
-          {uploadStatus === 'error' && (
-            <div style={{
-              marginBottom: 16, padding: '12px 14px', borderRadius: 'var(--radius)',
-              background: 'var(--kill-wash)', border: '1px solid color-mix(in oklch, var(--kill) 30%, var(--line-2))',
-            }}>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--kill)', marginBottom: 4 }}>upload fejlede</div>
-              <div style={{ fontSize: 12.5, color: 'var(--kill)', opacity: 0.8 }}>{uploadError}</div>
-              <div style={{ fontSize: 11, color: 'var(--kill)', opacity: 0.7, marginTop: 4 }}>Du kan stadig generere referat.</div>
-            </div>
-          )}
-
           {/* Følsom info (PII checklist) */}
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>følsom info</div>
           <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 6, lineHeight: 1.5 }}>
             {piiReplacements.length === 0
-              ? (uploadStatus === 'uploading' || uploadStatus === 'processing')
-                ? 'Analyse klar når lyden er uploadet.'
-                : 'Ingen personoplysninger fundet.'
+              ? 'Ingen personoplysninger fundet.'
               : <>Hviske har fundet <strong style={{ color: 'var(--ink)' }}>{piiReplacements.length} ting</strong>, der kan være personoplysninger.</>
             }
           </div>
@@ -1103,18 +986,7 @@ export function TranscriptReview({
           </span>
         ) : (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}>
-            {(uploadStatus === 'uploading' || uploadStatus === 'processing') && (
-              <span style={{
-                width: 14, height: 14, borderRadius: 999, flexShrink: 0,
-                border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)',
-                display: 'inline-block', animation: 'spin 0.8s linear infinite',
-              }} />
-            )}
-            {uploadStatus === 'uploading'
-              ? `uploader lydfil… ${uploadProgress}%`
-              : uploadStatus === 'processing'
-              ? 'analyserer personoplysninger…'
-              : 'ingen lydfil'}
+            ingen lydfil
           </span>
         )}
       </div>

@@ -16,6 +16,9 @@ import { formatDuration, formatFileSize } from '@/lib/utils';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { pickRecordingMimeType, extensionForMimeType } from '@/lib/audio/recording-format';
 import { RealtimeTranscriptionStream } from '@/lib/audio/realtime-stream';
+import { saveAudio, deleteAudio, saveTranscript, updateMeeting } from '@/lib/storage';
+import type { TranscriptSegment, PiiReplacement } from '@/types';
+import type { TranscriptChapter } from '@/lib/ai/chapters';
 
 interface LiveSegment {
   speaker: string;
@@ -33,6 +36,7 @@ interface RecordingScreenProps {
   meetingId: string;
   existingRecording?: { durationSeconds: number | null; sizeBytes: number };
   onNavigateToReview?: () => void;
+  onRecordingComplete?: () => void;
 }
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
@@ -40,12 +44,10 @@ type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
 const BYTES_PER_SECOND_ESTIMATE = 16_000;
 const SILENCE_THRESHOLD_SECONDS = 5;
 const SILENCE_VOLUME_THRESHOLD = 0.02;
-// How often, while recording, we re-analyze the transcript for things to clarify.
 const CLARIFY_INTERVAL_MS = 25_000;
-// Tick cadence for the countdown bar to the next clarification refresh.
 const CLARIFY_TICK_MS = 250;
 
-export function RecordingScreen({ meetingId, existingRecording, onNavigateToReview }: RecordingScreenProps) {
+export function RecordingScreen({ meetingId, existingRecording, onNavigateToReview, onRecordingComplete }: RecordingScreenProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const isMobile = useIsMobile();
@@ -58,19 +60,12 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const [isUploading, setIsUploading] = useState(false);
   const [isOverwriting, setIsOverwriting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // True if the realtime live-text stream can't connect — the batch transcript
-  // still works, but the live interim captions won't show.
   const [liveCaptionsUnavailable, setLiveCaptionsUnavailable] = useState(false);
-  // True while a batch diarization pass is running (on pause) — the preview is
-  // being repainted with authoritative speaker labels.
   const [isDiarizing, setIsDiarizing] = useState(false);
 
-  // Live transcription
   const [liveSegments, setLiveSegments] = useState<LiveSegment[]>([]);
   const [interimText, setInterimText] = useState('');
   const [clarifications, setClarifications] = useState<ClarificationItem[]>([]);
-  // Fraction (0–1) of time remaining until the next clarification refresh, for the
-  // reverse countdown bar. Starts full (1) and drains to 0, then resets.
   const [clarifyRemaining, setClarifyRemaining] = useState(1);
   const liveSegmentsRef = useRef<LiveSegment[]>([]);
   const mimeTypeRef = useRef('audio/webm');
@@ -80,11 +75,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
   const interimTextRef = useRef('');
   const recordingActiveRef = useRef(false);
-  // Live transcription stream (ElevenLabs realtime). Text-only preview; speakers
-  // are filled in by the batch diarization pass at pause / save.
   const streamRef = useRef<RealtimeTranscriptionStream | null>(null);
-  // Elapsed-seconds mark when the current utterance's first partial arrived, so a
-  // committed line gets a sensible start time in the preview.
   const utteranceStartRef = useRef<number | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -131,14 +122,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     setClarifyRemaining(1);
   }
 
-  // ── Live transcription (ElevenLabs realtime) ─────────────────────────────────
-
   function currentElapsed(): number {
     return Math.max(0, (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000);
   }
 
-  // Open the realtime stream for live text-only preview. Speakers are blank ("—")
-  // until the batch diarization pass runs at pause / save.
   async function startRealtime(stream: MediaStream) {
     const ctl = new RealtimeTranscriptionStream(meetingId, {
       onPartial: (text) => {
@@ -171,7 +158,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     await ctl.start(stream);
   }
 
-  // Flush the recorder's buffered tail into chunksRef before reading it.
   function flushRecorder(recorder: MediaRecorder): Promise<void> {
     if (recorder.state !== 'recording') return Promise.resolve();
     return new Promise<void>((resolve) => {
@@ -181,8 +167,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     });
   }
 
-  // Run the authoritative batch scribe_v2 pass over everything recorded so far and
-  // repaint the preview with real speaker labels. Used at every pause.
   async function diarizeSoFar(recorder: MediaRecorder) {
     setIsDiarizing(true);
     try {
@@ -202,14 +186,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         utteranceStartRef.current = null;
       }
     } catch (err) {
-      // Diarization is a checkpoint nicety — keep the realtime preview on failure.
       console.error('[diarize] failed:', err);
     } finally {
       setIsDiarizing(false);
     }
   }
-
-  // ── Recording lifecycle ───────────────────────────────────────────────────────
 
   async function refreshClarifications() {
     if (liveSegmentsRef.current.length === 0) return;
@@ -224,13 +205,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       const data = await res.json() as { clarifications?: ClarificationItem[] };
       setClarifications(data.clarifications ?? []);
     } catch (err) {
-      // Live clarifications are a non-critical enhancement — keep recording, just log.
       console.error('[clarifications] refresh failed:', err);
     }
   }
 
-  // Drive the countdown bar and fire a refresh when it reaches zero. Runs only
-  // while actively recording (started/stopped alongside the recorder).
   function startClarifyTimer() {
     nextClarifyAtRef.current = Date.now() + CLARIFY_INTERVAL_MS;
     setClarifyRemaining(1);
@@ -254,13 +232,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   async function startRecording() {
     setError(null);
     resetLiveState();
-    // Tracked outside try so the catch can release it if setup fails after getUserMedia
     let stream: MediaStream | null = null;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      // Volume meter — non-critical. If the Web Audio API can't open the hardware device
-      // (e.g. macOS CoreAudio in a bad state), recording still proceeds without the bar.
       try {
         const ctx = new AudioContext();
         const analyser = ctx.createAnalyser();
@@ -268,20 +243,16 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         ctx.createMediaStreamSource(stream).connect(analyser);
         audioContextRef.current = ctx;
         analyserRef.current = analyser;
-        // Chrome may start the context suspended (autoplay policy / autostart path).
         await ctx.resume();
-        // Auto-recover if the system later suspends the context (e.g. macOS CoreAudio reset).
         ctx.onstatechange = () => {
           if (ctx.state === 'suspended' && recordingActiveRef.current) void ctx.resume();
         };
       } catch (audioErr) {
-        console.warn('[startRecording] AudioContext unavailable, volume meter disabled:', audioErr);
+        console.warn('[startRecording] AudioContext unavailable:', audioErr);
         audioContextRef.current = null;
         analyserRef.current = null;
       }
 
-      // Pick a mime type the browser can actually record (iOS Safari needs mp4,
-      // not webm). Empty string → let MediaRecorder choose its own default.
       const mimeType = pickRecordingMimeType();
       mimeTypeRef.current = mimeType || 'audio/webm';
 
@@ -311,7 +282,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
       void startRealtime(stream);
     } catch (err) {
-      // Release the mic if we acquired it but failed during setup — otherwise it stays locked
       stream?.getTracks().forEach((t) => t.stop());
       audioContextRef.current?.close();
       audioContextRef.current = null;
@@ -331,32 +301,26 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   async function pauseRecording() {
     if (!mediaRecorderRef.current) return;
     const recorder = mediaRecorderRef.current;
-    // Freeze the clock + meter immediately so the UI feels responsive.
     pauseStartRef.current = Date.now();
     if (timerRef.current) clearInterval(timerRef.current);
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     stopClarifyTimer();
     setVolumeLevel(0);
-    // Spin the pause button right away — it stays "loading" until diarization lands.
     setIsDiarizing(true);
     setRecordingState('paused');
 
-    // Close the live stream, flush the recorded tail, then pause the recorder.
     await streamRef.current?.stop();
     streamRef.current = null;
     await flushRecorder(recorder);
     recorder.pause();
-    // Suspend the AudioContext so it releases the hardware and stops generating errors
     void audioContextRef.current?.suspend();
 
-    // Repaint the preview with authoritative speaker labels.
     await diarizeSoFar(recorder);
   }
 
   async function resumeRecording() {
     if (!mediaRecorderRef.current) return;
     const recorder = mediaRecorderRef.current;
-    // Await the resume so the AudioContext is fully running before pollVolume starts reading
     await audioContextRef.current?.resume();
     recorder.resume();
     pausedDurationRef.current += Date.now() - pauseStartRef.current;
@@ -369,7 +333,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     void startRealtime(recorder.stream);
   }
 
-  // Auto-start when navigated here from the home page record button
   const didAutostart = useRef(false);
   useEffect(() => {
     if (didAutostart.current) return;
@@ -397,8 +360,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     audioContextRef.current?.close();
     audioContextRef.current = null;
 
-    // Resume before stopping so the recorder flushes its buffer into a
-    // final ondataavailable event — paused recorders may not do this reliably.
     if (recorder.state === 'paused') recorder.resume();
 
     await new Promise<void>((resolve) => {
@@ -413,56 +374,61 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     const mimeType = recorder.mimeType || 'audio/webm';
     const blob = new Blob(chunksRef.current, { type: mimeType });
 
-    try {
-      // Save live-preview segments as a draft transcript first. This ensures
-      // something is visible on the review page immediately while the authoritative
-      // batch transcription runs in the background on the server.
-      let savedTranscriptId: string | null = null;
-      if (liveSegmentsRef.current.length > 0) {
-        try {
-          const saveRes = await fetch(`/api/meetings/${meetingId}/save-transcript`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ segments: liveSegmentsRef.current }),
-          });
-          if (saveRes.ok) {
-            const data = await saveRes.json() as { transcriptId?: string };
-            savedTranscriptId = data.transcriptId ?? null;
-          }
-        } catch {
-          // Non-fatal — batch transcription will still create a transcript
-        }
-      }
+    // Store audio blob in IndexedDB first
+    await saveAudio(meetingId, blob, mimeType);
+    await updateMeeting(meetingId, {
+      status: 'processing',
+      audioSizeBytes: blob.size,
+      audioDurationSeconds: elapsed > 0 ? elapsed : null,
+    });
 
-      // Upload audio for the authoritative batch transcription. The server saves
-      // the audio synchronously and runs transcription in the background, so this
-      // call returns quickly and the client can navigate to the review page.
+    try {
       const formData = new FormData();
       formData.append('audio', blob, `recording.${extensionForMimeType(mimeType)}`);
       formData.append('meetingId', meetingId);
-      formData.append('duration', String(elapsed));
-      if (savedTranscriptId) {
-        formData.append('transcriptId', savedTranscriptId);
-      }
 
       const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(data.error ?? 'Upload fejlede');
+        throw new Error(data.error ?? 'Transskription fejlede');
       }
+
+      const data = await res.json() as {
+        segments: TranscriptSegment[];
+        piiReplacements: PiiReplacement[];
+        rawText: string;
+        chapters: TranscriptChapter[];
+      };
+
+      await saveTranscript(meetingId, {
+        rawText: data.rawText,
+        segments: data.segments,
+        chapters: data.chapters ?? [],
+        piiReplacements: data.piiReplacements ?? [],
+      });
+
+      await updateMeeting(meetingId, { status: 'review' });
+      onRecordingComplete?.();
+      router.push(`/meeting/${meetingId}/review`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Noget gik galt under upload');
+      // On failure: store empty transcript so user can see the review page
+      await saveTranscript(meetingId, {
+        rawText: '',
+        segments: [],
+        chapters: [],
+        piiReplacements: [],
+      });
+      await updateMeeting(meetingId, { status: 'review' });
+      setError(err instanceof Error ? err.message : 'Noget gik galt under behandling');
+      onRecordingComplete?.();
+      router.push(`/meeting/${meetingId}/review`);
     }
-    router.push(`/meeting/${meetingId}/review`);
   }
 
   async function confirmOverwrite() {
     setIsOverwriting(true);
-    await fetch(`/api/meetings/${meetingId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'recording' }),
-    });
+    await deleteAudio(meetingId);
+    await updateMeeting(meetingId, { status: 'recording', audioDeleted: false, audioSizeBytes: 0, audioDurationSeconds: null });
     setShowOverwriteDialog(false);
     setIsOverwriting(false);
     startRecording();
@@ -479,7 +445,9 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current.stream.getTracks().forEach((t) => t.stop());
     }
-    await fetch(`/api/meetings/${meetingId}`, { method: 'DELETE' });
+    // Import deleteMeeting lazily to avoid circular dep issues
+    const { deleteMeeting } = await import('@/lib/storage');
+    await deleteMeeting(meetingId);
     router.push('/dashboard');
   }
 
@@ -506,9 +474,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const seconds = elapsed % 60;
   const elapsedFormatted = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
-  const showLivePanel = recordingState === 'recording' || recordingState === 'paused' || liveSegments.length > 0;
-
-  // ── Completed state (navigated back after recording) ─────────────────────────
+  // ── Completed state ───────────────────────────────────────────────────────
   if (existingRecording && recordingState === 'idle') {
     const dur = existingRecording.durationSeconds;
     const durFormatted = dur != null ? formatDuration(dur) : null;
@@ -572,7 +538,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     );
   }
 
-  // ── Active recording / idle ───────────────────────────────────────────────────
+  // ── Active recording / idle ───────────────────────────────────────────────
   const uniqueSpeakers = Array.from(new Set(liveSegments.map((s) => s.speaker).filter((s) => s !== '—')));
   const speakerCount = (sp: string) => liveSegments.filter((s) => s.speaker === sp).length;
   const fmtSec = (s: number) => {
@@ -596,7 +562,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           </div>
         </div>
 
-        {/* Signal bars (live volume) */}
         <div style={{ paddingBottom: 6 }}>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', marginBottom: 8, letterSpacing: 0.4 }}>signal</div>
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 30 }}>
@@ -617,7 +582,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         </div>
       </div>
 
-      {/* Error */}
       {error && (
         <div style={{
           marginTop: 16, padding: '12px 16px', borderRadius: 'var(--radius)',
@@ -628,7 +592,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         </div>
       )}
 
-      {/* Live captions unavailable (e.g. iOS Safari) — recording still works */}
       {liveCaptionsUnavailable && (recordingState === 'recording' || recordingState === 'paused') && (
         <div style={{
           marginTop: 16, padding: '10px 14px', borderRadius: 'var(--radius)',
@@ -640,7 +603,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         </div>
       )}
 
-      {/* Silence warning */}
       {showSilenceWarning && recordingState === 'recording' && (
         <div style={{
           marginTop: 16, padding: '10px 14px', borderRadius: 'var(--radius)',
@@ -652,7 +614,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         </div>
       )}
 
-      {/* Body — transcript + sidebar */}
       <div style={{
         marginTop: 28, display: 'grid',
         gridTemplateColumns: isMobile ? '1fr' : '1fr 280px',
@@ -667,7 +628,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           border: '1px solid var(--line-2)', borderRadius: 'var(--radius)',
           background: 'var(--surface)', overflow: 'hidden',
         }}>
-          {/* Transcript header */}
           <div style={{
             padding: '12px 18px', borderBottom: '1px solid var(--line)',
             display: 'flex', alignItems: 'center', gap: 12,
@@ -679,12 +639,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                 background: recordingState === 'paused' ? 'var(--muted)' : (recordingState === 'recording' ? 'var(--keep)' : 'var(--muted-2)'),
                 animation: (recordingState === 'recording' || isDiarizing) ? 'protoPulse 1.4s ease-in-out infinite' : 'none',
               }} />
-              {isDiarizing ? 'finder talere…' : recordingState === 'recording' ? 'transskriberer live' : recordingState === 'paused' ? 'pause' : 'klar'}
+              {isDiarizing ? 'finder talere…' : recordingState === 'recording' ? 'transskriberer live' : recordingState === 'paused' ? 'pause' : (isUploading ? 'behandler…' : 'klar')}
             </span>
             {recordingState === 'recording' && !isDiarizing && <span>· scribe v2 realtime</span>}
           </div>
 
-          {/* Transcript rows */}
           <div style={{
             flex: 1, overflow: 'auto', padding: '14px 0',
             maskImage: 'linear-gradient(to bottom, black 82%, transparent 100%)',
@@ -695,7 +654,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                 padding: '20px 18px', fontFamily: 'var(--mono)', fontSize: 12.5,
                 color: 'var(--muted)', fontStyle: 'italic',
               }}>
-                {recordingState === 'idle' ? 'Tryk optag for at starte…' : 'Lytter…'}
+                {recordingState === 'idle' ? (isUploading ? 'Behandler og transskriberer optagelse…' : 'Tryk optag for at starte…') : 'Lytter…'}
               </div>
             ) : (
               <>
@@ -717,7 +676,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                     </div>
                   );
                 })}
-                {/* Interim row: realtime partial text, finalized into a committed segment */}
                 {interimText && recordingState === 'recording' && (
                   <div style={{
                     display: 'grid', gridTemplateColumns: isMobile ? '44px 64px 1fr 14px' : '60px 90px 1fr 20px',
@@ -738,7 +696,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                     <span />
                   </div>
                 )}
-                {/* Cursor on last confirmed segment when no interim text */}
                 {!interimText && recordingState === 'recording' && liveSegments.length > 0 && (
                   <div style={{ padding: '2px 18px' }}>
                     <span style={{
@@ -757,7 +714,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         {/* Sidebar */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 28, paddingLeft: 8, overflow: 'auto' }}>
 
-          {/* Speakers (only shown after batch processing; live has no speaker labels) */}
           {uniqueSpeakers.length > 0 && (
             <div>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>
@@ -776,7 +732,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             </div>
           )}
 
-          {/* Live clarifications — things worth nailing down, refreshed on a countdown */}
           {(recordingState === 'recording' || clarifications.length > 0) && (
             <div>
               <div style={{
@@ -829,7 +784,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16,
         position: 'relative',
       }}>
-        {recordingState === 'idle' && (
+        {recordingState === 'idle' && !isUploading && (
           <>
             <button
               onClick={startRecording}
@@ -924,7 +879,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
               border: '2px solid var(--accent)', borderTopColor: 'transparent',
               animation: 'spin 0.8s linear infinite',
             }} />
-            gemmer optagelse…
+            behandler og transskriberer…
           </div>
         )}
       </div>
@@ -965,6 +920,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       <style>{`
         @keyframes protoPulse { 0%,100%{opacity:1} 50%{opacity:.35} }
         @keyframes protoBlink { 0%,49%{opacity:1} 50%,100%{opacity:0} }
+        @keyframes spin { to { transform: rotate(360deg); } }
       `}</style>
     </div>
   );
