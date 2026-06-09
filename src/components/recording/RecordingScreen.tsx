@@ -104,6 +104,7 @@ interface LiveSegment {
   start: number;
   end: number;
   text: string;
+  preRevealedWords: number;
 }
 
 interface ClarificationItem {
@@ -202,6 +203,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const pendingUtterancesRef = useRef<Array<{
     start: number; end: number; audio: Float32Array;
     skip: number; windowStart: number;
+    partialWords: number; speechEndMs: number;
   }>>([]);
   const partialTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // PCM accumulation for live transcription (16 kHz Int16 frames from the AudioWorklet).
@@ -284,7 +286,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   // Push a finalized utterance into the live segments list. Splits text first by
   // sentence-ending punctuation, then further caps each chunk at MAX_WORDS_PER_LINE
   // so unpunctuated Danish speech still produces readable rows rather than one giant line.
-  function commitUtterance(start: number, end: number, text: string) {
+  function commitUtterance(start: number, end: number, text: string, preRevealedWords = 0) {
     interimTextRef.current = '';
     setInterimText('');
     if (!text.trim()) return;
@@ -304,9 +306,14 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     const wordCounts = sentences.map(s => s.split(/\s+/).filter(Boolean).length);
     const totalWords = Math.max(1, wordCounts.reduce((a, b) => a + b, 0));
     let t = start;
+    let wordsAssigned = 0;
     const newSegs: LiveSegment[] = sentences.map((sentence, i) => {
       const segEnd = t + (wordCounts[i] / totalWords) * duration;
-      const seg: LiveSegment = { speaker: '—', start: t, end: segEnd, text: sentence };
+      // First sentence inherits the full pre-revealed offset. Subsequent sentences
+      // subtract the words already assigned so only genuinely new words animate.
+      const segPreRevealed = Math.max(0, preRevealedWords - wordsAssigned);
+      wordsAssigned += wordCounts[i];
+      const seg: LiveSegment = { speaker: '—', start: t, end: segEnd, text: sentence, preRevealedWords: segPreRevealed };
       t = segEnd;
       return seg;
     });
@@ -380,6 +387,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       async function finalize(
         uStart: number, uEnd: number, audio: Float32Array,
         skipSamples: number, wsTime: number,
+        partialWords: number, speechEndMs: number,
       ) {
         finalizeInFlightRef.current = true;
         const remaining = skipSamples > 0 ? audio.slice(skipSamples) : audio;
@@ -389,16 +397,26 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             // All audio was committed by window auto-commits.
           } else if (remaining.length <= MAX_CHUNK_SAMPLES) {
             const text = await postWav(float32ToWavBlob(remaining));
-            commitUtterance(remainingStart, uEnd, text);
+            const networkElapsed = Date.now() - speechEndMs;
+            const preRevealed = partialWords + Math.floor(networkElapsed / Math.round(1000 / WORDS_PER_SECOND));
+            commitUtterance(remainingStart, uEnd, text, preRevealed);
           } else {
             const totalDuration = uEnd - remainingStart;
             let sampleStart = 0, chunkTimeStart = remainingStart;
+            let firstChunk = true;
             while (sampleStart < remaining.length) {
               const sampleEnd = Math.min(sampleStart + MAX_CHUNK_SAMPLES, remaining.length);
               const chunkDuration = ((sampleEnd - sampleStart) / remaining.length) * totalDuration;
               const chunkTimeEnd = chunkTimeStart + chunkDuration;
               const text = await postWav(float32ToWavBlob(remaining, sampleStart, sampleEnd));
-              if (text.trim()) commitUtterance(chunkTimeStart, chunkTimeEnd, text);
+              if (text.trim()) {
+                const networkElapsed = Date.now() - speechEndMs;
+                const preRevealed = firstChunk
+                  ? partialWords + Math.floor(networkElapsed / Math.round(1000 / WORDS_PER_SECOND))
+                  : 0;
+                commitUtterance(chunkTimeStart, chunkTimeEnd, text, preRevealed);
+              }
+              firstChunk = false;
               sampleStart = sampleEnd;
               chunkTimeStart = chunkTimeEnd;
             }
@@ -406,7 +424,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
           const next = pendingUtterancesRef.current.shift();
           if (next) {
-            await finalize(next.start, next.end, next.audio, next.skip, next.windowStart);
+            await finalize(next.start, next.end, next.audio, next.skip, next.windowStart, next.partialWords, next.speechEndMs);
           } else {
             if (utteranceStartRef.current === null) {
               const KEEP = 10;
@@ -532,17 +550,22 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           // reset committedSamplesRef/windowStartTimeRef, corrupting any deferred finalize.
           const capturedSkip = committedSamplesRef.current;
           const capturedWindowStart = windowStartTimeRef.current;
+          // Capture partial state before clearing — used to pre-reveal words already shown.
+          const capturedPartialWords = (interimTextRef.current && interimTextRef.current !== '…')
+            ? interimTextRef.current.split(/\s+/).filter(Boolean).length
+            : 0;
+          const capturedSpeechEndMs = Date.now();
           utteranceStartRef.current = null;
           interimTextRef.current = '';
           setInterimText('');
 
           if (finalizeInFlightRef.current) {
             // Another finalize is running — queue this one; it will be drained when that finalize completes.
-            pendingUtterancesRef.current.push({ start: uStart, end: uEnd, audio, skip: capturedSkip, windowStart: capturedWindowStart });
+            pendingUtterancesRef.current.push({ start: uStart, end: uEnd, audio, skip: capturedSkip, windowStart: capturedWindowStart, partialWords: capturedPartialWords, speechEndMs: capturedSpeechEndMs });
             return;
           }
 
-          await finalize(uStart, uEnd, audio, capturedSkip, capturedWindowStart);
+          await finalize(uStart, uEnd, audio, capturedSkip, capturedWindowStart, capturedPartialWords, capturedSpeechEndMs);
         },
         onVADMisfire: () => {
           stopPartialTimer();
@@ -1092,14 +1115,17 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                         {showSpeaker ? `${seg.speaker.toLowerCase()}:` : '·'}
                       </span>
                       <span style={{ color: 'var(--ink-2)' }}>
-                        {seg.text.split(' ').map((word, wi) => (
-                          <span key={wi} style={{
-                            animation: 'wordFadeIn 0.25s ease-out both',
-                            animationDelay: `${Math.round(wi * (1000 / WORDS_PER_SECOND))}ms`,
-                          }}>{word}{' '}</span>
-                        ))}
+                        {seg.text.split(' ').map((word, wi) => {
+                          const delayMs = Math.max(0, (wi - seg.preRevealedWords) * Math.round(1000 / WORDS_PER_SECOND));
+                          return (
+                            <span key={wi} style={{
+                              animation: 'wordFadeIn 0.25s ease-out both',
+                              animationDelay: `${delayMs}ms`,
+                            }}>{word}{' '}</span>
+                          );
+                        })}
                       </span>
-                      <span style={{ color: 'var(--muted-2)', textAlign: 'right', animation: 'wordFadeIn 0.25s ease-out both', animationDelay: `${Math.round(seg.text.split(' ').length * (1000 / WORDS_PER_SECOND))}ms` }}>★</span>
+                      <span style={{ color: 'var(--muted-2)', textAlign: 'right', animation: 'wordFadeIn 0.25s ease-out both', animationDelay: `${Math.max(0, (seg.text.split(' ').length - seg.preRevealedWords) * Math.round(1000 / WORDS_PER_SECOND))}ms` }}>★</span>
                     </div>
                   );
                 })}
