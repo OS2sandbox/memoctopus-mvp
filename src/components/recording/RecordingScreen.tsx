@@ -137,7 +137,9 @@ const MAX_COMMIT_FRAMES = COMMIT_WINDOW_FRAMES * 3;
 // This means the partial only ever shows NEW audio — no hindsight re-transcription.
 const PARTIAL_LOOKBACK_FRAMES = Math.ceil((16_000 * 4) / 1024);
 // Slower partial ticks — less impatient, more accurate with longer context.
-const PARTIAL_INTERVAL_MS = 700;
+const PARTIAL_INTERVAL_MS = 1000;
+// Max rate at which committed segment words are revealed left-to-right.
+const WORDS_PER_SECOND = 10;
 // How often, while recording, we re-analyze the transcript for things to clarify.
 const CLARIFY_INTERVAL_MS = 25_000;
 // Tick cadence for the countdown bar to the next clarification refresh.
@@ -495,9 +497,9 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         // Force single-threaded ORT — no SharedArrayBuffer (COOP/COEP) required.
         ortConfig: (ort: any) => { ort.env.wasm.numThreads = 1; },
         model: 'v5',
-        // 600ms silence before declaring speech end — patient enough to handle natural
+        // 900ms silence before declaring speech end — patient enough to handle natural
         // mid-sentence pauses without prematurely cutting the utterance.
-        redemptionMs: 600,
+        redemptionMs: 900,
         // 300ms pre-roll captures soft onsets; we also manually include pre-roll frames
         // when recording pcmSpeechStartFrameRef below.
         preSpeechPadMs: 300,
@@ -1084,14 +1086,20 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                       display: 'grid', gridTemplateColumns: isMobile ? '44px 64px 1fr 14px' : '60px 90px 1fr 20px',
                       gap: 12, padding: '5px 18px',
                       fontFamily: 'var(--mono)', fontSize: 12.5, lineHeight: 1.65,
-                      animation: 'segFadeIn 0.45s ease-out both',
                     }}>
-                      <span style={{ color: 'var(--accent)' }}>{fmtSec(seg.start)}</span>
-                      <span style={{ color: 'var(--ink)', fontWeight: 500 }}>
+                      <span style={{ color: 'var(--accent)', animation: 'wordFadeIn 0.25s ease-out both' }}>{fmtSec(seg.start)}</span>
+                      <span style={{ color: 'var(--ink)', fontWeight: 500, animation: 'wordFadeIn 0.25s ease-out both', animationDelay: '30ms' }}>
                         {showSpeaker ? `${seg.speaker.toLowerCase()}:` : '·'}
                       </span>
-                      <span style={{ color: 'var(--ink-2)' }}>{seg.text}</span>
-                      <span style={{ color: 'var(--muted-2)', textAlign: 'right' }}>★</span>
+                      <span style={{ color: 'var(--ink-2)' }}>
+                        {seg.text.split(' ').map((word, wi) => (
+                          <span key={wi} style={{
+                            animation: 'wordFadeIn 0.25s ease-out both',
+                            animationDelay: `${Math.round(wi * (1000 / WORDS_PER_SECOND))}ms`,
+                          }}>{word}{' '}</span>
+                        ))}
+                      </span>
+                      <span style={{ color: 'var(--muted-2)', textAlign: 'right', animation: 'wordFadeIn 0.25s ease-out both', animationDelay: `${Math.round(seg.text.split(' ').length * (1000 / WORDS_PER_SECOND))}ms` }}>★</span>
                     </div>
                   );
                 })}
@@ -1335,7 +1343,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       <style>{`
         @keyframes protoPulse { 0%,100%{opacity:1} 50%{opacity:.35} }
         @keyframes protoBlink { 0%,49%{opacity:1} 50%,100%{opacity:0} }
-        @keyframes segFadeIn { from { opacity:0; transform:translateY(4px) } to { opacity:1; transform:translateY(0) } }
+        @keyframes wordFadeIn { from { opacity:0; } to { opacity:1; } }
       `}</style>
     </div>
   );
