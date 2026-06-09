@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "predev": "lsof -ti :3005 | xargs kill -9 2>/dev/null || true",
+    "predev": "lsof -ti :3004 | xargs kill -9 2>/dev/null || true",
     "dev": "concurrently --kill-others -n next,bot -c blue,green \"next dev -p 3004\" \"npm --prefix bot-service run dev\"",
     "build": "next build",
     "start": "next start",
@@ -36,6 +36,7 @@
     "docx": "^9.5.0",
     "drizzle-orm": "^0.45.2",
     "geist": "^1.7.1",
+    "idb": "^8.0.3",
     "jspdf": "^4.2.1",
     "next": "15.5.18",
     "openai": "^4.95.1",
