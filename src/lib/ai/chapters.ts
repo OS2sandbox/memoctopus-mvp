@@ -25,7 +25,9 @@ export async function groupIntoChapters(segments: TranscriptSegment[]): Promise<
     mins < 5  ? '1' :
     mins < 15 ? '1–2' :
     mins < 30 ? '2–4' :
-                '3–6';
+    mins < 60 ? '3–6' :
+    mins < 90 ? '5–9' :
+                '7–14';
 
   const MAX_SEGMENT_CHARS = 200;
   const transcriptText = segments
@@ -65,7 +67,9 @@ Regler:
 - Alle segmentindekser 0–${segments.length - 1} skal dækkes af præcis ét kapitel
 - Kapitelindekser skal være sammenhængende og stigende
 - Antal kapitler: ${range}
-- Titler og resuméer på dansk`,
+- Titler og resuméer på dansk
+- Undgå generiske fangst-alt-kategorier som "Afsluttende bemærkninger" — opdel efter emne, ikke kronologi
+- Hvis slutningen af mødet dækker flere emner, giv hvert sit eget kapitel`,
       },
     ],
   });
