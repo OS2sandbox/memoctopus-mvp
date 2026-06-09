@@ -208,7 +208,7 @@ export async function POST(req: NextRequest) {
       console.error('Background transcription error:', err);
       await queryUserSchemaOne(
         userId,
-        `UPDATE meetings SET status = 'recording', updated_at = NOW() WHERE id = $1`,
+        `UPDATE meetings SET status = 'failed', updated_at = NOW() WHERE id = $1`,
         [meetingId],
       ).catch(() => {});
     }

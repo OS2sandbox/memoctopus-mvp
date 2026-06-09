@@ -127,7 +127,26 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
         </div>
       )}
 
-      {activeTab === 'review' && !transcript && meeting.status !== 'processing' && (
+      {activeTab === 'review' && !transcript && meeting.status === 'failed' && (
+        <div className="mx-auto max-w-[720px] px-6 py-12">
+          <h1 className="text-xl font-semibold text-[var(--ink)]">Transskription fejlede</h1>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Lydfilen kunne ikke transskriberes — transskriptionsserveren er muligvis midlertidigt utilgængelig.
+          </p>
+          <button
+            onClick={() => router.push(`/meeting/${meetingId}`)}
+            style={{
+              marginTop: 16, padding: '8px 16px', borderRadius: 8,
+              background: 'var(--ink)', color: 'var(--bg)', border: 'none',
+              fontSize: 13, cursor: 'pointer',
+            }}
+          >
+            Gå til optagelse
+          </button>
+        </div>
+      )}
+
+      {activeTab === 'review' && !transcript && meeting.status !== 'processing' && meeting.status !== 'failed' && (
         <div className="mx-auto max-w-[720px] px-6 py-12">
           <h1 className="text-xl font-semibold text-[var(--ink)]">Ingen transskription</h1>
           <p className="mt-2 text-sm text-[var(--muted)]">

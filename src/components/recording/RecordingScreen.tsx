@@ -161,7 +161,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const [liveCaptionsUnavailable, setLiveCaptionsUnavailable] = useState(false);
   // True while a batch diarization pass is running (on pause) — the preview is
   // being repainted with authoritative speaker labels.
-  const [isDiarizing, setIsDiarizing] = useState(false);
 
   // Live transcription
   const [liveSegments, setLiveSegments] = useState<LiveSegment[]>([]);
@@ -190,9 +189,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const partialInFlightRef = useRef(false);
   // AbortController for the single in-flight rolling-window commit. Null when idle.
   // Using one-at-a-time (not fire-and-forget) enforces backpressure so the server
-  // never queues multiple window requests. Aborted on pause so diarizeSoFar can
-  // proceed without competing with a window commit for hviske capacity.
+  // never queues multiple window requests. Aborted on pause to release hviske capacity.
   const windowCommitControllerRef = useRef<AbortController | null>(null);
+  // Count consecutive empty transcription responses. After 5 in a row we flip
+  // liveCaptionsUnavailable so the user knows the server isn't returning text.
+  const emptyTranscriptCountRef = useRef(0);
   // Queue of utterances that ended while a fetch was in-flight. Stores the VAD-provided
   // Float32 audio directly so frame-index drift between AudioContexts cannot corrupt them.
   // skip/windowStart are captured at speech-end so a later onSpeechStart reset cannot corrupt them.
@@ -266,8 +267,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     windowStartFrameRef.current = 0;
     windowStartTimeRef.current = 0;
     committedSamplesRef.current = 0;
+    emptyTranscriptCountRef.current = 0;
     setLiveCaptionsUnavailable(false);
-    setIsDiarizing(false);
     setClarifications([]);
     setClarifyRemaining(1);
   }
@@ -351,7 +352,15 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             if (data.latencyMs != null) {
               console.log(`[hviske] server latency: ${data.latencyMs}ms`);
             }
-            return data.text ?? '';
+            const text = data.text ?? '';
+            if (text.trim()) {
+              emptyTranscriptCountRef.current = 0;
+              setLiveCaptionsUnavailable(false);
+            } else {
+              emptyTranscriptCountRef.current += 1;
+              if (emptyTranscriptCountRef.current >= 5) setLiveCaptionsUnavailable(true);
+            }
+            return text;
           }
         } catch (err) {
           if (err instanceof Error && err.name !== 'AbortError') {
@@ -561,34 +570,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     });
   }
 
-  // Run the authoritative batch scribe_v2 pass over everything recorded so far and
-  // repaint the preview with real speaker labels. Used at every pause.
-  async function diarizeSoFar(recorder: MediaRecorder) {
-    setIsDiarizing(true);
-    try {
-      const mimeType = recorder.mimeType || mimeTypeRef.current;
-      const blob = new Blob(chunksRef.current, { type: mimeType });
-      if (blob.size < 10_000) return;
-      const formData = new FormData();
-      formData.append('audio', blob, `segment.${extensionForMimeType(mimeType)}`);
-      const res = await fetch(`/api/meetings/${meetingId}/live-transcribe`, { method: 'POST', body: formData });
-      if (!res.ok) return;
-      const data = await res.json() as { segments: LiveSegment[]; text: string };
-      if (data.segments?.length) {
-        liveSegmentsRef.current = data.segments;
-        setLiveSegments(data.segments);
-        interimTextRef.current = '';
-        setInterimText('');
-        utteranceStartRef.current = null;
-      }
-    } catch (err) {
-      // Diarization is a checkpoint nicety — keep the realtime preview on failure.
-      console.error('[diarize] failed:', err);
-    } finally {
-      setIsDiarizing(false);
-    }
-  }
-
   // ── Recording lifecycle ───────────────────────────────────────────────────────
 
   async function refreshClarifications() {
@@ -739,14 +720,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     stopClarifyTimer();
     setVolumeLevel(0);
-    // Spin the pause button right away — it stays "loading" until diarization lands.
-    setIsDiarizing(true);
     setRecordingState('paused');
 
     // Pause VAD processing, flush the recorded tail, then pause the recorder.
     if (partialTimerRef.current) { clearInterval(partialTimerRef.current); partialTimerRef.current = null; }
-    // Abort any in-flight window commit — diarizeSoFar covers that audio authoritatively
-    // and we don't want the commit competing with it for hviske capacity.
     windowCommitControllerRef.current?.abort();
     windowCommitControllerRef.current = null;
     vadRef.current?.pause();
@@ -754,9 +731,6 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     recorder.pause();
     // Suspend the AudioContext so it releases the hardware and stops generating errors
     void audioContextRef.current?.suspend();
-
-    // Repaint the preview with authoritative speaker labels.
-    await diarizeSoFar(recorder);
   }
 
   async function resumeRecording() {
@@ -833,36 +807,13 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     const mimeType = recorder.mimeType || 'audio/webm';
     const blob = new Blob(chunksRef.current, { type: mimeType });
 
-    // Persist live segments immediately so the review page shows content while
-    // audio processing completes in the background. Pass transcriptId to the
-    // transcribe route so it takes the update path (PII only, no re-transcription).
-    let savedTranscriptId: string | null = null;
-    if (liveSegmentsRef.current.length > 0) {
-      try {
-        const saveRes = await fetch(`/api/meetings/${meetingId}/save-transcript`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ segments: liveSegmentsRef.current }),
-        });
-        if (saveRes.ok) {
-          const data = await saveRes.json() as { transcriptId: string };
-          savedTranscriptId = data.transcriptId;
-        } else {
-          console.error('[stopAndSave] live segment save returned error:', saveRes.status);
-          setError('Live transskription kunne ikke gemmes — bruger fuld lydtransskription.');
-        }
-      } catch (saveErr) {
-        console.error('[stopAndSave] live segment save failed:', saveErr);
-        setError('Live transskription kunne ikke gemmes — bruger fuld lydtransskription.');
-      }
-    }
-
+    // Upload the full audio for a clean batch transcription. The review page shows
+    // a processing state while the backend transcribes, then flips to review when done.
     try {
       const formData = new FormData();
       formData.append('audio', blob, `recording.${extensionForMimeType(mimeType)}`);
       formData.append('meetingId', meetingId);
       formData.append('duration', String(durationSeconds));
-      if (savedTranscriptId) formData.append('transcriptId', savedTranscriptId);
       const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
@@ -1050,7 +1001,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         </div>
       )}
 
-      {/* Live captions unavailable (e.g. iOS Safari) — recording still works */}
+      {/* Live captions unavailable — recording still works */}
       {liveCaptionsUnavailable && (recordingState === 'recording' || recordingState === 'paused') && (
         <div style={{
           marginTop: 16, padding: '10px 14px', borderRadius: 'var(--radius)',
@@ -1058,7 +1009,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           background: 'var(--accent-wash)',
           fontSize: 13.5, color: 'var(--ink-2)',
         }}>
-          Live-tekst er ikke tilgængelig lige nu. Optagelsen transskriberes fuldt ud, og talere genkendes, når du sætter på pause eller gemmer.
+          Live-transskription er ikke tilgængelig — transskriptionsserveren svarer ikke. Optagelsen gemmes og kan transskriberes, når serveren er klar igen.
         </div>
       )}
 
@@ -1099,11 +1050,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
               <span style={{
                 width: 7, height: 7, borderRadius: 999, flexShrink: 0,
                 background: recordingState === 'paused' ? 'var(--muted)' : (recordingState === 'recording' ? 'var(--keep)' : 'var(--muted-2)'),
-                animation: (recordingState === 'recording' || isDiarizing) ? 'protoPulse 1.4s ease-in-out infinite' : 'none',
+                animation: recordingState === 'recording' ? 'protoPulse 1.4s ease-in-out infinite' : 'none',
               }} />
-              {isDiarizing ? 'finder talere…' : recordingState === 'recording' ? 'transskriberer live' : recordingState === 'paused' ? 'pause' : 'klar'}
+              {recordingState === 'recording' ? 'transskriberer live' : recordingState === 'paused' ? 'pause' : 'klar'}
             </span>
-            {recordingState === 'recording' && !isDiarizing && <span>· hviske live</span>}
+            {recordingState === 'recording' && <span>· hviske live</span>}
           </div>
 
           {/* Transcript rows */}
@@ -1293,23 +1244,15 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             </button>
             <button
               onClick={recordingState === 'recording' ? pauseRecording : resumeRecording}
-              disabled={isDiarizing}
-              aria-busy={isDiarizing}
               style={{
                 width: 56, height: 56, borderRadius: 999,
                 background: 'var(--ink)', border: 'none',
-                cursor: isDiarizing ? 'default' : 'pointer',
+                cursor: 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}
-              aria-label={isDiarizing ? 'Finder talere…' : recordingState === 'recording' ? 'Pause' : 'Fortsæt'}
+              aria-label={recordingState === 'recording' ? 'Pause' : 'Fortsæt'}
             >
-              {isDiarizing ? (
-                <span style={{
-                  display: 'inline-block', width: 20, height: 20, borderRadius: 999,
-                  border: '2px solid var(--bg)', borderTopColor: 'transparent',
-                  animation: 'spin 0.8s linear infinite',
-                }} />
-              ) : recordingState === 'recording' ? (
+              {recordingState === 'recording' ? (
                 <span style={{ display: 'flex', gap: 4 }}>
                   <span style={{ width: 4, height: 16, background: 'var(--bg)', borderRadius: 2 }} />
                   <span style={{ width: 4, height: 16, background: 'var(--bg)', borderRadius: 2 }} />

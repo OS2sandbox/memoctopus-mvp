@@ -21,7 +21,7 @@ export class HviskeProvider implements TranscriptionProvider {
   constructor() {
     this.client = new OpenAI({
       apiKey: process.env.HVISKE_API_KEY ?? 'no-key',
-      baseURL: process.env.HVISKE_URL ?? 'http://74.48.78.46:58780/v1',
+      baseURL: process.env.HVISKE_URL ?? 'http://109.173.238.203:40093/v1',
     });
     this.model = process.env.HVISKE_MODEL ?? 'syvai/hviske-v5.1';
     this.language = process.env.ASR_LANGUAGE ?? 'da';
