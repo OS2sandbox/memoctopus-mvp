@@ -29,14 +29,8 @@ export async function groupIntoChapters(segments: TranscriptSegment[]): Promise<
     mins < 90 ? '5–9' :
                 '7–14';
 
-  const MAX_SEGMENT_CHARS = 200;
   const transcriptText = segments
-    .map((s, i) => {
-      const text = s.text.length > MAX_SEGMENT_CHARS
-        ? s.text.slice(0, MAX_SEGMENT_CHARS) + '…'
-        : s.text;
-      return `[${i}] ${fmt(s.start)} [${s.speaker}]: ${text}`;
-    })
+    .map((s, i) => `[${i}] ${fmt(s.start)} [${s.speaker}]: ${s.text}`)
     .join('\n');
 
   const response = await getClient().chat.completions.create({
