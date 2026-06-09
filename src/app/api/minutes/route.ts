@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { queryUserSchemaOne, queryUserSchema } from '@/lib/db/user-schema';
 import { suggestTemplate, generateMinutes, generateMinutesFreeform } from '@/lib/ai/minutes';
+import { TranscriptChapter } from '@/lib/ai/chapters';
 import { deleteAudioFile } from '@/lib/audio/storage';
 import { TranscriptSegment, TemplateStructure } from '@/types';
 
@@ -31,19 +32,18 @@ export async function POST(req: NextRequest) {
   );
   if (!meeting) return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
 
-  // Use the client-processed segments (with PII applied and manual edits) directly for generation.
-  // Do NOT write them back to DB — the DB keeps the raw uncensored transcript so PII toggling
-  // on the review page keeps working across navigations.
-  const transcriptSegments: TranscriptSegment[] = segments && segments.length > 0
-    ? segments
-    : await (async () => {
-        const transcript = await queryUserSchemaOne<{ segments: unknown }>(
-          session.user.id,
-          'SELECT segments FROM transcripts WHERE id = $1',
-          [transcriptId],
-        );
-        return (transcript?.segments as TranscriptSegment[]) ?? [];
-      })();
+  // Load transcript from DB to get chapters (and segments if not provided by client).
+  // Segments from the client carry PII edits applied in the review UI, so prefer those.
+  const transcriptRow = await queryUserSchemaOne<{ segments: unknown; chapters: unknown }>(
+    session.user.id,
+    'SELECT segments, chapters FROM transcripts WHERE id = $1',
+    [transcriptId],
+  );
+  const transcriptSegments: TranscriptSegment[] =
+    segments && segments.length > 0
+      ? segments
+      : ((transcriptRow?.segments as TranscriptSegment[]) ?? []);
+  const chapters = (transcriptRow?.chapters as TranscriptChapter[] | null) ?? undefined;
 
   if (transcriptSegments.length === 0) {
     return NextResponse.json({ error: 'Transcript not found' }, { status: 404 });
@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
 
   if (customPrompt) {
     // User gave instructions — let the AI decide sections and content freely
-    minutesContent = await generateMinutesFreeform(transcriptSegments, customPrompt, participants);
+    minutesContent = await generateMinutesFreeform(transcriptSegments, customPrompt, participants, chapters);
   } else {
     // No prompt — pick a template and generate structured minutes
     const templates = await queryUserSchema<{
@@ -88,6 +88,7 @@ export async function POST(req: NextRequest) {
       (chosenTemplate.structure as TemplateStructure).sections,
       undefined,
       participants,
+      chapters,
     );
   }
 
