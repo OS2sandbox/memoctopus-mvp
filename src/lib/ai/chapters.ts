@@ -38,7 +38,7 @@ export async function groupIntoChapters(segments: TranscriptSegment[]): Promise<
     messages: [
       {
         role: 'user',
-        content: `Analyser denne mødetransskription og opdel den i tematiske kapitler baseret på emneskift.
+        content: `Analyser denne mødetransskription og identificer emneskift.
 
 Hvert segment er markeret med sit indeks [0], [1] osv. og tidsstempel.
 Mødelængde: ca. ${Math.round(mins)} minutter → brug ${range} kapitel${range === '1' ? '' : 'er'}.
@@ -50,50 +50,56 @@ Returner JSON uden markdown:
 {
   "chapters": [
     {
+      "startIndex": 0,
       "title": "Kapiteloverskrift på dansk (maks 8 ord)",
-      "summary": "Kort resumé af hvad der diskuteres (1-2 sætninger på dansk)",
-      "segmentIndices": [0, 1, 2]
+      "summary": "Kort resumé af hvad der diskuteres (1-2 sætninger på dansk)"
     }
   ]
 }
 
 Regler:
-- Alle segmentindekser 0–${segments.length - 1} skal dækkes af præcis ét kapitel
-- Kapitelindekser skal være sammenhængende og stigende
+- Første kapitel starter ALTID ved startIndex 0
+- startIndex skal være stigende for hvert kapitel
+- Det sidste kapitel dækker automatisk resten af transskriptionen til og med segment ${segments.length - 1}
 - Antal kapitler: ${range}
 - Titler og resuméer på dansk
-- Undgå generiske fangst-alt-kategorier som "Afsluttende bemærkninger" — opdel efter emne, ikke kronologi
-- Hvis slutningen af mødet dækker flere emner, giv hvert sit eget kapitel`,
+- Opdel efter emne, ikke kronologi`,
       },
     ],
   });
 
   const raw = response.choices[0]?.message?.content ?? '';
   try {
-    // Extract the JSON object even if the model wraps it in prose or markdown fences
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('No JSON object found in response');
     const parsed = JSON.parse(jsonMatch[0]) as {
-      chapters: Array<{ title: string; summary: string; segmentIndices: number[] }>;
+      chapters: Array<{ startIndex: number; title: string; summary: string }>;
     };
 
-    const chapters = parsed.chapters.map((ch, i) => ({
-      id: `ch-${i}`,
-      title: ch.title,
-      summary: ch.summary,
-      startTime: segments[ch.segmentIndices[0]]?.start ?? 0,
-      endTime: segments[ch.segmentIndices[ch.segmentIndices.length - 1]]?.end ?? 0,
-      segmentIndices: ch.segmentIndices,
-    }));
+    if (!Array.isArray(parsed.chapters) || parsed.chapters.length === 0) throw new Error('Empty chapters');
 
-    // Ensure every segment is covered — the model sometimes stops short for long transcripts.
-    const covered = new Set(chapters.flatMap((ch) => ch.segmentIndices));
-    const missing = Array.from({ length: segments.length }, (_, i) => i).filter((i) => !covered.has(i));
-    if (missing.length > 0 && chapters.length > 0) {
-      const last = chapters[chapters.length - 1];
-      last.segmentIndices = [...last.segmentIndices, ...missing].sort((a, b) => a - b);
-      last.endTime = segments[last.segmentIndices[last.segmentIndices.length - 1]]?.end ?? last.endTime;
-    }
+    // Sort by startIndex and clamp to valid range
+    const sorted = [...parsed.chapters]
+      .sort((a, b) => a.startIndex - b.startIndex)
+      .map((ch) => ({ ...ch, startIndex: Math.max(0, Math.min(ch.startIndex, segments.length - 1)) }));
+
+    // Force first chapter to start at 0
+    sorted[0].startIndex = 0;
+
+    // Build contiguous ranges from boundary indices
+    const chapters: TranscriptChapter[] = sorted.map((ch, i) => {
+      const startIdx = ch.startIndex;
+      const endIdx = (sorted[i + 1]?.startIndex ?? segments.length) - 1;
+      const segmentIndices = Array.from({ length: endIdx - startIdx + 1 }, (_, j) => startIdx + j);
+      return {
+        id: `ch-${i}`,
+        title: ch.title,
+        summary: ch.summary,
+        startTime: segments[startIdx]?.start ?? 0,
+        endTime: segments[endIdx]?.end ?? 0,
+        segmentIndices,
+      };
+    });
 
     // Clamp each chapter's endTime to the next chapter's startTime to prevent overlap
     for (let i = 0; i < chapters.length - 1; i++) {
