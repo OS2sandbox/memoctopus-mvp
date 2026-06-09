@@ -137,8 +137,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ piiReplacements: liveReplacements });
   }
 
-  // Create mode: save audio + set status immediately, then transcribe in the background
-  // so the client can navigate to the review page without waiting for the full STT pipeline.
+  // Create mode: save audio. When storageOnly=true the client handles transcription itself
+  // via VAD batch uploads and calls save-transcript directly — skip the background job.
+  const storageOnly = formData.get('storageOnly') === 'true';
+
   let buffer: Buffer;
   try {
     buffer = Buffer.from(await audioFile.arrayBuffer());
@@ -162,6 +164,9 @@ export async function POST(req: NextRequest) {
     console.error('Audio save error:', err);
     return NextResponse.json({ error: 'Failed to save audio' }, { status: 500 });
   }
+
+  // storageOnly: audio archived, client handles transcription — don't touch status.
+  if (storageOnly) return NextResponse.json({ ok: true });
 
   await queryUserSchemaOne(
     userId,

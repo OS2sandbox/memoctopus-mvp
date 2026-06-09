@@ -15,6 +15,7 @@ import { VolumeBar } from './VolumeBar';
 import { formatDuration, formatFileSize } from '@/lib/utils';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { pickRecordingMimeType, extensionForMimeType } from '@/lib/audio/recording-format';
+import type { TranscriptSegment } from '@/types';
 
 // ── PCM live-transcription helpers ───────────────────────────────────────────
 
@@ -107,6 +108,105 @@ interface LiveSegment {
   preRevealedWords: number;
 }
 
+// ── VAD batch transcription helpers ──────────────────────────────────────────
+// After recording stops, the accumulated VAD utterances are grouped into ~27 s
+// speech batches (matching the model's training window), encoded as WAV, and
+// transcribed in parallel. Silences between utterances are dropped, avoiding
+// hallucinations and maximising GPU utilisation.
+
+type VadInterval = {
+  originalStart: number;  // wall-clock seconds at speech start
+  originalEnd:   number;  // wall-clock seconds at speech end
+  wavOffset:     number;  // cumulative speech-seconds before this utterance in the batch WAV
+  wavDuration:   number;  // speech duration of this utterance in the WAV
+};
+
+type ReadyBatch = {
+  wav: Blob;
+  intervals: VadInterval[];
+  totalWavDuration: number;
+};
+
+type VadBatchState = {
+  pendingAudio:       Float32Array[];
+  pendingIntervals:   VadInterval[];
+  pendingWavDuration: number;
+  readyBatches:       ReadyBatch[];
+};
+
+function newVadBatchState(): VadBatchState {
+  return { pendingAudio: [], pendingIntervals: [], pendingWavDuration: 0, readyBatches: [] };
+}
+
+function sealCurrentBatch(state: VadBatchState): void {
+  if (state.pendingAudio.length === 0) return;
+  const totalSamples = state.pendingAudio.reduce((n, a) => n + a.length, 0);
+  const combined = new Float32Array(totalSamples);
+  let off = 0;
+  for (const a of state.pendingAudio) { combined.set(a, off); off += a.length; }
+  const wav = float32ToWavBlob(combined);
+  state.readyBatches.push({ wav, intervals: state.pendingIntervals, totalWavDuration: state.pendingWavDuration });
+  state.pendingAudio = [];
+  state.pendingIntervals = [];
+  state.pendingWavDuration = 0;
+}
+
+function mapWavTime(wavT: number, intervals: VadInterval[]): number {
+  for (const iv of intervals) {
+    if (iv.wavDuration === 0) continue;
+    if (wavT >= iv.wavOffset && wavT <= iv.wavOffset + iv.wavDuration) {
+      return iv.originalStart + ((wavT - iv.wavOffset) / iv.wavDuration) * (iv.originalEnd - iv.originalStart);
+    }
+  }
+  if (intervals.length === 0) return 0;
+  if (wavT <= intervals[0].wavOffset) return intervals[0].originalStart;
+  return intervals[intervals.length - 1].originalEnd;
+}
+
+function splitTextWithIntervals(
+  text: string,
+  intervals: VadInterval[],
+  totalWavDuration: number,
+): TranscriptSegment[] {
+  if (!text.trim() || intervals.length === 0) return [];
+  const punctChunks = (text.trim().match(/[^.!?]+[.!?]+/g) ?? [text.trim()]).map(s => s.trim()).filter(Boolean);
+  const sentences: string[] = [];
+  for (const chunk of punctChunks) {
+    const words = chunk.split(/\s+/).filter(Boolean);
+    for (let i = 0; i < words.length; i += MAX_WORDS_PER_LINE) {
+      sentences.push(words.slice(i, i + MAX_WORDS_PER_LINE).join(' '));
+    }
+  }
+  if (sentences.length === 0) return [];
+  const wordCounts = sentences.map(s => s.split(/\s+/).filter(Boolean).length);
+  const totalWords = Math.max(1, wordCounts.reduce((a, b) => a + b, 0));
+  let elapsed = 0;
+  return sentences.map((sentence, i) => {
+    const segDur = (wordCounts[i] / totalWords) * totalWavDuration;
+    const wavStart = elapsed;
+    elapsed += segDur;
+    return {
+      speaker: 'Taler 1',
+      start: mapWavTime(wavStart, intervals),
+      end: mapWavTime(elapsed, intervals),
+      text: sentence,
+    };
+  });
+}
+
+async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  const queue = tasks.map((task, i) => ({ task, i }));
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
+    let item: typeof queue[0] | undefined;
+    while ((item = queue.shift()) !== undefined) {
+      results[item.i] = await item.task();
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 interface ClarificationItem {
   question: string;
   context?: string;
@@ -141,6 +241,10 @@ const PARTIAL_LOOKBACK_FRAMES = Math.ceil((16_000 * 4) / 1024);
 const PARTIAL_INTERVAL_MS = 1000;
 // Max rate at which committed segment words are revealed left-to-right.
 const WORDS_PER_SECOND = 10;
+// Max speech-seconds per post-recording batch (matches model training window).
+const BATCH_DURATION_S = 27;
+// Concurrent hviske calls during post-recording batch transcription.
+const BATCH_CONCURRENCY = 5;
 // How often, while recording, we re-analyze the transcript for things to clarify.
 const CLARIFY_INTERVAL_MS = 25_000;
 // Tick cadence for the countdown bar to the next clarification refresh.
@@ -159,6 +263,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const [isUploading, setIsUploading] = useState(false);
   const [isOverwriting, setIsOverwriting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [batchProgress, setBatchProgress] = useState<{ completed: number; total: number } | null>(null);
   // True if VAD setup fails or utterance transcription errors out — the batch
   // transcript still works, but the live interim captions won't show.
   const [liveCaptionsUnavailable, setLiveCaptionsUnavailable] = useState(false);
@@ -206,6 +311,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     partialWords: number; speechEndMs: number;
   }>>([]);
   const partialTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // VAD batch state for post-recording parallel transcription.
+  const vadBatchStateRef = useRef<VadBatchState>(newVadBatchState());
   // PCM accumulation for live transcription (16 kHz Int16 frames from the AudioWorklet).
   const pcmFramesRef = useRef<Int16Array[]>([]);
   // Frame index into pcmFramesRef where the current utterance started (with pre-roll).
@@ -254,6 +361,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   }, []);
 
   function resetLiveState() {
+    vadBatchStateRef.current = newVadBatchState();
+    setBatchProgress(null);
     liveSegmentsRef.current = [];
     setLiveSegments([]);
     interimTextRef.current = '';
@@ -566,6 +675,17 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           }
 
           await finalize(uStart, uEnd, audio, capturedSkip, capturedWindowStart, capturedPartialWords, capturedSpeechEndMs);
+
+          // Batch accumulation for post-recording parallel transcription. Runs after
+          // the live-caption finalize so it doesn't block it. Uses the same uStart/uEnd
+          // captured above (before utteranceStartRef was cleared).
+          const batchState = vadBatchStateRef.current;
+          const wavOffset = batchState.pendingWavDuration;
+          const wavDuration = audio.length / 16_000;
+          batchState.pendingAudio.push(audio);
+          batchState.pendingIntervals.push({ originalStart: uStart, originalEnd: uEnd, wavOffset, wavDuration });
+          batchState.pendingWavDuration += wavDuration;
+          if (batchState.pendingWavDuration >= BATCH_DURATION_S) sealCurrentBatch(batchState);
         },
         onVADMisfire: () => {
           stopPartialTimer();
@@ -837,21 +957,64 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     const mimeType = recorder.mimeType || 'audio/webm';
     const blob = new Blob(chunksRef.current, { type: mimeType });
 
-    // Upload the full audio for a clean batch transcription. The review page shows
-    // a processing state while the backend transcribes, then flips to review when done.
+    // Seal any remaining speech into the final partial batch.
+    sealCurrentBatch(vadBatchStateRef.current);
+    const batches = vadBatchStateRef.current.readyBatches;
+
+    // Archive the full WebM for storage — fire and forget, do NOT await before navigating.
+    // storageOnly=true tells the server to skip background transcription; the client
+    // handles transcription below and calls save-transcript directly.
+    const archiveFormData = new FormData();
+    archiveFormData.append('audio', blob, `recording.${extensionForMimeType(mimeType)}`);
+    archiveFormData.append('meetingId', meetingId);
+    archiveFormData.append('duration', String(durationSeconds));
+    archiveFormData.append('storageOnly', 'true');
+    const archivePromise = fetch('/api/transcribe', { method: 'POST', body: archiveFormData })
+      .catch((err) => console.error('[archive] upload failed:', err));
+
     try {
-      const formData = new FormData();
-      formData.append('audio', blob, `recording.${extensionForMimeType(mimeType)}`);
-      formData.append('meetingId', meetingId);
-      formData.append('duration', String(durationSeconds));
-      const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(data.error ?? 'Upload fejlede');
-      }
+      // Transcribe all VAD speech batches in parallel, then save the assembled transcript.
+      setBatchProgress({ completed: 0, total: batches.length });
+      let done = 0;
+      const tasks = batches.map((batch) => async (): Promise<TranscriptSegment[]> => {
+        try {
+          const fd = new FormData();
+          fd.append('audio', batch.wav, 'batch.wav');
+          const res = await fetch(`/api/meetings/${meetingId}/utterance`, {
+            method: 'POST',
+            body: fd,
+            signal: AbortSignal.timeout(60_000),
+          });
+          if (!res.ok) return [];
+          const { text } = await res.json() as { text: string };
+          return text?.trim() ? splitTextWithIntervals(text, batch.intervals, batch.totalWavDuration) : [];
+        } catch (err) {
+          console.error('[batch] transcription failed:', err);
+          return [];
+        } finally {
+          setBatchProgress({ completed: ++done, total: batches.length });
+        }
+      });
+
+      const segmentArrays = await runWithConcurrency(tasks, BATCH_CONCURRENCY);
+      const segments = segmentArrays.flat().sort((a, b) => a.start - b.start);
+
+      const saveRes = await fetch(`/api/meetings/${meetingId}/save-transcript`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ segments }),
+      });
+      if (!saveRes.ok) throw new Error('Gem fejlede');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Noget gik galt under upload');
+      setError(err instanceof Error ? err.message : 'Noget gik galt under transskription');
+      setIsUploading(false);
+      setBatchProgress(null);
+      return;
     }
+
+    // Release batch memory before navigating.
+    vadBatchStateRef.current = newVadBatchState();
+    await archivePromise;
     router.push(`/meeting/${meetingId}/review`);
   }
 
@@ -1328,7 +1491,9 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
               border: '2px solid var(--accent)', borderTopColor: 'transparent',
               animation: 'spin 0.8s linear infinite',
             }} />
-            transskriberer og gemmer…
+            {batchProgress && batchProgress.total > 0
+              ? `transskriberer ${batchProgress.completed} / ${batchProgress.total} segmenter…`
+              : 'transskriberer og gemmer…'}
           </div>
         )}
       </div>
