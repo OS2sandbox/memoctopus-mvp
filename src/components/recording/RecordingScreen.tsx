@@ -179,8 +179,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const vadRef = useRef<any>(null);
   // Elapsed-seconds mark when VAD fires onSpeechStart, for accurate segment timestamps.
   const utteranceStartRef = useRef<number | null>(null);
-  // Guard against overlapping utterance finalization fetches.
-  const utteranceInFlightRef = useRef(false);
+  // Guard against running two finalize calls concurrently. Window auto-commits are
+  // fire-and-forget and do NOT set this flag — they run in parallel so the commit
+  // pipeline never falls behind live audio.
+  const finalizeInFlightRef = useRef(false);
   // Separate guard for partial-timer requests — keeps partials from blocking finalization.
   const partialInFlightRef = useRef(false);
   // Queue of utterances that ended while a fetch was in-flight. Stores the VAD-provided
@@ -244,7 +246,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     interimTextRef.current = '';
     setInterimText('');
     utteranceStartRef.current = null;
-    utteranceInFlightRef.current = false;
+    finalizeInFlightRef.current = false;
     partialInFlightRef.current = false;
     pendingUtterancesRef.current = [];
     if (partialTimerRef.current) { clearInterval(partialTimerRef.current); partialTimerRef.current = null; }
@@ -295,7 +297,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       t = segEnd;
       return seg;
     });
-    const updated = [...liveSegmentsRef.current, ...newSegs];
+    const updated = [...liveSegmentsRef.current, ...newSegs].sort((a, b) => a.start - b.start);
     liveSegmentsRef.current = updated;
     setLiveSegments(updated);
     setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
@@ -352,7 +354,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         uStart: number, uEnd: number, audio: Float32Array,
         skipSamples: number, wsTime: number,
       ) {
-        utteranceInFlightRef.current = true;
+        finalizeInFlightRef.current = true;
         const remaining = skipSamples > 0 ? audio.slice(skipSamples) : audio;
         const remainingStart = skipSamples > 0 ? wsTime : uStart;
         try {
@@ -389,7 +391,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             }
           }
         } finally {
-          utteranceInFlightRef.current = false;
+          finalizeInFlightRef.current = false;
         }
       }
 
@@ -400,26 +402,27 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           const currentFrame = pcmFramesRef.current.length;
           const framesInWindow = currentFrame - windowStartFrameRef.current;
 
-          // Auto-commit: a full 2 s window has accumulated and no commit is in-flight.
-          if (framesInWindow >= COMMIT_WINDOW_FRAMES && !utteranceInFlightRef.current) {
+          // Auto-commit: a full 2 s window has accumulated.
+          // Window commits are fire-and-forget — they do NOT set finalizeInFlightRef, so
+          // speech-end can call finalize immediately without waiting for any in-flight
+          // window commit. This eliminates the N×server_latency compounding delay.
+          if (framesInWindow >= COMMIT_WINDOW_FRAMES) {
             const commitEndFrame = windowStartFrameRef.current + COMMIT_WINDOW_FRAMES;
             const wav = buildWavBlob(windowStartFrameRef.current, commitEndFrame);
             if (!wav) return;
             const commitStart = windowStartTimeRef.current;
             const commitEnd = commitStart + (COMMIT_WINDOW_FRAMES * 1024) / 16_000;
-            // Advance window immediately so the next partial shows only fresh audio.
+            // Advance window synchronously so the next tick immediately picks up fresh audio
+            // and committedSamplesRef is correct when onSpeechEnd captures it.
             windowStartFrameRef.current = commitEndFrame;
             windowStartTimeRef.current = commitEnd;
             committedSamplesRef.current += COMMIT_WINDOW_FRAMES * 1024;
             interimTextRef.current = '…';
             setInterimText('…');
-            utteranceInFlightRef.current = true;
             postWav(wav).then((text) => {
               if (text.trim()) commitUtterance(commitStart, commitEnd, text);
-            }).finally(() => {
-              utteranceInFlightRef.current = false;
-              const next = pendingUtterancesRef.current.shift();
-              if (next && utteranceStartRef.current === null) void finalize(next.start, next.end, next.audio, next.skip, next.windowStart);
+            }).catch((err) => {
+              console.error('[window-commit] postWav failed:', err);
             });
             return;
           }
@@ -498,8 +501,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           interimTextRef.current = '';
           setInterimText('');
 
-          if (utteranceInFlightRef.current) {
-            // Push to queue — nothing is dropped even if multiple utterances pile up.
+          if (finalizeInFlightRef.current) {
+            // Another finalize is running — queue this one; it will be drained when that finalize completes.
             pendingUtterancesRef.current.push({ start: uStart, end: uEnd, audio, skip: capturedSkip, windowStart: capturedWindowStart });
             return;
           }
@@ -730,10 +733,14 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   async function resumeRecording() {
     if (!mediaRecorderRef.current) return;
     const recorder = mediaRecorderRef.current;
+    // Update pausedDuration FIRST — before any async gap — so currentElapsed() is
+    // correct from the moment VAD's onSpeechStart fires. The previous order
+    // (update after await) caused a race where onSpeechStart captured a timestamp
+    // inflated by the full pause duration.
+    pausedDurationRef.current += Date.now() - pauseStartRef.current;
     // Await the resume so the AudioContext is fully running before pollVolume starts reading
     await audioContextRef.current?.resume();
     recorder.resume();
-    pausedDurationRef.current += Date.now() - pauseStartRef.current;
     timerRef.current = setInterval(() => {
       setElapsed(Math.floor((Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000));
     }, 500);
