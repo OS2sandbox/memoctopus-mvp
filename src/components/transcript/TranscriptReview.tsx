@@ -512,11 +512,7 @@ export function TranscriptReview({
                   <div
                     onClick={() => {
                       const isNowOpen = !openChapters.has(ch.id);
-                      setOpenChapters((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(ch.id)) next.delete(ch.id); else next.add(ch.id);
-                        return next;
-                      });
+                      setOpenChapters((prev) => prev.has(ch.id) ? new Set() : new Set([ch.id]));
                       // If opening with an active search, jump to first match in this chapter
                       if (isNowOpen && search.trim() && matches.length > 0) {
                         const firstInChapter = ch.segmentIndices.find((si) => matches.includes(si));
