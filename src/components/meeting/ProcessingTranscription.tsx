@@ -75,19 +75,59 @@ function* energyVAD(
   }
 }
 
-// Resample a mono Float32Array to 16 kHz using OfflineAudioContext.
-async function resampleTo16k(audio: Float32Array, fromRate: number): Promise<Float32Array> {
-  if (fromRate === 16_000) return audio;
-  const length = Math.ceil(audio.length * 16_000 / fromRate);
-  const offCtx = new OfflineAudioContext({ numberOfChannels: 1, length, sampleRate: 16_000 });
-  const buf = offCtx.createBuffer(1, audio.length, fromRate);
-  buf.getChannelData(0).set(audio);
-  const src = offCtx.createBufferSource();
-  src.buffer = buf;
-  src.connect(offCtx.destination);
-  src.start();
-  const out = await offCtx.startRendering();
-  return out.getChannelData(0);
+// Decode, downmix to mono, and resample to 16 kHz — all in 60-second chunks.
+// A single OfflineAudioContext for a 74-minute file would be ~71M frames, which
+// browsers silently truncate around the 10M-frame mark. Processing in small
+// chunks keeps each OfflineAudioContext well within browser limits.
+async function decodeAndResampleTo16k(arrayBuffer: ArrayBuffer): Promise<Float32Array> {
+  const audioCtx = new AudioContext();
+  const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+  await audioCtx.close();
+
+  // Fast path: already at 16 kHz mono — no resampling or copy needed.
+  if (decoded.sampleRate === 16_000 && decoded.numberOfChannels === 1) {
+    return decoded.getChannelData(0).slice();
+  }
+
+  const fromRate = decoded.sampleRate;
+  const CHUNK_S = 60;
+  const chunkInputFrames = Math.round(fromRate * CHUNK_S);
+  const totalInputFrames = decoded.length;
+  const outputChunks: Float32Array[] = [];
+
+  for (let offset = 0; offset < totalInputFrames; offset += chunkInputFrames) {
+    const end = Math.min(offset + chunkInputFrames, totalInputFrames);
+    const chunkLength = end - offset;
+    const outLength = Math.ceil(chunkLength * 16_000 / fromRate);
+
+    const offCtx = new OfflineAudioContext({ numberOfChannels: 1, length: outLength, sampleRate: 16_000 });
+    const srcBuf = offCtx.createBuffer(1, chunkLength, fromRate);
+    const srcData = srcBuf.getChannelData(0);
+
+    // Downmix channels into the mono source buffer for this chunk.
+    if (decoded.numberOfChannels === 1) {
+      srcData.set(decoded.getChannelData(0).subarray(offset, end));
+    } else {
+      const scale = 1 / decoded.numberOfChannels;
+      for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+        const chData = decoded.getChannelData(ch).subarray(offset, end);
+        for (let i = 0; i < chunkLength; i++) srcData[i] += chData[i] * scale;
+      }
+    }
+
+    const src = offCtx.createBufferSource();
+    src.buffer = srcBuf;
+    src.connect(offCtx.destination);
+    src.start();
+    const out = await offCtx.startRendering();
+    outputChunks.push(out.getChannelData(0).slice());
+  }
+
+  const totalLength = outputChunks.reduce((s, c) => s + c.length, 0);
+  const result = new Float32Array(totalLength);
+  let off = 0;
+  for (const chunk of outputChunks) { result.set(chunk, off); off += chunk.length; }
+  return result;
 }
 
 export function ProcessingTranscription({ meetingId }: Props) {
@@ -110,28 +150,9 @@ export function ProcessingTranscription({ meetingId }: Props) {
         if (!audioRes.ok) throw new Error(`Lydfil ikke fundet (${audioRes.status})`);
         const arrayBuffer = await audioRes.arrayBuffer();
 
-        // 2. Decode and downmix to mono at native rate, then resample to 16 kHz
+        // 2. Decode, downmix to mono, and resample to 16 kHz in 60-second chunks.
         setPhase('analyzing');
-        const audioCtx = new AudioContext();
-        const decoded = await audioCtx.decodeAudioData(arrayBuffer);
-        await audioCtx.close();
-
-        let nativeMono: Float32Array;
-        if (decoded.numberOfChannels === 1) {
-          nativeMono = decoded.getChannelData(0);
-        } else {
-          nativeMono = new Float32Array(decoded.length);
-          for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
-            const chData = decoded.getChannelData(ch);
-            for (let i = 0; i < nativeMono.length; i++) nativeMono[i] += chData[i];
-          }
-          const scale = 1 / decoded.numberOfChannels;
-          for (let i = 0; i < nativeMono.length; i++) nativeMono[i] *= scale;
-        }
-
-        // Resample to 16 kHz so VAD segments are already at the right rate for
-        // float32ToWavBlob (which writes a 16 kHz WAV header).
-        const mono16k = await resampleTo16k(nativeMono, decoded.sampleRate);
+        const mono16k = await decodeAndResampleTo16k(arrayBuffer);
 
         // 3. Energy VAD: find speech regions and accumulate into ~27s batches.
         // Timestamps from energyVAD are in seconds at 16 kHz — these become the
