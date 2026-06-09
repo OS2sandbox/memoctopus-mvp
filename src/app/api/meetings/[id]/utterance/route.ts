@@ -45,13 +45,18 @@ export async function POST(req: NextRequest, { params }: Params) {
   const buffer = Buffer.from(await audioFile.arrayBuffer());
   if (buffer.length < 2_000) return NextResponse.json({ text: '' });
 
+  const audioBytes = buffer.length;
+  const t0 = Date.now();
   try {
     const provider = new HviskeProvider();
-    const text = await provider.transcribeRaw(buffer, audioFile.type || 'audio/wav');
-    if (isHallucinatedRepetition(text)) return NextResponse.json({ text: '' });
-    return NextResponse.json({ text });
+    const { text, latencyMs } = await provider.transcribeRaw(buffer, audioFile.type || 'audio/wav');
+    const totalMs = Date.now() - t0;
+    console.log(`[utterance] ${audioBytes} bytes → ${latencyMs} ms hviske / ${totalMs} ms total`);
+    if (isHallucinatedRepetition(text)) return NextResponse.json({ text: '', latencyMs });
+    return NextResponse.json({ text, latencyMs });
   } catch (err) {
-    console.error('Utterance transcription error:', err);
-    return NextResponse.json({ text: '' });
+    const totalMs = Date.now() - t0;
+    console.error(`[utterance] failed after ${totalMs} ms:`, err);
+    return NextResponse.json({ text: '', latencyMs: totalMs });
   }
 }

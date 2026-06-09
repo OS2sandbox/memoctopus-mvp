@@ -29,54 +29,112 @@ export async function POST(req: NextRequest) {
   );
   if (!meeting) return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
 
-  // Update mode: transcript already exists (created by save-transcript).
-  // Save the audio file, detect PII, patch the transcript — don't change meeting status.
+  // Update mode: a live transcript already exists (created by save-transcript).
+  // Save audio + run PII on the live segments immediately (fast path so the review
+  // page has something to show). Then re-transcribe the full audio in the background
+  // and overwrite the live segments with the authoritative batch result — this fills
+  // in any gaps the per-utterance live path missed due to latency spikes or timeouts.
   if (transcriptId) {
+    let buffer: Buffer;
     try {
-      const buffer = Buffer.from(await audioFile.arrayBuffer());
-      const mimeType = audioFile.type || 'audio/webm';
-      const duration = durationStr ? parseInt(durationStr, 10) : null;
+      buffer = Buffer.from(await audioFile.arrayBuffer());
+    } catch (err) {
+      return NextResponse.json({ error: 'Failed to read audio' }, { status: 400 });
+    }
 
-      const { filename, sizeBytes } = await saveAudioFile(session.user.id, buffer, audioFile.name);
+    const mimeType = audioFile.type || 'audio/webm';
+    const duration = durationStr ? parseInt(durationStr, 10) : null;
+    const userId = session.user.id;
+
+    try {
+      const { filename, sizeBytes } = await saveAudioFile(userId, buffer, audioFile.name);
       await queryUserSchemaOne(
-        session.user.id,
+        userId,
         `INSERT INTO audio_files (meeting_id, filename, size_bytes, duration_seconds)
          VALUES ($1, $2, $3, $4)`,
         [meetingId, filename, sizeBytes, duration],
       );
-
-      // Load the already-saved segments so PII detection runs on the real transcript
-      const existing = await queryUserSchemaOne<{ segments: unknown }>(
-        session.user.id,
-        'SELECT segments FROM transcripts WHERE id = $1',
-        [transcriptId],
-      );
-      const rawSegments = Array.isArray(existing?.segments)
-        ? (existing.segments as TranscriptSegment[])
-        : [];
-
-      let replacements: PiiReplacement[] = [];
-      try {
-        const piiResult = await detectPiiInSegments(rawSegments);
-        replacements = piiResult.replacements;
-      } catch (piiErr) {
-        console.error('PII detection failed (non-fatal):', piiErr);
-      }
-
-      await queryUserSchemaOne(
-        session.user.id,
-        'UPDATE transcripts SET pii_replacements = $1 WHERE id = $2',
-        [JSON.stringify(replacements), transcriptId],
-      );
-
-      return NextResponse.json({ piiReplacements: replacements });
     } catch (err) {
-      console.error('Audio upload error:', err);
+      console.error('Audio save error:', err);
       return NextResponse.json(
         { error: err instanceof Error ? err.message : 'Upload failed' },
         { status: 500 },
       );
     }
+
+    // Run PII on the live segments so the review page isn't waiting on the batch pass.
+    const existing = await queryUserSchemaOne<{ segments: unknown }>(
+      userId,
+      'SELECT segments FROM transcripts WHERE id = $1',
+      [transcriptId],
+    );
+    const liveSegments = Array.isArray(existing?.segments)
+      ? (existing.segments as TranscriptSegment[])
+      : [];
+
+    let liveReplacements: PiiReplacement[] = [];
+    try {
+      const piiResult = await detectPiiInSegments(liveSegments);
+      liveReplacements = piiResult.replacements;
+    } catch (piiErr) {
+      console.error('PII detection failed (non-fatal):', piiErr);
+    }
+
+    await queryUserSchemaOne(
+      userId,
+      'UPDATE transcripts SET pii_replacements = $1 WHERE id = $2',
+      [JSON.stringify(liveReplacements), transcriptId],
+    );
+
+    // Re-transcribe the full audio in the background. The batch pass processes the
+    // complete recording and fills gaps the per-utterance live path missed.
+    // We flip status to 'processing' so the review page's 4 s poll picks up the
+    // update when it completes; a short delay lets the user see the live preview first.
+    after(async () => {
+      await new Promise((r) => setTimeout(r, 3_000));
+      await queryUserSchemaOne(
+        userId,
+        `UPDATE meetings SET status = 'processing', updated_at = NOW() WHERE id = $1`,
+        [meetingId],
+      ).catch(() => {});
+
+      try {
+        console.log(`[transcribe] starting batch re-transcription for meeting ${meetingId}`);
+        const provider = getTranscriptionProvider();
+        const rawSegments: TranscriptSegment[] = await provider.transcribe(buffer, mimeType, duration ?? undefined);
+
+        let replacements: PiiReplacement[] = [];
+        try {
+          const piiResult = await detectPiiInSegments(rawSegments);
+          replacements = piiResult.replacements;
+        } catch (piiErr) {
+          console.error('PII detection failed in batch re-transcription (non-fatal):', piiErr);
+        }
+        const rawText = rawSegments.map((s) => s.text).join(' ');
+
+        await queryUserSchemaOne(
+          userId,
+          `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements)
+           VALUES ($1, $2, $3, NULL, $4)
+           ON CONFLICT (meeting_id) DO UPDATE SET
+             raw_text = EXCLUDED.raw_text,
+             segments = EXCLUDED.segments,
+             pii_replacements = EXCLUDED.pii_replacements`,
+          [meetingId, rawText, JSON.stringify(rawSegments), JSON.stringify(replacements)],
+        );
+        console.log(`[transcribe] batch re-transcription complete for meeting ${meetingId}: ${rawSegments.length} segments`);
+      } catch (err) {
+        console.error(`[transcribe] batch re-transcription failed for meeting ${meetingId}:`, err);
+      } finally {
+        await queryUserSchemaOne(
+          userId,
+          `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,
+          [meetingId],
+        ).catch(() => {});
+      }
+    });
+
+    return NextResponse.json({ piiReplacements: liveReplacements });
   }
 
   // Create mode: save audio + set status immediately, then transcribe in the background

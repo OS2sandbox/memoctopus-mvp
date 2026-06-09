@@ -126,9 +126,13 @@ const SILENCE_VOLUME_THRESHOLD = 0.02;
 const MAX_CHUNK_SAMPLES = 16_000 * 15;
 // Max words per committed live segment — keeps lines readable even without punctuation.
 const MAX_WORDS_PER_LINE = 20;
-// Rolling commit window: the partial timer auto-commits each completed 2 s block.
-// Shorter window = smaller hviske tasks = less server backlog.
+// Minimum frames before triggering an auto-commit. The actual commit is adaptive —
+// all frames accumulated since the last commit (up to MAX_COMMIT_FRAMES) are sent
+// in one request so the window grows instead of queuing when the server is slow.
 const COMMIT_WINDOW_FRAMES = Math.ceil((16_000 * 2) / 1024);
+// Ceiling for one adaptive commit (6 s). Keeps the cascade damage of a single timeout
+// bounded: at most 6 s of audio is lost per timeout, not the full MAX_CHUNK_SAMPLES.
+const MAX_COMMIT_FRAMES = COMMIT_WINDOW_FRAMES * 3;
 // Partial interim uses a trailing 2 s lookback instead of the full growing window.
 // This means the partial only ever shows NEW audio — no hindsight re-transcription.
 const PARTIAL_LOOKBACK_FRAMES = Math.ceil((16_000 * 2) / 1024);
@@ -179,12 +183,16 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const vadRef = useRef<any>(null);
   // Elapsed-seconds mark when VAD fires onSpeechStart, for accurate segment timestamps.
   const utteranceStartRef = useRef<number | null>(null);
-  // Guard against running two finalize calls concurrently. Window auto-commits are
-  // fire-and-forget and do NOT set this flag — they run in parallel so the commit
-  // pipeline never falls behind live audio.
+  // Guard against running two finalize calls concurrently. Window auto-commits use
+  // windowCommitControllerRef instead, keeping finalization independent.
   const finalizeInFlightRef = useRef(false);
   // Separate guard for partial-timer requests — keeps partials from blocking finalization.
   const partialInFlightRef = useRef(false);
+  // AbortController for the single in-flight rolling-window commit. Null when idle.
+  // Using one-at-a-time (not fire-and-forget) enforces backpressure so the server
+  // never queues multiple window requests. Aborted on pause so diarizeSoFar can
+  // proceed without competing with a window commit for hviske capacity.
+  const windowCommitControllerRef = useRef<AbortController | null>(null);
   // Queue of utterances that ended while a fetch was in-flight. Stores the VAD-provided
   // Float32 audio directly so frame-index drift between AudioContexts cannot corrupt them.
   // skip/windowStart are captured at speech-end so a later onSpeechStart reset cannot corrupt them.
@@ -248,6 +256,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     utteranceStartRef.current = null;
     finalizeInFlightRef.current = false;
     partialInFlightRef.current = false;
+    windowCommitControllerRef.current?.abort();
+    windowCommitControllerRef.current = null;
     pendingUtterancesRef.current = [];
     if (partialTimerRef.current) { clearInterval(partialTimerRef.current); partialTimerRef.current = null; }
     pcmFramesRef.current = [];
@@ -322,11 +332,14 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       }
 
       // POST a WAV blob to the utterance endpoint and return the transcribed text.
-      async function postWav(blob: Blob): Promise<string> {
+      async function postWav(blob: Blob, externalSignal?: AbortSignal): Promise<string> {
         const formData = new FormData();
         formData.append('audio', blob, 'utterance.wav');
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 15_000);
+        const timeout = setTimeout(() => controller.abort(), 22_000);
+        if (externalSignal) {
+          externalSignal.addEventListener('abort', () => controller.abort(), { once: true });
+        }
         try {
           const res = await fetch(`/api/meetings/${meetingId}/utterance`, {
             method: 'POST',
@@ -334,7 +347,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             signal: controller.signal,
           });
           if (res.ok) {
-            const data = await res.json() as { text: string };
+            const data = await res.json() as { text: string; latencyMs?: number };
+            if (data.latencyMs != null) {
+              console.log(`[hviske] server latency: ${data.latencyMs}ms`);
+            }
             return data.text ?? '';
           }
         } catch (err) {
@@ -402,27 +418,33 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           const currentFrame = pcmFramesRef.current.length;
           const framesInWindow = currentFrame - windowStartFrameRef.current;
 
-          // Auto-commit: a full 2 s window has accumulated.
-          // Window commits are fire-and-forget — they do NOT set finalizeInFlightRef, so
-          // speech-end can call finalize immediately without waiting for any in-flight
-          // window commit. This eliminates the N×server_latency compounding delay.
-          if (framesInWindow >= COMMIT_WINDOW_FRAMES) {
-            const commitEndFrame = windowStartFrameRef.current + COMMIT_WINDOW_FRAMES;
+          // Auto-commit: wait for the previous commit to finish (backpressure), then
+          // send all accumulated frames in one adaptive-size request (2–15 s). This
+          // prevents server queue build-up when hviske is slower than the window size —
+          // the window simply grows to cover the gap instead of stacking requests.
+          if (framesInWindow >= COMMIT_WINDOW_FRAMES && !windowCommitControllerRef.current) {
+            const commitFrames = Math.min(framesInWindow, MAX_COMMIT_FRAMES);
+            const commitEndFrame = windowStartFrameRef.current + commitFrames;
             const wav = buildWavBlob(windowStartFrameRef.current, commitEndFrame);
             if (!wav) return;
             const commitStart = windowStartTimeRef.current;
-            const commitEnd = commitStart + (COMMIT_WINDOW_FRAMES * 1024) / 16_000;
-            // Advance window synchronously so the next tick immediately picks up fresh audio
-            // and committedSamplesRef is correct when onSpeechEnd captures it.
+            const commitEnd = commitStart + (commitFrames * 1024) / 16_000;
+            // Advance window synchronously so committedSamplesRef is correct when
+            // onSpeechEnd fires and captures it for finalize's skip calculation.
             windowStartFrameRef.current = commitEndFrame;
             windowStartTimeRef.current = commitEnd;
-            committedSamplesRef.current += COMMIT_WINDOW_FRAMES * 1024;
+            committedSamplesRef.current += commitFrames * 1024;
             interimTextRef.current = '…';
             setInterimText('…');
-            postWav(wav).then((text) => {
+            const ctl = new AbortController();
+            const t0 = Date.now();
+            const audioDurS = (commitFrames * 1024 / 16_000).toFixed(1);
+            windowCommitControllerRef.current = ctl;
+            postWav(wav, ctl.signal).then((text) => {
+              console.log(`[window-commit] ${audioDurS}s audio → ${Date.now() - t0}ms round-trip`);
               if (text.trim()) commitUtterance(commitStart, commitEnd, text);
-            }).catch((err) => {
-              console.error('[window-commit] postWav failed:', err);
+            }).catch(() => {}).finally(() => {
+              if (windowCommitControllerRef.current === ctl) windowCommitControllerRef.current = null;
             });
             return;
           }
@@ -430,7 +452,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           // Partial: trailing 2 s lookback so we only show genuinely new audio.
           // This prevents the growing-window "hindsight edit" where the model
           // re-transcribes earlier frames and subtly changes what was displayed.
-          if (partialInFlightRef.current || framesInWindow === 0) return;
+          // Suppress partials while a window commit is in-flight — both compete for
+          // the same hviske GPU capacity, and concurrent requests are the primary cause
+          // of latency spikes. The '…' placeholder shown during commit is enough UX.
+          if (partialInFlightRef.current || framesInWindow === 0 || windowCommitControllerRef.current) return;
           const partialStart = Math.max(windowStartFrameRef.current, currentFrame - PARTIAL_LOOKBACK_FRAMES);
           const capturedWindowStart = windowStartFrameRef.current;
           const wav = buildWavBlob(partialStart, currentFrame);
@@ -720,6 +745,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
     // Pause VAD processing, flush the recorded tail, then pause the recorder.
     if (partialTimerRef.current) { clearInterval(partialTimerRef.current); partialTimerRef.current = null; }
+    // Abort any in-flight window commit — diarizeSoFar covers that audio authoritatively
+    // and we don't want the commit competing with it for hviske capacity.
+    windowCommitControllerRef.current?.abort();
+    windowCommitControllerRef.current = null;
     vadRef.current?.pause();
     await flushRecorder(recorder);
     recorder.pause();

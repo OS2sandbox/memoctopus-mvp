@@ -47,18 +47,19 @@ export class HviskeProvider implements TranscriptionProvider {
     return splitIntoTimedSegments(text, duration);
   }
 
-  async transcribeRaw(audioBuffer: Buffer, mimeType: string): Promise<string> {
+  async transcribeRaw(audioBuffer: Buffer, mimeType: string): Promise<{ text: string; latencyMs: number }> {
     const ext = mimeTypeToExt(mimeType);
     const file = new File([new Uint8Array(audioBuffer)], `audio.${ext}`, { type: mimeType });
 
+    const t0 = Date.now();
     const response = await this.client.audio.transcriptions.create({
       model: this.model,
       file,
       language: this.language,
       response_format: 'json',
-    }, { timeout: 12_000 });
+    }, { timeout: 20_000 });
 
-    return response.text ?? '';
+    return { text: response.text ?? '', latencyMs: Date.now() - t0 };
   }
 }
 
