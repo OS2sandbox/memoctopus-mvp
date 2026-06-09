@@ -16,6 +16,12 @@ import { formatDuration, formatFileSize } from '@/lib/utils';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { pickRecordingMimeType, extensionForMimeType } from '@/lib/audio/recording-format';
 import type { TranscriptSegment } from '@/types';
+import {
+  float32ToWavBlob, newVadBatchState, sealCurrentBatch, mapWavTime,
+  splitTextWithIntervals, runWithConcurrency,
+  BATCH_DURATION_S, BATCH_CONCURRENCY, MAX_WORDS_PER_LINE,
+  type VadInterval, type ReadyBatch, type VadBatchState,
+} from '@/lib/audio/vad-batch';
 
 // ── PCM live-transcription helpers ───────────────────────────────────────────
 
@@ -75,136 +81,12 @@ function encodePcmToWav(frames: Int16Array[]): Blob {
   return new Blob([buf], { type: 'audio/wav' });
 }
 
-// Encode a Float32Array slice (16 kHz, normalised −1..1) to a 16-bit PCM WAV blob.
-// Used for final utterance transcription from the VAD-provided audio, which is
-// guaranteed to be aligned with the VAD model's speech boundaries.
-function float32ToWavBlob(samples: Float32Array, startSample = 0, endSample?: number): Blob {
-  const src = samples.subarray(startSample, endSample);
-  const numSamples = src.length;
-  const dataBytes = numSamples * 2;
-  const buf = new ArrayBuffer(44 + dataBytes);
-  const v = new DataView(buf);
-  const ws = (off: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
-  ws(0, 'RIFF'); v.setUint32(4, 36 + dataBytes, true);
-  ws(8, 'WAVE'); ws(12, 'fmt ');
-  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-  v.setUint32(24, 16_000, true); v.setUint32(28, 32_000, true);
-  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
-  ws(36, 'data'); v.setUint32(40, dataBytes, true);
-  let off = 44;
-  for (let i = 0; i < numSamples; i++) {
-    const s = Math.max(-1, Math.min(1, src[i]));
-    v.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-    off += 2;
-  }
-  return new Blob([buf], { type: 'audio/wav' });
-}
-
 interface LiveSegment {
   speaker: string;
   start: number;
   end: number;
   text: string;
   preRevealedWords: number;
-}
-
-// ── VAD batch transcription helpers ──────────────────────────────────────────
-// After recording stops, the accumulated VAD utterances are grouped into ~27 s
-// speech batches (matching the model's training window), encoded as WAV, and
-// transcribed in parallel. Silences between utterances are dropped, avoiding
-// hallucinations and maximising GPU utilisation.
-
-type VadInterval = {
-  originalStart: number;  // wall-clock seconds at speech start
-  originalEnd:   number;  // wall-clock seconds at speech end
-  wavOffset:     number;  // cumulative speech-seconds before this utterance in the batch WAV
-  wavDuration:   number;  // speech duration of this utterance in the WAV
-};
-
-type ReadyBatch = {
-  wav: Blob;
-  intervals: VadInterval[];
-  totalWavDuration: number;
-};
-
-type VadBatchState = {
-  pendingAudio:       Float32Array[];
-  pendingIntervals:   VadInterval[];
-  pendingWavDuration: number;
-  readyBatches:       ReadyBatch[];
-};
-
-function newVadBatchState(): VadBatchState {
-  return { pendingAudio: [], pendingIntervals: [], pendingWavDuration: 0, readyBatches: [] };
-}
-
-function sealCurrentBatch(state: VadBatchState): void {
-  if (state.pendingAudio.length === 0) return;
-  const totalSamples = state.pendingAudio.reduce((n, a) => n + a.length, 0);
-  const combined = new Float32Array(totalSamples);
-  let off = 0;
-  for (const a of state.pendingAudio) { combined.set(a, off); off += a.length; }
-  const wav = float32ToWavBlob(combined);
-  state.readyBatches.push({ wav, intervals: state.pendingIntervals, totalWavDuration: state.pendingWavDuration });
-  state.pendingAudio = [];
-  state.pendingIntervals = [];
-  state.pendingWavDuration = 0;
-}
-
-function mapWavTime(wavT: number, intervals: VadInterval[]): number {
-  for (const iv of intervals) {
-    if (iv.wavDuration === 0) continue;
-    if (wavT >= iv.wavOffset && wavT <= iv.wavOffset + iv.wavDuration) {
-      return iv.originalStart + ((wavT - iv.wavOffset) / iv.wavDuration) * (iv.originalEnd - iv.originalStart);
-    }
-  }
-  if (intervals.length === 0) return 0;
-  if (wavT <= intervals[0].wavOffset) return intervals[0].originalStart;
-  return intervals[intervals.length - 1].originalEnd;
-}
-
-function splitTextWithIntervals(
-  text: string,
-  intervals: VadInterval[],
-  totalWavDuration: number,
-): TranscriptSegment[] {
-  if (!text.trim() || intervals.length === 0) return [];
-  const punctChunks = (text.trim().match(/[^.!?]+[.!?]+/g) ?? [text.trim()]).map(s => s.trim()).filter(Boolean);
-  const sentences: string[] = [];
-  for (const chunk of punctChunks) {
-    const words = chunk.split(/\s+/).filter(Boolean);
-    for (let i = 0; i < words.length; i += MAX_WORDS_PER_LINE) {
-      sentences.push(words.slice(i, i + MAX_WORDS_PER_LINE).join(' '));
-    }
-  }
-  if (sentences.length === 0) return [];
-  const wordCounts = sentences.map(s => s.split(/\s+/).filter(Boolean).length);
-  const totalWords = Math.max(1, wordCounts.reduce((a, b) => a + b, 0));
-  let elapsed = 0;
-  return sentences.map((sentence, i) => {
-    const segDur = (wordCounts[i] / totalWords) * totalWavDuration;
-    const wavStart = elapsed;
-    elapsed += segDur;
-    return {
-      speaker: 'Taler 1',
-      start: mapWavTime(wavStart, intervals),
-      end: mapWavTime(elapsed, intervals),
-      text: sentence,
-    };
-  });
-}
-
-async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
-  const results: T[] = new Array(tasks.length);
-  const queue = tasks.map((task, i) => ({ task, i }));
-  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
-    let item: typeof queue[0] | undefined;
-    while ((item = queue.shift()) !== undefined) {
-      results[item.i] = await item.task();
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 interface ClarificationItem {
@@ -225,8 +107,6 @@ const SILENCE_THRESHOLD_SECONDS = 5;
 const SILENCE_VOLUME_THRESHOLD = 0.02;
 // 15 s at 16 kHz — max audio per hviske call, also the early-commit threshold.
 const MAX_CHUNK_SAMPLES = 16_000 * 15;
-// Max words per committed live segment — keeps lines readable even without punctuation.
-const MAX_WORDS_PER_LINE = 20;
 // Minimum frames before triggering an auto-commit. The actual commit is adaptive —
 // all frames accumulated since the last commit (up to MAX_COMMIT_FRAMES) are sent
 // in one request so the window grows instead of queuing when the server is slow.
@@ -241,10 +121,6 @@ const PARTIAL_LOOKBACK_FRAMES = Math.ceil((16_000 * 4) / 1024);
 const PARTIAL_INTERVAL_MS = 1000;
 // Max rate at which committed segment words are revealed left-to-right.
 const WORDS_PER_SECOND = 10;
-// Max speech-seconds per post-recording batch (matches model training window).
-const BATCH_DURATION_S = 27;
-// Concurrent hviske calls during post-recording batch transcription.
-const BATCH_CONCURRENCY = 5;
 // How often, while recording, we re-analyze the transcript for things to clarify.
 const CLARIFY_INTERVAL_MS = 25_000;
 // Tick cadence for the countdown bar to the next clarification refresh.

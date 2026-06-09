@@ -9,6 +9,7 @@ import { TranscriptReview } from '@/components/transcript/TranscriptReview';
 import { MinutesEditor } from '@/components/minutes/MinutesEditor';
 import { ExportTab } from '@/components/meeting/ExportTab';
 import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
+import { ProcessingTranscription } from '@/components/meeting/ProcessingTranscription';
 import type { MeetingPageData } from '@/lib/data/meeting-page';
 
 interface MeetingPageClientProps {
@@ -31,6 +32,7 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
     const id = setInterval(() => router.refresh(), 4000);
     return () => clearInterval(id);
   }, [meeting.status, activeTab, router]);
+
 
   const switchTab = useCallback(
     (tab: ProcessPhase) => {
@@ -110,21 +112,7 @@ export function MeetingPageClient({ meetingId, initialTab, data }: MeetingPageCl
       )}
 
       {activeTab === 'review' && !transcript && meeting.status === 'processing' && (
-        <div className="mx-auto max-w-[720px] px-6 py-12">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{
-              width: 8, height: 8, borderRadius: 999, background: 'var(--accent)', flexShrink: 0,
-              animation: 'processingPulse 1.4s ease-in-out infinite',
-            }} />
-            <h1 className="text-xl font-semibold text-[var(--ink)]">Transskription er i gang…</h1>
-          </div>
-          <p className="mt-2 text-sm text-[var(--muted)]">
-            Lydfilen behandles. Siden opdateres automatisk når transskriptionen er klar.
-          </p>
-          <style>{`
-            @keyframes processingPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
-          `}</style>
-        </div>
+        <ProcessingTranscription meetingId={meetingId} />
       )}
 
       {activeTab === 'review' && !transcript && meeting.status === 'failed' && (

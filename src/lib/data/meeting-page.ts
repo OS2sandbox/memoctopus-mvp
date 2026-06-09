@@ -27,6 +27,7 @@ export interface MeetingPageData {
     meetingUrl: string | null;
     botSession: string | null;
     participants: string[];
+    updatedAt: string | null;
   };
   audioFile: { durationSeconds: number | null; sizeBytes: number } | null;
   transcript: {
@@ -60,9 +61,10 @@ export async function getMeetingPageData(
     meeting_url: string | null;
     bot_session: string | null;
     participants: string[];
+    updated_at: string | null;
   }>(
     userId,
-    'SELECT id, status, title, source, meeting_url, bot_session, participants FROM meetings WHERE id = $1',
+    'SELECT id, status, title, source, meeting_url, bot_session, participants, updated_at FROM meetings WHERE id = $1',
     [meetingId],
   );
   if (!meeting) return null;
@@ -162,6 +164,7 @@ export async function getMeetingPageData(
       meetingUrl: meeting.meeting_url ?? null,
       botSession: meeting.bot_session ?? null,
       participants: meeting.participants ?? [],
+      updatedAt: meeting.updated_at ?? null,
     },
     audioFile,
     transcript,
