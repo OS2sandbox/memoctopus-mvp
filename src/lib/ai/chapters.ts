@@ -86,6 +86,15 @@ Regler:
       segmentIndices: ch.segmentIndices,
     }));
 
+    // Ensure every segment is covered — the model sometimes stops short for long transcripts.
+    const covered = new Set(chapters.flatMap((ch) => ch.segmentIndices));
+    const missing = Array.from({ length: segments.length }, (_, i) => i).filter((i) => !covered.has(i));
+    if (missing.length > 0 && chapters.length > 0) {
+      const last = chapters[chapters.length - 1];
+      last.segmentIndices = [...last.segmentIndices, ...missing].sort((a, b) => a - b);
+      last.endTime = segments[last.segmentIndices[last.segmentIndices.length - 1]]?.end ?? last.endTime;
+    }
+
     // Clamp each chapter's endTime to the next chapter's startTime to prevent overlap
     for (let i = 0; i < chapters.length - 1; i++) {
       chapters[i].endTime = Math.min(chapters[i].endTime, chapters[i + 1].startTime);
