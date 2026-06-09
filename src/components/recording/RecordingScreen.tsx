@@ -122,18 +122,18 @@ type RecordingState = 'idle' | 'recording' | 'paused' | 'stopped';
 const BYTES_PER_SECOND_ESTIMATE = 16_000;
 const SILENCE_THRESHOLD_SECONDS = 5;
 const SILENCE_VOLUME_THRESHOLD = 0.02;
-// How often quick partials fire during active speech (matches demo's 0.7 s interval).
-const PARTIAL_INTERVAL_MS = 700;
 // 15 s at 16 kHz — max audio per hviske call, also the early-commit threshold.
 const MAX_CHUNK_SAMPLES = 16_000 * 15;
 // Max words per committed live segment — keeps lines readable even without punctuation.
 const MAX_WORDS_PER_LINE = 20;
-// Threshold (in PCM frames) before switching the partial timer to sliding-window mode.
-// Also the boundary at which we early-commit accumulated merger text.
-const MAX_PARTIAL_FRAMES = Math.ceil((16_000 * 15) / 1024);
-// Audio actually sent per sliding-window partial — shorter than MAX_PARTIAL_FRAMES so
-// hviske responds quickly (7 s ≈ half the time of a 15 s clip).
-const SLIDING_WINDOW_FRAMES = Math.ceil((16_000 * 7) / 1024);
+// Rolling commit window: the partial timer auto-commits each completed 2 s block.
+// Shorter window = smaller hviske tasks = less server backlog.
+const COMMIT_WINDOW_FRAMES = Math.ceil((16_000 * 2) / 1024);
+// Partial interim uses a trailing 2 s lookback instead of the full growing window.
+// This means the partial only ever shows NEW audio — no hindsight re-transcription.
+const PARTIAL_LOOKBACK_FRAMES = Math.ceil((16_000 * 2) / 1024);
+// Faster partial ticks for snappier visual feedback.
+const PARTIAL_INTERVAL_MS = 400;
 // How often, while recording, we re-analyze the transcript for things to clarify.
 const CLARIFY_INTERVAL_MS = 25_000;
 // Tick cadence for the countdown bar to the next clarification refresh.
@@ -185,7 +185,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const partialInFlightRef = useRef(false);
   // Queue of utterances that ended while a fetch was in-flight. Stores the VAD-provided
   // Float32 audio directly so frame-index drift between AudioContexts cannot corrupt them.
-  const pendingUtterancesRef = useRef<Array<{ start: number; end: number; audio: Float32Array }>>([]);
+  // skip/windowStart are captured at speech-end so a later onSpeechStart reset cannot corrupt them.
+  const pendingUtterancesRef = useRef<Array<{
+    start: number; end: number; audio: Float32Array;
+    skip: number; windowStart: number;
+  }>>([]);
   const partialTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // PCM accumulation for live transcription (16 kHz Int16 frames from the AudioWorklet).
   const pcmFramesRef = useRef<Int16Array[]>([]);
@@ -195,9 +199,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const pcmWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
   // Tracks committed + tail display across consecutive partials of one utterance.
   const mergerRef = useRef(new LocalAgreementMerger());
-  // Set to true when the current utterance has crossed the 15 s sliding-window boundary.
-  const wasInSlidingModeRef = useRef(false);
-  // How many VAD audio samples have already been committed early (before speech ended).
+  // PCM frame index where the current uncommitted rolling window starts.
+  const windowStartFrameRef = useRef(0);
+  // Elapsed-second timestamp when the current window started.
+  const windowStartTimeRef = useRef(0);
+  // Total 16 kHz samples already committed via window auto-commits (finalize skips these).
   const committedSamplesRef = useRef(0);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -245,7 +251,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     pcmFramesRef.current = [];
     pcmSpeechStartFrameRef.current = 0;
     mergerRef.current.reset();
-    wasInSlidingModeRef.current = false;
+    windowStartFrameRef.current = 0;
+    windowStartTimeRef.current = 0;
     committedSamplesRef.current = 0;
     setLiveCaptionsUnavailable(false);
     setIsDiarizing(false);
@@ -339,55 +346,41 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         return '';
       }
 
-      // Finalize one utterance using the VAD-provided Float32Array. Using the library's
-      // own audio guarantees the segment boundaries match exactly what the VAD model
-      // analyzed — eliminating the clock-skew bug that occurred when using frame indices
-      // from a separate AudioContext. For utterances longer than 15 s the audio is split
-      // into chunks so hviske never exceeds its 12 s server timeout.
-      async function finalize(uStart: number, uEnd: number, audio: Float32Array) {
+      // Finalize one utterance. skipSamples/wsTime are captured at speech-end so that a
+      // later onSpeechStart (which resets committedSamplesRef) cannot corrupt the slice.
+      async function finalize(
+        uStart: number, uEnd: number, audio: Float32Array,
+        skipSamples: number, wsTime: number,
+      ) {
         utteranceInFlightRef.current = true;
-        // Preserve the partial timer's last hypothesis as a fallback. If postWav fails
-        // (network blip, server restart), we commit the last known partial result rather
-        // than silently dropping the utterance.
-        const fallbackText = mergerRef.current.forceCommit();
-        // Skip samples already committed via the early sliding-window path so we don't
-        // re-transcribe and duplicate the first chunk of a long utterance.
-        const skipSamples = committedSamplesRef.current;
         const remaining = skipSamples > 0 ? audio.slice(skipSamples) : audio;
+        const remainingStart = skipSamples > 0 ? wsTime : uStart;
         try {
           if (remaining.length === 0) {
-            // Nothing left — all audio was committed early.
+            // All audio was committed by window auto-commits.
           } else if (remaining.length <= MAX_CHUNK_SAMPLES) {
-            // Short path: single hviske call. Fall back to last partial on failure.
-            const wav = float32ToWavBlob(remaining);
-            const text = await postWav(wav) || (skipSamples === 0 ? fallbackText : '');
-            commitUtterance(uStart, uEnd, text);
+            const text = await postWav(float32ToWavBlob(remaining));
+            commitUtterance(remainingStart, uEnd, text);
           } else {
-            // Long path: split into 15 s chunks so hviske never times out.
-            const totalDuration = uEnd - uStart;
-            let sampleStart = 0;
-            let chunkTimeStart = uStart;
+            const totalDuration = uEnd - remainingStart;
+            let sampleStart = 0, chunkTimeStart = remainingStart;
             while (sampleStart < remaining.length) {
               const sampleEnd = Math.min(sampleStart + MAX_CHUNK_SAMPLES, remaining.length);
               const chunkDuration = ((sampleEnd - sampleStart) / remaining.length) * totalDuration;
               const chunkTimeEnd = chunkTimeStart + chunkDuration;
-              const wav = float32ToWavBlob(remaining, sampleStart, sampleEnd);
-              const text = await postWav(wav);
+              const text = await postWav(float32ToWavBlob(remaining, sampleStart, sampleEnd));
               if (text.trim()) commitUtterance(chunkTimeStart, chunkTimeEnd, text);
               sampleStart = sampleEnd;
               chunkTimeStart = chunkTimeEnd;
             }
           }
 
-          // Drain the ordered queue so no utterance is ever dropped.
           const next = pendingUtterancesRef.current.shift();
           if (next) {
-            await finalize(next.start, next.end, next.audio);
+            await finalize(next.start, next.end, next.audio, next.skip, next.windowStart);
           } else {
-            // Queue empty and no active speech: trim old PCM frames to free memory.
-            // Only safe here because no frame indices are in use.
             if (utteranceStartRef.current === null) {
-              const KEEP = 10; // ~640 ms safety buffer for the next utterance's pre-roll
+              const KEEP = 10;
               const keepFrom = Math.max(0, pcmFramesRef.current.length - KEEP);
               if (keepFrom > 0) {
                 pcmFramesRef.current = pcmFramesRef.current.slice(keepFrom);
@@ -403,47 +396,49 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       function startPartialTimer() {
         if (partialTimerRef.current) return;
         partialTimerRef.current = setInterval(() => {
-          // Use a separate in-flight flag so slow partial requests never delay finalization.
-          if (utteranceStartRef.current === null || partialInFlightRef.current) return;
-          const speechStartFrame = pcmSpeechStartFrameRef.current;
+          if (utteranceStartRef.current === null) return;
           const currentFrame = pcmFramesRef.current.length;
-          const framesInWindow = currentFrame - speechStartFrame;
-          const sliding = framesInWindow > MAX_PARTIAL_FRAMES;
-          // In sliding mode use a shorter window (7 s) so hviske responds faster.
-          const wavStartFrame = sliding
-            ? currentFrame - SLIDING_WINDOW_FRAMES
-            : speechStartFrame;
+          const framesInWindow = currentFrame - windowStartFrameRef.current;
 
-          // On the first tick where we enter sliding mode, immediately commit the
-          // merger's accumulated stable text as permanent rows. This prevents long
-          // utterances from holding all text in the interim-only display until speech ends.
-          if (sliding && !wasInSlidingModeRef.current && utteranceStartRef.current !== null) {
-            wasInSlidingModeRef.current = true;
-            const earlyText = mergerRef.current.forceCommit();
-            if (earlyText.trim()) {
-              const chunkDur = MAX_PARTIAL_FRAMES / (16_000 / 1024); // frames → seconds
-              const chunkEnd = utteranceStartRef.current + chunkDur;
-              commitUtterance(utteranceStartRef.current, chunkEnd, earlyText);
-              utteranceStartRef.current = chunkEnd;
-              committedSamplesRef.current = MAX_PARTIAL_FRAMES * 1024;
-            }
+          // Auto-commit: a full 2 s window has accumulated and no commit is in-flight.
+          if (framesInWindow >= COMMIT_WINDOW_FRAMES && !utteranceInFlightRef.current) {
+            const commitEndFrame = windowStartFrameRef.current + COMMIT_WINDOW_FRAMES;
+            const wav = buildWavBlob(windowStartFrameRef.current, commitEndFrame);
+            if (!wav) return;
+            const commitStart = windowStartTimeRef.current;
+            const commitEnd = commitStart + (COMMIT_WINDOW_FRAMES * 1024) / 16_000;
+            // Advance window immediately so the next partial shows only fresh audio.
+            windowStartFrameRef.current = commitEndFrame;
+            windowStartTimeRef.current = commitEnd;
+            committedSamplesRef.current += COMMIT_WINDOW_FRAMES * 1024;
+            interimTextRef.current = '…';
+            setInterimText('…');
+            utteranceInFlightRef.current = true;
+            postWav(wav).then((text) => {
+              if (text.trim()) commitUtterance(commitStart, commitEnd, text);
+            }).finally(() => {
+              utteranceInFlightRef.current = false;
+              const next = pendingUtterancesRef.current.shift();
+              if (next && utteranceStartRef.current === null) void finalize(next.start, next.end, next.audio, next.skip, next.windowStart);
+            });
+            return;
           }
 
-          if (sliding) mergerRef.current.reset();
-          const wav = buildWavBlob(wavStartFrame);
+          // Partial: trailing 2 s lookback so we only show genuinely new audio.
+          // This prevents the growing-window "hindsight edit" where the model
+          // re-transcribes earlier frames and subtly changes what was displayed.
+          if (partialInFlightRef.current || framesInWindow === 0) return;
+          const partialStart = Math.max(windowStartFrameRef.current, currentFrame - PARTIAL_LOOKBACK_FRAMES);
+          const capturedWindowStart = windowStartFrameRef.current;
+          const wav = buildWavBlob(partialStart, currentFrame);
           if (!wav) return;
           partialInFlightRef.current = true;
           postWav(wav).then((text) => {
-            if (utteranceStartRef.current === null) return; // utterance already ended
-            let display: string;
-            if (sliding) {
-              display = text || '…';
-            } else {
-              const { committed, tail } = mergerRef.current.merge(text);
-              display = committed && tail ? `${committed} ${tail}` : (committed || tail || '…');
-            }
-            interimTextRef.current = display;
-            setInterimText(display);
+            if (utteranceStartRef.current === null) return;
+            // Discard if the window already advanced (auto-commit fired while in-flight).
+            if (windowStartFrameRef.current !== capturedWindowStart) return;
+            interimTextRef.current = text || '…';
+            setInterimText(text || '…');
           }).finally(() => {
             partialInFlightRef.current = false;
           });
@@ -463,13 +458,16 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         // Force single-threaded ORT — no SharedArrayBuffer (COOP/COEP) required.
         ortConfig: (ort: any) => { ort.env.wasm.numThreads = 1; },
         model: 'v5',
-        // 600ms silence before declaring speech end — matches demo's SILENCE_TIMEOUT_MS.
-        redemptionMs: 600,
+        // 300ms silence before declaring speech end — snappier finalization vs the
+        // previous 600ms default. With 3 s window auto-commits the cost of a
+        // slightly-early speech-end is low (at most one empty finalize call).
+        redemptionMs: 300,
         // 300ms pre-roll captures soft onsets; we also manually include pre-roll frames
         // when recording pcmSpeechStartFrameRef below.
         preSpeechPadMs: 300,
         positiveSpeechThreshold: 0.5,
-        negativeSpeechThreshold: 0.35,
+        // Lower threshold ends speech detection sooner during natural pauses.
+        negativeSpeechThreshold: 0.25,
         onSpeechStart: () => {
           utteranceStartRef.current = currentElapsed();
           // Include ~300 ms of pre-roll (≈5 frames × 1024 samples @ 16 kHz) so hviske
@@ -477,7 +475,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           const preRollFrames = Math.round(16_000 * 0.3 / 1024);
           pcmSpeechStartFrameRef.current = Math.max(0, pcmFramesRef.current.length - preRollFrames);
           mergerRef.current.reset();
-          wasInSlidingModeRef.current = false;
+          windowStartFrameRef.current = pcmSpeechStartFrameRef.current;
+          windowStartTimeRef.current = utteranceStartRef.current;
           committedSamplesRef.current = 0;
           interimTextRef.current = '…';
           setInterimText('…');
@@ -491,17 +490,21 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           stopPartialTimer();
           const uStart = utteranceStartRef.current ?? currentElapsed();
           const uEnd = currentElapsed();
+          // Snapshot committed state NOW — onSpeechStart for the next utterance will
+          // reset committedSamplesRef/windowStartTimeRef, corrupting any deferred finalize.
+          const capturedSkip = committedSamplesRef.current;
+          const capturedWindowStart = windowStartTimeRef.current;
           utteranceStartRef.current = null;
           interimTextRef.current = '';
           setInterimText('');
 
           if (utteranceInFlightRef.current) {
             // Push to queue — nothing is dropped even if multiple utterances pile up.
-            pendingUtterancesRef.current.push({ start: uStart, end: uEnd, audio });
+            pendingUtterancesRef.current.push({ start: uStart, end: uEnd, audio, skip: capturedSkip, windowStart: capturedWindowStart });
             return;
           }
 
-          await finalize(uStart, uEnd, audio);
+          await finalize(uStart, uEnd, audio, capturedSkip, capturedWindowStart);
         },
         onVADMisfire: () => {
           stopPartialTimer();
@@ -770,6 +773,14 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     audioContextRef.current?.close();
     audioContextRef.current = null;
 
+    // Compute accurate duration from refs before resuming the recorder (which would
+    // change recorder.state). The React `elapsed` state may be up to 500 ms stale,
+    // and doesn't account for the ongoing pause when stopped while paused.
+    const ongoingPauseMs = recorder.state === 'paused' ? Date.now() - pauseStartRef.current : 0;
+    const durationSeconds = Math.max(0, Math.floor(
+      (Date.now() - startTimeRef.current - pausedDurationRef.current - ongoingPauseMs) / 1000
+    ));
+
     // Resume before stopping so the recorder flushes its buffer into a
     // final ondataavailable event — paused recorders may not do this reliably.
     if (recorder.state === 'paused') recorder.resume();
@@ -814,7 +825,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       const formData = new FormData();
       formData.append('audio', blob, `recording.${extensionForMimeType(mimeType)}`);
       formData.append('meetingId', meetingId);
-      formData.append('duration', String(elapsed));
+      formData.append('duration', String(durationSeconds));
       if (savedTranscriptId) formData.append('transcriptId', savedTranscriptId);
       const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
       if (!res.ok) {
