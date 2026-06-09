@@ -34,6 +34,8 @@ export async function POST(req: NextRequest) {
   const meetingId = formData.get('meetingId') as string | null;
   const userId = formData.get('userId') as string | null;
   const participantsJson = formData.get('participants') as string | null;
+  const durationStr = formData.get('duration') as string | null;
+  const durationSeconds = durationStr ? Number(durationStr) : undefined;
 
   if (!audioFile || !meetingId || !userId) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -88,7 +90,7 @@ export async function POST(req: NextRequest) {
   // after this response is returned. This prevents the bot-service's HTTP request from
   // hitting the proxy timeout (502) while waiting for transcription to finish.
   after(async () => {
-    await _processAudio({ buffer, mimeType, meetingId, userId, originalFilename });
+    await _processAudio({ buffer, mimeType, meetingId, userId, originalFilename, durationSeconds });
   });
 
   return NextResponse.json({ ok: true });
@@ -100,12 +102,14 @@ async function _processAudio({
   meetingId,
   userId,
   originalFilename,
+  durationSeconds,
 }: {
   buffer: Buffer;
   mimeType: string;
   meetingId: string;
   userId: string;
   originalFilename: string;
+  durationSeconds: number | undefined;
 }): Promise<void> {
   try {
     const { filename, sizeBytes } = await saveAudioFile(userId, buffer, originalFilename);
@@ -116,7 +120,7 @@ async function _processAudio({
     );
 
     const provider = getTranscriptionProvider();
-    const rawSegments: TranscriptSegment[] = await provider.transcribe(buffer, mimeType);
+    const rawSegments: TranscriptSegment[] = await provider.transcribe(buffer, mimeType, durationSeconds);
 
     let piiReplacements: PiiReplacement[] = [];
     try {
@@ -138,7 +142,12 @@ async function _processAudio({
     await queryUserSchemaOne(
       userId,
       `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements, chapters)
-       VALUES ($1, $2, $3, NULL, $4, $5)`,
+       VALUES ($1, $2, $3, NULL, $4, $5)
+       ON CONFLICT (meeting_id) DO UPDATE SET
+         raw_text = EXCLUDED.raw_text,
+         segments = EXCLUDED.segments,
+         pii_replacements = EXCLUDED.pii_replacements,
+         chapters = EXCLUDED.chapters`,
       [meetingId, rawText, JSON.stringify(rawSegments), JSON.stringify(piiReplacements), JSON.stringify(chapters)],
     );
 
@@ -150,16 +159,12 @@ async function _processAudio({
   } catch (err) {
     console.error('Bot audio transcription error:', err);
     // Even on failure, move to review with an empty transcript so the UI can navigate.
-    const inserted = await queryUserSchemaOne(
+    await queryUserSchemaOne(
       userId,
       `INSERT INTO transcripts (meeting_id, raw_text, segments) VALUES ($1, '', '[]')
-       ON CONFLICT DO NOTHING
-       RETURNING meeting_id`,
+       ON CONFLICT (meeting_id) DO NOTHING`,
       [meetingId],
     ).catch(() => null);
-    if (!inserted) {
-      console.warn('Bot audio: transcript already exists for meetingId:', meetingId, '— keeping existing');
-    }
     await queryUserSchemaOne(
       userId,
       `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,

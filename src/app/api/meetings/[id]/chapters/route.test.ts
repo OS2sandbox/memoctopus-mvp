@@ -130,29 +130,43 @@ describe('PATCH /api/meetings/[id]/chapters', () => {
     expect(res.status).toBe(400);
   });
 
+  it('returns 404 when no transcript exists', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockQueryOne.mockResolvedValueOnce(null as never); // SELECT returns nothing
+
+    const res = await PATCH(makeJsonReq(BASE_URL, 'PATCH', { chapters: sampleChapters }), PARAMS);
+    expect(res.status).toBe(404);
+  });
+
   it('returns 200 ok when chapters are saved', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryOne.mockResolvedValueOnce({} as never);
+    mockQueryOne.mockResolvedValueOnce({ id: 'transcript-1' } as never); // SELECT
+    mockQueryOne.mockResolvedValueOnce({} as never); // UPDATE
 
     const res = await PATCH(makeJsonReq(BASE_URL, 'PATCH', { chapters: sampleChapters }), PARAMS);
     expect(res.status).toBe(200);
     expect((await res.json()).ok).toBe(true);
   });
 
-  it('saves chapters JSON to transcript by meeting_id', async () => {
+  it('saves chapters JSON to transcript by id', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryOne.mockResolvedValueOnce({} as never);
+    mockQueryOne.mockResolvedValueOnce({ id: 'transcript-1' } as never); // SELECT
+    mockQueryOne.mockResolvedValueOnce({} as never); // UPDATE
 
     await PATCH(makeJsonReq(BASE_URL, 'PATCH', { chapters: sampleChapters }), PARAMS);
 
-    const [, sql, params] = mockQueryOne.mock.calls[0];
-    expect(sql).toMatch(/UPDATE transcripts SET chapters/i);
-    expect(params[0]).toBe(JSON.stringify(sampleChapters));
+    const updateCall = mockQueryOne.mock.calls.find(
+      ([, sql]) => typeof sql === 'string' && /UPDATE transcripts SET chapters/i.test(sql),
+    );
+    expect(updateCall).toBeDefined();
+    expect(updateCall![2][0]).toBe(JSON.stringify(sampleChapters));
+    expect(updateCall![2][1]).toBe('transcript-1');
   });
 
   it('accepts an empty chapters array', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryOne.mockResolvedValueOnce({} as never);
+    mockQueryOne.mockResolvedValueOnce({ id: 'transcript-1' } as never); // SELECT
+    mockQueryOne.mockResolvedValueOnce({} as never); // UPDATE
 
     const res = await PATCH(makeJsonReq(BASE_URL, 'PATCH', { chapters: [] }), PARAMS);
     expect(res.status).toBe(200);

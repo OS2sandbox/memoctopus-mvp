@@ -81,7 +81,7 @@ export async function getMeetingPageData(
       pii_replacements: unknown;
     }>(
       userId,
-      'SELECT id, raw_text, segments, pii_removed_at, pii_replacements FROM transcripts WHERE meeting_id = $1 ORDER BY id DESC LIMIT 1',
+      'SELECT id, raw_text, segments, pii_removed_at, pii_replacements FROM transcripts WHERE meeting_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1',
       [meetingId],
     ),
   ]);
@@ -96,7 +96,7 @@ export async function getMeetingPageData(
     try {
       const chaptersRow = await queryUserSchemaOne<{ chapters: unknown }>(
         userId,
-        'SELECT chapters FROM transcripts WHERE meeting_id = $1 ORDER BY id DESC LIMIT 1',
+        'SELECT chapters FROM transcripts WHERE meeting_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1',
         [meetingId],
       );
       if (Array.isArray(chaptersRow?.chapters)) {

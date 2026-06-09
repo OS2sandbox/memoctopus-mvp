@@ -124,9 +124,16 @@ const SILENCE_THRESHOLD_SECONDS = 5;
 const SILENCE_VOLUME_THRESHOLD = 0.02;
 // How often quick partials fire during active speech (matches demo's 0.7 s interval).
 const PARTIAL_INTERVAL_MS = 700;
-// Maximum PCM frames per hviske call (16 kHz × 1024-sample frames = 64 ms/frame).
-// 15 s × 16 000 / 1024 ≈ 235 frames → ~480 KB WAV. Beyond this hviske times out.
+// 15 s at 16 kHz — max audio per hviske call, also the early-commit threshold.
+const MAX_CHUNK_SAMPLES = 16_000 * 15;
+// Max words per committed live segment — keeps lines readable even without punctuation.
+const MAX_WORDS_PER_LINE = 20;
+// Threshold (in PCM frames) before switching the partial timer to sliding-window mode.
+// Also the boundary at which we early-commit accumulated merger text.
 const MAX_PARTIAL_FRAMES = Math.ceil((16_000 * 15) / 1024);
+// Audio actually sent per sliding-window partial — shorter than MAX_PARTIAL_FRAMES so
+// hviske responds quickly (7 s ≈ half the time of a 15 s clip).
+const SLIDING_WINDOW_FRAMES = Math.ceil((16_000 * 7) / 1024);
 // How often, while recording, we re-analyze the transcript for things to clarify.
 const CLARIFY_INTERVAL_MS = 25_000;
 // Tick cadence for the countdown bar to the next clarification refresh.
@@ -172,8 +179,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const vadRef = useRef<any>(null);
   // Elapsed-seconds mark when VAD fires onSpeechStart, for accurate segment timestamps.
   const utteranceStartRef = useRef<number | null>(null);
-  // Guard against overlapping utterance fetches.
+  // Guard against overlapping utterance finalization fetches.
   const utteranceInFlightRef = useRef(false);
+  // Separate guard for partial-timer requests — keeps partials from blocking finalization.
+  const partialInFlightRef = useRef(false);
   // Queue of utterances that ended while a fetch was in-flight. Stores the VAD-provided
   // Float32 audio directly so frame-index drift between AudioContexts cannot corrupt them.
   const pendingUtterancesRef = useRef<Array<{ start: number; end: number; audio: Float32Array }>>([]);
@@ -186,6 +195,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const pcmWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
   // Tracks committed + tail display across consecutive partials of one utterance.
   const mergerRef = useRef(new LocalAgreementMerger());
+  // Set to true when the current utterance has crossed the 15 s sliding-window boundary.
+  const wasInSlidingModeRef = useRef(false);
+  // How many VAD audio samples have already been committed early (before speech ended).
+  const committedSamplesRef = useRef(0);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -226,11 +239,14 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     setInterimText('');
     utteranceStartRef.current = null;
     utteranceInFlightRef.current = false;
+    partialInFlightRef.current = false;
     pendingUtterancesRef.current = [];
     if (partialTimerRef.current) { clearInterval(partialTimerRef.current); partialTimerRef.current = null; }
     pcmFramesRef.current = [];
     pcmSpeechStartFrameRef.current = 0;
     mergerRef.current.reset();
+    wasInSlidingModeRef.current = false;
+    committedSamplesRef.current = 0;
     setLiveCaptionsUnavailable(false);
     setIsDiarizing(false);
     setClarifications([]);
@@ -243,22 +259,33 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     return Math.max(0, (Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000);
   }
 
-  // Push a finalized utterance into the live segments list. Splits multi-sentence text
-  // into separate segments using word-count-proportional timestamps so they don't overlap.
+  // Push a finalized utterance into the live segments list. Splits text first by
+  // sentence-ending punctuation, then further caps each chunk at MAX_WORDS_PER_LINE
+  // so unpunctuated Danish speech still produces readable rows rather than one giant line.
   function commitUtterance(start: number, end: number, text: string) {
     interimTextRef.current = '';
     setInterimText('');
     if (!text.trim()) return;
     const duration = Math.max(0.1, end - start);
-    const sentences = (text.trim().match(/[^.!?]+[.!?]+/g) ?? [text.trim()])
+
+    // Split on sentence boundaries, then sub-split any chunk that exceeds the word cap.
+    const punctChunks = (text.trim().match(/[^.!?]+[.!?]+/g) ?? [text.trim()])
       .map(s => s.trim()).filter(Boolean);
+    const sentences: string[] = [];
+    for (const chunk of punctChunks) {
+      const words = chunk.split(/\s+/).filter(Boolean);
+      for (let i = 0; i < words.length; i += MAX_WORDS_PER_LINE) {
+        sentences.push(words.slice(i, i + MAX_WORDS_PER_LINE).join(' '));
+      }
+    }
+
     const wordCounts = sentences.map(s => s.split(/\s+/).filter(Boolean).length);
     const totalWords = Math.max(1, wordCounts.reduce((a, b) => a + b, 0));
-    let elapsed = start;
+    let t = start;
     const newSegs: LiveSegment[] = sentences.map((sentence, i) => {
-      const segEnd = elapsed + (wordCounts[i] / totalWords) * duration;
-      const seg: LiveSegment = { speaker: '—', start: elapsed, end: segEnd, text: sentence };
-      elapsed = segEnd;
+      const segEnd = t + (wordCounts[i] / totalWords) * duration;
+      const seg: LiveSegment = { speaker: '—', start: t, end: segEnd, text: sentence };
+      t = segEnd;
       return seg;
     });
     const updated = [...liveSegmentsRef.current, ...newSegs];
@@ -317,29 +344,34 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       // analyzed — eliminating the clock-skew bug that occurred when using frame indices
       // from a separate AudioContext. For utterances longer than 15 s the audio is split
       // into chunks so hviske never exceeds its 12 s server timeout.
-      const MAX_SAMPLES_PER_CHUNK = 16_000 * 15; // 15 s at 16 kHz
       async function finalize(uStart: number, uEnd: number, audio: Float32Array) {
         utteranceInFlightRef.current = true;
         // Preserve the partial timer's last hypothesis as a fallback. If postWav fails
         // (network blip, server restart), we commit the last known partial result rather
         // than silently dropping the utterance.
         const fallbackText = mergerRef.current.forceCommit();
+        // Skip samples already committed via the early sliding-window path so we don't
+        // re-transcribe and duplicate the first chunk of a long utterance.
+        const skipSamples = committedSamplesRef.current;
+        const remaining = skipSamples > 0 ? audio.slice(skipSamples) : audio;
         try {
-          if (audio.length <= MAX_SAMPLES_PER_CHUNK) {
+          if (remaining.length === 0) {
+            // Nothing left — all audio was committed early.
+          } else if (remaining.length <= MAX_CHUNK_SAMPLES) {
             // Short path: single hviske call. Fall back to last partial on failure.
-            const wav = float32ToWavBlob(audio);
-            const text = await postWav(wav) || fallbackText;
+            const wav = float32ToWavBlob(remaining);
+            const text = await postWav(wav) || (skipSamples === 0 ? fallbackText : '');
             commitUtterance(uStart, uEnd, text);
           } else {
             // Long path: split into 15 s chunks so hviske never times out.
             const totalDuration = uEnd - uStart;
             let sampleStart = 0;
             let chunkTimeStart = uStart;
-            while (sampleStart < audio.length) {
-              const sampleEnd = Math.min(sampleStart + MAX_SAMPLES_PER_CHUNK, audio.length);
-              const chunkDuration = ((sampleEnd - sampleStart) / audio.length) * totalDuration;
+            while (sampleStart < remaining.length) {
+              const sampleEnd = Math.min(sampleStart + MAX_CHUNK_SAMPLES, remaining.length);
+              const chunkDuration = ((sampleEnd - sampleStart) / remaining.length) * totalDuration;
               const chunkTimeEnd = chunkTimeStart + chunkDuration;
-              const wav = float32ToWavBlob(audio, sampleStart, sampleEnd);
+              const wav = float32ToWavBlob(remaining, sampleStart, sampleEnd);
               const text = await postWav(wav);
               if (text.trim()) commitUtterance(chunkTimeStart, chunkTimeEnd, text);
               sampleStart = sampleEnd;
@@ -371,22 +403,36 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       function startPartialTimer() {
         if (partialTimerRef.current) return;
         partialTimerRef.current = setInterval(() => {
-          if (utteranceStartRef.current === null || utteranceInFlightRef.current) return;
+          // Use a separate in-flight flag so slow partial requests never delay finalization.
+          if (utteranceStartRef.current === null || partialInFlightRef.current) return;
           const speechStartFrame = pcmSpeechStartFrameRef.current;
           const currentFrame = pcmFramesRef.current.length;
-          // Cap the partial window at MAX_PARTIAL_FRAMES so hviske never times out.
-          // When we exceed the cap, switch to a sliding window (most recent 15 s).
-          // The merger's "prefix" assumption breaks in sliding-window mode, so we reset
-          // it and show raw text — stable committed text takes over from there.
           const framesInWindow = currentFrame - speechStartFrame;
           const sliding = framesInWindow > MAX_PARTIAL_FRAMES;
+          // In sliding mode use a shorter window (7 s) so hviske responds faster.
           const wavStartFrame = sliding
-            ? currentFrame - MAX_PARTIAL_FRAMES
+            ? currentFrame - SLIDING_WINDOW_FRAMES
             : speechStartFrame;
+
+          // On the first tick where we enter sliding mode, immediately commit the
+          // merger's accumulated stable text as permanent rows. This prevents long
+          // utterances from holding all text in the interim-only display until speech ends.
+          if (sliding && !wasInSlidingModeRef.current && utteranceStartRef.current !== null) {
+            wasInSlidingModeRef.current = true;
+            const earlyText = mergerRef.current.forceCommit();
+            if (earlyText.trim()) {
+              const chunkDur = MAX_PARTIAL_FRAMES / (16_000 / 1024); // frames → seconds
+              const chunkEnd = utteranceStartRef.current + chunkDur;
+              commitUtterance(utteranceStartRef.current, chunkEnd, earlyText);
+              utteranceStartRef.current = chunkEnd;
+              committedSamplesRef.current = MAX_PARTIAL_FRAMES * 1024;
+            }
+          }
+
           if (sliding) mergerRef.current.reset();
           const wav = buildWavBlob(wavStartFrame);
           if (!wav) return;
-          utteranceInFlightRef.current = true;
+          partialInFlightRef.current = true;
           postWav(wav).then((text) => {
             if (utteranceStartRef.current === null) return; // utterance already ended
             let display: string;
@@ -399,12 +445,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             interimTextRef.current = display;
             setInterimText(display);
           }).finally(() => {
-            utteranceInFlightRef.current = false;
-            // Drain any utterances that ended while this partial was in-flight.
-            const next = pendingUtterancesRef.current.shift();
-            if (next && utteranceStartRef.current === null) {
-              void finalize(next.start, next.end, next.audio);
-            }
+            partialInFlightRef.current = false;
           });
         }, PARTIAL_INTERVAL_MS);
       }
@@ -436,6 +477,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           const preRollFrames = Math.round(16_000 * 0.3 / 1024);
           pcmSpeechStartFrameRef.current = Math.max(0, pcmFramesRef.current.length - preRollFrames);
           mergerRef.current.reset();
+          wasInSlidingModeRef.current = false;
+          committedSamplesRef.current = 0;
           interimTextRef.current = '…';
           setInterimText('…');
           startPartialTimer();
@@ -757,9 +800,13 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         if (saveRes.ok) {
           const data = await saveRes.json() as { transcriptId: string };
           savedTranscriptId = data.transcriptId;
+        } else {
+          console.error('[stopAndSave] live segment save returned error:', saveRes.status);
+          setError('Live transskription kunne ikke gemmes — bruger fuld lydtransskription.');
         }
       } catch (saveErr) {
-        console.warn('[stopAndSave] live segment save failed, falling back to batch STT:', saveErr);
+        console.error('[stopAndSave] live segment save failed:', saveErr);
+        setError('Live transskription kunne ikke gemmes — bruger fuld lydtransskription.');
       }
     }
 

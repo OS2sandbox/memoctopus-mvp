@@ -133,6 +133,10 @@ export async function POST(req: NextRequest) {
         userId,
         `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements)
          VALUES ($1, $2, $3, NULL, $4)
+         ON CONFLICT (meeting_id) DO UPDATE SET
+           raw_text = EXCLUDED.raw_text,
+           segments = EXCLUDED.segments,
+           pii_replacements = EXCLUDED.pii_replacements
          RETURNING id`,
         [meetingId, rawText, JSON.stringify(rawSegments), JSON.stringify(replacements)],
       );

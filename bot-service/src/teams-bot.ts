@@ -865,6 +865,7 @@ export class TeamsMeetingBot {
     });
     form.append('meetingId', this.config.meetingId);
     form.append('userId', this.config.userId);
+    form.append('duration', String(this.elapsed));
     // Strip internal sentinel values before sending to the server
     const realParticipants = this.participants.filter((p) => p !== '__audio_detected__');
     form.append('participants', JSON.stringify(realParticipants));

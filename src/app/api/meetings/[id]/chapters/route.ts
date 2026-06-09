@@ -19,7 +19,7 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   const transcript = await queryUserSchemaOne<{ id: string }>(
     session.user.id,
-    'SELECT id FROM transcripts WHERE meeting_id = $1 ORDER BY id DESC LIMIT 1',
+    'SELECT id FROM transcripts WHERE meeting_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1',
     [id],
   );
 
@@ -48,10 +48,17 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const { chapters } = (await req.json()) as { chapters?: TranscriptChapter[] };
   if (!Array.isArray(chapters)) return NextResponse.json({ error: 'Invalid' }, { status: 400 });
 
+  const transcript = await queryUserSchemaOne<{ id: string }>(
+    session.user.id,
+    'SELECT id FROM transcripts WHERE meeting_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1',
+    [id],
+  );
+  if (!transcript) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
   await queryUserSchemaOne(
     session.user.id,
-    'UPDATE transcripts SET chapters = $1 WHERE meeting_id = $2',
-    [JSON.stringify(chapters), id],
+    'UPDATE transcripts SET chapters = $1 WHERE id = $2',
+    [JSON.stringify(chapters), transcript.id],
   );
 
   return NextResponse.json({ ok: true });
