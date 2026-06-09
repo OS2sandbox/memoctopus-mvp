@@ -129,15 +129,15 @@ const MAX_WORDS_PER_LINE = 20;
 // Minimum frames before triggering an auto-commit. The actual commit is adaptive —
 // all frames accumulated since the last commit (up to MAX_COMMIT_FRAMES) are sent
 // in one request so the window grows instead of queuing when the server is slow.
-const COMMIT_WINDOW_FRAMES = Math.ceil((16_000 * 2) / 1024);
-// Ceiling for one adaptive commit (6 s). Keeps the cascade damage of a single timeout
-// bounded: at most 6 s of audio is lost per timeout, not the full MAX_CHUNK_SAMPLES.
+const COMMIT_WINDOW_FRAMES = Math.ceil((16_000 * 3) / 1024);
+// Ceiling for one adaptive commit (9 s). Keeps the cascade damage of a single timeout
+// bounded: at most 9 s of audio is lost per timeout, not the full MAX_CHUNK_SAMPLES.
 const MAX_COMMIT_FRAMES = COMMIT_WINDOW_FRAMES * 3;
-// Partial interim uses a trailing 2 s lookback instead of the full growing window.
+// Partial interim uses a trailing 4 s lookback instead of the full growing window.
 // This means the partial only ever shows NEW audio — no hindsight re-transcription.
-const PARTIAL_LOOKBACK_FRAMES = Math.ceil((16_000 * 2) / 1024);
-// Faster partial ticks for snappier visual feedback.
-const PARTIAL_INTERVAL_MS = 400;
+const PARTIAL_LOOKBACK_FRAMES = Math.ceil((16_000 * 4) / 1024);
+// Slower partial ticks — less impatient, more accurate with longer context.
+const PARTIAL_INTERVAL_MS = 700;
 // How often, while recording, we re-analyze the transcript for things to clarify.
 const CLARIFY_INTERVAL_MS = 25_000;
 // Tick cadence for the countdown bar to the next clarification refresh.
@@ -495,16 +495,15 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         // Force single-threaded ORT — no SharedArrayBuffer (COOP/COEP) required.
         ortConfig: (ort: any) => { ort.env.wasm.numThreads = 1; },
         model: 'v5',
-        // 300ms silence before declaring speech end — snappier finalization vs the
-        // previous 600ms default. With 3 s window auto-commits the cost of a
-        // slightly-early speech-end is low (at most one empty finalize call).
-        redemptionMs: 300,
+        // 600ms silence before declaring speech end — patient enough to handle natural
+        // mid-sentence pauses without prematurely cutting the utterance.
+        redemptionMs: 600,
         // 300ms pre-roll captures soft onsets; we also manually include pre-roll frames
         // when recording pcmSpeechStartFrameRef below.
         preSpeechPadMs: 300,
         positiveSpeechThreshold: 0.5,
-        // Lower threshold ends speech detection sooner during natural pauses.
-        negativeSpeechThreshold: 0.25,
+        // Slightly higher threshold gives natural pauses more room before ending speech.
+        negativeSpeechThreshold: 0.35,
         onSpeechStart: () => {
           utteranceStartRef.current = currentElapsed();
           // Include ~300 ms of pre-roll (≈5 frames × 1024 samples @ 16 kHz) so hviske
@@ -1078,14 +1077,14 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
               </div>
             ) : (
               <>
-                {liveSegments.map((seg, i) => {
+                {liveSegments.map((seg) => {
                   const showSpeaker = seg.speaker !== '—';
                   return (
-                    <div key={i} style={{
+                    <div key={seg.start} style={{
                       display: 'grid', gridTemplateColumns: isMobile ? '44px 64px 1fr 14px' : '60px 90px 1fr 20px',
                       gap: 12, padding: '5px 18px',
-                      opacity: 0.5 + Math.min(0.5, i * 0.06),
                       fontFamily: 'var(--mono)', fontSize: 12.5, lineHeight: 1.65,
+                      animation: 'segFadeIn 0.45s ease-out both',
                     }}>
                       <span style={{ color: 'var(--accent)' }}>{fmtSec(seg.start)}</span>
                       <span style={{ color: 'var(--ink)', fontWeight: 500 }}>
@@ -1336,6 +1335,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       <style>{`
         @keyframes protoPulse { 0%,100%{opacity:1} 50%{opacity:.35} }
         @keyframes protoBlink { 0%,49%{opacity:1} 50%,100%{opacity:0} }
+        @keyframes segFadeIn { from { opacity:0; transform:translateY(4px) } to { opacity:1; transform:translateY(0) } }
       `}</style>
     </div>
   );
