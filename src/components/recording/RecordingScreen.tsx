@@ -263,7 +263,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const [isUploading, setIsUploading] = useState(false);
   const [isOverwriting, setIsOverwriting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [batchProgress, setBatchProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [batchProgress, setBatchProgress] = useState<{
+    completed: number; total: number;
+    completedSeconds: number; totalSeconds: number;
+  } | null>(null);
   // True if VAD setup fails or utterance transcription errors out — the batch
   // transcript still works, but the live interim captions won't show.
   const [liveCaptionsUnavailable, setLiveCaptionsUnavailable] = useState(false);
@@ -974,8 +977,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
     try {
       // Transcribe all VAD speech batches in parallel, then save the assembled transcript.
-      setBatchProgress({ completed: 0, total: batches.length });
+      const totalSeconds = batches.reduce((s, b) => s + b.totalWavDuration, 0);
+      setBatchProgress({ completed: 0, total: batches.length, completedSeconds: 0, totalSeconds });
       let done = 0;
+      let completedSeconds = 0;
       const tasks = batches.map((batch) => async (): Promise<TranscriptSegment[]> => {
         try {
           const fd = new FormData();
@@ -992,7 +997,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           console.error('[batch] transcription failed:', err);
           return [];
         } finally {
-          setBatchProgress({ completed: ++done, total: batches.length });
+          completedSeconds += batch.totalWavDuration;
+          setBatchProgress({ completed: ++done, total: batches.length, completedSeconds, totalSeconds });
         }
       });
 
@@ -1484,18 +1490,39 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           </>
         )}
 
-        {(recordingState === 'stopped' || isUploading) && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--mono)', fontSize: 12.5, color: 'var(--muted)' }}>
-            <span style={{
-              display: 'inline-block', width: 14, height: 14, borderRadius: 999,
-              border: '2px solid var(--accent)', borderTopColor: 'transparent',
-              animation: 'spin 0.8s linear infinite',
-            }} />
-            {batchProgress && batchProgress.total > 0
-              ? `transskriberer ${batchProgress.completed} / ${batchProgress.total} segmenter…`
-              : 'transskriberer og gemmer…'}
-          </div>
-        )}
+        {(recordingState === 'stopped' || isUploading) && (() => {
+          const pct = batchProgress && batchProgress.totalSeconds > 0
+            ? Math.min(100, Math.round(batchProgress.completedSeconds / batchProgress.totalSeconds * 100))
+            : 0;
+          return (
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)', width: '100%' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <span style={{
+                    display: 'inline-block', width: 11, height: 11, borderRadius: 999, flexShrink: 0,
+                    border: '2px solid var(--accent)', borderTopColor: 'transparent',
+                    animation: 'spin 0.8s linear infinite',
+                  }} />
+                  <span>
+                    {batchProgress && batchProgress.total > 0
+                      ? `transskriberer ${batchProgress.completed} / ${batchProgress.total} segmenter…`
+                      : 'transskriberer og gemmer…'}
+                  </span>
+                </div>
+                {batchProgress && batchProgress.total > 0 && (
+                  <span style={{ color: 'var(--accent)', fontWeight: 500 }}>{pct}%</span>
+                )}
+              </div>
+              <div style={{ height: 3, borderRadius: 999, background: 'var(--line)', overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', borderRadius: 999, background: 'var(--accent)',
+                  width: `${pct}%`,
+                  transition: 'width 0.5s ease-out',
+                }} />
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Dialogs */}
