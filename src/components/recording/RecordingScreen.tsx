@@ -646,6 +646,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           await ctx.audioWorklet.addModule('/asr-worklet.js');
           const workletNode = new AudioWorkletNode(ctx, 'asr-downsampler');
           workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
+            if (!recordingActiveRef.current) return;
             pcmFramesRef.current.push(new Int16Array(e.data));
           };
           source.connect(workletNode);
@@ -729,8 +730,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     vadRef.current?.pause();
     await flushRecorder(recorder);
     recorder.pause();
-    // Suspend the AudioContext so it releases the hardware and stops generating errors
-    void audioContextRef.current?.suspend();
+    // Clear the flag BEFORE suspending so the onstatechange auto-resume handler
+    // doesn't immediately undo the suspend (it guards on recordingActiveRef).
+    recordingActiveRef.current = false;
+    await audioContextRef.current?.suspend();
   }
 
   async function resumeRecording() {
@@ -741,6 +744,9 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     // (update after await) caused a race where onSpeechStart captured a timestamp
     // inflated by the full pause duration.
     pausedDurationRef.current += Date.now() - pauseStartRef.current;
+    // Restore the flag BEFORE resuming so the onstatechange handler can auto-recover
+    // from any future system-initiated suspensions once we're recording again.
+    recordingActiveRef.current = true;
     // Await the resume so the AudioContext is fully running before pollVolume starts reading
     await audioContextRef.current?.resume();
     recorder.resume();
