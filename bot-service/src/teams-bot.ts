@@ -438,7 +438,10 @@ export class TeamsMeetingBot {
           const bodyText = await page.evaluate(() => (document.body?.innerText ?? '').toLowerCase()).catch(() => '');
           if (!bodyText.includes("couldn't connect you") && !bodyText.includes("could not connect you")) break;
         }
-        // After retries, the LEAVE_BTN arm or denial arm will resolve the race.
+        // After retries, never let this arm settle — Arm 1 (LEAVE_BTN) or Arm 3
+        // (denial) must win the race. Without this, the async function resolving
+        // with `undefined` wins, giving joinResult = undefined and a spurious failure.
+        await new Promise<never>(() => {});
       }).catch(() => {}),
 
       // Text-based denial detection

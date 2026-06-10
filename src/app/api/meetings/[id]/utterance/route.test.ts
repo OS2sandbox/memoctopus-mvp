@@ -84,7 +84,7 @@ describe('POST /api/meetings/[id]/utterance', () => {
 
     it('proceeds to transcription for audio exactly at the 2 000 byte threshold', async () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-      mockTranscribeRaw.mockResolvedValueOnce('Hej');
+      mockTranscribeRaw.mockResolvedValueOnce({ text: 'Hej', latencyMs: 0 });
       await POST(makeAudioRequest(2_000), PARAMS);
       expect(mockTranscribeRaw).toHaveBeenCalled();
     });
@@ -93,7 +93,7 @@ describe('POST /api/meetings/[id]/utterance', () => {
   describe('successful transcription', () => {
     it('returns 200 with text from transcribeRaw', async () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-      mockTranscribeRaw.mockResolvedValueOnce('Hej verden');
+      mockTranscribeRaw.mockResolvedValueOnce({ text: 'Hej verden', latencyMs: 50 });
 
       const res = await POST(makeAudioRequest(5_000), PARAMS);
       expect(res.status).toBe(200);
@@ -102,7 +102,7 @@ describe('POST /api/meetings/[id]/utterance', () => {
 
     it('passes buffer and mime type to transcribeRaw', async () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-      mockTranscribeRaw.mockResolvedValueOnce('ok');
+      mockTranscribeRaw.mockResolvedValueOnce({ text: 'ok', latencyMs: 0 });
 
       await POST(makeAudioRequest(5_000, 'audio/wav'), PARAMS);
 
@@ -115,7 +115,7 @@ describe('POST /api/meetings/[id]/utterance', () => {
 
     it('returns text as-is (trimming happens client-side)', async () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-      mockTranscribeRaw.mockResolvedValueOnce('  Hej  ');
+      mockTranscribeRaw.mockResolvedValueOnce({ text: '  Hej  ', latencyMs: 0 });
 
       const res = await POST(makeAudioRequest(5_000), PARAMS);
       expect((await res.json()).text).toBe('  Hej  ');
@@ -126,7 +126,7 @@ describe('POST /api/meetings/[id]/utterance', () => {
     it('returns empty text when a single word dominates output (>50%)', async () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
       // 5 of 6 words are the same — clearly a hallucination loop
-      mockTranscribeRaw.mockResolvedValueOnce('tak tak tak tak tak okay');
+      mockTranscribeRaw.mockResolvedValueOnce({ text: 'tak tak tak tak tak okay', latencyMs: 0 });
 
       const res = await POST(makeAudioRequest(5_000), PARAMS);
       expect((await res.json()).text).toBe('');
@@ -134,7 +134,7 @@ describe('POST /api/meetings/[id]/utterance', () => {
 
     it('returns empty text when the same word repeats 3+ times consecutively', async () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-      mockTranscribeRaw.mockResolvedValueOnce('hej hej hej verden');
+      mockTranscribeRaw.mockResolvedValueOnce({ text: 'hej hej hej verden', latencyMs: 0 });
 
       const res = await POST(makeAudioRequest(5_000), PARAMS);
       expect((await res.json()).text).toBe('');
@@ -143,7 +143,7 @@ describe('POST /api/meetings/[id]/utterance', () => {
     it('passes through short output (under 4 words) even if repetitive', async () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
       // 3 words — filter is skipped for short utterances
-      mockTranscribeRaw.mockResolvedValueOnce('ja ja ja');
+      mockTranscribeRaw.mockResolvedValueOnce({ text: 'ja ja ja', latencyMs: 0 });
 
       const res = await POST(makeAudioRequest(5_000), PARAMS);
       expect((await res.json()).text).toBe('ja ja ja');
@@ -151,7 +151,7 @@ describe('POST /api/meetings/[id]/utterance', () => {
 
     it('passes through valid output with no repetitions', async () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-      mockTranscribeRaw.mockResolvedValueOnce('det er en god idé at gøre det');
+      mockTranscribeRaw.mockResolvedValueOnce({ text: 'det er en god idé at gøre det', latencyMs: 0 });
 
       const res = await POST(makeAudioRequest(5_000), PARAMS);
       expect((await res.json()).text).toBe('det er en god idé at gøre det');

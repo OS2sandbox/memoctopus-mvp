@@ -150,7 +150,7 @@ describe('HviskeProvider.transcribeRaw', () => {
 
     const result = await provider.transcribeRaw(Buffer.from('audio'), 'audio/wav');
 
-    expect(result).toBe('Hej verden');
+    expect(result.text).toBe('Hej verden');
   });
 
   it('returns empty string when API returns no text', async () => {
@@ -158,7 +158,7 @@ describe('HviskeProvider.transcribeRaw', () => {
 
     const result = await provider.transcribeRaw(Buffer.from('audio'), 'audio/wav');
 
-    expect(result).toBe('');
+    expect(result.text).toBe('');
   });
 
   it('uses response_format json (not verbose_json)', async () => {

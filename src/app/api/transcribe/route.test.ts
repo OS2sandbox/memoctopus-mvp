@@ -148,7 +148,7 @@ describe('POST /api/transcribe', () => {
     expect(reviewCall).toBeDefined();
   });
 
-  it('background job: resets meeting status to recording on transcription error', async () => {
+  it('background job: sets meeting status to failed on transcription error', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never);
     mockQueryOne.mockResolvedValue({} as never);
@@ -162,7 +162,10 @@ describe('POST /api/transcribe', () => {
     for (const cb of afterCallbacks) await cb();
 
     const resetCall = mockQueryOne.mock.calls.find(
-      ([, sql]) => typeof sql === 'string' && sql.includes("'recording'"),
+      ([, sql, params]) =>
+        typeof sql === 'string' &&
+        sql.includes('UPDATE meetings SET status') &&
+        Array.isArray(params) && params[0] === 'failed',
     );
     expect(resetCall).toBeDefined();
   });

@@ -97,6 +97,7 @@ describe('POST /api/minutes', () => {
   it('generates minutes with template selection and returns minutesId', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never); // meeting lookup
+    mockQueryOne.mockResolvedValueOnce({ segments: sampleSegments, chapters: null } as never); // transcript lookup
     mockQueryMany.mockResolvedValueOnce(sampleTemplates as never); // templates
     mockSuggestTemplate.mockResolvedValueOnce({ templateId: 'tmpl-1', templateName: 'Bestyrelsesmøde', explanation: 'x' });
     mockGenerateMinutes.mockResolvedValueOnce(sampleMinutesContent);
@@ -115,6 +116,7 @@ describe('POST /api/minutes', () => {
   it('calls generateMinutesFreeform when customPrompt is provided', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never);
+    mockQueryOne.mockResolvedValueOnce({ segments: sampleSegments, chapters: null } as never); // transcript lookup
     mockGenerateMinutesFreeform.mockResolvedValueOnce(sampleMinutesContent);
     mockQueryOne.mockResolvedValueOnce({} as never); // DELETE
     mockQueryOne.mockResolvedValueOnce({ id: 'min-free' } as never); // INSERT
@@ -132,7 +134,7 @@ describe('POST /api/minutes', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(mockGenerateMinutesFreeform).toHaveBeenCalledWith(sampleSegments, 'Fokus på beslutninger', undefined);
+    expect(mockGenerateMinutesFreeform).toHaveBeenCalledWith(sampleSegments, 'Fokus på beslutninger', undefined, undefined);
     expect(mockGenerateMinutes).not.toHaveBeenCalled();
     expect(mockSuggestTemplate).not.toHaveBeenCalled();
   });
@@ -140,6 +142,7 @@ describe('POST /api/minutes', () => {
   it('does not call generateMinutesFreeform when no customPrompt is provided', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never);
+    mockQueryOne.mockResolvedValueOnce({ segments: sampleSegments, chapters: null } as never); // transcript lookup
     mockQueryMany.mockResolvedValueOnce(sampleTemplates as never);
     mockSuggestTemplate.mockResolvedValueOnce({ templateId: 'tmpl-1', templateName: 'X', explanation: 'x' });
     mockGenerateMinutes.mockResolvedValueOnce(sampleMinutesContent);
@@ -157,6 +160,7 @@ describe('POST /api/minutes', () => {
   it('updates meeting status to minutes after generation', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never);
+    mockQueryOne.mockResolvedValueOnce({ segments: sampleSegments, chapters: null } as never); // transcript lookup
     mockQueryMany.mockResolvedValueOnce(sampleTemplates as never);
     mockSuggestTemplate.mockResolvedValueOnce({ templateId: 'tmpl-1', templateName: 'X', explanation: 'x' });
     mockGenerateMinutes.mockResolvedValueOnce(sampleMinutesContent);
@@ -177,6 +181,7 @@ describe('POST /api/minutes', () => {
   it('uses the default template when suggestion does not match any template', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never);
+    mockQueryOne.mockResolvedValueOnce({ segments: sampleSegments, chapters: null } as never); // transcript lookup
     mockQueryMany.mockResolvedValueOnce(sampleTemplates as never);
     mockSuggestTemplate.mockResolvedValueOnce({ templateId: 'non-existent', templateName: 'X', explanation: 'x' });
     mockGenerateMinutes.mockResolvedValueOnce(sampleMinutesContent);
@@ -196,6 +201,7 @@ describe('POST /api/minutes', () => {
   it('returns 500 when no templates are available', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ id: 'meet-1' } as never);
+    mockQueryOne.mockResolvedValueOnce({ segments: sampleSegments, chapters: null } as never); // transcript lookup
     mockQueryMany.mockResolvedValueOnce([] as never); // no templates
     mockSuggestTemplate.mockResolvedValueOnce({ templateId: null, templateName: 'X', explanation: 'x' });
 
