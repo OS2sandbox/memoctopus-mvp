@@ -27,7 +27,6 @@ export default function NewMeetingPage() {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadMode, setUploadMode] = useState<'record' | 'upload'>('record');
-  const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Check for a file passed from the dashboard "upload lydfil" picker.
@@ -75,19 +74,7 @@ export default function NewMeetingPage() {
       }
       const { id } = await res.json();
 
-      if (uploadMode === 'upload' && file) {
-        const formData = new FormData();
-        formData.append('audio', file, file.name);
-        formData.append('meetingId', id);
-        const uploadRes = await fetch('/api/transcribe', { method: 'POST', body: formData });
-        if (!uploadRes.ok) {
-          const d = await uploadRes.json();
-          throw new Error(d.error ?? 'Upload fejlede');
-        }
-        router.push(`/meeting/${id}/review`);
-      } else {
-        router.push(`/meeting/${id}`);
-      }
+      router.push(`/meeting/${id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt');
       setIsSubmitting(false);
@@ -160,17 +147,13 @@ export default function NewMeetingPage() {
                 if (f) {
                   setUploadFile(f);
                   e.currentTarget.value = '';
-                } else {
-                  setFile(null);
                 }
               }}
               className="block w-full text-sm text-[var(--ink-2)] file:mr-3 file:py-2 file:px-3 file:rounded-[var(--radius)] file:border file:border-[var(--line)] file:bg-[var(--surface-2)] file:text-sm file:font-medium file:text-[var(--ink)] hover:file:bg-[var(--line)] file:cursor-pointer cursor-pointer"
             />
-            {!file && (
-              <p className="text-xs text-[var(--muted)]">
-                Vælg en lydfil fra din computer.
-              </p>
-            )}
+            <p className="text-xs text-[var(--muted)]">
+              Vælg en lydfil fra din computer.
+            </p>
           </div>
         )}
 
@@ -193,7 +176,7 @@ export default function NewMeetingPage() {
           </Button>
           <Button
             type="submit"
-            disabled={isSubmitting || (uploadMode === 'upload' && !file)}
+            disabled={isSubmitting || uploadMode === 'upload'}
           >
             {isSubmitting
               ? 'Opretter...'

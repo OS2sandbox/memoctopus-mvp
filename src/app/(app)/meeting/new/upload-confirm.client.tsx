@@ -6,6 +6,7 @@ import {
   newVadBatchState, sealCurrentBatch, splitTextWithIntervals,
   runWithConcurrency, BATCH_DURATION_S, BATCH_CONCURRENCY,
 } from '@/lib/audio/vad-batch';
+import { energyVAD, decodeAndResampleTo16k } from '@/lib/audio/vad-client';
 import type { TranscriptSegment } from '@/types';
 
 // Deterministic waveform — doubles as the progress bar fill indicator.
@@ -22,107 +23,6 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// Energy-based VAD — identical to the one in ProcessingTranscription.tsx.
-function* energyVAD(
-  audio: Float32Array,
-  sampleRate: number,
-): Generator<{ audio: Float32Array; start: number; end: number }> {
-  const frameSamples = Math.round(sampleRate * 0.03);
-  const threshold    = 0.01;
-  const prePad       = Math.round(sampleRate * 0.25);
-  const postPad      = Math.round(sampleRate * 0.40);
-  const minSpeech    = Math.round(sampleRate * 0.10);
-  const minSilFrames = Math.ceil(sampleRate * 0.80 / frameSamples);
-
-  const numFrames = Math.ceil(audio.length / frameSamples);
-  const isSpeech: boolean[] = new Array(numFrames);
-  for (let i = 0; i < numFrames; i++) {
-    const s = i * frameSamples;
-    const e = Math.min(s + frameSamples, audio.length);
-    let sum = 0;
-    for (let j = s; j < e; j++) sum += audio[j] * audio[j];
-    isSpeech[i] = Math.sqrt(sum / (e - s)) >= threshold;
-  }
-
-  let segStart = -1;
-  let silFrames = 0;
-
-  for (let i = 0; i < numFrames; i++) {
-    if (isSpeech[i]) {
-      if (segStart === -1) segStart = i;
-      silFrames = 0;
-    } else if (segStart !== -1) {
-      if (++silFrames >= minSilFrames) {
-        const from = Math.max(0, segStart * frameSamples - prePad);
-        const to   = Math.min(audio.length, (i - silFrames) * frameSamples + postPad);
-        if (to - from >= minSpeech) {
-          yield { audio: audio.slice(from, to), start: from / sampleRate, end: to / sampleRate };
-        }
-        segStart = -1;
-        silFrames = 0;
-      }
-    }
-  }
-
-  if (segStart !== -1) {
-    const from = Math.max(0, segStart * frameSamples - prePad);
-    const to   = Math.min(audio.length, audio.length + postPad);
-    if (to - from >= minSpeech) {
-      yield { audio: audio.slice(from, to), start: from / sampleRate, end: to / sampleRate };
-    }
-  }
-}
-
-// Decode, downmix to mono, resample to 16 kHz — identical to ProcessingTranscription.tsx.
-async function decodeAndResampleTo16k(arrayBuffer: ArrayBuffer): Promise<Float32Array> {
-  const audioCtx = new AudioContext();
-  const decoded = await audioCtx.decodeAudioData(arrayBuffer);
-  await audioCtx.close();
-
-  if (decoded.sampleRate === 16_000 && decoded.numberOfChannels === 1) {
-    return decoded.getChannelData(0).slice();
-  }
-
-  const fromRate = decoded.sampleRate;
-  const CHUNK_S = 60;
-  const chunkInputFrames = Math.round(fromRate * CHUNK_S);
-  const totalInputFrames = decoded.length;
-  const outputChunks: Float32Array[] = [];
-
-  for (let offset = 0; offset < totalInputFrames; offset += chunkInputFrames) {
-    const end = Math.min(offset + chunkInputFrames, totalInputFrames);
-    const chunkLength = end - offset;
-    const outLength = Math.ceil(chunkLength * 16_000 / fromRate);
-
-    const offCtx = new OfflineAudioContext({ numberOfChannels: 1, length: outLength, sampleRate: 16_000 });
-    const srcBuf = offCtx.createBuffer(1, chunkLength, fromRate);
-    const srcData = srcBuf.getChannelData(0);
-
-    if (decoded.numberOfChannels === 1) {
-      srcData.set(decoded.getChannelData(0).subarray(offset, end));
-    } else {
-      const scale = 1 / decoded.numberOfChannels;
-      for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
-        const chData = decoded.getChannelData(ch).subarray(offset, end);
-        for (let i = 0; i < chunkLength; i++) srcData[i] += chData[i] * scale;
-      }
-    }
-
-    const src = offCtx.createBufferSource();
-    src.buffer = srcBuf;
-    src.connect(offCtx.destination);
-    src.start();
-    const out = await offCtx.startRendering();
-    outputChunks.push(out.getChannelData(0).slice());
-  }
-
-  const totalLength = outputChunks.reduce((s, c) => s + c.length, 0);
-  const result = new Float32Array(totalLength);
-  let off = 0;
-  for (const chunk of outputChunks) { result.set(chunk, off); off += chunk.length; }
-  return result;
-}
-
 interface Props {
   file: File;
   onCancel: () => void;
@@ -133,22 +33,17 @@ type Phase = 'init' | 'analyzing' | 'transcribing' | 'saving' | 'done' | 'error'
 export function UploadConfirmScreen({ file, onCancel }: Props) {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>('init');
-  const [meetingId, setMeetingId] = useState<string | null>(null);
   const [audioDuration, setAudioDuration] = useState(0);
-  // Real progress tracking: completedSeconds / totalSeconds (speech duration from VAD batches).
   const [completedSeconds, setCompletedSeconds] = useState(0);
   const [totalSeconds, setTotalSeconds] = useState(0);
   const [title, setTitle] = useState('');
   const [participants, setParticipants] = useState<string[]>([]);
   const [adding, setAdding] = useState('');
-  // Segments accumulate live as each batch completes during transcription.
   const [liveSegments, setLiveSegments] = useState<TranscriptSegment[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const meetingIdRef = useRef<string | null>(null);
-  const didStart = useRef(false);
 
-  // Load audio duration from the local File object.
   // Guard against double-revocation: React StrictMode runs effects twice in dev,
   // which can revoke the blob URL before the Audio element loads it → ERR_FILE_NOT_FOUND.
   useEffect(() => {
@@ -162,28 +57,25 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
     return revoke;
   }, [file]);
 
-  // Main pipeline: create meeting → archive to server → decode → VAD → batch transcribe → save.
   useEffect(() => {
-    if (didStart.current) return;
-    didStart.current = true;
+    let cancelled = false;
+
     void run();
 
     async function run() {
       try {
-        // 1. Create meeting with a placeholder title.
         const dateStr = new Intl.DateTimeFormat('da', { day: 'numeric', month: 'long' }).format(new Date());
         const meetingRes = await fetch('/api/meetings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title: `Møde · ${dateStr}`, participants: [] }),
         });
+        if (cancelled) return;
         if (!meetingRes.ok) throw new Error('Kunne ikke oprette møde');
         const { id } = await meetingRes.json();
-        setMeetingId(id);
         meetingIdRef.current = id;
 
-        // 2. Archive the file on the server in parallel (storageOnly — client handles transcription).
-        //    Fire-and-forget; transcription proceeds even if archiving fails.
+        // Fire-and-forget; transcription proceeds even if archiving fails.
         const archiveFormData = new FormData();
         archiveFormData.append('audio', file, file.name);
         archiveFormData.append('meetingId', id);
@@ -191,7 +83,6 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         fetch('/api/transcribe', { method: 'POST', body: archiveFormData })
           .catch((err) => console.warn('[upload-confirm] server archive failed:', err));
 
-        // 3. Decode + VAD (client-side, from local File — no server download needed).
         setPhase('analyzing');
         let arrayBuffer: ArrayBuffer;
         try {
@@ -199,14 +90,15 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         } catch {
           throw new Error('Lydfilen kunne ikke læses. Prøv at uploade filen igen.');
         }
+        if (cancelled) return;
+
         let mono16k: Float32Array;
         try {
           mono16k = await decodeAndResampleTo16k(arrayBuffer);
         } catch {
-          throw new Error(
-            'Lydformatet understøttes ikke. Prøv MP3, WAV eller M4A.',
-          );
+          throw new Error('Lydformatet understøttes ikke. Prøv MP3, WAV eller M4A.');
         }
+        if (cancelled) return;
 
         const batchState = newVadBatchState();
         for (const { audio, start, end } of energyVAD(mono16k, 16_000)) {
@@ -219,7 +111,6 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         }
         sealCurrentBatch(batchState);
 
-        // 4. Transcribe all batches in parallel; update progress + live-kig as each completes.
         setPhase('transcribing');
         const batches = batchState.readyBatches;
         if (batches.length === 0) {
@@ -244,8 +135,10 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
             const segs = text?.trim()
               ? splitTextWithIntervals(text, batch.intervals, batch.totalWavDuration)
               : [];
-            if (segs.length > 0) {
-              setLiveSegments(prev => [...prev, ...segs].sort((a, b) => a.start - b.start));
+            // Append without sorting; batches arrive out of order, live preview is best-effort.
+            // Final authoritative sort happens after all batches complete.
+            if (segs.length > 0 && !cancelled) {
+              setLiveSegments(prev => [...prev, ...segs]);
             }
             return segs;
           } catch (err) {
@@ -253,43 +146,52 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
             return [];
           } finally {
             completedSecs += batch.totalWavDuration;
-            setCompletedSeconds(completedSecs);
+            if (!cancelled) setCompletedSeconds(completedSecs);
           }
         });
 
         const segmentArrays = await runWithConcurrency(tasks, BATCH_CONCURRENCY);
+        if (cancelled) return;
         const segments = segmentArrays.flat().sort((a, b) => a.start - b.start);
 
-        // 5. Save transcript → sets meeting status to 'review'.
         setPhase('saving');
         const saveRes = await fetch(`/api/meetings/${id}/save-transcript`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ segments }),
         });
+        if (cancelled) return;
         if (!saveRes.ok) throw new Error('Gem fejlede');
 
         setCompletedSeconds(total);
         setPhase('done');
       } catch (err) {
+        if (cancelled) return;
         console.error('[upload-confirm]', err);
         setError(err instanceof Error ? err.message : 'Transskription fejlede');
         setPhase('error');
       }
     }
+
+    return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const done = phase === 'done';
 
-  // Progress: fraction of speech-audio transcribed. 0 during decode/analyze; 100 when saving/done.
-  const progress = (phase === 'saving' || phase === 'done')
-    ? 100
-    : totalSeconds > 0 && phase === 'transcribing'
-      ? Math.min(99, Math.round((completedSeconds / totalSeconds) * 100))
-      : 0;
+  let progress: number;
+  switch (phase) {
+    case 'saving':
+    case 'done':
+      progress = 100;
+      break;
+    case 'transcribing':
+      progress = totalSeconds > 0 ? Math.min(99, Math.round((completedSeconds / totalSeconds) * 100)) : 0;
+      break;
+    default:
+      progress = 0;
+  }
 
-  // Map speech-progress onto real audio duration for the MM:SS display.
   const transcribedSecs = (totalSeconds > 0 && audioDuration > 0)
     ? Math.round((completedSeconds / totalSeconds) * audioDuration)
     : 0;
@@ -301,11 +203,14 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
 
   const fileExt = file.name.split('.').pop()?.toLowerCase() ?? '';
 
-  const progressLabel = phase === 'init' || phase === 'analyzing'
-    ? (phase === 'analyzing' ? 'analyserer tale…' : 'forbereder…')
-    : phase === 'saving' ? 'gemmer transskription…'
-    : done ? 'transskription færdig'
-    : 'transskriberer med hviske';
+  const progressLabels: Record<Phase, string> = {
+    init: 'forbereder…',
+    analyzing: 'analyserer tale…',
+    transcribing: 'transskriberer med hviske',
+    saving: 'gemmer transskription…',
+    done: 'transskription færdig',
+    error: '',
+  };
 
   function addParticipant() {
     const v = adding.trim();
@@ -320,10 +225,11 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
   }
 
   async function handleContinue() {
-    if (!done || !meetingId) return;
+    const id = meetingIdRef.current;
+    if (!done || !id) return;
     const finalTitle = title.trim() || file.name.replace(/\.[^.]+$/, '');
     try {
-      await fetch(`/api/meetings/${meetingId}`, {
+      await fetch(`/api/meetings/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: finalTitle, participants }),
@@ -331,7 +237,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
     } catch {
       // non-fatal — we still navigate
     }
-    router.push(`/meeting/${meetingId}/review`);
+    router.push(`/meeting/${id}/review`);
   }
 
   if (phase === 'error') {
@@ -380,7 +286,6 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
             </button>
           </div>
 
-          {/* Show filename so user knows which file failed */}
           <div style={{
             marginTop: 40, paddingTop: 22, borderTop: '1px solid var(--line)',
             fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
@@ -464,7 +369,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
                 {progress}<span style={{ fontSize: 26, color: 'var(--muted)' }}>%</span>
               </div>
               <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>
-                {progressLabel}
+                {progressLabels[phase]}
               </div>
             </div>
             <div style={{ textAlign: 'right' }}>

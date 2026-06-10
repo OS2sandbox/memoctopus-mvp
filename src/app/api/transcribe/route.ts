@@ -7,10 +7,60 @@ import { detectPiiInSegments } from '@/lib/ai/pii';
 import { saveAudioFile } from '@/lib/audio/storage';
 import { TranscriptSegment, PiiReplacement } from '@/types';
 
+async function runBatchTranscription(
+  userId: string,
+  meetingId: string,
+  buffer: Buffer,
+  mimeType: string,
+  duration: number | null,
+  failStatus: 'review' | 'failed' = 'review',
+): Promise<void> {
+  try {
+    const provider = getTranscriptionProvider();
+    // Pass the actual recording duration so timestamps reflect real wall-clock time,
+    // not a bitrate estimate (Chrome records at ~200 kbps, not the assumed 64 kbps).
+    const rawSegments: TranscriptSegment[] = await provider.transcribe(buffer, mimeType, duration ?? undefined);
+
+    let replacements: PiiReplacement[] = [];
+    try {
+      const piiResult = await detectPiiInSegments(rawSegments);
+      replacements = piiResult.replacements;
+    } catch (piiErr) {
+      console.error('PII detection failed (non-fatal):', piiErr);
+    }
+    const rawText = rawSegments.map((s) => s.text).join(' ');
+
+    await queryUserSchemaOne(
+      userId,
+      `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements)
+       VALUES ($1, $2, $3, NULL, $4)
+       ON CONFLICT (meeting_id) DO UPDATE SET
+         raw_text = EXCLUDED.raw_text,
+         segments = EXCLUDED.segments,
+         pii_replacements = EXCLUDED.pii_replacements`,
+      [meetingId, rawText, JSON.stringify(rawSegments), JSON.stringify(replacements)],
+    );
+
+    await queryUserSchemaOne(
+      userId,
+      `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,
+      [meetingId],
+    );
+  } catch (err) {
+    console.error(`[transcribe] batch transcription failed for meeting ${meetingId}:`, err);
+    await queryUserSchemaOne(
+      userId,
+      `UPDATE meetings SET status = $1, updated_at = NOW() WHERE id = $2`,
+      [failStatus, meetingId],
+    ).catch(() => {});
+  }
+}
+
 export async function POST(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+  const userId = session.user.id;
   const formData = await req.formData();
   const audioFile = formData.get('audio') as File | null;
   const meetingId = formData.get('meetingId') as string | null;
@@ -23,7 +73,7 @@ export async function POST(req: NextRequest) {
   }
 
   const meeting = await queryUserSchemaOne<{ id: string; status: string }>(
-    session.user.id,
+    userId,
     'SELECT id, status FROM meetings WHERE id = $1',
     [meetingId],
   );
@@ -44,7 +94,6 @@ export async function POST(req: NextRequest) {
 
     const mimeType = audioFile.type || 'audio/webm';
     const duration = durationStr ? parseInt(durationStr, 10) : null;
-    const userId = session.user.id;
 
     try {
       const { filename, sizeBytes } = await saveAudioFile(userId, buffer, audioFile.name);
@@ -97,41 +146,9 @@ export async function POST(req: NextRequest) {
         `UPDATE meetings SET status = 'processing', updated_at = NOW() WHERE id = $1`,
         [meetingId],
       ).catch(() => {});
-
-      try {
-        console.log(`[transcribe] starting batch re-transcription for meeting ${meetingId}`);
-        const provider = getTranscriptionProvider();
-        const rawSegments: TranscriptSegment[] = await provider.transcribe(buffer, mimeType, duration ?? undefined);
-
-        let replacements: PiiReplacement[] = [];
-        try {
-          const piiResult = await detectPiiInSegments(rawSegments);
-          replacements = piiResult.replacements;
-        } catch (piiErr) {
-          console.error('PII detection failed in batch re-transcription (non-fatal):', piiErr);
-        }
-        const rawText = rawSegments.map((s) => s.text).join(' ');
-
-        await queryUserSchemaOne(
-          userId,
-          `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements)
-           VALUES ($1, $2, $3, NULL, $4)
-           ON CONFLICT (meeting_id) DO UPDATE SET
-             raw_text = EXCLUDED.raw_text,
-             segments = EXCLUDED.segments,
-             pii_replacements = EXCLUDED.pii_replacements`,
-          [meetingId, rawText, JSON.stringify(rawSegments), JSON.stringify(replacements)],
-        );
-        console.log(`[transcribe] batch re-transcription complete for meeting ${meetingId}: ${rawSegments.length} segments`);
-      } catch (err) {
-        console.error(`[transcribe] batch re-transcription failed for meeting ${meetingId}:`, err);
-      } finally {
-        await queryUserSchemaOne(
-          userId,
-          `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,
-          [meetingId],
-        ).catch(() => {});
-      }
+      console.log(`[transcribe] starting batch re-transcription for meeting ${meetingId}`);
+      await runBatchTranscription(userId, meetingId, buffer, mimeType, duration, 'review');
+      console.log(`[transcribe] batch re-transcription complete for meeting ${meetingId}`);
     });
 
     return NextResponse.json({ piiReplacements: liveReplacements });
@@ -150,7 +167,6 @@ export async function POST(req: NextRequest) {
 
   const mimeType = audioFile.type || 'audio/webm';
   const duration = durationStr ? parseInt(durationStr, 10) : null;
-  const userId = session.user.id;
 
   try {
     const { filename, sizeBytes } = await saveAudioFile(userId, buffer, audioFile.name);
@@ -177,46 +193,7 @@ export async function POST(req: NextRequest) {
   // Run the STT + PII pipeline after the response so the client isn't blocked.
   // The review page polls every 4 s and will pick up the status change to 'review'.
   after(async () => {
-    try {
-      const provider = getTranscriptionProvider();
-      // Pass the actual recording duration so timestamps reflect real wall-clock time,
-      // not a bitrate estimate (Chrome records at ~200 kbps, not the assumed 64 kbps).
-      const rawSegments: TranscriptSegment[] = await provider.transcribe(buffer, mimeType, duration ?? undefined);
-
-      let replacements: PiiReplacement[] = [];
-      try {
-        const piiResult = await detectPiiInSegments(rawSegments);
-        replacements = piiResult.replacements;
-      } catch (piiErr) {
-        console.error('PII detection failed (non-fatal):', piiErr);
-      }
-      const rawText = rawSegments.map((s) => s.text).join(' ');
-
-      await queryUserSchemaOne<{ id: string }>(
-        userId,
-        `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements)
-         VALUES ($1, $2, $3, NULL, $4)
-         ON CONFLICT (meeting_id) DO UPDATE SET
-           raw_text = EXCLUDED.raw_text,
-           segments = EXCLUDED.segments,
-           pii_replacements = EXCLUDED.pii_replacements
-         RETURNING id`,
-        [meetingId, rawText, JSON.stringify(rawSegments), JSON.stringify(replacements)],
-      );
-
-      await queryUserSchemaOne(
-        userId,
-        `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,
-        [meetingId],
-      );
-    } catch (err) {
-      console.error('Background transcription error:', err);
-      await queryUserSchemaOne(
-        userId,
-        `UPDATE meetings SET status = 'failed', updated_at = NOW() WHERE id = $1`,
-        [meetingId],
-      ).catch(() => {});
-    }
+    await runBatchTranscription(userId, meetingId, buffer, mimeType, duration, 'failed');
   });
 
   return NextResponse.json({ ok: true });
