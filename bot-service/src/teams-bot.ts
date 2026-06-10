@@ -88,8 +88,14 @@ export class TeamsMeetingBot {
   private async _launch(): Promise<void> {
     // launchPersistentContext takes userDataDir as its first arg — Playwright does not
     // allow --user-data-dir in the args array when using chromium.launch().
+    // Headless mode: defaults to true for local development so the bot doesn't
+    // pop up a real browser window during `npm run dev`. The production Docker
+    // image sets HEADLESS=false and runs Chromium against an Xvfb virtual
+    // display — Teams' anti-bot heuristics detect headless mode (even Chrome's
+    // new headless) and trigger post-admission "Leaving..." cascades.
+    const headless = process.env.HEADLESS !== 'false';
     this.context = await chromium.launchPersistentContext(this.userDataDir, {
-      headless: true,
+      headless,
       executablePath: process.env.CHROMIUM_PATH || undefined,
       permissions: ['microphone', 'camera'],
       userAgent:
