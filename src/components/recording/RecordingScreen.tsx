@@ -87,6 +87,8 @@ interface LiveSegment {
   end: number;
   text: string;
   preRevealedWords: number;
+  waveElapsedAtCommitMs: number;
+  waveIntervalMs: number;
 }
 
 interface ClarificationItem {
@@ -119,8 +121,11 @@ const MAX_COMMIT_FRAMES = COMMIT_WINDOW_FRAMES * 3;
 const PARTIAL_LOOKBACK_FRAMES = Math.ceil((16_000 * 4) / 1024);
 // Slower partial ticks — less impatient, more accurate with longer context.
 const PARTIAL_INTERVAL_MS = 1000;
-// Max rate at which committed segment words are revealed left-to-right.
+// Max rate at which committed segment words are revealed left-to-right (no prior partial).
 const WORDS_PER_SECOND = 10;
+// Slower wave rate for the continuous live wave (interim → final carry-over).
+// Must be slow enough that the wave is visibly in-progress when interim text first appears.
+const LIVE_WAVE_INTERVAL_MS = 300;
 // How often, while recording, we re-analyze the transcript for things to clarify.
 const CLARIFY_INTERVAL_MS = 25_000;
 // Tick cadence for the countdown bar to the next clarification refresh.
@@ -169,6 +174,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const vadRef = useRef<any>(null);
   // Elapsed-seconds mark when VAD fires onSpeechStart, for accurate segment timestamps.
   const utteranceStartRef = useRef<number | null>(null);
+  // Wall-clock ms when the current utterance (wave) started.
+  const waveStartMsRef = useRef<number | null>(null);
   // Guard against running two finalize calls concurrently. Window auto-commits use
   // windowCommitControllerRef instead, keeping finalization independent.
   const finalizeInFlightRef = useRef(false);
@@ -187,7 +194,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const pendingUtterancesRef = useRef<Array<{
     start: number; end: number; audio: Float32Array;
     skip: number; windowStart: number;
-    partialWords: number; speechEndMs: number;
+    partialWords: number; speechEndMs: number; waveStartMs: number;
   }>>([]);
   const partialTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // VAD batch state for post-recording parallel transcription.
@@ -274,7 +281,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   // Push a finalized utterance into the live segments list. Splits text first by
   // sentence-ending punctuation, then further caps each chunk at MAX_WORDS_PER_LINE
   // so unpunctuated Danish speech still produces readable rows rather than one giant line.
-  function commitUtterance(start: number, end: number, text: string, preRevealedWords = 0) {
+  function commitUtterance(start: number, end: number, text: string, preRevealedWords = 0, waveElapsedAtCommitMs = 0) {
     interimTextRef.current = '';
     setInterimText('');
     if (!text.trim()) return;
@@ -293,6 +300,9 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
     const wordCounts = sentences.map(s => s.split(/\s+/).filter(Boolean).length);
     const totalWords = Math.max(1, wordCounts.reduce((a, b) => a + b, 0));
+    // Use the live wave interval when there was a prior partial wave; otherwise the
+    // faster per-word rate for utterances that were too short for any partial to appear.
+    const segIntervalMs = waveElapsedAtCommitMs > 0 ? LIVE_WAVE_INTERVAL_MS : Math.round(1000 / WORDS_PER_SECOND);
     let t = start;
     let wordsAssigned = 0;
     const newSegs: LiveSegment[] = sentences.map((sentence, i) => {
@@ -300,8 +310,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       // First sentence inherits the full pre-revealed offset. Subsequent sentences
       // subtract the words already assigned so only genuinely new words animate.
       const segPreRevealed = Math.max(0, preRevealedWords - wordsAssigned);
+      // waveElapsedAtCommitMs is adjusted per sentence: words already assigned to prior
+      // sentences have already been swept by the wave, so shift the elapsed time forward.
+      const segWaveElapsed = waveElapsedAtCommitMs - wordsAssigned * segIntervalMs;
       wordsAssigned += wordCounts[i];
-      const seg: LiveSegment = { speaker: '—', start: t, end: segEnd, text: sentence, preRevealedWords: segPreRevealed };
+      const seg: LiveSegment = { speaker: '—', start: t, end: segEnd, text: sentence, preRevealedWords: segPreRevealed, waveElapsedAtCommitMs: segWaveElapsed, waveIntervalMs: segIntervalMs };
       t = segEnd;
       return seg;
     });
@@ -375,7 +388,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       async function finalize(
         uStart: number, uEnd: number, audio: Float32Array,
         skipSamples: number, wsTime: number,
-        partialWords: number, speechEndMs: number,
+        partialWords: number, speechEndMs: number, waveStartMs: number,
       ) {
         finalizeInFlightRef.current = true;
         const remaining = skipSamples > 0 ? audio.slice(skipSamples) : audio;
@@ -387,7 +400,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             const text = await postWav(float32ToWavBlob(remaining));
             const networkElapsed = Date.now() - speechEndMs;
             const preRevealed = partialWords + Math.floor(networkElapsed / Math.round(1000 / WORDS_PER_SECOND));
-            commitUtterance(remainingStart, uEnd, text, preRevealed);
+            const waveElapsed = Date.now() - waveStartMs;
+            commitUtterance(remainingStart, uEnd, text, preRevealed, waveElapsed);
           } else {
             const totalDuration = uEnd - remainingStart;
             let sampleStart = 0, chunkTimeStart = remainingStart;
@@ -402,7 +416,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                 const preRevealed = firstChunk
                   ? partialWords + Math.floor(networkElapsed / Math.round(1000 / WORDS_PER_SECOND))
                   : 0;
-                commitUtterance(chunkTimeStart, chunkTimeEnd, text, preRevealed);
+                const waveElapsed = Date.now() - waveStartMs;
+                commitUtterance(chunkTimeStart, chunkTimeEnd, text, preRevealed, waveElapsed);
               }
               firstChunk = false;
               sampleStart = sampleEnd;
@@ -412,7 +427,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
           const next = pendingUtterancesRef.current.shift();
           if (next) {
-            await finalize(next.start, next.end, next.audio, next.skip, next.windowStart, next.partialWords, next.speechEndMs);
+            await finalize(next.start, next.end, next.audio, next.skip, next.windowStart, next.partialWords, next.speechEndMs, next.waveStartMs);
           } else {
             if (utteranceStartRef.current === null) {
               const KEEP = 10;
@@ -459,7 +474,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             windowCommitControllerRef.current = ctl;
             postWav(wav, ctl.signal).then((text) => {
               console.log(`[window-commit] ${audioDurS}s audio → ${Date.now() - t0}ms round-trip`);
-              if (text.trim()) commitUtterance(commitStart, commitEnd, text);
+              if (text.trim()) {
+                const waveElapsed = waveStartMsRef.current !== null ? Date.now() - waveStartMsRef.current : 0;
+                commitUtterance(commitStart, commitEnd, text, 0, waveElapsed);
+              }
             }).catch(() => {}).finally(() => {
               if (windowCommitControllerRef.current === ctl) windowCommitControllerRef.current = null;
             });
@@ -482,6 +500,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             if (utteranceStartRef.current === null) return;
             // Discard if the window already advanced (auto-commit fired while in-flight).
             if (windowStartFrameRef.current !== capturedWindowStart) return;
+            if (text && waveStartMsRef.current === null) waveStartMsRef.current = Date.now();
             interimTextRef.current = text || '…';
             setInterimText(text || '…');
           }).finally(() => {
@@ -514,6 +533,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         negativeSpeechThreshold: 0.35,
         onSpeechStart: () => {
           utteranceStartRef.current = currentElapsed();
+          waveStartMsRef.current = null; // set when first real partial text appears
           // Include ~300 ms of pre-roll (≈5 frames × 1024 samples @ 16 kHz) so hviske
           // doesn't miss soft onsets at the start of the utterance.
           const preRollFrames = Math.round(16_000 * 0.3 / 1024);
@@ -543,17 +563,19 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             ? interimTextRef.current.split(/\s+/).filter(Boolean).length
             : 0;
           const capturedSpeechEndMs = Date.now();
+          const capturedWaveStartMs = waveStartMsRef.current ?? capturedSpeechEndMs;
           utteranceStartRef.current = null;
+          waveStartMsRef.current = null;
           interimTextRef.current = '';
           setInterimText('');
 
           if (finalizeInFlightRef.current) {
             // Another finalize is running — queue this one; it will be drained when that finalize completes.
-            pendingUtterancesRef.current.push({ start: uStart, end: uEnd, audio, skip: capturedSkip, windowStart: capturedWindowStart, partialWords: capturedPartialWords, speechEndMs: capturedSpeechEndMs });
+            pendingUtterancesRef.current.push({ start: uStart, end: uEnd, audio, skip: capturedSkip, windowStart: capturedWindowStart, partialWords: capturedPartialWords, speechEndMs: capturedSpeechEndMs, waveStartMs: capturedWaveStartMs });
             return;
           }
 
-          await finalize(uStart, uEnd, audio, capturedSkip, capturedWindowStart, capturedPartialWords, capturedSpeechEndMs);
+          await finalize(uStart, uEnd, audio, capturedSkip, capturedWindowStart, capturedPartialWords, capturedSpeechEndMs, capturedWaveStartMs);
 
           // Batch accumulation for post-recording parallel transcription. Runs after
           // the live-caption finalize so it doesn't block it. Uses the same uStart/uEnd
@@ -569,6 +591,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         onVADMisfire: () => {
           stopPartialTimer();
           utteranceStartRef.current = null;
+          waveStartMsRef.current = null;
           mergerRef.current.reset();
           interimTextRef.current = '';
           setInterimText('');
@@ -1161,16 +1184,19 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                       </span>
                       <span style={{ color: 'var(--ink-2)' }}>
                         {seg.text.split(' ').map((word, wi) => {
-                          const delayMs = Math.max(0, (wi - seg.preRevealedWords) * Math.round(1000 / WORDS_PER_SECOND));
+                          const rawDelay = wi * seg.waveIntervalMs - seg.waveElapsedAtCommitMs;
+                          if (rawDelay <= -250) {
+                            return <span key={wi}>{word}{' '}</span>;
+                          }
                           return (
                             <span key={wi} style={{
                               animation: 'wordFadeIn 0.25s ease-out both',
-                              animationDelay: `${delayMs}ms`,
+                              animationDelay: `${Math.max(-250, rawDelay)}ms`,
                             }}>{word}{' '}</span>
                           );
                         })}
                       </span>
-                      <span style={{ color: 'var(--muted-2)', textAlign: 'right', animation: 'wordFadeIn 0.25s ease-out both', animationDelay: `${Math.max(0, (seg.text.split(' ').length - seg.preRevealedWords) * Math.round(1000 / WORDS_PER_SECOND))}ms` }}>★</span>
+                      <span style={{ color: 'var(--muted-2)', textAlign: 'right', animation: 'wordFadeIn 0.25s ease-out both', animationDelay: `${Math.max(0, seg.text.split(' ').length * seg.waveIntervalMs - seg.waveElapsedAtCommitMs)}ms` }}>★</span>
                     </div>
                   );
                 })}
@@ -1185,7 +1211,19 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                     <span style={{ color: 'var(--accent)' }}>{fmtSec(utteranceStartRef.current ?? elapsed)}</span>
                     <span style={{ color: 'var(--ink)', fontWeight: 500 }}>·</span>
                     <span style={{ color: 'var(--ink-2)', fontStyle: 'italic' }}>
-                      {interimText}
+                      {interimText === '…' ? interimText : interimText.split(/\s+/).filter(Boolean).map((word, wi) => {
+                        const waveElapsed = waveStartMsRef.current !== null ? Date.now() - waveStartMsRef.current : 0;
+                        const rawDelay = wi * LIVE_WAVE_INTERVAL_MS - waveElapsed;
+                        if (rawDelay <= -250) {
+                          return <span key={wi}>{word}{' '}</span>;
+                        }
+                        return (
+                          <span key={wi} style={{
+                            animation: 'wordFadeIn 0.25s ease-out both',
+                            animationDelay: `${Math.max(-250, rawDelay)}ms`,
+                          }}>{word}{' '}</span>
+                        );
+                      })}
                       <span style={{
                         display: 'inline-block', width: 7, height: 14,
                         background: 'var(--accent)', verticalAlign: 'middle', marginLeft: 3,
