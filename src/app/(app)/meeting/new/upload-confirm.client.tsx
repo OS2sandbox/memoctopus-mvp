@@ -43,6 +43,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const meetingIdRef = useRef<string | null>(null);
+  const archiveFailedRef = useRef(false);
 
   // Guard against double-revocation: React StrictMode runs effects twice in dev,
   // which can revoke the blob URL before the Audio element loads it → ERR_FILE_NOT_FOUND.
@@ -75,13 +76,15 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         const { id } = await meetingRes.json();
         meetingIdRef.current = id;
 
-        // Fire-and-forget; transcription proceeds even if archiving fails.
+        // Fire-and-forget — client-side VAD transcription runs in parallel.
+        // Archive failure is non-fatal but logged and surfaced after completion.
         const archiveFormData = new FormData();
         archiveFormData.append('audio', file, file.name);
         archiveFormData.append('meetingId', id);
         archiveFormData.append('storageOnly', 'true');
         fetch('/api/transcribe', { method: 'POST', body: archiveFormData })
-          .catch((err) => console.warn('[upload-confirm] server archive failed:', err));
+          .then(r => { if (!r.ok) archiveFailedRef.current = true; })
+          .catch(() => { archiveFailedRef.current = true; });
 
         setPhase('analyzing');
         let arrayBuffer: ArrayBuffer;
@@ -576,7 +579,9 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         }}>
           <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)' }}>
             {done
-              ? 'transskriptionen er klar — gennemgå og ryd op i referatet.'
+              ? archiveFailedRef.current
+                ? 'advarsel: lydfilen kunne ikke arkiveres på serveren — transskriptionen er klar.'
+                : 'transskriptionen er klar — gennemgå og ryd op i referatet.'
               : 'du kan navngive møde og deltagere nu — vi fortsætter automatisk når den er færdig.'}
           </span>
           <button

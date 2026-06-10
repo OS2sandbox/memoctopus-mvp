@@ -60,8 +60,16 @@ export function* energyVAD(
 // chunks keeps each OfflineAudioContext well within browser limits.
 export async function decodeAndResampleTo16k(arrayBuffer: ArrayBuffer): Promise<Float32Array> {
   const audioCtx = new AudioContext();
-  const decoded = await audioCtx.decodeAudioData(arrayBuffer);
-  await audioCtx.close();
+  let decoded: AudioBuffer;
+  try {
+    decoded = await audioCtx.decodeAudioData(arrayBuffer);
+  } finally {
+    await audioCtx.close();
+  }
+
+  if (decoded.numberOfChannels < 1) {
+    throw new Error('Audio file has no channels');
+  }
 
   // Fast path: already at 16 kHz mono — no resampling or copy needed.
   if (decoded.sampleRate === 16_000 && decoded.numberOfChannels === 1) {

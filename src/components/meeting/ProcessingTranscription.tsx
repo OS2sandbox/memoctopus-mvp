@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   newVadBatchState, sealCurrentBatch, splitTextWithIntervals,
@@ -27,11 +27,9 @@ export function ProcessingTranscription({ meetingId }: Props) {
   const [phase, setPhase] = useState<Phase>('downloading');
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const didStart = useRef(false);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
-    if (didStart.current) return;
-    didStart.current = true;
     void run();
 
     async function run() {
@@ -108,19 +106,22 @@ export function ProcessingTranscription({ meetingId }: Props) {
         setPhase('error');
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [meetingId]);
+  }, [meetingId, retryCount]);
 
   const pct = batchProgress && batchProgress.totalSeconds > 0
     ? Math.min(100, Math.round((batchProgress.completedSeconds / batchProgress.totalSeconds) * 100))
     : 0;
 
-  const label = phase === 'downloading' ? 'henter lydfil…'
-    : phase === 'analyzing' ? 'analyserer og opdeler tale…'
-    : phase === 'saving' ? 'gemmer transskription…'
-    : batchProgress && batchProgress.total > 0
+  const phaseLabels: Record<Phase, string> = {
+    downloading: 'henter lydfil…',
+    analyzing: 'analyserer og opdeler tale…',
+    transcribing: batchProgress && batchProgress.total > 0
       ? `transskriberer ${batchProgress.completed} / ${batchProgress.total} segmenter…`
-      : 'transskriberer…';
+      : 'transskriberer…',
+    saving: 'gemmer transskription…',
+    error: '',
+  };
+  const label = phaseLabels[phase];
 
   if (phase === 'error') {
     return (
@@ -128,7 +129,7 @@ export function ProcessingTranscription({ meetingId }: Props) {
         <h1 className="text-xl font-semibold text-[var(--ink)]">Transskription fejlede</h1>
         <p className="mt-2 text-sm text-[var(--muted)]">{error}</p>
         <button
-          onClick={() => { didStart.current = false; setPhase('downloading'); setError(null); setBatchProgress(null); }}
+          onClick={() => { setPhase('downloading'); setError(null); setBatchProgress(null); setRetryCount(c => c + 1); }}
           style={{
             marginTop: 16, padding: '8px 16px', borderRadius: 8,
             background: 'var(--ink)', color: 'var(--bg)', border: 'none',

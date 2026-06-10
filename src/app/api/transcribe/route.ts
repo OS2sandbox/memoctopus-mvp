@@ -7,6 +7,27 @@ import { detectPiiInSegments } from '@/lib/ai/pii';
 import { saveAudioFile } from '@/lib/audio/storage';
 import { TranscriptSegment, PiiReplacement } from '@/types';
 
+function parseDuration(raw: string | null): number | null {
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  return isNaN(n) ? null : Math.max(0, Math.min(7_200, n));
+}
+
+async function saveAudioRecord(
+  userId: string,
+  meetingId: string,
+  buffer: Buffer,
+  filename: string,
+  durationSecs: number | null,
+): Promise<void> {
+  const { filename: saved, sizeBytes } = await saveAudioFile(userId, buffer, filename);
+  await queryUserSchemaOne(
+    userId,
+    `INSERT INTO audio_files (meeting_id, filename, size_bytes, duration_seconds) VALUES ($1, $2, $3, $4)`,
+    [meetingId, saved, sizeBytes, durationSecs],
+  );
+}
+
 async function runBatchTranscription(
   userId: string,
   meetingId: string,
@@ -93,16 +114,10 @@ export async function POST(req: NextRequest) {
     }
 
     const mimeType = audioFile.type || 'audio/webm';
-    const duration = durationStr ? parseInt(durationStr, 10) : null;
+    const duration = parseDuration(durationStr);
 
     try {
-      const { filename, sizeBytes } = await saveAudioFile(userId, buffer, audioFile.name);
-      await queryUserSchemaOne(
-        userId,
-        `INSERT INTO audio_files (meeting_id, filename, size_bytes, duration_seconds)
-         VALUES ($1, $2, $3, $4)`,
-        [meetingId, filename, sizeBytes, duration],
-      );
+      await saveAudioRecord(userId, meetingId, buffer, audioFile.name, duration);
     } catch (err) {
       console.error('Audio save error:', err);
       return NextResponse.json(
@@ -166,16 +181,10 @@ export async function POST(req: NextRequest) {
   }
 
   const mimeType = audioFile.type || 'audio/webm';
-  const duration = durationStr ? parseInt(durationStr, 10) : null;
+  const duration = parseDuration(durationStr);
 
   try {
-    const { filename, sizeBytes } = await saveAudioFile(userId, buffer, audioFile.name);
-    await queryUserSchemaOne(
-      userId,
-      `INSERT INTO audio_files (meeting_id, filename, size_bytes, duration_seconds)
-       VALUES ($1, $2, $3, $4)`,
-      [meetingId, filename, sizeBytes, duration],
-    );
+    await saveAudioRecord(userId, meetingId, buffer, audioFile.name, duration);
   } catch (err) {
     console.error('Audio save error:', err);
     return NextResponse.json({ error: 'Failed to save audio' }, { status: 500 });

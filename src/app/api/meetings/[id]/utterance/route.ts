@@ -3,6 +3,14 @@ import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { HviskeProvider } from '@/lib/ai/transcription';
 
+// Reuse a single provider instance across requests — creating one per request
+// would spin up a new OpenAI client each time, losing connection pooling.
+let _provider: HviskeProvider | null = null;
+function getProvider(): HviskeProvider {
+  if (!_provider) _provider = new HviskeProvider();
+  return _provider;
+}
+
 interface Params {
   params: Promise<{ id: string }>;
 }
@@ -48,8 +56,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   const audioBytes = buffer.length;
   const t0 = Date.now();
   try {
-    const provider = new HviskeProvider();
-    const { text, latencyMs } = await provider.transcribeRaw(buffer, audioFile.type || 'audio/wav');
+    const { text, latencyMs } = await getProvider().transcribeRaw(buffer, audioFile.type || 'audio/wav');
     const totalMs = Date.now() - t0;
     console.log(`[utterance] ${audioBytes} bytes → ${latencyMs} ms hviske / ${totalMs} ms total`);
     if (isHallucinatedRepetition(text)) return NextResponse.json({ text: '', latencyMs });
