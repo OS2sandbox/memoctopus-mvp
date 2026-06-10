@@ -620,22 +620,28 @@ export class TeamsMeetingBot {
         continue;
       }
 
-      // 2. Ready?
+      // 2. Ready? The prejoin is interactive as soon as the Join-now button
+      // OR any prejoin control (name input / camera toggle / audio radio) is
+      // visible. We deliberately do NOT require a "Cancel" button —
+      // teams.live.com's anonymous prejoin often has no Cancel, and requiring
+      // it kept this loop spinning forever even though the form was ready.
       const joinNowVisible = await page.locator(JOIN_NOW_BTN).first().isVisible().catch(() => false);
-      const cancelVisible = await page.locator('button:has-text("Cancel"), [aria-label*="Cancel"], button:has-text("Annuller")').first().isVisible().catch(() => false);
       const controlVisible = await page.locator(prejoinControlSel).first().isVisible().catch(() => false);
-      if (joinNowVisible || (cancelVisible && controlVisible)) {
+      if (joinNowVisible || controlVisible) {
         console.log('[bot] prejoin controls ready');
         return true;
       }
 
-      // 3. Continue button still showing — re-click
+      // 3. Still on the launcher page (no prejoin control visible) and a
+      // "Continue on this browser" button is showing — re-click it. We only
+      // reach here when step 2 found NO prejoin control, so this can't fire
+      // mid-prejoin and disrupt teams.live.com's in-page transition.
       const continueBtn = page.locator('button:has-text("Continue on this browser"), button:has-text("Fortsæt i denne browser")').first();
       if (continueClicks < 2 && await continueBtn.isVisible().catch(() => false)) {
         continueClicks++;
         console.log(`[bot] re-clicking Continue on this browser (attempt ${continueClicks})`);
         await continueBtn.click().catch(() => {});
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(800);
         continue;
       }
 
