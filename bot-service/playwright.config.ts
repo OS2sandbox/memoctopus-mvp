@@ -2,6 +2,9 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './test',
+  // .spec.ts → Playwright (real browser tests).
+  // .test.ts → Vitest (pure logic + HTTP tests).
+  testMatch: '**/*.spec.ts',
   timeout: 30_000,
   use: {
     browserName: 'chromium',
