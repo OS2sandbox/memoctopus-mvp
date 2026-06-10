@@ -1,5 +1,30 @@
 // Injected into every page via addInitScript before any Teams JS loads.
 // Must be self-contained — no imports, no closures over Node.js variables.
+//
+// What this patch does:
+//   1. Hooks RTCPeerConnection construction to listen for remote audio tracks.
+//      Audio tracks are mirrored into hidden <audio> elements and the
+//      receiving PC is registered in window.__botAudioPcs so the Node side
+//      can call getStats() on each PC during participant polling.
+//   2. Installs a global unhandledrejection swallower for DOM-Event-typed
+//      rejections (the "{"isTrusted":true}" pattern). Teams' bundles
+//      routinely convert browser Events (MediaStreamTrack 'ended', XMLHttp
+//      'error', MediaError) into Promise rejections. When these go
+//      unhandled, Teams' own onunhandledrejection handler can cascade
+//      into automatic "Leaving..." transitions.
+//
+// What this patch does NOT do (intentionally removed):
+//   - It does NOT redirect video addTrack/addTransceiver to a throw-away
+//     RTCPeerConnection. That pattern caused InvalidAccessError every time
+//     Teams later tried to remove or query the sender on the real PC,
+//     which surfaced as "Action failed → Leaving..." or unhandled-rejection
+//     cascades post-admission. The BUNDLE id=11 collision the redirect was
+//     protecting against is prevented upstream by the
+//     `--use-file-for-fake-video-capture=/dev/null` Chromium launch flag
+//     (see teams-bot.ts launch args). That flag swaps the built-in fake
+//     camera for a file-based device with different codec capabilities, so
+//     there is no id=11 conflict in the SDP and no need to hide video from
+//     the real PC.
 export function installWebRTCPatch(): void {
   const win = window as unknown as Record<string, unknown>;
   const OrigRTC = window.RTCPeerConnection;
@@ -11,6 +36,31 @@ export function installWebRTCPatch(): void {
   win.__botAudioPcs = audioPcsList;
   let hadAudioPeer = false;
 
+  // ─── Unhandled-rejection swallower ─────────────────────────────────────────
+  //
+  // Teams' code catches browser Events (MediaStreamTrack 'ended',
+  // XMLHttpRequest 'error', etc.) and re-throws them as Promise rejections.
+  // The Event serialises as `{"isTrusted":true}` in the console. When these
+  // go unhandled, Teams' own state machine sometimes reacts by transitioning
+  // the call to "Leaving..." with no other diagnostic.
+  //
+  // We attach a listener that calls preventDefault on Event-shaped rejections
+  // — this suppresses the browser's default "log to console" behaviour AND,
+  // in practice, prevents Teams' internal error-recovery from firing the
+  // leave cascade. We deliberately do NOT swallow non-Event rejections (real
+  // errors with stack traces still surface so we can debug them).
+  window.addEventListener('unhandledrejection', (ev) => {
+    const reason = ev.reason as unknown;
+    if (
+      reason instanceof Event ||
+      (typeof reason === 'object' && reason !== null && (reason as { isTrusted?: boolean }).isTrusted === true)
+    ) {
+      ev.preventDefault();
+    }
+  });
+
+  // ─── checkAllPeersGone — composite departure signal ────────────────────────
+  //
   // Check whether all known audio peers are gone — either via RTC state changes
   // or via audio track readyState. Teams routes through a relay so connection
   // states often stay 'connected' after participants leave; track states are more
@@ -39,46 +89,7 @@ export function installWebRTCPatch(): void {
     if (cb) cb();
   };
 
-  // Redirect video addTrack/addTransceiver calls to throw-away PeerConnections so
-  // the meeting PC stays audio-only.  Chrome's fake device assigns conflicting RTP
-  // header extension id=11 values to the audio and video m-sections in a BUNDLE
-  // group; with video absent from the real PC the offer contains only one m-section
-  // and the collision cannot occur.  Teams receives real RTCRtpSender /
-  // RTCRtpTransceiver objects (from the throw-away PC) so its internal video-sender
-  // bookkeeping is satisfied without crashing.
-  const throwawayPCMap = new WeakMap<RTCPeerConnection, RTCPeerConnection>();
-  const getThrowawayPC = (pc: RTCPeerConnection): RTCPeerConnection => {
-    let t = throwawayPCMap.get(pc);
-    if (!t) { t = new OrigRTC(); throwawayPCMap.set(pc, t); }
-    return t;
-  };
-  const _origAddTrack = OrigRTC.prototype.addTrack;
-  OrigRTC.prototype.addTrack = function(
-    this: RTCPeerConnection, track: MediaStreamTrack, ...streams: MediaStream[]
-  ): RTCRtpSender {
-    if (track?.kind === 'video') {
-      console.log('[webrtc-patch] addTrack(video) → throw-away PC (avoiding BUNDLE id=11 collision)');
-      return _origAddTrack.call(getThrowawayPC(this), track, ...streams);
-    }
-    return _origAddTrack.call(this, track, ...streams);
-  };
-  // Some Teams versions use addTransceiver instead of addTrack for video setup.
-  const _origAddTransceiver = OrigRTC.prototype.addTransceiver as (
-    trackOrKind: MediaStreamTrack | string, init?: RTCRtpTransceiverInit
-  ) => RTCRtpTransceiver;
-  (OrigRTC.prototype as unknown as {
-    addTransceiver: (t: MediaStreamTrack | string, i?: RTCRtpTransceiverInit) => RTCRtpTransceiver
-  }).addTransceiver = function(
-    this: RTCPeerConnection, trackOrKind: MediaStreamTrack | string, init?: RTCRtpTransceiverInit
-  ): RTCRtpTransceiver {
-    const kind = typeof trackOrKind === 'string' ? trackOrKind : trackOrKind?.kind;
-    if (kind === 'video') {
-      console.log('[webrtc-patch] addTransceiver(video) → throw-away PC');
-      return _origAddTransceiver.call(getThrowawayPC(this), trackOrKind, init as RTCRtpTransceiverInit);
-    }
-    return _origAddTransceiver.call(this, trackOrKind, init as RTCRtpTransceiverInit);
-  };
-
+  // ─── Constructor patch — capture remote audio tracks ────────────────────────
   function PatchedRTC(
     this: RTCPeerConnection,
     ...args: ConstructorParameters<typeof RTCPeerConnection>
@@ -99,8 +110,6 @@ export function installWebRTCPatch(): void {
             audioPcs.delete(pc);
             const idx = audioPcsList.indexOf(pc);
             if (idx !== -1) audioPcsList.splice(idx, 1);
-            // Close the throw-away PC to free ICE/DTLS resources
-            throwawayPCMap.get(pc)?.close();
           }
           checkAllPeersGone();
         });
