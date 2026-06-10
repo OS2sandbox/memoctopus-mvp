@@ -403,7 +403,13 @@ export class TeamsMeetingBot {
             await page.waitForTimeout(1500);
           }
 
-          const stillPresent = await page.locator(LEAVE_BTN).first().isVisible().catch(() => false);
+          let stillPresent = await page.locator(LEAVE_BTN).first().isVisible().catch(() => false);
+          if (!stillPresent) {
+            // Teams can briefly hide the Leave button while animating the lobby→meeting
+            // toolbar transition. Wait up to 8 s for it to reappear before giving up.
+            await page.waitForSelector(LEAVE_BTN, { timeout: 8000 }).catch(() => {});
+            stillPresent = await page.locator(LEAVE_BTN).first().isVisible().catch(() => false);
+          }
           console.log('[bot] hangup button found, still present after checks:', stillPresent, 'url=', page.url());
           return stillPresent ? 'admitted' as const : 'spurious' as const;
         }),
@@ -442,7 +448,13 @@ export class TeamsMeetingBot {
         // (denial) must win the race. Without this, the async function resolving
         // with `undefined` wins, giving joinResult = undefined and a spurious failure.
         await new Promise<never>(() => {});
-      }).catch(() => {}),
+      }).catch(async () => {
+        // The catch fires if waitForFunction rejects (timeout/navigation) OR if the
+        // then-callback throws (e.g. click() on a stale element). In all cases we
+        // must NOT settle this arm — resolving with undefined here would win the
+        // race and produce joinResult = undefined exactly like the original bug.
+        await new Promise<never>(() => {});
+      }),
 
       // Text-based denial detection
       page.waitForFunction(
@@ -472,6 +484,14 @@ export class TeamsMeetingBot {
     if (joinResult !== 'admitted') {
       console.log(`[bot] join failed or spurious: ${joinResult}`);
       await snap(`04-join-${joinResult}`);
+      // Unconditional snapshot and page text for spurious/failed joins so the
+      // state of the Teams page is always captured without needing BOT_DEBUG_SNAPSHOTS.
+      try {
+        const failSnap = await page.screenshot({ fullPage: false });
+        fs.writeFileSync(`/tmp/bot-snap-join-${joinResult}.png`, failSnap);
+        const failText = await page.evaluate(() => (document.body?.innerText ?? '').slice(0, 500)).catch(() => '');
+        console.log(`[bot] page text at join-${joinResult}:`, failText.replace(/\n/g, ' | '));
+      } catch { /* ignore */ }
       if (joinResult === 'spurious') {
         throw new Error('Hangup button appeared then disappeared — page still navigating or join failed');
       }
