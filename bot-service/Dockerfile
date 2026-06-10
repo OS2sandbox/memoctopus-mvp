@@ -16,6 +16,16 @@ RUN npx playwright install-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 RUN npx playwright install chromium
 
+# Microsoft Edge for Teams. Teams gates some code paths on the Edge UA +
+# CDP fingerprint; running Chromium can produce post-admission "Leaving..."
+# even with all the headed/Xvfb fixes. Skip on ARM64 (Edge for Linux is
+# x86_64-only); the runtime falls back to Chromium when msedge isn't found.
+RUN arch=$(uname -m) && if [ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ]; then \
+        npx playwright install msedge || true; \
+    else \
+        echo "Skipping msedge install on $arch (Edge for Linux is x86_64 only)"; \
+    fi
+
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build

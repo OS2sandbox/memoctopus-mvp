@@ -94,9 +94,21 @@ export class TeamsMeetingBot {
     // display — Teams' anti-bot heuristics detect headless mode (even Chrome's
     // new headless) and trigger post-admission "Leaving..." cascades.
     const headless = process.env.HEADLESS !== 'false';
-    this.context = await chromium.launchPersistentContext(this.userDataDir, {
+
+    // Browser channel: default to MS Edge for Teams (Teams gates several code
+    // paths on the Edge UA + CDP fingerprint and treats it as first-class
+    // whereas Chromium can hit post-admission "Leaving..."). Falls back to
+    // bundled Chromium if Edge isn't installed (arm64 / local dev), or if the
+    // operator sets BROWSER_CHANNEL=chromium explicitly.
+    const requestedChannel = process.env.BROWSER_CHANNEL;
+    const tryChannels: (string | undefined)[] = requestedChannel === 'chromium'
+      ? [undefined]
+      : requestedChannel
+        ? [requestedChannel, undefined]
+        : ['msedge', undefined];
+
+    const baseOpts = {
       headless,
-      executablePath: process.env.CHROMIUM_PATH || undefined,
       permissions: ['microphone', 'camera'],
       userAgent:
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
@@ -153,7 +165,35 @@ export class TeamsMeetingBot {
         '--noerrdialogs',
         '--disable-accelerated-2d-canvas',
       ],
-    });
+    };
+
+    let context: BrowserContext | null = null;
+    let lastErr: unknown;
+    for (const channel of tryChannels) {
+      try {
+        context = await chromium.launchPersistentContext(this.userDataDir, {
+          ...baseOpts,
+          channel,
+          executablePath: channel ? undefined : (process.env.CHROMIUM_PATH || undefined),
+        });
+        console.log(`[bot] launched with channel=${channel ?? 'chromium'}`);
+        break;
+      } catch (err) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(`[bot] channel=${channel ?? 'chromium'} launch failed: ${msg}`);
+        // Wipe the user-data-dir so the next channel attempt starts clean
+        // (a failed launch can leave a half-initialised profile that the next
+        // launch refuses with "user data directory is already in use").
+        await fs.promises.rm(this.userDataDir, { recursive: true, force: true }).catch(() => {});
+      }
+    }
+    if (!context) {
+      throw lastErr instanceof Error
+        ? lastErr
+        : new Error('All browser channels failed to launch');
+    }
+    this.context = context;
 
     this.page = await this.context.newPage();
 
