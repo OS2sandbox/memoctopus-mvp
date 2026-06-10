@@ -1,47 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { JoinRaceResult, isAdmitted, joinFailureMessage, hangForever } from '../../src/lib/join-race';
+import { JoinRaceResult, isAdmitted, joinFailureMessage } from '../../src/lib/join-race';
 
 /**
- * The join race in _joinMeeting must NEVER resolve to undefined — the original
- * regression (b78eac3) was an async arm returning early and feeding `undefined`
- * into the result handler. These tests lock the discriminated union shape and
- * the hangForever helper that prevents accidental early returns.
+ * The admission wait must resolve to a known tag — never undefined. The
+ * original regression (b78eac3) was a Promise.race arm returning early and
+ * feeding `undefined` into the result handler; the race has since been
+ * replaced by a polling loop (_waitForAdmission), and 'spurious' was removed
+ * in favour of the assume-admitted fallback. These tests lock the
+ * discriminated union shape.
  */
 
 describe('JoinRaceResult discriminated union', () => {
   it('isAdmitted narrows correctly for every possible value', () => {
-    const all: JoinRaceResult[] = ['admitted', 'spurious', 'denied', 'timeout'];
+    const all: JoinRaceResult[] = ['admitted', 'denied', 'timeout'];
     expect(all.filter(isAdmitted)).toEqual(['admitted']);
-    expect(all.filter((r) => !isAdmitted(r))).toEqual(['spurious', 'denied', 'timeout']);
-  });
-
-  it('joinFailureMessage returns the spurious message for the spurious case', () => {
-    expect(joinFailureMessage('spurious')).toMatch(/Hangup button appeared then disappeared/);
+    expect(all.filter((r) => !isAdmitted(r))).toEqual(['denied', 'timeout']);
   });
 
   it('joinFailureMessage returns the entry message for denied/timeout', () => {
     expect(joinFailureMessage('denied')).toMatch(/Entry denied/);
     expect(joinFailureMessage('timeout')).toMatch(/Entry timeout/);
-  });
-});
-
-describe('hangForever', () => {
-  it('returns a Promise that never resolves and never rejects', async () => {
-    const promise = hangForever();
-    // Race it against a settled timeout — the settled side must win.
-    const tag = await Promise.race<string>([
-      promise.then(() => 'hang-resolved'),
-      new Promise<string>((resolve) => setTimeout(() => resolve('timeout-won'), 25)),
-    ]);
-    expect(tag).toBe('timeout-won');
-  });
-
-  it('is assignable to Promise<never> — caller-site type guard', () => {
-    // Compile-time check: any narrower type would let the bug class (resolving
-    // with `undefined`) sneak back. If this annotation ever breaks, the
-    // hangForever signature has loosened in a way that re-enables the bug.
-    const p: Promise<never> = hangForever();
-    // Use p to keep the linter quiet.
-    expect(typeof p.then).toBe('function');
   });
 });

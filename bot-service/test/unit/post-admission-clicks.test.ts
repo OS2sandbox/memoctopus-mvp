@@ -29,9 +29,12 @@ import * as path from 'path';
 const TEAMS_BOT_PATH = path.resolve(__dirname, '../../src/teams-bot.ts');
 
 const START_MARKER = 'await this._startAudioCapture();';
-// The post-admission region ends at the closing brace of `_joinMeeting`.
-// We detect end by the next `private async ` declaration.
-const END_MARKER = /^\s*private async _startAudioCapture\(/m;
+// The post-admission region ends at the closing brace of `_joinMeeting` —
+// the first brace at exactly 2-space indentation after the start marker
+// (inner blocks are indented deeper). Methods AFTER _joinMeeting (e.g. the
+// prejoin-readiness and admission polling helpers) legitimately click
+// prejoin/lobby buttons and must not be included in this region.
+const END_MARKER = /^ {2}\}$/m;
 
 describe('post-admission flow has no toolbar clicks', () => {
   it('contains no .click( calls between _startAudioCapture and the end of _joinMeeting', () => {

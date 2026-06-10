@@ -10,7 +10,7 @@ import {
   leaveDetectorTick,
   LeaveDetectorState,
 } from './lib/leave-detector';
-import { JoinRaceResult, isAdmitted, joinFailureMessage, hangForever } from './lib/join-race';
+import { JoinRaceResult, isAdmitted, joinFailureMessage } from './lib/join-race';
 
 export type BotStatus = 'joining' | 'recording' | 'paused' | 'ended' | 'error';
 
@@ -23,9 +23,11 @@ export interface BotSessionConfig {
   internalSecret: string;
 }
 
-// aria-label="Leave" is intentionally omitted — it is too broad and matches the lobby's
-// "leave the lobby" cancel button, causing a false-positive before admission.
+// Bare aria-label="Leave" is intentionally omitted — it is too broad and matches the
+// lobby's "leave the lobby" cancel button, causing a false-positive before admission.
 // aria-label="Leave meeting" (and locale variants) is specific to the in-meeting toolbar.
+// The [role="toolbar"]-scoped variant is safe because the lobby cancel button is not
+// inside a toolbar (matches vexa's teamsInitialAdmissionIndicators).
 const LEAVE_BTN = [
   '#hangup-button',
   'button[data-tid="hangup-main-btn"]',
@@ -34,6 +36,29 @@ const LEAVE_BTN = [
   'button[aria-label="Leave call"]',
   'button[aria-label="Forlad møde"]',
   'button[aria-label="Forlad opkald"]',
+  '[role="toolbar"] button[aria-label*="Leave"]',
+].join(', ');
+
+// Join-now selectors — used both for clicking AND as a negative admission
+// signal (if Join now is still visible we are NOT in the meeting yet).
+const JOIN_NOW_BTN = [
+  'button[data-tid="prejoin-join-button"]',
+  'button[aria-label="Join now"]',
+  '#prejoin-join-button',
+  'button:has-text("Join now")',
+  'button:has-text("Deltag nu")',
+].join(', ');
+
+// "Continue without audio or video" confirmation modal. Teams renders this
+// intermittently (depends on media-permission cache state at page boot) and
+// it BLOCKS the prejoin — Join now never enables until dismissed. Selector
+// list mirrors vexa's teamsContinueWithoutMediaSelectors.
+const NO_MEDIA_MODAL_BTN = [
+  'button:has-text("Continue without audio or video")',
+  'button[aria-label="Continue without audio or video"]',
+  'button[aria-label*="Continue without audio"]',
+  '[role="dialog"] button:has-text("Continue without audio or video")',
+  '[role="alertdialog"] button:has-text("Continue without audio or video")',
 ].join(', ');
 
 export class TeamsMeetingBot {
@@ -358,25 +383,11 @@ export class TeamsMeetingBot {
       }
     }
 
-    // Teams may show "Continue without audio or video" modal when browser has
-    // no camera/mic device. This BLOCKS the Join now button. Dismiss it eagerly.
-    const noMediaBtn = page.locator([
-      'button:has-text("Continue without audio or video")',
-      'button[aria-label="Continue without audio or video"]',
-    ].join(', ')).first();
-    if (await noMediaBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
-      console.log('[bot] dismissing "Continue without audio or video" modal');
-      await noMediaBtn.click();
-      await page.waitForTimeout(500);
-    }
-
-    // Wait for the prejoin screen join button
-    console.log('[bot] waiting for prejoin join button…');
-    await page.waitForSelector(
-      'button[data-tid="prejoin-join-button"], button[aria-label="Join now"], #prejoin-join-button',
-      { timeout: 20_000 },
-    ).catch(() => { console.log('[bot] prejoin join button wait timed out'); });
-    await page.waitForTimeout(500);
+    // Poll until the prejoin screen is genuinely ready (vexa pattern). A
+    // one-shot modal check + fixed join-button wait raced Teams' rendering:
+    // the "Continue without audio or video" modal appears intermittently and
+    // LATE (after prejoin boot), and when missed it blocks Join now forever.
+    await this._waitForPreJoinReadiness(45_000);
     await snap('02-prejoin');
 
     // Turn off camera and mute mic as early as possible on the prejoin screen —
@@ -426,7 +437,7 @@ export class TeamsMeetingBot {
 
     // Fill in the display name after muting so Teams sees the final device state before join.
     const nameInput = page.locator(
-      'input[data-tid="prejoin-display-name-input"], input[placeholder*="name" i], input[aria-label*="name" i]',
+      'input[data-tid="prejoin-display-name-input"], input[placeholder*="name" i], input[aria-label*="name" i], input[type="text"]',
     ).first();
     if (await nameInput.isVisible({ timeout: 3000 }).catch(() => false)) {
       console.log('[bot] filling name:', this.config.botName);
@@ -435,6 +446,45 @@ export class TeamsMeetingBot {
       await page.waitForTimeout(300);
     } else {
       console.log('[bot] name input not found');
+    }
+
+    // Ensure "Computer audio" is selected before joining. Teams can default
+    // to "Don't use audio" (especially after the no-media modal path) — in
+    // that mode Teams sets up NO audio transceivers at all: remote audio
+    // tracks never arrive, the recording stays empty, and the in-call mic
+    // button doesn't even render. vexa does this explicitly (join.ts Step 5)
+    // and it is load-bearing for audio capture.
+    const computerAudioRadio = page.locator([
+      '[role="radio"][aria-label*="Computer audio"]',
+      '[role="radio"][aria-label*="Computerlyd"]',
+      'input[type="radio"][aria-label*="Computer audio"]',
+      'label:has-text("Computer audio") input[type="radio"]',
+    ].join(', ')).first();
+    const dontUseAudioRadio = page.locator([
+      `[role="radio"][aria-label*="Don't use audio"]`,
+      '[role="radio"][aria-label*="Brug ikke lyd"]',
+    ].join(', ')).first();
+    if (await computerAudioRadio.isVisible({ timeout: 2000 }).catch(() => false)) {
+      const dontUseChecked = await dontUseAudioRadio.getAttribute('aria-checked').catch(() => null);
+      if (dontUseChecked === 'true') {
+        console.log(`[bot] "Don't use audio" was selected — switching to Computer audio`);
+      }
+      await computerAudioRadio.click({ timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(200);
+      console.log('[bot] selected Computer audio');
+    } else {
+      console.log('[bot] computer audio radio not visible — continuing with defaults');
+    }
+    // Force the speaker on if Teams shows it disabled — remote audio playback
+    // (which our capture pipeline consumes) requires the speaker enabled.
+    const speakerOnBtn = page.locator([
+      'button[aria-label*="Turn speaker on"]',
+      'button[aria-label*="Speaker is off"]',
+      'button:has-text("Turn speaker on")',
+    ].join(', ')).first();
+    if (await speakerOnBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await speakerOnBtn.click({ timeout: 5000 }).catch(() => {});
+      console.log('[bot] enabled speaker (prejoin)');
     }
 
     // Click "Join now"
@@ -472,7 +522,7 @@ export class TeamsMeetingBot {
     ).catch(() => {});
     await snap('03-after-join');
 
-    // Race: admitted (Leave button appears) vs denied vs timeout (5 min)
+    // Poll for admission: admitted (enabled Leave button) vs denied vs timeout (5 min)
     {
       const lobbyUrl = page.url();
       const lobbyTitle = await page.title().catch(() => '');
@@ -485,133 +535,13 @@ export class TeamsMeetingBot {
     if (lobbySnap) fs.writeFileSync('/tmp/bot-snap-lobby.png', lobbySnap);
     console.log('[bot] lobby snapshot → /tmp/bot-snap-lobby.png');
 
-    const joinResult: JoinRaceResult = await Promise.race<JoinRaceResult>([
-      // Wait for the in-meeting hangup button (data-tid only — aria-label="Leave" also
-      // appears on the lobby's cancel button and causes a false-positive here).
-      // We then re-confirm the button is stable after the page finishes navigating.
-      page.waitForSelector(LEAVE_BTN, { timeout: 300_000 })
-        .then(async () => {
-          // Give Teams 2 s to finish post-join navigation before we declare admitted.
-          // Without this, the selector can match a transient button on the prejoin
-          // page before the SPA navigates to the actual meeting room.
-          await page.waitForTimeout(2000);
-
-          // If the page landed on the Teams WebRTC connection error screen
-          // ("Sorry, we couldn't connect you"), the Dismiss button there has
-          // data-tid="hangup-button" and matches LEAVE_BTN — but we're not actually
-          // in the meeting. Try clicking "Rejoin call" to retry the WebRTC connection.
-          // After each click we wait for LEAVE_BTN to reappear (up to 30 s) rather than
-          // a fixed sleep, because Teams cycles through loading→lobby→meeting states and
-          // a fixed 6 s window lands mid-transition with LEAVE_BTN absent, causing a
-          // false 'spurious' return.
-          const rejoinSel = [
-            'button:has-text("Rejoin call")',
-            'button:has-text("Try again")',
-            'button:has-text("Prøv igen")',
-            'button:has-text("Forsøg igen")',
-          ].join(', ');
-
-          for (let attempt = 0; attempt < 3; attempt++) {
-            const bodyText = await page.evaluate(() =>
-              (document.body?.innerText ?? '').toLowerCase(),
-            ).catch(() => '');
-            if (!bodyText.includes("couldn't connect you") && !bodyText.includes("could not connect you")) break;
-
-            const rejoinBtn = page.locator(rejoinSel).first();
-            if (!await rejoinBtn.isVisible({ timeout: 1000 }).catch(() => false)) break;
-
-            console.log(`[bot] WebRTC connection error — clicking Rejoin call (attempt ${attempt + 1})`);
-            await rejoinBtn.click();
-            // Wait for the in-meeting hangup button to reappear (up to 30 s).
-            // Teams goes through loading → lobby → meeting before LEAVE_BTN becomes
-            // visible again; a fixed sleep would expire during this transition.
-            await page.waitForSelector(LEAVE_BTN, { timeout: 30_000 }).catch(() => {});
-            await page.waitForTimeout(1500);
-          }
-
-          let stillPresent = await page.locator(LEAVE_BTN).first().isVisible().catch(() => false);
-          if (!stillPresent) {
-            // Teams can briefly hide the Leave button while animating the lobby→meeting
-            // toolbar transition. Wait up to 8 s for it to reappear before giving up.
-            await page.waitForSelector(LEAVE_BTN, { timeout: 8000 }).catch(() => {});
-            stillPresent = await page.locator(LEAVE_BTN).first().isVisible().catch(() => false);
-          }
-          console.log('[bot] hangup button found, still present after checks:', stillPresent, 'url=', page.url());
-          return stillPresent ? 'admitted' as const : 'spurious' as const;
-        }),
-
-      // Fast-path for the Teams WebRTC connection-error page ("Sorry, we couldn't
-      // connect you").  This page can appear if setLocalDescription fails on the
-      // meeting PC before the bot is admitted; in that case its "Dismiss" button
-      // does NOT have data-tid="hangup-button" in the light-meetings experience
-      // and never matches LEAVE_BTN, causing the main arm to timeout after 5 min.
-      // Detecting the error text directly lets us retry much faster.
-      page.waitForFunction(
-        () => {
-          const text = (document.body?.innerText ?? '').toLowerCase();
-          return text.includes("couldn't connect you") || text.includes("could not connect you");
-        },
-        undefined,
-        { timeout: 300_000 },
-      ).then(async () => {
-        const rejoinSel = [
-          'button:has-text("Rejoin call")',
-          'button:has-text("Try again")',
-          'button:has-text("Prøv igen")',
-          'button:has-text("Forsøg igen")',
-        ].join(', ');
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const rejoinBtn = page.locator(rejoinSel).first();
-          if (!await rejoinBtn.isVisible({ timeout: 2000 }).catch(() => false)) break;
-          console.log(`[bot] connection-error page — clicking Rejoin call (fast-path, attempt ${attempt + 1})`);
-          await rejoinBtn.click();
-          await page.waitForSelector(LEAVE_BTN, { timeout: 30_000 }).catch(() => {});
-          await page.waitForTimeout(1500);
-          const bodyText = await page.evaluate(() => (document.body?.innerText ?? '').toLowerCase()).catch(() => '');
-          if (!bodyText.includes("couldn't connect you") && !bodyText.includes("could not connect you")) break;
-        }
-        // After retries, never let this arm settle — Arm 1 (LEAVE_BTN) or Arm 3
-        // (denial) must win the race. Without this, the async function resolving
-        // with `undefined` wins, giving joinResult = undefined and a spurious failure.
-        return hangForever();
-      }).catch(async () => {
-        // The catch fires if waitForFunction rejects (timeout/navigation) OR if the
-        // then-callback throws (e.g. click() on a stale element). In all cases we
-        // must NOT settle this arm — resolving with undefined here would win the
-        // race and produce joinResult = undefined exactly like the original bug.
-        return hangForever();
-      }),
-
-      // Text-based denial detection
-      page.waitForFunction(
-        () => {
-          const text = (document.body.innerText ?? '').toLowerCase();
-          return (
-            text.includes("weren't let in") ||
-            text.includes("was not let in") ||
-            text.includes("didn't let you in") ||
-            text.includes("request was declined") ||
-            text.includes("entry was denied") ||
-            text.includes("sorry, but you were denied")
-          );
-        },
-        undefined,
-        { timeout: 300_000 },
-      ).then(() => 'denied' as const),
-    ]).catch(async () => {
-      await snap('04-lobby-timeout');
-      if (debugSnapshots) {
-        const htmlFb = await page.content().catch(() => '');
-        fs.writeFileSync('/tmp/bot-page-fallback.html', htmlFb);
-      }
-      return 'timeout' as const;
-    });
+    const joinResult: JoinRaceResult = await this._waitForAdmission(300_000);
 
     if (!isAdmitted(joinResult)) {
-      console.log(`[bot] join failed or spurious: ${joinResult}`);
+      console.log(`[bot] join failed: ${joinResult}`);
       await snap(`04-join-${joinResult}`);
-      // Unconditional snapshot and page text for spurious/failed joins so the
-      // state of the Teams page is always captured without needing BOT_DEBUG_SNAPSHOTS.
+      // Unconditional snapshot and page text for failed joins so the state of
+      // the Teams page is always captured without needing BOT_DEBUG_SNAPSHOTS.
       try {
         const failSnap = await page.screenshot({ fullPage: false });
         fs.writeFileSync(`/tmp/bot-snap-join-${joinResult}.png`, failSnap);
@@ -647,6 +577,219 @@ export class TeamsMeetingBot {
     //     state to "off" before we click Join now.
     //   - _pollParticipants reads the roster via headcount badge + roster cells
     //     that work whether the participants panel is open or closed.
+  }
+
+  /**
+   * Poll until the Teams prejoin screen is genuinely interactive (vexa's
+   * waitForTeamsPreJoinReadiness pattern). Each 300 ms tick:
+   *   1. Dismiss the "Continue without audio or video" modal (≤3 attempts) —
+   *      it appears intermittently and LATE, and blocks Join now until
+   *      dismissed.
+   *   2. Success when Join now is visible, OR Cancel is visible together
+   *      with a prejoin control (name input / camera toggle / audio radio).
+   *   3. Re-click "Continue on this browser" if it is still showing
+   *      (≤2 attempts) — the first click sometimes doesn't take.
+   *   4. If Teams shows its permission gate ("Select Allow to let Microsoft
+   *      Teams use your mic and camera"), run a one-shot getUserMedia
+   *      warm-up so device enumeration completes. Our gUM patch makes this
+   *      safe: audio comes back disabled, video is a canvas clone.
+   */
+  private async _waitForPreJoinReadiness(timeoutMs: number): Promise<boolean> {
+    const page = this.page!;
+    const start = Date.now();
+    let modalClicks = 0;
+    let continueClicks = 0;
+    let warmedUp = false;
+
+    const prejoinControlSel = [
+      'input[data-tid="prejoin-display-name-input"]',
+      'input[placeholder*="name" i]',
+      'button[aria-label*="camera" i]',
+      'button[aria-label*="video" i]',
+      '[role="radio"][aria-label*="Computer audio"]',
+    ].join(', ');
+
+    while (Date.now() - start < timeoutMs) {
+      // 1. Late-appearing no-media modal
+      const modal = page.locator(NO_MEDIA_MODAL_BTN).first();
+      if (modalClicks < 3 && await modal.isVisible().catch(() => false)) {
+        modalClicks++;
+        console.log(`[bot] dismissing "Continue without audio or video" modal (attempt ${modalClicks})`);
+        await modal.click({ timeout: 5000 }).catch(() => {});
+        await page.waitForTimeout(500);
+        continue;
+      }
+
+      // 2. Ready?
+      const joinNowVisible = await page.locator(JOIN_NOW_BTN).first().isVisible().catch(() => false);
+      const cancelVisible = await page.locator('button:has-text("Cancel"), [aria-label*="Cancel"], button:has-text("Annuller")').first().isVisible().catch(() => false);
+      const controlVisible = await page.locator(prejoinControlSel).first().isVisible().catch(() => false);
+      if (joinNowVisible || (cancelVisible && controlVisible)) {
+        console.log('[bot] prejoin controls ready');
+        return true;
+      }
+
+      // 3. Continue button still showing — re-click
+      const continueBtn = page.locator('button:has-text("Continue on this browser"), button:has-text("Fortsæt i denne browser")').first();
+      if (continueClicks < 2 && await continueBtn.isVisible().catch(() => false)) {
+        continueClicks++;
+        console.log(`[bot] re-clicking Continue on this browser (attempt ${continueClicks})`);
+        await continueBtn.click().catch(() => {});
+        await page.waitForTimeout(500);
+        continue;
+      }
+
+      // 4. Permission gate — nudge device enumeration once
+      if (!warmedUp) {
+        const gateVisible = await page
+          .locator('text=/Select Allow to let Microsoft Teams use your mic and camera/i')
+          .first().isVisible().catch(() => false);
+        if (gateVisible) {
+          warmedUp = true;
+          console.log('[bot] permission gate detected — running media warm-up');
+          const result = await page.evaluate(async () => {
+            try {
+              const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+              const n = stream.getTracks().length;
+              stream.getTracks().forEach((t) => t.stop());
+              return `warm-up ok (tracks=${n})`;
+            } catch (err) {
+              return `warm-up failed: ${err instanceof Error ? err.message : String(err)}`;
+            }
+          }).catch((err: unknown) => `warm-up evaluate failed: ${err instanceof Error ? err.message : String(err)}`);
+          console.log(`[bot] ${result}`);
+        }
+      }
+
+      await page.waitForTimeout(300);
+    }
+
+    console.log(`[bot] prejoin readiness timed out after ${timeoutMs} ms (url=${page.url()})`);
+    return false;
+  }
+
+  /**
+   * Poll for admission after "Join now" (vexa's admission.ts pattern).
+   *
+   * Replaces the old Promise.race of waitForSelector/waitForFunction arms —
+   * a polling loop re-evaluates every signal each 2 s tick, so a transient
+   * state (Leave button hidden mid-animation, slow lobby→meeting
+   * transition) can never permanently mis-settle the outcome the way a
+   * settled race arm could. Per tick:
+   *
+   *   1. Denial text → 'denied'.
+   *   2. Connection-error page ("couldn't connect you") → click "Rejoin
+   *      call" (max 3 attempts across the whole wait); if retries are
+   *      exhausted and the error page persists → 'denied'.
+   *   3. Admission: a LEAVE_BTN match that is visible AND not
+   *      aria-disabled, with no Join-now button visible (negative check —
+   *      the lobby cancel button can match broad Leave selectors). Require
+   *      2 consecutive ticks to debounce transient matches.
+   *   4. Lobby tracking: if lobby indicators are visible, remember we were
+   *      in the lobby.
+   *   5. Assume-admitted fallback: we were in the lobby, lobby indicators
+   *      have been gone ≥3 consecutive ticks, and no denial / connection
+   *      error is present → 'admitted'. (vexa does the same; the in-meeting
+   *      leave-detector backstops a false positive.)
+   */
+  private async _waitForAdmission(timeoutMs: number): Promise<JoinRaceResult> {
+    const page = this.page!;
+    const start = Date.now();
+    const TICK_MS = 2000;
+
+    const denialTexts = [
+      // ours (historical)
+      "weren't let in", 'was not let in', "didn't let you in",
+      'request was declined', 'entry was denied', 'sorry, but you were denied',
+      // from vexa's teamsRejectionIndicators
+      'you were denied entry', 'access denied', 'entry denied',
+      'request denied', 'admission denied',
+    ];
+    const lobbySel = '[data-tid="lobby-section"], [aria-label="Lobby"]';
+    const rejoinSel = [
+      'button:has-text("Rejoin call")',
+      'button:has-text("Try again")',
+      'button:has-text("Prøv igen")',
+      'button:has-text("Forsøg igen")',
+    ].join(', ');
+
+    let rejoinClicks = 0;
+    let admittedTicks = 0;
+    let wasInLobby = false;
+    let lobbyGoneTicks = 0;
+
+    while (Date.now() - start < timeoutMs) {
+      const bodyText = await page.evaluate(() => (document.body?.innerText ?? '').toLowerCase()).catch(() => '');
+
+      // 1. Denial
+      if (denialTexts.some((t) => bodyText.includes(t))) {
+        console.log('[bot] denial text detected');
+        return 'denied';
+      }
+
+      // 2. Connection-error page
+      const onErrorPage = bodyText.includes("couldn't connect you") || bodyText.includes('could not connect you');
+      if (onErrorPage) {
+        admittedTicks = 0;
+        if (rejoinClicks >= 3) {
+          console.log('[bot] connection-error page persists after 3 rejoin attempts — giving up');
+          return 'denied';
+        }
+        const rejoinBtn = page.locator(rejoinSel).first();
+        if (await rejoinBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+          rejoinClicks++;
+          console.log(`[bot] connection-error page — clicking Rejoin call (attempt ${rejoinClicks}/3)`);
+          await rejoinBtn.click().catch(() => {});
+          await page.waitForTimeout(1500);
+        }
+        await page.waitForTimeout(TICK_MS);
+        continue;
+      }
+
+      // 3. Admission (enabled Leave button + Join-now negative, debounced)
+      const joinNowVisible = await page.locator(JOIN_NOW_BTN).first().isVisible().catch(() => false);
+      let leaveEnabled = false;
+      if (!joinNowVisible) {
+        const leaveBtn = page.locator(LEAVE_BTN).first();
+        if (await leaveBtn.isVisible().catch(() => false)) {
+          const disabled = await leaveBtn.getAttribute('aria-disabled').catch(() => null);
+          leaveEnabled = disabled !== 'true';
+        }
+      }
+      if (leaveEnabled) {
+        admittedTicks++;
+        if (admittedTicks >= 2) {
+          console.log('[bot] admitted — enabled Leave button on 2 consecutive ticks, url=', page.url());
+          return 'admitted';
+        }
+      } else {
+        admittedTicks = 0;
+      }
+
+      // 4–5. Lobby tracking + assume-admitted fallback
+      const inLobby = joinNowVisible
+        || await page.locator(lobbySel).first().isVisible().catch(() => false)
+        || bodyText.includes('someone in the meeting should let you in')
+        || bodyText.includes('waiting for others to arrive')
+        || bodyText.includes('when the meeting starts');
+      if (inLobby) {
+        wasInLobby = true;
+        lobbyGoneTicks = 0;
+      } else if (wasInLobby) {
+        lobbyGoneTicks++;
+        if (lobbyGoneTicks >= 3 && !leaveEnabled && admittedTicks === 0) {
+          console.log('[bot] lobby disappeared without denial — assuming admitted (leave-detector will backstop)');
+          return 'admitted';
+        }
+      }
+
+      await page.waitForTimeout(TICK_MS);
+    }
+
+    console.log(`[bot] admission wait timed out after ${timeoutMs} ms`);
+    const failSnap = await page.screenshot({ fullPage: false }).catch(() => null);
+    if (failSnap) fs.writeFileSync('/tmp/bot-snap-admission-timeout.png', failSnap);
+    return 'timeout';
   }
 
   private async _startAudioCapture(): Promise<void> {
