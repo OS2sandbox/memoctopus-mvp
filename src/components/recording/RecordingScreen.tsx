@@ -440,6 +440,13 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           }
         } finally {
           finalizeInFlightRef.current = false;
+          // Safety cleanup: if finalize completed without calling commitUtterance
+          // (e.g. remaining.length === 0, or postWav threw) and no new speech started,
+          // clear any stale interim text that was kept visible during the in-flight period.
+          if (utteranceStartRef.current === null && interimTextRef.current) {
+            interimTextRef.current = '';
+            setInterimText('');
+          }
         }
       }
 
@@ -566,8 +573,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           const capturedWaveStartMs = waveStartMsRef.current ?? capturedSpeechEndMs;
           utteranceStartRef.current = null;
           waveStartMsRef.current = null;
-          interimTextRef.current = '';
-          setInterimText('');
+          // Keep interim text visible while the final transcription is in-flight so
+          // there is no blank gap between partial display and committed segment arrival.
 
           if (finalizeInFlightRef.current) {
             // Another finalize is running — queue this one; it will be drained when that finalize completes.
