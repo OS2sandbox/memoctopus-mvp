@@ -138,10 +138,17 @@ export class TeamsMeetingBot {
         '--hide-scrollbars',
         '--disable-blink-features=AutomationControlled',
         '--use-fake-ui-for-media-stream',
-        // File-based fake camera prevents the BUNDLE id=11 collision when the
-        // built-in fake camera and fake mic both assign id=11 to different RTP
-        // header extensions. /dev/null streams black frames on Linux.
+        // Enable Chromium's fake media devices. Without this, getUserMedia in
+        // a container with no real audio hardware throws NotFoundError (or
+        // returns broken tracks), Teams interprets that as a misbehaving
+        // client and disconnects post-admission. The file-based overrides
+        // below replace the built-in fake camera/mic to (a) provide silence
+        // instead of the default 440 Hz beep, and (b) avoid the BUNDLE id=11
+        // collision when both built-in fake devices share the same RTP
+        // header extension id.
+        '--use-fake-device-for-media-stream',
         '--use-file-for-fake-video-capture=/dev/null',
+        '--use-file-for-fake-audio-capture=/dev/null',
         '--allow-running-insecure-content',
         '--autoplay-policy=no-user-gesture-required',
         // Disables same-origin policy so the injected AudioContext can connect to
@@ -224,33 +231,18 @@ export class TeamsMeetingBot {
       route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
     );
 
-    // Patch getUserMedia so the bot transmits silence and no video.
-    //
-    // Audio: disabled (enabled=false) so the bot transmits silence.
-    //
-    // Video: disabled (enabled=false) rather than stopped. Calling t.stop() fires
-    // the 'ended' event which hits Teams' onended=reject handler, producing
-    // {"isTrusted":true} console noise and causing Teams to transiently render
-    // [data-tid="call-ended-title"] while it recovers — triggering endObs and briefly
-    // hiding the Leave button. With enabled=false the track stays alive silently,
-    // Teams adds it to the PeerConnection normally, and no rejection fires.
-    //
-    // The SDP BUNDLE id=11 collision (Chrome's fake camera and fake microphone both
-    // assign id=11 to different RTP header extensions) is prevented upstream by
-    // --use-file-for-fake-video-capture=/dev/null, which replaces the built-in fake
-    // camera with a file-based device that has different codec capability tables.
-    //
-    // Do NOT use video:false in constraints — Teams dereferences the video track
-    // unconditionally and crashes with "Failed to convert value to MediaStreamTrack".
-    await this.page.addInitScript(() => {
-      const origGUM = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-      navigator.mediaDevices.getUserMedia = async (constraints?: MediaStreamConstraints) => {
-        const stream = await origGUM(constraints ?? {});
-        stream.getAudioTracks().forEach((t) => { t.enabled = false; });
-        stream.getVideoTracks().forEach((t) => { t.enabled = false; });
-        return stream;
-      };
-    });
+    // No getUserMedia patch. The launch flags above provide fake media devices:
+    //   --use-fake-device-for-media-stream     → fake audio + video devices exist
+    //   --use-file-for-fake-audio-capture=/dev/null → mic transmits silence
+    //   --use-file-for-fake-video-capture=/dev/null → camera transmits black
+    // Together, these make getUserMedia behave like a normal browser with a
+    // silent mic and blank camera. The previous patch overrode
+    // navigator.mediaDevices.getUserMedia at the JS level and set
+    // track.enabled=false post-hoc — Teams' anti-bot detection can flag a
+    // patched gUM (the function's toString() doesn't match the native impl)
+    // and a track that flips enabled=false right after creation looks
+    // unnatural. The prejoin mute step (clicks the mic toggle off, falls back
+    // to Ctrl+Shift+M) still gives Teams a UI-level "muted" state.
 
     // Patch RTCPeerConnection before any page scripts load so we capture every
     // remote audio track Teams creates. See src/webrtc-patch.ts for details.
@@ -322,8 +314,9 @@ export class TeamsMeetingBot {
     // Turn off camera and mute mic as early as possible on the prejoin screen —
     // before filling the name, so Teams reaches "Join now" with both already off.
     // Only click buttons that indicate the device is currently ON (to avoid toggling
-    // something that is already off). The getUserMedia patch already disables tracks,
-    // but Teams' UI state is independent and can show the mic/camera as "on".
+    // something that is already off). The fake-audio-capture / fake-video-capture
+    // launch flags already make the bot transmit silence + black frames, but
+    // Teams' UI mute state is independent and can show the mic/camera as "on".
 
     const cameraBtnSel = [
       'button[aria-label="Turn off video"]',
@@ -579,9 +572,9 @@ export class TeamsMeetingBot {
     //      in that window dispatch unhandled rejections that Teams surfaces as
     //      "Action failed".
     // Why neither click is needed:
-    //   - The getUserMedia patch sets `track.enabled = false` on every audio
-    //     track at construction time (teams-bot.ts:184). The bot literally
-    //     cannot transmit audio regardless of Teams' UI mute state.
+    //   - --use-file-for-fake-audio-capture=/dev/null makes the fake mic
+    //     transmit pure silence at the device level. The bot literally cannot
+    //     transmit audio regardless of Teams' UI mute state.
     //   - The prejoin mute step (lines ~263–299) already drives Teams' mute
     //     state to "off" before we click Join now.
     //   - _pollParticipants reads the roster via headcount badge + roster cells
