@@ -1,7 +1,7 @@
 import type { TranscriptSegment } from '@/types';
 
 export const BATCH_DURATION_S = 27;
-export const BATCH_CONCURRENCY = 5;
+export const BATCH_CONCURRENCY = 20;
 export const MAX_WORDS_PER_LINE = 20;
 
 export type VadInterval = {
