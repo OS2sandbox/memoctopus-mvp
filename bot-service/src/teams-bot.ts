@@ -1028,18 +1028,22 @@ export class TeamsMeetingBot {
     this._resetWatchdog();
     try {
       // Primary: check if Leave button is still visible — if gone, we were kicked or meeting ended.
-      // Require 2 consecutive polls (≈4 s) before stopping: Teams transiently hides the Leave
-      // button while recovering from the video-track stop() rejection, so a single missing poll
-      // is not reliable. Two consecutive polls confirms the button is genuinely gone.
+      // Only activate after 30 s in the meeting: Teams takes several seconds to fully render the
+      // in-call toolbar after admission (SPA navigation, CallTitleService fetch, media
+      // negotiation), and hadActiveTracks can become true on the very first poll — using it as
+      // the activation condition caused the check to fire at t+4 s before Teams finished settling.
+      // The 30 s threshold matches the _handleMeetingEnded guard. Require 5 consecutive missing
+      // polls (≈10 s) so transient toolbar animations or error-recovery screens don't trigger a stop.
+      // Other signals (track count, participant count) cover departures inside the 30 s window.
       const leaveVisible = await this.page.locator(LEAVE_BTN).first().isVisible().catch(() => false);
-      if (!leaveVisible && (this.hadActiveTracks || this.elapsed > 10) && this.isActivelyRecording()) {
+      if (!leaveVisible && this.elapsed > 30 && this.isActivelyRecording()) {
         this.leaveBtnGonePolls++;
-        if (this.leaveBtnGonePolls >= 2) {
-          console.log('[bot] Leave button gone for 2 consecutive polls — kicked or meeting ended');
+        if (this.leaveBtnGonePolls >= 5) {
+          console.log('[bot] Leave button gone for 5 consecutive polls — kicked or meeting ended');
           void this.stop();
           return;
         }
-        console.log(`[bot] Leave button gone (poll ${this.leaveBtnGonePolls}/2) — waiting to confirm`);
+        console.log(`[bot] Leave button gone (poll ${this.leaveBtnGonePolls}/5) — waiting to confirm`);
       } else {
         this.leaveBtnGonePolls = 0;
       }

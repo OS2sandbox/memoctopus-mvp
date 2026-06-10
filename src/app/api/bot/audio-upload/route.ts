@@ -1,6 +1,6 @@
 import { after, NextRequest, NextResponse } from 'next/server';
 import { queryUserSchemaOne } from '@/lib/db/user-schema';
-import { getTranscriptionProvider } from '@/lib/ai/transcription';
+import { transcribeWithVadBatches } from '@/lib/audio/vad-batch-server';
 import { detectPiiInSegments } from '@/lib/ai/pii';
 import { groupIntoChapters } from '@/lib/ai/chapters';
 import { saveAudioFile } from '@/lib/audio/storage';
@@ -34,8 +34,6 @@ export async function POST(req: NextRequest) {
   const meetingId = formData.get('meetingId') as string | null;
   const userId = formData.get('userId') as string | null;
   const participantsJson = formData.get('participants') as string | null;
-  const durationStr = formData.get('duration') as string | null;
-  const durationSeconds = durationStr ? Number(durationStr) : undefined;
 
   if (!audioFile || !meetingId || !userId) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -90,7 +88,7 @@ export async function POST(req: NextRequest) {
   // after this response is returned. This prevents the bot-service's HTTP request from
   // hitting the proxy timeout (502) while waiting for transcription to finish.
   after(async () => {
-    await _processAudio({ buffer, mimeType, meetingId, userId, originalFilename, durationSeconds });
+    await _processAudio({ buffer, meetingId, userId, originalFilename });
   });
 
   return NextResponse.json({ ok: true });
@@ -98,18 +96,14 @@ export async function POST(req: NextRequest) {
 
 async function _processAudio({
   buffer,
-  mimeType,
   meetingId,
   userId,
   originalFilename,
-  durationSeconds,
 }: {
   buffer: Buffer;
-  mimeType: string;
   meetingId: string;
   userId: string;
   originalFilename: string;
-  durationSeconds: number | undefined;
 }): Promise<void> {
   try {
     const { filename, sizeBytes } = await saveAudioFile(userId, buffer, originalFilename);
@@ -119,8 +113,7 @@ async function _processAudio({
       [meetingId, filename, sizeBytes],
     );
 
-    const provider = getTranscriptionProvider();
-    const rawSegments: TranscriptSegment[] = await provider.transcribe(buffer, mimeType, durationSeconds);
+    const rawSegments: TranscriptSegment[] = await transcribeWithVadBatches(buffer);
 
     let piiReplacements: PiiReplacement[] = [];
     try {
