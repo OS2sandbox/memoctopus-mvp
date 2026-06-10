@@ -138,18 +138,15 @@ export class TeamsMeetingBot {
         '--hide-scrollbars',
         '--disable-blink-features=AutomationControlled',
         '--use-fake-ui-for-media-stream',
-        // File-based fake camera. The previous experiment with
-        // `--use-fake-device-for-media-stream + --use-file-for-fake-audio-capture=/dev/null`
-        // broke Teams entirely: /dev/null is not a valid WAV file, Chromium's
-        // fake-audio-capture failed to initialise, getUserMedia({audio:true})
-        // returned broken tracks, Teams' WebRTC setup threw, and Promise.all
-        // in Teams' join code rejected — bot stalled at the prejoin screen.
-        // Without --use-fake-device-for-media-stream Chromium uses the real
-        // audio devices (laptop mic on Mac dev, none in container — but the
-        // gUM patch below sets enabled=false either way so nothing is
-        // transmitted). The video flag below is kept because it's the
-        // upstream BUNDLE id=11 collision fix.
-        '--use-file-for-fake-video-capture=/dev/null',
+        // No fake camera/mic flags. The gUM patch in this file substitutes a
+        // canvas.captureStream() track for video (avoids the BUNDLE id=11
+        // header-extension collision the built-in fake camera was producing)
+        // and lets audio fall through to whatever device Chromium finds (real
+        // mic on Mac dev, none in container — and the patch mutes it either
+        // way). Previously --use-file-for-fake-video-capture=/dev/null was
+        // supposed to swap the built-in fake camera; on Chromium it does NOT
+        // do so reliably (verified locally), which is how the collision was
+        // happening in the first place.
         '--allow-running-insecure-content',
         '--autoplay-policy=no-user-gesture-required',
         // Disables same-origin policy so the injected AudioContext can connect to
@@ -232,33 +229,81 @@ export class TeamsMeetingBot {
       route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }),
     );
 
-    // Patch getUserMedia so the bot transmits silence and black video. The
-    // launch flags above use --use-file-for-fake-video-capture for the video
-    // side but the audio side falls back to whatever real device Chromium
-    // finds (laptop mic on Mac dev, nothing in headless container). Disabling
-    // the tracks here makes the bot transmit silence regardless. We restore
-    // the native function's toString() to hide the patch from Teams' anti-bot
-    // detection — Function.prototype.toString.call(patched) returning the JS
-    // source instead of "[native code]" is a known fingerprinting signal.
+    // Patch getUserMedia.
     //
-    // Do NOT call track.stop() — it fires 'ended' which Teams' onended=reject
-    // handler turns into a {"isTrusted":true} unhandled rejection. enabled=
-    // false leaves the track alive but silent.
+    // The video side is the load-bearing change: substitute Chromium's built-in
+    // fake camera with a `canvas.captureStream()` video track. The built-in
+    // fake camera advertises the RTP header extension `urn:3gpp:video-
+    // orientation` at extmap id=11; Chromium's audio backend ALSO uses id=11
+    // in some configurations, producing a BUNDLE collision on
+    // `setLocalDescription` ("A BUNDLE group contains a codec collision for
+    // header extension id=11"). Teams then renders "Sorry, we couldn't
+    // connect you" and the call drops to "Leaving...". The canvas-sourced
+    // video track is encoded by libwebrtc's screencast capturer, which uses
+    // a leaner extension set (no video-orientation), so the collision can't
+    // occur at the source. NB: we explicitly do NOT munge SDP at the JS
+    // level — vexa's bug #281 (44 ms post-admission drop, malformed offer
+    // SDP with BUNDLE enabled but rtcp-mux missing) was caused by exactly
+    // that. Substituting upstream of the SDP generator avoids that class.
     //
-    // Do NOT pass constraints={video:false}. Teams dereferences the video
-    // track unconditionally and crashes with "Failed to convert value to
-    // MediaStreamTrack".
+    // The audio side stays as a real device with track.enabled=false. Do NOT
+    // call track.stop() — it fires 'ended' which Teams' onended=reject
+    // handler converts to a {"isTrusted":true} unhandled rejection. Do NOT
+    // pass {video:false}; Teams dereferences the video track unconditionally
+    // and crashes with "Failed to convert value to MediaStreamTrack".
+    //
+    // patched.toString() is shimmed to return the native string so anti-bot
+    // fingerprinting that diffs Function.toString output doesn't flag us.
     await this.page.addInitScript(() => {
       const origGUM = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+
+      // Lazy canvas video stream — created once on first video gUM call,
+      // cloned per consumer so multiple gUM callers can each get a track.
+      let canvasStream: MediaStream | null = null;
+      const getCanvasStream = (): MediaStream => {
+        if (canvasStream) return canvasStream;
+        const canvas = document.createElement('canvas');
+        canvas.width = 640;
+        canvas.height = 360;
+        canvas.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;';
+        if (document.body) document.body.appendChild(canvas);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('canvas 2d context unavailable');
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, 640, 360);
+        // captureStream(N) only emits frames when the canvas surface
+        // changes. Without continuous dirty pixels Teams' liveness checks
+        // see a frozen track and may treat the call as broken. A 1×1
+        // alternation at requestAnimationFrame cadence is cheap.
+        canvasStream = canvas.captureStream(15);
+        let flip = 0;
+        const pump = () => {
+          ctx.fillStyle = (++flip) & 1 ? '#000001' : '#000000';
+          ctx.fillRect(0, 0, 1, 1);
+          requestAnimationFrame(pump);
+        };
+        requestAnimationFrame(pump);
+        return canvasStream;
+      };
+
       const patched = async (constraints?: MediaStreamConstraints) => {
+        // Video requested → audio from origGUM (or empty), canvas for video.
+        if (constraints && constraints.video) {
+          const audioStream = constraints.audio
+            ? await origGUM({ audio: constraints.audio })
+            : new MediaStream();
+          audioStream.getAudioTracks().forEach((t) => { t.enabled = false; });
+          const out = new MediaStream();
+          audioStream.getAudioTracks().forEach((t) => out.addTrack(t));
+          out.addTrack(getCanvasStream().getVideoTracks()[0].clone());
+          return out;
+        }
+        // Audio-only or empty constraints — pass through, mute everything.
         const stream = await origGUM(constraints ?? {});
         stream.getAudioTracks().forEach((t) => { t.enabled = false; });
         stream.getVideoTracks().forEach((t) => { t.enabled = false; });
         return stream;
       };
-      // Make patched.toString() return the native-looking string so anti-bot
-      // fingerprinting code that compares Function.toString() output doesn't
-      // flag the patch.
       Object.defineProperty(patched, 'toString', {
         value: () => 'function getUserMedia() { [native code] }',
         configurable: true,
