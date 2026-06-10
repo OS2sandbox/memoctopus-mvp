@@ -175,7 +175,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   // Elapsed-seconds mark when VAD fires onSpeechStart, for accurate segment timestamps.
   const utteranceStartRef = useRef<number | null>(null);
   // Wall-clock ms when the current utterance (wave) started.
+  // Shifted forward whenever the wave idles past the last visible word (see wave-pause logic).
   const waveStartMsRef = useRef<number | null>(null);
+  // Word count of the most recent partial, used to detect wave over-run.
+  const prevInterimWordCountRef = useRef(0);
   // Guard against running two finalize calls concurrently. Window auto-commits use
   // windowCommitControllerRef instead, keeping finalization independent.
   const finalizeInFlightRef = useRef(false);
@@ -400,7 +403,11 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             const text = await postWav(float32ToWavBlob(remaining));
             const networkElapsed = Date.now() - speechEndMs;
             const preRevealed = partialWords + Math.floor(networkElapsed / Math.round(1000 / WORDS_PER_SECOND));
-            const waveElapsed = Date.now() - waveStartMs;
+            // Absorb any idle overshoot between speech-end and API return so the wave
+            // resumes from the partial frontier rather than the real elapsed time.
+            const maxWaveMs = partialWords * LIVE_WAVE_INTERVAL_MS;
+            const rawElapsed = Date.now() - waveStartMs;
+            const waveElapsed = Math.min(rawElapsed, maxWaveMs);
             commitUtterance(remainingStart, uEnd, text, preRevealed, waveElapsed);
           } else {
             const totalDuration = uEnd - remainingStart;
@@ -416,7 +423,9 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                 const preRevealed = firstChunk
                   ? partialWords + Math.floor(networkElapsed / Math.round(1000 / WORDS_PER_SECOND))
                   : 0;
-                const waveElapsed = Date.now() - waveStartMs;
+                const maxWaveMs = (firstChunk ? partialWords : 0) * LIVE_WAVE_INTERVAL_MS;
+                const rawElapsed = Date.now() - waveStartMs;
+                const waveElapsed = firstChunk ? Math.min(rawElapsed, maxWaveMs) : rawElapsed;
                 commitUtterance(chunkTimeStart, chunkTimeEnd, text, preRevealed, waveElapsed);
               }
               firstChunk = false;
@@ -508,6 +517,20 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             // Discard if the window already advanced (auto-commit fired while in-flight).
             if (windowStartFrameRef.current !== capturedWindowStart) return;
             if (text && waveStartMsRef.current === null) waveStartMsRef.current = Date.now();
+            // Wave-pause: if the wave ran past the previous word frontier while waiting
+            // for this partial, absorb the idle overshoot so the new words continue
+            // from position 0 (one LIVE_WAVE_INTERVAL_MS after the last revealed word).
+            if (text && waveStartMsRef.current !== null) {
+              const newWordCount = text.split(/\s+/).filter(Boolean).length;
+              const prevCount = prevInterimWordCountRef.current;
+              if (newWordCount > prevCount) {
+                const realElapsed = Date.now() - waveStartMsRef.current;
+                const maxWaveMs = prevCount * LIVE_WAVE_INTERVAL_MS;
+                const excess = Math.max(0, realElapsed - maxWaveMs);
+                if (excess > 0) waveStartMsRef.current += excess;
+              }
+              prevInterimWordCountRef.current = newWordCount;
+            }
             interimTextRef.current = text || '…';
             setInterimText(text || '…');
           }).finally(() => {
@@ -541,6 +564,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         onSpeechStart: () => {
           utteranceStartRef.current = currentElapsed();
           waveStartMsRef.current = null; // set when first real partial text appears
+          prevInterimWordCountRef.current = 0;
           // Include ~300 ms of pre-roll (≈5 frames × 1024 samples @ 16 kHz) so hviske
           // doesn't miss soft onsets at the start of the utterance.
           const preRollFrames = Math.round(16_000 * 0.3 / 1024);
@@ -599,6 +623,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           stopPartialTimer();
           utteranceStartRef.current = null;
           waveStartMsRef.current = null;
+          prevInterimWordCountRef.current = 0;
           mergerRef.current.reset();
           interimTextRef.current = '';
           setInterimText('');
