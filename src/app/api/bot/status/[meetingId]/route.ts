@@ -37,10 +37,12 @@ export async function GET(
     });
   }
 
-  // If no bot session yet (still joining pre-bot-start) or already at review+
+  // No active bot session — either pre-join (bot_session cleared) or never started.
+  // Include meetingStatus so the client can redirect to review for completed meetings.
   if (!meeting.bot_session) {
     return NextResponse.json({
       status: 'forbinder',
+      meetingStatus: meeting.status,
       participants: meeting.participants ?? [],
       elapsed: 0,
     });

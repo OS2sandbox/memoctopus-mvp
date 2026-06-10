@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     }
     await queryUserSchemaOne(
       body.userId,
-      `UPDATE meetings SET status = 'cancelled', updated_at = NOW() WHERE id = $1`,
+      `UPDATE meetings SET status = 'cancelled', bot_session = NULL, updated_at = NOW() WHERE id = $1`,
       [body.meetingId],
     ).catch(() => {});
     return NextResponse.json({ ok: true });
@@ -146,7 +146,7 @@ async function _processAudio({
 
     await queryUserSchemaOne(
       userId,
-      `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,
+      `UPDATE meetings SET status = 'review', bot_session = NULL, updated_at = NOW() WHERE id = $1`,
       [meetingId],
     );
   } catch (err) {
@@ -160,7 +160,7 @@ async function _processAudio({
     ).catch(() => null);
     await queryUserSchemaOne(
       userId,
-      `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,
+      `UPDATE meetings SET status = 'review', bot_session = NULL, updated_at = NOW() WHERE id = $1`,
       [meetingId],
     ).catch(() => {});
   }
