@@ -93,39 +93,47 @@ export class TeamsMeetingBot {
       executablePath: process.env.CHROMIUM_PATH || undefined,
       permissions: ['microphone', 'camera'],
       userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+      // Remove Playwright's --enable-automation flag — Teams (and Chromium's own
+      // anti-bot heuristics) gate behaviour on this flag and can refuse media
+      // access or kick the session post-admission when it is set.
+      ignoreDefaultArgs: ['--enable-automation'],
       args: [
+        '--incognito',
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
+        // Cross-origin iframe isolation breaks Teams' media initialisation in
+        // headless Chromium and produces {"isTrusted":true} unhandled rejections
+        // that cascade into "Leaving..." immediately after admission. Disabling
+        // site isolation collapses Teams' SPA into a single renderer (same effect
+        // as --renderer-process-limit=1 but more reliably across Playwright
+        // versions). Acceptable: the bot only ever navigates to teams.microsoft.com.
+        '--disable-features=IsolateOrigins,site-per-process,VizDisplayCompositor',
+        '--disable-site-isolation-trials',
+        '--disable-infobars',
         '--disable-gpu',
+        // Collapse gpu-process into the renderer. Avoids per-bot CPU bursts
+        // from SwiftShader software compositing and removes a class of IPC
+        // failures that surface as Event-typed unhandled rejections.
+        '--in-process-gpu',
         '--hide-scrollbars',
         '--disable-blink-features=AutomationControlled',
         '--use-fake-ui-for-media-stream',
-        // Replace the built-in fake camera with a file-based device. When both
-        // audio and video use the built-in fake device, Chrome assigns id=11 to
-        // different RTP header extensions in each m-section, causing a BUNDLE
-        // collision that prevents the PeerConnection from completing. A file-based
-        // video capture device has different codec capability tables and avoids the
-        // id=11 conflict. /dev/null produces a black frame stream on Linux.
+        // File-based fake camera prevents the BUNDLE id=11 collision when the
+        // built-in fake camera and fake mic both assign id=11 to different RTP
+        // header extensions. /dev/null streams black frames on Linux.
         '--use-file-for-fake-video-capture=/dev/null',
+        '--allow-running-insecure-content',
         '--autoplay-policy=no-user-gesture-required',
         // Disables same-origin policy so the injected AudioContext can connect to
-        // MediaStreams from cross-origin RTCPeerConnections. Acceptable here because
-        // this Chromium instance is headless, isolated per session, and only ever
-        // navigates to teams.microsoft.com URLs.
+        // MediaStreams from cross-origin RTCPeerConnections.
         '--disable-web-security',
-        '--disable-features=VizDisplayCompositor',
         '--ignore-certificate-errors',
+        '--ignore-ssl-errors',
+        '--ignore-certificate-errors-spki-list',
         '--disk-cache-size=0',
         '--media-cache-size=0',
-        // Force all rendering into a single process. Without this, Teams' cross-origin
-        // iframes spin up separate renderer processes; in headless mode the IPC between
-        // those processes is unreliable and produces the {"isTrusted":true} unhandled
-        // rejections that break Teams' media initialisation. The roster selectors return
-        // rosterCount=-1 with this flag, but definitelyAlone ignores that case so
-        // departure detection still works via audio silence, button count and RTP idle.
-        '--renderer-process-limit=1',
         // Disable extensions so Teams doesn't try to load background-page workers
         // that fail to initialise in headless mode and emit spurious error events.
         '--disable-extensions',
@@ -138,8 +146,6 @@ export class TeamsMeetingBot {
         '--disable-crash-reporter',
         '--noerrdialogs',
         '--disable-accelerated-2d-canvas',
-        '--disable-accelerated-video-decode',
-        '--disable-gpu-compositing',
       ],
     });
 

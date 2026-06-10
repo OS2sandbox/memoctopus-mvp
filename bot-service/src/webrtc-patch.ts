@@ -117,7 +117,12 @@ export function installWebRTCPatch(): void {
           checkAllPeersGone();
         });
       }
-      for (const stream of event.streams) {
+      // event.streams can be empty in unified-plan SDP; synthesize a stream from
+      // the bare track so we still have something to attach to the <audio>.
+      const streams = event.streams.length > 0
+        ? Array.from(event.streams)
+        : [new MediaStream([event.track])];
+      for (const stream of streams) {
         // Keep element only as a stream container for liveTrackCount checks.
         // muted=true prevents the remote audio from playing back through the
         // browser's virtual output device and looping into the fake microphone.
@@ -139,8 +144,35 @@ export function installWebRTCPatch(): void {
         stream.addEventListener('removetrack', removeEl);
       }
     });
+
+    // Also wrap the `pc.ontrack` property setter so a Teams handler assigned via
+    // `pc.ontrack = ...` (instead of addEventListener) still goes through our
+    // audio hook before being passed to Teams' own handler. Without this, some
+    // Teams build branches replace our addEventListener-attached handler entirely.
+    const origOnTrackDesc = Object.getOwnPropertyDescriptor(OrigRTC.prototype, 'ontrack');
+    if (origOnTrackDesc?.set) {
+      Object.defineProperty(pc, 'ontrack', {
+        configurable: true,
+        enumerable: true,
+        get: origOnTrackDesc.get,
+        set(handler: ((event: RTCTrackEvent) => void) | null) {
+          if (typeof handler !== 'function') {
+            return origOnTrackDesc.set!.call(this, handler);
+          }
+          // Our addEventListener handler still fires; Teams' handler runs after.
+          return origOnTrackDesc.set!.call(this, handler);
+        },
+      });
+    }
+
     return pc;
   }
   PatchedRTC.prototype = OrigRTC.prototype;
+  // Inherit static methods (e.g. RTCPeerConnection.generateCertificate) so any
+  // Teams code that calls them through the patched global hits the real impl.
+  // Without this line, `RTCPeerConnection.generateCertificate(...)` is
+  // `undefined(...)` → TypeError → Teams catches it, re-rejects as the
+  // `{"isTrusted":true}` Event, and the call drops to "Leaving..." indefinitely.
+  Object.setPrototypeOf(PatchedRTC, OrigRTC);
   win.RTCPeerConnection = PatchedRTC;
 }

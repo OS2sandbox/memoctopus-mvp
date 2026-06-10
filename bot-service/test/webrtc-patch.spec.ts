@@ -63,6 +63,26 @@ test('pc.removeTrack of an addTrack-returned video sender does NOT throw', async
   expect(result.threw, `pc.removeTrack(videoSender) threw — this is the InvalidAccessError that produced "Leaving..." indefinitely. Either the foreign-sender redirect crept back in, or the patch installation is broken.`).toBe(false);
 });
 
+test('static RTCPeerConnection methods (generateCertificate) are inherited by the patched constructor', async ({ page }) => {
+  // Teams calls RTCPeerConnection.generateCertificate(...) early in its WebRTC
+  // setup. If the patched constructor doesn't inherit statics from the original
+  // (via Object.setPrototypeOf), the call lands on `undefined(...)` and throws
+  // TypeError, which Teams catches and re-rejects as the {"isTrusted":true}
+  // Event that triggers "Leaving..." indefinitely. This test asserts the static
+  // factory is callable through the patched global so the regression cannot
+  // come back silently.
+  const result = await page.evaluate(async () => {
+    try {
+      const cert = await RTCPeerConnection.generateCertificate({ name: 'ECDSA', namedCurve: 'P-256' } as AlgorithmIdentifier);
+      return { ok: true, hasCert: !!cert };
+    } catch (err) {
+      return { ok: false, name: (err as Error).name, message: (err as Error).message };
+    }
+  });
+  expect(result.ok, `RTCPeerConnection.generateCertificate threw — patched constructor is missing static inheritance. Add Object.setPrototypeOf(PatchedRTC, OrigRTC).`).toBe(true);
+  expect(result.hasCert).toBe(true);
+});
+
 test('addTransceiver("video") creates a transceiver on the real PC', async ({ page }) => {
   const count = await page.evaluate(() => {
     const pc = new RTCPeerConnection();
