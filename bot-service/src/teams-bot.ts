@@ -5,6 +5,12 @@ import FormData from 'form-data';
 import fetch from 'node-fetch';
 import { chromium, BrowserContext, Page } from 'playwright';
 import { installWebRTCPatch } from './webrtc-patch';
+import {
+  newLeaveDetectorState,
+  leaveDetectorTick,
+  LeaveDetectorState,
+} from './lib/leave-detector';
+import { JoinRaceResult, isAdmitted, joinFailureMessage, hangForever } from './lib/join-race';
 
 export type BotStatus = 'joining' | 'recording' | 'paused' | 'ended' | 'error';
 
@@ -55,7 +61,7 @@ export class TeamsMeetingBot {
   private rtpIdleChecks = 0;
   private rtpAudioIdleChecks = 0;
   private buttonCount = -1;
-  private leaveBtnGonePolls = 0;
+  private leaveDetector: LeaveDetectorState = newLeaveDetectorState();
   private onEndedCallback: (() => void) | null = null;
 
   constructor(config: BotSessionConfig) {
@@ -142,12 +148,19 @@ export class TeamsMeetingBot {
     // Forward browser console and unhandled errors to Node stdout so they appear
     // alongside bot logs. Errors show at [browser:error] to make them easy to grep.
     this.page.on('console', (msg) => {
-      if (msg.type() === 'error' || msg.type() === 'warning') {
-        console.log(`[browser:${msg.type()}]`, msg.text());
+      const type = msg.type();
+      if (type === 'error' || type === 'warning') {
+        console.log(`[browser:${type}]`, msg.text());
       }
     });
     this.page.on('pageerror', (err) => {
       console.log('[browser:pageerror]', err.message);
+    });
+    // Distinct tag for Teams' "Action failed" toast — historically the dominant
+    // trigger for instant-leave regressions after admission. Logging it
+    // separately makes grep find the trigger before the leave cascade.
+    void this.page.exposeFunction('__botLogActionFailed', (text: string) => {
+      console.log('[bot:action-failed]', text.slice(0, 200));
     });
 
     // Short-circuit requests that Teams makes to third-party domains which respond
@@ -359,7 +372,7 @@ export class TeamsMeetingBot {
     if (lobbySnap) fs.writeFileSync('/tmp/bot-snap-lobby.png', lobbySnap);
     console.log('[bot] lobby snapshot → /tmp/bot-snap-lobby.png');
 
-    const joinResult = await Promise.race([
+    const joinResult: JoinRaceResult = await Promise.race<JoinRaceResult>([
       // Wait for the in-meeting hangup button (data-tid only — aria-label="Leave" also
       // appears on the lobby's cancel button and causes a false-positive here).
       // We then re-confirm the button is stable after the page finishes navigating.
@@ -447,13 +460,13 @@ export class TeamsMeetingBot {
         // After retries, never let this arm settle — Arm 1 (LEAVE_BTN) or Arm 3
         // (denial) must win the race. Without this, the async function resolving
         // with `undefined` wins, giving joinResult = undefined and a spurious failure.
-        await new Promise<never>(() => {});
+        return hangForever();
       }).catch(async () => {
         // The catch fires if waitForFunction rejects (timeout/navigation) OR if the
         // then-callback throws (e.g. click() on a stale element). In all cases we
         // must NOT settle this arm — resolving with undefined here would win the
         // race and produce joinResult = undefined exactly like the original bug.
-        await new Promise<never>(() => {});
+        return hangForever();
       }),
 
       // Text-based denial detection
@@ -481,7 +494,7 @@ export class TeamsMeetingBot {
       return 'timeout' as const;
     });
 
-    if (joinResult !== 'admitted') {
+    if (!isAdmitted(joinResult)) {
       console.log(`[bot] join failed or spurious: ${joinResult}`);
       await snap(`04-join-${joinResult}`);
       // Unconditional snapshot and page text for spurious/failed joins so the
@@ -492,10 +505,7 @@ export class TeamsMeetingBot {
         const failText = await page.evaluate(() => (document.body?.innerText ?? '').slice(0, 500)).catch(() => '');
         console.log(`[bot] page text at join-${joinResult}:`, failText.replace(/\n/g, ' | '));
       } catch { /* ignore */ }
-      if (joinResult === 'spurious') {
-        throw new Error('Hangup button appeared then disappeared — page still navigating or join failed');
-      }
-      throw new Error(`Entry ${joinResult} — host denied or meeting unreachable`);
+      throw new Error(joinFailureMessage(joinResult));
     }
 
     await snap('05-in-meeting');
@@ -507,54 +517,23 @@ export class TeamsMeetingBot {
 
     await this._startAudioCapture();
 
-    // Teams sometimes re-enables the mic after lobby admission — mute as soon as
-    // the in-call toolbar renders.
-    //
-    // Strategy: wait for ANY mic button (on or off) to appear, then read its state
-    // before acting. This avoids the race where the toolbar hasn't loaded yet and
-    // Ctrl+Shift+M fires blind, accidentally unmuting a mic the prejoin step silenced.
-    const inCallMicOnSel = [
-      'button[data-tid="microphone-button"][aria-pressed="true"]',
-      'button[data-tid="toggle-mute"][aria-pressed="true"]',
-      'button[aria-label="Mute"]',
-      'button[aria-label="Mute microphone"]',
-      'button[aria-label="Turn off microphone"]',
-      'button[aria-label="Sluk mikrofon"]',
-      'button[aria-label="Slå lyden fra"]',
-      'button[title="Mute microphone (Ctrl+Shift+M)"]',
-    ].join(', ');
-    const inCallMicOffSel = [
-      'button[data-tid="microphone-button"][aria-pressed="false"]',
-      'button[data-tid="toggle-mute"][aria-pressed="false"]',
-      'button[aria-label="Unmute"]',
-      'button[aria-label="Unmute microphone"]',
-      'button[aria-label="Turn on microphone"]',
-      'button[aria-label="Slå lyden til"]',
-    ].join(', ');
-
-    // Wait for the toolbar to render before reading state (up to 3 s).
-    await page.waitForSelector(`${inCallMicOnSel}, ${inCallMicOffSel}`, { timeout: 3000 }).catch(() => {});
-
-    const micIsOn = await page.locator(inCallMicOnSel).first().isVisible().catch(() => false);
-    if (micIsOn) {
-      await page.locator(inCallMicOnSel).first().click().catch(() => {});
-      console.log('[bot] muted microphone in-call via button');
-    } else {
-      console.log('[bot] microphone already muted in-call — skipping');
-    }
-
-    // Open the participants panel so the roster selectors in _pollParticipants()
-    // find real names — the panel DOM nodes only exist when the panel is open.
-    const participantsBtn = page.locator([
-      'button[data-tid="participants-button"]',
-      'button[aria-label="Show participants"]',
-      'button[aria-label="Vis deltagere"]',
-      'button[aria-label="People"]',
-    ].join(', ')).first();
-    if (await participantsBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await participantsBtn.click().catch(() => {});
-      console.log('[bot] opened participants panel');
-    }
+    // No post-admission UI clicks. Clicking the in-call mic toggle or the
+    // participants-panel button inside the first ~5 s after admission triggers
+    // Teams' "Action failed" toast → auto-leave, because:
+    //   1. Teams' mic-toggle handler iterates RTCRtpSenders. The video sender
+    //      returned by webrtc-patch.ts:addTrack belongs to a throw-away PC, so
+    //      any sender method call on it throws InvalidAccessError.
+    //   2. The toolbar buttons mount before React binds their handlers; clicks
+    //      in that window dispatch unhandled rejections that Teams surfaces as
+    //      "Action failed".
+    // Why neither click is needed:
+    //   - The getUserMedia patch sets `track.enabled = false` on every audio
+    //     track at construction time (teams-bot.ts:184). The bot literally
+    //     cannot transmit audio regardless of Teams' UI mute state.
+    //   - The prejoin mute step (lines ~263–299) already drives Teams' mute
+    //     state to "off" before we click Join now.
+    //   - _pollParticipants reads the roster via headcount badge + roster cells
+    //     that work whether the participants panel is open or closed.
   }
 
   private async _startAudioCapture(): Promise<void> {
@@ -779,6 +758,34 @@ export class TeamsMeetingBot {
           }, 300);
         });
         endObs.observe(document.body, { childList: true, subtree: true });
+
+        // Action-failed toast observer — surfaces a distinct log line as soon
+        // as Teams renders its generic error toast. We do NOT take any action
+        // here (the existing leave-detection paths handle the cascade); this
+        // is purely forensic, so post-mortems can pinpoint the trigger.
+        const ACTION_FAILED_PATTERNS = [
+          'action failed',
+          'handlingen mislykkedes',
+          'handlingen kunne ikke',
+        ];
+        let actionFailedSeen = false;
+        const actionFailedObs = new MutationObserver(() => {
+          if (actionFailedSeen) return;
+          try {
+            const alerts = document.querySelectorAll('[role="alert"], [aria-live="assertive"], [data-tid*="toast" i]');
+            for (const el of Array.from(alerts)) {
+              const text = ((el as HTMLElement).innerText ?? '').toLowerCase();
+              if (!text) continue;
+              if (ACTION_FAILED_PATTERNS.some((p) => text.includes(p))) {
+                actionFailedSeen = true;
+                (window as unknown as Record<string, ((s: string) => void) | undefined>).__botLogActionFailed?.(text);
+                actionFailedObs.disconnect();
+                break;
+              }
+            }
+          } catch { /* swallow — observability must never throw */ }
+        });
+        actionFailedObs.observe(document.body, { childList: true, subtree: true });
       } catch (err) {
         console.error('[bot] audio capture setup failed', err);
       }
@@ -1036,16 +1043,16 @@ export class TeamsMeetingBot {
       // polls (≈10 s) so transient toolbar animations or error-recovery screens don't trigger a stop.
       // Other signals (track count, participant count) cover departures inside the 30 s window.
       const leaveVisible = await this.page.locator(LEAVE_BTN).first().isVisible().catch(() => false);
-      if (!leaveVisible && this.elapsed > 30 && this.isActivelyRecording()) {
-        this.leaveBtnGonePolls++;
-        if (this.leaveBtnGonePolls >= 5) {
-          console.log('[bot] Leave button gone for 5 consecutive polls — kicked or meeting ended');
-          void this.stop();
-          return;
-        }
-        console.log(`[bot] Leave button gone (poll ${this.leaveBtnGonePolls}/5) — waiting to confirm`);
-      } else {
-        this.leaveBtnGonePolls = 0;
+      const decision = leaveDetectorTick(this.leaveDetector, {
+        leaveButtonVisible: leaveVisible,
+        elapsedSeconds: this.elapsed,
+        isActivelyRecording: this.isActivelyRecording(),
+      });
+      this.leaveDetector = decision.state;
+      if (decision.logLine) console.log(`[bot] ${decision.logLine}`);
+      if (decision.shouldStop) {
+        void this.stop();
+        return;
       }
 
       // Participants button aria-label contains the live headcount, e.g. "Show participants (2)".
