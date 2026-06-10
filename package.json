@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "postinstall": "node scripts/copy-vad-assets.js",
-    "predev": "lsof -ti :${PORT:-3004} | xargs kill -9 2>/dev/null || true",
+    "predev": "lsof -t -i :${PORT:-3004} -i :${BOT_PORT:-3001} | xargs kill -9 2>/dev/null || true",
     "dev": "concurrently --kill-others -n next,bot -c blue,green \"./node_modules/.bin/next dev -p ${PORT:-3004}\" \"npm --prefix bot-service run dev\"",
     "build": "next build",
     "start": "next start",
