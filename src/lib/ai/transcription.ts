@@ -8,9 +8,9 @@ export interface TranscriptionProvider {
 }
 
 // ─── Hviske implementation ────────────────────────────────────────────────────
-// Talks to the hviske server via its OpenAI-compatible /v1/audio/transcriptions
-// endpoint. Two modes:
-//   transcribe()    — full batch call, returns diarized TranscriptSegment[]
+// Hviske (syvai) is the only transcription provider. Talks to the server via its
+// OpenAI-compatible /v1/audio/transcriptions endpoint. Two modes:
+//   transcribe()    — full batch call, returns timed TranscriptSegment[]
 //   transcribeRaw() — lightweight call, returns plain text (for per-utterance live path)
 
 export class HviskeProvider implements TranscriptionProvider {
@@ -36,6 +36,7 @@ export class HviskeProvider implements TranscriptionProvider {
       file,
       language: this.language,
       response_format: 'json',
+      temperature: 0,
     });
 
     const text = response.text?.trim() ?? '';
@@ -57,6 +58,7 @@ export class HviskeProvider implements TranscriptionProvider {
       file,
       language: this.language,
       response_format: 'json',
+      temperature: 0,
     }, { timeout: 20_000 });
 
     return { text: response.text ?? '', latencyMs: Date.now() - t0 };

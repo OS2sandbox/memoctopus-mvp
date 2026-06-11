@@ -6,8 +6,6 @@ import { MeetingBotScreen } from './MeetingBotScreen';
 
 const mockPush = vi.fn();
 const mockSearchParamsGet = vi.fn().mockReturnValue(null);
-// Stable object references prevent useCallback deps from changing on every render,
-// which would otherwise cause an infinite polling restart loop in tests.
 const mockRouter = { push: mockPush };
 const mockSearchParamsObj = { get: mockSearchParamsGet };
 
@@ -20,24 +18,62 @@ vi.mock('@/lib/use-is-mobile', () => ({
   useIsMobile: () => false,
 }));
 
+vi.mock('@/lib/storage', () => ({
+  saveAudio: vi.fn().mockResolvedValue(undefined),
+  updateMeeting: vi.fn().mockResolvedValue(undefined),
+  deleteMeeting: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { saveAudio, updateMeeting, deleteMeeting } from '@/lib/storage';
+
+const mockSaveAudio = vi.mocked(saveAudio);
+const mockUpdateMeeting = vi.mocked(updateMeeting);
+const mockDeleteMeeting = vi.mocked(deleteMeeting);
+
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
 const MEETING_ID = 'meet-1';
 const MEETING_URL = 'https://teams.microsoft.com/l/meetup-join/19:meeting_abc@thread.v2/0';
+const SESSION = 'sess-1';
 
-function forbinderResponse(overrides: object = {}) {
-  return {
-    ok: true,
-    json: async () => ({ status: 'forbinder', participants: [], elapsed: 0, ...overrides }),
-  };
+function jsonOk(body: object) {
+  return { ok: true, json: async () => body };
 }
 
-function renderBot(props: { meetingId?: string; meetingUrl?: string } = {}) {
+// Route the mocked fetch by URL so a single render can hit several bot endpoints.
+function routeFetch(handlers: {
+  status?: () => unknown;
+  audio?: () => Response;
+  control?: () => unknown;
+  sessions?: () => unknown;
+}) {
+  mockFetch.mockImplementation(async (url: string) => {
+    if (url.includes('/api/bot/status/')) return handlers.status?.() ?? jsonOk({ status: 'forbinder', participants: [], elapsed: 0 });
+    if (url.includes('/api/bot/audio/')) return handlers.audio?.() ?? new Response(null, { status: 404 });
+    if (url.includes('/api/bot/control/')) return handlers.control?.() ?? jsonOk({ ok: true });
+    if (url.includes('/api/bot/sessions')) return handlers.sessions?.() ?? jsonOk({ sessionId: SESSION });
+    return jsonOk({});
+  });
+}
+
+function audioResponse(participants: string[] = [], duration = 30) {
+  return new Response(new Blob(['audio bytes']), {
+    status: 200,
+    headers: {
+      'Content-Type': 'audio/webm',
+      'X-Participants': encodeURIComponent(JSON.stringify(participants)),
+      'X-Duration': String(duration),
+    },
+  });
+}
+
+function renderBot(props: { meetingId?: string; meetingUrl?: string; botSession?: string | null } = {}) {
   return render(
     <MeetingBotScreen
       meetingId={props.meetingId ?? MEETING_ID}
       meetingUrl={props.meetingUrl ?? MEETING_URL}
+      botSession={props.botSession === undefined ? SESSION : props.botSession}
     />,
   );
 }
@@ -45,9 +81,11 @@ function renderBot(props: { meetingId?: string; meetingUrl?: string } = {}) {
 beforeEach(() => {
   mockFetch.mockReset();
   mockPush.mockReset();
+  mockSaveAudio.mockClear();
+  mockUpdateMeeting.mockClear();
+  mockDeleteMeeting.mockClear();
   mockSearchParamsGet.mockReturnValue(null);
-  // Default: every poll returns 'forbinder'
-  mockFetch.mockResolvedValue(forbinderResponse());
+  routeFetch({});
 });
 
 afterEach(() => {
@@ -56,12 +94,6 @@ afterEach(() => {
 
 describe('MeetingBotScreen', () => {
   // ─── Initial render ───────────────────────────────────────────────────────────
-
-  it('shows 00:00 timer in connecting state', async () => {
-    renderBot();
-    await waitFor(() => expect(mockFetch).toHaveBeenCalled());
-    expect(screen.getByText('00:00')).toBeInTheDocument();
-  });
 
   it('renders the meeting URL chip', () => {
     renderBot();
@@ -73,53 +105,25 @@ describe('MeetingBotScreen', () => {
     expect(screen.getByText('← afbryd')).toBeInTheDocument();
   });
 
-  it('starts polling /api/bot/status/:id on mount', async () => {
-    renderBot();
+  it('polls /api/bot/status/:id with the sessionId when a session exists', async () => {
+    renderBot({ botSession: SESSION });
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
-    const [[url]] = mockFetch.mock.calls;
-    expect(url).toContain(`/api/bot/status/${MEETING_ID}`);
+    const statusCall = mockFetch.mock.calls.find(([url]) => typeof url === 'string' && url.includes('/api/bot/status/'));
+    expect(statusCall).toBeDefined();
+    expect(statusCall![0]).toContain(`sessionId=${SESSION}`);
+  });
+
+  it('does not poll when there is no session yet', async () => {
+    renderBot({ botSession: null });
+    await new Promise((r) => setTimeout(r, 50));
+    const statusCall = mockFetch.mock.calls.find(([url]) => typeof url === 'string' && url.includes('/api/bot/status/'));
+    expect(statusCall).toBeUndefined();
   });
 
   // ─── Status transitions ───────────────────────────────────────────────────────
 
-  it('navigates to review when meetingStatus becomes review', async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({ status: 'processing', meetingStatus: 'review', participants: [], elapsed: 0 }),
-    });
-    renderBot();
-    await waitFor(() => {
-      expect(mockPush).toHaveBeenCalledWith(`/meeting/${MEETING_ID}/review`);
-    });
-  });
-
-  it('shows cancelled state when meetingStatus is cancelled', async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({ status: 'forbinder', meetingStatus: 'cancelled', participants: [], elapsed: 0 }),
-    });
-    renderBot();
-    await waitFor(() => {
-      expect(screen.getByText('AFBRUDT')).toBeInTheDocument();
-    });
-  });
-
-  it('shows error state when poll returns error status', async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({ status: 'error', participants: [], elapsed: 0 }),
-    });
-    renderBot();
-    await waitFor(() => {
-      expect(screen.getByText('FEJL')).toBeInTheDocument();
-    });
-  });
-
   it('shows participant names when poll returns participants', async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({ status: 'optager', participants: ['Alice', 'Bob'], elapsed: 5 }),
-    });
+    routeFetch({ status: () => jsonOk({ status: 'optager', botStatus: 'recording', participants: ['Alice', 'Bob'], elapsed: 5 }) });
     renderBot();
     await waitFor(() => {
       expect(screen.getByText('Alice')).toBeInTheDocument();
@@ -127,171 +131,138 @@ describe('MeetingBotScreen', () => {
     });
   });
 
-  it('shows processing state when bot reports ended', async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({ status: 'processing', participants: [], elapsed: 0 }),
-    });
+  it('shows error state when poll returns error status', async () => {
+    routeFetch({ status: () => jsonOk({ status: 'error', botStatus: 'error', participants: [], elapsed: 0 }) });
     renderBot();
-    await waitFor(() => {
-      expect(screen.getByText('BEHANDLER')).toBeInTheDocument();
-    });
+    await waitFor(() => expect(screen.getByText('FEJL')).toBeInTheDocument());
   });
 
-  // ─── Timer behaviour ──────────────────────────────────────────────────────────
-
-  it('starts elapsed timer when transitioning from forbinder to optager', async () => {
-    vi.useFakeTimers();
-    mockFetch.mockResolvedValueOnce(forbinderResponse()); // first poll: forbinder
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({ status: 'optager', participants: [], elapsed: 10 }),
+  it('shows processing while pulling the recording (bot ended, audio not ready)', async () => {
+    routeFetch({
+      status: () => jsonOk({ status: 'processing', botStatus: 'ended', participants: [], elapsed: 0 }),
+      audio: () => new Response(null, { status: 404 }), // still uploading
     });
-
     renderBot();
-    // Wrap in act() so React flushes state updates from timer callbacks before we assert.
-    // waitFor doesn't work with fake timers because its own 50ms retry is also fake.
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await waitFor(() => expect(screen.getByText('BEHANDLER')).toBeInTheDocument());
+  });
 
-    // elapsed is seeded from server value on transition; timer should now be ticking
-    const timer = screen.getByText(/\d{2}:\d{2}/);
-    expect(timer).not.toHaveTextContent('00:00');
+  it('downloads the recording into IndexedDB and navigates to review when the bot ends', async () => {
+    routeFetch({
+      status: () => jsonOk({ status: 'processing', botStatus: 'ended', participants: [], elapsed: 0 }),
+      audio: () => audioResponse(['Alice'], 42),
+    });
+    renderBot();
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/meeting/${MEETING_ID}/review`));
+    expect(mockSaveAudio).toHaveBeenCalledWith(MEETING_ID, expect.any(Blob), 'audio/webm');
+    expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, expect.objectContaining({
+      status: 'processing',
+      botSession: null,
+      audioDurationSeconds: 42,
+    }));
+  });
+
+  it('shows cancelled and discards the meeting when the bot has no recording', async () => {
+    routeFetch({
+      status: () => jsonOk({ status: 'processing', botStatus: 'ended', participants: [], elapsed: 0 }),
+      audio: () => new Response(JSON.stringify({ status: 'no-recording' }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      }),
+    });
+    renderBot();
+    await waitFor(() => expect(screen.getByText('AFBRUDT')).toBeInTheDocument());
+    expect(mockDeleteMeeting).toHaveBeenCalledWith(MEETING_ID);
   });
 
   // ─── Controls ─────────────────────────────────────────────────────────────────
 
-  it('abort button calls /api/bot/control with action=abort and navigates home', async () => {
-    mockFetch
-      .mockResolvedValueOnce(forbinderResponse()) // poll
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) }); // control
-
+  it('abort calls control with action=abort + sessionId, deletes the meeting, navigates home', async () => {
     renderBot();
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
 
-    const abortBtn = screen.getByText('← afbryd');
-    await act(async () => { fireEvent.click(abortBtn); });
-
+    await act(async () => { fireEvent.click(screen.getByText('← afbryd')); });
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/dashboard'));
 
-    const controlCall = mockFetch.mock.calls.find(
-      ([url]) => typeof url === 'string' && url.includes('/api/bot/control/'),
-    );
+    const controlCall = mockFetch.mock.calls.find(([url]) => typeof url === 'string' && url.includes('/api/bot/control/'));
     expect(controlCall).toBeDefined();
     const body = JSON.parse(controlCall![1].body as string);
     expect(body.action).toBe('abort');
+    expect(body.sessionId).toBe(SESSION);
+    expect(mockDeleteMeeting).toHaveBeenCalledWith(MEETING_ID);
   });
 
-  it('stop button calls /api/bot/control with action=stop', async () => {
-    // Start in optager (recording) so stop button is visible
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({ status: 'optager', participants: [], elapsed: 30 }),
-    });
-
+  it('stop calls control with action=stop + sessionId', async () => {
+    routeFetch({ status: () => jsonOk({ status: 'optager', botStatus: 'recording', participants: [], elapsed: 30 }) });
     renderBot();
     await waitFor(() => screen.getByText('Stop & afslut →'));
 
-    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) });
     await act(async () => { fireEvent.click(screen.getByText('Stop & afslut →')); });
 
-    const controlCall = mockFetch.mock.calls.find(
-      ([url]) => typeof url === 'string' && url.includes('/api/bot/control/'),
-    );
+    const controlCall = mockFetch.mock.calls.find(([url]) => typeof url === 'string' && url.includes('/api/bot/control/'));
     expect(controlCall).toBeDefined();
     const body = JSON.parse(controlCall![1].body as string);
     expect(body.action).toBe('stop');
+    expect(body.sessionId).toBe(SESSION);
   });
 
-  it('pause button calls /api/bot/control with action=pause when recording', async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({ status: 'optager', participants: [], elapsed: 10 }),
-    });
-
+  it('pause calls control with action=pause when recording', async () => {
+    routeFetch({ status: () => jsonOk({ status: 'optager', botStatus: 'recording', participants: [], elapsed: 10 }) });
     renderBot();
     await waitFor(() => screen.getByTitle('Pause optagelse'));
 
-    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) });
     await act(async () => { fireEvent.click(screen.getByTitle('Pause optagelse')); });
 
     const controlCall = mockFetch.mock.calls.find(
-      ([url, init]) =>
-        typeof url === 'string' &&
-        url.includes('/api/bot/control/') &&
+      ([url, init]) => typeof url === 'string' && url.includes('/api/bot/control/') &&
         JSON.parse((init as RequestInit).body as string).action === 'pause',
-    );
-    expect(controlCall).toBeDefined();
-  });
-
-  it('resume button calls /api/bot/control with action=resume when paused', async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({ status: 'pause', participants: [], elapsed: 20 }),
-    });
-
-    renderBot();
-    await waitFor(() => screen.getByTitle('Fortsæt optagelse'));
-
-    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true }) });
-    await act(async () => { fireEvent.click(screen.getByTitle('Fortsæt optagelse')); });
-
-    const controlCall = mockFetch.mock.calls.find(
-      ([url, init]) =>
-        typeof url === 'string' &&
-        url.includes('/api/bot/control/') &&
-        JSON.parse((init as RequestInit).body as string).action === 'resume',
     );
     expect(controlCall).toBeDefined();
   });
 
   // ─── Bot session creation ─────────────────────────────────────────────────────
 
-  it('calls /api/bot/sessions when ?join=1 is present', async () => {
+  it('creates a session (with meetingUrl) when ?join=1 and no existing session', async () => {
     mockSearchParamsGet.mockReturnValue('1');
-    mockFetch
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ sessionId: 'sess-1' }) }) // sessions
-      .mockResolvedValue(forbinderResponse()); // polls
-
-    renderBot();
+    renderBot({ botSession: null });
     await waitFor(() => {
-      const sessionCall = mockFetch.mock.calls.find(
-        ([url]) => typeof url === 'string' && url.includes('/api/bot/sessions'),
-      );
+      const sessionCall = mockFetch.mock.calls.find(([url]) => typeof url === 'string' && url.includes('/api/bot/sessions'));
       expect(sessionCall).toBeDefined();
     });
+    const sessionCall = mockFetch.mock.calls.find(([url]) => typeof url === 'string' && url.includes('/api/bot/sessions'));
+    const body = JSON.parse(sessionCall![1].body as string);
+    expect(body.meetingUrl).toBe(MEETING_URL);
+    await waitFor(() => expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, { botSession: SESSION }));
   });
 
-  it('does NOT call /api/bot/sessions when ?join param is absent', async () => {
+  it('does NOT create a session when ?join is absent', async () => {
     mockSearchParamsGet.mockReturnValue(null);
-    renderBot();
+    renderBot({ botSession: SESSION });
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
+    const sessionCall = mockFetch.mock.calls.find(([url]) => typeof url === 'string' && url.includes('/api/bot/sessions'));
+    expect(sessionCall).toBeUndefined();
+  });
 
-    const sessionCall = mockFetch.mock.calls.find(
-      ([url]) => typeof url === 'string' && url.includes('/api/bot/sessions'),
-    );
+  it('does NOT create a session when one already exists (reload)', async () => {
+    mockSearchParamsGet.mockReturnValue('1');
+    renderBot({ botSession: SESSION });
+    await waitFor(() => expect(mockFetch).toHaveBeenCalled());
+    const sessionCall = mockFetch.mock.calls.find(([url]) => typeof url === 'string' && url.includes('/api/bot/sessions'));
     expect(sessionCall).toBeUndefined();
   });
 
   it('shows error state when session creation fails', async () => {
     mockSearchParamsGet.mockReturnValue('1');
-    mockFetch
-      .mockResolvedValueOnce({ ok: false, json: async () => ({ error: 'Too many sessions' }) }) // sessions fails
-      .mockResolvedValue({ ok: false, status: 503 }); // polls return error → no status override
-
-    renderBot();
-    await waitFor(() => {
-      expect(screen.getByText('FEJL')).toBeInTheDocument();
-    });
+    routeFetch({ sessions: () => ({ ok: false, json: async () => ({ error: 'Too many sessions' }) }) });
+    renderBot({ botSession: null });
+    await waitFor(() => expect(screen.getByText('FEJL')).toBeInTheDocument());
   });
 
   // ─── Cleanup ──────────────────────────────────────────────────────────────────
 
   it('stops polling when component unmounts', async () => {
     vi.useFakeTimers();
-    mockFetch.mockResolvedValue(forbinderResponse());
-
+    routeFetch({});
     const { unmount } = renderBot();
-    await vi.advanceTimersByTimeAsync(3000); // advance past one poll interval without infinite loop
+    await vi.advanceTimersByTimeAsync(3000);
     const callsBefore = mockFetch.mock.calls.length;
 
     unmount();

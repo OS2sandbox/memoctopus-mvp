@@ -170,6 +170,7 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
         <MeetingBotScreen
           meetingId={meetingId}
           meetingUrl={meeting.meetingUrl ?? ''}
+          botSession={meeting.botSession ?? null}
         />
       )}
 

@@ -14,6 +14,8 @@ export interface StoredMeeting {
   audioDurationSeconds: number | null;
   audioSizeBytes: number;
   audioDeleted: boolean;
+  // Active Teams bot-service session id (null when not a bot meeting / not joined).
+  botSession?: string | null;
 }
 
 export interface StoredTranscript {

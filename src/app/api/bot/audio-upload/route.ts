@@ -1,12 +1,12 @@
-import { after, NextRequest, NextResponse } from 'next/server';
-import { queryUserSchemaOne } from '@/lib/db/user-schema';
-import { transcribeWithVadBatches } from '@/lib/audio/vad-batch-server';
-import { detectPiiInSegments } from '@/lib/ai/pii';
-import { groupIntoChapters } from '@/lib/ai/chapters';
-import { saveAudioFile } from '@/lib/audio/storage';
-import type { TranscriptSegment, PiiReplacement } from '@/types';
+import { NextRequest, NextResponse } from 'next/server';
+import { storePendingAudio, markNoRecording } from '@/lib/bot-pending-audio';
 
 // Called by the bot service — authenticated with BOT_INTERNAL_SECRET, not a user session.
+//
+// The recording is stashed transiently (keyed by meetingId) rather than persisted:
+// meetings live in the user's browser IndexedDB, so the client pulls this audio down
+// via GET /api/bot/audio/[meetingId] and runs the normal client-side transcription
+// pipeline. Nothing is written to a server database.
 export async function POST(req: NextRequest) {
   const authHeader = req.headers.get('Authorization');
   const secret = process.env.BOT_INTERNAL_SECRET;
@@ -14,28 +14,24 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // Handle no-recording notification from bot (JSON, no audio file)
+  // No-recording notification from bot (JSON, no audio file).
   const contentType = req.headers.get('content-type') ?? '';
   if (contentType.includes('application/json')) {
-    const body = await req.json() as { meetingId?: string; userId?: string; hasRecording?: boolean };
-    if (!body.meetingId || !body.userId || body.hasRecording !== false) {
+    const body = await req.json() as { meetingId?: string; hasRecording?: boolean };
+    if (!body.meetingId || body.hasRecording !== false) {
       return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
     }
-    await queryUserSchemaOne(
-      body.userId,
-      `UPDATE meetings SET status = 'cancelled', bot_session = NULL, updated_at = NOW() WHERE id = $1`,
-      [body.meetingId],
-    ).catch(() => {});
+    await markNoRecording(body.meetingId).catch(() => {});
     return NextResponse.json({ ok: true });
   }
 
   const formData = await req.formData();
   const audioFile = formData.get('audio') as File | null;
   const meetingId = formData.get('meetingId') as string | null;
-  const userId = formData.get('userId') as string | null;
+  const durationStr = formData.get('duration') as string | null;
   const participantsJson = formData.get('participants') as string | null;
 
-  if (!audioFile || !meetingId || !userId) {
+  if (!audioFile || !meetingId) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
   }
 
@@ -44,124 +40,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid audio file type' }, { status: 400 });
   }
 
-  const meeting = await queryUserSchemaOne<{ id: string; status: string }>(
-    userId,
-    'SELECT id, status FROM meetings WHERE id = $1',
-    [meetingId],
-  );
-  if (!meeting) return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
-
-  // Read audio into memory now — the File object is tied to this request and won't
-  // be available after the response is sent.
-  const buffer = Buffer.from(await audioFile.arrayBuffer());
-  const originalFilename = audioFile.name || 'recording.webm';
-
-  // Merge detected participants (fast DB write — do before responding).
+  let participants: string[] = [];
   if (participantsJson) {
     try {
-      const detected: string[] = JSON.parse(participantsJson);
-      if (detected.length > 0) {
-        await queryUserSchemaOne(
-          userId,
-          `UPDATE meetings
-           SET participants = (
-             SELECT array_agg(DISTINCT elem ORDER BY elem)
-             FROM unnest(participants || $1::text[]) AS t(elem)
-           ),
-           updated_at = NOW()
-           WHERE id = $2`,
-          [detected, meetingId],
-        );
-      }
-    } catch {
-      // non-fatal — proceed with transcription
-    }
+      const parsed = JSON.parse(participantsJson);
+      if (Array.isArray(parsed)) participants = parsed.filter((p) => typeof p === 'string');
+    } catch { /* non-fatal */ }
   }
 
-  await queryUserSchemaOne(
-    userId,
-    `UPDATE meetings SET status = 'processing', updated_at = NOW() WHERE id = $1`,
-    [meetingId],
-  );
+  const durationSeconds = durationStr ? Math.max(0, parseInt(durationStr, 10) || 0) : null;
+  const buffer = Buffer.from(await audioFile.arrayBuffer());
 
-  // Schedule the slow pipeline (save → transcribe → PII → chapters → review) to run
-  // after this response is returned. This prevents the bot-service's HTTP request from
-  // hitting the proxy timeout (502) while waiting for transcription to finish.
-  after(async () => {
-    await _processAudio({ buffer, meetingId, userId, originalFilename });
-  });
+  try {
+    await storePendingAudio(meetingId, buffer, {
+      mimeType,
+      participants,
+      durationSeconds,
+      hasRecording: true,
+    });
+  } catch (err) {
+    console.error('[bot audio-upload] failed to stash audio:', err);
+    return NextResponse.json({ error: 'Failed to store audio' }, { status: 500 });
+  }
 
   return NextResponse.json({ ok: true });
-}
-
-async function _processAudio({
-  buffer,
-  meetingId,
-  userId,
-  originalFilename,
-}: {
-  buffer: Buffer;
-  meetingId: string;
-  userId: string;
-  originalFilename: string;
-}): Promise<void> {
-  try {
-    const { filename, sizeBytes } = await saveAudioFile(userId, buffer, originalFilename);
-    await queryUserSchemaOne(
-      userId,
-      `INSERT INTO audio_files (meeting_id, filename, size_bytes) VALUES ($1, $2, $3)`,
-      [meetingId, filename, sizeBytes],
-    );
-
-    const rawSegments: TranscriptSegment[] = await transcribeWithVadBatches(buffer);
-
-    let piiReplacements: PiiReplacement[] = [];
-    try {
-      const piiResult = await detectPiiInSegments(rawSegments);
-      piiReplacements = piiResult.replacements;
-    } catch (piiErr) {
-      console.error('Bot audio PII detection failed (non-fatal):', piiErr);
-    }
-
-    let chapters: Awaited<ReturnType<typeof groupIntoChapters>> = [];
-    try {
-      chapters = await groupIntoChapters(rawSegments);
-    } catch (chapErr) {
-      console.error('Bot audio chapters generation failed (non-fatal):', chapErr);
-    }
-
-    const rawText = rawSegments.map((s) => s.text).join(' ');
-
-    await queryUserSchemaOne(
-      userId,
-      `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements, chapters)
-       VALUES ($1, $2, $3, NULL, $4, $5)
-       ON CONFLICT (meeting_id) DO UPDATE SET
-         raw_text = EXCLUDED.raw_text,
-         segments = EXCLUDED.segments,
-         pii_replacements = EXCLUDED.pii_replacements,
-         chapters = EXCLUDED.chapters`,
-      [meetingId, rawText, JSON.stringify(rawSegments), JSON.stringify(piiReplacements), JSON.stringify(chapters)],
-    );
-
-    await queryUserSchemaOne(
-      userId,
-      `UPDATE meetings SET status = 'review', bot_session = NULL, updated_at = NOW() WHERE id = $1`,
-      [meetingId],
-    );
-  } catch (err) {
-    console.error('Bot audio transcription error:', err);
-    // Even on failure, move to review with an empty transcript so the UI can navigate.
-    await queryUserSchemaOne(
-      userId,
-      `INSERT INTO transcripts (meeting_id, raw_text, segments) VALUES ($1, '', '[]')
-       ON CONFLICT (meeting_id) DO NOTHING`,
-      [meetingId],
-    ).catch(() => null);
-    await queryUserSchemaOne(
-      userId,
-      `UPDATE meetings SET status = 'review', bot_session = NULL, updated_at = NOW() WHERE id = $1`,
-      [meetingId],
-    ).catch(() => {});
-  }
 }

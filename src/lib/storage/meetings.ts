@@ -38,6 +38,7 @@ export async function createMeeting(data: {
     audioDurationSeconds: null,
     audioSizeBytes: 0,
     audioDeleted: false,
+    botSession: null,
   };
   await db.put('meetings', meeting);
   return meeting;
