@@ -1,134 +1,76 @@
 services:
-  vllm:
-    image: vllm/vllm-openai:latest
-    container_name: memoctopus-vllm
-    runtime: nvidia
-    environment:
-      HF_TOKEN: ${HF_TOKEN:-}
-    volumes:
-      - huggingface_cache:/root/.cache/huggingface
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
-      - "8001:8000"
-    command: --model ${VLLM_MODEL:-Qwen/Qwen3-0.6B} --gpu-memory-utilization 0.5 --max-num-seqs 32
-    ipc: host
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+      - "3002:3000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+      - BETTER_AUTH_URL=${BETTER_AUTH_URL}
+      - BETTER_AUTH_TRUSTED_ORIGINS=${BETTER_AUTH_TRUSTED_ORIGINS:-}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - AUDIO_STORAGE_PATH=/audio-storage
+      - BOT_SERVICE_URL=http://bot-service:3001
+      - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3002}
+      - NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED=${NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED:-true}
+      - NEXT_PUBLIC_MICROSOFT_ENABLED=${NEXT_PUBLIC_MICROSOFT_ENABLED:-false}
+      - NEXT_PUBLIC_AUTHENTIK_ENABLED=${NEXT_PUBLIC_AUTHENTIK_ENABLED:-false}
+      - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
+      - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
+      - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-}
+      - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID:-}
+      - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET:-}
+      - AUTHENTIK_DISCOVERY_URL=${AUTHENTIK_DISCOVERY_URL:-}
+    volumes:
+      - audio-storage:/audio-storage
     networks:
-      - memoctopus-network
+      - internal
+    depends_on:
+      bot-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
-  postgres:
-    image: postgres:16-alpine
-    container_name: memoctopus-postgres
+  bot-service:
+    build:
+      context: ./bot-service
+      dockerfile: Dockerfile
+    # No public port binding — only the app service needs to reach this via
+    # the internal Docker network (http://bot-service:3001). Exposing it
+    # publicly would bypass the Next.js proxy and its auth checks.
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-memoctopus}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - BOT_PORT=3001
+      - NEXT_APP_URL=http://app:3000
+      - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
+      - BOT_MAX_SESSIONS=${BOT_MAX_SESSIONS:-5}
+    networks:
+      - internal
+    shm_size: "2gb"
+    mem_limit: 6g
+    memswap_limit: 6g
+    oom_score_adj: 500
+    stop_grace_period: 120s
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-memoctopus}"]
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
       interval: 10s
       timeout: 5s
-      retries: 5
-    networks:
-      - memoctopus-network
+      retries: 3
+      start_period: 15s
     restart: unless-stopped
-
-  transcription:
-    build:
-      context: ./transcription
-      dockerfile: Dockerfile
-    container_name: memoctopus-transcription
-    runtime: nvidia
-    environment:
-      HF_TOKEN: ${HF_TOKEN:-}
-    volumes:
-      - nemo_cache:/root/.cache
-    ports:
-      - "8003:8000"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    networks:
-      - memoctopus-network
-    restart: unless-stopped
-
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: memoctopus-backend
-    environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-memoctopus}?sslmode=disable
-      TRANSCRIPTION_BASE_URL: http://transcription:8000
-      VLLM_BASE_URL: http://vllm:8000/v1
-      VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen3-0.6B}
-    ports:
-      - "8002:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      vllm:
-        condition: service_started
-      transcription:
-        condition: service_started
-    networks:
-      - memoctopus-network
-    restart: unless-stopped
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: memoctopus-frontend
-    environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-memoctopus}?sslmode=disable
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
-      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
-      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
-      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
-      MICROSOFT_TENANT_ID: ${MICROSOFT_TENANT_ID:-}
-      BACKEND_URL: http://backend:8000
-    expose:
-      - "3000"
-    depends_on:
-      - backend
-    networks:
-      - memoctopus-network
-    restart: unless-stopped
-
-  nginx:
-    image: nginx:alpine
-    container_name: memoctopus-nginx
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./nginx/certs:/etc/nginx/certs:ro
-    depends_on:
-      - frontend
-    networks:
-      - memoctopus-network
-    restart: unless-stopped
-
-volumes:
-  postgres_data:
-  huggingface_cache:
-  nemo_cache:
 
 networks:
-  memoctopus-network:
+  internal:
     driver: bridge
+
+volumes:
+  audio-storage:
