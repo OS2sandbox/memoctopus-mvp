@@ -330,19 +330,30 @@ export class TeamsMeetingBot {
       };
 
       const patched = async (constraints?: MediaStreamConstraints) => {
+        // Neither audio nor video requested — origGUM({}) throws
+        // "At least one of audio and video must be requested" in Chromium,
+        // and that rejection is exactly the {"isTrusted":true}-class noise we
+        // avoid elsewhere. Hand back an empty stream instead.
+        if (!constraints || (!constraints.audio && !constraints.video)) {
+          return new MediaStream();
+        }
         // Video requested → audio from origGUM (or empty), canvas for video.
-        if (constraints && constraints.video) {
+        if (constraints.video) {
           const audioStream = constraints.audio
             ? await origGUM({ audio: constraints.audio })
             : new MediaStream();
           audioStream.getAudioTracks().forEach((t) => { t.enabled = false; });
           const out = new MediaStream();
           audioStream.getAudioTracks().forEach((t) => out.addTrack(t));
-          out.addTrack(getCanvasStream().getVideoTracks()[0].clone());
+          // Guard: if the canvas somehow produced no video track, return
+          // audio-only rather than throwing on [0].clone() — a thrown gUM
+          // rejection wedges the prejoin / drops the call.
+          const canvasVideo = getCanvasStream().getVideoTracks()[0];
+          if (canvasVideo) out.addTrack(canvasVideo.clone());
           return out;
         }
-        // Audio-only or empty constraints — pass through, mute everything.
-        const stream = await origGUM(constraints ?? {});
+        // Audio-only — pass through, mute everything.
+        const stream = await origGUM(constraints);
         stream.getAudioTracks().forEach((t) => { t.enabled = false; });
         stream.getVideoTracks().forEach((t) => { t.enabled = false; });
         return stream;

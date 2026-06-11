@@ -205,26 +205,9 @@ export function installWebRTCPatch(): void {
         stream.addEventListener('removetrack', removeEl);
       }
     });
-
-    // Also wrap the `pc.ontrack` property setter so a Teams handler assigned via
-    // `pc.ontrack = ...` (instead of addEventListener) still goes through our
-    // audio hook before being passed to Teams' own handler. Without this, some
-    // Teams build branches replace our addEventListener-attached handler entirely.
-    const origOnTrackDesc = Object.getOwnPropertyDescriptor(OrigRTC.prototype, 'ontrack');
-    if (origOnTrackDesc?.set) {
-      Object.defineProperty(pc, 'ontrack', {
-        configurable: true,
-        enumerable: true,
-        get: origOnTrackDesc.get,
-        set(handler: ((event: RTCTrackEvent) => void) | null) {
-          if (typeof handler !== 'function') {
-            return origOnTrackDesc.set!.call(this, handler);
-          }
-          // Our addEventListener handler still fires; Teams' handler runs after.
-          return origOnTrackDesc.set!.call(this, handler);
-        },
-      });
-    }
+    // NB: our audio capture is attached via addEventListener('track') above,
+    // which a later `pc.ontrack = …` assignment by Teams does NOT remove — so
+    // no ontrack-setter wrapper is needed to keep the hook alive.
 
     return pc;
   }

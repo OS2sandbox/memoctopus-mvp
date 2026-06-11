@@ -53,28 +53,33 @@ export async function GET(
     return NextResponse.json({ error: 'Bot service not configured' }, { status: 503 });
   }
 
-  const res = await botFetch(bot, `/sessions/${meeting.bot_session}`);
+  // Returned when the bot-service can't be reached or has no record of the
+  // session (restart, crash, or a connection-refused throw). We hand back the
+  // DB-level meeting status so the client keeps polling cleanly instead of
+  // seeing a console 502. While the meeting is still joining/recording the bot
+  // session simply isn't available yet, so report the neutral 'forbinder'
+  // (connecting) status rather than erroring.
+  const offlineFallback = () =>
+    NextResponse.json({
+      status: meeting.status === 'review' || meeting.status === 'processing' ? 'processing' : 'forbinder',
+      meetingStatus: meeting.status,
+      participants: meeting.participants ?? [],
+      elapsed: 0,
+    });
+
+  // botFetch THROWS on connection-refused/DNS failure (it doesn't return a
+  // non-ok Response), so the try/catch is required — without it the route 500s
+  // and bypasses offlineFallback. This was the console 502 seen during a
+  // bot-service restart mid-poll.
+  let res: Response;
+  try {
+    res = await botFetch(bot, `/sessions/${meeting.bot_session}`);
+  } catch {
+    return offlineFallback();
+  }
 
   if (!res.ok) {
-    // Bot session gone (service restart?) — return the DB-level meeting status so the
-    // client can continue polling without a console 502 error.
-    if (meeting.status === 'review') {
-      return NextResponse.json({
-        status: 'processing',
-        meetingStatus: 'review',
-        participants: meeting.participants ?? [],
-        elapsed: 0,
-      });
-    }
-    if (meeting.status === 'processing') {
-      return NextResponse.json({
-        status: 'processing',
-        meetingStatus: 'processing',
-        participants: meeting.participants ?? [],
-        elapsed: 0,
-      });
-    }
-    return NextResponse.json({ error: 'Bot service unreachable' }, { status: 502 });
+    return offlineFallback();
   }
 
   const botState = await res.json();
