@@ -37,7 +37,7 @@ describe('POST /api/meetings/[id]/clarifications', () => {
   });
 
   it('returns 401 when not authenticated', async () => {
-    mockGetSession.mockResolvedValueOnce(null);
+    mockGetSession.mockResolvedValueOnce(null as never);
     const res = await POST(makeJsonReq(BASE_URL, 'POST', { transcript: 'text' }), PARAMS);
     expect(res.status).toBe(401);
   });

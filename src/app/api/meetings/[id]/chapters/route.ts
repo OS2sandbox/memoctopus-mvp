@@ -14,8 +14,3 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ chapters: [] });
   }
 }
-
-// PATCH: client-side only; stub for backwards compat
-export async function PATCH() {
-  return NextResponse.json({ ok: true });
-}

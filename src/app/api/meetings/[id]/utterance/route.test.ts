@@ -46,14 +46,14 @@ beforeEach(() => {
 describe('POST /api/meetings/[id]/utterance', () => {
   describe('authentication', () => {
     it('returns 401 when no session exists', async () => {
-      mockGetSession.mockResolvedValueOnce(null);
+      mockGetSession.mockResolvedValueOnce(null as never);
       const res = await POST(makeAudioRequest(5_000), PARAMS);
       expect(res.status).toBe(401);
       expect((await res.json()).error).toBe('Unauthorized');
     });
 
     it('does not call transcribeRaw when unauthenticated', async () => {
-      mockGetSession.mockResolvedValueOnce(null);
+      mockGetSession.mockResolvedValueOnce(null as never);
       await POST(makeAudioRequest(5_000), PARAMS);
       expect(mockTranscribeRaw).not.toHaveBeenCalled();
     });
