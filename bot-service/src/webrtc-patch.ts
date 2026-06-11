@@ -6,7 +6,12 @@
 //      Audio tracks are mirrored into hidden <audio> elements and the
 //      receiving PC is registered in window.__botAudioPcs so the Node side
 //      can call getStats() on each PC during participant polling.
-//   2. Installs a global unhandledrejection swallower for DOM-Event-typed
+//   2. Hooks setLocalDescription to repair the BUNDLE extmap id=11 collision
+//      in Teams' offer SDP (see dedupeExtmapCollisions below). This is what
+//      actually fixes "Sorry, we couldn't connect you" — Chromium's own offer
+//      maps id=11 to different extension URNs in the audio vs video
+//      m-sections, and setLocalDescription would otherwise throw.
+//   3. Installs a global unhandledrejection swallower for DOM-Event-typed
 //      rejections (the "{"isTrusted":true}" pattern). Teams' bundles
 //      routinely convert browser Events (MediaStreamTrack 'ended', XMLHttp
 //      'error', MediaError) into Promise rejections. When these go
@@ -16,15 +21,14 @@
 // What this patch does NOT do (intentionally removed):
 //   - It does NOT redirect video addTrack/addTransceiver to a throw-away
 //     RTCPeerConnection. That pattern caused InvalidAccessError every time
-//     Teams later tried to remove or query the sender on the real PC,
-//     which surfaced as "Action failed → Leaving..." or unhandled-rejection
+//     Teams later tried to remove or query the sender on the real PC, which
+//     surfaced as "Action failed → Leaving..." or unhandled-rejection
 //     cascades post-admission. The BUNDLE id=11 collision the redirect was
-//     protecting against is prevented upstream by the
-//     `--use-file-for-fake-video-capture=/dev/null` Chromium launch flag
-//     (see teams-bot.ts launch args). That flag swaps the built-in fake
-//     camera for a file-based device with different codec capabilities, so
-//     there is no id=11 conflict in the SDP and no need to hide video from
-//     the real PC.
+//     protecting against is now handled two ways instead: the canvas-video
+//     substitution in teams-bot.ts's getUserMedia patch (which avoids the
+//     collision at the source when Teams sends video) and the
+//     setLocalDescription dedupe below (belt-and-suspenders for the offer
+//     Teams generates regardless of our tracks).
 export function installWebRTCPatch(): void {
   const win = window as unknown as Record<string, unknown>;
   const OrigRTC = window.RTCPeerConnection;
