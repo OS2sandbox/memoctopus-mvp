@@ -731,6 +731,7 @@ export class TeamsMeetingBot {
     let admittedTicks = 0;
     let wasInLobby = false;
     let lobbyGoneTicks = 0;
+    let errorPageTicks = 0;
 
     while (Date.now() - start < timeoutMs) {
       const bodyText = await page.evaluate(() => (document.body?.innerText ?? '').toLowerCase()).catch(() => '');
@@ -741,10 +742,22 @@ export class TeamsMeetingBot {
         return 'denied';
       }
 
-      // 2. Connection-error page
+      // 2. Connection-error page. Teams transiently renders "Sorry, we
+      // couldn't connect you" WHILE it is still establishing the bot's media
+      // right after admission — clicking "Rejoin call" on first sight tears
+      // down that in-progress connection and restarts it, which is what
+      // stretched the host's "Admitting…" to ~30 s. Only click Rejoin once the
+      // error has PERSISTED for 2 consecutive ticks (≈4 s), by which point it
+      // is a genuine failure rather than a mid-connection blip.
       const onErrorPage = bodyText.includes("couldn't connect you") || bodyText.includes('could not connect you');
       if (onErrorPage) {
         admittedTicks = 0;
+        errorPageTicks++;
+        if (errorPageTicks < 2) {
+          console.log('[bot] connection-error text seen — waiting one tick to see if it self-resolves');
+          await page.waitForTimeout(TICK_MS);
+          continue;
+        }
         if (rejoinClicks >= 3) {
           console.log('[bot] connection-error page persists after 3 rejoin attempts — giving up');
           return 'denied';
@@ -752,13 +765,14 @@ export class TeamsMeetingBot {
         const rejoinBtn = page.locator(rejoinSel).first();
         if (await rejoinBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
           rejoinClicks++;
-          console.log(`[bot] connection-error page — clicking Rejoin call (attempt ${rejoinClicks}/3)`);
+          console.log(`[bot] connection-error page persisted — clicking Rejoin call (attempt ${rejoinClicks}/3)`);
           await rejoinBtn.click().catch(() => {});
           await page.waitForTimeout(1500);
         }
         await page.waitForTimeout(TICK_MS);
         continue;
       }
+      errorPageTicks = 0;
 
       // 3. Admission (enabled Leave button + Join-now negative, debounced)
       const joinNowVisible = await page.locator(JOIN_NOW_BTN).first().isVisible().catch(() => false);
