@@ -70,17 +70,19 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
     stopTimer();
     setStatus('processing');
 
+    // 404 polls are cheap (one stat of a local file), so poll fast — every 500 ms of
+    // quantization here is dead time between "bot uploaded" and "processing starts".
     const deadline = Date.now() + 2 * 60_000;
     while (Date.now() < deadline) {
       let res: Response;
       try {
         res = await fetch(`/api/bot/audio/${meetingId}`);
       } catch {
-        await new Promise((r) => setTimeout(r, 2000));
+        await new Promise((r) => setTimeout(r, 500));
         continue;
       }
       if (res.status === 404) {
-        await new Promise((r) => setTimeout(r, 2000));
+        await new Promise((r) => setTimeout(r, 500));
         continue;
       }
       const ctype = res.headers.get('content-type') ?? '';

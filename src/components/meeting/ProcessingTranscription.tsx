@@ -1,13 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import {
-  newVadBatchState, sealCurrentBatch, splitTextWithIntervals,
-  runWithConcurrency, BATCH_DURATION_S, BATCH_CONCURRENCY,
-} from '@/lib/audio/vad-batch';
-import { energyVAD, decodeAndResampleTo16k } from '@/lib/audio/vad-client';
-import { assignSpeakers } from '@/lib/audio/merge-speakers';
-import { diarizeFromMono16k } from '@/lib/audio/diarize-client';
+import { transcribeBatchesOnServer } from '@/lib/audio/transcribe-batches-client';
+import { fetchDiarizationTurns, applyDiarizationLabels } from '@/lib/audio/diarize-client';
 import { getAudio, saveTranscript, updateMeeting } from '@/lib/storage';
 import type { TranscriptSegment } from '@/types';
 
@@ -16,7 +11,42 @@ interface Props {
   onComplete?: () => void;
 }
 
-type Phase = 'downloading' | 'analyzing' | 'transcribing' | 'diarizing' | 'saving' | 'error';
+type Phase = 'downloading' | 'analyzing' | 'transcribing' | 'saving' | 'error';
+
+// How long to wait for the server-side bot transcription (started the moment the
+// bot uploaded) before falling back to driving transcription from the client.
+const SERVER_TRANSCRIPT_DEADLINE_MS = 5 * 60_000;
+const SERVER_TRANSCRIPT_POLL_MS = 1_000;
+
+interface ServerTranscript {
+  status: 'none' | 'processing' | 'failed' | 'ready';
+  segments?: TranscriptSegment[];
+  diarized?: boolean;
+}
+
+// Collect the transcript that the server began producing when the bot uploaded the
+// recording. Resolves null when there is no server-side run (e.g. an uploaded file
+// resumed after a refresh), it failed, or the deadline passes — callers fall back.
+async function collectServerTranscript(
+  meetingId: string,
+  isCancelled: () => boolean,
+): Promise<ServerTranscript | null> {
+  const deadline = Date.now() + SERVER_TRANSCRIPT_DEADLINE_MS;
+  while (!isCancelled() && Date.now() < deadline) {
+    let data: ServerTranscript;
+    try {
+      const res = await fetch(`/api/bot/transcript/${meetingId}`);
+      if (!res.ok) return null;
+      data = await res.json() as ServerTranscript;
+    } catch {
+      return null;
+    }
+    if (data.status === 'ready') return data;
+    if (data.status !== 'processing') return null;
+    await new Promise((r) => setTimeout(r, SERVER_TRANSCRIPT_POLL_MS));
+  }
+  return null;
+}
 
 interface BatchProgress {
   completed: number;
@@ -32,90 +62,83 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
   const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
     void run();
+
+    async function save(segments: TranscriptSegment[]) {
+      setPhase('saving');
+      const rawText = segments.map((s) => s.text).join(' ');
+      await saveTranscript(meetingId, { rawText, segments, chapters: [], piiReplacements: [] });
+      await updateMeeting(meetingId, { status: 'review' });
+    }
 
     async function run() {
       try {
-        // 1. Load the archived audio from IndexedDB
+        // 1. Load the archived audio from IndexedDB (needed for fallback + diarization).
         setPhase('downloading');
         const audioEntry = await getAudio(meetingId);
         if (!audioEntry) throw new Error('Lydfil ikke fundet');
-        const arrayBuffer = await audioEntry.blob.arrayBuffer();
+        const blob = audioEntry.blob;
+        if (cancelled) return;
 
-        // 2. Decode, downmix to mono, and resample to 16 kHz in 60-second chunks.
+        // 2. Bot recordings: the server started transcription + diarization the
+        // moment the bot uploaded — usually it is already done by the time the user
+        // lands here. Collect it instead of re-doing the work.
         setPhase('analyzing');
-        const mono16k = await decodeAndResampleTo16k(arrayBuffer);
-
-        // Kick off speaker diarization in parallel with transcription. It runs as a
-        // single acoustic pass over the WHOLE recording (speaker identity is global),
-        // so we send one WAV of the full audio and merge the turns onto the segments
-        // afterwards. Fail-soft: any error yields no turns and segments keep 'Taler 1'.
-        const diarizationPromise = diarizeFromMono16k(meetingId, mono16k);
-
-        // 3. Energy VAD: find speech regions and accumulate into ~27s batches.
-        // Timestamps from energyVAD are in seconds at 16 kHz — these become the
-        // VadInterval wall-clock positions used for transcript timestamp mapping.
-        const batchState = newVadBatchState();
-        for (const { audio, start, end } of energyVAD(mono16k, 16_000)) {
-          const wavOffset   = batchState.pendingWavDuration;
-          const wavDuration = audio.length / 16_000;
-          batchState.pendingAudio.push(audio);
-          batchState.pendingIntervals.push({ originalStart: start, originalEnd: end, wavOffset, wavDuration });
-          batchState.pendingWavDuration += wavDuration;
-          if (batchState.pendingWavDuration >= BATCH_DURATION_S) sealCurrentBatch(batchState);
-        }
-        sealCurrentBatch(batchState);
-
-        // 4. Transcribe all batches in parallel
-        setPhase('transcribing');
-        const batches = batchState.readyBatches;
-        const totalSeconds = batches.reduce((s, b) => s + b.totalWavDuration, 0);
-        setBatchProgress({ completed: 0, total: batches.length, completedSeconds: 0, totalSeconds });
-
-        let done = 0;
-        let completedSeconds = 0;
-        const tasks = batches.map((batch) => async (): Promise<TranscriptSegment[]> => {
-          try {
-            const fd = new FormData();
-            fd.append('audio', batch.wav, 'batch.wav');
-            const res = await fetch(`/api/meetings/${meetingId}/utterance`, {
-              method: 'POST',
-              body: fd,
-              signal: AbortSignal.timeout(60_000),
-            });
-            if (!res.ok) return [];
-            const { text } = await res.json() as { text: string };
-            return text?.trim() ? splitTextWithIntervals(text, batch.intervals, batch.totalWavDuration) : [];
-          } catch (err) {
-            console.error('[ProcessingTranscription] batch failed:', err);
-            return [];
-          } finally {
-            completedSeconds += batch.totalWavDuration;
-            setBatchProgress({ completed: ++done, total: batches.length, completedSeconds, totalSeconds });
+        const serverTranscript = await collectServerTranscript(meetingId, () => cancelled);
+        if (cancelled) return;
+        if (serverTranscript?.segments?.length) {
+          await save(serverTranscript.segments);
+          if (!serverTranscript.diarized) {
+            // Server-side diarization failed — fail-soft retry from here, patching
+            // labels onto the already-saved transcript when the turns arrive.
+            void fetchDiarizationTurns(meetingId, blob)
+              .then((turns) => applyDiarizationLabels(meetingId, turns));
           }
+          onComplete?.();
+          return;
+        }
+
+        // 3. Fallback: drive transcription from here. One upload of the original
+        // compressed audio; the server decodes, runs VAD, and fans out all batches
+        // to hviske simultaneously, streaming progress back. Diarization runs in
+        // parallel and does NOT block the transcript — labels are patched in later.
+        const diarizationPromise = fetchDiarizationTurns(meetingId, blob);
+
+        const result = await transcribeBatchesOnServer(meetingId, blob, {
+          onMeta: (meta) => {
+            if (cancelled) return;
+            setPhase('transcribing');
+            setBatchProgress({
+              completed: 0, total: meta.totalBatches,
+              completedSeconds: 0, totalSeconds: meta.totalSpeechSeconds,
+            });
+          },
+          onBatch: (update) => {
+            if (cancelled) return;
+            setBatchProgress((prev) => ({
+              completed: update.completedBatches,
+              total: update.totalBatches,
+              completedSeconds: (prev?.completedSeconds ?? 0) + update.batchSeconds,
+              totalSeconds: prev?.totalSeconds ?? 0,
+            }));
+          },
         });
+        if (cancelled) return;
 
-        const segmentArrays = await runWithConcurrency(tasks, BATCH_CONCURRENCY);
-        const sorted = segmentArrays.flat().sort((a, b) => a.start - b.start);
-
-        // 5. Merge speaker labels from the diarization pass (started above, in parallel).
-        setPhase('diarizing');
-        const turns = await diarizationPromise;
-        const segments = assignSpeakers(sorted, turns);
-
-        // 6. Save transcript to IndexedDB and advance to review
-        setPhase('saving');
-        const rawText = segments.map((s) => s.text).join(' ');
-        await saveTranscript(meetingId, { rawText, segments, chapters: [], piiReplacements: [] });
-        await updateMeeting(meetingId, { status: 'review' });
+        await save(result.segments);
+        void diarizationPromise.then((turns) => applyDiarizationLabels(meetingId, turns));
 
         onComplete?.();
       } catch (err) {
+        if (cancelled) return;
         console.error('[ProcessingTranscription]', err);
         setError(err instanceof Error ? err.message : 'Transskription fejlede');
         setPhase('error');
       }
     }
+
+    return () => { cancelled = true; };
   }, [meetingId, retryCount]);
 
   const pct = batchProgress && batchProgress.totalSeconds > 0
@@ -124,11 +147,10 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
 
   const phaseLabels: Record<Phase, string> = {
     downloading: 'henter lydfil…',
-    analyzing: 'analyserer og opdeler tale…',
+    analyzing: 'henter transskription…',
     transcribing: batchProgress && batchProgress.total > 0
       ? `transskriberer ${batchProgress.completed} / ${batchProgress.total} segmenter…`
       : 'transskriberer…',
-    diarizing: 'genkender talere…',
     saving: 'gemmer transskription…',
     error: '',
   };

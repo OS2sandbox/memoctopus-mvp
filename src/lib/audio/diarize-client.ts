@@ -1,6 +1,4 @@
 import type { SpeakerTurn } from '@/lib/ai/diarization';
-import { float32ToWavBlob } from './vad-batch';
-import { decodeAndResampleTo16k } from './vad-client';
 import { assignSpeakers } from './merge-speakers';
 import { DEFAULT_SPEAKER_LABEL } from './speaker-labels';
 import { getTranscript, saveTranscriptSegments } from '@/lib/storage';
@@ -12,11 +10,15 @@ import { notifyTranscriptUpdated } from '@/lib/transcript-events';
 // Every helper is fail-soft: on any error it returns [] so the caller keeps the
 // default single-speaker labels instead of breaking the recording flow.
 
-// POST a full-recording WAV to the diarize route and return the speaker turns.
-export async function fetchDiarizationTurns(meetingId: string, wav: Blob): Promise<SpeakerTurn[]> {
+// POST the recording to the diarize route and return the speaker turns. The blob is
+// sent in its ORIGINAL compressed format (webm/opus, mp3, m4a, …) — the diarization
+// service decodes it with ffmpeg. Shipping the compressed file instead of a decoded
+// 16-bit PCM WAV cuts the payload ~4-10x (a 100-min meeting is ~190 MB as WAV) and
+// skips the in-browser full-file decode that used to gate this request.
+export async function fetchDiarizationTurns(meetingId: string, audio: Blob): Promise<SpeakerTurn[]> {
   try {
     const fd = new FormData();
-    fd.append('audio', wav, 'recording.wav');
+    fd.append('audio', audio, 'recording');
     const res = await fetch(`/api/meetings/${meetingId}/diarize`, {
       method: 'POST',
       body: fd,
@@ -31,21 +33,9 @@ export async function fetchDiarizationTurns(meetingId: string, wav: Blob): Promi
   }
 }
 
-// For paths that already hold the decoded 16 kHz mono audio (upload, processing).
-export function diarizeFromMono16k(meetingId: string, mono16k: Float32Array): Promise<SpeakerTurn[]> {
-  return fetchDiarizationTurns(meetingId, float32ToWavBlob(mono16k));
-}
-
-// For paths that only hold the original recording blob (live mic). Decodes it to
-// 16 kHz mono first — the same full-timeline basis the segment timestamps use.
-export async function diarizeFromBlob(meetingId: string, blob: Blob): Promise<SpeakerTurn[]> {
-  try {
-    const mono16k = await decodeAndResampleTo16k(await blob.arrayBuffer());
-    return diarizeFromMono16k(meetingId, mono16k);
-  } catch (err) {
-    console.error('[diarize] decode failed:', err);
-    return [];
-  }
+// Kept as a named entry point for paths that hold the original recording blob.
+export function diarizeFromBlob(meetingId: string, blob: Blob): Promise<SpeakerTurn[]> {
+  return fetchDiarizationTurns(meetingId, blob);
 }
 
 // Patch the already-saved transcript with speaker labels once diarization finishes,

@@ -2,13 +2,8 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  newVadBatchState, sealCurrentBatch, splitTextWithIntervals,
-  runWithConcurrency, BATCH_DURATION_S, BATCH_CONCURRENCY,
-} from '@/lib/audio/vad-batch';
-import { energyVAD, decodeAndResampleTo16k } from '@/lib/audio/vad-client';
-import { assignSpeakers } from '@/lib/audio/merge-speakers';
-import { diarizeFromMono16k } from '@/lib/audio/diarize-client';
+import { transcribeBatchesOnServer } from '@/lib/audio/transcribe-batches-client';
+import { fetchDiarizationTurns, applyDiarizationLabels } from '@/lib/audio/diarize-client';
 import { createMeeting, saveAudio, saveTranscript, updateMeeting, deleteMeeting } from '@/lib/storage';
 import type { TranscriptSegment } from '@/types';
 
@@ -90,79 +85,45 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         if (cancelled) return;
 
         setPhase('analyzing');
-        let arrayBuffer: ArrayBuffer;
+
+        // Diarize the full recording in parallel with transcription. The original
+        // compressed file is posted as-is (the diarization service decodes it), and
+        // speaker labels are patched onto the saved transcript when the turns land —
+        // the user is NOT kept waiting on diarization.
+        const diarizationPromise = fetchDiarizationTurns(id, file);
+
+        // One upload of the original file; the server decodes with ffmpeg, runs VAD,
+        // and fans out ALL 27 s batches to hviske simultaneously. Progress and
+        // segments stream back per batch for the live preview.
+        let completedSecs = 0;
+        let result;
         try {
-          arrayBuffer = await file.arrayBuffer();
+          result = await transcribeBatchesOnServer(id, file, {
+            onMeta: (meta) => {
+              if (cancelled) return;
+              setPhase('transcribing');
+              setTotalSeconds(meta.totalSpeechSeconds);
+              setCompletedSeconds(0);
+            },
+            onBatch: (update) => {
+              if (cancelled) return;
+              completedSecs += update.batchSeconds;
+              setCompletedSeconds(completedSecs);
+              // Append without sorting; batches arrive out of order, live preview is
+              // best-effort. The final 'done' payload is authoritative and sorted.
+              if (update.segments.length > 0) {
+                setLiveSegments(prev => [...prev, ...update.segments]);
+              }
+            },
+          });
         } catch {
-          throw new Error('Lydfilen kunne ikke læses. Prøv at uploade filen igen.');
+          throw new Error('Lydformatet understøttes ikke, eller serveren svarede ikke. Prøv MP3, WAV eller M4A.');
         }
         if (cancelled) return;
-
-        let mono16k: Float32Array;
-        try {
-          mono16k = await decodeAndResampleTo16k(arrayBuffer);
-        } catch {
-          throw new Error('Lydformatet understøttes ikke. Prøv MP3, WAV eller M4A.');
-        }
-        if (cancelled) return;
-
-        // Diarize the full recording in parallel with transcription; merged in below.
-        const diarizationPromise = diarizeFromMono16k(id, mono16k);
-
-        const batchState = newVadBatchState();
-        for (const { audio, start, end } of energyVAD(mono16k, 16_000)) {
-          const wavOffset   = batchState.pendingWavDuration;
-          const wavDuration = audio.length / 16_000;
-          batchState.pendingAudio.push(audio);
-          batchState.pendingIntervals.push({ originalStart: start, originalEnd: end, wavOffset, wavDuration });
-          batchState.pendingWavDuration += wavDuration;
-          if (batchState.pendingWavDuration >= BATCH_DURATION_S) sealCurrentBatch(batchState);
-        }
-        sealCurrentBatch(batchState);
-
-        setPhase('transcribing');
-        const batches = batchState.readyBatches;
-        if (batches.length === 0) {
+        if (result.totalBatches === 0) {
           throw new Error('Ingen tale fundet i lydfilen. Er filen lydløs?');
         }
-        const total = batches.reduce((s, b) => s + b.totalWavDuration, 0);
-        setTotalSeconds(total);
-        setCompletedSeconds(0);
-
-        let completedSecs = 0;
-        const tasks = batches.map((batch) => async (): Promise<TranscriptSegment[]> => {
-          try {
-            const fd = new FormData();
-            fd.append('audio', batch.wav, 'batch.wav');
-            const res = await fetch(`/api/meetings/${id}/utterance`, {
-              method: 'POST',
-              body: fd,
-              signal: AbortSignal.timeout(60_000),
-            });
-            if (!res.ok) return [];
-            const { text } = await res.json() as { text: string };
-            const segs = text?.trim()
-              ? splitTextWithIntervals(text, batch.intervals, batch.totalWavDuration)
-              : [];
-            // Append without sorting; batches arrive out of order, live preview is best-effort.
-            // Final authoritative sort happens after all batches complete.
-            if (segs.length > 0 && !cancelled) {
-              setLiveSegments(prev => [...prev, ...segs]);
-            }
-            return segs;
-          } catch (err) {
-            console.error('[upload-confirm] batch failed:', err);
-            return [];
-          } finally {
-            completedSecs += batch.totalWavDuration;
-            if (!cancelled) setCompletedSeconds(completedSecs);
-          }
-        });
-
-        const segmentArrays = await runWithConcurrency(tasks, BATCH_CONCURRENCY);
-        if (cancelled) return;
-        const sorted = segmentArrays.flat().sort((a, b) => a.start - b.start);
-        const segments = assignSpeakers(sorted, await diarizationPromise);
+        const segments: TranscriptSegment[] = result.segments;
 
         setPhase('saving');
         const rawText = segments.map((s) => s.text).join(' ');
@@ -170,7 +131,10 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         await updateMeeting(id, { status: 'review' });
         if (cancelled) return;
 
-        setCompletedSeconds(total);
+        // Patch in speaker labels once diarization finishes (review screen refreshes).
+        void diarizationPromise.then((turns) => applyDiarizationLabels(id, turns));
+
+        setCompletedSeconds(result.totalSpeechSeconds);
         setPhase('done');
       } catch (err) {
         if (cancelled) return;

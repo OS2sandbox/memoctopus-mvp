@@ -64,6 +64,9 @@ export async function POST(req: NextRequest, { params }: Params) {
   } catch (err) {
     const totalMs = Date.now() - t0;
     console.error(`[utterance] failed after ${totalMs} ms:`, err);
-    return NextResponse.json({ text: '', latencyMs: totalMs });
+    // 502, not 200-with-empty-text: callers must be able to tell "silence" from
+    // "transcription failed" so failed batches are retried instead of silently
+    // dropping ~27 s of audio from the transcript.
+    return NextResponse.json({ error: 'Transcription failed', latencyMs: totalMs }, { status: 502 });
   }
 }

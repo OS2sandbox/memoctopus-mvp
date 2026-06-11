@@ -10,8 +10,11 @@ The model weights are baked into the image at build time (see Dockerfile), so th
 service never reaches the network at request time — important for the GDPR posture.
 """
 
+import asyncio
 import io
 import os
+import subprocess
+import time
 import wave
 
 import numpy as np
@@ -34,6 +37,16 @@ _bearer = HTTPBearer(auto_error=False)
 
 # Loaded once at startup and reused across requests.
 _pipeline: Pipeline | None = None
+# The pipeline is not safe for concurrent calls — serialize inference explicitly
+# (decode can still overlap, and the event loop stays responsive for /health).
+_inference_lock = asyncio.Lock()
+
+
+# Batch sizes for the segmentation/embedding sub-models. The pyannote defaults
+# (1/32 depending on version) leave a GPU mostly idle on long recordings; larger
+# batches cut inference wall time several-fold. Tunable via env if VRAM is tight.
+SEGMENTATION_BATCH_SIZE = int(os.environ.get("DIARIZATION_SEGMENTATION_BATCH_SIZE", "32"))
+EMBEDDING_BATCH_SIZE = int(os.environ.get("DIARIZATION_EMBEDDING_BATCH_SIZE", "32"))
 
 
 def get_pipeline() -> Pipeline:
@@ -44,7 +57,21 @@ def get_pipeline() -> Pipeline:
         except TypeError:
             # Older pyannote releases use the `use_auth_token` kwarg name.
             pipeline = Pipeline.from_pretrained(MODEL_NAME, use_auth_token=HF_TOKEN)
+        for attr, value in (
+            ("segmentation_batch_size", SEGMENTATION_BATCH_SIZE),
+            ("embedding_batch_size", EMBEDDING_BATCH_SIZE),
+        ):
+            # Attribute names vary across pyannote releases — set only what exists.
+            if hasattr(pipeline, attr):
+                setattr(pipeline, attr, value)
         _pipeline = pipeline.to(torch.device(DEVICE))
+        if DEVICE != "cuda":
+            print(
+                f"[diarization] WARNING: running on device '{DEVICE}'. A 100-minute "
+                "meeting can take 10+ minutes on CPU vs ~1 minute on GPU. Set "
+                "DIARIZATION_DEVICE=cuda on a GPU host.",
+                flush=True,
+            )
     return _pipeline
 
 
@@ -89,10 +116,9 @@ def health() -> dict:
 def _load_wav(data: bytes) -> tuple[torch.Tensor, int]:
     """Decode a PCM WAV into a (channel, time) float32 waveform + sample rate.
 
-    The Next.js app always sends a 16 kHz mono PCM WAV, so we decode it with the
-    stdlib `wave` module and hand pyannote an in-memory waveform. This sidesteps
-    pyannote 4's file I/O (torchcodec/ffmpeg), which isn't reliably available on
-    every host.
+    Decoded with the stdlib `wave` module so pyannote gets an in-memory waveform.
+    This sidesteps pyannote 4's file I/O (torchcodec/ffmpeg), which isn't reliably
+    available on every host.
     """
     with wave.open(io.BytesIO(data), "rb") as w:
         n_channels = w.getnchannels()
@@ -101,13 +127,48 @@ def _load_wav(data: bytes) -> tuple[torch.Tensor, int]:
         frames = w.readframes(w.getnframes())
 
     if sample_width != 2:
-        raise HTTPException(status_code=400, detail="Only 16-bit PCM WAV is supported")
+        raise ValueError("Only 16-bit PCM WAV is supported by the stdlib decoder")
 
     samples = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
     if n_channels > 1:
         samples = samples.reshape(-1, n_channels).mean(axis=1)  # downmix to mono
     waveform = torch.from_numpy(samples).unsqueeze(0)  # (1, time)
     return waveform, sample_rate
+
+
+def _load_with_ffmpeg(data: bytes) -> tuple[torch.Tensor, int]:
+    """Decode any compressed format (webm/opus, mp3, m4a, …) via ffmpeg.
+
+    Clients send the recording in its original compressed format — ~4-10x smaller
+    than the PCM WAV the service used to require, which dominates request time when
+    the audio travels through an SSH tunnel. ffmpeg resamples to 16 kHz mono s16le
+    on stdout; diarization is acoustic, so the resample is lossless for its purposes.
+    """
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-loglevel", "error", "-i", "pipe:0",
+             "-ar", "16000", "-ac", "1", "-f", "s16le", "pipe:1"],
+            input=data, capture_output=True, check=True,
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=415,
+            detail="ffmpeg not installed on the diarization host; only PCM WAV is accepted",
+        )
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=400, detail=f"Undecodable audio: {e.stderr.decode(errors='replace')[:500]}")
+
+    samples = np.frombuffer(proc.stdout, dtype="<i2").astype(np.float32) / 32768.0
+    waveform = torch.from_numpy(samples).unsqueeze(0)  # (1, time)
+    return waveform, 16_000
+
+
+def _load_audio(data: bytes) -> tuple[torch.Tensor, int]:
+    """PCM WAV via the fast stdlib path, anything else via ffmpeg."""
+    try:
+        return _load_wav(data)
+    except (wave.Error, EOFError, ValueError):
+        return _load_with_ffmpeg(data)
 
 
 @app.post("/diarize")
@@ -119,9 +180,18 @@ async def diarize(
     if len(data) < 2_000:
         return {"turns": []}
 
-    waveform, sample_rate = _load_wav(data)
-    output = get_pipeline()({"waveform": waveform, "sample_rate": sample_rate})
+    t0 = time.monotonic()
+    # Decode + inference are CPU/GPU-bound and synchronous — run them off the event
+    # loop so /health and concurrent requests aren't frozen for minutes per file.
+    waveform, sample_rate = await asyncio.to_thread(_load_audio, data)
+    async with _inference_lock:
+        output = await asyncio.to_thread(get_pipeline(), {"waveform": waveform, "sample_rate": sample_rate})
     annotation = _annotation_from(output)
+    print(
+        f"[diarization] {len(data)} bytes ({waveform.shape[1] / sample_rate:.0f} s audio) "
+        f"on {DEVICE} in {time.monotonic() - t0:.1f} s",
+        flush=True,
+    )
 
     turns = [
         {"speaker": speaker, "start": round(float(segment.start), 3), "end": round(float(segment.end), 3)}

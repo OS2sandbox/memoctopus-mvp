@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { storePendingAudio, markNoRecording } from '@/lib/bot-pending-audio';
+import { storePendingAudio, storePendingTranscript, markNoRecording } from '@/lib/bot-pending-audio';
+import { processBotRecording } from '@/lib/bot-transcribe';
 
 // Called by the bot service — authenticated with BOT_INTERNAL_SECRET, not a user session.
 //
@@ -62,6 +63,15 @@ export async function POST(req: NextRequest) {
     console.error('[bot audio-upload] failed to stash audio:', err);
     return NextResponse.json({ error: 'Failed to store audio' }, { status: 500 });
   }
+
+  // Start transcription + diarization NOW, server-side, instead of waiting for the
+  // user's browser to poll the audio down and re-upload it. The 'processing' marker
+  // is written before responding so the client never races an absent stash; the
+  // heavy work itself runs detached (fire-and-forget) — the bot's upload request
+  // must not block on minutes of inference, and failures degrade to the client-side
+  // fallback path.
+  await storePendingTranscript(meetingId, { status: 'processing' }).catch(() => {});
+  void processBotRecording(meetingId, buffer, mimeType);
 
   return NextResponse.json({ ok: true });
 }

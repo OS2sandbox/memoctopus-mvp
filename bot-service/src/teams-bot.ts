@@ -959,7 +959,10 @@ export class TeamsMeetingBot {
         const mimeType = ['audio/webm;codecs=opus', 'audio/webm', ''].find(
           (m) => m === '' || MediaRecorder.isTypeSupported(m),
         ) ?? '';
-        const recorderOpts: MediaRecorderOptions = { audioBitsPerSecond: 128_000 };
+        // 48 kbps opus is transparent for speech and shrinks the recording ~2.5x vs
+        // 128 kbps — every downstream transfer (upload to the app, transcript
+        // processing, diarization) scales with this size.
+        const recorderOpts: MediaRecorderOptions = { audioBitsPerSecond: 48_000 };
         if (mimeType) recorderOpts.mimeType = mimeType;
         const recorder = new MediaRecorder(dest.stream, recorderOpts);
         console.log('[bot] MediaRecorder mimeType:', recorder.mimeType);

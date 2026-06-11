@@ -24,6 +24,11 @@ export class HviskeProvider implements TranscriptionProvider {
     this.client = new OpenAI({
       apiKey: process.env.HVISKE_API_KEY ?? 'no-key',
       baseURL: process.env.HVISKE_URL ?? 'http://109.173.238.203:40093/v1',
+      // No SDK auto-retries: a retried batch re-uploads ~1 MB of WAV and triples the
+      // worst-case lane occupancy under full fan-out. Retries happen at the
+      // application level instead (see vad-batch-server.ts), where they run AFTER
+      // the first wave drains rather than amplifying an overloaded server.
+      maxRetries: 0,
     });
     this.model = process.env.HVISKE_MODEL ?? 'syvai/hviske-v5.1';
     this.language = process.env.ASR_LANGUAGE ?? 'da';
@@ -50,7 +55,11 @@ export class HviskeProvider implements TranscriptionProvider {
     return splitIntoTimedSegments(text, duration);
   }
 
-  async transcribeRaw(audioBuffer: Buffer, mimeType: string): Promise<{ text: string; latencyMs: number }> {
+  async transcribeRaw(
+    audioBuffer: Buffer,
+    mimeType: string,
+    opts?: { timeoutMs?: number },
+  ): Promise<{ text: string; latencyMs: number }> {
     const ext = mimeTypeToExt(mimeType);
     const file = new File([new Uint8Array(audioBuffer)], `audio.${ext}`, { type: mimeType });
 
@@ -61,7 +70,9 @@ export class HviskeProvider implements TranscriptionProvider {
       language: this.language,
       response_format: 'json',
       temperature: 0,
-    }, { timeout: 20_000 });
+      // Default 20 s suits the live-caption path; the batch fan-out passes a longer
+      // timeout because queueing at full concurrency lengthens individual tails.
+    }, { timeout: opts?.timeoutMs ?? 20_000 });
 
     return { text: response.text ?? '', latencyMs: Date.now() - t0 };
   }

@@ -9,9 +9,13 @@ The Danish STT model (hviske) does not diarize, so this runs as a separate
 app merges those turns onto the transcript by time-overlap
 (`src/lib/audio/merge-speakers.ts`). Diarization is language-agnostic.
 
-The app always sends a 16 kHz mono PCM WAV, which the service decodes in-process
-(stdlib `wave` + numpy) and hands to pyannote as a waveform tensor — so it does
-**not** depend on pyannote 4's torchcodec/ffmpeg audio backend.
+The app sends the recording in its **original compressed format** (webm/opus,
+mp3, m4a, …) — ~4-10x smaller than PCM WAV, which matters because requests
+travel through an SSH tunnel. PCM WAV is decoded in-process (stdlib `wave` +
+numpy); everything else is decoded by shelling out to **ffmpeg** (`ffmpeg` must
+be on PATH — it is in the Docker image; install it on bare-metal hosts with
+`apt-get install -y ffmpeg`). Neither path depends on pyannote 4's
+torchcodec/ffmpeg audio backend.
 
 ## API
 
@@ -22,8 +26,12 @@ The app always sends a 16 kHz mono PCM WAV, which the service decodes in-process
 ## Config (env)
 
 - `DIARIZATION_API_KEY` — bearer secret; must match the app's `DIARIZATION_API_KEY`.
-- `DIARIZATION_DEVICE` — `cpu` | `cuda` | unset (auto). Force `cpu` if the GPU is
-  already saturated by another model.
+- `DIARIZATION_DEVICE` — `cpu` | `cuda` | unset (auto). Force `cpu` only if the GPU
+  is saturated by another model — CPU is 10-20x slower and the service logs a loud
+  warning at startup when it is not on `cuda`.
+- `DIARIZATION_SEGMENTATION_BATCH_SIZE` / `DIARIZATION_EMBEDDING_BATCH_SIZE` —
+  sub-model batch sizes (default 32). Larger values cut GPU inference wall time on
+  long recordings; lower them if VRAM is tight.
 - `HF_TOKEN` — only needed the first time, to download the gated weights (cached after).
 
 ## Deploy A — directly on the GPU box (what production uses)

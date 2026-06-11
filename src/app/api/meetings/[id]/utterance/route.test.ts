@@ -159,13 +159,13 @@ describe('POST /api/meetings/[id]/utterance', () => {
   });
 
   describe('transcription errors', () => {
-    it('returns 200 with empty text when transcribeRaw throws', async () => {
+    it('returns 502 when transcribeRaw throws, so callers can retry the batch', async () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
       mockTranscribeRaw.mockRejectedValueOnce(new Error('provider timeout'));
 
       const res = await POST(makeAudioRequest(5_000), PARAMS);
-      expect(res.status).toBe(200);
-      expect((await res.json()).text).toBe('');
+      expect(res.status).toBe(502);
+      expect((await res.json()).error).toBeDefined();
     });
 
     it('does not propagate provider exceptions to the caller', async () => {

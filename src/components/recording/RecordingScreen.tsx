@@ -19,10 +19,10 @@ import type { TranscriptSegment } from '@/types';
 import { saveAudio, saveTranscript, updateMeeting, deleteMeeting } from '@/lib/storage';
 import { diarizeFromBlob, applyDiarizationLabels } from '@/lib/audio/diarize-client';
 import {
-  float32ToWavBlob, newVadBatchState, sealCurrentBatch, mapWavTime,
-  splitTextWithIntervals, runWithConcurrency,
-  BATCH_DURATION_S, BATCH_CONCURRENCY, MAX_WORDS_PER_LINE,
-  type VadInterval, type ReadyBatch, type VadBatchState,
+  float32ToWavBlob, newVadBatchState, sealCurrentBatch,
+  splitTextWithIntervals,
+  BATCH_DURATION_S, MAX_WORDS_PER_LINE,
+  type ReadyBatch, type VadBatchState,
 } from '@/lib/audio/vad-batch';
 
 // ── PCM live-transcription helpers ───────────────────────────────────────────
@@ -76,10 +76,11 @@ function encodePcmToWav(frames: Int16Array[]): Blob {
   v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
   v.setUint16(32, 2, true); v.setUint16(34, 16, true);
   ws(36, 'data'); v.setUint32(40, dataBytes, true);
-  let off = 44;
-  for (const frame of frames) {
-    for (let i = 0; i < frame.length; i++) { v.setInt16(off, frame[i], true); off += 2; }
-  }
+  // Bulk-copy each Int16 frame through a typed-array view (44-byte header is
+  // 2-byte aligned) instead of a per-sample DataView loop.
+  const out = new Int16Array(buf, 44, totalSamples);
+  let off = 0;
+  for (const frame of frames) { out.set(frame, off); off += frame.length; }
   return new Blob([buf], { type: 'audio/wav' });
 }
 
@@ -129,6 +130,10 @@ const WORDS_PER_SECOND = 10;
 // Slower wave rate for the continuous live wave (interim → final carry-over).
 // Must be slow enough that the wave is visibly in-progress when interim text first appears.
 const LIVE_WAVE_INTERVAL_MS = 300;
+// Max concurrent batch uploads while still recording. Batches seal every ~27 s of
+// speech, so 1 in flight is the steady state; 2 absorbs bursts without starving
+// the live-caption requests.
+const MAX_LIVE_BATCH_UPLOADS = 2;
 // How often, while recording, we re-analyze the transcript for things to clarify.
 const CLARIFY_INTERVAL_MS = 25_000;
 // Tick cadence for the countdown bar to the next clarification refresh.
@@ -205,6 +210,15 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
   const partialTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // VAD batch state for post-recording parallel transcription.
   const vadBatchStateRef = useRef<VadBatchState>(newVadBatchState());
+  // Batches already dispatched DURING recording (one entry per sealed batch, in
+  // readyBatches order). Sealed batches are transcribed while the meeting is still
+  // running, so stopping only waits for the final partial batch instead of starting
+  // the whole fan-out from zero. null result = failed; retried once at stop time.
+  const liveBatchesRef = useRef<Array<{ batch: ReadyBatch; promise: Promise<TranscriptSegment[] | null> }>>([]);
+  // Gate: at most 2 batch uploads in flight while recording, so they never starve
+  // the live-caption requests sharing the connection pool and the hviske server.
+  const liveBatchInFlightRef = useRef(0);
+  const liveBatchWaitersRef = useRef<Array<() => void>>([]);
   // PCM accumulation for live transcription (16 kHz Int16 frames from the AudioWorklet).
   const pcmFramesRef = useRef<Int16Array[]>([]);
   // Frame index into pcmFramesRef where the current utterance started (with pre-roll).
@@ -254,6 +268,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
   function resetLiveState() {
     vadBatchStateRef.current = newVadBatchState();
+    liveBatchesRef.current = [];
     setBatchProgress(null);
     liveSegmentsRef.current = [];
     setLiveSegments([]);
@@ -620,7 +635,12 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
           batchState.pendingAudio.push(audio);
           batchState.pendingIntervals.push({ originalStart: uStart, originalEnd: uEnd, wavOffset, wavDuration });
           batchState.pendingWavDuration += wavDuration;
-          if (batchState.pendingWavDuration >= BATCH_DURATION_S) sealCurrentBatch(batchState);
+          if (batchState.pendingWavDuration >= BATCH_DURATION_S) {
+            sealCurrentBatch(batchState);
+            // Transcribe the sealed batch NOW, while the meeting is still running,
+            // so stopping the recording only waits for the final partial batch.
+            dispatchSealedBatches();
+          }
         },
         onVADMisfire: () => {
           stopPartialTimer();
@@ -858,6 +878,50 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     stopClarifyTimer();
   }
 
+  // ── Batch transcription, dispatched while still recording ────────────────────
+
+  async function postBatch(batch: ReadyBatch): Promise<TranscriptSegment[] | null> {
+    try {
+      const fd = new FormData();
+      fd.append('audio', batch.wav, 'batch.wav');
+      const res = await fetch(`/api/meetings/${meetingId}/utterance`, {
+        method: 'POST',
+        body: fd,
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (!res.ok) return null;
+      const { text } = await res.json() as { text: string };
+      return text?.trim() ? splitTextWithIntervals(text, batch.intervals, batch.totalWavDuration) : [];
+    } catch (err) {
+      console.error('[batch] transcription failed:', err);
+      return null;
+    }
+  }
+
+  async function postBatchGated(batch: ReadyBatch): Promise<TranscriptSegment[] | null> {
+    while (liveBatchInFlightRef.current >= MAX_LIVE_BATCH_UPLOADS) {
+      await new Promise<void>((r) => liveBatchWaitersRef.current.push(r));
+    }
+    liveBatchInFlightRef.current++;
+    try {
+      return await postBatch(batch);
+    } finally {
+      liveBatchInFlightRef.current--;
+      // Wake everyone; they re-check the gate condition above.
+      liveBatchWaitersRef.current.splice(0).forEach((wake) => wake());
+    }
+  }
+
+  // Fire transcription for any sealed-but-not-yet-dispatched batches. Idempotent —
+  // tracks how many of readyBatches already have an in-flight request.
+  function dispatchSealedBatches() {
+    const ready = vadBatchStateRef.current.readyBatches;
+    while (liveBatchesRef.current.length < ready.length) {
+      const batch = ready[liveBatchesRef.current.length];
+      liveBatchesRef.current.push({ batch, promise: postBatchGated(batch) });
+    }
+  }
+
   async function stopAndSave() {
     if (!mediaRecorderRef.current) return;
     const recorder = mediaRecorderRef.current;
@@ -899,9 +963,12 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     // are patched in (and the review screen refreshed) when diarization lands.
     const diarizationPromise = diarizeFromBlob(meetingId, blob);
 
-    // Seal any remaining speech into the final partial batch.
+    // Seal any remaining speech into the final partial batch and dispatch it.
+    // Earlier batches were already dispatched as they sealed during recording, so
+    // most of the fan-out is typically done (or in flight) by the time we get here.
     sealCurrentBatch(vadBatchStateRef.current);
-    const batches = vadBatchStateRef.current.readyBatches;
+    dispatchSealedBatches();
+    const liveBatches = liveBatchesRef.current;
 
     // Archive the full recording in IndexedDB so it can be played back during review.
     // Kicked off without awaiting; the client transcribes the VAD batches below and
@@ -916,33 +983,19 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     })();
 
     try {
-      // Transcribe all VAD speech batches in parallel, then save the assembled transcript.
-      const totalSeconds = batches.reduce((s, b) => s + b.totalWavDuration, 0);
-      setBatchProgress({ completed: 0, total: batches.length, completedSeconds: 0, totalSeconds });
+      // Await the in-flight batch requests (most resolved during recording) and
+      // give failed ones a single retry now that the live-caption traffic is gone.
+      const totalSeconds = liveBatches.reduce((s, e) => s + e.batch.totalWavDuration, 0);
+      setBatchProgress({ completed: 0, total: liveBatches.length, completedSeconds: 0, totalSeconds });
       let done = 0;
       let completedSeconds = 0;
-      const tasks = batches.map((batch) => async (): Promise<TranscriptSegment[]> => {
-        try {
-          const fd = new FormData();
-          fd.append('audio', batch.wav, 'batch.wav');
-          const res = await fetch(`/api/meetings/${meetingId}/utterance`, {
-            method: 'POST',
-            body: fd,
-            signal: AbortSignal.timeout(60_000),
-          });
-          if (!res.ok) return [];
-          const { text } = await res.json() as { text: string };
-          return text?.trim() ? splitTextWithIntervals(text, batch.intervals, batch.totalWavDuration) : [];
-        } catch (err) {
-          console.error('[batch] transcription failed:', err);
-          return [];
-        } finally {
-          completedSeconds += batch.totalWavDuration;
-          setBatchProgress({ completed: ++done, total: batches.length, completedSeconds, totalSeconds });
-        }
-      });
-
-      const segmentArrays = await runWithConcurrency(tasks, BATCH_CONCURRENCY);
+      const segmentArrays = await Promise.all(liveBatches.map(async (entry): Promise<TranscriptSegment[]> => {
+        let segs = await entry.promise;
+        if (segs === null) segs = await postBatch(entry.batch);
+        completedSeconds += entry.batch.totalWavDuration;
+        setBatchProgress({ completed: ++done, total: liveBatches.length, completedSeconds, totalSeconds });
+        return segs ?? [];
+      }));
       const segments = segmentArrays.flat().sort((a, b) => a.start - b.start);
 
       const rawText = segments.map((s) => s.text).join(' ');
@@ -960,6 +1013,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
 
     // Release batch memory before navigating.
     vadBatchStateRef.current = newVadBatchState();
+    liveBatchesRef.current = [];
     await archivePromise;
     onRecordingComplete?.();
     router.push(`/meeting/${meetingId}/review`);
