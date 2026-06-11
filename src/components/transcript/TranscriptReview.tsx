@@ -4,7 +4,8 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
 import { WaveformPlayer } from './WaveformPlayer';
-import { saveTranscriptChapters, saveTranscriptSegments, saveMinutes, deleteAudio, updateMeeting } from '@/lib/storage';
+import { getTranscript, saveTranscriptChapters, saveTranscriptSegments, saveMinutes, deleteAudio, updateMeeting } from '@/lib/storage';
+import { onTranscriptUpdated } from '@/lib/transcript-events';
 import type { MinutesContent } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
 
@@ -71,6 +72,21 @@ export function TranscriptReview({
   useEffect(() => {
     try { sessionStorage.setItem(`participants-${meetingId}`, JSON.stringify(editableParticipants)); } catch { /* ignore */ }
   }, [editableParticipants, meetingId]);
+
+  // Refresh segments when a background task patches the transcript — e.g. speaker
+  // diarization landing after the recording already navigated here. Pulls the fresh
+  // segments from storage so the speaker labels update in place. The mount re-read
+  // also catches a patch that landed in the brief gap before this subscribed.
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      const fresh = await getTranscript(meetingId);
+      if (!cancelled && fresh?.segments?.length) setSegments(fresh.segments);
+    };
+    void refresh();
+    const off = onTranscriptUpdated(meetingId, () => { void refresh(); });
+    return () => { cancelled = true; off(); };
+  }, [meetingId]);
   const [activeKeywords, setActiveKeywords] = useState<Set<string>>(new Set());
   const [customText, setCustomText] = useState('');
 

@@ -1,6 +1,10 @@
 import type { SpeakerTurn } from '@/lib/ai/diarization';
 import { float32ToWavBlob } from './vad-batch';
 import { decodeAndResampleTo16k } from './vad-client';
+import { assignSpeakers } from './merge-speakers';
+import { DEFAULT_SPEAKER_LABEL } from './speaker-labels';
+import { getTranscript, saveTranscriptSegments } from '@/lib/storage';
+import { notifyTranscriptUpdated } from '@/lib/transcript-events';
 
 // Client-side helpers for the speaker-diarization pass. Diarization runs once over
 // the WHOLE recording (speaker identity is global) and the returned turns are merged
@@ -41,5 +45,23 @@ export async function diarizeFromBlob(meetingId: string, blob: Blob): Promise<Sp
   } catch (err) {
     console.error('[diarize] decode failed:', err);
     return [];
+  }
+}
+
+// Patch the already-saved transcript with speaker labels once diarization finishes,
+// then notify the review screen to refresh. For the non-blocking flow: the transcript
+// is saved with default labels and shown immediately, and speaker turns stream in here.
+// Re-reads the current segments (rather than trusting a stale copy) and skips the patch
+// if the user has already relabelled speakers, so it never clobbers manual edits.
+export async function applyDiarizationLabels(meetingId: string, turns: SpeakerTurn[]): Promise<void> {
+  if (turns.length === 0) return;
+  try {
+    const current = await getTranscript(meetingId);
+    if (!current?.segments?.length) return;
+    if (!current.segments.every((s) => s.speaker === DEFAULT_SPEAKER_LABEL)) return;
+    await saveTranscriptSegments(meetingId, assignSpeakers(current.segments, turns));
+    notifyTranscriptUpdated(meetingId);
+  } catch (err) {
+    console.error('[diarize] background label update failed:', err);
   }
 }

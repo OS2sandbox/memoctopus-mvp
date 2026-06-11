@@ -17,8 +17,7 @@ import { useIsMobile } from '@/lib/use-is-mobile';
 import { pickRecordingMimeType } from '@/lib/audio/recording-format';
 import type { TranscriptSegment } from '@/types';
 import { saveAudio, saveTranscript, updateMeeting, deleteMeeting } from '@/lib/storage';
-import { assignSpeakers } from '@/lib/audio/merge-speakers';
-import { diarizeFromBlob } from '@/lib/audio/diarize-client';
+import { diarizeFromBlob, applyDiarizationLabels } from '@/lib/audio/diarize-client';
 import {
   float32ToWavBlob, newVadBatchState, sealCurrentBatch, mapWavTime,
   splitTextWithIntervals, runWithConcurrency,
@@ -895,8 +894,9 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     const mimeType = recorder.mimeType || 'audio/webm';
     const blob = new Blob(chunksRef.current, { type: mimeType });
 
-    // Diarize the full recording in parallel with transcription. The live path only
-    // holds the compressed blob, so this decodes it to 16 kHz mono first. Fail-soft.
+    // Diarize the full recording in parallel with transcription, but DON'T block on
+    // it — the transcript is saved and shown with default labels, and speaker labels
+    // are patched in (and the review screen refreshed) when diarization lands.
     const diarizationPromise = diarizeFromBlob(meetingId, blob);
 
     // Seal any remaining speech into the final partial batch.
@@ -943,12 +943,14 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       });
 
       const segmentArrays = await runWithConcurrency(tasks, BATCH_CONCURRENCY);
-      const sorted = segmentArrays.flat().sort((a, b) => a.start - b.start);
-      const segments = assignSpeakers(sorted, await diarizationPromise);
+      const segments = segmentArrays.flat().sort((a, b) => a.start - b.start);
 
       const rawText = segments.map((s) => s.text).join(' ');
       await saveTranscript(meetingId, { rawText, segments, chapters: [], piiReplacements: [] });
       await updateMeeting(meetingId, { status: 'review' });
+
+      // Patch in speaker labels once diarization finishes (review screen refreshes).
+      void diarizationPromise.then((turns) => applyDiarizationLabels(meetingId, turns));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt under transskription');
       setIsUploading(false);
