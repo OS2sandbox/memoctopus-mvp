@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+const mockDecode = vi.hoisted(() => vi.fn());
+const mockEncode = vi.hoisted(() => vi.fn());
+
+vi.mock('@/lib/audio/decode-server', () => ({
+  decodeToMono16k: mockDecode,
+  encodeMono16kWav: mockEncode,
+}));
+
 import {
   PyannoteProvider,
   getDiarizationProvider,
@@ -23,6 +32,8 @@ beforeEach(() => {
   process.env = { ...ENV };
   mockFetch = vi.fn();
   vi.stubGlobal('fetch', mockFetch);
+  mockDecode.mockReset();
+  mockEncode.mockReset();
 });
 
 afterEach(() => {
@@ -85,6 +96,43 @@ describe('PyannoteProvider.diarize', () => {
   it('throws when the service responds non-ok (so the route can fail-soft)', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({}, false, 502));
     await expect(new PyannoteProvider().diarize(buf, 'audio/wav')).rejects.toThrow('502');
+  });
+
+  it('does NOT decode when the input is already WAV', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ turns: [] }));
+    await new PyannoteProvider().diarize(buf, 'audio/wav');
+    expect(mockDecode).not.toHaveBeenCalled();
+  });
+
+  it('decodes compressed audio to WAV before forwarding to the service', async () => {
+    const decoded = new Float32Array([0, 0.5, -0.5]);
+    const wav = Buffer.from('RIFFwav');
+    mockDecode.mockResolvedValueOnce(decoded);
+    mockEncode.mockReturnValueOnce(wav);
+    mockFetch.mockResolvedValueOnce(jsonResponse({ turns: [] }));
+
+    await new PyannoteProvider().diarize(buf, 'audio/webm');
+
+    expect(mockDecode).toHaveBeenCalledOnce();
+    expect(mockDecode.mock.calls[0][0]).toBe(buf);
+    expect(mockEncode).toHaveBeenCalledWith(decoded);
+    // The forwarded file is the WAV, named with a .wav extension.
+    const form = mockFetch.mock.calls[0][1].body as FormData;
+    const file = form.get('audio') as File;
+    expect(file.type).toBe('audio/wav');
+    expect(file.name).toBe('audio.wav');
+  });
+
+  it('falls back to the original audio when server-side decode fails', async () => {
+    mockDecode.mockRejectedValueOnce(new Error('ffmpeg missing'));
+    mockFetch.mockResolvedValueOnce(jsonResponse({ turns: [] }));
+
+    await new PyannoteProvider().diarize(buf, 'audio/webm');
+
+    // Still POSTs (the service may be able to decode it itself); does not throw.
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const form = mockFetch.mock.calls[0][1].body as FormData;
+    expect((form.get('audio') as File).type).toBe('audio/webm');
   });
 });
 

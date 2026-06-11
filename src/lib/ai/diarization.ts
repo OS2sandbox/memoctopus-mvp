@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { mimeTypeToExt } from './mime';
+import { decodeToMono16k, encodeMono16kWav } from '@/lib/audio/decode-server';
 
 // ─── Interface ────────────────────────────────────────────────────────────────
 // Speaker diarization runs as a separate acoustic pass over the full recording.
@@ -32,8 +33,25 @@ export class PyannoteProvider implements DiarizationProvider {
   }
 
   async diarize(audioBuffer: Buffer, mimeType: string): Promise<SpeakerTurn[]> {
-    const ext = mimeTypeToExt(mimeType, 'wav');
-    const file = new File([new Uint8Array(audioBuffer)], `audio.${ext}`, { type: mimeType });
+    // The pyannote service decodes only PCM WAV. Callers now send the original
+    // compressed recording (small browser/bot upload — the win), so decode anything
+    // that isn't already WAV to 16 kHz mono WAV here with ffmpeg before forwarding.
+    // This keeps diarization working regardless of the service version, and the
+    // app→service hop is local in production (docker-compose). Fail-soft: if the
+    // local decode fails, send the original and let the service attempt it.
+    let buffer = audioBuffer;
+    let outMime = mimeType;
+    if (!/wav/i.test(mimeType)) {
+      try {
+        buffer = encodeMono16kWav(await decodeToMono16k(audioBuffer));
+        outMime = 'audio/wav';
+      } catch (err) {
+        console.error('[diarize] server-side decode failed, sending original:', err);
+      }
+    }
+
+    const ext = mimeTypeToExt(outMime, 'wav');
+    const file = new File([new Uint8Array(buffer)], `audio.${ext}`, { type: outMime });
     const form = new FormData();
     form.append('audio', file);
 
