@@ -1,4 +1,5 @@
 import type { TranscriptSegment } from '@/types';
+import { DEFAULT_SPEAKER_LABEL } from './speaker-labels';
 
 // 27 s: hviske processes up to ~30 s windows reliably; leaves headroom for VAD pre/post-roll padding.
 export const BATCH_DURATION_S = 27;
@@ -100,7 +101,7 @@ export function splitTextWithIntervals(
     const wavStart = elapsed;
     elapsed += segDur;
     return {
-      speaker: 'Taler 1',
+      speaker: DEFAULT_SPEAKER_LABEL,
       start: mapWavTime(wavStart, intervals),
       end: mapWavTime(elapsed, intervals),
       text: sentence,

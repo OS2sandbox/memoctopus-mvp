@@ -85,7 +85,6 @@ services:
     # Internal only — reached by the app service at http://diarization-service:5000.
     # Runs pyannote.audio (speaker-diarization-community-1) over full recordings.
     environment:
-      - DIARIZATION_PORT=5000
       - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
     networks:
       - internal

@@ -67,6 +67,19 @@ describe('assignSpeakers', () => {
     expect(result[1].speaker).toBe('Taler 1'); // first mapped speaker
   });
 
+  it('keeps speaker labels stable when a speaker recurs later in the meeting', () => {
+    // A → B → A → C: the returning speaker must reuse its first label, not get a new one.
+    const segments = [seg(0, 2), seg(2, 4), seg(4, 6), seg(6, 8)];
+    const turns: SpeakerTurn[] = [
+      { speaker: 'SPEAKER_00', start: 0, end: 2 },
+      { speaker: 'SPEAKER_01', start: 2, end: 4 },
+      { speaker: 'SPEAKER_00', start: 4, end: 6 },
+      { speaker: 'SPEAKER_02', start: 6, end: 8 },
+    ];
+    const result = assignSpeakers(segments, turns);
+    expect(result.map((s) => s.speaker)).toEqual(['Taler 1', 'Taler 2', 'Taler 1', 'Taler 3']);
+  });
+
   it('does not mutate the input segments', () => {
     const segments = [seg(0, 2)];
     const turns: SpeakerTurn[] = [{ speaker: 'SPEAKER_03', start: 0, end: 2 }];

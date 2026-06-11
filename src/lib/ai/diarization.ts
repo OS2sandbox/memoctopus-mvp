@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { mimeTypeToExt } from './mime';
 
 // ─── Interface ────────────────────────────────────────────────────────────────
 // Speaker diarization runs as a separate acoustic pass over the full recording.
@@ -23,15 +24,15 @@ export interface DiarizationProvider {
 
 export class PyannoteProvider implements DiarizationProvider {
   private baseURL: string;
-  private apiKey: string;
+  private apiKey: string | undefined;
 
   constructor() {
     this.baseURL = (process.env.DIARIZATION_URL ?? 'http://localhost:5000').replace(/\/$/, '');
-    this.apiKey = process.env.DIARIZATION_API_KEY ?? '';
+    this.apiKey = process.env.DIARIZATION_API_KEY;
   }
 
   async diarize(audioBuffer: Buffer, mimeType: string): Promise<SpeakerTurn[]> {
-    const ext = mimeTypeToExt(mimeType);
+    const ext = mimeTypeToExt(mimeType, 'wav');
     const file = new File([new Uint8Array(audioBuffer)], `audio.${ext}`, { type: mimeType });
     const form = new FormData();
     form.append('audio', file);
@@ -49,22 +50,6 @@ export class PyannoteProvider implements DiarizationProvider {
     const data = (await res.json()) as { turns?: SpeakerTurn[] };
     return Array.isArray(data.turns) ? data.turns : [];
   }
-}
-
-// ─── Shared helpers ───────────────────────────────────────────────────────────
-
-function mimeTypeToExt(mimeType: string): string {
-  const map: Record<string, string> = {
-    'audio/webm': 'webm',
-    'audio/mp4': 'mp4',
-    'audio/mpeg': 'mp3',
-    'audio/mp3': 'mp3',
-    'audio/wav': 'wav',
-    'audio/ogg': 'ogg',
-    'audio/flac': 'flac',
-    'audio/x-m4a': 'm4a',
-  };
-  return map[mimeType] ?? 'wav';
 }
 
 // ─── Active provider ──────────────────────────────────────────────────────────

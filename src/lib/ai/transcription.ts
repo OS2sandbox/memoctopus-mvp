@@ -1,5 +1,7 @@
 import OpenAI from 'openai';
 import { TranscriptSegment } from '@/types';
+import { mimeTypeToExt } from './mime';
+import { DEFAULT_SPEAKER_LABEL } from '@/lib/audio/speaker-labels';
 
 // ─── Interface ────────────────────────────────────────────────────────────────
 
@@ -81,7 +83,7 @@ function splitIntoTimedSegments(text: string, totalDurationSeconds: number): Tra
     .filter(Boolean);
 
   if (sentences.length === 0) {
-    return [{ speaker: 'Taler 1', start: 0, end: totalDurationSeconds, text }];
+    return [{ speaker: DEFAULT_SPEAKER_LABEL, start: 0, end: totalDurationSeconds, text }];
   }
 
   const wordCounts = sentences.map(s => s.split(/\s+/).filter(Boolean).length);
@@ -91,7 +93,7 @@ function splitIntoTimedSegments(text: string, totalDurationSeconds: number): Tra
   return sentences.map((sentence, i) => {
     const segDuration = (wordCounts[i] / Math.max(totalWords, 1)) * totalDurationSeconds;
     const segment: TranscriptSegment = {
-      speaker: 'Taler 1',
+      speaker: DEFAULT_SPEAKER_LABEL,
       start: elapsed,
       end: elapsed + segDuration,
       text: sentence,
@@ -99,22 +101,6 @@ function splitIntoTimedSegments(text: string, totalDurationSeconds: number): Tra
     elapsed += segDuration;
     return segment;
   });
-}
-
-// ─── Shared helpers ───────────────────────────────────────────────────────────
-
-function mimeTypeToExt(mimeType: string): string {
-  const map: Record<string, string> = {
-    'audio/webm': 'webm',
-    'audio/mp4': 'mp4',
-    'audio/mpeg': 'mp3',
-    'audio/mp3': 'mp3',
-    'audio/wav': 'wav',
-    'audio/ogg': 'ogg',
-    'audio/flac': 'flac',
-    'audio/x-m4a': 'm4a',
-  };
-  return map[mimeType] ?? 'webm';
 }
 
 // ─── Active provider ──────────────────────────────────────────────────────────

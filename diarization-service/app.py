@@ -54,6 +54,24 @@ def _warm() -> None:
     get_pipeline()
 
 
+def _annotation_from(output):
+    """Return the diarization Annotation regardless of pyannote's output shape.
+
+    Depending on model/version, calling the pipeline returns either an Annotation
+    directly, or a wrapper exposing `.exclusive_speaker_diarization` (preferred —
+    one speaker per instant, simplifies time-overlap merge) and/or
+    `.speaker_diarization`. Pick the first that supports `itertracks`.
+    """
+    for candidate in (
+        getattr(output, "exclusive_speaker_diarization", None),
+        getattr(output, "speaker_diarization", None),
+        output,
+    ):
+        if candidate is not None and hasattr(candidate, "itertracks"):
+            return candidate
+    raise RuntimeError("pyannote output has no iterable diarization annotation")
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "model": MODEL_NAME, "cuda": torch.cuda.is_available()}
@@ -72,10 +90,8 @@ async def diarize(
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
         tmp.write(data)
         tmp.flush()
-        # exclusive_speaker_diarization keeps at most one speaker active per instant,
-        # which simplifies merging turns onto STT segments by time-overlap.
         output = get_pipeline()(tmp.name)
-        annotation = getattr(output, "exclusive_speaker_diarization", output)
+        annotation = _annotation_from(output)
 
     turns = [
         {"speaker": speaker, "start": round(float(segment.start), 3), "end": round(float(segment.end), 3)}

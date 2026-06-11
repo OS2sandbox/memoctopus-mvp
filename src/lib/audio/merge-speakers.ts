@@ -1,5 +1,6 @@
 import type { TranscriptSegment } from '@/types';
 import type { SpeakerTurn } from '@/lib/ai/diarization';
+import { speakerLabel } from './speaker-labels';
 
 // Merges acoustic diarization output (speaker turns over the full recording) onto
 // the already-transcribed segments. hviske produces no speaker labels — every
@@ -32,7 +33,7 @@ export function assignSpeakers(
   const labelFor = (rawSpeaker: string): string => {
     let label = labelMap.get(rawSpeaker);
     if (!label) {
-      label = `Taler ${labelMap.size + 1}`;
+      label = speakerLabel(labelMap.size + 1);
       labelMap.set(rawSpeaker, label);
     }
     return label;

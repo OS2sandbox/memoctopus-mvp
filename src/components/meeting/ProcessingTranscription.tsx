@@ -16,6 +16,26 @@ interface Props {
   onComplete?: () => void;
 }
 
+// Requests speaker turns for the full recording. Fail-soft: returns [] on any
+// error so the caller keeps the default single-speaker labels.
+async function fetchDiarization(meetingId: string, wav: Blob): Promise<SpeakerTurn[]> {
+  try {
+    const fd = new FormData();
+    fd.append('audio', wav, 'recording.wav');
+    const res = await fetch(`/api/meetings/${meetingId}/diarize`, {
+      method: 'POST',
+      body: fd,
+      signal: AbortSignal.timeout(300_000),
+    });
+    if (!res.ok) return [];
+    const { turns } = await res.json() as { turns: SpeakerTurn[] };
+    return Array.isArray(turns) ? turns : [];
+  } catch (err) {
+    console.error('[ProcessingTranscription] diarization failed:', err);
+    return [];
+  }
+}
+
 type Phase = 'downloading' | 'analyzing' | 'transcribing' | 'diarizing' | 'saving' | 'error';
 
 interface BatchProgress {
@@ -50,23 +70,7 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
         // single acoustic pass over the WHOLE recording (speaker identity is global),
         // so we send one WAV of the full audio and merge the turns onto the segments
         // afterwards. Fail-soft: any error yields no turns and segments keep 'Taler 1'.
-        const diarizationPromise: Promise<SpeakerTurn[]> = (async () => {
-          try {
-            const fd = new FormData();
-            fd.append('audio', float32ToWavBlob(mono16k), 'recording.wav');
-            const res = await fetch(`/api/meetings/${meetingId}/diarize`, {
-              method: 'POST',
-              body: fd,
-              signal: AbortSignal.timeout(300_000),
-            });
-            if (!res.ok) return [];
-            const { turns } = await res.json() as { turns: SpeakerTurn[] };
-            return Array.isArray(turns) ? turns : [];
-          } catch (err) {
-            console.error('[ProcessingTranscription] diarization failed:', err);
-            return [];
-          }
-        })();
+        const diarizationPromise = fetchDiarization(meetingId, float32ToWavBlob(mono16k));
 
         // 3. Energy VAD: find speech regions and accumulate into ~27s batches.
         // Timestamps from energyVAD are in seconds at 16 kHz — these become the
