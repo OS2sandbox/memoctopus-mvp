@@ -11,6 +11,7 @@ import {
   LeaveDetectorState,
 } from './lib/leave-detector';
 import { JoinRaceResult, isAdmitted, joinFailureMessage } from './lib/join-race';
+import { isRealParticipant } from './lib/participants';
 
 export type BotStatus = 'joining' | 'recording' | 'paused' | 'ended' | 'error';
 
@@ -465,9 +466,16 @@ export class TeamsMeetingBot {
       '[role="radio"][aria-label*="Brug ikke lyd"]',
     ].join(', ')).first();
     if (await computerAudioRadio.isVisible({ timeout: 2000 }).catch(() => false)) {
-      const dontUseChecked = await dontUseAudioRadio.getAttribute('aria-checked').catch(() => null);
-      if (dontUseChecked === 'true') {
-        console.log(`[bot] "Don't use audio" was selected — switching to Computer audio`);
+      // Only read "Don't use audio" state if that radio is actually present.
+      // getAttribute() blocks for its full default 30s timeout when the
+      // element is absent — guarding with the immediate isVisible() check
+      // avoids a ~30s stall on the prejoin (the radio is often not rendered
+      // once Computer audio is already the default).
+      if (await dontUseAudioRadio.isVisible().catch(() => false)) {
+        const dontUseChecked = await dontUseAudioRadio.getAttribute('aria-checked', { timeout: 1000 }).catch(() => null);
+        if (dontUseChecked === 'true') {
+          console.log(`[bot] "Don't use audio" was selected — switching to Computer audio`);
+        }
       }
       await computerAudioRadio.click({ timeout: 5000 }).catch(() => {});
       await page.waitForTimeout(200);
@@ -1158,8 +1166,10 @@ export class TeamsMeetingBot {
     form.append('meetingId', this.config.meetingId);
     form.append('userId', this.config.userId);
     form.append('duration', String(this.elapsed));
-    // Strip internal sentinel values before sending to the server
-    const realParticipants = this.participants.filter((p) => p !== '__audio_detected__');
+    // Strip internal sentinels and system phantoms ("Microsoft Teams meeting")
+    // before sending to the server so they don't appear in the meeting's
+    // participant list.
+    const realParticipants = this.participants.filter((p) => isRealParticipant(p, this.config.botName));
     form.append('participants', JSON.stringify(realParticipants));
 
     try {
@@ -1550,28 +1560,31 @@ export class TeamsMeetingBot {
         console.log(`[bot] roster names found: ${JSON.stringify(names)} (rosterCount=${rosterCount})`);
       }
 
-      const filtered = names.filter((n) => n && n !== this.config.botName);
+      // filtered = real human participants — excludes the bot's own name AND
+      // system phantoms like "Microsoft Teams meeting" (which teams.live.com
+      // always lists). Counting the phantom kept definitelyNotAlone true after
+      // the last human left, cancelling the alone-timer so the bot never left.
+      const filtered = names.filter((n) => isRealParticipant(n, this.config.botName));
       if (filtered.length > 0) {
         this.hadOtherParticipants = true;
         this.participants = Array.from(new Set([...this.participants, ...filtered]));
       }
 
-      // Roster-based alone detection: stop when count shows the bot is the only one left.
+      // Roster-based alone detection: stop when no real human remains.
       if ((this.hadActiveTracks || this.hadOtherParticipants) && this.isActivelyRecording()) {
-        // rosterCount < 0  → selectors found nothing (re-render / panel closed); treat as no data
-        // rosterCount = 0  → truly empty roster
-        // rosterCount = 1  → exactly one entry; could be the bot itself OR one real participant
-        // rosterCount > 1  → multiple participants present
-        //
-        // filtered = names excluding the bot's own display name.
-        // definitelyAlone requires filtered.length === 0 so we don't stop when the ONE
-        // roster entry is the OTHER participant (which was the bug: 1 ≤ 1 fired even when
-        // the roster showed just the meeting host).
-        const definitelyAlone = rosterCount >= 0 && rosterCount <= 1 && filtered.length === 0;
-        const definitelyNotAlone = rosterCount > 1 || filtered.length > 0;
+        // The DOM rosterCount includes phantoms and can't distinguish them, so
+        // we trust the filtered real-name count whenever we successfully read
+        // names. Only when NO names could be extracted (re-render / panel
+        // closed → names empty, rosterCount -1) do we fall back to the raw
+        // rosterCount, and then only treat ≤1 as alone.
+        const haveNames = names.length > 0;
+        const definitelyAlone = haveNames
+          ? filtered.length === 0
+          : (rosterCount >= 0 && rosterCount <= 1);
+        const definitelyNotAlone = filtered.length > 0;
 
         if (definitelyAlone && this.isActivelyRecording() && !this.aloneTimer) {
-          console.log(`[bot] Roster alone (rosterCount=${rosterCount}, filtered=${filtered.length}) — will stop in 5 s`);
+          console.log(`[bot] Roster alone (rosterCount=${rosterCount}, realHumans=${filtered.length}) — will stop in 5 s`);
           this.aloneTimer = setTimeout(() => {
             this.aloneTimer = null;
             if (this.isActivelyRecording()) {
