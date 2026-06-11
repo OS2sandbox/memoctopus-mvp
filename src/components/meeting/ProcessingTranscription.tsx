@@ -2,19 +2,21 @@
 
 import { useEffect, useState } from 'react';
 import {
-  newVadBatchState, sealCurrentBatch, splitTextWithIntervals,
+  newVadBatchState, sealCurrentBatch, splitTextWithIntervals, float32ToWavBlob,
   runWithConcurrency, BATCH_DURATION_S, BATCH_CONCURRENCY,
 } from '@/lib/audio/vad-batch';
 import { energyVAD, decodeAndResampleTo16k } from '@/lib/audio/vad-client';
+import { assignSpeakers } from '@/lib/audio/merge-speakers';
 import { getAudio, saveTranscript, updateMeeting } from '@/lib/storage';
 import type { TranscriptSegment } from '@/types';
+import type { SpeakerTurn } from '@/lib/ai/diarization';
 
 interface Props {
   meetingId: string;
   onComplete?: () => void;
 }
 
-type Phase = 'downloading' | 'analyzing' | 'transcribing' | 'saving' | 'error';
+type Phase = 'downloading' | 'analyzing' | 'transcribing' | 'diarizing' | 'saving' | 'error';
 
 interface BatchProgress {
   completed: number;
@@ -43,6 +45,28 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
         // 2. Decode, downmix to mono, and resample to 16 kHz in 60-second chunks.
         setPhase('analyzing');
         const mono16k = await decodeAndResampleTo16k(arrayBuffer);
+
+        // Kick off speaker diarization in parallel with transcription. It runs as a
+        // single acoustic pass over the WHOLE recording (speaker identity is global),
+        // so we send one WAV of the full audio and merge the turns onto the segments
+        // afterwards. Fail-soft: any error yields no turns and segments keep 'Taler 1'.
+        const diarizationPromise: Promise<SpeakerTurn[]> = (async () => {
+          try {
+            const fd = new FormData();
+            fd.append('audio', float32ToWavBlob(mono16k), 'recording.wav');
+            const res = await fetch(`/api/meetings/${meetingId}/diarize`, {
+              method: 'POST',
+              body: fd,
+              signal: AbortSignal.timeout(300_000),
+            });
+            if (!res.ok) return [];
+            const { turns } = await res.json() as { turns: SpeakerTurn[] };
+            return Array.isArray(turns) ? turns : [];
+          } catch (err) {
+            console.error('[ProcessingTranscription] diarization failed:', err);
+            return [];
+          }
+        })();
 
         // 3. Energy VAD: find speech regions and accumulate into ~27s batches.
         // Timestamps from energyVAD are in seconds at 16 kHz — these become the
@@ -88,9 +112,14 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
         });
 
         const segmentArrays = await runWithConcurrency(tasks, BATCH_CONCURRENCY);
-        const segments = segmentArrays.flat().sort((a, b) => a.start - b.start);
+        const sorted = segmentArrays.flat().sort((a, b) => a.start - b.start);
 
-        // 5. Save transcript to IndexedDB and advance to review
+        // 5. Merge speaker labels from the diarization pass (started above, in parallel).
+        setPhase('diarizing');
+        const turns = await diarizationPromise;
+        const segments = assignSpeakers(sorted, turns);
+
+        // 6. Save transcript to IndexedDB and advance to review
         setPhase('saving');
         const rawText = segments.map((s) => s.text).join(' ');
         await saveTranscript(meetingId, { rawText, segments, chapters: [], piiReplacements: [] });
@@ -115,6 +144,7 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
     transcribing: batchProgress && batchProgress.total > 0
       ? `transskriberer ${batchProgress.completed} / ${batchProgress.total} segmenter…`
       : 'transskriberer…',
+    diarizing: 'genkender talere…',
     saving: 'gemmer transskription…',
     error: '',
   };
