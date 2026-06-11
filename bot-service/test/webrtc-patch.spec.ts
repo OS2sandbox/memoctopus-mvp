@@ -197,3 +197,84 @@ test('Non-Event Promise rejections (real errors) are still reported as unhandled
   });
   expect(result.sawUnhandled).toBe(true);
 });
+
+// ─── BUNDLE extmap collision repair (setLocalDescription hook) ───────────────
+
+test('setLocalDescription repairs a BUNDLE extmap id collision instead of throwing', async ({ page }) => {
+  // Reproduces the exact failure: a real Chromium offer is munged so the audio
+  // and video m-sections both claim extmap id=11 for DIFFERENT URNs. Without
+  // the patch, setLocalDescription throws InvalidAccessError ("A BUNDLE group
+  // contains a codec collision for header extension id=11"). With the patch's
+  // setLocalDescription hook, the duplicate line is dropped and the offer
+  // applies cleanly. This is the bot-doesn't-join → "Sorry, we couldn't
+  // connect you" → "Leaving..." regression.
+  const result = await page.evaluate(async () => {
+    const pc = new RTCPeerConnection();
+    pc.addTransceiver('audio', { direction: 'sendrecv' });
+    pc.addTransceiver('video', { direction: 'sendrecv' });
+    const offer = await pc.createOffer();
+    let sdp = offer.sdp || '';
+
+    // Force a collision: ensure the audio section has extmap:11 → audio-level,
+    // and the video section has extmap:11 → a DIFFERENT urn. Chromium already
+    // puts repaired-rtp-stream-id at 11 in video; we add an audio id=11 with a
+    // different URN so the two sections collide.
+    const audioIdx = sdp.indexOf('m=audio');
+    const videoIdx = sdp.indexOf('m=video');
+    const audioHead = sdp.slice(0, videoIdx);
+    const videoTail = sdp.slice(videoIdx);
+    // Inject an audio extmap:11 right after the m=audio line.
+    const injected = audioHead.replace(
+      /(m=audio[^\r\n]*\r?\n)/,
+      `$1a=extmap:11 urn:ietf:params:rtp-hdrext:ssrc-audio-level\r\n`,
+    );
+    // Make sure video has an extmap:11 with a different URN.
+    const videoWithDup = videoTail.includes('a=extmap:11 ')
+      ? videoTail
+      : videoTail.replace(
+          /(m=video[^\r\n]*\r?\n)/,
+          `$1a=extmap:11 urn:3gpp:video-orientation\r\n`,
+        );
+    sdp = injected + videoWithDup;
+    void audioIdx;
+
+    let threw: { name: string; message: string } | null = null;
+    try {
+      await pc.setLocalDescription({ type: 'offer', sdp });
+    } catch (err) {
+      threw = { name: (err as Error).name, message: (err as Error).message };
+    }
+    const applied = pc.localDescription?.sdp || '';
+    // Count how many times extmap:11 appears with each URN in the applied SDP.
+    const elevenLines = (applied.match(/^a=extmap:11(?:\/\S+)? \S+/gm) || []);
+    const distinctUrns = new Set(elevenLines.map((l) => l.split(' ').pop()));
+    return { threw, fixedFlag: (window as unknown as Record<string, unknown>).__botFixedSdpCollision === true, distinctUrnCount: distinctUrns.size };
+  });
+
+  expect(
+    result.threw,
+    `setLocalDescription threw — the BUNDLE collision repair hook did not run or did not remove the duplicate extmap. ${JSON.stringify(result.threw)}`,
+  ).toBeNull();
+  expect(result.fixedFlag, 'the patch did not flag that it repaired a collision').toBe(true);
+  // After repair, id=11 maps to at most one URN across the bundle.
+  expect(result.distinctUrnCount).toBeLessThanOrEqual(1);
+});
+
+test('setLocalDescription leaves a clean offer untouched', async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    (window as unknown as Record<string, unknown>).__botFixedSdpCollision = false;
+    const pc = new RTCPeerConnection();
+    pc.addTransceiver('audio', { direction: 'sendrecv' });
+    const offer = await pc.createOffer();
+    let threw: string | null = null;
+    try {
+      await pc.setLocalDescription(offer);
+    } catch (err) {
+      threw = (err as Error).message;
+    }
+    return { threw, fixedFlag: (window as unknown as Record<string, unknown>).__botFixedSdpCollision === true };
+  });
+  expect(result.threw).toBeNull();
+  // A clean audio-only offer has no collision, so the repair flag stays false.
+  expect(result.fixedFlag).toBe(false);
+});

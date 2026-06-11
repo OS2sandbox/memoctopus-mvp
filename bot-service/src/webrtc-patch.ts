@@ -36,6 +36,63 @@ export function installWebRTCPatch(): void {
   win.__botAudioPcs = audioPcsList;
   let hadAudioPeer = false;
 
+  // ─── BUNDLE extmap collision repair ────────────────────────────────────────
+  //
+  // Teams' offer SDP can assign the same RTP header-extension id (id=11 in
+  // practice) to DIFFERENT extension URNs in the bundled audio vs video
+  // m-sections. setLocalDescription then throws:
+  //   InvalidAccessError: A BUNDLE group contains a codec collision for
+  //   header extension id=11.
+  // Teams catches it → "Sorry, we couldn't connect you" → bot leaves.
+  //
+  // We make the id→URN mapping consistent (first m-section to claim an id
+  // keeps it; a later section mapping the same id to a different URN has that
+  // one extmap line dropped). Header extensions are optional to negotiate, so
+  // this is safe — we do NOT remove m-sections or touch rtcp-mux (that heavier
+  // munge was vexa's #281 regression).
+  //
+  // NOTE: this is an inline copy of src/lib/sdp-dedupe.ts (installWebRTCPatch
+  // must be self-contained for addInitScript — no imports). Keep in sync; the
+  // Playwright e2e test guards this version's behaviour.
+  const dedupeExtmapCollisions = (sdp: string): string => {
+    const eol = sdp.indexOf('\r\n') !== -1 ? '\r\n' : '\n';
+    const lines = sdp.split(/\r?\n/);
+    const idToUrn: Record<string, string> = {};
+    const out: string[] = [];
+    let dropped = 0;
+    for (const line of lines) {
+      const m = line.match(/^a=extmap:(\d+)(?:\/[^ ]+)? (\S+)/);
+      if (m) {
+        const id = m[1];
+        const urn = m[2];
+        const existing = idToUrn[id];
+        if (existing !== undefined && existing !== urn) { dropped++; continue; }
+        if (existing === undefined) idToUrn[id] = urn;
+      }
+      out.push(line);
+    }
+    return dropped === 0 ? sdp : out.join(eol);
+  };
+
+  // Patch setLocalDescription on the prototype so every PC (Teams' meeting PC
+  // included) repairs its offer before applying it. PatchedRTC.prototype ===
+  // OrigRTC.prototype, so instances pick this up.
+  const origSetLocalDescription = OrigRTC.prototype.setLocalDescription;
+  OrigRTC.prototype.setLocalDescription = function(
+    this: RTCPeerConnection,
+    description?: RTCLocalSessionDescriptionInit,
+  ): Promise<void> {
+    if (description && typeof description.sdp === 'string') {
+      const fixed = dedupeExtmapCollisions(description.sdp);
+      if (fixed !== description.sdp) {
+        win.__botFixedSdpCollision = true;
+        description = { type: description.type, sdp: fixed } as RTCLocalSessionDescriptionInit;
+      }
+    }
+    // eslint-disable-next-line prefer-rest-params
+    return origSetLocalDescription.apply(this, [description] as never);
+  };
+
   // ─── Unhandled-rejection swallower ─────────────────────────────────────────
   //
   // Teams' code catches browser Events (MediaStreamTrack 'ended',
