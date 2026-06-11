@@ -17,6 +17,8 @@ import { useIsMobile } from '@/lib/use-is-mobile';
 import { pickRecordingMimeType } from '@/lib/audio/recording-format';
 import type { TranscriptSegment } from '@/types';
 import { saveAudio, saveTranscript, updateMeeting, deleteMeeting } from '@/lib/storage';
+import { assignSpeakers } from '@/lib/audio/merge-speakers';
+import { diarizeFromBlob } from '@/lib/audio/diarize-client';
 import {
   float32ToWavBlob, newVadBatchState, sealCurrentBatch, mapWavTime,
   splitTextWithIntervals, runWithConcurrency,
@@ -893,6 +895,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     const mimeType = recorder.mimeType || 'audio/webm';
     const blob = new Blob(chunksRef.current, { type: mimeType });
 
+    // Diarize the full recording in parallel with transcription. The live path only
+    // holds the compressed blob, so this decodes it to 16 kHz mono first. Fail-soft.
+    const diarizationPromise = diarizeFromBlob(meetingId, blob);
+
     // Seal any remaining speech into the final partial batch.
     sealCurrentBatch(vadBatchStateRef.current);
     const batches = vadBatchStateRef.current.readyBatches;
@@ -937,7 +943,8 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       });
 
       const segmentArrays = await runWithConcurrency(tasks, BATCH_CONCURRENCY);
-      const segments = segmentArrays.flat().sort((a, b) => a.start - b.start);
+      const sorted = segmentArrays.flat().sort((a, b) => a.start - b.start);
+      const segments = assignSpeakers(sorted, await diarizationPromise);
 
       const rawText = segments.map((s) => s.text).join(' ');
       await saveTranscript(meetingId, { rawText, segments, chapters: [], piiReplacements: [] });

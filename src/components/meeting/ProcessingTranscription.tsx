@@ -2,38 +2,18 @@
 
 import { useEffect, useState } from 'react';
 import {
-  newVadBatchState, sealCurrentBatch, splitTextWithIntervals, float32ToWavBlob,
+  newVadBatchState, sealCurrentBatch, splitTextWithIntervals,
   runWithConcurrency, BATCH_DURATION_S, BATCH_CONCURRENCY,
 } from '@/lib/audio/vad-batch';
 import { energyVAD, decodeAndResampleTo16k } from '@/lib/audio/vad-client';
 import { assignSpeakers } from '@/lib/audio/merge-speakers';
+import { diarizeFromMono16k } from '@/lib/audio/diarize-client';
 import { getAudio, saveTranscript, updateMeeting } from '@/lib/storage';
 import type { TranscriptSegment } from '@/types';
-import type { SpeakerTurn } from '@/lib/ai/diarization';
 
 interface Props {
   meetingId: string;
   onComplete?: () => void;
-}
-
-// Requests speaker turns for the full recording. Fail-soft: returns [] on any
-// error so the caller keeps the default single-speaker labels.
-async function fetchDiarization(meetingId: string, wav: Blob): Promise<SpeakerTurn[]> {
-  try {
-    const fd = new FormData();
-    fd.append('audio', wav, 'recording.wav');
-    const res = await fetch(`/api/meetings/${meetingId}/diarize`, {
-      method: 'POST',
-      body: fd,
-      signal: AbortSignal.timeout(300_000),
-    });
-    if (!res.ok) return [];
-    const { turns } = await res.json() as { turns: SpeakerTurn[] };
-    return Array.isArray(turns) ? turns : [];
-  } catch (err) {
-    console.error('[ProcessingTranscription] diarization failed:', err);
-    return [];
-  }
 }
 
 type Phase = 'downloading' | 'analyzing' | 'transcribing' | 'diarizing' | 'saving' | 'error';
@@ -70,7 +50,7 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
         // single acoustic pass over the WHOLE recording (speaker identity is global),
         // so we send one WAV of the full audio and merge the turns onto the segments
         // afterwards. Fail-soft: any error yields no turns and segments keep 'Taler 1'.
-        const diarizationPromise = fetchDiarization(meetingId, float32ToWavBlob(mono16k));
+        const diarizationPromise = diarizeFromMono16k(meetingId, mono16k);
 
         // 3. Energy VAD: find speech regions and accumulate into ~27s batches.
         // Timestamps from energyVAD are in seconds at 16 kHz — these become the

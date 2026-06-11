@@ -7,6 +7,8 @@ import {
   runWithConcurrency, BATCH_DURATION_S, BATCH_CONCURRENCY,
 } from '@/lib/audio/vad-batch';
 import { energyVAD, decodeAndResampleTo16k } from '@/lib/audio/vad-client';
+import { assignSpeakers } from '@/lib/audio/merge-speakers';
+import { diarizeFromMono16k } from '@/lib/audio/diarize-client';
 import { createMeeting, saveAudio, saveTranscript, updateMeeting, deleteMeeting } from '@/lib/storage';
 import type { TranscriptSegment } from '@/types';
 
@@ -104,6 +106,9 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         }
         if (cancelled) return;
 
+        // Diarize the full recording in parallel with transcription; merged in below.
+        const diarizationPromise = diarizeFromMono16k(id, mono16k);
+
         const batchState = newVadBatchState();
         for (const { audio, start, end } of energyVAD(mono16k, 16_000)) {
           const wavOffset   = batchState.pendingWavDuration;
@@ -156,7 +161,8 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
 
         const segmentArrays = await runWithConcurrency(tasks, BATCH_CONCURRENCY);
         if (cancelled) return;
-        const segments = segmentArrays.flat().sort((a, b) => a.start - b.start);
+        const sorted = segmentArrays.flat().sort((a, b) => a.start - b.start);
+        const segments = assignSpeakers(sorted, await diarizationPromise);
 
         setPhase('saving');
         const rawText = segments.map((s) => s.text).join(' ');
