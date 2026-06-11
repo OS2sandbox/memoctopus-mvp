@@ -13,14 +13,27 @@ export async function GET(_req: NextRequest, { params }: Params) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const meeting = await queryUserSchemaOne(
+  const meeting = await queryUserSchemaOne<Record<string, unknown>>(
     session.user.id,
     'SELECT * FROM meetings WHERE id = $1',
     [id],
   );
 
   if (!meeting) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  return NextResponse.json(meeting);
+
+  // Include transcript segments when status is review so callers can poll once
+  // for both completion and the resulting transcript (used by upload confirm screen).
+  const result: Record<string, unknown> = { ...meeting };
+  if (meeting.status === 'review') {
+    const transcript = await queryUserSchemaOne<{ segments: unknown }>(
+      session.user.id,
+      'SELECT segments FROM transcripts WHERE meeting_id = $1',
+      [id],
+    );
+    result.segments = transcript?.segments ?? null;
+  }
+
+  return NextResponse.json(result);
 }
 
 export async function PATCH(req: NextRequest, { params }: Params) {
@@ -74,16 +87,27 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     return NextResponse.json({ version: newVersion, newVersion: versionRow });
   }
 
-  // Handle title rename
+  // Handle title (+ optional participants) update
   if (body.title !== undefined) {
-    const titleSchema = z.object({ title: z.string().min(1) });
+    const titleSchema = z.object({
+      title: z.string().min(1),
+      participants: z.array(z.string()).optional(),
+    });
     const parsed = titleSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-    await queryUserSchemaOne(
-      session.user.id,
-      'UPDATE meetings SET title = $1, updated_at = NOW() WHERE id = $2',
-      [parsed.data.title, id],
-    );
+    if (parsed.data.participants !== undefined) {
+      await queryUserSchemaOne(
+        session.user.id,
+        'UPDATE meetings SET title = $1, participants = $2, updated_at = NOW() WHERE id = $3',
+        [parsed.data.title, parsed.data.participants, id],
+      );
+    } else {
+      await queryUserSchemaOne(
+        session.user.id,
+        'UPDATE meetings SET title = $1, updated_at = NOW() WHERE id = $2',
+        [parsed.data.title, id],
+      );
+    }
     return NextResponse.json({ ok: true });
   }
 

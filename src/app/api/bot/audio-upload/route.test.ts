@@ -16,9 +16,9 @@ vi.mock('@/lib/db/user-schema', () => ({
   queryUserSchemaOne: vi.fn(),
 }));
 
-const mockTranscribe = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/ai/transcription', () => ({
-  getTranscriptionProvider: () => ({ transcribe: mockTranscribe }),
+const mockTranscribeWithVadBatches = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audio/vad-batch-server', () => ({
+  transcribeWithVadBatches: mockTranscribeWithVadBatches,
 }));
 
 vi.mock('@/lib/ai/pii', () => ({
@@ -71,10 +71,10 @@ function validAudio() {
 
 beforeEach(() => {
   mockQueryOne.mockReset();
-  mockTranscribe.mockReset();
+  mockTranscribeWithVadBatches.mockReset();
   mockDetectPii.mockResolvedValue({ replacements: [] });
   mockGroupChapters.mockResolvedValue([]);
-  mockTranscribe.mockResolvedValue(SEGMENTS);
+  mockTranscribeWithVadBatches.mockResolvedValue(SEGMENTS);
   process.env.BOT_INTERNAL_SECRET = SECRET;
 });
 
@@ -192,7 +192,7 @@ describe('POST /api/bot/audio-upload', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).ok).toBe(true);
 
-    expect(mockTranscribe).toHaveBeenCalledOnce();
+    expect(mockTranscribeWithVadBatches).toHaveBeenCalledOnce();
 
     const insertTranscript = mockQueryOne.mock.calls.find(
       ([, sql]) => typeof sql === 'string' && /INSERT INTO transcripts/.test(sql),
@@ -281,7 +281,7 @@ describe('POST /api/bot/audio-upload', () => {
   });
 
   it('on transcription failure: inserts empty transcript and sets review; POST still returns 200', async () => {
-    mockTranscribe.mockRejectedValueOnce(new Error('Transcription failed'));
+    mockTranscribeWithVadBatches.mockRejectedValueOnce(new Error('Transcription failed'));
     mockQueryOne.mockResolvedValueOnce(MEETING as never); // meeting
     mockQueryOne.mockResolvedValueOnce(undefined as never); // set processing
     mockQueryOne.mockResolvedValueOnce(undefined as never); // audio_files

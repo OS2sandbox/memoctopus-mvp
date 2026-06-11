@@ -77,7 +77,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
         setStatus('cancelled');
         return;
       }
-      if (data.meetingStatus === 'review') {
+      if (['processing', 'review', 'minutes', 'done', 'redacted'].includes(data.meetingStatus ?? '')) {
         stopPolling();
         stopTimer();
         router.push(`/meeting/${meetingId}/review`);

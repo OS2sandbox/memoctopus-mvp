@@ -8,10 +8,9 @@ vi.mock('openai', () => ({
   },
 }));
 
-import { HviskeProvider, ElevenLabsProvider, getTranscriptionProvider, setTranscriptionProvider } from './transcription';
+import { HviskeProvider, getTranscriptionProvider, setTranscriptionProvider } from './transcription';
 
-// ─── HviskeProvider ───────────────────────────────────────────────────────────
-// Exercises the shared OpenAI-compatible transcription path + heuristic diarization.
+// ─── HviskeProvider.transcribe ────────────────────────────────────────────────
 
 describe('HviskeProvider.transcribe', () => {
   let provider: HviskeProvider;
@@ -21,112 +20,91 @@ describe('HviskeProvider.transcribe', () => {
     mockTranscriptionsCreate.mockReset();
   });
 
-  it('returns a single fallback segment when API returns no segments', async () => {
-    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'Hello world', segments: [] });
+  it('sends response_format json to the API', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'Hej.' });
 
-    const result = await provider.transcribe(Buffer.from('audio'), 'audio/webm');
+    await provider.transcribe(Buffer.from('a'), 'audio/webm');
+
+    const call = mockTranscriptionsCreate.mock.calls[0][0];
+    expect(call.response_format).toBe('json');
+  });
+
+  it('sends language=da to the API', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'Hej.' });
+
+    await provider.transcribe(Buffer.from('a'), 'audio/webm');
+
+    const call = mockTranscriptionsCreate.mock.calls[0][0];
+    expect(call.language).toBe('da');
+  });
+
+  it('returns an empty array when the API returns empty text', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: '' });
+
+    const result = await provider.transcribe(Buffer.from('a'), 'audio/webm');
+
+    expect(result).toHaveLength(0);
+  });
+
+  it('returns a single segment when text has no sentence boundaries', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'Ingen punktum her' });
+
+    const result = await provider.transcribe(Buffer.from('a'), 'audio/webm');
 
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      speaker: 'Taler 1',
-      start: 0,
-      end: 0,
-      text: 'Hello world',
-    });
-  });
-
-  it('returns a fallback segment when segments is undefined', async () => {
-    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'Fallback' });
-
-    const result = await provider.transcribe(Buffer.from('audio'), 'audio/webm');
-
-    expect(result).toHaveLength(1);
-    expect(result[0].text).toBe('Fallback');
-  });
-
-  it('maps segments keeping speaker 1 when gaps are ≤ 2s', async () => {
-    mockTranscriptionsCreate.mockResolvedValueOnce({
-      text: 'full',
-      segments: [
-        { start: 0, end: 2, text: ' First ' },
-        { start: 3, end: 5, text: ' Second ' }, // 1s gap — no switch
-      ],
-    });
-
-    const result = await provider.transcribe(Buffer.from('a'), 'audio/webm');
-
+    expect(result[0].text).toBe('Ingen punktum her');
     expect(result[0].speaker).toBe('Taler 1');
-    expect(result[1].speaker).toBe('Taler 1');
   });
 
-  it('switches to Taler 2 when gap exceeds 2 seconds', async () => {
-    mockTranscriptionsCreate.mockResolvedValueOnce({
-      text: 'full',
-      segments: [
-        { start: 0, end: 2, text: 'A' },
-        { start: 5, end: 7, text: 'B' }, // 3s gap
-      ],
-    });
+  it('splits text into multiple segments on sentence boundaries', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'Første sætning. Anden sætning. Tredje sætning.' });
 
-    const result = await provider.transcribe(Buffer.from('a'), 'audio/webm');
+    const result = await provider.transcribe(Buffer.alloc(8000), 'audio/webm');
 
-    expect(result[0].speaker).toBe('Taler 1');
-    expect(result[1].speaker).toBe('Taler 2');
+    expect(result).toHaveLength(3);
+    expect(result[0].text).toBe('Første sætning.');
+    expect(result[1].text).toBe('Anden sætning.');
+    expect(result[2].text).toBe('Tredje sætning.');
   });
 
-  it('switches back to Taler 1 on a second gap > 2s', async () => {
-    mockTranscriptionsCreate.mockResolvedValueOnce({
-      text: 'full',
-      segments: [
-        { start: 0, end: 2, text: 'A' },
-        { start: 5, end: 7, text: 'B' }, // → Taler 2
-        { start: 10, end: 12, text: 'C' }, // → Taler 1
-      ],
-    });
+  it('labels all segments as Taler 1', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'A. B. C.' });
 
-    const result = await provider.transcribe(Buffer.from('a'), 'audio/webm');
+    const result = await provider.transcribe(Buffer.alloc(8000), 'audio/webm');
 
-    expect(result[0].speaker).toBe('Taler 1');
-    expect(result[1].speaker).toBe('Taler 2');
-    expect(result[2].speaker).toBe('Taler 1');
+    expect(result.every(s => s.speaker === 'Taler 1')).toBe(true);
   });
 
-  it('does not switch speaker at exactly 2s gap (boundary is > 2)', async () => {
-    mockTranscriptionsCreate.mockResolvedValueOnce({
-      text: 'full',
-      segments: [
-        { start: 0, end: 2, text: 'A' },
-        { start: 4, end: 6, text: 'B' }, // exactly 2s gap — no switch
-      ],
-    });
+  it('timestamps are monotonically increasing across segments', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'Første. Anden. Tredje.' });
 
-    const result = await provider.transcribe(Buffer.from('a'), 'audio/webm');
+    const result = await provider.transcribe(Buffer.alloc(16_000), 'audio/webm');
 
-    expect(result[0].speaker).toBe('Taler 1');
-    expect(result[1].speaker).toBe('Taler 1');
+    for (let i = 1; i < result.length; i++) {
+      expect(result[i].start).toBeGreaterThanOrEqual(result[i - 1].end);
+    }
   });
 
-  it('trims whitespace from segment text', async () => {
-    mockTranscriptionsCreate.mockResolvedValueOnce({
-      text: 'x',
-      segments: [{ start: 0, end: 1, text: '  padded text  ' }],
-    });
+  it('total duration spans the estimated audio length', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'Hej. Verden.' });
 
-    const result = await provider.transcribe(Buffer.from('a'), 'audio/webm');
+    // 8000 bytes → ~1 second estimated (8000 / 8000)
+    const result = await provider.transcribe(Buffer.alloc(8_000), 'audio/webm');
 
-    expect(result[0].text).toBe('padded text');
+    const lastEnd = result[result.length - 1].end;
+    expect(lastEnd).toBeCloseTo(1.0, 1);
   });
 
-  it('preserves start/end timestamps from transcription segments', async () => {
-    mockTranscriptionsCreate.mockResolvedValueOnce({
-      text: 'x',
-      segments: [{ start: 3.5, end: 7.2, text: 'Text' }],
-    });
+  it('distributes duration proportionally by word count', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'Et ord. Tre separate ord her.' });
 
-    const result = await provider.transcribe(Buffer.from('a'), 'audio/webm');
+    // 8000 bytes → 1 s total
+    const result = await provider.transcribe(Buffer.alloc(8_000), 'audio/webm');
 
-    expect(result[0].start).toBe(3.5);
-    expect(result[0].end).toBe(7.2);
+    // Sentence 1: 2 words; sentence 2: 4 words → total 6
+    // Sentence 1 end ≈ 2/6 = 0.333 s
+    expect(result[0].end).toBeCloseTo(2 / 6, 2);
+    expect(result[1].start).toBeCloseTo(2 / 6, 2);
   });
 
   it.each([
@@ -140,7 +118,7 @@ describe('HviskeProvider.transcribe', () => {
     ['audio/x-m4a', 'm4a'],
     ['audio/unknown', 'webm'],
   ])('maps mime type %s to file extension .%s', async (mime, ext) => {
-    mockTranscriptionsCreate.mockResolvedValueOnce({ text: '', segments: [] });
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'x.' });
 
     await provider.transcribe(Buffer.from('a'), mime);
 
@@ -148,32 +126,76 @@ describe('HviskeProvider.transcribe', () => {
     expect(call.file.name).toMatch(new RegExp(`\\.${ext}$`));
   });
 
-  it('sends language=da to the transcription API', async () => {
-    mockTranscriptionsCreate.mockResolvedValueOnce({ text: '', segments: [] });
+  it('trims whitespace from the full text before splitting', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: '  Hej verden.  ' });
 
-    await provider.transcribe(Buffer.from('a'), 'audio/webm');
+    const result = await provider.transcribe(Buffer.alloc(8_000), 'audio/webm');
 
-    const call = mockTranscriptionsCreate.mock.calls[0][0];
-    expect(call.language).toBe('da');
+    expect(result[0].text).toBe('Hej verden.');
+  });
+});
+
+// ─── HviskeProvider.transcribeRaw ─────────────────────────────────────────────
+
+describe('HviskeProvider.transcribeRaw', () => {
+  let provider: HviskeProvider;
+
+  beforeEach(() => {
+    provider = new HviskeProvider();
+    mockTranscriptionsCreate.mockReset();
   });
 
-  it('requests verbose_json response format', async () => {
-    mockTranscriptionsCreate.mockResolvedValueOnce({ text: '', segments: [] });
+  it('returns the text string from the API response', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'Hej verden' });
 
-    await provider.transcribe(Buffer.from('a'), 'audio/webm');
+    const result = await provider.transcribeRaw(Buffer.from('audio'), 'audio/wav');
+
+    expect(result.text).toBe('Hej verden');
+  });
+
+  it('returns empty string when API returns no text', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: '' });
+
+    const result = await provider.transcribeRaw(Buffer.from('audio'), 'audio/wav');
+
+    expect(result.text).toBe('');
+  });
+
+  it('uses response_format json (not verbose_json)', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'x' });
+
+    await provider.transcribeRaw(Buffer.from('a'), 'audio/wav');
 
     const call = mockTranscriptionsCreate.mock.calls[0][0];
-    expect(call.response_format).toBe('verbose_json');
+    expect(call.response_format).toBe('json');
+  });
+
+  it('does not request timestamp_granularities', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'x' });
+
+    await provider.transcribeRaw(Buffer.from('a'), 'audio/wav');
+
+    const call = mockTranscriptionsCreate.mock.calls[0][0];
+    expect(call.timestamp_granularities).toBeUndefined();
+  });
+
+  it('sends the correct file extension for audio/wav', async () => {
+    mockTranscriptionsCreate.mockResolvedValueOnce({ text: 'x' });
+
+    await provider.transcribeRaw(Buffer.from('a'), 'audio/wav');
+
+    const call = mockTranscriptionsCreate.mock.calls[0][0];
+    expect(call.file.name).toMatch(/\.wav$/);
   });
 });
 
 // ─── Provider singleton ───────────────────────────────────────────────────────
 
 describe('getTranscriptionProvider / setTranscriptionProvider', () => {
-  it('returns an ElevenLabsProvider by default', () => {
+  it('returns a HviskeProvider by default', () => {
     setTranscriptionProvider(null as never);
     const p = getTranscriptionProvider();
-    expect(p).toBeInstanceOf(ElevenLabsProvider);
+    expect(p).toBeInstanceOf(HviskeProvider);
   });
 
   it('returns the same instance on repeated calls', () => {

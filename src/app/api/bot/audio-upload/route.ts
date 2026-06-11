@@ -1,6 +1,6 @@
 import { after, NextRequest, NextResponse } from 'next/server';
 import { queryUserSchemaOne } from '@/lib/db/user-schema';
-import { getTranscriptionProvider } from '@/lib/ai/transcription';
+import { transcribeWithVadBatches } from '@/lib/audio/vad-batch-server';
 import { detectPiiInSegments } from '@/lib/ai/pii';
 import { groupIntoChapters } from '@/lib/ai/chapters';
 import { saveAudioFile } from '@/lib/audio/storage';
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     }
     await queryUserSchemaOne(
       body.userId,
-      `UPDATE meetings SET status = 'cancelled', updated_at = NOW() WHERE id = $1`,
+      `UPDATE meetings SET status = 'cancelled', bot_session = NULL, updated_at = NOW() WHERE id = $1`,
       [body.meetingId],
     ).catch(() => {});
     return NextResponse.json({ ok: true });
@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
   // after this response is returned. This prevents the bot-service's HTTP request from
   // hitting the proxy timeout (502) while waiting for transcription to finish.
   after(async () => {
-    await _processAudio({ buffer, mimeType, meetingId, userId, originalFilename });
+    await _processAudio({ buffer, meetingId, userId, originalFilename });
   });
 
   return NextResponse.json({ ok: true });
@@ -96,13 +96,11 @@ export async function POST(req: NextRequest) {
 
 async function _processAudio({
   buffer,
-  mimeType,
   meetingId,
   userId,
   originalFilename,
 }: {
   buffer: Buffer;
-  mimeType: string;
   meetingId: string;
   userId: string;
   originalFilename: string;
@@ -115,8 +113,7 @@ async function _processAudio({
       [meetingId, filename, sizeBytes],
     );
 
-    const provider = getTranscriptionProvider();
-    const rawSegments: TranscriptSegment[] = await provider.transcribe(buffer, mimeType);
+    const rawSegments: TranscriptSegment[] = await transcribeWithVadBatches(buffer);
 
     let piiReplacements: PiiReplacement[] = [];
     try {
@@ -138,31 +135,32 @@ async function _processAudio({
     await queryUserSchemaOne(
       userId,
       `INSERT INTO transcripts (meeting_id, raw_text, segments, pii_removed_at, pii_replacements, chapters)
-       VALUES ($1, $2, $3, NULL, $4, $5)`,
+       VALUES ($1, $2, $3, NULL, $4, $5)
+       ON CONFLICT (meeting_id) DO UPDATE SET
+         raw_text = EXCLUDED.raw_text,
+         segments = EXCLUDED.segments,
+         pii_replacements = EXCLUDED.pii_replacements,
+         chapters = EXCLUDED.chapters`,
       [meetingId, rawText, JSON.stringify(rawSegments), JSON.stringify(piiReplacements), JSON.stringify(chapters)],
     );
 
     await queryUserSchemaOne(
       userId,
-      `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,
+      `UPDATE meetings SET status = 'review', bot_session = NULL, updated_at = NOW() WHERE id = $1`,
       [meetingId],
     );
   } catch (err) {
     console.error('Bot audio transcription error:', err);
     // Even on failure, move to review with an empty transcript so the UI can navigate.
-    const inserted = await queryUserSchemaOne(
-      userId,
-      `INSERT INTO transcripts (meeting_id, raw_text, segments) VALUES ($1, '', '[]')
-       ON CONFLICT DO NOTHING
-       RETURNING meeting_id`,
-      [meetingId],
-    ).catch(() => null);
-    if (!inserted) {
-      console.warn('Bot audio: transcript already exists for meetingId:', meetingId, '— keeping existing');
-    }
     await queryUserSchemaOne(
       userId,
-      `UPDATE meetings SET status = 'review', updated_at = NOW() WHERE id = $1`,
+      `INSERT INTO transcripts (meeting_id, raw_text, segments) VALUES ($1, '', '[]')
+       ON CONFLICT (meeting_id) DO NOTHING`,
+      [meetingId],
+    ).catch(() => null);
+    await queryUserSchemaOne(
+      userId,
+      `UPDATE meetings SET status = 'review', bot_session = NULL, updated_at = NOW() WHERE id = $1`,
       [meetingId],
     ).catch(() => {});
   }

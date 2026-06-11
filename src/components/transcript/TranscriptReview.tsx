@@ -550,7 +550,7 @@ export function TranscriptReview({
           {audioUrl && <audio ref={audioRef} src={audioUrl} preload="metadata" />}
 
           {/* Transcript — chapters or flat fallback */}
-          <div style={{ marginTop: 8, flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ marginTop: 8, flex: 1, overflowY: 'auto' }}>
             {chaptersLoading && (
               <div style={{
                 padding: '24px 0', display: 'flex', alignItems: 'center', gap: 10,
@@ -578,10 +578,7 @@ export function TranscriptReview({
               return (
                 <div
                   key={ch.id}
-                  style={{
-                    borderTop: '1px solid var(--line)',
-                    ...(isOpen ? { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' } : {}),
-                  }}
+                  style={{ borderTop: '1px solid var(--line)' }}
                 >
                   <div
                     onClick={() => {
@@ -651,7 +648,7 @@ export function TranscriptReview({
                     </div>
                   </div>
                   {isOpen && (
-                    <div style={{ paddingBottom: 18, flex: 1, overflowY: 'auto' }}>
+                    <div style={{ paddingBottom: 18 }}>
                       {chSegs.map(({ seg, idx }) => {
                         const isCurrentMatch = matchIndex >= 0 && matches[matchIndex] === idx;
                         const isAnyMatch = search.trim() && matches.includes(idx);
@@ -683,7 +680,7 @@ export function TranscriptReview({
             })}
 
             {!chaptersLoading && !chapters && (
-              <div style={{ borderTop: '1px solid var(--line)', flex: 1, overflowY: 'auto' }}>
+              <div style={{ borderTop: '1px solid var(--line)' }}>
                 {segments.length === 0 ? (
                   <p style={{ padding: '32px 0', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
                     Ingen transskription fundet.

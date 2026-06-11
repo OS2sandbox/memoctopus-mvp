@@ -20,7 +20,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   const transcript = await queryUserSchemaOne<{ id: string; segments: unknown }>(
     session.user.id,
-    'SELECT id, segments FROM transcripts WHERE meeting_id = $1 ORDER BY id DESC LIMIT 1',
+    'SELECT id, segments FROM transcripts WHERE meeting_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1',
     [id],
   );
   if (!transcript) return NextResponse.json({ error: 'Not found' }, { status: 404 });
