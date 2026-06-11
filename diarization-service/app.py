@@ -10,9 +10,11 @@ The model weights are baked into the image at build time (see Dockerfile), so th
 service never reaches the network at request time — important for the GDPR posture.
 """
 
+import io
 import os
-import tempfile
+import wave
 
+import numpy as np
 import torch
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -20,7 +22,11 @@ from pyannote.audio import Pipeline
 
 MODEL_NAME = os.environ.get("DIARIZATION_MODEL", "pyannote/speaker-diarization-community-1")
 API_KEY = os.environ.get("DIARIZATION_API_KEY", "")
-# HF token only needed at build/download time; weights are cached in the image.
+# Inference device: "cpu", "cuda", or unset for auto. Force "cpu" when the GPU is
+# already saturated by another model (e.g. the STT server) to avoid CUDA OOM.
+DEVICE = os.environ.get("DIARIZATION_DEVICE") or ("cuda" if torch.cuda.is_available() else "cpu")
+# Gated-model auth. huggingface_hub also reads HF_TOKEN from the environment, so the
+# weights download even if the kwarg name differs across pyannote releases.
 HF_TOKEN = os.environ.get("HF_TOKEN")
 
 app = FastAPI(title="diarization-service")
@@ -33,9 +39,12 @@ _pipeline: Pipeline | None = None
 def get_pipeline() -> Pipeline:
     global _pipeline
     if _pipeline is None:
-        _pipeline = Pipeline.from_pretrained(MODEL_NAME, use_auth_token=HF_TOKEN)
-        if torch.cuda.is_available():
-            _pipeline.to(torch.device("cuda"))
+        try:
+            pipeline = Pipeline.from_pretrained(MODEL_NAME, token=HF_TOKEN)
+        except TypeError:
+            # Older pyannote releases use the `use_auth_token` kwarg name.
+            pipeline = Pipeline.from_pretrained(MODEL_NAME, use_auth_token=HF_TOKEN)
+        _pipeline = pipeline.to(torch.device(DEVICE))
     return _pipeline
 
 
@@ -74,7 +83,31 @@ def _annotation_from(output):
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "model": MODEL_NAME, "cuda": torch.cuda.is_available()}
+    return {"status": "ok", "model": MODEL_NAME, "device": DEVICE}
+
+
+def _load_wav(data: bytes) -> tuple[torch.Tensor, int]:
+    """Decode a PCM WAV into a (channel, time) float32 waveform + sample rate.
+
+    The Next.js app always sends a 16 kHz mono PCM WAV, so we decode it with the
+    stdlib `wave` module and hand pyannote an in-memory waveform. This sidesteps
+    pyannote 4's file I/O (torchcodec/ffmpeg), which isn't reliably available on
+    every host.
+    """
+    with wave.open(io.BytesIO(data), "rb") as w:
+        n_channels = w.getnchannels()
+        sample_rate = w.getframerate()
+        sample_width = w.getsampwidth()
+        frames = w.readframes(w.getnframes())
+
+    if sample_width != 2:
+        raise HTTPException(status_code=400, detail="Only 16-bit PCM WAV is supported")
+
+    samples = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
+    if n_channels > 1:
+        samples = samples.reshape(-1, n_channels).mean(axis=1)  # downmix to mono
+    waveform = torch.from_numpy(samples).unsqueeze(0)  # (1, time)
+    return waveform, sample_rate
 
 
 @app.post("/diarize")
@@ -86,12 +119,9 @@ async def diarize(
     if len(data) < 2_000:
         return {"turns": []}
 
-    suffix = os.path.splitext(audio.filename or "")[1] or ".wav"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
-        tmp.write(data)
-        tmp.flush()
-        output = get_pipeline()(tmp.name)
-        annotation = _annotation_from(output)
+    waveform, sample_rate = _load_wav(data)
+    output = get_pipeline()({"waveform": waveform, "sample_rate": sample_rate})
+    annotation = _annotation_from(output)
 
     turns = [
         {"speaker": speaker, "start": round(float(segment.start), 3), "end": round(float(segment.end), 3)}
