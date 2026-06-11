@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { createMeeting, getAllMeetings } from '@/lib/storage';
+import { setPendingUploadFile } from '@/lib/pending-upload';
 
 export default function OptaqPage() {
   const router = useRouter();
@@ -285,7 +286,12 @@ export default function OptaqPage() {
                 accept="audio/*,video/*"
                 style={{ display: 'none' }}
                 onChange={(e) => {
-                  if (e.target.files?.[0]) router.push('/meeting/new?mode=upload');
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    setPendingUploadFile(file);
+                    router.push('/meeting/new');
+                    e.target.value = '';
+                  }
                 }}
               />
             </div>

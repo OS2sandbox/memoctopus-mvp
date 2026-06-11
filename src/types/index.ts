@@ -1,4 +1,4 @@
-export type MeetingStatus = 'joining' | 'recording' | 'processing' | 'review' | 'minutes' | 'done' | 'redacted';
+export type MeetingStatus = 'joining' | 'recording' | 'processing' | 'review' | 'minutes' | 'done' | 'redacted' | 'failed';
 
 export interface TranscriptSegment {
   speaker: string;

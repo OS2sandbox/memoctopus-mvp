@@ -1,16 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suggestTemplate, generateMinutes, generateMinutesFreeform } from '@/lib/ai/minutes';
 import { getTemplates } from '@/lib/storage/templates';
+import { TranscriptChapter } from '@/lib/ai/chapters';
 import { TranscriptSegment, TemplateStructure } from '@/types';
 
 export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { segments, customPrompt, participants } = body as {
+  const { segments, customPrompt, participants, chapters } = body as {
     segments: TranscriptSegment[];
     customPrompt?: string;
     participants?: string[];
+    chapters?: TranscriptChapter[];
   };
 
   if (!segments || segments.length === 0) {
@@ -22,7 +24,8 @@ export async function POST(req: NextRequest) {
   let templateId: string | null = null;
 
   if (customPrompt) {
-    minutesContent = await generateMinutesFreeform(segments, customPrompt, participants);
+    // User gave instructions — let the AI decide sections and content freely
+    minutesContent = await generateMinutesFreeform(segments, customPrompt, participants, chapters);
   } else {
     const suggestion = await suggestTemplate(
       segments,
@@ -44,6 +47,7 @@ export async function POST(req: NextRequest) {
       (chosenTemplate.structure as TemplateStructure).sections,
       undefined,
       participants,
+      chapters,
     );
   }
 

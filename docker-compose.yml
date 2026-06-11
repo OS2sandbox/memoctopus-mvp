@@ -53,6 +53,11 @@ services:
       - NEXT_APP_URL=http://app:3000
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
       - BOT_MAX_SESSIONS=${BOT_MAX_SESSIONS:-5}
+      # Chromium runs headed against Xvfb (started by entrypoint.sh) so Teams'
+      # anti-bot heuristics don't detect headless mode and trigger post-
+      # admission "Leaving..." cascades. Override to true only for debugging.
+      - HEADLESS=false
+      - DISPLAY=:99
     networks:
       - internal
     shm_size: "2gb"

@@ -7,10 +7,17 @@ import type { TranscriptChapter } from '@/lib/ai/chapters';
 
 export const maxDuration = 300;
 
+function parseDuration(raw: string | null): number | null {
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  return isNaN(n) ? null : Math.max(0, Math.min(7_200, n));
+}
+
 export async function POST(req: NextRequest) {
   const formData = await req.formData();
   const audioFile = formData.get('audio') as File | null;
   const meetingId = formData.get('meetingId') as string | null;
+  const duration = parseDuration(formData.get('duration') as string | null);
 
   if (!audioFile || !meetingId) {
     return NextResponse.json({ error: 'Missing audio file or meetingId' }, { status: 400 });
@@ -24,7 +31,9 @@ export async function POST(req: NextRequest) {
 
   try {
     const provider = getTranscriptionProvider();
-    segments = await provider.transcribe(buffer, mimeType);
+    // Pass the actual recording duration so timestamps reflect real wall-clock time,
+    // not a bitrate estimate (Chrome records at ~200 kbps, not the assumed 64 kbps).
+    segments = await provider.transcribe(buffer, mimeType, duration ?? undefined);
   } catch (err) {
     console.error('Transcription error:', err);
     return NextResponse.json({ error: 'Transcription failed' }, { status: 500 });

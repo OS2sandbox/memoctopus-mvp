@@ -197,13 +197,30 @@ describe('GET /api/bot/status/[meetingId]', () => {
     expect(body.meetingStatus).toBe('processing');
   });
 
-  it('returns 502 when bot session is gone and meeting is in an unexpected state', async () => {
+  it('returns graceful forbinder (not 502) when bot session is gone mid-recording', async () => {
+    // A bot-service restart mid-poll must not surface a console 502 — the
+    // client keeps polling on the neutral 'forbinder' status + DB meetingStatus.
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockQueryOne.mockResolvedValueOnce({ ...MEETING, status: 'recording' } as never);
     mockFetch.mockResolvedValueOnce({ ok: false, status: 503 });
 
     const res = await getStatus();
-    expect(res.status).toBe(502);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe('forbinder');
+    expect(body.meetingStatus).toBe('recording');
+  });
+
+  it('returns graceful response (not 500) when botFetch throws on connection refused', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockQueryOne.mockResolvedValueOnce({ ...MEETING, status: 'recording' } as never);
+    mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+
+    const res = await getStatus();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe('forbinder');
+    expect(body.meetingStatus).toBe('recording');
   });
 
   it('includes elapsed and meetingStatus in response', async () => {

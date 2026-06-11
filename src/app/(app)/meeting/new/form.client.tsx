@@ -8,9 +8,9 @@ import { z } from 'zod';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { createMeeting, saveAudio, saveTranscript, updateMeeting } from '@/lib/storage';
-import type { TranscriptSegment, PiiReplacement } from '@/types';
-import type { TranscriptChapter } from '@/lib/ai/chapters';
+import { createMeeting } from '@/lib/storage';
+import { takePendingUploadFile } from '@/lib/pending-upload';
+import { UploadConfirmScreen } from './upload-confirm.client';
 
 const schema = z.object({
   title: z.string().min(2, 'Titel skal have mindst 2 tegn').max(200),
@@ -28,14 +28,30 @@ export default function NewMeetingPage() {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadMode, setUploadMode] = useState<'record' | 'upload'>('record');
-  const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Check for a file passed from the dashboard "upload lydfil" picker.
+  const [uploadFile, setUploadFile] = useState<File | null>(() => takePendingUploadFile());
+
+  // useForm must be called unconditionally (Rules of Hooks) even when we render
+  // UploadConfirmScreen instead of this form.
   const {
     register,
     handleSubmit,
     formState: { errors },
   } = useForm<FormData>({ resolver: zodResolver(schema) });
+
+  if (uploadFile) {
+    return (
+      <UploadConfirmScreen
+        file={uploadFile}
+        onCancel={() => {
+          setUploadFile(null);
+          router.push('/dashboard');
+        }}
+      />
+    );
+  }
 
   async function onSubmit(data: FormData) {
     setIsSubmitting(true);
@@ -48,42 +64,15 @@ export default function NewMeetingPage() {
             .filter(Boolean)
         : [];
 
+      // The upload path is handled by UploadConfirmScreen (rendered when a file is
+      // chosen). This submit handler only covers the "record now" path.
       const meeting = await createMeeting({
         title: data.title,
         participants: participants.length > 0 ? participants : undefined,
         source: 'local',
         status: 'recording',
       });
-
-      if (uploadMode === 'upload' && file) {
-        await saveAudio(meeting.id, file, file.type || 'audio/webm');
-        await updateMeeting(meeting.id, { status: 'processing', audioSizeBytes: file.size });
-
-        const formData = new FormData();
-        formData.append('audio', file, file.name);
-        formData.append('meetingId', meeting.id);
-        const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
-        if (!res.ok) {
-          const d = await res.json();
-          throw new Error(d.error ?? 'Upload fejlede');
-        }
-        const result = await res.json() as {
-          segments: TranscriptSegment[];
-          piiReplacements: PiiReplacement[];
-          rawText: string;
-          chapters: TranscriptChapter[];
-        };
-        await saveTranscript(meeting.id, {
-          rawText: result.rawText,
-          segments: result.segments,
-          chapters: result.chapters ?? [],
-          piiReplacements: result.piiReplacements ?? [],
-        });
-        await updateMeeting(meeting.id, { status: 'review' });
-        router.push(`/meeting/${meeting.id}/review`);
-      } else {
-        router.push(`/meeting/${meeting.id}?autostart=1`);
-      }
+      router.push(`/meeting/${meeting.id}?autostart=1`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt');
       setIsSubmitting(false);
@@ -151,14 +140,18 @@ export default function NewMeetingPage() {
               id="audioFile"
               type="file"
               accept="audio/*"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) {
+                  setUploadFile(f);
+                  e.currentTarget.value = '';
+                }
+              }}
               className="block w-full text-sm text-[var(--ink-2)] file:mr-3 file:py-2 file:px-3 file:rounded-[var(--radius)] file:border file:border-[var(--line)] file:bg-[var(--surface-2)] file:text-sm file:font-medium file:text-[var(--ink)] hover:file:bg-[var(--line)] file:cursor-pointer cursor-pointer"
             />
-            {!file && (
-              <p className="text-xs text-[var(--muted)]">
-                Vælg en lydfil fra din computer.
-              </p>
-            )}
+            <p className="text-xs text-[var(--muted)]">
+              Vælg en lydfil fra din computer.
+            </p>
           </div>
         )}
 
@@ -181,7 +174,7 @@ export default function NewMeetingPage() {
           </Button>
           <Button
             type="submit"
-            disabled={isSubmitting || (uploadMode === 'upload' && !file)}
+            disabled={isSubmitting || uploadMode === 'upload'}
           >
             {isSubmitting
               ? uploadMode === 'upload' ? 'Behandler…' : 'Opretter...'

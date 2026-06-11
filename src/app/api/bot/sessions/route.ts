@@ -31,6 +31,10 @@ export async function POST(req: NextRequest) {
   if (!meeting) return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
   if (meeting.source !== 'teams') return NextResponse.json({ error: 'Not a Teams meeting' }, { status: 400 });
   if (!meeting.meeting_url) return NextResponse.json({ error: 'No meeting URL' }, { status: 400 });
+  // Prevent starting a new bot session while the previous recording is still being transcribed.
+  if (meeting.status === 'processing') {
+    return NextResponse.json({ error: 'Transkription er i gang — prøv igen om lidt' }, { status: 409 });
+  }
 
   // Atomically claim the slot — only one concurrent request can proceed.
   // Also clears a 'creating' sentinel that's been stuck for >2 min (indicates
