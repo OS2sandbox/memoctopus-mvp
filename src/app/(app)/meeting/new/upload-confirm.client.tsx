@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { transcribeBatchesOnServer } from '@/lib/audio/transcribe-batches-client';
-import { fetchDiarizationTurns, applyDiarizationLabels } from '@/lib/audio/diarize-client';
+import { startDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import { createMeeting, saveAudio, saveTranscript, updateMeeting, deleteMeeting } from '@/lib/storage';
 import type { TranscriptSegment } from '@/types';
 
@@ -90,7 +90,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         // compressed file is posted as-is (the diarization service decodes it), and
         // speaker labels are patched onto the saved transcript when the turns land —
         // the user is NOT kept waiting on diarization.
-        const diarizationPromise = fetchDiarizationTurns(id, file);
+        const diarizationPromise = startDiarization(id, file);
 
         // One upload of the original file; the server decodes with ffmpeg, runs VAD,
         // and fans out ALL 27 s batches to hviske simultaneously. Progress and
@@ -127,12 +127,14 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
 
         setPhase('saving');
         const rawText = segments.map((s) => s.text).join(' ');
-        await saveTranscript(id, { rawText, segments, chapters: [], piiReplacements: [] });
+        // Saved with default labels and diarizationStatus 'pending' — the review
+        // screen shows an uncertainty state for speakers until diarization lands.
+        await saveTranscript(id, { rawText, segments, chapters: [], piiReplacements: [], diarizationStatus: 'pending' });
         await updateMeeting(id, { status: 'review' });
         if (cancelled) return;
 
-        // Patch in speaker labels once diarization finishes (review screen refreshes).
-        void diarizationPromise.then((turns) => applyDiarizationLabels(id, turns));
+        // Patch in speaker labels (and clear the pending state) once diarization finishes.
+        void diarizationPromise.then((turns) => finishDiarization(id, turns));
 
         setCompletedSeconds(result.totalSpeechSeconds);
         setPhase('done');

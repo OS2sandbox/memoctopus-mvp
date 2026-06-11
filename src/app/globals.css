@@ -169,6 +169,14 @@ button, input, textarea, select {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
+/* Shimmer for the speaker-label placeholder while diarization is still running. */
+@keyframes speakerShimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [style*="speakerShimmer"] { animation: protoPulse 1.4s ease-in-out infinite !important; }
+}
 @keyframes protoBlink {
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }

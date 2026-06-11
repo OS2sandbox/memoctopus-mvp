@@ -4,8 +4,9 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
 import { WaveformPlayer } from './WaveformPlayer';
-import { getTranscript, saveTranscriptChapters, saveTranscriptSegments, saveMinutes, deleteAudio, updateMeeting } from '@/lib/storage';
+import { getTranscript, getAudio, saveTranscriptChapters, saveTranscriptSegments, saveMinutes, deleteAudio, updateMeeting } from '@/lib/storage';
 import { onTranscriptUpdated } from '@/lib/transcript-events';
+import { isDiarizationInFlight, ensureDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import type { MinutesContent } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
 
@@ -18,6 +19,7 @@ interface TranscriptReviewProps {
   audioDeleted?: boolean;
   initialChapters?: TranscriptChapter[];
   participants?: string[];
+  initialDiarizing?: boolean;
   onDataChange?: () => void;
 }
 
@@ -53,10 +55,14 @@ export function TranscriptReview({
   audioDeleted = false,
   initialChapters,
   participants,
+  initialDiarizing = false,
   onDataChange,
 }: TranscriptReviewProps) {
   const isMobile = useIsMobile();
   const [segments, setSegments] = useState(initialSegments);
+  // Speaker diarization is still running when true: the review screen shows an
+  // uncertainty state for speaker labels instead of the placeholder 'Taler 1'.
+  const [diarizing, setDiarizing] = useState(initialDiarizing);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editableParticipants, setEditableParticipants] = useState<string[]>(() => {
@@ -81,9 +87,27 @@ export function TranscriptReview({
     let cancelled = false;
     const refresh = async () => {
       const fresh = await getTranscript(meetingId);
-      if (!cancelled && fresh?.segments?.length) setSegments(fresh.segments);
+      if (cancelled || !fresh) return;
+      if (fresh.segments?.length) setSegments(fresh.segments);
+      setDiarizing(fresh.diarizationStatus === 'pending');
     };
-    void refresh();
+    const init = async () => {
+      const fresh = await getTranscript(meetingId);
+      if (cancelled || !fresh) return;
+      if (fresh.segments?.length) setSegments(fresh.segments);
+      setDiarizing(fresh.diarizationStatus === 'pending');
+      // Safety net: the transcript is still 'pending' but nothing is diarizing it
+      // in this session — the tab was reloaded mid-pass, so the original background
+      // request died. Re-run it from the stored audio so labels don't hang in the
+      // uncertainty state. If the audio is gone, just clear the pending state.
+      if (fresh.diarizationStatus === 'pending' && !isDiarizationInFlight(meetingId)) {
+        const audio = await getAudio(meetingId);
+        if (cancelled) return;
+        if (audio?.blob) void ensureDiarization(meetingId, audio.blob);
+        else void finishDiarization(meetingId, []);
+      }
+    };
+    void init();
     const off = onTranscriptUpdated(meetingId, () => { void refresh(); });
     return () => { cancelled = true; off(); };
   }, [meetingId]);
@@ -607,6 +631,7 @@ export function TranscriptReview({
                             onSeek={audioUrl ? seekTo : undefined}
                             hasPii={piiSegmentIndices.has(idx)}
                             isHighlighted={highlightedSegment === idx}
+                            diarizing={diarizing}
                           />
                         </div>
                         );
@@ -635,6 +660,7 @@ export function TranscriptReview({
                         onSeek={audioUrl ? seekTo : undefined}
                         hasPii={piiSegmentIndices.has(i)}
                         isHighlighted={highlightedSegment === i}
+                        diarizing={diarizing}
                       />
                     </div>
                   ))

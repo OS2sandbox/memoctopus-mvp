@@ -26,6 +26,12 @@ export interface StoredTranscript {
   chapters: TranscriptChapter[];
   piiReplacements: PiiReplacement[];
   piiRemovedAt: string | null;
+  // Speaker-diarization lifecycle. 'pending' means the transcript was saved with
+  // default ('Taler 1') labels and an acoustic diarization pass is still running —
+  // the review UI shows an uncertainty state instead of confident labels until it
+  // resolves to 'done'. Absent (legacy transcripts, or paths that arrive already
+  // diarized) is treated as 'done'.
+  diarizationStatus?: 'pending' | 'done';
 }
 
 export interface StoredMinutes {

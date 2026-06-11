@@ -20,6 +20,7 @@ export async function saveTranscript(
     chapters: TranscriptChapter[];
     piiReplacements: PiiReplacement[];
     piiRemovedAt?: string | null;
+    diarizationStatus?: 'pending' | 'done';
   },
 ): Promise<StoredTranscript> {
   const db = await getDB();
@@ -32,6 +33,7 @@ export async function saveTranscript(
     chapters: data.chapters,
     piiReplacements: data.piiReplacements,
     piiRemovedAt: data.piiRemovedAt ?? existing?.piiRemovedAt ?? null,
+    diarizationStatus: data.diarizationStatus ?? existing?.diarizationStatus,
   };
   await db.put('transcripts', transcript);
   return transcript;
@@ -50,10 +52,16 @@ export async function saveTranscriptChapters(
 export async function saveTranscriptSegments(
   meetingId: string,
   segments: TranscriptSegment[],
+  diarizationStatus?: 'pending' | 'done',
 ): Promise<void> {
   const db = await getDB();
   const existing = (await db.getAllFromIndex('transcripts', 'by-meeting', meetingId))[0];
   if (!existing) return;
   const rawText = segments.map((s) => s.text).join(' ');
-  await db.put('transcripts', { ...existing, segments, rawText });
+  await db.put('transcripts', {
+    ...existing,
+    segments,
+    rawText,
+    ...(diarizationStatus ? { diarizationStatus } : {}),
+  });
 }

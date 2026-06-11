@@ -197,6 +197,7 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
           audioDeleted={meeting.audioDeleted && meeting.status !== 'recording' && meeting.status !== 'processing'}
           initialChapters={transcript.chapters}
           participants={meeting.participants}
+          initialDiarizing={transcript.diarizationStatus === 'pending'}
           onDataChange={loadData}
         />
       )}

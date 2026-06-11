@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { transcribeBatchesOnServer } from '@/lib/audio/transcribe-batches-client';
-import { fetchDiarizationTurns, applyDiarizationLabels } from '@/lib/audio/diarize-client';
+import { startDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import { getAudio, saveTranscript, updateMeeting } from '@/lib/storage';
 import type { TranscriptSegment } from '@/types';
 
@@ -65,10 +65,10 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
     let cancelled = false;
     void run();
 
-    async function save(segments: TranscriptSegment[]) {
+    async function save(segments: TranscriptSegment[], diarizationStatus: 'pending' | 'done') {
       setPhase('saving');
       const rawText = segments.map((s) => s.text).join(' ');
-      await saveTranscript(meetingId, { rawText, segments, chapters: [], piiReplacements: [] });
+      await saveTranscript(meetingId, { rawText, segments, chapters: [], piiReplacements: [], diarizationStatus });
       await updateMeeting(meetingId, { status: 'review' });
     }
 
@@ -88,12 +88,15 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
         const serverTranscript = await collectServerTranscript(meetingId, () => cancelled);
         if (cancelled) return;
         if (serverTranscript?.segments?.length) {
-          await save(serverTranscript.segments);
-          if (!serverTranscript.diarized) {
-            // Server-side diarization failed — fail-soft retry from here, patching
-            // labels onto the already-saved transcript when the turns arrive.
-            void fetchDiarizationTurns(meetingId, blob)
-              .then((turns) => applyDiarizationLabels(meetingId, turns));
+          if (serverTranscript.diarized) {
+            // Already diarized server-side — labels are final.
+            await save(serverTranscript.segments, 'done');
+          } else {
+            // Server-side diarization failed — save as 'pending' (uncertainty state)
+            // and retry diarization from here, patching labels in when it lands.
+            await save(serverTranscript.segments, 'pending');
+            const turns = startDiarization(meetingId, blob);
+            void turns.then((t) => finishDiarization(meetingId, t));
           }
           onComplete?.();
           return;
@@ -103,7 +106,7 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
         // compressed audio; the server decodes, runs VAD, and fans out all batches
         // to hviske simultaneously, streaming progress back. Diarization runs in
         // parallel and does NOT block the transcript — labels are patched in later.
-        const diarizationPromise = fetchDiarizationTurns(meetingId, blob);
+        const diarizationPromise = startDiarization(meetingId, blob);
 
         const result = await transcribeBatchesOnServer(meetingId, blob, {
           onMeta: (meta) => {
@@ -126,8 +129,8 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
         });
         if (cancelled) return;
 
-        await save(result.segments);
-        void diarizationPromise.then((turns) => applyDiarizationLabels(meetingId, turns));
+        await save(result.segments, 'pending');
+        void diarizationPromise.then((turns) => finishDiarization(meetingId, turns));
 
         onComplete?.();
       } catch (err) {

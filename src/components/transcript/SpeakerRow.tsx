@@ -14,9 +14,12 @@ interface SpeakerRowProps {
   onSeek?: (time: number) => void;
   hasPii?: boolean;
   isHighlighted?: boolean;
+  // Diarization is still running: show an uncertainty placeholder for the speaker
+  // instead of the not-yet-meaningful default label, and don't offer rename yet.
+  diarizing?: boolean;
 }
 
-export const SpeakerRow = React.memo(function SpeakerRow({ segment, index, onUpdate, onRenameAll, speakerSegmentCount, onSeek, hasPii, isHighlighted }: SpeakerRowProps) {
+export const SpeakerRow = React.memo(function SpeakerRow({ segment, index, onUpdate, onRenameAll, speakerSegmentCount, onSeek, hasPii, isHighlighted, diarizing }: SpeakerRowProps) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -74,16 +77,34 @@ export const SpeakerRow = React.memo(function SpeakerRow({ segment, index, onUpd
             {formatDuration(segment.start)}
           </span>
         )}
-        <button
-          className="text-[var(--ink-2)] hover:text-[var(--accent)] transition-colors text-left w-full truncate"
-          style={{ fontSize: 'var(--t-small)', fontWeight: 500 }}
-          onClick={() => setRenameOpen((v) => !v)}
-          title="Klik for at omdøbe taleren"
-        >
-          {segment.speaker}
-        </button>
+        {diarizing ? (
+          <span
+            className="flex items-center gap-1.5"
+            title="Genkender taler…"
+            aria-label="Genkender taler"
+          >
+            <span
+              aria-hidden
+              style={{
+                display: 'block', height: 11, width: 52, borderRadius: 999,
+                background: 'linear-gradient(90deg, var(--sunk) 25%, var(--line-2) 50%, var(--sunk) 75%)',
+                backgroundSize: '300% 100%',
+                animation: 'speakerShimmer 1.4s ease-in-out infinite',
+              }}
+            />
+          </span>
+        ) : (
+          <button
+            className="text-[var(--ink-2)] hover:text-[var(--accent)] transition-colors text-left w-full truncate"
+            style={{ fontSize: 'var(--t-small)', fontWeight: 500 }}
+            onClick={() => setRenameOpen((v) => !v)}
+            title="Klik for at omdøbe taleren"
+          >
+            {segment.speaker}
+          </button>
+        )}
 
-        {renameOpen && (
+        {renameOpen && !diarizing && (
           <div
             className="absolute left-0 z-10 rounded-[var(--radius)] border border-[var(--line-strong)] bg-[var(--surface)] shadow-md"
             style={{ top: '100%', minWidth: 220, padding: '12px 14px' }}

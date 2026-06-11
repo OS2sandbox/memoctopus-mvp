@@ -33,25 +33,56 @@ export async function fetchDiarizationTurns(meetingId: string, audio: Blob): Pro
   }
 }
 
-// Kept as a named entry point for paths that hold the original recording blob.
-export function diarizeFromBlob(meetingId: string, blob: Blob): Promise<SpeakerTurn[]> {
-  return fetchDiarizationTurns(meetingId, blob);
+// Meetings whose diarization request is currently in flight in this session. Lets
+// the review screen tell "someone is already diarizing this" from "the page was
+// reloaded mid-pass and nobody is" — so it only re-triggers in the latter case.
+const diarizationInFlight = new Set<string>();
+
+export function isDiarizationInFlight(meetingId: string): boolean {
+  return diarizationInFlight.has(meetingId);
 }
 
-// Patch the already-saved transcript with speaker labels once diarization finishes,
-// then notify the review screen to refresh. For the non-blocking flow: the transcript
-// is saved with default labels and shown immediately, and speaker turns stream in here.
-// Re-reads the current segments (rather than trusting a stale copy) and skips the patch
-// if the user has already relabelled speakers, so it never clobbers manual edits.
-export async function applyDiarizationLabels(meetingId: string, turns: SpeakerTurn[]): Promise<void> {
-  if (turns.length === 0) return;
+// Start the diarization request and register it as in-flight. Callers save the
+// transcript with diarizationStatus:'pending' and later hand the resolved turns to
+// finishDiarization. Kept separate from finishDiarization so the request can run in
+// parallel with transcription and only be applied once the transcript is saved.
+export function startDiarization(meetingId: string, audio: Blob): Promise<SpeakerTurn[]> {
+  diarizationInFlight.add(meetingId);
+  return fetchDiarizationTurns(meetingId, audio);
+}
+
+// Resolve the diarization for a saved transcript: merge speaker labels if we got
+// any (and the user hasn't already relabelled — never clobber manual edits), then
+// ALWAYS clear the 'pending' status to 'done' so the review UI leaves the
+// uncertainty state even when diarization found nothing or failed. Notifies the
+// review screen and clears the in-flight marker. Re-reads current segments rather
+// than trusting a stale copy.
+export async function finishDiarization(meetingId: string, turns: SpeakerTurn[]): Promise<void> {
   try {
     const current = await getTranscript(meetingId);
     if (!current?.segments?.length) return;
-    if (!current.segments.every((s) => s.speaker === DEFAULT_SPEAKER_LABEL)) return;
-    await saveTranscriptSegments(meetingId, assignSpeakers(current.segments, turns));
+    const segments = (turns.length > 0 && current.segments.every((s) => s.speaker === DEFAULT_SPEAKER_LABEL))
+      ? assignSpeakers(current.segments, turns)
+      : current.segments;
+    await saveTranscriptSegments(meetingId, segments, 'done');
     notifyTranscriptUpdated(meetingId);
   } catch (err) {
-    console.error('[diarize] background label update failed:', err);
+    console.error('[diarize] finish failed:', err);
+  } finally {
+    diarizationInFlight.delete(meetingId);
   }
+}
+
+// Convenience for callers that start and finish in one place.
+export async function diarizeAndApply(meetingId: string, audio: Blob): Promise<void> {
+  await finishDiarization(meetingId, await startDiarization(meetingId, audio));
+}
+
+// Safety net for the review screen: if a transcript is still 'pending' but no
+// diarization is running in this session (e.g. the tab was reloaded mid-pass, so
+// the original background request died), run it again from the stored audio so the
+// labels don't hang in the uncertainty state forever. No-op if one is already running.
+export async function ensureDiarization(meetingId: string, audio: Blob): Promise<void> {
+  if (diarizationInFlight.has(meetingId)) return;
+  await diarizeAndApply(meetingId, audio);
 }

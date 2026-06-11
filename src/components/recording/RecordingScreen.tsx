@@ -17,7 +17,7 @@ import { useIsMobile } from '@/lib/use-is-mobile';
 import { pickRecordingMimeType } from '@/lib/audio/recording-format';
 import type { TranscriptSegment } from '@/types';
 import { saveAudio, saveTranscript, updateMeeting, deleteMeeting } from '@/lib/storage';
-import { diarizeFromBlob, applyDiarizationLabels } from '@/lib/audio/diarize-client';
+import { startDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import {
   float32ToWavBlob, newVadBatchState, sealCurrentBatch,
   splitTextWithIntervals,
@@ -961,7 +961,7 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     // Diarize the full recording in parallel with transcription, but DON'T block on
     // it — the transcript is saved and shown with default labels, and speaker labels
     // are patched in (and the review screen refreshed) when diarization lands.
-    const diarizationPromise = diarizeFromBlob(meetingId, blob);
+    const diarizationPromise = startDiarization(meetingId, blob);
 
     // Seal any remaining speech into the final partial batch and dispatch it.
     // Earlier batches were already dispatched as they sealed during recording, so
@@ -999,11 +999,13 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       const segments = segmentArrays.flat().sort((a, b) => a.start - b.start);
 
       const rawText = segments.map((s) => s.text).join(' ');
-      await saveTranscript(meetingId, { rawText, segments, chapters: [], piiReplacements: [] });
+      // Saved with default labels and diarizationStatus 'pending' — the review
+      // screen shows an uncertainty state for speakers until diarization lands.
+      await saveTranscript(meetingId, { rawText, segments, chapters: [], piiReplacements: [], diarizationStatus: 'pending' });
       await updateMeeting(meetingId, { status: 'review' });
 
-      // Patch in speaker labels once diarization finishes (review screen refreshes).
-      void diarizationPromise.then((turns) => applyDiarizationLabels(meetingId, turns));
+      // Patch in speaker labels (and clear the pending state) once diarization finishes.
+      void diarizationPromise.then((turns) => finishDiarization(meetingId, turns));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt under transskription');
       setIsUploading(false);
