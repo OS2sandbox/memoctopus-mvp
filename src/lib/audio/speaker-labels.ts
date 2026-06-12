@@ -18,3 +18,11 @@ export const DEFAULT_SPEAKER_LABEL = speakerLabel(1);
 export function isDefaultSpeakerLabel(label: string): boolean {
   return /^Taler \d+$/.test(label.trim());
 }
+
+// The lowest-numbered 'Taler N' not already present in `used` — for handing an
+// unlinked voice back to the unmatched pool with a fresh, non-colliding label.
+export function nextAvailableSpeakerLabel(used: Set<string>): string {
+  let n = 1;
+  while (used.has(speakerLabel(n))) n++;
+  return speakerLabel(n);
+}

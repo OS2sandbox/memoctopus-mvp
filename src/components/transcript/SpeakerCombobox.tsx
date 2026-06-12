@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 interface SpeakerComboboxProps {
   // The speaker label currently shown for this row (seeds the input).
@@ -38,25 +38,27 @@ export function SpeakerCombobox({
   }, [autoFocus]);
 
   const trimmed = query.trim();
-  const filtered = participants.filter(
-    (p) => p.toLowerCase().includes(trimmed.toLowerCase()) && p !== currentSpeaker,
-  );
-  // Offer "add new" when the typed name isn't already an exact participant match.
-  const exactExists = participants.some((p) => p.toLowerCase() === trimmed.toLowerCase());
-  const showAddNew = trimmed.length > 0 && !exactExists;
+  // One pass over participants: collect matches and note whether the typed name is
+  // already an exact entry (which suppresses the "add new" row).
+  const { filtered, showAddNew } = useMemo(() => {
+    const lower = trimmed.toLowerCase();
+    const matches: string[] = [];
+    let exact = false;
+    for (const p of participants) {
+      const pl = p.toLowerCase();
+      if (pl === lower) exact = true;
+      if (pl.includes(lower) && p !== currentSpeaker) matches.push(p);
+    }
+    return { filtered: matches, showAddNew: trimmed.length > 0 && !exact };
+  }, [participants, trimmed, currentSpeaker]);
 
   // Flat list of selectable options for keyboard navigation: participants first,
   // then the optional "add new" row.
   const optionCount = filtered.length + (showAddNew ? 1 : 0);
 
   function choose(index: number) {
-    if (showAddNew && index === filtered.length) {
-      onAssign(trimmed);
-    } else if (filtered[index]) {
-      onAssign(filtered[index]);
-    } else if (trimmed) {
-      onAssign(trimmed);
-    }
+    if (showAddNew && index === filtered.length) onAssign(trimmed);
+    else onAssign(filtered[index]);
     onClose();
   }
 

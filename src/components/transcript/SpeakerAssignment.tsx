@@ -173,28 +173,26 @@ export function SpeakerAssignment({
 
     if (row.kind === 'recognized') {
       return (
-        <React.Fragment key={row.name}>
-          <div className="sa-row named" title={`${row.name} · stemme genkendt`}>
-            <span className="sa-dot" />
-            <span className="sa-name">{row.name}</span>
-            {onPlaySegment && row.start !== undefined && (
-              <button
-                type="button"
-                className="sa-play"
-                title={`Afspil ${row.name}s stemme`}
-                onClick={(e) => play(e, row.start, row.end)}
-              >
-                <PlayTri />
-              </button>
-            )}
+        <div key={row.name} className="sa-row named" title={`${row.name} · stemme genkendt`}>
+          <span className="sa-dot" />
+          <span className="sa-name">{row.name}</span>
+          {onPlaySegment && row.start !== undefined && (
             <button
               type="button"
-              className="sa-x"
-              title="Fjern stemme"
-              onClick={() => onUnlink(row.name)}
-            >×</button>
-          </div>
-        </React.Fragment>
+              className="sa-play"
+              title={`Afspil ${row.name}s stemme`}
+              onClick={(e) => play(e, row.start, row.end)}
+            >
+              <PlayTri />
+            </button>
+          )}
+          <button
+            type="button"
+            className="sa-x"
+            title="Fjern stemme"
+            onClick={() => onUnlink(row.name)}
+          >×</button>
+        </div>
       );
     }
 

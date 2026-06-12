@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { speakerLabel, DEFAULT_SPEAKER_LABEL, isDefaultSpeakerLabel } from './speaker-labels';
+import { speakerLabel, DEFAULT_SPEAKER_LABEL, isDefaultSpeakerLabel, nextAvailableSpeakerLabel } from './speaker-labels';
 
 // These assertions pin the Danish label convention shared by transcription,
 // vad-batch, and merge-speakers. If the wording ever changes intentionally,
@@ -27,5 +27,12 @@ describe('speaker labels', () => {
     expect(isDefaultSpeakerLabel('Taler')).toBe(false);
     expect(isDefaultSpeakerLabel('Taler Jensen')).toBe(false);
     expect(isDefaultSpeakerLabel('')).toBe(false);
+  });
+
+  it('finds the lowest free "Taler N", filling gaps', () => {
+    expect(nextAvailableSpeakerLabel(new Set())).toBe('Taler 1');
+    expect(nextAvailableSpeakerLabel(new Set(['Taler 1', 'Taler 2']))).toBe('Taler 3');
+    expect(nextAvailableSpeakerLabel(new Set(['Taler 1', 'Taler 3']))).toBe('Taler 2');
+    expect(nextAvailableSpeakerLabel(new Set(['Mette', 'Taler 1']))).toBe('Taler 2');
   });
 });

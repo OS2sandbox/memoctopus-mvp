@@ -8,7 +8,7 @@ import { WaveformPlayer } from './WaveformPlayer';
 import { getTranscript, getAudio, saveTranscriptChapters, saveTranscriptSegments, saveMinutes, deleteAudio, updateMeeting } from '@/lib/storage';
 import { onTranscriptUpdated } from '@/lib/transcript-events';
 import { isDiarizationInFlight, ensureDiarization, finishDiarization } from '@/lib/audio/diarize-client';
-import { isDefaultSpeakerLabel, speakerLabel } from '@/lib/audio/speaker-labels';
+import { isDefaultSpeakerLabel, nextAvailableSpeakerLabel } from '@/lib/audio/speaker-labels';
 import type { MinutesContent } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
 
@@ -32,6 +32,13 @@ interface TranscriptChapter {
   startTime: number;
   endTime: number;
   segmentIndices: number[];
+}
+
+// Participant names are matched case-insensitively. Returns the existing roster
+// entry (in its canonical casing) that matches `name`, or undefined.
+function findExistingName(names: string[], name: string): string | undefined {
+  const lower = name.toLowerCase();
+  return names.find((p) => p.toLowerCase() === lower);
 }
 
 function applySelectedPiiReplacements(
@@ -75,6 +82,11 @@ export function TranscriptReview({
     } catch { /* ignore */ }
     return participants ?? [];
   });
+  // Latest roster, readable from callbacks without making them depend on it — so
+  // assignSpeaker stays stable across participant edits and doesn't re-render every
+  // memoized SpeakerRow when a participant is added.
+  const participantsRef = useRef(editableParticipants);
+  participantsRef.current = editableParticipants;
   // Participants confirmed to have *not* spoken ("talte ikke"). UI-only — these
   // people stay in editableParticipants and flow to the referat unchanged; the set
   // just distinguishes a deliberate "silent" person from one still awaiting a voice.
@@ -266,6 +278,17 @@ export function TranscriptReview({
     setSegments((prev) => prev.map((s, i) => (i === index ? updated : s)));
   }, []);
 
+  // Drop a name from the "talte ikke" set (no-op if absent). Stable — shared by the
+  // assign/unlink/remove handlers.
+  const deleteFromSilent = useCallback((name: string) => {
+    setSilent((prev) => {
+      if (!prev.has(name)) return prev;
+      const next = new Set(prev);
+      next.delete(name);
+      return next;
+    });
+  }, []);
+
   // Connect a diarized voice to a participant — the single write path behind the
   // matcher panel and the transcript-row picker (the prototype's `linkVoice`). The
   // name is added to the roster if new (reusing an existing participant's canonical
@@ -275,17 +298,12 @@ export function TranscriptReview({
     async (from: string, to: string) => {
       const trimmed = to.trim();
       if (!trimmed || trimmed === from) return;
-      const existing = editableParticipants.find((p) => p.toLowerCase() === trimmed.toLowerCase());
+      const existing = findExistingName(participantsRef.current, trimmed);
       const finalName = existing ?? trimmed;
       if (!existing && !isDefaultSpeakerLabel(finalName)) {
         setEditableParticipants((prev) => [...prev, finalName]);
       }
-      setSilent((prev) => {
-        if (!prev.has(finalName)) return prev;
-        const n = new Set(prev);
-        n.delete(finalName);
-        return n;
-      });
+      deleteFromSilent(finalName);
       const updated = segments.map((seg) => (seg.speaker === from ? { ...seg, speaker: finalName } : seg));
       setSegments(updated);
       try {
@@ -294,7 +312,7 @@ export function TranscriptReview({
         console.error('[speakers] assign persist failed:', err);
       }
     },
-    [meetingId, segments, editableParticipants],
+    [meetingId, segments, deleteFromSilent],
   );
 
   // Unlink a recognized person: relabel all their segments back to a fresh, unused
@@ -302,25 +320,17 @@ export function TranscriptReview({
   // roster as pending.
   const unlinkSpeaker = useCallback(
     async (name: string) => {
-      const used = new Set(segments.map((s) => s.speaker));
-      let n = 1;
-      while (used.has(speakerLabel(n))) n++;
-      const fresh = speakerLabel(n);
+      const fresh = nextAvailableSpeakerLabel(new Set(segments.map((s) => s.speaker)));
       const updated = segments.map((seg) => (seg.speaker === name ? { ...seg, speaker: fresh } : seg));
       setSegments(updated);
-      setSilent((prev) => {
-        if (!prev.has(name)) return prev;
-        const next = new Set(prev);
-        next.delete(name);
-        return next;
-      });
+      deleteFromSilent(name);
       try {
         await saveTranscriptSegments(meetingId, updated);
       } catch (err) {
         console.error('[speakers] unlink persist failed:', err);
       }
     },
-    [meetingId, segments],
+    [meetingId, segments, deleteFromSilent],
   );
 
   const markSilent = useCallback((name: string) => {
@@ -329,13 +339,8 @@ export function TranscriptReview({
 
   const removeParticipant = useCallback((name: string) => {
     setEditableParticipants((prev) => prev.filter((p) => p !== name));
-    setSilent((prev) => {
-      if (!prev.has(name)) return prev;
-      const next = new Set(prev);
-      next.delete(name);
-      return next;
-    });
-  }, []);
+    deleteFromSilent(name);
+  }, [deleteFromSilent]);
 
   // A freshly added participant joins the roster as "talte ikke" (silent) until a
   // voice is linked — mirrors the prototype's add-as-noVoice behaviour.
@@ -343,7 +348,7 @@ export function TranscriptReview({
     const trimmed = name.trim();
     if (!trimmed) return;
     setEditableParticipants((prev) =>
-      prev.some((p) => p.toLowerCase() === trimmed.toLowerCase()) ? prev : [...prev, trimmed],
+      findExistingName(prev, trimmed) ? prev : [...prev, trimmed],
     );
     setSilent((prev) => new Set(prev).add(trimmed));
   }, []);
