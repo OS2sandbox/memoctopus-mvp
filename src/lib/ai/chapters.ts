@@ -25,7 +25,9 @@ export async function groupIntoChapters(segments: TranscriptSegment[]): Promise<
     mins < 5  ? '1' :
     mins < 15 ? '1–2' :
     mins < 30 ? '2–4' :
-                '3–6';
+    mins < 60 ? '3–6' :
+    mins < 90 ? '5–9' :
+                '7–14';
 
   const transcriptText = segments
     .map((s, i) => `[${i}] ${fmt(s.start)} [${s.speaker}]: ${s.text}`)
@@ -36,7 +38,7 @@ export async function groupIntoChapters(segments: TranscriptSegment[]): Promise<
     messages: [
       {
         role: 'user',
-        content: `Analyser denne mødetransskription og opdel den i tematiske kapitler baseret på emneskift.
+        content: `Analyser denne mødetransskription og identificer emneskift.
 
 Hvert segment er markeret med sit indeks [0], [1] osv. og tidsstempel.
 Mødelængde: ca. ${Math.round(mins)} minutter → brug ${range} kapitel${range === '1' ? '' : 'er'}.
@@ -48,39 +50,56 @@ Returner JSON uden markdown:
 {
   "chapters": [
     {
+      "startIndex": 0,
       "title": "Kapiteloverskrift på dansk (maks 8 ord)",
-      "summary": "Kort resumé af hvad der diskuteres (1-2 sætninger på dansk)",
-      "segmentIndices": [0, 1, 2]
+      "summary": "Kort resumé af hvad der diskuteres (1-2 sætninger på dansk)"
     }
   ]
 }
 
 Regler:
-- Alle segmentindekser 0–${segments.length - 1} skal dækkes af præcis ét kapitel
-- Kapitelindekser skal være sammenhængende og stigende
+- Første kapitel starter ALTID ved startIndex 0
+- startIndex skal være stigende for hvert kapitel
+- Det sidste kapitel dækker automatisk resten af transskriptionen til og med segment ${segments.length - 1}
 - Antal kapitler: ${range}
-- Titler og resuméer på dansk`,
+- Titler og resuméer på dansk
+- Opdel efter emne, ikke kronologi`,
       },
     ],
   });
 
   const raw = response.choices[0]?.message?.content ?? '';
   try {
-    // Extract the JSON object even if the model wraps it in prose or markdown fences
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('No JSON object found in response');
     const parsed = JSON.parse(jsonMatch[0]) as {
-      chapters: Array<{ title: string; summary: string; segmentIndices: number[] }>;
+      chapters: Array<{ startIndex: number; title: string; summary: string }>;
     };
 
-    const chapters = parsed.chapters.map((ch, i) => ({
-      id: `ch-${i}`,
-      title: ch.title,
-      summary: ch.summary,
-      startTime: segments[ch.segmentIndices[0]]?.start ?? 0,
-      endTime: segments[ch.segmentIndices[ch.segmentIndices.length - 1]]?.end ?? 0,
-      segmentIndices: ch.segmentIndices,
-    }));
+    if (!Array.isArray(parsed.chapters) || parsed.chapters.length === 0) throw new Error('Empty chapters');
+
+    // Sort by startIndex and clamp to valid range
+    const sorted = [...parsed.chapters]
+      .sort((a, b) => a.startIndex - b.startIndex)
+      .map((ch) => ({ ...ch, startIndex: Math.max(0, Math.min(ch.startIndex, segments.length - 1)) }));
+
+    // Force first chapter to start at 0
+    sorted[0].startIndex = 0;
+
+    // Build contiguous ranges from boundary indices
+    const chapters: TranscriptChapter[] = sorted.map((ch, i) => {
+      const startIdx = ch.startIndex;
+      const endIdx = (sorted[i + 1]?.startIndex ?? segments.length) - 1;
+      const segmentIndices = Array.from({ length: endIdx - startIdx + 1 }, (_, j) => startIdx + j);
+      return {
+        id: `ch-${i}`,
+        title: ch.title,
+        summary: ch.summary,
+        startTime: segments[startIdx]?.start ?? 0,
+        endTime: segments[endIdx]?.end ?? 0,
+        segmentIndices,
+      };
+    });
 
     // Clamp each chapter's endTime to the next chapter's startTime to prevent overlap
     for (let i = 0; i < chapters.length - 1; i++) {

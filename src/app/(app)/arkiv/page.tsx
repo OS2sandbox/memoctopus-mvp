@@ -1,59 +1,36 @@
-import { redirect } from 'next/navigation';
-import { headers } from 'next/headers';
+'use client';
+
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { auth } from '@/lib/auth';
-import { queryUserSchema } from '@/lib/db/user-schema';
-import { formatDate, formatDuration, statusLabel, statusVariant } from '@/lib/utils';
-import { Badge } from '@/components/ui/badge';
+import { getAllMeetings, StoredMeeting } from '@/lib/storage';
+import { ArchiveMeetingRow } from '@/components/archive-meeting-row';
 import { Meeting } from '@/types';
 
-export const dynamic = 'force-dynamic';
+export default function ArkivPage() {
+  const [meetings, setMeetings] = useState<(Meeting & { durationSeconds: number | null })[]>([]);
+  const [loading, setLoading] = useState(true);
 
-export default async function ArkivPage() {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) redirect('/');
-
-  const rows = await queryUserSchema<{
-    id: string;
-    title: string;
-    participants: string[];
-    status: string;
-    created_at: string;
-    updated_at: string;
-    duration_seconds: number | null;
-  }>(session.user.id, `
-    SELECT m.*, af.duration_seconds
-    FROM meetings m
-    LEFT JOIN (
-      SELECT DISTINCT ON (meeting_id) meeting_id, duration_seconds
-      FROM audio_files
-      WHERE deleted_at IS NULL
-      ORDER BY meeting_id, id DESC
-    ) af ON af.meeting_id = m.id
-    ORDER BY m.created_at DESC
-    LIMIT 200
-  `);
-
-  const meetings = rows.map((r) => ({
-    id: r.id,
-    title: r.title,
-    participants: r.participants,
-    status: r.status as Meeting['status'],
-    createdAt: new Date(r.created_at),
-    updatedAt: new Date(r.updated_at),
-    durationSeconds: r.duration_seconds,
-  }));
-
-  function statusHref(m: Meeting) {
-    if (m.status === 'recording' || m.status === 'processing') return `/meeting/${m.id}`;
-    if (m.status === 'review') return `/meeting/${m.id}/review`;
-    if (m.status === 'minutes') return `/meeting/${m.id}/minutes`;
-    return `/meeting/${m.id}/minutes`;
-  }
+  useEffect(() => {
+    getAllMeetings()
+      .then((rows) => {
+        const mapped = rows
+          .filter((r) => r.status !== 'joining')
+          .map((r: StoredMeeting) => ({
+            id: r.id,
+            title: r.title,
+            participants: r.participants,
+            status: r.status,
+            createdAt: new Date(r.createdAt),
+            updatedAt: new Date(r.updatedAt),
+            durationSeconds: r.audioDurationSeconds,
+          }));
+        setMeetings(mapped);
+      })
+      .finally(() => setLoading(false));
+  }, []);
 
   return (
     <div className="mx-auto max-w-[1040px] px-6 py-12">
-      {/* Header */}
       <div className="flex items-start justify-between mb-8">
         <div>
           <h1
@@ -67,13 +44,24 @@ export default async function ArkivPage() {
           >
             Arkiv
           </h1>
-          <p className="mt-1 text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
-            {meetings.length} møder
-          </p>
+          {!loading && (
+            <p className="mt-1 text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>
+              {meetings.length} møder
+            </p>
+          )}
         </div>
       </div>
 
-      {meetings.length === 0 ? (
+      {loading ? (
+        <div className="py-8">
+          {[...Array(3)].map((_, i) => (
+            <div
+              key={i}
+              className="h-14 bg-[var(--fill)] rounded mb-2 animate-pulse"
+            />
+          ))}
+        </div>
+      ) : meetings.length === 0 ? (
         <div className="py-16 text-center">
           <p className="text-[var(--muted)]" style={{ fontSize: 'var(--t-body)' }}>
             Du har ikke optaget noget endnu.
@@ -88,29 +76,11 @@ export default async function ArkivPage() {
       ) : (
         <div className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] divide-y divide-[var(--line)]">
           {meetings.map((m) => (
-            <Link
+            <ArchiveMeetingRow
               key={m.id}
-              href={statusHref(m)}
-              className="flex items-center gap-4 px-5 py-4 hover:bg-[var(--surface-2)] transition-colors"
-            >
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-[var(--ink)] truncate" style={{ fontSize: 'var(--t-body)' }}>
-                  {m.title}
-                </p>
-                <p className="mt-0.5 text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}>
-                  {formatDate(m.createdAt)}
-                  {m.durationSeconds != null && (
-                    <> · {formatDuration(m.durationSeconds)}</>
-                  )}
-                  {m.participants.length > 0 && (
-                    <> · {m.participants.length} deltager{m.participants.length !== 1 ? 'e' : ''}</>
-                  )}
-                </p>
-              </div>
-              <Badge variant={statusVariant(m.status)}>
-                {statusLabel(m.status)}
-              </Badge>
-            </Link>
+              meeting={m}
+              onDeleted={() => setMeetings((prev) => prev.filter((x) => x.id !== m.id))}
+            />
           ))}
         </div>
       )}

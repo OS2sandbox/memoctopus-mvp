@@ -11,6 +11,12 @@ function getUserAudioDir(userId: string): string {
   return path.join(getStorageRoot(), userId);
 }
 
+function assertSafeFilename(filename: string): void {
+  if (!/^[\w.-]+$/.test(filename)) {
+    throw new Error(`Invalid audio filename: ${filename}`);
+  }
+}
+
 export async function ensureUserAudioDir(userId: string): Promise<void> {
   const dir = getUserAudioDir(userId);
   await fs.mkdir(dir, { recursive: true });
@@ -37,11 +43,13 @@ export async function saveAudioFile(
 }
 
 export async function readAudioFile(userId: string, filename: string): Promise<Buffer> {
+  assertSafeFilename(filename);
   const filepath = path.join(getUserAudioDir(userId), filename);
   return fs.readFile(filepath);
 }
 
 export async function deleteAudioFile(userId: string, filename: string): Promise<void> {
+  assertSafeFilename(filename);
   const filepath = path.join(getUserAudioDir(userId), filename);
   try {
     await fs.unlink(filepath);
@@ -53,6 +61,7 @@ export async function deleteAudioFile(userId: string, filename: string): Promise
 }
 
 export function getAudioFilePath(userId: string, filename: string): string {
+  assertSafeFilename(filename);
   return path.join(getUserAudioDir(userId), filename);
 }
 
@@ -65,6 +74,7 @@ export function createAudioReadStream(
 }
 
 export async function audioFileExists(userId: string, filename: string): Promise<boolean> {
+  assertSafeFilename(filename);
   const filepath = path.join(getUserAudioDir(userId), filename);
   try {
     await fs.access(filepath);

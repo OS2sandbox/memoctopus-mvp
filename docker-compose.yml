@@ -10,9 +10,14 @@ services:
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       - BETTER_AUTH_URL=${BETTER_AUTH_URL}
       - BETTER_AUTH_TRUSTED_ORIGINS=${BETTER_AUTH_TRUSTED_ORIGINS:-}
-      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - HVISKE_URL=${HVISKE_URL}
+      - HVISKE_API_KEY=${HVISKE_API_KEY}
+      - HVISKE_MODEL=${HVISKE_MODEL:-syvai/hviske-v5.1}
+      - ASR_LANGUAGE=${ASR_LANGUAGE:-da}
+      - DIARIZATION_URL=${DIARIZATION_URL:-http://diarization-service:5000}
+      - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
       - AUDIO_STORAGE_PATH=/audio-storage
       - BOT_SERVICE_URL=http://bot-service:3001
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
@@ -53,6 +58,11 @@ services:
       - NEXT_APP_URL=http://app:3000
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
       - BOT_MAX_SESSIONS=${BOT_MAX_SESSIONS:-5}
+      # Chromium runs headed against Xvfb (started by entrypoint.sh) so Teams'
+      # anti-bot heuristics don't detect headless mode and trigger post-
+      # admission "Leaving..." cascades. Override to true only for debugging.
+      - HEADLESS=false
+      - DISPLAY=:99
     networks:
       - internal
     shm_size: "2gb"
@@ -66,6 +76,35 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+    restart: unless-stopped
+
+  diarization-service:
+    build:
+      context: ./diarization-service
+      dockerfile: Dockerfile
+    # Internal only — reached by the app service at http://diarization-service:5000.
+    # Runs pyannote.audio (speaker-diarization-community-1) over full recordings.
+    environment:
+      - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
+    networks:
+      - internal
+    # pyannote loads several models into shared memory; give it headroom like the bot.
+    shm_size: "2gb"
+    # Requires an NVIDIA GPU on the host (nvidia-container-toolkit). Diarization runs
+    # on CPU if no GPU is reserved, but far slower — keep the reservation in prod.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     restart: unless-stopped
 
 networks:

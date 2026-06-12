@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
-import { queryUserSchemaOne } from '@/lib/db/user-schema';
 import { getBotServiceConfig, botFetch } from '@/lib/bot-service';
 
+// Polls the live bot-service session status. Stateless: the client supplies the
+// sessionId (stored in its IndexedDB meeting record) as a query param. No DB.
+//
+// Returns a neutral 'forbinder' (connecting) state when no session is known yet
+// or the bot-service can't be reached, so the client keeps polling cleanly.
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ meetingId: string }> },
@@ -11,73 +15,33 @@ export async function GET(
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const { meetingId } = await params;
+  await params; // meetingId is part of the path but the lookup is by sessionId
+  const sessionId = req.nextUrl.searchParams.get('sessionId');
 
-  const meeting = await queryUserSchemaOne<{
-    id: string;
-    status: string;
-    source: string;
-    bot_session: string | null;
-    participants: string[];
-  }>(
-    session.user.id,
-    'SELECT id, status, source, bot_session, participants FROM meetings WHERE id = $1',
-    [meetingId],
-  );
+  const connecting = (botStatus = 'idle') =>
+    NextResponse.json({ status: 'forbinder', botStatus, participants: [], elapsed: 0 });
 
-  if (!meeting) return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
-
-  // Cancelled (no recording made) — tell client to go home
-  if (meeting.status === 'cancelled') {
-    return NextResponse.json({
-      status: 'forbinder',
-      meetingStatus: 'cancelled',
-      participants: [],
-      elapsed: 0,
-    });
-  }
-
-  // If no bot session yet (still joining pre-bot-start) or already at review+
-  if (!meeting.bot_session) {
-    return NextResponse.json({
-      status: 'forbinder',
-      participants: meeting.participants ?? [],
-      elapsed: 0,
-    });
-  }
+  // No session yet (pre-join or page reload before the session was created).
+  if (!sessionId) return connecting();
 
   const bot = getBotServiceConfig();
   if (!bot) {
     return NextResponse.json({ error: 'Bot service not configured' }, { status: 503 });
   }
 
-  const res = await botFetch(bot, `/sessions/${meeting.bot_session}`);
-
-  if (!res.ok) {
-    // Bot session gone (service restart?) — return the DB-level meeting status so the
-    // client can continue polling without a console 502 error.
-    if (meeting.status === 'review') {
-      return NextResponse.json({
-        status: 'processing',
-        meetingStatus: 'review',
-        participants: meeting.participants ?? [],
-        elapsed: 0,
-      });
-    }
-    if (meeting.status === 'processing') {
-      return NextResponse.json({
-        status: 'processing',
-        meetingStatus: 'processing',
-        participants: meeting.participants ?? [],
-        elapsed: 0,
-      });
-    }
-    return NextResponse.json({ error: 'Bot service unreachable' }, { status: 502 });
+  // botFetch THROWS on connection-refused/DNS failure, so guard it — a bot-service
+  // restart mid-poll should report 'forbinder', not 500.
+  let res: Response;
+  try {
+    res = await botFetch(bot, `/sessions/${sessionId}`);
+  } catch {
+    return connecting();
   }
+  if (!res.ok) return connecting();
 
   const botState = await res.json();
 
-  // Map bot service status to UI status
+  // Map bot-service status → UI status.
   const statusMap: Record<string, string> = {
     joining: 'forbinder',
     recording: 'optager',
@@ -87,22 +51,13 @@ export async function GET(
   };
   const uiStatus = statusMap[botState.status as string] ?? 'forbinder';
 
-  // When bot reports ended naturally, update DB status to processing
-  if (botState.status === 'ended' && meeting.status !== 'processing' && meeting.status !== 'review') {
-    await queryUserSchemaOne(
-      session.user.id,
-      `UPDATE meetings SET status = 'processing', updated_at = NOW() WHERE id = $1`,
-      [meetingId],
-    );
-  }
-
-  const rawParticipants: string[] = botState.participants?.length ? botState.participants : (meeting.participants ?? []);
+  const rawParticipants: string[] = botState.participants?.length ? botState.participants : [];
   const participants = rawParticipants.filter((p: string) => p !== '__audio_detected__');
 
   return NextResponse.json({
     status: uiStatus,
+    botStatus: botState.status ?? 'idle',
     participants,
     elapsed: botState.elapsed ?? 0,
-    meetingStatus: meeting.status,
   });
 }

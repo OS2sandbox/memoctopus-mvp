@@ -3,13 +3,17 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
+import { SpeakerAssignment, type ParticipantRow } from './SpeakerAssignment';
 import { WaveformPlayer } from './WaveformPlayer';
-import { pendingUpload } from '@/lib/pending-upload';
+import { getTranscript, getAudio, saveTranscriptChapters, saveTranscriptSegments, saveMinutes, deleteAudio, updateMeeting } from '@/lib/storage';
+import { onTranscriptUpdated } from '@/lib/transcript-events';
+import { isDiarizationInFlight, ensureDiarization, finishDiarization } from '@/lib/audio/diarize-client';
+import { isDefaultSpeakerLabel, nextAvailableSpeakerLabel } from '@/lib/audio/speaker-labels';
+import type { MinutesContent } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
 
 interface TranscriptReviewProps {
   meetingId: string;
-  transcriptId: string;
   initialSegments: TranscriptSegment[];
   piiReplacements: PiiReplacement[];
   audioUrl?: string;
@@ -17,9 +21,9 @@ interface TranscriptReviewProps {
   audioDeleted?: boolean;
   initialChapters?: TranscriptChapter[];
   participants?: string[];
+  initialDiarizing?: boolean;
+  onDataChange?: () => void;
 }
-
-type UploadStatus = 'idle' | 'uploading' | 'processing' | 'done' | 'error';
 
 interface TranscriptChapter {
   id: string;
@@ -28,6 +32,13 @@ interface TranscriptChapter {
   startTime: number;
   endTime: number;
   segmentIndices: number[];
+}
+
+// Participant names are matched case-insensitively. Returns the existing roster
+// entry (in its canonical casing) that matches `name`, or undefined.
+function findExistingName(names: string[], name: string): string | undefined {
+  const lower = name.toLowerCase();
+  return names.find((p) => p.toLowerCase() === lower);
 }
 
 function applySelectedPiiReplacements(
@@ -46,7 +57,6 @@ function applySelectedPiiReplacements(
 
 export function TranscriptReview({
   meetingId,
-  transcriptId,
   initialSegments,
   piiReplacements: initialPiiReplacements,
   audioUrl: initialAudioUrl,
@@ -54,9 +64,14 @@ export function TranscriptReview({
   audioDeleted = false,
   initialChapters,
   participants,
+  initialDiarizing = false,
+  onDataChange,
 }: TranscriptReviewProps) {
   const isMobile = useIsMobile();
   const [segments, setSegments] = useState(initialSegments);
+  // Speaker diarization is still running when true: the review screen shows an
+  // uncertainty state for speaker labels instead of the placeholder 'Taler 1'.
+  const [diarizing, setDiarizing] = useState(initialDiarizing);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editableParticipants, setEditableParticipants] = useState<string[]>(() => {
@@ -67,11 +82,66 @@ export function TranscriptReview({
     } catch { /* ignore */ }
     return participants ?? [];
   });
-  const [newParticipantInput, setNewParticipantInput] = useState('');
+  // Latest roster, readable from callbacks without making them depend on it — so
+  // assignSpeaker stays stable across participant edits and doesn't re-render every
+  // memoized SpeakerRow when a participant is added.
+  const participantsRef = useRef(editableParticipants);
+  participantsRef.current = editableParticipants;
+  // Participants confirmed to have *not* spoken ("talte ikke"). UI-only — these
+  // people stay in editableParticipants and flow to the referat unchanged; the set
+  // just distinguishes a deliberate "silent" person from one still awaiting a voice.
+  const [silent, setSilent] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set();
+    try {
+      const saved = sessionStorage.getItem(`silent-${meetingId}`);
+      if (saved) return new Set(JSON.parse(saved) as string[]);
+    } catch { /* ignore */ }
+    return new Set();
+  });
 
   useEffect(() => {
     try { sessionStorage.setItem(`participants-${meetingId}`, JSON.stringify(editableParticipants)); } catch { /* ignore */ }
+    // Persist to IndexedDB too so participants added while assigning speakers
+    // survive a reload (sessionStorage alone is cleared with the tab).
+    updateMeeting(meetingId, { participants: editableParticipants }).catch(() => {});
   }, [editableParticipants, meetingId]);
+
+  useEffect(() => {
+    try { sessionStorage.setItem(`silent-${meetingId}`, JSON.stringify([...silent])); } catch { /* ignore */ }
+  }, [silent, meetingId]);
+
+  // Refresh segments when a background task patches the transcript — e.g. speaker
+  // diarization landing after the recording already navigated here. Pulls the fresh
+  // segments from storage so the speaker labels update in place. The mount re-read
+  // also catches a patch that landed in the brief gap before this subscribed.
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      const fresh = await getTranscript(meetingId);
+      if (cancelled || !fresh) return;
+      if (fresh.segments?.length) setSegments(fresh.segments);
+      setDiarizing(fresh.diarizationStatus === 'pending');
+    };
+    const init = async () => {
+      const fresh = await getTranscript(meetingId);
+      if (cancelled || !fresh) return;
+      if (fresh.segments?.length) setSegments(fresh.segments);
+      setDiarizing(fresh.diarizationStatus === 'pending');
+      // Safety net: the transcript is still 'pending' but nothing is diarizing it
+      // in this session — the tab was reloaded mid-pass, so the original background
+      // request died. Re-run it from the stored audio so labels don't hang in the
+      // uncertainty state. If the audio is gone, just clear the pending state.
+      if (fresh.diarizationStatus === 'pending' && !isDiarizationInFlight(meetingId)) {
+        const audio = await getAudio(meetingId);
+        if (cancelled) return;
+        if (audio?.blob) void ensureDiarization(meetingId, audio.blob);
+        else void finishDiarization(meetingId, []);
+      }
+    };
+    void init();
+    const off = onTranscriptUpdated(meetingId, () => { void refresh(); });
+    return () => { cancelled = true; off(); };
+  }, [meetingId]);
   const [activeKeywords, setActiveKeywords] = useState<Set<string>>(new Set());
   const [customText, setCustomText] = useState('');
 
@@ -91,88 +161,33 @@ export function TranscriptReview({
 
   // Audio player
   const [audioUrl, setAudioUrl] = useState(initialAudioUrl);
+  // Sync audioUrl when the prop changes (e.g. after router.refresh() post-deletion)
+  useEffect(() => {
+    setAudioUrl(initialAudioUrl);
+  }, [initialAudioUrl]);
   const audioRef = useRef<HTMLAudioElement>(null);
+  // When set, playback auto-pauses at this time — used to play a single speaker
+  // soundbite (the inline assign prompt) rather than running to the end.
+  const stopAtRef = useRef<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  // The soundbite (start/end) currently playing as a bounded preview, or null.
+  // Lets the matcher render a pause icon on the active soundbite button, so the
+  // same control that starts a preview can also stop it.
+  const [playingBite, setPlayingBite] = useState<{ start: number; end: number } | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(audioDurationSeconds ?? 0);
   const [audioError, setAudioError] = useState<string | null>(null);
 
-  // Background audio upload (from pending upload store)
-  const [uploadStatus, setUploadStatus] = useState<UploadStatus>('idle');
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-
-  // Kick off pending audio upload on first render
-  useEffect(() => {
-    const pending = pendingUpload.get();
-    if (!pending || pending.meetingId !== meetingId) return;
-    pendingUpload.clear();
-    if (pending.elapsed > 0) setDuration((d) => (d > 0 ? d : pending.elapsed));
-    startAudioUpload(pending.blob, pending.elapsed);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function startAudioUpload(blob: Blob, elapsed: number) {
-    setUploadStatus('uploading');
-    setUploadProgress(0);
-    setUploadError(null);
-
-    const mimeType = blob.type || 'audio/webm';
-    const formData = new FormData();
-    formData.append('audio', blob, `recording.${mimeType.includes('mp4') ? 'm4a' : 'webm'}`);
-    formData.append('meetingId', meetingId);
-    formData.append('transcriptId', transcriptId);
-    formData.append('duration', String(elapsed));
-
-    const xhr = new XMLHttpRequest();
-
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) {
-        setUploadProgress(Math.round((e.loaded / e.total) * 100));
-      }
-    };
-
-    xhr.upload.onload = () => {
-      // Bytes sent; server is now running PII detection
-      setUploadStatus('processing');
-      setUploadProgress(100);
-    };
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          const data = JSON.parse(xhr.responseText) as { piiReplacements?: PiiReplacement[] };
-          const newReplacements = data.piiReplacements ?? [];
-          setPiiReplacements(newReplacements);
-          setCheckedPii(new Set(newReplacements.map((_, i) => i)));
-        } catch {
-          // PII data couldn't be parsed — not critical, continue without it
-        }
-        setAudioUrl(`/api/meetings/${meetingId}/audio`);
-        setUploadStatus('done');
-      } else {
-        let msg = 'Upload fejlede';
-        try {
-          msg = (JSON.parse(xhr.responseText) as { error?: string }).error ?? msg;
-        } catch { /* ignore */ }
-        setUploadStatus('error');
-        setUploadError(msg);
-      }
-    };
-
-    xhr.onerror = () => {
-      setUploadStatus('error');
-      setUploadError('Netværksfejl under upload af lydfil');
-    };
-
-    xhr.open('POST', '/api/transcribe');
-    xhr.send(formData);
-  }
-
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    const onTime = () => setCurrentTime(audio.currentTime);
+    const onTime = () => {
+      setCurrentTime(audio.currentTime);
+      if (stopAtRef.current !== null && audio.currentTime >= stopAtRef.current) {
+        audio.pause();
+        stopAtRef.current = null;
+      }
+    };
     const onMeta = () => {
       if (isFinite(audio.duration) && audio.duration > 0) setDuration(audio.duration);
     };
@@ -180,8 +195,8 @@ export function TranscriptReview({
       if (isFinite(audio.duration) && audio.duration > 0) setDuration(audio.duration);
     };
     const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
-    const onEnded = () => setIsPlaying(false);
+    const onPause = () => { setIsPlaying(false); setPlayingBite(null); };
+    const onEnded = () => { setIsPlaying(false); setPlayingBite(null); };
     const onError = () => setAudioError('Lydfilen kunne ikke indlæses');
     audio.addEventListener('timeupdate', onTime);
     audio.addEventListener('loadedmetadata', onMeta);
@@ -228,14 +243,41 @@ export function TranscriptReview({
   const seekTo = useCallback((time: number) => {
     const audio = audioRef.current;
     if (!audio) return;
+    stopAtRef.current = null; // a manual seek isn't a bounded soundbite
+    setPlayingBite(null);
     audio.currentTime = time;
     setCurrentTime(time);
     audio.play().catch(() => setAudioError('Afspilning fejlede'));
   }, []);
 
+  // Play just one speaker's soundbite, auto-pausing at its end.
+  const playSegment = useCallback((start: number, end: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    stopAtRef.current = end;
+    audio.currentTime = start;
+    setCurrentTime(start);
+    setPlayingBite({ start, end });
+    audio.play().catch(() => setAudioError('Afspilning fejlede'));
+  }, []);
+
+  // Play a soundbite, or pause it if it's the one already playing — so the same
+  // button both starts and stops the preview.
+  const togglePlaySegment = useCallback((start: number, end: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (isPlaying && playingBite && playingBite.start === start && playingBite.end === end) {
+      audio.pause();
+    } else {
+      playSegment(start, end);
+    }
+  }, [isPlaying, playingBite, playSegment]);
+
   function togglePlay() {
     const audio = audioRef.current;
     if (!audio) return;
+    stopAtRef.current = null; // manual play/pause clears any soundbite bound
+    setPlayingBite(null);
     if (isPlaying) {
       audio.pause();
     } else {
@@ -255,24 +297,191 @@ export function TranscriptReview({
     setSegments((prev) => prev.map((s, i) => (i === index ? updated : s)));
   }, []);
 
-  const handleRenameAll = useCallback(
+  // Drop a name from the "talte ikke" set (no-op if absent). Stable — shared by the
+  // assign/unlink/remove handlers.
+  const deleteFromSilent = useCallback((name: string) => {
+    setSilent((prev) => {
+      if (!prev.has(name)) return prev;
+      const next = new Set(prev);
+      next.delete(name);
+      return next;
+    });
+  }, []);
+
+  // Connect a diarized voice to a participant — the single write path behind the
+  // matcher panel and the transcript-row picker (the prototype's `linkVoice`). The
+  // name is added to the roster if new (reusing an existing participant's canonical
+  // casing so the label and the roster stay byte-identical), un-silenced, and every
+  // segment of `from` is relabelled to that name and persisted.
+  const assignSpeaker = useCallback(
     async (from: string, to: string) => {
-      setSegments((prev) =>
-        prev.map((seg) => (seg.speaker === from ? { ...seg, speaker: to } : seg)),
-      );
+      const trimmed = to.trim();
+      if (!trimmed || trimmed === from) return;
+      const existing = findExistingName(participantsRef.current, trimmed);
+      const finalName = existing ?? trimmed;
+      if (!existing && !isDefaultSpeakerLabel(finalName)) {
+        setEditableParticipants((prev) => [...prev, finalName]);
+      }
+      deleteFromSilent(finalName);
+      const updated = segments.map((seg) => (seg.speaker === from ? { ...seg, speaker: finalName } : seg));
+      setSegments(updated);
       try {
-        await fetch(`/api/meetings/${meetingId}/transcript/speakers`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from, to }),
-        });
+        await saveTranscriptSegments(meetingId, updated);
       } catch (err) {
-        // optimistic update already applied; persist failure is non-critical
-        console.error('[speakers] rename persist failed:', err);
+        console.error('[speakers] assign persist failed:', err);
       }
     },
-    [meetingId],
+    [meetingId, segments, deleteFromSilent],
   );
+
+  // Unlink a recognized person: relabel all their segments back to a fresh, unused
+  // 'Taler N' so the voice returns to the unmatched pool. The person stays in the
+  // roster as pending.
+  const unlinkSpeaker = useCallback(
+    async (name: string) => {
+      const fresh = nextAvailableSpeakerLabel(new Set(segments.map((s) => s.speaker)));
+      const updated = segments.map((seg) => (seg.speaker === name ? { ...seg, speaker: fresh } : seg));
+      setSegments(updated);
+      deleteFromSilent(name);
+      try {
+        await saveTranscriptSegments(meetingId, updated);
+      } catch (err) {
+        console.error('[speakers] unlink persist failed:', err);
+      }
+    },
+    [meetingId, segments, deleteFromSilent],
+  );
+
+  const markSilent = useCallback((name: string) => {
+    setSilent((prev) => new Set(prev).add(name));
+  }, []);
+
+  // Rename a participant in place — works whether they're pending, silent, or
+  // already linked to a voice. If they have a voice, the relabel carries through
+  // to every segment so the transcript stays in sync. A rename onto a name that
+  // already exists (case-insensitively, different person) merges by dropping the
+  // old entry.
+  const renameParticipant = useCallback(
+    async (oldName: string, newName: string) => {
+      const trimmed = newName.trim();
+      if (!trimmed || trimmed === oldName) return;
+      setEditableParticipants((prev) => {
+        const existing = findExistingName(prev, trimmed);
+        if (existing && existing !== oldName) return prev.filter((p) => p !== oldName);
+        return prev.map((p) => (p === oldName ? trimmed : p));
+      });
+      setSilent((prev) => {
+        if (!prev.has(oldName)) return prev;
+        const next = new Set(prev);
+        next.delete(oldName);
+        next.add(trimmed);
+        return next;
+      });
+      if (segments.some((s) => s.speaker === oldName)) {
+        const updated = segments.map((seg) => (seg.speaker === oldName ? { ...seg, speaker: trimmed } : seg));
+        setSegments(updated);
+        try {
+          await saveTranscriptSegments(meetingId, updated);
+        } catch (err) {
+          console.error('[speakers] rename persist failed:', err);
+        }
+      }
+    },
+    [meetingId, segments],
+  );
+
+  // Remove a participant entirely. If a voice was linked to them, return it to the
+  // unmatched pool (a fresh 'Taler N') rather than leaving segments tagged with a
+  // person who's no longer in the roster.
+  const removeParticipant = useCallback(
+    async (name: string) => {
+      if (segments.some((s) => s.speaker === name)) {
+        const fresh = nextAvailableSpeakerLabel(new Set(segments.map((s) => s.speaker)));
+        const updated = segments.map((seg) => (seg.speaker === name ? { ...seg, speaker: fresh } : seg));
+        setSegments(updated);
+        try {
+          await saveTranscriptSegments(meetingId, updated);
+        } catch (err) {
+          console.error('[speakers] remove persist failed:', err);
+        }
+      }
+      setEditableParticipants((prev) => prev.filter((p) => p !== name));
+      deleteFromSilent(name);
+    },
+    [meetingId, segments, deleteFromSilent],
+  );
+
+  // A freshly added participant joins the roster as "talte ikke" (silent) until a
+  // voice is linked — mirrors the prototype's add-as-noVoice behaviour.
+  const addParticipant = useCallback((name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setEditableParticipants((prev) =>
+      findExistingName(prev, trimmed) ? prev : [...prev, trimmed],
+    );
+    setSilent((prev) => new Set(prev).add(trimmed));
+  }, []);
+
+  // Still-unassigned speakers ("Taler N"), ordered by first appearance, each with
+  // its longest ("most representative") segment for the soundbite. Feeds the guided
+  // assignment tool docked next to the participant list.
+  const unassignedSpeakers = useMemo(() => {
+    const firstIndex = new Map<string, number>();
+    const rep = new Map<string, { start: number; end: number; dur: number }>();
+    segments.forEach((seg, i) => {
+      if (!isDefaultSpeakerLabel(seg.speaker)) return;
+      if (!firstIndex.has(seg.speaker)) firstIndex.set(seg.speaker, i);
+      const dur = seg.end - seg.start;
+      const cur = rep.get(seg.speaker);
+      if (!cur || dur > cur.dur) rep.set(seg.speaker, { start: seg.start, end: seg.end, dur });
+    });
+    return [...firstIndex.entries()]
+      .sort((a, b) => a[1] - b[1])
+      .map(([speaker]) => ({ speaker, start: rep.get(speaker)!.start, end: rep.get(speaker)!.end }));
+  }, [segments]);
+
+  // Distinct speaker labels currently in the transcript, and each label's longest
+  // segment (for the recognized-row replay button).
+  const speakerStats = useMemo(() => {
+    const distinct = new Set<string>();
+    const longest = new Map<string, { start: number; end: number; dur: number }>();
+    segments.forEach((seg) => {
+      distinct.add(seg.speaker);
+      const dur = seg.end - seg.start;
+      const cur = longest.get(seg.speaker);
+      if (!cur || dur > cur.dur) longest.set(seg.speaker, { start: seg.start, end: seg.end, dur });
+    });
+    return { distinct, longest };
+  }, [segments]);
+
+  // One row per participant, classified for the matcher panel: a name that is a
+  // segment speaker is "recognized" (a voice is linked); otherwise it's "silent" if
+  // the user marked it so, else "pending".
+  const participantRows = useMemo<ParticipantRow[]>(
+    () => editableParticipants.map((name) => {
+      if (speakerStats.distinct.has(name)) {
+        const rep = speakerStats.longest.get(name);
+        return { name, kind: 'recognized', start: rep?.start, end: rep?.end };
+      }
+      return { name, kind: silent.has(name) ? 'silent' : 'pending' };
+    }),
+    [editableParticipants, speakerStats, silent],
+  );
+
+  // Participants with no voice yet — the candidates offered when naming a leftover
+  // voice and in the transcript-row picker (so a name never appears in two places).
+  const voicelessParticipants = useMemo(
+    () => editableParticipants.filter((p) => !speakerStats.distinct.has(p)),
+    [editableParticipants, speakerStats],
+  );
+
+  // Header counter: recognized = distinct non-placeholder labels; total = those plus
+  // the still-unmatched voices.
+  const recognizedVoiceCount = useMemo(
+    () => [...speakerStats.distinct].filter((s) => !isDefaultSpeakerLabel(s)).length,
+    [speakerStats],
+  );
+  const totalVoices = recognizedVoiceCount + unassignedSpeakers.length;
 
   function jumpToSegment(segmentIndex: number) {
     // Open the chapter containing this segment, close all others
@@ -348,8 +557,6 @@ export function TranscriptReview({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            meetingId,
-            transcriptId,
             segments: processedSegments,
             participants: editableParticipants.filter(Boolean),
             customPrompt: [...Array.from(activeKeywords), customText.trim()].filter(Boolean).join(', ') || undefined,
@@ -363,6 +570,11 @@ export function TranscriptReview({
         const data = await res.json();
         throw new Error(data.error ?? 'Kunne ikke generere referat');
       }
+      const data = await res.json() as { content: MinutesContent; templateId?: string };
+      await saveMinutes(meetingId, data.content, data.templateId);
+      await deleteAudio(meetingId);
+      await updateMeeting(meetingId, { status: 'minutes', audioDeleted: true });
+      onDataChange?.();
       window.location.href = `/meeting/${meetingId}/minutes`;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt');
@@ -405,12 +617,7 @@ export function TranscriptReview({
   );
 
   const saveChapters = useCallback((updated: TranscriptChapter[]) => {
-    fetch(`/api/meetings/${meetingId}/chapters`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chapters: updated }),
-    }).catch((err) => console.error('[chapters] save failed:', err));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    saveTranscriptChapters(meetingId, updated).catch((err) => console.error('[chapters] save failed:', err));
   }, [meetingId]);
 
   useEffect(() => {
@@ -426,7 +633,10 @@ export function TranscriptReview({
       .then((data) => {
         const chs = (data.chapters ?? []) as TranscriptChapter[];
         setChapters(chs.length > 0 ? chs : null);
-        if (chs.length > 0) setOpenChapters(new Set([chs[0].id]));
+        if (chs.length > 0) {
+          setOpenChapters(new Set([chs[0].id]));
+          saveTranscriptChapters(meetingId, chs).catch(() => {});
+        }
       })
       .catch((err) => console.error('[chapters] generate failed:', err))
       .finally(() => setChaptersLoading(false));
@@ -550,7 +760,7 @@ export function TranscriptReview({
           {audioUrl && <audio ref={audioRef} src={audioUrl} preload="metadata" />}
 
           {/* Transcript — chapters or flat fallback */}
-          <div style={{ marginTop: 8, flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ marginTop: 8, flex: 1, overflowY: 'auto' }}>
             {chaptersLoading && (
               <div style={{
                 padding: '24px 0', display: 'flex', alignItems: 'center', gap: 10,
@@ -578,19 +788,12 @@ export function TranscriptReview({
               return (
                 <div
                   key={ch.id}
-                  style={{
-                    borderTop: '1px solid var(--line)',
-                    ...(isOpen ? { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' } : {}),
-                  }}
+                  style={{ borderTop: '1px solid var(--line)' }}
                 >
                   <div
                     onClick={() => {
                       const isNowOpen = !openChapters.has(ch.id);
-                      setOpenChapters((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(ch.id)) next.delete(ch.id); else next.add(ch.id);
-                        return next;
-                      });
+                      setOpenChapters((prev) => prev.has(ch.id) ? new Set() : new Set([ch.id]));
                       // If opening with an active search, jump to first match in this chapter
                       if (isNowOpen && search.trim() && matches.length > 0) {
                         const firstInChapter = ch.segmentIndices.find((si) => matches.includes(si));
@@ -651,7 +854,7 @@ export function TranscriptReview({
                     </div>
                   </div>
                   {isOpen && (
-                    <div style={{ paddingBottom: 18, flex: 1, overflowY: 'auto' }}>
+                    <div style={{ paddingBottom: 18 }}>
                       {chSegs.map(({ seg, idx }) => {
                         const isCurrentMatch = matchIndex >= 0 && matches[matchIndex] === idx;
                         const isAnyMatch = search.trim() && matches.includes(idx);
@@ -667,11 +870,13 @@ export function TranscriptReview({
                             segment={seg}
                             index={idx}
                             onUpdate={handleSegmentUpdate}
-                            onRenameAll={handleRenameAll}
+                            onAssign={assignSpeaker}
                             speakerSegmentCount={speakerCounts[seg.speaker] ?? 1}
+                            participants={voicelessParticipants}
                             onSeek={audioUrl ? seekTo : undefined}
                             hasPii={piiSegmentIndices.has(idx)}
                             isHighlighted={highlightedSegment === idx}
+                            diarizing={diarizing}
                           />
                         </div>
                         );
@@ -683,7 +888,7 @@ export function TranscriptReview({
             })}
 
             {!chaptersLoading && !chapters && (
-              <div style={{ borderTop: '1px solid var(--line)', flex: 1, overflowY: 'auto' }}>
+              <div style={{ borderTop: '1px solid var(--line)' }}>
                 {segments.length === 0 ? (
                   <p style={{ padding: '32px 0', textAlign: 'center', color: 'var(--muted)', fontSize: 13 }}>
                     Ingen transskription fundet.
@@ -695,11 +900,13 @@ export function TranscriptReview({
                         segment={seg}
                         index={i}
                         onUpdate={handleSegmentUpdate}
-                        onRenameAll={handleRenameAll}
+                        onAssign={assignSpeaker}
                         speakerSegmentCount={speakerCounts[seg.speaker] ?? 1}
+                        participants={voicelessParticipants}
                         onSeek={audioUrl ? seekTo : undefined}
                         hasPii={piiSegmentIndices.has(i)}
                         isHighlighted={highlightedSegment === i}
+                        diarizing={diarizing}
                       />
                     </div>
                   ))
@@ -721,50 +928,11 @@ export function TranscriptReview({
           display: 'flex', flexDirection: 'column', gap: 0,
         }}>
 
-          {/* Upload progress */}
-          {(uploadStatus === 'uploading' || uploadStatus === 'processing') && (
-            <div style={{ marginBottom: 20 }}>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 8 }}>
-                {uploadStatus === 'uploading' ? 'uploader lydoptagelse' : 'analyserer personoplysninger'}
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-2)' }}>
-                  {uploadStatus === 'uploading' ? 'upload' : 'PII-analyse'}
-                </span>
-                <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)' }}>
-                  {uploadStatus === 'uploading' ? `${uploadProgress}%` : '…'}
-                </span>
-              </div>
-              <div style={{ height: 4, background: 'var(--line-2)', borderRadius: 2, overflow: 'hidden' }}>
-                <div style={{
-                  height: '100%', borderRadius: 2,
-                  width: uploadStatus === 'processing' ? '100%' : `${uploadProgress}%`,
-                  background: 'var(--accent)',
-                  transition: 'width 0.3s',
-                  animation: uploadStatus === 'processing' ? 'protoPulse 1.5s ease-in-out infinite' : 'none',
-                }} />
-              </div>
-            </div>
-          )}
-
-          {uploadStatus === 'error' && (
-            <div style={{
-              marginBottom: 16, padding: '12px 14px', borderRadius: 'var(--radius)',
-              background: 'var(--kill-wash)', border: '1px solid color-mix(in oklch, var(--kill) 30%, var(--line-2))',
-            }}>
-              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--kill)', marginBottom: 4 }}>upload fejlede</div>
-              <div style={{ fontSize: 12.5, color: 'var(--kill)', opacity: 0.8 }}>{uploadError}</div>
-              <div style={{ fontSize: 11, color: 'var(--kill)', opacity: 0.7, marginTop: 4 }}>Du kan stadig generere referat.</div>
-            </div>
-          )}
-
           {/* Følsom info (PII checklist) */}
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>følsom info</div>
           <div style={{ fontSize: 13, color: 'var(--ink-2)', marginTop: 6, lineHeight: 1.5 }}>
             {piiReplacements.length === 0
-              ? (uploadStatus === 'uploading' || uploadStatus === 'processing')
-                ? 'Analyse klar når lyden er uploadet.'
-                : 'Ingen personoplysninger fundet.'
+              ? 'Ingen personoplysninger fundet.'
               : <>Hviske har fundet <strong style={{ color: 'var(--ink)' }}>{piiReplacements.length} ting</strong>, der kan være personoplysninger.</>
             }
           </div>
@@ -833,50 +1001,26 @@ export function TranscriptReview({
             </div>
           )}
 
-          {/* Deltagere — editable list included in referat */}
+          {/* Talere & deltagere — one participant-first list that connects each
+              diarized voice to a person. While diarization is still running the
+              matcher shows a recognising state but keeps the roster editable. */}
           <div style={{ marginTop: 28 }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 8 }}>deltagere</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {editableParticipants.map((name, i) => (
-                <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--muted-2)', flexShrink: 0, display: 'inline-block' }} />
-                  <span style={{ flex: 1 }}>{name}</span>
-                  <button
-                    onClick={() => setEditableParticipants((prev) => prev.filter((_, j) => j !== i))}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted-2)', fontSize: 14, padding: '0 2px', lineHeight: 1 }}
-                    title="Fjern deltager"
-                  >×</button>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: editableParticipants.length > 0 ? 8 : 0 }}>
-              <input
-                value={newParticipantInput}
-                onChange={(e) => setNewParticipantInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && newParticipantInput.trim()) {
-                    e.preventDefault();
-                    setEditableParticipants((prev) => [...prev, newParticipantInput.trim()]);
-                    setNewParticipantInput('');
-                  }
-                }}
-                placeholder="tilføj deltager"
-                style={{
-                  flex: 1, fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-2)',
-                  background: 'transparent', border: 'none', outline: 'none',
-                  borderBottom: '1px solid var(--line-2)', padding: '2px 0',
-                }}
-              />
-              {newParticipantInput.trim() && (
-                <button
-                  onClick={() => {
-                    setEditableParticipants((prev) => [...prev, newParticipantInput.trim()]);
-                    setNewParticipantInput('');
-                  }}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: 11, fontFamily: 'var(--mono)', padding: 0 }}
-                >+ tilføj</button>
-              )}
-            </div>
+            <SpeakerAssignment
+              rows={participantRows}
+              voices={unassignedSpeakers}
+              voicelessParticipants={voicelessParticipants}
+              recognizedCount={recognizedVoiceCount}
+              totalVoices={totalVoices}
+              diarizing={diarizing}
+              onLink={assignSpeaker}
+              onMarkSilent={markSilent}
+              onUnlink={unlinkSpeaker}
+              onRemove={removeParticipant}
+              onRename={renameParticipant}
+              onAdd={addParticipant}
+              onPlaySegment={audioUrl ? togglePlaySegment : undefined}
+              playingSegment={playingBite}
+            />
           </div>
 
           {/* Keywords / prompt */}
@@ -1099,18 +1243,7 @@ export function TranscriptReview({
           </span>
         ) : (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}>
-            {(uploadStatus === 'uploading' || uploadStatus === 'processing') && (
-              <span style={{
-                width: 14, height: 14, borderRadius: 999, flexShrink: 0,
-                border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)',
-                display: 'inline-block', animation: 'spin 0.8s linear infinite',
-              }} />
-            )}
-            {uploadStatus === 'uploading'
-              ? `uploader lydfil… ${uploadProgress}%`
-              : uploadStatus === 'processing'
-              ? 'analyserer personoplysninger…'
-              : 'ingen lydfil'}
+            ingen lydfil
           </span>
         )}
       </div>

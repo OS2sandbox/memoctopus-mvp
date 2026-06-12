@@ -43,9 +43,7 @@ describe('groupIntoChapters', () => {
     mockComplete.mockResolvedValueOnce(
       openaiResponse(
         JSON.stringify({
-          chapters: [
-            { title: 'Åbning', summary: 'Mødet åbnes.', segmentIndices: [0, 1, 2] },
-          ],
+          chapters: [{ startIndex: 0, title: 'Åbning', summary: 'Mødet åbnes.' }],
         }),
       ),
     );
@@ -59,9 +57,7 @@ describe('groupIntoChapters', () => {
     mockComplete.mockResolvedValueOnce(
       openaiResponse(
         JSON.stringify({
-          chapters: [
-            { title: 'Budgetgennemgang', summary: 'Diskussion af budget.', segmentIndices: [0, 1, 2] },
-          ],
+          chapters: [{ startIndex: 0, title: 'Budgetgennemgang', summary: 'Diskussion af budget.' }],
         }),
       ),
     );
@@ -77,8 +73,8 @@ describe('groupIntoChapters', () => {
       openaiResponse(
         JSON.stringify({
           chapters: [
-            { title: 'Del 1', summary: 's1', segmentIndices: [0, 1] },
-            { title: 'Del 2', summary: 's2', segmentIndices: [2] },
+            { startIndex: 0, title: 'Del 1', summary: 's1' },
+            { startIndex: 2, title: 'Del 2', summary: 's2' },
           ],
         }),
       ),
@@ -95,8 +91,8 @@ describe('groupIntoChapters', () => {
       openaiResponse(
         JSON.stringify({
           chapters: [
-            { title: 'Del 1', summary: 's1', segmentIndices: [0, 1] },
-            { title: 'Del 2', summary: 's2', segmentIndices: [2] },
+            { startIndex: 0, title: 'Del 1', summary: 's1' },
+            { startIndex: 2, title: 'Del 2', summary: 's2' },
           ],
         }),
       ),
@@ -112,8 +108,8 @@ describe('groupIntoChapters', () => {
       openaiResponse(
         JSON.stringify({
           chapters: [
-            { title: 'Del 1', summary: 's1', segmentIndices: [0, 1] },
-            { title: 'Del 2', summary: 's2', segmentIndices: [2] },
+            { startIndex: 0, title: 'Del 1', summary: 's1' },
+            { startIndex: 2, title: 'Del 2', summary: 's2' },
           ],
         }),
       ),
@@ -125,13 +121,13 @@ describe('groupIntoChapters', () => {
     expect(result[0].endTime).toBeLessThanOrEqual(result[1].startTime);
   });
 
-  it('stores segmentIndices from the response', async () => {
+  it('computes contiguous segmentIndices from startIndex boundaries', async () => {
     mockComplete.mockResolvedValueOnce(
       openaiResponse(
         JSON.stringify({
           chapters: [
-            { title: 'Del 1', summary: 's', segmentIndices: [0, 1] },
-            { title: 'Del 2', summary: 's', segmentIndices: [2] },
+            { startIndex: 0, title: 'Del 1', summary: 's' },
+            { startIndex: 2, title: 'Del 2', summary: 's' },
           ],
         }),
       ),
@@ -157,7 +153,7 @@ describe('groupIntoChapters', () => {
   it('strips markdown code fences before parsing', async () => {
     mockComplete.mockResolvedValueOnce(
       openaiResponse(
-        '```json\n{"chapters":[{"title":"T","summary":"S","segmentIndices":[0,1,2]}]}\n```',
+        '```json\n{"chapters":[{"startIndex":0,"title":"T","summary":"S"}]}\n```',
       ),
     );
 
@@ -167,7 +163,7 @@ describe('groupIntoChapters', () => {
 
   it('uses gpt-4o model', async () => {
     mockComplete.mockResolvedValueOnce(
-      openaiResponse(JSON.stringify({ chapters: [{ title: 'T', summary: 'S', segmentIndices: [0, 1, 2] }] })),
+      openaiResponse(JSON.stringify({ chapters: [{ startIndex: 0, title: 'T', summary: 'S' }] })),
     );
 
     await groupIntoChapters(shortMeeting);
@@ -178,7 +174,7 @@ describe('groupIntoChapters', () => {
 
   it('includes segment indices in the prompt', async () => {
     mockComplete.mockResolvedValueOnce(
-      openaiResponse(JSON.stringify({ chapters: [{ title: 'T', summary: 'S', segmentIndices: [0, 1, 2] }] })),
+      openaiResponse(JSON.stringify({ chapters: [{ startIndex: 0, title: 'T', summary: 'S' }] })),
     );
 
     await groupIntoChapters(shortMeeting);
@@ -196,7 +192,7 @@ describe('groupIntoChapters', () => {
     ];
 
     mockComplete.mockResolvedValueOnce(
-      openaiResponse(JSON.stringify({ chapters: [{ title: 'T', summary: 'S', segmentIndices: [0] }] })),
+      openaiResponse(JSON.stringify({ chapters: [{ startIndex: 0, title: 'T', summary: 'S' }] })),
     );
 
     await groupIntoChapters(shortSegments);
@@ -210,7 +206,11 @@ describe('groupIntoChapters', () => {
     mockComplete.mockResolvedValueOnce(
       openaiResponse(
         JSON.stringify({
-          chapters: longMeeting.map((_, i) => ({ title: `K${i}`, summary: 'S', segmentIndices: [i] })).slice(0, 4),
+          chapters: [
+            { startIndex: 0, title: 'K1', summary: 'S' },
+            { startIndex: 10, title: 'K2', summary: 'S' },
+            { startIndex: 20, title: 'K3', summary: 'S' },
+          ],
         }),
       ),
     );

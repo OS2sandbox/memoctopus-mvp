@@ -115,6 +115,39 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       ADD COLUMN IF NOT EXISTS chapters JSONB NOT NULL DEFAULT '[]'
     `);
 
+    await client.query(`
+      ALTER TABLE "${schema}".transcripts
+      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    `);
+
+    // Remove duplicate transcript rows (keep the one with the largest id per meeting),
+    // then enforce uniqueness so each meeting has at most one transcript.
+    await client.query(`
+      DELETE FROM "${schema}".transcripts
+      WHERE id NOT IN (
+        SELECT DISTINCT ON (meeting_id) id
+        FROM "${schema}".transcripts
+        ORDER BY meeting_id, id DESC
+      )
+    `);
+
+    await client.query(`
+      DO $body$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint c
+          JOIN pg_class cl ON cl.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = cl.relnamespace
+          WHERE c.conname = 'transcripts_meeting_id_unique'
+            AND n.nspname = '${schema}'
+        ) THEN
+          ALTER TABLE "${schema}".transcripts
+            ADD CONSTRAINT transcripts_meeting_id_unique UNIQUE (meeting_id);
+        END IF;
+      END
+      $body$
+    `);
+
     // minutes
     await client.query(`
       CREATE TABLE IF NOT EXISTS "${schema}".minutes (

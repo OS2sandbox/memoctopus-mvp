@@ -1,5 +1,34 @@
 // Injected into every page via addInitScript before any Teams JS loads.
 // Must be self-contained — no imports, no closures over Node.js variables.
+//
+// What this patch does:
+//   1. Hooks RTCPeerConnection construction to listen for remote audio tracks.
+//      Audio tracks are mirrored into hidden <audio> elements and the
+//      receiving PC is registered in window.__botAudioPcs so the Node side
+//      can call getStats() on each PC during participant polling.
+//   2. Hooks setLocalDescription to repair the BUNDLE extmap id=11 collision
+//      in Teams' offer SDP (see dedupeExtmapCollisions below). This is what
+//      actually fixes "Sorry, we couldn't connect you" — Chromium's own offer
+//      maps id=11 to different extension URNs in the audio vs video
+//      m-sections, and setLocalDescription would otherwise throw.
+//   3. Installs a global unhandledrejection swallower for DOM-Event-typed
+//      rejections (the "{"isTrusted":true}" pattern). Teams' bundles
+//      routinely convert browser Events (MediaStreamTrack 'ended', XMLHttp
+//      'error', MediaError) into Promise rejections. When these go
+//      unhandled, Teams' own onunhandledrejection handler can cascade
+//      into automatic "Leaving..." transitions.
+//
+// What this patch does NOT do (intentionally removed):
+//   - It does NOT redirect video addTrack/addTransceiver to a throw-away
+//     RTCPeerConnection. That pattern caused InvalidAccessError every time
+//     Teams later tried to remove or query the sender on the real PC, which
+//     surfaced as "Action failed → Leaving..." or unhandled-rejection
+//     cascades post-admission. The BUNDLE id=11 collision the redirect was
+//     protecting against is now handled two ways instead: the canvas-video
+//     substitution in teams-bot.ts's getUserMedia patch (which avoids the
+//     collision at the source when Teams sends video) and the
+//     setLocalDescription dedupe below (belt-and-suspenders for the offer
+//     Teams generates regardless of our tracks).
 export function installWebRTCPatch(): void {
   const win = window as unknown as Record<string, unknown>;
   const OrigRTC = window.RTCPeerConnection;
@@ -11,6 +40,88 @@ export function installWebRTCPatch(): void {
   win.__botAudioPcs = audioPcsList;
   let hadAudioPeer = false;
 
+  // ─── BUNDLE extmap collision repair ────────────────────────────────────────
+  //
+  // Teams' offer SDP can assign the same RTP header-extension id (id=11 in
+  // practice) to DIFFERENT extension URNs in the bundled audio vs video
+  // m-sections. setLocalDescription then throws:
+  //   InvalidAccessError: A BUNDLE group contains a codec collision for
+  //   header extension id=11.
+  // Teams catches it → "Sorry, we couldn't connect you" → bot leaves.
+  //
+  // We make the id→URN mapping consistent (first m-section to claim an id
+  // keeps it; a later section mapping the same id to a different URN has that
+  // one extmap line dropped). Header extensions are optional to negotiate, so
+  // this is safe — we do NOT remove m-sections or touch rtcp-mux (that heavier
+  // munge was vexa's #281 regression).
+  //
+  // NOTE: this is an inline copy of src/lib/sdp-dedupe.ts (installWebRTCPatch
+  // must be self-contained for addInitScript — no imports). Keep in sync; the
+  // Playwright e2e test guards this version's behaviour.
+  const dedupeExtmapCollisions = (sdp: string): string => {
+    const eol = sdp.indexOf('\r\n') !== -1 ? '\r\n' : '\n';
+    const lines = sdp.split(/\r?\n/);
+    const idToUrn: Record<string, string> = {};
+    const out: string[] = [];
+    let dropped = 0;
+    for (const line of lines) {
+      const m = line.match(/^a=extmap:(\d+)(?:\/[^ ]+)? (\S+)/);
+      if (m) {
+        const id = m[1];
+        const urn = m[2];
+        const existing = idToUrn[id];
+        if (existing !== undefined && existing !== urn) { dropped++; continue; }
+        if (existing === undefined) idToUrn[id] = urn;
+      }
+      out.push(line);
+    }
+    return dropped === 0 ? sdp : out.join(eol);
+  };
+
+  // Patch setLocalDescription on the prototype so every PC (Teams' meeting PC
+  // included) repairs its offer before applying it. PatchedRTC.prototype ===
+  // OrigRTC.prototype, so instances pick this up.
+  const origSetLocalDescription = OrigRTC.prototype.setLocalDescription;
+  OrigRTC.prototype.setLocalDescription = function(
+    this: RTCPeerConnection,
+    description?: RTCLocalSessionDescriptionInit,
+  ): Promise<void> {
+    if (description && typeof description.sdp === 'string') {
+      const fixed = dedupeExtmapCollisions(description.sdp);
+      if (fixed !== description.sdp) {
+        win.__botFixedSdpCollision = true;
+        description = { type: description.type, sdp: fixed } as RTCLocalSessionDescriptionInit;
+      }
+    }
+    // eslint-disable-next-line prefer-rest-params
+    return origSetLocalDescription.apply(this, [description] as never);
+  };
+
+  // ─── Unhandled-rejection swallower ─────────────────────────────────────────
+  //
+  // Teams' code catches browser Events (MediaStreamTrack 'ended',
+  // XMLHttpRequest 'error', etc.) and re-throws them as Promise rejections.
+  // The Event serialises as `{"isTrusted":true}` in the console. When these
+  // go unhandled, Teams' own state machine sometimes reacts by transitioning
+  // the call to "Leaving..." with no other diagnostic.
+  //
+  // We attach a listener that calls preventDefault on Event-shaped rejections
+  // — this suppresses the browser's default "log to console" behaviour AND,
+  // in practice, prevents Teams' internal error-recovery from firing the
+  // leave cascade. We deliberately do NOT swallow non-Event rejections (real
+  // errors with stack traces still surface so we can debug them).
+  window.addEventListener('unhandledrejection', (ev) => {
+    const reason = ev.reason as unknown;
+    if (
+      reason instanceof Event ||
+      (typeof reason === 'object' && reason !== null && (reason as { isTrusted?: boolean }).isTrusted === true)
+    ) {
+      ev.preventDefault();
+    }
+  });
+
+  // ─── checkAllPeersGone — composite departure signal ────────────────────────
+  //
   // Check whether all known audio peers are gone — either via RTC state changes
   // or via audio track readyState. Teams routes through a relay so connection
   // states often stay 'connected' after participants leave; track states are more
@@ -39,46 +150,7 @@ export function installWebRTCPatch(): void {
     if (cb) cb();
   };
 
-  // Redirect video addTrack/addTransceiver calls to throw-away PeerConnections so
-  // the meeting PC stays audio-only.  Chrome's fake device assigns conflicting RTP
-  // header extension id=11 values to the audio and video m-sections in a BUNDLE
-  // group; with video absent from the real PC the offer contains only one m-section
-  // and the collision cannot occur.  Teams receives real RTCRtpSender /
-  // RTCRtpTransceiver objects (from the throw-away PC) so its internal video-sender
-  // bookkeeping is satisfied without crashing.
-  const throwawayPCMap = new WeakMap<RTCPeerConnection, RTCPeerConnection>();
-  const getThrowawayPC = (pc: RTCPeerConnection): RTCPeerConnection => {
-    let t = throwawayPCMap.get(pc);
-    if (!t) { t = new OrigRTC(); throwawayPCMap.set(pc, t); }
-    return t;
-  };
-  const _origAddTrack = OrigRTC.prototype.addTrack;
-  OrigRTC.prototype.addTrack = function(
-    this: RTCPeerConnection, track: MediaStreamTrack, ...streams: MediaStream[]
-  ): RTCRtpSender {
-    if (track?.kind === 'video') {
-      console.log('[webrtc-patch] addTrack(video) → throw-away PC (avoiding BUNDLE id=11 collision)');
-      return _origAddTrack.call(getThrowawayPC(this), track, ...streams);
-    }
-    return _origAddTrack.call(this, track, ...streams);
-  };
-  // Some Teams versions use addTransceiver instead of addTrack for video setup.
-  const _origAddTransceiver = OrigRTC.prototype.addTransceiver as (
-    trackOrKind: MediaStreamTrack | string, init?: RTCRtpTransceiverInit
-  ) => RTCRtpTransceiver;
-  (OrigRTC.prototype as unknown as {
-    addTransceiver: (t: MediaStreamTrack | string, i?: RTCRtpTransceiverInit) => RTCRtpTransceiver
-  }).addTransceiver = function(
-    this: RTCPeerConnection, trackOrKind: MediaStreamTrack | string, init?: RTCRtpTransceiverInit
-  ): RTCRtpTransceiver {
-    const kind = typeof trackOrKind === 'string' ? trackOrKind : trackOrKind?.kind;
-    if (kind === 'video') {
-      console.log('[webrtc-patch] addTransceiver(video) → throw-away PC');
-      return _origAddTransceiver.call(getThrowawayPC(this), trackOrKind, init as RTCRtpTransceiverInit);
-    }
-    return _origAddTransceiver.call(this, trackOrKind, init as RTCRtpTransceiverInit);
-  };
-
+  // ─── Constructor patch — capture remote audio tracks ────────────────────────
   function PatchedRTC(
     this: RTCPeerConnection,
     ...args: ConstructorParameters<typeof RTCPeerConnection>
@@ -99,8 +171,6 @@ export function installWebRTCPatch(): void {
             audioPcs.delete(pc);
             const idx = audioPcsList.indexOf(pc);
             if (idx !== -1) audioPcsList.splice(idx, 1);
-            // Close the throw-away PC to free ICE/DTLS resources
-            throwawayPCMap.get(pc)?.close();
           }
           checkAllPeersGone();
         });
@@ -108,7 +178,12 @@ export function installWebRTCPatch(): void {
           checkAllPeersGone();
         });
       }
-      for (const stream of event.streams) {
+      // event.streams can be empty in unified-plan SDP; synthesize a stream from
+      // the bare track so we still have something to attach to the <audio>.
+      const streams = event.streams.length > 0
+        ? Array.from(event.streams)
+        : [new MediaStream([event.track])];
+      for (const stream of streams) {
         // Keep element only as a stream container for liveTrackCount checks.
         // muted=true prevents the remote audio from playing back through the
         // browser's virtual output device and looping into the fake microphone.
@@ -130,8 +205,18 @@ export function installWebRTCPatch(): void {
         stream.addEventListener('removetrack', removeEl);
       }
     });
+    // NB: our audio capture is attached via addEventListener('track') above,
+    // which a later `pc.ontrack = …` assignment by Teams does NOT remove — so
+    // no ontrack-setter wrapper is needed to keep the hook alive.
+
     return pc;
   }
   PatchedRTC.prototype = OrigRTC.prototype;
+  // Inherit static methods (e.g. RTCPeerConnection.generateCertificate) so any
+  // Teams code that calls them through the patched global hits the real impl.
+  // Without this line, `RTCPeerConnection.generateCertificate(...)` is
+  // `undefined(...)` → TypeError → Teams catches it, re-rejects as the
+  // `{"isTrusted":true}` Event, and the call drops to "Leaving..." indefinitely.
+  Object.setPrototypeOf(PatchedRTC, OrigRTC);
   win.RTCPeerConnection = PatchedRTC;
 }

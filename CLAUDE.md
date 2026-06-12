@@ -55,7 +55,7 @@ A Next.js 15 App Router application using the `(app)` route group for authentica
 **Auth**: Uses `better-auth` library. The `src/lib/auth/index.ts` currently exports a **demo stub** that always returns a hard-coded demo user — there is no real session gating yet.
 
 **AI pipeline** (after a meeting is recorded):
-1. `src/lib/ai/transcription.ts` — STT via ElevenLabs `scribe_v2` (default, with speaker diarization) or `syvai/hviske-v5.1` via vLLM. Controlled by `TRANSCRIPTION_PROVIDER` env var.
+1. `src/lib/ai/transcription.ts` — STT via the hviske (`syvai/hviske-v5.1`) server's OpenAI-compatible API. Used for both the per-utterance live path (`/api/meetings/[id]/utterance`) and the batch transcribe pass. Configured via `HVISKE_URL` / `HVISKE_API_KEY`.
 2. `src/lib/ai/pii.ts` — PII detection and replacement using Anthropic SDK.
 3. `src/lib/ai/chapters.ts` — Chapter/topic segmentation using OpenAI.
 4. `src/lib/ai/minutes.ts` — Meeting minutes generation using OpenAI `gpt-4o`. Prompts are in Danish.
@@ -87,10 +87,12 @@ Bot-service authenticates all requests from the Next.js app via `Authorization: 
 | `DATABASE_URL` | PostgreSQL connection string |
 | `BOT_INTERNAL_SECRET` | Shared secret between Next.js and bot-service |
 | `BOT_SERVICE_URL` | URL of bot-service from Next.js (e.g. `http://localhost:3001`) |
-| `ELEVENLABS_API_KEY` | ElevenLabs STT (default provider) |
+| `HVISKE_URL` | hviske STT server (OpenAI-compatible `/v1`) |
+| `HVISKE_API_KEY` | Bearer key for the hviske STT server |
+| `HVISKE_MODEL` | hviske model id (default `syvai/hviske-v5.1`) |
+| `ASR_LANGUAGE` | Transcription language (default `da`) |
 | `OPENAI_API_KEY` | Chapters, minutes, clarifications generation |
 | `ANTHROPIC_API_KEY` | PII detection |
-| `TRANSCRIPTION_PROVIDER` | `elevenlabs` (default) or `hviske` |
 | `AUDIO_STORAGE_PATH` | Filesystem path for audio files |
 
 ## Testing conventions
