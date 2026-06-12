@@ -219,11 +219,21 @@ button, input, textarea, select {
 .sa-name { flex: 1; min-width: 0; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sa-row.unnamed .sa-name { color: var(--ink-2); }
 .sa-row.pending .sa-name { color: var(--muted); }
+.sa-name-edit { cursor: text; outline: none; border-bottom: 1px dashed transparent; }
+.sa-name-edit:hover { border-bottom-color: var(--line-2); }
+.sa-name-edit:focus { border-bottom-color: var(--accent); color: var(--ink); }
 
 .sa-play { width: 22px; height: 22px; border-radius: 999px; flex-shrink: 0; background: transparent; border: 1px solid var(--line-2); cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
 .sa-play:hover { border-color: var(--accent); }
 .sa-play .tri { width: 0; height: 0; border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent; border-left: 5px solid var(--ink-2); margin-left: 1px; }
 .sa-play:hover .tri { border-left-color: var(--accent); }
+.sa-play .bars, .sa-play2 .bars { display: flex; gap: 2px; align-items: center; }
+.sa-play .bars i { width: 2px; height: 8px; background: var(--ink-2); display: block; }
+.sa-play:hover .bars i { background: var(--accent); }
+.sa-play2 .bars i { width: 2px; height: 8px; background: var(--bg); display: block; }
+
+.sa-hover { opacity: 0; transition: opacity .12s; }
+.sa-row:hover .sa-hover { opacity: 1; }
 
 .sa-tag { font-family: var(--mono); font-size: 9.5px; color: var(--muted-2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px; flex-shrink: 0; }
 .sa-x { background: none; border: none; cursor: pointer; color: var(--muted-2); font-size: 15px; line-height: 1; padding: 0 2px; opacity: 0; }

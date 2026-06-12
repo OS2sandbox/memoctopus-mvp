@@ -6,6 +6,7 @@ import { transcribeBatchesOnServer } from '@/lib/audio/transcribe-batches-client
 import { startDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import { createMeeting, saveAudio, saveTranscript, updateMeeting, deleteMeeting } from '@/lib/storage';
 import type { TranscriptSegment } from '@/types';
+import { isDefaultSpeakerLabel } from '@/lib/audio/speaker-labels';
 
 // Deterministic waveform — doubles as the progress bar fill indicator.
 const WAVE = Array.from({ length: 92 }, (_, i) =>
@@ -518,7 +519,12 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
                   }}>
                     <span style={{ color: 'var(--accent)' }}>{fmtMS(seg.start)}</span>
                     <span style={{ color: 'var(--ink-2)' }}>
-                      <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{seg.speaker.toLowerCase()}: </span>
+                      {/* Diarization hasn't run yet here — every segment is the
+                          placeholder 'Taler N', so don't show a speaker label
+                          before the gennemgang page assigns real speakers. */}
+                      {!isDefaultSpeakerLabel(seg.speaker) && (
+                        <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{seg.speaker.toLowerCase()}: </span>
+                      )}
                       {seg.text}
                       {isLast && (
                         <span

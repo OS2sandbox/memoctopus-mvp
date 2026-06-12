@@ -170,6 +170,10 @@ export function TranscriptReview({
   // soundbite (the inline assign prompt) rather than running to the end.
   const stopAtRef = useRef<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  // The soundbite (start/end) currently playing as a bounded preview, or null.
+  // Lets the matcher render a pause icon on the active soundbite button, so the
+  // same control that starts a preview can also stop it.
+  const [playingBite, setPlayingBite] = useState<{ start: number; end: number } | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(audioDurationSeconds ?? 0);
   const [audioError, setAudioError] = useState<string | null>(null);
@@ -191,8 +195,8 @@ export function TranscriptReview({
       if (isFinite(audio.duration) && audio.duration > 0) setDuration(audio.duration);
     };
     const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
-    const onEnded = () => setIsPlaying(false);
+    const onPause = () => { setIsPlaying(false); setPlayingBite(null); };
+    const onEnded = () => { setIsPlaying(false); setPlayingBite(null); };
     const onError = () => setAudioError('Lydfilen kunne ikke indlæses');
     audio.addEventListener('timeupdate', onTime);
     audio.addEventListener('loadedmetadata', onMeta);
@@ -240,6 +244,7 @@ export function TranscriptReview({
     const audio = audioRef.current;
     if (!audio) return;
     stopAtRef.current = null; // a manual seek isn't a bounded soundbite
+    setPlayingBite(null);
     audio.currentTime = time;
     setCurrentTime(time);
     audio.play().catch(() => setAudioError('Afspilning fejlede'));
@@ -252,13 +257,27 @@ export function TranscriptReview({
     stopAtRef.current = end;
     audio.currentTime = start;
     setCurrentTime(start);
+    setPlayingBite({ start, end });
     audio.play().catch(() => setAudioError('Afspilning fejlede'));
   }, []);
+
+  // Play a soundbite, or pause it if it's the one already playing — so the same
+  // button both starts and stops the preview.
+  const togglePlaySegment = useCallback((start: number, end: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (isPlaying && playingBite && playingBite.start === start && playingBite.end === end) {
+      audio.pause();
+    } else {
+      playSegment(start, end);
+    }
+  }, [isPlaying, playingBite, playSegment]);
 
   function togglePlay() {
     const audio = audioRef.current;
     if (!audio) return;
     stopAtRef.current = null; // manual play/pause clears any soundbite bound
+    setPlayingBite(null);
     if (isPlaying) {
       audio.pause();
     } else {
@@ -337,10 +356,60 @@ export function TranscriptReview({
     setSilent((prev) => new Set(prev).add(name));
   }, []);
 
-  const removeParticipant = useCallback((name: string) => {
-    setEditableParticipants((prev) => prev.filter((p) => p !== name));
-    deleteFromSilent(name);
-  }, [deleteFromSilent]);
+  // Rename a participant in place — works whether they're pending, silent, or
+  // already linked to a voice. If they have a voice, the relabel carries through
+  // to every segment so the transcript stays in sync. A rename onto a name that
+  // already exists (case-insensitively, different person) merges by dropping the
+  // old entry.
+  const renameParticipant = useCallback(
+    async (oldName: string, newName: string) => {
+      const trimmed = newName.trim();
+      if (!trimmed || trimmed === oldName) return;
+      setEditableParticipants((prev) => {
+        const existing = findExistingName(prev, trimmed);
+        if (existing && existing !== oldName) return prev.filter((p) => p !== oldName);
+        return prev.map((p) => (p === oldName ? trimmed : p));
+      });
+      setSilent((prev) => {
+        if (!prev.has(oldName)) return prev;
+        const next = new Set(prev);
+        next.delete(oldName);
+        next.add(trimmed);
+        return next;
+      });
+      if (segments.some((s) => s.speaker === oldName)) {
+        const updated = segments.map((seg) => (seg.speaker === oldName ? { ...seg, speaker: trimmed } : seg));
+        setSegments(updated);
+        try {
+          await saveTranscriptSegments(meetingId, updated);
+        } catch (err) {
+          console.error('[speakers] rename persist failed:', err);
+        }
+      }
+    },
+    [meetingId, segments],
+  );
+
+  // Remove a participant entirely. If a voice was linked to them, return it to the
+  // unmatched pool (a fresh 'Taler N') rather than leaving segments tagged with a
+  // person who's no longer in the roster.
+  const removeParticipant = useCallback(
+    async (name: string) => {
+      if (segments.some((s) => s.speaker === name)) {
+        const fresh = nextAvailableSpeakerLabel(new Set(segments.map((s) => s.speaker)));
+        const updated = segments.map((seg) => (seg.speaker === name ? { ...seg, speaker: fresh } : seg));
+        setSegments(updated);
+        try {
+          await saveTranscriptSegments(meetingId, updated);
+        } catch (err) {
+          console.error('[speakers] remove persist failed:', err);
+        }
+      }
+      setEditableParticipants((prev) => prev.filter((p) => p !== name));
+      deleteFromSilent(name);
+    },
+    [meetingId, segments, deleteFromSilent],
+  );
 
   // A freshly added participant joins the roster as "talte ikke" (silent) until a
   // voice is linked — mirrors the prototype's add-as-noVoice behaviour.
@@ -947,8 +1016,10 @@ export function TranscriptReview({
               onMarkSilent={markSilent}
               onUnlink={unlinkSpeaker}
               onRemove={removeParticipant}
+              onRename={renameParticipant}
               onAdd={addParticipant}
-              onPlaySegment={audioUrl ? playSegment : undefined}
+              onPlaySegment={audioUrl ? togglePlaySegment : undefined}
+              playingSegment={playingBite}
             />
           </div>
 

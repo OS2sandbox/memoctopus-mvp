@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SpeakerAssignment, type ParticipantRow, type VoiceBite } from './SpeakerAssignment';
 
@@ -15,6 +15,7 @@ function setup(overrides: Partial<React.ComponentProps<typeof SpeakerAssignment>
     onMarkSilent: vi.fn(),
     onUnlink: vi.fn(),
     onRemove: vi.fn(),
+    onRename: vi.fn(),
     onAdd: vi.fn(),
     onPlaySegment: vi.fn(),
   };
@@ -77,12 +78,28 @@ describe('SpeakerAssignment panel', () => {
     expect(onLink).not.toHaveBeenCalled();
   });
 
-  it('unlinks a recognized person via ×', async () => {
+  it('frakobler (unlinks) a recognized person, keeping them in the roster', async () => {
     const user = userEvent.setup();
     const { onUnlink } = setup();
     const row = screen.getByText('Mette').closest('.sa-row') as HTMLElement;
-    await user.click(within(row).getByTitle('Fjern stemme'));
+    await user.click(within(row).getByText('frakobl'));
     expect(onUnlink).toHaveBeenCalledWith('Mette');
+  });
+
+  it('removes a recognized person via ×', async () => {
+    const user = userEvent.setup();
+    const { onRemove } = setup();
+    const row = screen.getByText('Mette').closest('.sa-row') as HTMLElement;
+    await user.click(within(row).getByTitle('Fjern deltager'));
+    expect(onRemove).toHaveBeenCalledWith('Mette');
+  });
+
+  it('removes a pending person via ×', async () => {
+    const user = userEvent.setup();
+    const { onRemove } = setup();
+    const row = screen.getByText('Lars').closest('.sa-row') as HTMLElement;
+    await user.click(within(row).getByTitle('Fjern deltager'));
+    expect(onRemove).toHaveBeenCalledWith('Lars');
   });
 
   it('removes a silent person via ×', async () => {
@@ -93,11 +110,35 @@ describe('SpeakerAssignment panel', () => {
     expect(onRemove).toHaveBeenCalledWith('Pia');
   });
 
+  it('renames a participant on blur', () => {
+    const { onRename } = setup();
+    const name = screen.getByText('Lars');
+    name.textContent = 'Lars Hansen';
+    fireEvent.blur(name);
+    expect(onRename).toHaveBeenCalledWith('Lars', 'Lars Hansen');
+  });
+
+  it('does not rename when the name is unchanged or blanked', () => {
+    const { onRename } = setup();
+    const name = screen.getByText('Lars');
+    fireEvent.blur(name);
+    name.textContent = '   ';
+    fireEvent.blur(name);
+    expect(onRename).not.toHaveBeenCalled();
+  });
+
   it('plays a recognized person\'s soundbite', async () => {
     const user = userEvent.setup();
     const { onPlaySegment } = setup();
     await user.click(screen.getByTitle('Afspil Mettes stemme'));
     expect(onPlaySegment).toHaveBeenCalledWith(10, 22);
+  });
+
+  it('shows a pause control on the soundbite currently playing', () => {
+    setup({ playingSegment: { start: 10, end: 22 } });
+    const row = screen.getByText('Mette').closest('.sa-row') as HTMLElement;
+    expect(within(row).getByTitle('Pause')).toBeInTheDocument();
+    expect(within(row).queryByTitle('Afspil Mettes stemme')).not.toBeInTheDocument();
   });
 
   it('hides leftover voices while any participant is still pending', () => {

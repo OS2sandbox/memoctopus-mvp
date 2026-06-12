@@ -36,13 +36,43 @@ interface SpeakerAssignmentProps {
   onMarkSilent: (name: string) => void;
   onUnlink: (name: string) => void;
   onRemove: (name: string) => void;
+  onRename: (oldName: string, newName: string) => void;
   onAdd: (name: string) => void;
   onPlaySegment?: (start: number, end: number) => void;
+  // The soundbite currently playing, so its button shows a pause icon instead.
+  playingSegment?: { start: number; end: number } | null;
 }
 
-// Triangle glyph; its colour comes from the parent (.sa-play vs .sa-play2).
-function PlayTri() {
-  return <span className="tri" />;
+// Play triangle, or pause bars when this soundbite is the one currently playing.
+// The colour comes from the parent (.sa-play vs .sa-play2).
+function BiteIcon({ playing }: { playing: boolean }) {
+  return playing ? <span className="bars"><i /><i /></span> : <span className="tri" />;
+}
+
+// A participant name that becomes editable on click (rename in place), mirroring
+// the chapter-title editing pattern. Commits on blur/Enter; Escape reverts.
+function EditableName({ name, onRename }: { name: string; onRename: (oldName: string, newName: string) => void }) {
+  return (
+    <span
+      className="sa-name sa-name-edit"
+      contentEditable
+      suppressContentEditableWarning
+      spellCheck={false}
+      title="Klik for at omdøbe"
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
+        else if (e.key === 'Escape') { e.currentTarget.textContent = name; e.currentTarget.blur(); }
+      }}
+      onBlur={(e) => {
+        const t = e.currentTarget.textContent?.trim() ?? '';
+        if (t && t !== name) onRename(name, t);
+        else e.currentTarget.textContent = name;
+      }}
+    >
+      {name}
+    </span>
+  );
 }
 
 // The participant-first speaker matcher: one row per person, each pending person
@@ -61,8 +91,10 @@ export function SpeakerAssignment({
   onMarkSilent,
   onUnlink,
   onRemove,
+  onRename,
   onAdd,
   onPlaySegment,
+  playingSegment,
 }: SpeakerAssignmentProps) {
   // Only one dropdown / naming box open at a time.
   const [openName, setOpenName] = useState<string | null>(null);
@@ -73,6 +105,10 @@ export function SpeakerAssignment({
 
   const pct = totalVoices > 0 ? (recognizedCount / totalVoices) * 100 : 0;
   const hasPending = rows.some((r) => r.kind === 'pending');
+
+  // Is this exact soundbite the one currently playing? (Drives the pause icon.)
+  const bitePlaying = (start?: number, end?: number) =>
+    playingSegment != null && start === playingSegment.start && end === playingSegment.end;
 
   function play(e: React.MouseEvent, start?: number, end?: number) {
     e.stopPropagation();
@@ -116,7 +152,7 @@ export function SpeakerAssignment({
             {rows.map((row) => (
               <div className="sa-row unnamed" key={row.name}>
                 <span className="sa-dot" />
-                <span className="sa-name">{row.name}</span>
+                <EditableName name={row.name} onRename={onRename} />
                 <button type="button" className="sa-x" title="Fjern deltager" onClick={() => onRemove(row.name)}>×</button>
               </div>
             ))}
@@ -144,11 +180,11 @@ export function SpeakerAssignment({
               <span
                 className="sa-play2"
                 role="button"
-                aria-label={`Afspil ${v.speaker}`}
-                title="Afspil"
+                aria-label={bitePlaying(v.start, v.end) ? `Pause ${v.speaker}` : `Afspil ${v.speaker}`}
+                title={bitePlaying(v.start, v.end) ? 'Pause' : 'Afspil'}
                 onClick={(e) => play(e, v.start, v.end)}
               >
-                <PlayTri />
+                <BiteIcon playing={bitePlaying(v.start, v.end)} />
               </span>
               <span>{v.speaker}</span>
               <span className="pick">vælg</span>
@@ -172,25 +208,32 @@ export function SpeakerAssignment({
     const open = openName === row.name;
 
     if (row.kind === 'recognized') {
+      const playing = bitePlaying(row.start, row.end);
       return (
-        <div key={row.name} className="sa-row named" title={`${row.name} · stemme genkendt`}>
+        <div key={row.name} className="sa-row named">
           <span className="sa-dot" />
-          <span className="sa-name">{row.name}</span>
+          <EditableName name={row.name} onRename={onRename} />
           {onPlaySegment && row.start !== undefined && (
             <button
               type="button"
               className="sa-play"
-              title={`Afspil ${row.name}s stemme`}
+              title={playing ? 'Pause' : `Afspil ${row.name}s stemme`}
               onClick={(e) => play(e, row.start, row.end)}
             >
-              <PlayTri />
+              <BiteIcon playing={playing} />
             </button>
           )}
           <button
             type="button"
-            className="sa-x"
-            title="Fjern stemme"
+            className="sa-trigger sa-hover"
+            title="Frakobl stemmen (behold deltager)"
             onClick={() => onUnlink(row.name)}
+          >frakobl</button>
+          <button
+            type="button"
+            className="sa-x"
+            title="Fjern deltager"
+            onClick={() => onRemove(row.name)}
           >×</button>
         </div>
       );
@@ -201,7 +244,7 @@ export function SpeakerAssignment({
         <React.Fragment key={row.name}>
           <div className="sa-row unnamed">
             <span className="sa-dot" />
-            <span className="sa-name">{row.name}</span>
+            <EditableName name={row.name} onRename={onRename} />
             <span className="sa-tag">talte ikke</span>
             <button
               type="button"
@@ -225,12 +268,18 @@ export function SpeakerAssignment({
       <React.Fragment key={row.name}>
         <div className="sa-row pending unnamed">
           <span className="sa-dot" />
-          <span className="sa-name">{row.name}</span>
+          <EditableName name={row.name} onRename={onRename} />
           <button
             type="button"
             className="sa-trigger primary"
             onClick={() => setOpenName(open ? null : row.name)}
           >tildel stemme {open ? '▴' : '▾'}</button>
+          <button
+            type="button"
+            className="sa-x"
+            title="Fjern deltager"
+            onClick={() => onRemove(row.name)}
+          >×</button>
         </div>
         {open && voiceDropdown(row.name, false)}
       </React.Fragment>
@@ -272,8 +321,8 @@ export function SpeakerAssignment({
                 <div className="sa-row unnamed">
                   <span className="sa-dot" />
                   {onPlaySegment && (
-                    <button type="button" className="sa-play" title="Afspil" onClick={(e) => play(e, v.start, v.end)}>
-                      <PlayTri />
+                    <button type="button" className="sa-play" title={bitePlaying(v.start, v.end) ? 'Pause' : 'Afspil'} onClick={(e) => play(e, v.start, v.end)}>
+                      <BiteIcon playing={bitePlaying(v.start, v.end)} />
                     </button>
                   )}
                   <span className="sa-name">{v.speaker}</span>
