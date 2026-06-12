@@ -1270,17 +1270,13 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
             ) : (
               <>
                 {liveSegments.map((seg) => {
-                  const showSpeaker = seg.speaker !== '—';
                   return (
                     <div key={seg.start} style={{
-                      display: 'grid', gridTemplateColumns: isMobile ? '44px 64px 1fr 14px' : '60px 90px 1fr 20px',
+                      display: 'grid', gridTemplateColumns: isMobile ? '44px 1fr 14px' : '60px 1fr 20px',
                       gap: 12, padding: '5px 18px',
                       fontFamily: 'var(--mono)', fontSize: 12.5, lineHeight: 1.65,
                     }}>
                       <span style={{ color: 'var(--accent)', animation: 'wordFadeIn 0.25s ease-out both' }}>{fmtSec(seg.start)}</span>
-                      <span style={{ color: 'var(--ink)', fontWeight: 500, animation: 'wordFadeIn 0.25s ease-out both', animationDelay: '30ms' }}>
-                        {showSpeaker ? `${seg.speaker.toLowerCase()}:` : '·'}
-                      </span>
                       <span style={{ color: 'var(--ink-2)' }}>
                         {seg.text.split(' ').map((word, wi) => {
                           const rawDelay = wi * seg.waveIntervalMs - seg.waveElapsedAtCommitMs;
@@ -1302,13 +1298,12 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
                 {/* Interim row: realtime partial text, finalized into a committed segment */}
                 {interimText && recordingState === 'recording' && (
                   <div style={{
-                    display: 'grid', gridTemplateColumns: isMobile ? '44px 64px 1fr 14px' : '60px 90px 1fr 20px',
+                    display: 'grid', gridTemplateColumns: isMobile ? '44px 1fr 14px' : '60px 1fr 20px',
                     gap: 12, padding: '5px 18px',
                     opacity: 0.75,
                     fontFamily: 'var(--mono)', fontSize: 12.5, lineHeight: 1.65,
                   }}>
                     <span style={{ color: 'var(--accent)' }}>{fmtSec(utteranceStartRef.current ?? elapsed)}</span>
-                    <span style={{ color: 'var(--ink)', fontWeight: 500 }}>·</span>
                     <span style={{ color: 'var(--ink-2)', fontStyle: 'italic' }}>
                       {interimText === '…' ? interimText : interimText.split(/\s+/).filter(Boolean).map((word, wi) => {
                         const waveElapsed = waveStartMsRef.current !== null ? Date.now() - waveStartMsRef.current : 0;
