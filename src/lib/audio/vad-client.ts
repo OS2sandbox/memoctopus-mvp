@@ -80,8 +80,11 @@ export async function decodeAndResampleTo16k(arrayBuffer: ArrayBuffer): Promise<
   const CHUNK_S = 60;
   const chunkInputFrames = Math.round(fromRate * CHUNK_S);
   const totalInputFrames = decoded.length;
-  const outputChunks: Float32Array[] = [];
 
+  // Render all 60 s chunks concurrently — they are independent OfflineAudioContexts
+  // (the chunking itself must stay: single contexts truncate around ~10M frames).
+  // Results land at a fixed index so concatenation order is preserved.
+  const renders: Promise<Float32Array>[] = [];
   for (let offset = 0; offset < totalInputFrames; offset += chunkInputFrames) {
     const end = Math.min(offset + chunkInputFrames, totalInputFrames);
     const chunkLength = end - offset;
@@ -106,9 +109,9 @@ export async function decodeAndResampleTo16k(arrayBuffer: ArrayBuffer): Promise<
     src.buffer = srcBuf;
     src.connect(offCtx.destination);
     src.start();
-    const out = await offCtx.startRendering();
-    outputChunks.push(out.getChannelData(0).slice());
+    renders.push(offCtx.startRendering().then((out) => out.getChannelData(0).slice()));
   }
+  const outputChunks = await Promise.all(renders);
 
   const totalLength = outputChunks.reduce((s, c) => s + c.length, 0);
   const result = new Float32Array(totalLength);

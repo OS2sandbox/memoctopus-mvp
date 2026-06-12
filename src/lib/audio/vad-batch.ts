@@ -1,4 +1,5 @@
 import type { TranscriptSegment } from '@/types';
+import { DEFAULT_SPEAKER_LABEL } from './speaker-labels';
 
 // 27 s: hviske processes up to ~30 s windows reliably; leaves headroom for VAD pre/post-roll padding.
 export const BATCH_DURATION_S = 27;
@@ -43,11 +44,13 @@ export function float32ToWavBlob(samples: Float32Array, startSample = 0, endSamp
   v.setUint32(24, 16_000, true); v.setUint32(28, 32_000, true);
   v.setUint16(32, 2, true); v.setUint16(34, 16, true);
   ws(36, 'data'); v.setUint32(40, dataBytes, true);
-  let off = 44;
+  // Bulk-fill through an Int16Array view (the 44-byte header is 2-byte aligned).
+  // A per-sample DataView loop costs seconds of main-thread time on a full-meeting
+  // WAV (~96M samples for 100 min); this is the same little-endian layout.
+  const out = new Int16Array(buf, 44, numSamples);
   for (let i = 0; i < numSamples; i++) {
     const s = Math.max(-1, Math.min(1, src[i]));
-    v.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-    off += 2;
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
   }
   return new Blob([buf], { type: 'audio/wav' });
 }
@@ -100,7 +103,7 @@ export function splitTextWithIntervals(
     const wavStart = elapsed;
     elapsed += segDur;
     return {
-      speaker: 'Taler 1',
+      speaker: DEFAULT_SPEAKER_LABEL,
       start: mapWavTime(wavStart, intervals),
       end: mapWavTime(elapsed, intervals),
       text: sentence,

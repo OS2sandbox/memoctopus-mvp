@@ -1,34 +1,11 @@
-import { redirect } from 'next/navigation';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
-import { queryUserSchema } from '@/lib/db/user-schema';
+'use client';
+
+import React from 'react';
 import { Badge } from '@/components/ui/badge';
-import { Template, TemplateStructure } from '@/types';
+import { getTemplates } from '@/lib/storage';
 
-export const dynamic = 'force-dynamic';
-
-export default async function TemplatesPage() {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) redirect('/');
-
-  const rows = await queryUserSchema<{
-    id: string;
-    name: string;
-    description: string;
-    structure: unknown;
-    is_default: boolean;
-  }>(
-    session.user.id,
-    'SELECT id, name, description, structure, is_default FROM templates ORDER BY is_default DESC, name ASC',
-  );
-
-  const templates: Template[] = rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    description: r.description,
-    structure: r.structure as TemplateStructure,
-    isDefault: r.is_default,
-  }));
+export default function TemplatesPage() {
+  const templates = getTemplates();
 
   return (
     <div className="mx-auto max-w-[960px] px-4 py-8">

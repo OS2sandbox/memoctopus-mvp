@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { createMeeting } from '@/lib/storage';
 import { takePendingUploadFile } from '@/lib/pending-upload';
 import { UploadConfirmScreen } from './upload-confirm.client';
 
@@ -63,18 +64,15 @@ export default function NewMeetingPage() {
             .filter(Boolean)
         : [];
 
-      const res = await fetch('/api/meetings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: data.title, participants }),
+      // The upload path is handled by UploadConfirmScreen (rendered when a file is
+      // chosen). This submit handler only covers the "record now" path.
+      const meeting = await createMeeting({
+        title: data.title,
+        participants: participants.length > 0 ? participants : undefined,
+        source: 'local',
+        status: 'recording',
       });
-      if (!res.ok) {
-        const d = await res.json();
-        throw new Error(d.error ?? 'Kunne ikke oprette møde');
-      }
-      const { id } = await res.json();
-
-      router.push(`/meeting/${id}`);
+      router.push(`/meeting/${meeting.id}?autostart=1`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Noget gik galt');
       setIsSubmitting(false);
@@ -179,7 +177,7 @@ export default function NewMeetingPage() {
             disabled={isSubmitting || uploadMode === 'upload'}
           >
             {isSubmitting
-              ? 'Opretter...'
+              ? uploadMode === 'upload' ? 'Behandler…' : 'Opretter...'
               : uploadMode === 'record'
               ? 'Start optagelse'
               : 'Upload og transskribér'}

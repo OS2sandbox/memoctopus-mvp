@@ -1,53 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
-vi.mock('next/headers', () => ({
-  headers: vi.fn().mockResolvedValue(new Headers()),
-}));
+// The transcribe route is stateless: it transcribes the uploaded audio, runs PII
+// detection + chapter grouping, and returns the result. Persistence happens
+// client-side in IndexedDB, so there is no auth / DB / background-job behaviour here.
 
-vi.mock('@/lib/auth', () => ({
-  auth: { api: { getSession: vi.fn() } },
-}));
-
-vi.mock('@/lib/db/user-schema', () => ({
-  queryUserSchemaOne: vi.fn(),
-}));
-
+const mockTranscribe = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/ai/transcription', () => ({
-  getTranscriptionProvider: vi.fn(() => ({
-    transcribe: vi.fn().mockResolvedValue([
-      { speaker: 'Taler 1', start: 0, end: 5, text: 'Hej verden.' },
-    ]),
-  })),
+  getTranscriptionProvider: () => ({ transcribe: mockTranscribe }),
 }));
 
+const mockDetectPii = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/ai/pii', () => ({
-  detectPiiInSegments: vi.fn().mockResolvedValue({ replacements: [] }),
+  detectPiiInSegments: mockDetectPii,
 }));
 
-vi.mock('@/lib/audio/storage', () => ({
-  saveAudioFile: vi.fn().mockResolvedValue({ filename: 'test.webm', sizeBytes: 100 }),
+const mockGroupChapters = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/ai/chapters', () => ({
+  groupIntoChapters: mockGroupChapters,
 }));
-
-// Execute the after() callback synchronously in tests so we can assert on its effects.
-const afterCallbacks: Array<() => Promise<void>> = [];
-vi.mock('next/server', async (importOriginal) => {
-  const mod = await importOriginal<typeof import('next/server')>();
-  return {
-    ...mod,
-    after: vi.fn((cb: () => Promise<void>) => { afterCallbacks.push(cb); }),
-  };
-});
 
 import { POST } from './route';
-import { after } from 'next/server';
-import { auth } from '@/lib/auth';
-import { queryUserSchemaOne } from '@/lib/db/user-schema';
-import { FAKE_SESSION } from '@/test/helpers';
 
-const mockGetSession = vi.mocked(auth.api.getSession);
-const mockQueryOne = vi.mocked(queryUserSchemaOne);
-const mockAfter = vi.mocked(after);
+const SEGMENTS = [{ speaker: 'Taler 1', start: 0, end: 5, text: 'Hej verden.' }];
+const CHAPTERS = [{ id: 'c1', title: 'Intro', summary: '', startTime: 0, endTime: 5, segmentIndices: [0] }];
 
 function makeFormRequest(meetingId: string | null, includeFile = true): NextRequest {
   const form = new FormData();
@@ -63,110 +39,63 @@ function makeFormRequest(meetingId: string | null, includeFile = true): NextRequ
 
 describe('POST /api/transcribe', () => {
   beforeEach(() => {
-    mockGetSession.mockReset();
-    mockQueryOne.mockReset();
-    mockAfter.mockReset();
-    afterCallbacks.length = 0;
-  });
-
-  it('returns 401 when not authenticated', async () => {
-    mockGetSession.mockResolvedValueOnce(null);
-    const res = await POST(makeFormRequest('meet-1'));
-    expect(res.status).toBe(401);
+    mockTranscribe.mockReset();
+    mockTranscribe.mockResolvedValue(SEGMENTS);
+    mockDetectPii.mockReset();
+    mockDetectPii.mockResolvedValue({ replacements: [] });
+    mockGroupChapters.mockReset();
+    mockGroupChapters.mockResolvedValue(CHAPTERS);
   });
 
   it('returns 400 when audio file is missing', async () => {
-    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     const res = await POST(makeFormRequest('meet-1', false));
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/missing/i);
   });
 
   it('returns 400 when meetingId is missing', async () => {
-    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     const res = await POST(makeFormRequest(null));
     expect(res.status).toBe(400);
   });
 
-  it('returns 404 when meeting does not belong to user', async () => {
-    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryOne.mockResolvedValueOnce(null as never);
-
+  it('transcribes and returns segments, pii, rawText and chapters', async () => {
     const res = await POST(makeFormRequest('meet-1'));
-    expect(res.status).toBe(404);
-    expect((await res.json()).error).toMatch(/not found/i);
-  });
-
-  it('returns 200 ok immediately (transcription runs in background)', async () => {
-    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never); // meeting lookup
-    mockQueryOne.mockResolvedValue({} as never); // all subsequent DB calls
-
-    const res = await POST(makeFormRequest('meet-1'));
-
     expect(res.status).toBe(200);
-    expect((await res.json()).ok).toBe(true);
+
+    const data = await res.json();
+    expect(mockTranscribe).toHaveBeenCalledOnce();
+    expect(data.segments).toEqual(SEGMENTS);
+    expect(data.chapters).toEqual(CHAPTERS);
+    expect(data.rawText).toBe('Hej verden.');
+    expect(data.piiReplacements).toEqual([]);
   });
 
-  it('sets meeting status to processing before returning', async () => {
-    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never);
-    mockQueryOne.mockResolvedValue({} as never);
-
+  it('passes the recording duration through to the provider', async () => {
     await POST(makeFormRequest('meet-1'));
-
-    const processingCall = mockQueryOne.mock.calls.find(
-      ([, sql]) => typeof sql === 'string' && sql.includes("'processing'"),
-    );
-    expect(processingCall).toBeDefined();
+    expect(mockTranscribe).toHaveBeenCalledWith(expect.anything(), 'audio/webm', 30);
   });
 
-  it('queues a background job via after()', async () => {
-    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never);
-    mockQueryOne.mockResolvedValue({} as never);
-
-    await POST(makeFormRequest('meet-1'));
-
-    expect(mockAfter).toHaveBeenCalledOnce();
+  it('returns 500 when transcription fails', async () => {
+    mockTranscribe.mockRejectedValueOnce(new Error('boom'));
+    const res = await POST(makeFormRequest('meet-1'));
+    expect(res.status).toBe(500);
   });
 
-  it('background job: sets meeting to review after successful transcription', async () => {
-    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never);
-    // save audio + set processing
-    mockQueryOne.mockResolvedValue({} as never);
-
-    await POST(makeFormRequest('meet-1'));
-
-    // Run the queued background callback
-    for (const cb of afterCallbacks) await cb();
-
-    const reviewCall = mockQueryOne.mock.calls.find(
-      ([, sql]) => typeof sql === 'string' && sql.includes("'review'"),
-    );
-    expect(reviewCall).toBeDefined();
+  it('still returns segments when PII detection fails (non-fatal)', async () => {
+    mockDetectPii.mockRejectedValueOnce(new Error('pii down'));
+    const res = await POST(makeFormRequest('meet-1'));
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.segments).toEqual(SEGMENTS);
+    expect(data.piiReplacements).toEqual([]);
   });
 
-  it('background job: sets meeting status to failed on transcription error', async () => {
-    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockQueryOne.mockResolvedValueOnce({ id: 'meet-1', status: 'recording' } as never);
-    mockQueryOne.mockResolvedValue({} as never);
-
-    const { getTranscriptionProvider } = await import('@/lib/ai/transcription');
-    vi.mocked(getTranscriptionProvider).mockReturnValueOnce({
-      transcribe: vi.fn().mockRejectedValueOnce(new Error('Transcription failed')),
-    });
-
-    await POST(makeFormRequest('meet-1'));
-    for (const cb of afterCallbacks) await cb();
-
-    const resetCall = mockQueryOne.mock.calls.find(
-      ([, sql, params]) =>
-        typeof sql === 'string' &&
-        sql.includes('UPDATE meetings SET status') &&
-        Array.isArray(params) && params[0] === 'failed',
-    );
-    expect(resetCall).toBeDefined();
+  it('still returns segments when chapter grouping fails (non-fatal)', async () => {
+    mockGroupChapters.mockRejectedValueOnce(new Error('chapters down'));
+    const res = await POST(makeFormRequest('meet-1'));
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.segments).toEqual(SEGMENTS);
+    expect(data.chapters).toEqual([]);
   });
 });

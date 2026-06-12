@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { DangerSection } from '@/components/compliance/DangerSection';
+import { getAllMeetings, deleteAudio, updateMeeting, getTranscript, saveTranscript } from '@/lib/storage';
 
 interface UsageData {
   meetingCount: number;
@@ -18,26 +18,54 @@ function formatBytes(bytes: number): string {
 }
 
 export default function SettingsDataPage() {
-  const router = useRouter();
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/account/usage')
-      .then((r) => r.json())
-      .then(setUsage)
+    getAllMeetings()
+      .then((meetings) => {
+        const audioBytes = meetings.reduce((sum, m) => sum + (m.audioDeleted ? 0 : (m.audioSizeBytes ?? 0)), 0);
+        const oldest = meetings.length > 0 ? meetings[meetings.length - 1].createdAt : null;
+        setUsage({ meetingCount: meetings.length, audioBytes, oldestMeeting: oldest });
+      })
       .catch(() => setUsage(null))
       .finally(() => setLoading(false));
   }, []);
 
   async function deleteAllAudio() {
-    await fetch('/api/account/audio', { method: 'DELETE' });
-    router.refresh();
+    const meetings = await getAllMeetings();
+    await Promise.all(
+      meetings
+        .filter((m) => !m.audioDeleted)
+        .map(async (m) => {
+          await deleteAudio(m.id);
+          await updateMeeting(m.id, { audioDeleted: true });
+        }),
+    );
+    setUsage((u) => u ? { ...u, audioBytes: 0 } : u);
   }
 
   async function deleteAllSensitive() {
-    await fetch('/api/account/sensitive', { method: 'DELETE' });
-    router.refresh();
+    const meetings = await getAllMeetings();
+    await Promise.all(
+      meetings
+        .filter((m) => m.status !== 'redacted')
+        .map(async (m) => {
+          const transcript = await getTranscript(m.id);
+          if (transcript) {
+            await saveTranscript(m.id, {
+              rawText: '',
+              segments: [],
+              chapters: transcript.chapters,
+              piiReplacements: [],
+              piiRemovedAt: new Date().toISOString(),
+            });
+          }
+          await deleteAudio(m.id);
+          await updateMeeting(m.id, { status: 'redacted', audioDeleted: true });
+        }),
+    );
+    setUsage((u) => u ? { ...u, audioBytes: 0 } : u);
   }
 
   return (
@@ -63,14 +91,8 @@ export default function SettingsDataPage() {
           <p className="text-[var(--muted)]" style={{ fontSize: 'var(--t-small)' }}>Indlæser…</p>
         ) : usage ? (
           <div className="flex flex-wrap gap-x-12 gap-y-6">
-            <Stat
-              label="Møder i alt"
-              value={usage.meetingCount.toString()}
-            />
-            <Stat
-              label="Lyd i alt"
-              value={formatBytes(usage.audioBytes)}
-            />
+            <Stat label="Møder i alt" value={usage.meetingCount.toString()} />
+            <Stat label="Lyd i alt" value={formatBytes(usage.audioBytes)} />
             {usage.oldestMeeting && (
               <Stat
                 label="Ældste møde"

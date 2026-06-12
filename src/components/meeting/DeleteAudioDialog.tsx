@@ -3,23 +3,26 @@
 import React, { useState } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { deleteAudio, updateMeeting } from '@/lib/storage';
 
 interface DeleteAudioDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   meetingId: string;
   title: string;
+  description?: string;
   confirmLabel: string;
   onDeleted: () => void;
 }
 
-export function DeleteAudioDialog({ open, onOpenChange, meetingId, title, confirmLabel, onDeleted }: DeleteAudioDialogProps) {
+export function DeleteAudioDialog({ open, onOpenChange, meetingId, title, description, confirmLabel, onDeleted }: DeleteAudioDialogProps) {
   const [deleting, setDeleting] = useState(false);
 
   async function handleConfirm() {
     setDeleting(true);
     try {
-      await fetch(`/api/meetings/${meetingId}/audio`, { method: 'DELETE' });
+      await deleteAudio(meetingId);
+      await updateMeeting(meetingId, { audioDeleted: true });
       onDeleted();
     } finally {
       setDeleting(false);
@@ -35,7 +38,7 @@ export function DeleteAudioDialog({ open, onOpenChange, meetingId, title, confir
           <DialogDescription className="sr-only">Bekræft sletning af lydfil</DialogDescription>
         </DialogHeader>
         <p style={{ fontSize: 14, color: 'var(--ink-2)', lineHeight: 1.6 }}>
-          Lydfilen slettes, og mødet nulstilles til optagelse.
+          {description ?? 'Lydfilen slettes, og mødet nulstilles til optagelse.'}
         </p>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={deleting}>

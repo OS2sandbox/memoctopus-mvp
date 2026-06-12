@@ -3,10 +3,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useIsMobile } from '@/lib/use-is-mobile';
+import { saveAudio, updateMeeting, deleteMeeting } from '@/lib/storage';
 
 interface MeetingBotScreenProps {
   meetingId: string;
   meetingUrl: string;
+  botSession?: string | null;
 }
 
 type BotStatus = 'forbinder' | 'optager' | 'pause' | 'processing' | 'error' | 'cancelled';
@@ -21,7 +23,7 @@ function fmtTime(s: number): string {
   return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
-export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProps) {
+export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingBotScreenProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const isMobile = useIsMobile();
@@ -39,6 +41,9 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
   const participantsRef = useRef<string>('[]');
   const consecutiveFailsRef = useRef(0);
   const nextPollAtRef = useRef(0);
+  const sessionIdRef = useRef<string | null>(botSession ?? null);
+  const finishingRef = useRef(false);
+  const stoppingRef = useRef(false);
   statusRef.current = status;
 
   const stopTimer = useCallback(() => {
@@ -56,10 +61,66 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   }, []);
 
+  // Bot finished — pull the recorded audio down into IndexedDB, then hand off to the
+  // standard client-side transcription pipeline on the review screen (ProcessingTranscription).
+  const finishFromBot = useCallback(async () => {
+    if (finishingRef.current) return;
+    finishingRef.current = true;
+    stopPolling();
+    stopTimer();
+    setStatus('processing');
+
+    // 404 polls are cheap (one stat of a local file), so poll fast — every 500 ms of
+    // quantization here is dead time between "bot uploaded" and "processing starts".
+    const deadline = Date.now() + 2 * 60_000;
+    while (Date.now() < deadline) {
+      let res: Response;
+      try {
+        res = await fetch(`/api/bot/audio/${meetingId}`);
+      } catch {
+        await new Promise((r) => setTimeout(r, 500));
+        continue;
+      }
+      if (res.status === 404) {
+        await new Promise((r) => setTimeout(r, 500));
+        continue;
+      }
+      const ctype = res.headers.get('content-type') ?? '';
+      if (ctype.includes('application/json')) {
+        // No usable recording — discard the empty meeting and show a cancelled state.
+        await deleteMeeting(meetingId).catch(() => {});
+        setStatus('cancelled');
+        return;
+      }
+      // Audio body — save into IndexedDB and continue on the review screen.
+      const blob = await res.blob();
+      const mimeType = ctype || 'audio/webm';
+      const partsHeader = res.headers.get('X-Participants');
+      const durHeader = res.headers.get('X-Duration');
+      let parts: string[] = [];
+      if (partsHeader) { try { parts = JSON.parse(decodeURIComponent(partsHeader)); } catch { /* ignore */ } }
+      const duration = durHeader ? parseInt(durHeader, 10) : NaN;
+
+      await saveAudio(meetingId, blob, mimeType);
+      await updateMeeting(meetingId, {
+        status: 'processing',
+        botSession: null,
+        audioSizeBytes: blob.size,
+        audioDurationSeconds: Number.isFinite(duration) ? duration : null,
+        ...(parts.length > 0 ? { participants: parts } : {}),
+      });
+      router.push(`/meeting/${meetingId}/review`);
+      return;
+    }
+    setStatus('error');
+    setErrorMessage('Optagelsen kunne ikke hentes fra bot-tjenesten.');
+  }, [meetingId, router, stopPolling, stopTimer]);
+
   const pollStatus = useCallback(async () => {
+    if (finishingRef.current || !sessionIdRef.current) return;
     if (Date.now() < nextPollAtRef.current) return;
     try {
-      const res = await fetch(`/api/bot/status/${meetingId}`);
+      const res = await fetch(`/api/bot/status/${meetingId}?sessionId=${encodeURIComponent(sessionIdRef.current)}`);
       if (!res.ok) {
         consecutiveFailsRef.current++;
         nextPollAtRef.current = Date.now() + pollBackoffMs(consecutiveFailsRef.current);
@@ -70,24 +131,20 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
       const data = await res.json();
       const newStatus: BotStatus = data.status as BotStatus;
 
-      // Terminal states — handle first before any status update
-      if (data.meetingStatus === 'cancelled') {
-        stopPolling();
-        stopTimer();
-        setStatus('cancelled');
+      // Bot finished recording — pull the audio down and move to processing.
+      if (data.botStatus === 'ended' || newStatus === 'processing') {
+        void finishFromBot();
         return;
       }
-      if (['processing', 'review', 'minutes', 'done', 'redacted'].includes(data.meetingStatus ?? '')) {
-        stopPolling();
-        stopTimer();
-        router.push(`/meeting/${meetingId}/review`);
-        return;
-      }
+
+      // After the user pressed Stop, ignore intermediate states until 'ended'.
+      if (stoppingRef.current) return;
 
       const newParticipantsJson = JSON.stringify(data.participants ?? []);
       if (newParticipantsJson !== participantsRef.current) {
         participantsRef.current = newParticipantsJson;
         setParticipants(data.participants ?? []);
+        updateMeeting(meetingId, { participants: data.participants ?? [] }).catch(() => {});
       }
 
       // Sync timer start reference from server on every recording poll so the
@@ -104,8 +161,6 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
           startTimer();
         } else if (newStatus === 'pause') {
           stopTimer();
-        } else if (newStatus === 'processing') {
-          stopTimer();
         }
         setStatus(newStatus);
       }
@@ -113,32 +168,39 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
       consecutiveFailsRef.current++;
       nextPollAtRef.current = Date.now() + pollBackoffMs(consecutiveFailsRef.current);
     }
-  }, [meetingId, startTimer, stopTimer, stopPolling, router]);
+  }, [meetingId, startTimer, stopTimer, finishFromBot]);
 
   // Start bot session on mount (only when ?join=1).
   // AbortController ensures only one request survives in React Strict Mode's
   // double-mount cycle — the cleanup cancels the first, the second completes.
   useEffect(() => {
     const shouldJoin = searchParams.get('join') === '1';
-    if (!shouldJoin) return;
+    // Skip if we shouldn't join, or a session already exists (page reload / Strict Mode).
+    if (!shouldJoin || sessionIdRef.current) return;
 
     const controller = new AbortController();
     fetch('/api/bot/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ meetingId }),
+      body: JSON.stringify({ meetingId, meetingUrl }),
       signal: controller.signal,
     }).then(async (res) => {
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string };
         setStatus('error');
         setErrorMessage(body.error ?? 'Kunne ikke starte bot-session');
+        return;
+      }
+      const { sessionId } = await res.json() as { sessionId?: string };
+      if (sessionId) {
+        sessionIdRef.current = sessionId;
+        updateMeeting(meetingId, { botSession: sessionId }).catch(() => {});
       }
     }).catch((err: unknown) => {
       if (err instanceof Error && err.name !== 'AbortError') setStatus('error');
     });
     return () => controller.abort();
-  }, [meetingId, searchParams]);
+  }, [meetingId, meetingUrl, searchParams]);
 
   // Begin polling as soon as the component mounts
   useEffect(() => {
@@ -154,7 +216,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
     return fetch(`/api/bot/control/${meetingId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ action, sessionId: sessionIdRef.current }),
     });
   }
 
@@ -178,10 +240,12 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
   async function handleStop() {
     if (controlLoading) return;
     setControlLoading(true);
+    stoppingRef.current = true;
     try {
       await sendControl('stop');
       stopTimer();
       setStatus('processing');
+      // The next status poll will see 'ended' and pull the recording down.
     } finally {
       setControlLoading(false);
     }
@@ -190,9 +254,11 @@ export function MeetingBotScreen({ meetingId, meetingUrl }: MeetingBotScreenProp
   async function handleAbort() {
     if (controlLoading) return;
     setControlLoading(true);
+    finishingRef.current = true; // cancel any in-flight finish/poll
     stopPolling();
     stopTimer();
     await sendControl('abort').catch(() => {});
+    await deleteMeeting(meetingId).catch(() => {});
     router.push('/dashboard');
   }
 

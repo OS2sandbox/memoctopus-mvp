@@ -37,10 +37,10 @@ function isHallucinatedRepetition(text: string): boolean {
   return false;
 }
 
-// Per-utterance transcription for the VAD-based live recording path.
-// Always uses HviskeProvider directly — independent of TRANSCRIPTION_PROVIDER,
-// which controls only the final batch pass. No DB write: the frontend accumulates
-// live segments; the authoritative transcript is written by /api/transcribe at end.
+// Per-utterance transcription for the VAD-based recording/upload path.
+// Stateless compute: transcribes one audio batch via Hviske and returns the text.
+// No persistence — the client accumulates segments and stores the transcript in
+// IndexedDB (see RecordingScreen / upload-confirm / ProcessingTranscription).
 export async function POST(req: NextRequest, { params }: Params) {
   const { id: _id } = await params;
   const session = await auth.api.getSession({ headers: await headers() });
@@ -64,6 +64,9 @@ export async function POST(req: NextRequest, { params }: Params) {
   } catch (err) {
     const totalMs = Date.now() - t0;
     console.error(`[utterance] failed after ${totalMs} ms:`, err);
-    return NextResponse.json({ text: '', latencyMs: totalMs });
+    // 502, not 200-with-empty-text: callers must be able to tell "silence" from
+    // "transcription failed" so failed batches are retried instead of silently
+    // dropping ~27 s of audio from the transcript.
+    return NextResponse.json({ error: 'Transcription failed', latencyMs: totalMs }, { status: 502 });
   }
 }

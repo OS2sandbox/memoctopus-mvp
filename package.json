@@ -5,7 +5,7 @@
   "scripts": {
     "postinstall": "node scripts/copy-vad-assets.js",
     "predev": "lsof -t -i :${PORT:-3004} -i :${BOT_PORT:-3001} | xargs kill -9 2>/dev/null || true",
-    "dev": "concurrently --kill-others -n next,bot -c blue,green \"./node_modules/.bin/next dev -p ${PORT:-3004}\" \"npm --prefix bot-service run dev\"",
+    "dev": "concurrently --kill-others -n next,bot,diar -c blue,green,magenta \"./node_modules/.bin/next dev -p ${PORT:-3004}\" \"npm --prefix bot-service run dev\" \"bash scripts/diar-tunnel.sh\"",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -38,6 +38,7 @@
     "docx": "^9.5.0",
     "drizzle-orm": "^0.45.2",
     "geist": "^1.7.1",
+    "idb": "^8.0.3",
     "jspdf": "^4.2.1",
     "next": "15.5.18",
     "openai": "^4.95.1",

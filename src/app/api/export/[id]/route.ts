@@ -1,43 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
-import { queryUserSchemaOne } from '@/lib/db/user-schema';
 import { MinutesContent, MinutesSection } from '@/types';
 
-interface Params {
-  params: Promise<{ id: string }>;
-}
+export async function POST(req: NextRequest) {
+  const body = await req.json() as { title?: string; content?: MinutesContent; format?: string };
+  const { title = 'Referat', content, format = 'pdf' } = body;
 
-export async function GET(req: NextRequest, { params }: Params) {
-  const { id } = await params;
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
-  const format = req.nextUrl.searchParams.get('format') ?? 'pdf';
-
-  const meeting = await queryUserSchemaOne<{ id: string; title: string }>(
-    session.user.id,
-    'SELECT id, title FROM meetings WHERE id = $1',
-    [id],
-  );
-  if (!meeting) return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
-
-  const minutesRow = await queryUserSchemaOne<{ content: unknown; version: number }>(
-    session.user.id,
-    'SELECT content, version FROM minutes WHERE meeting_id = $1 ORDER BY version DESC LIMIT 1',
-    [id],
-  );
-  if (!minutesRow) return NextResponse.json({ error: 'No minutes found' }, { status: 404 });
-
-  const content = minutesRow.content as MinutesContent;
+  if (!content?.sections) {
+    return NextResponse.json({ error: 'Missing content' }, { status: 400 });
+  }
 
   if (format === 'pdf') {
-    return exportPdf(meeting.title, content);
+    return exportPdf(title, content);
   } else if (format === 'docx') {
-    return exportDocx(meeting.title, content);
+    return exportDocx(title, content);
+  } else if (format === 'md') {
+    return exportMarkdown(title, content);
   }
 
   return NextResponse.json({ error: 'Unknown format' }, { status: 400 });
+}
+
+function exportMarkdown(title: string, content: MinutesContent): NextResponse {
+  const lines: string[] = [`# ${title}`, '', `*Genereret: ${new Date().toLocaleDateString('da-DK')}*`, ''];
+  for (const section of content.sections as MinutesSection[]) {
+    lines.push(`## ${section.label}`, '');
+    lines.push(section.content.trim() || '*(ingen indhold)*', '');
+  }
+  return new NextResponse(lines.join('\n'), {
+    headers: {
+      'Content-Type': 'text/markdown; charset=utf-8',
+      'Content-Disposition': `attachment; filename="referat.md"`,
+    },
+  });
 }
 
 async function exportPdf(title: string, content: MinutesContent): Promise<NextResponse> {
@@ -50,51 +44,38 @@ async function exportPdf(title: string, content: MinutesContent): Promise<NextRe
   const contentWidth = pageWidth - marginLeft - marginRight;
   let y = 20;
 
-  // Title
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(16);
   doc.text(title, marginLeft, y);
   y += 10;
 
-  // Date
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
   doc.setTextColor(115, 115, 112);
   doc.text(`Genereret: ${new Date().toLocaleDateString('da-DK')}`, marginLeft, y);
   y += 8;
 
-  // Divider
   doc.setDrawColor(229, 229, 226);
   doc.line(marginLeft, y, pageWidth - marginRight, y);
   y += 8;
 
   for (const section of content.sections) {
-    // Check page break
-    if (y > 260) {
-      doc.addPage();
-      y = 20;
-    }
+    if (y > 260) { doc.addPage(); y = 20; }
 
-    // Section heading
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(11);
     doc.setTextColor(15, 15, 14);
     doc.text(section.label, marginLeft, y);
     y += 6;
 
-    // Section content
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
     doc.setTextColor(61, 61, 58);
 
     if (section.content.trim()) {
-      // Split into lines respecting width
       const lines = doc.splitTextToSize(section.content, contentWidth) as string[];
       for (const line of lines) {
-        if (y > 270) {
-          doc.addPage();
-          y = 20;
-        }
+        if (y > 270) { doc.addPage(); y = 20; }
         doc.text(line, marginLeft, y);
         y += 5.5;
       }
@@ -103,7 +84,6 @@ async function exportPdf(title: string, content: MinutesContent): Promise<NextRe
       doc.text('(ingen indhold)', marginLeft, y);
       y += 5.5;
     }
-
     y += 6;
   }
 
@@ -117,92 +97,36 @@ async function exportPdf(title: string, content: MinutesContent): Promise<NextRe
 }
 
 async function exportDocx(title: string, content: MinutesContent): Promise<NextResponse> {
-  const {
-    Document,
-    Packer,
-    Paragraph,
-    TextRun,
-    HeadingLevel,
-    AlignmentType,
-    BorderStyle,
-  } = await import('docx');
+  const { Document, Packer, Paragraph, TextRun, HeadingLevel, BorderStyle } = await import('docx');
 
   const children = [];
 
-  // Title
-  children.push(
-    new Paragraph({
-      text: title,
-      heading: HeadingLevel.HEADING_1,
-      spacing: { after: 200 },
-    }),
-  );
-
-  // Date
-  children.push(
-    new Paragraph({
-      children: [
-        new TextRun({
-          text: `Genereret: ${new Date().toLocaleDateString('da-DK')}`,
-          size: 18,
-          color: '737370',
-        }),
-      ],
-      spacing: { after: 400 },
-      border: {
-        bottom: {
-          style: BorderStyle.SINGLE,
-          size: 1,
-          color: 'E5E5E2',
-        },
-      },
-    }),
-  );
+  children.push(new Paragraph({ text: title, heading: HeadingLevel.HEADING_1, spacing: { after: 200 } }));
+  children.push(new Paragraph({
+    children: [new TextRun({ text: `Genereret: ${new Date().toLocaleDateString('da-DK')}`, size: 18, color: '737370' })],
+    spacing: { after: 400 },
+    border: { bottom: { style: BorderStyle.SINGLE, size: 1, color: 'E5E5E2' } },
+  }));
 
   for (const section of content.sections as MinutesSection[]) {
-    // Section heading
-    children.push(
-      new Paragraph({
-        text: section.label,
-        heading: HeadingLevel.HEADING_2,
-        spacing: { before: 400, after: 120 },
-      }),
-    );
+    children.push(new Paragraph({ text: section.label, heading: HeadingLevel.HEADING_2, spacing: { before: 400, after: 120 } }));
 
-    // Content paragraphs
     const lines = section.content.trim()
       ? section.content.split('\n').filter((l) => l.trim())
       : ['(ingen indhold)'];
 
     for (const line of lines) {
-      children.push(
-        new Paragraph({
-          children: [
-            new TextRun({
-              text: line.replace(/^[-*]\s/, ''),
-              size: 22,
-              color: section.content.trim() ? '3d3d3a' : '737370',
-            }),
-          ],
-          spacing: { after: 120 },
-          ...(line.match(/^[-*]\s/) ? { bullet: { level: 0 } } : {}),
-        }),
-      );
+      children.push(new Paragraph({
+        children: [new TextRun({ text: line.replace(/^[-*]\s/, ''), size: 22, color: section.content.trim() ? '3d3d3a' : '737370' })],
+        spacing: { after: 120 },
+        ...(line.match(/^[-*]\s/) ? { bullet: { level: 0 } } : {}),
+      }));
     }
   }
 
   const doc = new Document({
     sections: [{ children }],
-    styles: {
-      default: {
-        document: {
-          run: {
-            font: 'Calibri',
-            size: 22,
-          },
-        },
-      },
-    },
+    styles: { default: { document: { run: { font: 'Calibri', size: 22 } } } },
   });
 
   const buffer = await Packer.toBuffer(doc);

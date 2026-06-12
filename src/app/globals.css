@@ -169,6 +169,15 @@ button, input, textarea, select {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
+/* Shimmer for the speaker-label placeholder while diarization is still running. */
+@keyframes speakerShimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [style*="speakerShimmer"] { animation: protoPulse 1.4s ease-in-out infinite !important; }
+  .sa-progbar.indet > i { animation: protoPulse 1.4s ease-in-out infinite !important; width: 100% !important; transform: none !important; }
+}
 @keyframes protoBlink {
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }
@@ -186,3 +195,80 @@ button, input, textarea, select {
 .data-\[state\=closed\]\:fade-out-0[data-state=closed] {
   opacity: 0;
 }
+
+/* ── Talere & deltagere panel (speaker ⇄ participant matching) ──────────
+   Participant-first matcher in the gennemgang sidebar. Namespaced `sa-` to
+   avoid collisions. Hover/opacity/transition states live here because inline
+   styles can't express them. Tokens come from the variables above. */
+.sa-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.sa-eyebrow { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: .4px; white-space: nowrap; }
+.sa-prog { font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+.sa-progbar { height: 3px; background: var(--line); border-radius: 999px; margin-top: 8px; overflow: hidden; }
+.sa-progbar > i { display: block; height: 100%; background: var(--accent); transition: width .35s cubic-bezier(.2,.7,.2,1); }
+
+.sa-status { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11px; color: var(--accent); margin: 14px 0 4px; }
+.sa-status .ck { width: 15px; height: 15px; border-radius: 999px; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 9px; }
+
+.sa-list { margin-top: 14px; }
+.sa-row { display: flex; align-items: center; gap: 9px; padding: 9px 2px; border-top: 1px solid var(--line); }
+.sa-row:first-child { border-top: none; }
+.sa-row:hover { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.sa-dot { width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0; }
+.sa-row.named .sa-dot { background: var(--accent); }
+.sa-row.unnamed .sa-dot { background: transparent; border: 1px solid var(--muted-2); }
+.sa-name { flex: 1; min-width: 0; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sa-row.unnamed .sa-name { color: var(--ink-2); }
+.sa-row.pending .sa-name { color: var(--muted); }
+.sa-name-edit { cursor: text; outline: none; border-bottom: 1px dashed transparent; }
+.sa-name-edit:hover { border-bottom-color: var(--line-2); }
+.sa-name-edit:focus { border-bottom-color: var(--accent); color: var(--ink); }
+
+.sa-play { width: 22px; height: 22px; border-radius: 999px; flex-shrink: 0; background: transparent; border: 1px solid var(--line-2); cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+.sa-play:hover { border-color: var(--accent); }
+.sa-play .tri { width: 0; height: 0; border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent; border-left: 5px solid var(--ink-2); margin-left: 1px; }
+.sa-play:hover .tri { border-left-color: var(--accent); }
+.sa-play .bars, .sa-play2 .bars { display: flex; gap: 2px; align-items: center; }
+.sa-play .bars i { width: 2px; height: 8px; background: var(--ink-2); display: block; }
+.sa-play:hover .bars i { background: var(--accent); }
+.sa-play2 .bars i { width: 2px; height: 8px; background: var(--bg); display: block; }
+
+.sa-hover { opacity: 0; transition: opacity .12s; }
+.sa-row:hover .sa-hover { opacity: 1; }
+
+.sa-tag { font-family: var(--mono); font-size: 9.5px; color: var(--muted-2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 6px; flex-shrink: 0; }
+.sa-x { background: none; border: none; cursor: pointer; color: var(--muted-2); font-size: 15px; line-height: 1; padding: 0 2px; opacity: 0; }
+.sa-row:hover .sa-x { opacity: 1; }
+.sa-x:hover { color: var(--kill); }
+
+.sa-trigger { font-family: var(--mono); font-size: 10.5px; color: var(--accent); background: none; border: none; cursor: pointer; padding: 0; flex-shrink: 0; white-space: nowrap; }
+.sa-trigger.primary { border: 1px solid var(--line-2); border-radius: 999px; padding: 4px 11px; color: var(--ink-2); }
+.sa-trigger.primary:hover { border-color: var(--accent); color: var(--accent); }
+
+.sa-drop { margin: 2px 0 10px 16px; border: 1px solid var(--line-2); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.sa-drop-h { font-family: var(--mono); font-size: 10.5px; color: var(--muted); padding: 9px 11px 7px; }
+.sa-opt { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; background: none; border: none; border-top: 1px solid var(--line); padding: 8px 11px; font-size: 13px; color: var(--ink); cursor: pointer; white-space: nowrap; }
+.sa-opt:hover { background: var(--accent-wash); }
+.sa-opt .pick { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--accent); opacity: 0; }
+.sa-opt:hover .pick { opacity: 1; }
+.sa-opt.none { color: var(--muted); font-family: var(--mono); font-size: 11.5px; }
+.sa-drop-empty { padding: 8px 11px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); }
+.sa-play2 { width: 22px; height: 22px; border-radius: 999px; background: var(--ink); display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: none; cursor: pointer; padding: 0; }
+.sa-play2 .tri { width: 0; height: 0; border-top: 4px solid transparent; border-bottom: 4px solid transparent; border-left: 6px solid var(--bg); margin-left: 1px; }
+
+.sa-sub { font-family: var(--mono); font-size: 10px; letter-spacing: .4px; color: var(--muted-2); margin: 16px 0 7px; }
+button.sa-sub { display: flex; align-items: center; gap: 6px; background: none; border: none; cursor: pointer; }
+button.sa-sub:hover { color: var(--muted); }
+
+/* Diarization still running: indeterminate progress + a quiet "recognising" note. */
+.sa-prog.sa-loading { display: flex; align-items: center; gap: 6px; color: var(--muted-2); }
+.sa-spin { width: 11px; height: 11px; border-radius: 999px; flex-shrink: 0; border: 2px solid var(--line-2); border-top-color: var(--accent); display: inline-block; animation: spin .8s linear infinite; }
+@keyframes saIndet { 0% { transform: translateX(-120%); } 100% { transform: translateX(360%); } }
+.sa-progbar.indet > i { width: 28%; animation: saIndet 1.1s ease-in-out infinite; }
+.sa-hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-top: 12px; max-width: 42ch; }
+.sa-act { font-family: var(--mono); font-size: 10.5px; color: var(--accent); background: none; border: none; cursor: pointer; padding: 0; flex-shrink: 0; white-space: nowrap; }
+.sa-namebox { margin: 2px 0 10px 16px; }
+
+.sa-foot { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; display: flex; align-items: center; gap: 6px; }
+.sa-foot input { flex: 1; border: none; border-bottom: 1px solid var(--line-2); background: transparent; outline: none; font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); padding: 3px 0; }
+.sa-foot input::placeholder { color: var(--muted-2); }
+.sa-foot button { background: none; border: none; color: var(--accent); font-family: var(--mono); font-size: 11px; cursor: pointer; padding: 0; white-space: nowrap; }

@@ -1,38 +1,50 @@
 'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { TranscriptSegment } from '@/types';
 import { formatDuration } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
+import { SpeakerCombobox } from './SpeakerCombobox';
 
 interface SpeakerRowProps {
   segment: TranscriptSegment;
   index: number;
   onUpdate: (index: number, segment: TranscriptSegment) => void;
-  onRenameAll: (from: string, to: string) => void;
+  // Connect this speaker to a participant. The parent adds `to` to the participant
+  // list if it isn't one already, then renames every segment of `from` to `to`.
+  onAssign: (from: string, to: string) => void;
   speakerSegmentCount: number;
+  // Participants offered in the speaker picker (type-or-select).
+  participants: string[];
   onSeek?: (time: number) => void;
   hasPii?: boolean;
   isHighlighted?: boolean;
+  // Diarization is still running: show an uncertainty placeholder for the speaker
+  // instead of the not-yet-meaningful default label, and don't offer rename yet.
+  diarizing?: boolean;
 }
 
-export const SpeakerRow = React.memo(function SpeakerRow({ segment, index, onUpdate, onRenameAll, speakerSegmentCount, onSeek, hasPii, isHighlighted }: SpeakerRowProps) {
+export const SpeakerRow = React.memo(function SpeakerRow({
+  segment,
+  index,
+  onUpdate,
+  onAssign,
+  speakerSegmentCount,
+  participants,
+  onSeek,
+  hasPii,
+  isHighlighted,
+  diarizing,
+}: SpeakerRowProps) {
   const [renameOpen, setRenameOpen] = useState(false);
-  const [renameValue, setRenameValue] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
 
+  // Close the picker if diarization (re)starts under us.
   useEffect(() => {
-    if (renameOpen) {
-      setRenameValue(segment.speaker);
-      setTimeout(() => inputRef.current?.focus(), 0);
-    }
-  }, [renameOpen, segment.speaker]);
+    if (diarizing) setRenameOpen(false);
+  }, [diarizing]);
 
-  function commitRename() {
-    const trimmed = renameValue.trim();
-    if (trimmed && trimmed !== segment.speaker) {
-      onRenameAll(segment.speaker, trimmed);
-    }
+  function assign(name: string) {
+    const trimmed = name.trim();
+    if (trimmed && trimmed !== segment.speaker) onAssign(segment.speaker, trimmed);
     setRenameOpen(false);
   }
 
@@ -74,56 +86,48 @@ export const SpeakerRow = React.memo(function SpeakerRow({ segment, index, onUpd
             {formatDuration(segment.start)}
           </span>
         )}
-        <button
-          className="text-[var(--ink-2)] hover:text-[var(--accent)] transition-colors text-left w-full truncate"
-          style={{ fontSize: 'var(--t-small)', fontWeight: 500 }}
-          onClick={() => setRenameOpen((v) => !v)}
-          title="Klik for at omdøbe taleren"
-        >
-          {segment.speaker}
-        </button>
+        {diarizing ? (
+          <span
+            className="flex items-center gap-1.5"
+            title="Genkender taler…"
+            aria-label="Genkender taler"
+          >
+            <span
+              aria-hidden
+              style={{
+                display: 'block', height: 11, width: 52, borderRadius: 999,
+                background: 'linear-gradient(90deg, var(--sunk) 25%, var(--line-2) 50%, var(--sunk) 75%)',
+                backgroundSize: '300% 100%',
+                animation: 'speakerShimmer 1.4s ease-in-out infinite',
+              }}
+            />
+          </span>
+        ) : (
+          <button
+            className="text-[var(--ink-2)] hover:text-[var(--accent)] transition-colors text-left w-full truncate"
+            style={{ fontSize: 'var(--t-small)', fontWeight: 500 }}
+            onClick={() => setRenameOpen((v) => !v)}
+            title="Klik for at vælge eller skrive taler"
+          >
+            {segment.speaker}
+          </button>
+        )}
 
-        {renameOpen && (
+        {renameOpen && !diarizing && (
           <div
             className="absolute left-0 z-10 rounded-[var(--radius)] border border-[var(--line-strong)] bg-[var(--surface)] shadow-md"
-            style={{ top: '100%', minWidth: 220, padding: '12px 14px' }}
+            style={{ top: '100%', minWidth: 240, padding: '12px 14px' }}
           >
             <p className="font-medium text-[var(--ink)] mb-0.5" style={{ fontSize: 'var(--t-small)' }}>
-              Omdøb &quot;{segment.speaker}&quot;
+              Hvem er {segment.speaker}?
             </p>
-            <p className="text-[var(--muted)] mb-3" style={{ fontSize: 'var(--t-micro)' }}>
-              Bruges i {speakerSegmentCount} {speakerSegmentCount === 1 ? 'segment' : 'segmenter'}
-            </p>
-            <input
-              ref={inputRef}
-              type="text"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitRename();
-                if (e.key === 'Escape') setRenameOpen(false);
-              }}
-              className="w-full border border-[var(--line-strong)] rounded-[var(--radius-sm)] px-2 py-1.5 text-sm bg-[var(--surface)] text-[var(--ink)] outline-none focus:border-[var(--accent)]"
-              style={{ fontSize: 'var(--t-small)' }}
+            <SpeakerCombobox
+              currentSpeaker={segment.speaker}
+              participants={participants}
+              segmentCount={speakerSegmentCount}
+              onAssign={assign}
+              onClose={() => setRenameOpen(false)}
             />
-            <div className="flex gap-2 mt-3">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setRenameOpen(false)}
-                className="flex-1"
-              >
-                Annullér
-              </Button>
-              <Button
-                size="sm"
-                onClick={commitRename}
-                disabled={!renameValue.trim()}
-                className="flex-1"
-              >
-                Omdøb alle
-              </Button>
-            </div>
           </div>
         )}
       </div>

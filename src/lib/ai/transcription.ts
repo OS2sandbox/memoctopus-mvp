@@ -1,5 +1,7 @@
 import OpenAI from 'openai';
 import { TranscriptSegment } from '@/types';
+import { mimeTypeToExt } from './mime';
+import { DEFAULT_SPEAKER_LABEL } from '@/lib/audio/speaker-labels';
 
 // ─── Interface ────────────────────────────────────────────────────────────────
 
@@ -8,9 +10,9 @@ export interface TranscriptionProvider {
 }
 
 // ─── Hviske implementation ────────────────────────────────────────────────────
-// Talks to the hviske server via its OpenAI-compatible /v1/audio/transcriptions
-// endpoint. Two modes:
-//   transcribe()    — full batch call, returns diarized TranscriptSegment[]
+// Hviske (syvai) is the only transcription provider. Talks to the server via its
+// OpenAI-compatible /v1/audio/transcriptions endpoint. Two modes:
+//   transcribe()    — full batch call, returns timed TranscriptSegment[]
 //   transcribeRaw() — lightweight call, returns plain text (for per-utterance live path)
 
 export class HviskeProvider implements TranscriptionProvider {
@@ -22,6 +24,11 @@ export class HviskeProvider implements TranscriptionProvider {
     this.client = new OpenAI({
       apiKey: process.env.HVISKE_API_KEY ?? 'no-key',
       baseURL: process.env.HVISKE_URL ?? 'http://109.173.238.203:40093/v1',
+      // No SDK auto-retries: a retried batch re-uploads ~1 MB of WAV and triples the
+      // worst-case lane occupancy under full fan-out. Retries happen at the
+      // application level instead (see vad-batch-server.ts), where they run AFTER
+      // the first wave drains rather than amplifying an overloaded server.
+      maxRetries: 0,
     });
     this.model = process.env.HVISKE_MODEL ?? 'syvai/hviske-v5.1';
     this.language = process.env.ASR_LANGUAGE ?? 'da';
@@ -36,6 +43,7 @@ export class HviskeProvider implements TranscriptionProvider {
       file,
       language: this.language,
       response_format: 'json',
+      temperature: 0,
     });
 
     const text = response.text?.trim() ?? '';
@@ -47,7 +55,11 @@ export class HviskeProvider implements TranscriptionProvider {
     return splitIntoTimedSegments(text, duration);
   }
 
-  async transcribeRaw(audioBuffer: Buffer, mimeType: string): Promise<{ text: string; latencyMs: number }> {
+  async transcribeRaw(
+    audioBuffer: Buffer,
+    mimeType: string,
+    opts?: { timeoutMs?: number },
+  ): Promise<{ text: string; latencyMs: number }> {
     const ext = mimeTypeToExt(mimeType);
     const file = new File([new Uint8Array(audioBuffer)], `audio.${ext}`, { type: mimeType });
 
@@ -57,7 +69,10 @@ export class HviskeProvider implements TranscriptionProvider {
       file,
       language: this.language,
       response_format: 'json',
-    }, { timeout: 20_000 });
+      temperature: 0,
+      // Default 20 s suits the live-caption path; the batch fan-out passes a longer
+      // timeout because queueing at full concurrency lengthens individual tails.
+    }, { timeout: opts?.timeoutMs ?? 20_000 });
 
     return { text: response.text ?? '', latencyMs: Date.now() - t0 };
   }
@@ -79,7 +94,7 @@ function splitIntoTimedSegments(text: string, totalDurationSeconds: number): Tra
     .filter(Boolean);
 
   if (sentences.length === 0) {
-    return [{ speaker: 'Taler 1', start: 0, end: totalDurationSeconds, text }];
+    return [{ speaker: DEFAULT_SPEAKER_LABEL, start: 0, end: totalDurationSeconds, text }];
   }
 
   const wordCounts = sentences.map(s => s.split(/\s+/).filter(Boolean).length);
@@ -89,7 +104,7 @@ function splitIntoTimedSegments(text: string, totalDurationSeconds: number): Tra
   return sentences.map((sentence, i) => {
     const segDuration = (wordCounts[i] / Math.max(totalWords, 1)) * totalDurationSeconds;
     const segment: TranscriptSegment = {
-      speaker: 'Taler 1',
+      speaker: DEFAULT_SPEAKER_LABEL,
       start: elapsed,
       end: elapsed + segDuration,
       text: sentence,
@@ -97,22 +112,6 @@ function splitIntoTimedSegments(text: string, totalDurationSeconds: number): Tra
     elapsed += segDuration;
     return segment;
   });
-}
-
-// ─── Shared helpers ───────────────────────────────────────────────────────────
-
-function mimeTypeToExt(mimeType: string): string {
-  const map: Record<string, string> = {
-    'audio/webm': 'webm',
-    'audio/mp4': 'mp4',
-    'audio/mpeg': 'mp3',
-    'audio/mp3': 'mp3',
-    'audio/wav': 'wav',
-    'audio/ogg': 'ogg',
-    'audio/flac': 'flac',
-    'audio/x-m4a': 'm4a',
-  };
-  return map[mimeType] ?? 'webm';
 }
 
 // ─── Active provider ──────────────────────────────────────────────────────────

@@ -1,0 +1,6 @@
+torch>=2.2
+torchaudio>=2.2
+pyannote.audio>=4.0
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9

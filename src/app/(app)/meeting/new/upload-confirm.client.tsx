@@ -2,12 +2,11 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  newVadBatchState, sealCurrentBatch, splitTextWithIntervals,
-  runWithConcurrency, BATCH_DURATION_S, BATCH_CONCURRENCY,
-} from '@/lib/audio/vad-batch';
-import { energyVAD, decodeAndResampleTo16k } from '@/lib/audio/vad-client';
+import { transcribeBatchesOnServer } from '@/lib/audio/transcribe-batches-client';
+import { startDiarization, finishDiarization } from '@/lib/audio/diarize-client';
+import { createMeeting, saveAudio, saveTranscript, updateMeeting, deleteMeeting } from '@/lib/storage';
 import type { TranscriptSegment } from '@/types';
+import { isDefaultSpeakerLabel } from '@/lib/audio/speaker-labels';
 
 // Deterministic waveform — doubles as the progress bar fill indicator.
 const WAVE = Array.from({ length: 92 }, (_, i) =>
@@ -66,107 +65,79 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
     async function run() {
       try {
         const dateStr = new Intl.DateTimeFormat('da', { day: 'numeric', month: 'long' }).format(new Date());
-        const meetingRes = await fetch('/api/meetings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: `Møde · ${dateStr}`, participants: [] }),
+        const meeting = await createMeeting({
+          title: `Møde · ${dateStr}`,
+          participants: [],
+          source: 'local',
+          status: 'processing',
         });
         if (cancelled) return;
-        if (!meetingRes.ok) throw new Error('Kunne ikke oprette møde');
-        const { id } = await meetingRes.json();
+        const id = meeting.id;
         meetingIdRef.current = id;
 
-        // Fire-and-forget — client-side VAD transcription runs in parallel.
-        // Archive failure is non-fatal but logged and surfaced after completion.
-        const archiveFormData = new FormData();
-        archiveFormData.append('audio', file, file.name);
-        archiveFormData.append('meetingId', id);
-        archiveFormData.append('storageOnly', 'true');
-        fetch('/api/transcribe', { method: 'POST', body: archiveFormData })
-          .then(r => { if (!r.ok) archiveFailedRef.current = true; })
-          .catch(() => { archiveFailedRef.current = true; });
+        // Archive the original audio in IndexedDB so it can be played back during
+        // review. Failure is non-fatal but surfaced after completion.
+        try {
+          await saveAudio(id, file, file.type || 'audio/webm');
+          await updateMeeting(id, { audioSizeBytes: file.size });
+        } catch {
+          archiveFailedRef.current = true;
+        }
+        if (cancelled) return;
 
         setPhase('analyzing');
-        let arrayBuffer: ArrayBuffer;
+
+        // Diarize the full recording in parallel with transcription. The original
+        // compressed file is posted as-is (the diarization service decodes it), and
+        // speaker labels are patched onto the saved transcript when the turns land —
+        // the user is NOT kept waiting on diarization.
+        const diarizationPromise = startDiarization(id, file);
+
+        // One upload of the original file; the server decodes with ffmpeg, runs VAD,
+        // and fans out ALL 27 s batches to hviske simultaneously. Progress and
+        // segments stream back per batch for the live preview.
+        let completedSecs = 0;
+        let result;
         try {
-          arrayBuffer = await file.arrayBuffer();
+          result = await transcribeBatchesOnServer(id, file, {
+            onMeta: (meta) => {
+              if (cancelled) return;
+              setPhase('transcribing');
+              setTotalSeconds(meta.totalSpeechSeconds);
+              setCompletedSeconds(0);
+            },
+            onBatch: (update) => {
+              if (cancelled) return;
+              completedSecs += update.batchSeconds;
+              setCompletedSeconds(completedSecs);
+              // Append without sorting; batches arrive out of order, live preview is
+              // best-effort. The final 'done' payload is authoritative and sorted.
+              if (update.segments.length > 0) {
+                setLiveSegments(prev => [...prev, ...update.segments]);
+              }
+            },
+          });
         } catch {
-          throw new Error('Lydfilen kunne ikke læses. Prøv at uploade filen igen.');
+          throw new Error('Lydformatet understøttes ikke, eller serveren svarede ikke. Prøv MP3, WAV eller M4A.');
         }
         if (cancelled) return;
-
-        let mono16k: Float32Array;
-        try {
-          mono16k = await decodeAndResampleTo16k(arrayBuffer);
-        } catch {
-          throw new Error('Lydformatet understøttes ikke. Prøv MP3, WAV eller M4A.');
-        }
-        if (cancelled) return;
-
-        const batchState = newVadBatchState();
-        for (const { audio, start, end } of energyVAD(mono16k, 16_000)) {
-          const wavOffset   = batchState.pendingWavDuration;
-          const wavDuration = audio.length / 16_000;
-          batchState.pendingAudio.push(audio);
-          batchState.pendingIntervals.push({ originalStart: start, originalEnd: end, wavOffset, wavDuration });
-          batchState.pendingWavDuration += wavDuration;
-          if (batchState.pendingWavDuration >= BATCH_DURATION_S) sealCurrentBatch(batchState);
-        }
-        sealCurrentBatch(batchState);
-
-        setPhase('transcribing');
-        const batches = batchState.readyBatches;
-        if (batches.length === 0) {
+        if (result.totalBatches === 0) {
           throw new Error('Ingen tale fundet i lydfilen. Er filen lydløs?');
         }
-        const total = batches.reduce((s, b) => s + b.totalWavDuration, 0);
-        setTotalSeconds(total);
-        setCompletedSeconds(0);
-
-        let completedSecs = 0;
-        const tasks = batches.map((batch) => async (): Promise<TranscriptSegment[]> => {
-          try {
-            const fd = new FormData();
-            fd.append('audio', batch.wav, 'batch.wav');
-            const res = await fetch(`/api/meetings/${id}/utterance`, {
-              method: 'POST',
-              body: fd,
-              signal: AbortSignal.timeout(60_000),
-            });
-            if (!res.ok) return [];
-            const { text } = await res.json() as { text: string };
-            const segs = text?.trim()
-              ? splitTextWithIntervals(text, batch.intervals, batch.totalWavDuration)
-              : [];
-            // Append without sorting; batches arrive out of order, live preview is best-effort.
-            // Final authoritative sort happens after all batches complete.
-            if (segs.length > 0 && !cancelled) {
-              setLiveSegments(prev => [...prev, ...segs]);
-            }
-            return segs;
-          } catch (err) {
-            console.error('[upload-confirm] batch failed:', err);
-            return [];
-          } finally {
-            completedSecs += batch.totalWavDuration;
-            if (!cancelled) setCompletedSeconds(completedSecs);
-          }
-        });
-
-        const segmentArrays = await runWithConcurrency(tasks, BATCH_CONCURRENCY);
-        if (cancelled) return;
-        const segments = segmentArrays.flat().sort((a, b) => a.start - b.start);
+        const segments: TranscriptSegment[] = result.segments;
 
         setPhase('saving');
-        const saveRes = await fetch(`/api/meetings/${id}/save-transcript`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ segments }),
-        });
+        const rawText = segments.map((s) => s.text).join(' ');
+        // Saved with default labels and diarizationStatus 'pending' — the review
+        // screen shows an uncertainty state for speakers until diarization lands.
+        await saveTranscript(id, { rawText, segments, chapters: [], piiReplacements: [], diarizationStatus: 'pending' });
+        await updateMeeting(id, { status: 'review' });
         if (cancelled) return;
-        if (!saveRes.ok) throw new Error('Gem fejlede');
 
-        setCompletedSeconds(total);
+        // Patch in speaker labels (and clear the pending state) once diarization finishes.
+        void diarizationPromise.then((turns) => finishDiarization(id, turns));
+
+        setCompletedSeconds(result.totalSpeechSeconds);
         setPhase('done');
       } catch (err) {
         if (cancelled) return;
@@ -222,7 +193,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
 
   async function handleCancel() {
     if (meetingIdRef.current) {
-      fetch(`/api/meetings/${meetingIdRef.current}`, { method: 'DELETE' }).catch(() => {});
+      deleteMeeting(meetingIdRef.current).catch(() => {});
     }
     onCancel();
   }
@@ -232,11 +203,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
     if (!done || !id) return;
     const finalTitle = title.trim() || file.name.replace(/\.[^.]+$/, '');
     try {
-      await fetch(`/api/meetings/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: finalTitle, participants }),
-      });
+      await updateMeeting(id, { title: finalTitle, participants });
     } catch {
       // non-fatal — we still navigate
     }
@@ -552,7 +519,12 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
                   }}>
                     <span style={{ color: 'var(--accent)' }}>{fmtMS(seg.start)}</span>
                     <span style={{ color: 'var(--ink-2)' }}>
-                      <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{seg.speaker.toLowerCase()}: </span>
+                      {/* Diarization hasn't run yet here — every segment is the
+                          placeholder 'Taler N', so don't show a speaker label
+                          before the gennemgang page assigns real speakers. */}
+                      {!isDefaultSpeakerLabel(seg.speaker) && (
+                        <span style={{ color: 'var(--ink)', fontWeight: 500 }}>{seg.speaker.toLowerCase()}: </span>
+                      )}
                       {seg.text}
                       {isLast && (
                         <span
