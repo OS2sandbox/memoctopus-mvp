@@ -3,10 +3,12 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
+import { SpeakerAssignment, type ParticipantRow } from './SpeakerAssignment';
 import { WaveformPlayer } from './WaveformPlayer';
 import { getTranscript, getAudio, saveTranscriptChapters, saveTranscriptSegments, saveMinutes, deleteAudio, updateMeeting } from '@/lib/storage';
 import { onTranscriptUpdated } from '@/lib/transcript-events';
 import { isDiarizationInFlight, ensureDiarization, finishDiarization } from '@/lib/audio/diarize-client';
+import { isDefaultSpeakerLabel, speakerLabel } from '@/lib/audio/speaker-labels';
 import type { MinutesContent } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
 
@@ -73,11 +75,28 @@ export function TranscriptReview({
     } catch { /* ignore */ }
     return participants ?? [];
   });
-  const [newParticipantInput, setNewParticipantInput] = useState('');
+  // Participants confirmed to have *not* spoken ("talte ikke"). UI-only — these
+  // people stay in editableParticipants and flow to the referat unchanged; the set
+  // just distinguishes a deliberate "silent" person from one still awaiting a voice.
+  const [silent, setSilent] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set();
+    try {
+      const saved = sessionStorage.getItem(`silent-${meetingId}`);
+      if (saved) return new Set(JSON.parse(saved) as string[]);
+    } catch { /* ignore */ }
+    return new Set();
+  });
 
   useEffect(() => {
     try { sessionStorage.setItem(`participants-${meetingId}`, JSON.stringify(editableParticipants)); } catch { /* ignore */ }
+    // Persist to IndexedDB too so participants added while assigning speakers
+    // survive a reload (sessionStorage alone is cleared with the tab).
+    updateMeeting(meetingId, { participants: editableParticipants }).catch(() => {});
   }, [editableParticipants, meetingId]);
+
+  useEffect(() => {
+    try { sessionStorage.setItem(`silent-${meetingId}`, JSON.stringify([...silent])); } catch { /* ignore */ }
+  }, [silent, meetingId]);
 
   // Refresh segments when a background task patches the transcript — e.g. speaker
   // diarization landing after the recording already navigated here. Pulls the fresh
@@ -135,6 +154,9 @@ export function TranscriptReview({
     setAudioUrl(initialAudioUrl);
   }, [initialAudioUrl]);
   const audioRef = useRef<HTMLAudioElement>(null);
+  // When set, playback auto-pauses at this time — used to play a single speaker
+  // soundbite (the inline assign prompt) rather than running to the end.
+  const stopAtRef = useRef<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(audioDurationSeconds ?? 0);
@@ -143,7 +165,13 @@ export function TranscriptReview({
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    const onTime = () => setCurrentTime(audio.currentTime);
+    const onTime = () => {
+      setCurrentTime(audio.currentTime);
+      if (stopAtRef.current !== null && audio.currentTime >= stopAtRef.current) {
+        audio.pause();
+        stopAtRef.current = null;
+      }
+    };
     const onMeta = () => {
       if (isFinite(audio.duration) && audio.duration > 0) setDuration(audio.duration);
     };
@@ -199,14 +227,26 @@ export function TranscriptReview({
   const seekTo = useCallback((time: number) => {
     const audio = audioRef.current;
     if (!audio) return;
+    stopAtRef.current = null; // a manual seek isn't a bounded soundbite
     audio.currentTime = time;
     setCurrentTime(time);
+    audio.play().catch(() => setAudioError('Afspilning fejlede'));
+  }, []);
+
+  // Play just one speaker's soundbite, auto-pausing at its end.
+  const playSegment = useCallback((start: number, end: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    stopAtRef.current = end;
+    audio.currentTime = start;
+    setCurrentTime(start);
     audio.play().catch(() => setAudioError('Afspilning fejlede'));
   }, []);
 
   function togglePlay() {
     const audio = audioRef.current;
     if (!audio) return;
+    stopAtRef.current = null; // manual play/pause clears any soundbite bound
     if (isPlaying) {
       audio.pause();
     } else {
@@ -226,18 +266,148 @@ export function TranscriptReview({
     setSegments((prev) => prev.map((s, i) => (i === index ? updated : s)));
   }, []);
 
-  const handleRenameAll = useCallback(
+  // Connect a diarized voice to a participant — the single write path behind the
+  // matcher panel and the transcript-row picker (the prototype's `linkVoice`). The
+  // name is added to the roster if new (reusing an existing participant's canonical
+  // casing so the label and the roster stay byte-identical), un-silenced, and every
+  // segment of `from` is relabelled to that name and persisted.
+  const assignSpeaker = useCallback(
     async (from: string, to: string) => {
-      const updated = segments.map((seg) => (seg.speaker === from ? { ...seg, speaker: to } : seg));
+      const trimmed = to.trim();
+      if (!trimmed || trimmed === from) return;
+      const existing = editableParticipants.find((p) => p.toLowerCase() === trimmed.toLowerCase());
+      const finalName = existing ?? trimmed;
+      if (!existing && !isDefaultSpeakerLabel(finalName)) {
+        setEditableParticipants((prev) => [...prev, finalName]);
+      }
+      setSilent((prev) => {
+        if (!prev.has(finalName)) return prev;
+        const n = new Set(prev);
+        n.delete(finalName);
+        return n;
+      });
+      const updated = segments.map((seg) => (seg.speaker === from ? { ...seg, speaker: finalName } : seg));
       setSegments(updated);
       try {
         await saveTranscriptSegments(meetingId, updated);
       } catch (err) {
-        console.error('[speakers] rename persist failed:', err);
+        console.error('[speakers] assign persist failed:', err);
+      }
+    },
+    [meetingId, segments, editableParticipants],
+  );
+
+  // Unlink a recognized person: relabel all their segments back to a fresh, unused
+  // 'Taler N' so the voice returns to the unmatched pool. The person stays in the
+  // roster as pending.
+  const unlinkSpeaker = useCallback(
+    async (name: string) => {
+      const used = new Set(segments.map((s) => s.speaker));
+      let n = 1;
+      while (used.has(speakerLabel(n))) n++;
+      const fresh = speakerLabel(n);
+      const updated = segments.map((seg) => (seg.speaker === name ? { ...seg, speaker: fresh } : seg));
+      setSegments(updated);
+      setSilent((prev) => {
+        if (!prev.has(name)) return prev;
+        const next = new Set(prev);
+        next.delete(name);
+        return next;
+      });
+      try {
+        await saveTranscriptSegments(meetingId, updated);
+      } catch (err) {
+        console.error('[speakers] unlink persist failed:', err);
       }
     },
     [meetingId, segments],
   );
+
+  const markSilent = useCallback((name: string) => {
+    setSilent((prev) => new Set(prev).add(name));
+  }, []);
+
+  const removeParticipant = useCallback((name: string) => {
+    setEditableParticipants((prev) => prev.filter((p) => p !== name));
+    setSilent((prev) => {
+      if (!prev.has(name)) return prev;
+      const next = new Set(prev);
+      next.delete(name);
+      return next;
+    });
+  }, []);
+
+  // A freshly added participant joins the roster as "talte ikke" (silent) until a
+  // voice is linked — mirrors the prototype's add-as-noVoice behaviour.
+  const addParticipant = useCallback((name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setEditableParticipants((prev) =>
+      prev.some((p) => p.toLowerCase() === trimmed.toLowerCase()) ? prev : [...prev, trimmed],
+    );
+    setSilent((prev) => new Set(prev).add(trimmed));
+  }, []);
+
+  // Still-unassigned speakers ("Taler N"), ordered by first appearance, each with
+  // its longest ("most representative") segment for the soundbite. Feeds the guided
+  // assignment tool docked next to the participant list.
+  const unassignedSpeakers = useMemo(() => {
+    const firstIndex = new Map<string, number>();
+    const rep = new Map<string, { start: number; end: number; dur: number }>();
+    segments.forEach((seg, i) => {
+      if (!isDefaultSpeakerLabel(seg.speaker)) return;
+      if (!firstIndex.has(seg.speaker)) firstIndex.set(seg.speaker, i);
+      const dur = seg.end - seg.start;
+      const cur = rep.get(seg.speaker);
+      if (!cur || dur > cur.dur) rep.set(seg.speaker, { start: seg.start, end: seg.end, dur });
+    });
+    return [...firstIndex.entries()]
+      .sort((a, b) => a[1] - b[1])
+      .map(([speaker]) => ({ speaker, start: rep.get(speaker)!.start, end: rep.get(speaker)!.end }));
+  }, [segments]);
+
+  // Distinct speaker labels currently in the transcript, and each label's longest
+  // segment (for the recognized-row replay button).
+  const speakerStats = useMemo(() => {
+    const distinct = new Set<string>();
+    const longest = new Map<string, { start: number; end: number; dur: number }>();
+    segments.forEach((seg) => {
+      distinct.add(seg.speaker);
+      const dur = seg.end - seg.start;
+      const cur = longest.get(seg.speaker);
+      if (!cur || dur > cur.dur) longest.set(seg.speaker, { start: seg.start, end: seg.end, dur });
+    });
+    return { distinct, longest };
+  }, [segments]);
+
+  // One row per participant, classified for the matcher panel: a name that is a
+  // segment speaker is "recognized" (a voice is linked); otherwise it's "silent" if
+  // the user marked it so, else "pending".
+  const participantRows = useMemo<ParticipantRow[]>(
+    () => editableParticipants.map((name) => {
+      if (speakerStats.distinct.has(name)) {
+        const rep = speakerStats.longest.get(name);
+        return { name, kind: 'recognized', start: rep?.start, end: rep?.end };
+      }
+      return { name, kind: silent.has(name) ? 'silent' : 'pending' };
+    }),
+    [editableParticipants, speakerStats, silent],
+  );
+
+  // Participants with no voice yet — the candidates offered when naming a leftover
+  // voice and in the transcript-row picker (so a name never appears in two places).
+  const voicelessParticipants = useMemo(
+    () => editableParticipants.filter((p) => !speakerStats.distinct.has(p)),
+    [editableParticipants, speakerStats],
+  );
+
+  // Header counter: recognized = distinct non-placeholder labels; total = those plus
+  // the still-unmatched voices.
+  const recognizedVoiceCount = useMemo(
+    () => [...speakerStats.distinct].filter((s) => !isDefaultSpeakerLabel(s)).length,
+    [speakerStats],
+  );
+  const totalVoices = recognizedVoiceCount + unassignedSpeakers.length;
 
   function jumpToSegment(segmentIndex: number) {
     // Open the chapter containing this segment, close all others
@@ -626,8 +796,9 @@ export function TranscriptReview({
                             segment={seg}
                             index={idx}
                             onUpdate={handleSegmentUpdate}
-                            onRenameAll={handleRenameAll}
+                            onAssign={assignSpeaker}
                             speakerSegmentCount={speakerCounts[seg.speaker] ?? 1}
+                            participants={voicelessParticipants}
                             onSeek={audioUrl ? seekTo : undefined}
                             hasPii={piiSegmentIndices.has(idx)}
                             isHighlighted={highlightedSegment === idx}
@@ -655,8 +826,9 @@ export function TranscriptReview({
                         segment={seg}
                         index={i}
                         onUpdate={handleSegmentUpdate}
-                        onRenameAll={handleRenameAll}
+                        onAssign={assignSpeaker}
                         speakerSegmentCount={speakerCounts[seg.speaker] ?? 1}
+                        participants={voicelessParticipants}
                         onSeek={audioUrl ? seekTo : undefined}
                         hasPii={piiSegmentIndices.has(i)}
                         isHighlighted={highlightedSegment === i}
@@ -755,50 +927,24 @@ export function TranscriptReview({
             </div>
           )}
 
-          {/* Deltagere — editable list included in referat */}
+          {/* Talere & deltagere — one participant-first list that connects each
+              diarized voice to a person. While diarization is still running the
+              matcher shows a recognising state but keeps the roster editable. */}
           <div style={{ marginTop: 28 }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 8 }}>deltagere</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {editableParticipants.map((name, i) => (
-                <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-2)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--muted-2)', flexShrink: 0, display: 'inline-block' }} />
-                  <span style={{ flex: 1 }}>{name}</span>
-                  <button
-                    onClick={() => setEditableParticipants((prev) => prev.filter((_, j) => j !== i))}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted-2)', fontSize: 14, padding: '0 2px', lineHeight: 1 }}
-                    title="Fjern deltager"
-                  >×</button>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: editableParticipants.length > 0 ? 8 : 0 }}>
-              <input
-                value={newParticipantInput}
-                onChange={(e) => setNewParticipantInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && newParticipantInput.trim()) {
-                    e.preventDefault();
-                    setEditableParticipants((prev) => [...prev, newParticipantInput.trim()]);
-                    setNewParticipantInput('');
-                  }
-                }}
-                placeholder="tilføj deltager"
-                style={{
-                  flex: 1, fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--ink-2)',
-                  background: 'transparent', border: 'none', outline: 'none',
-                  borderBottom: '1px solid var(--line-2)', padding: '2px 0',
-                }}
-              />
-              {newParticipantInput.trim() && (
-                <button
-                  onClick={() => {
-                    setEditableParticipants((prev) => [...prev, newParticipantInput.trim()]);
-                    setNewParticipantInput('');
-                  }}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent)', fontSize: 11, fontFamily: 'var(--mono)', padding: 0 }}
-                >+ tilføj</button>
-              )}
-            </div>
+            <SpeakerAssignment
+              rows={participantRows}
+              voices={unassignedSpeakers}
+              voicelessParticipants={voicelessParticipants}
+              recognizedCount={recognizedVoiceCount}
+              totalVoices={totalVoices}
+              diarizing={diarizing}
+              onLink={assignSpeaker}
+              onMarkSilent={markSilent}
+              onUnlink={unlinkSpeaker}
+              onRemove={removeParticipant}
+              onAdd={addParticipant}
+              onPlaySegment={audioUrl ? playSegment : undefined}
+            />
           </div>
 
           {/* Keywords / prompt */}

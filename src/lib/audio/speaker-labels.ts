@@ -10,3 +10,11 @@ export function speakerLabel(n: number): string {
 
 // The default applied before diarization, when there is only one known speaker.
 export const DEFAULT_SPEAKER_LABEL = speakerLabel(1);
+
+// A speaker label is "unassigned" while it's still a generic 'Taler N' placeholder
+// produced by transcription/diarization. Once the user renames it to a real person
+// (a participant), it no longer matches — which is how the review screen knows which
+// speakers still need to be connected to a participant.
+export function isDefaultSpeakerLabel(label: string): boolean {
+  return /^Taler \d+$/.test(label.trim());
+}

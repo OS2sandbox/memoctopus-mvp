@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { speakerLabel, DEFAULT_SPEAKER_LABEL } from './speaker-labels';
+import { speakerLabel, DEFAULT_SPEAKER_LABEL, isDefaultSpeakerLabel } from './speaker-labels';
 
 // These assertions pin the Danish label convention shared by transcription,
 // vad-batch, and merge-speakers. If the wording ever changes intentionally,
@@ -14,5 +14,18 @@ describe('speaker labels', () => {
   it('DEFAULT_SPEAKER_LABEL is the first speaker', () => {
     expect(DEFAULT_SPEAKER_LABEL).toBe('Taler 1');
     expect(DEFAULT_SPEAKER_LABEL).toBe(speakerLabel(1));
+  });
+
+  it('treats generic "Taler N" labels as unassigned', () => {
+    expect(isDefaultSpeakerLabel('Taler 1')).toBe(true);
+    expect(isDefaultSpeakerLabel('Taler 12')).toBe(true);
+    expect(isDefaultSpeakerLabel('  Taler 3  ')).toBe(true);
+  });
+
+  it('treats a real name as assigned', () => {
+    expect(isDefaultSpeakerLabel('Mette')).toBe(false);
+    expect(isDefaultSpeakerLabel('Taler')).toBe(false);
+    expect(isDefaultSpeakerLabel('Taler Jensen')).toBe(false);
+    expect(isDefaultSpeakerLabel('')).toBe(false);
   });
 });
