@@ -1,31 +1,58 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { MinutesContent, MinutesSection } from '@/types';
+import { MinutesContent } from '@/types';
+import { minutesToBody } from '@/lib/minutes-format';
 
 export async function POST(req: NextRequest) {
   const body = await req.json() as { title?: string; content?: MinutesContent; format?: string };
   const { title = 'Referat', content, format = 'pdf' } = body;
 
-  if (!content?.sections) {
+  if (!content || (content.body == null && !content.sections)) {
     return NextResponse.json({ error: 'Missing content' }, { status: 400 });
   }
 
+  const markdown = minutesToBody(content);
+
   if (format === 'pdf') {
-    return exportPdf(title, content);
+    return exportPdf(title, markdown);
   } else if (format === 'docx') {
-    return exportDocx(title, content);
+    return exportDocx(title, markdown);
   } else if (format === 'md') {
-    return exportMarkdown(title, content);
+    return exportMarkdown(title, markdown);
   }
 
   return NextResponse.json({ error: 'Unknown format' }, { status: 400 });
 }
 
-function exportMarkdown(title: string, content: MinutesContent): NextResponse {
-  const lines: string[] = [`# ${title}`, '', `*Genereret: ${new Date().toLocaleDateString('da-DK')}*`, ''];
-  for (const section of content.sections as MinutesSection[]) {
-    lines.push(`## ${section.label}`, '');
-    lines.push(section.content.trim() || '*(ingen indhold)*', '');
-  }
+// ─── Lightweight markdown line classification ────────────────────────────────
+
+type Line =
+  | { kind: 'heading'; text: string }
+  | { kind: 'bullet'; text: string }
+  | { kind: 'text'; text: string };
+
+function parseLines(markdown: string): Line[] {
+  return markdown
+    .split('\n')
+    .map((raw) => raw.trimEnd())
+    .filter((l) => l.trim().length > 0)
+    .map((l): Line => {
+      const heading = l.match(/^#{1,6}\s+(.*)$/);
+      if (heading) return { kind: 'heading', text: heading[1].trim() };
+      const bullet = l.match(/^\s*[-*]\s+(.*)$/);
+      if (bullet) return { kind: 'bullet', text: stripInline(bullet[1]) };
+      const ordered = l.match(/^\s*\d+\.\s+(.*)$/);
+      if (ordered) return { kind: 'bullet', text: stripInline(ordered[1]) };
+      return { kind: 'text', text: stripInline(l) };
+    });
+}
+
+// Strip the most common inline markdown emphasis markers for plain-text outputs.
+function stripInline(s: string): string {
+  return s.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1').replace(/`(.*?)`/g, '$1');
+}
+
+function exportMarkdown(title: string, markdown: string): NextResponse {
+  const lines = [`# ${title}`, '', `*Genereret: ${new Date().toLocaleDateString('da-DK')}*`, '', markdown.trim() || '*(ingen indhold)*', ''];
   return new NextResponse(lines.join('\n'), {
     headers: {
       'Content-Type': 'text/markdown; charset=utf-8',
@@ -34,7 +61,7 @@ function exportMarkdown(title: string, content: MinutesContent): NextResponse {
   });
 }
 
-async function exportPdf(title: string, content: MinutesContent): Promise<NextResponse> {
+async function exportPdf(title: string, markdown: string): Promise<NextResponse> {
   const { jsPDF } = await import('jspdf');
 
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -59,32 +86,41 @@ async function exportPdf(title: string, content: MinutesContent): Promise<NextRe
   doc.line(marginLeft, y, pageWidth - marginRight, y);
   y += 8;
 
-  for (const section of content.sections) {
-    if (y > 260) { doc.addPage(); y = 20; }
+  const lines = parseLines(markdown);
+  if (lines.length === 0) {
+    doc.setTextColor(115, 115, 112);
+    doc.text('(ingen indhold)', marginLeft, y);
+  }
 
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.setTextColor(15, 15, 14);
-    doc.text(section.label, marginLeft, y);
-    y += 6;
+  for (const line of lines) {
+    if (y > 270) { doc.addPage(); y = 20; }
+
+    if (line.kind === 'heading') {
+      y += 2;
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(15, 15, 14);
+      const wrapped = doc.splitTextToSize(line.text, contentWidth) as string[];
+      for (const w of wrapped) {
+        if (y > 270) { doc.addPage(); y = 20; }
+        doc.text(w, marginLeft, y);
+        y += 6;
+      }
+      y += 1;
+      continue;
+    }
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(10);
     doc.setTextColor(61, 61, 58);
-
-    if (section.content.trim()) {
-      const lines = doc.splitTextToSize(section.content, contentWidth) as string[];
-      for (const line of lines) {
-        if (y > 270) { doc.addPage(); y = 20; }
-        doc.text(line, marginLeft, y);
-        y += 5.5;
-      }
-    } else {
-      doc.setTextColor(115, 115, 112);
-      doc.text('(ingen indhold)', marginLeft, y);
+    const prefix = line.kind === 'bullet' ? '•  ' : '';
+    const indent = line.kind === 'bullet' ? 3 : 0;
+    const wrapped = doc.splitTextToSize(prefix + line.text, contentWidth - indent) as string[];
+    for (const w of wrapped) {
+      if (y > 270) { doc.addPage(); y = 20; }
+      doc.text(w, marginLeft + indent, y);
       y += 5.5;
     }
-    y += 6;
   }
 
   const pdfBuffer = Buffer.from(doc.output('arraybuffer'));
@@ -96,7 +132,7 @@ async function exportPdf(title: string, content: MinutesContent): Promise<NextRe
   });
 }
 
-async function exportDocx(title: string, content: MinutesContent): Promise<NextResponse> {
+async function exportDocx(title: string, markdown: string): Promise<NextResponse> {
   const { Document, Packer, Paragraph, TextRun, HeadingLevel, BorderStyle } = await import('docx');
 
   const children = [];
@@ -108,18 +144,21 @@ async function exportDocx(title: string, content: MinutesContent): Promise<NextR
     border: { bottom: { style: BorderStyle.SINGLE, size: 1, color: 'E5E5E2' } },
   }));
 
-  for (const section of content.sections as MinutesSection[]) {
-    children.push(new Paragraph({ text: section.label, heading: HeadingLevel.HEADING_2, spacing: { before: 400, after: 120 } }));
+  const lines = parseLines(markdown);
+  if (lines.length === 0) {
+    children.push(new Paragraph({
+      children: [new TextRun({ text: '(ingen indhold)', size: 22, color: '737370' })],
+    }));
+  }
 
-    const lines = section.content.trim()
-      ? section.content.split('\n').filter((l) => l.trim())
-      : ['(ingen indhold)'];
-
-    for (const line of lines) {
+  for (const line of lines) {
+    if (line.kind === 'heading') {
+      children.push(new Paragraph({ text: line.text, heading: HeadingLevel.HEADING_2, spacing: { before: 300, after: 120 } }));
+    } else {
       children.push(new Paragraph({
-        children: [new TextRun({ text: line.replace(/^[-*]\s/, ''), size: 22, color: section.content.trim() ? '3d3d3a' : '737370' })],
+        children: [new TextRun({ text: line.text, size: 22, color: '3d3d3a' })],
         spacing: { after: 120 },
-        ...(line.match(/^[-*]\s/) ? { bullet: { level: 0 } } : {}),
+        ...(line.kind === 'bullet' ? { bullet: { level: 0 } } : {}),
       }));
     }
   }

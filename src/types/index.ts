@@ -19,13 +19,34 @@ export interface TemplateSectionDef {
 }
 
 export interface MinutesContent {
-  sections: MinutesSection[];
+  // The referat as a single flowing markdown document. This is the canonical
+  // representation; the editor renders one borderless surface over it.
+  body?: string;
+  // Legacy section-based representation, kept so older saved minutes still load.
+  // `minutesToBody()` (src/lib/minutes-format.ts) flattens these into `body`.
+  sections?: MinutesSection[];
 }
 
 export interface MinutesSection {
   key: string;
   label: string;
   content: string;
+}
+
+// A reusable, shareable prompt for generating a referat. The free-text `prompt`
+// drives generation; the three include* flags optionally inject the matching
+// category (Deltagere / Beslutningspunkter / Dagsorden) into the output.
+export interface Skabelon {
+  id: string;
+  name: string;
+  description: string;
+  prompt: string;
+  includeDeltagere: boolean;
+  includeBeslutningspunkter: boolean;
+  includeDagsorden: boolean;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface PiiReplacement {

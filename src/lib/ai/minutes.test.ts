@@ -8,355 +8,114 @@ vi.mock('openai', () => ({
   },
 }));
 
-import { suggestTemplate, generateMinutes, generateMinutesFreeform } from './minutes';
-import type { TranscriptSegment, TemplateSectionDef } from '@/types';
+import { generateReferatBody, buildSkabelonInstruction, SkabelonSpec } from './minutes';
+import type { TranscriptSegment } from '@/types';
 
 const sampleSegments: TranscriptSegment[] = [
   { speaker: 'Taler 1', start: 0, end: 5, text: 'Vi åbner mødet.' },
   { speaker: 'Taler 2', start: 6, end: 10, text: 'Første punkt på dagsordenen.' },
 ];
 
-const sampleTemplates = [
-  { id: 'tmpl-1', name: 'Bestyrelsesmøde', description: 'Til bestyrelsesmøder' },
-  { id: 'tmpl-2', name: 'Personalemøde', description: 'Til personalemøder' },
-];
-
-const sampleSections: TemplateSectionDef[] = [
-  { key: 'deltagere', label: 'Deltagere', required: true },
-  { key: 'beslutninger', label: 'Beslutninger', description: 'Vigtige beslutninger', required: true },
-  { key: 'noter', label: 'Noter', required: false },
-];
+const baseSpec: SkabelonSpec = {
+  prompt: 'Lav et kortfattet referat.',
+  includeDeltagere: false,
+  includeBeslutningspunkter: false,
+  includeDagsorden: false,
+};
 
 function openaiResponse(content: string) {
   return { choices: [{ message: { content } }] };
 }
 
-// ─── suggestTemplate ──────────────────────────────────────────────────────────
+// ─── buildSkabelonInstruction ─────────────────────────────────────────────────
 
-describe('suggestTemplate', () => {
-  beforeEach(() => mockComplete.mockReset());
+describe('buildSkabelonInstruction', () => {
+  it('includes the base prompt', () => {
+    const out = buildSkabelonInstruction(baseSpec);
+    expect(out).toContain('Lav et kortfattet referat.');
+  });
 
-  it('returns the suggested template from OpenAI', async () => {
-    mockComplete.mockResolvedValueOnce(
-      openaiResponse(
-        JSON.stringify({
-          templateId: 'tmpl-1',
-          templateName: 'Bestyrelsesmøde',
-          explanation: 'Passer til en bestyrelse.',
-        }),
-      ),
+  it('injects the three categories when toggled on', () => {
+    const out = buildSkabelonInstruction(
+      { ...baseSpec, includeDeltagere: true, includeBeslutningspunkter: true, includeDagsorden: true },
+      ['Anna', 'Bjørn'],
     );
-
-    const result = await suggestTemplate(sampleSegments, sampleTemplates);
-
-    expect(result.templateId).toBe('tmpl-1');
-    expect(result.templateName).toBe('Bestyrelsesmøde');
-    expect(result.explanation).toBe('Passer til en bestyrelse.');
+    expect(out).toContain('Deltagere');
+    expect(out).toContain('Beslutningspunkter');
+    expect(out).toContain('Dagsorden');
+    expect(out).toContain('Anna, Bjørn');
   });
 
-  it('strips markdown code fences before parsing', async () => {
-    mockComplete.mockResolvedValueOnce(
-      openaiResponse(
-        '```json\n{"templateId":"tmpl-2","templateName":"Personalemøde","explanation":"X"}\n```',
-      ),
-    );
-
-    const result = await suggestTemplate(sampleSegments, sampleTemplates);
-    expect(result.templateId).toBe('tmpl-2');
+  it('lists participants even without the Deltagere category', () => {
+    const out = buildSkabelonInstruction(baseSpec, ['Anna']);
+    expect(out).toContain('Anna');
   });
 
-  it('falls back gracefully when JSON parse fails', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse('invalid json'));
-
-    const result = await suggestTemplate(sampleSegments, sampleTemplates);
-
-    expect(result.templateId).toBeNull();
-    expect(result.templateName).toBe('Bestyrelsesmøde'); // first template name
-    expect(result.explanation).toBeTruthy();
+  it('appends the custom prompt', () => {
+    const out = buildSkabelonInstruction(baseSpec, [], 'Fokus på handlinger');
+    expect(out).toContain('Fokus på handlinger');
   });
 
-  it('falls back with "Standard" when templates array is empty', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse('bad json'));
-
-    const result = await suggestTemplate(sampleSegments, []);
-    expect(result.templateName).toBe('Standard');
-  });
-
-  it('truncates transcript to 3000 chars in the prompt', async () => {
-    const longSegments: TranscriptSegment[] = Array.from({ length: 200 }, (_, i) => ({
-      speaker: 'Taler 1',
-      start: i,
-      end: i + 1,
-      text: 'Dette er en lang sætning der fylder meget i transskriptionen.',
-    }));
-
-    mockComplete.mockResolvedValueOnce(
-      openaiResponse(
-        JSON.stringify({ templateId: null, templateName: 'Standard', explanation: 'x' }),
-      ),
-    );
-
-    await suggestTemplate(longSegments, sampleTemplates);
-
-    const call = mockComplete.mock.calls[0][0];
-    const userContent = call.messages[1].content as string;
-    const parts = userContent.split('Transskription:\n');
-    expect(parts).toHaveLength(2);
-    const transcriptPart = parts[1].split('\n\nReturner JSON:')[0];
-    expect(transcriptPart.length).toBeLessThanOrEqual(3000);
-  });
-
-  it('includes template names and descriptions in the prompt', async () => {
-    mockComplete.mockResolvedValueOnce(
-      openaiResponse(JSON.stringify({ templateId: 'tmpl-1', templateName: 'X', explanation: 'y' })),
-    );
-
-    await suggestTemplate(sampleSegments, sampleTemplates);
-
-    const call = mockComplete.mock.calls[0][0];
-    const userContent = call.messages[1].content as string;
-    expect(userContent).toContain('Bestyrelsesmøde');
-    expect(userContent).toContain('Personalemøde');
-    expect(userContent).toContain('tmpl-1');
-  });
-
-  it('includes transcript text in the prompt', async () => {
-    mockComplete.mockResolvedValueOnce(
-      openaiResponse(JSON.stringify({ templateId: null, templateName: 'X', explanation: 'y' })),
-    );
-
-    await suggestTemplate(sampleSegments, sampleTemplates);
-
-    const call = mockComplete.mock.calls[0][0];
-    const userContent = call.messages[1].content as string;
-    expect(userContent).toContain('Vi åbner mødet.');
-  });
-
-  it('uses gpt-4o model', async () => {
-    mockComplete.mockResolvedValueOnce(
-      openaiResponse(JSON.stringify({ templateId: null, templateName: 'X', explanation: 'y' })),
-    );
-
-    await suggestTemplate(sampleSegments, sampleTemplates);
-
-    const call = mockComplete.mock.calls[0][0];
-    expect(call.model).toBe('gpt-4o');
+  it('omits categories that are toggled off', () => {
+    const out = buildSkabelonInstruction({ ...baseSpec, includeDagsorden: true });
+    expect(out).toContain('Dagsorden');
+    expect(out).not.toContain('Beslutningspunkter');
   });
 });
 
-// ─── generateMinutes ──────────────────────────────────────────────────────────
+// ─── generateReferatBody ──────────────────────────────────────────────────────
 
-describe('generateMinutes', () => {
+describe('generateReferatBody', () => {
   beforeEach(() => mockComplete.mockReset());
 
-  it('returns sections from OpenAI response', async () => {
-    mockComplete.mockResolvedValueOnce(
-      openaiResponse(
-        JSON.stringify({
-          sections: [
-            { key: 'deltagere', label: 'Deltagere', content: '- Taler 1\n- Taler 2' },
-            { key: 'beslutninger', label: 'Beslutninger', content: 'Ingen.' },
-            { key: 'noter', label: 'Noter', content: '' },
-          ],
-        }),
-      ),
-    );
+  it('returns the markdown body from the OpenAI response', async () => {
+    mockComplete.mockResolvedValueOnce(openaiResponse('## Referat\n\nMødet blev åbnet.'));
 
-    const result = await generateMinutes(sampleSegments, sampleSections);
+    const result = await generateReferatBody(sampleSegments, baseSpec);
 
-    expect(result.sections).toHaveLength(3);
-    expect(result.sections[0].key).toBe('deltagere');
-    expect(result.sections[0].content).toBe('- Taler 1\n- Taler 2');
+    expect(result.body).toBe('## Referat\n\nMødet blev åbnet.');
   });
 
-  it('strips markdown code fences before parsing', async () => {
-    mockComplete.mockResolvedValueOnce(
-      openaiResponse(
-        '```json\n{"sections":[{"key":"k","label":"L","content":"C"}]}\n```',
-      ),
-    );
+  it('strips an accidental markdown code fence', async () => {
+    mockComplete.mockResolvedValueOnce(openaiResponse('```markdown\n## Referat\n\nIndhold.\n```'));
 
-    const result = await generateMinutes(sampleSegments, [{ key: 'k', label: 'L', required: true }]);
-    expect(result.sections[0].content).toBe('C');
+    const result = await generateReferatBody(sampleSegments, baseSpec);
+
+    expect(result.body).toBe('## Referat\n\nIndhold.');
   });
 
-  it('falls back to empty sections matching the template when JSON parse fails', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse('not valid json'));
+  it('includes the transcript text in the prompt', async () => {
+    mockComplete.mockResolvedValueOnce(openaiResponse('referat'));
 
-    const result = await generateMinutes(sampleSegments, sampleSections);
+    await generateReferatBody(sampleSegments, baseSpec);
 
-    expect(result.sections).toHaveLength(sampleSections.length);
-    result.sections.forEach((s) => expect(s.content).toBe(''));
-    expect(result.sections.map((s) => s.key)).toEqual(sampleSections.map((s) => s.key));
-  });
-
-  it('includes section keys and labels in the prompt', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
-
-    await generateMinutes(sampleSegments, sampleSections);
-
-    const call = mockComplete.mock.calls[0][0];
-    const userContent = call.messages[1].content as string;
-    expect(userContent).toContain('"deltagere"');
-    expect(userContent).toContain('"Deltagere"');
-    expect(userContent).toContain('"beslutninger"');
-  });
-
-  it('marks required sections as påkrævet in the prompt', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
-
-    await generateMinutes(sampleSegments, sampleSections);
-
-    const call = mockComplete.mock.calls[0][0];
-    const userContent = call.messages[1].content as string;
-    expect(userContent).toContain('påkrævet');
-  });
-
-  it('includes formatted timestamps in the transcript', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
-
-    await generateMinutes(
-      [{ speaker: 'Taler 1', start: 65, end: 70, text: 'Hej' }],
-      sampleSections,
-    );
-
-    const call = mockComplete.mock.calls[0][0];
-    const userContent = call.messages[1].content as string;
-    // 65 seconds = 1:05
-    expect(userContent).toContain('1:05');
-  });
-
-  it('includes section descriptions when present', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
-
-    await generateMinutes(sampleSegments, sampleSections);
-
-    const call = mockComplete.mock.calls[0][0];
-    const userContent = call.messages[1].content as string;
-    expect(userContent).toContain('Vigtige beslutninger');
-  });
-
-  it('sends customPrompt in user message when provided', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
-
-    await generateMinutes(sampleSegments, sampleSections, 'Fokus på beslutninger');
-
-    const call = mockComplete.mock.calls[0][0];
-    const userContent = call.messages[1].content as string;
-    expect(userContent).toContain('Fokus på beslutninger');
-  });
-
-  it('uses gpt-4o model', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
-
-    await generateMinutes(sampleSegments, sampleSections);
-
-    const call = mockComplete.mock.calls[0][0];
-    expect(call.model).toBe('gpt-4o');
-  });
-
-  it('returns all section keys and labels from template in fallback', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse('bad json'));
-
-    const result = await generateMinutes(sampleSegments, sampleSections);
-    expect(result.sections.map((s) => s.label)).toEqual(
-      sampleSections.map((s) => s.label),
-    );
-  });
-});
-
-// ─── generateMinutesFreeform ──────────────────────────────────────────────────
-
-describe('generateMinutesFreeform', () => {
-  beforeEach(() => mockComplete.mockReset());
-
-  it('returns sections from OpenAI response', async () => {
-    mockComplete.mockResolvedValueOnce(
-      openaiResponse(
-        JSON.stringify({
-          sections: [
-            { key: 'resumé', label: 'Resumé', content: 'Mødet omhandlede projektstatus.' },
-            { key: 'handlinger', label: 'Handlinger', content: '- Opdater status.' },
-          ],
-        }),
-      ),
-    );
-
-    const result = await generateMinutesFreeform(sampleSegments, 'Fokus på handlingspunkter');
-
-    expect(result.sections).toHaveLength(2);
-    expect(result.sections[0].key).toBe('resumé');
-    expect(result.sections[0].content).toBe('Mødet omhandlede projektstatus.');
-  });
-
-  it('strips markdown code fences before parsing', async () => {
-    mockComplete.mockResolvedValueOnce(
-      openaiResponse(
-        '```json\n{"sections":[{"key":"s","label":"S","content":"C"}]}\n```',
-      ),
-    );
-
-    const result = await generateMinutesFreeform(sampleSegments, 'kort referat');
-    expect(result.sections[0].content).toBe('C');
-  });
-
-  it('falls back to empty sections array when JSON parse fails', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse('not valid json'));
-
-    const result = await generateMinutesFreeform(sampleSegments, 'prompt');
-    expect(result.sections).toHaveLength(0);
-  });
-
-  it('includes custom prompt in user message', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
-
-    await generateMinutesFreeform(sampleSegments, 'Lav et kortfattet referat');
-
-    const call = mockComplete.mock.calls[0][0];
-    const userContent = call.messages[1].content as string;
-    expect(userContent).toContain('Lav et kortfattet referat');
-  });
-
-  it('includes transcript text in the prompt', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
-
-    await generateMinutesFreeform(sampleSegments, 'prompt');
-
-    const call = mockComplete.mock.calls[0][0];
-    const userContent = call.messages[1].content as string;
+    const userContent = mockComplete.mock.calls[0][0].messages[1].content as string;
     expect(userContent).toContain('Vi åbner mødet.');
   });
 
   it('includes formatted timestamps in the prompt', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
+    mockComplete.mockResolvedValueOnce(openaiResponse('referat'));
 
-    await generateMinutesFreeform(
-      [{ speaker: 'Taler 1', start: 125, end: 130, text: 'Punkt to' }],
-      'referat',
-    );
+    await generateReferatBody([{ speaker: 'Taler 1', start: 65, end: 70, text: 'Hej' }], baseSpec);
 
-    const call = mockComplete.mock.calls[0][0];
-    const userContent = call.messages[1].content as string;
-    // 125 seconds = 2:05
-    expect(userContent).toContain('2:05');
+    const userContent = mockComplete.mock.calls[0][0].messages[1].content as string;
+    expect(userContent).toContain('1:05'); // 65 seconds
   });
 
-  it('uses gpt-4o model', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
+  it('feeds the built instruction into the prompt', async () => {
+    mockComplete.mockResolvedValueOnce(openaiResponse('referat'));
 
-    await generateMinutesFreeform(sampleSegments, 'prompt');
+    await generateReferatBody(sampleSegments, { ...baseSpec, includeDagsorden: true });
 
-    const call = mockComplete.mock.calls[0][0];
-    expect(call.model).toBe('gpt-4o');
+    const userContent = mockComplete.mock.calls[0][0].messages[1].content as string;
+    expect(userContent).toContain('Dagsorden');
   });
 
-  it('instructs OpenAI to decide sections itself', async () => {
-    mockComplete.mockResolvedValueOnce(openaiResponse(JSON.stringify({ sections: [] })));
+  it('uses gpt-4o', async () => {
+    mockComplete.mockResolvedValueOnce(openaiResponse('referat'));
 
-    await generateMinutesFreeform(sampleSegments, 'prompt');
+    await generateReferatBody(sampleSegments, baseSpec);
 
-    const call = mockComplete.mock.calls[0][0];
-    const userContent = call.messages[1].content as string;
-    expect(userContent).toContain('Beslut selv hvilke sektioner');
+    expect(mockComplete.mock.calls[0][0].model).toBe('gpt-4o');
   });
 });

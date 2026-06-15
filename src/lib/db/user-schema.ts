@@ -58,6 +58,22 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       )
     `);
 
+    // skabeloner — reusable, shareable prompts for generating a referat
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".skabeloner (
+        id           TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        name         TEXT NOT NULL,
+        description  TEXT NOT NULL DEFAULT '',
+        prompt       TEXT NOT NULL DEFAULT '',
+        include_deltagere          BOOLEAN NOT NULL DEFAULT FALSE,
+        include_beslutningspunkter BOOLEAN NOT NULL DEFAULT FALSE,
+        include_dagsorden          BOOLEAN NOT NULL DEFAULT FALSE,
+        is_default   BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
     // meetings
     await client.query(`
       CREATE TABLE IF NOT EXISTS "${schema}".meetings (
@@ -257,6 +273,39 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         )
       ) AS t(name, description, structure, is_default)
       WHERE NOT EXISTS (SELECT 1 FROM "${schema}".templates LIMIT 1)
+    `);
+
+    // Seed default skabeloner (prompt-based) if none exist
+    await client.query(`
+      INSERT INTO "${schema}".skabeloner
+        (name, description, prompt, include_deltagere, include_beslutningspunkter, include_dagsorden, is_default)
+      SELECT * FROM (VALUES
+        (
+          'Bestyrelsesmøde',
+          'Til formelle bestyrelsesmøder med dagsorden og beslutningspunkter',
+          'Udarbejd et formelt mødereferat for et bestyrelsesmøde. Skriv i et professionelt, klart sprog. Fremhæv beslutninger, ansvarlige og deadlines, og afslut med eventuelle handlingspunkter og næste møde.',
+          TRUE, TRUE, TRUE, TRUE
+        ),
+        (
+          'Personalemøde',
+          'Til interne personalemøder og teamopdateringer',
+          'Udarbejd et referat for et personalemøde. Opsummer statusopdateringer, drøftede punkter samt aftaler og opfølgning. Hold tonen uformel men præcis.',
+          TRUE, FALSE, FALSE, FALSE
+        ),
+        (
+          'Forældresamtale',
+          'Til skole-hjem samtaler og forældremøder',
+          'Udarbejd et kort referat for en forældresamtale. Beskriv barnets trivsel og faglige udvikling, samt de aftaler der blev indgået. Vær konkret og respektfuld.',
+          TRUE, FALSE, FALSE, FALSE
+        ),
+        (
+          'Projektmøde',
+          'Til projektstyring og koordineringsmøder',
+          'Udarbejd et referat for et projektmøde. Beskriv projektstatus og fremdrift, risici og blokeringer, beslutninger samt handlingspunkter med ansvarlige.',
+          TRUE, TRUE, FALSE, FALSE
+        )
+      ) AS s(name, description, prompt, include_deltagere, include_beslutningspunkter, include_dagsorden, is_default)
+      WHERE NOT EXISTS (SELECT 1 FROM "${schema}".skabeloner LIMIT 1)
     `);
 
     await client.query('COMMIT');

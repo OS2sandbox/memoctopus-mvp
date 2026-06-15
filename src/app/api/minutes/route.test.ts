@@ -1,45 +1,63 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockSuggestTemplate = vi.hoisted(() => vi.fn());
-const mockGenerateMinutes = vi.hoisted(() => vi.fn());
-const mockGenerateMinutesFreeform = vi.hoisted(() => vi.fn());
-const mockGetTemplates = vi.hoisted(() => vi.fn());
-
-vi.mock('@/lib/ai/minutes', () => ({
-  suggestTemplate: mockSuggestTemplate,
-  generateMinutes: mockGenerateMinutes,
-  generateMinutesFreeform: mockGenerateMinutesFreeform,
+vi.mock('next/headers', () => ({
+  headers: vi.fn().mockResolvedValue(new Headers()),
 }));
 
-vi.mock('@/lib/storage/templates', () => ({
-  getTemplates: mockGetTemplates,
+vi.mock('@/lib/auth', () => ({
+  auth: { api: { getSession: vi.fn() } },
+}));
+
+const mockGenerateReferatBody = vi.hoisted(() => vi.fn());
+const mockGetSkabelon = vi.hoisted(() => vi.fn());
+const mockGetDefaultSkabelon = vi.hoisted(() => vi.fn());
+
+vi.mock('@/lib/ai/minutes', () => ({
+  generateReferatBody: mockGenerateReferatBody,
+}));
+
+vi.mock('@/lib/skabeloner/server', () => ({
+  getSkabelon: mockGetSkabelon,
+  getDefaultSkabelon: mockGetDefaultSkabelon,
 }));
 
 import { POST } from './route';
-import { makeJsonReq } from '@/test/helpers';
+import { auth } from '@/lib/auth';
+import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
+
+const mockGetSession = vi.mocked(auth.api.getSession);
 
 const BASE_URL = 'http://localhost/api/minutes';
+const sampleSegments = [{ speaker: 'Taler 1', start: 0, end: 5, text: 'Vi besluttede at gå videre.' }];
+const sampleContent = { body: '## Beslutninger\n\nGå videre.' };
 
-const sampleSegments = [
-  { speaker: 'Taler 1', start: 0, end: 5, text: 'Vi besluttede at gå videre.' },
-];
+const defaultSkabelon = {
+  id: 'sk-default',
+  name: 'Bestyrelsesmøde',
+  description: '',
+  prompt: 'Lav et referat.',
+  includeDeltagere: true,
+  includeBeslutningspunkter: true,
+  includeDagsorden: true,
+  isDefault: true,
+  createdAt: '', updatedAt: '',
+};
 
-const sampleContent = { sections: [{ key: 'beslutninger', label: 'Beslutninger', content: 'Gå videre.' }] };
-
-const templates = [
-  { id: 'tpl-standard', name: 'Standard', description: 'Standard referat', isDefault: true, structure: { sections: [{ key: 'beslutninger', label: 'Beslutninger', required: true }] } },
-  { id: 'tpl-kort', name: 'Kort', description: 'Kort referat', isDefault: false, structure: { sections: [] } },
-];
-
-// The route generates minutes from client-supplied segments via the AI helpers.
-// It does NOT touch auth or the database — persistence is client-side (IndexedDB).
 describe('POST /api/minutes', () => {
   beforeEach(() => {
-    mockSuggestTemplate.mockReset();
-    mockGenerateMinutes.mockReset();
-    mockGenerateMinutesFreeform.mockReset();
-    mockGetTemplates.mockReset();
-    mockGetTemplates.mockReturnValue(templates);
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    mockGenerateReferatBody.mockReset();
+    mockGetSkabelon.mockReset();
+    mockGetDefaultSkabelon.mockReset();
+    mockGetDefaultSkabelon.mockResolvedValue(defaultSkabelon);
+    mockGenerateReferatBody.mockResolvedValue(sampleContent);
+  });
+
+  it('returns 401 when not authenticated', async () => {
+    mockGetSession.mockResolvedValueOnce(null as never);
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
+    expect(res.status).toBe(401);
   });
 
   it('returns 400 when segments is missing', async () => {
@@ -48,71 +66,52 @@ describe('POST /api/minutes', () => {
     expect((await res.json()).error).toBe('No segments provided');
   });
 
-  it('returns 400 when segments is empty', async () => {
-    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: [] }));
-    expect(res.status).toBe(400);
-  });
-
-  it('suggests a template and returns generated content + templateId', async () => {
-    mockSuggestTemplate.mockResolvedValueOnce({ templateId: 'tpl-standard' });
-    mockGenerateMinutes.mockResolvedValueOnce(sampleContent);
-
+  it('generates the body using the default skabelon and returns its id', async () => {
     const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
 
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.templateId).toBe('tpl-standard');
     expect(body.content).toEqual(sampleContent);
-    expect(mockGenerateMinutes).toHaveBeenCalledOnce();
-    expect(mockGenerateMinutesFreeform).not.toHaveBeenCalled();
+    expect(body.skabelonId).toBe('sk-default');
+    expect(mockGetDefaultSkabelon).toHaveBeenCalledOnce();
   });
 
-  it('falls back to the default template when the suggestion is unknown', async () => {
-    mockSuggestTemplate.mockResolvedValueOnce({ templateId: 'does-not-exist' });
-    mockGenerateMinutes.mockResolvedValueOnce(sampleContent);
+  it('loads the chosen skabelon when skabelonId is provided', async () => {
+    mockGetSkabelon.mockResolvedValueOnce({ ...defaultSkabelon, id: 'sk-1' });
 
-    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, skabelonId: 'sk-1' }));
 
     expect(res.status).toBe(200);
-    expect((await res.json()).templateId).toBe('tpl-standard'); // the isDefault template
+    expect((await res.json()).skabelonId).toBe('sk-1');
+    expect(mockGetSkabelon).toHaveBeenCalledWith('user-123', 'sk-1');
+    expect(mockGetDefaultSkabelon).not.toHaveBeenCalled();
   });
 
-  it('uses freeform generation (templateId null) when a customPrompt is given', async () => {
-    mockGenerateMinutesFreeform.mockResolvedValueOnce(sampleContent);
+  it('lets explicit category toggles override the skabelon defaults', async () => {
+    await POST(makeJsonReq(BASE_URL, 'POST', {
+      segments: sampleSegments,
+      includeDeltagere: false,
+      includeDagsorden: false,
+    }));
 
-    const res = await POST(
-      makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, customPrompt: 'Fokusér på beslutninger' }),
-    );
-
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.templateId).toBeNull();
-    expect(body.content).toEqual(sampleContent);
-    expect(mockGenerateMinutesFreeform).toHaveBeenCalledOnce();
-    expect(mockSuggestTemplate).not.toHaveBeenCalled();
-    expect(mockGenerateMinutes).not.toHaveBeenCalled();
+    // generateReferatBody(segments, spec, participants, chapters, customPrompt)
+    const spec = mockGenerateReferatBody.mock.calls[0][1];
+    expect(spec.includeDeltagere).toBe(false);
+    expect(spec.includeDagsorden).toBe(false);
+    expect(spec.includeBeslutningspunkter).toBe(true); // unchanged → from skabelon
   });
 
-  it('forwards participants and chapters to the generator', async () => {
-    mockSuggestTemplate.mockResolvedValueOnce({ templateId: 'tpl-standard' });
-    mockGenerateMinutes.mockResolvedValueOnce(sampleContent);
+  it('forwards participants, chapters and customPrompt to the generator', async () => {
     const participants = ['Alice', 'Bob'];
     const chapters = [{ id: 'ch-0', title: 'Intro', summary: 'S', startTime: 0, endTime: 5, segmentIndices: [0] }];
 
-    await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, participants, chapters }));
+    await POST(makeJsonReq(BASE_URL, 'POST', {
+      segments: sampleSegments, participants, chapters, customPrompt: 'kort',
+    }));
 
-    // generateMinutes(segments, sections, undefined, participants, chapters)
-    const args = mockGenerateMinutes.mock.calls[0];
-    expect(args[3]).toEqual(participants);
-    expect(args[4]).toEqual(chapters);
-  });
-
-  it('returns 500 when no templates are available', async () => {
-    mockGetTemplates.mockReturnValue([]);
-    mockSuggestTemplate.mockResolvedValueOnce({ templateId: null });
-
-    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
-    expect(res.status).toBe(500);
-    expect((await res.json()).error).toBe('No templates available');
+    const args = mockGenerateReferatBody.mock.calls[0];
+    expect(args[2]).toEqual(participants);
+    expect(args[3]).toEqual(chapters);
+    expect(args[4]).toBe('kort');
   });
 });

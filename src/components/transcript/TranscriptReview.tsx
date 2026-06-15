@@ -9,7 +9,7 @@ import { getTranscript, getAudio, saveTranscriptChapters, saveTranscriptSegments
 import { onTranscriptUpdated } from '@/lib/transcript-events';
 import { isDiarizationInFlight, ensureDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import { isDefaultSpeakerLabel, nextAvailableSpeakerLabel } from '@/lib/audio/speaker-labels';
-import type { MinutesContent } from '@/types';
+import type { MinutesContent, Skabelon } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
 
 interface TranscriptReviewProps {
@@ -142,8 +142,47 @@ export function TranscriptReview({
     const off = onTranscriptUpdated(meetingId, () => { void refresh(); });
     return () => { cancelled = true; off(); };
   }, [meetingId]);
-  const [activeKeywords, setActiveKeywords] = useState<Set<string>>(new Set());
+  // Skabelon-driven generation: the chosen prompt + the three optional category
+  // injections (Deltagere / Beslutningspunkter / Dagsorden), seeded from the
+  // selected Skabelon but overridable here in gennemgang.
+  const [skabeloner, setSkabeloner] = useState<Skabelon[]>([]);
+  const [selectedSkabelonId, setSelectedSkabelonId] = useState<string>('');
+  const [cats, setCats] = useState({ deltagere: false, beslutningspunkter: false, dagsorden: false });
   const [customText, setCustomText] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/skabeloner')
+      .then((r) => (r.ok ? r.json() : { skabeloner: [] }))
+      .then((data: { skabeloner: Skabelon[] }) => {
+        if (cancelled) return;
+        const list = data.skabeloner ?? [];
+        setSkabeloner(list);
+        const def = list.find((s) => s.isDefault) ?? list[0];
+        if (def) {
+          setSelectedSkabelonId(def.id);
+          setCats({
+            deltagere: def.includeDeltagere,
+            beslutningspunkter: def.includeBeslutningspunkter,
+            dagsorden: def.includeDagsorden,
+          });
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  function selectSkabelon(id: string) {
+    setSelectedSkabelonId(id);
+    const s = skabeloner.find((x) => x.id === id);
+    if (s) {
+      setCats({
+        deltagere: s.includeDeltagere,
+        beslutningspunkter: s.includeBeslutningspunkter,
+        dagsorden: s.includeDagsorden,
+      });
+    }
+  }
 
   // PII checklist: all items checked by default
   const [piiReplacements, setPiiReplacements] = useState<PiiReplacement[]>(initialPiiReplacements);
@@ -559,7 +598,11 @@ export function TranscriptReview({
           body: JSON.stringify({
             segments: processedSegments,
             participants: editableParticipants.filter(Boolean),
-            customPrompt: [...Array.from(activeKeywords), customText.trim()].filter(Boolean).join(', ') || undefined,
+            skabelonId: selectedSkabelonId || undefined,
+            includeDeltagere: cats.deltagere,
+            includeBeslutningspunkter: cats.beslutningspunkter,
+            includeDagsorden: cats.dagsorden,
+            customPrompt: customText.trim() || undefined,
           }),
           signal: abort.signal,
         });
@@ -570,8 +613,8 @@ export function TranscriptReview({
         const data = await res.json();
         throw new Error(data.error ?? 'Kunne ikke generere referat');
       }
-      const data = await res.json() as { content: MinutesContent; templateId?: string };
-      await saveMinutes(meetingId, data.content, data.templateId);
+      const data = await res.json() as { content: MinutesContent; skabelonId?: string | null };
+      await saveMinutes(meetingId, data.content, data.skabelonId ?? null);
       await deleteAudio(meetingId);
       await updateMeeting(meetingId, { status: 'minutes', audioDeleted: true });
       onDataChange?.();
@@ -1023,74 +1066,69 @@ export function TranscriptReview({
             />
           </div>
 
-          {/* Keywords / prompt */}
+          {/* Skabelon, kategorier & ekstra instruktioner */}
           <div style={{ marginTop: 28 }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>fokus</div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>skabelon</div>
 
-            {/* Inactive keyword chips — above the textarea */}
-            {['Standard', 'Beslutninger', 'Handlepunkter', 'Fuld detalje'].some((k) => !activeKeywords.has(k)) && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                {['Standard', 'Beslutninger', 'Handlepunkter', 'Fuld detalje']
-                  .filter((k) => !activeKeywords.has(k))
-                  .map((keyword) => (
-                    <button
-                      key={keyword}
-                      onClick={() => setActiveKeywords((prev) => { const n = new Set(prev); n.add(keyword); return n; })}
-                      style={{
-                        padding: '4px 10px',
-                        border: '1px solid var(--line)',
-                        borderRadius: 999,
-                        background: 'transparent',
-                        fontFamily: 'var(--mono)', fontSize: 11.5,
-                        color: 'var(--ink-2)',
-                        cursor: 'pointer',
-                        transition: 'border-color 120ms, color 120ms',
-                      }}
-                    >
-                      {keyword}
-                    </button>
-                  ))}
-              </div>
-            )}
+            {/* Skabelon selector */}
+            <select
+              value={selectedSkabelonId}
+              onChange={(e) => selectSkabelon(e.target.value)}
+              style={{
+                width: '100%', padding: '8px 10px',
+                border: '1px solid var(--line-2)', borderRadius: 'var(--radius)',
+                background: 'var(--bg)', color: 'var(--ink)',
+                fontSize: 13, cursor: 'pointer', marginBottom: 14,
+              }}
+            >
+              {skabeloner.length === 0 && <option value="">Standard</option>}
+              {skabeloner.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
 
-            {/* Textarea with active keywords inside */}
+            {/* Optional category injections */}
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 8 }}>kategorier</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+              {([
+                ['deltagere', 'Deltagere'],
+                ['beslutningspunkter', 'Beslutningspunkter'],
+                ['dagsorden', 'Dagsorden'],
+              ] as const).map(([key, label]) => {
+                const active = cats[key];
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setCats((prev) => ({ ...prev, [key]: !prev[key] }))}
+                    style={{
+                      padding: '4px 10px',
+                      border: '1px solid ' + (active ? 'var(--accent)' : 'var(--line)'),
+                      borderRadius: 999,
+                      background: active ? 'var(--accent-wash)' : 'transparent',
+                      fontFamily: 'var(--mono)', fontSize: 11.5,
+                      color: active ? 'var(--accent)' : 'var(--ink-2)',
+                      cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', gap: 5,
+                      transition: 'border-color 120ms, color 120ms',
+                    }}
+                  >
+                    {label}
+                    {active && <span style={{ fontSize: 13, lineHeight: 1, opacity: 0.7 }}>×</span>}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Extra ad-hoc instructions */}
             <div style={{
               border: '1px solid var(--line-2)',
               borderRadius: 'var(--radius)',
               background: 'var(--bg)',
             }}>
-              {activeKeywords.size > 0 && (
-                <div style={{
-                  padding: '8px 10px', display: 'flex', flexWrap: 'wrap', gap: 6,
-                  borderBottom: '1px solid var(--line)',
-                }}>
-                  {['Standard', 'Beslutninger', 'Handlepunkter', 'Fuld detalje']
-                    .filter((k) => activeKeywords.has(k))
-                    .map((keyword) => (
-                      <button
-                        key={keyword}
-                        onClick={() => setActiveKeywords((prev) => { const n = new Set(prev); n.delete(keyword); return n; })}
-                        style={{
-                          padding: '3px 8px',
-                          border: '1px solid var(--accent)',
-                          borderRadius: 999,
-                          background: 'var(--accent-wash)',
-                          fontFamily: 'var(--mono)', fontSize: 11.5,
-                          color: 'var(--accent)',
-                          cursor: 'pointer',
-                          display: 'flex', alignItems: 'center', gap: 5,
-                        }}
-                      >
-                        {keyword}
-                        <span style={{ fontSize: 13, lineHeight: 1, opacity: 0.7 }}>×</span>
-                      </button>
-                    ))}
-                </div>
-              )}
               <textarea
                 value={customText}
                 onChange={(e) => setCustomText(e.target.value)}
-                placeholder={activeKeywords.size === 0 ? 'Beskriv referatet…' : 'Tilføj instruktioner…'}
+                placeholder="Tilføj instruktioner…"
                 rows={2}
                 style={{
                   width: '100%', minHeight: 60,
