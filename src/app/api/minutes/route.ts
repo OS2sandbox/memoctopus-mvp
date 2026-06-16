@@ -47,6 +47,9 @@ export async function POST(req: NextRequest) {
   let skabelon: Skabelon | null = null;
   if (skabelonId) {
     skabelon = await getSkabelon(userId, skabelonId);
+    // A non-empty id that no longer resolves (deleted/stale in another tab) falls
+    // back to the default rather than silently generating with an empty prompt.
+    if (!skabelon) skabelon = await getDefaultSkabelon(userId);
   } else if (skabelonId === undefined) {
     skabelon = await getDefaultSkabelon(userId);
   }
