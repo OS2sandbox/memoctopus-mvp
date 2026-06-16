@@ -66,6 +66,108 @@ function skabelonToCats(s?: Skabelon | null) {
   };
 }
 
+// Styled skabelon picker — a native <select> can't be themed or show the
+// favorite heart, so this mirrors the app's surface/line/accent tokens, marks
+// the current choice, and flags the user's default with a small blue heart.
+function SkabelonSelect({
+  skabeloner,
+  value,
+  onChange,
+}: {
+  skabeloner: Skabelon[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const selectedName = skabeloner.find((s) => s.id === value)?.name ?? 'Ingen skabelon';
+  const options = [{ id: '', name: 'Ingen skabelon', isDefault: false }, ...skabeloner];
+
+  return (
+    <div ref={ref} style={{ position: 'relative', marginBottom: 14 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        style={{
+          width: '100%', padding: '8px 10px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+          border: '1px solid ' + (open ? 'var(--accent)' : 'var(--line-2)'),
+          borderRadius: 'var(--radius)', background: 'var(--bg)', color: 'var(--ink)',
+          fontSize: 13, cursor: 'pointer', textAlign: 'left', transition: 'border-color 120ms',
+        }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedName}</span>
+        <svg width="10" height="10" viewBox="0 0 10 10" style={{ flexShrink: 0, color: 'var(--muted)', transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : undefined }}>
+          <path d="M1 3l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          style={{
+            position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0,
+            background: 'var(--surface)', border: '1px solid var(--line)',
+            borderRadius: 'var(--radius)', boxShadow: '0 8px 28px rgba(0,0,0,0.10)',
+            zIndex: 50, overflow: 'hidden', padding: 4,
+          }}
+        >
+          {options.map((opt) => {
+            const isSel = opt.id === value;
+            return (
+              <button
+                key={opt.id || '__none__'}
+                type="button"
+                role="option"
+                aria-selected={isSel}
+                onClick={() => { onChange(opt.id); setOpen(false); }}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '7px 9px', borderRadius: 'calc(var(--radius) - 2px)',
+                  border: 'none', cursor: 'pointer', textAlign: 'left', fontSize: 13,
+                  background: isSel ? 'var(--accent-wash)' : 'transparent',
+                  color: isSel ? 'var(--accent)' : 'var(--ink)',
+                }}
+                onMouseEnter={(e) => { if (!isSel) e.currentTarget.style.background = 'var(--bg-2)'; }}
+                onMouseLeave={(e) => { if (!isSel) e.currentTarget.style.background = 'transparent'; }}
+              >
+                <span style={{ width: 14, flexShrink: 0, display: 'inline-flex', justifyContent: 'center', color: 'var(--accent)' }}>
+                  {isSel && (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                  )}
+                </span>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{opt.name}</span>
+                {opt.isDefault && (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="var(--accent)" stroke="none" style={{ flexShrink: 0 }} aria-label="standard">
+                    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+                  </svg>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TranscriptReview({
   meetingId,
   initialSegments,
@@ -1191,21 +1293,11 @@ export function TranscriptReview({
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>skabelon</div>
 
             {/* Skabelon selector */}
-            <select
+            <SkabelonSelect
+              skabeloner={skabeloner}
               value={selectedSkabelonId}
-              onChange={(e) => selectSkabelon(e.target.value)}
-              style={{
-                width: '100%', padding: '8px 10px',
-                border: '1px solid var(--line-2)', borderRadius: 'var(--radius)',
-                background: 'var(--bg)', color: 'var(--ink)',
-                fontSize: 13, cursor: 'pointer', marginBottom: 14,
-              }}
-            >
-              <option value="">Ingen skabelon</option>
-              {skabeloner.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
+              onChange={selectSkabelon}
+            />
 
             {/* Optional category injections */}
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 8 }}>kategorier</div>
