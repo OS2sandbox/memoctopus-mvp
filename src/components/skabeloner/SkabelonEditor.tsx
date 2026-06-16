@@ -188,21 +188,28 @@ export function SkabelonEditor({
 
         <div className="space-y-4 mt-2">
           {!skabelon && pasteEnabled && (
-            <div className="rounded-[var(--radius-lg)] border border-dashed border-[var(--line)] p-3 space-y-2">
-              <Label htmlFor="sk-paste">{what.label}</Label>
-              <p className="text-xs text-[var(--muted)]">
-                {what.help}
-              </p>
-              <div className="flex items-start gap-2">
-                <Textarea
+            <div className="rounded-[var(--radius)] border border-dashed border-[var(--line)] px-3 py-2.5 space-y-2">
+              <div>
+                <Label htmlFor="sk-paste">{what.label}</Label>
+                <p className="text-xs text-[var(--muted)] mt-0.5">
+                  {what.help}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
                   id="sk-paste"
                   value={pasteValue}
                   onChange={(e) => {
                     setPasteValue(e.target.value);
                     setPasteError(null);
                   }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleImport();
+                    }
+                  }}
                   placeholder={what.placeholder}
-                  rows={2}
                   className="font-mono text-xs"
                 />
                 <Button
