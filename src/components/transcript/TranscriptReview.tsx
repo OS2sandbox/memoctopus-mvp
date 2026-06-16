@@ -314,13 +314,6 @@ export function TranscriptReview({
     setTemplateError(null);
   }
 
-  // Cycle to the other step. No-op without a selected skabelon (only 'new' exists).
-  function cycleTemplateMode() {
-    if (!selectedSkabelon) return;
-    setTemplateError(null);
-    setTemplateMode((m) => (m === 'update' ? 'new' : 'update'));
-  }
-
   // Persist the current prompt + categories — either folding them into the
   // selected skabelon ('update') or forking a brand-new one ('new').
   async function saveTemplate(mode: 'update' | 'new') {
@@ -1370,27 +1363,52 @@ export function TranscriptReview({
                 </button>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {/* Step header — names the current step and cycles to the other */}
-                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-2)', letterSpacing: 0.3 }}>
-                      {templateStep === 'update'
-                        ? `Opdater „${selectedSkabelon?.name ?? ''}"`
-                        : 'Gem som ny skabelon'}
+                  {/* Mode selector — make it explicit whether you're adding to the
+                      selected skabelon or creating a new one */}
+                  {selectedSkabelon ? (
+                    <>
+                      {/* Common track pill makes the two options read as one
+                          either/or toggle, spanning the full width */}
+                      <div style={{
+                        display: 'flex', gap: 4, padding: 3,
+                        border: '1px solid var(--line)', borderRadius: 999, background: 'var(--surface)',
+                      }}>
+                        {([
+                          ['update', 'Føj til skabelon'],
+                          ['new', 'Ny skabelon'],
+                        ] as const).map(([mode, label]) => {
+                          const on = templateStep === mode;
+                          return (
+                            <button
+                              key={mode}
+                              onClick={() => { setTemplateMode(mode); setTemplateError(null); }}
+                              disabled={templateSaving}
+                              style={{
+                                flex: 1, padding: '5px 12px', borderRadius: 999, textAlign: 'center',
+                                border: '1px solid ' + (on ? 'var(--accent)' : 'transparent'),
+                                cursor: templateSaving ? 'not-allowed' : 'pointer',
+                                fontFamily: 'var(--mono)', fontSize: 11.5,
+                                background: on ? 'var(--accent-wash)' : 'transparent',
+                                color: on ? 'var(--accent)' : 'var(--ink-2)',
+                                transition: 'border-color 120ms, color 120ms, background 120ms',
+                              }}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', lineHeight: 1.5 }}>
+                        {templateStep === 'update'
+                          ? `Føjer dine instruktioner til skabelonen ${selectedSkabelon.name}.`
+                          : 'Opretter en ny skabelon ud fra prompten.'}
+                      </span>
+                    </>
+                  ) : (
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', lineHeight: 1.5 }}>
+                      Opretter en ny skabelon ud fra prompten.
                     </span>
-                    {selectedSkabelon && (
-                      <button
-                        onClick={cycleTemplateMode}
-                        disabled={templateSaving}
-                        style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 4,
-                          background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                          fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)', flexShrink: 0,
-                        }}
-                      >
-                        ↺ {templateStep === 'update' ? 'gem som ny i stedet' : 'opdater i stedet'}
-                      </button>
-                    )}
-                  </div>
+                  )}
 
                   {/* New skabelon needs a name */}
                   {templateStep === 'new' && (
@@ -1423,7 +1441,7 @@ export function TranscriptReview({
                         opacity: templateSaving ? 0.6 : 1,
                       }}
                     >
-                      {templateSaving ? 'gemmer…' : templateStep === 'update' ? 'Opdater' : 'Gem'}
+                      {templateSaving ? 'gemmer…' : templateStep === 'update' ? 'Føj til skabelonen' : 'Gem skabelon'}
                     </button>
                     <button
                       onClick={closeTemplateForm}
