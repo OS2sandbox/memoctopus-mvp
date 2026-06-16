@@ -16,7 +16,7 @@ import { formatDuration, formatFileSize } from '@/lib/utils';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { pickRecordingMimeType } from '@/lib/audio/recording-format';
 import type { TranscriptSegment } from '@/types';
-import { saveAudio, saveTranscript, updateMeeting, deleteMeeting } from '@/lib/storage';
+import { saveAudio, saveTranscript, updateMeeting, deleteMeeting, getMeeting, getTranscript, getAudio } from '@/lib/storage';
 import { startDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import {
   float32ToWavBlob, newVadBatchState, sealCurrentBatch,
@@ -1066,6 +1066,32 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
       }
       mediaRecorderRef.current?.stream.getTracks().forEach((t) => t.stop());
       mediaRecorderRef.current = null;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Remove an abandoned empty recording so it doesn't clutter the Arkiv: if the
+  // user leaves while the meeting is still an in-progress recording that produced
+  // nothing — no transcript and no saved audio — delete it on unmount. A real
+  // stop (stopAndSave) writes a transcript and flips the status to 'review' before
+  // navigating, and a failed stop still keeps its saved audio, so neither is
+  // matched here. The async read also doubles as a StrictMode guard: dev's
+  // mount→cleanup→mount remounts before the read resolves, so instanceMountedRef
+  // is true again and we skip.
+  const instanceMountedRef = useRef(false);
+  useEffect(() => {
+    instanceMountedRef.current = true;
+    return () => {
+      instanceMountedRef.current = false;
+      void (async () => {
+        const [m, t, a] = await Promise.all([
+          getMeeting(meetingId), getTranscript(meetingId), getAudio(meetingId),
+        ]);
+        if (instanceMountedRef.current) return; // remounted (StrictMode) — not a real unmount
+        if (m && m.status === 'recording' && !t && !a) {
+          await deleteMeeting(meetingId).catch(() => {});
+        }
+      })();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

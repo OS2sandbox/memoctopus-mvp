@@ -39,7 +39,12 @@ export default function ArkivPage() {
     getAllMeetings()
       .then((rows) => {
         const mapped = rows
+          // Hide meetings that never got off the ground: a bot still joining, or an
+          // abandoned recording that produced nothing (still 'recording', no saved
+          // audio). RecordingScreen deletes these on unmount; this also covers the
+          // navigation race and orphans left by a crash or closed tab.
           .filter((r) => r.status !== 'joining')
+          .filter((r) => !(r.status === 'recording' && r.audioSizeBytes === 0))
           .map((r: StoredMeeting) => ({
             id: r.id,
             title: r.title,
