@@ -30,8 +30,11 @@ services:
       # Only needed if the model repo is gated; harmless when empty.
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
     volumes:
-      # Cache the downloaded weights so restarts don't re-download (~minutes).
-      - hf-cache:/root/.cache/huggingface
+      # HF weight cache. Default: a named volume (downloads once, persists across
+      # restarts on this host). To REUSE pre-downloaded weights, set HF_CACHE_DIR
+      # in .env to a host path holding an HF cache (e.g. /workspace/.hf_home) — it
+      # then bind-mounts that instead, so hviske skips the multi-GB download.
+      - ${HF_CACHE_DIR:-hf-cache}:/root/.cache/huggingface
     ports:
       # Optional external exposure; matches the legacy port. Remove to keep it
       # internal-only (the app reaches it over the compose network regardless).
@@ -63,9 +66,23 @@ services:
       dockerfile: Dockerfile
       args:
         HF_TOKEN: ${HF_TOKEN:-}
+        # Default true: bake the pyannote weights into the image (offline at runtime).
+        # Set DIARIZATION_BAKE_WEIGHTS=false to skip the build-time download and
+        # instead load weights at runtime from a mounted HF cache (see DIAR_HF_CACHE_DIR
+        # below). HF_TOKEN must then be present at runtime too (it is, via env).
+        BAKE_WEIGHTS: ${DIARIZATION_BAKE_WEIGHTS:-true}
     environment:
       - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
       - DIARIZATION_DEVICE=cuda
+      # Runtime token + cache home — only used when BAKE_WEIGHTS=false (harmless otherwise).
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HF_HOME=/models
+    # To reuse pre-downloaded pyannote weights instead of baking, set
+    # DIARIZATION_BAKE_WEIGHTS=false and point DIAR_HF_CACHE_DIR at a host HF cache:
+    #   volumes:
+    #     - ${DIAR_HF_CACHE_DIR}:/models
+    # (Leave unset for the default baked image — mounting an empty dir at /models
+    # would shadow the baked weights, so it's deliberately NOT wired by default.)
     shm_size: "2gb"
     deploy:
       resources:

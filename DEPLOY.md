@@ -11,6 +11,21 @@ clone repo → edit `.env` → `compose up`).
 
 The overlay is **not standalone** — it's always merged on top of the base.
 
+## One-command host setup
+
+On a fresh Ubuntu/Debian GPU host, `scripts/bootstrap-host.sh` installs Docker +
+the NVIDIA Container Toolkit, verifies `--gpus all`, and brings the stack up:
+
+```bash
+git clone <repo> referat && cd referat
+./scripts/bootstrap-host.sh            # everything mode: install + verify GPU + up
+./scripts/bootstrap-host.sh --small    # app stack only (no GPU toolkit)
+./scripts/bootstrap-host.sh --no-up    # install + verify, don't start
+```
+On first run with no `.env` it creates one from the template and stops so you can
+fill in secrets; re-run to bring the stack up. It assumes the NVIDIA *driver* is
+already installed (`nvidia-smi` works) — it does not install kernel drivers.
+
 ## Two deploy modes
 
 ```bash
@@ -36,6 +51,23 @@ build fetches the pyannote weights. The `hf-cache` volume makes later restarts f
 
 > Tip: export `COMPOSE_FILE=docker-compose.yml:docker-compose.ai.yml` once and then
 > plain `docker compose up -d` / `logs` / `ps` always include the overlay.
+
+## Reusing pre-downloaded model weights
+
+By default hviske downloads its (public) model into a named volume on first boot,
+and diarization bakes its (gated) weights into the image at build. To avoid
+re-downloading multi-GB weights on a new host, reuse an existing HF cache:
+
+- **hviske**: set `HF_CACHE_DIR` in `.env` to a host path containing an HF cache
+  (e.g. `/workspace/.hf_home`). It bind-mounts that instead of the named volume.
+- **diarization** (advanced): set `DIARIZATION_BAKE_WEIGHTS=false`, set
+  `DIAR_HF_CACHE_DIR`, and uncomment the `/models` volume in `docker-compose.ai.yml`
+  so weights load at runtime from the mounted cache (needs `HF_TOKEN` at runtime,
+  already passed). Otherwise keep the default baked image.
+
+Models used: `syvai/hviske-v5.1` (public, no token) and
+`pyannote/speaker-diarization-community-1` (gated — needs an `HF_TOKEN` whose
+account accepted the terms once; access is auto-granted).
 
 ## Day-2 operations
 
