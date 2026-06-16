@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { TranscriptSegment } from '@/types';
 import { TranscriptChapter } from '@/lib/ai/chapters';
+import { formatDate } from '@/lib/utils';
 
 let client: OpenAI | null = null;
 function getClient() {
@@ -32,11 +33,12 @@ export interface SkabelonSpec {
   includeDato: boolean;
 }
 
-// Format an ISO timestamp as a Danish long date, e.g. "16. juni 2026".
+// Format an ISO timestamp as a Danish long date (e.g. "16. juni 2026"), or null
+// if it isn't a valid date.
 function formatDanishDate(iso: string): string | null {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return null;
-  return new Intl.DateTimeFormat('da-DK', { day: 'numeric', month: 'long', year: 'numeric' }).format(d);
+  return formatDate(d);
 }
 
 // ─── Prompt building ──────────────────────────────────────────────────────────

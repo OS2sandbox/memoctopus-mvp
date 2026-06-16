@@ -55,6 +55,17 @@ function applySelectedPiiReplacements(
   });
 }
 
+// The category toggles seeded from a Skabelon's include* flags. No skabelon
+// (undefined) is a blank template with every category off.
+function skabelonToCats(s?: Skabelon | null) {
+  return {
+    deltagere: s?.includeDeltagere ?? false,
+    beslutningspunkter: s?.includeBeslutningspunkter ?? false,
+    dagsorden: s?.includeDagsorden ?? false,
+    dato: s?.includeDato ?? false,
+  };
+}
+
 export function TranscriptReview({
   meetingId,
   initialSegments,
@@ -147,7 +158,7 @@ export function TranscriptReview({
   // selected Skabelon but overridable here in gennemgang.
   const [skabeloner, setSkabeloner] = useState<Skabelon[]>([]);
   const [selectedSkabelonId, setSelectedSkabelonId] = useState<string>('');
-  const [cats, setCats] = useState({ deltagere: false, beslutningspunkter: false, dagsorden: false, dato: false });
+  const [cats, setCats] = useState(() => skabelonToCats());
   const [customText, setCustomText] = useState('');
 
   // "Gem prompt som skabelon": persist the current prompt + category selection as
@@ -204,62 +215,48 @@ export function TranscriptReview({
     setTemplateMode((m) => (m === 'update' ? 'new' : 'update'));
   }
 
-  async function saveAsSkabelon() {
-    const name = templateName.trim();
-    if (!name) { setTemplateError('Navn er påkrævet'); return; }
-    setTemplateSaving(true);
+  // Persist the current prompt + categories — either folding them into the
+  // selected skabelon ('update') or forking a brand-new one ('new').
+  async function saveTemplate(mode: 'update' | 'new') {
     setTemplateError(null);
-    try {
-      const res = await fetch('/api/skabeloner', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, ...templatePayload() }),
-      });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error(d.error ?? 'Kunne ikke gemme skabelon');
-      }
-      const { skabelon } = (await res.json()) as { skabelon: Skabelon };
-      setSkabeloner((prev) => [...prev, skabelon]);
-      setSelectedSkabelonId(skabelon.id);
-      // The extra text is now baked into the new skabelon's prompt — clear it so
-      // generation doesn't apply it a second time, and explain the disappearance.
-      setCustomText('');
-      setSavedHint('Skabelon gemt, er der andet du vil tilføje?');
-      closeTemplateForm();
-    } catch (err) {
-      setTemplateError(err instanceof Error ? err.message : 'Noget gik galt');
-    } finally {
-      setTemplateSaving(false);
-    }
-  }
-
-  // Fold the ad-hoc instructions into the currently selected skabelon, making the
-  // addition permanent instead of spawning a new one.
-  async function updateSelectedSkabelon() {
-    if (!selectedSkabelon) return;
-    setTemplateSaving(true);
-    setTemplateError(null);
-    try {
-      const res = await fetch(`/api/skabeloner/${selectedSkabelon.id}`, {
+    let req: { url: string; method: string; body: Record<string, unknown> };
+    if (mode === 'update') {
+      if (!selectedSkabelon) return;
+      req = {
+        url: `/api/skabeloner/${selectedSkabelon.id}`,
         method: 'PUT',
+        body: { name: selectedSkabelon.name, description: selectedSkabelon.description, ...templatePayload() },
+      };
+    } else {
+      const name = templateName.trim();
+      if (!name) { setTemplateError('Navn er påkrævet'); return; }
+      req = { url: '/api/skabeloner', method: 'POST', body: { name, ...templatePayload() } };
+    }
+
+    setTemplateSaving(true);
+    try {
+      const res = await fetch(req.url, {
+        method: req.method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: selectedSkabelon.name,
-          description: selectedSkabelon.description,
-          ...templatePayload(),
-        }),
+        body: JSON.stringify(req.body),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        throw new Error(d.error ?? 'Kunne ikke opdatere skabelon');
+        throw new Error(d.error ?? (mode === 'update' ? 'Kunne ikke opdatere skabelon' : 'Kunne ikke gemme skabelon'));
       }
       const { skabelon } = (await res.json()) as { skabelon: Skabelon };
-      setSkabeloner((prev) => prev.map((s) => (s.id === skabelon.id ? skabelon : s)));
-      // The addition is now part of the skabelon prompt — clear the extra box and
-      // explain why the text vanished.
+      if (mode === 'update') {
+        setSkabeloner((prev) => prev.map((s) => (s.id === skabelon.id ? skabelon : s)));
+      } else {
+        setSkabeloner((prev) => [...prev, skabelon]);
+        setSelectedSkabelonId(skabelon.id);
+      }
+      // The extra text is now baked into the skabelon's prompt — clear it so
+      // generation doesn't apply it twice, and explain the disappearance.
       setCustomText('');
-      setSavedHint('Skabelon opdateret, er der andet du vil tilføje?');
+      setSavedHint(mode === 'update'
+        ? 'Skabelon opdateret, er der andet du vil tilføje?'
+        : 'Skabelon gemt, er der andet du vil tilføje?');
       closeTemplateForm();
     } catch (err) {
       setTemplateError(err instanceof Error ? err.message : 'Noget gik galt');
@@ -279,12 +276,7 @@ export function TranscriptReview({
         const def = list.find((s) => s.isDefault) ?? list[0];
         if (def) {
           setSelectedSkabelonId(def.id);
-          setCats({
-            deltagere: def.includeDeltagere,
-            beslutningspunkter: def.includeBeslutningspunkter,
-            dagsorden: def.includeDagsorden,
-            dato: def.includeDato,
-          });
+          setCats(skabelonToCats(def));
         }
       })
       .catch(() => {});
@@ -296,12 +288,7 @@ export function TranscriptReview({
     setSavedHint(null);
     const s = skabeloner.find((x) => x.id === id);
     // "Ingen skabelon" (empty id) is a blank template: clear every category.
-    setCats({
-      deltagere: s?.includeDeltagere ?? false,
-      beslutningspunkter: s?.includeBeslutningspunkter ?? false,
-      dagsorden: s?.includeDagsorden ?? false,
-      dato: s?.includeDato ?? false,
-    });
+    setCats(skabelonToCats(s));
   }
 
   // PII checklist: all items checked by default
@@ -1313,7 +1300,7 @@ export function TranscriptReview({
                     <input
                       value={templateName}
                       onChange={(e) => setTemplateName(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') void saveAsSkabelon(); }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') void saveTemplate('new'); }}
                       placeholder="Navn på skabelon"
                       autoFocus
                       style={{
@@ -1328,7 +1315,7 @@ export function TranscriptReview({
                   {/* Confirm + cancel */}
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <button
-                      onClick={() => void (templateStep === 'update' ? updateSelectedSkabelon() : saveAsSkabelon())}
+                      onClick={() => void saveTemplate(templateStep)}
                       disabled={templateSaving}
                       style={{
                         flex: 1, padding: '8px 14px',
