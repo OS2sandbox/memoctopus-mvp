@@ -1,3 +1,18 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# BASE STACK ("small"): the CPU-only application — Next.js app, Teams bot,
+# Postgres. Self-contained; talks to hviske/diarization hosted ELSEWHERE
+# (set HVISKE_URL / DIARIZATION_URL in .env to the remote box):
+#
+#     docker compose up -d
+#
+# To run the WHOLE system on a Docker + NVIDIA host, merge the AI overlay — it
+# adds the GPU services and repoints the app at them automatically:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d
+#
+# Everything is driven by .env (copy from .env.deploy.example), so moving to a
+# new server is: clone repo → edit .env → compose up. See DEPLOY.md.
+# ─────────────────────────────────────────────────────────────────────────────
 services:
   # Self-contained PostgreSQL. The app stores better-auth tables in `public` and
   # creates a per-user schema (u_<userId>) lazily at runtime. Data persists on the
@@ -43,7 +58,7 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "8080:3000"
+      - "${APP_PORT:-8080}:3000"
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
@@ -51,11 +66,14 @@ services:
       - BETTER_AUTH_TRUSTED_ORIGINS=${BETTER_AUTH_TRUSTED_ORIGINS:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # AI service endpoints. In the base ("small") stack these point at a
+      # remote host (set in .env). The AI overlay overrides them to the in-compose
+      # service names (http://hviske:8000/v1, http://diarization-service:5000).
       - HVISKE_URL=${HVISKE_URL}
       - HVISKE_API_KEY=${HVISKE_API_KEY}
       - HVISKE_MODEL=${HVISKE_MODEL:-syvai/hviske-v5.1}
       - ASR_LANGUAGE=${ASR_LANGUAGE:-da}
-      - DIARIZATION_URL=${DIARIZATION_URL:-http://diarization-service:5000}
+      - DIARIZATION_URL=${DIARIZATION_URL}
       - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
       - AUDIO_STORAGE_PATH=/audio-storage
       - BOT_SERVICE_URL=http://bot-service:3001
@@ -122,39 +140,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    restart: unless-stopped
-
-  diarization-service:
-    build:
-      context: ./diarization-service
-      dockerfile: Dockerfile
-      args:
-        # Build-time only — used to download the gated pyannote weights, then baked
-        # into the image. Set HF_TOKEN in .env (a HF token with gated-repo access).
-        HF_TOKEN: ${HF_TOKEN:-}
-    # Internal only — reached by the app service at http://diarization-service:5000.
-    # Runs pyannote.audio (speaker-diarization-community-1) over full recordings.
-    environment:
-      - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
-    networks:
-      - internal
-    # pyannote loads several models into shared memory; give it headroom like the bot.
-    shm_size: "2gb"
-    # Requires an NVIDIA GPU on the host (nvidia-container-toolkit). Diarization runs
-    # on CPU if no GPU is reserved, but far slower — keep the reservation in prod.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 60s
     restart: unless-stopped
 
 networks:

@@ -1,0 +1,101 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AI OVERLAY: adds the GPU inference services (hviske vLLM + pyannote diarization)
+# and repoints the app at them. ALWAYS merge on top of the base file — it is not
+# a standalone compose project:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d
+#
+# Requires a host with an NVIDIA GPU and the nvidia-container-toolkit installed
+# (verify with: docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi).
+# Both services share a single GPU — hviske reserves ~78% of VRAM (HVISKE_GPU_MEM_UTIL),
+# leaving room for diarization (~1–2 GB), exactly as the bare-metal setup runs today.
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  # Danish Whisper STT served by vLLM with an OpenAI-compatible API.
+  # Mirrors the proven bare-metal command:
+  #   vllm serve syvai/hviske-v5.1 --trust-remote-code --gpu-memory-utilization 0.78 \
+  #     --host 0.0.0.0 --port 40093 --api-key <key>
+  # The vllm/vllm-openai image's entrypoint IS the API server, so we pass --model.
+  hviske:
+    image: vllm/vllm-openai:${VLLM_IMAGE_TAG:-latest}
+    command:
+      - --model=${HVISKE_MODEL:-syvai/hviske-v5.1}
+      - --served-model-name=${HVISKE_MODEL:-syvai/hviske-v5.1}
+      - --trust-remote-code
+      - --gpu-memory-utilization=${HVISKE_GPU_MEM_UTIL:-0.78}
+      - --host=0.0.0.0
+      - --port=8000
+      - --api-key=${HVISKE_API_KEY}
+    environment:
+      # Only needed if the model repo is gated; harmless when empty.
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    volumes:
+      # Cache the downloaded weights so restarts don't re-download (~minutes).
+      - hf-cache:/root/.cache/huggingface
+    ports:
+      # Optional external exposure; matches the legacy port. Remove to keep it
+      # internal-only (the app reaches it over the compose network regardless).
+      - "${HVISKE_PORT:-40093}:8000"
+    shm_size: "2gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      # First boot loads the model into VRAM — can take a few minutes.
+      start_period: 300s
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # pyannote.audio speaker diarization (NOT vLLM — its own FastAPI + CUDA service).
+  # Gated weights are baked in at build time via HF_TOKEN (build arg).
+  diarization-service:
+    build:
+      context: ./diarization-service
+      dockerfile: Dockerfile
+      args:
+        HF_TOKEN: ${HF_TOKEN:-}
+    environment:
+      - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
+      - DIARIZATION_DEVICE=cuda
+    shm_size: "2gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # Override the base app: point it at the in-compose GPU services and wait for
+  # them to be healthy before starting. These environment values win over the
+  # base file's (compose merges environment by key).
+  app:
+    environment:
+      - HVISKE_URL=http://hviske:8000/v1
+      - DIARIZATION_URL=http://diarization-service:5000
+    depends_on:
+      hviske:
+        condition: service_healthy
+      diarization-service:
+        condition: service_healthy
+
+volumes:
+  hf-cache:
