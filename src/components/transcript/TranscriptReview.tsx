@@ -1305,7 +1305,12 @@ export function TranscriptReview({
                 return (
                   <button
                     key={key}
-                    onClick={() => setCats((prev) => ({ ...prev, [key]: !prev[key] }))}
+                    onClick={() => {
+                      // Mark as touched so a late-arriving default skabelon fetch
+                      // doesn't overwrite the user's manual category choices.
+                      skabelonTouchedRef.current = true;
+                      setCats((prev) => ({ ...prev, [key]: !prev[key] }));
+                    }}
                     style={{
                       padding: '4px 10px',
                       border: '1px solid ' + (active ? 'var(--accent)' : 'var(--line)'),
