@@ -1,10 +1,49 @@
 services:
+  # Self-contained PostgreSQL. The app stores better-auth tables in `public` and
+  # creates a per-user schema (u_<userId>) lazily at runtime. Data persists on the
+  # `pgdata` named volume.
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-referat}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-referat}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-referat} -d ${POSTGRES_DB:-referat}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # One-shot: applies the drizzle migrations (better-auth public tables) and exits.
+  # Built from the `builder` stage because it carries the source, drizzle config,
+  # migrations and devDependencies (drizzle-kit) that the slim runtime image omits.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+    command: ["npx", "drizzle-kit", "migrate"]
+    networks:
+      - internal
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   app:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3002:3000"
+      - "8080:3000"
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
@@ -38,8 +77,15 @@ services:
     depends_on:
       bot-service:
         condition: service_healthy
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      # 127.0.0.1 (not localhost): inside the container `localhost` resolves to
+      # IPv6 ::1 first, but next-server listens on IPv4 0.0.0.0 only — a localhost
+      # probe gets "connection refused" and the container is wrongly unhealthy.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -82,6 +128,10 @@ services:
     build:
       context: ./diarization-service
       dockerfile: Dockerfile
+      args:
+        # Build-time only — used to download the gated pyannote weights, then baked
+        # into the image. Set HF_TOKEN in .env (a HF token with gated-repo access).
+        HF_TOKEN: ${HF_TOKEN:-}
     # Internal only — reached by the app service at http://diarization-service:5000.
     # Runs pyannote.audio (speaker-diarization-community-1) over full recordings.
     environment:
@@ -113,3 +163,4 @@ networks:
 
 volumes:
   audio-storage:
+  pgdata:

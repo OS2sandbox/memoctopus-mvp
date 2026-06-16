@@ -38,8 +38,10 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# drizzle
-/drizzle
+# drizzle — migrations are version-controlled (the `migrate` compose service
+# applies them on deploy). Ignore only drizzle-kit's local studio/meta cruft.
+/drizzle/.drizzle
 
 # audio storage
 /audio-storage
+.env.docker
