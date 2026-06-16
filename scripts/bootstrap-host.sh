@@ -77,9 +77,16 @@ install_nvidia_toolkit() {
   else
     ok "nvidia-container-toolkit already installed"
   fi
-  log "Wiring the NVIDIA runtime into Docker"
-  $SUDO nvidia-ctk runtime configure --runtime=docker
-  $SUDO systemctl restart docker
+  # Idempotent: only (re)configure + restart Docker when the nvidia runtime isn't
+  # already registered. Re-running this script to bring the stack up must NOT
+  # bounce dockerd — that would kill running containers.
+  if $SUDO docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then
+    ok "NVIDIA Docker runtime already configured"
+  else
+    log "Wiring the NVIDIA runtime into Docker"
+    $SUDO nvidia-ctk runtime configure --runtime=docker
+    $SUDO systemctl restart docker
+  fi
 }
 
 verify_gpu() {

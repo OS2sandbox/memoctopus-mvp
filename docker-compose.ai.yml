@@ -48,7 +48,10 @@ services:
               count: 1
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # Use python3 (always in the vLLM image) rather than curl, which the image
+      # is not guaranteed to ship — a missing curl would fail every probe and the
+      # app (depends_on: hviske healthy) would never start.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 5s
       retries: 5

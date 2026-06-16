@@ -57,6 +57,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # NEXT_PUBLIC_* must be passed at build time (Next inlines them into the
+      # browser bundle); the matching `environment` entries below only cover the
+      # server-side reads. Change one of these → rebuild (`up -d --build`).
+      args:
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:8080}
+        NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED: ${NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED:-true}
+        NEXT_PUBLIC_MICROSOFT_ENABLED: ${NEXT_PUBLIC_MICROSOFT_ENABLED:-false}
+        NEXT_PUBLIC_AUTHENTIK_ENABLED: ${NEXT_PUBLIC_AUTHENTIK_ENABLED:-false}
     ports:
       - "${APP_PORT:-8080}:3000"
     environment:
@@ -78,7 +86,7 @@ services:
       - AUDIO_STORAGE_PATH=/audio-storage
       - BOT_SERVICE_URL=http://bot-service:3001
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
-      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3002}
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:8080}
       - NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED=${NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED:-true}
       - NEXT_PUBLIC_MICROSOFT_ENABLED=${NEXT_PUBLIC_MICROSOFT_ENABLED:-false}
       - NEXT_PUBLIC_AUTHENTIK_ENABLED=${NEXT_PUBLIC_AUTHENTIK_ENABLED:-false}

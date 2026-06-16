@@ -15,6 +15,17 @@ COPY . .
 # Stage the @ricky0123/vad-web assets into public/ (the postinstall hook skipped
 # in deps) before building so Next.js bundles them.
 RUN node scripts/copy-vad-assets.js
+# NEXT_PUBLIC_* are inlined into the browser bundle at build time, so they must be
+# present as build args — setting them only as runtime env (compose `environment`)
+# does NOT change the client bundle. Compose passes these via the app `build.args`.
+ARG NEXT_PUBLIC_APP_URL=http://localhost:8080
+ARG NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED=true
+ARG NEXT_PUBLIC_MICROSOFT_ENABLED=false
+ARG NEXT_PUBLIC_AUTHENTIK_ENABLED=false
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL \
+    NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED=$NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED \
+    NEXT_PUBLIC_MICROSOFT_ENABLED=$NEXT_PUBLIC_MICROSOFT_ENABLED \
+    NEXT_PUBLIC_AUTHENTIK_ENABLED=$NEXT_PUBLIC_AUTHENTIK_ENABLED
 RUN npm run build
 
 FROM node:22-alpine AS runner
