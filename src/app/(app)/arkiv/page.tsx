@@ -26,6 +26,7 @@ export default function ArkivPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
 
   // Allow deep-linking to the Skabeloner tab (e.g. from the old /templates route).
   useEffect(() => {
@@ -63,6 +64,7 @@ export default function ArkivPage() {
   function exitEditMode() {
     setEditMode(false);
     setSelected(new Set());
+    setBulkError(null);
   }
 
   function toggleSelect(id: string) {
@@ -82,13 +84,25 @@ export default function ArkivPage() {
 
   async function handleBulkDelete() {
     setIsBulkDeleting(true);
+    setBulkError(null);
     const ids = [...selected];
     // Each delete removes the meeting plus its transcript, referat and audio.
-    await Promise.all(ids.map((id) => deleteMeeting(id).catch(() => {})));
-    setMeetings((prev) => prev.filter((m) => !selected.has(m.id)));
+    // Only drop rows that actually deleted, so a failure can't make data silently
+    // vanish from the list while it survives in storage.
+    const results = await Promise.allSettled(ids.map((id) => deleteMeeting(id)));
+    const deleted = new Set(ids.filter((_, i) => results[i].status === 'fulfilled'));
+    setMeetings((prev) => prev.filter((m) => !deleted.has(m.id)));
     setBulkDeleteOpen(false);
     setIsBulkDeleting(false);
-    exitEditMode();
+
+    const failed = ids.length - deleted.size;
+    if (failed > 0) {
+      // Keep the failed ones selected and stay in edit mode so the user can retry.
+      setSelected(new Set(ids.filter((id) => !deleted.has(id))));
+      setBulkError(`Kunne ikke slette ${failed} ${failed === 1 ? 'møde' : 'møder'}. Prøv igen.`);
+    } else {
+      exitEditMode();
+    }
   }
 
   const tabs: { key: Tab; label: string }[] = [
@@ -196,6 +210,9 @@ export default function ArkivPage() {
                   </Button>
                 </div>
               </div>
+            )}
+            {editMode && bulkError && (
+              <p className="mb-3 text-sm text-[var(--kill)]">{bulkError}</p>
             )}
             <div className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] divide-y divide-[var(--line)]">
               {meetings.map((m) => (
