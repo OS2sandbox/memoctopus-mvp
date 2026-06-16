@@ -150,6 +150,123 @@ export function TranscriptReview({
   const [cats, setCats] = useState({ deltagere: false, beslutningspunkter: false, dagsorden: false });
   const [customText, setCustomText] = useState('');
 
+  // "Gem prompt som skabelon": persist the current prompt + category selection as
+  // a reusable Skabelon — either folding it into the selected one (Opdater) or
+  // forking a brand-new one.
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  // Which step the cycleable save form is on: fold into the selected skabelon, or
+  // fork a brand-new one. Only the 'new' step exists when no skabelon is selected.
+  const [templateMode, setTemplateMode] = useState<'update' | 'new'>('new');
+  const [templateName, setTemplateName] = useState('');
+  const [templateSaving, setTemplateSaving] = useState(false);
+  const [templateError, setTemplateError] = useState<string | null>(null);
+  // After a save/update the instruction box is cleared (its text moved into the
+  // skabelon); this becomes the box's placeholder to explain where it went.
+  const [savedHint, setSavedHint] = useState<string | null>(null);
+
+  const selectedSkabelon = skabeloner.find((s) => s.id === selectedSkabelonId) ?? null;
+  // The actual step to render: 'update' is only valid while a skabelon is
+  // selected, so deselecting it mid-form falls back to 'new'.
+  const templateStep = selectedSkabelon ? templateMode : 'new';
+
+  // The effective prompt = the selected skabelon's saved prompt plus the ad-hoc
+  // instructions typed below it, mirroring how generation combines the two.
+  function effectivePrompt(): string {
+    return [selectedSkabelon?.prompt.trim() ?? '', customText.trim()].filter(Boolean).join('\n\n');
+  }
+
+  const templatePayload = () => ({
+    prompt: effectivePrompt(),
+    includeDeltagere: cats.deltagere,
+    includeBeslutningspunkter: cats.beslutningspunkter,
+    includeDagsorden: cats.dagsorden,
+  });
+
+  function openTemplateForm() {
+    setSavingTemplate(true);
+    setTemplateError(null);
+    // Default to updating the selected skabelon; with none selected only the
+    // 'new' step is reachable.
+    setTemplateMode(selectedSkabelon ? 'update' : 'new');
+  }
+
+  function closeTemplateForm() {
+    setSavingTemplate(false);
+    setTemplateName('');
+    setTemplateError(null);
+  }
+
+  // Cycle to the other step. No-op without a selected skabelon (only 'new' exists).
+  function cycleTemplateMode() {
+    if (!selectedSkabelon) return;
+    setTemplateError(null);
+    setTemplateMode((m) => (m === 'update' ? 'new' : 'update'));
+  }
+
+  async function saveAsSkabelon() {
+    const name = templateName.trim();
+    if (!name) { setTemplateError('Navn er påkrævet'); return; }
+    setTemplateSaving(true);
+    setTemplateError(null);
+    try {
+      const res = await fetch('/api/skabeloner', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, ...templatePayload() }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error ?? 'Kunne ikke gemme skabelon');
+      }
+      const { skabelon } = (await res.json()) as { skabelon: Skabelon };
+      setSkabeloner((prev) => [...prev, skabelon]);
+      setSelectedSkabelonId(skabelon.id);
+      // The extra text is now baked into the new skabelon's prompt — clear it so
+      // generation doesn't apply it a second time, and explain the disappearance.
+      setCustomText('');
+      setSavedHint('Skabelon gemt, er der andet du vil tilføje?');
+      closeTemplateForm();
+    } catch (err) {
+      setTemplateError(err instanceof Error ? err.message : 'Noget gik galt');
+    } finally {
+      setTemplateSaving(false);
+    }
+  }
+
+  // Fold the ad-hoc instructions into the currently selected skabelon, making the
+  // addition permanent instead of spawning a new one.
+  async function updateSelectedSkabelon() {
+    if (!selectedSkabelon) return;
+    setTemplateSaving(true);
+    setTemplateError(null);
+    try {
+      const res = await fetch(`/api/skabeloner/${selectedSkabelon.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: selectedSkabelon.name,
+          description: selectedSkabelon.description,
+          ...templatePayload(),
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error ?? 'Kunne ikke opdatere skabelon');
+      }
+      const { skabelon } = (await res.json()) as { skabelon: Skabelon };
+      setSkabeloner((prev) => prev.map((s) => (s.id === skabelon.id ? skabelon : s)));
+      // The addition is now part of the skabelon prompt — clear the extra box and
+      // explain why the text vanished.
+      setCustomText('');
+      setSavedHint('Skabelon opdateret, er der andet du vil tilføje?');
+      closeTemplateForm();
+    } catch (err) {
+      setTemplateError(err instanceof Error ? err.message : 'Noget gik galt');
+    } finally {
+      setTemplateSaving(false);
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     fetch('/api/skabeloner')
@@ -174,14 +291,14 @@ export function TranscriptReview({
 
   function selectSkabelon(id: string) {
     setSelectedSkabelonId(id);
+    setSavedHint(null);
     const s = skabeloner.find((x) => x.id === id);
-    if (s) {
-      setCats({
-        deltagere: s.includeDeltagere,
-        beslutningspunkter: s.includeBeslutningspunkter,
-        dagsorden: s.includeDagsorden,
-      });
-    }
+    // "Ingen skabelon" (empty id) is a blank template: clear every category.
+    setCats({
+      deltagere: s?.includeDeltagere ?? false,
+      beslutningspunkter: s?.includeBeslutningspunkter ?? false,
+      dagsorden: s?.includeDagsorden ?? false,
+    });
   }
 
   // PII checklist: all items checked by default
@@ -1081,7 +1198,7 @@ export function TranscriptReview({
                 fontSize: 13, cursor: 'pointer', marginBottom: 14,
               }}
             >
-              {skabeloner.length === 0 && <option value="">Standard</option>}
+              <option value="">Ingen skabelon</option>
               {skabeloner.map((s) => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
@@ -1127,8 +1244,8 @@ export function TranscriptReview({
             }}>
               <textarea
                 value={customText}
-                onChange={(e) => setCustomText(e.target.value)}
-                placeholder="Tilføj instruktioner…"
+                onChange={(e) => { setCustomText(e.target.value); if (savedHint) setSavedHint(null); }}
+                placeholder={savedHint ?? 'Tilføj instruktioner…'}
                 rows={2}
                 style={{
                   width: '100%', minHeight: 60,
@@ -1140,6 +1257,97 @@ export function TranscriptReview({
                   display: 'block',
                 }}
               />
+            </div>
+
+            {/* Gem prompt som skabelon — one cycleable step (opdater / ny) */}
+            <div style={{ marginTop: 10 }}>
+              {!savingTemplate ? (
+                <button
+                  onClick={openTemplateForm}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                    fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--accent)',
+                  }}
+                >
+                  Gem prompt som skabelon →
+                </button>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {/* Step header — names the current step and cycles to the other */}
+                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--ink-2)', letterSpacing: 0.3 }}>
+                      {templateStep === 'update'
+                        ? `Opdater „${selectedSkabelon?.name ?? ''}"`
+                        : 'Gem som ny skabelon'}
+                    </span>
+                    {selectedSkabelon && (
+                      <button
+                        onClick={cycleTemplateMode}
+                        disabled={templateSaving}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 4,
+                          background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                          fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--accent)', flexShrink: 0,
+                        }}
+                      >
+                        ↺ {templateStep === 'update' ? 'gem som ny i stedet' : 'opdater i stedet'}
+                      </button>
+                    )}
+                  </div>
+
+                  {/* New skabelon needs a name */}
+                  {templateStep === 'new' && (
+                    <input
+                      value={templateName}
+                      onChange={(e) => setTemplateName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') void saveAsSkabelon(); }}
+                      placeholder="Navn på skabelon"
+                      autoFocus
+                      style={{
+                        width: '100%', padding: '8px 10px',
+                        border: '1px solid var(--line-2)', borderRadius: 'var(--radius)',
+                        background: 'var(--bg)', color: 'var(--ink)',
+                        fontSize: 13, outline: 'none',
+                      }}
+                    />
+                  )}
+
+                  {/* Confirm + cancel */}
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <button
+                      onClick={() => void (templateStep === 'update' ? updateSelectedSkabelon() : saveAsSkabelon())}
+                      disabled={templateSaving}
+                      style={{
+                        flex: 1, padding: '8px 14px',
+                        background: 'var(--accent)', color: '#fff',
+                        border: '1px solid var(--accent)', borderRadius: 'var(--radius)',
+                        fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 500,
+                        cursor: templateSaving ? 'not-allowed' : 'pointer',
+                        opacity: templateSaving ? 0.6 : 1,
+                      }}
+                    >
+                      {templateSaving ? 'gemmer…' : templateStep === 'update' ? 'Opdater' : 'Gem'}
+                    </button>
+                    <button
+                      onClick={closeTemplateForm}
+                      disabled={templateSaving}
+                      style={{
+                        background: 'none', border: 'none', padding: '8px 12px', flexShrink: 0,
+                        fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      annullér
+                    </button>
+                  </div>
+                  {templateError && (
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--kill)' }}>
+                      {templateError}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

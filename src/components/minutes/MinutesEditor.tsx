@@ -4,7 +4,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { MinutesContent } from '@/types';
 import { Button } from '@/components/ui/button';
 import { SaveStatus, SaveState } from '@/components/layout/SaveStatus';
-import { VersionHistory } from './VersionHistory';
 import { RichEditor } from './RichEditor';
 import { saveMinutes, snapshotMinutes } from '@/lib/storage';
 import { minutesToBody } from '@/lib/minutes-format';
@@ -149,7 +148,6 @@ export function MinutesEditor({
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [version, setVersion] = useState(initialVersion);
   const [versions, setVersions] = useState(initialVersions);
-  const [showHistory, setShowHistory] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Latest body (kept in a ref so the leave/unmount handlers see the freshest
@@ -240,111 +238,75 @@ export function MinutesEditor({
     setBody(minutesToBody(restored));
   }
 
-  // Restore an old version: preserve whatever is currently shown as its own
-  // version first (so the restore is itself undoable), then make the restored
-  // content the new current document.
-  async function handleRestore(restored: MinutesContent) {
-    const restoredBody = minutesToBody(restored);
-    if (saveTimer.current) {
-      clearTimeout(saveTimer.current);
-      saveTimer.current = null;
-    }
-    setShowHistory(false);
-    setSaveState('saving');
-    try {
-      const snapped = await snapshotMinutes(meetingId, { body: latestBodyRef.current });
-      if (snapped) {
-        setVersion(snapped.version);
-        setVersions(snapped.versions);
-      }
-      setBody(restoredBody);
-      baselineBodyRef.current = restoredBody;
-      latestBodyRef.current = restoredBody;
-      await saveMinutes(meetingId, { body: restoredBody });
-      setSaveState('saved');
-      setTimeout(() => setSaveState('idle'), 2000);
-      onSaved?.();
-    } catch {
-      setSaveState('error');
-    }
-  }
-
   return (
-    <div className="mx-auto max-w-[720px] px-6 py-12">
-      <div className="flex flex-wrap items-start justify-between gap-4 mb-10">
-        <div>
-          <h1
-            style={{ fontSize: 'var(--t-h1)', fontWeight: 300, color: 'var(--ink)', margin: 0 }}
-          >
-            Referat
-          </h1>
-          <VersionDropdown version={version} versions={versions} onSelect={loadVersion} />
+    <div style={{ background: 'var(--bg-2)', minHeight: 'calc(100vh - 56px)' }}>
+      <div className="mx-auto max-w-[820px] px-6 py-10">
+        <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
+          <div>
+            <h1
+              style={{ fontSize: 'var(--t-h1)', fontWeight: 300, color: 'var(--ink)', margin: 0 }}
+            >
+              Referat
+            </h1>
+            <VersionDropdown version={version} versions={versions} onSelect={loadVersion} />
+          </div>
+          <div className="flex items-center gap-3 mt-1">
+            <SaveStatus state={saveState} />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void snapshot()}
+              disabled={body === baselineBodyRef.current}
+              title="Gem den nuværende tekst som en version du kan vende tilbage til"
+            >
+              Gem version
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => (window.location.href = `/meeting/${meetingId}/export`)}
+            >
+              Eksportér
+            </Button>
+          </div>
         </div>
-        <div className="flex items-center gap-3 mt-1">
-          <SaveStatus state={saveState} />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => void snapshot()}
-            disabled={body === baselineBodyRef.current}
-            title="Gem den nuværende tekst som en version du kan vende tilbage til"
-          >
-            Gem version
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setShowHistory(true)}>
-            Historik
-          </Button>
-          <Button
-            variant="default"
-            size="sm"
-            onClick={() => (window.location.href = `/meeting/${meetingId}/export`)}
-          >
-            Eksportér
-          </Button>
+
+        {/* Editability hint — the sheet below mirrors the exported document, so
+            it isn't obvious it can be edited without a nudge. */}
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)',
+            letterSpacing: 0.4, marginBottom: 10,
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M12 20h9" />
+            <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+          </svg>
+          klik for at redigere · gemmes automatisk
+        </div>
+
+        {/* Paper sheet — a page outline that previews the final export and makes
+            the otherwise borderless editor read as an editable document. */}
+        <div
+          style={{
+            background: 'var(--surface)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--radius)',
+            boxShadow: '0 1px 2px rgba(0,0,0,0.04), 0 8px 28px rgba(0,0,0,0.06)',
+            padding: 'clamp(28px, 6vw, 64px)',
+          }}
+        >
+          <RichEditor
+            value={body}
+            onChange={updateBody}
+            placeholder="Skriv referatet her…"
+            borderless
+            minHeight={560}
+          />
         </div>
       </div>
-
-      {/* Single, borderless editable referat document */}
-      <RichEditor
-        value={body}
-        onChange={updateBody}
-        placeholder="Skriv referatet her…"
-        borderless
-        minHeight={420}
-      />
-
-      {showHistory && (
-        <div
-          className="fixed inset-y-0 right-0 z-50 w-80 max-w-full bg-[var(--surface)] border-l border-[var(--line)] shadow-lg flex flex-col"
-          style={{ animation: 'slide-in-from-right 0.15s ease' }}
-        >
-          <style>{`
-            @keyframes slide-in-from-right {
-              from { transform: translateX(100%); }
-              to   { transform: translateX(0); }
-            }
-          `}</style>
-          <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--line)]">
-            <span className="font-medium text-[var(--ink)]" style={{ fontSize: 'var(--t-body)' }}>
-              Versionshistorik
-            </span>
-            <button
-              onClick={() => setShowHistory(false)}
-              className="text-[var(--muted)] hover:text-[var(--ink)] transition-colors"
-              aria-label="Luk"
-            >
-              ✕
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            <VersionHistory
-              versions={versions}
-              currentVersion={version}
-              onRestore={handleRestore}
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 }
