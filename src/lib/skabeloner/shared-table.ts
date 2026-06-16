@@ -24,7 +24,19 @@ export function ensureSharedSkabelonerTable(): Promise<void> {
           include_dagsorden          BOOLEAN NOT NULL DEFAULT FALSE,
           include_dato               BOOLEAN NOT NULL DEFAULT FALSE,
           created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
+        );
+        -- Self-heal tables created before later columns were added (mirrors the
+        -- ADD COLUMN IF NOT EXISTS approach in ensureUserSchema). Without this, a
+        -- table created before the 'Dato' category breaks link sharing with a
+        -- missing-column error on insert.
+        ALTER TABLE public.shared_skabeloner
+          ADD COLUMN IF NOT EXISTS description                TEXT        NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS prompt                     TEXT        NOT NULL DEFAULT '',
+          ADD COLUMN IF NOT EXISTS include_deltagere          BOOLEAN     NOT NULL DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS include_beslutningspunkter BOOLEAN     NOT NULL DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS include_dagsorden          BOOLEAN     NOT NULL DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS include_dato               BOOLEAN     NOT NULL DEFAULT FALSE,
+          ADD COLUMN IF NOT EXISTS created_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW();
       `)
       .then(() => undefined)
       .catch((err) => {
