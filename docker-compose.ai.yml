@@ -73,7 +73,8 @@ services:
         BAKE_WEIGHTS: ${DIARIZATION_BAKE_WEIGHTS:-true}
     environment:
       - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
-      - DIARIZATION_DEVICE=cuda
+      # cuda | cpu — force cpu only if the GPU is saturated by hviske (10-20x slower).
+      - DIARIZATION_DEVICE=${DIARIZATION_DEVICE:-cuda}
       # Runtime token + cache home — only used when BAKE_WEIGHTS=false (harmless otherwise).
       - HF_TOKEN=${HF_TOKEN:-}
       - HF_HOME=/models

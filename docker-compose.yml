@@ -18,7 +18,7 @@ services:
   # creates a per-user schema (u_<userId>) lazily at runtime. Data persists on the
   # `pgdata` named volume.
   db:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-referat}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
