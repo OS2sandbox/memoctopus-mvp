@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { SaveStatus, SaveState } from '@/components/layout/SaveStatus';
 import { VersionHistory } from './VersionHistory';
 import { RichEditor } from './RichEditor';
-import { saveMinutes } from '@/lib/storage';
+import { saveMinutes, snapshotMinutes } from '@/lib/storage';
 import { minutesToBody } from '@/lib/minutes-format';
 
 interface VersionRecord {
@@ -152,13 +152,22 @@ export function MinutesEditor({
   const [showHistory, setShowHistory] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Latest body (kept in a ref so the leave/unmount handlers see the freshest
+  // text without re-subscribing), and the body as of the last checkpoint — used
+  // to tell whether anything changed worth snapshotting.
+  const latestBodyRef = useRef(body);
+  const baselineBodyRef = useRef(body);
+  useEffect(() => {
+    latestBodyRef.current = body;
+  }, [body]);
+
+  // Autosave: overwrite the current content in place. Does NOT create a version —
+  // continuous editing keeps a single live document instead of spawning versions.
   const save = useCallback(
     async (bodyToSave: string) => {
       setSaveState('saving');
       try {
-        const saved = await saveMinutes(meetingId, { body: bodyToSave });
-        setVersion(saved.version);
-        setVersions(saved.versions);
+        await saveMinutes(meetingId, { body: bodyToSave });
         setSaveState('saved');
         setTimeout(() => setSaveState('idle'), 2000);
         onSaved?.();
@@ -169,15 +178,60 @@ export function MinutesEditor({
     [meetingId, onSaved],
   );
 
+  // Checkpoint the current document as a new version. Flushes any pending autosave
+  // first so the latest text is persisted, then archives the previous checkpoint
+  // (the baseline) into history. No-op when nothing changed since the last
+  // checkpoint. Triggered when leaving the editor and by the "Gem version" button.
+  const snapshot = useCallback(async () => {
+    const current = latestBodyRef.current;
+    const baseline = baselineBodyRef.current;
+    if (current === baseline) return;
+    baselineBodyRef.current = current;
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    setSaveState('saving');
+    try {
+      await saveMinutes(meetingId, { body: current });
+      const snapped = await snapshotMinutes(meetingId, { body: baseline });
+      if (snapped) {
+        setVersion(snapped.version);
+        setVersions(snapped.versions);
+      }
+      setSaveState('saved');
+      setTimeout(() => setSaveState('idle'), 2000);
+      onSaved?.();
+    } catch {
+      setSaveState('error');
+    }
+  }, [meetingId, onSaved]);
+
   function updateBody(text: string) {
     setBody(text);
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => save(text), AUTOSAVE_DELAY);
   }
 
+  // Snapshot when the user leaves: tab hidden / closed (visibilitychange,
+  // pagehide) and SPA navigation away (effect cleanup on unmount). Held in a ref
+  // so listeners attach once and always call the freshest snapshot closure.
+  const snapshotRef = useRef(snapshot);
   useEffect(() => {
+    snapshotRef.current = snapshot;
+  }, [snapshot]);
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') void snapshotRef.current();
+    };
+    const onPageHide = () => void snapshotRef.current();
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', onPageHide);
     return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onPageHide);
       if (saveTimer.current) clearTimeout(saveTimer.current);
+      void snapshotRef.current();
     };
   }, []);
 
@@ -186,11 +240,33 @@ export function MinutesEditor({
     setBody(minutesToBody(restored));
   }
 
-  function handleRestore(restored: MinutesContent) {
+  // Restore an old version: preserve whatever is currently shown as its own
+  // version first (so the restore is itself undoable), then make the restored
+  // content the new current document.
+  async function handleRestore(restored: MinutesContent) {
     const restoredBody = minutesToBody(restored);
-    setBody(restoredBody);
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
     setShowHistory(false);
-    save(restoredBody);
+    setSaveState('saving');
+    try {
+      const snapped = await snapshotMinutes(meetingId, { body: latestBodyRef.current });
+      if (snapped) {
+        setVersion(snapped.version);
+        setVersions(snapped.versions);
+      }
+      setBody(restoredBody);
+      baselineBodyRef.current = restoredBody;
+      latestBodyRef.current = restoredBody;
+      await saveMinutes(meetingId, { body: restoredBody });
+      setSaveState('saved');
+      setTimeout(() => setSaveState('idle'), 2000);
+      onSaved?.();
+    } catch {
+      setSaveState('error');
+    }
   }
 
   return (
@@ -206,6 +282,15 @@ export function MinutesEditor({
         </div>
         <div className="flex items-center gap-3 mt-1">
           <SaveStatus state={saveState} />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void snapshot()}
+            disabled={body === baselineBodyRef.current}
+            title="Gem den nuværende tekst som en version du kan vende tilbage til"
+          >
+            Gem version
+          </Button>
           <Button variant="ghost" size="sm" onClick={() => setShowHistory(true)}>
             Historik
           </Button>
