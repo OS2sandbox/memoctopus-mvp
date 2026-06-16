@@ -1368,11 +1368,23 @@ export function TranscriptReview({
                   {selectedSkabelon ? (
                     <>
                       {/* Common track pill makes the two options read as one
-                          either/or toggle, spanning the full width */}
+                          either/or toggle, spanning the full width. A sliding thumb
+                          (exactly one half-slot wide) glides between the two slots. */}
                       <div style={{
-                        display: 'flex', gap: 4, padding: 3,
+                        position: 'relative', display: 'flex', padding: 3,
                         border: '1px solid var(--line)', borderRadius: 999, background: 'var(--surface)',
                       }}>
+                        <div
+                          aria-hidden
+                          style={{
+                            position: 'absolute', top: 3, bottom: 3, left: 3,
+                            width: 'calc((100% - 6px) / 2)', borderRadius: 999,
+                            background: 'var(--accent-wash)', border: '1px solid var(--accent)',
+                            transform: templateStep === 'new' ? 'translateX(100%)' : 'translateX(0)',
+                            transition: 'transform 200ms cubic-bezier(.4,.7,.2,1)',
+                            pointerEvents: 'none',
+                          }}
+                        />
                         {([
                           ['update', 'Føj til skabelon'],
                           ['new', 'Ny skabelon'],
@@ -1384,13 +1396,13 @@ export function TranscriptReview({
                               onClick={() => { setTemplateMode(mode); setTemplateError(null); }}
                               disabled={templateSaving}
                               style={{
-                                flex: 1, padding: '5px 12px', borderRadius: 999, textAlign: 'center',
-                                border: '1px solid ' + (on ? 'var(--accent)' : 'transparent'),
+                                position: 'relative', zIndex: 1,
+                                flex: 1, padding: '5px 12px', textAlign: 'center',
+                                border: 'none', background: 'transparent', borderRadius: 999,
                                 cursor: templateSaving ? 'not-allowed' : 'pointer',
                                 fontFamily: 'var(--mono)', fontSize: 11.5,
-                                background: on ? 'var(--accent-wash)' : 'transparent',
                                 color: on ? 'var(--accent)' : 'var(--ink-2)',
-                                transition: 'border-color 120ms, color 120ms, background 120ms',
+                                transition: 'color 160ms',
                               }}
                             >
                               {label}
@@ -1400,13 +1412,13 @@ export function TranscriptReview({
                       </div>
                       <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', lineHeight: 1.5 }}>
                         {templateStep === 'update'
-                          ? `Føjer dine instruktioner til skabelonen ${selectedSkabelon.name}.`
-                          : 'Opretter en ny skabelon ud fra prompten.'}
+                          ? `Forlæng skabelonen ${selectedSkabelon.name} med dine instruktioner`
+                          : 'Opret en ny skabelon ud fra instruktionerne.'}
                       </span>
                     </>
                   ) : (
                     <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', lineHeight: 1.5 }}>
-                      Opretter en ny skabelon ud fra prompten.
+                      Opret en ny skabelon ud fra instruktionerne.
                     </span>
                   )}
 
