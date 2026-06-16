@@ -16,6 +16,8 @@ import {
   getTranscript,
   getMinutes,
   getAudio,
+  deleteAudio,
+  updateMeeting,
   StoredMeeting,
   StoredTranscript,
   StoredMinutes,
@@ -38,6 +40,19 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
   const [audioUrl, setAudioUrl] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const audioBlobUrlRef = useRef<string | null>(null);
+  // Tracks whether the meeting currently has stored audio that should be purged
+  // on leaving the page. Read inside the cleanup below so it reflects the live
+  // value, not a stale closure. Stays false until audio has actually loaded —
+  // which is why StrictMode's mount→cleanup→mount (it fires before the async
+  // load resolves) can't trigger a premature deletion.
+  const audioDeletableRef = useRef(false);
+  audioDeletableRef.current = !!audioUrl && !!meeting && !meeting.audioDeleted;
+  // True only for the live recording session that will save its audio and route
+  // to /review. That handoff (this instance unmounts on the router.push) must not
+  // purge the freshly saved audio; every other view purges on leave. Captured
+  // once on first load — see loadData.
+  const activeRecorderRef = useRef(false);
+  const initialLoadDoneRef = useRef(false);
 
   const loadData = useCallback(async () => {
     const [m, t, min] = await Promise.all([
@@ -48,6 +63,16 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
     setMeeting(m);
     setTranscript(t);
     setMinutes(min);
+
+    // Mark this instance as the live recorder if it opened the recording route on
+    // an in-progress meeting. Such a session saves audio and navigates to /review,
+    // so its unmount must not purge that handoff. Any other view (review, the
+    // recording look-back, an abandoned recording reopened from the Arkiv) purges.
+    if (!initialLoadDoneRef.current) {
+      initialLoadDoneRef.current = true;
+      activeRecorderRef.current =
+        initialTab === 'recording' && !!m && (m.status === 'recording' || m.status === 'processing');
+    }
 
     if (m && !m.audioDeleted) {
       const audioEntry = await getAudio(meetingId);
@@ -68,7 +93,7 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
     }
 
     setLoading(false);
-  }, [meetingId]);
+  }, [meetingId, initialTab]);
 
   useEffect(() => {
     loadData();
@@ -82,6 +107,38 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
     setHasAudio(hasAudio);
     return () => setHasAudio(false);
   }, [activeTab, audioUrl, setHasAudio]);
+
+  // Privacy: audio must never linger for a meeting reopened from the Arkiv. The
+  // recording is purged either when the referat is generated (handled in
+  // TranscriptReview) or when the user leaves the meeting entirely — navigating
+  // back to the Arkiv, opening another meeting, or closing the tab. This unmount
+  // cleanup covers every tab (the Gennemgang/review view, the recording look-back,
+  // and an abandoned recording), so no meeting in the Arkiv keeps stored audio.
+  // It runs once (no activeTab/audioUrl deps), so in-page tab switches and the
+  // routine blob-URL refresh in loadData never trigger a deletion mid-session;
+  // only the real unmount does. The live recording session is the sole exception
+  // (activeRecorderRef) — it saves audio and hands it to /review.
+  useEffect(() => {
+    return () => {
+      if (activeRecorderRef.current) return;
+      if (!audioDeletableRef.current) return;
+      void deleteAudio(meetingId).catch(() => {});
+      void updateMeeting(meetingId, { audioDeleted: true }).catch(() => {});
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meetingId]);
+
+  // Catch the cases an unmount cleanup can't reliably handle — closing the tab or
+  // a hard reload — whenever deletable audio is present on any tab.
+  useEffect(() => {
+    if (!audioUrl) return;
+    const purge = () => {
+      if (activeRecorderRef.current || !audioDeletableRef.current) return;
+      void deleteAudio(meetingId).catch(() => {});
+    };
+    window.addEventListener('pagehide', purge);
+    return () => window.removeEventListener('pagehide', purge);
+  }, [audioUrl, meetingId]);
 
 
   const switchTab = useCallback(

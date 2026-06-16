@@ -236,6 +236,40 @@ describe('HeroForm — sign-up submit', () => {
     expect(mockPush).not.toHaveBeenCalled();
   });
 
+  it('shows a password-length message for the PASSWORD_TOO_SHORT code', async () => {
+    mockSignUpEmail.mockResolvedValueOnce({ error: { code: 'PASSWORD_TOO_SHORT', message: 'Password too short' } });
+
+    renderForm();
+    fireEvent.change(screen.getByLabelText('Navn'), { target: { value: 'Jane' } });
+    fireEvent.change(screen.getByLabelText('E-mail'), { target: { value: 'jane@example.com' } });
+    fireEvent.change(screen.getByLabelText('Adgangskode'), { target: { value: 'short' } });
+
+    await act(async () => {
+      fireEvent.submit(screen.getByRole('button', { name: 'Opret konto' }).closest('form')!);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Adgangskoden skal være mindst 8 tegn.')).toBeInTheDocument();
+    });
+  });
+
+  it('shows an "email already in use" message for the USER_ALREADY_EXISTS code', async () => {
+    mockSignUpEmail.mockResolvedValueOnce({ error: { code: 'USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL', message: 'exists' } });
+
+    renderForm();
+    fireEvent.change(screen.getByLabelText('Navn'), { target: { value: 'Jane' } });
+    fireEvent.change(screen.getByLabelText('E-mail'), { target: { value: 'jane@example.com' } });
+    fireEvent.change(screen.getByLabelText('Adgangskode'), { target: { value: 'hunter2hunter2' } });
+
+    await act(async () => {
+      fireEvent.submit(screen.getByRole('button', { name: 'Opret konto' }).closest('form')!);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('E-mailen er allerede i brug. Log ind i stedet.')).toBeInTheDocument();
+    });
+  });
+
   it('shows error when sign-up succeeds but subsequent sign-in fails', async () => {
     mockSignUpEmail.mockResolvedValueOnce({ error: null });
     mockSignInEmail.mockResolvedValueOnce({ error: { message: 'auth failed' } });

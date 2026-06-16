@@ -43,6 +43,14 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
 
   const meetingIdRef = useRef<string | null>(null);
   const archiveFailedRef = useRef(false);
+  // Guards the upload job against React StrictMode's double-invoke (mount →
+  // cleanup → mount in dev). `startedRef` ensures the job — and the single
+  // meeting it creates — runs exactly once; without it the second invocation
+  // created a duplicate meeting that stranded in 'processing' and showed up
+  // twice in the Arkiv. `liveRef` is re-armed on each (re)mount so the one
+  // surviving job keeps updating state after the spurious cleanup fires.
+  const startedRef = useRef(false);
+  const liveRef = useRef(true);
 
   // Guard against double-revocation: React StrictMode runs effects twice in dev,
   // which can revoke the blob URL before the Audio element loads it → ERR_FILE_NOT_FOUND.
@@ -58,20 +66,33 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
   }, [file]);
 
   useEffect(() => {
-    let cancelled = false;
+    // Re-arm on every (re)mount so the in-flight job keeps updating state…
+    liveRef.current = true;
+    // …but start the job — and create its meeting — only once.
+    if (startedRef.current) {
+      return () => { liveRef.current = false; };
+    }
+    startedRef.current = true;
 
     void run();
 
     async function run() {
       try {
         const dateStr = new Intl.DateTimeFormat('da', { day: 'numeric', month: 'long' }).format(new Date());
+        // Use the uploaded file's own date as the recording date — uploading an
+        // old clip should keep the clip's date, not today's. Falls back to now
+        // when the browser reports no usable lastModified (0).
+        const recordedAt = file.lastModified
+          ? new Date(file.lastModified).toISOString()
+          : undefined;
         const meeting = await createMeeting({
           title: `Møde · ${dateStr}`,
           participants: [],
           source: 'local',
           status: 'processing',
+          recordedAt,
         });
-        if (cancelled) return;
+        if (!liveRef.current) return;
         const id = meeting.id;
         meetingIdRef.current = id;
 
@@ -83,7 +104,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         } catch {
           archiveFailedRef.current = true;
         }
-        if (cancelled) return;
+        if (!liveRef.current) return;
 
         setPhase('analyzing');
 
@@ -101,13 +122,13 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         try {
           result = await transcribeBatchesOnServer(id, file, {
             onMeta: (meta) => {
-              if (cancelled) return;
+              if (!liveRef.current) return;
               setPhase('transcribing');
               setTotalSeconds(meta.totalSpeechSeconds);
               setCompletedSeconds(0);
             },
             onBatch: (update) => {
-              if (cancelled) return;
+              if (!liveRef.current) return;
               completedSecs += update.batchSeconds;
               setCompletedSeconds(completedSecs);
               // Append without sorting; batches arrive out of order, live preview is
@@ -120,7 +141,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         } catch {
           throw new Error('Lydformatet understøttes ikke, eller serveren svarede ikke. Prøv MP3, WAV eller M4A.');
         }
-        if (cancelled) return;
+        if (!liveRef.current) return;
         if (result.totalBatches === 0) {
           throw new Error('Ingen tale fundet i lydfilen. Er filen lydløs?');
         }
@@ -132,7 +153,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         // screen shows an uncertainty state for speakers until diarization lands.
         await saveTranscript(id, { rawText, segments, chapters: [], piiReplacements: [], diarizationStatus: 'pending' });
         await updateMeeting(id, { status: 'review' });
-        if (cancelled) return;
+        if (!liveRef.current) return;
 
         // Patch in speaker labels (and clear the pending state) once diarization finishes.
         void diarizationPromise.then((turns) => finishDiarization(id, turns));
@@ -140,14 +161,14 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         setCompletedSeconds(result.totalSpeechSeconds);
         setPhase('done');
       } catch (err) {
-        if (cancelled) return;
+        if (!liveRef.current) return;
         console.error('[upload-confirm]', err);
         setError(err instanceof Error ? err.message : 'Transskription fejlede');
         setPhase('error');
       }
     }
 
-    return () => { cancelled = true; };
+    return () => { liveRef.current = false; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

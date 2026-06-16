@@ -26,7 +26,7 @@ describe('POST /api/export/[id]', () => {
     expect((await res.json()).error).toBe('Unknown format');
   });
 
-  it('exports markdown with the title, section labels, and an empty-section fallback', async () => {
+  it('exports markdown from legacy sections, dropping empty ones', async () => {
     const res = await POST(makeJsonReq(BASE_URL, 'POST', { title: 'Mit Referat', content, format: 'md' }));
 
     expect(res.status).toBe(200);
@@ -36,7 +36,24 @@ describe('POST /api/export/[id]', () => {
     expect(text).toContain('# Mit Referat');
     expect(text).toContain('## Punkter');
     expect(text).toContain('Vi besluttede at gå videre.');
-    expect(text).toContain('*(ingen indhold)*'); // empty section fallback
+    expect(text).not.toContain('Tom sektion'); // empty section dropped
+  });
+
+  it('exports markdown directly from a single-body referat', async () => {
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', {
+      title: 'Mit Referat', content: { body: '## Beslutninger\n\nGå videre.' }, format: 'md',
+    }));
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain('## Beslutninger');
+    expect(text).toContain('Gå videre.');
+  });
+
+  it('falls back to a placeholder when the document is empty', async () => {
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { content: { body: '' }, format: 'md' }));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('*(ingen indhold)*');
   });
 
   it('defaults to a PDF document when no format is given', async () => {
