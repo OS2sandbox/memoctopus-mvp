@@ -1270,7 +1270,7 @@ export function TranscriptReview({
                     fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--accent)',
                   }}
                 >
-                  Gem prompt som skabelon →
+                  Gem som skabelon →
                 </button>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
