@@ -4,6 +4,8 @@ import { auth } from '@/lib/auth';
 import { db } from '@/lib/db';
 import { sharedSkabeloner } from '@/lib/db/schema';
 import { getSkabelon } from '@/lib/skabeloner/server';
+import { getShareConfig } from '@/lib/skabeloner/share-config';
+import { ensureSharedSkabelonerTable } from '@/lib/skabeloner/shared-table';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -11,11 +13,15 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function POST(_req: NextRequest, { params }: Ctx) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!getShareConfig().link) {
+    return NextResponse.json({ error: 'Linkdeling er deaktiveret' }, { status: 403 });
+  }
 
   const { id } = await params;
   const skabelon = await getSkabelon(session.user.id, id);
   if (!skabelon) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
 
+  await ensureSharedSkabelonerTable();
   const token = crypto.randomUUID();
   await db.insert(sharedSkabeloner).values({
     token,

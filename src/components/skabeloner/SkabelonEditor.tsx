@@ -18,6 +18,7 @@ import {
   extractImportToken,
   type ShareableSkabelon,
 } from '@/lib/skabeloner/share-code';
+import type { ShareConfig } from '@/lib/skabeloner/share-config';
 import type { Skabelon } from '@/types';
 
 interface SkabelonEditorProps {
@@ -26,6 +27,8 @@ interface SkabelonEditorProps {
   // The Skabelon being edited, or null to create a new one.
   skabelon: Skabelon | null;
   onSaved: (skabelon: Skabelon) => void;
+  // Which sharing methods are enabled — gates the paste-to-import affordance.
+  shareConfig?: ShareConfig;
 }
 
 const CATEGORIES = [
@@ -37,7 +40,13 @@ const CATEGORIES = [
 
 type CategoryKey = (typeof CATEGORIES)[number][0];
 
-export function SkabelonEditor({ open, onOpenChange, skabelon, onSaved }: SkabelonEditorProps) {
+export function SkabelonEditor({
+  open,
+  onOpenChange,
+  skabelon,
+  onSaved,
+  shareConfig = { code: true, link: false },
+}: SkabelonEditorProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [prompt, setPrompt] = useState('');
@@ -87,35 +96,46 @@ export function SkabelonEditor({ open, onOpenChange, skabelon, onSaved }: Skabel
     setPasteApplied(true);
   }
 
-  // Accept either a self-contained code or an old-style import link.
+  // Accept whichever sharing methods the admin enabled: a self-contained code
+  // and/or a server import link.
   async function handleImport() {
     const raw = pasteValue.trim();
     if (!raw) return;
     setPasteError(null);
 
-    const decoded = decodeSkabelonCode(raw);
-    if (decoded) {
-      applyShareable(decoded);
-      return;
-    }
-
-    const token = extractImportToken(raw);
-    if (token) {
-      setPasting(true);
-      try {
-        const res = await fetch(`/api/skabeloner/import/${token}`);
-        if (!res.ok) throw new Error();
-        const data = (await res.json()) as { skabelon: ShareableSkabelon };
-        applyShareable(data.skabelon);
-      } catch {
-        setPasteError('Kunne ikke hente skabelon fra linket');
-      } finally {
-        setPasting(false);
+    if (shareConfig.code) {
+      const decoded = decodeSkabelonCode(raw);
+      if (decoded) {
+        applyShareable(decoded);
+        return;
       }
-      return;
     }
 
-    setPasteError('Ugyldig kode eller link');
+    if (shareConfig.link) {
+      const token = extractImportToken(raw);
+      if (token) {
+        setPasting(true);
+        try {
+          const res = await fetch(`/api/skabeloner/import/${token}`);
+          if (!res.ok) throw new Error();
+          const data = (await res.json()) as { skabelon: ShareableSkabelon };
+          applyShareable(data.skabelon);
+        } catch {
+          setPasteError('Kunne ikke hente skabelon fra linket');
+        } finally {
+          setPasting(false);
+        }
+        return;
+      }
+    }
+
+    setPasteError(
+      shareConfig.code && shareConfig.link
+        ? 'Ugyldig kode eller link'
+        : shareConfig.link
+          ? 'Ugyldigt link'
+          : 'Ugyldig kode',
+    );
   }
 
   async function handleSave() {
@@ -147,6 +167,15 @@ export function SkabelonEditor({ open, onOpenChange, skabelon, onSaved }: Skabel
     }
   }
 
+  // The paste affordance adapts to whichever sharing methods are enabled.
+  const pasteEnabled = shareConfig.code || shareConfig.link;
+  const what =
+    shareConfig.code && shareConfig.link
+      ? { label: 'Har du en kode eller et link?', placeholder: 'Indsæt kode eller link…', help: 'Indsæt en delt skabelonkode eller et link for at udfylde felterne automatisk.' }
+      : shareConfig.link
+        ? { label: 'Har du et link?', placeholder: 'Indsæt link…', help: 'Indsæt et delingslink for at udfylde felterne automatisk.' }
+        : { label: 'Har du en kode?', placeholder: 'Indsæt kode…', help: 'Indsæt en delt skabelonkode for at udfylde felterne automatisk.' };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -158,11 +187,11 @@ export function SkabelonEditor({ open, onOpenChange, skabelon, onSaved }: Skabel
         </DialogHeader>
 
         <div className="space-y-4 mt-2">
-          {!skabelon && (
+          {!skabelon && pasteEnabled && (
             <div className="rounded-[var(--radius-lg)] border border-dashed border-[var(--line)] p-3 space-y-2">
-              <Label htmlFor="sk-paste">Har du en kode eller et link?</Label>
+              <Label htmlFor="sk-paste">{what.label}</Label>
               <p className="text-xs text-[var(--muted)]">
-                Indsæt en delt skabelonkode eller et link for at udfylde felterne automatisk.
+                {what.help}
               </p>
               <div className="flex items-start gap-2">
                 <Textarea
@@ -172,7 +201,7 @@ export function SkabelonEditor({ open, onOpenChange, skabelon, onSaved }: Skabel
                     setPasteValue(e.target.value);
                     setPasteError(null);
                   }}
-                  placeholder="Indsæt kode eller link…"
+                  placeholder={what.placeholder}
                   rows={2}
                   className="font-mono text-xs"
                 />

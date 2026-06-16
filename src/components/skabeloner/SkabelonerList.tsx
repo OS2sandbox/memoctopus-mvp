@@ -10,9 +10,11 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { SkabelonEditor } from './SkabelonEditor';
 import { encodeSkabelonCode } from '@/lib/skabeloner/share-code';
+import type { ShareConfig } from '@/lib/skabeloner/share-config';
 import type { Skabelon } from '@/types';
 
 const CATEGORY_LABELS: [keyof Skabelon, string][] = [
@@ -27,15 +29,31 @@ export function SkabelonerList() {
   const [loading, setLoading] = useState(true);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<Skabelon | null>(null);
+  // Default to the out-of-box config (code on, link off) so the share affordance
+  // renders correctly before the server config arrives; corrected on fetch.
+  const [shareConfig, setShareConfig] = useState<ShareConfig>({ code: true, link: false });
+  const [shareTarget, setShareTarget] = useState<Skabelon | null>(null);
   const [shareCode, setShareCode] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [shareLink, setShareLink] = useState<string | null>(null);
+  const [linkLoading, setLinkLoading] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
 
   useEffect(() => {
     fetch('/api/skabeloner')
       .then((r) => (r.ok ? r.json() : { skabeloner: [] }))
       .then((data: { skabeloner: Skabelon[] }) => setSkabeloner(data.skabeloner ?? []))
       .finally(() => setLoading(false));
+    fetch('/api/skabeloner/share-config')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { share: ShareConfig } | null) => {
+        if (data?.share) setShareConfig(data.share);
+      })
+      .catch(() => {});
   }, []);
+
+  const shareEnabled = shareConfig.code || shareConfig.link;
 
   function handleSaved(saved: Skabelon) {
     setSkabeloner((prev) => {
@@ -69,26 +87,50 @@ export function SkabelonerList() {
   }
 
   async function handleShare(s: Skabelon) {
-    // The whole template travels inside the code, so no server round-trip is
-    // needed — and the recipient pastes it under "Ny skabelon".
-    const code = encodeSkabelonCode(s);
-    setShareCode(code);
-    setCopied(false);
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-    } catch {
-      /* clipboard may be unavailable; the code is still selectable */
+    setShareTarget(s);
+    setCopiedCode(false);
+    setCopiedLink(false);
+    setShareLink(null);
+    setLinkError(null);
+
+    // Code sharing is self-contained — the whole template travels in the code, so
+    // build it locally and pre-copy it for convenience.
+    if (shareConfig.code) {
+      const code = encodeSkabelonCode(s);
+      setShareCode(code);
+      try {
+        await navigator.clipboard.writeText(code);
+        setCopiedCode(true);
+      } catch {
+        /* clipboard may be unavailable; the code is still selectable */
+      }
+    } else {
+      setShareCode(null);
+    }
+
+    // Link sharing publishes the template server-side and returns an import token.
+    if (shareConfig.link) {
+      setLinkLoading(true);
+      try {
+        const res = await fetch(`/api/skabeloner/${s.id}/share`, { method: 'POST' });
+        if (!res.ok) throw new Error();
+        const { token } = (await res.json()) as { token: string };
+        setShareLink(`${window.location.origin}/skabeloner/import/${token}`);
+      } catch {
+        setLinkError('Kunne ikke oprette delingslink');
+      } finally {
+        setLinkLoading(false);
+      }
     }
   }
 
-  async function copyCode() {
-    if (!shareCode) return;
+  async function copyText(text: string, which: 'code' | 'link') {
     try {
-      await navigator.clipboard.writeText(shareCode);
-      setCopied(true);
+      await navigator.clipboard.writeText(text);
+      if (which === 'code') setCopiedCode(true);
+      else setCopiedLink(true);
     } catch {
-      /* clipboard may be unavailable; the code is still selectable */
+      /* clipboard may be unavailable; the value is still selectable */
     }
   }
 
@@ -96,7 +138,8 @@ export function SkabelonerList() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <p className="text-sm text-[var(--muted)]">
-          Skabeloner er genbrugelige prompts til at generere referater. Tryk Del for at kopiere en skabelon som kode, andre kan indsætte under Ny skabelon.
+          Skabeloner er genbrugelige prompts til at generere referater.
+          {shareEnabled && ' Tryk Del for at dele en skabelon med andre.'}
         </p>
         <Button size="sm" onClick={openNew}>
           + Ny skabelon
@@ -174,7 +217,9 @@ export function SkabelonerList() {
 
                 <div className="mt-auto flex items-center gap-1 pt-2">
                   <Button variant="ghost" size="sm" onClick={() => openEdit(s)}>Rediger</Button>
-                  <Button variant="ghost" size="sm" onClick={() => handleShare(s)}>Del</Button>
+                  {shareEnabled && (
+                    <Button variant="ghost" size="sm" onClick={() => handleShare(s)}>Del</Button>
+                  )}
                   <Button variant="ghost" size="sm" onClick={() => handleDelete(s)}>Slet</Button>
                 </div>
               </div>
@@ -188,30 +233,56 @@ export function SkabelonerList() {
         onOpenChange={setEditorOpen}
         skabelon={editing}
         onSaved={handleSaved}
+        shareConfig={shareConfig}
       />
 
-      <Dialog open={shareCode !== null} onOpenChange={(o) => !o && setShareCode(null)}>
+      <Dialog open={shareTarget !== null} onOpenChange={(o) => !o && setShareTarget(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Del skabelon</DialogTitle>
             <DialogDescription>
-              {copied
-                ? 'Koden er kopieret til udklipsholderen. Send den til andre — de indsætter den under "Ny skabelon".'
-                : 'Kopiér denne kode og send den til andre. De indsætter den under "Ny skabelon".'}
+              Send en kode eller et link til andre — de indsætter det under &quot;Ny skabelon&quot;.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2 mt-2">
-            <Textarea
-              readOnly
-              value={shareCode ?? ''}
-              rows={4}
-              className="font-mono text-xs"
-              onFocus={(e) => e.currentTarget.select()}
-            />
-            <Button size="sm" onClick={copyCode}>{copied ? 'Kopieret' : 'Kopiér kode'}</Button>
+
+          <div className="space-y-5 mt-2">
+            {shareConfig.code && shareCode && (
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-[var(--ink)]">Kode</p>
+                <Textarea
+                  readOnly
+                  value={shareCode}
+                  rows={4}
+                  className="font-mono text-xs"
+                  onFocus={(e) => e.currentTarget.select()}
+                />
+                <Button size="sm" onClick={() => copyText(shareCode, 'code')}>
+                  {copiedCode ? 'Kopieret' : 'Kopiér kode'}
+                </Button>
+              </div>
+            )}
+
+            {shareConfig.link && (
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-[var(--ink)]">Link</p>
+                {linkLoading ? (
+                  <p className="text-sm text-[var(--muted)]">Genererer link…</p>
+                ) : linkError ? (
+                  <p className="text-sm text-[var(--kill)]">{linkError}</p>
+                ) : shareLink ? (
+                  <div className="flex items-center gap-2">
+                    <Input readOnly value={shareLink} onFocus={(e) => e.currentTarget.select()} />
+                    <Button size="sm" onClick={() => copyText(shareLink, 'link')}>
+                      {copiedLink ? 'Kopieret' : 'Kopiér'}
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+            )}
           </div>
+
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setShareCode(null)}>Luk</Button>
+            <Button variant="ghost" onClick={() => setShareTarget(null)}>Luk</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
