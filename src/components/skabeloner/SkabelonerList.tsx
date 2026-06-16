@@ -19,6 +19,7 @@ const CATEGORY_LABELS: [keyof Skabelon, string][] = [
   ['includeDeltagere', 'Deltagere'],
   ['includeBeslutningspunkter', 'Beslutningspunkter'],
   ['includeDagsorden', 'Dagsorden'],
+  ['includeDato', 'Dato'],
 ];
 
 export function SkabelonerList() {

@@ -26,6 +26,7 @@ export async function POST(req: NextRequest) {
     includeDeltagere: body.includeDeltagere,
     includeBeslutningspunkter: body.includeBeslutningspunkter,
     includeDagsorden: body.includeDagsorden,
+    includeDato: body.includeDato,
   });
   return NextResponse.json({ skabelon }, { status: 201 });
 }

@@ -34,6 +34,7 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
       includeDeltagere: shared.includeDeltagere,
       includeBeslutningspunkter: shared.includeBeslutningspunkter,
       includeDagsorden: shared.includeDagsorden,
+      includeDato: shared.includeDato,
     },
   });
 }
@@ -54,6 +55,7 @@ export async function POST(_req: NextRequest, { params }: Ctx) {
     includeDeltagere: shared.includeDeltagere,
     includeBeslutningspunkter: shared.includeBeslutningspunkter,
     includeDagsorden: shared.includeDagsorden,
+    includeDato: shared.includeDato,
   });
 
   return NextResponse.json({ skabelon }, { status: 201 });

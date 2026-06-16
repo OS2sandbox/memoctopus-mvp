@@ -74,6 +74,7 @@ export const sharedSkabeloner = pgTable('shared_skabeloner', {
   includeDeltagere: boolean('include_deltagere').notNull().default(false),
   includeBeslutningspunkter: boolean('include_beslutningspunkter').notNull().default(false),
   includeDagsorden: boolean('include_dagsorden').notNull().default(false),
+  includeDato: boolean('include_dato').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 });
 

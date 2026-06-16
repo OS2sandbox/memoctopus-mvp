@@ -13,8 +13,10 @@ const MINUTES_SYSTEM_PROMPT = `Du er en dansk mødesekretær der udarbejder prof
 Du skriver:
 - Klart og præcist dansk (ikke bureaukratisk, men formelt)
 - I tredje person ("Mødet besluttede...", "Parterne aftalte...")
-- Med fokus på beslutninger, handlinger og aftaler — ikke alt hvad der blev sagt
+- Fokuseret på det væsentlige — ikke alt hvad der blev sagt
 - Med respekt for mødets karakter og kontekst
+
+Brugerens instruktioner og de ønskede afsnit er styrende: følg dem nøje — også den ønskede længde — og tilføj ikke afsnit (fx beslutninger eller resumé) eller indhold der ikke er bedt om.
 
 Du skriver referatet som ét sammenhængende dokument i markdown.`;
 
@@ -27,6 +29,14 @@ export interface SkabelonSpec {
   includeDeltagere: boolean;
   includeBeslutningspunkter: boolean;
   includeDagsorden: boolean;
+  includeDato: boolean;
+}
+
+// Format an ISO timestamp as a Danish long date, e.g. "16. juni 2026".
+function formatDanishDate(iso: string): string | null {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat('da-DK', { day: 'numeric', month: 'long', year: 'numeric' }).format(d);
 }
 
 // ─── Prompt building ──────────────────────────────────────────────────────────
@@ -35,11 +45,20 @@ export function buildSkabelonInstruction(
   spec: SkabelonSpec,
   participants?: string[],
   customPrompt?: string,
+  meetingDate?: string,
 ): string {
   const parts: string[] = [];
   if (spec.prompt.trim()) parts.push(spec.prompt.trim());
 
   const categories: string[] = [];
+  if (spec.includeDato) {
+    const formatted = meetingDate ? formatDanishDate(meetingDate) : null;
+    categories.push(
+      formatted
+        ? `- Angiv mødets dato i referatet: ${formatted}.`
+        : '- En **Dato**-sektion med mødets dato.',
+    );
+  }
   if (spec.includeDagsorden) {
     categories.push('- En **Dagsorden**-sektion med mødets punkter.');
   }
@@ -52,13 +71,16 @@ export function buildSkabelonInstruction(
     categories.push('- En **Beslutningspunkter**-sektion der opsummerer de trufne beslutninger.');
   }
   if (categories.length > 0) {
-    parts.push('Inkludér følgende afsnit i referatet:\n' + categories.join('\n'));
+    parts.push(
+      'Strukturér referatet med følgende afsnit, og medtag ikke yderligere faste afsnit (fx beslutninger eller resumé) medmindre instruktionen nedenfor beder om det:\n' +
+        categories.join('\n'),
+    );
   } else if (participants && participants.length > 0) {
     parts.push(`Deltagere i mødet: ${participants.join(', ')}.`);
   }
 
   if (customPrompt && customPrompt.trim()) {
-    parts.push('Yderligere instruktion til referatet: ' + customPrompt.trim());
+    parts.push('Følg denne instruktion nøje: ' + customPrompt.trim());
   }
   return parts.join('\n\n');
 }
@@ -74,7 +96,7 @@ async function _generateBody(transcriptText: string, instruction: string): Promi
         role: 'user',
         content: `Udarbejd et mødereferat baseret på denne transskription.
 ${instruction ? `\n${instruction}\n` : ''}
-Skriv referatet som ét sammenhængende dokument i markdown. Brug overskrifter (##) til afsnit og punktlister hvor det er relevant. Returner KUN selve referatet — ingen forklaringer, ingen JSON og ingen code blocks.
+Følg instruktionerne ovenfor nøje — herunder ønsket længde og hvilke afsnit der skal med. Skriv referatet som ét sammenhængende dokument i markdown. Brug overskrifter (##) til afsnit og punktlister hvor det er relevant. Returner KUN selve referatet — ingen forklaringer, ingen JSON og ingen code blocks.
 
 Transskription:
 ${transcriptText}`,
@@ -125,11 +147,12 @@ export async function generateReferatBody(
   participants?: string[],
   chapters?: TranscriptChapter[],
   customPrompt?: string,
+  meetingDate?: string,
 ): Promise<{ body: string }> {
   const transcriptText = transcript
     .map((s) => `[${s.speaker}] (${formatTime(s.start)}): ${s.text}`)
     .join('\n');
-  const instruction = buildSkabelonInstruction(spec, participants, customPrompt);
+  const instruction = buildSkabelonInstruction(spec, participants, customPrompt, meetingDate);
 
   if (chapters && chapters.length > 1 && transcriptText.length > CHAPTER_SPLIT_THRESHOLD) {
     const summaries = await Promise.all(

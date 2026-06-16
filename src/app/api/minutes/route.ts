@@ -4,7 +4,7 @@ import { auth } from '@/lib/auth';
 import { generateReferatBody, SkabelonSpec } from '@/lib/ai/minutes';
 import { getSkabelon, getDefaultSkabelon } from '@/lib/skabeloner/server';
 import { TranscriptChapter } from '@/lib/ai/chapters';
-import { TranscriptSegment } from '@/types';
+import { TranscriptSegment, Skabelon } from '@/types';
 
 export const maxDuration = 120;
 
@@ -22,6 +22,8 @@ export async function POST(req: NextRequest) {
     includeDeltagere,
     includeBeslutningspunkter,
     includeDagsorden,
+    includeDato,
+    meetingDate,
   } = body as {
     segments: TranscriptSegment[];
     participants?: string[];
@@ -31,6 +33,8 @@ export async function POST(req: NextRequest) {
     includeDeltagere?: boolean;
     includeBeslutningspunkter?: boolean;
     includeDagsorden?: boolean;
+    includeDato?: boolean;
+    meetingDate?: string;
   };
 
   if (!segments || segments.length === 0) {
@@ -38,9 +42,14 @@ export async function POST(req: NextRequest) {
   }
 
   const userId = session.user.id;
-  const skabelon = skabelonId
-    ? await getSkabelon(userId, skabelonId)
-    : await getDefaultSkabelon(userId);
+  // An explicit empty skabelonId ('') means the user chose "Ingen skabelon" — no
+  // skabelon prompt at all. Omitting the field entirely falls back to the default.
+  let skabelon: Skabelon | null = null;
+  if (skabelonId) {
+    skabelon = await getSkabelon(userId, skabelonId);
+  } else if (skabelonId === undefined) {
+    skabelon = await getDefaultSkabelon(userId);
+  }
 
   // Toggle overrides from the gennemgang UI win over the Skabelon defaults;
   // when neither is set we fall back to the Skabelon's own flags.
@@ -50,6 +59,7 @@ export async function POST(req: NextRequest) {
     includeBeslutningspunkter:
       includeBeslutningspunkter ?? skabelon?.includeBeslutningspunkter ?? false,
     includeDagsorden: includeDagsorden ?? skabelon?.includeDagsorden ?? false,
+    includeDato: includeDato ?? skabelon?.includeDato ?? false,
   };
 
   const content = await generateReferatBody(
@@ -58,6 +68,7 @@ export async function POST(req: NextRequest) {
     participants,
     chapters,
     customPrompt,
+    meetingDate,
   );
 
   return NextResponse.json({ content, skabelonId: skabelon?.id ?? null });

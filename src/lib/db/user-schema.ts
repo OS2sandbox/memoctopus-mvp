@@ -68,10 +68,17 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         include_deltagere          BOOLEAN NOT NULL DEFAULT FALSE,
         include_beslutningspunkter BOOLEAN NOT NULL DEFAULT FALSE,
         include_dagsorden          BOOLEAN NOT NULL DEFAULT FALSE,
+        include_dato               BOOLEAN NOT NULL DEFAULT FALSE,
         is_default   BOOLEAN NOT NULL DEFAULT FALSE,
         created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
+    `);
+
+    // Backfill the Dato flag onto skabeloner tables created before it existed.
+    await client.query(`
+      ALTER TABLE "${schema}".skabeloner
+        ADD COLUMN IF NOT EXISTS include_dato BOOLEAN NOT NULL DEFAULT FALSE
     `);
 
     // meetings

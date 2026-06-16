@@ -27,6 +27,7 @@ const CATEGORIES = [
   ['includeDeltagere', 'Deltagere'],
   ['includeBeslutningspunkter', 'Beslutningspunkter'],
   ['includeDagsorden', 'Dagsorden'],
+  ['includeDato', 'Dato'],
 ] as const;
 
 type CategoryKey = (typeof CATEGORIES)[number][0];
@@ -39,6 +40,7 @@ export function SkabelonEditor({ open, onOpenChange, skabelon, onSaved }: Skabel
     includeDeltagere: false,
     includeBeslutningspunkter: false,
     includeDagsorden: false,
+    includeDato: false,
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +55,7 @@ export function SkabelonEditor({ open, onOpenChange, skabelon, onSaved }: Skabel
       includeDeltagere: skabelon?.includeDeltagere ?? false,
       includeBeslutningspunkter: skabelon?.includeBeslutningspunkter ?? false,
       includeDagsorden: skabelon?.includeDagsorden ?? false,
+      includeDato: skabelon?.includeDato ?? false,
     });
     setError(null);
   }, [open, skabelon]);

@@ -10,6 +10,7 @@ export interface SkabelonRow {
   include_deltagere: boolean;
   include_beslutningspunkter: boolean;
   include_dagsorden: boolean;
+  include_dato: boolean;
   is_default: boolean;
   created_at: string | Date;
   updated_at: string | Date;
@@ -28,6 +29,7 @@ export function mapSkabelon(row: SkabelonRow): Skabelon {
     includeDeltagere: row.include_deltagere,
     includeBeslutningspunkter: row.include_beslutningspunkter,
     includeDagsorden: row.include_dagsorden,
+    includeDato: row.include_dato,
     isDefault: row.is_default,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
@@ -41,6 +43,7 @@ export interface SkabelonInput {
   includeDeltagere?: boolean;
   includeBeslutningspunkter?: boolean;
   includeDagsorden?: boolean;
+  includeDato?: boolean;
 }
 
 export async function listSkabeloner(userId: string): Promise<Skabelon[]> {
@@ -72,8 +75,8 @@ export async function createSkabelon(userId: string, input: SkabelonInput): Prom
   const row = await queryUserSchemaOne<SkabelonRow>(
     userId,
     `INSERT INTO skabeloner
-       (name, description, prompt, include_deltagere, include_beslutningspunkter, include_dagsorden)
-     VALUES ($1, $2, $3, $4, $5, $6)
+       (name, description, prompt, include_deltagere, include_beslutningspunkter, include_dagsorden, include_dato)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
     [
       input.name,
@@ -82,6 +85,7 @@ export async function createSkabelon(userId: string, input: SkabelonInput): Prom
       input.includeDeltagere ?? false,
       input.includeBeslutningspunkter ?? false,
       input.includeDagsorden ?? false,
+      input.includeDato ?? false,
     ],
   );
   return mapSkabelon(row!);
@@ -101,6 +105,7 @@ export async function updateSkabelon(
        include_deltagere = $5,
        include_beslutningspunkter = $6,
        include_dagsorden = $7,
+       include_dato = $8,
        updated_at = NOW()
      WHERE id = $1
      RETURNING *`,
@@ -112,6 +117,7 @@ export async function updateSkabelon(
       input.includeDeltagere ?? false,
       input.includeBeslutningspunkter ?? false,
       input.includeDagsorden ?? false,
+      input.includeDato ?? false,
     ],
   );
   return row ? mapSkabelon(row) : null;

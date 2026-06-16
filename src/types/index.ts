@@ -34,8 +34,8 @@ export interface MinutesSection {
 }
 
 // A reusable, shareable prompt for generating a referat. The free-text `prompt`
-// drives generation; the three include* flags optionally inject the matching
-// category (Deltagere / Beslutningspunkter / Dagsorden) into the output.
+// drives generation; the include* flags optionally inject the matching category
+// (Deltagere / Beslutningspunkter / Dagsorden / Dato) into the output.
 export interface Skabelon {
   id: string;
   name: string;
@@ -44,6 +44,7 @@ export interface Skabelon {
   includeDeltagere: boolean;
   includeBeslutningspunkter: boolean;
   includeDagsorden: boolean;
+  includeDato: boolean;
   isDefault: boolean;
   createdAt: string;
   updatedAt: string;

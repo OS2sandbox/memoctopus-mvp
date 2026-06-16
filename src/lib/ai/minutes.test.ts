@@ -21,6 +21,7 @@ const baseSpec: SkabelonSpec = {
   includeDeltagere: false,
   includeBeslutningspunkter: false,
   includeDagsorden: false,
+  includeDato: false,
 };
 
 function openaiResponse(content: string) {
@@ -60,6 +61,21 @@ describe('buildSkabelonInstruction', () => {
     const out = buildSkabelonInstruction({ ...baseSpec, includeDagsorden: true });
     expect(out).toContain('Dagsorden');
     expect(out).not.toContain('Beslutningspunkter');
+  });
+
+  it('injects the formatted meeting date when Dato is on', () => {
+    const out = buildSkabelonInstruction(
+      { ...baseSpec, includeDato: true },
+      undefined,
+      undefined,
+      '2026-06-16T10:00:00.000Z',
+    );
+    expect(out).toContain('16. juni 2026');
+  });
+
+  it('falls back to a Dato section when no date is supplied', () => {
+    const out = buildSkabelonInstruction({ ...baseSpec, includeDato: true });
+    expect(out).toContain('Dato');
   });
 });
 

@@ -5,7 +5,7 @@ import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
 import { SpeakerAssignment, type ParticipantRow } from './SpeakerAssignment';
 import { WaveformPlayer } from './WaveformPlayer';
-import { getTranscript, getAudio, saveTranscriptChapters, saveTranscriptSegments, saveMinutes, deleteAudio, updateMeeting } from '@/lib/storage';
+import { getTranscript, getAudio, saveTranscriptChapters, saveTranscriptSegments, saveMinutes, deleteAudio, updateMeeting, getMeeting } from '@/lib/storage';
 import { onTranscriptUpdated } from '@/lib/transcript-events';
 import { isDiarizationInFlight, ensureDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import { isDefaultSpeakerLabel, nextAvailableSpeakerLabel } from '@/lib/audio/speaker-labels';
@@ -147,7 +147,7 @@ export function TranscriptReview({
   // selected Skabelon but overridable here in gennemgang.
   const [skabeloner, setSkabeloner] = useState<Skabelon[]>([]);
   const [selectedSkabelonId, setSelectedSkabelonId] = useState<string>('');
-  const [cats, setCats] = useState({ deltagere: false, beslutningspunkter: false, dagsorden: false });
+  const [cats, setCats] = useState({ deltagere: false, beslutningspunkter: false, dagsorden: false, dato: false });
   const [customText, setCustomText] = useState('');
 
   // "Gem prompt som skabelon": persist the current prompt + category selection as
@@ -180,6 +180,7 @@ export function TranscriptReview({
     includeDeltagere: cats.deltagere,
     includeBeslutningspunkter: cats.beslutningspunkter,
     includeDagsorden: cats.dagsorden,
+    includeDato: cats.dato,
   });
 
   function openTemplateForm() {
@@ -282,6 +283,7 @@ export function TranscriptReview({
             deltagere: def.includeDeltagere,
             beslutningspunkter: def.includeBeslutningspunkter,
             dagsorden: def.includeDagsorden,
+            dato: def.includeDato,
           });
         }
       })
@@ -298,6 +300,7 @@ export function TranscriptReview({
       deltagere: s?.includeDeltagere ?? false,
       beslutningspunkter: s?.includeBeslutningspunkter ?? false,
       dagsorden: s?.includeDagsorden ?? false,
+      dato: s?.includeDato ?? false,
     });
   }
 
@@ -705,6 +708,8 @@ export function TranscriptReview({
     setError(null);
     try {
       const processedSegments = displaySegments;
+      // The recording date — used when the "Dato" category is enabled.
+      const meeting = await getMeeting(meetingId);
       const abort = new AbortController();
       const timeout = setTimeout(() => abort.abort(), 5 * 60 * 1000);
       let res: Response;
@@ -715,10 +720,14 @@ export function TranscriptReview({
           body: JSON.stringify({
             segments: processedSegments,
             participants: editableParticipants.filter(Boolean),
-            skabelonId: selectedSkabelonId || undefined,
+            // Send the literal selection — '' ("Ingen skabelon") must reach the
+            // server as an explicit "no skabelon", not collapse to the default.
+            skabelonId: selectedSkabelonId,
             includeDeltagere: cats.deltagere,
             includeBeslutningspunkter: cats.beslutningspunkter,
             includeDagsorden: cats.dagsorden,
+            includeDato: cats.dato,
+            meetingDate: meeting?.createdAt ?? undefined,
             customPrompt: customText.trim() || undefined,
           }),
           signal: abort.signal,
@@ -1211,6 +1220,7 @@ export function TranscriptReview({
                 ['deltagere', 'Deltagere'],
                 ['beslutningspunkter', 'Beslutningspunkter'],
                 ['dagsorden', 'Dagsorden'],
+                ['dato', 'Dato'],
               ] as const).map(([key, label]) => {
                 const active = cats[key];
                 return (

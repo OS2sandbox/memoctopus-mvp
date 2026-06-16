@@ -26,6 +26,7 @@ export async function POST(_req: NextRequest, { params }: Ctx) {
     includeDeltagere: skabelon.includeDeltagere,
     includeBeslutningspunkter: skabelon.includeBeslutningspunkter,
     includeDagsorden: skabelon.includeDagsorden,
+    includeDato: skabelon.includeDato,
   });
 
   return NextResponse.json({ token }, { status: 201 });

@@ -31,6 +31,7 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
     includeDeltagere: body.includeDeltagere,
     includeBeslutningspunkter: body.includeBeslutningspunkter,
     includeDagsorden: body.includeDagsorden,
+    includeDato: body.includeDato,
   });
   if (!skabelon) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
   return NextResponse.json({ skabelon });

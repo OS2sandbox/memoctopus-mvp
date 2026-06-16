@@ -39,6 +39,7 @@ const defaultSkabelon = {
   includeDeltagere: true,
   includeBeslutningspunkter: true,
   includeDagsorden: true,
+  includeDato: false,
   isDefault: true,
   createdAt: '', updatedAt: '',
 };
@@ -85,6 +86,23 @@ describe('POST /api/minutes', () => {
     expect((await res.json()).skabelonId).toBe('sk-1');
     expect(mockGetSkabelon).toHaveBeenCalledWith('user-123', 'sk-1');
     expect(mockGetDefaultSkabelon).not.toHaveBeenCalled();
+  });
+
+  it('uses no skabelon when skabelonId is an explicit empty string ("Ingen skabelon")', async () => {
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, skabelonId: '' }));
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).skabelonId).toBe(null);
+    expect(mockGetDefaultSkabelon).not.toHaveBeenCalled();
+    expect(mockGetSkabelon).not.toHaveBeenCalled();
+    // No skabelon → empty base prompt and NO tags silently inherited from the
+    // default skabelon, even though category flags were omitted from the request.
+    const spec = mockGenerateReferatBody.mock.calls[0][1];
+    expect(spec.prompt).toBe('');
+    expect(spec.includeDeltagere).toBe(false);
+    expect(spec.includeBeslutningspunkter).toBe(false);
+    expect(spec.includeDagsorden).toBe(false);
+    expect(spec.includeDato).toBe(false);
   });
 
   it('lets explicit category toggles override the skabelon defaults', async () => {
