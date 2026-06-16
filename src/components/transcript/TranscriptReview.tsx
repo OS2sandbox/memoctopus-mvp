@@ -158,6 +158,10 @@ export function TranscriptReview({
   // selected Skabelon but overridable here in gennemgang.
   const [skabeloner, setSkabeloner] = useState<Skabelon[]>([]);
   const [selectedSkabelonId, setSelectedSkabelonId] = useState<string>('');
+  // The skabelon list loads async (and can arrive late while transcription
+  // saturates the connection pool). Once the user picks a skabelon themselves,
+  // don't let that late default-selection overwrite their choice.
+  const skabelonTouchedRef = useRef(false);
   const [cats, setCats] = useState(() => skabelonToCats());
   const [customText, setCustomText] = useState('');
 
@@ -274,7 +278,7 @@ export function TranscriptReview({
         const list = data.skabeloner ?? [];
         setSkabeloner(list);
         const def = list.find((s) => s.isDefault) ?? list[0];
-        if (def) {
+        if (def && !skabelonTouchedRef.current) {
           setSelectedSkabelonId(def.id);
           setCats(skabelonToCats(def));
         }
@@ -284,6 +288,7 @@ export function TranscriptReview({
   }, []);
 
   function selectSkabelon(id: string) {
+    skabelonTouchedRef.current = true;
     setSelectedSkabelonId(id);
     setSavedHint(null);
     const s = skabeloner.find((x) => x.id === id);

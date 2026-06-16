@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -60,6 +59,14 @@ export function SkabelonerList() {
     if (res.ok) setSkabeloner((prev) => prev.filter((x) => x.id !== s.id));
   }
 
+  async function handleSetDefault(s: Skabelon) {
+    if (s.isDefault) return;
+    const res = await fetch(`/api/skabeloner/${s.id}/default`, { method: 'POST' });
+    if (!res.ok) return;
+    // One default per user — mirror that locally so only the chosen card fills.
+    setSkabeloner((prev) => prev.map((x) => ({ ...x, isDefault: x.id === s.id })));
+  }
+
   async function handleShare(s: Skabelon) {
     const res = await fetch(`/api/skabeloner/${s.id}/share`, { method: 'POST' });
     if (!res.ok) return;
@@ -111,8 +118,37 @@ export function SkabelonerList() {
               >
                 <div className="flex items-start justify-between gap-2 mb-2">
                   <h2 className="font-semibold text-[var(--ink)]">{s.name}</h2>
-                  {s.isDefault && <Badge variant="default">Standard</Badge>}
+                  <button
+                    type="button"
+                    onClick={() => handleSetDefault(s)}
+                    title={s.isDefault ? 'Standardskabelon' : 'Gør til standard'}
+                    aria-pressed={s.isDefault}
+                    aria-label={s.isDefault ? 'Standardskabelon' : 'Gør til standard'}
+                    className="shrink-0 p-1 rounded-full transition-colors"
+                    style={{
+                      background: 'none', border: 'none', lineHeight: 0,
+                      cursor: s.isDefault ? 'default' : 'pointer',
+                      color: s.isDefault ? 'var(--accent)' : 'var(--muted)',
+                    }}
+                  >
+                    <svg
+                      width="20" height="20" viewBox="0 0 24 24"
+                      fill={s.isDefault ? 'currentColor' : 'none'}
+                      stroke={s.isDefault ? 'none' : 'currentColor'}
+                      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                      shapeRendering="geometricPrecision"
+                      style={{ display: 'block' }}
+                    >
+                      <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+                    </svg>
+                  </button>
                 </div>
+
+                {s.isDefault && (
+                  <p className="text-xs mb-2" style={{ color: 'var(--accent)' }}>
+                    Skabelon valgt som standard
+                  </p>
+                )}
                 <p className="text-sm text-[var(--muted)] mb-4">{s.description || 'Ingen beskrivelse'}</p>
 
                 {activeCats.length > 0 && (

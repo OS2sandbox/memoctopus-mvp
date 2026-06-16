@@ -71,6 +71,16 @@ export async function getDefaultSkabelon(userId: string): Promise<Skabelon | nul
   return row ? mapSkabelon(row) : null;
 }
 
+// Make one skabelon the user's default. Enforces the single-default invariant in
+// a single statement: every row's flag becomes (id = chosen), so the chosen row
+// turns true and all others turn false. Returns null if the id doesn't exist.
+export async function setDefaultSkabelon(userId: string, id: string): Promise<Skabelon | null> {
+  const existing = await getSkabelon(userId, id);
+  if (!existing) return null;
+  await queryUserSchema(userId, `UPDATE skabeloner SET is_default = (id = $1)`, [id]);
+  return getSkabelon(userId, id);
+}
+
 export async function createSkabelon(userId: string, input: SkabelonInput): Promise<Skabelon> {
   const row = await queryUserSchemaOne<SkabelonRow>(
     userId,
