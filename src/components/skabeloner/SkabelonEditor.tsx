@@ -13,6 +13,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  decodeSkabelonCode,
+  extractImportToken,
+  type ShareableSkabelon,
+} from '@/lib/skabeloner/share-code';
 import type { Skabelon } from '@/types';
 
 interface SkabelonEditorProps {
@@ -44,6 +49,10 @@ export function SkabelonEditor({ open, onOpenChange, skabelon, onSaved }: Skabel
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pasteValue, setPasteValue] = useState('');
+  const [pasteError, setPasteError] = useState<string | null>(null);
+  const [pasting, setPasting] = useState(false);
+  const [pasteApplied, setPasteApplied] = useState(false);
 
   // Reset the form whenever the dialog opens (for a new skabelon or an edit).
   useEffect(() => {
@@ -58,7 +67,56 @@ export function SkabelonEditor({ open, onOpenChange, skabelon, onSaved }: Skabel
       includeDato: skabelon?.includeDato ?? false,
     });
     setError(null);
+    setPasteValue('');
+    setPasteError(null);
+    setPasteApplied(false);
   }, [open, skabelon]);
+
+  function applyShareable(s: ShareableSkabelon) {
+    setName(s.name);
+    setDescription(s.description);
+    setPrompt(s.prompt);
+    setCats({
+      includeDeltagere: s.includeDeltagere,
+      includeBeslutningspunkter: s.includeBeslutningspunkter,
+      includeDagsorden: s.includeDagsorden,
+      includeDato: s.includeDato,
+    });
+    setPasteValue('');
+    setPasteError(null);
+    setPasteApplied(true);
+  }
+
+  // Accept either a self-contained code or an old-style import link.
+  async function handleImport() {
+    const raw = pasteValue.trim();
+    if (!raw) return;
+    setPasteError(null);
+
+    const decoded = decodeSkabelonCode(raw);
+    if (decoded) {
+      applyShareable(decoded);
+      return;
+    }
+
+    const token = extractImportToken(raw);
+    if (token) {
+      setPasting(true);
+      try {
+        const res = await fetch(`/api/skabeloner/import/${token}`);
+        if (!res.ok) throw new Error();
+        const data = (await res.json()) as { skabelon: ShareableSkabelon };
+        applyShareable(data.skabelon);
+      } catch {
+        setPasteError('Kunne ikke hente skabelon fra linket');
+      } finally {
+        setPasting(false);
+      }
+      return;
+    }
+
+    setPasteError('Ugyldig kode eller link');
+  }
 
   async function handleSave() {
     if (!name.trim()) {
@@ -100,6 +158,42 @@ export function SkabelonEditor({ open, onOpenChange, skabelon, onSaved }: Skabel
         </DialogHeader>
 
         <div className="space-y-4 mt-2">
+          {!skabelon && (
+            <div className="rounded-[var(--radius-lg)] border border-dashed border-[var(--line)] p-3 space-y-2">
+              <Label htmlFor="sk-paste">Har du en kode eller et link?</Label>
+              <p className="text-xs text-[var(--muted)]">
+                Indsæt en delt skabelonkode eller et link for at udfylde felterne automatisk.
+              </p>
+              <div className="flex items-start gap-2">
+                <Textarea
+                  id="sk-paste"
+                  value={pasteValue}
+                  onChange={(e) => {
+                    setPasteValue(e.target.value);
+                    setPasteError(null);
+                  }}
+                  placeholder="Indsæt kode eller link…"
+                  rows={2}
+                  className="font-mono text-xs"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={handleImport}
+                  disabled={pasting || !pasteValue.trim()}
+                >
+                  {pasting ? 'Henter…' : 'Indsæt'}
+                </Button>
+              </div>
+              {pasteError && <p className="text-sm text-[var(--kill)]">{pasteError}</p>}
+              {pasteApplied && !pasteError && (
+                <p className="text-sm" style={{ color: 'var(--accent)' }}>
+                  Skabelon indlæst — gennemse og gem.
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="space-y-1.5">
             <Label htmlFor="sk-name">Navn</Label>
             <Input id="sk-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="F.eks. Bestyrelsesmøde" />
