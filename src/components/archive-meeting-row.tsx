@@ -26,7 +26,21 @@ function statusHref(m: ArchiveMeeting) {
   return `/meeting/${m.id}/minutes`;
 }
 
-export function ArchiveMeetingRow({ meeting, onDeleted }: { meeting: ArchiveMeeting; onDeleted?: () => void }) {
+export function ArchiveMeetingRow({
+  meeting,
+  onDeleted,
+  selectionMode = false,
+  selected = false,
+  onToggleSelect,
+}: {
+  meeting: ArchiveMeeting;
+  onDeleted?: () => void;
+  // When true the row becomes a selectable target (checkbox, no navigation) so
+  // the archive can be bulk-edited. The parent owns the selection set.
+  selectionMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
+}) {
   const [hovered, setHovered] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -42,6 +56,50 @@ export function ArchiveMeetingRow({ meeting, onDeleted }: { meeting: ArchiveMeet
     }
   }
 
+  const rowBody = (
+    <>
+      <div className="flex-1 min-w-0">
+        <p className="font-medium text-[var(--ink)] truncate" style={{ fontSize: 'var(--t-body)' }}>
+          {meeting.title}
+        </p>
+        <p className="mt-0.5 text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}>
+          {formatDate(meeting.createdAt)}
+          {meeting.durationSeconds != null && (
+            <> · {formatDuration(meeting.durationSeconds)}</>
+          )}
+          {meeting.participants.length > 0 && (
+            <> · {meeting.participants.length} deltager{meeting.participants.length !== 1 ? 'e' : ''}</>
+          )}
+        </p>
+      </div>
+      <Badge variant={statusVariant(meeting.status)}>
+        {statusLabel(meeting.status)}
+      </Badge>
+    </>
+  );
+
+  if (selectionMode) {
+    return (
+      <div
+        className="relative flex items-center gap-4 px-5 py-4 cursor-pointer hover:bg-[var(--surface-2)] transition-colors"
+        onClick={onToggleSelect}
+        role="checkbox"
+        aria-checked={selected}
+        aria-label={`Vælg ${meeting.title}`}
+      >
+        <input
+          type="checkbox"
+          checked={selected}
+          readOnly
+          tabIndex={-1}
+          className="shrink-0"
+          style={{ accentColor: 'var(--accent)', width: 16, height: 16 }}
+        />
+        {rowBody}
+      </div>
+    );
+  }
+
   return (
     <>
       <div
@@ -50,23 +108,7 @@ export function ArchiveMeetingRow({ meeting, onDeleted }: { meeting: ArchiveMeet
         onMouseLeave={() => setHovered(false)}
       >
         <Link href={statusHref(meeting)} className="flex flex-1 min-w-0 items-center gap-4">
-          <div className="flex-1 min-w-0">
-            <p className="font-medium text-[var(--ink)] truncate" style={{ fontSize: 'var(--t-body)' }}>
-              {meeting.title}
-            </p>
-            <p className="mt-0.5 text-[var(--muted)]" style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--t-micro)' }}>
-              {formatDate(meeting.createdAt)}
-              {meeting.durationSeconds != null && (
-                <> · {formatDuration(meeting.durationSeconds)}</>
-              )}
-              {meeting.participants.length > 0 && (
-                <> · {meeting.participants.length} deltager{meeting.participants.length !== 1 ? 'e' : ''}</>
-              )}
-            </p>
-          </div>
-          <Badge variant={statusVariant(meeting.status)}>
-            {statusLabel(meeting.status)}
-          </Badge>
+          {rowBody}
         </Link>
 
         <button

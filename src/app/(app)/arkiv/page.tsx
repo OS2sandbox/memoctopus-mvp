@@ -2,9 +2,18 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { getAllMeetings, StoredMeeting } from '@/lib/storage';
+import { getAllMeetings, deleteMeeting, StoredMeeting } from '@/lib/storage';
 import { ArchiveMeetingRow } from '@/components/archive-meeting-row';
 import { SkabelonerList } from '@/components/skabeloner/SkabelonerList';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Meeting } from '@/types';
 
 type Tab = 'meetings' | 'skabeloner';
@@ -13,6 +22,10 @@ export default function ArkivPage() {
   const [meetings, setMeetings] = useState<(Meeting & { durationSeconds: number | null })[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('meetings');
+  const [editMode, setEditMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   // Allow deep-linking to the Skabeloner tab (e.g. from the old /templates route).
   useEffect(() => {
@@ -42,8 +55,40 @@ export default function ArkivPage() {
 
   function selectTab(next: Tab) {
     setTab(next);
+    if (next !== 'meetings') exitEditMode();
     const url = next === 'skabeloner' ? '/arkiv?tab=skabeloner' : '/arkiv';
     window.history.replaceState(null, '', url);
+  }
+
+  function exitEditMode() {
+    setEditMode(false);
+    setSelected(new Set());
+  }
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const allSelected = meetings.length > 0 && selected.size === meetings.length;
+
+  function toggleSelectAll() {
+    setSelected(allSelected ? new Set() : new Set(meetings.map((m) => m.id)));
+  }
+
+  async function handleBulkDelete() {
+    setIsBulkDeleting(true);
+    const ids = [...selected];
+    // Each delete removes the meeting plus its transcript, referat and audio.
+    await Promise.all(ids.map((id) => deleteMeeting(id).catch(() => {})));
+    setMeetings((prev) => prev.filter((m) => !selected.has(m.id)));
+    setBulkDeleteOpen(false);
+    setIsBulkDeleting(false);
+    exitEditMode();
   }
 
   const tabs: { key: Tab; label: string }[] = [
@@ -72,6 +117,12 @@ export default function ArkivPage() {
             </p>
           )}
         </div>
+
+        {tab === 'meetings' && !loading && meetings.length > 0 && !editMode && (
+          <Button variant="outline" size="sm" onClick={() => setEditMode(true)}>
+            Rediger arkiv
+          </Button>
+        )}
       </div>
 
       {/* Tab bar */}
@@ -122,19 +173,71 @@ export default function ArkivPage() {
             </Link>
           </div>
         ) : (
-          <div className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] divide-y divide-[var(--line)]">
-            {meetings.map((m) => (
-              <ArchiveMeetingRow
-                key={m.id}
-                meeting={m}
-                onDeleted={() => setMeetings((prev) => prev.filter((x) => x.id !== m.id))}
-              />
-            ))}
-          </div>
+          <>
+            {editMode && (
+              <div className="flex items-center justify-between mb-3">
+                <button
+                  onClick={toggleSelectAll}
+                  className="text-sm text-[var(--accent)] hover:underline"
+                >
+                  {allSelected ? 'Fravælg alle' : 'Vælg alle'}
+                </button>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm" onClick={exitEditMode}>
+                    Færdig
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={selected.size === 0}
+                    onClick={() => setBulkDeleteOpen(true)}
+                  >
+                    Slet valgte ({selected.size})
+                  </Button>
+                </div>
+              </div>
+            )}
+            <div className="border border-[var(--line)] rounded-[var(--radius)] bg-[var(--surface)] divide-y divide-[var(--line)]">
+              {meetings.map((m) => (
+                <ArchiveMeetingRow
+                  key={m.id}
+                  meeting={m}
+                  selectionMode={editMode}
+                  selected={selected.has(m.id)}
+                  onToggleSelect={() => toggleSelect(m.id)}
+                  onDeleted={() => setMeetings((prev) => prev.filter((x) => x.id !== m.id))}
+                />
+              ))}
+            </div>
+          </>
         )
       ) : (
         <SkabelonerList />
       )}
+
+      <Dialog open={bulkDeleteOpen} onOpenChange={(o) => !isBulkDeleting && setBulkDeleteOpen(o)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Slet {selected.size} {selected.size === 1 ? 'møde' : 'møder'}?
+            </DialogTitle>
+            <DialogDescription>
+              Alt indhold slettes permanent — lyd, transskription og referat.
+              Denne handling kan ikke fortrydes.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setBulkDeleteOpen(false)} disabled={isBulkDeleting}>
+              Annullér
+            </Button>
+            <Button variant="destructive" size="sm" onClick={handleBulkDelete} disabled={isBulkDeleting}>
+              {isBulkDeleting
+                ? 'Sletter…'
+                : `Slet ${selected.size} ${selected.size === 1 ? 'møde' : 'møder'}`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
