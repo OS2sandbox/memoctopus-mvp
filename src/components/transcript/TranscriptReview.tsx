@@ -5,11 +5,11 @@ import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
 import { SpeakerAssignment, type ParticipantRow } from './SpeakerAssignment';
 import { WaveformPlayer } from './WaveformPlayer';
-import { getTranscript, getAudio, saveTranscriptChapters, saveTranscriptSegments, saveMinutes, deleteAudio, updateMeeting } from '@/lib/storage';
+import { getTranscript, getAudio, saveTranscriptChapters, saveTranscriptSegments, saveMinutes, deleteAudio, updateMeeting, getMeeting } from '@/lib/storage';
 import { onTranscriptUpdated } from '@/lib/transcript-events';
 import { isDiarizationInFlight, ensureDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import { isDefaultSpeakerLabel, nextAvailableSpeakerLabel } from '@/lib/audio/speaker-labels';
-import type { MinutesContent } from '@/types';
+import type { MinutesContent, Skabelon } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
 
 interface TranscriptReviewProps {
@@ -53,6 +53,119 @@ function applySelectedPiiReplacements(
     for (const r of toApply) text = text.replaceAll(r.original, r.replacement);
     return { ...seg, text };
   });
+}
+
+// The category toggles seeded from a Skabelon's include* flags. No skabelon
+// (undefined) is a blank template with every category off.
+function skabelonToCats(s?: Skabelon | null) {
+  return {
+    deltagere: s?.includeDeltagere ?? false,
+    beslutningspunkter: s?.includeBeslutningspunkter ?? false,
+    dagsorden: s?.includeDagsorden ?? false,
+    dato: s?.includeDato ?? false,
+  };
+}
+
+// Styled skabelon picker — a native <select> can't be themed or show the
+// favorite heart, so this mirrors the app's surface/line/accent tokens, marks
+// the current choice, and flags the user's default with a small blue heart.
+function SkabelonSelect({
+  skabeloner,
+  value,
+  onChange,
+}: {
+  skabeloner: Skabelon[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const selectedName = skabeloner.find((s) => s.id === value)?.name ?? 'Ingen skabelon';
+  const options = [{ id: '', name: 'Ingen skabelon', isDefault: false }, ...skabeloner];
+
+  return (
+    <div ref={ref} style={{ position: 'relative', marginBottom: 14 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        style={{
+          width: '100%', padding: '8px 10px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+          border: '1px solid ' + (open ? 'var(--accent)' : 'var(--line-2)'),
+          borderRadius: 'var(--radius)', background: 'var(--bg)', color: 'var(--ink)',
+          fontSize: 13, cursor: 'pointer', textAlign: 'left', transition: 'border-color 120ms',
+        }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedName}</span>
+        <svg width="10" height="10" viewBox="0 0 10 10" style={{ flexShrink: 0, color: 'var(--muted)', transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : undefined }}>
+          <path d="M1 3l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          style={{
+            position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0,
+            background: 'var(--surface)', border: '1px solid var(--line)',
+            borderRadius: 'var(--radius)', boxShadow: '0 8px 28px rgba(0,0,0,0.10)',
+            zIndex: 50, overflow: 'hidden', padding: 4,
+          }}
+        >
+          {options.map((opt) => {
+            const isSel = opt.id === value;
+            return (
+              <button
+                key={opt.id || '__none__'}
+                type="button"
+                role="option"
+                aria-selected={isSel}
+                onClick={() => { onChange(opt.id); setOpen(false); }}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '7px 9px', borderRadius: 'calc(var(--radius) - 2px)',
+                  border: 'none', cursor: 'pointer', textAlign: 'left', fontSize: 13,
+                  background: isSel ? 'var(--accent-wash)' : 'transparent',
+                  color: isSel ? 'var(--accent)' : 'var(--ink)',
+                }}
+                onMouseEnter={(e) => { if (!isSel) e.currentTarget.style.background = 'var(--bg-2)'; }}
+                onMouseLeave={(e) => { if (!isSel) e.currentTarget.style.background = 'transparent'; }}
+              >
+                <span style={{ width: 14, flexShrink: 0, display: 'inline-flex', justifyContent: 'center', color: 'var(--accent)' }}>
+                  {isSel && (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                  )}
+                </span>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{opt.name}</span>
+                {opt.isDefault && (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="var(--accent)" stroke="none" style={{ flexShrink: 0 }} aria-label="standard">
+                    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+                  </svg>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function TranscriptReview({
@@ -142,8 +255,141 @@ export function TranscriptReview({
     const off = onTranscriptUpdated(meetingId, () => { void refresh(); });
     return () => { cancelled = true; off(); };
   }, [meetingId]);
-  const [activeKeywords, setActiveKeywords] = useState<Set<string>>(new Set());
+  // Skabelon-driven generation: the chosen prompt + the three optional category
+  // injections (Deltagere / Beslutningspunkter / Dagsorden), seeded from the
+  // selected Skabelon but overridable here in gennemgang.
+  const [skabeloner, setSkabeloner] = useState<Skabelon[]>([]);
+  const [selectedSkabelonId, setSelectedSkabelonId] = useState<string>('');
+  // The skabelon list loads async (and can arrive late while transcription
+  // saturates the connection pool). Once the user picks a skabelon themselves,
+  // don't let that late default-selection overwrite their choice.
+  const skabelonTouchedRef = useRef(false);
+  const [cats, setCats] = useState(() => skabelonToCats());
   const [customText, setCustomText] = useState('');
+
+  // "Gem prompt som skabelon": persist the current prompt + category selection as
+  // a reusable Skabelon — either folding it into the selected one (Opdater) or
+  // forking a brand-new one.
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  // Which step the cycleable save form is on: fold into the selected skabelon, or
+  // fork a brand-new one. Only the 'new' step exists when no skabelon is selected.
+  const [templateMode, setTemplateMode] = useState<'update' | 'new'>('new');
+  const [templateName, setTemplateName] = useState('');
+  const [templateSaving, setTemplateSaving] = useState(false);
+  const [templateError, setTemplateError] = useState<string | null>(null);
+  // After a save/update the instruction box is cleared (its text moved into the
+  // skabelon); this becomes the box's placeholder to explain where it went.
+  const [savedHint, setSavedHint] = useState<string | null>(null);
+
+  const selectedSkabelon = skabeloner.find((s) => s.id === selectedSkabelonId) ?? null;
+  // The actual step to render: 'update' is only valid while a skabelon is
+  // selected, so deselecting it mid-form falls back to 'new'.
+  const templateStep = selectedSkabelon ? templateMode : 'new';
+
+  // The effective prompt = the selected skabelon's saved prompt plus the ad-hoc
+  // instructions typed below it, mirroring how generation combines the two.
+  function effectivePrompt(): string {
+    return [selectedSkabelon?.prompt.trim() ?? '', customText.trim()].filter(Boolean).join('\n\n');
+  }
+
+  const templatePayload = () => ({
+    prompt: effectivePrompt(),
+    includeDeltagere: cats.deltagere,
+    includeBeslutningspunkter: cats.beslutningspunkter,
+    includeDagsorden: cats.dagsorden,
+    includeDato: cats.dato,
+  });
+
+  function openTemplateForm() {
+    setSavingTemplate(true);
+    setTemplateError(null);
+    // Default to updating the selected skabelon; with none selected only the
+    // 'new' step is reachable.
+    setTemplateMode(selectedSkabelon ? 'update' : 'new');
+  }
+
+  function closeTemplateForm() {
+    setSavingTemplate(false);
+    setTemplateName('');
+    setTemplateError(null);
+  }
+
+  // Persist the current prompt + categories — either folding them into the
+  // selected skabelon ('update') or forking a brand-new one ('new').
+  async function saveTemplate(mode: 'update' | 'new') {
+    setTemplateError(null);
+    let req: { url: string; method: string; body: Record<string, unknown> };
+    if (mode === 'update') {
+      if (!selectedSkabelon) return;
+      req = {
+        url: `/api/skabeloner/${selectedSkabelon.id}`,
+        method: 'PUT',
+        body: { name: selectedSkabelon.name, description: selectedSkabelon.description, ...templatePayload() },
+      };
+    } else {
+      const name = templateName.trim();
+      if (!name) { setTemplateError('Navn er påkrævet'); return; }
+      req = { url: '/api/skabeloner', method: 'POST', body: { name, ...templatePayload() } };
+    }
+
+    setTemplateSaving(true);
+    try {
+      const res = await fetch(req.url, {
+        method: req.method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req.body),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error ?? (mode === 'update' ? 'Kunne ikke opdatere skabelon' : 'Kunne ikke gemme skabelon'));
+      }
+      const { skabelon } = (await res.json()) as { skabelon: Skabelon };
+      if (mode === 'update') {
+        setSkabeloner((prev) => prev.map((s) => (s.id === skabelon.id ? skabelon : s)));
+      } else {
+        setSkabeloner((prev) => [...prev, skabelon]);
+        setSelectedSkabelonId(skabelon.id);
+      }
+      // The extra text is now baked into the skabelon's prompt — clear it so
+      // generation doesn't apply it twice, and explain the disappearance.
+      setCustomText('');
+      setSavedHint(mode === 'update'
+        ? 'Skabelon opdateret, er der andet du vil tilføje?'
+        : 'Skabelon gemt, er der andet du vil tilføje?');
+      closeTemplateForm();
+    } catch (err) {
+      setTemplateError(err instanceof Error ? err.message : 'Noget gik galt');
+    } finally {
+      setTemplateSaving(false);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/skabeloner')
+      .then((r) => (r.ok ? r.json() : { skabeloner: [] }))
+      .then((data: { skabeloner: Skabelon[] }) => {
+        if (cancelled) return;
+        const list = data.skabeloner ?? [];
+        setSkabeloner(list);
+        const def = list.find((s) => s.isDefault) ?? list[0];
+        if (def && !skabelonTouchedRef.current) {
+          setSelectedSkabelonId(def.id);
+          setCats(skabelonToCats(def));
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  function selectSkabelon(id: string) {
+    skabelonTouchedRef.current = true;
+    setSelectedSkabelonId(id);
+    setSavedHint(null);
+    const s = skabeloner.find((x) => x.id === id);
+    // "Ingen skabelon" (empty id) is a blank template: clear every category.
+    setCats(skabelonToCats(s));
+  }
 
   // PII checklist: all items checked by default
   const [piiReplacements, setPiiReplacements] = useState<PiiReplacement[]>(initialPiiReplacements);
@@ -549,6 +795,10 @@ export function TranscriptReview({
     setError(null);
     try {
       const processedSegments = displaySegments;
+      // The recording date — used when the "Dato" category is enabled. Prefer the
+      // audio's own date (recordedAt); fall back to createdAt for legacy meetings.
+      const meeting = await getMeeting(meetingId);
+      const meetingDate = meeting?.recordedAt ?? meeting?.createdAt;
       const abort = new AbortController();
       const timeout = setTimeout(() => abort.abort(), 5 * 60 * 1000);
       let res: Response;
@@ -559,7 +809,15 @@ export function TranscriptReview({
           body: JSON.stringify({
             segments: processedSegments,
             participants: editableParticipants.filter(Boolean),
-            customPrompt: [...Array.from(activeKeywords), customText.trim()].filter(Boolean).join(', ') || undefined,
+            // Send the literal selection — '' ("Ingen skabelon") must reach the
+            // server as an explicit "no skabelon", not collapse to the default.
+            skabelonId: selectedSkabelonId,
+            includeDeltagere: cats.deltagere,
+            includeBeslutningspunkter: cats.beslutningspunkter,
+            includeDagsorden: cats.dagsorden,
+            includeDato: cats.dato,
+            meetingDate: meetingDate ?? undefined,
+            customPrompt: customText.trim() || undefined,
           }),
           signal: abort.signal,
         });
@@ -570,8 +828,8 @@ export function TranscriptReview({
         const data = await res.json();
         throw new Error(data.error ?? 'Kunne ikke generere referat');
       }
-      const data = await res.json() as { content: MinutesContent; templateId?: string };
-      await saveMinutes(meetingId, data.content, data.templateId);
+      const data = await res.json() as { content: MinutesContent; skabelonId?: string | null };
+      await saveMinutes(meetingId, data.content, data.skabelonId ?? null);
       await deleteAudio(meetingId);
       await updateMeeting(meetingId, { status: 'minutes', audioDeleted: true });
       onDataChange?.();
@@ -1023,74 +1281,65 @@ export function TranscriptReview({
             />
           </div>
 
-          {/* Keywords / prompt */}
+          {/* Skabelon, kategorier & ekstra instruktioner */}
           <div style={{ marginTop: 28 }}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>fokus</div>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>skabelon</div>
 
-            {/* Inactive keyword chips — above the textarea */}
-            {['Standard', 'Beslutninger', 'Handlepunkter', 'Fuld detalje'].some((k) => !activeKeywords.has(k)) && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
-                {['Standard', 'Beslutninger', 'Handlepunkter', 'Fuld detalje']
-                  .filter((k) => !activeKeywords.has(k))
-                  .map((keyword) => (
-                    <button
-                      key={keyword}
-                      onClick={() => setActiveKeywords((prev) => { const n = new Set(prev); n.add(keyword); return n; })}
-                      style={{
-                        padding: '4px 10px',
-                        border: '1px solid var(--line)',
-                        borderRadius: 999,
-                        background: 'transparent',
-                        fontFamily: 'var(--mono)', fontSize: 11.5,
-                        color: 'var(--ink-2)',
-                        cursor: 'pointer',
-                        transition: 'border-color 120ms, color 120ms',
-                      }}
-                    >
-                      {keyword}
-                    </button>
-                  ))}
-              </div>
-            )}
+            {/* Skabelon selector */}
+            <SkabelonSelect
+              skabeloner={skabeloner}
+              value={selectedSkabelonId}
+              onChange={selectSkabelon}
+            />
 
-            {/* Textarea with active keywords inside */}
+            {/* Optional category injections */}
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 8 }}>kategorier</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+              {([
+                ['deltagere', 'Deltagere'],
+                ['beslutningspunkter', 'Beslutningspunkter'],
+                ['dagsorden', 'Dagsorden'],
+                ['dato', 'Dato'],
+              ] as const).map(([key, label]) => {
+                const active = cats[key];
+                return (
+                  <button
+                    key={key}
+                    onClick={() => {
+                      // Mark as touched so a late-arriving default skabelon fetch
+                      // doesn't overwrite the user's manual category choices.
+                      skabelonTouchedRef.current = true;
+                      setCats((prev) => ({ ...prev, [key]: !prev[key] }));
+                    }}
+                    style={{
+                      padding: '4px 10px',
+                      border: '1px solid ' + (active ? 'var(--accent)' : 'var(--line)'),
+                      borderRadius: 999,
+                      background: active ? 'var(--accent-wash)' : 'transparent',
+                      fontFamily: 'var(--mono)', fontSize: 11.5,
+                      color: active ? 'var(--accent)' : 'var(--ink-2)',
+                      cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', gap: 5,
+                      transition: 'border-color 120ms, color 120ms',
+                    }}
+                  >
+                    {label}
+                    {active && <span style={{ fontSize: 13, lineHeight: 1, opacity: 0.7 }}>×</span>}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Extra ad-hoc instructions */}
             <div style={{
               border: '1px solid var(--line-2)',
               borderRadius: 'var(--radius)',
               background: 'var(--bg)',
             }}>
-              {activeKeywords.size > 0 && (
-                <div style={{
-                  padding: '8px 10px', display: 'flex', flexWrap: 'wrap', gap: 6,
-                  borderBottom: '1px solid var(--line)',
-                }}>
-                  {['Standard', 'Beslutninger', 'Handlepunkter', 'Fuld detalje']
-                    .filter((k) => activeKeywords.has(k))
-                    .map((keyword) => (
-                      <button
-                        key={keyword}
-                        onClick={() => setActiveKeywords((prev) => { const n = new Set(prev); n.delete(keyword); return n; })}
-                        style={{
-                          padding: '3px 8px',
-                          border: '1px solid var(--accent)',
-                          borderRadius: 999,
-                          background: 'var(--accent-wash)',
-                          fontFamily: 'var(--mono)', fontSize: 11.5,
-                          color: 'var(--accent)',
-                          cursor: 'pointer',
-                          display: 'flex', alignItems: 'center', gap: 5,
-                        }}
-                      >
-                        {keyword}
-                        <span style={{ fontSize: 13, lineHeight: 1, opacity: 0.7 }}>×</span>
-                      </button>
-                    ))}
-                </div>
-              )}
               <textarea
                 value={customText}
-                onChange={(e) => setCustomText(e.target.value)}
-                placeholder={activeKeywords.size === 0 ? 'Beskriv referatet…' : 'Tilføj instruktioner…'}
+                onChange={(e) => { setCustomText(e.target.value); if (savedHint) setSavedHint(null); }}
+                placeholder={savedHint ?? 'Tilføj instruktioner…'}
                 rows={2}
                 style={{
                   width: '100%', minHeight: 60,
@@ -1102,6 +1351,134 @@ export function TranscriptReview({
                   display: 'block',
                 }}
               />
+            </div>
+
+            {/* Gem prompt som skabelon — one cycleable step (opdater / ny) */}
+            <div style={{ marginTop: 10 }}>
+              {!savingTemplate ? (
+                <button
+                  onClick={openTemplateForm}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                    fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--accent)',
+                  }}
+                >
+                  Gem som skabelon →
+                </button>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {/* Mode selector — make it explicit whether you're adding to the
+                      selected skabelon or creating a new one */}
+                  {selectedSkabelon ? (
+                    <>
+                      {/* Common track pill makes the two options read as one
+                          either/or toggle, spanning the full width. A sliding thumb
+                          (exactly one half-slot wide) glides between the two slots. */}
+                      <div style={{
+                        position: 'relative', display: 'flex', padding: 3,
+                        border: '1px solid var(--line)', borderRadius: 999, background: 'var(--surface)',
+                      }}>
+                        <div
+                          aria-hidden
+                          style={{
+                            position: 'absolute', top: 3, bottom: 3, left: 3,
+                            width: 'calc((100% - 6px) / 2)', borderRadius: 999,
+                            background: 'var(--accent-wash)', border: '1px solid var(--accent)',
+                            transform: templateStep === 'new' ? 'translateX(100%)' : 'translateX(0)',
+                            transition: 'transform 200ms cubic-bezier(.4,.7,.2,1)',
+                            pointerEvents: 'none',
+                          }}
+                        />
+                        {([
+                          ['update', 'Føj til skabelon'],
+                          ['new', 'Ny skabelon'],
+                        ] as const).map(([mode, label]) => {
+                          const on = templateStep === mode;
+                          return (
+                            <button
+                              key={mode}
+                              onClick={() => { setTemplateMode(mode); setTemplateError(null); }}
+                              disabled={templateSaving}
+                              style={{
+                                position: 'relative', zIndex: 1,
+                                flex: 1, padding: '5px 12px', textAlign: 'center',
+                                border: 'none', background: 'transparent', borderRadius: 999,
+                                cursor: templateSaving ? 'not-allowed' : 'pointer',
+                                fontFamily: 'var(--mono)', fontSize: 11.5,
+                                color: on ? 'var(--accent)' : 'var(--ink-2)',
+                                transition: 'color 160ms',
+                              }}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', lineHeight: 1.5 }}>
+                        {templateStep === 'update'
+                          ? `Forlæng skabelonen ${selectedSkabelon.name} med dine instruktioner`
+                          : 'Opret en ny skabelon ud fra instruktionerne.'}
+                      </span>
+                    </>
+                  ) : (
+                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', lineHeight: 1.5 }}>
+                      Opret en ny skabelon ud fra instruktionerne.
+                    </span>
+                  )}
+
+                  {/* New skabelon needs a name */}
+                  {templateStep === 'new' && (
+                    <input
+                      value={templateName}
+                      onChange={(e) => setTemplateName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') void saveTemplate('new'); }}
+                      placeholder="Navn på skabelon"
+                      autoFocus
+                      style={{
+                        width: '100%', padding: '8px 10px',
+                        border: '1px solid var(--line-2)', borderRadius: 'var(--radius)',
+                        background: 'var(--bg)', color: 'var(--ink)',
+                        fontSize: 13, outline: 'none',
+                      }}
+                    />
+                  )}
+
+                  {/* Confirm + cancel */}
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <button
+                      onClick={() => void saveTemplate(templateStep)}
+                      disabled={templateSaving}
+                      style={{
+                        flex: 1, padding: '8px 14px',
+                        background: 'var(--accent)', color: '#fff',
+                        border: '1px solid var(--accent)', borderRadius: 'var(--radius)',
+                        fontFamily: 'var(--mono)', fontSize: 12, fontWeight: 500,
+                        cursor: templateSaving ? 'not-allowed' : 'pointer',
+                        opacity: templateSaving ? 0.6 : 1,
+                      }}
+                    >
+                      {templateSaving ? 'gemmer…' : templateStep === 'update' ? 'Føj til skabelonen' : 'Gem skabelon'}
+                    </button>
+                    <button
+                      onClick={closeTemplateForm}
+                      disabled={templateSaving}
+                      style={{
+                        background: 'none', border: 'none', padding: '8px 12px', flexShrink: 0,
+                        fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      annullér
+                    </button>
+                  </div>
+                  {templateError && (
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--kill)' }}>
+                      {templateError}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

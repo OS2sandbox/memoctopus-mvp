@@ -10,6 +10,24 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import type { FormEvent } from 'react';
 
 
+// Map better-auth sign-up error codes to specific Danish messages, so a
+// too-short password isn't mislabelled as "email already in use".
+function signUpErrorMessage(error: { code?: string } | null | undefined): string {
+  switch (error?.code) {
+    case 'PASSWORD_TOO_SHORT':
+      return 'Adgangskoden skal være mindst 8 tegn.';
+    case 'PASSWORD_TOO_LONG':
+      return 'Adgangskoden er for lang.';
+    case 'USER_ALREADY_EXISTS':
+    case 'USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL':
+      return 'E-mailen er allerede i brug. Log ind i stedet.';
+    case 'INVALID_EMAIL':
+      return 'Ugyldig e-mailadresse.';
+    default:
+      return 'Kunne ikke oprette konto. E-mailen er muligvis allerede i brug.';
+  }
+}
+
 function EyeIcon({ off }: { off: boolean }) {
   return off ? (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -74,7 +92,7 @@ export function HeroForm() {
     } else {
       const { error: signUpError } = await signUp.email({ name, email, password });
       if (signUpError) {
-        actions.authError('Kunne ikke oprette konto. E-mailen er muligvis allerede i brug.');
+        actions.authError(signUpErrorMessage(signUpError));
         return;
       }
       const { error: signInError } = await signIn.email({ email, password, rememberMe: true });
@@ -143,6 +161,7 @@ export function HeroForm() {
                 onChange={(e) => actions.setPassword(e.target.value)}
                 placeholder="••••••••"
                 required
+                minLength={isSignUp ? 8 : undefined}
                 style={{ paddingRight: 40 }}
               />
               <button
@@ -160,6 +179,11 @@ export function HeroForm() {
                 <EyeIcon off={showPassword} />
               </button>
             </div>
+            {isSignUp && (
+              <p style={{ fontSize: 11.5, color: 'var(--muted)', margin: '6px 0 0' }}>
+                Mindst 8 tegn.
+              </p>
+            )}
           </div>
         </>
       )}

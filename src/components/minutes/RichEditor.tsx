@@ -9,6 +9,9 @@ interface RichEditorProps {
   value: string;
   onChange: (markdown: string) => void;
   placeholder?: string;
+  // "Invisible" variant: no surrounding box; the toolbar only appears on focus.
+  borderless?: boolean;
+  minHeight?: number;
 }
 
 function ToolbarBtn({
@@ -55,7 +58,7 @@ const SEP = (
   <div style={{ width: 1, height: 16, background: 'var(--line)', margin: '0 4px', flexShrink: 0 }} />
 );
 
-export function RichEditor({ value, onChange, placeholder }: RichEditorProps) {
+export function RichEditor({ value, onChange, placeholder, borderless, minHeight = 80 }: RichEditorProps) {
   const [focused, setFocused] = useState(false);
 
   const editor = useEditor({
@@ -75,7 +78,7 @@ export function RichEditor({ value, onChange, placeholder }: RichEditorProps) {
     ],
     content: value,
     editorProps: {
-      attributes: { style: 'outline:none;min-height:80px' },
+      attributes: { style: `outline:none;min-height:${minHeight}px` },
     },
     onUpdate({ editor }) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -100,24 +103,36 @@ export function RichEditor({ value, onChange, placeholder }: RichEditorProps) {
 
   if (!editor) return null;
 
+  const showToolbar = !borderless || focused;
+
   return (
     <div
       style={{
-        border: `1px solid ${focused ? 'var(--accent)' : 'var(--line)'}`,
-        borderRadius: 'var(--radius)',
-        background: 'var(--surface)',
+        position: borderless ? 'relative' : undefined,
+        border: borderless ? 'none' : `1px solid ${focused ? 'var(--accent)' : 'var(--line)'}`,
+        borderRadius: borderless ? 0 : 'var(--radius)',
+        background: borderless ? 'transparent' : 'var(--surface)',
         transition: 'border-color 0.15s',
       }}
     >
       {/* Toolbar */}
       <div
         style={{
-          display: 'flex',
+          display: showToolbar ? 'flex' : 'none',
           alignItems: 'center',
           gap: 2,
           padding: '4px 8px',
-          borderBottom: '1px solid var(--line)',
+          borderBottom: borderless ? 'none' : '1px solid var(--line)',
           flexWrap: 'wrap',
+          ...(borderless
+            ? {
+                position: 'sticky',
+                top: 56,
+                zIndex: 5,
+                background: 'var(--bg)',
+                marginBottom: 4,
+              }
+            : {}),
         }}
       >
         <ToolbarBtn
@@ -167,7 +182,7 @@ export function RichEditor({ value, onChange, placeholder }: RichEditorProps) {
       {/* Content area */}
       <div
         style={{
-          padding: '10px 12px',
+          padding: borderless ? 0 : '10px 12px',
           fontSize: 'var(--t-body)',
           lineHeight: 1.7,
           color: 'var(--ink)',

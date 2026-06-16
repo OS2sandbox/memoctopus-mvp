@@ -1,12 +1,12 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { MinutesContent, MinutesSection } from '@/types';
+import { MinutesContent } from '@/types';
 import { Button } from '@/components/ui/button';
 import { SaveStatus, SaveState } from '@/components/layout/SaveStatus';
-import { VersionHistory } from './VersionHistory';
 import { RichEditor } from './RichEditor';
-import { saveMinutes } from '@/lib/storage';
+import { saveMinutes, snapshotMinutes } from '@/lib/storage';
+import { minutesToBody } from '@/lib/minutes-format';
 
 interface VersionRecord {
   id: string;
@@ -144,23 +144,28 @@ export function MinutesEditor({
   versions: initialVersions,
   onSaved,
 }: MinutesEditorProps) {
-  const [content, setContent] = useState<MinutesContent>(initialContent);
+  const [body, setBody] = useState<string>(() => minutesToBody(initialContent));
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [version, setVersion] = useState(initialVersion);
   const [versions, setVersions] = useState(initialVersions);
-  const [showHistory, setShowHistory] = useState(false);
-  const [addingSection, setAddingSection] = useState(false);
-  const [newLabel, setNewLabel] = useState('');
-  const newLabelRef = useRef<HTMLInputElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Latest body (kept in a ref so the leave/unmount handlers see the freshest
+  // text without re-subscribing), and the body as of the last checkpoint — used
+  // to tell whether anything changed worth snapshotting.
+  const latestBodyRef = useRef(body);
+  const baselineBodyRef = useRef(body);
+  useEffect(() => {
+    latestBodyRef.current = body;
+  }, [body]);
+
+  // Autosave: overwrite the current content in place. Does NOT create a version —
+  // continuous editing keeps a single live document instead of spawning versions.
   const save = useCallback(
-    async (contentToSave: MinutesContent) => {
+    async (bodyToSave: string) => {
       setSaveState('saving');
       try {
-        const saved = await saveMinutes(meetingId, contentToSave);
-        setVersion(saved.version);
-        setVersions(saved.versions);
+        await saveMinutes(meetingId, { body: bodyToSave });
         setSaveState('saved');
         setTimeout(() => setSaveState('idle'), 2000);
         onSaved?.();
@@ -171,245 +176,137 @@ export function MinutesEditor({
     [meetingId, onSaved],
   );
 
-  function updateSection(key: string, text: string) {
-    setContent((prev) => {
-      const next = {
-        sections: prev.sections.map((s) => (s.key === key ? { ...s, content: text } : s)),
-      };
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(() => save(next), AUTOSAVE_DELAY);
-      return next;
-    });
+  // Checkpoint the current document as a new version. Flushes any pending autosave
+  // first so the latest text is persisted, then archives the previous checkpoint
+  // (the baseline) into history. No-op when nothing changed since the last
+  // checkpoint. Triggered when leaving the editor and by the "Gem version" button.
+  const snapshot = useCallback(async () => {
+    const current = latestBodyRef.current;
+    const baseline = baselineBodyRef.current;
+    if (current === baseline) return;
+    baselineBodyRef.current = current;
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    setSaveState('saving');
+    try {
+      await saveMinutes(meetingId, { body: current });
+      const snapped = await snapshotMinutes(meetingId, { body: baseline });
+      if (snapped) {
+        setVersion(snapped.version);
+        setVersions(snapped.versions);
+      }
+      setSaveState('saved');
+      setTimeout(() => setSaveState('idle'), 2000);
+      onSaved?.();
+    } catch {
+      setSaveState('error');
+    }
+  }, [meetingId, onSaved]);
+
+  function updateBody(text: string) {
+    setBody(text);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => save(text), AUTOSAVE_DELAY);
   }
 
-  function deleteSection(key: string) {
-    setContent((prev) => {
-      const next = { sections: prev.sections.filter((s) => s.key !== key) };
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(() => save(next), AUTOSAVE_DELAY);
-      return next;
-    });
-  }
-
+  // Snapshot when the user leaves: tab hidden / closed (visibilitychange,
+  // pagehide) and SPA navigation away (effect cleanup on unmount). Held in a ref
+  // so listeners attach once and always call the freshest snapshot closure.
+  const snapshotRef = useRef(snapshot);
   useEffect(() => {
+    snapshotRef.current = snapshot;
+  }, [snapshot]);
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') void snapshotRef.current();
+    };
+    const onPageHide = () => void snapshotRef.current();
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', onPageHide);
     return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onPageHide);
       if (saveTimer.current) clearTimeout(saveTimer.current);
+      void snapshotRef.current();
     };
   }, []);
 
-  function openAddSection() {
-    setNewLabel('');
-    setAddingSection(true);
-    setTimeout(() => newLabelRef.current?.focus(), 0);
-  }
-
-  function commitAddSection() {
-    const label = newLabel.trim();
-    if (!label) { setAddingSection(false); return; }
-    const key = `custom_${Date.now()}`;
-    setContent((prev) => {
-      const next = { sections: [...prev.sections, { key, label, content: '' }] };
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(() => save(next), AUTOSAVE_DELAY);
-      return next;
-    });
-    setAddingSection(false);
-    setNewLabel('');
-  }
-
-  function loadVersion(restoredContent: MinutesContent) {
+  function loadVersion(restored: MinutesContent) {
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    setContent(restoredContent);
-  }
-
-  function handleRestore(restoredContent: MinutesContent) {
-    setContent(restoredContent);
-    setShowHistory(false);
-    save(restoredContent);
+    setBody(minutesToBody(restored));
   }
 
   return (
-    <div className="mx-auto max-w-[720px] px-6 py-12">
-      <div className="flex flex-wrap items-start justify-between gap-4 mb-12">
-        <div>
-          <h1
-            style={{ fontSize: 'var(--t-h1)', fontWeight: 300, color: 'var(--ink)', margin: 0 }}
-          >
-            Referat
-          </h1>
-          <VersionDropdown version={version} versions={versions} onSelect={loadVersion} />
-        </div>
-        <div className="flex items-center gap-3 mt-1">
-          <SaveStatus state={saveState} />
-          <Button variant="ghost" size="sm" onClick={() => setShowHistory(true)}>
-            Historik
-          </Button>
-          <Button
-            variant="default"
-            size="sm"
-            onClick={() => (window.location.href = `/meeting/${meetingId}/export`)}
-          >
-            Eksportér
-          </Button>
-        </div>
-      </div>
-
-      <div className="space-y-10">
-        {content.sections.map((section: MinutesSection) => (
-          <div key={section.key} className="group">
-            <div className="flex items-baseline justify-between mb-3">
-              <h2
-                className="font-medium text-[var(--ink)]"
-                style={{ fontSize: 'var(--t-h2)' }}
-              >
-                {section.label}
-              </h2>
-              <button
-                onClick={() => deleteSection(section.key)}
-                title="Slet afsnit"
-                style={{
-                  opacity: 0,
-                  transition: 'opacity 0.15s',
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  color: 'var(--muted)',
-                  fontSize: 18,
-                  lineHeight: 1,
-                  padding: '0 4px',
-                }}
-                className="group-hover:!opacity-100 hover:!text-[var(--kill)]"
-              >
-                ×
-              </button>
-            </div>
-            <RichEditor
-              value={section.content}
-              onChange={(md) => updateSection(section.key, md)}
-              placeholder={`Skriv ${section.label.toLowerCase()} her…`}
-            />
-          </div>
-        ))}
-      </div>
-
-      {/* Add section */}
-      <div className="mt-10">
-        {addingSection ? (
-          <div className="flex items-center gap-2">
-            <input
-              ref={newLabelRef}
-              type="text"
-              value={newLabel}
-              onChange={(e) => setNewLabel(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitAddSection();
-                if (e.key === 'Escape') setAddingSection(false);
-              }}
-              placeholder="Navn på afsnit…"
-              style={{
-                flex: 1,
-                border: '1px solid var(--accent)',
-                borderRadius: 'var(--radius)',
-                background: 'var(--surface)',
-                outline: 'none',
-                padding: '6px 10px',
-                fontSize: 'var(--t-body)',
-                color: 'var(--ink)',
-              }}
-            />
-            <button
-              onClick={commitAddSection}
-              style={{
-                padding: '6px 14px',
-                borderRadius: 'var(--radius)',
-                background: 'var(--ink)',
-                color: 'white',
-                fontSize: 'var(--t-small)',
-                fontWeight: 500,
-                border: 'none',
-                cursor: 'pointer',
-              }}
+    <div style={{ background: 'var(--bg-2)', minHeight: 'calc(100vh - 56px)' }}>
+      <div className="mx-auto max-w-[820px] px-6 py-10">
+        <div className="flex flex-wrap items-start justify-between gap-4 mb-6">
+          <div>
+            <h1
+              style={{ fontSize: 'var(--t-h1)', fontWeight: 300, color: 'var(--ink)', margin: 0 }}
             >
-              Tilføj
-            </button>
-            <button
-              onClick={() => setAddingSection(false)}
-              style={{
-                padding: '6px 10px',
-                borderRadius: 'var(--radius)',
-                background: 'transparent',
-                color: 'var(--muted)',
-                fontSize: 'var(--t-small)',
-                border: '1px solid var(--line)',
-                cursor: 'pointer',
-              }}
-            >
-              Annullér
-            </button>
+              Referat
+            </h1>
+            <VersionDropdown version={version} versions={versions} onSelect={loadVersion} />
           </div>
-        ) : (
-          <button
-            onClick={openAddSection}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '6px 12px',
-              borderRadius: 'var(--radius)',
-              border: '1px dashed var(--line-strong)',
-              background: 'transparent',
-              color: 'var(--muted)',
-              fontSize: 'var(--t-small)',
-              cursor: 'pointer',
-              transition: 'color 0.15s, border-color 0.15s',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = 'var(--ink)';
-              e.currentTarget.style.borderColor = 'var(--ink-3)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = 'var(--muted)';
-              e.currentTarget.style.borderColor = 'var(--line-strong)';
-            }}
-          >
-            <span style={{ fontSize: 16, lineHeight: 1 }}>+</span>
-            Tilføj afsnit
-          </button>
-        )}
-      </div>
+          <div className="flex items-center gap-3 mt-1">
+            <SaveStatus state={saveState} />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void snapshot()}
+              disabled={body === baselineBodyRef.current}
+              title="Gem den nuværende tekst som en version du kan vende tilbage til"
+            >
+              Gem version
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => (window.location.href = `/meeting/${meetingId}/export`)}
+            >
+              Eksportér
+            </Button>
+          </div>
+        </div>
 
-      {showHistory && (
+        {/* Editability hint — the sheet below mirrors the exported document, so
+            it isn't obvious it can be edited without a nudge. */}
         <div
-          className="fixed inset-y-0 right-0 z-50 w-80 max-w-full bg-[var(--surface)] border-l border-[var(--line)] shadow-lg flex flex-col"
-          style={{ animation: 'slide-in-from-right 0.15s ease' }}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)',
+            letterSpacing: 0.4, marginBottom: 10,
+          }}
         >
-          <style>{`
-            @keyframes slide-in-from-right {
-              from { transform: translateX(100%); }
-              to   { transform: translateX(0); }
-            }
-          `}</style>
-          <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--line)]">
-            <span className="font-medium text-[var(--ink)]" style={{ fontSize: 'var(--t-body)' }}>
-              Versionshistorik
-            </span>
-            <button
-              onClick={() => setShowHistory(false)}
-              className="text-[var(--muted)] hover:text-[var(--ink)] transition-colors"
-              aria-label="Luk"
-            >
-              ✕
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            <VersionHistory
-              versions={versions}
-              currentVersion={version}
-              onRestore={handleRestore}
-            />
-          </div>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M12 20h9" />
+            <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+          </svg>
+          klik for at redigere · gemmes automatisk
         </div>
-      )}
+
+        {/* Paper sheet — a page outline that previews the final export and makes
+            the otherwise borderless editor read as an editable document. */}
+        <div
+          style={{
+            background: 'var(--surface)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--radius)',
+            boxShadow: '0 1px 2px rgba(0,0,0,0.04), 0 8px 28px rgba(0,0,0,0.06)',
+            padding: 'clamp(28px, 6vw, 64px)',
+          }}
+        >
+          <RichEditor
+            value={body}
+            onChange={updateBody}
+            placeholder="Skriv referatet her…"
+            borderless
+            minHeight={560}
+          />
+        </div>
+      </div>
     </div>
   );
 }
