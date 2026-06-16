@@ -10,6 +10,10 @@ export interface StoredMeeting {
   source: 'local' | 'teams';
   meetingUrl: string | null;
   createdAt: string;
+  // When the audio was actually recorded — the file's own date for uploads, or
+  // the recording start for live/Teams meetings. Used for the "Dato" referat tag.
+  // Optional for back-compat with meetings created before this field existed.
+  recordedAt?: string | null;
   updatedAt: string;
   audioDurationSeconds: number | null;
   audioSizeBytes: number;

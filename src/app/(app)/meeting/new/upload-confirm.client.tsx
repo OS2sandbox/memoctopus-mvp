@@ -65,11 +65,18 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
     async function run() {
       try {
         const dateStr = new Intl.DateTimeFormat('da', { day: 'numeric', month: 'long' }).format(new Date());
+        // Use the uploaded file's own date as the recording date — uploading an
+        // old clip should keep the clip's date, not today's. Falls back to now
+        // when the browser reports no usable lastModified (0).
+        const recordedAt = file.lastModified
+          ? new Date(file.lastModified).toISOString()
+          : undefined;
         const meeting = await createMeeting({
           title: `Møde · ${dateStr}`,
           participants: [],
           source: 'local',
           status: 'processing',
+          recordedAt,
         });
         if (cancelled) return;
         const id = meeting.id;

@@ -708,8 +708,10 @@ export function TranscriptReview({
     setError(null);
     try {
       const processedSegments = displaySegments;
-      // The recording date — used when the "Dato" category is enabled.
+      // The recording date — used when the "Dato" category is enabled. Prefer the
+      // audio's own date (recordedAt); fall back to createdAt for legacy meetings.
       const meeting = await getMeeting(meetingId);
+      const meetingDate = meeting?.recordedAt ?? meeting?.createdAt;
       const abort = new AbortController();
       const timeout = setTimeout(() => abort.abort(), 5 * 60 * 1000);
       let res: Response;
@@ -727,7 +729,7 @@ export function TranscriptReview({
             includeBeslutningspunkter: cats.beslutningspunkter,
             includeDagsorden: cats.dagsorden,
             includeDato: cats.dato,
-            meetingDate: meeting?.createdAt ?? undefined,
+            meetingDate: meetingDate ?? undefined,
             customPrompt: customText.trim() || undefined,
           }),
           signal: abort.signal,

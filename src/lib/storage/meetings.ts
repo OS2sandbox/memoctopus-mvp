@@ -23,6 +23,9 @@ export async function createMeeting(data: {
   source?: 'local' | 'teams';
   meetingUrl?: string | null;
   status?: MeetingStatus;
+  // The audio's own recording date. Defaults to now (correct for live/Teams
+  // recordings); upload flows pass the file's date so an old clip keeps its date.
+  recordedAt?: string;
 }): Promise<StoredMeeting> {
   const db = await getDB();
   const now = new Date().toISOString();
@@ -34,6 +37,7 @@ export async function createMeeting(data: {
     source: data.source ?? 'local',
     meetingUrl: data.meetingUrl ?? null,
     createdAt: now,
+    recordedAt: data.recordedAt ?? now,
     updatedAt: now,
     audioDurationSeconds: null,
     audioSizeBytes: 0,
