@@ -51,6 +51,12 @@ COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
 RUN chown -R appuser:appgroup /app
+
+# Bot recordings are stashed under AUDIO_STORAGE_PATH (mounted as the
+# `audio-storage` volume at /audio-storage). Create it owned by appuser so a
+# freshly-initialised named volume inherits that ownership — otherwise the
+# non-root app can't mkdir/write there and bot audio uploads fail with EACCES.
+RUN mkdir -p /audio-storage && chown -R appuser:appgroup /audio-storage
 USER appuser
 
 EXPOSE 3000
