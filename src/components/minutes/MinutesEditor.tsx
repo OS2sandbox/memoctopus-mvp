@@ -12,6 +12,7 @@ interface VersionRecord {
   id: string;
   label: number;
   content: MinutesContent;
+  baseline: MinutesContent;
 }
 
 interface MinutesEditorProps {
@@ -30,7 +31,7 @@ const AUTOSAVE_DELAY = 1500;
 // since the last checkpoint (so "Gem version" doesn't fork an identical copy).
 function fingerprint(content: MinutesContent): string {
   return JSON.stringify({
-    body: content.body ?? '',
+    body: minutesToBody(content),
     title: content.header?.title ?? '',
     date: content.header?.date ?? null,
   });
@@ -180,9 +181,12 @@ export function MinutesEditor({
     return { body: bodyRef.current, header: { title: titleRef.current, date: dateRef.current } };
   }, []);
 
-  // Document fingerprint as of the last checkpoint / version load — used to tell
-  // whether there's anything new worth snapshotting.
-  const baselineRef = useRef(fingerprint(currentContent()));
+  // Fingerprint of the active version's committed baseline — "dirty" (and the
+  // "Gem version" enable state) is measured against this, so autosaved working
+  // edits still count as unsaved relative to the checkpoint.
+  const baselineRef = useRef(
+    fingerprint(initialVersions.find((v) => v.id === initialActiveId)?.baseline ?? initialContent),
+  );
   // Meeting title last pushed to the meeting record, so pure body edits don't
   // trigger redundant renames.
   const savedTitleRef = useRef(title);
@@ -195,7 +199,7 @@ export function MinutesEditor({
       setSaveState('saving');
       try {
         const saved = await saveMinutes(meetingId, content);
-        setVersions(saved.versions.map((v) => ({ id: v.id, label: v.label, content: v.content })));
+        setVersions(saved.versions.map((v) => ({ id: v.id, label: v.label, content: v.content, baseline: v.baseline })));
         const nextTitle = content.header?.title ?? meetingTitle;
         if (nextTitle !== savedTitleRef.current) {
           await updateMeeting(meetingId, { title: nextTitle });
@@ -228,10 +232,10 @@ export function MinutesEditor({
   function updateTitle(text: string) { setTitle(text); scheduleSave(); }
   function updateDate(text: string) { setDate(text); scheduleSave(); }
 
-  // Checkpoint the current document as a NEW version ("Gem version"). Flushes the
-  // active version first, then forks a fresh version (next stable label) that
-  // becomes active — prior versions keep their numbers and content. No-op when
-  // nothing changed since the last checkpoint.
+  // "Gem version": promote the current working content into a NEW version (next
+  // stable label) that becomes active, and revert the version being edited back to
+  // its committed baseline — so the edits become a distinct version and the
+  // original is preserved. No-op when nothing changed since the checkpoint.
   const snapshot = useCallback(async () => {
     const content = currentContent();
     if (fingerprint(content) === baselineRef.current) return;
@@ -241,13 +245,13 @@ export function MinutesEditor({
     }
     setSaveState('saving');
     try {
-      await saveMinutes(meetingId, content);
       const snapped = await snapshotMinutes(meetingId, content);
       if (snapped) {
         setVersion(snapped.version);
         setActiveId(snapped.activeVersionId);
-        setVersions(snapped.versions.map((v) => ({ id: v.id, label: v.label, content: v.content })));
+        setVersions(snapped.versions.map((v) => ({ id: v.id, label: v.label, content: v.content, baseline: v.baseline })));
       }
+      // The new version is committed at `content`, so it's now the baseline.
       baselineRef.current = fingerprint(content);
       setSaveState('saved');
       setTimeout(() => setSaveState('idle'), 2000);
@@ -291,9 +295,10 @@ export function MinutesEditor({
     setActiveId(v.id);
     setVersion(v.label);
     if (switched) {
-      setVersions(switched.versions.map((sv) => ({ id: sv.id, label: sv.label, content: sv.content })));
+      setVersions(switched.versions.map((sv) => ({ id: sv.id, label: sv.label, content: sv.content, baseline: sv.baseline })));
     }
-    baselineRef.current = fingerprint(currentContent());
+    // Dirty is measured against this version's committed baseline.
+    baselineRef.current = fingerprint(v.baseline);
   }
 
   const dirty = fingerprint({ body, header: { title, date } }) !== baselineRef.current;

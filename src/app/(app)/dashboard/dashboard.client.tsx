@@ -28,6 +28,9 @@ export default function OptaqPage() {
   function handleKeyDown(e: KeyboardEvent) {
     const tag = (e.target as HTMLElement).tagName;
     if (/input|textarea/i.test(tag)) return;
+    // Ignore browser/OS shortcuts so a hard refresh (Cmd/Ctrl+Shift+R) isn't read
+    // as the "R = record" shortcut and dropped into a recording.
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === 'r' || e.key === 'R') { e.preventDefault(); startRecording(); }
     if (e.key === 'u' || e.key === 'U') document.getElementById('upload-input')?.click();
   }
@@ -130,11 +133,14 @@ export default function OptaqPage() {
             </div>
 
             <div style={{ marginTop: 18, paddingBottom: 8, borderBottom: '1px solid var(--line)' }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)', marginBottom: 8, letterSpacing: 0.4 }}>
+                mødets navn
+              </div>
               <input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') startRecording(); }}
-                placeholder="Hvad handler mødet om?"
+                placeholder="Navngiv mødet…"
                 style={{
                   width: '100%', fontSize: 19, color: 'var(--ink)',
                   fontWeight: 300, padding: '4px 0',
@@ -338,7 +344,7 @@ export default function OptaqPage() {
                 lineHeight: 1.8, letterSpacing: 0.2,
               }}>
                 lyden gemmes lokalt på din enhed<br />
-                slettes automatisk efter 14 dage<br />
+                slettes automatisk når referatet er genereret<br />
                 personoplysninger fjernes inden referat
               </div>
             </div>

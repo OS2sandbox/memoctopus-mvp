@@ -45,7 +45,11 @@ export interface StoredTranscript {
 export interface StoredMinutesVersion {
   id: string;
   label: number;
+  // The live/working content (autosaved edits while this version is active).
   content: MinutesContent;
+  // The committed checkpoint this version reverts to when "Gem version" promotes
+  // the working edits into a new version. Equals `content` for an untouched version.
+  baseline: MinutesContent;
   createdAt: string;
   updatedAt: string;
 }

@@ -239,6 +239,7 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
               ? { durationSeconds: audioFile.durationSeconds, sizeBytes: audioFile.sizeBytes }
               : undefined
           }
+          isActiveRecording={meeting.status === 'recording'}
           onNavigateToReview={() => switchTab('review')}
           onRecordingComplete={loadData}
         />
