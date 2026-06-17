@@ -60,16 +60,19 @@ re-downloading multi-GB weights on a new host, reuse an existing HF cache:
 
 - **hviske**: set `HF_CACHE_DIR` in `.env` to a host path containing an HF cache
   (e.g. `/workspace/.hf_home`). It bind-mounts that instead of the named volume.
-- **diarization** (advanced): set `DIARIZATION_BAKE_WEIGHTS=false`, set
-  `DIAR_HF_CACHE_DIR`, and uncomment the `/models` volume in `docker-compose.ai.yml`
-  so weights load at runtime from the mounted cache (needs `HF_TOKEN` at runtime,
-  already passed). Otherwise keep the default baked image.
+- **diarization**: weights live at `/models` on a named volume that Docker seeds
+  from the baked image on first start (default just works). To reuse a host cache,
+  set `DIAR_HF_CACHE_DIR` to that path (bind mount); pair with
+  `DIARIZATION_BAKE_WEIGHTS=false` to also skip the build-time download.
 
 Models used: `syvai/hviske-v5.1` (public, no token) and
 `pyannote/speaker-diarization-community-1` (gated — needs an `HF_TOKEN` whose
 account accepted the terms once; access is auto-granted).
 
 ## Day-2 operations
+
+> These `docker compose` commands need docker-group membership (the bootstrap
+> script adds you — log out/in once) or `sudo`.
 
 ```bash
 # Redeploy ONLY the frontend (GPU models untouched):

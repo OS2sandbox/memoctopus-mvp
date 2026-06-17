@@ -76,17 +76,20 @@ services:
         BAKE_WEIGHTS: ${DIARIZATION_BAKE_WEIGHTS:-true}
     environment:
       - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
-      # cuda | cpu — force cpu only if the GPU is saturated by hviske (10-20x slower).
+      # cuda | cpu — run pyannote on CPU when hviske saturates the shared GPU
+      # (10-20x slower). The overlay still targets a GPU host (hviske needs the
+      # card), so the nvidia reservation below stays even in cpu mode.
       - DIARIZATION_DEVICE=${DIARIZATION_DEVICE:-cuda}
-      # Runtime token + cache home — only used when BAKE_WEIGHTS=false (harmless otherwise).
+      # Runtime token + cache home — used when weights load at runtime (BAKE_WEIGHTS=false).
       - HF_TOKEN=${HF_TOKEN:-}
       - HF_HOME=/models
-    # To reuse pre-downloaded pyannote weights instead of baking, set
-    # DIARIZATION_BAKE_WEIGHTS=false and point DIAR_HF_CACHE_DIR at a host HF cache:
-    #   volumes:
-    #     - ${DIAR_HF_CACHE_DIR}:/models
-    # (Leave unset for the default baked image — mounting an empty dir at /models
-    # would shadow the baked weights, so it's deliberately NOT wired by default.)
+    volumes:
+      # Model weights at /models ($HF_HOME). Default: a named volume that Docker
+      # SEEDS from the baked image on first start — so BAKE_WEIGHTS=true works and
+      # weights persist across restarts without re-downloading. To REUSE a host
+      # cache, set DIAR_HF_CACHE_DIR to that path (bind mount); pair it with
+      # DIARIZATION_BAKE_WEIGHTS=false to also skip the build-time download.
+      - ${DIAR_HF_CACHE_DIR:-diar-models}:/models
     shm_size: "2gb"
     deploy:
       resources:
@@ -120,3 +123,4 @@ services:
 
 volumes:
   hf-cache:
+  diar-models:

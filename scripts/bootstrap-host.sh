@@ -45,7 +45,7 @@ die() { printf '\033[1;31m✗ %s\033[0m\n' "$*"; exit 1; }
 
 install_docker() {
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    ok "Docker + compose already installed"; return
+    ok "Docker + compose already installed"; add_docker_group; return
   fi
   log "Installing Docker Engine + compose plugin"
   . /etc/os-release
@@ -60,6 +60,21 @@ install_docker() {
   $SUDO apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   $SUDO systemctl enable --now docker
   ok "Docker installed"
+  add_docker_group
+}
+
+# Add the real (non-root) user to the docker group so the day-2 ops in DEPLOY.md
+# work without sudo. Group membership only takes effect on a new login, so this
+# run still uses $SUDO; we just print the heads-up.
+add_docker_group() {
+  local u="${SUDO_USER:-$(id -un)}"
+  [ "$u" = root ] && return
+  if id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+    ok "User '$u' already in the docker group"
+  else
+    $SUDO usermod -aG docker "$u" && \
+      ok "Added '$u' to the docker group — log out/in for non-sudo 'docker compose' (this run still uses sudo)"
+  fi
 }
 
 install_nvidia_toolkit() {

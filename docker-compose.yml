@@ -36,16 +36,15 @@ services:
     restart: unless-stopped
 
   # One-shot: applies the drizzle migrations (better-auth public tables) and exits.
-  # Built from the `builder` stage because it carries the source, drizzle config,
-  # migrations and devDependencies (drizzle-kit) that the slim runtime image omits.
+  # Built from the lightweight `migrate` stage (drizzle-kit + config + SQL only) so
+  # it doesn't pay for / depend on a full Next.js build. CMD is the drizzle-kit run.
   migrate:
     build:
       context: .
       dockerfile: Dockerfile
-      target: builder
+      target: migrate
     environment:
       - DATABASE_URL=${DATABASE_URL}
-    command: ["npx", "drizzle-kit", "migrate"]
     networks:
       - internal
     depends_on:

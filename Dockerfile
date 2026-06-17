@@ -28,6 +28,17 @@ ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL \
     NEXT_PUBLIC_AUTHENTIK_ENABLED=$NEXT_PUBLIC_AUTHENTIK_ENABLED
 RUN npm run build
 
+# Lightweight stage for the one-shot `migrate` compose service: it only needs
+# drizzle-kit (in node_modules), the config, and the committed SQL migrations —
+# NOT a full `npm run build`. Keeping it separate means applying a schema
+# migration doesn't depend on (or pay for) a successful Next.js production build.
+FROM node:22-alpine AS migrate
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY package*.json drizzle.config.ts ./
+COPY drizzle ./drizzle
+CMD ["npx", "drizzle-kit", "migrate"]
+
 FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
