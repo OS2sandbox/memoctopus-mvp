@@ -138,6 +138,8 @@ services:
       # admission "Leaving..." cascades. Override to true only for debugging.
       - HEADLESS=false
       - DISPLAY=:99
+      # Capture prejoin/launcher screenshots to /tmp/bot-snap-*.png for debugging.
+      - BOT_DEBUG_SNAPSHOTS=${BOT_DEBUG_SNAPSHOTS:-0}
     networks:
       - internal
     shm_size: "2gb"

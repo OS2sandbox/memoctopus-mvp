@@ -153,8 +153,14 @@ export class TeamsMeetingBot {
     const baseOpts = {
       headless,
       permissions: ['microphone', 'camera'],
+      // A Linux UA is deliberate: teams.live.com routes Windows UAs to the
+      // "download the desktop app" launcher (dl/launcher/launcher.html?directDl=true)
+      // whose "Continue on this browser" does not reliably advance an automated
+      // browser, leaving the bot stuck on the launcher. A Linux UA (no native
+      // Teams app) is served the lightweight web join (light-meetings/launch)
+      // directly — the prejoin screen this bot's join logic is built for.
       userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
       // Remove Playwright's --enable-automation flag — Teams (and Chromium's own
       // anti-bot heuristics) gate behaviour on this flag and can refuse media
       // access or kick the session post-admission when it is set.
@@ -391,8 +397,14 @@ export class TeamsMeetingBot {
       'button:has-text("Continue on this browser"), button[data-tid="prejoin-join-button"], button[aria-label="Join now"]',
       { timeout: 8000 },
     ).catch(() => {});
+    // The /meet/<id> URL redirects (to teams.live.com/light-meetings/launch for
+    // anonymous web join), and that SPA can navigate again as it boots. Let the
+    // redirect settle, and never let an early read crash the join — page.title()
+    // throws "Execution context was destroyed" if it races a navigation.
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
     await snap('01-landed');
-    console.log('[bot] landed, url=', page.url(), 'title=', await page.title());
+    const landedTitle = await page.title().catch(() => '(navigating)');
+    console.log('[bot] landed, url=', page.url(), 'title=', landedTitle);
 
     // Click "Continue on this browser"
     const continueSelectors = [
@@ -523,17 +535,46 @@ export class TeamsMeetingBot {
       'button:has-text("Join")',
       'button:has-text("Deltag")',
     ];
+    // Turning the camera/mic off makes Teams pop the "Continue without audio or
+    // video" modal, whose overlay intercepts the Join now click (causing a 30s
+    // click timeout → connection error). It can appear AFTER prejoin readiness,
+    // so dismiss it here, immediately before joining, in addition to the
+    // readiness-loop pass.
+    const dismissNoMediaModal = async (): Promise<boolean> => {
+      const modal = page.locator(NO_MEDIA_MODAL_BTN).first();
+      if (await modal.isVisible({ timeout: 1000 }).catch(() => false)) {
+        console.log('[bot] dismissing "Continue without audio or video" modal before join');
+        await modal.click({ timeout: 5000 }).catch(() => {});
+        await page.waitForTimeout(400);
+        return true;
+      }
+      return false;
+    };
+    const dismissedModal = await dismissNoMediaModal();
+
     let joined = false;
     for (const sel of joinSelectors) {
       const btn = page.locator(sel).first();
       if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
         console.log('[bot] clicking join selector:', sel);
-        await btn.click();
+        try {
+          await btn.click({ timeout: 8000 });
+        } catch {
+          // A late-appearing overlay (the no-media modal) is intercepting the
+          // click — dismiss it and retry, then force the click past any
+          // lingering overlay as a last resort.
+          await dismissNoMediaModal();
+          await btn.click({ timeout: 8000 }).catch(async () => {
+            await btn.click({ force: true, timeout: 5000 }).catch(() => {});
+          });
+        }
         joined = true;
         break;
       }
     }
-    if (!joined) {
+    // If the modal was dismissed but no Join now remained, the modal's confirm
+    // already advanced the join — don't treat that as a failure.
+    if (!joined && !dismissedModal) {
       await snap('03-no-join-btn');
       if (debugSnapshots) {
         const htmlFail = await page.content().catch(() => '');
