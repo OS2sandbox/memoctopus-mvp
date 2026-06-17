@@ -1,0 +1,58 @@
+services:
+  vllm-chat:
+    image: vllm/vllm-openai:v0.19.1
+    container_name: memoctopus-vllm-chat
+    runtime: nvidia
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    ports:
+      - "8001:8000"
+    command: --model ${VLLM_MODEL:-Qwen/Qwen3.6-27B} --reasoning-parser qwen3 --gpu-memory-utilization 0.75 --max-num-seqs 4 --max-model-len 65536 --dtype bfloat16
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - memoctopus
+    restart: unless-stopped
+
+  vllm-asr:
+    build:
+      context: ./vllm-asr
+      dockerfile: Dockerfile
+    image: memoctopus-vllm-asr:v0.19.0
+    container_name: memoctopus-vllm-asr
+    runtime: nvidia
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    ports:
+      - "8004:8000"
+    command: --model ${HVISKE_MODEL:-syvai/hviske-v5.1} --trust-remote-code --gpu-memory-utilization 0.15 --max-num-seqs 32 --dtype bfloat16
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - memoctopus
+    restart: unless-stopped
+
+volumes:
+  huggingface_cache:
+
+networks:
+  memoctopus:
+    name: memoctopus
+    driver: bridge

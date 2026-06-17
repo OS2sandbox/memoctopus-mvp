@@ -3,9 +3,13 @@ import { PiiResult, PiiReplacement } from '@/types';
 
 let client: OpenAI | null = null;
 function getClient() {
-  if (!client) client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+  if (!client) client = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY || 'no-key',
+    baseURL: process.env.LLM_BASE_URL || 'http://vllm-chat:8000/v1',
+  });
   return client;
 }
+const LLM_MODEL = process.env.LLM_MODEL || 'Qwen/Qwen3.6-27B';
 
 const PII_SYSTEM_PROMPT = `Du er en dansk GDPR-assistent der identificerer og fjerner personhenførbare oplysninger fra mødetransskriptioner, baseret på EU-forordning 2016/679.
 
@@ -38,7 +42,7 @@ Returner ALTID valid JSON i dette format:
 
 export async function removePii(text: string): Promise<PiiResult> {
   const response = await getClient().chat.completions.create({
-    model: 'gpt-4o',
+    model: LLM_MODEL,
     messages: [
       { role: 'system', content: PII_SYSTEM_PROMPT },
       {

@@ -3,25 +3,32 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED: ${NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED:-false}
+        NEXT_PUBLIC_MICROSOFT_ENABLED: ${NEXT_PUBLIC_MICROSOFT_ENABLED:-true}
+        NEXT_PUBLIC_AUTHENTIK_ENABLED: ${NEXT_PUBLIC_AUTHENTIK_ENABLED:-false}
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://taletiltekst.syddjurs.dk}
     ports:
       - "3002:3000"
     environment:
-      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-memoctopus}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       - BETTER_AUTH_URL=${BETTER_AUTH_URL}
       - BETTER_AUTH_TRUSTED_ORIGINS=${BETTER_AUTH_TRUSTED_ORIGINS:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - HVISKE_URL=${HVISKE_URL}
-      - HVISKE_API_KEY=${HVISKE_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-no-key}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://vllm-chat:8000/v1}
+      - LLM_MODEL=${LLM_MODEL:-Qwen/Qwen3.6-27B}
+      - HVISKE_URL=http://vllm-asr:8000/v1
+      - HVISKE_API_KEY=${HVISKE_API_KEY:-}
       - HVISKE_MODEL=${HVISKE_MODEL:-syvai/hviske-v5.1}
       - ASR_LANGUAGE=${ASR_LANGUAGE:-da}
-      - DIARIZATION_URL=${DIARIZATION_URL:-http://diarization-service:5000}
-      - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
+      - DIARIZATION_URL=http://diarization-service:5000
+      - DIARIZATION_API_KEY=${DIARIZATION_API_KEY:-}
       - AUDIO_STORAGE_PATH=/audio-storage
       - BOT_SERVICE_URL=http://bot-service:3001
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
-      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3002}
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-https://taletiltekst.syddjurs.dk}
       - NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED=${NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED:-true}
       - NEXT_PUBLIC_MICROSOFT_ENABLED=${NEXT_PUBLIC_MICROSOFT_ENABLED:-false}
       - NEXT_PUBLIC_AUTHENTIK_ENABLED=${NEXT_PUBLIC_AUTHENTIK_ENABLED:-false}
@@ -34,12 +41,14 @@ services:
     volumes:
       - audio-storage:/audio-storage
     networks:
-      - internal
+      - memoctopus
     depends_on:
+      postgres:
+        condition: service_healthy
       bot-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -50,21 +59,15 @@ services:
     build:
       context: ./bot-service
       dockerfile: Dockerfile
-    # No public port binding — only the app service needs to reach this via
-    # the internal Docker network (http://bot-service:3001). Exposing it
-    # publicly would bypass the Next.js proxy and its auth checks.
     environment:
       - BOT_PORT=3001
       - NEXT_APP_URL=http://app:3000
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
       - BOT_MAX_SESSIONS=${BOT_MAX_SESSIONS:-5}
-      # Chromium runs headed against Xvfb (started by entrypoint.sh) so Teams'
-      # anti-bot heuristics don't detect headless mode and trigger post-
-      # admission "Leaving..." cascades. Override to true only for debugging.
       - HEADLESS=false
       - DISPLAY=:99
     networks:
-      - internal
+      - memoctopus
     shm_size: "2gb"
     mem_limit: 6g
     memswap_limit: 6g
@@ -82,16 +85,13 @@ services:
     build:
       context: ./diarization-service
       dockerfile: Dockerfile
-    # Internal only — reached by the app service at http://diarization-service:5000.
-    # Runs pyannote.audio (speaker-diarization-community-1) over full recordings.
+      args:
+        HF_TOKEN: ${HF_TOKEN:-}
     environment:
-      - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
+      - DIARIZATION_API_KEY=${DIARIZATION_API_KEY:-}
     networks:
-      - internal
-    # pyannote loads several models into shared memory; give it headroom like the bot.
+      - memoctopus
     shm_size: "2gb"
-    # Requires an NVIDIA GPU on the host (nvidia-container-toolkit). Diarization runs
-    # on CPU if no GPU is reserved, but far slower — keep the reservation in prod.
     deploy:
       resources:
         reservations:
@@ -107,9 +107,47 @@ services:
       start_period: 60s
     restart: unless-stopped
 
-networks:
-  internal:
-    driver: bridge
+  postgres:
+    image: postgres:16-alpine
+    container_name: memoctopus-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-memoctopus}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-memoctopus}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - memoctopus
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: memoctopus-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - memoctopus
+    restart: unless-stopped
 
 volumes:
   audio-storage:
+  postgres_data:
+
+networks:
+  memoctopus:
+    name: memoctopus
+    driver: bridge

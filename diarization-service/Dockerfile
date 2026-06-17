@@ -24,7 +24,7 @@ COPY app.py .
 # pyannote/segmentation dependency.)
 ARG HF_TOKEN
 RUN python3 -c "from pyannote.audio import Pipeline; \
-    Pipeline.from_pretrained('pyannote/speaker-diarization-community-1', use_auth_token='${HF_TOKEN}')"
+    Pipeline.from_pretrained('pyannote/speaker-diarization-community-1', token='${HF_TOKEN}')"
 
 EXPOSE 5000
 
