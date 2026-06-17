@@ -28,7 +28,9 @@ export class PyannoteProvider implements DiarizationProvider {
   private apiKey: string | undefined;
 
   constructor() {
-    this.baseURL = (process.env.DIARIZATION_URL ?? 'http://localhost:5000').replace(/\/$/, '');
+    // `||` not `??`: a blank DIARIZATION_URL (empty string from a deploy .env)
+    // must fall back to the default rather than yield an empty baseURL.
+    this.baseURL = (process.env.DIARIZATION_URL || 'http://localhost:5000').replace(/\/$/, '');
     this.apiKey = process.env.DIARIZATION_API_KEY;
   }
 

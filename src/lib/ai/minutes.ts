@@ -1,7 +1,6 @@
 import OpenAI from 'openai';
 import { TranscriptSegment } from '@/types';
 import { TranscriptChapter } from '@/lib/ai/chapters';
-import { formatDate } from '@/lib/utils';
 
 let client: OpenAI | null = null;
 function getClient() {
@@ -33,34 +32,20 @@ export interface SkabelonSpec {
   includeDato: boolean;
 }
 
-// Format an ISO timestamp as a Danish long date (e.g. "16. juni 2026"), or null
-// if it isn't a valid date.
-function formatDanishDate(iso: string): string | null {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return null;
-  return formatDate(d);
-}
-
 // ─── Prompt building ──────────────────────────────────────────────────────────
 
 export function buildSkabelonInstruction(
   spec: SkabelonSpec,
   participants?: string[],
   customPrompt?: string,
-  meetingDate?: string,
 ): string {
   const parts: string[] = [];
   if (spec.prompt.trim()) parts.push(spec.prompt.trim());
 
   const categories: string[] = [];
-  if (spec.includeDato) {
-    const formatted = meetingDate ? formatDanishDate(meetingDate) : null;
-    categories.push(
-      formatted
-        ? `- Angiv mødets dato i referatet: ${formatted}.`
-        : '- En **Dato**-sektion med mødets dato.',
-    );
-  }
+  // The "Dato" tag no longer injects the date into the body — the date lives in
+  // the editable document header (see MinutesContent.header) so it isn't rendered
+  // twice. `spec.includeDato` is consumed at save time to populate that header.
   if (spec.includeDagsorden) {
     categories.push('- En **Dagsorden**-sektion med mødets punkter.');
   }
@@ -149,12 +134,11 @@ export async function generateReferatBody(
   participants?: string[],
   chapters?: TranscriptChapter[],
   customPrompt?: string,
-  meetingDate?: string,
 ): Promise<{ body: string }> {
   const transcriptText = transcript
     .map((s) => `[${s.speaker}] (${formatTime(s.start)}): ${s.text}`)
     .join('\n');
-  const instruction = buildSkabelonInstruction(spec, participants, customPrompt, meetingDate);
+  const instruction = buildSkabelonInstruction(spec, participants, customPrompt);
 
   if (chapters && chapters.length > 1 && transcriptText.length > CHAPTER_SPLIT_THRESHOLD) {
     const summaries = await Promise.all(

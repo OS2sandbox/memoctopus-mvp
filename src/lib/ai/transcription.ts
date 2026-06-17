@@ -22,8 +22,11 @@ export class HviskeProvider implements TranscriptionProvider {
 
   constructor() {
     this.client = new OpenAI({
-      apiKey: process.env.HVISKE_API_KEY ?? 'no-key',
-      baseURL: process.env.HVISKE_URL ?? 'http://109.173.238.203:40093/v1',
+      // `||` not `??`: an env var set to an empty string (e.g. a deploy .env that
+      // ships HVISKE_URL= blank) must fall back to the default, not produce an
+      // empty baseURL that fails every request opaquely.
+      apiKey: process.env.HVISKE_API_KEY || 'no-key',
+      baseURL: process.env.HVISKE_URL || 'http://109.173.238.203:40093/v1',
       // No SDK auto-retries: a retried batch re-uploads ~1 MB of WAV and triples the
       // worst-case lane occupancy under full fan-out. Retries happen at the
       // application level instead (see vad-batch-server.ts), where they run AFTER

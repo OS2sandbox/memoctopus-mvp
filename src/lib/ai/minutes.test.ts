@@ -63,19 +63,13 @@ describe('buildSkabelonInstruction', () => {
     expect(out).not.toContain('Beslutningspunkter');
   });
 
-  it('injects the formatted meeting date when Dato is on', () => {
-    const out = buildSkabelonInstruction(
-      { ...baseSpec, includeDato: true },
-      undefined,
-      undefined,
-      '2026-06-16T10:00:00.000Z',
-    );
-    expect(out).toContain('16. juni 2026');
-  });
-
-  it('falls back to a Dato section when no date is supplied', () => {
+  it('does not inject the date into the body — the Dato tag drives the document header instead', () => {
     const out = buildSkabelonInstruction({ ...baseSpec, includeDato: true });
-    expect(out).toContain('Dato');
+    expect(out).not.toContain('Dato');
+    expect(out).not.toContain('dato');
+    // Other categories are unaffected.
+    const withAgenda = buildSkabelonInstruction({ ...baseSpec, includeDato: true, includeDagsorden: true });
+    expect(withAgenda).toContain('Dagsorden');
   });
 });
 

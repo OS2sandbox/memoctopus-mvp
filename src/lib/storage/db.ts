@@ -38,14 +38,30 @@ export interface StoredTranscript {
   diarizationStatus?: 'pending' | 'done';
 }
 
+// A single referat version with a stable, human-facing number (`label`). Labels
+// never change once assigned: editing a version updates its content in place but
+// keeps its label and position, so "Version 1" stays "Version 1" even after it's
+// edited later than "Version 3".
+export interface StoredMinutesVersion {
+  id: string;
+  label: number;
+  content: MinutesContent;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StoredMinutes {
   id: string;
   meetingId: string;
   templateId: string | null;
+  // Mirror of the active version's content + label, kept in sync so consumers that
+  // only read the "current" referat (export, meeting page) don't need version logic.
   content: MinutesContent;
   version: number;
   createdAt: string;
-  versions: { id: string; content: MinutesContent; createdAt: string }[];
+  // The version currently being edited; autosaves write to it in place.
+  activeVersionId: string | null;
+  versions: StoredMinutesVersion[];
 }
 
 export interface StoredAudio {
