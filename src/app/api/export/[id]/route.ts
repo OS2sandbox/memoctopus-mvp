@@ -6,21 +6,33 @@ export async function POST(req: NextRequest) {
   const body = await req.json() as { title?: string; content?: MinutesContent; format?: string };
   const { title = 'Referat', content, format = 'pdf' } = body;
 
-  if (!content || (content.body == null && !content.sections)) {
+  if (!content || (content.body == null && !content.sections && !content.header)) {
     return NextResponse.json({ error: 'Missing content' }, { status: 400 });
   }
 
-  const markdown = minutesToBody(content);
+  // Render the same editable document header the preview shows: the title always,
+  // the date only when present (it's only set when the "Dato" tag was selected).
+  const docTitle = content.header?.title?.trim() || title;
+  const docDate = content.header?.date?.trim() || null;
+  const markdown = normalizeMarkdown(minutesToBody(content));
 
   if (format === 'pdf') {
-    return exportPdf(title, markdown);
+    return exportPdf(docTitle, docDate, markdown);
   } else if (format === 'docx') {
-    return exportDocx(title, markdown);
+    return exportDocx(docTitle, docDate, markdown);
   } else if (format === 'md') {
-    return exportMarkdown(title, markdown);
+    return exportMarkdown(docTitle, docDate, markdown);
   }
 
   return NextResponse.json({ error: 'Unknown format' }, { status: 400 });
+}
+
+// The rich-text editor serialises soft line breaks as CommonMark hard breaks — a
+// trailing backslash before the newline (and a lone "\" for an empty break line).
+// Left as-is those backslashes render literally in the export; strip the marker so
+// the break renders as the blank line the user sees in the editor.
+function normalizeMarkdown(markdown: string): string {
+  return markdown.replace(/\\(\r?\n)/g, '$1');
 }
 
 // ─── Lightweight markdown line classification ────────────────────────────────
@@ -51,8 +63,14 @@ function stripInline(s: string): string {
   return s.replace(/\*\*(.*?)\*\*/g, '$1').replace(/\*(.*?)\*/g, '$1').replace(/`(.*?)`/g, '$1');
 }
 
-function exportMarkdown(title: string, markdown: string): NextResponse {
-  const lines = [`# ${title}`, '', `*Genereret: ${new Date().toLocaleDateString('da-DK')}*`, '', markdown.trim() || '*(ingen indhold)*', ''];
+function exportMarkdown(title: string, date: string | null, markdown: string): NextResponse {
+  const lines = [
+    `# ${title}`,
+    ...(date ? ['', `*${date}*`] : []),
+    '',
+    markdown.trim() || '*(ingen indhold)*',
+    '',
+  ];
   return new NextResponse(lines.join('\n'), {
     headers: {
       'Content-Type': 'text/markdown; charset=utf-8',
@@ -61,7 +79,7 @@ function exportMarkdown(title: string, markdown: string): NextResponse {
   });
 }
 
-async function exportPdf(title: string, markdown: string): Promise<NextResponse> {
+async function exportPdf(title: string, date: string | null, markdown: string): Promise<NextResponse> {
   const { jsPDF } = await import('jspdf');
 
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -76,11 +94,13 @@ async function exportPdf(title: string, markdown: string): Promise<NextResponse>
   doc.text(title, marginLeft, y);
   y += 10;
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.setTextColor(115, 115, 112);
-  doc.text(`Genereret: ${new Date().toLocaleDateString('da-DK')}`, marginLeft, y);
-  y += 8;
+  if (date) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(115, 115, 112);
+    doc.text(date, marginLeft, y);
+    y += 8;
+  }
 
   doc.setDrawColor(229, 229, 226);
   doc.line(marginLeft, y, pageWidth - marginRight, y);
@@ -132,17 +152,19 @@ async function exportPdf(title: string, markdown: string): Promise<NextResponse>
   });
 }
 
-async function exportDocx(title: string, markdown: string): Promise<NextResponse> {
+async function exportDocx(title: string, date: string | null, markdown: string): Promise<NextResponse> {
   const { Document, Packer, Paragraph, TextRun, HeadingLevel, BorderStyle } = await import('docx');
 
   const children = [];
 
-  children.push(new Paragraph({ text: title, heading: HeadingLevel.HEADING_1, spacing: { after: 200 } }));
-  children.push(new Paragraph({
-    children: [new TextRun({ text: `Genereret: ${new Date().toLocaleDateString('da-DK')}`, size: 18, color: '737370' })],
-    spacing: { after: 400 },
-    border: { bottom: { style: BorderStyle.SINGLE, size: 1, color: 'E5E5E2' } },
-  }));
+  children.push(new Paragraph({ text: title, heading: HeadingLevel.HEADING_1, spacing: { after: date ? 200 : 400 } }));
+  if (date) {
+    children.push(new Paragraph({
+      children: [new TextRun({ text: date, size: 18, color: '737370' })],
+      spacing: { after: 400 },
+      border: { bottom: { style: BorderStyle.SINGLE, size: 1, color: 'E5E5E2' } },
+    }));
+  }
 
   const lines = parseLines(markdown);
   if (lines.length === 0) {

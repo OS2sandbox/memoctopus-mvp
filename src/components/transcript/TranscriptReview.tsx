@@ -11,6 +11,7 @@ import { isDiarizationInFlight, ensureDiarization, finishDiarization } from '@/l
 import { isDefaultSpeakerLabel, nextAvailableSpeakerLabel } from '@/lib/audio/speaker-labels';
 import type { MinutesContent, Skabelon } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
+import { formatDate } from '@/lib/utils';
 
 interface TranscriptReviewProps {
   meetingId: string;
@@ -829,7 +830,16 @@ export function TranscriptReview({
         throw new Error(data.error ?? 'Kunne ikke generere referat');
       }
       const data = await res.json() as { content: MinutesContent; skabelonId?: string | null };
-      await saveMinutes(meetingId, data.content, data.skabelonId ?? null);
+      // Build the editable document header: the title always, the date only when
+      // the "Dato" tag is on (otherwise it would appear both here and in the body).
+      const content: MinutesContent = {
+        ...data.content,
+        header: {
+          title: meeting?.title ?? 'Referat',
+          date: cats.dato && meetingDate ? formatDate(meetingDate) : null,
+        },
+      };
+      await saveMinutes(meetingId, content, data.skabelonId ?? null);
       await deleteAudio(meetingId);
       await updateMeeting(meetingId, { status: 'minutes', audioDeleted: true });
       onDataChange?.();

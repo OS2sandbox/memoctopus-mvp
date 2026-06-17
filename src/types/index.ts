@@ -25,6 +25,16 @@ export interface MinutesContent {
   // Legacy section-based representation, kept so older saved minutes still load.
   // `minutesToBody()` (src/lib/minutes-format.ts) flattens these into `body`.
   sections?: MinutesSection[];
+  // Editable document header rendered above the body in both the editor preview
+  // and the export, so the two read one-to-one. `date` is only populated when the
+  // "Dato" tag is selected at generation (otherwise the meeting date would appear
+  // both here and inside the body); a null date means no date line is shown.
+  header?: MinutesHeader;
+}
+
+export interface MinutesHeader {
+  title: string;
+  date: string | null;
 }
 
 export interface MinutesSection {

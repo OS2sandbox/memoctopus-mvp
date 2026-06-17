@@ -64,6 +64,39 @@ describe('POST /api/export/[id]', () => {
     expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
   });
 
+  it('renders the editable header title and date from content.header', async () => {
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', {
+      title: 'Fallback',
+      content: { body: 'Indhold.', header: { title: 'Møde · 17. juni', date: '17. juni 2026' } },
+      format: 'md',
+    }));
+    const text = await res.text();
+    expect(text).toContain('# Møde · 17. juni'); // header title wins over the title param
+    expect(text).toContain('*17. juni 2026*');
+    expect(text).not.toContain('Fallback');
+  });
+
+  it('omits the date line when the header has no date', async () => {
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', {
+      content: { body: 'Indhold.', header: { title: 'Møde', date: null } },
+      format: 'md',
+    }));
+    const text = await res.text();
+    expect(text).toContain('# Møde');
+    // The only italic/asterisk content would be a date line — none expected.
+    expect(text).not.toMatch(/\*[^*]+\*/);
+  });
+
+  it('strips CommonMark hard-break backslashes so line breaks do not render as "\\"', async () => {
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', {
+      content: { body: 'Tiende sætning: S\\\n\\\nØv bøv' },
+      format: 'md',
+    }));
+    const text = await res.text();
+    expect(text).toContain('Øv bøv');
+    expect(text).not.toContain('\\'); // no literal backslash artifacts
+  });
+
   it('exports a docx document', async () => {
     const res = await POST(makeJsonReq(BASE_URL, 'POST', { content, format: 'docx' }));
     expect(res.status).toBe(200);
