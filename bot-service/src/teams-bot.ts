@@ -402,11 +402,9 @@ export class TeamsMeetingBot {
 
     console.log('[bot] navigating to', this.config.meetingUrl);
     await page.goto(this.config.meetingUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    // Wait for Teams to render its initial UI rather than sleeping a fixed 4 s.
-    await page.waitForSelector(
-      'button:has-text("Continue on this browser"), button[data-tid="prejoin-join-button"], button[aria-label="Join now"]',
-      { timeout: 8000 },
-    ).catch(() => {});
+    // No fixed selector wait here — the prejoin readiness poll below already waits
+    // for the controls efficiently (300ms ticks). The old waitForSelector cost up
+    // to 8 s on the heavier web client (it timed out before readiness even ran).
     // The /meet/<id> URL redirects (to teams.live.com/light-meetings/launch for
     // anonymous web join), and that SPA can navigate again as it boots. Let the
     // redirect settle, and never let an early read crash the join — page.title()
@@ -484,7 +482,7 @@ export class TeamsMeetingBot {
     const nameInput = page.locator(
       'input[data-tid="prejoin-display-name-input"], input[placeholder*="name" i], input[aria-label*="name" i], input[type="text"]',
     ).first();
-    if (await nameInput.isVisible({ timeout: 3000 }).catch(() => false)) {
+    if (await nameInput.isVisible({ timeout: 1000 }).catch(() => false)) {
       console.log('[bot] filling name:', this.config.botName);
       await nameInput.fill('');
       await nameInput.fill(this.config.botName);
@@ -509,14 +507,14 @@ export class TeamsMeetingBot {
       `[role="radio"][aria-label*="Don't use audio"]`,
       '[role="radio"][aria-label*="Brug ikke lyd"]',
     ].join(', ')).first();
-    if (await computerAudioRadio.isVisible({ timeout: 2000 }).catch(() => false)) {
+    if (await computerAudioRadio.isVisible({ timeout: 800 }).catch(() => false)) {
       // Only read "Don't use audio" state if that radio is actually present.
       // getAttribute() blocks for its full default 30s timeout when the
       // element is absent — guarding with the immediate isVisible() check
       // avoids a ~30s stall on the prejoin (the radio is often not rendered
       // once Computer audio is already the default).
       if (await dontUseAudioRadio.isVisible().catch(() => false)) {
-        const dontUseChecked = await dontUseAudioRadio.getAttribute('aria-checked', { timeout: 1000 }).catch(() => null);
+        const dontUseChecked = await dontUseAudioRadio.getAttribute('aria-checked', { timeout: 500 }).catch(() => null);
         if (dontUseChecked === 'true') {
           console.log(`[bot] "Don't use audio" was selected — switching to Computer audio`);
         }
@@ -534,7 +532,7 @@ export class TeamsMeetingBot {
       'button[aria-label*="Speaker is off"]',
       'button:has-text("Turn speaker on")',
     ].join(', ')).first();
-    if (await speakerOnBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+    if (await speakerOnBtn.isVisible({ timeout: 400 }).catch(() => false)) {
       await speakerOnBtn.click({ timeout: 5000 }).catch(() => {});
       console.log('[bot] enabled speaker (prejoin)');
     }
@@ -554,7 +552,7 @@ export class TeamsMeetingBot {
     // readiness-loop pass.
     const dismissNoMediaModal = async (): Promise<boolean> => {
       const modal = page.locator(NO_MEDIA_MODAL_BTN).first();
-      if (await modal.isVisible({ timeout: 1000 }).catch(() => false)) {
+      if (await modal.isVisible({ timeout: 500 }).catch(() => false)) {
         console.log('[bot] dismissing "Continue without audio or video" modal before join');
         await modal.click({ timeout: 5000 }).catch(() => {});
         await page.waitForTimeout(400);
@@ -660,7 +658,7 @@ export class TeamsMeetingBot {
    * if a click happened. Used for the prejoin camera/mic toggles, which only
    * need clicking when Teams renders them in the "on" state.
    */
-  private async _clickIfVisible(selectors: string[], timeoutMs = 2000): Promise<boolean> {
+  private async _clickIfVisible(selectors: string[], timeoutMs = 400): Promise<boolean> {
     const btn = this.page!.locator(selectors.join(', ')).first();
     if (await btn.isVisible({ timeout: timeoutMs }).catch(() => false)) {
       await btn.click().catch(() => {});
