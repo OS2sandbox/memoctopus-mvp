@@ -190,6 +190,51 @@ export async function snapshotMinutes(
   return minutes;
 }
 
+// Save a freshly generated referat as its own version. The first generation
+// creates version 1; regenerating (e.g. going back to Gennemgang and generating
+// again) APPENDS a new version and makes it active, leaving the prior versions
+// (and the user's edits to them) intact — it does not overwrite version 1.
+export async function appendMinutesVersion(
+  meetingId: string,
+  content: MinutesContent,
+  templateId?: string | null,
+): Promise<StoredMinutes> {
+  const db = await getDB();
+  const existing = await readRow(meetingId);
+  const now = new Date().toISOString();
+
+  if (!existing) {
+    const v: StoredMinutesVersion = { id: newId(), label: 1, content, baseline: content, createdAt: now, updatedAt: now };
+    const minutes: StoredMinutes = {
+      id: newId(),
+      meetingId,
+      templateId: templateId ?? null,
+      content,
+      version: 1,
+      createdAt: now,
+      activeVersionId: v.id,
+      versions: [v],
+    };
+    await db.put('minutes', minutes);
+    return minutes;
+  }
+
+  const nextLabel = existing.versions.reduce((m, v) => Math.max(m, v.label), 0) + 1;
+  const fresh: StoredMinutesVersion = { id: newId(), label: nextLabel, content, baseline: content, createdAt: now, updatedAt: now };
+  let versions = [...existing.versions, fresh];
+  if (versions.length > MAX_VERSIONS) {
+    versions = [...versions].sort((a, b) => a.label - b.label).slice(versions.length - MAX_VERSIONS);
+  }
+  const minutes = withActiveMirror({
+    ...existing,
+    templateId: templateId !== undefined ? templateId : existing.templateId,
+    activeVersionId: fresh.id,
+    versions,
+  });
+  await db.put('minutes', minutes);
+  return minutes;
+}
+
 // Switch which version is being edited. The active version's content is mirrored
 // to the top level so the editor and consumers load it. Returns the row unchanged
 // when the id doesn't resolve.

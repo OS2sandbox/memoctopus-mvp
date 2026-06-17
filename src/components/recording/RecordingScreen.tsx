@@ -102,6 +102,10 @@ interface ClarificationItem {
 interface RecordingScreenProps {
   meetingId: string;
   existingRecording?: { durationSeconds: number | null; sizeBytes: number };
+  // True when this is a live, in-progress recording session (meeting status
+  // 'recording'). A hard refresh of such a session loses the in-memory recording,
+  // so we send the user to the dashboard rather than auto-starting a new one.
+  isActiveRecording?: boolean;
   onNavigateToReview?: () => void;
   onRecordingComplete?: () => void;
 }
@@ -139,7 +143,7 @@ const CLARIFY_INTERVAL_MS = 25_000;
 // Tick cadence for the countdown bar to the next clarification refresh.
 const CLARIFY_TICK_MS = 250;
 
-export function RecordingScreen({ meetingId, existingRecording, onNavigateToReview, onRecordingComplete }: RecordingScreenProps) {
+export function RecordingScreen({ meetingId, existingRecording, isActiveRecording, onNavigateToReview, onRecordingComplete }: RecordingScreenProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const isMobile = useIsMobile();
@@ -863,7 +867,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     vadRef.current?.start();
   }
 
-  // Auto-start when navigated here from the home page record button
+  // Auto-start when navigated here from the home page record button. The
+  // autostart flag is then stripped from the URL so a hard refresh doesn't start a
+  // brand-new recording. A refresh of a live recording (no flag, nothing to resume)
+  // can't recover the in-memory audio, so we send the user back to the dashboard.
   const didAutostart = useRef(false);
   useEffect(() => {
     if (didAutostart.current) return;
@@ -871,6 +878,10 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
     if (searchParams.get('autostart') === '1') {
       didAutostart.current = true;
       startRecording();
+      router.replace(`/meeting/${meetingId}`, { scroll: false });
+    } else if (isActiveRecording) {
+      didAutostart.current = true;
+      router.replace('/dashboard');
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

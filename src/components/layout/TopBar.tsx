@@ -21,7 +21,6 @@ export function TopBar() {
   const nav = [
     { href: '/dashboard', label: 'Optag', exact: true },
     { href: '/arkiv', label: 'Arkiv' },
-    { href: '/settings/data', label: 'Data' },
   ];
 
   const reviewMeetingId = useMemo(

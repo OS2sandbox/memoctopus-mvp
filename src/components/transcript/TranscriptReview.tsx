@@ -5,7 +5,7 @@ import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
 import { SpeakerAssignment, type ParticipantRow } from './SpeakerAssignment';
 import { WaveformPlayer } from './WaveformPlayer';
-import { getTranscript, getAudio, saveTranscriptChapters, saveTranscriptSegments, saveMinutes, deleteAudio, updateMeeting, getMeeting } from '@/lib/storage';
+import { getTranscript, getAudio, saveTranscriptChapters, saveTranscriptSegments, appendMinutesVersion, deleteAudio, updateMeeting, getMeeting } from '@/lib/storage';
 import { onTranscriptUpdated } from '@/lib/transcript-events';
 import { isDiarizationInFlight, ensureDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import { isDefaultSpeakerLabel, nextAvailableSpeakerLabel } from '@/lib/audio/speaker-labels';
@@ -859,7 +859,7 @@ export function TranscriptReview({
           date: cats.dato && meetingDate ? formatDate(meetingDate) : null,
         },
       };
-      await saveMinutes(meetingId, content, data.skabelonId ?? null);
+      await appendMinutesVersion(meetingId, content, data.skabelonId ?? null);
       await deleteAudio(meetingId);
       await updateMeeting(meetingId, { status: 'minutes', audioDeleted: true });
       onDataChange?.();
