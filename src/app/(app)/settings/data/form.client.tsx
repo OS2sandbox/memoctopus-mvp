@@ -120,12 +120,12 @@ export default function SettingsDataPage() {
           Slet alle lydfiler
         </h2>
         <p className="text-[var(--muted)] mb-6" style={{ fontSize: 'var(--t-small)' }}>
-          Beholder transskriptioner og referater. Lydfiler slettes automatisk 14 dage efter transskription.
+          Beholder transskriptioner og referater. Lydfiler slettes automatisk, når referatet er genereret.
         </p>
         <DangerSection
           title="Slet alle lydfiler nu"
           description="Sletter alle lydfiler på tværs af alle møder. Transskriptioner og referater bevares."
-          retentionNote="Automatisk sletning: 14 dage efter transskription"
+          retentionNote="Automatisk sletning: når referatet genereres"
           actionLabel="Slet alle lydfiler"
           onAction={deleteAllAudio}
         />

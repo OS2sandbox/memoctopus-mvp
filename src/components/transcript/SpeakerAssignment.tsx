@@ -105,6 +105,10 @@ export function SpeakerAssignment({
 
   const pct = totalVoices > 0 ? (recognizedCount / totalVoices) * 100 : 0;
   const hasPending = rows.some((r) => r.kind === 'pending');
+  // No audio (e.g. it was deleted after the referat was generated) → speaker
+  // assignment is transcript-based only: hide the soundbite play affordances
+  // rather than show clips that can't play.
+  const hasAudio = onPlaySegment != null;
 
   // Is this exact soundbite the one currently playing? (Drives the pause icon.)
   const bitePlaying = (start?: number, end?: number) =>
@@ -168,7 +172,7 @@ export function SpeakerAssignment({
   function voiceDropdown(name: string, isSilent: boolean) {
     return (
       <div className="sa-drop">
-        <div className="sa-drop-h">afspil og vælg {name}s stemme</div>
+        <div className="sa-drop-h">{hasAudio ? `afspil og vælg ${name}s stemme` : `vælg ${name}s stemme`}</div>
         {voices.length > 0 ? (
           voices.map((v) => (
             <button
@@ -177,15 +181,17 @@ export function SpeakerAssignment({
               className="sa-opt"
               onClick={() => { onLink(v.speaker, name); setOpenName(null); }}
             >
-              <span
-                className="sa-play2"
-                role="button"
-                aria-label={bitePlaying(v.start, v.end) ? `Pause ${v.speaker}` : `Afspil ${v.speaker}`}
-                title={bitePlaying(v.start, v.end) ? 'Pause' : 'Afspil'}
-                onClick={(e) => play(e, v.start, v.end)}
-              >
-                <BiteIcon playing={bitePlaying(v.start, v.end)} />
-              </span>
+              {hasAudio && (
+                <span
+                  className="sa-play2"
+                  role="button"
+                  aria-label={bitePlaying(v.start, v.end) ? `Pause ${v.speaker}` : `Afspil ${v.speaker}`}
+                  title={bitePlaying(v.start, v.end) ? 'Pause' : 'Afspil'}
+                  onClick={(e) => play(e, v.start, v.end)}
+                >
+                  <BiteIcon playing={bitePlaying(v.start, v.end)} />
+                </span>
+              )}
               <span>{v.speaker}</span>
               <span className="pick">vælg</span>
             </button>

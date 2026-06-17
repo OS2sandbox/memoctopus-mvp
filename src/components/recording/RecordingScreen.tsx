@@ -116,7 +116,7 @@ const MAX_CHUNK_SAMPLES = 16_000 * 15;
 // Minimum frames before triggering an auto-commit. The actual commit is adaptive —
 // all frames accumulated since the last commit (up to MAX_COMMIT_FRAMES) are sent
 // in one request so the window grows instead of queuing when the server is slow.
-const COMMIT_WINDOW_FRAMES = Math.ceil((16_000 * 3) / 1024);
+const COMMIT_WINDOW_FRAMES = Math.ceil((16_000 * 4) / 1024);
 // Ceiling for one adaptive commit (9 s). Keeps the cascade damage of a single timeout
 // bounded: at most 9 s of audio is lost per timeout, not the full MAX_CHUNK_SAMPLES.
 const MAX_COMMIT_FRAMES = COMMIT_WINDOW_FRAMES * 3;
@@ -124,7 +124,7 @@ const MAX_COMMIT_FRAMES = COMMIT_WINDOW_FRAMES * 3;
 // This means the partial only ever shows NEW audio — no hindsight re-transcription.
 const PARTIAL_LOOKBACK_FRAMES = Math.ceil((16_000 * 4) / 1024);
 // Slower partial ticks — less impatient, more accurate with longer context.
-const PARTIAL_INTERVAL_MS = 1000;
+const PARTIAL_INTERVAL_MS = 1500;
 // Max rate at which committed segment words are revealed left-to-right (no prior partial).
 const WORDS_PER_SECOND = 10;
 // Slower wave rate for the continuous live wave (interim → final carry-over).
@@ -570,13 +570,16 @@ export function RecordingScreen({ meetingId, existingRecording, onNavigateToRevi
         // Force single-threaded ORT — no SharedArrayBuffer (COOP/COEP) required.
         ortConfig: (ort: any) => { ort.env.wasm.numThreads = 1; },
         model: 'v5',
-        // 900ms silence before declaring speech end — patient enough to handle natural
-        // mid-sentence pauses without prematurely cutting the utterance.
-        redemptionMs: 900,
+        // 1200ms silence before declaring speech end — patient enough to ride out
+        // natural mid-sentence pauses so the VAD doesn't chop utterances into short,
+        // imprecise fragments.
+        redemptionMs: 1200,
         // 300ms pre-roll captures soft onsets; we also manually include pre-roll frames
         // when recording pcmSpeechStartFrameRef below.
         preSpeechPadMs: 300,
-        positiveSpeechThreshold: 0.5,
+        // Higher start threshold makes the VAD less twitchy — it won't fire on faint
+        // background noise, only on clear speech.
+        positiveSpeechThreshold: 0.6,
         // Slightly higher threshold gives natural pauses more room before ending speech.
         negativeSpeechThreshold: 0.35,
         onSpeechStart: () => {
