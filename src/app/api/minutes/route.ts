@@ -23,7 +23,6 @@ export async function POST(req: NextRequest) {
     includeBeslutningspunkter,
     includeDagsorden,
     includeDato,
-    meetingDate,
   } = body as {
     segments: TranscriptSegment[];
     participants?: string[];
@@ -34,7 +33,6 @@ export async function POST(req: NextRequest) {
     includeBeslutningspunkter?: boolean;
     includeDagsorden?: boolean;
     includeDato?: boolean;
-    meetingDate?: string;
   };
 
   if (!segments || segments.length === 0) {
@@ -71,7 +69,6 @@ export async function POST(req: NextRequest) {
     participants,
     chapters,
     customPrompt,
-    meetingDate,
   );
 
   return NextResponse.json({ content, skabelonId: skabelon?.id ?? null });

@@ -73,10 +73,13 @@ const MAX_CONTINUE_RECLICKS = 2;
 // Admission polling loop tuning (_waitForAdmission). Each threshold below was a
 // regression fix — tune deliberately, not by feel.
 const ADMISSION_TIMEOUT_MS = 300_000;
-const ADMISSION_TICK_MS = 2_000;
-const ADMISSION_CONFIRM_TICKS = 2;   // consecutive enabled-Leave ticks before "admitted"
-const ERROR_CONFIRM_TICKS = 2;       // consecutive error-page ticks before clicking Rejoin
-const LOBBY_GONE_TICKS = 3;          // consecutive lobby-absent ticks before assume-admitted
+// Poll fast (500ms) so admission is detected ~quickly after the host lets the bot
+// in, instead of up to 2s of dead time per tick. The *_TICKS counts are scaled up
+// to keep roughly the same wall-clock debounce the regression fixes relied on.
+const ADMISSION_TICK_MS = 500;
+const ADMISSION_CONFIRM_TICKS = 2;   // consecutive enabled-Leave ticks before "admitted" (~1s)
+const ERROR_CONFIRM_TICKS = 3;       // consecutive error-page ticks before clicking Rejoin (~1.5s)
+const LOBBY_GONE_TICKS = 6;          // consecutive lobby-absent ticks before assume-admitted (~3s)
 const MAX_REJOIN_ATTEMPTS = 3;       // Rejoin-call clicks before giving up
 
 export class TeamsMeetingBot {
@@ -106,16 +109,23 @@ export class TeamsMeetingBot {
   private buttonCount = -1;
   private leaveDetector: LeaveDetectorState = newLeaveDetectorState();
   private onEndedCallback: (() => void) | null = null;
+  // Wall-clock start of the join, for timing instrumentation (see sinceStart()).
+  private startTs = 0;
 
   constructor(config: BotSessionConfig) {
     this.config = config;
     this.userDataDir = path.join(os.tmpdir(), `bot-${config.meetingId}-${Date.now()}`);
   }
 
+  private sinceStart(): number { return Date.now() - this.startTs; }
+
   async start(): Promise<void> {
+    this.startTs = Date.now();
     try {
       await this._launch();
+      console.log(`[timing] browser launched +${this.sinceStart()}ms`);
       await this._joinMeeting();
+      console.log(`[timing] in meeting (capture starting) +${this.sinceStart()}ms`);
       this.status = 'recording';
       this._startElapsedTimer();
       this._startParticipantPolling();
@@ -153,8 +163,14 @@ export class TeamsMeetingBot {
     const baseOpts = {
       headless,
       permissions: ['microphone', 'camera'],
+      // A Linux UA is deliberate: teams.live.com routes Windows UAs to the
+      // "download the desktop app" launcher (dl/launcher/launcher.html?directDl=true)
+      // whose "Continue on this browser" does not reliably advance an automated
+      // browser, leaving the bot stuck on the launcher. A Linux UA (no native
+      // Teams app) is served the lightweight web join (light-meetings/launch)
+      // directly — the prejoin screen this bot's join logic is built for.
       userAgent:
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
       // Remove Playwright's --enable-automation flag — Teams (and Chromium's own
       // anti-bot heuristics) gate behaviour on this flag and can refuse media
       // access or kick the session post-admission when it is set.
@@ -386,13 +402,22 @@ export class TeamsMeetingBot {
 
     console.log('[bot] navigating to', this.config.meetingUrl);
     await page.goto(this.config.meetingUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    // Wait for Teams to render its initial UI rather than sleeping a fixed 4 s.
+    // Let Teams render/redirect to a real prejoin (or the launcher) before we act,
+    // so we don't click a half-rendered button. Resolves as soon as a button
+    // appears; only costs the full timeout on the heaviest loads.
     await page.waitForSelector(
       'button:has-text("Continue on this browser"), button[data-tid="prejoin-join-button"], button[aria-label="Join now"]',
       { timeout: 8000 },
     ).catch(() => {});
+    // The /meet/<id> URL redirects (to teams.live.com/light-meetings/launch for
+    // anonymous web join), and that SPA can navigate again as it boots. Let the
+    // redirect settle, and never let an early read crash the join — page.title()
+    // throws "Execution context was destroyed" if it races a navigation.
+    await page.waitForLoadState('domcontentloaded').catch(() => {});
     await snap('01-landed');
-    console.log('[bot] landed, url=', page.url(), 'title=', await page.title());
+    const landedTitle = await page.title().catch(() => '(navigating)');
+    console.log('[bot] landed, url=', page.url(), 'title=', landedTitle);
+    console.log(`[timing] prejoin page loaded +${this.sinceStart()}ms`);
 
     // Click "Continue on this browser"
     const continueSelectors = [
@@ -405,9 +430,15 @@ export class TeamsMeetingBot {
     ];
     for (const sel of continueSelectors) {
       const btn = page.locator(sel).first();
-      if (await btn.isVisible({ timeout: 5000 }).catch(() => false)) {
+      if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
         console.log('[bot] clicking continue selector:', sel);
-        await btn.click();
+        // Never let this hang: on the launcher the button can be unstable while
+        // the page boots, so a plain click() waits the full 30s actionability
+        // timeout and kills the join. Cap it and force-click as a fallback; the
+        // readiness poll re-clicks too if this didn't take.
+        await btn.click({ timeout: 4000 }).catch(() =>
+          btn.click({ force: true, timeout: 2000 }).catch(() => {}),
+        );
         break;
       }
     }
@@ -417,6 +448,7 @@ export class TeamsMeetingBot {
     // the "Continue without audio or video" modal appears intermittently and
     // LATE (after prejoin boot), and when missed it blocks Join now forever.
     await this._waitForPreJoinReadiness(PREJOIN_READINESS_TIMEOUT_MS);
+    console.log(`[timing] prejoin interactive +${this.sinceStart()}ms`);
     await snap('02-prejoin');
 
     // Turn off camera and mute mic as early as possible on the prejoin screen —
@@ -460,11 +492,11 @@ export class TeamsMeetingBot {
     const nameInput = page.locator(
       'input[data-tid="prejoin-display-name-input"], input[placeholder*="name" i], input[aria-label*="name" i], input[type="text"]',
     ).first();
-    if (await nameInput.isVisible({ timeout: 3000 }).catch(() => false)) {
+    if (await nameInput.isVisible({ timeout: 1000 }).catch(() => false)) {
       console.log('[bot] filling name:', this.config.botName);
       await nameInput.fill('');
       await nameInput.fill(this.config.botName);
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(100);
     } else {
       console.log('[bot] name input not found');
     }
@@ -485,20 +517,20 @@ export class TeamsMeetingBot {
       `[role="radio"][aria-label*="Don't use audio"]`,
       '[role="radio"][aria-label*="Brug ikke lyd"]',
     ].join(', ')).first();
-    if (await computerAudioRadio.isVisible({ timeout: 2000 }).catch(() => false)) {
+    if (await computerAudioRadio.isVisible({ timeout: 800 }).catch(() => false)) {
       // Only read "Don't use audio" state if that radio is actually present.
       // getAttribute() blocks for its full default 30s timeout when the
       // element is absent — guarding with the immediate isVisible() check
       // avoids a ~30s stall on the prejoin (the radio is often not rendered
       // once Computer audio is already the default).
       if (await dontUseAudioRadio.isVisible().catch(() => false)) {
-        const dontUseChecked = await dontUseAudioRadio.getAttribute('aria-checked', { timeout: 1000 }).catch(() => null);
+        const dontUseChecked = await dontUseAudioRadio.getAttribute('aria-checked', { timeout: 500 }).catch(() => null);
         if (dontUseChecked === 'true') {
           console.log(`[bot] "Don't use audio" was selected — switching to Computer audio`);
         }
       }
       await computerAudioRadio.click({ timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(200);
+      await page.waitForTimeout(50);
       console.log('[bot] selected Computer audio');
     } else {
       console.log('[bot] computer audio radio not visible — continuing with defaults');
@@ -510,7 +542,7 @@ export class TeamsMeetingBot {
       'button[aria-label*="Speaker is off"]',
       'button:has-text("Turn speaker on")',
     ].join(', ')).first();
-    if (await speakerOnBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+    if (await speakerOnBtn.isVisible({ timeout: 400 }).catch(() => false)) {
       await speakerOnBtn.click({ timeout: 5000 }).catch(() => {});
       console.log('[bot] enabled speaker (prejoin)');
     }
@@ -523,17 +555,46 @@ export class TeamsMeetingBot {
       'button:has-text("Join")',
       'button:has-text("Deltag")',
     ];
+    // Turning the camera/mic off makes Teams pop the "Continue without audio or
+    // video" modal, whose overlay intercepts the Join now click (causing a 30s
+    // click timeout → connection error). It can appear AFTER prejoin readiness,
+    // so dismiss it here, immediately before joining, in addition to the
+    // readiness-loop pass.
+    const dismissNoMediaModal = async (): Promise<boolean> => {
+      const modal = page.locator(NO_MEDIA_MODAL_BTN).first();
+      if (await modal.isVisible({ timeout: 500 }).catch(() => false)) {
+        console.log('[bot] dismissing "Continue without audio or video" modal before join');
+        await modal.click({ timeout: 5000 }).catch(() => {});
+        await page.waitForTimeout(400);
+        return true;
+      }
+      return false;
+    };
+    const dismissedModal = await dismissNoMediaModal();
+
     let joined = false;
     for (const sel of joinSelectors) {
       const btn = page.locator(sel).first();
       if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
         console.log('[bot] clicking join selector:', sel);
-        await btn.click();
+        try {
+          await btn.click({ timeout: 8000 });
+        } catch {
+          // A late-appearing overlay (the no-media modal) is intercepting the
+          // click — dismiss it and retry, then force the click past any
+          // lingering overlay as a last resort.
+          await dismissNoMediaModal();
+          await btn.click({ timeout: 8000 }).catch(async () => {
+            await btn.click({ force: true, timeout: 5000 }).catch(() => {});
+          });
+        }
         joined = true;
         break;
       }
     }
-    if (!joined) {
+    // If the modal was dismissed but no Join now remained, the modal's confirm
+    // already advanced the join — don't treat that as a failure.
+    if (!joined && !dismissedModal) {
       await snap('03-no-join-btn');
       if (debugSnapshots) {
         const htmlFail = await page.content().catch(() => '');
@@ -541,6 +602,7 @@ export class TeamsMeetingBot {
       }
       throw new Error('Could not find join button');
     }
+    console.log(`[timing] join now clicked +${this.sinceStart()}ms`);
     // Wait for the lobby/meeting UI to appear rather than sleeping a fixed 4 s.
     await page.waitForSelector(
       `${LEAVE_BTN}, [data-tid="lobby-section"], [aria-label="Lobby"]`,
@@ -606,7 +668,7 @@ export class TeamsMeetingBot {
    * if a click happened. Used for the prejoin camera/mic toggles, which only
    * need clicking when Teams renders them in the "on" state.
    */
-  private async _clickIfVisible(selectors: string[], timeoutMs = 2000): Promise<boolean> {
+  private async _clickIfVisible(selectors: string[], timeoutMs = 400): Promise<boolean> {
     const btn = this.page!.locator(selectors.join(', ')).first();
     if (await btn.isVisible({ timeout: timeoutMs }).catch(() => false)) {
       await btn.click().catch(() => {});
@@ -676,7 +738,11 @@ export class TeamsMeetingBot {
       if (continueClicks < MAX_CONTINUE_RECLICKS && await continueBtn.isVisible().catch(() => false)) {
         continueClicks++;
         console.log(`[bot] re-clicking Continue on this browser (attempt ${continueClicks})`);
-        await continueBtn.click().catch(() => {});
+        // Capped click so a stalling launcher button doesn't burn the full 30s
+        // actionability timeout inside the readiness loop.
+        await continueBtn.click({ timeout: 4000 }).catch(() =>
+          continueBtn.click({ force: true, timeout: 2000 }).catch(() => {}),
+        );
         await page.waitForTimeout(800);
         continue;
       }
@@ -815,6 +881,7 @@ export class TeamsMeetingBot {
         admittedTicks++;
         if (admittedTicks >= ADMISSION_CONFIRM_TICKS) {
           console.log(`[bot] admitted — enabled Leave button on ${ADMISSION_CONFIRM_TICKS} consecutive ticks, url=`, page.url());
+          console.log(`[timing] admitted +${this.sinceStart()}ms`);
           return 'admitted';
         }
       } else {

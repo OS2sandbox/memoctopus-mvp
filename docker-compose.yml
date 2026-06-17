@@ -1,30 +1,98 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# BASE STACK ("small"): the CPU-only application — Next.js app, Teams bot,
+# Postgres. Self-contained; talks to hviske/diarization hosted ELSEWHERE
+# (set HVISKE_URL / DIARIZATION_URL in .env to the remote box):
+#
+#     docker compose up -d
+#
+# To run the WHOLE system on a Docker + NVIDIA host, merge the AI overlay — it
+# adds the GPU services and repoints the app at them automatically:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.ai.yml up -d
+#
+# Everything is driven by .env (copy from .env.deploy.example), so moving to a
+# new server is: clone repo → edit .env → compose up. See DEPLOY.md.
+# ─────────────────────────────────────────────────────────────────────────────
 services:
+  # Self-contained PostgreSQL. The app stores better-auth tables in `public` and
+  # creates a per-user schema (u_<userId>) lazily at runtime. Data persists on the
+  # `pgdata` named volume.
+  db:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-referat}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-referat}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-referat} -d ${POSTGRES_DB:-referat}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # One-shot: applies the drizzle migrations (better-auth public tables) and exits.
+  # Built from the lightweight `migrate` stage (drizzle-kit + config + SQL only) so
+  # it doesn't pay for / depend on a full Next.js build. CMD is the drizzle-kit run.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: migrate
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+    networks:
+      - internal
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   app:
     build:
       context: .
       dockerfile: Dockerfile
+      # NEXT_PUBLIC_* must be passed at build time (Next inlines them into the
+      # browser bundle); the matching `environment` entries below only cover the
+      # server-side reads. Change one of these → rebuild (`up -d --build`).
+      args:
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:8080}
+        NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED: ${NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED:-true}
+        NEXT_PUBLIC_MICROSOFT_ENABLED: ${NEXT_PUBLIC_MICROSOFT_ENABLED:-true}
+        NEXT_PUBLIC_AUTHENTIK_ENABLED: ${NEXT_PUBLIC_AUTHENTIK_ENABLED:-true}
     ports:
-      - "3002:3000"
+      - "${APP_PORT:-8080}:3000"
+    # Lets the container reach services on the Docker host (e.g. an SSH tunnel to a
+    # GPU box's diarization at host.docker.internal:5000). Automatic on Docker
+    # Desktop; this makes it work on Linux hosts too. Harmless if unused.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       - BETTER_AUTH_URL=${BETTER_AUTH_URL}
       - BETTER_AUTH_TRUSTED_ORIGINS=${BETTER_AUTH_TRUSTED_ORIGINS:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # AI service endpoints. In the base ("small") stack these point at a
+      # remote host (set in .env). The AI overlay overrides them to the in-compose
+      # service names (http://hviske:8000/v1, http://diarization-service:5000).
       - HVISKE_URL=${HVISKE_URL}
       - HVISKE_API_KEY=${HVISKE_API_KEY}
       - HVISKE_MODEL=${HVISKE_MODEL:-syvai/hviske-v5.1}
       - ASR_LANGUAGE=${ASR_LANGUAGE:-da}
-      - DIARIZATION_URL=${DIARIZATION_URL:-http://diarization-service:5000}
+      - DIARIZATION_URL=${DIARIZATION_URL}
       - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
       - AUDIO_STORAGE_PATH=/audio-storage
       - BOT_SERVICE_URL=http://bot-service:3001
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
-      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3002}
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:8080}
       - NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED=${NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED:-true}
-      - NEXT_PUBLIC_MICROSOFT_ENABLED=${NEXT_PUBLIC_MICROSOFT_ENABLED:-false}
-      - NEXT_PUBLIC_AUTHENTIK_ENABLED=${NEXT_PUBLIC_AUTHENTIK_ENABLED:-false}
+      - NEXT_PUBLIC_MICROSOFT_ENABLED=${NEXT_PUBLIC_MICROSOFT_ENABLED:-true}
+      - NEXT_PUBLIC_AUTHENTIK_ENABLED=${NEXT_PUBLIC_AUTHENTIK_ENABLED:-true}
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-}
@@ -38,8 +106,15 @@ services:
     depends_on:
       bot-service:
         condition: service_healthy
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      # 127.0.0.1 (not localhost): inside the container `localhost` resolves to
+      # IPv6 ::1 first, but next-server listens on IPv4 0.0.0.0 only — a localhost
+      # probe gets "connection refused" and the container is wrongly unhealthy.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -63,6 +138,8 @@ services:
       # admission "Leaving..." cascades. Override to true only for debugging.
       - HEADLESS=false
       - DISPLAY=:99
+      # Capture prejoin/launcher screenshots to /tmp/bot-snap-*.png for debugging.
+      - BOT_DEBUG_SNAPSHOTS=${BOT_DEBUG_SNAPSHOTS:-0}
     networks:
       - internal
     shm_size: "2gb"
@@ -78,38 +155,10 @@ services:
       start_period: 15s
     restart: unless-stopped
 
-  diarization-service:
-    build:
-      context: ./diarization-service
-      dockerfile: Dockerfile
-    # Internal only — reached by the app service at http://diarization-service:5000.
-    # Runs pyannote.audio (speaker-diarization-community-1) over full recordings.
-    environment:
-      - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
-    networks:
-      - internal
-    # pyannote loads several models into shared memory; give it headroom like the bot.
-    shm_size: "2gb"
-    # Requires an NVIDIA GPU on the host (nvidia-container-toolkit). Diarization runs
-    # on CPU if no GPU is reserved, but far slower — keep the reservation in prod.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 60s
-    restart: unless-stopped
-
 networks:
   internal:
     driver: bridge
 
 volumes:
   audio-storage:
+  pgdata:

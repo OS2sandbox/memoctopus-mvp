@@ -20,11 +20,18 @@ COPY app.py .
 # Bake the gated model weights into the image so the service runs fully offline at
 # request time. Pass the HF token only at build:
 #   docker build --build-arg HF_TOKEN=hf_xxx -t diarization-service ./diarization-service
-# (You must first accept the model terms on huggingface.co for the model + its
-# pyannote/segmentation dependency.)
+# (You must first accept the model terms on huggingface.co for the model.)
+#
+# Set BAKE_WEIGHTS=false to skip the download — the service then loads the weights
+# at runtime from a mounted HF cache ($HF_HOME=/models) using a runtime HF_TOKEN.
 ARG HF_TOKEN
-RUN python3 -c "from pyannote.audio import Pipeline; \
-    Pipeline.from_pretrained('pyannote/speaker-diarization-community-1', use_auth_token='${HF_TOKEN}')"
+ARG BAKE_WEIGHTS=true
+RUN if [ "$BAKE_WEIGHTS" = "true" ]; then \
+      python3 -c "from pyannote.audio import Pipeline; \
+        Pipeline.from_pretrained('pyannote/speaker-diarization-community-1', use_auth_token='${HF_TOKEN}')"; \
+    else \
+      echo "BAKE_WEIGHTS=false — skipping build-time model download (weights expected at runtime via mounted /models)"; \
+    fi
 
 EXPOSE 5000
 
