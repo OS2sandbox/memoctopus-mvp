@@ -52,6 +52,34 @@ build fetches the pyannote weights. The `hf-cache` volume makes later restarts f
 > Tip: export `COMPOSE_FILE=docker-compose.yml:docker-compose.ai.yml` once and then
 > plain `docker compose up -d` / `logs` / `ps` always include the overlay.
 
+### Test the small stack locally against the GPU server
+
+Run the small stack on your laptop while transcription/diarization/OpenAI run
+remotely — all chosen via env. In `.env`:
+
+```bash
+HVISKE_URL=http://<GPU-HOST>:40093/v1     # hviske is published publicly
+HVISKE_API_KEY=<key>
+OPENAI_API_KEY=<key>
+# diarization is bound to 127.0.0.1:5000 on the box → reach it through an SSH
+# tunnel on the host; the app container hits it via host.docker.internal:
+DIARIZATION_URL=http://host.docker.internal:5001
+DIARIZATION_API_KEY=<key>
+```
+
+Open the tunnel (leave it running). Use a **local port other than 5000 on macOS**
+— AirPlay Receiver squats :5000; we use :5001. Bind `0.0.0.0` so the container can
+reach it via `host.docker.internal`:
+
+```bash
+ssh -p <ssh-port> -N -L 0.0.0.0:5001:localhost:5000 <user>@<GPU-HOST>
+docker compose up -d        # app on http://localhost:8080
+```
+
+The `app` service already declares `extra_hosts: host.docker.internal:host-gateway`
+so this works on Linux hosts too (automatic on Docker Desktop). Verify:
+`docker compose exec app wget -qO- http://host.docker.internal:5001/health`.
+
 ## Reusing pre-downloaded model weights
 
 By default hviske downloads its (public) model into a named volume on first boot,
