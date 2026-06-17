@@ -67,18 +67,28 @@ DIARIZATION_URL=http://host.docker.internal:5001
 DIARIZATION_API_KEY=<key>
 ```
 
-Open the tunnel (leave it running). Use a **local port other than 5000 on macOS**
-— AirPlay Receiver squats :5000; we use :5001. Bind `0.0.0.0` so the container can
-reach it via `host.docker.internal`:
+**Automatic tunnel (recommended)** — merge the tunnel overlay and set
+`DIARIZATION_SSH`; a sidecar opens and maintains the SSH tunnel as part of the
+stack, and the overlay points the app at it (`http://diar-tunnel:5000`). No manual
+`ssh -L`, no host port (so no macOS AirPlay :5000 clash), works on Linux too:
+
+```bash
+# in .env:  DIARIZATION_SSH=-p 40419 root@<GPU-HOST>
+docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d
+```
+The sidecar authenticates with a key from `~/.ssh` (override via `SSH_DIR`);
+passphrase-protected keys need an ssh-agent (see `docker-compose.tunnel.yml`).
+Verify: `docker compose ... ps` shows `diar-tunnel` healthy.
+
+**Manual tunnel (alternative)** — if you'd rather not run the sidecar, open the
+tunnel yourself and set `DIARIZATION_URL=http://host.docker.internal:5001` (use a
+local port other than 5000 on macOS — AirPlay squats it; the `app` service
+declares `extra_hosts: host.docker.internal:host-gateway` so this works on Linux):
 
 ```bash
 ssh -p <ssh-port> -N -L 0.0.0.0:5001:localhost:5000 <user>@<GPU-HOST>
-docker compose up -d        # app on http://localhost:8080
+docker compose up -d
 ```
-
-The `app` service already declares `extra_hosts: host.docker.internal:host-gateway`
-so this works on Linux hosts too (automatic on Docker Desktop). Verify:
-`docker compose exec app wget -qO- http://host.docker.internal:5001/health`.
 
 ## Reusing pre-downloaded model weights
 
