@@ -1,0 +1,39 @@
+import { betterAuth } from "better-auth";
+import { Pool } from "pg";
+
+export const auth = betterAuth({
+  database: new Pool({
+    connectionString: process.env["DATABASE_URL"],
+  }),
+  secret:
+    process.env["BETTER_AUTH_SECRET"] || "fallback-secret-key-for-development",
+  baseURL: process.env["BETTER_AUTH_URL"] || "http://localhost:3000",
+  trustedOrigins: [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://10.1.3.10:6767",
+    "https://pedro.sikkerai.dk",
+    "http://taletiltekst.syddjurs.dk",
+    "https://taletiltekst.syddjurs.dk",
+  ],
+  emailAndPassword: {
+    enabled: true,
+    requireEmailVerification: false,
+    minPasswordLength: 8,
+  },
+  socialProviders:
+    process.env["MICROSOFT_CLIENT_ID"] && process.env["MICROSOFT_CLIENT_SECRET"]
+      ? {
+          microsoft: {
+            clientId: process.env["MICROSOFT_CLIENT_ID"] as string,
+            clientSecret: process.env["MICROSOFT_CLIENT_SECRET"] as string,
+            tenantId: process.env["MICROSOFT_TENANT_ID"] || "common",
+            prompt: "select_account",
+          },
+        }
+      : {},
+  session: {
+    expiresIn: 86_400 * 7, // 7 days
+    updateAge: 86_400, // 1 day
+  },
+});

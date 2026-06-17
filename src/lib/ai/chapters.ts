@@ -3,9 +3,13 @@ import { TranscriptSegment } from '@/types';
 
 let client: OpenAI | null = null;
 function getClient() {
-  if (!client) client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+  if (!client) client = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY || 'no-key',
+    baseURL: process.env.LLM_BASE_URL || 'http://vllm-chat:8000/v1',
+  });
   return client;
 }
+const LLM_MODEL = process.env.LLM_MODEL || 'Qwen/Qwen3.6-27B';
 
 export interface TranscriptChapter {
   id: string;
@@ -34,7 +38,7 @@ export async function groupIntoChapters(segments: TranscriptSegment[]): Promise<
     .join('\n');
 
   const response = await getClient().chat.completions.create({
-    model: 'gpt-4o',
+    model: LLM_MODEL,
     messages: [
       {
         role: 'user',
