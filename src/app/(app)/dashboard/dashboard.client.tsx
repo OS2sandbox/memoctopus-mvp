@@ -28,6 +28,9 @@ export default function OptaqPage() {
   function handleKeyDown(e: KeyboardEvent) {
     const tag = (e.target as HTMLElement).tagName;
     if (/input|textarea/i.test(tag)) return;
+    // Ignore browser/OS shortcuts so a hard refresh (Cmd/Ctrl+Shift+R) isn't read
+    // as the "R = record" shortcut and dropped into a recording.
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === 'r' || e.key === 'R') { e.preventDefault(); startRecording(); }
     if (e.key === 'u' || e.key === 'U') document.getElementById('upload-input')?.click();
   }
