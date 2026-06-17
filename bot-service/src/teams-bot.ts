@@ -402,9 +402,13 @@ export class TeamsMeetingBot {
 
     console.log('[bot] navigating to', this.config.meetingUrl);
     await page.goto(this.config.meetingUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    // No fixed selector wait here — the prejoin readiness poll below already waits
-    // for the controls efficiently (300ms ticks). The old waitForSelector cost up
-    // to 8 s on the heavier web client (it timed out before readiness even ran).
+    // Let Teams render/redirect to a real prejoin (or the launcher) before we act,
+    // so we don't click a half-rendered button. Resolves as soon as a button
+    // appears; only costs the full timeout on the heaviest loads.
+    await page.waitForSelector(
+      'button:has-text("Continue on this browser"), button[data-tid="prejoin-join-button"], button[aria-label="Join now"]',
+      { timeout: 8000 },
+    ).catch(() => {});
     // The /meet/<id> URL redirects (to teams.live.com/light-meetings/launch for
     // anonymous web join), and that SPA can navigate again as it boots. Let the
     // redirect settle, and never let an early read crash the join — page.title()
@@ -426,9 +430,15 @@ export class TeamsMeetingBot {
     ];
     for (const sel of continueSelectors) {
       const btn = page.locator(sel).first();
-      if (await btn.isVisible({ timeout: 5000 }).catch(() => false)) {
+      if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
         console.log('[bot] clicking continue selector:', sel);
-        await btn.click();
+        // Never let this hang: on the launcher the button can be unstable while
+        // the page boots, so a plain click() waits the full 30s actionability
+        // timeout and kills the join. Cap it and force-click as a fallback; the
+        // readiness poll re-clicks too if this didn't take.
+        await btn.click({ timeout: 4000 }).catch(() =>
+          btn.click({ force: true, timeout: 2000 }).catch(() => {}),
+        );
         break;
       }
     }
@@ -728,7 +738,11 @@ export class TeamsMeetingBot {
       if (continueClicks < MAX_CONTINUE_RECLICKS && await continueBtn.isVisible().catch(() => false)) {
         continueClicks++;
         console.log(`[bot] re-clicking Continue on this browser (attempt ${continueClicks})`);
-        await continueBtn.click().catch(() => {});
+        // Capped click so a stalling launcher button doesn't burn the full 30s
+        // actionability timeout inside the readiness loop.
+        await continueBtn.click({ timeout: 4000 }).catch(() =>
+          continueBtn.click({ force: true, timeout: 2000 }).catch(() => {}),
+        );
         await page.waitForTimeout(800);
         continue;
       }
