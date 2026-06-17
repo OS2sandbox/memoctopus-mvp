@@ -183,6 +183,11 @@ export function TranscriptReview({
 }: TranscriptReviewProps) {
   const isMobile = useIsMobile();
   const [segments, setSegments] = useState(initialSegments);
+  // Latest segments + a debounce timer for autosaving transcript text edits.
+  // Held in refs so the debounced save and the leave handler see the freshest text.
+  const segmentsRef = useRef(segments);
+  const segSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => { segmentsRef.current = segments; }, [segments]);
   // Speaker diarization is still running when true: the review screen shows an
   // uncertainty state for speaker labels instead of the placeholder 'Taler 1'.
   const [diarizing, setDiarizing] = useState(initialDiarizing);
@@ -233,7 +238,9 @@ export function TranscriptReview({
     const refresh = async () => {
       const fresh = await getTranscript(meetingId);
       if (cancelled || !fresh) return;
-      if (fresh.segments?.length) setSegments(fresh.segments);
+      // Don't overwrite local text edits that haven't been autosaved yet — the
+      // user's in-progress edit wins over a background diarization patch.
+      if (fresh.segments?.length && !segSaveTimer.current) setSegments(fresh.segments);
       setDiarizing(fresh.diarizationStatus === 'pending');
     };
     const init = async () => {
@@ -540,9 +547,22 @@ export function TranscriptReview({
     [segments],
   );
 
+  // Persist the current (edited) transcript to storage. Used by the debounced
+  // autosave below and flushed on leave so text edits survive reloads/navigation.
+  const persistSegments = useCallback(async () => {
+    if (segSaveTimer.current) { clearTimeout(segSaveTimer.current); segSaveTimer.current = null; }
+    try { await saveTranscriptSegments(meetingId, segmentsRef.current); } catch { /* ignore */ }
+  }, [meetingId]);
+
   const handleSegmentUpdate = useCallback((index: number, updated: TranscriptSegment) => {
     setSegments((prev) => prev.map((s, i) => (i === index ? updated : s)));
-  }, []);
+    // Autosave the text edit (debounced — the textarea fires per keystroke).
+    if (segSaveTimer.current) clearTimeout(segSaveTimer.current);
+    segSaveTimer.current = setTimeout(() => void persistSegments(), 800);
+  }, [persistSegments]);
+
+  // Flush any pending transcript edit when leaving so nothing is lost.
+  useEffect(() => () => { void persistSegments(); }, [persistSegments]);
 
   // Drop a name from the "talte ikke" set (no-op if absent). Stable — shared by the
   // assign/unlink/remove handlers.
