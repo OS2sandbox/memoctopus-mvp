@@ -73,10 +73,13 @@ const MAX_CONTINUE_RECLICKS = 2;
 // Admission polling loop tuning (_waitForAdmission). Each threshold below was a
 // regression fix — tune deliberately, not by feel.
 const ADMISSION_TIMEOUT_MS = 300_000;
-const ADMISSION_TICK_MS = 2_000;
-const ADMISSION_CONFIRM_TICKS = 2;   // consecutive enabled-Leave ticks before "admitted"
-const ERROR_CONFIRM_TICKS = 2;       // consecutive error-page ticks before clicking Rejoin
-const LOBBY_GONE_TICKS = 3;          // consecutive lobby-absent ticks before assume-admitted
+// Poll fast (500ms) so admission is detected ~quickly after the host lets the bot
+// in, instead of up to 2s of dead time per tick. The *_TICKS counts are scaled up
+// to keep roughly the same wall-clock debounce the regression fixes relied on.
+const ADMISSION_TICK_MS = 500;
+const ADMISSION_CONFIRM_TICKS = 2;   // consecutive enabled-Leave ticks before "admitted" (~1s)
+const ERROR_CONFIRM_TICKS = 3;       // consecutive error-page ticks before clicking Rejoin (~1.5s)
+const LOBBY_GONE_TICKS = 6;          // consecutive lobby-absent ticks before assume-admitted (~3s)
 const MAX_REJOIN_ATTEMPTS = 3;       // Rejoin-call clicks before giving up
 
 export class TeamsMeetingBot {
@@ -106,16 +109,23 @@ export class TeamsMeetingBot {
   private buttonCount = -1;
   private leaveDetector: LeaveDetectorState = newLeaveDetectorState();
   private onEndedCallback: (() => void) | null = null;
+  // Wall-clock start of the join, for timing instrumentation (see sinceStart()).
+  private startTs = 0;
 
   constructor(config: BotSessionConfig) {
     this.config = config;
     this.userDataDir = path.join(os.tmpdir(), `bot-${config.meetingId}-${Date.now()}`);
   }
 
+  private sinceStart(): number { return Date.now() - this.startTs; }
+
   async start(): Promise<void> {
+    this.startTs = Date.now();
     try {
       await this._launch();
+      console.log(`[timing] browser launched +${this.sinceStart()}ms`);
       await this._joinMeeting();
+      console.log(`[timing] in meeting (capture starting) +${this.sinceStart()}ms`);
       this.status = 'recording';
       this._startElapsedTimer();
       this._startParticipantPolling();
@@ -405,6 +415,7 @@ export class TeamsMeetingBot {
     await snap('01-landed');
     const landedTitle = await page.title().catch(() => '(navigating)');
     console.log('[bot] landed, url=', page.url(), 'title=', landedTitle);
+    console.log(`[timing] prejoin page loaded +${this.sinceStart()}ms`);
 
     // Click "Continue on this browser"
     const continueSelectors = [
@@ -429,6 +440,7 @@ export class TeamsMeetingBot {
     // the "Continue without audio or video" modal appears intermittently and
     // LATE (after prejoin boot), and when missed it blocks Join now forever.
     await this._waitForPreJoinReadiness(PREJOIN_READINESS_TIMEOUT_MS);
+    console.log(`[timing] prejoin interactive +${this.sinceStart()}ms`);
     await snap('02-prejoin');
 
     // Turn off camera and mute mic as early as possible on the prejoin screen —
@@ -476,7 +488,7 @@ export class TeamsMeetingBot {
       console.log('[bot] filling name:', this.config.botName);
       await nameInput.fill('');
       await nameInput.fill(this.config.botName);
-      await page.waitForTimeout(300);
+      await page.waitForTimeout(100);
     } else {
       console.log('[bot] name input not found');
     }
@@ -510,7 +522,7 @@ export class TeamsMeetingBot {
         }
       }
       await computerAudioRadio.click({ timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(200);
+      await page.waitForTimeout(50);
       console.log('[bot] selected Computer audio');
     } else {
       console.log('[bot] computer audio radio not visible — continuing with defaults');
@@ -582,6 +594,7 @@ export class TeamsMeetingBot {
       }
       throw new Error('Could not find join button');
     }
+    console.log(`[timing] join now clicked +${this.sinceStart()}ms`);
     // Wait for the lobby/meeting UI to appear rather than sleeping a fixed 4 s.
     await page.waitForSelector(
       `${LEAVE_BTN}, [data-tid="lobby-section"], [aria-label="Lobby"]`,
@@ -856,6 +869,7 @@ export class TeamsMeetingBot {
         admittedTicks++;
         if (admittedTicks >= ADMISSION_CONFIRM_TICKS) {
           console.log(`[bot] admitted — enabled Leave button on ${ADMISSION_CONFIRM_TICKS} consecutive ticks, url=`, page.url());
+          console.log(`[timing] admitted +${this.sinceStart()}ms`);
           return 'admitted';
         }
       } else {
