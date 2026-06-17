@@ -56,7 +56,7 @@ A Next.js 15 App Router application using the `(app)` route group for authentica
 
 **AI pipeline** (after a meeting is recorded):
 1. `src/lib/ai/transcription.ts` — STT via the hviske (`syvai/hviske-v5.1`) server's OpenAI-compatible API. Used for both the per-utterance live path (`/api/meetings/[id]/utterance`) and the batch transcribe pass. Configured via `HVISKE_URL` / `HVISKE_API_KEY`.
-2. `src/lib/ai/pii.ts` — PII detection and replacement using Anthropic SDK.
+2. `src/lib/ai/pii.ts` — PII detection and replacement using OpenAI `gpt-4o`.
 3. `src/lib/ai/chapters.ts` — Chapter/topic segmentation using OpenAI.
 4. `src/lib/ai/minutes.ts` — Meeting minutes generation using OpenAI `gpt-4o`. Prompts are in Danish.
 5. `src/lib/ai/clarifications.ts` — Generates clarification questions about ambiguous content.
@@ -91,8 +91,7 @@ Bot-service authenticates all requests from the Next.js app via `Authorization: 
 | `HVISKE_API_KEY` | Bearer key for the hviske STT server |
 | `HVISKE_MODEL` | hviske model id (default `syvai/hviske-v5.1`) |
 | `ASR_LANGUAGE` | Transcription language (default `da`) |
-| `OPENAI_API_KEY` | Chapters, minutes, clarifications generation |
-| `ANTHROPIC_API_KEY` | PII detection |
+| `OPENAI_API_KEY` | Chapters, minutes, clarifications generation, and PII detection |
 | `AUDIO_STORAGE_PATH` | Filesystem path for audio files |
 
 ## Testing conventions
