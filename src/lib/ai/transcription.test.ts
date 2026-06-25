@@ -8,7 +8,7 @@ vi.mock('openai', () => ({
   },
 }));
 
-import { HviskeProvider, getTranscriptionProvider, setTranscriptionProvider, isEnsembleDiarization } from './transcription';
+import { HviskeProvider, getTranscriptionProvider, setTranscriptionProvider, isEnsembleDiarization, hviskeBaseURL } from './transcription';
 
 // ─── HviskeProvider.transcribe ────────────────────────────────────────────────
 
@@ -291,19 +291,75 @@ describe('HviskeProvider.transcribeEnsemble', () => {
   });
 });
 
-describe('isEnsembleDiarization', () => {
+describe('backend selection (local vs hosted, mirrors the LLM selector)', () => {
   const ENV = process.env;
+
+  beforeEach(() => {
+    process.env = { ...ENV };
+    delete process.env.HVISKE_URL;
+    delete process.env.HVISKE_API_KEY;
+    delete process.env.HVISKE_MODEL;
+    delete process.env.HVISKE_DIARIZE;
+    mockTranscriptionsCreate.mockReset().mockResolvedValue({ text: 'x' });
+  });
   afterEach(() => { process.env = ENV; });
 
-  it('is true only when HVISKE_DIARIZE=true (case-insensitive)', () => {
-    process.env = { ...ENV, HVISKE_DIARIZE: 'true' };
-    expect(isEnsembleDiarization()).toBe(true);
-    process.env = { ...ENV, HVISKE_DIARIZE: 'TRUE' };
-    expect(isEnsembleDiarization()).toBe(true);
-    process.env = { ...ENV, HVISKE_DIARIZE: 'false' };
-    expect(isEnsembleDiarization()).toBe(false);
-    process.env = { ...ENV };
-    delete process.env.HVISKE_DIARIZE;
-    expect(isEnsembleDiarization()).toBe(false);
+  describe('hviskeBaseURL', () => {
+    it('defaults to the self-hosted vLLM ASR when no key/URL is configured', () => {
+      expect(hviskeBaseURL()).toBe('http://vllm-asr:8000/v1');
+    });
+    it('uses the hosted syv.ai platform when an API key is set', () => {
+      process.env.HVISKE_API_KEY = 'hv_x';
+      expect(hviskeBaseURL()).toBe('https://platform.syv.ai/v1');
+    });
+    it('honours an explicit HVISKE_URL (trailing slash trimmed)', () => {
+      process.env.HVISKE_URL = 'http://my-stt:8000/v1/';
+      expect(hviskeBaseURL()).toBe('http://my-stt:8000/v1');
+    });
+  });
+
+  describe('model selection', () => {
+    async function modelOf(): Promise<string> {
+      mockTranscriptionsCreate.mockClear();
+      await new HviskeProvider().transcribe(Buffer.from('a'), 'audio/wav');
+      return mockTranscriptionsCreate.mock.calls[0][0].model;
+    }
+    it('defaults to the self-hosted hviske-ensemble when no key is set', async () => {
+      expect(await modelOf()).toBe('syvai/hviske-ensemble');
+    });
+    it('uses syv-transcribe on the hosted syv.ai platform', async () => {
+      process.env.HVISKE_API_KEY = 'hv_x';
+      expect(await modelOf()).toBe('syv-transcribe');
+    });
+    it('HVISKE_MODEL overrides the default', async () => {
+      process.env.HVISKE_MODEL = 'custom-asr';
+      expect(await modelOf()).toBe('custom-asr');
+    });
+  });
+
+  describe('isEnsembleDiarization (inline diarization auto-detection)', () => {
+    it('auto-enables on the hosted syv.ai platform (key set, no URL)', () => {
+      process.env.HVISKE_API_KEY = 'hv_x';
+      expect(isEnsembleDiarization()).toBe(true);
+    });
+    it('auto-disables for the self-hosted default (no key)', () => {
+      expect(isEnsembleDiarization()).toBe(false);
+    });
+    it('auto-disables for an explicit self-hosted HVISKE_URL', () => {
+      process.env.HVISKE_URL = 'http://hviske:8000/v1';
+      expect(isEnsembleDiarization()).toBe(false);
+    });
+    it('auto-enables for an explicit platform.syv.ai HVISKE_URL', () => {
+      process.env.HVISKE_URL = 'https://platform.syv.ai/v1';
+      expect(isEnsembleDiarization()).toBe(true);
+    });
+    it('HVISKE_DIARIZE overrides the auto-detection (case-insensitive)', () => {
+      process.env.HVISKE_API_KEY = 'hv_x'; // would auto-enable
+      process.env.HVISKE_DIARIZE = 'FALSE';
+      expect(isEnsembleDiarization()).toBe(false);
+      delete process.env.HVISKE_API_KEY; // would auto-disable
+      process.env.HVISKE_DIARIZE = 'true';
+      expect(isEnsembleDiarization()).toBe(true);
+    });
   });
 });

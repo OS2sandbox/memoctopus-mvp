@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { mimeTypeToExt } from './mime';
 import { decodeToMono16k, encodeMono16kWav } from '@/lib/audio/decode-server';
-import { isEnsembleDiarization } from './transcription';
+import { isEnsembleDiarization, hviskeBaseURL } from './transcription';
 
 // ─── Interface ────────────────────────────────────────────────────────────────
 // Speaker diarization runs as a separate acoustic pass over the full recording.
@@ -34,9 +34,10 @@ export class PyannoteProvider implements DiarizationProvider {
   constructor() {
     // `||` not `??`: a blank DIARIZATION_URL (empty string from a deploy .env) must
     // fall back to the derived default rather than yield an empty baseURL. The
-    // fallback strips a trailing `/v1` from the hviske origin because /diarize lives
-    // at the server root, not under the OpenAI-compatible /v1 prefix.
-    const hviskeOrigin = (process.env.HVISKE_URL || 'http://109.173.238.203:40093/v1').replace(/\/v1\/?$/, '');
+    // fallback strips a trailing `/v1` from the resolved STT origin (the co-hosted
+    // hviske /diarize lives at the server root, not under the /v1 prefix) so it
+    // follows the same local-vs-hosted selection as transcription.
+    const hviskeOrigin = hviskeBaseURL().replace(/\/v1\/?$/, '');
     this.baseURL = (process.env.DIARIZATION_URL || hviskeOrigin).replace(/\/$/, '');
     this.apiKey = process.env.DIARIZATION_API_KEY;
   }

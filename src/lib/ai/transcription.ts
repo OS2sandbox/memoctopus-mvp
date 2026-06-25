@@ -9,13 +9,48 @@ export interface TranscriptionProvider {
   transcribe(audioBuffer: Buffer, mimeType: string, durationSeconds?: number): Promise<TranscriptSegment[]>;
 }
 
-// Whether the transcription server is an *ensemble* endpoint that returns
-// diarization + real segment timestamps inline (one call: text + speaker + start/end),
-// e.g. platform.syv.ai with `diarize=true`. When true, the app skips both the VAD
-// batch fan-out and the separate diarization pass — transcribeEnsemble() returns
-// fully-labelled, timed segments directly. Toggled with HVISKE_DIARIZE=true.
+// ─── Backend selection ──────────────────────────────────────────────────────
+// Mirrors the chat-LLM selector (src/lib/ai/llm-client.ts). Precedence:
+//   1. HVISKE_URL set     → use it (any OpenAI-compatible STT endpoint), with HVISKE_MODEL
+//   2. HVISKE_API_KEY set → hosted syv.ai platform (syv-transcribe)
+//   3. neither            → self-hosted vLLM ASR (syvai/hviske-ensemble) at vllm-asr:8000
+// HVISKE_MODEL overrides the model id. So a deploy "just works" against the hosted
+// API the moment a key is supplied, and falls back to the self-hosted model otherwise.
+
+const SYVAI_BASE_URL = 'https://platform.syv.ai/v1';
+const LOCAL_ASR_BASE_URL = 'http://vllm-asr:8000/v1';
+const SYVAI_MODEL = 'syv-transcribe';
+const LOCAL_ASR_MODEL = 'syvai/hviske-ensemble';
+
+function hasHviskeKey(): boolean {
+  return !!process.env.HVISKE_API_KEY?.trim();
+}
+
+// Resolved STT endpoint: HVISKE_URL wins; else the hosted syv.ai API when a key is
+// configured; else the self-hosted vLLM ASR.
+export function hviskeBaseURL(): string {
+  const explicit = process.env.HVISKE_URL?.trim();
+  if (explicit) return explicit.replace(/\/+$/, '');
+  return hasHviskeKey() ? SYVAI_BASE_URL : LOCAL_ASR_BASE_URL;
+}
+
+// Resolved model id: HVISKE_MODEL wins; else syv-transcribe on the hosted syv.ai
+// platform, or the self-hosted hviske-ensemble for any other endpoint.
+function hviskeModel(): string {
+  return process.env.HVISKE_MODEL?.trim()
+    || (hviskeBaseURL().includes('platform.syv.ai') ? SYVAI_MODEL : LOCAL_ASR_MODEL);
+}
+
+// Whether the STT endpoint returns diarization + segment timestamps inline (one
+// call: text + speaker + start/end), so the app skips both the VAD fan-out and the
+// separate diarization pass. Only the hosted syv.ai platform supports this; the
+// self-hosted hviske transcribes only (and diarizes via the separate /diarize
+// service). HVISKE_DIARIZE=true|false overrides the auto-detection.
 export function isEnsembleDiarization(): boolean {
-  return (process.env.HVISKE_DIARIZE || 'false').toLowerCase() === 'true';
+  const explicit = process.env.HVISKE_DIARIZE?.trim().toLowerCase();
+  if (explicit === 'true') return true;
+  if (explicit === 'false') return false;
+  return hviskeBaseURL().includes('platform.syv.ai');
 }
 
 // Shape of a single segment in the verbose_json response (extra Whisper fields omitted).
@@ -43,11 +78,8 @@ export class HviskeProvider implements TranscriptionProvider {
   private apiKey: string;
 
   constructor() {
-    // `||` not `??`: an env var set to an empty string (e.g. a deploy .env that
-    // ships HVISKE_URL= blank) must fall back to the default, not produce an
-    // empty baseURL that fails every request opaquely.
     this.apiKey = process.env.HVISKE_API_KEY || 'no-key';
-    this.baseURL = (process.env.HVISKE_URL || 'http://109.173.238.203:40093/v1').replace(/\/$/, '');
+    this.baseURL = hviskeBaseURL();
     this.client = new OpenAI({
       apiKey: this.apiKey,
       baseURL: this.baseURL,
@@ -57,7 +89,7 @@ export class HviskeProvider implements TranscriptionProvider {
       // the first wave drains rather than amplifying an overloaded server.
       maxRetries: 0,
     });
-    this.model = process.env.HVISKE_MODEL ?? 'syvai/hviske-ensemble';
+    this.model = hviskeModel();
     this.language = process.env.ASR_LANGUAGE ?? 'da';
   }
 
