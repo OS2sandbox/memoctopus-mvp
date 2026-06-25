@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { mimeTypeToExt } from './mime';
 import { decodeToMono16k, encodeMono16kWav } from '@/lib/audio/decode-server';
+import { isEnsembleDiarization } from './transcription';
 
 // ─── Interface ────────────────────────────────────────────────────────────────
 // Speaker diarization runs as a separate acoustic pass over the full recording.
@@ -41,6 +42,11 @@ export class PyannoteProvider implements DiarizationProvider {
   }
 
   async diarize(audioBuffer: Buffer, mimeType: string): Promise<SpeakerTurn[]> {
+    // In ensemble mode the transcription endpoint already diarizes inline, so there
+    // is no separate /diarize service. Return [] (a no-op): callers merge [] onto
+    // their already-labelled segments, leaving the inline labels intact.
+    if (isEnsembleDiarization()) return [];
+
     // The pyannote service decodes only PCM WAV. Callers now send the original
     // compressed recording (small browser/bot upload — the win), so decode anything
     // that isn't already WAV to 16 kHz mono WAV here with ffmpeg before forwarding.

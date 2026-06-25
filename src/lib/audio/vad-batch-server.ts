@@ -1,4 +1,4 @@
-import { HviskeProvider } from '@/lib/ai/transcription';
+import { HviskeProvider, isEnsembleDiarization } from '@/lib/ai/transcription';
 import { energyVAD } from '@/lib/audio/vad-client';
 import {
   BATCH_DURATION_S,
@@ -20,6 +20,15 @@ let _provider: HviskeProvider | null = null;
 function getProvider() {
   if (!_provider) _provider = new HviskeProvider();
   return _provider;
+}
+
+export { isEnsembleDiarization };
+
+// Ensemble path: one call to the transcription server returns diarized, timestamped
+// segments — no VAD batching, no separate diarization pass. Used when
+// HVISKE_DIARIZE=true (platform.syv.ai). See HviskeProvider.transcribeEnsemble.
+export async function transcribeEnsemble(buffer: Buffer, mimeType: string): Promise<TranscriptSegment[]> {
+  return getProvider().transcribeEnsemble(buffer, mimeType);
 }
 
 // Mirror of the hallucination guard in /api/meetings/[id]/utterance.

@@ -1,4 +1,4 @@
-import { transcribeWithVadBatches } from '@/lib/audio/vad-batch-server';
+import { transcribeWithVadBatches, transcribeEnsemble, isEnsembleDiarization } from '@/lib/audio/vad-batch-server';
 import { getDiarizationProvider } from '@/lib/ai/diarization';
 import { assignSpeakers } from '@/lib/audio/merge-speakers';
 import { storePendingTranscript } from '@/lib/bot-pending-audio';
@@ -20,6 +20,15 @@ export async function processBotRecording(
 ): Promise<void> {
   const t0 = Date.now();
   try {
+    // Ensemble path: one call returns diarized, timestamped segments — no separate
+    // diarization pass to merge.
+    if (isEnsembleDiarization()) {
+      const segments = await transcribeEnsemble(buffer, mimeType);
+      await storePendingTranscript(meetingId, { status: 'ready', segments, diarized: true });
+      console.log(`[bot-transcribe] ${meetingId}: ${segments.length} ensemble segments in ${Date.now() - t0} ms`);
+      return;
+    }
+
     const [transcription, diarization] = await Promise.allSettled([
       transcribeWithVadBatches(buffer),
       getDiarizationProvider().diarize(buffer, mimeType),

@@ -10,10 +10,14 @@ vi.mock('@/lib/auth', () => ({
 
 const mockPrepare = vi.hoisted(() => vi.fn());
 const mockTranscribe = vi.hoisted(() => vi.fn());
+const mockEnsemble = vi.hoisted(() => vi.fn());
+const mockIsEnsemble = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock('@/lib/audio/vad-batch-server', () => ({
   prepareVadBatches: mockPrepare,
   transcribeVadBatches: mockTranscribe,
+  transcribeEnsemble: mockEnsemble,
+  isEnsembleDiarization: mockIsEnsemble,
 }));
 
 import { NextRequest } from 'next/server';
@@ -45,6 +49,8 @@ beforeEach(() => {
   mockGetSession.mockReset();
   mockPrepare.mockReset();
   mockTranscribe.mockReset();
+  mockEnsemble.mockReset();
+  mockIsEnsemble.mockReset().mockReturnValue(false);
 });
 
 describe('POST /api/meetings/[id]/transcribe-batches', () => {
@@ -111,5 +117,23 @@ describe('POST /api/meetings/[id]/transcribe-batches', () => {
     const events = await readEvents(res);
     expect(events[0]).toMatchObject({ type: 'meta', totalBatches: 0 });
     expect(events.at(-1)).toMatchObject({ type: 'done', segments: [] });
+  });
+
+  it('ensemble mode: emits diarized segments from one call, skipping VAD batching', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockIsEnsemble.mockReturnValue(true);
+    mockEnsemble.mockResolvedValueOnce([
+      { speaker: 'Taler 1', start: 0, end: 3, text: 'hej' },
+      { speaker: 'Taler 2', start: 3, end: 6, text: 'dav' },
+    ]);
+
+    const res = await POST(makeAudioRequest(5_000), PARAMS);
+    const events = await readEvents(res);
+
+    expect(mockEnsemble).toHaveBeenCalledOnce();
+    expect(mockPrepare).not.toHaveBeenCalled();
+    const done = events.at(-1) as Record<string, unknown>;
+    expect(done).toMatchObject({ type: 'done', diarized: true });
+    expect((done.segments as unknown[]).length).toBe(2);
   });
 });

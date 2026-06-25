@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockTranscriptionsCreate = vi.hoisted(() => vi.fn());
 
@@ -8,7 +8,7 @@ vi.mock('openai', () => ({
   },
 }));
 
-import { HviskeProvider, getTranscriptionProvider, setTranscriptionProvider } from './transcription';
+import { HviskeProvider, getTranscriptionProvider, setTranscriptionProvider, isEnsembleDiarization } from './transcription';
 
 // ─── HviskeProvider.transcribe ────────────────────────────────────────────────
 
@@ -208,5 +208,102 @@ describe('getTranscriptionProvider / setTranscriptionProvider', () => {
     setTranscriptionProvider(stub);
     expect(getTranscriptionProvider()).toBe(stub);
     setTranscriptionProvider(null as never); // reset
+  });
+});
+
+// ─── HviskeProvider.transcribeEnsemble (platform.syv.ai diarized path) ────────
+
+describe('HviskeProvider.transcribeEnsemble', () => {
+  const ENV = process.env;
+  let mockFetch: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    process.env = {
+      ...ENV,
+      HVISKE_URL: 'https://platform.syv.ai/v1',
+      HVISKE_API_KEY: 'hv_test',
+      HVISKE_MODEL: 'syv-transcribe',
+      ASR_LANGUAGE: 'da',
+    };
+    mockFetch = vi.fn();
+    vi.stubGlobal('fetch', mockFetch);
+  });
+
+  afterEach(() => {
+    process.env = ENV;
+    vi.unstubAllGlobals();
+  });
+
+  const ok = (body: unknown): Response =>
+    ({ ok: true, status: 200, json: async () => body }) as Response;
+
+  it('maps verbose_json segments to labelled, timed TranscriptSegments', async () => {
+    mockFetch.mockResolvedValueOnce(ok({
+      speakers: 2,
+      segments: [
+        { start: 0, end: 3, text: ' Hej', speaker: 0 },
+        { start: 3, end: 6, text: 'med dig ', speaker: 1 },
+      ],
+    }));
+
+    const segs = await new HviskeProvider().transcribeEnsemble(Buffer.from('a'), 'audio/webm');
+
+    expect(segs).toEqual([
+      { speaker: 'Taler 1', start: 0, end: 3, text: 'Hej' },
+      { speaker: 'Taler 2', start: 3, end: 6, text: 'med dig' },
+    ]);
+  });
+
+  it('POSTs diarize=true + verbose_json with bearer auth to <base>/audio/transcriptions', async () => {
+    mockFetch.mockResolvedValueOnce(ok({ segments: [] }));
+
+    await new HviskeProvider().transcribeEnsemble(Buffer.from('a'), 'audio/wav');
+
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe('https://platform.syv.ai/v1/audio/transcriptions');
+    expect(init.method).toBe('POST');
+    expect(init.headers.Authorization).toBe('Bearer hv_test');
+    const form = init.body as FormData;
+    expect(form.get('diarize')).toBe('true');
+    expect(form.get('response_format')).toBe('verbose_json');
+    expect(form.get('model')).toBe('syv-transcribe');
+    expect(form.get('language')).toBe('da');
+  });
+
+  it('drops empty-text segments and defaults a missing speaker to Taler 1', async () => {
+    mockFetch.mockResolvedValueOnce(ok({
+      segments: [
+        { start: 0, end: 1, text: '   ', speaker: 0 },
+        { start: 1, end: 2, text: 'noget', speaker: null },
+      ],
+    }));
+
+    const segs = await new HviskeProvider().transcribeEnsemble(Buffer.from('a'), 'audio/wav');
+
+    expect(segs).toEqual([{ speaker: 'Taler 1', start: 1, end: 2, text: 'noget' }]);
+  });
+
+  it('throws when the server responds non-ok', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) } as Response);
+    await expect(
+      new HviskeProvider().transcribeEnsemble(Buffer.from('a'), 'audio/wav'),
+    ).rejects.toThrow('500');
+  });
+});
+
+describe('isEnsembleDiarization', () => {
+  const ENV = process.env;
+  afterEach(() => { process.env = ENV; });
+
+  it('is true only when HVISKE_DIARIZE=true (case-insensitive)', () => {
+    process.env = { ...ENV, HVISKE_DIARIZE: 'true' };
+    expect(isEnsembleDiarization()).toBe(true);
+    process.env = { ...ENV, HVISKE_DIARIZE: 'TRUE' };
+    expect(isEnsembleDiarization()).toBe(true);
+    process.env = { ...ENV, HVISKE_DIARIZE: 'false' };
+    expect(isEnsembleDiarization()).toBe(false);
+    process.env = { ...ENV };
+    delete process.env.HVISKE_DIARIZE;
+    expect(isEnsembleDiarization()).toBe(false);
   });
 });

@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import { TranscriptSegment } from '@/types';
 import { mimeTypeToExt } from './mime';
-import { DEFAULT_SPEAKER_LABEL } from '@/lib/audio/speaker-labels';
+import { DEFAULT_SPEAKER_LABEL, speakerLabel } from '@/lib/audio/speaker-labels';
 
 // ─── Interface ────────────────────────────────────────────────────────────────
 
@@ -9,24 +9,48 @@ export interface TranscriptionProvider {
   transcribe(audioBuffer: Buffer, mimeType: string, durationSeconds?: number): Promise<TranscriptSegment[]>;
 }
 
+// Whether the transcription server is an *ensemble* endpoint that returns
+// diarization + real segment timestamps inline (one call: text + speaker + start/end),
+// e.g. platform.syv.ai with `diarize=true`. When true, the app skips both the VAD
+// batch fan-out and the separate diarization pass — transcribeEnsemble() returns
+// fully-labelled, timed segments directly. Toggled with HVISKE_DIARIZE=true.
+export function isEnsembleDiarization(): boolean {
+  return (process.env.HVISKE_DIARIZE || 'false').toLowerCase() === 'true';
+}
+
+// Shape of a single segment in the verbose_json response (extra Whisper fields omitted).
+interface VerboseSegment {
+  start?: number;
+  end?: number;
+  text?: string;
+  speaker?: number | null;
+}
+
 // ─── Hviske implementation ────────────────────────────────────────────────────
 // Hviske (syvai) is the only transcription provider. Talks to the server via its
-// OpenAI-compatible /v1/audio/transcriptions endpoint. Two modes:
-//   transcribe()    — full batch call, returns timed TranscriptSegment[]
-//   transcribeRaw() — lightweight call, returns plain text (for per-utterance live path)
+// OpenAI-compatible /v1/audio/transcriptions endpoint. Modes:
+//   transcribe()         — full batch call, returns timed TranscriptSegment[]
+//   transcribeRaw()      — lightweight call, returns plain text (per-utterance live path)
+//   transcribeEnsemble() — one call returning diarized, timestamped segments (platform.syv.ai)
 
 export class HviskeProvider implements TranscriptionProvider {
   private client: OpenAI;
   private model: string;
   private language: string;
+  // Kept alongside the OpenAI client because transcribeEnsemble() bypasses the SDK
+  // (the `diarize` form field is a non-OpenAI extension the SDK won't pass through).
+  private baseURL: string;
+  private apiKey: string;
 
   constructor() {
+    // `||` not `??`: an env var set to an empty string (e.g. a deploy .env that
+    // ships HVISKE_URL= blank) must fall back to the default, not produce an
+    // empty baseURL that fails every request opaquely.
+    this.apiKey = process.env.HVISKE_API_KEY || 'no-key';
+    this.baseURL = (process.env.HVISKE_URL || 'http://109.173.238.203:40093/v1').replace(/\/$/, '');
     this.client = new OpenAI({
-      // `||` not `??`: an env var set to an empty string (e.g. a deploy .env that
-      // ships HVISKE_URL= blank) must fall back to the default, not produce an
-      // empty baseURL that fails every request opaquely.
-      apiKey: process.env.HVISKE_API_KEY || 'no-key',
-      baseURL: process.env.HVISKE_URL || 'http://109.173.238.203:40093/v1',
+      apiKey: this.apiKey,
+      baseURL: this.baseURL,
       // No SDK auto-retries: a retried batch re-uploads ~1 MB of WAV and triples the
       // worst-case lane occupancy under full fan-out. Retries happen at the
       // application level instead (see vad-batch-server.ts), where they run AFTER
@@ -35,6 +59,47 @@ export class HviskeProvider implements TranscriptionProvider {
     });
     this.model = process.env.HVISKE_MODEL ?? 'syvai/hviske-ensemble';
     this.language = process.env.ASR_LANGUAGE ?? 'da';
+  }
+
+  // One-shot diarized transcription: POSTs the whole recording to the ensemble
+  // endpoint with diarize=true + verbose_json and maps the response straight to
+  // labelled, timed TranscriptSegment[]. No VAD batching, no separate diarization
+  // pass — the server does both. Speaker is a 0-indexed integer → 'Taler N'.
+  async transcribeEnsemble(audioBuffer: Buffer, mimeType: string): Promise<TranscriptSegment[]> {
+    const ext = mimeTypeToExt(mimeType);
+    const file = new File([new Uint8Array(audioBuffer)], `audio.${ext}`, { type: mimeType });
+    const form = new FormData();
+    form.append('file', file);
+    form.append('model', this.model);
+    form.append('language', this.language);
+    form.append('response_format', 'verbose_json');
+    form.append('diarize', 'true');
+    form.append('temperature', '0');
+
+    const res = await fetch(`${this.baseURL}/audio/transcriptions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.apiKey}` },
+      body: form,
+      // Generous: a full-length meeting is one call here (the server fans out
+      // internally), so this covers worst-case long recordings.
+      signal: AbortSignal.timeout(600_000),
+    });
+    if (!res.ok) {
+      throw new Error(`Transcription server returned ${res.status}`);
+    }
+
+    const data = (await res.json()) as { segments?: VerboseSegment[] };
+    const segments = Array.isArray(data.segments) ? data.segments : [];
+    return segments
+      .map((seg): TranscriptSegment => ({
+        // speaker is 0-indexed; speakerLabel is 1-indexed. Missing speaker (a
+        // segment the diarizer couldn't place) falls back to the first speaker.
+        speaker: typeof seg.speaker === 'number' ? speakerLabel(seg.speaker + 1) : DEFAULT_SPEAKER_LABEL,
+        start: seg.start ?? 0,
+        end: seg.end ?? seg.start ?? 0,
+        text: (seg.text ?? '').trim(),
+      }))
+      .filter((s) => s.text.length > 0);
   }
 
   async transcribe(audioBuffer: Buffer, mimeType: string, durationSeconds?: number): Promise<TranscriptSegment[]> {

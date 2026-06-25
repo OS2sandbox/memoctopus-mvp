@@ -83,6 +83,14 @@ describe('PyannoteProvider.diarize', () => {
     expect(mockFetch.mock.calls[0][1].headers).toBeUndefined();
   });
 
+  it('no-ops to [] without fetching when ensemble mode (HVISKE_DIARIZE=true) is on', async () => {
+    process.env.HVISKE_DIARIZE = 'true';
+    const result = await new PyannoteProvider().diarize(buf, 'audio/webm');
+    expect(result).toEqual([]);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockDecode).not.toHaveBeenCalled();
+  });
+
   it('returns [] when the response body has no turns array', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({}));
     expect(await new PyannoteProvider().diarize(buf, 'audio/wav')).toEqual([]);
