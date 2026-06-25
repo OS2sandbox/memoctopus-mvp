@@ -1,4 +1,5 @@
-import { openDB, DBSchema } from 'idb';
+import { openDB, deleteDB, DBSchema } from 'idb';
+import { getStorageUserId, waitForStorageUserId } from './scope';
 import type { TranscriptSegment, PiiReplacement, MinutesContent, MeetingStatus } from '@/types';
 import type { TranscriptChapter } from '@/lib/ai/chapters';
 
@@ -33,9 +34,11 @@ export interface StoredTranscript {
   // Speaker-diarization lifecycle. 'pending' means the transcript was saved with
   // default ('Taler 1') labels and an acoustic diarization pass is still running —
   // the review UI shows an uncertainty state instead of confident labels until it
-  // resolves to 'done'. Absent (legacy transcripts, or paths that arrive already
-  // diarized) is treated as 'done'.
-  diarizationStatus?: 'pending' | 'done';
+  // resolves to 'done'. 'failed' means the diarization service couldn't be reached
+  // (or errored), so labels stay default and the review UI tells the user automatic
+  // speaker recognition is unavailable. Absent (legacy transcripts, or paths that
+  // arrive already diarized) is treated as 'done'.
+  diarizationStatus?: 'pending' | 'done' | 'failed';
 }
 
 // A single referat version with a stable, human-facing number (`label`). Labels
@@ -90,10 +93,16 @@ interface ReferatDB extends DBSchema {
 }
 
 let dbPromise: ReturnType<typeof openDB<ReferatDB>> | null = null;
+let openName: string | null = null;
+let legacyCleaned = false;
 
-export function getDB() {
-  if (!dbPromise) {
-    dbPromise = openDB<ReferatDB>('referat-db', 1, {
+function openScopedDB(userId: string) {
+  const name = `referat-db-u-${userId}`;
+  // Reopen if the active user changed (a different user signed in this session) so
+  // we never serve one user's data from another's cached connection.
+  if (!dbPromise || openName !== name) {
+    openName = name;
+    dbPromise = openDB<ReferatDB>(name, 1, {
       upgrade(db) {
         db.createObjectStore('meetings', { keyPath: 'id' });
         const transcripts = db.createObjectStore('transcripts', { keyPath: 'id' });
@@ -103,6 +112,22 @@ export function getDB() {
         db.createObjectStore('audio', { keyPath: 'meetingId' });
       },
     });
+    // One-time: discard the legacy origin-scoped database that leaked across users.
+    // Its records can't be attributed to a single user, so they are not migrated.
+    if (!legacyCleaned) {
+      legacyCleaned = true;
+      void deleteDB('referat-db').catch(() => {});
+    }
   }
   return dbPromise;
+}
+
+// Returns the IndexedDB connection for the ACTIVE user. The database is namespaced
+// by user id (see ./scope) so users sharing a browser never see each other's data.
+// If the scope isn't set yet (a storage call raced ahead of <StorageScope> on first
+// mount), it waits for it rather than opening an unscoped database.
+export function getDB() {
+  const userId = getStorageUserId();
+  if (userId) return openScopedDB(userId);
+  return waitForStorageUserId().then(openScopedDB);
 }
