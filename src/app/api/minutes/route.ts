@@ -5,10 +5,11 @@ import { generateReferatBody, SkabelonSpec } from '@/lib/ai/minutes';
 import { getSkabelon, getDefaultSkabelon } from '@/lib/skabeloner/server';
 import { TranscriptChapter } from '@/lib/ai/chapters';
 import { TranscriptSegment, Skabelon } from '@/types';
+import { withHandler } from '@/lib/api-handler';
 
 export const maxDuration = 120;
 
-export async function POST(req: NextRequest) {
+async function postHandler(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -73,3 +74,5 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ content, skabelonId: skabelon?.id ?? null });
 }
+
+export const POST = withHandler('minutes', postHandler);

@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { headers } from 'next/headers';
+import { auth } from '@/lib/auth';
 import { MinutesContent } from '@/types';
 import { minutesToBody } from '@/lib/minutes-format';
+import { withHandler } from '@/lib/api-handler';
 
-export async function POST(req: NextRequest) {
+async function postHandler(req: NextRequest): Promise<NextResponse> {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   const body = await req.json() as { title?: string; content?: MinutesContent; format?: string };
   const { title = 'Referat', content, format = 'pdf' } = body;
 
@@ -26,6 +32,8 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ error: 'Unknown format' }, { status: 400 });
 }
+
+export const POST = withHandler('export', postHandler);
 
 // The rich-text editor serialises soft line breaks as CommonMark hard breaks — a
 // trailing backslash before the newline (and a lone "\" for an empty break line).
