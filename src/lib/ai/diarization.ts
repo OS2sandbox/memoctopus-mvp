@@ -19,18 +19,24 @@ export interface DiarizationProvider {
 }
 
 // ─── pyannote implementation ──────────────────────────────────────────────────
-// Talks to the self-hosted pyannote.audio service (FastAPI wrapper around
-// speaker-diarization-community-1). Configured via DIARIZATION_URL +
-// DIARIZATION_API_KEY, mirroring how HviskeProvider is configured.
+// Talks to the pyannote.audio diarization service (FastAPI wrapper around
+// speaker-diarization-community-1). As of the ensemble migration this is co-hosted
+// ON the hviske server itself (`POST /diarize`, same host:port as transcription) —
+// so by default we derive the base URL from HVISKE_URL (minus its `/v1` suffix) and
+// no separate service / SSH tunnel is needed. DIARIZATION_URL still overrides for
+// split deployments (e.g. the standalone diarization-service in docker-compose).
 
 export class PyannoteProvider implements DiarizationProvider {
   private baseURL: string;
   private apiKey: string | undefined;
 
   constructor() {
-    // `||` not `??`: a blank DIARIZATION_URL (empty string from a deploy .env)
-    // must fall back to the default rather than yield an empty baseURL.
-    this.baseURL = (process.env.DIARIZATION_URL || 'http://localhost:5000').replace(/\/$/, '');
+    // `||` not `??`: a blank DIARIZATION_URL (empty string from a deploy .env) must
+    // fall back to the derived default rather than yield an empty baseURL. The
+    // fallback strips a trailing `/v1` from the hviske origin because /diarize lives
+    // at the server root, not under the OpenAI-compatible /v1 prefix.
+    const hviskeOrigin = (process.env.HVISKE_URL || 'http://109.173.238.203:40093/v1').replace(/\/v1\/?$/, '');
+    this.baseURL = (process.env.DIARIZATION_URL || hviskeOrigin).replace(/\/$/, '');
     this.apiKey = process.env.DIARIZATION_API_KEY;
   }
 
@@ -55,7 +61,10 @@ export class PyannoteProvider implements DiarizationProvider {
     const ext = mimeTypeToExt(outMime, 'wav');
     const file = new File([new Uint8Array(buffer)], `audio.${ext}`, { type: outMime });
     const form = new FormData();
-    form.append('audio', file);
+    // Multipart field name is `file` — the co-hosted hviske /diarize endpoint
+    // requires it (the legacy standalone service accepted `audio`; it now accepts
+    // both, see diarization-service/app.py).
+    form.append('file', file);
 
     const res = await fetch(`${this.baseURL}/diarize`, {
       method: 'POST',

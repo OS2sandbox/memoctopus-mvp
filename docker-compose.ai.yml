@@ -13,14 +13,14 @@
 services:
   # Danish Whisper STT served by vLLM with an OpenAI-compatible API.
   # Mirrors the proven bare-metal command:
-  #   vllm serve syvai/hviske-v5.1 --trust-remote-code --gpu-memory-utilization 0.78 \
+  #   vllm serve syvai/hviske-ensemble --trust-remote-code --gpu-memory-utilization 0.78 \
   #     --host 0.0.0.0 --port 40093 --api-key <key>
   # The vllm/vllm-openai image's entrypoint IS the API server, so we pass --model.
   hviske:
     image: vllm/vllm-openai:${VLLM_IMAGE_TAG:-latest}
     command:
-      - --model=${HVISKE_MODEL:-syvai/hviske-v5.1}
-      - --served-model-name=${HVISKE_MODEL:-syvai/hviske-v5.1}
+      - --model=${HVISKE_MODEL:-syvai/hviske-ensemble}
+      - --served-model-name=${HVISKE_MODEL:-syvai/hviske-ensemble}
       - --trust-remote-code
       - --gpu-memory-utilization=${HVISKE_GPU_MEM_UTIL:-0.78}
       - --host=0.0.0.0

@@ -173,10 +173,17 @@ def _load_audio(data: bytes) -> tuple[torch.Tensor, int]:
 
 @app.post("/diarize")
 async def diarize(
-    audio: UploadFile = File(...),
+    # The Next.js client (and the co-hosted hviske /diarize) use the field name
+    # `file`; the legacy contract used `audio`. Accept either so the same client
+    # works against both this standalone service and the co-hosted endpoint.
+    file: UploadFile | None = File(None),
+    audio: UploadFile | None = File(None),
     _: None = Depends(require_auth),
 ) -> dict:
-    data = await audio.read()
+    upload = file or audio
+    if upload is None:
+        raise HTTPException(status_code=422, detail="Missing audio file (field 'file' or 'audio')")
+    data = await upload.read()
     if len(data) < 2_000:
         return {"turns": []}
 

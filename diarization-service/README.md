@@ -20,7 +20,7 @@ torchcodec/ffmpeg audio backend.
 ## API
 
 - `GET /health` → `{ "status": "ok", "model": "...", "device": "cuda" }`
-- `POST /diarize` (multipart, field `audio`) → `{ "turns": [{ "speaker": "SPEAKER_00", "start": 0.0, "end": 4.2 }, ...] }`
+- `POST /diarize` (multipart, field `file` — `audio` also accepted for the legacy contract) → `{ "turns": [{ "speaker": "SPEAKER_00", "start": 0.0, "end": 4.2 }, ...] }`
   - Bearer-authenticated with `DIARIZATION_API_KEY` (auth disabled when unset).
 
 ## Config (env)

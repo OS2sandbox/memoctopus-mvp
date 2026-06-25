@@ -103,7 +103,7 @@ re-downloading multi-GB weights on a new host, reuse an existing HF cache:
   set `DIAR_HF_CACHE_DIR` to that path (bind mount); pair with
   `DIARIZATION_BAKE_WEIGHTS=false` to also skip the build-time download.
 
-Models used: `syvai/hviske-v5.1` (public, no token) and
+Models used: `syvai/hviske-ensemble` (public, no token) and
 `pyannote/speaker-diarization-community-1` (gated — needs an `HF_TOKEN` whose
 account accepted the terms once; access is auto-granted).
 

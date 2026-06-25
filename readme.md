@@ -1,7 +1,7 @@
 # Referat
 
 Next.js app for recording meetings, generating transcripts, and producing
-summaries (referater). Uses hviske-v5.1 for speech-to-text and OpenAI for
+summaries (referater). Uses hviske-ensemble for speech-to-text and OpenAI for
 chapter, topic, minutes generation, and PII detection.
 
 ## Setup

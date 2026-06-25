@@ -33,7 +33,7 @@ export class HviskeProvider implements TranscriptionProvider {
       // the first wave drains rather than amplifying an overloaded server.
       maxRetries: 0,
     });
-    this.model = process.env.HVISKE_MODEL ?? 'syvai/hviske-v5.1';
+    this.model = process.env.HVISKE_MODEL ?? 'syvai/hviske-ensemble';
     this.language = process.env.ASR_LANGUAGE ?? 'da';
   }
 

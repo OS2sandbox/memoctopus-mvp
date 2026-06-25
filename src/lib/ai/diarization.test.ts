@@ -118,7 +118,7 @@ describe('PyannoteProvider.diarize', () => {
     expect(mockEncode).toHaveBeenCalledWith(decoded);
     // The forwarded file is the WAV, named with a .wav extension.
     const form = mockFetch.mock.calls[0][1].body as FormData;
-    const file = form.get('audio') as File;
+    const file = form.get('file') as File;
     expect(file.type).toBe('audio/wav');
     expect(file.name).toBe('audio.wav');
   });
@@ -132,7 +132,7 @@ describe('PyannoteProvider.diarize', () => {
     // Still POSTs (the service may be able to decode it itself); does not throw.
     expect(mockFetch).toHaveBeenCalledOnce();
     const form = mockFetch.mock.calls[0][1].body as FormData;
-    expect((form.get('audio') as File).type).toBe('audio/webm');
+    expect((form.get('file') as File).type).toBe('audio/webm');
   });
 });
 

@@ -82,7 +82,7 @@ services:
       # service names (http://hviske:8000/v1, http://diarization-service:5000).
       - HVISKE_URL=${HVISKE_URL}
       - HVISKE_API_KEY=${HVISKE_API_KEY}
-      - HVISKE_MODEL=${HVISKE_MODEL:-syvai/hviske-v5.1}
+      - HVISKE_MODEL=${HVISKE_MODEL:-syvai/hviske-ensemble}
       - ASR_LANGUAGE=${ASR_LANGUAGE:-da}
       - DIARIZATION_URL=${DIARIZATION_URL}
       - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}

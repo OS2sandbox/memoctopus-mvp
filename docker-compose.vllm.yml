@@ -36,7 +36,7 @@ services:
       - huggingface_cache:/root/.cache/huggingface
     ports:
       - "8004:8000"
-    command: --model ${HVISKE_MODEL:-syvai/hviske-v5.1} --trust-remote-code --gpu-memory-utilization 0.15 --max-num-seqs 32 --dtype bfloat16
+    command: --model ${HVISKE_MODEL:-syvai/hviske-ensemble} --trust-remote-code --gpu-memory-utilization 0.15 --max-num-seqs 32 --dtype bfloat16
     ipc: host
     deploy:
       resources:
