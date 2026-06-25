@@ -142,7 +142,7 @@ describe('removePii', () => {
     expect(call.messages[0].content).toContain('GDPR');
   });
 
-  it('uses gpt-4o model', async () => {
+  it('uses configured LLM model', async () => {
     mockComplete.mockResolvedValueOnce(
       openaiResponse(JSON.stringify({ cleanedText: 'x', replacements: [] })),
     );
@@ -150,7 +150,7 @@ describe('removePii', () => {
     await removePii('anything');
 
     const call = mockComplete.mock.calls[0][0];
-    expect(call.model).toBe('gpt-4o');
+    expect(call.model).toBe(process.env.LLM_MODEL ?? 'Qwen/Qwen3.6-27B');
   });
 });
 

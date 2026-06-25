@@ -121,11 +121,11 @@ describe('generateReferatBody', () => {
     expect(userContent).toContain('Dagsorden');
   });
 
-  it('uses gpt-4o', async () => {
+  it('uses configured LLM model', async () => {
     mockComplete.mockResolvedValueOnce(openaiResponse('referat'));
 
     await generateReferatBody(sampleSegments, baseSpec);
 
-    expect(mockComplete.mock.calls[0][0].model).toBe('gpt-4o');
+    expect(mockComplete.mock.calls[0][0].model).toBe(process.env.LLM_MODEL ?? 'Qwen/Qwen3.6-27B');
   });
 });

@@ -8,6 +8,23 @@ jobs:
   app:
     runs-on: ubuntu-latest
 
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/memoctopus
+      BETTER_AUTH_SECRET: ci-secret
+      BETTER_AUTH_URL: http://localhost:3000
+      BETTER_AUTH_TRUSTED_ORIGINS: http://localhost:3000
+      OPENAI_API_KEY: no-key
+      LLM_BASE_URL: http://localhost:8000/v1
+      LLM_MODEL: ci-model
+      HVISKE_URL: http://localhost:8001/v1
+      HVISKE_API_KEY: no-key
+      HVISKE_MODEL: syvai/hviske-v5.1
+      ASR_LANGUAGE: da
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED: 'false'
+      NEXT_PUBLIC_MICROSOFT_ENABLED: 'false'
+      NEXT_PUBLIC_AUTHENTIK_ENABLED: 'true'
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -25,25 +42,9 @@ jobs:
 
       - name: Build
         run: npm run build
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/memoctopus
-          BETTER_AUTH_SECRET: ci-secret
-          BETTER_AUTH_URL: http://localhost:3000
-          BETTER_AUTH_TRUSTED_ORIGINS: http://localhost:3000
-          OPENAI_API_KEY: no-key
-          LLM_BASE_URL: http://localhost:8000/v1
-          LLM_MODEL: ci-model
-          HVISKE_URL: http://localhost:8001/v1
-          HVISKE_API_KEY: no-key
-          HVISKE_MODEL: syvai/hviske-v5.1
-          ASR_LANGUAGE: da
-          NEXT_PUBLIC_APP_URL: http://localhost:3000
-          NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED: 'false'
-          NEXT_PUBLIC_MICROSOFT_ENABLED: 'false'
-          NEXT_PUBLIC_AUTHENTIK_ENABLED: 'true'
 
       - name: Test
-        run: npm test --if-present -- --run
+        run: npm test --if-present
 
   bot-service:
     runs-on: ubuntu-latest
@@ -70,4 +71,4 @@ jobs:
         run: npm run build --if-present
 
       - name: Test
-        run: npm test --if-present -- --run
+        run: npm test --if-present
