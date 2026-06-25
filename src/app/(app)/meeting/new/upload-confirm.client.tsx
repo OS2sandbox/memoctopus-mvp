@@ -101,7 +101,8 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         try {
           await saveAudio(id, file, file.type || 'audio/webm');
           await updateMeeting(id, { audioSizeBytes: file.size });
-        } catch {
+        } catch (err) {
+          console.error('[upload-confirm] saveAudio/updateMeeting failed (non-fatal):', err);
           archiveFailedRef.current = true;
         }
         if (!liveRef.current) return;
@@ -138,7 +139,8 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
               }
             },
           });
-        } catch {
+        } catch (err) {
+          console.error('[upload-confirm] transcribeBatchesOnServer failed:', err);
           throw new Error('Lydformatet understøttes ikke, eller serveren svarede ikke. Prøv MP3, WAV eller M4A.');
         }
         if (!liveRef.current) return;
@@ -214,7 +216,9 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
 
   async function handleCancel() {
     if (meetingIdRef.current) {
-      deleteMeeting(meetingIdRef.current).catch(() => {});
+      deleteMeeting(meetingIdRef.current).catch((err) => {
+        console.error('[upload-confirm] deleteMeeting on cancel failed (non-fatal):', err);
+      });
     }
     onCancel();
   }
@@ -225,7 +229,8 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
     const finalTitle = title.trim() || file.name.replace(/\.[^.]+$/, '');
     try {
       await updateMeeting(id, { title: finalTitle, participants });
-    } catch {
+    } catch (err) {
+      console.error('[upload-confirm] updateMeeting (title/participants) failed (non-fatal):', err);
       // non-fatal — we still navigate
     }
     router.push(`/meeting/${id}/review`);

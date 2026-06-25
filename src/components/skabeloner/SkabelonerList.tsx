@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { ErrorBanner } from '@/components/ui/error-banner';
 import { SkabelonEditor } from './SkabelonEditor';
 import { encodeSkabelonCode } from '@/lib/skabeloner/share-code';
 import type { ShareConfig } from '@/lib/skabeloner/share-config';
@@ -43,18 +44,37 @@ export function SkabelonerList() {
   // and the brief confirmation to show above its buttons.
   const [copiedToast, setCopiedToast] = useState<{ id: string; text: string } | null>(null);
   const copiedToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  function loadSkabeloner() {
+    setLoadError(null);
+    setLoading(true);
+    fetch('/api/skabeloner')
+      .then((r) => {
+        if (!r.ok) {
+          console.error('[skabeloner] Kunne ikke hente skabeloner — HTTP', r.status);
+          throw new Error(`HTTP ${r.status}`);
+        }
+        return r.json();
+      })
+      .then((data: { skabeloner: Skabelon[] }) => setSkabeloner(data.skabeloner ?? []))
+      .catch((err) => {
+        console.error('[skabeloner] Fejl ved indlæsning af skabeloner:', err);
+        setLoadError('Kunne ikke indlæse skabeloner. Prøv at genindlæse siden.');
+      })
+      .finally(() => setLoading(false));
+  }
 
   useEffect(() => {
-    fetch('/api/skabeloner')
-      .then((r) => (r.ok ? r.json() : { skabeloner: [] }))
-      .then((data: { skabeloner: Skabelon[] }) => setSkabeloner(data.skabeloner ?? []))
-      .finally(() => setLoading(false));
+    loadSkabeloner();
     fetch('/api/skabeloner/share-config')
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { share: ShareConfig } | null) => {
         if (data?.share) setShareConfig(data.share);
       })
       .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => () => {
@@ -82,16 +102,37 @@ export function SkabelonerList() {
 
   async function handleDelete(s: Skabelon) {
     if (!window.confirm(`Slet skabelonen "${s.name}"?`)) return;
-    const res = await fetch(`/api/skabeloner/${s.id}`, { method: 'DELETE' });
-    if (res.ok) setSkabeloner((prev) => prev.filter((x) => x.id !== s.id));
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/skabeloner/${s.id}`, { method: 'DELETE' });
+      if (res.ok) {
+        setSkabeloner((prev) => prev.filter((x) => x.id !== s.id));
+      } else {
+        console.error('[skabeloner] Sletning fejlede — HTTP', res.status, 'for skabelon', s.id);
+        setActionError('Kunne ikke slette skabelonen. Prøv igen.');
+      }
+    } catch (err) {
+      console.error('[skabeloner] Netværksfejl ved sletning af skabelon', s.id, err);
+      setActionError('Kunne ikke slette skabelonen. Prøv igen.');
+    }
   }
 
   async function handleSetDefault(s: Skabelon) {
     if (s.isDefault) return;
-    const res = await fetch(`/api/skabeloner/${s.id}/default`, { method: 'POST' });
-    if (!res.ok) return;
-    // One default per user — mirror that locally so only the chosen card fills.
-    setSkabeloner((prev) => prev.map((x) => ({ ...x, isDefault: x.id === s.id })));
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/skabeloner/${s.id}/default`, { method: 'POST' });
+      if (!res.ok) {
+        console.error('[skabeloner] Kunne ikke sætte standardskabelon — HTTP', res.status, 'for skabelon', s.id);
+        setActionError('Kunne ikke sætte standardskabelon. Prøv igen.');
+        return;
+      }
+      // One default per user — mirror that locally so only the chosen card fills.
+      setSkabeloner((prev) => prev.map((x) => ({ ...x, isDefault: x.id === s.id })));
+    } catch (err) {
+      console.error('[skabeloner] Netværksfejl ved ændring af standardskabelon', s.id, err);
+      setActionError('Kunne ikke sætte standardskabelon. Prøv igen.');
+    }
   }
 
   // Copy text to the clipboard and flash the inline "… kopieret til udklipsholder"
@@ -199,13 +240,25 @@ export function SkabelonerList() {
         </Button>
       </div>
 
+      {loadError && (
+        <ErrorBanner
+          message={loadError}
+          onRetry={loadSkabeloner}
+          className="mb-4"
+        />
+      )}
+
+      {actionError && (
+        <ErrorBanner message={actionError} onRetry={() => setActionError(null)} retryLabel="Luk" className="mb-4" />
+      )}
+
       {loading ? (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {[...Array(2)].map((_, i) => (
             <div key={i} className="h-40 bg-[var(--fill)] rounded-[var(--radius-lg)] animate-pulse" />
           ))}
         </div>
-      ) : skabeloner.length === 0 ? (
+      ) : !loadError && skabeloner.length === 0 ? (
         <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--surface)] px-8 py-12 text-center">
           <p className="text-sm text-[var(--muted)]">Ingen skabeloner endnu.</p>
           <Button size="sm" className="mt-4" onClick={openNew}>+ Opret din første skabelon</Button>

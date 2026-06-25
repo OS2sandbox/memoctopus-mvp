@@ -129,6 +129,26 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
         });
         if (cancelled) return;
 
+        // Distinguish a transcription FAILURE from a genuinely silent file: the
+        // server tallies unreachable/rejected batches into failedSeconds rather
+        // than throwing, so an all-failed run returns empty segments. Saving that
+        // silently would strand the user on "Ingen transskription fundet" with no
+        // hint that the speech service was the problem.
+        if (result.segments.length === 0) {
+          throw new Error(
+            result.failedSeconds > 0
+              ? 'Transskriptionen fejlede — taletjenesten kunne ikke nås. Tjek forbindelsen til hviske og prøv igen.'
+              : 'Ingen tale fundet i lydfilen. Er filen lydløs?',
+          );
+        }
+        if (result.failedSeconds > 0) {
+          // Partial failure: keep the transcript we got, but make the gap traceable.
+          console.warn(
+            `[ProcessingTranscription] partial transcription for ${meetingId}: ` +
+            `${Math.round(result.failedSeconds)}s of audio could not be transcribed`,
+          );
+        }
+
         await save(result.segments, 'pending');
         void diarizationPromise.then((turns) => finishDiarization(meetingId, turns));
 
