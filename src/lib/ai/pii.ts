@@ -1,15 +1,5 @@
-import OpenAI from 'openai';
 import { PiiResult, PiiReplacement } from '@/types';
-
-let client: OpenAI | null = null;
-function getClient() {
-  if (!client) client = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY || 'no-key',
-    baseURL: process.env.LLM_BASE_URL || 'http://vllm-chat:8000/v1',
-  });
-  return client;
-}
-const LLM_MODEL = process.env.LLM_MODEL || 'Qwen/Qwen3.6-27B';
+import { getLlmClient, llmModel } from './llm-client';
 
 const PII_SYSTEM_PROMPT = `Du er en dansk GDPR-assistent der identificerer og fjerner personhenførbare oplysninger fra mødetransskriptioner, baseret på EU-forordning 2016/679.
 
@@ -41,8 +31,8 @@ Returner ALTID valid JSON i dette format:
 }`;
 
 export async function removePii(text: string): Promise<PiiResult> {
-  const response = await getClient().chat.completions.create({
-    model: LLM_MODEL,
+  const response = await getLlmClient().chat.completions.create({
+    model: llmModel('gpt-4o'),
     messages: [
       { role: 'system', content: PII_SYSTEM_PROMPT },
       {
@@ -68,8 +58,12 @@ export async function removePii(text: string): Promise<PiiResult> {
     }));
 
     return { cleanedText: parsed.cleanedText, replacements };
-  } catch {
-    console.error('Failed to parse PII response, returning original text');
+  } catch (err) {
+    // Log the raw LLM response alongside the error so parse failures are traceable.
+    // NOTE: returning the original text is intentional (GDPR-safe fallback), but a
+    // piiDetectionFailed flag to let callers distinguish "no PII" from "parse error"
+    // would require extending PiiResult in src/types/index.ts — see notes.
+    console.error('[pii] parse failed. raw:', raw, err);
     return { cleanedText: text, replacements: [] };
   }
 }

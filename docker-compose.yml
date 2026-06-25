@@ -77,6 +77,11 @@ services:
       - BETTER_AUTH_URL=${BETTER_AUTH_URL}
       - BETTER_AUTH_TRUSTED_ORIGINS=${BETTER_AUTH_TRUSTED_ORIGINS:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Chat LLM backend (minutes/PII/chapters/clarifications): with an OPENAI_API_KEY
+      # set, it uses hosted OpenAI; with none, it falls back to the self-hosted vLLM
+      # (vllm-chat). LLM_BASE_URL / LLM_MODEL override the endpoint + model explicitly.
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_MODEL=${LLM_MODEL:-}
       # AI service endpoints. In the base ("small") stack these point at a
       # remote host (set in .env). The AI overlay overrides them to the in-compose
       # service names (http://hviske:8000/v1, http://diarization-service:5000).

@@ -76,7 +76,8 @@ describe('buildSkabelonInstruction', () => {
 // ─── generateReferatBody ──────────────────────────────────────────────────────
 
 describe('generateReferatBody', () => {
-  beforeEach(() => mockComplete.mockReset());
+  // A key is configured, so the LLM selector targets hosted OpenAI (gpt-4o).
+  beforeEach(() => { process.env.OPENAI_API_KEY = 'sk-test'; mockComplete.mockReset(); });
 
   it('returns the markdown body from the OpenAI response', async () => {
     mockComplete.mockResolvedValueOnce(openaiResponse('## Referat\n\nMødet blev åbnet.'));

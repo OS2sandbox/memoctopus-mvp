@@ -1,14 +1,4 @@
-import OpenAI from 'openai';
-
-let client: OpenAI | null = null;
-function getClient() {
-  if (!client) client = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY || 'no-key',
-    baseURL: process.env.LLM_BASE_URL || 'http://vllm-chat:8000/v1',
-  });
-  return client;
-}
-const LLM_MODEL = process.env.LLM_MODEL || 'Qwen/Qwen3.6-27B';
+import { getLlmClient, llmModel } from './llm-client';
 
 export interface ClarificationItem {
   /** A concrete clarifying question, in Danish. */
@@ -21,8 +11,8 @@ export interface ClarificationItem {
 // open questions left unanswered, ambiguous statements, undefined terms, and
 // decisions/action items missing an owner, deadline, or scope.
 export async function analyzeClarifications(transcript: string): Promise<ClarificationItem[]> {
-  const response = await getClient().chat.completions.create({
-    model: LLM_MODEL,
+  const response = await getLlmClient().chat.completions.create({
+    model: llmModel('gpt-4o-mini'),
     messages: [
       {
         role: 'user',
@@ -52,7 +42,8 @@ Maks 4 spørgsmål, kun de vigtigste. Hvis intet er uafklaret, returnér {"clari
   try {
     const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
     return (JSON.parse(cleaned) as { clarifications: ClarificationItem[] }).clarifications ?? [];
-  } catch {
+  } catch (err) {
+    console.error('[clarifications] parse failed, returning empty fallback. raw:', raw, err);
     return [];
   }
 }
