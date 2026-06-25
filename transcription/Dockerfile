@@ -7,27 +7,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Host driver 595.71.05 supports CUDA 13.x runtime. Use torch 2.8+cu128 wheels
-# so pyannote.audio 4.x + torchcodec install cleanly.
-RUN pip install --no-cache-dir \
-    'torch==2.8.0' \
-    'torchaudio==2.8.0' \
-    --index-url https://download.pytorch.org/whl/cu128 && \
+# Host driver 550.x only supports CUDA 12.4 — cu124 index only has torch<=2.6.
+# pyannote 4.x needs torchaudio>=2.8 (unavailable for cu124), so pin to 3.x.
+# Use constraints to prevent the second pip install from upgrading torch.
+RUN echo 'torch==2.6.0+cu124' > /tmp/constraints.txt && \
+    echo 'torchaudio==2.6.0+cu124' >> /tmp/constraints.txt && \
     pip install --no-cache-dir \
-    nvidia-npp-cu12 \
-    'pyannote.audio' \
-    'torchcodec==0.7' \
-    'httpx<0.28' \
-    soundfile \
-    numpy \
+    'torch==2.6.0+cu124' \
+    'torchaudio==2.6.0+cu124' \
+    --index-url https://download.pytorch.org/whl/cu124 && \
+    pip install --no-cache-dir \
+    --constraint /tmp/constraints.txt \
+    'nemo_toolkit[asr]' \
+    'pyannote.audio>=3.3,<4.0' \
     fastapi \
     'uvicorn[standard]' \
     python-multipart \
-    --extra-index-url https://download.pytorch.org/whl/cu128
-
-# Expose nvidia-npp-cu12's .so files to ctypes/torchcodec (torch only preloads
-# the CUDA libs it uses directly; torchcodec's audio decoder needs NPP too).
-ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/npp/lib:${LD_LIBRARY_PATH}
+    --extra-index-url https://download.pytorch.org/whl/cu124
 
 COPY main.py .
 

@@ -2,14 +2,25 @@ name: CI
 
 on:
   pull_request:
-    branches: ["main"]
+    branches: [main]
 
 jobs:
-  build:
+  app:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node: [23.x]
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/memoctopus
+      BETTER_AUTH_SECRET: ci-secret
+      BETTER_AUTH_URL: http://localhost:3000
+      BETTER_AUTH_TRUSTED_ORIGINS: http://localhost:3000
+      OPENAI_API_KEY: no-key
+      LLM_BASE_URL: http://localhost:8000/v1
+      LLM_MODEL: ci-model
+      HVISKE_URL: http://localhost:8001/v1
+      HVISKE_API_KEY: no-key
+      HVISKE_MODEL: syvai/hviske-v5.1
+      ASR_LANGUAGE: da
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
 
     steps:
       - name: Checkout
@@ -20,24 +31,49 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 22.x
+          cache: npm
+
+      - name: Install deps
+        run: npm ci --legacy-peer-deps
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED: 'false'
+          NEXT_PUBLIC_MICROSOFT_ENABLED: 'false'
+          NEXT_PUBLIC_AUTHENTIK_ENABLED: 'true'
+
+      - name: Test
+        run: npx vitest run --pool=threads --maxWorkers=2
+        env:
+          NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED: 'true'
+          NEXT_PUBLIC_MICROSOFT_ENABLED: 'false'
+          NEXT_PUBLIC_AUTHENTIK_ENABLED: 'false'
+
+  bot-service:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: bot-service
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22.x
+          cache: npm
+          cache-dependency-path: bot-service/package-lock.json
 
       - name: Install deps
         run: npm ci
-        working-directory: frontend
 
-      - name: Lint
-        run: npm run lint --if-present
-        working-directory: frontend
-
-      - name: Commitlint
-        run: npx commitlint --from=origin/main --to=HEAD
-        working-directory: frontend
-
-      - name: Typecheck / Build
+      - name: Build
         run: npm run build --if-present
-        working-directory: frontend
 
       - name: Test
-        run: npm test --if-present -- --ci
-        working-directory: frontend
+        run: npx vitest run

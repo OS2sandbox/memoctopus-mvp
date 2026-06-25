@@ -1,0 +1,49 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# TUNNEL OVERLAY: auto-opens an SSH tunnel to a remote diarization service so the
+# small stack can use it without a manual `ssh -L`. Merge it on top of the base:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d
+#
+# Configure DIARIZATION_SSH in .env (e.g. "-p 40419 root@1.2.3.4"). The tunnel
+# listens inside the compose network as `diar-tunnel:5000`, and this overlay points
+# the app at it — so there's no host port to bind (no AirPlay :5000 clash) and it
+# works on Linux hosts too. Use it ONLY in small mode (the AI overlay runs
+# diarization in-compose, so the two are mutually exclusive).
+#
+# Auth: the container needs to authenticate the ssh — either forward the host
+# ssh-agent (default below; on Docker Desktop the agent is at the magic socket
+# path) or mount a key into /root/.ssh. If your key has a passphrase, the agent
+# path is required.
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  diar-tunnel:
+    build: ./tunnel
+    environment:
+      - DIARIZATION_SSH=${DIARIZATION_SSH:?set DIARIZATION_SSH to use the tunnel overlay}
+      - TUNNEL_LISTEN_PORT=5000
+      - TUNNEL_REMOTE=${DIAR_TUNNEL_REMOTE:-localhost:5000}
+    volumes:
+      # Mount the ssh key dir read-only; the entrypoint copies id_* keys in with
+      # safe perms. Override with SSH_DIR to point at a different dir. (Passphrase
+      # keys won't work without an agent — see the overlay header for that path.)
+      - ${SSH_DIR:-${HOME}/.ssh}:/host-ssh:ro
+    networks:
+      - internal
+    healthcheck:
+      # Probe end-to-end THROUGH the tunnel (busybox wget, 127.0.0.1 — `localhost`
+      # would resolve to IPv6 ::1 but the forward listens on IPv4). Healthy only
+      # once the remote diarization answers, which is exactly what the app needs.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
+  # Point the app at the in-network tunnel and wait for it.
+  app:
+    environment:
+      - DIARIZATION_URL=http://diar-tunnel:5000
+    depends_on:
+      diar-tunnel:
+        condition: service_healthy

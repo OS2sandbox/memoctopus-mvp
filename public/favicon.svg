@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Memoctopus — Orbit (Bold Ring) — scalable -->
+  <rect width="32" height="32" rx="7" fill="#1535EB"/>
+  <circle cx="16" cy="16" r="5" fill="none" stroke="white" stroke-width="3"/>
+  <circle cx="16"    cy="7"     r="2.2" fill="#1535EB"/>
+  <circle cx="22.36" cy="9.64"  r="2.2" fill="#1535EB"/>
+  <circle cx="25"    cy="16"    r="2.2" fill="#1535EB"/>
+  <circle cx="22.36" cy="22.36" r="2.2" fill="#1535EB"/>
+  <circle cx="16"    cy="25"    r="2.2" fill="#1535EB"/>
+  <circle cx="9.64"  cy="22.36" r="2.2" fill="#1535EB"/>
+  <circle cx="7"     cy="16"    r="2.2" fill="#1535EB"/>
+  <circle cx="9.64"  cy="9.64"  r="2.2" fill="#1535EB"/>
+  <circle cx="16"    cy="7"     r="1.5" fill="#E8304A"/>
+  <circle cx="22.36" cy="9.64"  r="1.5" fill="white"/>
+  <circle cx="25"    cy="16"    r="1.5" fill="white"/>
+  <circle cx="22.36" cy="22.36" r="1.5" fill="white"/>
+  <circle cx="16"    cy="25"    r="1.5" fill="white"/>
+  <circle cx="9.64"  cy="22.36" r="1.5" fill="white"/>
+  <circle cx="7"     cy="16"    r="1.5" fill="white"/>
+  <circle cx="9.64"  cy="9.64"  r="1.5" fill="white"/>
+</svg>
