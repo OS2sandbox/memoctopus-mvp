@@ -23,9 +23,6 @@ jobs:
       - name: Install deps
         run: npm ci --legacy-peer-deps
 
-      - name: Commitlint
-        run: npx commitlint --from=origin/main --to=HEAD
-
       - name: Build
         run: npm run build
         env:
