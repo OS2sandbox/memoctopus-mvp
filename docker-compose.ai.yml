@@ -17,7 +17,14 @@ services:
   #     --host 0.0.0.0 --port 40093 --api-key <key>
   # The vllm/vllm-openai image's entrypoint IS the API server, so we pass --model.
   hviske:
-    image: vllm/vllm-openai:${VLLM_IMAGE_TAG:-latest}
+    # ASR needs a CUSTOM image: vllm/vllm-openai:v0.19.0 + librosa. The stock image
+    # lacks librosa (vLLM can't decode audio → "Invalid or unsupported audio file"),
+    # and v0.19.1+ regresses the ASR decoder. So ASR stays on v0.19.0 while the chat
+    # model (vllm-chat) runs on v0.24.0 — two separate images by design. See vllm-asr/Dockerfile.
+    build:
+      context: ./vllm-asr
+      dockerfile: Dockerfile
+    image: memoctopus-vllm-asr:v0.19.0
     command:
       - --model=${HVISKE_MODEL:-syvai/hviske-ensemble}
       - --served-model-name=${HVISKE_MODEL:-syvai/hviske-ensemble}
@@ -57,6 +64,51 @@ services:
       retries: 5
       # First boot loads the model into VRAM — can take a few minutes.
       start_period: 300s
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # Chat LLM (minutes / PII / chapters / clarifications) served by vLLM with an
+  # OpenAI-compatible API. The app's llm-client (src/lib/ai/llm-client.ts) targets
+  # http://vllm-chat:8000/v1 by default when no hosted LLM_BASE_URL / OPENAI_API_KEY
+  # is set, so this stays on the same `internal` network as the app.
+  # Shares the GPU with hviske + diarization — keep the sum of gpu-memory-utilization
+  # across the vLLM services well under 1.0 (here: 0.50 chat + 0.25 hviske).
+  vllm-chat:
+    image: vllm/vllm-openai:${VLLM_IMAGE_TAG:-v0.24.0}
+    command:
+      - --model=${VLLM_MODEL:-google/gemma-4-12b-it}
+      - --served-model-name=${VLLM_MODEL:-google/gemma-4-12b-it}
+      - --gpu-memory-utilization=${VLLM_CHAT_GPU_MEM_UTIL:-0.50}
+      - --max-model-len=${VLLM_CHAT_MAX_MODEL_LEN:-32768}
+      - --max-num-seqs=${VLLM_CHAT_MAX_NUM_SEQS:-4}
+      - --dtype=bfloat16
+      - --host=0.0.0.0
+      - --port=8000
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    volumes:
+      # Reuse the existing HF weight cache (Gemma already downloaded here), so a
+      # restart doesn't re-pull ~24 GB.
+      - huggingface_cache:/root/.cache/huggingface
+    ports:
+      - "${VLLM_CHAT_PORT:-8001}:8000"
+    ipc: host
+    shm_size: "2gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      # First boot loads the 12B model into VRAM — can take several minutes.
+      start_period: 600s
     restart: unless-stopped
     networks:
       - internal
@@ -120,7 +172,10 @@ services:
         condition: service_healthy
       diarization-service:
         condition: service_healthy
+      vllm-chat:
+        condition: service_healthy
 
 volumes:
   hf-cache:
   diar-models:
+  huggingface_cache:
