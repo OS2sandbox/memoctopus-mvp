@@ -10,6 +10,11 @@ import { notifyTranscriptUpdated } from '@/lib/transcript-events';
 // Every helper is fail-soft: on any error it returns [] so the caller keeps the
 // default single-speaker labels instead of breaking the recording flow.
 
+function getDiarizationTimeoutMs(): number {
+  const value = Number(process.env.NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS);
+  return Number.isFinite(value) && value > 0 ? value : 300_000;
+}
+
 // POST the recording to the diarize route and return the speaker turns. The blob is
 // sent in its ORIGINAL compressed format (webm/opus, mp3, m4a, …) — the diarization
 // service decodes it with ffmpeg. Shipping the compressed file instead of a decoded
@@ -19,12 +24,15 @@ export async function fetchDiarizationTurns(meetingId: string, audio: Blob): Pro
   try {
     const fd = new FormData();
     fd.append('audio', audio, 'recording');
+
     const res = await fetch(`/api/meetings/${meetingId}/diarize`, {
       method: 'POST',
       body: fd,
-      signal: AbortSignal.timeout(300_000),
+      signal: AbortSignal.timeout(getDiarizationTimeoutMs()),
     });
+
     if (!res.ok) return [];
+
     const { turns } = await res.json() as { turns: SpeakerTurn[] };
     return Array.isArray(turns) ? turns : [];
   } catch (err) {
@@ -61,9 +69,11 @@ export async function finishDiarization(meetingId: string, turns: SpeakerTurn[])
   try {
     const current = await getTranscript(meetingId);
     if (!current?.segments?.length) return;
+
     const segments = (turns.length > 0 && current.segments.every((s) => s.speaker === DEFAULT_SPEAKER_LABEL))
       ? assignSpeakers(current.segments, turns)
       : current.segments;
+
     await saveTranscriptSegments(meetingId, segments, 'done');
     notifyTranscriptUpdated(meetingId);
   } catch (err) {
