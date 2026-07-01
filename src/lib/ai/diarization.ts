@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { Agent, fetch as undiciFetch } from 'undici';
+import { Agent, FormData, fetch as undiciFetch } from 'undici';
 import { mimeTypeToExt } from './mime';
 import { decodeToMono16k, encodeMono16kWav } from '@/lib/audio/decode-server';
 
@@ -70,13 +70,17 @@ export class PyannoteProvider implements DiarizationProvider {
     }
 
     const ext = mimeTypeToExt(outMime, 'wav');
-    const file = new File([new Uint8Array(buffer)], `audio.${ext}`, { type: outMime });
     const form = new FormData();
+    const blob = new Blob([new Uint8Array(buffer)], { type: outMime });
 
     // Multipart field name is `file` — the co-hosted hviske /diarize endpoint
     // requires it. The legacy standalone service accepted `audio`; it now accepts
     // both, see diarization-service/app.py.
-    form.append('file', file);
+    //
+    // Use undici.FormData together with undici.fetch. Mixing global FormData/File
+    // with undici.fetch can produce a request that reaches FastAPI but is parsed as
+    // missing the uploaded file.
+    form.append('file', blob, `audio.${ext}`);
 
     const timeoutMs = getDiarizationTimeoutMs();
 
