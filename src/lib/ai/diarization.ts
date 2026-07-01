@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { Agent } from 'undici';
+import { Agent, fetch as undiciFetch } from 'undici';
 import { mimeTypeToExt } from './mime';
 import { decodeToMono16k, encodeMono16kWav } from '@/lib/audio/decode-server';
 
@@ -24,7 +24,7 @@ function getDiarizationTimeoutMs(): number {
   return Number.isFinite(value) && value > 0 ? value : 300_000;
 }
 
-type FetchInitWithDispatcher = RequestInit & {
+type FetchInitWithDispatcher = Parameters<typeof undiciFetch>[1] & {
   dispatcher: Agent;
 };
 
@@ -55,10 +55,11 @@ export class PyannoteProvider implements DiarizationProvider {
     // compressed recording (small browser/bot upload — the win), so decode anything
     // that isn't already WAV to 16 kHz mono WAV here with ffmpeg before forwarding.
     // This keeps diarization working regardless of the service version, and the
-    // app→service hop is local in production (docker-compose). Fail-soft: if the
-    // local decode fails, send the original and let the service attempt it.
+    // app→service hop is local in production. Fail-soft: if the local decode fails,
+    // send the original and let the service attempt it.
     let buffer = audioBuffer;
     let outMime = mimeType;
+
     if (!/wav/i.test(mimeType)) {
       try {
         buffer = encodeMono16kWav(await decodeToMono16k(audioBuffer));
@@ -73,23 +74,26 @@ export class PyannoteProvider implements DiarizationProvider {
     const form = new FormData();
 
     // Multipart field name is `file` — the co-hosted hviske /diarize endpoint
-    // requires it (the legacy standalone service accepted `audio`; it now accepts
-    // both, see diarization-service/app.py).
+    // requires it. The legacy standalone service accepted `audio`; it now accepts
+    // both, see diarization-service/app.py.
     form.append('file', file);
 
     const timeoutMs = getDiarizationTimeoutMs();
 
-    // Node's fetch uses undici underneath. AbortSignal.timeout controls our own
-    // request timeout, but undici also has headers/body timers. CPU diarization can
-    // legitimately take longer than the default headers timeout before returning
-    // response headers, so configure the dispatcher to match DIARIZATION_TIMEOUT_MS.
+    // Use undici.fetch together with undici.Agent. Passing an undici dispatcher to
+    // Next/Node's patched global fetch can fail with UND_ERR_INVALID_ARG.
+    //
+    // AbortSignal.timeout controls our own request timeout, but undici also has
+    // headers/body timers. CPU diarization can legitimately take longer than the
+    // default headers timeout before returning response headers, so configure those
+    // timers to match DIARIZATION_TIMEOUT_MS.
     const dispatcher = new Agent({
       headersTimeout: timeoutMs,
       bodyTimeout: timeoutMs,
     });
 
     try {
-      const res = await fetch(`${this.baseURL}/diarize`, {
+      const res = await undiciFetch(`${this.baseURL}/diarize`, {
         method: 'POST',
         headers: this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : undefined,
         body: form,
