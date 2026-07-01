@@ -28,6 +28,15 @@ import {
 
 const ENV = process.env;
 
+type FormLike = {
+  get(name: string): unknown;
+};
+
+type UploadedFileLike = {
+  type?: string;
+  name?: string;
+};
+
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
   return {
     ok,
@@ -68,7 +77,8 @@ describe('PyannoteProvider.diarize', () => {
     const [url, init] = mockUndiciFetch.mock.calls[0];
     expect(url).toBe('http://diar:5000/diarize');
     expect(init.method).toBe('POST');
-    expect(init.body).toBeInstanceOf(FormData);
+    expect(init.body).toBeDefined();
+    expect(typeof (init.body as FormLike).get).toBe('function');
     expect(init.dispatcher).toBeDefined();
     expect(init.signal).toBeDefined();
   });
@@ -146,8 +156,8 @@ describe('PyannoteProvider.diarize', () => {
     expect(mockEncode).toHaveBeenCalledWith(decoded);
 
     // The forwarded file is the WAV, named with a .wav extension.
-    const form = mockUndiciFetch.mock.calls[0][1].body as FormData;
-    const file = form.get('file') as File;
+    const form = mockUndiciFetch.mock.calls[0][1].body as FormLike;
+    const file = form.get('file') as UploadedFileLike;
 
     expect(file.type).toBe('audio/wav');
     expect(file.name).toBe('audio.wav');
@@ -162,8 +172,8 @@ describe('PyannoteProvider.diarize', () => {
     // Still POSTs; the service may be able to decode it itself. Does not throw.
     expect(mockUndiciFetch).toHaveBeenCalledOnce();
 
-    const form = mockUndiciFetch.mock.calls[0][1].body as FormData;
-    const file = form.get('file') as File;
+    const form = mockUndiciFetch.mock.calls[0][1].body as FormLike;
+    const file = form.get('file') as UploadedFileLike;
 
     expect(file.type).toBe('audio/webm');
   });
