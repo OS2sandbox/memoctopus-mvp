@@ -43,6 +43,7 @@ jobs:
           NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED: 'false'
           NEXT_PUBLIC_MICROSOFT_ENABLED: 'false'
           NEXT_PUBLIC_AUTHENTIK_ENABLED: 'true'
+          NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS: '3600000'
 
       - name: Test
         run: npx vitest run --pool=threads --maxWorkers=2
@@ -50,6 +51,7 @@ jobs:
           NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED: 'true'
           NEXT_PUBLIC_MICROSOFT_ENABLED: 'false'
           NEXT_PUBLIC_AUTHENTIK_ENABLED: 'false'
+          NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS: '3600000'
 
   bot-service:
     runs-on: ubuntu-latest
