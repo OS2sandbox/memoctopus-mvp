@@ -102,7 +102,10 @@ export class PyannoteProvider implements DiarizationProvider {
       } as FetchInitWithDispatcher);
 
       if (!res.ok) {
-        throw new Error(`Diarization service returned ${res.status}`);
+        const body = await res.text().catch(() => '');
+        throw new Error(
+          `Diarization service returned ${res.status}${body ? `: ${body.slice(0, 1000)}` : ''}`,
+        );
       }
 
       const data = (await res.json()) as { turns?: SpeakerTurn[] };
