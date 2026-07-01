@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { Agent } from 'undici';
 import { mimeTypeToExt } from './mime';
 import { decodeToMono16k, encodeMono16kWav } from '@/lib/audio/decode-server';
 
@@ -22,6 +23,10 @@ function getDiarizationTimeoutMs(): number {
   const value = Number(process.env.DIARIZATION_TIMEOUT_MS);
   return Number.isFinite(value) && value > 0 ? value : 300_000;
 }
+
+type FetchInitWithDispatcher = RequestInit & {
+  dispatcher: Agent;
+};
 
 // ─── pyannote implementation ──────────────────────────────────────────────────
 // Talks to the pyannote.audio diarization service (FastAPI wrapper around
@@ -66,24 +71,41 @@ export class PyannoteProvider implements DiarizationProvider {
     const ext = mimeTypeToExt(outMime, 'wav');
     const file = new File([new Uint8Array(buffer)], `audio.${ext}`, { type: outMime });
     const form = new FormData();
+
     // Multipart field name is `file` — the co-hosted hviske /diarize endpoint
     // requires it (the legacy standalone service accepted `audio`; it now accepts
     // both, see diarization-service/app.py).
     form.append('file', file);
 
-    const res = await fetch(`${this.baseURL}/diarize`, {
-      method: 'POST',
-      headers: this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : undefined,
-      body: form,
-      signal: AbortSignal.timeout(getDiarizationTimeoutMs()),
+    const timeoutMs = getDiarizationTimeoutMs();
+
+    // Node's fetch uses undici underneath. AbortSignal.timeout controls our own
+    // request timeout, but undici also has headers/body timers. CPU diarization can
+    // legitimately take longer than the default headers timeout before returning
+    // response headers, so configure the dispatcher to match DIARIZATION_TIMEOUT_MS.
+    const dispatcher = new Agent({
+      headersTimeout: timeoutMs,
+      bodyTimeout: timeoutMs,
     });
 
-    if (!res.ok) {
-      throw new Error(`Diarization service returned ${res.status}`);
-    }
+    try {
+      const res = await fetch(`${this.baseURL}/diarize`, {
+        method: 'POST',
+        headers: this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : undefined,
+        body: form,
+        signal: AbortSignal.timeout(timeoutMs),
+        dispatcher,
+      } as FetchInitWithDispatcher);
 
-    const data = (await res.json()) as { turns?: SpeakerTurn[] };
-    return Array.isArray(data.turns) ? data.turns : [];
+      if (!res.ok) {
+        throw new Error(`Diarization service returned ${res.status}`);
+      }
+
+      const data = (await res.json()) as { turns?: SpeakerTurn[] };
+      return Array.isArray(data.turns) ? data.turns : [];
+    } finally {
+      await dispatcher.close();
+    }
   }
 }
 
