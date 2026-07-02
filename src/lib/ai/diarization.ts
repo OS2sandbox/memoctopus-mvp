@@ -19,6 +19,11 @@ export interface DiarizationProvider {
   diarize(audioBuffer: Buffer, mimeType: string): Promise<SpeakerTurn[]>;
 }
 
+function getDiarizationTimeoutMs(): number {
+  const value = Number(process.env.DIARIZATION_TIMEOUT_MS);
+  return Number.isFinite(value) && value > 0 ? value : 300_000;
+}
+
 // ─── pyannote implementation ──────────────────────────────────────────────────
 // Talks to the pyannote.audio diarization service (FastAPI wrapper around
 // speaker-diarization-community-1). As of the ensemble migration this is co-hosted
@@ -77,7 +82,7 @@ export class PyannoteProvider implements DiarizationProvider {
       method: 'POST',
       headers: this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : undefined,
       body: form,
-      signal: AbortSignal.timeout(300_000),
+      signal: AbortSignal.timeout(getDiarizationTimeoutMs()),
     });
     if (!res.ok) {
       throw new Error(`Diarization service returned ${res.status}`);
