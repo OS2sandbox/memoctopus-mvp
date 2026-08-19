@@ -22,6 +22,7 @@ import torch
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pyannote.audio import Pipeline
+from prometheus_fastapi_instrumentator import Instrumentator
 
 MODEL_NAME = os.environ.get("DIARIZATION_MODEL", "pyannote/speaker-diarization-community-1")
 API_KEY = os.environ.get("DIARIZATION_API_KEY", "")
@@ -34,6 +35,8 @@ HF_TOKEN = os.environ.get("HF_TOKEN")
 
 app = FastAPI(title="diarization-service")
 _bearer = HTTPBearer(auto_error=False)
+
+Instrumentator().instrument(app).expose(app)
 
 # Loaded once at startup and reused across requests.
 _pipeline: Pipeline | None = None
