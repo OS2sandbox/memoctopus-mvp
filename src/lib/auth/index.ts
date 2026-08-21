@@ -4,14 +4,19 @@ import { nextCookies } from 'better-auth/next-js';
 import { genericOAuth } from 'better-auth/plugins';
 import { db } from '@/lib/db';
 import { users, sessions, accounts, verifications } from '@/lib/db/schema';
+import {
+  emailPasswordEnabled,
+  microsoftConfig,
+  oidcConfig,
+  warnDeprecatedAuthEnv,
+} from './providers';
 
-// Optional OAuth providers — opt-in via env, disabled by default.
-const microsoftEnabled = !!(process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET);
-const authentikEnabled = !!(
-  process.env.AUTHENTIK_CLIENT_ID &&
-  process.env.AUTHENTIK_CLIENT_SECRET &&
-  process.env.AUTHENTIK_DISCOVERY_URL
-);
+// Optional OAuth providers — enabled by credential presence, resolved in
+// ./providers so the sign-in page renders exactly what is registered here.
+const microsoft = microsoftConfig();
+const oidc = oidcConfig();
+
+warnDeprecatedAuthEnv();
 
 // ─── Real better-auth instance ────────────────────────────────────────────────
 // Each user gets a stable `user.id`, which the rest of the app uses as the
@@ -48,28 +53,38 @@ export const auth = betterAuth({
     },
   }),
   emailAndPassword: {
-    enabled: true,
+    enabled: emailPasswordEnabled(),
   },
-  socialProviders: microsoftEnabled
-    ? {
-        microsoft: {
-          clientId: process.env.MICROSOFT_CLIENT_ID!,
-          clientSecret: process.env.MICROSOFT_CLIENT_SECRET!,
-          tenantId: process.env.MICROSOFT_TENANT_ID || 'common',
-        },
-      }
-    : {},
+  socialProviders: microsoft ? { microsoft } : {},
+  // Let a login from a provider we control link into an existing account with
+  // the same email instead of failing. Note that better-auth ALSO requires the
+  // local user row to have emailVerified — this app never verifies emails, so
+  // in practice only SSO-first users (whose IdP asserted email_verified) can be
+  // linked. requireLocalEmailVerified is deliberately left at its secure
+  // default: turning it off would let anyone pre-register an unverified account
+  // at someone else's address and capture their SSO identity — and here user.id
+  // is the per-user PostgreSQL schema key, so that is a data breach.
+  account: {
+    accountLinking: {
+      enabled: true,
+      trustedProviders: [
+        ...(microsoft ? ['microsoft'] : []),
+        ...(oidc ? [oidc.providerId] : []),
+      ],
+    },
+  },
   plugins: [
-    ...(authentikEnabled
+    ...(oidc
       ? [
           genericOAuth({
             config: [
               {
-                providerId: 'authentik',
-                clientId: process.env.AUTHENTIK_CLIENT_ID!,
-                clientSecret: process.env.AUTHENTIK_CLIENT_SECRET!,
-                discoveryUrl: process.env.AUTHENTIK_DISCOVERY_URL!,
+                providerId: oidc.providerId,
+                clientId: oidc.clientId,
+                clientSecret: oidc.clientSecret,
+                discoveryUrl: oidc.discoveryUrl,
                 scopes: ['openid', 'profile', 'email'],
+                pkce: oidc.pkce,
               },
             ],
           }),

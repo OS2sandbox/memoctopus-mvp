@@ -107,6 +107,62 @@ Models used: `syvai/hviske-ensemble` (public, no token) and
 `pyannote/speaker-diarization-community-1` (gated — needs an `HF_TOKEN` whose
 account accepted the terms once; access is auto-granted).
 
+## Single sign-on (OIDC)
+
+Memoctopus can sign users in against any standards-compliant OIDC provider —
+Keycloak, Authentik, Entra ID via OIDC, and so on. There is no provider-specific
+code: you supply a discovery URL, a client id and a client secret.
+
+**Auth configuration is read at runtime.** Change it and `docker compose up -d app`
+is enough — you never need `--build` for a login-method change.
+
+1. In your IdP, create a **confidential** client (client id + secret) and register
+   this redirect URI, substituting your own values:
+
+   ```
+   <BETTER_AUTH_URL>/api/auth/oauth2/callback/<OIDC_PROVIDER_ID>
+   ```
+
+2. Find the discovery document:
+
+   | IdP | Discovery URL |
+   |---|---|
+   | Keycloak | `https://<host>/realms/<realm>/.well-known/openid-configuration` |
+   | Authentik | `https://<host>/application/o/<app-slug>/.well-known/openid-configuration` |
+
+3. Fill in `.env`:
+
+   ```bash
+   OIDC_PROVIDER_ID=keycloak            # also the callback path segment
+   OIDC_PROVIDER_NAME=Kommune Login     # button label: "Fortsæt med Kommune Login"
+   OIDC_CLIENT_ID=...
+   OIDC_CLIENT_SECRET=...
+   OIDC_DISCOVERY_URL=https://.../.well-known/openid-configuration
+   ```
+
+4. `docker compose up -d app`, then load the sign-in page — the button appears as
+   soon as all three credentials are set. Scopes are always `openid profile email`;
+   PKCE is on unless you set `OIDC_PKCE=false`.
+
+To offer SSO only, set `EMAIL_PASSWORD_ENABLED=false`; that disables the
+email/password endpoints, not just the form.
+
+**⚠️ Pick `OIDC_PROVIDER_ID` once.** It is both the callback path segment and the
+key linking users to their accounts. Changing it after go-live means returning
+users no longer match their existing account and are given a new, empty one.
+
+**Account linking.** An SSO login can link into an existing account with the same
+email only if that account's address is verified. This app sends no verification
+emails, so accounts created with email/password are never linkable — if such a
+user later signs in via SSO they get "account not linked". Have them sign in the
+way they registered, or remove the password account first.
+
+**Upgrading from the Authentik-specific setup.** `AUTHENTIK_CLIENT_ID`,
+`AUTHENTIK_CLIENT_SECRET` and `AUTHENTIK_DISCOVERY_URL` still work and log a
+deprecation warning; on that path the provider id stays `authentik`, so your
+registered redirect URI and existing accounts are unaffected. To migrate, copy the
+three values to their `OIDC_*` names and set `OIDC_PROVIDER_ID=authentik`.
+
 ## Day-2 operations
 
 > These `docker compose` commands need docker-group membership (the bootstrap
