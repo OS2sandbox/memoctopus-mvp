@@ -42,6 +42,11 @@ function renderForm(providers: AuthProvider[] = [], emailPasswordEnabled = true)
   return render(<HeroForm providers={providers} emailPasswordEnabled={emailPasswordEnabled} />);
 }
 
+const clickProvider = (label: string) =>
+  act(async () => {
+    fireEvent.click(screen.getByText(`Fortsæt med ${label}`));
+  });
+
 beforeEach(() => {
   mockPush.mockReset();
   mockSearchParamsGet.mockReturnValue(null);
@@ -432,9 +437,7 @@ describe('HeroForm — Microsoft sign-in', () => {
     mockSignInSocial.mockResolvedValueOnce({ error: null });
 
     renderForm([MICROSOFT]);
-    await act(async () => {
-      fireEvent.click(screen.getByText('Fortsæt med Microsoft'));
-    });
+    await clickProvider('Microsoft');
 
     expect(mockSignInSocial).toHaveBeenCalledWith({ provider: 'microsoft', callbackURL: '/dashboard' });
   });
@@ -443,9 +446,7 @@ describe('HeroForm — Microsoft sign-in', () => {
     mockSignInSocial.mockResolvedValueOnce({ error: { message: 'oauth failed' } });
 
     renderForm([MICROSOFT]);
-    await act(async () => {
-      fireEvent.click(screen.getByText('Fortsæt med Microsoft'));
-    });
+    await clickProvider('Microsoft');
 
     await waitFor(() => {
       expect(screen.getByText('Microsoft login mislykkedes. Prøv igen.')).toBeInTheDocument();
@@ -457,9 +458,7 @@ describe('HeroForm — Microsoft sign-in', () => {
     mockSignInSocial.mockResolvedValueOnce({ error: null });
 
     renderForm([MICROSOFT]);
-    await act(async () => {
-      fireEvent.click(screen.getByText('Fortsæt med Microsoft'));
-    });
+    await clickProvider('Microsoft');
 
     expect(mockSignInSocial).toHaveBeenCalledWith({ provider: 'microsoft', callbackURL: '/meeting/xyz' });
   });
@@ -475,9 +474,7 @@ describe('HeroForm — generic OIDC sign-in', () => {
     mockSignInOAuth2.mockResolvedValueOnce({ error: null });
 
     renderForm([KEYCLOAK]);
-    await act(async () => {
-      fireEvent.click(screen.getByText('Fortsæt med Keycloak'));
-    });
+    await clickProvider('Keycloak');
 
     expect(mockSignInOAuth2).toHaveBeenCalledWith({ providerId: 'keycloak', callbackURL: '/dashboard' });
     expect(mockSignInSocial).not.toHaveBeenCalled();
@@ -488,9 +485,7 @@ describe('HeroForm — generic OIDC sign-in', () => {
     mockSignInOAuth2.mockResolvedValueOnce({ error: null });
 
     renderForm([KEYCLOAK]);
-    await act(async () => {
-      fireEvent.click(screen.getByText('Fortsæt med Keycloak'));
-    });
+    await clickProvider('Keycloak');
 
     expect(mockSignInOAuth2).toHaveBeenCalledWith({ providerId: 'keycloak', callbackURL: '/meeting/xyz' });
   });
@@ -499,9 +494,7 @@ describe('HeroForm — generic OIDC sign-in', () => {
     mockSignInOAuth2.mockResolvedValueOnce({ error: { message: 'oauth failed' } });
 
     renderForm([KEYCLOAK]);
-    await act(async () => {
-      fireEvent.click(screen.getByText('Fortsæt med Keycloak'));
-    });
+    await clickProvider('Keycloak');
 
     await waitFor(() => {
       expect(screen.getByText('Keycloak login mislykkedes. Prøv igen.')).toBeInTheDocument();

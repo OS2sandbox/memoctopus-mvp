@@ -4,7 +4,6 @@ import {
   enabledAuthProviders,
   microsoftConfig,
   oidcConfig,
-  resetDeprecationWarning,
   warnDeprecatedAuthEnv,
 } from './providers';
 
@@ -35,11 +34,11 @@ beforeEach(() => {
     if (/^(OIDC_|AUTHENTIK_|MICROSOFT_|EMAIL_PASSWORD_|NEXT_PUBLIC_)/.test(key)) delete clean[key];
   }
   process.env = clean as NodeJS.ProcessEnv;
-  resetDeprecationWarning();
 });
 
 afterEach(() => {
   process.env = ENV;
+  vi.restoreAllMocks();
 });
 
 describe('emailPasswordEnabled', () => {
@@ -98,16 +97,10 @@ describe('microsoftConfig', () => {
     expect(microsoftConfig()).toBeNull();
   });
 
-  it('honours the deprecated NEXT_PUBLIC_MICROSOFT_ENABLED kill switch', () => {
+  it('ignores a stale NEXT_PUBLIC_MICROSOFT_ENABLED=false', () => {
+    // The old .env examples shipped that line as a default, so honouring it
+    // would silently break a first-time Microsoft setup after upgrading.
     Object.assign(process.env, MICROSOFT, { NEXT_PUBLIC_MICROSOFT_ENABLED: 'false' });
-    expect(microsoftConfig()).toBeNull();
-  });
-
-  it('lets the canonical kill switch override the deprecated one', () => {
-    Object.assign(process.env, MICROSOFT, {
-      MICROSOFT_ENABLED: 'true',
-      NEXT_PUBLIC_MICROSOFT_ENABLED: 'false',
-    });
     expect(microsoftConfig()).not.toBeNull();
   });
 });
@@ -126,7 +119,6 @@ describe('oidcConfig — OIDC_* path', () => {
       clientSecret: 'oidc-secret',
       discoveryUrl: OIDC.OIDC_DISCOVERY_URL,
       pkce: true,
-      legacy: false,
     });
   });
 
@@ -158,12 +150,26 @@ describe('oidcConfig — OIDC_* path', () => {
     expect(oidcConfig()).toBeNull();
   });
 
-  it('rejects a provider id that is not a safe URL path segment', () => {
-    Object.assign(process.env, OIDC, { OIDC_PROVIDER_ID: 'foo/bar' });
-    expect(() => oidcConfig()).toThrow(/Invalid OIDC_PROVIDER_ID/);
+  it('lower-cases the provider id rather than rejecting it', () => {
+    Object.assign(process.env, OIDC, { OIDC_PROVIDER_ID: 'Keycloak' });
+    expect(oidcConfig()).toMatchObject({ providerId: 'keycloak' });
+  });
 
-    process.env.OIDC_PROVIDER_ID = 'Foo Bar';
-    expect(() => oidcConfig()).toThrow(/Invalid OIDC_PROVIDER_ID/);
+  it('disables OIDC — rather than throwing — on an unusable provider id', () => {
+    spyOnWarn();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    Object.assign(process.env, OIDC, { OIDC_PROVIDER_ID: 'foo/bar' });
+
+    // Throwing here would 500 every route, including email/password login.
+    expect(oidcConfig()).toBeNull();
+    expect(error).toHaveBeenCalled();
+  });
+
+  it('refuses to reuse a built-in social provider id', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    Object.assign(process.env, OIDC, { OIDC_PROVIDER_ID: 'microsoft' });
+    expect(oidcConfig()).toBeNull();
+    expect(error).toHaveBeenCalled();
   });
 });
 
@@ -177,7 +183,6 @@ describe('oidcConfig — deprecated AUTHENTIK_* fallback', () => {
       clientSecret: 'ak-secret',
       discoveryUrl: AUTHENTIK.AUTHENTIK_DISCOVERY_URL,
       pkce: true,
-      legacy: true,
     });
   });
 
@@ -187,16 +192,12 @@ describe('oidcConfig — deprecated AUTHENTIK_* fallback', () => {
       OIDC_CLIENT_SECRET: 'oidc-secret',
       // no OIDC_DISCOVERY_URL
     });
-    expect(oidcConfig()).toMatchObject({
-      clientId: 'ak-id',
-      clientSecret: 'ak-secret',
-      legacy: true,
-    });
+    expect(oidcConfig()).toMatchObject({ clientId: 'ak-id', clientSecret: 'ak-secret' });
   });
 
   it('prefers a complete OIDC_* triple over the legacy one', () => {
     Object.assign(process.env, AUTHENTIK, OIDC);
-    expect(oidcConfig()).toMatchObject({ clientId: 'oidc-id', providerId: 'oidc', legacy: false });
+    expect(oidcConfig()).toMatchObject({ clientId: 'oidc-id', providerId: 'oidc' });
   });
 
   it('lets an explicit OIDC_PROVIDER_ID win on the legacy path', () => {
@@ -236,22 +237,25 @@ describe('enabledAuthProviders', () => {
   });
 });
 
+const spyOnWarn = () => vi.spyOn(console, 'warn').mockImplementation(() => {});
+
 describe('warnDeprecatedAuthEnv', () => {
+  let warn: ReturnType<typeof spyOnWarn>;
+
+  beforeEach(() => {
+    warn = spyOnWarn();
+  });
+
   it('stays silent when only canonical vars are set', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     Object.assign(process.env, OIDC, MICROSOFT);
     warnDeprecatedAuthEnv();
     expect(warn).not.toHaveBeenCalled();
-    warn.mockRestore();
   });
 
-  it('warns once, naming the deprecated vars in use', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    Object.assign(process.env, AUTHENTIK);
+  it('names the deprecated vars in use', () => {
+    Object.assign(process.env, AUTHENTIK, { NEXT_PUBLIC_MICROSOFT_ENABLED: 'false' });
     warnDeprecatedAuthEnv();
-    warnDeprecatedAuthEnv();
-    expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain('AUTHENTIK_CLIENT_ID');
-    warn.mockRestore();
+    expect(warn.mock.calls[0][0]).toContain('NEXT_PUBLIC_MICROSOFT_ENABLED');
   });
 });

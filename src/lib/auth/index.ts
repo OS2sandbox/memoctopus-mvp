@@ -11,8 +11,8 @@ import {
   warnDeprecatedAuthEnv,
 } from './providers';
 
-// Optional OAuth providers — enabled by credential presence, resolved in
-// ./providers so the sign-in page renders exactly what is registered here.
+// Resolved in ./providers so the sign-in page renders exactly what is
+// registered here.
 const microsoft = microsoftConfig();
 const oidc = oidcConfig();
 
@@ -56,23 +56,13 @@ export const auth = betterAuth({
     enabled: emailPasswordEnabled(),
   },
   socialProviders: microsoft ? { microsoft } : {},
-  // Let a login from a provider we control link into an existing account with
-  // the same email instead of failing. Note that better-auth ALSO requires the
-  // local user row to have emailVerified — this app never verifies emails, so
-  // in practice only SSO-first users (whose IdP asserted email_verified) can be
-  // linked. requireLocalEmailVerified is deliberately left at its secure
-  // default: turning it off would let anyone pre-register an unverified account
-  // at someone else's address and capture their SSO identity — and here user.id
-  // is the per-user PostgreSQL schema key, so that is a data breach.
-  account: {
-    accountLinking: {
-      enabled: true,
-      trustedProviders: [
-        ...(microsoft ? ['microsoft'] : []),
-        ...(oidc ? [oidc.providerId] : []),
-      ],
-    },
-  },
+  // No `account.accountLinking` override on purpose. Adding providers to
+  // `trustedProviders` would drop better-auth's requirement that the *incoming*
+  // IdP asserted email_verified (see dist/oauth2/link-account.mjs) — an attacker
+  // who can self-register an unverified account at any configured IdP under a
+  // victim's address could then link into that victim's account. Here user.id is
+  // the per-user PostgreSQL schema key, so that is a data breach. The defaults
+  // require both sides to be verified; leave them alone.
   plugins: [
     ...(oidc
       ? [

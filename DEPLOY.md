@@ -151,11 +151,18 @@ email/password endpoints, not just the form.
 key linking users to their accounts. Changing it after go-live means returning
 users no longer match their existing account and are given a new, empty one.
 
-**Account linking.** An SSO login can link into an existing account with the same
-email only if that account's address is verified. This app sends no verification
-emails, so accounts created with email/password are never linkable — if such a
-user later signs in via SSO they get "account not linked". Have them sign in the
-way they registered, or remove the password account first.
+**Account linking.** An SSO login links into an existing account with the same
+email only when **both** sides are verified: your IdP must assert `email_verified`
+for the incoming login, and the existing account must already be verified. This
+app sends no verification emails, so accounts created with email/password are
+never linkable — if such a user later signs in via SSO they get "account not
+linked". Have them sign in the way they registered, or remove the password
+account first.
+
+This is deliberate and should not be relaxed by marking providers trusted: that
+would drop the check on the *incoming* IdP, so anyone able to self-register at a
+configured IdP under someone else's address could take over their account — and
+each account owns a private PostgreSQL schema.
 
 **Upgrading from the Authentik-specific setup.** `AUTHENTIK_CLIENT_ID`,
 `AUTHENTIK_CLIENT_SECRET` and `AUTHENTIK_DISCOVERY_URL` still work and log a

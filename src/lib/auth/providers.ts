@@ -1,4 +1,3 @@
-// ─── Auth provider configuration ─────────────────────────────────────────────
 // Single source of truth for which login methods are enabled. Read by BOTH the
 // better-auth instance (src/lib/auth/index.ts, to register providers) and the
 // sign-in page (src/app/(marketing)/page.tsx, to render buttons), so the two can
@@ -15,61 +14,57 @@
 //
 // Server-only: must not import @/lib/db (it opens a pg.Pool at module scope).
 
-/**
- * A login provider as the browser sees it. Deliberately carries no secrets —
- * this crosses the server→client boundary as a prop.
- */
+/** Crosses the server→client boundary as a prop — must carry no secrets. */
 export type AuthProvider =
   | { kind: 'social'; id: 'microsoft'; label: string }
   | { kind: 'oauth2'; id: string; label: string };
 
-export interface OidcConfig {
+interface OidcConfig {
   providerId: string;
   providerName: string;
   clientId: string;
   clientSecret: string;
   discoveryUrl: string;
   pkce: boolean;
-  /** Sourced from the deprecated AUTHENTIK_* variables. */
-  legacy: boolean;
-}
-
-export interface MicrosoftConfig {
-  clientId: string;
-  clientSecret: string;
-  tenantId: string;
 }
 
 const DEFAULT_PROVIDER_ID = 'oidc';
 const DEFAULT_PROVIDER_LABEL = 'SSO';
 const LEGACY_PROVIDER_ID = 'authentik';
-const LEGACY_PROVIDER_LABEL = 'Authentik';
+
+// Pre-generic-OIDC names. One registry so the resolvers below and the startup
+// warning can never drift apart. Not all of these are still honoured — see
+// microsoftConfig() — but every one of them is worth warning about.
+const DEPRECATED_FLAGS = {
+  EMAIL_PASSWORD_ENABLED: 'NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED',
+  MICROSOFT_ENABLED: 'NEXT_PUBLIC_MICROSOFT_ENABLED',
+  OIDC_ENABLED: 'NEXT_PUBLIC_AUTHENTIK_ENABLED',
+} as const;
+
+const DEPRECATED_CREDENTIALS = [
+  'AUTHENTIK_CLIENT_ID',
+  'AUTHENTIK_CLIENT_SECRET',
+  'AUTHENTIK_DISCOVERY_URL',
+];
 
 // providerId ends up in the callback path (<baseURL>/api/auth/oauth2/callback/
 // <providerId>) and in the accounts.provider_id column, so it must be a safe URL
-// path segment. Rejecting a bad value at boot beats a callback that 404s only
-// once a user tries to log in.
+// path segment. Reusing a built-in social provider's id would make two different
+// identity sources write the same accounts.provider_id and cross-match.
 const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9_-]*$/;
+const RESERVED_PROVIDER_IDS = ['microsoft'];
 
-/**
- * Read an env var, treating blank as unset.
- *
- * docker-compose passes unset variables through as `${VAR:-}`, which arrives as
- * an empty string rather than undefined — hence `||` and not `??` (same hazard
- * documented in src/lib/ai/diarization.ts).
- */
+// `||` not `??`: docker-compose passes unset variables through as `${VAR:-}`,
+// which arrives as an empty string rather than undefined (same hazard documented
+// in src/lib/ai/diarization.ts).
 function env(key: string): string | undefined {
   return process.env[key]?.trim() || undefined;
 }
 
-/**
- * Resolve a boolean toggle from the first *defined* name, so a canonical name
- * always wins over its deprecated alias. Anything but the literal "false"
- * counts as on.
- */
-function flag(...names: string[]): boolean {
-  for (const name of names) {
-    const value = env(name);
+/** Resolves from the first *defined* name, so a canonical name beats its alias. */
+function flag(name: string, alias?: string): boolean {
+  for (const key of [name, alias]) {
+    const value = key && env(key);
     if (value !== undefined) return value.toLowerCase() !== 'false';
   }
   return true;
@@ -79,20 +74,32 @@ function titleCase(id: string): string {
   return id.charAt(0).toUpperCase() + id.slice(1);
 }
 
+function credentials(prefix: 'OIDC' | 'AUTHENTIK') {
+  const clientId = env(`${prefix}_CLIENT_ID`);
+  const clientSecret = env(`${prefix}_CLIENT_SECRET`);
+  const discoveryUrl = env(`${prefix}_DISCOVERY_URL`);
+  return clientId && clientSecret && discoveryUrl ? { clientId, clientSecret, discoveryUrl } : null;
+}
+
 export function emailPasswordEnabled(): boolean {
-  return flag('EMAIL_PASSWORD_ENABLED', 'NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED');
+  return flag('EMAIL_PASSWORD_ENABLED', DEPRECATED_FLAGS.EMAIL_PASSWORD_ENABLED);
 }
 
 /**
  * Microsoft Entra ID, enabled whenever credentials are present. MICROSOFT_ENABLED
- * (or the deprecated NEXT_PUBLIC_MICROSOFT_ENABLED) is a kill switch, not an
- * opt-in — requiring both credentials and a flag is what let the two disagree.
+ * is a kill switch, not an opt-in — requiring both credentials and a flag is what
+ * let the server and the UI disagree.
+ *
+ * NEXT_PUBLIC_MICROSOFT_ENABLED is deliberately NOT honoured as an alias here:
+ * the old .env examples shipped it as "false" by default, so an operator who
+ * configures Microsoft for the first time after upgrading would silently get
+ * nothing. warnDeprecatedAuthEnv() flags it instead.
  */
-export function microsoftConfig(): MicrosoftConfig | null {
+export function microsoftConfig() {
   const clientId = env('MICROSOFT_CLIENT_ID');
   const clientSecret = env('MICROSOFT_CLIENT_SECRET');
   if (!clientId || !clientSecret) return null;
-  if (!flag('MICROSOFT_ENABLED', 'NEXT_PUBLIC_MICROSOFT_ENABLED')) return null;
+  if (!flag('MICROSOFT_ENABLED')) return null;
 
   return { clientId, clientSecret, tenantId: env('MICROSOFT_TENANT_ID') || 'common' };
 }
@@ -102,61 +109,51 @@ export function microsoftConfig(): MicrosoftConfig | null {
  *
  * Credential sets are all-or-nothing and never mixed: the OIDC_* triple wins,
  * and the deprecated AUTHENTIK_* triple is used only when OIDC_* is incomplete.
- * On that legacy path the provider id stays "authentik" so the redirect URI
+ * On that legacy path the provider id defaults to "authentik" so the redirect URI
  * already registered in the IdP, and the existing accounts rows, keep working.
  */
 export function oidcConfig(): OidcConfig | null {
-  let legacy = false;
-  let clientId = env('OIDC_CLIENT_ID');
-  let clientSecret = env('OIDC_CLIENT_SECRET');
-  let discoveryUrl = env('OIDC_DISCOVERY_URL');
-
-  if (!clientId || !clientSecret || !discoveryUrl) {
-    clientId = env('AUTHENTIK_CLIENT_ID');
-    clientSecret = env('AUTHENTIK_CLIENT_SECRET');
-    discoveryUrl = env('AUTHENTIK_DISCOVERY_URL');
-    legacy = true;
-  }
-  if (!clientId || !clientSecret || !discoveryUrl) return null;
+  const primary = credentials('OIDC');
+  const legacy = !primary;
+  const creds = primary ?? credentials('AUTHENTIK');
+  if (!creds) return null;
 
   // NEXT_PUBLIC_AUTHENTIK_ENABLED only applies when the legacy credentials are
   // actually in use, so a stale "false" left in a migrated .env cannot silently
   // disable a freshly configured Keycloak.
-  const killSwitches = legacy
-    ? ['OIDC_ENABLED', 'NEXT_PUBLIC_AUTHENTIK_ENABLED']
-    : ['OIDC_ENABLED'];
-  if (!flag(...killSwitches)) return null;
+  if (!flag('OIDC_ENABLED', legacy ? DEPRECATED_FLAGS.OIDC_ENABLED : undefined)) return null;
 
-  const providerId = env('OIDC_PROVIDER_ID') ?? (legacy ? LEGACY_PROVIDER_ID : DEFAULT_PROVIDER_ID);
-  if (!PROVIDER_ID_RE.test(providerId)) {
-    throw new Error(
-      `Invalid OIDC_PROVIDER_ID "${providerId}": must match ${PROVIDER_ID_RE} ` +
-        '(it is used as a URL path segment in the OAuth callback).',
+  // Lower-cased first: "Keycloak" is a natural thing to type, and the id is
+  // case-insensitive as far as we are concerned.
+  const providerId =
+    env('OIDC_PROVIDER_ID')?.toLowerCase() ?? (legacy ? LEGACY_PROVIDER_ID : DEFAULT_PROVIDER_ID);
+
+  // Disable OIDC rather than throwing: oidcConfig() runs at module scope in
+  // auth/index.ts and per request on the sign-in page, so throwing would 500
+  // every route including email/password login — a typo would lock everyone out.
+  if (!PROVIDER_ID_RE.test(providerId) || RESERVED_PROVIDER_IDS.includes(providerId)) {
+    console.error(
+      `[auth] Ignoring OIDC config: OIDC_PROVIDER_ID "${providerId}" must match ` +
+        `${PROVIDER_ID_RE} and must not be one of ${RESERVED_PROVIDER_IDS.join(', ')}. ` +
+        'It is used as a URL path segment in the OAuth callback.',
     );
+    return null;
   }
 
   return {
+    ...creds,
     providerId,
-    providerName: env('OIDC_PROVIDER_NAME') ?? defaultProviderLabel(providerId, legacy),
-    clientId,
-    clientSecret,
-    discoveryUrl,
+    providerName: env('OIDC_PROVIDER_NAME') ?? defaultProviderLabel(providerId),
     // better-auth defaults pkce to false; we default it on, since both Keycloak
     // and Authentik support it and servers that don't simply ignore the params.
     pkce: flag('OIDC_PKCE'),
-    legacy,
   };
 }
 
-function defaultProviderLabel(providerId: string, legacy: boolean): string {
-  if (legacy && providerId === LEGACY_PROVIDER_ID) return LEGACY_PROVIDER_LABEL;
-  if (providerId === DEFAULT_PROVIDER_ID) return DEFAULT_PROVIDER_LABEL;
-  return titleCase(providerId);
+function defaultProviderLabel(providerId: string): string {
+  return providerId === DEFAULT_PROVIDER_ID ? DEFAULT_PROVIDER_LABEL : titleCase(providerId);
 }
 
-/**
- * The providers to render on the sign-in page, stripped of every secret.
- */
 export function enabledAuthProviders(): AuthProvider[] {
   const providers: AuthProvider[] = [];
 
@@ -172,36 +169,17 @@ export function enabledAuthProviders(): AuthProvider[] {
   return providers;
 }
 
-let warned = false;
-
-/**
- * Log a single deprecation line for the pre-generic-OIDC variable names. Kept
- * out of the resolvers above so those stay pure; called once at startup.
- */
+/** Called once at startup from auth/index.ts. */
 export function warnDeprecatedAuthEnv(): void {
-  if (warned) return;
+  const inUse = [...Object.values(DEPRECATED_FLAGS), ...DEPRECATED_CREDENTIALS].filter(
+    (name) => env(name) !== undefined,
+  );
+  if (inUse.length === 0) return;
 
-  const deprecated = [
-    'AUTHENTIK_CLIENT_ID',
-    'AUTHENTIK_CLIENT_SECRET',
-    'AUTHENTIK_DISCOVERY_URL',
-    'NEXT_PUBLIC_AUTHENTIK_ENABLED',
-    'NEXT_PUBLIC_MICROSOFT_ENABLED',
-    'NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED',
-  ].filter((name) => env(name) !== undefined);
-
-  if (deprecated.length === 0) return;
-
-  warned = true;
   console.warn(
-    `[auth] Deprecated env vars in use: ${deprecated.join(', ')}. ` +
+    `[auth] Deprecated env vars in use: ${inUse.join(', ')}. ` +
       'Use OIDC_CLIENT_ID / OIDC_CLIENT_SECRET / OIDC_DISCOVERY_URL / OIDC_ENABLED, ' +
       'MICROSOFT_ENABLED and EMAIL_PASSWORD_ENABLED instead. ' +
       'Set OIDC_PROVIDER_ID=authentik to keep your existing callback URL and accounts.',
   );
-}
-
-/** Test seam: allow the once-only deprecation warning to fire again. */
-export function resetDeprecationWarning(): void {
-  warned = false;
 }
