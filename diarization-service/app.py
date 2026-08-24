@@ -23,6 +23,8 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pyannote.audio import Pipeline
 from prometheus_fastapi_instrumentator import Instrumentator
+from prometheus_client import Counter
+
 
 MODEL_NAME = os.environ.get("DIARIZATION_MODEL", "pyannote/speaker-diarization-community-1")
 API_KEY = os.environ.get("DIARIZATION_API_KEY", "")
@@ -32,11 +34,20 @@ DEVICE = os.environ.get("DIARIZATION_DEVICE") or ("cuda" if torch.cuda.is_availa
 # Gated-model auth. huggingface_hub also reads HF_TOKEN from the environment, so the
 # weights download even if the kwarg name differs across pyannote releases.
 HF_TOKEN = os.environ.get("HF_TOKEN")
+# Failure reasons for Prometheus metrics
+FAILURE_INVALID_AUDIO = "invalid_audio"
+FAILURE_INTERNAL_ERROR = "internal_error"
 
 app = FastAPI(title="diarization-service")
 _bearer = HTTPBearer(auto_error=False)
 
 Instrumentator().instrument(app).expose(app)
+
+diarization_jobs_total = Counter(
+    "memoctopus_diarization_jobs_total",
+    "Diarization job outcomes",
+    ["status", "failure_reason"],
+)
 
 # Loaded once at startup and reused across requests.
 _pipeline: Pipeline | None = None
@@ -183,19 +194,34 @@ async def diarize(
     audio: UploadFile | None = File(None),
     _: None = Depends(require_auth),
 ) -> dict:
+    diarization_jobs_total.labels(status="started", failure_reason="").inc()
+    
     upload = file or audio
     if upload is None:
+        diarization_jobs_total.labels(status="failed", failure_reason=FAILURE_INVALID_AUDIO).inc()
         raise HTTPException(status_code=422, detail="Missing audio file (field 'file' or 'audio')")
+    
     data = await upload.read()
     if len(data) < 2_000:
+        diarization_jobs_total.labels(status="completed", failure_reason="").inc()
         return {"turns": []}
 
     t0 = time.monotonic()
     # Decode + inference are CPU/GPU-bound and synchronous — run them off the event
     # loop so /health and concurrent requests aren't frozen for minutes per file.
-    waveform, sample_rate = await asyncio.to_thread(_load_audio, data)
-    async with _inference_lock:
-        output = await asyncio.to_thread(get_pipeline(), {"waveform": waveform, "sample_rate": sample_rate})
+    try:
+        waveform, sample_rate = await asyncio.to_thread(_load_audio, data)
+    except Exception:
+        diarization_jobs_total.labels(status="failed", failure_reason=FAILURE_INVALID_AUDIO).inc()
+        raise
+
+    try:
+        async with _inference_lock:
+            output = await asyncio.to_thread(get_pipeline(), {"waveform": waveform, "sample_rate": sample_rate})
+    except Exception:
+        diarization_jobs_total.labels(status="failed", failure_reason=FAILURE_INTERNAL_ERROR).inc()
+        raise
+
     annotation = _annotation_from(output)
     print(
         f"[diarization] {len(data)} bytes ({waveform.shape[1] / sample_rate:.0f} s audio) "
@@ -208,4 +234,5 @@ async def diarize(
         for segment, _, speaker in annotation.itertracks(yield_label=True)
     ]
     turns.sort(key=lambda t: t["start"])
+    diarization_jobs_total.labels(status="completed", failure_reason="").inc()
     return {"turns": turns}
