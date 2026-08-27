@@ -18,15 +18,12 @@ RUN node scripts/copy-vad-assets.js
 # NEXT_PUBLIC_* are inlined into the browser bundle at build time, so they must be
 # present as build args — setting them only as runtime env (compose `environment`)
 # does NOT change the client bundle. Compose passes these via the app `build.args`.
+# Auth configuration deliberately does NOT appear here: the sign-in page resolves
+# providers server-side per request (src/lib/auth/providers.ts), so operators can
+# change login methods with a restart instead of an image rebuild.
 ARG NEXT_PUBLIC_APP_URL=http://localhost:8080
-ARG NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED=true
-ARG NEXT_PUBLIC_MICROSOFT_ENABLED=false
-ARG NEXT_PUBLIC_AUTHENTIK_ENABLED=false
 ARG NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS=300000
 ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL \
-    NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED=$NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED \
-    NEXT_PUBLIC_MICROSOFT_ENABLED=$NEXT_PUBLIC_MICROSOFT_ENABLED \
-    NEXT_PUBLIC_AUTHENTIK_ENABLED=$NEXT_PUBLIC_AUTHENTIK_ENABLED \
     NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS=$NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS
 RUN npm run build
 
