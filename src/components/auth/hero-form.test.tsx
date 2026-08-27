@@ -3,6 +3,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { HeroForm } from './hero-form';
+import type { AuthProvider } from '@/lib/auth/providers';
 
 const mockPush = vi.fn();
 const mockSearchParamsGet = vi.fn().mockReturnValue(null);
@@ -16,6 +17,7 @@ vi.mock('next/navigation', () => ({
 
 const mockSignInEmail = vi.fn();
 const mockSignInSocial = vi.fn();
+const mockSignInOAuth2 = vi.fn();
 const mockSignUpEmail = vi.fn();
 
 vi.mock('@/lib/auth-client', () => ({
@@ -26,19 +28,32 @@ vi.mock('@/lib/auth-client', () => ({
   signUp: {
     email: (...args: unknown[]) => mockSignUpEmail(...args),
   },
+  authClient: {
+    signIn: {
+      oauth2: (...args: unknown[]) => mockSignInOAuth2(...args),
+    },
+  },
 }));
 
-function renderForm() {
-  return render(<HeroForm />);
+const MICROSOFT: AuthProvider = { kind: 'social', id: 'microsoft', label: 'Microsoft' };
+const KEYCLOAK: AuthProvider = { kind: 'oauth2', id: 'keycloak', label: 'Keycloak' };
+
+function renderForm(providers: AuthProvider[] = [], emailPasswordEnabled = true) {
+  return render(<HeroForm providers={providers} emailPasswordEnabled={emailPasswordEnabled} />);
 }
+
+const clickProvider = (label: string) =>
+  act(async () => {
+    fireEvent.click(screen.getByText(`Fortsæt med ${label}`));
+  });
 
 beforeEach(() => {
   mockPush.mockReset();
   mockSearchParamsGet.mockReturnValue(null);
   mockSignInEmail.mockReset();
   mockSignInSocial.mockReset();
+  mockSignInOAuth2.mockReset();
   mockSignUpEmail.mockReset();
-  delete process.env.NEXT_PUBLIC_MICROSOFT_ENABLED;
 });
 
 describe('HeroForm — initial render (sign-up mode)', () => {
@@ -408,37 +423,30 @@ describe('HeroForm — sign-in submit', () => {
 });
 
 describe('HeroForm — Microsoft sign-in', () => {
-  it('does not render Microsoft button when NEXT_PUBLIC_MICROSOFT_ENABLED is not "true"', () => {
+  it('does not render Microsoft button when the provider is not enabled', () => {
     renderForm();
     expect(screen.queryByText('Fortsæt med Microsoft')).toBeNull();
   });
 
-  it('renders Microsoft button when NEXT_PUBLIC_MICROSOFT_ENABLED is "true"', () => {
-    process.env.NEXT_PUBLIC_MICROSOFT_ENABLED = 'true';
-    renderForm();
+  it('renders Microsoft button when the provider is enabled', () => {
+    renderForm([MICROSOFT]);
     expect(screen.getByText('Fortsæt med Microsoft')).toBeInTheDocument();
   });
 
   it('calls signIn.social with provider=microsoft on Microsoft button click', async () => {
-    process.env.NEXT_PUBLIC_MICROSOFT_ENABLED = 'true';
     mockSignInSocial.mockResolvedValueOnce({ error: null });
 
-    renderForm();
-    await act(async () => {
-      fireEvent.click(screen.getByText('Fortsæt med Microsoft'));
-    });
+    renderForm([MICROSOFT]);
+    await clickProvider('Microsoft');
 
     expect(mockSignInSocial).toHaveBeenCalledWith({ provider: 'microsoft', callbackURL: '/dashboard' });
   });
 
   it('shows error when Microsoft sign-in returns an error message', async () => {
-    process.env.NEXT_PUBLIC_MICROSOFT_ENABLED = 'true';
     mockSignInSocial.mockResolvedValueOnce({ error: { message: 'oauth failed' } });
 
-    renderForm();
-    await act(async () => {
-      fireEvent.click(screen.getByText('Fortsæt med Microsoft'));
-    });
+    renderForm([MICROSOFT]);
+    await clickProvider('Microsoft');
 
     await waitFor(() => {
       expect(screen.getByText('Microsoft login mislykkedes. Prøv igen.')).toBeInTheDocument();
@@ -446,15 +454,78 @@ describe('HeroForm — Microsoft sign-in', () => {
   });
 
   it('passes the "from" search param as callbackURL to Microsoft sign-in', async () => {
-    process.env.NEXT_PUBLIC_MICROSOFT_ENABLED = 'true';
     mockSearchParamsGet.mockReturnValue('/meeting/xyz');
     mockSignInSocial.mockResolvedValueOnce({ error: null });
 
-    renderForm();
-    await act(async () => {
-      fireEvent.click(screen.getByText('Fortsæt med Microsoft'));
-    });
+    renderForm([MICROSOFT]);
+    await clickProvider('Microsoft');
 
     expect(mockSignInSocial).toHaveBeenCalledWith({ provider: 'microsoft', callbackURL: '/meeting/xyz' });
+  });
+});
+
+describe('HeroForm — generic OIDC sign-in', () => {
+  it('labels the button with the operator-configured provider name', () => {
+    renderForm([KEYCLOAK]);
+    expect(screen.getByText('Fortsæt med Keycloak')).toBeInTheDocument();
+  });
+
+  it('calls signIn.oauth2 with the configured providerId', async () => {
+    mockSignInOAuth2.mockResolvedValueOnce({ error: null });
+
+    renderForm([KEYCLOAK]);
+    await clickProvider('Keycloak');
+
+    expect(mockSignInOAuth2).toHaveBeenCalledWith({ providerId: 'keycloak', callbackURL: '/dashboard' });
+    expect(mockSignInSocial).not.toHaveBeenCalled();
+  });
+
+  it('passes the "from" search param as callbackURL', async () => {
+    mockSearchParamsGet.mockReturnValue('/meeting/xyz');
+    mockSignInOAuth2.mockResolvedValueOnce({ error: null });
+
+    renderForm([KEYCLOAK]);
+    await clickProvider('Keycloak');
+
+    expect(mockSignInOAuth2).toHaveBeenCalledWith({ providerId: 'keycloak', callbackURL: '/meeting/xyz' });
+  });
+
+  it('names the provider in the error message', async () => {
+    mockSignInOAuth2.mockResolvedValueOnce({ error: { message: 'oauth failed' } });
+
+    renderForm([KEYCLOAK]);
+    await clickProvider('Keycloak');
+
+    await waitFor(() => {
+      expect(screen.getByText('Keycloak login mislykkedes. Prøv igen.')).toBeInTheDocument();
+    });
+  });
+
+  it('renders several providers in the order given', () => {
+    renderForm([MICROSOFT, KEYCLOAK]);
+    const buttons = screen.getAllByText(/^Fortsæt med /);
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      'Fortsæt med Microsoft',
+      'Fortsæt med Keycloak',
+    ]);
+  });
+});
+
+describe('HeroForm — enabled method combinations', () => {
+  it('shows the administrator notice when no method is enabled', () => {
+    renderForm([], false);
+    expect(screen.getByText('Ingen login-metoder er aktiveret. Kontakt venligst din administrator.')).toBeInTheDocument();
+  });
+
+  it('renders an SSO-only form with no email fields and no divider', () => {
+    renderForm([KEYCLOAK], false);
+    expect(screen.getByText('Fortsæt med Keycloak')).toBeInTheDocument();
+    expect(screen.queryByLabelText('E-mail')).toBeNull();
+    expect(screen.queryByText('eller')).toBeNull();
+  });
+
+  it('renders the divider when both email/password and a provider are enabled', () => {
+    renderForm([KEYCLOAK]);
+    expect(screen.getByText('eller')).toBeInTheDocument();
   });
 });
