@@ -10,6 +10,11 @@ import { notifyTranscriptUpdated } from '@/lib/transcript-events';
 // Every helper is fail-soft: on any error it returns [] so the caller keeps the
 // default single-speaker labels instead of breaking the recording flow.
 
+function getDiarizationTimeoutMs(): number {
+  const value = Number(process.env.NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS);
+  return Number.isFinite(value) && value > 0 ? value : 300_000;
+}
+
 // POST the recording to the diarize route and return the speaker turns. The blob is
 // sent in its ORIGINAL compressed format (webm/opus, mp3, m4a, …) — the diarization
 // service decodes it with ffmpeg. Shipping the compressed file instead of a decoded
@@ -27,7 +32,7 @@ export async function fetchDiarizationTurns(meetingId: string, audio: Blob): Pro
     const res = await fetch(`/api/meetings/${meetingId}/diarize`, {
       method: 'POST',
       body: fd,
-      signal: AbortSignal.timeout(300_000),
+      signal: AbortSignal.timeout(getDiarizationTimeoutMs()),
     });
     if (!res.ok) {
       console.error('[diarize] non-OK response:', res.status);

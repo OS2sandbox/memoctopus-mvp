@@ -4,14 +4,19 @@ import { nextCookies } from 'better-auth/next-js';
 import { genericOAuth } from 'better-auth/plugins';
 import { db } from '@/lib/db';
 import { users, sessions, accounts, verifications } from '@/lib/db/schema';
+import {
+  emailPasswordEnabled,
+  microsoftConfig,
+  oidcConfig,
+  warnDeprecatedAuthEnv,
+} from './providers';
 
-// Optional OAuth providers — opt-in via env, disabled by default.
-const microsoftEnabled = !!(process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET);
-const authentikEnabled = !!(
-  process.env.AUTHENTIK_CLIENT_ID &&
-  process.env.AUTHENTIK_CLIENT_SECRET &&
-  process.env.AUTHENTIK_DISCOVERY_URL
-);
+// Resolved in ./providers so the sign-in page renders exactly what is
+// registered here.
+const microsoft = microsoftConfig();
+const oidc = oidcConfig();
+
+warnDeprecatedAuthEnv();
 
 // ─── Real better-auth instance ────────────────────────────────────────────────
 // Each user gets a stable `user.id`, which the rest of the app uses as the
@@ -48,28 +53,28 @@ export const auth = betterAuth({
     },
   }),
   emailAndPassword: {
-    enabled: true,
+    enabled: emailPasswordEnabled(),
   },
-  socialProviders: microsoftEnabled
-    ? {
-        microsoft: {
-          clientId: process.env.MICROSOFT_CLIENT_ID!,
-          clientSecret: process.env.MICROSOFT_CLIENT_SECRET!,
-          tenantId: process.env.MICROSOFT_TENANT_ID || 'common',
-        },
-      }
-    : {},
+  socialProviders: microsoft ? { microsoft } : {},
+  // No `account.accountLinking` override on purpose. Adding providers to
+  // `trustedProviders` would drop better-auth's requirement that the *incoming*
+  // IdP asserted email_verified (see dist/oauth2/link-account.mjs) — an attacker
+  // who can self-register an unverified account at any configured IdP under a
+  // victim's address could then link into that victim's account. Here user.id is
+  // the per-user PostgreSQL schema key, so that is a data breach. The defaults
+  // require both sides to be verified; leave them alone.
   plugins: [
-    ...(authentikEnabled
+    ...(oidc
       ? [
           genericOAuth({
             config: [
               {
-                providerId: 'authentik',
-                clientId: process.env.AUTHENTIK_CLIENT_ID!,
-                clientSecret: process.env.AUTHENTIK_CLIENT_SECRET!,
-                discoveryUrl: process.env.AUTHENTIK_DISCOVERY_URL!,
+                providerId: oidc.providerId,
+                clientId: oidc.clientId,
+                clientSecret: oidc.clientSecret,
+                discoveryUrl: oidc.discoveryUrl,
                 scopes: ['openid', 'profile', 'email'],
+                pkce: oidc.pkce,
               },
             ],
           }),

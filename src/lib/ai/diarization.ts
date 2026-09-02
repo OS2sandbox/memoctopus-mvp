@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { mimeTypeToExt } from './mime';
+import { Agent, FormData, fetch as undiciFetch } from 'undici';
 import { decodeToMono16k, encodeMono16kWav } from '@/lib/audio/decode-server';
 import { isEnsembleDiarization, hviskeBaseURL } from './transcription';
 
@@ -18,6 +19,15 @@ export interface SpeakerTurn {
 export interface DiarizationProvider {
   diarize(audioBuffer: Buffer, mimeType: string): Promise<SpeakerTurn[]>;
 }
+
+function getDiarizationTimeoutMs(): number {
+  const value = Number(process.env.DIARIZATION_TIMEOUT_MS);
+  return Number.isFinite(value) && value > 0 ? value : 300_000;
+}
+
+type FetchInitWithDispatcher = Parameters<typeof undiciFetch>[1] & {
+  dispatcher: Agent;
+};
 
 // ─── pyannote implementation ──────────────────────────────────────────────────
 // Talks to the pyannote.audio diarization service (FastAPI wrapper around
@@ -66,25 +76,53 @@ export class PyannoteProvider implements DiarizationProvider {
     }
 
     const ext = mimeTypeToExt(outMime, 'wav');
-    const file = new File([new Uint8Array(buffer)], `audio.${ext}`, { type: outMime });
     const form = new FormData();
+    const blob = new Blob([new Uint8Array(buffer)], { type: outMime });
+
     // Multipart field name is `file` — the co-hosted hviske /diarize endpoint
     // requires it (the legacy standalone service accepted `audio`; it now accepts
     // both, see diarization-service/app.py).
-    form.append('file', file);
+    //
+    // Use undici.FormData together with undici.fetch. Mixing global FormData/File
+    // with undici.fetch can produce a request that reaches FastAPI but is parsed as
+    // missing the uploaded file.
+    form.append('file', blob, `audio.${ext}`);
 
-    const res = await fetch(`${this.baseURL}/diarize`, {
-      method: 'POST',
-      headers: this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : undefined,
-      body: form,
-      signal: AbortSignal.timeout(300_000),
+    const timeoutMs = getDiarizationTimeoutMs();
+
+    // Use undici.fetch together with undici.Agent. Passing an undici dispatcher to
+    // Next/Node's patched global fetch can fail with UND_ERR_INVALID_ARG.
+    //
+    // AbortSignal.timeout controls our own request timeout, but undici also has
+    // headers/body timers. CPU diarization can legitimately take longer than the
+    // default headers timeout before returning response headers, so configure those
+    // timers to match DIARIZATION_TIMEOUT_MS.
+    const dispatcher = new Agent({
+      headersTimeout: timeoutMs,
+      bodyTimeout: timeoutMs,
     });
-    if (!res.ok) {
-      throw new Error(`Diarization service returned ${res.status}`);
-    }
 
-    const data = (await res.json()) as { turns?: SpeakerTurn[] };
-    return Array.isArray(data.turns) ? data.turns : [];
+    try {
+      const res = await undiciFetch(`${this.baseURL}/diarize`, {
+        method: 'POST',
+        headers: this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : undefined,
+        body: form,
+        signal: AbortSignal.timeout(timeoutMs),
+        dispatcher,
+      } as FetchInitWithDispatcher);
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(
+          `Diarization service returned ${res.status}${body ? `: ${body.slice(0, 1000)}` : ''}`,
+        );
+      }
+
+      const data = (await res.json()) as { turns?: SpeakerTurn[] };
+      return Array.isArray(data.turns) ? data.turns : [];
+    } finally {
+      await dispatcher.close();
+    }
   }
 }
 

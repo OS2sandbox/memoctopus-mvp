@@ -28,7 +28,7 @@ ARG HF_TOKEN
 ARG BAKE_WEIGHTS=true
 RUN if [ "$BAKE_WEIGHTS" = "true" ]; then \
       python3 -c "from pyannote.audio import Pipeline; \
-        Pipeline.from_pretrained('pyannote/speaker-diarization-community-1', use_auth_token='${HF_TOKEN}')"; \
+        Pipeline.from_pretrained('pyannote/speaker-diarization-community-1', token='${HF_TOKEN}')"; \
     else \
       echo "BAKE_WEIGHTS=false — skipping build-time model download (weights expected at runtime via mounted /models)"; \
     fi
