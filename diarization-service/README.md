@@ -22,6 +22,16 @@ torchcodec/ffmpeg audio backend.
 - `GET /health` → `{ "status": "ok", "model": "...", "device": "cuda" }`
 - `POST /diarize` (multipart, field `file` — `audio` also accepted for the legacy contract) → `{ "turns": [{ "speaker": "SPEAKER_00", "start": 0.0, "end": 4.2 }, ...] }`
   - Bearer-authenticated with `DIARIZATION_API_KEY` (auth disabled when unset).
+- `GET /metrics` → Prometheus exposition format.
+  - Standard per-route series (`http_requests_total`, `http_request_duration_seconds`,
+    in-progress) from `prometheus-fastapi-instrumentator`, plus:
+  - `memoctopus_diarization_jobs_total{status,failure_reason}` — job outcomes.
+    `failure_reason` is `invalid_audio` (bad or undecodable upload) or
+    `internal_error`, and empty on success.
+  - `memoctopus_diarization_duration_seconds` — decode + inference wall time,
+    excluding upload. Compare against the HTTP duration to tell a slow link from a
+    slow GPU.
+  - Unauthenticated by default; see `DIARIZATION_METRICS_REQUIRE_AUTH`.
 
 ## Config (env)
 
@@ -32,6 +42,12 @@ torchcodec/ffmpeg audio backend.
 - `DIARIZATION_SEGMENTATION_BATCH_SIZE` / `DIARIZATION_EMBEDDING_BATCH_SIZE` —
   sub-model batch sizes (default 32). Larger values cut GPU inference wall time on
   long recordings; lower them if VRAM is tight.
+- `DIARIZATION_METRICS_REQUIRE_AUTH` — `1`/`true` to require the same bearer token on
+  `/metrics` as on `/diarize`. Off by default: the service is not publicly exposed, and
+  a scraper that suddenly needs a credential fails silently (the series just stop). Turn
+  it on where the service is reachable from outside the internal network. Like
+  `/diarize`, it has no effect unless `DIARIZATION_API_KEY` is also set — with no key
+  configured there is nothing to check and `/metrics` stays open.
 - `HF_TOKEN` — only needed the first time, to download the gated weights (cached after).
 
 ## Deploy A — directly on the GPU box (what production uses)
@@ -39,7 +55,10 @@ torchcodec/ffmpeg audio backend.
 This is how it's deployed next to the hviske vLLM server (a vast.ai box, no Docker):
 
 ```bash
-pip3 install pyannote.audio
+# Install from requirements.txt, not just pyannote: app.py imports the Prometheus
+# packages at module load, so a partial install crash-loops the service under
+# supervisord rather than degrading.
+pip3 install -r requirements.txt
 # one-time gated-model download (accept terms on huggingface.co first):
 HF_TOKEN=hf_xxx python3 -c "from pyannote.audio import Pipeline; \
   Pipeline.from_pretrained('pyannote/speaker-diarization-community-1')"
