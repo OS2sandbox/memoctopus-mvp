@@ -260,16 +260,14 @@ async def diarize(
             {"speaker": speaker, "start": round(float(segment.start), 3), "end": round(float(segment.end), 3)}
             for segment, _, speaker in annotation.itertracks(yield_label=True)
         ]
-    except HTTPException as e:
-        # 400 is the only genuinely client-caused status raised below: undecodable
-        # audio. 415 means ffmpeg is missing from the *host* — a misconfiguration that
-        # would otherwise show up as 100% "bad uploads" and send operators hunting the
-        # caller instead of the box.
-        reason = "invalid_audio" if e.status_code == 400 else "internal_error"
+    except Exception as e:
+        # 400 is the only genuinely client-caused failure: undecodable audio. 415 means
+        # ffmpeg is missing from the *host* — a misconfiguration that would otherwise
+        # show up as 100% "bad uploads" and send operators hunting the caller instead
+        # of the box. Everything else is ours.
+        client_fault = isinstance(e, HTTPException) and e.status_code == 400
+        reason = "invalid_audio" if client_fault else "internal_error"
         diarization_jobs_total.labels(status="failure", failure_reason=reason).inc()
-        raise
-    except Exception:
-        diarization_jobs_total.labels(status="failure", failure_reason="internal_error").inc()
         raise
 
     diarization_queue_wait_seconds.observe(inference_started - decoded_at)
