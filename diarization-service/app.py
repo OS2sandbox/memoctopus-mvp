@@ -21,6 +21,8 @@ import numpy as np
 import torch
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from prometheus_client import Counter, Histogram
+from prometheus_fastapi_instrumentator import Instrumentator
 from pyannote.audio import Pipeline
 
 MODEL_NAME = os.environ.get("DIARIZATION_MODEL", "pyannote/speaker-diarization-community-1")
@@ -31,6 +33,12 @@ DEVICE = os.environ.get("DIARIZATION_DEVICE") or ("cuda" if torch.cuda.is_availa
 # Gated-model auth. huggingface_hub also reads HF_TOKEN from the environment, so the
 # weights download even if the kwarg name differs across pyannote releases.
 HF_TOKEN = os.environ.get("HF_TOKEN")
+
+# Whether /metrics requires the same bearer token as /diarize. Off by default: the
+# service is not publicly exposed, and a Prometheus scraper that suddenly needs a
+# credential fails silently (the series just stop). Turn it on where the service is
+# reachable from outside the internal network.
+METRICS_REQUIRE_AUTH = os.environ.get("DIARIZATION_METRICS_REQUIRE_AUTH", "").lower() in ("1", "true", "yes")
 
 app = FastAPI(title="diarization-service")
 _bearer = HTTPBearer(auto_error=False)
@@ -82,6 +90,35 @@ def require_auth(creds: HTTPAuthorizationCredentials | None = Depends(_bearer)) 
         return
     if creds is None or creds.credentials != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+# Job outcomes. Diarization is the slowest and least predictable step in the
+# pipeline, and it fails in ways users only notice much later (missing or wrong
+# speaker labels), so failures are counted separately from successes and split by
+# cause: `invalid_audio` is a bad or undecodable upload (the client's problem),
+# `internal_error` is ours. `failure_reason` is empty on success — a label has to be
+# present on every sample of a series, so it cannot simply be omitted.
+diarization_jobs_total = Counter(
+    "memoctopus_diarization_jobs_total",
+    "Diarization job outcomes",
+    ["status", "failure_reason"],
+)
+
+# Wall time of the diarization itself (decode + inference), separate from the HTTP
+# request duration the instrumentator records: it excludes upload time, so a slow
+# link and a slow GPU can be told apart. Buckets run to 30 min because CPU-bound
+# hosts genuinely take that long on a full meeting.
+diarization_duration_seconds = Histogram(
+    "memoctopus_diarization_duration_seconds",
+    "Time spent decoding and diarizing one recording",
+    buckets=(1, 5, 15, 30, 60, 120, 300, 600, 900, 1800, float("inf")),
+)
+
+# Standard per-route request count / duration / in-progress series, plus /metrics.
+Instrumentator().instrument(app).expose(
+    app,
+    dependencies=[Depends(require_auth)] if METRICS_REQUIRE_AUTH else None,
+)
 
 
 @app.on_event("startup")
@@ -182,18 +219,35 @@ async def diarize(
 ) -> dict:
     upload = file or audio
     if upload is None:
+        diarization_jobs_total.labels(status="failure", failure_reason="invalid_audio").inc()
         raise HTTPException(status_code=422, detail="Missing audio file (field 'file' or 'audio')")
     data = await upload.read()
     if len(data) < 2_000:
+        # Too small to contain speech. A successful job with nothing to report, not a
+        # failure — the caller gets an empty turn list and merges nothing.
+        diarization_jobs_total.labels(status="success", failure_reason="").inc()
         return {"turns": []}
 
     t0 = time.monotonic()
-    # Decode + inference are CPU/GPU-bound and synchronous — run them off the event
-    # loop so /health and concurrent requests aren't frozen for minutes per file.
-    waveform, sample_rate = await asyncio.to_thread(_load_audio, data)
-    async with _inference_lock:
-        output = await asyncio.to_thread(get_pipeline(), {"waveform": waveform, "sample_rate": sample_rate})
-    annotation = _annotation_from(output)
+    try:
+        # Decode + inference are CPU/GPU-bound and synchronous — run them off the event
+        # loop so /health and concurrent requests aren't frozen for minutes per file.
+        waveform, sample_rate = await asyncio.to_thread(_load_audio, data)
+        async with _inference_lock:
+            output = await asyncio.to_thread(get_pipeline(), {"waveform": waveform, "sample_rate": sample_rate})
+        annotation = _annotation_from(output)
+    except HTTPException as e:
+        # _load_with_ffmpeg raises 400/415 for undecodable or unsupported audio; any
+        # other status here is still the request's fault rather than a server fault.
+        reason = "invalid_audio" if e.status_code < 500 else "internal_error"
+        diarization_jobs_total.labels(status="failure", failure_reason=reason).inc()
+        raise
+    except Exception:
+        diarization_jobs_total.labels(status="failure", failure_reason="internal_error").inc()
+        raise
+    finally:
+        diarization_duration_seconds.observe(time.monotonic() - t0)
+
     print(
         f"[diarization] {len(data)} bytes ({waveform.shape[1] / sample_rate:.0f} s audio) "
         f"on {DEVICE} in {time.monotonic() - t0:.1f} s",
@@ -205,4 +259,5 @@ async def diarize(
         for segment, _, speaker in annotation.itertracks(yield_label=True)
     ]
     turns.sort(key=lambda t: t["start"])
+    diarization_jobs_total.labels(status="success", failure_reason="").inc()
     return {"turns": turns}
