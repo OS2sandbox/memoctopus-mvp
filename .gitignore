@@ -47,3 +47,7 @@ next-env.d.ts
 # audio storage
 /audio-storage
 .env.docker
+
+# Python bytecode (diarization-service)
+__pycache__/
+*.pyc
