@@ -153,9 +153,14 @@ async function _summarizeChapter(
   chapterSegments: TranscriptSegment[],
   chapterTitle: string,
 ): Promise<string> {
-  const transcriptText = mergeConsecutiveSpeakerTurns(chapterSegments)
-    .map((s) => `[${s.speaker}]: ${s.text}`)
-    .join('\n');
+  // A single chapter can be larger than the window on its own — chaptering bounds how
+  // many summaries there are, not how big each one is — so the budget applies here too.
+  const transcriptText = truncateToBudget(
+    mergeConsecutiveSpeakerTurns(chapterSegments)
+      .map((s) => `[${s.speaker}]: ${s.text}`)
+      .join('\n'),
+    transcriptBudgetChars(),
+  );
 
   const response = await getLlmClient().chat.completions.create({
     model: llmModel('gpt-4o'),

@@ -99,7 +99,6 @@ Bot-service authenticates all requests from the Next.js app via `Authorization: 
 | `AUDIO_STORAGE_PATH` | Filesystem path for audio files |
 | `LLM_CONTEXT_TOKENS` | Model context window for prompt sizing (default 65536) |
 | `LLM_MAX_OUTPUT_TOKENS` | Cap on generated referat length (default 2000) |
-| `DIARIZATION_METRICS_REQUIRE_AUTH` | Gate `/metrics` behind the diarization bearer token (default off) |
 | `BETTER_AUTH_URL` / `BETTER_AUTH_SECRET` | better-auth base URL and signing secret |
 | `EMAIL_PASSWORD_ENABLED` | Kill switch for email/password (default on) |
 | `MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT_ID` | Entra ID; enables itself when the id + secret are set |

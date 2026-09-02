@@ -139,6 +139,13 @@ describe('generateReferatBody', () => {
 // ─── Speaker-turn merging ─────────────────────────────────────────────────────
 
 describe('mergeConsecutiveSpeakerTurns', () => {
+  // Without this, mock.calls[0] is a leftover call from an earlier describe and the
+  // prompt assertion below passes even with merging disabled.
+  beforeEach(() => {
+    mockComplete.mockReset();
+    mockComplete.mockResolvedValue(openaiResponse('Referat'));
+  });
+
   it('collapses a run of segments from one speaker into a single turn', () => {
     const merged = mergeConsecutiveSpeakerTurns([
       { speaker: 'Taler 1', start: 0, end: 2, text: 'Vi åbner' },
@@ -294,5 +301,63 @@ describe('generateReferatBody — prompt sizing', () => {
     const prompt = mockComplete.mock.calls[0][0].messages[1].content as string;
     expect(prompt).toContain('Vi åbner mødet.');
     expect(prompt).not.toContain('forkortet');
+  });
+});
+
+// ─── Budget floor and per-chapter budgeting ───────────────────────────────────
+
+describe('generateReferatBody — degenerate budgets', () => {
+  const envKeys = [
+    'LLM_CONTEXT_TOKENS', 'LLM_MAX_OUTPUT_TOKENS', 'LLM_PROMPT_RESERVE_TOKENS',
+    'LLM_CHARS_PER_TOKEN', 'LLM_CHAPTER_SPLIT_CHARS', 'LLM_CHAPTER_SUMMARY_MAX_TOKENS',
+  ];
+
+  beforeEach(async () => {
+    mockComplete.mockReset();
+    mockComplete.mockResolvedValue(openaiResponse('Referat'));
+    for (const k of envKeys) delete process.env[k];
+    (await import('./llm-budget')).__resetBudgetWarning();
+  });
+
+  it('never sends an empty transcript when the window is configured absurdly small', async () => {
+    // Output + reserve exceed the window entirely — a naive budget would be <= 0.
+    process.env.LLM_CONTEXT_TOKENS = '100';
+    process.env.LLM_MAX_OUTPUT_TOKENS = '2000';
+    process.env.LLM_PROMPT_RESERVE_TOKENS = '1000';
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await generateReferatBody(sampleSegments, baseSpec);
+    const prompt = mockComplete.mock.calls[0][0].messages[1].content as string;
+    // The model must still see the meeting, not just the truncation marker.
+    expect(prompt).toContain('Vi åbner mødet.');
+  });
+
+  it('warns loudly rather than silently fabricating from nothing', async () => {
+    process.env.LLM_CONTEXT_TOKENS = '100';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await generateReferatBody(sampleSegments, baseSpec);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('LLM_CONTEXT_TOKENS'));
+  });
+
+  it('budgets each chapter summary, not just the condensed result', async () => {
+    process.env.LLM_CHAPTER_SPLIT_CHARS = '100';
+    process.env.LLM_CONTEXT_TOKENS = '3000';
+    process.env.LLM_MAX_OUTPUT_TOKENS = '500';
+    process.env.LLM_PROMPT_RESERVE_TOKENS = '500';
+    process.env.LLM_CHARS_PER_TOKEN = '1';   // budget = 2000 chars
+
+    // One enormous chapter: chaptering bounds the number of summaries, not their size.
+    const transcript: TranscriptSegment[] = Array.from({ length: 400 }, (_, i) => ({
+      speaker: `Taler ${(i % 2) + 1}`, start: i, end: i + 1, text: 'y'.repeat(50),
+    }));
+    const chapters = [
+      { title: 'Stor del', segmentIndices: transcript.map((_, i) => i).slice(0, 399) },
+      { title: 'Lille del', segmentIndices: [399] },
+    ];
+    await generateReferatBody(transcript, baseSpec, undefined, chapters as never);
+
+    const summaryPrompt = mockComplete.mock.calls[0][0].messages[0].content as string;
+    expect(summaryPrompt).toContain('forkortet');
+    expect(summaryPrompt.length).toBeLessThan(4_000);
   });
 });

@@ -55,11 +55,37 @@ export function charsPerToken(): number {
   return envFloat('LLM_CHARS_PER_TOKEN', 2.5);
 }
 
+// Never go below this, however the window is configured. A budget at or near zero
+// would send the model an empty transcript and nothing but the truncation marker —
+// and it would dutifully invent a referat from nothing, which is far worse than a
+// request that fails. A misconfiguration should be loud, not quietly fabricated.
+const MIN_TRANSCRIPT_BUDGET_CHARS = 2_000;
+
+let warnedAboutFloor = false;
+
 // How many characters of transcript can be sent while leaving room for the output and
 // the surrounding prompt.
 export function transcriptBudgetChars(): number {
   const usable = contextWindowTokens() - maxOutputTokens() - promptReserveTokens();
-  return Math.max(0, Math.floor(usable * charsPerToken()));
+  const derived = Math.floor(usable * charsPerToken());
+  if (derived < MIN_TRANSCRIPT_BUDGET_CHARS) {
+    if (!warnedAboutFloor) {
+      warnedAboutFloor = true;
+      console.warn(
+        `[minutes] LLM_CONTEXT_TOKENS=${contextWindowTokens()} leaves only ${derived} ` +
+        `characters for the transcript after output (${maxOutputTokens()}) and reserve ` +
+        `(${promptReserveTokens()}) tokens. Using ${MIN_TRANSCRIPT_BUDGET_CHARS}; the ` +
+        'request will likely exceed the window. Raise the context window or lower the caps.',
+      );
+    }
+    return MIN_TRANSCRIPT_BUDGET_CHARS;
+  }
+  return derived;
+}
+
+// Test seam: re-arm the one-shot warning above.
+export function __resetBudgetWarning(): void {
+  warnedAboutFloor = false;
 }
 
 // Character length above which chaptered transcripts are summarised per chapter
