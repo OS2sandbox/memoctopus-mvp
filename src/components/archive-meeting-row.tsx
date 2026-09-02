@@ -15,6 +15,7 @@ import {
 import { formatDate, formatDuration, statusLabel, statusVariant } from '@/lib/utils';
 import { Meeting } from '@/types';
 import { deleteMeeting } from '@/lib/storage';
+import { ErrorBanner } from '@/components/ui/error-banner';
 
 type ArchiveMeeting = Pick<Meeting, 'id' | 'title' | 'participants' | 'status' | 'createdAt'> & {
   durationSeconds: number | null;
@@ -44,15 +45,19 @@ export function ArchiveMeetingRow({
   const [hovered, setHovered] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   async function handleDelete() {
     setIsDeleting(true);
+    setDeleteError(null);
     try {
       await deleteMeeting(meeting.id);
       setDeleteOpen(false);
       onDeleted?.();
-    } catch {
+    } catch (err) {
+      console.error('[archive-meeting-row] handleDelete failed for meeting', meeting.id, err);
       setIsDeleting(false);
+      setDeleteError('Mødet kunne ikke slettes — prøv igen.');
     }
   }
 
@@ -114,6 +119,7 @@ export function ArchiveMeetingRow({
         <button
           onClick={(e) => {
             e.preventDefault();
+            setDeleteError(null);
             setDeleteOpen(true);
           }}
           className="ml-1 p-1.5 rounded text-[var(--muted)] hover:text-red-500 hover:bg-red-50 transition-colors"
@@ -139,6 +145,7 @@ export function ArchiveMeetingRow({
               Denne handling kan ikke fortrydes.
             </DialogDescription>
           </DialogHeader>
+          <ErrorBanner message={deleteError} className="mt-1" />
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setDeleteOpen(false)} disabled={isDeleting}>
               Annullér
