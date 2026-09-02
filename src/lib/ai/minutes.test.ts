@@ -21,6 +21,13 @@ const sampleSegments: TranscriptSegment[] = [
   { speaker: 'Taler 2', start: 6, end: 10, text: 'Første punkt på dagsordenen.' },
 ];
 
+// Every budget knob, cleared before each sizing test so one test can't leak into
+// the next. Listed once: this PR alone took it from two entries to six.
+const BUDGET_ENV_KEYS = [
+  'LLM_CONTEXT_TOKENS', 'LLM_MAX_OUTPUT_TOKENS', 'LLM_PROMPT_RESERVE_TOKENS',
+  'LLM_CHARS_PER_TOKEN', 'LLM_CHAPTER_SPLIT_CHARS', 'LLM_CHAPTER_SUMMARY_MAX_TOKENS',
+];
+
 const baseSpec: SkabelonSpec = {
   prompt: 'Lav et kortfattet referat.',
   includeDeltagere: false,
@@ -204,15 +211,10 @@ describe('mergeConsecutiveSpeakerTurns', () => {
 // ─── Context-window budgeting ─────────────────────────────────────────────────
 
 describe('generateReferatBody — prompt sizing', () => {
-  const envKeys = [
-    'LLM_CONTEXT_TOKENS', 'LLM_MAX_OUTPUT_TOKENS', 'LLM_PROMPT_RESERVE_TOKENS',
-    'LLM_CHARS_PER_TOKEN', 'LLM_CHAPTER_SPLIT_CHARS', 'LLM_CHAPTER_SUMMARY_MAX_TOKENS',
-  ];
-
   beforeEach(() => {
     mockComplete.mockReset();
     mockComplete.mockResolvedValue(openaiResponse('Referat'));
-    for (const k of envKeys) delete process.env[k];
+    for (const k of BUDGET_ENV_KEYS) delete process.env[k];
   });
 
   // One segment per speaker alternation, so merging can't collapse it away.
@@ -307,16 +309,10 @@ describe('generateReferatBody — prompt sizing', () => {
 // ─── Budget floor and per-chapter budgeting ───────────────────────────────────
 
 describe('generateReferatBody — degenerate budgets', () => {
-  const envKeys = [
-    'LLM_CONTEXT_TOKENS', 'LLM_MAX_OUTPUT_TOKENS', 'LLM_PROMPT_RESERVE_TOKENS',
-    'LLM_CHARS_PER_TOKEN', 'LLM_CHAPTER_SPLIT_CHARS', 'LLM_CHAPTER_SUMMARY_MAX_TOKENS',
-  ];
-
-  beforeEach(async () => {
+  beforeEach(() => {
     mockComplete.mockReset();
     mockComplete.mockResolvedValue(openaiResponse('Referat'));
-    for (const k of envKeys) delete process.env[k];
-    (await import('./llm-budget')).__resetBudgetWarning();
+    for (const k of BUDGET_ENV_KEYS) delete process.env[k];
   });
 
   it('never sends an empty transcript when the window is configured absurdly small', async () => {

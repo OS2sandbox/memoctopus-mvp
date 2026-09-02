@@ -102,11 +102,9 @@ export function mergeConsecutiveSpeakerTurns(segments: TranscriptSegment[]): Tra
   return merged;
 }
 
-// Render a transcript for the prompt: one line per speaker turn, timestamped.
-function renderTranscript(segments: TranscriptSegment[]): string {
-  return mergeConsecutiveSpeakerTurns(segments)
-    .map((s) => `[${s.speaker}] (${formatTime(s.start)}): ${s.text}`)
-    .join('\n');
+// Render already-merged turns for the prompt: one line per turn, timestamped.
+function renderTurns(turns: TranscriptSegment[]): string {
+  return turns.map((s) => `[${s.speaker}] (${formatTime(s.start)}): ${s.text}`).join('\n');
 }
 
 // Cut to `budget` characters on a line boundary where possible, so the prompt never
@@ -193,32 +191,32 @@ export async function generateReferatBody(
   chapters?: TranscriptChapter[],
   customPrompt?: string,
 ): Promise<{ body: string }> {
-  const transcriptText = renderTranscript(transcript);
   const instruction = buildSkabelonInstruction(spec, participants, customPrompt);
   const budget = transcriptBudgetChars();
+  const transcriptText = renderTurns(mergeConsecutiveSpeakerTurns(transcript));
 
-  // Summarise per chapter when the transcript is long enough that condensing helps
-  // the referat, OR when it simply will not fit the model's context window.
-  const splitThreshold = Math.min(chapterSplitChars(), budget);
+  // Summarise per chapter when the transcript is long enough that condensing helps the
+  // referat, OR when it simply will not fit the model's context window. Without the
+  // second condition an unchaptered long meeting went to the model whole and came back
+  // truncated; without the first, large-context deployments would stop condensing.
+  const useChapters =
+    !!chapters && chapters.length > 1 && transcriptText.length > Math.min(chapterSplitChars(), budget);
 
-  if (chapters && chapters.length > 1 && transcriptText.length > splitThreshold) {
+  let content = transcriptText;
+  if (useChapters) {
     const summaries = await Promise.all(
-      chapters.map((ch) => {
+      chapters!.map((ch) => {
+        // Chapters index the raw segments, so each slice is merged on its own.
         const chapterSegments = ch.segmentIndices.map((i) => transcript[i]).filter(Boolean);
         return _summarizeChapter(chapterSegments, ch.title);
       }),
     );
-    const condensed = chapters.map((ch, i) => `## ${ch.title}\n${summaries[i]}`).join('\n\n');
     // Summaries are far smaller than the transcript, but a meeting with very many
-    // chapters can still overflow — so the budget applies here too.
-    const body = await _generateBody(truncateToBudget(condensed, budget), instruction);
-    return { body };
+    // chapters can still overflow — so the budget below applies to this too.
+    content = chapters!.map((ch, i) => `## ${ch.title}\n${summaries[i]}`).join('\n\n');
   }
 
-  // No chapters to split on (segmentation found one or none), or the transcript is
-  // short enough to send whole. Either way it must still fit: without this, an
-  // unchaptered long meeting went to the model in full and came back truncated.
-  const body = await _generateBody(truncateToBudget(transcriptText, budget), instruction);
+  const body = await _generateBody(truncateToBudget(content, budget), instruction);
   return { body };
 }
 

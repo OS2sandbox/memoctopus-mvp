@@ -61,31 +61,24 @@ export function charsPerToken(): number {
 // request that fails. A misconfiguration should be loud, not quietly fabricated.
 const MIN_TRANSCRIPT_BUDGET_CHARS = 2_000;
 
-let warnedAboutFloor = false;
-
 // How many characters of transcript can be sent while leaving room for the output and
 // the surrounding prompt.
 export function transcriptBudgetChars(): number {
   const usable = contextWindowTokens() - maxOutputTokens() - promptReserveTokens();
   const derived = Math.floor(usable * charsPerToken());
   if (derived < MIN_TRANSCRIPT_BUDGET_CHARS) {
-    if (!warnedAboutFloor) {
-      warnedAboutFloor = true;
-      console.warn(
-        `[minutes] LLM_CONTEXT_TOKENS=${contextWindowTokens()} leaves only ${derived} ` +
-        `characters for the transcript after output (${maxOutputTokens()}) and reserve ` +
-        `(${promptReserveTokens()}) tokens. Using ${MIN_TRANSCRIPT_BUDGET_CHARS}; the ` +
-        'request will likely exceed the window. Raise the context window or lower the caps.',
-      );
-    }
+    // Warned every time rather than once: this only fires on a misconfiguration, and
+    // referat generation is not a hot path, so a repeated log costs nothing and avoids
+    // module-level state (plus the test seam it would need).
+    console.warn(
+      `[minutes] LLM_CONTEXT_TOKENS=${contextWindowTokens()} leaves only ${derived} ` +
+      `characters for the transcript after output (${maxOutputTokens()}) and reserve ` +
+      `(${promptReserveTokens()}) tokens. Using ${MIN_TRANSCRIPT_BUDGET_CHARS}; the ` +
+      'request will likely exceed the window. Raise the context window or lower the caps.',
+    );
     return MIN_TRANSCRIPT_BUDGET_CHARS;
   }
   return derived;
-}
-
-// Test seam: re-arm the one-shot warning above.
-export function __resetBudgetWarning(): void {
-  warnedAboutFloor = false;
 }
 
 // Character length above which chaptered transcripts are summarised per chapter
