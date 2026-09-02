@@ -62,7 +62,7 @@ Auth config is deliberately **runtime-only**, never `NEXT_PUBLIC_*`: an operator
 1. `src/lib/ai/transcription.ts` — STT via the hviske (`syvai/hviske-ensemble`) server's OpenAI-compatible API. Used for both the per-utterance live path (`/api/meetings/[id]/utterance`) and the batch transcribe pass. Configured via `HVISKE_URL` / `HVISKE_API_KEY`. Speaker diarization (`src/lib/ai/diarization.ts`) is now co-hosted on the same server at `POST /diarize`; hviske still returns plain text only, so segment timestamps are VAD-estimated and the diarization turns are merged on by time-overlap (`src/lib/audio/merge-speakers.ts`).
 2. `src/lib/ai/pii.ts` — PII detection and replacement using OpenAI `gpt-4o`.
 3. `src/lib/ai/chapters.ts` — Chapter/topic segmentation using OpenAI.
-4. `src/lib/ai/minutes.ts` — Meeting minutes generation using OpenAI `gpt-4o`. Prompts are in Danish.
+4. `src/lib/ai/minutes.ts` — Meeting minutes generation using OpenAI `gpt-4o`. Prompts are in Danish. The transcript is rendered one line per *speaker turn* (consecutive segments from one speaker are merged, cutting repeated `[Taler N]` labels) and sized against the model's context window via `src/lib/ai/llm-budget.ts` — an env-driven budget, since the real window of whatever `LLM_BASE_URL` points at cannot be detected. Over budget, a chaptered transcript is summarised per chapter and anything still too long is truncated with a marker; `max_tokens` is set explicitly on both calls so output length is a decision rather than a leftover.
 5. `src/lib/ai/clarifications.ts` — Generates clarification questions about ambiguous content.
 
 **Bot API routes** (`src/app/api/bot/`): Next.js acts as an authenticated proxy to the bot-service. All bot routes require a user session. The `/api/bot/audio-upload` route is the exception — it's called by the bot-service itself, authenticated via `BOT_INTERNAL_SECRET` (not a user session).
@@ -97,6 +97,8 @@ Bot-service authenticates all requests from the Next.js app via `Authorization: 
 | `ASR_LANGUAGE` | Transcription language (default `da`) |
 | `OPENAI_API_KEY` | Chapters, minutes, clarifications generation, and PII detection |
 | `AUDIO_STORAGE_PATH` | Filesystem path for audio files |
+| `LLM_CONTEXT_TOKENS` | Model context window for prompt sizing (default 65536) |
+| `LLM_MAX_OUTPUT_TOKENS` | Cap on generated referat length (default 2000) |
 | `BETTER_AUTH_URL` / `BETTER_AUTH_SECRET` | better-auth base URL and signing secret |
 | `EMAIL_PASSWORD_ENABLED` | Kill switch for email/password (default on) |
 | `MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT_ID` | Entra ID; enables itself when the id + secret are set |

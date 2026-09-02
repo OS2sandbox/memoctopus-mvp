@@ -80,6 +80,14 @@ services:
       # (vllm-chat). LLM_BASE_URL / LLM_MODEL override the endpoint + model explicitly.
       - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_MODEL=${LLM_MODEL:-}
+      # Prompt sizing. There is no env_file here, so a variable absent from this list
+      # never reaches the container and silently falls back to its default.
+      - LLM_CONTEXT_TOKENS=${LLM_CONTEXT_TOKENS:-}
+      - LLM_MAX_OUTPUT_TOKENS=${LLM_MAX_OUTPUT_TOKENS:-}
+      - LLM_CHARS_PER_TOKEN=${LLM_CHARS_PER_TOKEN:-}
+      - LLM_PROMPT_RESERVE_TOKENS=${LLM_PROMPT_RESERVE_TOKENS:-}
+      - LLM_CHAPTER_SPLIT_CHARS=${LLM_CHAPTER_SPLIT_CHARS:-}
+      - LLM_CHAPTER_SUMMARY_MAX_TOKENS=${LLM_CHAPTER_SUMMARY_MAX_TOKENS:-}
       # AI service endpoints. In the base ("small") stack these point at a
       # remote host (set in .env). The AI overlay overrides them to the in-compose
       # service names (http://hviske:8000/v1, http://diarization-service:5000).
