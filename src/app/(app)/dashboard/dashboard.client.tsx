@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { createMeeting, getAllMeetings } from '@/lib/storage';
 import { setPendingUploadFile } from '@/lib/pending-upload';
+import { ErrorBanner } from '@/components/ui/error-banner';
 
 export default function OptaqPage() {
   const router = useRouter();
@@ -17,12 +18,13 @@ export default function OptaqPage() {
   const [meetingLink, setMeetingLink] = useState('');
   const [linkLoading, setLinkLoading] = useState(false);
   const [linkError, setLinkError] = useState('');
+  const [recordError, setRecordError] = useState('');
   const [meetingCount, setMeetingCount] = useState<number | null>(null);
 
   useEffect(() => {
     getAllMeetings()
       .then((meetings) => setMeetingCount(meetings.length))
-      .catch(() => {});
+      .catch((err) => { console.warn('[dashboard] getAllMeetings failed:', err); });
   }, []);
 
   function handleKeyDown(e: KeyboardEvent) {
@@ -38,6 +40,7 @@ export default function OptaqPage() {
   async function startRecording() {
     if (loading) return;
     setLoading(true);
+    setRecordError('');
     try {
       const meetingTitle = title.trim() || `Møde · ${new Intl.DateTimeFormat('da', { day: 'numeric', month: 'long' }).format(new Date())}`;
       const meeting = await createMeeting({
@@ -47,7 +50,9 @@ export default function OptaqPage() {
         status: 'recording',
       });
       router.push(`/meeting/${meeting.id}?autostart=1`);
-    } catch {
+    } catch (err) {
+      console.error('[dashboard] startRecording failed:', err);
+      setRecordError('Noget gik galt. Prøv igen.');
       setLoading(false);
     }
   }
@@ -213,6 +218,12 @@ export default function OptaqPage() {
                 letterSpacing: 0.6, opacity: 0.85,
               }}>optag</span>
             </button>
+
+            {recordError && (
+              <div style={{ marginTop: 14, maxWidth: 300, margin: '14px auto 0' }}>
+                <ErrorBanner message={recordError} onRetry={startRecording} />
+              </div>
+            )}
 
             {/* Teams meeting link input */}
             <div style={{ marginTop: 30 }}>

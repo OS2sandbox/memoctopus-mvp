@@ -38,6 +38,40 @@ function transcriptPath(meetingId: string): string {
   return path.join(rootDir(), `${meetingId}.transcript.json`);
 }
 
+function ownerPath(meetingId: string): string {
+  return path.join(rootDir(), `${meetingId}.owner.json`);
+}
+
+// Ownership binding for a bot recording. Meetings live in the client's IndexedDB
+// (no server meetings table), so the only server-side record of WHO owns a meetingId
+// is written here at session-create time. Every client-facing bot route checks it so
+// one authenticated user can't pull down (or control) another user's recording by
+// supplying their meetingId. Without this the stash is keyed by meetingId alone.
+export async function setBotMeetingOwner(meetingId: string, userId: string): Promise<void> {
+  assertSafeId(meetingId);
+  await fs.mkdir(rootDir(), { recursive: true });
+  await fs.writeFile(ownerPath(meetingId), JSON.stringify({ userId, createdAt: Date.now() }));
+}
+
+export async function getBotMeetingOwner(meetingId: string): Promise<string | null> {
+  assertSafeId(meetingId);
+  try {
+    const { userId } = JSON.parse(await fs.readFile(ownerPath(meetingId), 'utf8')) as { userId: string };
+    return userId ?? null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.error('[bot-pending-audio] readOwner failed for', meetingId, err);
+    }
+    return null;
+  }
+}
+
+// True only when meetingId is owned by exactly this user. Missing owner → false
+// (deny by default), so an unbound or expired meetingId is never readable.
+export async function assertBotMeetingOwner(meetingId: string, userId: string): Promise<boolean> {
+  return (await getBotMeetingOwner(meetingId)) === userId;
+}
+
 export interface PendingMeta {
   mimeType: string;
   participants: string[];
@@ -66,16 +100,21 @@ async function sweep(): Promise<void> {
     const now = Date.now();
     await Promise.all(
       entries
-        .filter((f) => f.endsWith('.meta.json') || f.endsWith('.transcript.json'))
+        .filter((f) => f.endsWith('.meta.json') || f.endsWith('.transcript.json') || f.endsWith('.owner.json'))
         .map(async (f) => {
           try {
             const meta = JSON.parse(await fs.readFile(path.join(dir, f), 'utf8')) as { createdAt: number };
             if (now - meta.createdAt > TTL_MS) {
-              const id = f.replace(/\.(meta|transcript)\.json$/, '');
+              const id = f.replace(/\.(meta|transcript|owner)\.json$/, '');
               await deletePendingAudio(id);
               await deletePendingTranscript(id);
+              await fs.unlink(ownerPath(id)).catch(() => {});
             }
-          } catch { /* ignore malformed/raced entries */ }
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+              console.error('[bot-pending-audio] sweep: skipping malformed/inaccessible entry', f, err);
+            }
+          }
         }),
     );
   } catch { /* dir may not exist yet */ }
@@ -113,7 +152,10 @@ export async function readPendingMeta(meetingId: string): Promise<PendingMeta | 
   assertSafeId(meetingId);
   try {
     return JSON.parse(await fs.readFile(metaPath(meetingId), 'utf8')) as PendingMeta;
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.error('[bot-pending-audio] readPendingMeta failed for', meetingId, err);
+    }
     return null;
   }
 }
@@ -149,7 +191,10 @@ export async function readPendingTranscript(meetingId: string): Promise<PendingT
   assertSafeId(meetingId);
   try {
     return JSON.parse(await fs.readFile(transcriptPath(meetingId), 'utf8')) as PendingTranscript;
-  } catch {
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.error('[bot-pending-audio] readPendingTranscript failed for', meetingId, err);
+    }
     return null;
   }
 }

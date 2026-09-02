@@ -256,6 +256,74 @@ describe('MeetingBotScreen', () => {
     await waitFor(() => expect(screen.getByText('FEJL')).toBeInTheDocument());
   });
 
+  // ─── Error handling — control failures ───────────────────────────────────────
+
+  it('shows error state and does NOT lock stoppingRef when handleStop fails', async () => {
+    routeFetch({
+      status: () => jsonOk({ status: 'optager', botStatus: 'recording', participants: [], elapsed: 30 }),
+      control: () => ({ ok: false, json: async () => ({ error: 'Bot control failed' }) }),
+    });
+    renderBot();
+    await waitFor(() => screen.getByText('Stop & afslut →'));
+
+    await act(async () => { fireEvent.click(screen.getByText('Stop & afslut →')); });
+
+    await waitFor(() => expect(screen.getByText('FEJL')).toBeInTheDocument());
+    // The error message should be visible in the notice card body
+    expect(screen.getByText(/Kunne ikke stoppe optagelsen/)).toBeInTheDocument();
+    // Subsequent poll responses should still be able to change the status now that
+    // stoppingRef is reset — verify by checking that the component is not stuck:
+    // status is 'error', not 'processing', which proves we didn't lock it.
+    expect(screen.queryByText('BEHANDLER')).not.toBeInTheDocument();
+  });
+
+  it('shows error state when handlePauseResume (pause) fails', async () => {
+    routeFetch({
+      status: () => jsonOk({ status: 'optager', botStatus: 'recording', participants: [], elapsed: 10 }),
+      control: () => ({ ok: false, json: async () => ({ error: 'Service unavailable' }) }),
+    });
+    renderBot();
+    await waitFor(() => screen.getByTitle('Pause optagelse'));
+
+    await act(async () => { fireEvent.click(screen.getByTitle('Pause optagelse')); });
+
+    await waitFor(() => expect(screen.getByText('FEJL')).toBeInTheDocument());
+    expect(screen.getByText(/Kunne ikke sætte optagelse på pause/)).toBeInTheDocument();
+  });
+
+  it('escalates to error state after 10 consecutive poll failures (non-OK)', async () => {
+    vi.useFakeTimers();
+    routeFetch({
+      status: () => ({ ok: false, json: async () => ({}) }),
+    });
+    renderBot({ botSession: SESSION });
+
+    // Backoff per failure: min(2000*2^n, 30000).
+    // 10 failures need total ~220s of wall time; advance in steps so React can
+    // flush state updates between intervals.
+    for (let i = 0; i < 12; i++) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    }
+
+    expect(screen.getByText('FEJL')).toBeInTheDocument();
+    expect(screen.getByText(/Forbindelsen til bot-tjenesten er brudt/)).toBeInTheDocument();
+  }, 60_000);
+
+  it('escalates to error state after 10 consecutive poll failures (network throw)', async () => {
+    vi.useFakeTimers();
+    routeFetch({
+      status: () => { throw new Error('Network error'); },
+    });
+    renderBot({ botSession: SESSION });
+
+    for (let i = 0; i < 12; i++) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    }
+
+    expect(screen.getByText('FEJL')).toBeInTheDocument();
+    expect(screen.getByText(/Forbindelsen til bot-tjenesten er brudt/)).toBeInTheDocument();
+  }, 60_000);
+
   // ─── Cleanup ──────────────────────────────────────────────────────────────────
 
   it('stops polling when component unmounts', async () => {

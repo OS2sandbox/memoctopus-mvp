@@ -52,19 +52,19 @@ describe('fetchDiarizationTurns', () => {
     expect(init.body).toBeInstanceOf(FormData);
   });
 
-  it('fails soft to [] when the response is not ok', async () => {
+  it('returns null when the response is not ok (service unreachable)', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({}, false));
-    expect(await fetchDiarizationTurns('m', wav)).toEqual([]);
+    expect(await fetchDiarizationTurns('m', wav)).toBeNull();
   });
 
-  it('fails soft to [] when turns is missing or not an array', async () => {
+  it('returns [] when it ran but turns is missing or not an array', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({ turns: null }));
     expect(await fetchDiarizationTurns('m', wav)).toEqual([]);
   });
 
-  it('fails soft to [] when the request throws (service/tunnel down)', async () => {
+  it('returns null when the request throws (service/tunnel down)', async () => {
     mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
-    expect(await fetchDiarizationTurns('m', wav)).toEqual([]);
+    expect(await fetchDiarizationTurns('m', wav)).toBeNull();
   });
 });
 
@@ -113,6 +113,40 @@ describe('diarization lifecycle (start / finish / ensure)', () => {
     expect(mockNotify).toHaveBeenCalledWith('m2');
   });
 
+  it('finishDiarization marks status failed (not done) when turns is null (service unreachable)', async () => {
+    const segs = [seg(0, 5)];
+    mockGetTranscript.mockResolvedValueOnce({ segments: segs, rawText: 'x' });
+
+    await finishDiarization('m-fail', null);
+
+    const [, savedSegments, status] = mockSaveSegments.mock.calls[0];
+    expect(status).toBe('failed');
+    expect(savedSegments).toEqual(segs); // labels untouched — nothing to assign
+    expect(mockNotify).toHaveBeenCalledWith('m-fail');
+  });
+
+  it('finishDiarization clears pending when the transcript has zero segments (silent recording)', async () => {
+    // The exact hang bug: an empty transcript saved with status 'pending' must still
+    // be flipped to 'done', or the review screen's diarization spinner never stops
+    // (and the safety-net retrigger loops forever on the same empty transcript).
+    mockGetTranscript.mockResolvedValueOnce({ segments: [], rawText: '', diarizationStatus: 'pending' });
+
+    await finishDiarization('m-empty', []);
+
+    expect(mockSaveSegments).toHaveBeenCalledOnce();
+    const [meetingId, savedSegments, status] = mockSaveSegments.mock.calls[0];
+    expect(meetingId).toBe('m-empty');
+    expect(savedSegments).toEqual([]);
+    expect(status).toBe('done');
+    expect(mockNotify).toHaveBeenCalledWith('m-empty');
+  });
+
+  it('finishDiarization does not re-save an empty transcript already marked done', async () => {
+    mockGetTranscript.mockResolvedValueOnce({ segments: [], rawText: '', diarizationStatus: 'done' });
+    await finishDiarization('m-empty-done', []);
+    expect(mockSaveSegments).not.toHaveBeenCalled();
+  });
+
   it('finishDiarization never clobbers manually relabelled speakers', async () => {
     const segs = [seg(0, 5, 'Anna'), seg(6, 10, 'Bo')];
     mockGetTranscript.mockResolvedValueOnce({ segments: segs, rawText: 'x x' });
@@ -128,6 +162,52 @@ describe('diarization lifecycle (start / finish / ensure)', () => {
     mockGetTranscript.mockResolvedValueOnce(null);
     await finishDiarization('m4', TURNS);
     expect(mockSaveSegments).not.toHaveBeenCalled();
+  });
+
+  it('finishDiarization clears pending status and notifies even when the main try throws', async () => {
+    // First getTranscript call (inside the try) throws; second call (in the catch
+    // recovery block) returns a pending transcript so the UI is unblocked.
+    mockGetTranscript
+      .mockRejectedValueOnce(new Error('IndexedDB quota exceeded'))
+      .mockResolvedValueOnce({ segments: [seg(0, 5)], rawText: 'x', diarizationStatus: 'pending' });
+
+    await finishDiarization('m-throw', TURNS);
+
+    // Recovery path: best-effort save should have been called to clear pending → done
+    expect(mockSaveSegments).toHaveBeenCalledOnce();
+    const [meetingId, , status] = mockSaveSegments.mock.calls[0];
+    expect(meetingId).toBe('m-throw');
+    expect(status).toBe('done');
+    // notifyTranscriptUpdated must fire so the review screen exits the spinner
+    expect(mockNotify).toHaveBeenCalledWith('m-throw');
+    // in-flight marker must always be cleaned up
+    expect(isDiarizationInFlight('m-throw')).toBe(false);
+  });
+
+  it('finishDiarization skips recovery save when transcript is already done after a throw', async () => {
+    // Ensures we don't needlessly overwrite a transcript that was marked done by
+    // a concurrent call.
+    mockGetTranscript
+      .mockRejectedValueOnce(new Error('tx conflict'))
+      .mockResolvedValueOnce({ segments: [seg(0, 5)], rawText: 'x', diarizationStatus: 'done' });
+
+    await finishDiarization('m-throw-done', TURNS);
+
+    expect(mockSaveSegments).not.toHaveBeenCalled();
+    expect(isDiarizationInFlight('m-throw-done')).toBe(false);
+  });
+
+  it('fetchDiarizationTurns logs a console.error when the response is non-OK', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFetch.mockResolvedValueOnce(jsonResponse({}, false));
+
+    const result = await fetchDiarizationTurns('m-non-ok', wav);
+
+    expect(result).toBeNull();
+    // The call signature is ('[diarize] non-OK response:', res.status). res.status
+    // is undefined in this fake, so only assert the label string was logged.
+    expect(consoleSpy.mock.calls[0][0]).toContain('[diarize] non-OK');
+    consoleSpy.mockRestore();
   });
 
   it('ensureDiarization runs a fresh pass when none is in flight', async () => {

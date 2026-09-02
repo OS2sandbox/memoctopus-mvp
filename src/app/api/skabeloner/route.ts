@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { listSkabeloner, createSkabelon } from '@/lib/skabeloner/server';
+import { withHandler } from '@/lib/api-handler';
 
-export async function GET() {
+async function getHandler(): Promise<NextResponse> {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -11,7 +12,7 @@ export async function GET() {
   return NextResponse.json({ skabeloner });
 }
 
-export async function POST(req: NextRequest) {
+async function postHandler(req: NextRequest): Promise<NextResponse> {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -30,3 +31,6 @@ export async function POST(req: NextRequest) {
   });
   return NextResponse.json({ skabelon }, { status: 201 });
 }
+
+export const GET = withHandler('skabeloner/GET', getHandler);
+export const POST = withHandler('skabeloner/POST', postHandler);

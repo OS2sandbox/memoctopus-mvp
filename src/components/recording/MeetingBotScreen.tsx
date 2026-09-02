@@ -123,7 +123,12 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
       const res = await fetch(`/api/bot/status/${meetingId}?sessionId=${encodeURIComponent(sessionIdRef.current)}`);
       if (!res.ok) {
         consecutiveFailsRef.current++;
+        console.error(`[MeetingBotScreen] pollStatus non-OK ${res.status} (fail #${consecutiveFailsRef.current})`);
         nextPollAtRef.current = Date.now() + pollBackoffMs(consecutiveFailsRef.current);
+        if (consecutiveFailsRef.current >= 10) {
+          setStatus('error');
+          setErrorMessage('Forbindelsen til bot-tjenesten er brudt. Prøv at genindlæse siden.');
+        }
         return;
       }
       consecutiveFailsRef.current = 0;
@@ -164,9 +169,14 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
         }
         setStatus(newStatus);
       }
-    } catch {
+    } catch (err) {
       consecutiveFailsRef.current++;
+      console.error(`[MeetingBotScreen] pollStatus fetch failed (fail #${consecutiveFailsRef.current}):`, err);
       nextPollAtRef.current = Date.now() + pollBackoffMs(consecutiveFailsRef.current);
+      if (consecutiveFailsRef.current >= 10) {
+        setStatus('error');
+        setErrorMessage('Forbindelsen til bot-tjenesten er brudt. Prøv at genindlæse siden.');
+      }
     }
   }, [meetingId, startTimer, stopTimer, finishFromBot]);
 
@@ -212,12 +222,17 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
     };
   }, [pollStatus, stopPolling, stopTimer]);
 
-  function sendControl(action: string) {
-    return fetch(`/api/bot/control/${meetingId}`, {
+  async function sendControl(action: string): Promise<Response> {
+    const res = await fetch(`/api/bot/control/${meetingId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, sessionId: sessionIdRef.current }),
     });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as { error?: string };
+      throw new Error(body.error ?? `Bot control '${action}' failed with status ${res.status}`);
+    }
+    return res;
   }
 
   async function handlePauseResume() {
@@ -232,6 +247,14 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
         startTimer();
         setStatus('optager');
       }
+    } catch (err) {
+      console.error(`[MeetingBotScreen] handlePauseResume '${action}' failed:`, err);
+      setErrorMessage(
+        action === 'pause'
+          ? 'Kunne ikke sætte optagelse på pause — prøv igen.'
+          : 'Kunne ikke genoptage optagelse — prøv igen.',
+      );
+      setStatus('error');
     } finally {
       setControlLoading(false);
     }
@@ -246,6 +269,11 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
       stopTimer();
       setStatus('processing');
       // The next status poll will see 'ended' and pull the recording down.
+    } catch (err) {
+      console.error('[MeetingBotScreen] handleStop failed:', err);
+      stoppingRef.current = false;
+      setErrorMessage('Kunne ikke stoppe optagelsen — prøv igen.');
+      setStatus('error');
     } finally {
       setControlLoading(false);
     }

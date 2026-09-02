@@ -44,6 +44,16 @@ describe('SpeakerAssignment panel', () => {
     expect(screen.getByText('1 / 3 stemmer genkendt')).toBeInTheDocument();
   });
 
+  it('shows a clear message (and hides the counter) when diarization failed', () => {
+    setup({ diarizationFailed: true });
+    expect(screen.getByText(/Automatisk talergenkendelse kunne ikke nås/i)).toBeInTheDocument();
+    expect(screen.getByText('talergenkendelse utilgængelig')).toBeInTheDocument();
+    // The normal "X / Y stemmer genkendt" counter is replaced by the failure note.
+    expect(screen.queryByText(/stemmer genkendt/)).toBeNull();
+    // Roster stays editable so the user can still assign speakers manually.
+    expect(screen.getByText('Lars')).toBeInTheDocument();
+  });
+
   it('renders one row per participant', () => {
     setup();
     expect(screen.getByText('Mette')).toBeInTheDocument();
