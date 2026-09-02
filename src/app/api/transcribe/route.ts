@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { headers } from 'next/headers';
+import { auth } from '@/lib/auth';
 import { getTranscriptionProvider } from '@/lib/ai/transcription';
 import { detectPiiInSegments } from '@/lib/ai/pii';
 import { groupIntoChapters } from '@/lib/ai/chapters';
@@ -14,6 +16,9 @@ function parseDuration(raw: string | null): number | null {
 }
 
 export async function POST(req: NextRequest) {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
   const formData = await req.formData();
   const audioFile = formData.get('audio') as File | null;
   const meetingId = formData.get('meetingId') as string | null;

@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { getSkabelon, updateSkabelon, deleteSkabelon } from '@/lib/skabeloner/server';
+import { withHandler } from '@/lib/api-handler';
 
 type Ctx = { params: Promise<{ id: string }> };
 
-export async function GET(_req: NextRequest, { params }: Ctx) {
+export const GET = withHandler('skabeloner/[id] GET', async (_req: NextRequest, { params }: Ctx) => {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -13,9 +14,9 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
   const skabelon = await getSkabelon(session.user.id, id);
   if (!skabelon) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
   return NextResponse.json({ skabelon });
-}
+});
 
-export async function PUT(req: NextRequest, { params }: Ctx) {
+export const PUT = withHandler('skabeloner/[id] PUT', async (req: NextRequest, { params }: Ctx) => {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -35,9 +36,9 @@ export async function PUT(req: NextRequest, { params }: Ctx) {
   });
   if (!skabelon) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
   return NextResponse.json({ skabelon });
-}
+});
 
-export async function DELETE(_req: NextRequest, { params }: Ctx) {
+export const DELETE = withHandler('skabeloner/[id] DELETE', async (_req: NextRequest, { params }: Ctx) => {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -45,4 +46,4 @@ export async function DELETE(_req: NextRequest, { params }: Ctx) {
   const ok = await deleteSkabelon(session.user.id, id);
   if (!ok) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
   return NextResponse.json({ ok: true });
-}
+});

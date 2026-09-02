@@ -32,6 +32,9 @@ interface SpeakerAssignmentProps {
   // Diarization still running: voices aren't known yet, so the matcher shows a
   // recognising state but still lets the user build the participant roster.
   diarizing?: boolean;
+  // Diarization service couldn't be reached — automatic speaker recognition is
+  // unavailable, so the menu explains this and the user assigns speakers manually.
+  diarizationFailed?: boolean;
   onLink: (voiceLabel: string, name: string) => void;
   onMarkSilent: (name: string) => void;
   onUnlink: (name: string) => void;
@@ -87,6 +90,7 @@ export function SpeakerAssignment({
   recognizedCount,
   totalVoices,
   diarizing,
+  diarizationFailed,
   onLink,
   onMarkSilent,
   onUnlink,
@@ -296,11 +300,26 @@ export function SpeakerAssignment({
     <div>
       <div className="sa-head">
         <div className="sa-eyebrow">deltagere</div>
-        <div className="sa-prog">{recognizedCount} / {totalVoices} stemmer genkendt</div>
+        <div className="sa-prog">
+          {diarizationFailed ? 'talergenkendelse utilgængelig' : `${recognizedCount} / ${totalVoices} stemmer genkendt`}
+        </div>
       </div>
-      <div className="sa-progbar"><i style={{ width: `${pct}%` }} /></div>
+      {diarizationFailed ? (
+        <div
+          role="status"
+          style={{
+            margin: '6px 0 10px', padding: '8px 10px', borderRadius: 'var(--radius)',
+            background: 'var(--kill-wash)', border: '1px solid color-mix(in oklch, var(--kill) 25%, var(--line-2))',
+            fontSize: 12, lineHeight: 1.5, color: 'var(--kill)',
+          }}
+        >
+          Automatisk talergenkendelse kunne ikke nås. Alle ytringer er samlet som én taler — tildel talere manuelt nedenfor.
+        </div>
+      ) : (
+        <div className="sa-progbar"><i style={{ width: `${pct}%` }} /></div>
+      )}
 
-      {voices.length === 0 && totalVoices > 0 && (
+      {!diarizationFailed && voices.length === 0 && totalVoices > 0 && (
         <div className="sa-status"><span className="ck">✓</span> alle stemmer er genkendt</div>
       )}
 

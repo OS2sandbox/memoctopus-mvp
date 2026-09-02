@@ -11,17 +11,19 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/bot-pending-audio', () => ({
   readPendingTranscript: vi.fn(),
   deletePendingTranscript: vi.fn().mockResolvedValue(undefined),
+  assertBotMeetingOwner: vi.fn(),
 }));
 
 import { NextRequest } from 'next/server';
 import { GET } from './route';
 import { auth } from '@/lib/auth';
-import { readPendingTranscript, deletePendingTranscript } from '@/lib/bot-pending-audio';
+import { readPendingTranscript, deletePendingTranscript, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
 import { FAKE_SESSION } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockRead = vi.mocked(readPendingTranscript);
 const mockDelete = vi.mocked(deletePendingTranscript);
+const mockAssertOwner = vi.mocked(assertBotMeetingOwner);
 
 const PARAMS = { params: Promise.resolve({ meetingId: 'm1' }) };
 const REQ = new NextRequest('http://localhost/api/bot/transcript/m1');
@@ -32,6 +34,8 @@ beforeEach(() => {
   mockGetSession.mockReset();
   mockRead.mockReset();
   mockDelete.mockReset().mockResolvedValue(undefined);
+  mockAssertOwner.mockReset();
+  mockAssertOwner.mockResolvedValue(true);
 });
 
 describe('GET /api/bot/transcript/[meetingId]', () => {
@@ -46,6 +50,17 @@ describe('GET /api/bot/transcript/[meetingId]', () => {
     mockRead.mockResolvedValueOnce(null);
     const res = await GET(REQ, PARAMS);
     expect((await res.json()).status).toBe('none');
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it("returns 'none' (never the transcript) when the meeting belongs to another user", async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockAssertOwner.mockResolvedValueOnce(false);
+    mockRead.mockResolvedValueOnce({ status: 'ready', segments: SEGMENTS, diarized: true, createdAt: 1 });
+    const res = await GET(REQ, PARAMS);
+    expect((await res.json()).status).toBe('none');
+    // Must never read or delete a non-owner's transcript stash.
+    expect(mockRead).not.toHaveBeenCalled();
     expect(mockDelete).not.toHaveBeenCalled();
   });
 

@@ -13,6 +13,10 @@ vi.mock('@/lib/bot-service', async (importOriginal) => {
   return { ...actual, getBotServiceConfig: vi.fn() };
 });
 
+vi.mock('@/lib/bot-pending-audio', () => ({
+  setBotMeetingOwner: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { POST } from './route';
 import { auth } from '@/lib/auth';
 import { getBotServiceConfig } from '@/lib/bot-service';

@@ -74,6 +74,7 @@ export default function NewMeetingPage() {
       });
       router.push(`/meeting/${meeting.id}?autostart=1`);
     } catch (err) {
+      console.error('[new-meeting] createMeeting failed:', err);
       setError(err instanceof Error ? err.message : 'Noget gik galt');
       setIsSubmitting(false);
     }

@@ -20,7 +20,12 @@ function getDiarizationTimeoutMs(): number {
 // service decodes it with ffmpeg. Shipping the compressed file instead of a decoded
 // 16-bit PCM WAV cuts the payload ~4-10x (a 100-min meeting is ~190 MB as WAV) and
 // skips the in-browser full-file decode that used to gate this request.
-export async function fetchDiarizationTurns(meetingId: string, audio: Blob): Promise<SpeakerTurn[]> {
+// Returns the speaker turns, or `null` when the diarization service could not be
+// reached / errored. `null` is distinct from `[]` (ran but found no turns): the
+// caller marks the transcript 'failed' on null so the review UI can tell the user
+// automatic speaker recognition is unavailable rather than silently showing one
+// speaker as if diarization had succeeded.
+export async function fetchDiarizationTurns(meetingId: string, audio: Blob): Promise<SpeakerTurn[] | null> {
   try {
     const fd = new FormData();
     fd.append('audio', audio, 'recording');
@@ -29,12 +34,15 @@ export async function fetchDiarizationTurns(meetingId: string, audio: Blob): Pro
       body: fd,
       signal: AbortSignal.timeout(getDiarizationTimeoutMs()),
     });
-    if (!res.ok) return [];
+    if (!res.ok) {
+      console.error('[diarize] non-OK response:', res.status);
+      return null;
+    }
     const { turns } = await res.json() as { turns: SpeakerTurn[] };
     return Array.isArray(turns) ? turns : [];
   } catch (err) {
     console.error('[diarize] request failed:', err);
-    return [];
+    return null;
   }
 }
 
@@ -51,7 +59,7 @@ export function isDiarizationInFlight(meetingId: string): boolean {
 // transcript with diarizationStatus:'pending' and later hand the resolved turns to
 // finishDiarization. Kept separate from finishDiarization so the request can run in
 // parallel with transcription and only be applied once the transcript is saved.
-export function startDiarization(meetingId: string, audio: Blob): Promise<SpeakerTurn[]> {
+export function startDiarization(meetingId: string, audio: Blob): Promise<SpeakerTurn[] | null> {
   diarizationInFlight.add(meetingId);
   return fetchDiarizationTurns(meetingId, audio);
 }
@@ -62,10 +70,33 @@ export function startDiarization(meetingId: string, audio: Blob): Promise<Speake
 // uncertainty state even when diarization found nothing or failed. Notifies the
 // review screen and clears the in-flight marker. Re-reads current segments rather
 // than trusting a stale copy.
-export async function finishDiarization(meetingId: string, turns: SpeakerTurn[]): Promise<void> {
+export async function finishDiarization(meetingId: string, turns: SpeakerTurn[] | null): Promise<void> {
+  // `null` means the diarization service couldn't be reached — mark 'failed' so the
+  // review UI surfaces it; `[]` means it ran but found no turns (treated as 'done').
+  const failed = turns === null;
   try {
     const current = await getTranscript(meetingId);
-    if (!current?.segments?.length) return;
+    // No transcript saved yet — nothing to label or clear. The `finally` below
+    // still drops the in-flight marker so a later retrigger isn't blocked.
+    if (!current) return;
+    // A transcript exists but has no segments (silent recording / failed STT).
+    // There is nothing to label, but we MUST still flip 'pending' → terminal or the
+    // review screen's diarization spinner hangs forever (and the safety-net
+    // retrigger would loop on the same empty transcript).
+    if (!current.segments?.length) {
+      if (current.diarizationStatus === 'pending') {
+        await saveTranscriptSegments(meetingId, current.segments ?? [], failed ? 'failed' : 'done');
+        notifyTranscriptUpdated(meetingId);
+      }
+      return;
+    }
+    if (turns === null) {
+      // Service unreachable: keep the existing (default) labels but record the
+      // failure so the assignment UI can explain that recognition is unavailable.
+      await saveTranscriptSegments(meetingId, current.segments, 'failed');
+      notifyTranscriptUpdated(meetingId);
+      return;
+    }
     const segments = (turns.length > 0 && current.segments.every((s) => s.speaker === DEFAULT_SPEAKER_LABEL))
       ? assignSpeakers(current.segments, turns)
       : current.segments;
@@ -73,6 +104,18 @@ export async function finishDiarization(meetingId: string, turns: SpeakerTurn[])
     notifyTranscriptUpdated(meetingId);
   } catch (err) {
     console.error('[diarize] finish failed:', err);
+    // Best-effort: clear the 'pending' diarization status so the review UI's
+    // "Genkender taler…" spinner doesn't hang forever after an unexpected throw.
+    // Fetch current segments rather than assuming they're available from before the throw.
+    try {
+      const current = await getTranscript(meetingId);
+      if (current && current.diarizationStatus === 'pending') {
+        await saveTranscriptSegments(meetingId, current.segments ?? [], 'done');
+        notifyTranscriptUpdated(meetingId);
+      }
+    } catch (innerErr) {
+      console.error('[diarize] failed to clear pending status after error — UI may be stuck:', innerErr);
+    }
   } finally {
     diarizationInFlight.delete(meetingId);
   }

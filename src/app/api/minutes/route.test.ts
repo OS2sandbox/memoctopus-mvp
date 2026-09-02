@@ -132,4 +132,16 @@ describe('POST /api/minutes', () => {
     expect(args[3]).toEqual(chapters);
     expect(args[4]).toBe('kort');
   });
+
+  it('returns JSON 500 with parseable body when generateReferatBody throws', async () => {
+    mockGenerateReferatBody.mockRejectedValueOnce(new Error('OpenAI timeout'));
+
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
+
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body).toHaveProperty('error');
+    // Must be JSON (not HTML) so the client can parse it without crashing.
+    expect(typeof body.error).toBe('string');
+  });
 });
