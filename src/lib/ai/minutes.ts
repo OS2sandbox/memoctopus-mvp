@@ -1,6 +1,12 @@
 import { TranscriptSegment } from '@/types';
 import { TranscriptChapter } from '@/lib/ai/chapters';
 import { getLlmClient, llmModel } from './llm-client';
+import {
+  chapterSplitChars,
+  chapterSummaryMaxTokens,
+  maxOutputTokens,
+  transcriptBudgetChars,
+} from './llm-budget';
 
 const MINUTES_SYSTEM_PROMPT = `Du er en dansk mødesekretær der udarbejder professionelle mødereferater.
 
@@ -14,8 +20,10 @@ Brugerens instruktioner og de ønskede afsnit er styrende: følg dem nøje — o
 
 Du skriver referatet som ét sammenhængende dokument i markdown.`;
 
-// Transcript char length above which per-chapter summarisation is used (~30–60 min meeting)
-const CHAPTER_SPLIT_THRESHOLD = 20_000;
+// Appended when a transcript has to be cut to fit the context window, so the model
+// (and anyone reading the prompt in a log) knows the input is partial rather than the
+// meeting having simply ended.
+const TRUNCATION_MARKER = '\n\n[…] Transskriptionen er forkortet for at overholde modellens kontekstvindue.';
 
 // The generation-relevant subset of a Skabelon.
 export interface SkabelonSpec {
@@ -66,11 +74,59 @@ export function buildSkabelonInstruction(
   return parts.join('\n\n');
 }
 
+// ─── Transcript rendering ─────────────────────────────────────────────────────
+
+/**
+ * Collapse consecutive segments from the same speaker into one turn.
+ *
+ * hviske emits short utterances, so one person speaking for a minute becomes many
+ * segments — each paying for a repeated `[Taler N] (mm:ss): ` prefix. On a measured
+ * 57-minute meeting that was 982 segments against 126 real speaker turns, with ~37%
+ * of the prompt's characters spent on labels rather than speech.
+ *
+ * The merged turn keeps the first segment's start and the last one's end, so
+ * timestamps still bracket what was actually said.
+ */
+export function mergeConsecutiveSpeakerTurns(segments: TranscriptSegment[]): TranscriptSegment[] {
+  const merged: TranscriptSegment[] = [];
+  for (const segment of segments) {
+    const previous = merged[merged.length - 1];
+    if (previous && previous.speaker === segment.speaker) {
+      previous.end = segment.end;
+      previous.text = `${previous.text} ${segment.text}`.trim();
+    } else {
+      // Copied, so merging never mutates the caller's transcript.
+      merged.push({ ...segment });
+    }
+  }
+  return merged;
+}
+
+// Render a transcript for the prompt: one line per speaker turn, timestamped.
+function renderTranscript(segments: TranscriptSegment[]): string {
+  return mergeConsecutiveSpeakerTurns(segments)
+    .map((s) => `[${s.speaker}] (${formatTime(s.start)}): ${s.text}`)
+    .join('\n');
+}
+
+// Cut to `budget` characters on a line boundary where possible, so the prompt never
+// ends mid-word. Returns the text unchanged when it already fits.
+function truncateToBudget(text: string, budget: number): string {
+  if (text.length <= budget) return text;
+  const room = Math.max(0, budget - TRUNCATION_MARKER.length);
+  const cut = text.slice(0, room);
+  const lastNewline = cut.lastIndexOf('\n');
+  return (lastNewline > room * 0.5 ? cut.slice(0, lastNewline) : cut) + TRUNCATION_MARKER;
+}
+
 // ─── Generation ───────────────────────────────────────────────────────────────
 
 async function _generateBody(transcriptText: string, instruction: string): Promise<string> {
   const response = await getLlmClient().chat.completions.create({
     model: llmModel('gpt-4o'),
+    // Explicit, rather than "whatever is left of the context window" — which is
+    // least when the prompt is largest, silently truncating long referats.
+    max_tokens: maxOutputTokens(),
     messages: [
       { role: 'system', content: MINUTES_SYSTEM_PROMPT },
       {
@@ -97,10 +153,13 @@ async function _summarizeChapter(
   chapterSegments: TranscriptSegment[],
   chapterTitle: string,
 ): Promise<string> {
-  const transcriptText = chapterSegments.map((s) => `[${s.speaker}]: ${s.text}`).join('\n');
+  const transcriptText = mergeConsecutiveSpeakerTurns(chapterSegments)
+    .map((s) => `[${s.speaker}]: ${s.text}`)
+    .join('\n');
 
   const response = await getLlmClient().chat.completions.create({
     model: llmModel('gpt-4o'),
+    max_tokens: chapterSummaryMaxTokens(),
     messages: [
       {
         role: 'user',
@@ -129,12 +188,15 @@ export async function generateReferatBody(
   chapters?: TranscriptChapter[],
   customPrompt?: string,
 ): Promise<{ body: string }> {
-  const transcriptText = transcript
-    .map((s) => `[${s.speaker}] (${formatTime(s.start)}): ${s.text}`)
-    .join('\n');
+  const transcriptText = renderTranscript(transcript);
   const instruction = buildSkabelonInstruction(spec, participants, customPrompt);
+  const budget = transcriptBudgetChars();
 
-  if (chapters && chapters.length > 1 && transcriptText.length > CHAPTER_SPLIT_THRESHOLD) {
+  // Summarise per chapter when the transcript is long enough that condensing helps
+  // the referat, OR when it simply will not fit the model's context window.
+  const splitThreshold = Math.min(chapterSplitChars(), budget);
+
+  if (chapters && chapters.length > 1 && transcriptText.length > splitThreshold) {
     const summaries = await Promise.all(
       chapters.map((ch) => {
         const chapterSegments = ch.segmentIndices.map((i) => transcript[i]).filter(Boolean);
@@ -142,11 +204,16 @@ export async function generateReferatBody(
       }),
     );
     const condensed = chapters.map((ch, i) => `## ${ch.title}\n${summaries[i]}`).join('\n\n');
-    const body = await _generateBody(condensed, instruction);
+    // Summaries are far smaller than the transcript, but a meeting with very many
+    // chapters can still overflow — so the budget applies here too.
+    const body = await _generateBody(truncateToBudget(condensed, budget), instruction);
     return { body };
   }
 
-  const body = await _generateBody(transcriptText, instruction);
+  // No chapters to split on (segmentation found one or none), or the transcript is
+  // short enough to send whole. Either way it must still fit: without this, an
+  // unchaptered long meeting went to the model in full and came back truncated.
+  const body = await _generateBody(truncateToBudget(transcriptText, budget), instruction);
   return { body };
 }
 
