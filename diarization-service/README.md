@@ -45,7 +45,9 @@ torchcodec/ffmpeg audio backend.
 - `DIARIZATION_METRICS_REQUIRE_AUTH` — `1`/`true` to require the same bearer token on
   `/metrics` as on `/diarize`. Off by default: the service is not publicly exposed, and
   a scraper that suddenly needs a credential fails silently (the series just stop). Turn
-  it on where the service is reachable from outside the internal network.
+  it on where the service is reachable from outside the internal network. Like
+  `/diarize`, it has no effect unless `DIARIZATION_API_KEY` is also set — with no key
+  configured there is nothing to check and `/metrics` stays open.
 - `HF_TOKEN` — only needed the first time, to download the gated weights (cached after).
 
 ## Deploy A — directly on the GPU box (what production uses)
@@ -53,7 +55,10 @@ torchcodec/ffmpeg audio backend.
 This is how it's deployed next to the hviske vLLM server (a vast.ai box, no Docker):
 
 ```bash
-pip3 install pyannote.audio
+# Install from requirements.txt, not just pyannote: app.py imports the Prometheus
+# packages at module load, so a partial install crash-loops the service under
+# supervisord rather than degrading.
+pip3 install -r requirements.txt
 # one-time gated-model download (accept terms on huggingface.co first):
 HF_TOKEN=hf_xxx python3 -c "from pyannote.audio import Pipeline; \
   Pipeline.from_pretrained('pyannote/speaker-diarization-community-1')"

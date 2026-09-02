@@ -104,14 +104,28 @@ diarization_jobs_total = Counter(
     ["status", "failure_reason"],
 )
 
-# Wall time of the diarization itself (decode + inference), separate from the HTTP
-# request duration the instrumentator records: it excludes upload time, so a slow
-# link and a slow GPU can be told apart. Buckets run to 30 min because CPU-bound
-# hosts genuinely take that long on a full meeting.
+# Wall time of the work itself — decode plus inference, excluding both the upload and
+# time spent queued behind another request. Separating these three is the point: the
+# HTTP duration the instrumentator records includes upload (slow link), this includes
+# neither (slow GPU), and the queue histogram below covers the rest (saturated
+# service). Without the split, a #84-style timeout looks the same in all three cases.
+# Only successful jobs are observed: a decode that fails in 50 ms would otherwise drag
+# the percentiles down exactly when failures spike.
+# Buckets run to 30 min because CPU-bound hosts genuinely take that long on a meeting.
+_BUCKETS = (1, 5, 15, 30, 60, 120, 300, 600, 900, 1800, float("inf"))
+
 diarization_duration_seconds = Histogram(
     "memoctopus_diarization_duration_seconds",
-    "Time spent decoding and diarizing one recording",
-    buckets=(1, 5, 15, 30, 60, 120, 300, 600, 900, 1800, float("inf")),
+    "Decode + inference time for one successfully diarized recording",
+    buckets=_BUCKETS,
+)
+
+# Time waiting for _inference_lock. The pipeline is not concurrency-safe, so requests
+# serialise here; when this grows the service needs another replica, not a faster GPU.
+diarization_queue_wait_seconds = Histogram(
+    "memoctopus_diarization_queue_wait_seconds",
+    "Time a request spent waiting for the inference lock",
+    buckets=_BUCKETS,
 )
 
 # Standard per-route request count / duration / in-progress series, plus /metrics.
@@ -233,31 +247,41 @@ async def diarize(
         # Decode + inference are CPU/GPU-bound and synchronous — run them off the event
         # loop so /health and concurrent requests aren't frozen for minutes per file.
         waveform, sample_rate = await asyncio.to_thread(_load_audio, data)
+        decoded_at = time.monotonic()
         async with _inference_lock:
+            inference_started = time.monotonic()
             output = await asyncio.to_thread(get_pipeline(), {"waveform": waveform, "sample_rate": sample_rate})
+            inference_ended = time.monotonic()
         annotation = _annotation_from(output)
+        # Inside the try: _annotation_from raises when pyannote's output shape drifts,
+        # and itertracks can raise for the same reason. Counting those as failures is
+        # the whole point of the metric.
+        turns = [
+            {"speaker": speaker, "start": round(float(segment.start), 3), "end": round(float(segment.end), 3)}
+            for segment, _, speaker in annotation.itertracks(yield_label=True)
+        ]
     except HTTPException as e:
-        # _load_with_ffmpeg raises 400/415 for undecodable or unsupported audio; any
-        # other status here is still the request's fault rather than a server fault.
-        reason = "invalid_audio" if e.status_code < 500 else "internal_error"
+        # 400 is the only genuinely client-caused status raised below: undecodable
+        # audio. 415 means ffmpeg is missing from the *host* — a misconfiguration that
+        # would otherwise show up as 100% "bad uploads" and send operators hunting the
+        # caller instead of the box.
+        reason = "invalid_audio" if e.status_code == 400 else "internal_error"
         diarization_jobs_total.labels(status="failure", failure_reason=reason).inc()
         raise
     except Exception:
         diarization_jobs_total.labels(status="failure", failure_reason="internal_error").inc()
         raise
-    finally:
-        diarization_duration_seconds.observe(time.monotonic() - t0)
 
+    diarization_queue_wait_seconds.observe(inference_started - decoded_at)
+    diarization_duration_seconds.observe(
+        (decoded_at - t0) + (inference_ended - inference_started)
+    )
     print(
         f"[diarization] {len(data)} bytes ({waveform.shape[1] / sample_rate:.0f} s audio) "
         f"on {DEVICE} in {time.monotonic() - t0:.1f} s",
         flush=True,
     )
 
-    turns = [
-        {"speaker": speaker, "start": round(float(segment.start), 3), "end": round(float(segment.end), 3)}
-        for segment, _, speaker in annotation.itertracks(yield_label=True)
-    ]
     turns.sort(key=lambda t: t["start"])
     diarization_jobs_total.labels(status="success", failure_reason="").inc()
     return {"turns": turns}
