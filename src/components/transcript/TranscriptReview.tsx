@@ -8,10 +8,12 @@ import { WaveformPlayer } from './WaveformPlayer';
 import { getTranscript, getAudio, saveTranscriptChapters, saveTranscriptSegments, appendMinutesVersion, deleteAudio, updateMeeting, getMeeting } from '@/lib/storage';
 import { onTranscriptUpdated } from '@/lib/transcript-events';
 import { isDiarizationInFlight, ensureDiarization, finishDiarization } from '@/lib/audio/diarize-client';
+import { getStorageUserId } from '@/lib/storage/scope';
 import { isDefaultSpeakerLabel, nextAvailableSpeakerLabel } from '@/lib/audio/speaker-labels';
 import type { MinutesContent, Skabelon } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { formatDate } from '@/lib/utils';
+import { SaveStatus, type SaveState } from '@/components/layout/SaveStatus';
 
 interface TranscriptReviewProps {
   meetingId: string;
@@ -191,12 +193,19 @@ export function TranscriptReview({
   // Speaker diarization is still running when true: the review screen shows an
   // uncertainty state for speaker labels instead of the placeholder 'Taler 1'.
   const [diarizing, setDiarizing] = useState(initialDiarizing);
+  const [diarizationFailed, setDiarizationFailed] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Autosave status for transcript text edits
+  const [segSaveStatus, setSegSaveStatus] = useState<SaveState>('idle');
+  // Error surfaced after a speaker-persist failure (assign/unlink/rename/remove)
+  const [speakerError, setSpeakerError] = useState<string | null>(null);
+  // Error surfaced when chapters could not be generated
+  const [chaptersError, setChaptersError] = useState<string | null>(null);
   const [editableParticipants, setEditableParticipants] = useState<string[]>(() => {
     if (typeof window === 'undefined') return participants ?? [];
     try {
-      const saved = sessionStorage.getItem(`participants-${meetingId}`);
+      const saved = sessionStorage.getItem(`participants-${getStorageUserId() ?? 'anon'}-${meetingId}`);
       if (saved) return JSON.parse(saved) as string[];
     } catch { /* ignore */ }
     return participants ?? [];
@@ -212,21 +221,24 @@ export function TranscriptReview({
   const [silent, setSilent] = useState<Set<string>>(() => {
     if (typeof window === 'undefined') return new Set();
     try {
-      const saved = sessionStorage.getItem(`silent-${meetingId}`);
+      const saved = sessionStorage.getItem(`silent-${getStorageUserId() ?? 'anon'}-${meetingId}`);
       if (saved) return new Set(JSON.parse(saved) as string[]);
     } catch { /* ignore */ }
     return new Set();
   });
 
   useEffect(() => {
-    try { sessionStorage.setItem(`participants-${meetingId}`, JSON.stringify(editableParticipants)); } catch { /* ignore */ }
+    try { sessionStorage.setItem(`participants-${getStorageUserId() ?? 'anon'}-${meetingId}`, JSON.stringify(editableParticipants)); } catch { /* ignore */ }
     // Persist to IndexedDB too so participants added while assigning speakers
     // survive a reload (sessionStorage alone is cleared with the tab).
-    updateMeeting(meetingId, { participants: editableParticipants }).catch(() => {});
+    updateMeeting(meetingId, { participants: editableParticipants }).catch((err) => {
+      console.error('[transcript] persistParticipants failed:', err);
+      setError('Kunne ikke gemme deltagere — prøv igen');
+    });
   }, [editableParticipants, meetingId]);
 
   useEffect(() => {
-    try { sessionStorage.setItem(`silent-${meetingId}`, JSON.stringify([...silent])); } catch { /* ignore */ }
+    try { sessionStorage.setItem(`silent-${getStorageUserId() ?? 'anon'}-${meetingId}`, JSON.stringify([...silent])); } catch { /* ignore */ }
   }, [silent, meetingId]);
 
   // Refresh segments when a background task patches the transcript — e.g. speaker
@@ -242,12 +254,14 @@ export function TranscriptReview({
       // user's in-progress edit wins over a background diarization patch.
       if (fresh.segments?.length && !segSaveTimer.current) setSegments(fresh.segments);
       setDiarizing(fresh.diarizationStatus === 'pending');
+      setDiarizationFailed(fresh.diarizationStatus === 'failed');
     };
     const init = async () => {
       const fresh = await getTranscript(meetingId);
       if (cancelled || !fresh) return;
       if (fresh.segments?.length) setSegments(fresh.segments);
       setDiarizing(fresh.diarizationStatus === 'pending');
+      setDiarizationFailed(fresh.diarizationStatus === 'failed');
       // Safety net: the transcript is still 'pending' but nothing is diarizing it
       // in this session — the tab was reloaded mid-pass, so the original background
       // request died. Re-run it from the stored audio so labels don't hang in the
@@ -386,7 +400,7 @@ export function TranscriptReview({
           setCats(skabelonToCats(def));
         }
       })
-      .catch(() => {});
+      .catch((err) => { console.error('[transcript] skabeloner fetch failed:', err); });
     return () => { cancelled = true; };
   }, []);
 
@@ -551,7 +565,14 @@ export function TranscriptReview({
   // autosave below and flushed on leave so text edits survive reloads/navigation.
   const persistSegments = useCallback(async () => {
     if (segSaveTimer.current) { clearTimeout(segSaveTimer.current); segSaveTimer.current = null; }
-    try { await saveTranscriptSegments(meetingId, segmentsRef.current); } catch { /* ignore */ }
+    setSegSaveStatus('saving');
+    try {
+      await saveTranscriptSegments(meetingId, segmentsRef.current);
+      setSegSaveStatus('saved');
+    } catch (err) {
+      console.error('[transcript] autosave failed:', err);
+      setSegSaveStatus('error');
+    }
   }, [meetingId]);
 
   const handleSegmentUpdate = useCallback((index: number, updated: TranscriptSegment) => {
@@ -586,6 +607,7 @@ export function TranscriptReview({
       if (!trimmed || trimmed === from) return;
       const existing = findExistingName(participantsRef.current, trimmed);
       const finalName = existing ?? trimmed;
+      const prevSegments = segments;
       if (!existing && !isDefaultSpeakerLabel(finalName)) {
         setEditableParticipants((prev) => [...prev, finalName]);
       }
@@ -594,8 +616,11 @@ export function TranscriptReview({
       setSegments(updated);
       try {
         await saveTranscriptSegments(meetingId, updated);
+        setSpeakerError(null);
       } catch (err) {
         console.error('[speakers] assign persist failed:', err);
+        setSegments(prevSegments);
+        setSpeakerError('Kunne ikke gemme taler-tilknytning — prøv igen');
       }
     },
     [meetingId, segments, deleteFromSilent],
@@ -606,14 +631,18 @@ export function TranscriptReview({
   // roster as pending.
   const unlinkSpeaker = useCallback(
     async (name: string) => {
+      const prevSegments = segments;
       const fresh = nextAvailableSpeakerLabel(new Set(segments.map((s) => s.speaker)));
       const updated = segments.map((seg) => (seg.speaker === name ? { ...seg, speaker: fresh } : seg));
       setSegments(updated);
       deleteFromSilent(name);
       try {
         await saveTranscriptSegments(meetingId, updated);
+        setSpeakerError(null);
       } catch (err) {
         console.error('[speakers] unlink persist failed:', err);
+        setSegments(prevSegments);
+        setSpeakerError('Kunne ikke gemme taler-frakobling — prøv igen');
       }
     },
     [meetingId, segments, deleteFromSilent],
@@ -645,12 +674,16 @@ export function TranscriptReview({
         return next;
       });
       if (segments.some((s) => s.speaker === oldName)) {
+        const prevSegments = segments;
         const updated = segments.map((seg) => (seg.speaker === oldName ? { ...seg, speaker: trimmed } : seg));
         setSegments(updated);
         try {
           await saveTranscriptSegments(meetingId, updated);
+          setSpeakerError(null);
         } catch (err) {
           console.error('[speakers] rename persist failed:', err);
+          setSegments(prevSegments);
+          setSpeakerError('Kunne ikke gemme deltager-omdøbning — prøv igen');
         }
       }
     },
@@ -663,13 +696,18 @@ export function TranscriptReview({
   const removeParticipant = useCallback(
     async (name: string) => {
       if (segments.some((s) => s.speaker === name)) {
+        const prevSegments = segments;
         const fresh = nextAvailableSpeakerLabel(new Set(segments.map((s) => s.speaker)));
         const updated = segments.map((seg) => (seg.speaker === name ? { ...seg, speaker: fresh } : seg));
         setSegments(updated);
         try {
           await saveTranscriptSegments(meetingId, updated);
+          setSpeakerError(null);
         } catch (err) {
           console.error('[speakers] remove persist failed:', err);
+          setSegments(prevSegments);
+          setSpeakerError('Kunne ikke gemme deltager-fjernelse — prøv igen');
+          return;
         }
       }
       setEditableParticipants((prev) => prev.filter((p) => p !== name));
@@ -908,10 +946,9 @@ export function TranscriptReview({
     saveTranscriptChapters(meetingId, updated).catch((err) => console.error('[chapters] save failed:', err));
   }, [meetingId]);
 
-  useEffect(() => {
-    if (initialChapters && initialChapters.length > 0) return;
-    if (initialSegments.length === 0) return;
+  const fetchChapters = useCallback(() => {
     setChaptersLoading(true);
+    setChaptersError(null);
     fetch(`/api/meetings/${meetingId}/chapters`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -923,11 +960,23 @@ export function TranscriptReview({
         setChapters(chs.length > 0 ? chs : null);
         if (chs.length > 0) {
           setOpenChapters(new Set([chs[0].id]));
-          saveTranscriptChapters(meetingId, chs).catch(() => {});
+          saveTranscriptChapters(meetingId, chs).catch((err) => {
+            console.error('[chapters] chapter save failed:', err);
+          });
         }
       })
-      .catch((err) => console.error('[chapters] generate failed:', err))
+      .catch((err) => {
+        console.error('[chapters] generate failed:', err);
+        setChaptersError('Kapitler kunne ikke genereres');
+      })
       .finally(() => setChaptersLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meetingId]);
+
+  useEffect(() => {
+    if (initialChapters && initialChapters.length > 0) return;
+    if (initialSegments.length === 0) return;
+    fetchChapters();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1044,6 +1093,13 @@ export function TranscriptReview({
             </div>
           )}
 
+          {/* Transcript autosave status */}
+          {segSaveStatus !== 'idle' && (
+            <div style={{ marginTop: 6, display: 'flex', justifyContent: 'flex-end' }}>
+              <SaveStatus state={segSaveStatus} />
+            </div>
+          )}
+
           {/* Hidden audio element — controlled by the bottom bar */}
           {audioUrl && <audio ref={audioRef} src={audioUrl} preload="metadata" />}
 
@@ -1061,6 +1117,26 @@ export function TranscriptReview({
                   display: 'inline-block', animation: 'spin 0.8s linear infinite',
                 }} />
                 grupperer transskription…
+              </div>
+            )}
+
+            {!chaptersLoading && chaptersError && (
+              <div style={{
+                padding: '12px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)',
+                borderTop: '1px solid var(--line)',
+              }}>
+                <span style={{ color: 'var(--kill)' }}>{chaptersError}</span>
+                <button
+                  onClick={fetchChapters}
+                  style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--accent)',
+                    padding: 0,
+                  }}
+                >
+                  prøv igen →
+                </button>
               </div>
             )}
 
@@ -1300,6 +1376,7 @@ export function TranscriptReview({
               recognizedCount={recognizedVoiceCount}
               totalVoices={totalVoices}
               diarizing={diarizing}
+              diarizationFailed={diarizationFailed}
               onLink={assignSpeaker}
               onMarkSilent={markSilent}
               onUnlink={unlinkSpeaker}
@@ -1309,6 +1386,15 @@ export function TranscriptReview({
               onPlaySegment={audioUrl ? togglePlaySegment : undefined}
               playingSegment={playingBite}
             />
+            {speakerError && (
+              <div style={{
+                marginTop: 8, padding: '8px 10px', borderRadius: 'var(--radius)',
+                background: 'var(--kill-wash)', border: '1px solid color-mix(in oklch, var(--kill) 25%, var(--line-2))',
+                fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--kill)',
+              }}>
+                {speakerError}
+              </div>
+            )}
           </div>
 
           {/* Skabelon, kategorier & ekstra instruktioner */}

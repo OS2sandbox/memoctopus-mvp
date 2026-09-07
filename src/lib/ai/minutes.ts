@@ -1,16 +1,6 @@
-import OpenAI from 'openai';
 import { TranscriptSegment } from '@/types';
 import { TranscriptChapter } from '@/lib/ai/chapters';
-
-let client: OpenAI | null = null;
-function getClient() {
-  if (!client) client = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY || 'no-key',
-    baseURL: process.env.LLM_BASE_URL || 'http://vllm-chat:8000/v1',
-  });
-  return client;
-}
-const LLM_MODEL = process.env.LLM_MODEL || 'Qwen/Qwen3.6-27B';
+import { getLlmClient, llmModel } from './llm-client';
 
 const MINUTES_SYSTEM_PROMPT = `Du er en dansk mødesekretær der udarbejder professionelle mødereferater.
 
@@ -79,8 +69,8 @@ export function buildSkabelonInstruction(
 // ─── Generation ───────────────────────────────────────────────────────────────
 
 async function _generateBody(transcriptText: string, instruction: string): Promise<string> {
-  const response = await getClient().chat.completions.create({
-    model: LLM_MODEL,
+  const response = await getLlmClient().chat.completions.create({
+    model: llmModel('gpt-4o'),
     messages: [
       { role: 'system', content: MINUTES_SYSTEM_PROMPT },
       {
@@ -109,8 +99,8 @@ async function _summarizeChapter(
 ): Promise<string> {
   const transcriptText = chapterSegments.map((s) => `[${s.speaker}]: ${s.text}`).join('\n');
 
-  const response = await getClient().chat.completions.create({
-    model: LLM_MODEL,
+  const response = await getLlmClient().chat.completions.create({
+    model: llmModel('gpt-4o'),
     messages: [
       {
         role: 'user',

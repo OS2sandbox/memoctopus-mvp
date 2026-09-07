@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
-import { prepareVadBatches, transcribeVadBatches } from '@/lib/audio/vad-batch-server';
+import { prepareVadBatches, transcribeVadBatches, transcribeEnsemble, isEnsembleDiarization } from '@/lib/audio/vad-batch-server';
 import type { TranscriptSegment } from '@/types';
 
 interface Params {
@@ -15,7 +15,9 @@ export const maxDuration = 300;
 export type TranscribeBatchesEvent =
   | { type: 'meta'; totalBatches: number; totalSpeechSeconds: number }
   | { type: 'batch'; segments: TranscriptSegment[]; batchSeconds: number; completedBatches: number; totalBatches: number }
-  | { type: 'done'; segments: TranscriptSegment[]; failedSeconds: number }
+  // `diarized: true` signals the segments already carry real speaker labels (the
+  // ensemble endpoint diarized inline), so no separate diarization pass is needed.
+  | { type: 'done'; segments: TranscriptSegment[]; failedSeconds: number; diarized?: boolean }
   | { type: 'error'; message: string };
 
 // Batch transcription for the upload and bot-recording paths. The client uploads
@@ -47,6 +49,22 @@ export async function POST(req: NextRequest, { params }: Params) {
 
       const t0 = Date.now();
       try {
+        // Ensemble path: one call returns diarized, timestamped segments — no VAD
+        // fan-out, no separate diarization pass. Emitted as a single batch so the
+        // existing client (live preview + store) keeps working unchanged.
+        if (isEnsembleDiarization()) {
+          const segments = await transcribeEnsemble(buffer, audioFile.type || 'audio/wav');
+          const speechSeconds = segments.length ? segments[segments.length - 1].end : 0;
+          send({ type: 'meta', totalBatches: 1, totalSpeechSeconds: speechSeconds });
+          send({ type: 'batch', segments, batchSeconds: speechSeconds, completedBatches: 1, totalBatches: 1 });
+          console.log(
+            `[transcribe-batches] ensemble: ${buffer.length} bytes → ${segments.length} diarized segments ` +
+            `(${Math.round(speechSeconds)} s) in ${Date.now() - t0} ms`,
+          );
+          send({ type: 'done', segments, failedSeconds: 0, diarized: true });
+          return;
+        }
+
         const batches = await prepareVadBatches(buffer);
         const totalSpeechSeconds = batches.reduce((s, b) => s + b.totalWavDuration, 0);
         send({ type: 'meta', totalBatches: batches.length, totalSpeechSeconds });

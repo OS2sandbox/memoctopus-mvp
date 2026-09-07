@@ -6,8 +6,19 @@ vi.mock('@/lib/ai/chapters', () => ({
   groupIntoChapters: mockGroupIntoChapters,
 }));
 
+vi.mock('next/headers', () => ({
+  headers: vi.fn().mockResolvedValue(new Headers()),
+}));
+
+vi.mock('@/lib/auth', () => ({
+  auth: { api: { getSession: vi.fn() } },
+}));
+
 import { POST } from './route';
-import { makeJsonReq } from '@/test/helpers';
+import { auth } from '@/lib/auth';
+import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
+
+const mockGetSession = vi.mocked(auth.api.getSession);
 
 const BASE_URL = 'http://localhost/api/meetings/meet-1/chapters';
 
@@ -26,6 +37,15 @@ const sampleChapters = [
 describe('POST /api/meetings/[id]/chapters', () => {
   beforeEach(() => {
     mockGroupIntoChapters.mockReset();
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+  });
+
+  it('returns 401 when not authenticated', async () => {
+    mockGetSession.mockResolvedValueOnce(null as never);
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
+    expect(res.status).toBe(401);
+    expect(mockGroupIntoChapters).not.toHaveBeenCalled();
   });
 
   it('returns generated chapters from groupIntoChapters', async () => {
@@ -55,10 +75,17 @@ describe('POST /api/meetings/[id]/chapters', () => {
   });
 
   it('fails soft to an empty chapters array when groupIntoChapters throws', async () => {
-    mockGroupIntoChapters.mockRejectedValueOnce(new Error('AI error'));
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const aiError = new Error('AI error');
+    mockGroupIntoChapters.mockRejectedValueOnce(aiError);
 
     const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
     expect(res.status).toBe(200);
     expect((await res.json()).chapters).toEqual([]);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      '[chapters route] groupIntoChapters failed, returning empty fallback:',
+      aiError,
+    );
+    consoleErrorSpy.mockRestore();
   });
 });

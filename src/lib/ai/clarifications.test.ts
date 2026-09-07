@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockCreate = vi.hoisted(() => vi.fn());
 
@@ -17,7 +17,8 @@ function openaiResponse(content: string) {
 // ─── analyzeClarifications ────────────────────────────────────────────────────
 
 describe('analyzeClarifications', () => {
-  beforeEach(() => mockCreate.mockReset());
+  // A key is configured, so the LLM selector targets hosted OpenAI (gpt-4o-mini).
+  beforeEach(() => { process.env.OPENAI_API_KEY = 'sk-test'; mockCreate.mockReset(); });
 
   it('returns clarifying questions from a valid response', async () => {
     mockCreate.mockResolvedValueOnce(
@@ -48,9 +49,19 @@ describe('analyzeClarifications', () => {
     expect(result[0].question).toBe('Q?');
   });
 
-  it('returns empty array when JSON is invalid', async () => {
+  it('returns empty array when JSON is invalid and logs the error', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     mockCreate.mockResolvedValueOnce(openaiResponse('not json'));
-    expect(await analyzeClarifications('test')).toEqual([]);
+
+    const result = await analyzeClarifications('test');
+
+    expect(result).toEqual([]);
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[clarifications]'),
+      expect.stringContaining('not json'),
+      expect.any(SyntaxError),
+    );
+    consoleSpy.mockRestore();
   });
 
   it('returns empty array when the response has no content', async () => {

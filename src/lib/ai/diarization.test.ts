@@ -115,6 +115,14 @@ describe('PyannoteProvider.diarize', () => {
     expect(mockUndiciFetch.mock.calls[0][1].headers).toBeUndefined();
   });
 
+  it('no-ops to [] without fetching when ensemble mode (HVISKE_DIARIZE=true) is on', async () => {
+    process.env.HVISKE_DIARIZE = 'true';
+    const result = await new PyannoteProvider().diarize(buf, 'audio/webm');
+    expect(result).toEqual([]);
+    expect(mockUndiciFetch).not.toHaveBeenCalled();
+    expect(mockDecode).not.toHaveBeenCalled();
+  });
+
   it('returns [] when the response body has no turns array', async () => {
     mockUndiciFetch.mockResolvedValueOnce(jsonResponse({}));
 
@@ -131,6 +139,14 @@ describe('PyannoteProvider.diarize', () => {
     mockUndiciFetch.mockResolvedValueOnce(jsonResponse({}, false, 502));
 
     await expect(new PyannoteProvider().diarize(buf, 'audio/wav')).rejects.toThrow('502');
+  });
+
+  it('includes the response body when the service responds non-ok', async () => {
+    mockUndiciFetch.mockResolvedValueOnce(jsonResponse('missing file', false, 422));
+
+    await expect(new PyannoteProvider().diarize(buf, 'audio/wav')).rejects.toThrow(
+      'Diarization service returned 422: missing file',
+    );
   });
 
   it('does NOT decode when the input is already WAV', async () => {

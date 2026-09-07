@@ -456,6 +456,11 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
             }
           }
 
+          // Feed THIS utterance to the post-recording batch transcript before
+          // draining the next queued one, so queued utterances are never dropped
+          // from the final transcript even though they appeared in live captions.
+          accumulateBatch(uStart, uEnd, audio);
+
           const next = pendingUtterancesRef.current.shift();
           if (next) {
             await finalize(next.start, next.end, next.audio, next.skip, next.windowStart, next.partialWords, next.speechEndMs, next.waveStartMs);
@@ -516,7 +521,9 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
                 const waveElapsed = waveStartMsRef.current !== null ? Date.now() - waveStartMsRef.current : 0;
                 commitUtterance(commitStart, commitEnd, text, 0, waveElapsed);
               }
-            }).catch(() => {}).finally(() => {
+            }).catch((err) => {
+              console.error('[window-commit] postWav failed:', err);
+            }).finally(() => {
               if (windowCommitControllerRef.current === ctl) windowCommitControllerRef.current = null;
             });
             return;
@@ -631,23 +638,9 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
             return;
           }
 
+          // finalize() accumulates this utterance (and any it drains from the
+          // queue) into the batch state, so batch accumulation is NOT repeated here.
           await finalize(uStart, uEnd, audio, capturedSkip, capturedWindowStart, capturedPartialWords, capturedSpeechEndMs, capturedWaveStartMs);
-
-          // Batch accumulation for post-recording parallel transcription. Runs after
-          // the live-caption finalize so it doesn't block it. Uses the same uStart/uEnd
-          // captured above (before utteranceStartRef was cleared).
-          const batchState = vadBatchStateRef.current;
-          const wavOffset = batchState.pendingWavDuration;
-          const wavDuration = audio.length / 16_000;
-          batchState.pendingAudio.push(audio);
-          batchState.pendingIntervals.push({ originalStart: uStart, originalEnd: uEnd, wavOffset, wavDuration });
-          batchState.pendingWavDuration += wavDuration;
-          if (batchState.pendingWavDuration >= BATCH_DURATION_S) {
-            sealCurrentBatch(batchState);
-            // Transcribe the sealed batch NOW, while the meeting is still running,
-            // so stopping the recording only waits for the final partial batch.
-            dispatchSealedBatches();
-          }
         },
         onVADMisfire: () => {
           stopPartialTimer();
@@ -785,6 +778,24 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
 
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      // Surface a recorder fault (e.g. another app — a screen/video recorder —
+      // grabbing the audio device mid-recording) instead of letting it silently
+      // corrupt or truncate the final blob.
+      recorder.onerror = (e) => {
+        console.error('[recorder] error:', e);
+        // Stop recording cleanly and surface the fault so the user knows the
+        // recording was interrupted (rather than seeing a silently empty result).
+        recordingActiveRef.current = false;
+        clearIntervals();
+        vadRef.current?.destroy();
+        vadRef.current = null;
+        pcmWorkletNodeRef.current?.disconnect();
+        pcmWorkletNodeRef.current = null;
+        audioContextRef.current?.close();
+        audioContextRef.current = null;
+        setRecordingState('stopped');
+        setError('Optagelsen blev afbrudt af en fejl i lydenheden. Gem hvad der er optaget, eller start forfra.');
       };
 
       recorder.start(1000);
@@ -926,6 +937,27 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     }
   }
 
+  // Accumulate one finalized utterance into the post-recording batch transcript.
+  // Called for EVERY finalized utterance from finalize() — including ones drained
+  // from the pending queue under load — so the final transcript always matches the
+  // live captions. (Previously this lived only in the non-queued onSpeechEnd path,
+  // so utterances that queued while a finalize was in flight — common when a screen
+  // recorder saturates the CPU — were dropped from the final transcript.)
+  function accumulateBatch(uStart: number, uEnd: number, audio: Float32Array) {
+    const batchState = vadBatchStateRef.current;
+    const wavOffset = batchState.pendingWavDuration;
+    const wavDuration = audio.length / 16_000;
+    batchState.pendingAudio.push(audio);
+    batchState.pendingIntervals.push({ originalStart: uStart, originalEnd: uEnd, wavOffset, wavDuration });
+    batchState.pendingWavDuration += wavDuration;
+    if (batchState.pendingWavDuration >= BATCH_DURATION_S) {
+      sealCurrentBatch(batchState);
+      // Transcribe the sealed batch now, while the meeting is still running, so
+      // stopping only waits for the final partial batch.
+      dispatchSealedBatches();
+    }
+  }
+
   // Fire transcription for any sealed-but-not-yet-dispatched batches. Idempotent —
   // tracks how many of readyBatches already have an in-flight request.
   function dispatchSealedBatches() {
@@ -960,9 +992,20 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     // final ondataavailable event — paused recorders may not do this reliably.
     if (recorder.state === 'paused') recorder.resume();
 
+    // Wait for the recorder to flush its final chunk, but NEVER hang on it. A
+    // recorder whose audio device was disrupted mid-recording (e.g. another app —
+    // a screen/video recorder — grabbed the mic) can already be 'inactive' or
+    // never emit 'stop', and recorder.stop() then throws InvalidStateError. The
+    // final transcript comes from the VAD batches (not this blob), so a stuck
+    // recorder must not block transcript assembly + diarization below.
     await new Promise<void>((resolve) => {
-      recorder.addEventListener('stop', () => resolve(), { once: true });
-      recorder.stop();
+      if (recorder.state === 'inactive') { resolve(); return; }
+      let settled = false;
+      const finish = () => { if (!settled) { settled = true; resolve(); } };
+      recorder.addEventListener('stop', finish, { once: true });
+      recorder.addEventListener('error', finish, { once: true });
+      setTimeout(finish, 5000); // fallback: a stuck recorder can't hang the flow
+      try { recorder.stop(); } catch { finish(); }
     });
     recorder.stream.getTracks().forEach((t) => t.stop());
 
@@ -977,6 +1020,41 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     // are patched in (and the review screen refreshed) when diarization lands.
     const diarizationPromise = startDiarization(meetingId, blob);
 
+    // Let any in-flight finalize drain its queued utterances into the batch state
+    // before sealing — otherwise utterances still being finalized when stop was
+    // pressed would miss the final batch (and a fast stop after speaking could seal
+    // an empty batch → "ingen tale fundet"). Bounded so a stuck finalize can't hang.
+    for (let i = 0; i < 60 && (finalizeInFlightRef.current || pendingUtterancesRef.current.length > 0); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    // If we stopped MID-UTTERANCE, the VAD's onSpeechEnd never fired, so this
+    // utterance was shown live (via the window-commit path) but never added to the
+    // batch transcript. That's why a long, pause-free recording produced an empty
+    // final transcript while short clips (which end on a natural pause → onSpeechEnd)
+    // worked. Flush the in-progress utterance's raw PCM into the batch now, in
+    // <=BATCH_DURATION_S chunks so each stays within hviske's window.
+    if (utteranceStartRef.current !== null) {
+      const startFrame = pcmSpeechStartFrameRef.current;
+      const int16Frames = pcmFramesRef.current.slice(startFrame);
+      const totalSamples = int16Frames.reduce((n, f) => n + f.length, 0);
+      if (totalSamples > 0) {
+        const uStart = utteranceStartRef.current;
+        const uEnd = currentElapsed();
+        const all = new Float32Array(totalSamples);
+        let off = 0;
+        for (const fr of int16Frames) { for (let i = 0; i < fr.length; i++) all[off++] = fr[i] / 32768; }
+        const samplesPerChunk = 16_000 * BATCH_DURATION_S;
+        for (let s = 0; s < all.length; s += samplesPerChunk) {
+          const chunk = all.slice(s, Math.min(s + samplesPerChunk, all.length));
+          const cStart = uStart + (s / all.length) * (uEnd - uStart);
+          const cEnd = uStart + ((s + chunk.length) / all.length) * (uEnd - uStart);
+          accumulateBatch(cStart, cEnd, chunk);
+        }
+      }
+      utteranceStartRef.current = null;
+    }
+
     // Seal any remaining speech into the final partial batch and dispatch it.
     // Earlier batches were already dispatched as they sealed during recording, so
     // most of the fan-out is typically done (or in flight) by the time we get here.
@@ -984,17 +1062,9 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     dispatchSealedBatches();
     const liveBatches = liveBatchesRef.current;
 
-    // Archive the full recording in IndexedDB so it can be played back during review.
-    // Kicked off without awaiting; the client transcribes the VAD batches below and
-    // persists the assembled transcript directly.
-    const archivePromise = (async () => {
-      try {
-        await saveAudio(meetingId, blob, mimeType);
-        await updateMeeting(meetingId, { audioSizeBytes: blob.size, audioDurationSeconds: durationSeconds });
-      } catch (err) {
-        console.error('[archive] save failed:', err);
-      }
-    })();
+    // The recording is archived to IndexedDB only AFTER a transcript is produced
+    // (see below). A failed or empty transcription must not leave a saved meeting
+    // sitting in Arkiv with no referat and no way to act on it.
 
     try {
       // Await the in-flight batch requests (most resolved during recording) and
@@ -1003,14 +1073,38 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       setBatchProgress({ completed: 0, total: liveBatches.length, completedSeconds: 0, totalSeconds });
       let done = 0;
       let completedSeconds = 0;
+      let failedBatches = 0;
       const segmentArrays = await Promise.all(liveBatches.map(async (entry): Promise<TranscriptSegment[]> => {
         let segs = await entry.promise;
         if (segs === null) segs = await postBatch(entry.batch);
+        if (segs === null) failedBatches++;
         completedSeconds += entry.batch.totalWavDuration;
         setBatchProgress({ completed: ++done, total: liveBatches.length, completedSeconds, totalSeconds });
         return segs ?? [];
       }));
       const segments = segmentArrays.flat().sort((a, b) => a.start - b.start);
+      if (failedBatches > 0) {
+        console.error(`[transcribe] ${failedBatches}/${liveBatches.length} batches failed (speech service unreachable?)`);
+      }
+
+      if (segments.length === 0) {
+        // No transcript was produced — the speech service was unreachable, VAD
+        // never initialised, or the recording was genuinely silent. We have NOT
+        // archived the audio (that only happens on success below), so nothing is
+        // left saved: the recording is discarded and the user re-records. Surface
+        // a message that matches what actually happened — no false "retry" promise.
+        void diarizationPromise.catch(() => {});
+        setError(
+          liveCaptionsUnavailable
+            ? 'Transskription kunne ikke startes. Genindlæs siden (Cmd/Ctrl+Shift+R) og prøv igen.'
+            : failedBatches > 0
+              ? 'Transskriptionen fejlede — taletjenesten kunne ikke nås. Optagelsen blev ikke gemt. Prøv at optage igen.'
+              : 'Ingen tale fundet i optagelsen. Var mikrofonen aktiv og ikke slået fra?',
+        );
+        setIsUploading(false);
+        setBatchProgress(null);
+        return;
+      }
 
       const rawText = segments.map((s) => s.text).join(' ');
       // Saved with default labels and diarizationStatus 'pending' — the review
@@ -1030,7 +1124,20 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     // Release batch memory before navigating.
     vadBatchStateRef.current = newVadBatchState();
     liveBatchesRef.current = [];
-    await archivePromise;
+
+    // Now that a transcript exists, archive the audio for playback during review.
+    try {
+      await saveAudio(meetingId, blob, mimeType);
+      await updateMeeting(meetingId, { audioSizeBytes: blob.size, audioDurationSeconds: durationSeconds });
+    } catch (err) {
+      // The transcript is already saved; only the audio archive failed (e.g. quota
+      // exceeded or private-browsing). Warn so the user knows playback may not work,
+      // but the review is still available via the transcript.
+      console.error('[archive] save failed:', err);
+      setError('Transskriptionen er gemt, men lydfilen kunne ikke gemmes lokalt (muligvis fuld lageropbevaring). Gennemgang er stadig tilgængelig.');
+      setIsUploading(false);
+      return;
+    }
     onRecordingComplete?.();
     router.push(`/meeting/${meetingId}/review`);
   }
@@ -1103,7 +1210,9 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
         ]);
         if (instanceMountedRef.current) return; // remounted (StrictMode) — not a real unmount
         if (m && m.status === 'recording' && !t && !a) {
-          await deleteMeeting(meetingId).catch(() => {});
+          await deleteMeeting(meetingId).catch((err) => {
+            console.error('[RecordingScreen] abandoned-meeting cleanup failed:', err);
+          });
         }
       })();
     };

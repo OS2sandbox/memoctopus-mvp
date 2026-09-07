@@ -20,7 +20,19 @@ vi.mock('@/lib/ai/chapters', () => ({
   groupIntoChapters: mockGroupChapters,
 }));
 
+vi.mock('next/headers', () => ({
+  headers: vi.fn().mockResolvedValue(new Headers()),
+}));
+
+vi.mock('@/lib/auth', () => ({
+  auth: { api: { getSession: vi.fn() } },
+}));
+
 import { POST } from './route';
+import { auth } from '@/lib/auth';
+import { FAKE_SESSION } from '@/test/helpers';
+
+const mockGetSession = vi.mocked(auth.api.getSession);
 
 const SEGMENTS = [{ speaker: 'Taler 1', start: 0, end: 5, text: 'Hej verden.' }];
 const CHAPTERS = [{ id: 'c1', title: 'Intro', summary: '', startTime: 0, endTime: 5, segmentIndices: [0] }];
@@ -45,6 +57,15 @@ describe('POST /api/transcribe', () => {
     mockDetectPii.mockResolvedValue({ replacements: [] });
     mockGroupChapters.mockReset();
     mockGroupChapters.mockResolvedValue(CHAPTERS);
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+  });
+
+  it('returns 401 when not authenticated', async () => {
+    mockGetSession.mockResolvedValueOnce(null as never);
+    const res = await POST(makeFormRequest('meet-1'));
+    expect(res.status).toBe(401);
+    expect(mockTranscribe).not.toHaveBeenCalled();
   });
 
   it('returns 400 when audio file is missing', async () => {

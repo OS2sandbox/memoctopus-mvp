@@ -6,6 +6,7 @@ import { getAllMeetings, deleteMeeting, StoredMeeting } from '@/lib/storage';
 import { ArchiveMeetingRow } from '@/components/archive-meeting-row';
 import { SkabelonerList } from '@/components/skabeloner/SkabelonerList';
 import { Button } from '@/components/ui/button';
+import { ErrorBanner } from '@/components/ui/error-banner';
 import {
   Dialog,
   DialogContent,
@@ -27,6 +28,7 @@ export default function ArkivPage() {
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Allow deep-linking to the Skabeloner tab (e.g. from the old /templates route).
   useEffect(() => {
@@ -55,6 +57,10 @@ export default function ArkivPage() {
             durationSeconds: r.audioDurationSeconds,
           }));
         setMeetings(mapped);
+      })
+      .catch((err) => {
+        console.error('[arkiv] Kunne ikke indlæse møder fra lokalt lager:', err);
+        setLoadError('Kunne ikke indlæse dine møder. Prøv at genindlæse siden.');
       })
       .finally(() => setLoading(false));
   }, []);
@@ -179,6 +185,12 @@ export default function ArkivPage() {
               <div key={i} className="h-14 bg-[var(--fill)] rounded mb-2 animate-pulse" />
             ))}
           </div>
+        ) : loadError ? (
+          <ErrorBanner
+            message={loadError}
+            onRetry={() => window.location.reload()}
+            className="mt-4"
+          />
         ) : meetings.length === 0 ? (
           <div className="py-16 text-center">
             <p className="text-[var(--muted)]" style={{ fontSize: 'var(--t-body)' }}>

@@ -33,3 +33,11 @@ export function takePendingUploadFile(): File | null {
   _uploadFile = null;
   return f;
 }
+
+// Clear all in-memory pending data. Called on sign-out so a file/blob picked by one
+// user can never be consumed by the next user in the same tab (no full reload to
+// reset these module singletons).
+export function clearPendingUploads(): void {
+  _pending = null;
+  _uploadFile = null;
+}

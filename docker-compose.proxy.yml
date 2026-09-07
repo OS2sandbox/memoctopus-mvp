@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# PROXY OVERLAY — SYDDJURS-SPECIFIC. NOT a portable/general overlay.
+#
+# This serves the Syddjurs Kommune deployment at taletiltekst.syddjurs.dk only:
+# server_name, the *.syddjurs.dk wildcard cert (./nginx/certs), and the redirect
+# target are all hardcoded for that domain in ./nginx/nginx.conf. Do NOT merge it
+# for any other host — fork nginx/nginx.conf and supply your own cert instead.
+#
+# Terminates HTTPS and forwards to the app. Merge on top of base (+ ai overlay):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ai.yml -f docker-compose.proxy.yml up -d
+#
+# Binds host :80 (→ 301 https, also serves ACME challenges) and :443. Joins the
+# `internal` network so it can reach the app by service name. The cert is a
+# wildcard managed outside this stack, so no certbot sidecar is needed here.
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: memoctopus-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      # nginx:alpine ships curl; its BusyBox wget verifies TLS and has no
+      # --no-check-certificate, so use curl -k (the cert is *.syddjurs.dk, not 127.0.0.1).
+      test: ["CMD", "curl", "-fsk", "https://127.0.0.1/", "-o", "/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - internal

@@ -8,6 +8,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useRouter, useSearchParams } from 'next/navigation';
 import type { FormEvent } from 'react';
+import type { AuthProvider } from '@/lib/auth/providers';
+
+interface HeroFormProps {
+  providers: AuthProvider[];
+  emailPasswordEnabled: boolean;
+}
 
 
 // Map better-auth sign-up error codes to specific Danish messages, so a
@@ -42,7 +48,21 @@ function EyeIcon({ off }: { off: boolean }) {
   );
 }
 
-export function HeroForm() {
+// Generic OIDC providers are operator-configured, so we can't ship a logo for
+// them — an unbranded button is the existing fallback.
+function ProviderIcon({ provider }: { provider: AuthProvider }) {
+  if (provider.kind !== 'social') return null;
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 23 23" fill="none">
+      <path fill="#f25022" d="M1 1h10v10H1z" />
+      <path fill="#00a4ef" d="M12 1h10v10H12z" />
+      <path fill="#7fba00" d="M1 12h10v10H1z" />
+      <path fill="#ffb900" d="M12 12h10v10H12z" />
+    </svg>
+  );
+}
+
+export function HeroForm({ providers, emailPasswordEnabled }: HeroFormProps) {
   const { state, actions } = useAuthForm();
   const [showPassword, setShowPassword] = useState(false);
   const router = useRouter();
@@ -51,33 +71,25 @@ export function HeroForm() {
   const { isLoading, mode, email, password, name, error } = state;
   const isSignUp = mode === AuthMode.SignUp;
 
-  const emailPasswordEnabled = process.env.NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED !== 'false';
-  const microsoftEnabled = process.env.NEXT_PUBLIC_MICROSOFT_ENABLED === 'true';
-  const authentikEnabled = process.env.NEXT_PUBLIC_AUTHENTIK_ENABLED === 'true';
-  const anySocialEnabled = microsoftEnabled || authentikEnabled;
+  const hasProviders = providers.length > 0;
 
-  const handleSocialSignIn = async (
-    fn: () => Promise<{ error?: { message?: string } | null }>,
-    errorMsg: string,
-  ) => {
+  // On success the browser leaves for the IdP, so only the failure paths matter
+  // here. A rejected call (IdP unreachable, bad discovery URL) must still clear
+  // isLoading, or every button stays disabled with nothing shown.
+  const handleProviderSignIn = async (provider: AuthProvider) => {
+    const failed = () => actions.authError(`${provider.label} login mislykkedes. Prøv igen.`);
     actions.setLoading(true);
-    const { error } = await fn();
-    if (error?.message) actions.authError(errorMsg);
+    try {
+      const { error } = await (provider.kind === 'social'
+        ? signIn.social({ provider: provider.id, callbackURL: from })
+        : authClient.signIn.oauth2({ providerId: provider.id, callbackURL: from }));
+      if (error) failed();
+    } catch {
+      failed();
+    }
   };
 
-  const handleMicrosoftSignIn = () =>
-    handleSocialSignIn(
-      () => signIn.social({ provider: 'microsoft', callbackURL: from }),
-      'Microsoft login mislykkedes. Prøv igen.',
-    );
-
-  const handleAuthentikSignIn = () =>
-    handleSocialSignIn(
-      () => authClient.signIn.oauth2({ providerId: 'authentik', callbackURL: from }),
-      'Authentik login mislykkedes. Prøv igen.',
-    );
-
-  const noMethodsEnabled = !emailPasswordEnabled && !anySocialEnabled;
+  const noMethodsEnabled = !emailPasswordEnabled && !hasProviders;
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -207,7 +219,7 @@ export function HeroForm() {
         </Button>
       )}
 
-      {emailPasswordEnabled && anySocialEnabled && (
+      {emailPasswordEnabled && hasProviders && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '2px 0' }}>
           <div style={{ flex: 1, height: 1, background: 'var(--line)' }} />
           <span style={{ fontSize: 11.5, color: 'var(--muted)', fontFamily: 'var(--font-geist-mono)' }}>eller</span>
@@ -215,23 +227,19 @@ export function HeroForm() {
         </div>
       )}
 
-      {microsoftEnabled && (
-        <Button type="button" variant="outline" onClick={handleMicrosoftSignIn} disabled={isLoading} className="w-full">
-          <svg className="h-4 w-4" viewBox="0 0 23 23" fill="none">
-            <path fill="#f25022" d="M1 1h10v10H1z" />
-            <path fill="#00a4ef" d="M12 1h10v10H12z" />
-            <path fill="#7fba00" d="M1 12h10v10H1z" />
-            <path fill="#ffb900" d="M12 12h10v10H12z" />
-          </svg>
-          Fortsæt med Microsoft
+      {providers.map((provider) => (
+        <Button
+          key={provider.id}
+          type="button"
+          variant="outline"
+          onClick={() => handleProviderSignIn(provider)}
+          disabled={isLoading}
+          className="w-full"
+        >
+          <ProviderIcon provider={provider} />
+          Fortsæt med {provider.label}
         </Button>
-      )}
-
-      {authentikEnabled && (
-        <Button type="button" variant="outline" onClick={handleAuthentikSignIn} disabled={isLoading} className="w-full">
-          Fortsæt med Authentik
-        </Button>
-      )}
+      ))}
 
       {emailPasswordEnabled && (
         <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '4px 0 0' }}>

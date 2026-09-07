@@ -1,7 +1,8 @@
 import { Buffer } from 'node:buffer';
-import { Agent, FormData, fetch as undiciFetch } from 'undici';
 import { mimeTypeToExt } from './mime';
+import { Agent, FormData, fetch as undiciFetch } from 'undici';
 import { decodeToMono16k, encodeMono16kWav } from '@/lib/audio/decode-server';
+import { isEnsembleDiarization, hviskeBaseURL } from './transcription';
 
 // ─── Interface ────────────────────────────────────────────────────────────────
 // Speaker diarization runs as a separate acoustic pass over the full recording.
@@ -43,23 +44,28 @@ export class PyannoteProvider implements DiarizationProvider {
   constructor() {
     // `||` not `??`: a blank DIARIZATION_URL (empty string from a deploy .env) must
     // fall back to the derived default rather than yield an empty baseURL. The
-    // fallback strips a trailing `/v1` from the hviske origin because /diarize lives
-    // at the server root, not under the OpenAI-compatible /v1 prefix.
-    const hviskeOrigin = (process.env.HVISKE_URL || 'http://109.173.238.203:40093/v1').replace(/\/v1\/?$/, '');
+    // fallback strips a trailing `/v1` from the resolved STT origin (the co-hosted
+    // hviske /diarize lives at the server root, not under the /v1 prefix) so it
+    // follows the same local-vs-hosted selection as transcription.
+    const hviskeOrigin = hviskeBaseURL().replace(/\/v1\/?$/, '');
     this.baseURL = (process.env.DIARIZATION_URL || hviskeOrigin).replace(/\/$/, '');
     this.apiKey = process.env.DIARIZATION_API_KEY;
   }
 
   async diarize(audioBuffer: Buffer, mimeType: string): Promise<SpeakerTurn[]> {
+    // In ensemble mode the transcription endpoint already diarizes inline, so there
+    // is no separate /diarize service. Return [] (a no-op): callers merge [] onto
+    // their already-labelled segments, leaving the inline labels intact.
+    if (isEnsembleDiarization()) return [];
+
     // The pyannote service decodes only PCM WAV. Callers now send the original
     // compressed recording (small browser/bot upload — the win), so decode anything
     // that isn't already WAV to 16 kHz mono WAV here with ffmpeg before forwarding.
     // This keeps diarization working regardless of the service version, and the
-    // app→service hop is local in production. Fail-soft: if the local decode fails,
-    // send the original and let the service attempt it.
+    // app→service hop is local in production (docker-compose). Fail-soft: if the
+    // local decode fails, send the original and let the service attempt it.
     let buffer = audioBuffer;
     let outMime = mimeType;
-
     if (!/wav/i.test(mimeType)) {
       try {
         buffer = encodeMono16kWav(await decodeToMono16k(audioBuffer));
@@ -74,8 +80,8 @@ export class PyannoteProvider implements DiarizationProvider {
     const blob = new Blob([new Uint8Array(buffer)], { type: outMime });
 
     // Multipart field name is `file` — the co-hosted hviske /diarize endpoint
-    // requires it. The legacy standalone service accepted `audio`; it now accepts
-    // both, see diarization-service/app.py.
+    // requires it (the legacy standalone service accepted `audio`; it now accepts
+    // both, see diarization-service/app.py).
     //
     // Use undici.FormData together with undici.fetch. Mixing global FormData/File
     // with undici.fetch can produce a request that reaches FastAPI but is parsed as

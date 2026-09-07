@@ -11,6 +11,7 @@ import { ExportTab } from '@/components/meeting/ExportTab';
 import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
 import { ProcessingTranscription } from '@/components/meeting/ProcessingTranscription';
 import { useReviewAudio } from '@/lib/review-audio-context';
+import { ErrorBanner } from '@/components/ui/error-banner';
 import {
   getMeeting,
   getTranscript,
@@ -39,6 +40,7 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
   const [minutes, setMinutes] = useState<StoredMinutes | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const audioBlobUrlRef = useRef<string | null>(null);
   // Tracks whether the meeting currently has stored audio that should be purged
   // on leaving the page. Read inside the cleanup below so it reflects the live
@@ -55,44 +57,50 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
   const initialLoadDoneRef = useRef(false);
 
   const loadData = useCallback(async () => {
-    const [m, t, min] = await Promise.all([
-      getMeeting(meetingId),
-      getTranscript(meetingId),
-      getMinutes(meetingId),
-    ]);
-    setMeeting(m);
-    setTranscript(t);
-    setMinutes(min);
+    setLoadError(null);
+    try {
+      const [m, t, min] = await Promise.all([
+        getMeeting(meetingId),
+        getTranscript(meetingId),
+        getMinutes(meetingId),
+      ]);
+      setMeeting(m);
+      setTranscript(t);
+      setMinutes(min);
 
-    // Mark this instance as the live recorder if it opened the recording route on
-    // an in-progress meeting. Such a session saves audio and navigates to /review,
-    // so its unmount must not purge that handoff. Any other view (review, the
-    // recording look-back, an abandoned recording reopened from the Arkiv) purges.
-    if (!initialLoadDoneRef.current) {
-      initialLoadDoneRef.current = true;
-      activeRecorderRef.current =
-        initialTab === 'recording' && !!m && (m.status === 'recording' || m.status === 'processing');
-    }
+      // Mark this instance as the live recorder if it opened the recording route on
+      // an in-progress meeting. Such a session saves audio and navigates to /review,
+      // so its unmount must not purge that handoff. Any other view (review, the
+      // recording look-back, an abandoned recording reopened from the Arkiv) purges.
+      if (!initialLoadDoneRef.current) {
+        initialLoadDoneRef.current = true;
+        activeRecorderRef.current =
+          initialTab === 'recording' && !!m && (m.status === 'recording' || m.status === 'processing');
+      }
 
-    if (m && !m.audioDeleted) {
-      const audioEntry = await getAudio(meetingId);
-      if (audioEntry) {
-        if (audioBlobUrlRef.current) URL.revokeObjectURL(audioBlobUrlRef.current);
-        const url = URL.createObjectURL(audioEntry.blob);
-        audioBlobUrlRef.current = url;
-        setAudioUrl(url);
+      if (m && !m.audioDeleted) {
+        const audioEntry = await getAudio(meetingId);
+        if (audioEntry) {
+          if (audioBlobUrlRef.current) URL.revokeObjectURL(audioBlobUrlRef.current);
+          const url = URL.createObjectURL(audioEntry.blob);
+          audioBlobUrlRef.current = url;
+          setAudioUrl(url);
+        } else {
+          if (audioBlobUrlRef.current) URL.revokeObjectURL(audioBlobUrlRef.current);
+          audioBlobUrlRef.current = null;
+          setAudioUrl(undefined);
+        }
       } else {
         if (audioBlobUrlRef.current) URL.revokeObjectURL(audioBlobUrlRef.current);
         audioBlobUrlRef.current = null;
         setAudioUrl(undefined);
       }
-    } else {
-      if (audioBlobUrlRef.current) URL.revokeObjectURL(audioBlobUrlRef.current);
-      audioBlobUrlRef.current = null;
-      setAudioUrl(undefined);
+    } catch (err) {
+      console.error('[MeetingPageClient] loadData fejlede:', err);
+      setLoadError('Kunne ikke indlæse mødedata — prøv at genindlæse siden');
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   }, [meetingId, initialTab]);
 
   useEffect(() => {
@@ -122,8 +130,8 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
     return () => {
       if (activeRecorderRef.current) return;
       if (!audioDeletableRef.current) return;
-      void deleteAudio(meetingId).catch(() => {});
-      void updateMeeting(meetingId, { audioDeleted: true }).catch(() => {});
+      void deleteAudio(meetingId).catch((err) => { console.error('[MeetingPageClient] deleteAudio (unmount) fejlede:', err); });
+      void updateMeeting(meetingId, { audioDeleted: true }).catch((err) => { console.error('[MeetingPageClient] updateMeeting (unmount) fejlede:', err); });
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meetingId]);
@@ -134,7 +142,7 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
     if (!audioUrl) return;
     const purge = () => {
       if (activeRecorderRef.current || !audioDeletableRef.current) return;
-      void deleteAudio(meetingId).catch(() => {});
+      void deleteAudio(meetingId).catch((err) => { console.error('[MeetingPageClient] deleteAudio (pagehide) fejlede:', err); });
     };
     window.addEventListener('pagehide', purge);
     return () => window.removeEventListener('pagehide', purge);
@@ -166,6 +174,14 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
           animation: 'spin 0.8s linear infinite',
         }} />
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div style={{ padding: '48px', maxWidth: 560 }}>
+        <ErrorBanner message={loadError} onRetry={loadData} />
       </div>
     );
   }

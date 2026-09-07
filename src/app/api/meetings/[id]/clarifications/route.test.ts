@@ -76,9 +76,13 @@ describe('POST /api/meetings/[id]/clarifications', () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockAnalyzeClarifications.mockRejectedValueOnce(new Error('LLM error'));
 
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await POST(makeJsonReq(BASE_URL, 'POST', { transcript: 'text' }), PARAMS);
     expect(res.status).toBe(200);
     expect((await res.json()).clarifications).toEqual([]);
+    expect(consoleSpy).toHaveBeenCalledOnce();
+    expect(consoleSpy.mock.calls[0][0]).toContain('[clarifications route]');
+    consoleSpy.mockRestore();
   });
 
   it('passes the transcript to analyzeClarifications', async () => {

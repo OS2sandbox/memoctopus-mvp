@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { pendingUpload } from './pending-upload';
+import {
+  pendingUpload,
+  setPendingUploadFile,
+  takePendingUploadFile,
+  clearPendingUploads,
+} from './pending-upload';
 
 // ─── pendingUpload ─────────────────────────────────────────────────────────────
 
@@ -67,6 +72,29 @@ describe('pendingUpload', () => {
   it('get() after clear() is idempotent — returns null', () => {
     pendingUpload.clear();
     expect(pendingUpload.get()).toBeNull();
+    expect(pendingUpload.get()).toBeNull();
+  });
+});
+
+// ─── clearPendingUploads (sign-out isolation) ──────────────────────────────────
+
+describe('clearPendingUploads', () => {
+  beforeEach(() => clearPendingUploads());
+
+  it('drops a picked upload file so the next user cannot consume it', () => {
+    const file = new File(['secret audio'], 'recording.webm', { type: 'audio/webm' });
+    setPendingUploadFile(file);
+
+    clearPendingUploads();
+
+    expect(takePendingUploadFile()).toBeNull();
+  });
+
+  it('also clears the pending recording blob', () => {
+    pendingUpload.set({ meetingId: 'm', blob: new Blob(['x']), elapsed: 1 });
+
+    clearPendingUploads();
+
     expect(pendingUpload.get()).toBeNull();
   });
 });

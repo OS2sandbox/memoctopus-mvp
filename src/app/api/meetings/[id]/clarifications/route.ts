@@ -20,7 +20,8 @@ export async function POST(req: NextRequest, { params }: Params) {
   try {
     const clarifications = await analyzeClarifications(transcript);
     return NextResponse.json({ clarifications });
-  } catch {
+  } catch (err) {
+    console.error('[clarifications route] analyzeClarifications failed, returning empty fallback:', err);
     return NextResponse.json({ clarifications: [] });
   }
 }

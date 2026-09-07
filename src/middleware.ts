@@ -33,6 +33,12 @@ export function middleware(req: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!api/|_next/static|_next/image|favicon|public).*)',
+    // Exclude API routes, Next internals, and any request for a file with an
+    // extension. Static assets in public/ are served from the ROOT (e.g.
+    // /silero_vad_v5.onnx, /ort-wasm-*.wasm, /vad.worklet.bundle.min.js), not
+    // under /public/, so the old `public` token never matched them — they got
+    // auth-redirected to the login HTML, which made the in-browser VAD fail to
+    // initialize and recordings silently produce no transcript.
+    '/((?!api/|_next/static|_next/image|favicon|.*\\..*).*)',
   ],
 };

@@ -20,7 +20,7 @@ export async function saveTranscript(
     chapters: TranscriptChapter[];
     piiReplacements: PiiReplacement[];
     piiRemovedAt?: string | null;
-    diarizationStatus?: 'pending' | 'done';
+    diarizationStatus?: 'pending' | 'done' | 'failed';
   },
 ): Promise<StoredTranscript> {
   const db = await getDB();
@@ -52,7 +52,7 @@ export async function saveTranscriptChapters(
 export async function saveTranscriptSegments(
   meetingId: string,
   segments: TranscriptSegment[],
-  diarizationStatus?: 'pending' | 'done',
+  diarizationStatus?: 'pending' | 'done' | 'failed',
 ): Promise<void> {
   const db = await getDB();
   const existing = (await db.getAllFromIndex('transcripts', 'by-meeting', meetingId))[0];

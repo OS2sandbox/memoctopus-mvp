@@ -7,6 +7,7 @@ import { sharedSkabeloner } from '@/lib/db/schema';
 import { createSkabelon } from '@/lib/skabeloner/server';
 import { getShareConfig } from '@/lib/skabeloner/share-config';
 import { ensureSharedSkabelonerTable } from '@/lib/skabeloner/shared-table';
+import { withHandler } from '@/lib/api-handler';
 
 type Ctx = { params: Promise<{ token: string }> };
 
@@ -21,7 +22,7 @@ async function loadShared(token: string) {
 }
 
 // Preview a shared Skabelon.
-export async function GET(_req: NextRequest, { params }: Ctx) {
+async function getHandler(_req: NextRequest, { params }: Ctx): Promise<NextResponse> {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!getShareConfig().link) {
@@ -46,7 +47,7 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
 }
 
 // Import a shared Skabelon as a copy into the caller's own list.
-export async function POST(_req: NextRequest, { params }: Ctx) {
+async function postHandler(_req: NextRequest, { params }: Ctx): Promise<NextResponse> {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!getShareConfig().link) {
@@ -69,3 +70,6 @@ export async function POST(_req: NextRequest, { params }: Ctx) {
 
   return NextResponse.json({ skabelon }, { status: 201 });
 }
+
+export const GET = withHandler('skabeloner/import/GET', getHandler);
+export const POST = withHandler('skabeloner/import/POST', postHandler);

@@ -201,6 +201,75 @@ describe('getMeetingPageData', () => {
       expect.any(Array),
     );
   });
+
+  it('does not cache migration as done when ensureColumns fails, and logs an error', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const migrationError = new Error('migration failed');
+
+    // First call: ALTER TABLE fails — user must NOT be cached
+    mockQueryMany.mockRejectedValueOnce(migrationError as never);
+    mockQueryOne.mockResolvedValueOnce(null as never); // meeting SELECT returns null (no further calls)
+
+    await getMeetingPageData('never-cached-user', 'meet-1');
+
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('[meeting-page] ensureColumns failed'),
+      'never-cached-user',
+      migrationError,
+    );
+
+    // Second call: migration should be retried since user was NOT cached on failure
+    mockQueryMany.mockResolvedValueOnce([]); // ALTER TABLE succeeds this time
+    mockQueryOne.mockResolvedValueOnce(null as never); // meeting SELECT
+
+    await getMeetingPageData('never-cached-user', 'meet-1');
+
+    // ALTER TABLE was called a second time (two total calls for this user)
+    expect(mockQueryMany).toHaveBeenCalledTimes(2);
+
+    consoleError.mockRestore();
+  });
+
+  it('logs an error for unexpected chapters column errors (not PG 42703)', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const unexpectedError = Object.assign(new Error('permission denied'), { code: '42501' });
+
+    mockQueryOne.mockResolvedValueOnce(MEETING as never);
+    mockQueryOne.mockResolvedValueOnce(AUDIO_ROW as never);
+    mockQueryOne.mockResolvedValueOnce(TRANSCRIPT_ROW as never);
+    mockQueryOne.mockRejectedValueOnce(unexpectedError as never); // chapters SELECT fails
+    mockQueryOne.mockResolvedValueOnce(null as never); // minutes
+
+    const result = await getMeetingPageData('user-1', 'meet-1');
+
+    expect(result?.transcript?.chapters).toEqual([]);
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('[meeting-page] unexpected error loading chapters column'),
+      unexpectedError,
+    );
+
+    consoleError.mockRestore();
+  });
+
+  it('does not log an error for PG 42703 (expected missing column)', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const missingColumnError = Object.assign(new Error('column "chapters" does not exist'), {
+      code: '42703',
+    });
+
+    mockQueryOne.mockResolvedValueOnce(MEETING as never);
+    mockQueryOne.mockResolvedValueOnce(AUDIO_ROW as never);
+    mockQueryOne.mockResolvedValueOnce(TRANSCRIPT_ROW as never);
+    mockQueryOne.mockRejectedValueOnce(missingColumnError as never); // chapters SELECT fails with 42703
+    mockQueryOne.mockResolvedValueOnce(null as never); // minutes
+
+    const result = await getMeetingPageData('user-1', 'meet-1');
+
+    expect(result?.transcript?.chapters).toEqual([]);
+    expect(consoleError).not.toHaveBeenCalled();
+
+    consoleError.mockRestore();
+  });
 });
 
 // ─── resolveInitialTab ────────────────────────────────────────────────────────

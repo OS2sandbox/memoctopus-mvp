@@ -12,10 +12,12 @@ async function ensureColumns(userId: string) {
       userId,
       `ALTER TABLE transcripts ADD COLUMN IF NOT EXISTS chapters JSONB NOT NULL DEFAULT '[]'`,
     );
-  } catch {
-    // Non-fatal — page still loads; client will generate chapters via API if column is absent
+    migratedUsers.add(userId);
+  } catch (err) {
+    // Non-fatal — page still loads; client will generate chapters via API if column is absent.
+    // Do NOT mark as migrated so the next request retries.
+    console.error('[meeting-page] ensureColumns failed for user:', userId, err);
   }
-  migratedUsers.add(userId);
 }
 
 export interface MeetingPageData {
@@ -104,8 +106,14 @@ export async function getMeetingPageData(
       if (Array.isArray(chaptersRow?.chapters)) {
         savedChapters = chaptersRow.chapters as TranscriptChapter[];
       }
-    } catch {
-      // Column absent — client will generate chapters via API
+    } catch (err) {
+      // PG 42703 = undefined_column — expected when the migration has not yet run for this schema.
+      // Any other error is unexpected and should be logged.
+      const pgCode = (err as { code?: string })?.code;
+      if (pgCode !== '42703') {
+        console.error('[meeting-page] unexpected error loading chapters column:', err);
+      }
+      // Either way, fall back gracefully — client will generate chapters via API
     }
   }
 

@@ -14,6 +14,7 @@ import {
 import { ProcessStrip } from '@/components/layout/ProcessStrip';
 import { RedactDialog } from '@/components/compliance/RedactDialog';
 import { getMeeting, updateMeeting, deleteMeeting, deleteAudio, getTranscript, saveTranscript } from '@/lib/storage';
+import { ErrorBanner } from '@/components/ui/error-banner';
 
 export default function MeetingSettingsPage() {
   const params = useParams();
@@ -31,6 +32,12 @@ export default function MeetingSettingsPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Inline error state
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Whether the meeting title loaded successfully (guards the RedactDialog confirm)
+  const [titleLoaded, setTitleLoaded] = useState(false);
+
   // Fetch meeting title on mount
   useEffect(() => {
     getMeeting(id)
@@ -38,8 +45,11 @@ export default function MeetingSettingsPage() {
         const title = m?.title ?? '';
         setMeetingTitle(title);
         setRenameValue(title);
+        setTitleLoaded(true);
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.error('[settings] kunne ikke hente mødetitel:', err);
+      });
   }, [id]);
 
   // Focus the input when rename mode activates
@@ -66,11 +76,13 @@ export default function MeetingSettingsPage() {
       cancelRenaming();
       return;
     }
+    setRenameError(null);
     try {
       await updateMeeting(id, { title: trimmed });
       setMeetingTitle(trimmed);
-    } catch {
-      // silently ignore; revert to original title
+    } catch (err) {
+      console.error('[settings] kunne ikke omdøbe møde:', err);
+      setRenameError('Kunne ikke gemme det nye navn — prøv igen.');
     } finally {
       setIsRenaming(false);
     }
@@ -103,10 +115,13 @@ export default function MeetingSettingsPage() {
 
   async function handleDelete() {
     setIsDeleting(true);
+    setDeleteError(null);
     try {
       await deleteMeeting(id);
       router.push('/arkiv');
-    } catch {
+    } catch (err) {
+      console.error('[settings] kunne ikke slette møde:', err);
+      setDeleteError('Kunne ikke slette mødet — prøv igen.');
       setIsDeleting(false);
     }
   }
@@ -143,13 +158,22 @@ export default function MeetingSettingsPage() {
               </Button>
             )}
           </SettingRow>
+          <ErrorBanner message={renameError} onRetry={startRenaming} className="mt-2" />
 
           {/* Redact sensitive content */}
           <SettingRow
             title="Slet følsomt indhold"
             description="Slet lyd, rå transskription og PII permanent. Referatet beholdes."
           >
-            <Button variant="danger-ghost" size="sm" onClick={() => setRedactOpen(true)}>
+            {/* Disabled when title hasn't loaded: an empty meetingTitle bypasses the
+                RedactDialog type-to-confirm guard ('' === '' passes), so we block
+                opening until the title is confirmed. */}
+            <Button
+              variant="danger-ghost"
+              size="sm"
+              onClick={() => setRedactOpen(true)}
+              disabled={!titleLoaded}
+            >
               Slet følsomt indhold
             </Button>
           </SettingRow>
@@ -184,6 +208,7 @@ export default function MeetingSettingsPage() {
               Denne handling kan ikke fortrydes.
             </DialogDescription>
           </DialogHeader>
+          <ErrorBanner message={deleteError} className="mx-1" />
           <DialogFooter>
             <Button variant="outline" size="sm" onClick={() => setDeleteOpen(false)} disabled={isDeleting}>
               Annullér

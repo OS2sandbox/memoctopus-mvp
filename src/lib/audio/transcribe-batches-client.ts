@@ -22,12 +22,16 @@ export interface TranscribeResult {
   totalSpeechSeconds: number;
   totalBatches: number;
   failedSeconds: number;
+  // True when the segments already carry real speaker labels (the server diarized
+  // inline via the ensemble endpoint), so the caller can skip the separate
+  // diarization pass. Absent/false for the legacy VAD path.
+  diarized: boolean;
 }
 
 type StreamEvent =
   | ({ type: 'meta' } & TranscribeMeta)
   | ({ type: 'batch' } & TranscribeBatchUpdate)
-  | { type: 'done'; segments: TranscriptSegment[]; failedSeconds: number }
+  | { type: 'done'; segments: TranscriptSegment[]; failedSeconds: number; diarized?: boolean }
   | { type: 'error'; message: string };
 
 export async function transcribeBatchesOnServer(
@@ -56,7 +60,7 @@ export async function transcribeBatchesOnServer(
   const decoder = new TextDecoder();
   let buffered = '';
   let meta: TranscribeMeta = { totalBatches: 0, totalSpeechSeconds: 0 };
-  let final: { segments: TranscriptSegment[]; failedSeconds: number } | null = null;
+  let final: { segments: TranscriptSegment[]; failedSeconds: number; diarized: boolean } | null = null;
 
   const handleLine = (line: string) => {
     if (!line.trim()) return;
@@ -70,7 +74,7 @@ export async function transcribeBatchesOnServer(
         handlers?.onBatch?.(event);
         break;
       case 'done':
-        final = { segments: event.segments, failedSeconds: event.failedSeconds };
+        final = { segments: event.segments, failedSeconds: event.failedSeconds, diarized: event.diarized ?? false };
         break;
       case 'error':
         throw new Error(event.message);
@@ -91,6 +95,6 @@ export async function transcribeBatchesOnServer(
   handleLine(buffered);
 
   if (!final) throw new Error('Transskriptionen blev afbrudt før den var færdig');
-  const done = final as { segments: TranscriptSegment[]; failedSeconds: number };
-  return { segments: done.segments, failedSeconds: done.failedSeconds, ...meta };
+  const done = final as { segments: TranscriptSegment[]; failedSeconds: number; diarized: boolean };
+  return { segments: done.segments, failedSeconds: done.failedSeconds, diarized: done.diarized, ...meta };
 }

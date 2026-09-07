@@ -31,7 +31,8 @@ const longMeeting: TranscriptSegment[] = Array.from({ length: 30 }, (_, i) => ({
 // ─── groupIntoChapters ────────────────────────────────────────────────────────
 
 describe('groupIntoChapters', () => {
-  beforeEach(() => mockComplete.mockReset());
+  // A key is configured, so the LLM selector targets hosted OpenAI (gpt-4o).
+  beforeEach(() => { process.env.OPENAI_API_KEY = 'sk-test'; mockComplete.mockReset(); });
 
   it('returns empty array for empty segments', async () => {
     const result = await groupIntoChapters([]);
@@ -148,6 +149,32 @@ describe('groupIntoChapters', () => {
     expect(result[0].id).toBe('ch-0');
     expect(result[0].title).toBe('Transskription');
     expect(result[0].segmentIndices).toEqual([0, 1, 2]);
+  });
+
+  it('logs an error when JSON parsing fails on the fallback path', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockComplete.mockResolvedValueOnce(openaiResponse('not valid json at all'));
+
+    await groupIntoChapters(shortMeeting);
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[chapters] parse failed'),
+      expect.any(Error),
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('logs an error when response contains no JSON object', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockComplete.mockResolvedValueOnce(openaiResponse('no json here'));
+
+    await groupIntoChapters(shortMeeting);
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[chapters] parse failed'),
+      expect.any(Error),
+    );
+    errorSpy.mockRestore();
   });
 
   it('strips markdown code fences before parsing', async () => {

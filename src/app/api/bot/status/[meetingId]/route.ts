@@ -34,7 +34,8 @@ export async function GET(
   let res: Response;
   try {
     res = await botFetch(bot, `/sessions/${sessionId}`);
-  } catch {
+  } catch (err) {
+    console.warn('[bot/status] unreachable, returning forbinder:', err);
     return connecting();
   }
   if (!res.ok) return connecting();

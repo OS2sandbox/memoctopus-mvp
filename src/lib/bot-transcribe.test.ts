@@ -3,9 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockTranscribe = vi.hoisted(() => vi.fn());
 const mockDiarize = vi.hoisted(() => vi.fn());
 const mockStoreTranscript = vi.hoisted(() => vi.fn());
+const mockEnsemble = vi.hoisted(() => vi.fn());
+const mockIsEnsemble = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock('@/lib/audio/vad-batch-server', () => ({
   transcribeWithVadBatches: mockTranscribe,
+  transcribeEnsemble: mockEnsemble,
+  isEnsembleDiarization: mockIsEnsemble,
 }));
 
 vi.mock('@/lib/ai/diarization', () => ({
@@ -31,9 +35,30 @@ beforeEach(() => {
   mockTranscribe.mockReset();
   mockDiarize.mockReset();
   mockStoreTranscript.mockReset().mockResolvedValue(undefined);
+  mockEnsemble.mockReset();
+  mockIsEnsemble.mockReset().mockReturnValue(false);
 });
 
 describe('processBotRecording', () => {
+  it('ensemble mode: stashes diarized segments from one call, skipping the diarization pass', async () => {
+    mockIsEnsemble.mockReturnValue(true);
+    const ENSEMBLE_SEGMENTS = [
+      { speaker: 'Taler 1', start: 0, end: 3, text: 'hej' },
+      { speaker: 'Taler 2', start: 3, end: 6, text: 'dav' },
+    ];
+    mockEnsemble.mockResolvedValueOnce(ENSEMBLE_SEGMENTS);
+
+    await processBotRecording('m1', Buffer.from('audio'), 'audio/webm');
+
+    expect(mockEnsemble).toHaveBeenCalledOnce();
+    expect(mockTranscribe).not.toHaveBeenCalled();
+    expect(mockDiarize).not.toHaveBeenCalled();
+    const [meetingId, transcript] = mockStoreTranscript.mock.calls[0];
+    expect(meetingId).toBe('m1');
+    expect(transcript).toMatchObject({ status: 'ready', diarized: true });
+    expect(transcript.segments).toEqual(ENSEMBLE_SEGMENTS);
+  });
+
   it('stashes a ready transcript with diarized speaker labels', async () => {
     mockTranscribe.mockResolvedValueOnce(SEGMENTS);
     mockDiarize.mockResolvedValueOnce(TURNS);
