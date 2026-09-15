@@ -1,8 +1,31 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import OptaqPage from './dashboard.client';
+import { OnboardingProvider } from '@/lib/onboarding/context';
+
+// Onboarding hints wrap several dashboard controls; mark them already-seen so
+// the popovers don't render and DOM queries keep targeting the underlying
+// controls (mirrors the real app, which mounts this page under the app-level
+// OnboardingProvider).
+function render(ui: React.ReactElement) {
+  return rtlRender(
+    <OnboardingProvider
+      initial={{
+        tourSkipped: true,
+        tourCompleted: true,
+        seen: [
+          { stepId: 'dashboard.record-button', meetingId: null },
+          { stepId: 'dashboard.teams-link', meetingId: null },
+          { stepId: 'dashboard.participant-chip', meetingId: null },
+        ],
+      }}
+    >
+      {ui}
+    </OnboardingProvider>,
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Mocks

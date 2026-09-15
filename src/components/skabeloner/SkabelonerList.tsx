@@ -17,6 +17,7 @@ import { SkabelonEditor } from './SkabelonEditor';
 import { encodeSkabelonCode } from '@/lib/skabeloner/share-code';
 import type { ShareConfig } from '@/lib/skabeloner/share-config';
 import type { Skabelon } from '@/types';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 
 const CATEGORY_LABELS: [keyof Skabelon, string][] = [
   ['includeDeltagere', 'Deltagere'],
@@ -230,15 +231,17 @@ export function SkabelonerList() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <p className="text-sm text-[var(--muted)]">
-          Skabeloner er genbrugelige prompts til at generere referater.
-          {shareEnabled && ' Tryk Del for at dele en skabelon med andre.'}
-        </p>
-        <Button size="sm" onClick={openNew}>
-          + Ny skabelon
-        </Button>
-      </div>
+      <OnboardingHint stepId="skabeloner.tab-purpose">
+        <div className="flex items-center justify-between mb-6">
+          <p className="text-sm text-[var(--muted)]">
+            Skabeloner er genbrugelige prompts til at generere referater.
+            {shareEnabled && ' Tryk Del for at dele en skabelon med andre.'}
+          </p>
+          <Button size="sm" onClick={openNew}>
+            + Ny skabelon
+          </Button>
+        </div>
+      </OnboardingHint>
 
       {loadError && (
         <ErrorBanner
@@ -335,7 +338,9 @@ export function SkabelonerList() {
                   <div className="flex items-center gap-1">
                     <Button variant="ghost" size="sm" onClick={() => openEdit(s)}>Rediger</Button>
                     {shareEnabled && (
-                      <Button variant="ghost" size="sm" onClick={() => handleShare(s)}>Del</Button>
+                      <OnboardingHint stepId="skabeloner.share-button">
+                        <Button variant="ghost" size="sm" onClick={() => handleShare(s)}>Del</Button>
+                      </OnboardingHint>
                     )}
                     <Button variant="ghost" size="sm" onClick={() => handleDelete(s)}>Slet</Button>
                   </div>

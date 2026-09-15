@@ -3,6 +3,8 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
+import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
 interface SharedPreview {
   name: string;
@@ -11,12 +13,14 @@ interface SharedPreview {
   includeDeltagere: boolean;
   includeBeslutningspunkter: boolean;
   includeDagsorden: boolean;
+  includeDato: boolean;
 }
 
 const CATEGORY_LABELS: [keyof SharedPreview, string][] = [
   ['includeDeltagere', 'Deltagere'],
   ['includeBeslutningspunkter', 'Beslutningspunkter'],
   ['includeDagsorden', 'Dagsorden'],
+  ['includeDato', 'Dato'],
 ];
 
 export default function ImportSkabelonPage() {
@@ -55,14 +59,18 @@ export default function ImportSkabelonPage() {
 
   return (
     <div className="mx-auto max-w-[640px] px-6 py-12">
-      <h1 style={{ fontSize: 'var(--t-h1)', fontWeight: 300, color: 'var(--ink)', margin: 0 }}>
-        Importér skabelon
-      </h1>
+      <OnboardingHint stepId="skabelon-import.explainer">
+        <h1 style={{ fontSize: 'var(--t-h1)', fontWeight: 300, color: 'var(--ink)', margin: 0 }}>
+          Importér skabelon
+        </h1>
+      </OnboardingHint>
 
       {loading ? (
         <div className="h-40 mt-8 bg-[var(--fill)] rounded-[var(--radius-lg)] animate-pulse" />
       ) : error && !preview ? (
-        <p className="mt-6 text-sm text-[var(--kill)]">{error}</p>
+        <OnboardingTooltip stepId="skabelon-import.error-next-steps">
+          <p className="mt-6 text-sm text-[var(--kill)]">{error}</p>
+        </OnboardingTooltip>
       ) : preview ? (
         <>
           <div className="mt-8 rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--surface)] p-6">
@@ -90,9 +98,11 @@ export default function ImportSkabelonPage() {
           {error && <p className="mt-4 text-sm text-[var(--kill)]">{error}</p>}
 
           <div className="mt-6 flex items-center gap-3">
-            <Button onClick={handleImport} disabled={importing}>
-              {importing ? 'Importerer…' : 'Importér til mine skabeloner'}
-            </Button>
+            <OnboardingHint stepId="skabelon-import.idempotency">
+              <Button onClick={handleImport} disabled={importing}>
+                {importing ? 'Importerer…' : 'Importér til mine skabeloner'}
+              </Button>
+            </OnboardingHint>
             <Button variant="ghost" onClick={() => router.push('/arkiv?tab=skabeloner')}>
               Annullér
             </Button>

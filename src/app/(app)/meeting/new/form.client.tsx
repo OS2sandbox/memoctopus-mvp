@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { createMeeting } from '@/lib/storage';
 import { takePendingUploadFile } from '@/lib/pending-upload';
 import { UploadConfirmScreen } from './upload-confirm.client';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 
 const schema = z.object({
   title: z.string().min(2, 'Titel skal have mindst 2 tegn').max(200),
@@ -106,31 +107,45 @@ export default function NewMeetingPage() {
             Deltagere{' '}
             <span className="text-[var(--muted)] font-normal">(valgfri, kommasepareret)</span>
           </Label>
-          <Input
-            id="participants"
-            placeholder="f.eks. Formand, Næstformand, Kasserer"
-            {...register('participants')}
-          />
+          <OnboardingHint stepId="meeting-new.participants-field">
+            <Input
+              id="participants"
+              placeholder="f.eks. Formand, Næstformand, Kasserer"
+              {...register('participants')}
+            />
+          </OnboardingHint>
         </div>
 
         <div className="space-y-2">
           <Label>Lydkilde</Label>
           <div className="flex gap-3">
-            {AUDIO_MODES.map(({ value, label, description }) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setUploadMode(value)}
-                className={`flex-1 rounded-[var(--radius)] border px-4 py-3 text-left text-sm transition-colors ${
-                  uploadMode === value
-                    ? 'border-[var(--accent)] bg-[var(--accent-wash)] text-[var(--accent)]'
-                    : 'border-[var(--line)] bg-[var(--surface)] text-[var(--ink-2)] hover:bg-[var(--surface-2)]'
-                }`}
-              >
-                <span className="font-medium block">{label}</span>
-                <span className="text-xs opacity-75">{description}</span>
-              </button>
-            ))}
+            {AUDIO_MODES.map(({ value, label, description }) => {
+              const button = (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setUploadMode(value)}
+                  className={`flex-1 rounded-[var(--radius)] border px-4 py-3 text-left text-sm transition-colors ${
+                    uploadMode === value
+                      ? 'border-[var(--accent)] bg-[var(--accent-wash)] text-[var(--accent)]'
+                      : 'border-[var(--line)] bg-[var(--surface)] text-[var(--ink-2)] hover:bg-[var(--surface-2)]'
+                  }`}
+                >
+                  <span className="font-medium block">{label}</span>
+                  <span className="text-xs opacity-75">{description}</span>
+                </button>
+              );
+
+              if (value === 'upload') {
+                return (
+                  <OnboardingHint key={value} stepId="meeting-new.upload-mode">
+                    {button}
+                  </OnboardingHint>
+                );
+              }
+
+              return button;
+            })}
           </div>
         </div>
 
@@ -173,16 +188,13 @@ export default function NewMeetingPage() {
           >
             Annullér
           </Button>
-          <Button
-            type="submit"
-            disabled={isSubmitting || uploadMode === 'upload'}
-          >
-            {isSubmitting
-              ? uploadMode === 'upload' ? 'Behandler…' : 'Opretter...'
-              : uploadMode === 'record'
-              ? 'Start optagelse'
-              : 'Upload og transskribér'}
-          </Button>
+          {uploadMode !== 'upload' && (
+            <OnboardingHint stepId="meeting-new.record-mic-permission">
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? 'Opretter...' : 'Start optagelse'}
+              </Button>
+            </OnboardingHint>
+          )}
         </div>
       </form>
     </div>

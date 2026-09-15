@@ -315,6 +315,54 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       WHERE NOT EXISTS (SELECT 1 FROM "${schema}".skabeloner LIMIT 1)
     `);
 
+    // onboarding_progress — which onboarding hints this user has seen/dismissed
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".onboarding_progress (
+        id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        step_id     TEXT NOT NULL,
+        meeting_id  TEXT REFERENCES "${schema}".meetings(id) ON DELETE CASCADE,
+        status      TEXT NOT NULL DEFAULT 'seen',
+        seen_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      DO $body$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint c
+          JOIN pg_class cl ON cl.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = cl.relnamespace
+          WHERE c.conname = 'onboarding_progress_step_meeting_unique'
+            AND n.nspname = '${schema}'
+        ) THEN
+          ALTER TABLE "${schema}".onboarding_progress
+            ADD CONSTRAINT onboarding_progress_step_meeting_unique UNIQUE (step_id, meeting_id);
+        END IF;
+      END
+      $body$
+    `);
+
+    // Postgres treats every NULL as distinct under a plain UNIQUE constraint, so
+    // the constraint above only dedupes per-meeting rows. Global steps (no
+    // meeting_id) need a separate partial index to stay idempotent on upsert.
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS onboarding_progress_global_step_unique
+        ON "${schema}".onboarding_progress (step_id)
+        WHERE meeting_id IS NULL
+    `);
+
+    // onboarding_state — single-row per-user flags for the guided tour as a whole
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".onboarding_state (
+        id                 TEXT PRIMARY KEY DEFAULT 'singleton',
+        tour_skipped_at    TIMESTAMPTZ,
+        tour_completed_at  TIMESTAMPTZ,
+        last_step_id       TEXT,
+        updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -330,9 +378,20 @@ export function getUserSchemaName(userId: string): string {
 
 // ─── Per-user query helpers ─────────────────────────────────────────────────
 
-const globalForSchema = globalThis as unknown as { initializedSchemas: Set<string> | undefined };
+const globalForSchema = globalThis as unknown as {
+  initializedSchemas: Set<string> | undefined;
+  ensuringSchemas: Map<string, Promise<void>> | undefined;
+};
 if (!globalForSchema.initializedSchemas) globalForSchema.initializedSchemas = new Set<string>();
+if (!globalForSchema.ensuringSchemas) globalForSchema.ensuringSchemas = new Map<string, Promise<void>>();
 const initializedSchemas = globalForSchema.initializedSchemas;
+// Tracks in-flight ensureUserSchema() calls per user so concurrent callers
+// (e.g. two queryUserSchema calls fired in the same Promise.all) await the
+// SAME run instead of each racing their own — two racing CREATE TYPE ...
+// IF NOT EXISTS statements can both pass the "not exists" check before
+// either commits, and the second one's CREATE then fails with a unique
+// constraint violation.
+const ensuringSchemas = globalForSchema.ensuringSchemas;
 
 export async function queryUserSchema<T = Record<string, unknown>>(
   userId: string,
@@ -340,7 +399,12 @@ export async function queryUserSchema<T = Record<string, unknown>>(
   params: unknown[] = [],
 ): Promise<T[]> {
   if (!initializedSchemas.has(userId)) {
-    await ensureUserSchema(userId);
+    let ensuring = ensuringSchemas.get(userId);
+    if (!ensuring) {
+      ensuring = ensureUserSchema(userId).finally(() => ensuringSchemas.delete(userId));
+      ensuringSchemas.set(userId, ensuring);
+    }
+    await ensuring;
     initializedSchemas.add(userId);
   }
   const client = await pool.connect();

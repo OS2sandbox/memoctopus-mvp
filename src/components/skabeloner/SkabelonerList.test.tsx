@@ -1,10 +1,32 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render as rtlRender, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SkabelonerList } from './SkabelonerList';
 import type { Skabelon } from '@/types';
+import { OnboardingProvider } from '@/lib/onboarding/context';
+
+// Onboarding hints wrap the tab-purpose header and each card's "Del" button;
+// mark them already-seen so the popovers don't render and DOM queries keep
+// targeting the underlying controls (mirrors the real app, which mounts
+// SkabelonerList under the app-level OnboardingProvider).
+function render(ui: React.ReactElement) {
+  return rtlRender(
+    <OnboardingProvider
+      initial={{
+        tourSkipped: true,
+        tourCompleted: true,
+        seen: [
+          { stepId: 'skabeloner.tab-purpose', meetingId: null },
+          { stepId: 'skabeloner.share-button', meetingId: null },
+        ],
+      }}
+    >
+      {ui}
+    </OnboardingProvider>,
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Mock SkabelonEditor — it's a complex dialog; we only care that SkabelonerList

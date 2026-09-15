@@ -9,6 +9,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
 interface RedactDialogProps {
   open: boolean;
@@ -102,13 +103,15 @@ export function RedactDialog({ open, onOpenChange, meetingTitle, onConfirm }: Re
           <Button variant="ghost" onClick={handleClose} disabled={loading}>
             Afbryd
           </Button>
-          <Button
-            variant="destructive"
-            onClick={handleConfirm}
-            disabled={!isMatch || loading}
-          >
-            {loading ? 'Sletter…' : 'Slet permanent'}
-          </Button>
+          <OnboardingTooltip stepId="meeting-settings.redact-redirect">
+            <Button
+              variant="destructive"
+              onClick={handleConfirm}
+              disabled={!isMatch || loading}
+            >
+              {loading ? 'Sletter…' : 'Slet permanent'}
+            </Button>
+          </OnboardingTooltip>
         </DialogFooter>
       </DialogContent>
     </Dialog>
