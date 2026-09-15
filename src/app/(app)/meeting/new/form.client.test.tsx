@@ -1,7 +1,30 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { OnboardingProvider } from '@/lib/onboarding/context';
+
+// Onboarding hints wrap the upload-mode toggle, the record submit button, and
+// the participants field; mark them already-seen so the popovers don't render
+// and DOM queries keep targeting the underlying controls (mirrors the real
+// app, which mounts this page under the app-level OnboardingProvider).
+function render(ui: React.ReactElement) {
+  return rtlRender(
+    <OnboardingProvider
+      initial={{
+        tourSkipped: true,
+        tourCompleted: true,
+        seen: [
+          { stepId: 'meeting-new.upload-mode', meetingId: null },
+          { stepId: 'meeting-new.record-mic-permission', meetingId: null },
+          { stepId: 'meeting-new.participants-field', meetingId: null },
+        ],
+      }}
+    >
+      {ui}
+    </OnboardingProvider>,
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -123,16 +146,10 @@ describe('NewMeetingPage — AUDIO_MODES toggle', () => {
     expect(screen.getByText('MP3, WAV, M4A, WebM')).toBeInTheDocument();
   });
 
-  it('submit button shows "Upload og transskribér" after switching to upload mode', () => {
+  it('does not render a submit button in upload mode — selecting a file starts processing directly', () => {
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: /Upload lydfil/ }));
-    expect(screen.getByRole('button', { name: 'Upload og transskribér' })).toBeInTheDocument();
-  });
-
-  it('submit button is disabled in upload mode (upload is handled by file picker)', () => {
-    renderPage();
-    fireEvent.click(screen.getByRole('button', { name: /Upload lydfil/ }));
-    expect(screen.getByRole('button', { name: 'Upload og transskribér' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Upload og transskribér' })).not.toBeInTheDocument();
   });
 
   it('switches back to record mode on second click', () => {

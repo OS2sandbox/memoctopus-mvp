@@ -17,6 +17,11 @@ vi.mock('@/lib/auth', () => ({
   auth: { api: { getSession: vi.fn() } },
 }));
 
+vi.mock('@/lib/onboarding/store', () => ({
+  getOnboardingState: vi.fn().mockResolvedValue({ tourSkipped: false, tourCompleted: false, lastStepId: null }),
+  getSeenSteps: vi.fn().mockResolvedValue([]),
+}));
+
 // The layout renders client components; stub them out — this test only cares
 // about the auth decision, not the rendered tree.
 vi.mock('@/components/layout/TopBar', () => ({ TopBar: () => null }));

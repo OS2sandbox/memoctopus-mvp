@@ -1,0 +1,113 @@
+'use client';
+
+import React, { useEffect, useId } from 'react';
+import * as PopoverPrimitive from '@radix-ui/react-popover';
+import { useOnboarding } from '@/lib/onboarding/context';
+import { getStep } from '@/lib/onboarding/steps';
+
+function hintKey(stepId: string, meetingId: string | null): string {
+  return `${stepId}:${meetingId ?? ''}`;
+}
+
+/**
+ * Wraps a target element and, the first time this step hasn't been seen,
+ * shows a small dismissible bubble with onboarding copy anchored to it.
+ * Once dismissed it never reappears (state lives in onboarding_progress).
+ *
+ * Only one hint is ever open at a time, app-wide, so a page never shows
+ * several bubbles at once — pending hints queue in mount order and are
+ * revealed one by one as each is dismissed. A step id can also wrap more
+ * than one DOM element (e.g. the same "Del" button repeated once per card
+ * in a list); only the first-mounted instance claims the slot, so the
+ * bubble renders exactly once no matter how many elements reference it.
+ *
+ * Use for `engine: 'popover'` steps — one-time, high/medium-severity hints
+ * about non-obvious or destructive behavior. For always-visible ambient
+ * explainers (e.g. an icon's meaning), use OnboardingTooltip instead.
+ */
+export function OnboardingHint({
+  stepId,
+  meetingId = null,
+  condition = true,
+  children,
+}: {
+  stepId: string;
+  meetingId?: string | null;
+  /** Extra guard for steps that should only fire once app state satisfies a predicate. */
+  condition?: boolean;
+  children: React.ReactNode;
+}) {
+  const step = getStep(stepId);
+  const { isStepSeen, markSeen, showWelcome, claim, release, isActive } = useOnboarding();
+  const instanceId = useId();
+  const key = hintKey(stepId, meetingId);
+  const pending = condition && !isStepSeen(stepId, meetingId);
+
+  useEffect(() => {
+    if (!pending) return;
+    claim(key, instanceId);
+    return () => release(key, instanceId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, key, instanceId]);
+
+  // Never overlap the welcome dialog — it should be the only thing on screen
+  // until the user closes/skips it, after which the hint queue can take over.
+  const open = !showWelcome && pending && isActive(key, instanceId);
+
+  return (
+    <PopoverPrimitive.Root open={open}>
+      <PopoverPrimitive.Anchor asChild>{children}</PopoverPrimitive.Anchor>
+      {open && (
+        <PopoverPrimitive.Portal>
+          <PopoverPrimitive.Content
+            side={step.placement}
+            // 'center' (Radix's default) centers the bubble across the WHOLE
+            // anchor rect, which looks fine for a small button but points at
+            // empty space when the anchor is a wide block (a full-width row,
+            // a caption that spans its container) — 'start' keeps the arrow
+            // near the anchor's actual visible content in both cases.
+            align="start"
+            sideOffset={8}
+            collisionPadding={12}
+            onOpenAutoFocus={(e) => e.preventDefault()}
+            onEscapeKeyDown={() => markSeen(stepId, meetingId)}
+            style={{
+              zIndex: 60,
+              maxWidth: 280,
+              background: 'var(--accent-ink)',
+              color: '#fff',
+              borderRadius: 'var(--radius-lg)',
+              padding: '10px 12px',
+              fontSize: 12.5,
+              lineHeight: 1.5,
+              boxShadow: '0 6px 20px rgba(0,0,0,0.18)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+            }}
+          >
+            <span>{step.copy}</span>
+            <button
+              type="button"
+              onClick={() => markSeen(stepId, meetingId)}
+              style={{
+                alignSelf: 'flex-end',
+                background: 'rgba(255,255,255,0.16)',
+                border: 'none',
+                borderRadius: 'var(--radius)',
+                color: '#fff',
+                fontSize: 11,
+                fontFamily: 'var(--mono)',
+                padding: '3px 9px',
+                cursor: 'pointer',
+              }}
+            >
+              forstået
+            </button>
+            <PopoverPrimitive.Arrow width={10} height={5} style={{ fill: 'var(--accent-ink)' }} />
+          </PopoverPrimitive.Content>
+        </PopoverPrimitive.Portal>
+      )}
+    </PopoverPrimitive.Root>
+  );
+}

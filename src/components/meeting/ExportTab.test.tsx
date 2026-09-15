@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { ExportTab } from './ExportTab';
+import { OnboardingProvider } from '@/lib/onboarding/context';
 
 // ─── Mock next/link (used for "tilbage til referat" and "nyt møde →") ──────────
 vi.mock('next/link', () => ({
@@ -27,6 +28,28 @@ vi.mock('@/lib/storage', () => ({
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const MEETING_ID = 'mtg-abc';
+
+// Onboarding hints wrap the audio-deleted caption, the compliance note, and
+// the eyebrow label; mark them already-seen so the popovers don't render and
+// DOM queries keep targeting the underlying text (mirrors the real app,
+// which mounts ExportTab under the app-level OnboardingProvider).
+function render(ui: React.ReactElement) {
+  return rtlRender(
+    <OnboardingProvider
+      initial={{
+        tourSkipped: true,
+        tourCompleted: true,
+        seen: [
+          { stepId: 'export.audio-deleted-timing', meetingId: MEETING_ID },
+          { stepId: 'export.pii-compliance', meetingId: MEETING_ID },
+          { stepId: 'share.terminology-bridge', meetingId: MEETING_ID },
+        ],
+      }}
+    >
+      {ui}
+    </OnboardingProvider>,
+  );
+}
 
 function renderTab() {
   return render(<ExportTab meetingId={MEETING_ID} />);
