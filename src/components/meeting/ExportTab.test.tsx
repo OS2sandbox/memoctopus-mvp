@@ -29,10 +29,10 @@ vi.mock('@/lib/storage', () => ({
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const MEETING_ID = 'mtg-abc';
 
-// Onboarding hints wrap the audio-deleted caption, the compliance note, and
-// the eyebrow label; mark them already-seen so the popovers don't render and
-// DOM queries keep targeting the underlying text (mirrors the real app,
-// which mounts ExportTab under the app-level OnboardingProvider).
+// Onboarding hints wrap the audio-deleted caption and the eyebrow label;
+// mark them already-seen so the popovers don't render and DOM queries keep
+// targeting the underlying text (mirrors the real app, which mounts
+// ExportTab under the app-level OnboardingProvider).
 function render(ui: React.ReactElement) {
   return rtlRender(
     <OnboardingProvider
@@ -41,7 +41,6 @@ function render(ui: React.ReactElement) {
         tourCompleted: true,
         seen: [
           { stepId: 'export.audio-deleted-timing', meetingId: MEETING_ID },
-          { stepId: 'export.pii-compliance', meetingId: MEETING_ID },
           { stepId: 'share.terminology-bridge', meetingId: MEETING_ID },
         ],
       }}
@@ -114,11 +113,6 @@ describe('ExportTab — initial render', () => {
   it('shows PDF file name in the download button by default', () => {
     renderTab();
     expect(screen.getByRole('button', { name: /download referat\.pdf/ })).toBeInTheDocument();
-  });
-
-  it('shows the compliance note', () => {
-    renderTab();
-    expect(screen.getByText('indeholder ingen rå tale, lyd eller personoplysninger')).toBeInTheDocument();
   });
 
   it('renders the "tilbage til referat" link pointing at /meeting/:id/review', () => {

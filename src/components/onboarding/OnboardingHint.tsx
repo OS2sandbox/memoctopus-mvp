@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useId } from 'react';
+import React, { useEffect, useId, useRef } from 'react';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 import { useOnboarding } from '@/lib/onboarding/context';
 import { getStep } from '@/lib/onboarding/steps';
@@ -12,7 +12,9 @@ function hintKey(stepId: string, meetingId: string | null): string {
 /**
  * Wraps a target element and, the first time this step hasn't been seen,
  * shows a small dismissible bubble with onboarding copy anchored to it.
- * Once dismissed it never reappears (state lives in onboarding_progress).
+ * It's visible at most once ever: being shown counts as "seen" even if the
+ * user navigates away instead of clicking "forstået" (state lives in
+ * onboarding_progress).
  *
  * Only one hint is ever open at a time, app-wide, so a page never shows
  * several bubbles at once — pending hints queue in mount order and are
@@ -43,16 +45,29 @@ export function OnboardingHint({
   const key = hintKey(stepId, meetingId);
   const pending = condition && !isStepSeen(stepId, meetingId);
 
-  useEffect(() => {
-    if (!pending) return;
-    claim(key, instanceId);
-    return () => release(key, instanceId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pending, key, instanceId]);
-
   // Never overlap the welcome dialog — it should be the only thing on screen
   // until the user closes/skips it, after which the hint queue can take over.
   const open = !showWelcome && pending && isActive(key, instanceId);
+
+  // A hint should be visible at most once: if the user navigates away while
+  // it's showing (instead of clicking "forstået"), the unmount below would
+  // otherwise leave the step unseen, so it queues up again next time this
+  // stepId/meetingId mounts (e.g. revisiting a page). Track whether this
+  // instance actually got shown and, if so, mark it seen on unmount too.
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    if (open) wasOpenRef.current = true;
+  }, [open]);
+
+  useEffect(() => {
+    if (!pending) return;
+    claim(key, instanceId);
+    return () => {
+      release(key, instanceId);
+      if (wasOpenRef.current) markSeen(stepId, meetingId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, key, instanceId]);
 
   return (
     <PopoverPrimitive.Root open={open}>

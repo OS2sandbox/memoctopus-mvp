@@ -70,7 +70,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     scope: 'per-meeting',
     placement: 'bottom',
     engine: 'popover',
-    copy: 'Du har stadig en optagelse gemt lokalt for dette møde. Vælg “Slet og forlad”, hvis du er færdig med lydfilen — ellers bliv på siden, til referatet er færdigt.',
+    copy: 'Du har stadig en optagelse gemt lokalt for dette møde. Går du videre til Arkiv, bliver lydfilen slettet — men transskriptionen kan du altid finde igen der, uanset om referatet er færdigt.',
   },
   'topbar.arkiv-explainer': {
     id: 'topbar.arkiv-explainer',
@@ -277,15 +277,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     placement: 'top',
     engine: 'popover',
     copy: 'Lydfilen er allerede slettet — det sker automatisk, når referatet dannes, ikke når du trykker download. Selve transskriptionen ligger fortsat i arkivet.',
-  },
-  'export.pii-compliance': {
-    id: 'export.pii-compliance',
-    cluster: 'export-share',
-    severity: 'medium',
-    scope: 'per-meeting',
-    placement: 'top',
-    engine: 'popover',
-    copy: 'Vi fjerner automatisk navne og følsomme oplysninger, før referatet gemmes. Derfor kan vi love, at eksporten hverken indeholder lyd eller personoplysninger.',
   },
   'export.post-download-link': {
     id: 'export.post-download-link',

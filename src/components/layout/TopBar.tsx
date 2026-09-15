@@ -111,15 +111,15 @@ export function TopBar() {
               </Link>
             );
             if (item.href === '/arkiv') {
+              if (reviewMeetingId && hasAudio) {
+                return (
+                  <OnboardingHint key={item.href} stepId="topbar.unsaved-audio" meetingId={reviewMeetingId}>
+                    {link}
+                  </OnboardingHint>
+                );
+              }
               return (
                 <OnboardingHint key={item.href} stepId="topbar.arkiv-explainer">
-                  {link}
-                </OnboardingHint>
-              );
-            }
-            if (reviewMeetingId && hasAudio) {
-              return (
-                <OnboardingHint key={item.href} stepId="topbar.unsaved-audio" meetingId={reviewMeetingId}>
                   {link}
                 </OnboardingHint>
               );

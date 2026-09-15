@@ -149,12 +149,9 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
         <div style={{
           marginTop: 32, paddingTop: 20, borderTop: '1px solid var(--line)',
           fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
-          display: 'flex', justifyContent: 'space-between',
+          display: 'flex', justifyContent: 'flex-end',
           flexWrap: 'wrap', gap: 12,
         }}>
-          <OnboardingHint stepId="export.pii-compliance" meetingId={meetingId}>
-            <span>indeholder ingen rå tale, lyd eller personoplysninger</span>
-          </OnboardingHint>
           <Link
             href={`/meeting/${meetingId}/review`}
             style={{
