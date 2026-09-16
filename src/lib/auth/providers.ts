@@ -81,6 +81,42 @@ function credentials(prefix: 'OIDC' | 'AUTHENTIK') {
   return clientId && clientSecret && discoveryUrl ? { clientId, clientSecret, discoveryUrl } : null;
 }
 
+// ─── Microsoft Graph scopes ───────────────────────────────────────────────────
+// Delegated Graph access rides on the login token, so the scopes have to be
+// requested at sign-in time. Kept here (env-free, dependency-free) rather than in
+// src/lib/teams/graph-client.ts because auth/index.ts needs them, and graph-client
+// imports auth — the constant would close the cycle.
+
+/** Delegated scopes the Teams/Graph integration is built on. */
+export const GRAPH_DELEGATED_SCOPES = [
+  'openid',
+  'profile',
+  'email',
+  'offline_access',
+  'OnlineMeetings.ReadWrite',
+  'OnlineMeetingTranscript.Read.All',
+  'OnlineMeetingRecording.Read.All',
+  'Calendars.Read',
+] as const;
+
+// better-auth's microsoft provider always asks for these (see
+// node_modules/@better-auth/core/dist/social-providers/microsoft-entra-id.mjs),
+// including offline_access — which is what gets us a refresh token — and appends
+// `options.scope` to them. Listing them again would only duplicate them in the
+// authorize URL.
+const MICROSOFT_BUILTIN_SCOPES: readonly string[] = [
+  'openid',
+  'profile',
+  'email',
+  'User.Read',
+  'offline_access',
+];
+
+/** The Graph scopes to pass as `scope` on the microsoft social provider. */
+export function microsoftGraphScopes(): string[] {
+  return GRAPH_DELEGATED_SCOPES.filter((s) => !MICROSOFT_BUILTIN_SCOPES.includes(s));
+}
+
 export function emailPasswordEnabled(): boolean {
   return flag('EMAIL_PASSWORD_ENABLED', DEPRECATED_FLAGS.EMAIL_PASSWORD_ENABLED);
 }

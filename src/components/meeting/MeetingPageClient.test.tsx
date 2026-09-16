@@ -50,6 +50,14 @@ vi.mock('@/components/recording/MeetingBotScreen', () => ({
   ),
 }));
 
+vi.mock('@/components/recording/TeamsMeetingScreen', () => ({
+  TeamsMeetingScreen: (props: { meetingId: string; meetingUrl: string }) => (
+    <div data-testid="teams-meeting-screen" data-meeting-id={props.meetingId} data-meeting-url={props.meetingUrl}>
+      TeamsMeetingScreen
+    </div>
+  ),
+}));
+
 vi.mock('@/components/transcript/TranscriptReview', () => ({
   TranscriptReview: (props: { meetingId: string }) => (
     <div data-testid="transcript-review" data-meeting-id={props.meetingId}>TranscriptReview</div>
@@ -357,6 +365,43 @@ describe('MeetingPageClient — recording tab (teams source)', () => {
     renderClient({ initialTab: 'recording' });
     await waitFor(() => screen.getByTestId('meeting-bot-screen'));
     expect(screen.queryByTestId('recording-screen')).not.toBeInTheDocument();
+  });
+
+  it('renders TeamsMeetingScreen for a teams meeting awaiting Teams', async () => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({
+      source: 'teams',
+      status: 'awaiting_teams',
+      meetingUrl: 'https://teams.microsoft.com/l/meetup-join/19:abc@thread.v2/0',
+    }));
+
+    renderClient({ initialTab: 'recording' });
+    const screenEl = await screen.findByTestId('teams-meeting-screen');
+    expect(screenEl).toHaveAttribute('data-meeting-id', MEETING_ID);
+    expect(screenEl).toHaveAttribute('data-meeting-url', 'https://teams.microsoft.com/l/meetup-join/19:abc@thread.v2/0');
+    expect(screen.queryByTestId('meeting-bot-screen')).not.toBeInTheDocument();
+  });
+
+  it('passes an empty url to TeamsMeetingScreen when the meeting has none', async () => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({ source: 'teams', status: 'awaiting_teams', meetingUrl: null }));
+
+    renderClient({ initialTab: 'recording' });
+    expect(await screen.findByTestId('teams-meeting-screen')).toHaveAttribute('data-meeting-url', '');
+  });
+
+  it('keeps the legacy bot screen for teams meetings that are not awaiting_teams', async () => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({ source: 'teams', status: 'recording' }));
+
+    renderClient({ initialTab: 'recording' });
+    await waitFor(() => screen.getByTestId('meeting-bot-screen'));
+    expect(screen.queryByTestId('teams-meeting-screen')).not.toBeInTheDocument();
+  });
+
+  it('does not render TeamsMeetingScreen for a local meeting', async () => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({ source: 'local', status: 'awaiting_teams' }));
+
+    renderClient({ initialTab: 'recording' });
+    await waitFor(() => screen.getByTestId('recording-screen'));
+    expect(screen.queryByTestId('teams-meeting-screen')).not.toBeInTheDocument();
   });
 });
 

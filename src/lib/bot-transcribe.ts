@@ -1,10 +1,21 @@
 import { transcribeWithVadBatches, transcribeEnsemble, isEnsembleDiarization } from '@/lib/audio/vad-batch-server';
-import { getDiarizationProvider } from '@/lib/ai/diarization';
+import { getDiarizationProvider, type SpeakerTurn } from '@/lib/ai/diarization';
 import { assignSpeakers } from '@/lib/audio/merge-speakers';
 import { storePendingTranscript } from '@/lib/bot-pending-audio';
 
-// Server-side processing of a Teams-bot recording, kicked off the moment the bot
-// uploads — NOT when the user's browser eventually polls the audio down. The server
+export interface ProcessBotRecordingOptions {
+  /**
+   * Speaker timeline to merge in instead of running diarization. Teams meetings
+   * supply this from the meeting's own VTT transcript, where the turns already
+   * carry human display names — no pyannote pass needed, and no `Taler N`.
+   */
+  turns?: SpeakerTurn[];
+  /** Keep the turn labels verbatim (real names) rather than remapping to `Taler N`. */
+  preserveNames?: boolean;
+}
+
+// Server-side processing of a Teams recording, kicked off the moment the audio
+// lands — NOT when the user's browser eventually polls the audio down. The server
 // already holds the audio, so the old stash → poll → download → browser-decode →
 // re-upload chain is pure dead time on the critical path.
 //
@@ -13,19 +24,52 @@ import { storePendingTranscript } from '@/lib/bot-pending-audio';
 // the client to collect into IndexedDB. Everything is fail-soft: on failure the
 // stash is marked 'failed' and the client falls back to driving transcription
 // itself via /api/meetings/[id]/transcribe-batches.
+//
+// When `opts.turns` is supplied the diarization pass is skipped entirely: the
+// caller already knows who spoke when (Graph pipeline → VTT).
 export async function processBotRecording(
   meetingId: string,
   buffer: Buffer,
   mimeType: string,
+  opts: ProcessBotRecordingOptions = {},
 ): Promise<void> {
   const t0 = Date.now();
+  const injectedTurns = opts.turns;
+  const mergeOptions = { preserveNames: opts.preserveNames === true };
+
   try {
     // Ensemble path: one call returns diarized, timestamped segments — no separate
-    // diarization pass to merge.
+    // diarization pass to merge. Injected turns still win, because they carry names.
     if (isEnsembleDiarization()) {
-      const segments = await transcribeEnsemble(buffer, mimeType);
+      const ensembleSegments = await transcribeEnsemble(buffer, mimeType);
+      const segments = injectedTurns?.length
+        ? assignSpeakers(ensembleSegments, injectedTurns, mergeOptions)
+        : ensembleSegments;
       await storePendingTranscript(meetingId, { status: 'ready', segments, diarized: true });
       console.log(`[bot-transcribe] ${meetingId}: ${segments.length} ensemble segments in ${Date.now() - t0} ms`);
+      return;
+    }
+
+    if (injectedTurns) {
+      // Turns are known up front — transcribe only.
+      let transcribed;
+      try {
+        transcribed = await transcribeWithVadBatches(buffer);
+      } catch (err) {
+        console.error(`[bot-transcribe] ${meetingId} transcription failed:`, err);
+        await storePendingTranscript(meetingId, { status: 'failed' });
+        return;
+      }
+      const segments = assignSpeakers(transcribed, injectedTurns, mergeOptions);
+      await storePendingTranscript(meetingId, {
+        status: 'ready',
+        segments,
+        diarized: injectedTurns.length > 0,
+      });
+      console.log(
+        `[bot-transcribe] ${meetingId}: ${segments.length} segments ` +
+        `(injected turns=${injectedTurns.length}) in ${Date.now() - t0} ms`,
+      );
       return;
     }
 
@@ -46,7 +90,7 @@ export async function processBotRecording(
       console.error(`[bot-transcribe] ${meetingId} diarization failed:`, diarization.reason);
     }
 
-    const segments = assignSpeakers(transcription.value, turns);
+    const segments = assignSpeakers(transcription.value, turns, mergeOptions);
     await storePendingTranscript(meetingId, {
       status: 'ready',
       segments,

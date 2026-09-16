@@ -1,4 +1,16 @@
-export type MeetingStatus = 'joining' | 'recording' | 'processing' | 'review' | 'minutes' | 'done' | 'redacted' | 'failed';
+// `awaiting_teams` is the Graph-era pre-meeting state: Memoctopus is armed on the
+// meeting and we are waiting for Teams to hold it and produce its artifacts.
+// `joining` is the legacy bot-service state, kept until the bot is removed.
+export type MeetingStatus =
+  | 'awaiting_teams'
+  | 'joining'
+  | 'recording'
+  | 'processing'
+  | 'review'
+  | 'minutes'
+  | 'done'
+  | 'redacted'
+  | 'failed';
 
 export interface TranscriptSegment {
   speaker: string;

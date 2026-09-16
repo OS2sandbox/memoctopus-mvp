@@ -65,6 +65,24 @@ describe('GET /api/bot/audio/[meetingId]', () => {
     expect(body.status).toBe('no-recording');
   });
 
+  it('carries the speaker names through a transcript-only no-recording answer', async () => {
+    // Teams' transcript names every speaker even when there is no audio, and
+    // those names pre-fill the participant list in Gennemgang.
+    mockReadMeta.mockResolvedValue({
+      mimeType: '',
+      participants: ['Mette Hansen', 'Jens Poulsen'],
+      durationSeconds: 540,
+      hasRecording: false,
+      createdAt: Date.now(),
+    });
+    const body = await (await GET(makeRequest('meeting-1'), makeParams('meeting-1'))).json();
+    expect(body).toEqual({
+      status: 'no-recording',
+      participants: ['Mette Hansen', 'Jens Poulsen'],
+      durationSeconds: 540,
+    });
+  });
+
   it('returns 200 with the audio buffer and headers', async () => {
     mockReadMeta.mockResolvedValue({
       mimeType: 'audio/webm',

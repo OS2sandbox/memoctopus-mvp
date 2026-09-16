@@ -111,6 +111,62 @@ describe('processBotRecording', () => {
     expect(mockStoreTranscript).toHaveBeenCalledWith('m1', { status: 'failed' });
   });
 
+  it('skips diarization and keeps real names when turns are injected', async () => {
+    mockTranscribe.mockResolvedValueOnce(SEGMENTS);
+    const NAMED = [
+      { speaker: 'Mette Hansen', start: 0, end: 3.5 },
+      { speaker: 'Jens Poulsen', start: 3.5, end: 9 },
+    ];
+
+    await processBotRecording('m1', Buffer.from('audio'), 'audio/wav', {
+      turns: NAMED,
+      preserveNames: true,
+    });
+
+    expect(mockDiarize).not.toHaveBeenCalled();
+    const [, transcript] = mockStoreTranscript.mock.calls[0];
+    expect(transcript.status).toBe('ready');
+    expect(transcript.diarized).toBe(true);
+    expect(transcript.segments.map((s: { speaker: string }) => s.speaker)).toEqual([
+      'Mette Hansen',
+      'Jens Poulsen',
+    ]);
+  });
+
+  it('remaps injected turns to Taler N when preserveNames is not set', async () => {
+    mockTranscribe.mockResolvedValueOnce(SEGMENTS);
+
+    await processBotRecording('m1', Buffer.from('audio'), 'audio/wav', { turns: TURNS });
+
+    const [, transcript] = mockStoreTranscript.mock.calls[0];
+    expect(transcript.segments.map((s: { speaker: string }) => s.speaker)).toEqual(['Taler 1', 'Taler 2']);
+  });
+
+  it('marks the stash failed when transcription fails with injected turns', async () => {
+    mockTranscribe.mockRejectedValueOnce(new Error('hviske nede'));
+
+    await processBotRecording('m1', Buffer.from('audio'), 'audio/wav', { turns: TURNS });
+
+    expect(mockStoreTranscript).toHaveBeenCalledWith('m1', { status: 'failed' });
+    expect(mockDiarize).not.toHaveBeenCalled();
+  });
+
+  it('ensemble mode still honours injected names', async () => {
+    mockIsEnsemble.mockReturnValue(true);
+    mockEnsemble.mockResolvedValueOnce([
+      { speaker: 'Taler 1', start: 0, end: 3, text: 'hej' },
+      { speaker: 'Taler 2', start: 4, end: 8, text: 'med dig' },
+    ]);
+
+    await processBotRecording('m1', Buffer.from('audio'), 'audio/wav', {
+      turns: [{ speaker: 'Mette Hansen', start: 0, end: 9 }],
+      preserveNames: true,
+    });
+
+    const [, transcript] = mockStoreTranscript.mock.calls[0];
+    expect(transcript.segments.every((s: { speaker: string }) => s.speaker === 'Mette Hansen')).toBe(true);
+  });
+
   it('never throws — failures degrade to the client fallback', async () => {
     mockTranscribe.mockRejectedValueOnce(new Error('boom'));
     mockDiarize.mockRejectedValueOnce(new Error('boom'));

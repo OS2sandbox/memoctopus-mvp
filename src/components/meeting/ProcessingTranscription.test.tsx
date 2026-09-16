@@ -387,6 +387,41 @@ describe('ProcessingTranscription', () => {
     expect(screen.getByText('Lydfil ikke fundet')).toBeInTheDocument();
   });
 
+  it('uses a ready server transcript even when there is no local audio', async () => {
+    // Teams transcript-only meetings never produce an audio file, and a Graph
+    // meeting the server already transcribed does not need one either.
+    mockGetAudio.mockResolvedValue(null as any);
+    mockFetch.mockResolvedValue(makeServerTranscript('ready', true));
+
+    renderComponent();
+
+    await waitFor(() => {
+      expect(mockSaveTranscript).toHaveBeenCalledWith(
+        MEETING_ID,
+        expect.objectContaining({ segments: FAKE_SEGMENTS, diarizationStatus: 'done' }),
+      );
+    });
+    expect(screen.queryByText('Lydfil ikke fundet')).not.toBeInTheDocument();
+    expect(mockStartDiarization).not.toHaveBeenCalled();
+  });
+
+  it('keeps the server labels when the transcript is undiarized but no audio exists', async () => {
+    // There is nothing to diarize from, so the labels stand as final rather than
+    // leaving the transcript stuck in the "pending" uncertainty state.
+    mockGetAudio.mockResolvedValue(null as any);
+    mockFetch.mockResolvedValue(makeServerTranscript('ready', false));
+
+    renderComponent();
+
+    await waitFor(() => {
+      expect(mockSaveTranscript).toHaveBeenCalledWith(
+        MEETING_ID,
+        expect.objectContaining({ diarizationStatus: 'done' }),
+      );
+    });
+    expect(mockStartDiarization).not.toHaveBeenCalled();
+  });
+
   it('enters error phase when transcribeBatchesOnServer throws', async () => {
     mockFetch.mockResolvedValue(makeServerTranscript('none'));
     mockTranscribeBatches.mockRejectedValue(new Error('hviske er nede'));

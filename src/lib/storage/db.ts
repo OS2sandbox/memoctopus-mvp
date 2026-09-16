@@ -20,7 +20,24 @@ export interface StoredMeeting {
   audioSizeBytes: number;
   audioDeleted: boolean;
   // Active Teams bot-service session id (null when not a bot meeting / not joined).
+  // Legacy: removed together with the bot-service in the cleanup phase.
   botSession?: string | null;
+  // Microsoft Graph ("Memoctopus slået til") state, mirrored from the server-side
+  // teams_meetings row so the meeting list and the awaiting screen can render
+  // without a round-trip. All optional — meetings created before this existed, and
+  // every local recording, simply don't carry them.
+  //
+  // `teamsArmed` is true when we successfully PATCHed the meeting's options so
+  // Teams records and transcribes it by itself; false means the user is an invitee
+  // and the organizer still has to switch it on.
+  teamsArmed?: boolean;
+  teamsIsOrganizer?: boolean;
+  // The meeting's subject as Teams knows it (may differ from our `title`).
+  teamsSubject?: string;
+  // Scheduled window, ISO 8601. Used to say when the referat is expected and to
+  // decide when polling for artifacts should start.
+  scheduledStart?: string;
+  scheduledEnd?: string;
 }
 
 export interface StoredTranscript {

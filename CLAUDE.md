@@ -81,6 +81,54 @@ Bot-service authenticates all requests from the Next.js app via `Authorization: 
 
 **Session management**: Sessions are held in a `Map<string, BotSession>` in-process. The bot drains active sessions on `SIGTERM`/`SIGINT` (90s timeout). The `bot_session` column on the `meetings` table stores the active session ID; the sentinel value `'creating'` is used to prevent concurrent session creation for the same meeting.
 
+### 3. Teams via Microsoft Graph (`src/lib/teams/`)
+
+The newer path for Teams meetings: instead of sending a bot into the call, the app asks
+Microsoft Graph (delegated, as the signed-in Microsoft user) to turn on transcription and
+then collects Teams' own transcript/recording after the meeting. The bot-service still
+exists and still works; cleanup is a later step.
+
+- `graph-client.ts` — `graphFetch()` (bearer attached only for the Graph origin),
+  `getGraphAccessToken()` via better-auth's `/get-access-token`, `hasGraphScopes()`, and
+  `GraphError` with codes `consent_required | reauth_required | transcripts_disabled |
+  forbidden | not_found | http` carrying Danish user-safe messages. The delegated scope
+  list lives in `src/lib/auth/providers.ts` (`GRAPH_DELEGATED_SCOPES`) to avoid an import
+  cycle, and is re-exported here as `GRAPH_SCOPES`.
+- `url.ts` — validates/normalises a Teams join URL; `extractJoinContext()` pulls thread id,
+  tenant and organizer oid out of it.
+- `meeting-resolver.ts` — `resolveJoinUrl()` looks the meeting up via
+  `$filter=JoinWebUrl eq '…'` and decides `isOrganizer` against `/me`.
+- `meeting-arm.ts` — `armMeeting()` PATCHes `recordAutomatically` / `allowTranscription`;
+  returns `armed | not_organizer | policy_blocked`. `disarmMeeting()` only clears
+  `recordAutomatically`.
+- `calendar.ts` — `listUpcomingOnlineMeetings()` over `/me/calendarView` (recurring series
+  expanded into occurrences).
+- `artifacts.ts` — lists and downloads transcripts (VTT) and recordings; recording download
+  follows Graph's 302 by hand with `redirect: 'manual'`, dropping the bearer once the URL
+  leaves the Graph origin.
+- `vtt.ts` — VTT parser; `turnsFromVtt()` feeds real speaker names into
+  `src/lib/audio/merge-speakers.ts` (`preserveNames`), `segmentsFromVtt()` is the
+  transcript-only path.
+- `pipeline.ts` — `processTeamsMeeting()`: pick artifact → download → transcode → reuse the
+  existing `processBotRecording()` stash, so `/api/bot/audio` + `/api/bot/transcript` and
+  the Gennemgang flow are unchanged. Returns `ready | pending | failed`.
+- `store.ts` — raw-SQL CRUD over the per-user `teams_meetings` table (same per-user schema
+  rules as everything else), plus the polling-due predicate and backoff.
+- `poller.ts` — `pollMeeting()` / `pollDueMeetings()`; started from `src/instrumentation.ts`
+  inside the Next.js server process and serialised across instances by a Postgres advisory
+  lock. Disabled under test and via `TEAMS_POLLER_DISABLED`.
+- `http-errors.ts` — maps `GraphError` / `ResolveError` onto status codes and Danish
+  messages for the API routes.
+
+**API routes** (`src/app/api/teams/`, all session-gated):
+`GET /status` (is a Microsoft account linked, are the Graph scopes consented),
+`GET /calendar?days=7`, `POST /meetings` (register + arm), `GET /meetings/[id][?poll=1]`,
+`DELETE /meetings/[id]` (disarm + forget).
+
+**Teams meeting state** (`teams_meetings.state`):
+`awaiting_teams` → `ready` | `failed` | `needs_reauth`. The client-side meeting status gains
+a matching `awaiting_teams`.
+
 ### Docker / deployment
 `docker-compose.yml` at repo root defines two services: `app` (Next.js, port 3002) and `bot-service` (internal only, port 3001). The bot-service container needs `shm_size: 2gb` for Chromium. Audio files are stored on a named Docker volume (`audio-storage`), path configurable via `AUDIO_STORAGE_PATH`.
 
@@ -102,6 +150,11 @@ Bot-service authenticates all requests from the Next.js app via `Authorization: 
 | `MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT_ID` | Entra ID; enables itself when the id + secret are set |
 | `OIDC_CLIENT_ID` / `_SECRET` / `_DISCOVERY_URL` | Generic OIDC provider (Keycloak, Authentik, …) |
 | `OIDC_PROVIDER_ID` / `_NAME` | Callback path segment + account key / button label |
+| `GRAPH_BASE_URL` | Microsoft Graph base URL (default `https://graph.microsoft.com/v1.0`) |
+| `TEAMS_SPOKEN_LANGUAGE` | Language Teams transcribes in (default `da-DK`) |
+| `TEAMS_ARTIFACT_MODE` | `prefer-recording` (default) or `transcript-only` |
+| `TEAMS_POLL_INTERVAL_MS` | Graph poll interval (default `120000`) |
+| `TEAMS_POLLER_DISABLED` | Set `true` to stop this instance from polling Graph |
 
 ## Testing conventions
 

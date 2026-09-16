@@ -23,14 +23,26 @@ function overlap(aStart: number, aEnd: number, bStart: number, bEnd: number): nu
 // conversation rarely changes speaker during a gap the diarizer couldn't place);
 // the very first such segment falls back to the first speaker. When `turns` is
 // empty (diarization unavailable or failed), segments are returned unchanged.
+//
+// `preserveNames` switches off the remap: when the turns come from a Teams
+// WebVTT transcript their `speaker` is already a human display name
+// ('Mette Hansen'), and renaming that to 'Taler 1' would throw away the very
+// thing the Graph integration is for. Everything else — overlap matching, gap
+// inheritance, the empty-turns no-op — behaves identically in both modes.
+export interface AssignSpeakersOptions {
+  preserveNames?: boolean;
+}
+
 export function assignSpeakers(
   segments: TranscriptSegment[],
   turns: SpeakerTurn[],
+  options: AssignSpeakersOptions = {},
 ): TranscriptSegment[] {
   if (turns.length === 0) return segments;
 
   const labelMap = new Map<string, string>();
   const labelFor = (rawSpeaker: string): string => {
+    if (options.preserveNames) return rawSpeaker;
     let label = labelMap.get(rawSpeaker);
     if (!label) {
       label = speakerLabel(labelMap.size + 1);

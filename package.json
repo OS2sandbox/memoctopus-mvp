@@ -15,7 +15,9 @@
     "db:studio": "drizzle-kit studio",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "mock:graph": "node scripts/mock-graph/server.mjs",
+    "mock:graph:seed": "node scripts/mock-graph/seed-account.mjs"
   },
   "dependencies": {
     "@better-auth/core": "^1.6.11",

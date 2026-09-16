@@ -8,7 +8,9 @@ import { withHandler } from '@/lib/api-handler';
 // and transcribed client-side. The bot stashes audio here via /api/bot/audio-upload.
 //
 //   404 → not ready yet (bot still recording / uploading) — keep polling
-//   200 + JSON { status: 'no-recording' } → bot finished with nothing to transcribe
+//   200 + JSON { status: 'no-recording', participants, durationSeconds }
+//        → finished with nothing to transcribe (bot never admitted, or a Teams
+//          transcript-only meeting where the transcript is the whole result)
 //   200 + audio body → the recording (with X-Participants / X-Duration headers)
 //
 // The stashed copy is deleted as soon as it is handed to the client.
@@ -38,7 +40,14 @@ export const GET = withHandler(
 
     if (!meta.hasRecording) {
       await deletePendingAudio(meetingId);
-      return NextResponse.json({ status: 'no-recording' });
+      // Participants still matter with no audio: a Teams transcript-only meeting
+      // knows every speaker's display name, and that is what pre-fills the
+      // participant list in Gennemgang.
+      return NextResponse.json({
+        status: 'no-recording',
+        participants: meta.participants ?? [],
+        durationSeconds: meta.durationSeconds ?? null,
+      });
     }
 
     const buffer = await readPendingAudio(meetingId);

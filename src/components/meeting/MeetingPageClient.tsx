@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ProcessStrip, ProcessPhase } from '@/components/layout/ProcessStrip';
 import { RecordingScreen } from '@/components/recording/RecordingScreen';
 import { MeetingBotScreen } from '@/components/recording/MeetingBotScreen';
+import { TeamsMeetingScreen } from '@/components/recording/TeamsMeetingScreen';
 import { TranscriptReview } from '@/components/transcript/TranscriptReview';
 import { MinutesEditor } from '@/components/minutes/MinutesEditor';
 import { ExportTab } from '@/components/meeting/ExportTab';
@@ -239,7 +240,16 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
         onTabChange={switchTab}
       />
 
-      {activeTab === 'recording' && isTeamsMeeting && (
+      {activeTab === 'recording' && isTeamsMeeting && meeting.status === 'awaiting_teams' && (
+        <TeamsMeetingScreen
+          meetingId={meetingId}
+          meetingUrl={meeting.meetingUrl ?? ''}
+        />
+      )}
+
+      {/* Legacy Playwright-bot meetings (status 'joining'/'recording') keep the
+          old screen until the bot service is removed in the cleanup phase. */}
+      {activeTab === 'recording' && isTeamsMeeting && meeting.status !== 'awaiting_teams' && (
         <MeetingBotScreen
           meetingId={meetingId}
           meetingUrl={meeting.meetingUrl ?? ''}

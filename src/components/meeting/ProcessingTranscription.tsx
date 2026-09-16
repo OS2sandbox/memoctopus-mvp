@@ -74,22 +74,26 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
 
     async function run() {
       try {
-        // 1. Load the archived audio from IndexedDB (needed for fallback + diarization).
+        // 1. Load the archived audio from IndexedDB. It is REQUIRED only for the
+        // fallback and for client-side diarization — a Teams meeting recorded in
+        // transcript-only mode has no audio at all, and one whose recording the
+        // server already transcribed does not need it either. So a missing blob
+        // is not an error until we actually need it (step 3).
         setPhase('downloading');
         const audioEntry = await getAudio(meetingId);
-        if (!audioEntry) throw new Error('Lydfil ikke fundet');
-        const blob = audioEntry.blob;
+        const blob = audioEntry?.blob ?? null;
         if (cancelled) return;
 
-        // 2. Bot recordings: the server started transcription + diarization the
-        // moment the bot uploaded — usually it is already done by the time the user
-        // lands here. Collect it instead of re-doing the work.
+        // 2. Server-side runs (Teams bot, or the Microsoft Graph pipeline) started
+        // transcription + diarization before the user got here. Collect it instead
+        // of re-doing the work.
         setPhase('analyzing');
         const serverTranscript = await collectServerTranscript(meetingId, () => cancelled);
         if (cancelled) return;
         if (serverTranscript?.segments?.length) {
-          if (serverTranscript.diarized) {
-            // Already diarized server-side — labels are final.
+          if (serverTranscript.diarized || !blob) {
+            // Already diarized server-side — labels are final. With no audio there
+            // is nothing to diarize from either, so the labels stand as they are.
             await save(serverTranscript.segments, 'done');
           } else {
             // Server-side diarization failed — save as 'pending' (uncertainty state)
@@ -101,6 +105,10 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
           onComplete?.();
           return;
         }
+
+        // Nothing server-side and nothing local: there is no work left to do here
+        // and no way to do it — say so rather than crashing on a null blob.
+        if (!blob) throw new Error('Lydfil ikke fundet');
 
         // 3. Fallback: drive transcription from here. One upload of the original
         // compressed audio; the server decodes, runs VAD, and fans out all batches

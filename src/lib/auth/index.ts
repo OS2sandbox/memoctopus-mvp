@@ -7,6 +7,7 @@ import { users, sessions, accounts, verifications } from '@/lib/db/schema';
 import {
   emailPasswordEnabled,
   microsoftConfig,
+  microsoftGraphScopes,
   oidcConfig,
   warnDeprecatedAuthEnv,
 } from './providers';
@@ -55,7 +56,15 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: emailPasswordEnabled(),
   },
-  socialProviders: microsoft ? { microsoft } : {},
+  // The Teams integration reads Graph as the signed-in user (delegated), so the
+  // Graph scopes must be consented to at login. better-auth's microsoft provider
+  // already requests openid/profile/email/User.Read/offline_access and appends
+  // `scope` to them — offline_access is what yields the refresh token that
+  // auth.api.getAccessToken() later trades for a fresh access token.
+  // Users who signed in before these scopes existed keep a token without them;
+  // hasGraphScopes() in src/lib/teams/graph-client.ts detects that and the UI
+  // asks them to sign in again.
+  socialProviders: microsoft ? { microsoft: { ...microsoft, scope: microsoftGraphScopes() } } : {},
   // No `account.accountLinking` override on purpose. Adding providers to
   // `trustedProviders` would drop better-auth's requirement that the *incoming*
   // IdP asserted email_verified (see dist/oauth2/link-account.mjs) — an attacker

@@ -4,9 +4,17 @@ import React, { useState, useEffect, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useIsMobile } from '@/lib/use-is-mobile';
-import { createMeeting, getAllMeetings } from '@/lib/storage';
+import { createMeeting, deleteMeeting, getAllMeetings } from '@/lib/storage';
 import { setPendingUploadFile } from '@/lib/pending-upload';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { UpcomingTeamsMeetings, armErrorMessage } from '@/components/dashboard/UpcomingTeamsMeetings';
+import { signIn } from '@/lib/auth-client';
+
+interface TeamsStatus {
+  microsoftLinked: boolean;
+  scopesOk: boolean;
+  missing: string[];
+}
 
 export default function OptaqPage() {
   const router = useRouter();
@@ -20,12 +28,27 @@ export default function OptaqPage() {
   const [linkError, setLinkError] = useState('');
   const [recordError, setRecordError] = useState('');
   const [meetingCount, setMeetingCount] = useState<number | null>(null);
+  const [teamsStatus, setTeamsStatus] = useState<TeamsStatus | null>(null);
 
   useEffect(() => {
     getAllMeetings()
       .then((meetings) => setMeetingCount(meetings.length))
       .catch((err) => { console.warn('[dashboard] getAllMeetings failed:', err); });
   }, []);
+
+  // Whether the Teams section can work at all is a server-side fact (is there a
+  // Microsoft account, and does its stored scope cover Graph), so it is fetched
+  // rather than derived from the session on the client.
+  useEffect(() => {
+    fetch('/api/teams/status')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: TeamsStatus | null) => { if (data) setTeamsStatus(data); })
+      .catch((err) => { console.warn('[dashboard] teams status failed:', err); });
+  }, []);
+
+  function reconsent() {
+    void signIn.social({ provider: 'microsoft', callbackURL: '/dashboard' });
+  }
 
   function handleKeyDown(e: KeyboardEvent) {
     const tag = (e.target as HTMLElement).tagName;
@@ -57,20 +80,39 @@ export default function OptaqPage() {
     }
   }
 
+  // The local meeting is created first because its id is what registers the
+  // meeting server-side. If Graph rejects the link, the orphan is removed again
+  // so the Arkiv never fills with meetings that can never produce a referat.
   async function joinMeeting(link: string) {
     if (linkLoading) return;
     setLinkLoading(true);
     setLinkError('');
+    let localId: string | null = null;
     try {
       const dateStr = new Intl.DateTimeFormat('da', { day: 'numeric', month: 'long' }).format(new Date());
       const meeting = await createMeeting({
         title: `Teams-møde · ${dateStr}`,
         source: 'teams',
         meetingUrl: link,
-        status: 'joining',
+        status: 'awaiting_teams',
       });
-      router.push(`/meeting/${meeting.id}?join=1`);
+      localId = meeting.id;
+
+      const res = await fetch('/api/teams/meetings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meetingId: meeting.id, joinUrl: link }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setLinkError(armErrorMessage(res.status, (body as { error?: string }).error));
+        await deleteMeeting(meeting.id).catch(() => {});
+        setLinkLoading(false);
+        return;
+      }
+      router.push(`/meeting/${meeting.id}`);
     } catch {
+      if (localId) await deleteMeeting(localId).catch(() => {});
       setLinkError('Noget gik galt. Prøv igen.');
       setLinkLoading(false);
     }
@@ -116,6 +158,36 @@ export default function OptaqPage() {
             Dansk AI — kørt lokalt, frigivet åbent.<br />
             Ingen data forlader din maskine.
           </div>
+        </div>
+
+        {/* Teams — upcoming meetings / access hints */}
+        <div style={{ maxWidth: 560, margin: isMobile ? '36px auto 0' : '56px auto 0' }}>
+          {teamsStatus && teamsStatus.microsoftLinked && teamsStatus.scopesOk && <UpcomingTeamsMeetings />}
+
+          {teamsStatus && !teamsStatus.microsoftLinked && (
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)', textAlign: 'center' }}>
+              Teams-referater kræver, at du logger ind med Microsoft.
+            </div>
+          )}
+
+          {teamsStatus && teamsStatus.microsoftLinked && !teamsStatus.scopesOk && (
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)' }}>
+                Memoctopus mangler adgang til dine Teams-møder.
+              </div>
+              <button
+                type="button"
+                onClick={reconsent}
+                style={{
+                  marginTop: 10, padding: '8px 16px', borderRadius: 999, fontSize: 12.5,
+                  border: '1px solid var(--line-2)', background: 'transparent',
+                  color: 'var(--ink)', cursor: 'pointer',
+                }}
+              >
+                Giv adgang igen
+              </button>
+            </div>
+          )}
         </div>
 
         {/* 3-column grid */}

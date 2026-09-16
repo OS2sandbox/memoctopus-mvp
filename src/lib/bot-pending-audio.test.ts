@@ -5,6 +5,7 @@ import fs from 'fs/promises';
 vi.mock('fs/promises');
 
 import {
+  markNoRecording,
   readPendingMeta,
   readPendingTranscript,
   setBotMeetingOwner,
@@ -186,5 +187,44 @@ describe('bot meeting ownership', () => {
 
   it('rejects an unsafe meetingId (path traversal)', async () => {
     await expect(getBotMeetingOwner('../etc/passwd')).rejects.toThrow(/Invalid meetingId/);
+  });
+});
+
+// ─── markNoRecording ──────────────────────────────────────────────────────────
+
+describe('markNoRecording', () => {
+  beforeEach(() => {
+    vi.mocked(fs.mkdir).mockResolvedValue(undefined as never);
+    vi.mocked(fs.writeFile).mockResolvedValue(undefined as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('writes an empty meta by default', async () => {
+    await markNoRecording('m1');
+    const [, payload] = vi.mocked(fs.writeFile).mock.calls.at(-1)!;
+    expect(JSON.parse(payload as string)).toMatchObject({
+      hasRecording: false,
+      participants: [],
+      durationSeconds: null,
+    });
+  });
+
+  it('keeps the speaker names of a transcript-only meeting', async () => {
+    // Mode 2 has no audio, but Teams' transcript still names every speaker —
+    // that is what pre-fills the participant list in Gennemgang.
+    await markNoRecording('m1', {
+      participants: ['Mette Hansen', 'Jens Poulsen'],
+      durationSeconds: 540,
+    });
+
+    const [, payload] = vi.mocked(fs.writeFile).mock.calls.at(-1)!;
+    expect(JSON.parse(payload as string)).toMatchObject({
+      hasRecording: false,
+      participants: ['Mette Hansen', 'Jens Poulsen'],
+      durationSeconds: 540,
+    });
   });
 });

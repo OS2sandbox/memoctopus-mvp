@@ -133,19 +133,27 @@ export async function storePendingAudio(
   await fs.writeFile(metaPath(meetingId), JSON.stringify(full));
 }
 
-// Records that the bot finished with no usable recording (e.g. never admitted,
-// or the user aborted). The client polls and shows a cancelled state.
-export async function markNoRecording(meetingId: string): Promise<void> {
+// Records that the run finished with no usable recording — the bot was never
+// admitted, the user aborted, or (the Teams/Graph path) the meeting was
+// transcript-only. The client polls and gets `{ status: 'no-recording' }`.
+//
+// `meta` still matters when there is no audio: Teams' transcript names every
+// speaker, and those names are what pre-fills the participant list in
+// Gennemgang. Dropping them here would narrow that to the recording modes.
+export async function markNoRecording(
+  meetingId: string,
+  meta: Partial<Pick<PendingMeta, 'participants' | 'durationSeconds'>> = {},
+): Promise<void> {
   assertSafeId(meetingId);
   await fs.mkdir(rootDir(), { recursive: true });
-  const meta: PendingMeta = {
+  const full: PendingMeta = {
     mimeType: '',
-    participants: [],
-    durationSeconds: null,
+    participants: meta.participants ?? [],
+    durationSeconds: meta.durationSeconds ?? null,
     hasRecording: false,
     createdAt: Date.now(),
   };
-  await fs.writeFile(metaPath(meetingId), JSON.stringify(meta));
+  await fs.writeFile(metaPath(meetingId), JSON.stringify(full));
 }
 
 export async function readPendingMeta(meetingId: string): Promise<PendingMeta | null> {

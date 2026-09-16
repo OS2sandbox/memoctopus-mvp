@@ -43,6 +43,13 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       ALTER TYPE "${schema}".meeting_status ADD VALUE IF NOT EXISTS 'cancelled'
     `);
 
+    // Microsoft Graph / Teams: a meeting is armed and waits for Teams to finish
+    // recording + transcribing it. Replaces 'joining' for the Graph flow;
+    // 'joining' stays for the legacy Playwright bot until it is removed.
+    await client.query(`
+      ALTER TYPE "${schema}".meeting_status ADD VALUE IF NOT EXISTS 'awaiting_teams'
+    `);
+
     await client.query('BEGIN');
 
     // templates
@@ -223,6 +230,55 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         END IF;
       END
       $$
+    `);
+
+    // teams_meetings — server-side record of a Teams meeting armed via Microsoft
+    // Graph, so the poller knows what to fetch artifacts for.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".teams_meetings (
+        id               TEXT PRIMARY KEY,
+        graph_meeting_id TEXT NOT NULL,
+        join_url         TEXT NOT NULL,
+        subject          TEXT,
+        organizer_id     TEXT,
+        event_id         TEXT,
+        is_organizer     BOOLEAN NOT NULL DEFAULT FALSE,
+        armed            BOOLEAN NOT NULL DEFAULT FALSE,
+        arm_result       TEXT NOT NULL DEFAULT 'not_organizer',
+        scheduled_start  TIMESTAMPTZ,
+        scheduled_end    TIMESTAMPTZ,
+        state            TEXT NOT NULL DEFAULT 'awaiting_teams',
+        last_polled_at   TIMESTAMPTZ,
+        attempts         INTEGER NOT NULL DEFAULT 0,
+        failure_reason   TEXT,
+        transcript_id    TEXT,
+        recording_id     TEXT,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      ALTER TABLE "${schema}".teams_meetings
+        ADD COLUMN IF NOT EXISTS organizer_id  TEXT,
+        ADD COLUMN IF NOT EXISTS is_organizer  BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS armed         BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS arm_result    TEXT NOT NULL DEFAULT 'not_organizer',
+        ADD COLUMN IF NOT EXISTS event_id      TEXT,
+        ADD COLUMN IF NOT EXISTS transcript_id TEXT,
+        ADD COLUMN IF NOT EXISTS recording_id  TEXT,
+        ADD COLUMN IF NOT EXISTS created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        ADD COLUMN IF NOT EXISTS updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS teams_meetings_graph_meeting_id_idx
+        ON "${schema}".teams_meetings (graph_meeting_id)
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS teams_meetings_state_idx
+        ON "${schema}".teams_meetings (state, scheduled_end)
     `);
 
     // Seed default templates if none exist
