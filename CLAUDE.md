@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Development
 ```bash
-npm run dev          # Start both Next.js (port 3004) and bot-service (port 3001) concurrently
+npm run dev          # Next.js (port 3004) plus the diarization tunnel, concurrently
 npm run build        # Production build (Next.js only)
 npm start            # Serve production build
 npm run lint         # ESLint via next lint
@@ -27,11 +27,6 @@ npm run test:watch               # Run Vitest in watch mode
 npm run test:coverage            # Run with v8 coverage
 npx vitest run src/lib/ai/       # Run a specific directory
 npx vitest run src/lib/ai/chapters.test.ts  # Run a single test file
-```
-
-Bot-service has its own test runner (Playwright, not Vitest):
-```bash
-cd bot-service && npm test       # Run Playwright tests
 ```
 
 ### Environment setup
@@ -65,28 +60,33 @@ Auth config is deliberately **runtime-only**, never `NEXT_PUBLIC_*`: an operator
 4. `src/lib/ai/minutes.ts` — Meeting minutes generation using OpenAI `gpt-4o`. Prompts are in Danish.
 5. `src/lib/ai/clarifications.ts` — Generates clarification questions about ambiguous content.
 
-**Bot API routes** (`src/app/api/bot/`): Next.js acts as an authenticated proxy to the bot-service. All bot routes require a user session. The `/api/bot/audio-upload` route is the exception — it's called by the bot-service itself, authenticated via `BOT_INTERNAL_SECRET` (not a user session).
+**Pending-artifact hand-off**: a server-side run (the Graph pipeline) stashes its
+output on disk under `${AUDIO_STORAGE_PATH}/bot-pending` via
+`src/lib/pending-artifacts.ts`, and the browser collects it through
+`GET /api/meetings/[id]/pending-audio` and `/pending-transcript`, which delete the
+stashed copy as they hand it over. Both are session-gated and additionally check an
+owner file, so one user cannot collect another's artifacts.
+`pending-transcript` is polled for *every* meeting, local recordings included, where
+it answers `{ status: 'none' }` and the client falls back to its own batch pass.
+`src/lib/transcribe-recording.ts` (`transcribeRecording`) is the server-side
+transcription pass over a finished recording.
 
-**Meeting status flow**: `joining` → `recording` → `processing` → `review` → `minutes` → `done` (also `redacted`, `cancelled`).
+**Meeting status flow**: `awaiting_teams` (Teams/Graph) or `recording` (in person) →
+`processing` → `review` → `minutes` → `done` (also `redacted`, `failed`). The Postgres
+enum additionally carries `joining` and `cancelled`, neither of which any code writes:
+`joining` belonged to the removed Playwright bot, and a value cannot be dropped from a
+Postgres enum.
 
-### 2. Bot service (`bot-service/`)
+### 2. Teams via Microsoft Graph (`src/lib/teams/`)
 
-A standalone **Express + Playwright** TypeScript service that joins Microsoft Teams meetings as a headless Chromium browser, records audio, and POSTs the recording back to the Next.js app.
+How Teams meetings work. The app asks Microsoft Graph (delegated, as the signed-in
+Microsoft user) to turn on transcription, then collects Teams' own
+transcript/recording after the meeting. Nothing joins the call.
 
-- `src/index.ts` — Express server with session lifecycle routes (`POST /sessions`, `GET /sessions/:id`, `POST /sessions/:id/pause`, `/resume`, `/stop`, `DELETE /sessions/:id`) and a `/health` endpoint.
-- `src/teams-bot.ts` — `TeamsMeetingBot` class; drives Chromium via Playwright to join a Teams meeting URL, captures audio via WebRTC/MediaRecorder.
-- `src/webrtc-patch.ts` — Browser-side JS injected into the Teams page to work around WebRTC compatibility issues with headless Chrome.
-
-Bot-service authenticates all requests from the Next.js app via `Authorization: Bearer <BOT_INTERNAL_SECRET>`. It runs on port 3001 by default and is not exposed publicly in production (Docker internal network only).
-
-**Session management**: Sessions are held in a `Map<string, BotSession>` in-process. The bot drains active sessions on `SIGTERM`/`SIGINT` (90s timeout). The `bot_session` column on the `meetings` table stores the active session ID; the sentinel value `'creating'` is used to prevent concurrent session creation for the same meeting.
-
-### 3. Teams via Microsoft Graph (`src/lib/teams/`)
-
-The newer path for Teams meetings: instead of sending a bot into the call, the app asks
-Microsoft Graph (delegated, as the signed-in Microsoft user) to turn on transcription and
-then collects Teams' own transcript/recording after the meeting. The bot-service still
-exists and still works; cleanup is a later step.
+A Playwright bot did this before by joining the meeting as a participant. It was
+removed in `6c03588`; `git show bot-service-final` recovers it. Meetings it left
+behind in a browser's IndexedDB render `LegacyBotMeetingScreen`, which explains the
+dead end and offers the saved transcript or a delete.
 
 - `graph-client.ts` — `graphFetch()` (bearer attached only for the Graph origin),
   `getGraphAccessToken()` via better-auth's `/get-access-token`, `hasGraphScopes()`, and
@@ -108,7 +108,7 @@ exists and still works; cleanup is a later step.
   `src/lib/audio/merge-speakers.ts` (`preserveNames`), `segmentsFromVtt()` is the
   transcript-only path.
 - `pipeline.ts` — `processTeamsMeeting()`: pick artifact → download → transcode → reuse the
-  existing `processBotRecording()` stash, so `/api/bot/audio` + `/api/bot/transcript` and
+  existing `transcribeRecording()` stash, so the pending-artifact hand-off and
   the Gennemgang flow are unchanged. Returns `ready | pending | failed`.
 - `store.ts` — raw-SQL CRUD over the per-user `teams_meetings` table (same per-user schema
   rules as everything else), plus the polling-due predicate and backoff.
@@ -136,15 +136,27 @@ lives in `src/components/dashboard/arm-error-message.ts`.
 a matching `awaiting_teams`.
 
 ### Docker / deployment
-`docker-compose.yml` at repo root defines two services: `app` (Next.js, port 3002) and `bot-service` (internal only, port 3001). The bot-service container needs `shm_size: 2gb` for Chromium. Audio files are stored on a named Docker volume (`audio-storage`), path configurable via `AUDIO_STORAGE_PATH`.
+`docker-compose.yml` at repo root defines three services: `db` (Postgres), `migrate`
+(one-shot `drizzle-kit migrate`, which `app` waits on via
+`condition: service_completed_successfully`) and `app` (Next.js, published on
+`${APP_PORT:-8080}` → 3000). Audio files live on a named volume (`audio-storage`),
+path configurable via `AUDIO_STORAGE_PATH`.
+
+Overlays merge on top and are never used standalone: `docker-compose.ai.yml` adds the
+GPU services (hviske, diarization, vllm-chat) and repoints the app at them,
+`docker-compose.proxy.yml` is Syddjurs-specific TLS termination, and
+`docker-compose.tunnel.yml` reaches a remote diarization service over ssh.
+
+**The app only receives variables listed explicitly in `app.environment`.** There is no
+`env_file:`, so adding a variable to `.env` without adding it there leaves it unset in
+the container. Note also that `.env.deploy.example`, not `.env.example`, is what
+`scripts/bootstrap-host.sh` copies onto a server.
 
 ## Key env vars
 
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string |
-| `BOT_INTERNAL_SECRET` | Shared secret between Next.js and bot-service |
-| `BOT_SERVICE_URL` | URL of bot-service from Next.js (e.g. `http://localhost:3001`) |
 | `HVISKE_URL` | hviske STT server (OpenAI-compatible `/v1`) |
 | `HVISKE_API_KEY` | Bearer key for the hviske STT server |
 | `HVISKE_MODEL` | hviske model id (default `syvai/hviske-ensemble`) |
@@ -164,7 +176,7 @@ a matching `awaiting_teams`.
 
 ## Testing conventions
 
-- **Vitest** for the Next.js app; **Playwright** for the bot-service (excluded from Vitest via `exclude: ['bot-service/**']`).
+- **Vitest** throughout; there is no second test runner.
 - Component tests (`.test.tsx` in `src/components/`) run in `jsdom`; everything else runs in `node`.
 - Test helpers: `src/test/helpers.ts` exports `FAKE_SESSION` and `makeJsonReq()`.
 - API route tests mock `@/lib/db/user-schema` and `@/lib/auth` to avoid real DB/auth dependencies.

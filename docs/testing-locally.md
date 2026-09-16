@@ -114,7 +114,7 @@ curl -b cj "$B/api/teams/calendar?days=7"
 curl -b cj -H 'content-type: application/json' -H "origin: $B" -X POST $B/api/teams/meetings \
   -d '{"meetingId":"m1","joinUrl":"<mtgpast join url from the mock banner>"}'
 curl -b cj "$B/api/teams/meetings/m1?poll=1"
-curl -b cj $B/api/bot/transcript/m1
+curl -b cj $B/api/meetings/m1/pending-transcript
 ```
 
 ## B. Against a real tenant

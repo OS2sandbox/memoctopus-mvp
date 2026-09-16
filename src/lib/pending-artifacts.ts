@@ -2,13 +2,14 @@ import fs from 'fs/promises';
 import path from 'path';
 import type { TranscriptSegment } from '@/types';
 
-// Transient server-side hand-off for Teams-bot recordings.
+// Transient server-side hand-off for artifacts produced without a browser present.
 //
-// The bot records server-side and POSTs the finished audio to /api/bot/audio-upload.
-// Meetings live in the user's browser IndexedDB, so the server cannot persist the
-// transcript itself — instead it stashes the audio here briefly, keyed by meetingId,
-// until the user's browser polls /api/meetings/[id]/pending-audio and pulls it down into
-// IndexedDB (where the normal client-side transcription pipeline takes over).
+// The Graph pipeline collects a meeting's recording and transcript from Teams long
+// after whoever armed it has closed the tab. Meetings live in the user's browser
+// IndexedDB, so the server cannot persist them itself. It stashes them here instead,
+// keyed by meetingId, until the browser polls /api/meetings/[id]/pending-audio and
+// /pending-transcript and pulls them down into IndexedDB, where the normal
+// client-side pipeline takes over.
 //
 // Files are deleted as soon as the client downloads them; a TTL sweep drops anything
 // the client never collected (e.g. the tab was closed).
@@ -17,7 +18,7 @@ const TTL_MS = 60 * 60 * 1000; // 1 hour
 
 function rootDir(): string {
   const base = process.env.AUDIO_STORAGE_PATH ?? path.join(process.cwd(), 'audio-storage');
-  return path.join(base, 'bot-pending');
+  return path.join(base, 'pending-artifacts');
 }
 
 function assertSafeId(meetingId: string): void {

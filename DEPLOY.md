@@ -6,7 +6,7 @@ clone repo → edit `.env` → `compose up`).
 
 | File | Contains | Needs a GPU? |
 |---|---|---|
-| `docker-compose.yml` | **base ("small")**: app, bot-service, Postgres, migrate | no |
+| `docker-compose.yml` | **base ("small")**: app, Postgres, migrate | no |
 | `docker-compose.ai.yml` | **AI overlay**: hviske (vLLM STT) + diarization, and repoints the app at them | yes |
 
 The overlay is **not standalone** — it's always merged on top of the base.
