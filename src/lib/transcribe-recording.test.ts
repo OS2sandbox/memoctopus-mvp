@@ -16,11 +16,11 @@ vi.mock('@/lib/ai/diarization', () => ({
   getDiarizationProvider: () => ({ diarize: mockDiarize }),
 }));
 
-vi.mock('@/lib/bot-pending-audio', () => ({
+vi.mock('@/lib/pending-artifacts', () => ({
   storePendingTranscript: mockStoreTranscript,
 }));
 
-import { processBotRecording } from './bot-transcribe';
+import { transcribeRecording } from './transcribe-recording';
 
 const SEGMENTS = [
   { speaker: 'Taler 1', start: 0, end: 3, text: 'hej' },
@@ -39,7 +39,7 @@ beforeEach(() => {
   mockIsEnsemble.mockReset().mockReturnValue(false);
 });
 
-describe('processBotRecording', () => {
+describe('transcribeRecording', () => {
   it('ensemble mode: stashes diarized segments from one call, skipping the diarization pass', async () => {
     mockIsEnsemble.mockReturnValue(true);
     const ENSEMBLE_SEGMENTS = [
@@ -48,7 +48,7 @@ describe('processBotRecording', () => {
     ];
     mockEnsemble.mockResolvedValueOnce(ENSEMBLE_SEGMENTS);
 
-    await processBotRecording('m1', Buffer.from('audio'), 'audio/webm');
+    await transcribeRecording('m1', Buffer.from('audio'), 'audio/webm');
 
     expect(mockEnsemble).toHaveBeenCalledOnce();
     expect(mockTranscribe).not.toHaveBeenCalled();
@@ -63,7 +63,7 @@ describe('processBotRecording', () => {
     mockTranscribe.mockResolvedValueOnce(SEGMENTS);
     mockDiarize.mockResolvedValueOnce(TURNS);
 
-    await processBotRecording('m1', Buffer.from('audio'), 'audio/webm');
+    await transcribeRecording('m1', Buffer.from('audio'), 'audio/webm');
 
     expect(mockStoreTranscript).toHaveBeenCalledTimes(1);
     const [meetingId, transcript] = mockStoreTranscript.mock.calls[0];
@@ -85,7 +85,7 @@ describe('processBotRecording', () => {
       return SEGMENTS;
     });
 
-    await processBotRecording('m1', Buffer.from('audio'), 'audio/webm');
+    await transcribeRecording('m1', Buffer.from('audio'), 'audio/webm');
     expect(mockDiarize).toHaveBeenCalledOnce();
     expect(mockDiarize.mock.calls[0][1]).toBe('audio/webm');
   });
@@ -94,7 +94,7 @@ describe('processBotRecording', () => {
     mockTranscribe.mockResolvedValueOnce(SEGMENTS);
     mockDiarize.mockRejectedValueOnce(new Error('tunnel down'));
 
-    await processBotRecording('m1', Buffer.from('audio'), 'audio/webm');
+    await transcribeRecording('m1', Buffer.from('audio'), 'audio/webm');
 
     const [, transcript] = mockStoreTranscript.mock.calls[0];
     expect(transcript.status).toBe('ready');
@@ -106,7 +106,7 @@ describe('processBotRecording', () => {
     mockTranscribe.mockRejectedValueOnce(new Error('ffmpeg missing'));
     mockDiarize.mockResolvedValueOnce(TURNS);
 
-    await processBotRecording('m1', Buffer.from('audio'), 'audio/webm');
+    await transcribeRecording('m1', Buffer.from('audio'), 'audio/webm');
 
     expect(mockStoreTranscript).toHaveBeenCalledWith('m1', { status: 'failed' });
   });
@@ -118,7 +118,7 @@ describe('processBotRecording', () => {
       { speaker: 'Jens Poulsen', start: 3.5, end: 9 },
     ];
 
-    await processBotRecording('m1', Buffer.from('audio'), 'audio/wav', {
+    await transcribeRecording('m1', Buffer.from('audio'), 'audio/wav', {
       turns: NAMED,
       preserveNames: true,
     });
@@ -136,7 +136,7 @@ describe('processBotRecording', () => {
   it('remaps injected turns to Taler N when preserveNames is not set', async () => {
     mockTranscribe.mockResolvedValueOnce(SEGMENTS);
 
-    await processBotRecording('m1', Buffer.from('audio'), 'audio/wav', { turns: TURNS });
+    await transcribeRecording('m1', Buffer.from('audio'), 'audio/wav', { turns: TURNS });
 
     const [, transcript] = mockStoreTranscript.mock.calls[0];
     expect(transcript.segments.map((s: { speaker: string }) => s.speaker)).toEqual(['Taler 1', 'Taler 2']);
@@ -145,7 +145,7 @@ describe('processBotRecording', () => {
   it('marks the stash failed when transcription fails with injected turns', async () => {
     mockTranscribe.mockRejectedValueOnce(new Error('hviske nede'));
 
-    await processBotRecording('m1', Buffer.from('audio'), 'audio/wav', { turns: TURNS });
+    await transcribeRecording('m1', Buffer.from('audio'), 'audio/wav', { turns: TURNS });
 
     expect(mockStoreTranscript).toHaveBeenCalledWith('m1', { status: 'failed' });
     expect(mockDiarize).not.toHaveBeenCalled();
@@ -158,7 +158,7 @@ describe('processBotRecording', () => {
       { speaker: 'Taler 2', start: 4, end: 8, text: 'med dig' },
     ]);
 
-    await processBotRecording('m1', Buffer.from('audio'), 'audio/wav', {
+    await transcribeRecording('m1', Buffer.from('audio'), 'audio/wav', {
       turns: [{ speaker: 'Mette Hansen', start: 0, end: 9 }],
       preserveNames: true,
     });
@@ -172,6 +172,6 @@ describe('processBotRecording', () => {
     mockDiarize.mockRejectedValueOnce(new Error('boom'));
     mockStoreTranscript.mockRejectedValue(new Error('disk full'));
 
-    await expect(processBotRecording('m1', Buffer.from('audio'), 'audio/webm')).resolves.toBeUndefined();
+    await expect(transcribeRecording('m1', Buffer.from('audio'), 'audio/webm')).resolves.toBeUndefined();
   });
 });

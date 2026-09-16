@@ -39,16 +39,16 @@ vi.mock('./meeting-lock', () => ({
   withMeetingLock: <T,>(_key: string, fn: () => Promise<T>) => fn(),
 }));
 
-vi.mock('@/lib/bot-pending-audio', () => ({
+vi.mock('@/lib/pending-artifacts', () => ({
   storePendingAudio: mockStorePendingAudio,
   storePendingTranscript: mockStorePendingTranscript,
   readPendingTranscript: mockReadPendingTranscript,
   readPendingMeta: mockReadPendingMeta,
   markNoRecording: mockMarkNoRecording,
-  setBotMeetingOwner: mockSetOwner,
+  setMeetingOwner: mockSetOwner,
 }));
 
-vi.mock('@/lib/bot-transcribe', () => ({ processBotRecording: mockProcessBotRecording }));
+vi.mock('@/lib/transcribe-recording', () => ({ transcribeRecording: mockProcessBotRecording }));
 
 import { GraphError } from './graph-client';
 import { artifactMode, processTeamsMeeting, transcodeToWav } from './pipeline';
@@ -114,7 +114,7 @@ beforeEach(() => {
   mockSetOwner.mockReset().mockResolvedValue(undefined);
   mockReadFile.mockReset().mockResolvedValue(WAV);
   mockRm.mockReset().mockResolvedValue(undefined);
-  // processBotRecording is fail-soft; by default it succeeds and leaves a ready stash.
+  // transcribeRecording is fail-soft; by default it succeeds and leaves a ready stash.
   mockProcessBotRecording.mockReset().mockImplementation(async () => {
     mockReadPendingTranscript.mockResolvedValue({ status: 'ready', segments: [], createdAt: 1 });
   });
@@ -355,7 +355,7 @@ describe('processTeamsMeeting — recording only', () => {
       recordingId: 'r1',
     });
     expect(mockDownloadVtt).not.toHaveBeenCalled();
-    // No turns injected — bot-transcribe runs its own diarization pass.
+    // No turns injected — transcribe-recording runs its own diarization pass.
     expect(mockProcessBotRecording).toHaveBeenCalledWith('meet-1', WAV, 'audio/wav');
     expect(mockStorePendingAudio).toHaveBeenCalledWith('meet-1', WAV, {
       mimeType: 'audio/wav',

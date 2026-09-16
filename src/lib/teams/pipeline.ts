@@ -10,14 +10,14 @@ import {
   readPendingTranscript,
   readPendingMeta,
   markNoRecording,
-  setBotMeetingOwner,
-} from '@/lib/bot-pending-audio';
-import { processBotRecording } from '@/lib/bot-transcribe';
+  setMeetingOwner,
+} from '@/lib/pending-artifacts';
+import { transcribeRecording } from '@/lib/transcribe-recording';
 import { withMeetingLock } from './meeting-lock';
 
 // One meeting's worth of work: ask Graph what artifacts exist, decide which of the
 // three processing modes applies, and land the result in the pending stash the
-// client already knows how to collect (/api/bot/audio + /api/bot/transcript).
+// client already knows how to collect (/api/meetings/[id]/pending-audio + /pending-transcript).
 //
 // Idempotent: a meeting whose stash is already 'ready' is not reprocessed, and a
 // run in flight reports 'pending' rather than starting a second download.
@@ -183,10 +183,10 @@ async function runPipeline(
   }
 
   // Bind the stash to its owner BEFORE anything is written into it. Both
-  // hand-off routes (/api/bot/audio, /api/bot/transcript) deny by default when
+  // hand-off routes (pending-audio, pending-transcript) deny by default when
   // no owner file exists, so without this the meeting's real owner is answered
   // 404 / { status: 'none' } and the hand-off can never complete.
-  await setBotMeetingOwner(meeting.id, userId);
+  await setMeetingOwner(meeting.id, userId);
 
   let artifacts;
   try {
@@ -268,7 +268,7 @@ async function runRecordingWithTranscript(
     durationSeconds: durationFromCues(cues),
     hasRecording: true,
   });
-  await processBotRecording(meeting.id, wav, 'audio/wav', {
+  await transcribeRecording(meeting.id, wav, 'audio/wav', {
     turns: turnsFromVtt(cues),
     preserveNames: true,
   });
@@ -290,7 +290,7 @@ async function runTranscriptOnly(
   }
 
   // The audio route needs a meta record, or the client polls 404 forever. This is
-  // the existing "finished with nothing to transcribe" marker, so /api/bot/audio
+  // the existing "finished with nothing to transcribe" marker, so the pending-audio route
   // answers { status: 'no-recording' } and the client goes straight to the
   // transcript hand-off instead of waiting for a blob.
   const speakers = speakersFromVtt(cues);
@@ -323,13 +323,13 @@ async function runRecordingOnly(
     durationSeconds: null,
     hasRecording: true,
   });
-  await processBotRecording(meeting.id, wav, 'audio/wav');
+  await transcribeRecording(meeting.id, wav, 'audio/wav');
   await assertTranscribed(meeting.id);
 
   return { status: 'ready', mode: 'recording-only', speakers: [], transcriptId: null, recordingId };
 }
 
-// processBotRecording is fail-soft: it records its own failure in the stash rather
+// transcribeRecording is fail-soft: it records its own failure in the stash rather
 // than throwing, so the pipeline has to read the verdict back to know whether the
 // meeting is genuinely ready.
 async function assertTranscribed(meetingId: string): Promise<void> {

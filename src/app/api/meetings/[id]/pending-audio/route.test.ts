@@ -13,26 +13,26 @@ vi.mock('next/headers', () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
 
-vi.mock('@/lib/bot-pending-audio', () => ({
+vi.mock('@/lib/pending-artifacts', () => ({
   readPendingMeta: vi.fn(),
   readPendingAudio: vi.fn(),
   deletePendingAudio: vi.fn().mockResolvedValue(undefined),
-  assertBotMeetingOwner: vi.fn(),
+  assertMeetingOwner: vi.fn(),
 }));
 
 import { GET } from './route';
-import { readPendingMeta, readPendingAudio, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { readPendingMeta, readPendingAudio, assertMeetingOwner } from '@/lib/pending-artifacts';
 
 const mockReadMeta = vi.mocked(readPendingMeta);
 const mockReadAudio = vi.mocked(readPendingAudio);
-const mockAssertOwner = vi.mocked(assertBotMeetingOwner);
+const mockAssertOwner = vi.mocked(assertMeetingOwner);
 
 function makeRequest(meetingId: string): NextRequest {
-  return new NextRequest(`http://localhost/api/bot/audio/${meetingId}`, { method: 'GET' });
+  return new NextRequest(`http://localhost/api/meetings/${meetingId}/pending-audio`, { method: 'GET' });
 }
 
 function makeParams(meetingId: string) {
-  return { params: Promise.resolve({ meetingId }) };
+  return { params: Promise.resolve({ id: meetingId }) };
 }
 
 beforeEach(() => {
@@ -42,7 +42,7 @@ beforeEach(() => {
   mockAssertOwner.mockResolvedValue(true);
 });
 
-describe('GET /api/bot/audio/[meetingId]', () => {
+describe('GET /api/meetings/[id]/pending-audio', () => {
   it('returns 404 when meta is not yet available (pending)', async () => {
     mockReadMeta.mockResolvedValue(null);
     const res = await GET(makeRequest('meeting-1'), makeParams('meeting-1'));

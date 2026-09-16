@@ -7,7 +7,7 @@ import type { TranscriptSegment } from '@/types';
 // The bot records server-side and POSTs the finished audio to /api/bot/audio-upload.
 // Meetings live in the user's browser IndexedDB, so the server cannot persist the
 // transcript itself — instead it stashes the audio here briefly, keyed by meetingId,
-// until the user's browser polls /api/bot/audio/[meetingId] and pulls it down into
+// until the user's browser polls /api/meetings/[id]/pending-audio and pulls it down into
 // IndexedDB (where the normal client-side transcription pipeline takes over).
 //
 // Files are deleted as soon as the client downloads them; a TTL sweep drops anything
@@ -47,20 +47,20 @@ function ownerPath(meetingId: string): string {
 // is written here at session-create time. Every client-facing bot route checks it so
 // one authenticated user can't pull down (or control) another user's recording by
 // supplying their meetingId. Without this the stash is keyed by meetingId alone.
-export async function setBotMeetingOwner(meetingId: string, userId: string): Promise<void> {
+export async function setMeetingOwner(meetingId: string, userId: string): Promise<void> {
   assertSafeId(meetingId);
   await fs.mkdir(rootDir(), { recursive: true });
   await fs.writeFile(ownerPath(meetingId), JSON.stringify({ userId, createdAt: Date.now() }));
 }
 
-export async function getBotMeetingOwner(meetingId: string): Promise<string | null> {
+export async function getMeetingOwner(meetingId: string): Promise<string | null> {
   assertSafeId(meetingId);
   try {
     const { userId } = JSON.parse(await fs.readFile(ownerPath(meetingId), 'utf8')) as { userId: string };
     return userId ?? null;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('[bot-pending-audio] readOwner failed for', meetingId, err);
+      console.error('[pending-artifacts] readOwner failed for', meetingId, err);
     }
     return null;
   }
@@ -68,8 +68,8 @@ export async function getBotMeetingOwner(meetingId: string): Promise<string | nu
 
 // True only when meetingId is owned by exactly this user. Missing owner → false
 // (deny by default), so an unbound or expired meetingId is never readable.
-export async function assertBotMeetingOwner(meetingId: string, userId: string): Promise<boolean> {
-  return (await getBotMeetingOwner(meetingId)) === userId;
+export async function assertMeetingOwner(meetingId: string, userId: string): Promise<boolean> {
+  return (await getMeetingOwner(meetingId)) === userId;
 }
 
 export interface PendingMeta {
@@ -112,7 +112,7 @@ async function sweep(): Promise<void> {
             }
           } catch (err) {
             if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-              console.error('[bot-pending-audio] sweep: skipping malformed/inaccessible entry', f, err);
+              console.error('[pending-artifacts] sweep: skipping malformed/inaccessible entry', f, err);
             }
           }
         }),
@@ -162,7 +162,7 @@ export async function readPendingMeta(meetingId: string): Promise<PendingMeta | 
     return JSON.parse(await fs.readFile(metaPath(meetingId), 'utf8')) as PendingMeta;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('[bot-pending-audio] readPendingMeta failed for', meetingId, err);
+      console.error('[pending-artifacts] readPendingMeta failed for', meetingId, err);
     }
     return null;
   }
@@ -201,7 +201,7 @@ export async function readPendingTranscript(meetingId: string): Promise<PendingT
     return JSON.parse(await fs.readFile(transcriptPath(meetingId), 'utf8')) as PendingTranscript;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('[bot-pending-audio] readPendingTranscript failed for', meetingId, err);
+      console.error('[pending-artifacts] readPendingTranscript failed for', meetingId, err);
     }
     return null;
   }

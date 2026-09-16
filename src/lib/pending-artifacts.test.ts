@@ -8,10 +8,10 @@ import {
   markNoRecording,
   readPendingMeta,
   readPendingTranscript,
-  setBotMeetingOwner,
-  getBotMeetingOwner,
-  assertBotMeetingOwner,
-} from './bot-pending-audio';
+  setMeetingOwner,
+  getMeetingOwner,
+  assertMeetingOwner,
+} from './pending-artifacts';
 
 // ─── readPendingMeta ──────────────────────────────────────────────────────────
 
@@ -43,7 +43,7 @@ describe('readPendingMeta', () => {
     expect(result).toBeNull();
     expect(console.error).toHaveBeenCalledOnce();
     const [label, id, err] = (console.error as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(label).toContain('[bot-pending-audio]');
+    expect(label).toContain('[pending-artifacts]');
     expect(label).toContain('readPendingMeta');
     expect(id).toBe('meeting-456');
     expect(err).toBe(eacces);
@@ -57,7 +57,7 @@ describe('readPendingMeta', () => {
     expect(result).toBeNull();
     expect(console.error).toHaveBeenCalledOnce();
     const [label, id, err] = (console.error as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(label).toContain('[bot-pending-audio]');
+    expect(label).toContain('[pending-artifacts]');
     expect(id).toBe('meeting-789');
     expect(err).toBeInstanceOf(SyntaxError);
   });
@@ -113,7 +113,7 @@ describe('readPendingTranscript', () => {
     expect(result).toBeNull();
     expect(console.error).toHaveBeenCalledOnce();
     const [label, id, err] = (console.error as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(label).toContain('[bot-pending-audio]');
+    expect(label).toContain('[pending-artifacts]');
     expect(label).toContain('readPendingTranscript');
     expect(id).toBe('meeting-456');
     expect(err).toBe(eacces);
@@ -157,36 +157,36 @@ describe('bot meeting ownership', () => {
     vi.restoreAllMocks();
   });
 
-  it('setBotMeetingOwner writes the userId for the meeting', async () => {
-    await setBotMeetingOwner('m1', 'user-A');
+  it('setMeetingOwner writes the userId for the meeting', async () => {
+    await setMeetingOwner('m1', 'user-A');
     const [, payload] = vi.mocked(fs.writeFile).mock.calls.at(-1)!;
     expect(JSON.parse(payload as string)).toMatchObject({ userId: 'user-A' });
   });
 
-  it('getBotMeetingOwner returns the stored userId', async () => {
+  it('getMeetingOwner returns the stored userId', async () => {
     vi.mocked(fs.readFile).mockResolvedValueOnce(JSON.stringify({ userId: 'user-A', createdAt: 1 }));
-    expect(await getBotMeetingOwner('m1')).toBe('user-A');
+    expect(await getMeetingOwner('m1')).toBe('user-A');
   });
 
-  it('getBotMeetingOwner returns null (no log) when unbound (ENOENT)', async () => {
+  it('getMeetingOwner returns null (no log) when unbound (ENOENT)', async () => {
     vi.mocked(fs.readFile).mockRejectedValueOnce(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-    expect(await getBotMeetingOwner('m1')).toBeNull();
+    expect(await getMeetingOwner('m1')).toBeNull();
     expect(console.error).not.toHaveBeenCalled();
   });
 
-  it('assertBotMeetingOwner is true only for the owning user', async () => {
+  it('assertMeetingOwner is true only for the owning user', async () => {
     vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ userId: 'user-A', createdAt: 1 }));
-    expect(await assertBotMeetingOwner('m1', 'user-A')).toBe(true);
-    expect(await assertBotMeetingOwner('m1', 'user-B')).toBe(false);
+    expect(await assertMeetingOwner('m1', 'user-A')).toBe(true);
+    expect(await assertMeetingOwner('m1', 'user-B')).toBe(false);
   });
 
-  it('assertBotMeetingOwner denies by default when the meeting is unbound', async () => {
+  it('assertMeetingOwner denies by default when the meeting is unbound', async () => {
     vi.mocked(fs.readFile).mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-    expect(await assertBotMeetingOwner('m1', 'user-A')).toBe(false);
+    expect(await assertMeetingOwner('m1', 'user-A')).toBe(false);
   });
 
   it('rejects an unsafe meetingId (path traversal)', async () => {
-    await expect(getBotMeetingOwner('../etc/passwd')).rejects.toThrow(/Invalid meetingId/);
+    await expect(getMeetingOwner('../etc/passwd')).rejects.toThrow(/Invalid meetingId/);
   });
 });
 

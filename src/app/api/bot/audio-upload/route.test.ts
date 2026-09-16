@@ -1,24 +1,24 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
-vi.mock('@/lib/bot-pending-audio', () => ({
+vi.mock('@/lib/pending-artifacts', () => ({
   storePendingAudio: vi.fn().mockResolvedValue(undefined),
   storePendingTranscript: vi.fn().mockResolvedValue(undefined),
   markNoRecording: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/bot-transcribe', () => ({
-  processBotRecording: vi.fn().mockResolvedValue(undefined),
+vi.mock('@/lib/transcribe-recording', () => ({
+  transcribeRecording: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { POST } from './route';
-import { storePendingAudio, storePendingTranscript, markNoRecording } from '@/lib/bot-pending-audio';
-import { processBotRecording } from '@/lib/bot-transcribe';
+import { storePendingAudio, storePendingTranscript, markNoRecording } from '@/lib/pending-artifacts';
+import { transcribeRecording } from '@/lib/transcribe-recording';
 
 const mockStore = vi.mocked(storePendingAudio);
 const mockStoreTranscript = vi.mocked(storePendingTranscript);
 const mockMarkNoRecording = vi.mocked(markNoRecording);
-const mockProcess = vi.mocked(processBotRecording);
+const mockProcess = vi.mocked(transcribeRecording);
 
 const SECRET = 'test-bot-secret';
 

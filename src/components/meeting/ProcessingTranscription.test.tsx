@@ -643,7 +643,7 @@ describe('ProcessingTranscription', () => {
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
 
     const url = mockFetch.mock.calls[0][0] as string;
-    expect(url).toBe(`/api/bot/transcript/${MEETING_ID}`);
+    expect(url).toBe(`/api/meetings/${MEETING_ID}/pending-transcript`);
   });
 
   // ─── Server transcript with empty segments falls back ────────────────────────

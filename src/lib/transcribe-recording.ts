@@ -1,9 +1,9 @@
 import { transcribeWithVadBatches, transcribeEnsemble, isEnsembleDiarization } from '@/lib/audio/vad-batch-server';
 import { getDiarizationProvider, type SpeakerTurn } from '@/lib/ai/diarization';
 import { assignSpeakers } from '@/lib/audio/merge-speakers';
-import { storePendingTranscript } from '@/lib/bot-pending-audio';
+import { storePendingTranscript } from '@/lib/pending-artifacts';
 
-export interface ProcessBotRecordingOptions {
+export interface TranscribeRecordingOptions {
   /**
    * Speaker timeline to merge in instead of running diarization. Teams meetings
    * supply this from the meeting's own VTT transcript, where the turns already
@@ -27,11 +27,11 @@ export interface ProcessBotRecordingOptions {
 //
 // When `opts.turns` is supplied the diarization pass is skipped entirely: the
 // caller already knows who spoke when (Graph pipeline → VTT).
-export async function processBotRecording(
+export async function transcribeRecording(
   meetingId: string,
   buffer: Buffer,
   mimeType: string,
-  opts: ProcessBotRecordingOptions = {},
+  opts: TranscribeRecordingOptions = {},
 ): Promise<void> {
   const t0 = Date.now();
   const injectedTurns = opts.turns;
@@ -46,7 +46,7 @@ export async function processBotRecording(
         ? assignSpeakers(ensembleSegments, injectedTurns, mergeOptions)
         : ensembleSegments;
       await storePendingTranscript(meetingId, { status: 'ready', segments, diarized: true });
-      console.log(`[bot-transcribe] ${meetingId}: ${segments.length} ensemble segments in ${Date.now() - t0} ms`);
+      console.log(`[transcribe-recording] ${meetingId}: ${segments.length} ensemble segments in ${Date.now() - t0} ms`);
       return;
     }
 
@@ -56,7 +56,7 @@ export async function processBotRecording(
       try {
         transcribed = await transcribeWithVadBatches(buffer);
       } catch (err) {
-        console.error(`[bot-transcribe] ${meetingId} transcription failed:`, err);
+        console.error(`[transcribe-recording] ${meetingId} transcription failed:`, err);
         await storePendingTranscript(meetingId, { status: 'failed' });
         return;
       }
@@ -67,7 +67,7 @@ export async function processBotRecording(
         diarized: injectedTurns.length > 0,
       });
       console.log(
-        `[bot-transcribe] ${meetingId}: ${segments.length} segments ` +
+        `[transcribe-recording] ${meetingId}: ${segments.length} segments ` +
         `(injected turns=${injectedTurns.length}) in ${Date.now() - t0} ms`,
       );
       return;
@@ -79,7 +79,7 @@ export async function processBotRecording(
     ]);
 
     if (transcription.status === 'rejected') {
-      console.error(`[bot-transcribe] ${meetingId} transcription failed:`, transcription.reason);
+      console.error(`[transcribe-recording] ${meetingId} transcription failed:`, transcription.reason);
       await storePendingTranscript(meetingId, { status: 'failed' });
       return;
     }
@@ -87,7 +87,7 @@ export async function processBotRecording(
     const turns = diarization.status === 'fulfilled' ? diarization.value : [];
     if (diarization.status === 'rejected') {
       // Non-fatal: ship the transcript with default labels; the client can diarize.
-      console.error(`[bot-transcribe] ${meetingId} diarization failed:`, diarization.reason);
+      console.error(`[transcribe-recording] ${meetingId} diarization failed:`, diarization.reason);
     }
 
     const segments = assignSpeakers(transcription.value, turns, mergeOptions);
@@ -97,11 +97,11 @@ export async function processBotRecording(
       diarized: turns.length > 0,
     });
     console.log(
-      `[bot-transcribe] ${meetingId}: ${segments.length} segments ` +
+      `[transcribe-recording] ${meetingId}: ${segments.length} segments ` +
       `(diarized=${turns.length > 0}) in ${Date.now() - t0} ms`,
     );
   } catch (err) {
-    console.error(`[bot-transcribe] ${meetingId} failed:`, err);
+    console.error(`[transcribe-recording] ${meetingId} failed:`, err);
     await storePendingTranscript(meetingId, { status: 'failed' }).catch(() => {});
   }
 }

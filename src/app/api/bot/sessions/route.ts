@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { getBotServiceConfig, botFetch } from '@/lib/bot-service';
-import { setBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { setMeetingOwner } from '@/lib/pending-artifacts';
 
 // Starts a Teams bot-service session. Stateless: meetings live in the client's
 // IndexedDB, so the meeting URL is supplied by the client and the returned
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
   // can reject any other user who later supplies this meetingId. This is the only
   // server-side record of ownership (meetings themselves live in IndexedDB).
   try {
-    await setBotMeetingOwner(meetingId, session.user.id);
+    await setMeetingOwner(meetingId, session.user.id);
   } catch (err) {
     console.error('[bot/sessions] failed to record meeting owner:', err);
   }

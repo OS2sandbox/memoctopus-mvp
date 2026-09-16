@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
-import { getBotMeetingOwner, setBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
 import { armMeeting } from '@/lib/teams/meeting-arm';
 import { resolveJoinUrl } from '@/lib/teams/meeting-resolver';
@@ -62,13 +62,13 @@ export async function POST(req: NextRequest) {
   // will write this meeting's transcript and recording into it. Binding the id
   // to its owner here does two things: it stops another user's browser from
   // collecting these artifacts, and it makes the hand-off work at all — both
-  // /api/bot/audio and /api/bot/transcript deny by default when no owner is
+  // the pending-audio and pending-transcript routes deny by default when no owner is
   // recorded.
-  const existingOwner = await getBotMeetingOwner(meetingId);
+  const existingOwner = await getMeetingOwner(meetingId);
   if (existingOwner && existingOwner !== userId) {
     return NextResponse.json({ error: 'meeting-id-taken' }, { status: 409 });
   }
-  await setBotMeetingOwner(meetingId, userId);
+  await setMeetingOwner(meetingId, userId);
 
   // The client knows which *occurrence* of a recurring series it armed; Graph's
   // onlineMeeting only knows the series-level window. Prefer the occurrence, or

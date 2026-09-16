@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
-import { readPendingTranscript, deletePendingTranscript, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { readPendingTranscript, deletePendingTranscript, assertMeetingOwner } from '@/lib/pending-artifacts';
 
 // Client collects the server-side transcription of a Teams-bot recording
 // (kicked off by /api/bot/audio-upload the moment the bot uploaded the audio).
@@ -13,17 +13,17 @@ import { readPendingTranscript, deletePendingTranscript, assertBotMeetingOwner }
 //   { status: 'ready', segments, diarized } → done; the stash is deleted on hand-off
 export async function GET(
   _req: NextRequest,
-  { params }: { params: Promise<{ meetingId: string }> },
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const { meetingId } = await params;
+  const { id: meetingId } = await params;
 
   // Only the meeting's owner may read its server-side transcript. A non-owner gets
   // the same "no server-side run" response a stranger meetingId would yield, so the
   // transcript is never exposed and the destructive delete below is never reached.
-  if (!(await assertBotMeetingOwner(meetingId, session.user.id))) {
+  if (!(await assertMeetingOwner(meetingId, session.user.id))) {
     return NextResponse.json({ status: 'none' });
   }
 

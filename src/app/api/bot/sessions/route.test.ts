@@ -13,8 +13,8 @@ vi.mock('@/lib/bot-service', async (importOriginal) => {
   return { ...actual, getBotServiceConfig: vi.fn() };
 });
 
-vi.mock('@/lib/bot-pending-audio', () => ({
-  setBotMeetingOwner: vi.fn().mockResolvedValue(undefined),
+vi.mock('@/lib/pending-artifacts', () => ({
+  setMeetingOwner: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { POST } from './route';

@@ -8,25 +8,25 @@ vi.mock('@/lib/auth', () => ({
   auth: { api: { getSession: vi.fn() } },
 }));
 
-vi.mock('@/lib/bot-pending-audio', () => ({
+vi.mock('@/lib/pending-artifacts', () => ({
   readPendingTranscript: vi.fn(),
   deletePendingTranscript: vi.fn().mockResolvedValue(undefined),
-  assertBotMeetingOwner: vi.fn(),
+  assertMeetingOwner: vi.fn(),
 }));
 
 import { NextRequest } from 'next/server';
 import { GET } from './route';
 import { auth } from '@/lib/auth';
-import { readPendingTranscript, deletePendingTranscript, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { readPendingTranscript, deletePendingTranscript, assertMeetingOwner } from '@/lib/pending-artifacts';
 import { FAKE_SESSION } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockRead = vi.mocked(readPendingTranscript);
 const mockDelete = vi.mocked(deletePendingTranscript);
-const mockAssertOwner = vi.mocked(assertBotMeetingOwner);
+const mockAssertOwner = vi.mocked(assertMeetingOwner);
 
-const PARAMS = { params: Promise.resolve({ meetingId: 'm1' }) };
-const REQ = new NextRequest('http://localhost/api/bot/transcript/m1');
+const PARAMS = { params: Promise.resolve({ id: 'm1' }) };
+const REQ = new NextRequest('http://localhost/api/meetings/m1/pending-transcript');
 
 const SEGMENTS = [{ speaker: 'Taler 1', start: 0, end: 3, text: 'hej' }];
 
@@ -38,7 +38,7 @@ beforeEach(() => {
   mockAssertOwner.mockResolvedValue(true);
 });
 
-describe('GET /api/bot/transcript/[meetingId]', () => {
+describe('GET /api/meetings/[id]/pending-transcript', () => {
   it('returns 401 when no session exists', async () => {
     mockGetSession.mockResolvedValueOnce(null as never);
     const res = await GET(REQ, PARAMS);

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { getBotServiceConfig, botFetch } from '@/lib/bot-service';
-import { assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { assertMeetingOwner } from '@/lib/pending-artifacts';
 import { z } from 'zod';
 
 const bodySchema = z.object({
@@ -24,7 +24,7 @@ export async function POST(
   // Only the user who started this meeting's session may control it. Without this,
   // any authenticated user could stop/pause/abort another user's live recording by
   // supplying their (client-held) sessionId. Deny by default on an unbound meetingId.
-  if (!(await assertBotMeetingOwner(meetingId, session.user.id))) {
+  if (!(await assertMeetingOwner(meetingId, session.user.id))) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 

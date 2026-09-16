@@ -56,7 +56,7 @@ export async function collectTeamsArtifacts(meetingId: string): Promise<void> {
   while (Date.now() < deadline) {
     let res: Response;
     try {
-      res = await fetch(`/api/bot/audio/${meetingId}`);
+      res = await fetch(`/api/meetings/${meetingId}/pending-audio`);
     } catch {
       await new Promise((r) => setTimeout(r, AUDIO_COLLECT_RETRY_MS));
       continue;

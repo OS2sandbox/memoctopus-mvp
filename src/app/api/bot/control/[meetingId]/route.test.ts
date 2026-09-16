@@ -14,19 +14,19 @@ vi.mock('@/lib/bot-service', async (importOriginal) => {
   return { ...actual, getBotServiceConfig: vi.fn() };
 });
 
-vi.mock('@/lib/bot-pending-audio', () => ({
-  assertBotMeetingOwner: vi.fn(),
+vi.mock('@/lib/pending-artifacts', () => ({
+  assertMeetingOwner: vi.fn(),
 }));
 
 import { POST } from './route';
 import { auth } from '@/lib/auth';
 import { getBotServiceConfig } from '@/lib/bot-service';
-import { assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { assertMeetingOwner } from '@/lib/pending-artifacts';
 import { FAKE_SESSION } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockGetBotConfig = vi.mocked(getBotServiceConfig);
-const mockAssertOwner = vi.mocked(assertBotMeetingOwner);
+const mockAssertOwner = vi.mocked(assertMeetingOwner);
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 

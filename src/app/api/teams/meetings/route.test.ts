@@ -14,9 +14,9 @@ vi.mock('@/lib/teams/meeting-resolver', async (importOriginal) => {
 });
 vi.mock('@/lib/teams/meeting-arm', () => ({ armMeeting: vi.fn() }));
 vi.mock('@/lib/teams/store', () => ({ upsertTeamsMeeting: vi.fn() }));
-vi.mock('@/lib/bot-pending-audio', () => ({
-  getBotMeetingOwner: vi.fn(),
-  setBotMeetingOwner: vi.fn(),
+vi.mock('@/lib/pending-artifacts', () => ({
+  getMeetingOwner: vi.fn(),
+  setMeetingOwner: vi.fn(),
 }));
 
 import { POST } from './route';
@@ -25,15 +25,15 @@ import { GraphError } from '@/lib/teams/graph-client';
 import { armMeeting } from '@/lib/teams/meeting-arm';
 import { ResolveError, resolveJoinUrl } from '@/lib/teams/meeting-resolver';
 import { upsertTeamsMeeting } from '@/lib/teams/store';
-import { getBotMeetingOwner, setBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
 import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockResolve = vi.mocked(resolveJoinUrl);
 const mockArm = vi.mocked(armMeeting);
 const mockUpsert = vi.mocked(upsertTeamsMeeting);
-const mockGetOwner = vi.mocked(getBotMeetingOwner);
-const mockSetOwner = vi.mocked(setBotMeetingOwner);
+const mockGetOwner = vi.mocked(getMeetingOwner);
+const mockSetOwner = vi.mocked(setMeetingOwner);
 
 const URL_ = 'http://localhost/api/teams/meetings';
 const JOIN = 'https://teams.microsoft.com/l/meetup-join/19:meeting_abc@thread.v2/0';

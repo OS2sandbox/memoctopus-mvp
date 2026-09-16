@@ -35,7 +35,7 @@ async function collectServerTranscript(
   while (!isCancelled() && Date.now() < deadline) {
     let data: ServerTranscript;
     try {
-      const res = await fetch(`/api/bot/transcript/${meetingId}`);
+      const res = await fetch(`/api/meetings/${meetingId}/pending-transcript`);
       if (!res.ok) return null;
       data = await res.json() as ServerTranscript;
     } catch {

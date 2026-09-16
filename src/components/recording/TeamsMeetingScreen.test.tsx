@@ -49,7 +49,7 @@ function statusBody(overrides: Status = {}): Status {
   };
 }
 
-/** What GET /api/bot/audio/<id> answers with; overridden per test. */
+/** What GET /api/meetings/<id>/pending-audio answers with; overridden per test. */
 let audioResponse: unknown = null;
 
 function jsonAudio(body: unknown) {
@@ -64,7 +64,7 @@ function jsonAudio(body: unknown) {
 function respondWith(bodies: Status[] | Status) {
   const queue = Array.isArray(bodies) ? [...bodies] : null;
   mockFetch.mockImplementation(async (url: string) => {
-    if (String(url).startsWith('/api/bot/audio/')) {
+    if (String(url).startsWith('/api/meetings/')) {
       // Default: nothing to collect, so the screen continues straight on.
       return audioResponse ?? jsonAudio({ status: 'no-recording' });
     }

@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { storePendingAudio, storePendingTranscript, markNoRecording } from '@/lib/bot-pending-audio';
-import { processBotRecording } from '@/lib/bot-transcribe';
+import { storePendingAudio, storePendingTranscript, markNoRecording } from '@/lib/pending-artifacts';
+import { transcribeRecording } from '@/lib/transcribe-recording';
 import { withHandler } from '@/lib/api-handler';
 
 // Called by the bot service — authenticated with BOT_INTERNAL_SECRET, not a user session.
 //
 // The recording is stashed transiently (keyed by meetingId) rather than persisted:
 // meetings live in the user's browser IndexedDB, so the client pulls this audio down
-// via GET /api/bot/audio/[meetingId] and runs the normal client-side transcription
+// via GET /api/meetings/[id]/pending-audio and runs the normal client-side transcription
 // pipeline. Nothing is written to a server database.
 export const POST = withHandler('bot/audio-upload', async (req: NextRequest) => {
   const authHeader = req.headers.get('Authorization');
@@ -81,7 +81,7 @@ export const POST = withHandler('bot/audio-upload', async (req: NextRequest) => 
   await storePendingTranscript(meetingId, { status: 'processing' }).catch((err) => {
     console.error('[bot/audio-upload] storePendingTranscript failed for', meetingId, err);
   });
-  void processBotRecording(meetingId, buffer, mimeType);
+  void transcribeRecording(meetingId, buffer, mimeType);
 
   return NextResponse.json({ ok: true });
 });
