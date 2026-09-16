@@ -49,7 +49,6 @@ export async function createMeeting(data: {
     audioDurationSeconds: null,
     audioSizeBytes: 0,
     audioDeleted: false,
-    botSession: null,
   };
   // Only write the Teams fields that were actually supplied, so a local recording's
   // record stays free of undefined keys.

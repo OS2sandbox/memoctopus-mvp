@@ -24,7 +24,7 @@ interface ServerTranscript {
   diarized?: boolean;
 }
 
-// Collect the transcript that the server began producing when the bot uploaded the
+// Collect the transcript that the server began producing when it stashed the
 // recording. Resolves null when there is no server-side run (e.g. an uploaded file
 // resumed after a refresh), it failed, or the deadline passes — callers fall back.
 async function collectServerTranscript(

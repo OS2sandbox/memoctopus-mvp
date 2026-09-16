@@ -44,8 +44,9 @@ export async function ensureUserSchema(userId: string): Promise<void> {
     `);
 
     // Microsoft Graph / Teams: a meeting is armed and waits for Teams to finish
-    // recording + transcribing it. Replaces 'joining' for the Graph flow;
-    // 'joining' stays for the legacy Playwright bot until it is removed.
+    // recording + transcribing it. This replaced the removed bot's 'joining'.
+    // That value stays in the enum because Postgres cannot drop one, and an
+    // existing database already carries it. Nothing writes it any more.
     await client.query(`
       ALTER TYPE "${schema}".meeting_status ADD VALUE IF NOT EXISTS 'awaiting_teams'
     `);

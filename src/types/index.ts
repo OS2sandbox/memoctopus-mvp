@@ -1,9 +1,10 @@
 // `awaiting_teams` is the Graph-era pre-meeting state: Memoctopus is armed on the
 // meeting and we are waiting for Teams to hold it and produce its artifacts.
-// `joining` is the legacy bot-service state, kept until the bot is removed.
+// The removed bot's `joining` state is gone from this union. Its Postgres enum
+// value stays, since a value cannot be dropped from a Postgres enum, and an old
+// IndexedDB record may still carry it.
 export type MeetingStatus =
   | 'awaiting_teams'
-  | 'joining'
   | 'recording'
   | 'processing'
   | 'review'

@@ -4,7 +4,7 @@ import { auth } from '@/lib/auth';
 import { readPendingTranscript, deletePendingTranscript, assertMeetingOwner } from '@/lib/pending-artifacts';
 
 // Client collects the server-side transcription of a Teams-bot recording
-// (kicked off by /api/bot/audio-upload the moment the bot uploaded the audio).
+// (kicked off by the Graph pipeline as soon as it has the recording).
 //
 //   { status: 'none' }                → no server-side run for this meeting — the
 //                                       client drives transcription itself

@@ -1,8 +1,8 @@
 /**
  * Teams meeting URL validation and join-context parsing.
  *
- * Ported from the bot-service validator (`bot-service/src/lib/url-validator.ts`)
- * so the Next.js side can reject a link before it ever reaches Microsoft Graph.
+ * Rejects a link before it ever reaches Microsoft Graph. Ported from the
+ * removed bot-service's url-validator (see tag bot-service-final).
  * Acceptance criteria are deliberately tight:
  *   - parses as a URL after trimming surrounding whitespace
  *   - the scheme is https (no protocol downgrade, no `javascript:` smuggling)

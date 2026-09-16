@@ -234,10 +234,6 @@ describe('createMeeting', () => {
     expect(m.audioDeleted).toBe(false);
   });
 
-  it('initialises botSession to null', async () => {
-    const m = await createMeeting({ title: 'Test' });
-    expect(m.botSession).toBeNull();
-  });
 
   it('persists the meeting so getMeeting can retrieve it', async () => {
     const m = await createMeeting({ title: 'Persisted' });

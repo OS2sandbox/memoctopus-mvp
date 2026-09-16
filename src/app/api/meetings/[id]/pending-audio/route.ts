@@ -5,7 +5,7 @@ import { readPendingMeta, readPendingAudio, deletePendingAudio, assertMeetingOwn
 import { withHandler } from '@/lib/api-handler';
 
 // Client pulls down a finished Teams-bot recording so it can be saved into IndexedDB
-// and transcribed client-side. The bot stashes audio here via /api/bot/audio-upload.
+// and transcribed client-side. The Graph pipeline stashes the audio here.
 //
 //   404 → not ready yet (bot still recording / uploading) — keep polling
 //   200 + JSON { status: 'no-recording', participants, durationSeconds }

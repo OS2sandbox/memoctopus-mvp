@@ -133,9 +133,9 @@ export async function storePendingAudio(
   await fs.writeFile(metaPath(meetingId), JSON.stringify(full));
 }
 
-// Records that the run finished with no usable recording — the bot was never
-// admitted, the user aborted, or (the Teams/Graph path) the meeting was
-// transcript-only. The client polls and gets `{ status: 'no-recording' }`.
+// Records that the run finished with no usable recording: either the meeting was
+// transcript-only, or Teams produced no recording at all. The client polls and
+// gets `{ status: 'no-recording' }`.
 //
 // `meta` still matters when there is no audio: Teams' transcript names every
 // speaker, and those names are what pre-fills the participant list in

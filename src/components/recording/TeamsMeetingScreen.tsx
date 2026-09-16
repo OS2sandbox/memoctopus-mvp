@@ -43,9 +43,9 @@ export const ORGANIZER_REQUEST =
   'Kan du slå "Optag og transskriber automatisk" til i mødeindstillingerne for dette møde? Så laver Memoctopus referatet automatisk.';
 
 /**
- * Pull the artifacts the Graph pipeline stashed server-side into IndexedDB, the
- * way MeetingBotScreen does for the Playwright bot. Without this the review
- * screen opens on an empty IndexedDB and fails with "Lydfil ikke fundet".
+ * Pull the artifacts the Graph pipeline stashed server-side into IndexedDB.
+ * Without this the review screen opens on an empty IndexedDB and fails with
+ * "Lydfil ikke fundet".
  *
  * Three answers: 404 (not stashed yet — keep asking), `no-recording` (a
  * transcript-only meeting: no audio exists, but the speaker names do), or the

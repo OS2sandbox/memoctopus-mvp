@@ -4,7 +4,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { ProcessStrip, ProcessPhase } from '@/components/layout/ProcessStrip';
 import { RecordingScreen } from '@/components/recording/RecordingScreen';
-import { MeetingBotScreen } from '@/components/recording/MeetingBotScreen';
+import { LegacyBotMeetingScreen } from '@/components/recording/LegacyBotMeetingScreen';
 import { TeamsMeetingScreen } from '@/components/recording/TeamsMeetingScreen';
 import { TranscriptReview } from '@/components/transcript/TranscriptReview';
 import { MinutesEditor } from '@/components/minutes/MinutesEditor';
@@ -247,13 +247,15 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
         />
       )}
 
-      {/* Legacy Playwright-bot meetings (status 'joining'/'recording') keep the
-          old screen until the bot service is removed in the cleanup phase. */}
+      {/* Teams meetings from before the Graph integration, left behind in this
+          browser's IndexedDB by the removed Playwright bot. Nothing can finish
+          them, so the screen explains that and offers the transcript or a delete
+          rather than rendering an empty recording view. */}
       {activeTab === 'recording' && isTeamsMeeting && meeting.status !== 'awaiting_teams' && (
-        <MeetingBotScreen
+        <LegacyBotMeetingScreen
           meetingId={meetingId}
-          meetingUrl={meeting.meetingUrl ?? ''}
-          botSession={meeting.botSession ?? null}
+          hasTranscript={Boolean(transcript)}
+          onOpenReview={() => switchTab('review')}
         />
       )}
 

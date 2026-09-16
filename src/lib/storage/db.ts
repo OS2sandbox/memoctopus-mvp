@@ -19,9 +19,6 @@ export interface StoredMeeting {
   audioDurationSeconds: number | null;
   audioSizeBytes: number;
   audioDeleted: boolean;
-  // Active Teams bot-service session id (null when not a bot meeting / not joined).
-  // Legacy: removed together with the bot-service in the cleanup phase.
-  botSession?: string | null;
   // Microsoft Graph ("Memoctopus slået til") state, mirrored from the server-side
   // teams_meetings row so the meeting list and the awaiting screen can render
   // without a round-trip. All optional — meetings created before this existed, and

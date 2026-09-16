@@ -91,8 +91,6 @@ services:
       - DIARIZATION_URL=${DIARIZATION_URL}
       - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
       - AUDIO_STORAGE_PATH=/audio-storage
-      - BOT_SERVICE_URL=http://bot-service:3001
-      - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
       - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:8080}
       # Auth. All read at runtime — change these and `up -d app` is enough, no rebuild.
       - EMAIL_PASSWORD_ENABLED=${EMAIL_PASSWORD_ENABLED:-}
@@ -135,8 +133,6 @@ services:
     networks:
       - internal
     depends_on:
-      bot-service:
-        condition: service_healthy
       db:
         condition: service_healthy
       migrate:
@@ -150,40 +146,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    restart: unless-stopped
-
-  bot-service:
-    build:
-      context: ./bot-service
-      dockerfile: Dockerfile
-    # No public port binding — only the app service needs to reach this via
-    # the internal Docker network (http://bot-service:3001). Exposing it
-    # publicly would bypass the Next.js proxy and its auth checks.
-    environment:
-      - BOT_PORT=3001
-      - NEXT_APP_URL=http://app:3000
-      - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
-      - BOT_MAX_SESSIONS=${BOT_MAX_SESSIONS:-5}
-      # Chromium runs headed against Xvfb (started by entrypoint.sh) so Teams'
-      # anti-bot heuristics don't detect headless mode and trigger post-
-      # admission "Leaving..." cascades. Override to true only for debugging.
-      - HEADLESS=false
-      - DISPLAY=:99
-      # Capture prejoin/launcher screenshots to /tmp/bot-snap-*.png for debugging.
-      - BOT_DEBUG_SNAPSHOTS=${BOT_DEBUG_SNAPSHOTS:-0}
-    networks:
-      - internal
-    shm_size: "2gb"
-    mem_limit: 6g
-    memswap_limit: 6g
-    oom_score_adj: 500
-    stop_grace_period: 120s
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
     restart: unless-stopped
 
 networks:
