@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { signIn } from '@/lib/auth-client';
-import { saveAudio, updateMeeting, deleteMeeting } from '@/lib/storage';
+import { updateMeeting, deleteMeeting } from '@/lib/storage';
 
 export interface TeamsMeetingScreenProps {
   meetingId: string;
@@ -30,9 +30,9 @@ export type TeamsArmResult = 'armed' | 'not_organizer' | 'policy_blocked';
 
 const ADMIN_GUIDE = '/docs/setup-microsoft-teams.md';
 
-/** How long to keep asking for the stashed recording before giving up on it. */
-const AUDIO_COLLECT_DEADLINE_MS = 2 * 60_000;
-const AUDIO_COLLECT_RETRY_MS = 500;
+/** How long to keep asking for the run’s meta record before giving up on it. */
+const META_COLLECT_DEADLINE_MS = 2 * 60_000;
+const META_COLLECT_RETRY_MS = 500;
 
 const FAST_POLL_MS = 15_000;
 const SLOW_POLL_MS = 60_000;
@@ -43,61 +43,39 @@ export const ORGANIZER_REQUEST =
   'Kan du slå "Optag og transskriber automatisk" til i mødeindstillingerne for dette møde? Så laver Memoctopus referatet automatisk.';
 
 /**
- * Pull the artifacts the Graph pipeline stashed server-side into IndexedDB.
- * Without this the review screen opens on an empty IndexedDB and fails with
- * "Lydfil ikke fundet".
+ * Fill in what the server-side run produced before Gennemgang opens: the speaker
+ * names Teams gave us, and the meeting duration.
  *
- * Three answers: 404 (not stashed yet — keep asking), `no-recording` (a
- * transcript-only meeting: no audio exists, but the speaker names do), or the
- * wav itself.
+ * No audio is collected, because none is stashed. Graph publishes nothing until a
+ * meeting has ended, so the recording is transcribed server-side and dropped, and
+ * the transcript itself is collected by ProcessingTranscription. Without this step
+ * the review screen would open with an empty participant list.
+ *
+ * Two answers: 404 (the run has not finished — keep asking) or the meta record.
  */
 export async function collectTeamsArtifacts(meetingId: string): Promise<void> {
-  const deadline = Date.now() + AUDIO_COLLECT_DEADLINE_MS;
+  const deadline = Date.now() + META_COLLECT_DEADLINE_MS;
   while (Date.now() < deadline) {
     let res: Response;
     try {
-      res = await fetch(`/api/meetings/${meetingId}/pending-audio`);
+      res = await fetch(`/api/meetings/${meetingId}/pending-meta`);
     } catch {
-      await new Promise((r) => setTimeout(r, AUDIO_COLLECT_RETRY_MS));
+      await new Promise((r) => setTimeout(r, META_COLLECT_RETRY_MS));
       continue;
     }
     if (res.status === 404) {
-      await new Promise((r) => setTimeout(r, AUDIO_COLLECT_RETRY_MS));
+      await new Promise((r) => setTimeout(r, META_COLLECT_RETRY_MS));
       continue;
     }
 
-    const ctype = res.headers.get('content-type') ?? '';
-    if (ctype.includes('application/json')) {
-      // Transcript-only: the transcript is collected by ProcessingTranscription;
-      // all that is needed here are the speaker names from the Teams transcript.
-      const body = (await res.json().catch(() => ({}))) as {
-        participants?: string[];
-        durationSeconds?: number | null;
-      };
-      await updateMeeting(meetingId, {
-        status: 'processing',
-        audioDurationSeconds: body.durationSeconds ?? null,
-        ...(body.participants?.length ? { participants: body.participants } : {}),
-      });
-      return;
-    }
-
-    const blob = await res.blob();
-    const mimeType = ctype || 'audio/wav';
-    const partsHeader = res.headers.get('X-Participants');
-    const durHeader = res.headers.get('X-Duration');
-    let parts: string[] = [];
-    if (partsHeader) {
-      try { parts = JSON.parse(decodeURIComponent(partsHeader)); } catch { /* ignore */ }
-    }
-    const duration = durHeader ? parseInt(durHeader, 10) : NaN;
-
-    await saveAudio(meetingId, blob, mimeType);
+    const body = (await res.json().catch(() => ({}))) as {
+      participants?: string[];
+      durationSeconds?: number | null;
+    };
     await updateMeeting(meetingId, {
       status: 'processing',
-      audioSizeBytes: blob.size,
-      audioDurationSeconds: Number.isFinite(duration) ? duration : null,
-      ...(parts.length > 0 ? { participants: parts } : {}),
+      audioDurationSeconds: body.durationSeconds ?? null,
+      ...(body.participants?.length ? { participants: body.participants } : {}),
     });
     return;
   }

@@ -168,7 +168,9 @@ async function runPipeline(
     const meta = await readPendingMeta(meeting.id);
     return {
       status: 'ready',
-      mode: meta?.hasRecording ? 'recording+transcript' : 'transcript-only',
+      // The stash does not record which mode produced it, so this reports what the
+      // current configuration would run. Nothing consumes `mode` beyond logging.
+      mode: artifactMode() === 'transcript-only' ? 'transcript-only' : 'recording+transcript',
       speakers: meta?.participants ?? [],
       transcriptId: null,
       recordingId: null,

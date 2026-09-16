@@ -27,10 +27,6 @@ function assertSafeId(meetingId: string): void {
   }
 }
 
-function audioPath(meetingId: string): string {
-  return path.join(rootDir(), `${meetingId}.audio`);
-}
-
 function metaPath(meetingId: string): string {
   return path.join(rootDir(), `${meetingId}.meta.json`);
 }
@@ -74,10 +70,8 @@ export async function assertMeetingOwner(meetingId: string, userId: string): Pro
 }
 
 export interface PendingMeta {
-  mimeType: string;
   participants: string[];
   durationSeconds: number | null;
-  hasRecording: boolean;
   createdAt: number;
 }
 
@@ -107,7 +101,7 @@ async function sweep(): Promise<void> {
             const meta = JSON.parse(await fs.readFile(path.join(dir, f), 'utf8')) as { createdAt: number };
             if (now - meta.createdAt > TTL_MS) {
               const id = f.replace(/\.(meta|transcript|owner)\.json$/, '');
-              await deletePendingAudio(id);
+              await deletePendingMeta(id);
               await deletePendingTranscript(id);
               await fs.unlink(ownerPath(id)).catch(() => {});
             }
@@ -121,18 +115,6 @@ async function sweep(): Promise<void> {
   } catch { /* dir may not exist yet */ }
 }
 
-export async function storePendingAudio(
-  meetingId: string,
-  buffer: Buffer,
-  meta: Omit<PendingMeta, 'createdAt'>,
-): Promise<void> {
-  assertSafeId(meetingId);
-  await fs.mkdir(rootDir(), { recursive: true });
-  await sweep();
-  const full: PendingMeta = { ...meta, createdAt: Date.now() };
-  await fs.writeFile(audioPath(meetingId), buffer);
-  await fs.writeFile(metaPath(meetingId), JSON.stringify(full));
-}
 
 // Records that the run finished with no usable recording: either the meeting was
 // transcript-only, or Teams produced no recording at all. The client polls and
@@ -148,10 +130,8 @@ export async function markNoRecording(
   assertSafeId(meetingId);
   await fs.mkdir(rootDir(), { recursive: true });
   const full: PendingMeta = {
-    mimeType: '',
     participants: meta.participants ?? [],
     durationSeconds: meta.durationSeconds ?? null,
-    hasRecording: false,
     createdAt: Date.now(),
   };
   await fs.writeFile(metaPath(meetingId), JSON.stringify(full));
@@ -169,21 +149,10 @@ export async function readPendingMeta(meetingId: string): Promise<PendingMeta | 
   }
 }
 
-export async function readPendingAudio(meetingId: string): Promise<Buffer | null> {
-  assertSafeId(meetingId);
-  try {
-    return await fs.readFile(audioPath(meetingId));
-  } catch {
-    return null;
-  }
-}
 
-export async function deletePendingAudio(meetingId: string): Promise<void> {
+export async function deletePendingMeta(meetingId: string): Promise<void> {
   assertSafeId(meetingId);
-  await Promise.all([
-    fs.unlink(audioPath(meetingId)).catch(() => {}),
-    fs.unlink(metaPath(meetingId)).catch(() => {}),
-  ]);
+  await fs.unlink(metaPath(meetingId)).catch(() => {});
 }
 
 export async function storePendingTranscript(
@@ -192,6 +161,11 @@ export async function storePendingTranscript(
 ): Promise<void> {
   assertSafeId(meetingId);
   await fs.mkdir(rootDir(), { recursive: true });
+  // The TTL sweep hangs off this write because every run reaches it, including a
+  // run that ends in `failed`. It used to hang off storePendingAudio, which no
+  // run calls any more — and which the bot's failed runs never called either,
+  // which is why production's volume still holds meta files from July.
+  await sweep();
   const full: PendingTranscript = { ...transcript, createdAt: Date.now() };
   await fs.writeFile(transcriptPath(meetingId), JSON.stringify(full));
 }

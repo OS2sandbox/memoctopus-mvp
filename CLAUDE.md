@@ -60,16 +60,25 @@ Auth config is deliberately **runtime-only**, never `NEXT_PUBLIC_*`: an operator
 4. `src/lib/ai/minutes.ts` — Meeting minutes generation using OpenAI `gpt-4o`. Prompts are in Danish.
 5. `src/lib/ai/clarifications.ts` — Generates clarification questions about ambiguous content.
 
-**Pending-artifact hand-off**: a server-side run (the Graph pipeline) stashes its
-output on disk under `${AUDIO_STORAGE_PATH}/bot-pending` via
-`src/lib/pending-artifacts.ts`, and the browser collects it through
-`GET /api/meetings/[id]/pending-audio` and `/pending-transcript`, which delete the
-stashed copy as they hand it over. Both are session-gated and additionally check an
-owner file, so one user cannot collect another's artifacts.
-`pending-transcript` is polled for *every* meeting, local recordings included, where
-it answers `{ status: 'none' }` and the client falls back to its own batch pass.
-`src/lib/transcribe-recording.ts` (`transcribeRecording`) is the server-side
-transcription pass over a finished recording.
+**Pending-artifact hand-off**: the Graph pipeline runs long after whoever armed the
+meeting closed the tab, and meetings live in the browser, so it stashes its output on
+disk under `${AUDIO_STORAGE_PATH}/pending-artifacts` via
+`src/lib/pending-artifacts.ts`. The browser collects it through
+`GET /api/meetings/[id]/pending-meta` (speaker names and duration) and
+`/pending-transcript` (the segments), both of which delete the stashed record as they
+hand it over. Both are session-gated and additionally check an owner file, so one
+user cannot collect another's artifacts. `pending-transcript` is polled for *every*
+meeting, local recordings included, where it answers `{ status: 'none' }` and the
+client falls back to its own batch pass. `src/lib/transcribe-recording.ts`
+(`transcribeRecording`) is the server-side transcription pass over a recording.
+
+**Raw meeting audio never reaches the browser from a Teams meeting.** Graph publishes
+nothing until a meeting has ended and the poller will not ask before `scheduled_end`,
+so nobody can follow a Teams meeting live here and nobody has a reason to hold the
+audio afterwards. All three pipeline modes therefore transcribe server-side and then
+call `markNoRecording()`; there is no code path that stashes audio, and
+`pending-artifacts.ts` exposes none. Enforced per mode in `pipeline.test.ts`, so a
+fourth mode that stashed audio would fail the suite.
 
 **Meeting status flow**: `awaiting_teams` (Teams/Graph) or `recording` (in person) →
 `processing` → `review` → `minutes` → `done` (also `redacted`, `failed`). The Postgres

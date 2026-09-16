@@ -64,10 +64,8 @@ describe('readPendingMeta', () => {
 
   it('returns the parsed meta when the file is valid', async () => {
     const meta = {
-      mimeType: 'audio/webm',
       participants: ['Alice'],
       durationSeconds: 120,
-      hasRecording: true,
       createdAt: 1_000_000,
     };
     vi.mocked(fs.readFile).mockResolvedValueOnce(Buffer.from(JSON.stringify(meta)));
@@ -206,14 +204,13 @@ describe('markNoRecording', () => {
     await markNoRecording('m1');
     const [, payload] = vi.mocked(fs.writeFile).mock.calls.at(-1)!;
     expect(JSON.parse(payload as string)).toMatchObject({
-      hasRecording: false,
       participants: [],
       durationSeconds: null,
     });
   });
 
   it('keeps the speaker names of a transcript-only meeting', async () => {
-    // Mode 2 has no audio, but Teams' transcript still names every speaker —
+    // No mode stashes audio, but Teams' transcript still names every speaker, and
     // that is what pre-fills the participant list in Gennemgang.
     await markNoRecording('m1', {
       participants: ['Mette Hansen', 'Jens Poulsen'],
@@ -222,7 +219,6 @@ describe('markNoRecording', () => {
 
     const [, payload] = vi.mocked(fs.writeFile).mock.calls.at(-1)!;
     expect(JSON.parse(payload as string)).toMatchObject({
-      hasRecording: false,
       participants: ['Mette Hansen', 'Jens Poulsen'],
       durationSeconds: 540,
     });

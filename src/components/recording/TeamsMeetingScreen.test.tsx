@@ -49,10 +49,10 @@ function statusBody(overrides: Status = {}): Status {
   };
 }
 
-/** What GET /api/meetings/<id>/pending-audio answers with; overridden per test. */
-let audioResponse: unknown = null;
+/** What GET /api/meetings/<id>/pending-meta answers with; overridden per test. */
+let metaResponse: unknown = null;
 
-function jsonAudio(body: unknown) {
+function jsonMeta(body: unknown) {
   return {
     ok: true,
     status: 200,
@@ -66,7 +66,7 @@ function respondWith(bodies: Status[] | Status) {
   mockFetch.mockImplementation(async (url: string) => {
     if (String(url).startsWith('/api/meetings/')) {
       // Default: nothing to collect, so the screen continues straight on.
-      return audioResponse ?? jsonAudio({ status: 'no-recording' });
+      return metaResponse ?? jsonMeta({ status: 'no-recording' });
     }
     const body = queue ? (queue.length > 1 ? queue.shift()! : queue[0]) : (bodies as Status);
     return { ok: true, status: 200, json: async () => body };
@@ -79,7 +79,7 @@ function renderScreen(url = MEETING_URL) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  audioResponse = null;
+  metaResponse = null;
   mockSaveAudio.mockResolvedValue(undefined);
   mockUpdateMeeting.mockResolvedValue(undefined);
   mockDeleteMeeting.mockResolvedValue(undefined);
@@ -171,35 +171,32 @@ describe('TeamsMeetingScreen — ready', () => {
     });
   });
 
-  it('downloads the stashed recording into IndexedDB before routing', async () => {
-    // Without this the review screen opens on an empty IndexedDB and
-    // ProcessingTranscription fails with "Lydfil ikke fundet".
-    const blob = new Blob(['wav'], { type: 'audio/wav' });
-    audioResponse = {
-      ok: true,
-      status: 200,
-      headers: new Headers({
-        'content-type': 'audio/wav',
-        'X-Participants': encodeURIComponent(JSON.stringify(['Mette Hansen', 'Jens Poulsen'])),
-        'X-Duration': '540',
-      }),
-      blob: async () => blob,
-    };
+  // A Graph meeting publishes nothing until it has ended, so the recording is
+  // transcribed server-side and dropped. The client collects the speaker names and
+  // duration, never the audio, and must not write any into IndexedDB.
+  it('collects the names and duration without saving any audio', async () => {
+    metaResponse = jsonMeta({
+      status: 'no-recording',
+      participants: ['Mette Hansen', 'Jens Poulsen'],
+      durationSeconds: 540,
+    });
     respondWith(statusBody({ state: 'ready' }));
 
     renderScreen();
 
-    await waitFor(() => expect(mockSaveAudio).toHaveBeenCalledWith(MEETING_ID, blob, 'audio/wav'));
-    expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, expect.objectContaining({
-      status: 'processing',
-      participants: ['Mette Hansen', 'Jens Poulsen'],
-      audioDurationSeconds: 540,
-    }));
-    expect(mockPush).toHaveBeenCalledWith(`/meeting/${MEETING_ID}/review`);
+    await waitFor(() =>
+      expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, expect.objectContaining({
+        status: 'processing',
+        participants: ['Mette Hansen', 'Jens Poulsen'],
+        audioDurationSeconds: 540,
+      })),
+    );
+    expect(mockSaveAudio).not.toHaveBeenCalled();
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/meeting/${MEETING_ID}/review`));
   });
 
   it('keeps the Teams speaker names in transcript-only mode, with no audio', async () => {
-    audioResponse = jsonAudio({
+    metaResponse = jsonMeta({
       status: 'no-recording',
       participants: ['Mette Hansen'],
       durationSeconds: 300,

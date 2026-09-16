@@ -281,6 +281,9 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
           audioUrl={audioUrl}
           audioDurationSeconds={audioFile?.durationSeconds}
           audioDeleted={meeting.audioDeleted && meeting.status !== 'recording' && meeting.status !== 'processing'}
+          // A Teams meeting's audio is transcribed on the server and discarded, so
+          // none was ever stored here. `audioDeleted` would be the wrong word for it.
+          audioDiscarded={isTeamsMeeting && !meeting.audioDeleted}
           initialChapters={transcript.chapters}
           participants={meeting.participants}
           initialDiarizing={transcript.diarizationStatus === 'pending'}
