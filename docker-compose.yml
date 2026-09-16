@@ -100,6 +100,20 @@ services:
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-}
+      # Teams via Microsoft Graph. Runtime-only, like the auth block above.
+      # Unset is fine everywhere — the code defaults to public Graph, da-DK,
+      # prefer-recording, a 120s poll, and the poller enabled.
+      - GRAPH_BASE_URL=${GRAPH_BASE_URL:-}
+      - TEAMS_SPOKEN_LANGUAGE=${TEAMS_SPOKEN_LANGUAGE:-}
+      # prefer-recording (default) re-transcribes Teams' recording with hviske and
+      # takes speaker names from the VTT; transcript-only skips the download,
+      # the ffmpeg transcode and the audio-at-rest entirely.
+      - TEAMS_ARTIFACT_MODE=${TEAMS_ARTIFACT_MODE:-}
+      - TEAMS_POLL_INTERVAL_MS=${TEAMS_POLL_INTERVAL_MS:-}
+      # Set true on any instance that must not poll Graph (build/CI containers).
+      # Instances are already serialised by a Postgres advisory lock, so leaving
+      # it unset on several replicas is safe.
+      - TEAMS_POLLER_DISABLED=${TEAMS_POLLER_DISABLED:-}
       # Generic OIDC (Keycloak, Authentik, any compliant IdP).
       - OIDC_ENABLED=${OIDC_ENABLED:-}
       - OIDC_PROVIDER_ID=${OIDC_PROVIDER_ID:-}

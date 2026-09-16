@@ -107,6 +107,75 @@ Models used: `syvai/hviske-ensemble` (public, no token) and
 `pyannote/speaker-diarization-community-1` (gated — needs an `HF_TOKEN` whose
 account accepted the terms once; access is auto-granted).
 
+## Microsoft login and Teams referater
+
+Microsoft Entra ID is configured separately from the generic OIDC provider below,
+because it does double duty: it signs users in **and** it is how Memoctopus reaches
+Microsoft Graph to collect Teams transcripts. Like all auth configuration it is read
+at runtime — `docker compose up -d app` is enough, no `--build`.
+
+Microsoft login enables itself as soon as `MICROSOFT_CLIENT_ID` and
+`MICROSOFT_CLIENT_SECRET` are set; `MICROSOFT_ENABLED=false` is a kill switch.
+
+1. In **Entra admin center → App registrations**, register this redirect URI as
+   type *Web*:
+
+   ```
+   <BETTER_AUTH_URL>/api/auth/callback/microsoft
+   ```
+
+   Entra permits plain `http` only for `localhost`, so a real deployment must be
+   on https. `BETTER_AUTH_URL` is the single source of truth for the app's own
+   URLs — nothing is derived from request headers, so a mismatch here breaks
+   OAuth silently.
+
+2. Fill in `.env`:
+
+   ```bash
+   MICROSOFT_CLIENT_ID=...
+   MICROSOFT_CLIENT_SECRET=...
+   MICROSOFT_TENANT_ID=...        # the customer's real tenant id
+   ```
+
+   **⚠️ Set the real tenant id.** Left blank it falls back to `common`
+   (multi-tenant), and tenant-wide admin consent will not apply.
+
+3. For Teams referater, the same app registration needs these **delegated**
+   Microsoft Graph permissions, with **admin consent granted** for the
+   organisation:
+
+   | Permission | Used for |
+   |---|---|
+   | `OnlineMeetings.ReadWrite` | Turning on automatic transcription per meeting |
+   | `OnlineMeetingTranscript.Read.All` | Fetching the transcript afterwards |
+   | `OnlineMeetingRecording.Read.All` | Fetching the recording afterwards |
+   | `Calendars.Read` | Listing the user's upcoming Teams meetings |
+   | `User.Read`, `offline_access` | Identity, and refreshing access without re-login |
+
+   Delegated means the app never sees more than the signed-in user can see — only
+   that user's own meetings. Without admin consent each user is prompted
+   individually, which most municipal users cannot approve themselves.
+
+4. In **Teams admin center → Meetings → Meeting policies**, set *Transcription*
+   and *Meeting recording* to **On**. Both are required; without them Graph
+   accepts the request but Teams ignores it, and the app reports
+   `policy_blocked`. Allow up to an hour for the policy to propagate.
+
+The full admin guide, written in Danish for the customer's own IT department, ships
+with the app at `public/docs/setup-microsoft-teams.md` and is linked from the error
+screens.
+
+**Existing users must sign in again.** Consented scopes are stored per account at
+login, so users who signed in before step 3 keep a token with the old scope list.
+The dashboard shows them a "Giv adgang igen" button until they re-authenticate;
+this is expected, not a fault.
+
+Behaviour is tuned with the `TEAMS_*` variables in `.env.deploy.example`. The one
+worth a deliberate decision is `TEAMS_ARTIFACT_MODE`: `prefer-recording` (default)
+downloads the Teams recording and re-transcribes it locally with hviske, while
+`transcript-only` uses Teams' own text transcript and never downloads audio —
+the right choice for a customer who does not want meeting audio at rest here.
+
 ## Single sign-on (OIDC)
 
 Memoctopus can sign users in against any standards-compliant OIDC provider —
