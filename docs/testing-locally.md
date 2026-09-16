@@ -128,7 +128,7 @@ for Teams (Business Basic or higher, or E3/E5).
    - A client secret.
    - API permissions → Microsoft Graph → *Delegated*: `OnlineMeetings.ReadWrite`,
      `OnlineMeetingTranscript.Read.All`, `OnlineMeetingRecording.Read.All`,
-     `Calendars.Read`, `User.Read`, `offline_access` → **Grant admin consent**.
+     `User.Read`, `offline_access` → **Grant admin consent**.
 2. **Teams admin center** → Meetings → Meeting policies → Global → Recording &
    transcription: *Transcription* **On**, *Meeting recording* **On**. Takes up to
    an hour to propagate. Without both, arming reports `policy_blocked`.

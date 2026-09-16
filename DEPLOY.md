@@ -142,14 +142,14 @@ Microsoft login enables itself as soon as `MICROSOFT_CLIENT_ID` and
 
 3. For Teams referater, the same app registration needs these **delegated**
    Microsoft Graph permissions, with **admin consent granted** for the
-   organisation:
+   organisation. All three are scoped to individual meetings the user is already
+   party to — no calendar or mailbox access is requested:
 
    | Permission | Used for |
    |---|---|
    | `OnlineMeetings.ReadWrite` | Turning on automatic transcription per meeting |
    | `OnlineMeetingTranscript.Read.All` | Fetching the transcript afterwards |
    | `OnlineMeetingRecording.Read.All` | Fetching the recording afterwards |
-   | `Calendars.Read` | Listing the user's upcoming Teams meetings |
    | `User.Read`, `offline_access` | Identity, and refreshing access without re-login |
 
    Delegated means the app never sees more than the signed-in user can see — only

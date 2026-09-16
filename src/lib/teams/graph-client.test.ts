@@ -104,7 +104,7 @@ describe('getGraphAccessToken', () => {
   });
 
   it('throws consent_required listing the missing Graph scopes', async () => {
-    okToken('openid profile email offline_access Calendars.Read');
+    okToken('openid profile email offline_access User.Read');
     const err = await getGraphAccessToken('u').catch((e) => e);
     expect(err.code).toBe('consent_required');
     expect(err.status).toBe(403);
@@ -117,7 +117,7 @@ describe('getGraphAccessToken', () => {
 
   it('does not treat missing OIDC scopes as a consent gap', async () => {
     okToken(
-      'OnlineMeetings.ReadWrite OnlineMeetingTranscript.Read.All OnlineMeetingRecording.Read.All Calendars.Read',
+      'OnlineMeetings.ReadWrite OnlineMeetingTranscript.Read.All OnlineMeetingRecording.Read.All User.Read',
     );
     await expect(getGraphAccessToken('u')).resolves.toBe('tok-123');
   });
@@ -137,7 +137,6 @@ describe('hasGraphScopes', () => {
         'OnlineMeetings.ReadWrite',
         'OnlineMeetingTranscript.Read.All',
         'OnlineMeetingRecording.Read.All',
-        'Calendars.Read',
       ],
     });
   });

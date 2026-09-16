@@ -35,17 +35,6 @@ vi.mock('@/lib/auth-client', () => ({
   signIn: { social: (...args: unknown[]) => mockSignInSocial(...args) },
 }));
 
-// The Teams section has its own test file; here we only care that it mounts.
-vi.mock('@/components/dashboard/UpcomingTeamsMeetings', async () => {
-  const actual = await vi.importActual<typeof import('@/components/dashboard/UpcomingTeamsMeetings')>(
-    '@/components/dashboard/UpcomingTeamsMeetings',
-  );
-  return {
-    armErrorMessage: actual.armErrorMessage,
-    UpcomingTeamsMeetings: () => <div data-testid="upcoming-teams-meetings" />,
-  };
-});
-
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
@@ -798,32 +787,34 @@ describe('OptaqPage — Teams meeting link flow', () => {
 // ---------------------------------------------------------------------------
 
 describe('OptaqPage — Teams section', () => {
-  it('mounts the upcoming-meetings list when Microsoft is linked and scopes are granted', async () => {
+  // Teams meetings are registered by pasting a mødelink, which is always
+  // available, so a fully-consented user needs no Teams hint at all. The section
+  // exists only to explain why the link box would not work yet.
+  it('shows no Teams hint when Microsoft is linked and scopes are granted', async () => {
     routeFetch({ status: () => ({ ok: true, status: 200, json: async () => ({ microsoftLinked: true, scopesOk: true, missing: [] }) }) });
     renderPage();
-    expect(await screen.findByTestId('upcoming-teams-meetings')).toBeInTheDocument();
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith('/api/teams/status'));
+    expect(screen.queryByText('Teams-referater kræver, at du logger ind med Microsoft.')).toBeNull();
+    expect(screen.queryByText('Giv adgang igen')).toBeNull();
   });
 
   it('shows the Microsoft-login hint when no Microsoft account is linked', async () => {
     renderPage();
     expect(await screen.findByText('Teams-referater kræver, at du logger ind med Microsoft.')).toBeInTheDocument();
-    expect(screen.queryByTestId('upcoming-teams-meetings')).toBeNull();
   });
 
   it('offers "Giv adgang igen" when the stored scopes are insufficient', async () => {
-    routeFetch({ status: () => ({ ok: true, status: 200, json: async () => ({ microsoftLinked: true, scopesOk: false, missing: ['Calendars.Read'] }) }) });
+    routeFetch({ status: () => ({ ok: true, status: 200, json: async () => ({ microsoftLinked: true, scopesOk: false, missing: ['OnlineMeetings.ReadWrite'] }) }) });
     renderPage();
     const btn = await screen.findByText('Giv adgang igen');
     await act(async () => { fireEvent.click(btn); });
     expect(mockSignInSocial).toHaveBeenCalledWith({ provider: 'microsoft', callbackURL: '/dashboard' });
-    expect(screen.queryByTestId('upcoming-teams-meetings')).toBeNull();
   });
 
   it('renders nothing Teams-related when the status request fails', async () => {
     routeFetch({ status: () => ({ ok: false, status: 500, json: async () => ({}) }) });
     renderPage();
     await waitFor(() => expect(mockFetch).toHaveBeenCalledWith('/api/teams/status'));
-    expect(screen.queryByTestId('upcoming-teams-meetings')).toBeNull();
     expect(screen.queryByText('Teams-referater kræver, at du logger ind med Microsoft.')).toBeNull();
   });
 });

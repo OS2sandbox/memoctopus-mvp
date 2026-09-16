@@ -96,7 +96,6 @@ export const GRAPH_DELEGATED_SCOPES = [
   'OnlineMeetings.ReadWrite',
   'OnlineMeetingTranscript.Read.All',
   'OnlineMeetingRecording.Read.All',
-  'Calendars.Read',
 ] as const;
 
 // better-auth's microsoft provider always asks for these (see

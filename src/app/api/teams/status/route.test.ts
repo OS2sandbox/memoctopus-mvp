@@ -38,11 +38,11 @@ describe('GET /api/teams/status', () => {
   });
 
   it('reports the missing scopes for a user who signed in before they were added', async () => {
-    mockScopes.mockResolvedValueOnce({ ok: false, missing: ['Calendars.Read'] });
+    mockScopes.mockResolvedValueOnce({ ok: false, missing: ['OnlineMeetings.ReadWrite'] });
     expect(await (await GET()).json()).toEqual({
       microsoftLinked: true,
       scopesOk: false,
-      missing: ['Calendars.Read'],
+      missing: ['OnlineMeetings.ReadWrite'],
     });
   });
 

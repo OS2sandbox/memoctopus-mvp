@@ -28,13 +28,13 @@ af en bruger med rollen *Global administrator* eller *Privileged role administra
    | `OnlineMeetings.ReadWrite` | Slå automatisk transskription til på det enkelte møde |
    | `OnlineMeetingTranscript.Read.All` | Hente mødets transskription bagefter |
    | `OnlineMeetingRecording.Read.All` | Hente mødets optagelse bagefter |
-   | `Calendars.Read` | Vise brugerens kommende Teams-møder i Memoctopus |
    | `User.Read` | Læse brugerens eget navn og e-mail (findes typisk allerede) |
    | `offline_access` | Fornye adgangen, så brugeren ikke skal logge ind igen hver time |
 
    Det er **delegerede** tilladelser. Appen får aldrig mere adgang, end den
-   bruger der er logget ind, selv har — den kan kun se den pågældende brugers
-   egne møder.
+   bruger der er logget ind, selv har — den kan kun se de møder, brugeren selv
+   er inviteret til. Der bliver **ikke** bedt om adgang til kalender eller
+   postkasse.
 
 3. Tryk **Grant admin consent for \<organisation\>**. Uden dette trin bliver hver
    enkelt bruger mødt af en samtykke-dialog, som de typisk ikke selv har
@@ -85,8 +85,11 @@ ingen anden vej rundt om det end at slå indstillingen til.
    opsætning, skal logge ud og ind igen**, så den nye adgang bliver gemt. Indtil
    de gør det, viser forsiden en knap *"Giv adgang igen"*.
 2. Planlæg mødet i Outlook eller Teams som altid.
-3. Åbn Memoctopus. Mødet står under **Kommende Teams-møder** — tryk **Tag referat**.
-4. Hold mødet. Ingen skal trykke på noget i Teams undervejs.
+3. Kopiér mødelinket — det samme "Deltag i Teams-møde"-link, som deltagerne får
+   i indkaldelsen — og indsæt det i **Mødelink**-feltet i Memoctopus.
+4. Hold mødet. **Ingen skal trykke på noget i Teams undervejs**, og der kommer
+   ingen ekstra deltager ind i mødet. Memoctopus beder Teams om selv at
+   transskribere.
 5. Et par minutter efter mødet er referatet klar i Memoctopus.
 
 Møder, man ikke selv er arrangør af, kan Memoctopus ikke slå transskription til på.
@@ -101,6 +104,7 @@ Her viser Memoctopus i stedet en sætning, man kan sende til arrangøren.
 | "Jeres Teams-politik tillader ikke optagelse eller transskription" | Trin 2 mangler, eller er endnu ikke slået igennem | Gennemgå trin 2, vent op til en time |
 | "Jeres organisation har slået Graph-adgang til transskriptioner fra" | Indstillingen i trin 3 | Gennemgå trin 3 |
 | "Du skal være inviteret til mødet" | Mødet ligger ikke i brugerens kalender — fx et ad hoc "Mød nu", eller et link videresendt fra en anden | Brug et møde, brugeren selv er inviteret til |
+| "Mødelinket er ikke et gyldigt Teams-link" | Der er indsat noget andet end et Teams-mødelink | Kopiér linket fra mødeindkaldelsen igen |
 | Mødet står i "Venter på Teams" længe efter mødet | Microsoft er nogle gange et stykke tid om at frigive transskriptionen | Tryk **Tjek nu**. Memoctopus prøver selv i op til 24 timer |
 
 Kommer der ingen transskription, kan man kontrollere i

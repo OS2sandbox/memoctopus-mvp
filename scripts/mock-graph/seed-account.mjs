@@ -23,7 +23,7 @@ const { Client } = require('pg');
 const SCOPES = [
   'openid', 'profile', 'email', 'offline_access', 'User.Read',
   'OnlineMeetings.ReadWrite', 'OnlineMeetingTranscript.Read.All',
-  'OnlineMeetingRecording.Read.All', 'Calendars.Read',
+  'OnlineMeetingRecording.Read.All',
 ];
 const MOCK_ACCOUNT_ID = 'me-0000-0000-0000-000000000001'; // = ME.id in server.mjs
 

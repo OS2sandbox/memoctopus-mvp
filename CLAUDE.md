@@ -101,8 +101,6 @@ exists and still works; cleanup is a later step.
 - `meeting-arm.ts` — `armMeeting()` PATCHes `recordAutomatically` / `allowTranscription`;
   returns `armed | not_organizer | policy_blocked`. `disarmMeeting()` only clears
   `recordAutomatically`.
-- `calendar.ts` — `listUpcomingOnlineMeetings()` over `/me/calendarView` (recurring series
-  expanded into occurrences).
 - `artifacts.ts` — lists and downloads transcripts (VTT) and recordings; recording download
   follows Graph's 302 by hand with `redirect: 'manual'`, dropping the bearer once the URL
   leaves the Graph origin.
@@ -122,8 +120,16 @@ exists and still works; cleanup is a later step.
 
 **API routes** (`src/app/api/teams/`, all session-gated):
 `GET /status` (is a Microsoft account linked, are the Graph scopes consented),
-`GET /calendar?days=7`, `POST /meetings` (register + arm), `GET /meetings/[id][?poll=1]`,
+`POST /meetings` (register + arm), `GET /meetings/[id][?poll=1]`,
 `DELETE /meetings/[id]` (disarm + forget).
+
+The single entry point is the user pasting a meeting's join link into the dashboard's
+**Mødelink** box. There is deliberately no calendar listing: it would need
+`Calendars.Read` — read access to the user's whole calendar — which is a far harder
+consent for a municipality to grant than the three meeting-scoped permissions the rest
+of the flow needs. `resolveJoinUrl()` gets subject and start/end off the
+`onlineMeeting` itself, so nothing is lost. Danish copy for the route's error codes
+lives in `src/components/dashboard/arm-error-message.ts`.
 
 **Teams meeting state** (`teams_meetings.state`):
 `awaiting_teams` → `ready` | `failed` | `needs_reauth`. The client-side meeting status gains

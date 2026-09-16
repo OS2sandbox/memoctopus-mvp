@@ -89,7 +89,7 @@ export function graphOrigin(): string {
 }
 
 // Entra returns scopes space-delimited; better-auth persists them comma-joined.
-// Values may arrive fully qualified ("https://graph.microsoft.com/Calendars.Read")
+// Values may arrive fully qualified ("https://graph.microsoft.com/OnlineMeetings.ReadWrite")
 // and with arbitrary casing, so normalise both sides before comparing.
 function normaliseScope(scope: string): string {
   const bare = scope.trim().replace(/^https?:\/\/[^/]+\//i, '');

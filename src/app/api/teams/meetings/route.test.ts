@@ -251,13 +251,13 @@ describe('POST /api/teams/meetings', () => {
 
   it('maps consent_required to 403 with the missing scopes', async () => {
     mockResolve.mockRejectedValueOnce(
-      new GraphError('consent_required', 'Mangler samtykke.', { missingScopes: ['Calendars.Read'] }),
+      new GraphError('consent_required', 'Mangler samtykke.', { missingScopes: ['OnlineMeetings.ReadWrite'] }),
     );
     const res = await post({ meetingId: 'm1', joinUrl: JOIN });
     expect(res.status).toBe(403);
     expect(await res.json()).toMatchObject({
       error: 'consent_required',
-      missing: ['Calendars.Read'],
+      missing: ['OnlineMeetings.ReadWrite'],
     });
   });
 

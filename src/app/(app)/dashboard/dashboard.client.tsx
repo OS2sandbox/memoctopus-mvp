@@ -7,7 +7,7 @@ import { useIsMobile } from '@/lib/use-is-mobile';
 import { createMeeting, deleteMeeting, getAllMeetings } from '@/lib/storage';
 import { setPendingUploadFile } from '@/lib/pending-upload';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { UpcomingTeamsMeetings, armErrorMessage } from '@/components/dashboard/UpcomingTeamsMeetings';
+import { armErrorMessage } from '@/components/dashboard/arm-error-message';
 import { signIn } from '@/lib/auth-client';
 
 interface TeamsStatus {
@@ -160,10 +160,9 @@ export default function OptaqPage() {
           </div>
         </div>
 
-        {/* Teams — upcoming meetings / access hints */}
+        {/* Teams — access hints. A Teams meeting is registered by pasting its
+            mødelink into the box above; nothing is listed from the calendar. */}
         <div style={{ maxWidth: 560, margin: isMobile ? '36px auto 0' : '56px auto 0' }}>
-          {teamsStatus && teamsStatus.microsoftLinked && teamsStatus.scopesOk && <UpcomingTeamsMeetings />}
-
           {teamsStatus && !teamsStatus.microsoftLinked && (
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)', textAlign: 'center' }}>
               Teams-referater kræver, at du logger ind med Microsoft.
