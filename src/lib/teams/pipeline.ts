@@ -5,7 +5,6 @@ import { GraphError } from './graph-client';
 import { listArtifacts, pickArtifact, downloadTranscriptVtt, downloadRecording } from './artifacts';
 import { parseVtt, turnsFromVtt, segmentsFromVtt, speakersFromVtt, type VttCue } from './vtt';
 import {
-  storePendingAudio,
   storePendingTranscript,
   readPendingTranscript,
   readPendingMeta,
@@ -252,6 +251,13 @@ function graceElapsed(meeting: PipelineMeeting, now: Date): boolean {
 
 // Mode 1 — the target: Teams' recording transcribed by hviske (good Danish), with
 // the speaker timeline lifted from Teams' own transcript (real display names).
+//
+// The recording is transcribed and then dropped. It is deliberately never stashed
+// for the browser: Graph publishes nothing until the meeting has ended, so nobody
+// can follow a meeting live here, and a copy of the raw audio in IndexedDB would
+// then outlive the transcription it was fetched for with no user able to act on it.
+// The only thing handed over is the transcript, plus the speaker names and duration
+// that pre-fill Gennemgang.
 async function runRecordingWithTranscript(
   userId: string,
   meeting: PipelineMeeting,
@@ -262,17 +268,17 @@ async function runRecordingWithTranscript(
   const speakers = speakersFromVtt(cues);
   const wav = await fetchRecordingAsWav(userId, meeting, recordingId);
 
-  await storePendingAudio(meeting.id, wav, {
-    mimeType: 'audio/wav',
-    participants: speakers,
-    durationSeconds: durationFromCues(cues),
-    hasRecording: true,
-  });
   await transcribeRecording(meeting.id, wav, 'audio/wav', {
     turns: turnsFromVtt(cues),
     preserveNames: true,
   });
   await assertTranscribed(meeting.id);
+  // After the verdict, so a run that failed transcription never advertises itself
+  // as finished-with-no-audio to a client that would then stop waiting.
+  await markNoRecording(meeting.id, {
+    participants: speakers,
+    durationSeconds: durationFromCues(cues),
+  });
 
   return { status: 'ready', mode: 'recording+transcript', speakers, transcriptId, recordingId };
 }
@@ -317,14 +323,10 @@ async function runRecordingOnly(
 ): Promise<PipelineOutcome> {
   const wav = await fetchRecordingAsWav(userId, meeting, recordingId);
 
-  await storePendingAudio(meeting.id, wav, {
-    mimeType: 'audio/wav',
-    participants: [],
-    durationSeconds: null,
-    hasRecording: true,
-  });
+  // Transcribed and dropped, as in mode 1 — see the note there.
   await transcribeRecording(meeting.id, wav, 'audio/wav');
   await assertTranscribed(meeting.id);
+  await markNoRecording(meeting.id, { participants: [], durationSeconds: null });
 
   return { status: 'ready', mode: 'recording-only', speakers: [], transcriptId: null, recordingId };
 }

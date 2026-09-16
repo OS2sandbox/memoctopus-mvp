@@ -10,7 +10,7 @@ const mockStorePendingTranscript = vi.hoisted(() => vi.fn());
 const mockReadPendingTranscript = vi.hoisted(() => vi.fn());
 const mockReadPendingMeta = vi.hoisted(() => vi.fn());
 const mockMarkNoRecording = vi.hoisted(() => vi.fn());
-const mockProcessBotRecording = vi.hoisted(() => vi.fn());
+const mockTranscribeRecording = vi.hoisted(() => vi.fn());
 const mockSetOwner = vi.hoisted(() => vi.fn());
 const mockMkdir = vi.hoisted(() => vi.fn());
 const mockMkdtemp = vi.hoisted(() => vi.fn());
@@ -48,7 +48,7 @@ vi.mock('@/lib/pending-artifacts', () => ({
   setMeetingOwner: mockSetOwner,
 }));
 
-vi.mock('@/lib/transcribe-recording', () => ({ transcribeRecording: mockProcessBotRecording }));
+vi.mock('@/lib/transcribe-recording', () => ({ transcribeRecording: mockTranscribeRecording }));
 
 import { GraphError } from './graph-client';
 import { artifactMode, processTeamsMeeting, transcodeToWav } from './pipeline';
@@ -115,7 +115,7 @@ beforeEach(() => {
   mockReadFile.mockReset().mockResolvedValue(WAV);
   mockRm.mockReset().mockResolvedValue(undefined);
   // transcribeRecording is fail-soft; by default it succeeds and leaves a ready stash.
-  mockProcessBotRecording.mockReset().mockImplementation(async () => {
+  mockTranscribeRecording.mockReset().mockImplementation(async () => {
     mockReadPendingTranscript.mockResolvedValue({ status: 'ready', segments: [], createdAt: 1 });
   });
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -185,15 +185,16 @@ describe('processTeamsMeeting — recording + transcript', () => {
     expect(mockSpawn.mock.calls[0][0]).toBe('ffmpeg');
     expect(ffArgs).toEqual(expect.arrayContaining(['-ar', '16000', '-ac', '1', `${SCRATCH}/recording.wav`]));
 
-    // The stash carries the real names as participants and the VTT duration.
-    expect(mockStorePendingAudio).toHaveBeenCalledWith('meet-1', WAV, {
-      mimeType: 'audio/wav',
+    // The stash carries the real names and the VTT duration, and no audio: a Graph
+    // meeting cannot be followed live, so the raw recording is transcribed and
+    // dropped rather than handed to the browser.
+    expect(mockStorePendingAudio).not.toHaveBeenCalled();
+    expect(mockMarkNoRecording).toHaveBeenCalledWith('meet-1', {
       participants: ['Mette Hansen', 'Jens Poulsen'],
       durationSeconds: 9,
-      hasRecording: true,
     });
 
-    const [id, buffer, mime, opts] = mockProcessBotRecording.mock.calls[0];
+    const [id, buffer, mime, opts] = mockTranscribeRecording.mock.calls[0];
     expect(id).toBe('meet-1');
     expect(buffer).toBe(WAV);
     expect(mime).toBe('audio/wav');
@@ -224,11 +225,11 @@ describe('processTeamsMeeting — recording + transcript', () => {
     expect(outcome.status).toBe('failed');
     expect((outcome as { reason: string }).reason).toContain('moov atom not found');
     expect(mockRm).toHaveBeenCalledWith(SCRATCH, { recursive: true, force: true });
-    expect(mockProcessBotRecording).not.toHaveBeenCalled();
+    expect(mockTranscribeRecording).not.toHaveBeenCalled();
   });
 
   it('fails when the fail-soft transcription left a failed stash', async () => {
-    mockProcessBotRecording.mockImplementation(async () => {
+    mockTranscribeRecording.mockImplementation(async () => {
       mockReadPendingTranscript.mockResolvedValue({ status: 'failed', createdAt: 1 });
     });
 
@@ -321,7 +322,7 @@ describe('processTeamsMeeting — transcript only', () => {
 
     expect(outcome).toMatchObject({ status: 'ready', mode: 'transcript-only' });
     expect(mockDownloadRecording).not.toHaveBeenCalled();
-    expect(mockProcessBotRecording).not.toHaveBeenCalled();
+    expect(mockTranscribeRecording).not.toHaveBeenCalled();
   });
 
   it('is pending in transcript-only mode when only a recording exists', async () => {
@@ -356,13 +357,67 @@ describe('processTeamsMeeting — recording only', () => {
     });
     expect(mockDownloadVtt).not.toHaveBeenCalled();
     // No turns injected — transcribe-recording runs its own diarization pass.
-    expect(mockProcessBotRecording).toHaveBeenCalledWith('meet-1', WAV, 'audio/wav');
-    expect(mockStorePendingAudio).toHaveBeenCalledWith('meet-1', WAV, {
-      mimeType: 'audio/wav',
+    expect(mockTranscribeRecording).toHaveBeenCalledWith('meet-1', WAV, 'audio/wav');
+    expect(mockStorePendingAudio).not.toHaveBeenCalled();
+    expect(mockMarkNoRecording).toHaveBeenCalledWith('meet-1', {
       participants: [],
       durationSeconds: null,
-      hasRecording: true,
     });
+  });
+});
+
+// The product requirement behind this: Graph publishes nothing until a meeting has
+// ended, so a Teams meeting can never be followed live here. Raw meeting audio is
+// therefore transcribed server-side and dropped, never stashed for a browser to
+// keep. Asserted per mode rather than once, so adding a fourth mode that stashes
+// audio fails here instead of shipping.
+describe('processTeamsMeeting — no mode hands raw audio to the browser', () => {
+  it('recording+transcript stashes no audio', async () => {
+    mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [RECORDING_REF] });
+    const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
+    expect(outcome).toMatchObject({ status: 'ready', mode: 'recording+transcript' });
+    expect(mockStorePendingAudio).not.toHaveBeenCalled();
+  });
+
+  it('recording-only stashes no audio', async () => {
+    mockListArtifacts.mockResolvedValue({ transcripts: [], recordings: [RECORDING_REF] });
+    const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
+    expect(outcome).toMatchObject({ status: 'ready', mode: 'recording-only' });
+    expect(mockStorePendingAudio).not.toHaveBeenCalled();
+  });
+
+  it('transcript-only stashes no audio', async () => {
+    process.env.TEAMS_ARTIFACT_MODE = 'transcript-only';
+    mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [RECORDING_REF] });
+    const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
+    expect(outcome).toMatchObject({ status: 'ready', mode: 'transcript-only' });
+    expect(mockStorePendingAudio).not.toHaveBeenCalled();
+  });
+
+  // The transcript is what the browser gets instead, so the meeting still reaches
+  // Gennemgang with its speaker names.
+  it('still hands over the transcript and the speaker names', async () => {
+    mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [RECORDING_REF] });
+    await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
+    expect(mockMarkNoRecording).toHaveBeenCalledWith('meet-1', {
+      participants: ['Mette Hansen', 'Jens Poulsen'],
+      durationSeconds: 9,
+    });
+  });
+
+  // Ordering matters: a run whose transcription failed must not leave behind a
+  // "finished, no audio" marker, or the client stops waiting on a failed meeting.
+  it('does not mark no-recording when transcription fails', async () => {
+    mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [RECORDING_REF] });
+    // transcribeRecording is fail-soft: it records the verdict in the stash rather
+    // than throwing, which is what assertTranscribed reads back.
+    mockTranscribeRecording.mockImplementation(async () => {
+      mockReadPendingTranscript.mockResolvedValue({ status: 'failed', createdAt: 1 });
+    });
+
+    const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
+    expect(outcome).toMatchObject({ status: 'failed' });
+    expect(mockMarkNoRecording).not.toHaveBeenCalled();
   });
 });
 
@@ -420,7 +475,7 @@ describe('processTeamsMeeting — idempotency and errors', () => {
     await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
     expect(mockSetOwner).toHaveBeenCalledWith('meet-1', 'u1');
     expect(mockSetOwner.mock.invocationCallOrder[0])
-      .toBeLessThan(mockStorePendingAudio.mock.invocationCallOrder[0]);
+      .toBeLessThan(mockMarkNoRecording.mock.invocationCallOrder[0]);
   });
 
   it('rejects a meeting id that would escape the stash directory', async () => {
