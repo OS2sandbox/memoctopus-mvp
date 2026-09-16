@@ -10,11 +10,33 @@
  *     spoofing (`evil.teams.microsoft.com`) and no suffix spoofing
  *     (`teams.microsoft.com.evil.com`)
  *
+ * One exception to the tight host rule: a link copied out of an Outlook email in
+ * a tenant running Microsoft Defender Safe Links has been rewritten to
+ * `<region>.safelinks.protection.outlook.com/?url=<the real link>`. That is the
+ * link most users have to hand, so we unwrap it rather than telling them their
+ * own invite is invalid. Unwrapping widens which *inputs* are accepted, never
+ * which *destinations*: whatever comes out goes through the same https and
+ * allowed-host checks as a link pasted directly.
+ *
  * `ok: true` carries the normalized href, which is what we hand to Graph's
- * `$filter=JoinWebUrl eq '<url>'` lookup.
+ * `$filter=JoinWebUrl eq '<url>'` lookup. Node's URL preserves query-string
+ * percent-encoding verbatim, and Safe Links encodes the original link whole, so
+ * the unwrapped string is byte-identical to what Graph stored as JoinWebUrl —
+ * which matters, because that filter is an exact string comparison.
  */
 
 const ALLOWED_HOSTS = new Set<string>(['teams.microsoft.com', 'teams.live.com']);
+
+const SAFELINKS_HOST = 'safelinks.protection.outlook.com';
+
+/** Safe Links wrappers are regional (eur03., nam02., …), and occasionally nested. */
+const MAX_UNWRAP_DEPTH = 3;
+
+function isSafeLinksHost(hostname: string): boolean {
+  // The leading dot is load-bearing: it keeps `evilsafelinks.protection.outlook.com`
+  // and `safelinks.protection.outlook.com.evil.com` out.
+  return hostname === SAFELINKS_HOST || hostname.endsWith(`.${SAFELINKS_HOST}`);
+}
 
 export type TeamsUrlCheck = { ok: true; url: string } | { ok: false; reason: 'invalid-url' | 'wrong-host' };
 
@@ -32,6 +54,19 @@ export function validateTeamsUrl(input: string): TeamsUrlCheck {
 
   // A non-https scheme is not a "wrong host" — it can't be a real join link at all.
   if (parsed.protocol !== 'https:') return { ok: false, reason: 'invalid-url' };
+
+  for (let depth = 0; isSafeLinksHost(parsed.hostname) && depth < MAX_UNWRAP_DEPTH; depth += 1) {
+    // searchParams decodes the wrapper's encoding, handing back the original link.
+    const wrapped = parsed.searchParams.get('url');
+    if (!wrapped) return { ok: false, reason: 'invalid-url' };
+    try {
+      parsed = new URL(wrapped.trim());
+    } catch {
+      return { ok: false, reason: 'invalid-url' };
+    }
+    if (parsed.protocol !== 'https:') return { ok: false, reason: 'invalid-url' };
+  }
+
   if (!ALLOWED_HOSTS.has(parsed.hostname)) return { ok: false, reason: 'wrong-host' };
 
   return { ok: true, url: parsed.href };

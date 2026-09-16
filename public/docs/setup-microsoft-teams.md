@@ -86,7 +86,11 @@ ingen anden vej rundt om det end at slå indstillingen til.
    de gør det, viser forsiden en knap *"Giv adgang igen"*.
 2. Planlæg mødet i Outlook eller Teams som altid.
 3. Kopiér mødelinket — det samme "Deltag i Teams-møde"-link, som deltagerne får
-   i indkaldelsen — og indsæt det i **Mødelink**-feltet i Memoctopus.
+   i indkaldelsen — og indsæt det i **Mødelink**-feltet i Memoctopus. Linket kan
+   kopieres både fra mødeindkaldelsen i Outlook og med "Kopiér link til deltagelse"
+   i Teams. Har organisationen Defender Safe Links slået til, bliver links i mails
+   skrevet om til en `safelinks.protection.outlook.com`-adresse — det er i orden,
+   Memoctopus finder selv det rigtige mødelink inde i den.
 4. Hold mødet. **Ingen skal trykke på noget i Teams undervejs**, og der kommer
    ingen ekstra deltager ind i mødet. Memoctopus beder Teams om selv at
    transskribere.
