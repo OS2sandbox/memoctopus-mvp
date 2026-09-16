@@ -88,7 +88,16 @@ export interface PendingTranscript {
 }
 
 // Best-effort cleanup of entries older than the TTL.
-async function sweep(): Promise<void> {
+/**
+ * Drop anything the client never collected. `exceptId` is the meeting currently
+ * being written, and excluding it is load-bearing rather than an optimisation:
+ * the owner file is written once at the start of a run, while the download,
+ * transcode and ASR that follow can outlast the TTL on a long meeting. Sweeping
+ * blind would then delete the owner file of the very run in progress, and since
+ * the hand-off routes deny by default without one, a successful transcription
+ * would become uncollectable and the meeting would never finish.
+ */
+async function sweep(exceptId?: string): Promise<void> {
   try {
     const dir = rootDir();
     const entries = await fs.readdir(dir);
@@ -96,6 +105,7 @@ async function sweep(): Promise<void> {
     await Promise.all(
       entries
         .filter((f) => f.endsWith('.meta.json') || f.endsWith('.transcript.json') || f.endsWith('.owner.json'))
+        .filter((f) => f.replace(/\.(meta|transcript|owner)\.json$/, '') !== exceptId)
         .map(async (f) => {
           try {
             const meta = JSON.parse(await fs.readFile(path.join(dir, f), 'utf8')) as { createdAt: number };
@@ -165,7 +175,7 @@ export async function storePendingTranscript(
   // run that ends in `failed`. It used to hang off storePendingAudio, which no
   // run calls any more — and which the bot's failed runs never called either,
   // which is why production's volume still holds meta files from July.
-  await sweep();
+  await sweep(meetingId);
   const full: PendingTranscript = { ...transcript, createdAt: Date.now() };
   await fs.writeFile(transcriptPath(meetingId), JSON.stringify(full));
 }

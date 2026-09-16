@@ -8,6 +8,7 @@ import {
   markNoRecording,
   readPendingMeta,
   readPendingTranscript,
+  storePendingTranscript,
   setMeetingOwner,
   getMeetingOwner,
   assertMeetingOwner,
@@ -222,5 +223,80 @@ describe('markNoRecording', () => {
       participants: ['Mette Hansen', 'Jens Poulsen'],
       durationSeconds: 540,
     });
+  });
+});
+
+// ─── TTL sweep ────────────────────────────────────────────────────────────────
+
+// The sweep hangs off storePendingTranscript, which every run reaches — including
+// one that ends in 'failed'. It used to hang off storePendingAudio, which no run
+// calls any more, and which the removed bot's failed runs never called either,
+// so nothing ever cleaned up after them.
+describe('the TTL sweep on storePendingTranscript', () => {
+  const HOUR = 60 * 60 * 1000;
+
+  function stashContaining(files: Record<string, number>) {
+    vi.mocked(fs.readdir).mockResolvedValue(Object.keys(files) as never);
+    vi.mocked(fs.readFile).mockImplementation(async (p) => {
+      const name = String(p).split('/').pop()!;
+      return Buffer.from(JSON.stringify({ createdAt: files[name] })) as never;
+    });
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(fs.mkdir).mockResolvedValue(undefined as never);
+    vi.mocked(fs.writeFile).mockResolvedValue(undefined as never);
+    vi.mocked(fs.unlink).mockResolvedValue(undefined as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('deletes an entry the client never collected', async () => {
+    stashContaining({ 'stale.owner.json': Date.now() - 2 * HOUR });
+    await storePendingTranscript('current', { status: 'processing' });
+
+    const unlinked = vi.mocked(fs.unlink).mock.calls.map(([p]) => String(p));
+    expect(unlinked.some((p) => p.includes('stale'))).toBe(true);
+  });
+
+  it('leaves an entry that is still inside the TTL', async () => {
+    stashContaining({ 'fresh.owner.json': Date.now() - 60_000 });
+    await storePendingTranscript('current', { status: 'processing' });
+
+    const unlinked = vi.mocked(fs.unlink).mock.calls.map(([p]) => String(p));
+    expect(unlinked.some((p) => p.includes('fresh'))).toBe(false);
+  });
+
+  // The owner file is written once at the start of a run, while the download,
+  // transcode and ASR that follow can outlast the TTL on a long meeting. Sweeping
+  // blind would delete the owner file of the run in progress, and because the
+  // hand-off routes deny by default without one, a successful transcription would
+  // become uncollectable and the meeting would never finish.
+  it('never sweeps the meeting it is currently writing, however old its owner file', async () => {
+    stashContaining({
+      'current.owner.json': Date.now() - 3 * HOUR,
+      'current.meta.json': Date.now() - 3 * HOUR,
+    });
+
+    await storePendingTranscript('current', { status: 'ready', segments: [], diarized: true });
+
+    const unlinked = vi.mocked(fs.unlink).mock.calls.map(([p]) => String(p));
+    expect(unlinked.some((p) => p.includes('current'))).toBe(false);
+  });
+
+  it('still sweeps other stale meetings while one is in flight', async () => {
+    stashContaining({
+      'current.owner.json': Date.now() - 3 * HOUR,
+      'other.owner.json': Date.now() - 3 * HOUR,
+    });
+
+    await storePendingTranscript('current', { status: 'processing' });
+
+    const unlinked = vi.mocked(fs.unlink).mock.calls.map(([p]) => String(p));
+    expect(unlinked.some((p) => p.includes('other'))).toBe(true);
+    expect(unlinked.some((p) => p.includes('current'))).toBe(false);
   });
 });
