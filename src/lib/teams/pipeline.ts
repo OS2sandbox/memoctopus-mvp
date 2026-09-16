@@ -196,6 +196,10 @@ async function runPipeline(
     // propagates; a throttle or a gateway error is "not yet", not a failure;
     // everything else is this meeting's own failure.
     if (err instanceof GraphError && err.code === 'reauth_required') throw err;
+    // So is a tenant that has switched off Graph access to transcripts: it is not
+    // this meeting's fault and no retry can fix it, so let the poller turn it into
+    // the message that names the admin guide instead of leaking Graph's English.
+    if (err instanceof GraphError && err.code === 'transcripts_disabled') throw err;
     if (err instanceof GraphError && err.retryable) return { status: 'pending' };
     if (err instanceof GraphError) return { status: 'failed', reason: err.message };
     throw err;
@@ -231,6 +235,7 @@ async function runPipeline(
   } catch (err) {
     await storePendingTranscript(meeting.id, { status: 'failed' }).catch(() => {});
     if (err instanceof GraphError && err.code === 'reauth_required') throw err;
+    if (err instanceof GraphError && err.code === 'transcripts_disabled') throw err;
     if (err instanceof GraphError && err.retryable) return { status: 'pending' };
     const reason = err instanceof Error ? err.message : 'Ukendt fejl under hentning fra Microsoft Teams';
     console.error(`[teams-pipeline] ${meeting.id} failed:`, err);

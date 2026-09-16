@@ -457,16 +457,31 @@ describe('processTeamsMeeting — idempotency and errors', () => {
     expect(outcome).toMatchObject({ status: 'ready', mode: 'transcript-only' });
   });
 
-  it('turns a transcripts_disabled 403 into a Danish failure reason', async () => {
+  // GraphAccessToTranscriptsDisabled is a tenant-wide switch, not this meeting's
+  // problem, and only an admin can clear it. Swallowing it here would store
+  // graph-client's message — which misreads it as per-meeting and carries Graph's
+  // English text — instead of the poller's TRANSCRIPTS_DISABLED_MESSAGE, which
+  // names the admin guide. So it must propagate.
+  it('propagates a transcripts_disabled 403 so the poller can name the admin guide', async () => {
     mockListArtifacts.mockRejectedValue(
       new GraphError('transcripts_disabled', 'Transskription er ikke slået til for dette møde', { status: 403 }),
     );
 
-    const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
-    expect(outcome).toEqual({
-      status: 'failed',
-      reason: 'Transskription er ikke slået til for dette møde',
+    await expect(processTeamsMeeting('u1', MEETING, AFTER_GRACE)).rejects.toMatchObject({
+      code: 'transcripts_disabled',
     });
+  });
+
+  // The VTT download runs before fetchRecordingAsWav, so no scratch dir exists to
+  // clean up here — unlike the reauth_required-mid-download case below.
+  it('propagates transcripts_disabled raised after the artifact list', async () => {
+    mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [RECORDING_REF] });
+    mockDownloadVtt.mockRejectedValue(new GraphError('transcripts_disabled', 'slået fra', { status: 403 }));
+
+    await expect(processTeamsMeeting('u1', MEETING, AFTER_GRACE)).rejects.toMatchObject({
+      code: 'transcripts_disabled',
+    });
+    expect(mockStorePendingTranscript).toHaveBeenCalledWith(MEETING.id, { status: 'failed' });
   });
 
   it('propagates a reauth_required error so the poller can flag the account', async () => {
