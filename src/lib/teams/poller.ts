@@ -236,7 +236,11 @@ function pollerDisabled(): boolean {
  * Wired from `src/instrumentation.ts` on the nodejs runtime only.
  */
 export function startPoller(): () => void {
-  if (pollerDisabled()) return () => {};
+  if (pollerDisabled()) {
+    console.log('[teams/poller] disabled, not starting');
+    return () => {};
+  }
+  console.log(`[teams/poller] started, polling Graph every ${pollIntervalMs()} ms`);
 
   let running = false;
   const timer = setInterval(async () => {

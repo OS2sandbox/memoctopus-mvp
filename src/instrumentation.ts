@@ -8,6 +8,11 @@ export async function register() {
   // is inlined at build time, so webpack drops the whole block (and with it the
   // `pg` dependency chain) when compiling this file for the edge runtime.
   if (process.env.NEXT_RUNTIME === 'nodejs') {
+    // Logged unconditionally: this hook failing to run is invisible otherwise, and
+    // the only symptom is that Teams meetings are never collected unless someone
+    // has the waiting screen open. Diagnosing that from the outside took far
+    // longer than this line costs.
+    console.log('[instrumentation] register() running on the nodejs runtime');
     const { startPoller } = await import('@/lib/teams/poller');
     startPoller();
   }
