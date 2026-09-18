@@ -126,7 +126,7 @@ bring_up() {
 
   Created .env from .env.deploy.example.
   EDIT IT before continuing (secrets!): set POSTGRES_PASSWORD, BETTER_AUTH_SECRET,
-  BOT_INTERNAL_SECRET, HVISKE_API_KEY, DIARIZATION_API_KEY${MODE_HF}.
+  HVISKE_API_KEY, DIARIZATION_API_KEY${MODE_HF}.
   Then re-run:  ./scripts/bootstrap-host.sh $([ "$MODE" = small ] && echo --small)
 EOF
     exit 0

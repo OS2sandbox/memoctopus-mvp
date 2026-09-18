@@ -1,0 +1,46 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { headers } from 'next/headers';
+import { auth } from '@/lib/auth';
+import { readPendingTranscript, deletePendingTranscript, assertMeetingOwner } from '@/lib/pending-artifacts';
+
+// Client collects the server-side transcription of a Teams-bot recording
+// (kicked off by the Graph pipeline as soon as it has the recording).
+//
+//   { status: 'none' }                → no server-side run for this meeting — the
+//                                       client drives transcription itself
+//   { status: 'processing' }          → still working — poll again shortly
+//   { status: 'failed' }              → server-side run failed — client fallback
+//   { status: 'ready', segments, diarized } → done; the stash is deleted on hand-off
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const { id: meetingId } = await params;
+
+  // Only the meeting's owner may read its server-side transcript. A non-owner gets
+  // the same "no server-side run" response a stranger meetingId would yield, so the
+  // transcript is never exposed and the destructive delete below is never reached.
+  if (!(await assertMeetingOwner(meetingId, session.user.id))) {
+    return NextResponse.json({ status: 'none' });
+  }
+
+  const transcript = await readPendingTranscript(meetingId);
+  if (!transcript) return NextResponse.json({ status: 'none' });
+
+  if (transcript.status === 'processing') {
+    return NextResponse.json({ status: 'processing' }, { headers: { 'Cache-Control': 'no-store' } });
+  }
+
+  await deletePendingTranscript(meetingId);
+  if (transcript.status === 'failed') {
+    return NextResponse.json({ status: 'failed' });
+  }
+  return NextResponse.json({
+    status: 'ready',
+    segments: transcript.segments ?? [],
+    diarized: transcript.diarized ?? false,
+  });
+}

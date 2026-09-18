@@ -7,6 +7,7 @@ import { users, sessions, accounts, verifications } from '@/lib/db/schema';
 import {
   emailPasswordEnabled,
   microsoftConfig,
+  microsoftGraphScopes,
   oidcConfig,
   warnDeprecatedAuthEnv,
 } from './providers';
@@ -55,7 +56,25 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: emailPasswordEnabled(),
   },
-  socialProviders: microsoft ? { microsoft } : {},
+  // The Teams integration reads Graph as the signed-in user (delegated), so the
+  // Graph scopes must be consented to at login. better-auth's microsoft provider
+  // already requests openid/profile/email/User.Read/offline_access and appends
+  // `scope` to them — offline_access is what yields the refresh token that
+  // auth.api.getAccessToken() later trades for a fresh access token.
+  // Users who signed in before these scopes existed keep a token without them;
+  // hasGraphScopes() in src/lib/teams/graph-client.ts detects that and the UI
+  // asks them to sign in again.
+  //
+  // overrideUserInfoOnSignIn keeps the stored name and email in step with Entra on
+  // every sign-in. Without it better-auth writes them once, at account creation,
+  // and never again: it matches the account on the provider's subject claim, so a
+  // user whose mail attribute or display name later changes keeps the address they
+  // first signed up with. That happened here — an account created under one
+  // address kept showing it after the user moved to a syddjurs.dk mailbox, which
+  // reads as being logged in as the wrong person.
+  socialProviders: microsoft
+    ? { microsoft: { ...microsoft, scope: microsoftGraphScopes(), overrideUserInfoOnSignIn: true } }
+    : {},
   // No `account.accountLinking` override on purpose. Adding providers to
   // `trustedProviders` would drop better-auth's requirement that the *incoming*
   // IdP asserted email_verified (see dist/oauth2/link-account.mjs) — an attacker
@@ -75,6 +94,9 @@ export const auth = betterAuth({
                 discoveryUrl: oidc.discoveryUrl,
                 scopes: ['openid', 'profile', 'email'],
                 pkce: oidc.pkce,
+                // Same reasoning as overrideUserInfoOnSignIn above; the generic
+                // plugin spells the option without the suffix.
+                overrideUserInfo: true,
               },
             ],
           }),

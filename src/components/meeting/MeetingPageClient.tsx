@@ -4,7 +4,8 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { ProcessStrip, ProcessPhase } from '@/components/layout/ProcessStrip';
 import { RecordingScreen } from '@/components/recording/RecordingScreen';
-import { MeetingBotScreen } from '@/components/recording/MeetingBotScreen';
+import { LegacyBotMeetingScreen } from '@/components/recording/LegacyBotMeetingScreen';
+import { TeamsMeetingScreen } from '@/components/recording/TeamsMeetingScreen';
 import { TranscriptReview } from '@/components/transcript/TranscriptReview';
 import { MinutesEditor } from '@/components/minutes/MinutesEditor';
 import { ExportTab } from '@/components/meeting/ExportTab';
@@ -239,11 +240,22 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
         onTabChange={switchTab}
       />
 
-      {activeTab === 'recording' && isTeamsMeeting && (
-        <MeetingBotScreen
+      {activeTab === 'recording' && isTeamsMeeting && meeting.status === 'awaiting_teams' && (
+        <TeamsMeetingScreen
           meetingId={meetingId}
           meetingUrl={meeting.meetingUrl ?? ''}
-          botSession={meeting.botSession ?? null}
+        />
+      )}
+
+      {/* Teams meetings from before the Graph integration, left behind in this
+          browser's IndexedDB by the removed Playwright bot. Nothing can finish
+          them, so the screen explains that and offers the transcript or a delete
+          rather than rendering an empty recording view. */}
+      {activeTab === 'recording' && isTeamsMeeting && meeting.status !== 'awaiting_teams' && (
+        <LegacyBotMeetingScreen
+          meetingId={meetingId}
+          hasTranscript={Boolean(transcript)}
+          onOpenReview={() => switchTab('review')}
         />
       )}
 
@@ -269,6 +281,9 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
           audioUrl={audioUrl}
           audioDurationSeconds={audioFile?.durationSeconds}
           audioDeleted={meeting.audioDeleted && meeting.status !== 'recording' && meeting.status !== 'processing'}
+          // A Teams meeting's audio is transcribed on the server and discarded, so
+          // none was ever stored here. `audioDeleted` would be the wrong word for it.
+          audioDiscarded={isTeamsMeeting && !meeting.audioDeleted}
           initialChapters={transcript.chapters}
           participants={meeting.participants}
           initialDiarizing={transcript.diarizationStatus === 'pending'}

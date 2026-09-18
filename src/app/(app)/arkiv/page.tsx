@@ -45,7 +45,6 @@ export default function ArkivPage() {
           // abandoned recording that produced nothing (still 'recording', no saved
           // audio). RecordingScreen deletes these on unmount; this also covers the
           // navigation race and orphans left by a crash or closed tab.
-          .filter((r) => r.status !== 'joining')
           .filter((r) => !(r.status === 'recording' && r.audioSizeBytes === 0))
           .map((r: StoredMeeting) => ({
             id: r.id,

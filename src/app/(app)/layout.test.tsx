@@ -37,10 +37,13 @@ beforeEach(() => {
 });
 
 describe('(app) layout — server-side auth gate', () => {
+  // The marker matters: the middleware lets a present-but-invalid cookie through
+  // to here, so a bare redirect('/') would be bounced straight back by the
+  // middleware's authenticated-user shortcut, looping until the browser gives up.
   it('redirects to / when there is no valid session (forged/expired/absent cookie)', async () => {
     mockGetSession.mockResolvedValueOnce(null as never);
-    await expect(AppLayout({ children: null })).rejects.toThrow('REDIRECT:/');
-    expect(mockRedirect).toHaveBeenCalledWith('/');
+    await expect(AppLayout({ children: null })).rejects.toThrow('REDIRECT:/?session_expired=1');
+    expect(mockRedirect).toHaveBeenCalledWith('/?session_expired=1');
   });
 
   it('validates the actual token via getSession, not mere cookie presence', async () => {
