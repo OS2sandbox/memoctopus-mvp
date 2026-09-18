@@ -1,5 +1,6 @@
 import { graphJson } from '@/lib/teams/graph-client';
 import { validateTeamsUrl } from '@/lib/teams/url';
+import { graphDate } from '@/lib/teams/graph-dates';
 
 /**
  * Turning a join link (or a Graph meeting id) into everything the rest of the
@@ -106,8 +107,10 @@ function toResolved(meeting: GraphOnlineMeeting, meId: string | null): ResolvedM
     // Never "true by default": a missing organizer id must not let an invitee
     // believe they can arm the meeting.
     isOrganizer: Boolean(organizerId && meId && organizerId === meId),
-    scheduledStart: meeting.startDateTime ?? null,
-    scheduledEnd: meeting.endDateTime ?? null,
+    // Not `?? null`: Graph sends 0001-01-01T00:00:00Z rather than omitting the
+    // field when a meeting has no schedule, which is every instant meeting.
+    scheduledStart: graphDate(meeting.startDateTime),
+    scheduledEnd: graphDate(meeting.endDateTime),
     meetingType: meeting.meetingType ?? null,
     options: {
       allowRecording: meeting.allowRecording ?? null,

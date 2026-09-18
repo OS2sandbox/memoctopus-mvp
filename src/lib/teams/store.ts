@@ -1,4 +1,5 @@
 import { pool } from '@/lib/db';
+import { realDate } from '@/lib/teams/graph-dates';
 import { queryUserSchema, queryUserSchemaOne } from '@/lib/db/user-schema';
 
 /**
@@ -112,7 +113,10 @@ export function isTeamsMeetingDue(row: TeamsMeetingRow, now: Date): boolean {
 
 /** The instant the 24 h give-up window is measured from. */
 export function giveUpAnchor(row: Pick<TeamsMeetingRow, 'scheduledEnd' | 'createdAt'>): Date | null {
-  return row.scheduledEnd ?? row.createdAt ?? null;
+  // realDate, not a bare ??: rows written before the resolver filtered it carry
+  // Graph's 0001-01-01 zero value, and treating that as a real scheduled end
+  // makes the meeting look two thousand years overdue and abandoned on sight.
+  return realDate(row.scheduledEnd) ?? row.createdAt ?? null;
 }
 
 // ─── Row mapping ────────────────────────────────────────────────────────────

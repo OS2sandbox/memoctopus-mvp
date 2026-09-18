@@ -144,6 +144,38 @@ describe('isTeamsMeetingDue', () => {
     expect(giveUpAnchor({ scheduledEnd: null, createdAt: CREATED })).toBe(CREATED);
   });
 
+  // Graph expresses "this meeting has no schedule" as 0001-01-01T00:00:00Z rather
+  // than by omitting the field, and every instant ("Mød nu") meeting carries it.
+  // Read as a real scheduled end it sits two thousand years past the give-up
+  // window, so the meeting was abandoned on its first poll and the background
+  // poller skipped it forever. That is what broke instant meetings in production.
+  it("ignores Graph's zero date and falls back to createdAt", () => {
+    expect(
+      giveUpAnchor({ scheduledEnd: new Date('0001-01-01T00:00:00Z'), createdAt: CREATED }),
+    ).toBe(CREATED);
+  });
+
+  it('polls an instant meeting instead of abandoning it', () => {
+    expect(
+      isTeamsMeetingDue(
+        row({ scheduledEnd: new Date('0001-01-01T00:00:00Z'), createdAt: new Date(ms - 60_000) }),
+        now,
+      ),
+    ).toBe(true);
+  });
+
+  it('still gives up on an instant meeting once its own window has passed', () => {
+    expect(
+      isTeamsMeetingDue(
+        row({
+          scheduledEnd: new Date('0001-01-01T00:00:00Z'),
+          createdAt: new Date(ms - POLL_GIVE_UP_MS - 1000),
+        }),
+        now,
+      ),
+    ).toBe(false);
+  });
+
   it('is not due before the meeting ends', () => {
     expect(isTeamsMeetingDue(row({ scheduledEnd: new Date(ms + 60_000) }), now)).toBe(false);
   });

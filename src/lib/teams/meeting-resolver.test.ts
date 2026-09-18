@@ -116,6 +116,28 @@ describe('resolveJoinUrl', () => {
     });
   });
 
+  // An instant ("Mød nu") meeting has no schedule, and Graph says so with the
+  // .NET zero value rather than by omitting the field. Stored as a real date it
+  // makes the meeting look two thousand years overdue, and the poller abandons it
+  // before ever asking Graph for artifacts.
+  it("treats Graph's zero date as no schedule at all", async () => {
+    routeGraph({
+      onlineMeetings: {
+        value: [
+          meeting({
+            startDateTime: '0001-01-01T00:00:00Z',
+            endDateTime: '0001-01-01T00:00:00Z',
+          }),
+        ],
+      },
+    });
+
+    const resolved = await resolveJoinUrl('u1', JOIN);
+
+    expect(resolved.scheduledStart).toBeNull();
+    expect(resolved.scheduledEnd).toBeNull();
+  });
+
   it('is not organizer when the organizer oid differs', async () => {
     routeGraph({ me: { id: 'me-oid' }, onlineMeetings: { value: [meeting()] } });
     const mine = await resolveJoinUrl(USER, JOIN);

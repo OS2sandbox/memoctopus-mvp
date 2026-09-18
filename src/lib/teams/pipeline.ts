@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
 import { GraphError } from './graph-client';
+import { realDate } from './graph-dates';
 import { listArtifacts, pickArtifact, downloadTranscriptVtt, downloadRecording } from './artifacts';
 import { parseVtt, turnsFromVtt, segmentsFromVtt, speakersFromVtt, type VttCue } from './vtt';
 import {
@@ -206,10 +207,13 @@ async function runPipeline(
     throw err;
   }
 
-  const window =
-    meeting.scheduledStart && meeting.scheduledEnd
-      ? { start: meeting.scheduledStart, end: meeting.scheduledEnd }
-      : undefined;
+  // realDate drops Graph's 0001-01-01 zero value, which an instant meeting has for
+  // both ends. Without it the occurrence window sits in the year 1 and matches no
+  // artifact; with it the window is simply absent and the newest artifact wins,
+  // which is the right answer for a meeting that had no schedule.
+  const windowStart = realDate(meeting.scheduledStart);
+  const windowEnd = realDate(meeting.scheduledEnd);
+  const window = windowStart && windowEnd ? { start: windowStart, end: windowEnd } : undefined;
   const transcript = pickArtifact(artifacts.transcripts, window);
   const recording = artifactMode() === 'transcript-only' ? null : pickArtifact(artifacts.recordings, window);
 
@@ -247,8 +251,12 @@ async function runPipeline(
 /** True once waiting any longer for Teams to publish the recording is futile. */
 function graceElapsed(meeting: PipelineMeeting, now: Date): boolean {
   if ((meeting.attempts ?? 0) >= RECORDING_GRACE_ATTEMPTS) return true;
-  if (!meeting.scheduledEnd) return false;
-  return now.getTime() >= meeting.scheduledEnd.getTime() + RECORDING_GRACE_MS;
+  // Same sentinel guard: a year-1 end would make the grace look long spent, so a
+  // prefer-recording run would settle for the transcript before Teams has had any
+  // chance to publish the recording.
+  const end = realDate(meeting.scheduledEnd);
+  if (!end) return false;
+  return now.getTime() >= end.getTime() + RECORDING_GRACE_MS;
 }
 
 // Mode 1 — the target: Teams' recording transcribed by hviske (good Danish), with
