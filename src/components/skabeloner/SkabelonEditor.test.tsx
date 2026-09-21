@@ -2,6 +2,9 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { tabTo } from '@/test/keyboard';
+import { getStep } from '@/lib/onboarding/steps';
 import { SkabelonEditor } from './SkabelonEditor';
 import type { Skabelon } from '@/types';
 import { encodeSkabelonCode } from '@/lib/skabeloner/share-code';
@@ -978,5 +981,17 @@ describe('SkabelonEditor — default shareConfig', () => {
       />,
     );
     expect(screen.getByPlaceholderText('Indsæt kode…')).toBeInTheDocument();
+  });
+});
+
+describe('SkabelonEditor — category helper tooltip', () => {
+  it('opens when keyboard focus lands on a category button', async () => {
+    const user = userEvent.setup();
+    renderEditor();
+
+    await tabTo(user, screen.getByRole('button', { name: 'Deltagere' }));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      getStep('skabeloner.category-helper').copy,
+    );
   });
 });

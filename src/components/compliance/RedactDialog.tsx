@@ -104,13 +104,17 @@ export function RedactDialog({ open, onOpenChange, meetingTitle, onConfirm }: Re
             Afbryd
           </Button>
           <OnboardingTooltip stepId="meeting-settings.redact-redirect">
-            <Button
-              variant="destructive"
-              onClick={handleConfirm}
-              disabled={!isMatch || loading}
-            >
-              {loading ? 'Sletter…' : 'Slet permanent'}
-            </Button>
+            {/* A disabled button fires no pointer or focus events, so the span is what the tooltip
+                hangs on. It only takes a tab stop while the button can't (an enabled button is one itself). */}
+            <span className="inline-flex" tabIndex={isMatch && !loading ? undefined : 0}>
+              <Button
+                variant="destructive"
+                onClick={handleConfirm}
+                disabled={!isMatch || loading}
+              >
+                {loading ? 'Sletter…' : 'Slet permanent'}
+              </Button>
+            </span>
           </OnboardingTooltip>
         </DialogFooter>
       </DialogContent>

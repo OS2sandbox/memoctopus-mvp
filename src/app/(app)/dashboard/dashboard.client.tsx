@@ -226,7 +226,7 @@ export default function OptaqPage() {
             </OnboardingHint>
 
             <OnboardingTooltip stepId="dashboard.keyboard-shortcuts">
-              <div style={{
+              <div tabIndex={0} style={{
                 marginTop: 10, fontFamily: 'var(--mono)', fontSize: 11,
                 color: 'var(--muted)', cursor: 'default', display: 'inline-block',
               }}>

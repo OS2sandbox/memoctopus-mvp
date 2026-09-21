@@ -1319,7 +1319,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
 
         {/* Signal bars (live volume) */}
         <OnboardingTooltip stepId="recording.signal-bars">
-          <div style={{ paddingBottom: 6 }}>
+          <div tabIndex={0} style={{ paddingBottom: 6 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', marginBottom: 8, letterSpacing: 0.4 }}>signal</div>
             <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 30 }}>
               {Array.from({ length: isMobile ? 20 : 36 }).map((_, i) => {

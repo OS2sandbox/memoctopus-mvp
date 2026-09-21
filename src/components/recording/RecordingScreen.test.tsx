@@ -2,6 +2,9 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { tabTo } from '@/test/keyboard';
+import { getStep } from '@/lib/onboarding/steps';
 import { RecordingScreen } from './RecordingScreen';
 import { OnboardingProvider } from '@/lib/onboarding/context';
 
@@ -1090,5 +1093,19 @@ describe('RecordingScreen — archivePromise failure surfaced to user (MEDIUM)',
       expect(screen.getByText(/lydfilen kunne ikke gemmes lokalt/)).toBeInTheDocument();
     }, { timeout: 5000 });
     expect(mockPush).not.toHaveBeenCalledWith('/meeting/meeting-abc/review');
+  });
+});
+
+describe('RecordingScreen — signal bars tooltip', () => {
+  it('opens when Tab reaches the signal bars and closes on Escape', async () => {
+    // Fake timers would stall userEvent's internal delays.
+    const user = userEvent.setup();
+    renderScreen();
+
+    await tabTo(user, screen.getByText('signal').parentElement as HTMLElement);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(getStep('recording.signal-bars').copy);
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
   });
 });

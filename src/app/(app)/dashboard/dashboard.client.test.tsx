@@ -2,6 +2,9 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { tabTo } from '@/test/keyboard';
+import { getStep } from '@/lib/onboarding/steps';
 import OptaqPage from './dashboard.client';
 import { OnboardingProvider } from '@/lib/onboarding/context';
 
@@ -778,5 +781,20 @@ describe('OptaqPage — static content', () => {
   it('renders the "mødedetaljer" label', () => {
     renderPage();
     expect(screen.getByText('mødedetaljer')).toBeInTheDocument();
+  });
+});
+
+describe('OptaqPage — keyboard shortcut hint', () => {
+  it('opens its tooltip when Tab reaches the hint and closes on Escape', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await tabTo(user, screen.getByText('genveje: R · U'));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      getStep('dashboard.keyboard-shortcuts').copy,
+    );
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
   });
 });

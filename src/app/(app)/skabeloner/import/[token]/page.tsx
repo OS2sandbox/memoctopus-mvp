@@ -69,7 +69,7 @@ export default function ImportSkabelonPage() {
         <div className="h-40 mt-8 bg-[var(--fill)] rounded-[var(--radius-lg)] animate-pulse" />
       ) : error && !preview ? (
         <OnboardingTooltip stepId="skabelon-import.error-next-steps">
-          <p className="mt-6 text-sm text-[var(--kill)]">{error}</p>
+          <p tabIndex={0} className="mt-6 text-sm text-[var(--kill)]">{error}</p>
         </OnboardingTooltip>
       ) : preview ? (
         <>
