@@ -823,6 +823,7 @@ describe('generateReferatBody — context budget', () => {
     await generateReferatBody(longTranscript(40, 1000), baseSpec);
 
     const summaryCalls = mockComplete.mock.calls.map((c) => c[0]).filter(isSummaryCall);
+    expect(summaryCalls.length).toBeGreaterThan(0); // guard against a vacuous pass
     for (const c of summaryCalls) expect(c.max_tokens).toBe(1024);
   });
 
@@ -1396,8 +1397,7 @@ Expected: no output.
 
 - [ ] **Step 2: Lint**
 
-Run: `npm run lint`
-Expected: no errors in the files this plan touched. Pre-existing warnings elsewhere may remain; do not fix unrelated ones.
+The repo has no ESLint configuration, so `npm run lint` (`next lint`) is interactive and offers to create one. Do **not** accept: press Ctrl+C / answer Cancel, and confirm `git status` shows no new files. Lint is not part of CI here; rely on `tsc` and the tests.
 
 - [ ] **Step 3: Whole test suite**
 
@@ -1483,7 +1483,7 @@ LLM_CONTEXT_TOKENS=6000 LLM_MAX_OUTPUT_TOKENS=1500 \
 npx vitest run src/lib/ai/zz-real-minutes.test.ts 2>&1 | tail -5
 ```
 
-Expected: 1 test passes. The transcript is about 45,000 characters against a budget of roughly 10,000, so it must take the split path.
+Expected: 1 test passes. Vitest hides `console.log`, so to *prove* the split path was taken, spy on it (`vi.spyOn(console, 'log')`), collect lines starting with `[minutes]`, and write them to the result file: a real 128k-window model would also cope with the whole transcript in one call, so a good referat alone proves nothing. Expect `mode=split`.
 
 - [ ] **Step 3: Check coverage of the referat**
 
