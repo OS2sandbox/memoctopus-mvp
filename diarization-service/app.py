@@ -39,6 +39,14 @@ HF_TOKEN = os.environ.get("HF_TOKEN")
 # credential fails silently (the series just stop). Turn it on where the service is
 # reachable from outside the internal network.
 METRICS_REQUIRE_AUTH = os.environ.get("DIARIZATION_METRICS_REQUIRE_AUTH", "").lower() in ("1", "true", "yes")
+if METRICS_REQUIRE_AUTH and not API_KEY:
+    # require_auth() returns early when no key is configured, so the flag would silently
+    # protect nothing. Say so at startup instead of letting the operator assume otherwise.
+    print(
+        "[diarization] WARNING: DIARIZATION_METRICS_REQUIRE_AUTH is set but "
+        "DIARIZATION_API_KEY is empty, so /metrics is NOT protected. Set an API key.",
+        flush=True,
+    )
 
 app = FastAPI(title="diarization-service")
 _bearer = HTTPBearer(auto_error=False)
@@ -103,6 +111,11 @@ diarization_jobs_total = Counter(
     "Diarization job outcomes",
     ["status", "failure_reason"],
 )
+# A labelled counter has no samples until its first .inc(), so without this
+# rate(...{status="failure"}) returns nothing until the first failure ever happens and a
+# failure-ratio alert has no series to compute from. Create them all at zero.
+for _status, _reason in (("success", ""), ("failure", "invalid_audio"), ("failure", "internal_error")):
+    diarization_jobs_total.labels(status=_status, failure_reason=_reason)
 
 # Wall time of the work itself — decode plus inference, excluding both the upload and
 # time spent queued behind another request. Separating these three is the point: the
