@@ -9,6 +9,8 @@ import {
   readPendingMeta,
   readPendingTranscript,
   storePendingTranscript,
+  sweepExpired,
+  acknowledgePendingTranscript,
   setMeetingOwner,
   getMeetingOwner,
   assertMeetingOwner,
@@ -298,5 +300,165 @@ describe('the TTL sweep on storePendingTranscript', () => {
     const unlinked = vi.mocked(fs.unlink).mock.calls.map(([p]) => String(p));
     expect(unlinked.some((p) => p.includes('other'))).toBe(true);
     expect(unlinked.some((p) => p.includes('current'))).toBe(false);
+  });
+});
+
+// ─── The periodic sweep ───────────────────────────────────────────────────────
+
+// sweepExpired is what the timer in pending-sweeper.ts runs, with no run of its own
+// to exclude. So it has to tell a run that is still working from an entry nobody
+// will collect, using only what is on disk.
+describe('sweepExpired', () => {
+  const MIN = 60 * 1000;
+  const HOUR = 60 * MIN;
+
+  function stashOf(files: Record<string, Record<string, unknown>>) {
+    vi.mocked(fs.readdir).mockResolvedValue(Object.keys(files) as never);
+    vi.mocked(fs.readFile).mockImplementation(async (p) => {
+      const name = String(p).split('/').pop()!;
+      if (!(name in files)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return Buffer.from(JSON.stringify(files[name])) as never;
+    });
+  }
+  const unlinked = () => vi.mocked(fs.unlink).mock.calls.map(([p]) => String(p).split('/').pop()!);
+
+  beforeEach(() => {
+    vi.mocked(fs.unlink).mockClear();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.mocked(fs.mkdir).mockResolvedValue(undefined as never);
+    vi.mocked(fs.writeFile).mockResolvedValue(undefined as never);
+    vi.mocked(fs.unlink).mockResolvedValue(undefined as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('removes every file of an entry nobody collected within the TTL, with no run to trigger it', async () => {
+    stashOf({
+      'old.owner.json': { userId: 'u', createdAt: Date.now() - 2 * HOUR },
+      'old.meta.json': { participants: [], durationSeconds: null, createdAt: Date.now() - 2 * HOUR },
+      'old.transcript.json': { status: 'ready', segments: [], createdAt: Date.now() - 2 * HOUR },
+    });
+
+    await sweepExpired();
+
+    expect(unlinked().sort()).toEqual(['old.meta.json', 'old.owner.json', 'old.transcript.json']);
+  });
+
+  it('leaves an entry that is still inside the TTL', async () => {
+    stashOf({
+      'fresh.owner.json': { userId: 'u', createdAt: Date.now() - 5 * MIN },
+      'fresh.transcript.json': { status: 'ready', segments: [], createdAt: Date.now() - 5 * MIN },
+    });
+
+    await sweepExpired();
+
+    expect(unlinked()).toEqual([]);
+  });
+
+  // A long run writes its owner file first and its transcript last. Judging each
+  // file on its own would delete the freshly finished transcript because the owner
+  // file next to it is old, and the meeting would then never be collectable.
+  it('judges an entry by its newest file, so an old owner file does not doom a fresh transcript', async () => {
+    stashOf({
+      'long.owner.json': { userId: 'u', createdAt: Date.now() - 3 * HOUR },
+      'long.transcript.json': { status: 'ready', segments: [], createdAt: Date.now() - 2 * MIN },
+    });
+
+    await sweepExpired();
+
+    expect(unlinked()).toEqual([]);
+  });
+
+  it('never removes a run in progress, however old its owner file', async () => {
+    stashOf({
+      'busy.owner.json': { userId: 'u', createdAt: Date.now() - 90 * MIN },
+      'busy.transcript.json': { status: 'processing', createdAt: Date.now() - 90 * MIN },
+    });
+
+    await sweepExpired();
+
+    expect(unlinked()).toEqual([]);
+  });
+
+  it('gives up on a processing stash once it is far older than any run could be', async () => {
+    stashOf({
+      'dead.owner.json': { userId: 'u', createdAt: Date.now() - 12 * HOUR },
+      'dead.transcript.json': { status: 'processing', createdAt: Date.now() - 12 * HOUR },
+    });
+
+    await sweepExpired();
+
+    expect(unlinked()).toEqual(expect.arrayContaining(['dead.owner.json', 'dead.transcript.json']));
+  });
+
+  it('spares the meeting named in exceptId', async () => {
+    stashOf({
+      'mine.owner.json': { userId: 'u', createdAt: Date.now() - 3 * HOUR },
+      'other.owner.json': { userId: 'u', createdAt: Date.now() - 3 * HOUR },
+    });
+
+    await sweepExpired('mine');
+
+    expect(unlinked()).toContain('other.owner.json');
+    expect(unlinked().some((f) => f.startsWith('mine.'))).toBe(false);
+  });
+
+  it('a write for one meeting cannot cost a concurrent, longer-running meeting its owner file', async () => {
+    // Run B has been transcribing for 90 minutes (past the 1 h TTL). Run A finishes
+    // and stores its transcript, which sweeps with A excluded. B must survive.
+    stashOf({
+      'runB.owner.json': { userId: 'u', createdAt: Date.now() - 90 * MIN },
+      'runB.transcript.json': { status: 'processing', createdAt: Date.now() - 90 * MIN },
+    });
+
+    await storePendingTranscript('runA', { status: 'ready', segments: [], diarized: true });
+
+    expect(unlinked()).toEqual([]);
+  });
+});
+
+// ─── Acknowledging a hand-off ─────────────────────────────────────────────────
+
+describe('acknowledgePendingTranscript', () => {
+  const unlinked = () => vi.mocked(fs.unlink).mock.calls.map(([p]) => String(p).split('/').pop()!);
+
+  beforeEach(() => {
+    vi.mocked(fs.unlink).mockReset();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(fs.unlink).mockResolvedValue(undefined as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('removes the transcript, the meta record and the owner binding of a collected meeting', async () => {
+    vi.mocked(fs.readFile).mockResolvedValue(
+      Buffer.from(JSON.stringify({ status: 'ready', segments: [], createdAt: 1 })) as never,
+    );
+
+    await acknowledgePendingTranscript('m1');
+
+    expect(unlinked().sort()).toEqual(['m1.meta.json', 'm1.owner.json', 'm1.transcript.json']);
+  });
+
+  it('is idempotent: acknowledging a meeting with nothing left is not an error', async () => {
+    vi.mocked(fs.readFile).mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    vi.mocked(fs.unlink).mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+
+    await expect(acknowledgePendingTranscript('m1')).resolves.toBeUndefined();
+  });
+
+  it('never removes a run that is in progress', async () => {
+    vi.mocked(fs.readFile).mockResolvedValue(
+      Buffer.from(JSON.stringify({ status: 'processing', createdAt: Date.now() })) as never,
+    );
+
+    await acknowledgePendingTranscript('m1');
+
+    expect(unlinked()).toEqual([]);
   });
 });

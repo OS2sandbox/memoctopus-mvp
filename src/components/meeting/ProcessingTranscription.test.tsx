@@ -672,3 +672,78 @@ describe('ProcessingTranscription', () => {
     await waitFor(() => expect(mockSaveTranscript).toHaveBeenCalled());
   });
 });
+
+// The server keeps its copy of the transcript until the browser says it has saved
+// it, so nothing is lost when the tab dies or the save fails half way.
+describe('ProcessingTranscription — acknowledging the server copy', () => {
+  const PENDING_URL = `/api/meetings/${MEETING_ID}/pending-transcript`;
+  const acks = () => mockFetch.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'DELETE');
+
+  it('acknowledges only after the transcript is saved and the meeting moved on', async () => {
+    const events: string[] = [];
+    mockFetch.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') { events.push('ack'); return { ok: true, json: async () => ({ ok: true }) }; }
+      return makeServerTranscript('ready', true);
+    });
+    mockSaveTranscript.mockImplementation(async () => { events.push('saveTranscript'); return {} as never; });
+    mockUpdateMeeting.mockImplementation(async () => { events.push('updateMeeting'); });
+
+    const onComplete = vi.fn();
+    renderComponent({ onComplete });
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+
+    expect(events).toEqual(['saveTranscript', 'updateMeeting', 'ack']);
+    expect(acks()[0][0]).toBe(PENDING_URL);
+  });
+
+  it('does not acknowledge, and so does not lose the server copy, when the save fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFetch.mockResolvedValue(makeServerTranscript('ready', true));
+    mockSaveTranscript.mockRejectedValueOnce(new Error('QuotaExceededError'));
+
+    renderComponent();
+
+    expect(await screen.findByText('Transskription fejlede')).toBeInTheDocument();
+    expect(acks()).toHaveLength(0);
+
+    // "Prøv igen" fetches the same transcript again and this time it sticks.
+    const onGetsBefore = mockFetch.mock.calls.length;
+    await userEvent.click(screen.getByText('Prøv igen'));
+    await waitFor(() => expect(acks()).toHaveLength(1));
+    expect(mockFetch.mock.calls.length).toBeGreaterThan(onGetsBefore);
+    expect(mockSaveTranscript).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not acknowledge when moving the meeting to review fails after the transcript was saved', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFetch.mockResolvedValue(makeServerTranscript('ready', true));
+    mockUpdateMeeting.mockRejectedValueOnce(new Error('idb closed'));
+
+    renderComponent();
+
+    expect(await screen.findByText('Transskription fejlede')).toBeInTheDocument();
+    expect(acks()).toHaveLength(0);
+  });
+
+  it('a failed acknowledgement does not fail the hand-off: the TTL sweep cleans up', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockFetch.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') throw new Error('offline');
+      return makeServerTranscript('ready', true);
+    });
+
+    const onComplete = vi.fn();
+    renderComponent({ onComplete });
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+  });
+
+  it('sends no acknowledgement when there was no server-side transcript to collect', async () => {
+    mockFetch.mockResolvedValue(makeServerTranscript('none'));
+    const onComplete = vi.fn();
+    renderComponent({ onComplete });
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(acks()).toHaveLength(0);
+  });
+});
+

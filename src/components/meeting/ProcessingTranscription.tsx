@@ -48,6 +48,18 @@ async function collectServerTranscript(
   return null;
 }
 
+// Tell the server the transcript is safely in IndexedDB, so it can drop its copy.
+// The server deletes nothing on read, so this is the only thing that does. Called
+// strictly AFTER the save. It is best effort: if it fails the server copy is swept
+// after its TTL, which is harmless, whereas failing the hand-off here would not be.
+async function acknowledgeServerTranscript(meetingId: string): Promise<void> {
+  try {
+    await fetch(`/api/meetings/${meetingId}/pending-transcript`, { method: 'DELETE' });
+  } catch (err) {
+    console.warn('[ProcessingTranscription] kunne ikke kvittere for transskriptionen:', err);
+  }
+}
+
 interface BatchProgress {
   completed: number;
   total: number;
@@ -102,6 +114,8 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
             const turns = startDiarization(meetingId, blob);
             void turns.then((t) => finishDiarization(meetingId, t));
           }
+          // Saved: only now may the server drop its copy.
+          await acknowledgeServerTranscript(meetingId);
           onComplete?.();
           return;
         }
