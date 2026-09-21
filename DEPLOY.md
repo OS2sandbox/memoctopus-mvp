@@ -204,6 +204,18 @@ downloads the Teams recording and re-transcribes it locally with hviske, while
 asks for the recording permission — the right choice for a customer who does not
 want meeting audio at rest here.
 
+**Retention of collected transcripts.** The recording is transcribed and dropped, but
+the finished transcript sits as a file under `AUDIO_STORAGE_PATH/pending-artifacts`
+until the user's browser has saved it to IndexedDB and acknowledged that. Reading it
+does not delete it. Anything not acknowledged is removed after one hour by a sweep
+that runs every five minutes from the app's start-up hook, independent of other
+meetings, so an uncollected transcript stays at most about an hour plus five minutes
+(the leftovers of a run that died mid-way are reaped after six hours; a run that is
+still working is never touched).
+The sweep runs even with `TEAMS_GRAPH_ENABLED` off, so leftovers do not linger. If
+the user returns after that, the meeting screen offers "Hent igen", which collects it
+from Teams again while the meeting is less than 24 hours old.
+
 ## Single sign-on (OIDC)
 
 Memoctopus can sign users in against any standards-compliant OIDC provider —
