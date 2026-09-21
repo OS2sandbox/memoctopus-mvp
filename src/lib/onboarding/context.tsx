@@ -18,9 +18,11 @@ type OnboardingContextValue = {
    * bubbles at once. `claim` registers a step as pending (FIFO — first
    * mounted, first shown) and returns whether THIS instance owns the slot:
    * the same step id can wrap several DOM elements (e.g. a "Del" button
-   * repeated once per card in a list), but only the first mounted instance
-   * ever claims ownership, so only one bubble renders for that step no
-   * matter how many elements reference it.
+   * repeated once per card in a list), but only one instance owns the slot
+   * at a time, so only one bubble renders for that step no matter how many
+   * elements reference it. The other instances wait behind the owner and the
+   * next one takes over (keeping the step's place in the queue) when the
+   * owner releases.
    */
   claim: (key: string, instanceId: string) => boolean;
   release: (key: string, instanceId: string) => void;
@@ -76,13 +78,14 @@ export function OnboardingProvider({
     !unavailable && !initial.tourSkipped && !initial.tourCompleted && initial.seen.length === 0;
   const [showWelcome, setShowWelcome] = useState(isFirstTimeUser);
 
-  // FIFO queue of pending (unseen, mounted) hint keys and which component
-  // instance owns each one. Not reactive state on its own — `queueVersion`
-  // is bumped to force a re-render whenever the queue changes, since the
-  // queue/owners themselves live in refs to avoid tearing between the many
-  // OnboardingHint instances that read and mutate them during render/effects.
+  // FIFO queue of pending (unseen, mounted) hint keys and the component
+  // instances waiting on each one (the first is the owner). Not reactive
+  // state on its own — `queueVersion` is bumped to force a re-render whenever
+  // the queue changes, since the queue/claimants themselves live in refs to
+  // avoid tearing between the many OnboardingHint instances that read and
+  // mutate them during render/effects.
   const queueRef = useRef<string[]>([]);
-  const ownersRef = useRef<Map<string, string>>(new Map());
+  const claimantsRef = useRef<Map<string, string[]>>(new Map());
   const [queueVersion, setQueueVersion] = useState(0);
 
   const isStepSeen = useCallback(
@@ -92,28 +95,38 @@ export function OnboardingProvider({
   );
 
   const claim = useCallback((key: string, instanceId: string): boolean => {
-    const owners = ownersRef.current;
-    if (!owners.has(key)) {
-      owners.set(key, instanceId);
+    const claimants = claimantsRef.current;
+    const waiting = claimants.get(key);
+    if (!waiting) {
+      claimants.set(key, [instanceId]);
       queueRef.current = [...queueRef.current, key];
       setQueueVersion((v) => v + 1);
       return true;
     }
-    return owners.get(key) === instanceId;
+    if (!waiting.includes(instanceId)) waiting.push(instanceId);
+    return waiting[0] === instanceId;
   }, []);
 
   const release = useCallback((key: string, instanceId: string) => {
-    const owners = ownersRef.current;
-    if (owners.get(key) !== instanceId) return;
-    owners.delete(key);
-    queueRef.current = queueRef.current.filter((k) => k !== key);
+    const claimants = claimantsRef.current;
+    const waiting = claimants.get(key);
+    if (!waiting?.includes(instanceId)) return;
+    const rest = waiting.filter((id) => id !== instanceId);
+    if (rest.length > 0) {
+      // Another instance of the same step is still mounted: it inherits the slot
+      // (and the step's place in the queue) instead of the hint silently vanishing.
+      claimants.set(key, rest);
+    } else {
+      claimants.delete(key);
+      queueRef.current = queueRef.current.filter((k) => k !== key);
+    }
     setQueueVersion((v) => v + 1);
   }, []);
 
   const isActive = useCallback(
     (key: string, instanceId: string): boolean => {
       void queueVersion; // subscribe to queue changes
-      if (ownersRef.current.get(key) !== instanceId) return false;
+      if (claimantsRef.current.get(key)?.[0] !== instanceId) return false;
       return queueRef.current[0] === key;
     },
     [queueVersion],
@@ -127,8 +140,8 @@ export function OnboardingProvider({
       next.add(key);
       return next;
     });
-    if (ownersRef.current.has(key)) {
-      ownersRef.current.delete(key);
+    if (claimantsRef.current.has(key)) {
+      claimantsRef.current.delete(key);
       queueRef.current = queueRef.current.filter((k) => k !== key);
       setQueueVersion((v) => v + 1);
     }

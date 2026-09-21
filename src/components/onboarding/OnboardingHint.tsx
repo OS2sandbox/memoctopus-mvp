@@ -20,8 +20,9 @@ function hintKey(stepId: string, meetingId: string | null): string {
  * several bubbles at once — pending hints queue in mount order and are
  * revealed one by one as each is dismissed. A step id can also wrap more
  * than one DOM element (e.g. the same "Del" button repeated once per card
- * in a list); only the first-mounted instance claims the slot, so the
- * bubble renders exactly once no matter how many elements reference it.
+ * in a list); only one instance owns the slot at a time (the next mounted
+ * one takes over if the owner unmounts), so the bubble renders exactly once
+ * no matter how many elements reference it.
  *
  * Use for `engine: 'popover'` steps — one-time, high/medium-severity hints
  * about non-obvious or destructive behavior. For always-visible ambient
@@ -52,19 +53,29 @@ export function OnboardingHint({
   // A hint should be visible at most once: if the user navigates away while
   // it's showing (instead of clicking "forstået"), the unmount below would
   // otherwise leave the step unseen, so it queues up again next time this
-  // stepId/meetingId mounts (e.g. revisiting a page). Track whether this
-  // instance actually got shown and, if so, mark it seen on unmount too.
-  const wasOpenRef = useRef(false);
+  // stepId/meetingId mounts (e.g. revisiting a page). Track WHICH key this
+  // instance actually got shown for (one instance is reused when the key
+  // changes) and, if so, mark it seen on unmount too. Dismissing already
+  // saves, so it clears the ref to keep the cleanup from saving a second time.
+  const shownKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (open) wasOpenRef.current = true;
-  }, [open]);
+    if (open) shownKeyRef.current = key;
+  }, [open, key]);
+
+  const dismiss = () => {
+    shownKeyRef.current = null;
+    markSeen(stepId, meetingId);
+  };
 
   useEffect(() => {
     if (!pending) return;
     claim(key, instanceId);
     return () => {
       release(key, instanceId);
-      if (wasOpenRef.current) markSeen(stepId, meetingId);
+      if (shownKeyRef.current === key) {
+        shownKeyRef.current = null;
+        markSeen(stepId, meetingId);
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, key, instanceId]);
@@ -85,7 +96,7 @@ export function OnboardingHint({
             sideOffset={8}
             collisionPadding={12}
             onOpenAutoFocus={(e) => e.preventDefault()}
-            onEscapeKeyDown={() => markSeen(stepId, meetingId)}
+            onEscapeKeyDown={dismiss}
             style={{
               zIndex: 60,
               maxWidth: 280,
@@ -104,7 +115,7 @@ export function OnboardingHint({
             <span>{step.copy}</span>
             <button
               type="button"
-              onClick={() => markSeen(stepId, meetingId)}
+              onClick={dismiss}
               style={{
                 alignSelf: 'flex-end',
                 background: 'rgba(255,255,255,0.16)',
