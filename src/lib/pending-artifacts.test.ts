@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs/promises';
+import path from 'path';
 
 // Mock fs/promises so no real disk I/O happens.
 vi.mock('fs/promises');
@@ -261,7 +262,7 @@ describe('the TTL sweep on storePendingTranscript', () => {
     await storePendingTranscript('current', { status: 'processing' });
 
     const unlinked = vi.mocked(fs.unlink).mock.calls.map(([p]) => String(p));
-    expect(unlinked.some((p) => p.includes('stale'))).toBe(true);
+    expect(unlinked.some((p) => path.basename(p).includes('stale'))).toBe(true);
   });
 
   it('leaves an entry that is still inside the TTL', async () => {
@@ -269,7 +270,7 @@ describe('the TTL sweep on storePendingTranscript', () => {
     await storePendingTranscript('current', { status: 'processing' });
 
     const unlinked = vi.mocked(fs.unlink).mock.calls.map(([p]) => String(p));
-    expect(unlinked.some((p) => p.includes('fresh'))).toBe(false);
+    expect(unlinked.some((p) => path.basename(p).includes('fresh'))).toBe(false);
   });
 
   // The owner file is written once at the start of a run, while the download,
@@ -286,7 +287,7 @@ describe('the TTL sweep on storePendingTranscript', () => {
     await storePendingTranscript('current', { status: 'ready', segments: [], diarized: true });
 
     const unlinked = vi.mocked(fs.unlink).mock.calls.map(([p]) => String(p));
-    expect(unlinked.some((p) => p.includes('current'))).toBe(false);
+    expect(unlinked.some((p) => path.basename(p).includes('current'))).toBe(false);
   });
 
   it('still sweeps other stale meetings while one is in flight', async () => {
@@ -298,8 +299,8 @@ describe('the TTL sweep on storePendingTranscript', () => {
     await storePendingTranscript('current', { status: 'processing' });
 
     const unlinked = vi.mocked(fs.unlink).mock.calls.map(([p]) => String(p));
-    expect(unlinked.some((p) => p.includes('other'))).toBe(true);
-    expect(unlinked.some((p) => p.includes('current'))).toBe(false);
+    expect(unlinked.some((p) => path.basename(p).includes('other'))).toBe(true);
+    expect(unlinked.some((p) => path.basename(p).includes('current'))).toBe(false);
   });
 });
 
