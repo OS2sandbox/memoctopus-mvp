@@ -28,6 +28,7 @@ export async function createMeeting(data: {
   recordedAt?: string;
   // Microsoft Graph meeting details, set when a meeting is armed from the
   // dashboard (calendar pick or pasted link). Omitted for local recordings.
+  graphManaged?: boolean;
   teamsArmed?: boolean;
   teamsIsOrganizer?: boolean;
   teamsSubject?: string;
@@ -52,6 +53,7 @@ export async function createMeeting(data: {
   };
   // Only write the Teams fields that were actually supplied, so a local recording's
   // record stays free of undefined keys.
+  if (data.graphManaged !== undefined) meeting.graphManaged = data.graphManaged;
   if (data.teamsArmed !== undefined) meeting.teamsArmed = data.teamsArmed;
   if (data.teamsIsOrganizer !== undefined) meeting.teamsIsOrganizer = data.teamsIsOrganizer;
   if (data.teamsSubject !== undefined) meeting.teamsSubject = data.teamsSubject;

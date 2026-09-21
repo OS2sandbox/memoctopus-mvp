@@ -19,6 +19,13 @@ export interface StoredMeeting {
   audioDurationSeconds: number | null;
   audioSizeBytes: number;
   audioDeleted: boolean;
+  // Set on every meeting created for the Graph integration (the dashboard's link
+  // flow). A `source: 'teams'` meeting without it was left behind by the removed
+  // Playwright bot. Not derivable from `status`: a Graph meeting moves on to
+  // processing, review, minutes and done like any other. `teamsArmed` can't serve,
+  // since it is false for an invitee, and `teamsSubject` / `scheduledStart` are
+  // absent for instant meetings.
+  graphManaged?: boolean;
   // Microsoft Graph ("Memoctopus slået til") state, mirrored from the server-side
   // teams_meetings row so the meeting list and the awaiting screen can render
   // without a round-trip. All optional — meetings created before this existed, and
