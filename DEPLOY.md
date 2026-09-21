@@ -170,6 +170,25 @@ deprecation warning; on that path the provider id stays `authentik`, so your
 registered redirect URI and existing accounts are unaffected. To migrate, copy the
 three values to their `OIDC_*` names and set `OIDC_PROVIDER_ID=authentik`.
 
+## Long meetings: LLM context window
+
+Minutes generation sizes its prompt from the chat model's context window. A transcript
+that fits goes to the model in one call; a longer one is summarised in parts and the
+referat is written from the summaries, so a long meeting never overflows the window or
+comes back cut off. If even that is not possible the user sees a clear error instead of
+an incomplete referat.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LLM_CONTEXT_TOKENS` | `128000` for hosted OpenAI, `32768` otherwise | The model's context window in tokens |
+| `LLM_MAX_OUTPUT_TOKENS` | `16384` for hosted OpenAI, `4096` otherwise | Longest referat the model may write |
+
+With the bundled vLLM, `LLM_CONTEXT_TOKENS` follows `VLLM_CHAT_MAX_MODEL_LEN` automatically,
+so changing the vLLM window changes the app too. If you point `LLM_BASE_URL` at your own
+model, set `LLM_CONTEXT_TOKENS` to that model's real window; the default is deliberately
+conservative because the app cannot know it. Both are read at runtime: change them and run
+`docker compose up -d app`, no rebuild.
+
 ## Day-2 operations
 
 > These `docker compose` commands need docker-group membership (the bootstrap
