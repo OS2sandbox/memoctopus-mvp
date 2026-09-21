@@ -320,10 +320,19 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       CREATE TABLE IF NOT EXISTS "${schema}".onboarding_progress (
         id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
         step_id     TEXT NOT NULL,
-        meeting_id  TEXT REFERENCES "${schema}".meetings(id) ON DELETE CASCADE,
+        meeting_id  TEXT,
         status      TEXT NOT NULL DEFAULT 'seen',
         seen_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
+    `);
+
+    // meeting_id is a plain id, NOT a foreign key: meetings live in the browser's IndexedDB
+    // and nothing inserts into this schema's meetings table, so a REFERENCES there rejects
+    // every per-meeting hint. Databases that already created the table with the constraint
+    // lose it here (idempotent).
+    await client.query(`
+      ALTER TABLE "${schema}".onboarding_progress
+        DROP CONSTRAINT IF EXISTS onboarding_progress_meeting_id_fkey
     `);
 
     await client.query(`

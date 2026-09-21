@@ -37,7 +37,29 @@ export type OnboardingInitialState = {
   tourSkipped: boolean;
   tourCompleted: boolean;
   seen: SeenStep[];
+  /**
+   * The server could not load this user's onboarding state (for example a database
+   * error). Show nothing rather than everything: an empty `seen` list would otherwise
+   * look like a brand-new user and open the welcome dialog and every hint.
+   */
+  unavailable?: boolean;
 };
+
+// Fire-and-forget save. A lost write only means a hint shows once more next visit, which
+// is fine for onboarding copy, but a server-side rejection should be visible in the console
+// instead of being swallowed. Offline (fetch rejects) is expected and stays quiet.
+async function postStep(body: Record<string, unknown>): Promise<void> {
+  try {
+    const res = await fetch('/api/onboarding/step', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) console.warn(`[onboarding] could not save (HTTP ${res.status})`, body);
+  } catch {
+    // offline or aborted
+  }
+}
 
 export function OnboardingProvider({
   initial,
@@ -49,7 +71,9 @@ export function OnboardingProvider({
   const [seen, setSeen] = useState<Set<string>>(
     () => new Set(initial.seen.map((s) => seenKey(s.stepId, s.meetingId))),
   );
-  const isFirstTimeUser = !initial.tourSkipped && !initial.tourCompleted && initial.seen.length === 0;
+  const unavailable = initial.unavailable === true;
+  const isFirstTimeUser =
+    !unavailable && !initial.tourSkipped && !initial.tourCompleted && initial.seen.length === 0;
   const [showWelcome, setShowWelcome] = useState(isFirstTimeUser);
 
   // FIFO queue of pending (unseen, mounted) hint keys and which component
@@ -62,8 +86,9 @@ export function OnboardingProvider({
   const [queueVersion, setQueueVersion] = useState(0);
 
   const isStepSeen = useCallback(
-    (stepId: string, meetingId: string | null = null) => seen.has(seenKey(stepId, meetingId)),
-    [seen],
+    (stepId: string, meetingId: string | null = null) =>
+      unavailable || seen.has(seenKey(stepId, meetingId)),
+    [seen, unavailable],
   );
 
   const claim = useCallback((key: string, instanceId: string): boolean => {
@@ -107,36 +132,20 @@ export function OnboardingProvider({
       queueRef.current = queueRef.current.filter((k) => k !== key);
       setQueueVersion((v) => v + 1);
     }
-    // Fire-and-forget: a lost write just means this hint reshows once next visit,
-    // which is an acceptable cost for onboarding copy.
-    fetch('/api/onboarding/step', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ stepId, meetingId }),
-    }).catch(() => {});
+    void postStep({ stepId, meetingId });
   }, []);
 
   const openWelcome = useCallback(() => setShowWelcome(true), []);
 
   const closeWelcome = useCallback((skip?: boolean) => {
     setShowWelcome(false);
-    if (skip) {
-      fetch('/api/onboarding/step', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'skip-tour' }),
-      }).catch(() => {});
-    }
+    if (skip) void postStep({ action: 'skip-tour' });
   }, []);
 
   const startTour = useCallback(() => {
     setShowWelcome(false);
     setSeen(new Set());
-    fetch('/api/onboarding/step', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'reset-hints' }),
-    }).catch(() => {});
+    void postStep({ action: 'reset-hints' });
   }, []);
 
   const value = useMemo(
