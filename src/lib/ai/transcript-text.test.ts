@@ -62,9 +62,7 @@ describe('splitTurns', () => {
 
   it('returns a single part when everything fits', () => {
     const parts = splitTurns([turn(0, 'kort'), turn(1, 'også kort')], 1000);
-    expect(parts).toHaveLength(1);
-    expect(parts[0].start).toBe(0);
-    expect(parts[0].text).toBe(renderTurns([turn(0, 'kort'), turn(1, 'også kort')]));
+    expect(parts).toEqual([renderTurns([turn(0, 'kort'), turn(1, 'også kort')])]);
   });
 
   it('returns no parts for no turns', () => {
@@ -77,19 +75,9 @@ describe('splitTurns', () => {
     const parts = splitTurns(turns, budget);
 
     expect(parts.length).toBeGreaterThan(1);
-    for (const p of parts) expect(p.text.length).toBeLessThanOrEqual(budget);
+    for (const p of parts) expect(p.length).toBeLessThanOrEqual(budget);
     // Whole turns only: rejoining the parts reproduces the full rendering exactly.
-    expect(parts.map((p) => p.text).join('\n')).toBe(renderTurns(turns));
-  });
-
-  it('starts each part at the start time of its first turn', () => {
-    const turns = Array.from({ length: 6 }, (_, i) => turn(i, 'x'.repeat(100)));
-    const parts = splitTurns(turns, 250);
-    expect(parts[0].start).toBe(0);
-    for (const p of parts) {
-      const first = /\((\d+):(\d{2})\)/.exec(p.text)!;
-      expect(p.start).toBe(Number(first[1]) * 60 + Number(first[2]));
-    }
+    expect(parts.join('\n')).toBe(renderTurns(turns));
   });
 
   it('splits a single over-long turn at whitespace, losing no words', () => {
@@ -99,12 +87,12 @@ describe('splitTurns', () => {
     const parts = splitTurns([long], budget);
 
     expect(parts.length).toBeGreaterThan(1);
-    for (const p of parts) expect(p.text.length).toBeLessThanOrEqual(budget);
+    for (const p of parts) expect(p.length).toBeLessThanOrEqual(budget);
     // Each piece is its own rendered line. Strip the "[Taler 1] (0:30): " prefix from every
     // line and rejoin: the words are intact (independent of how pieces pack into parts).
     const prefix = '[Taler 1] (0:30): ';
     const rejoined = parts
-      .flatMap((p) => p.text.split('\n'))
+      .flatMap((p) => p.split('\n'))
       .map((line) => line.slice(prefix.length))
       .join(' ');
     expect(rejoined).toBe(long.text);
@@ -115,10 +103,10 @@ describe('splitTurns', () => {
     const budget = 300;
     const parts = splitTurns([long], budget);
 
-    for (const p of parts) expect(p.text.length).toBeLessThanOrEqual(budget);
+    for (const p of parts) expect(p.length).toBeLessThanOrEqual(budget);
     const prefix = '[Taler 1] (0:00): ';
     const rejoined = parts
-      .flatMap((p) => p.text.split('\n'))
+      .flatMap((p) => p.split('\n'))
       .map((line) => line.slice(prefix.length))
       .join('');
     expect(rejoined).toBe(long.text);

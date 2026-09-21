@@ -10,11 +10,6 @@ export interface Turn {
   text: string;
 }
 
-export interface TurnPart {
-  text: string;  // rendered turns, at most the requested budget
-  start: number; // start (seconds) of the first turn in this part
-}
-
 export function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
@@ -61,18 +56,17 @@ function splitLongTurn(turn: Turn, budgetChars: number): Turn[] {
   return pieces;
 }
 
-// Pack consecutive turns into parts that each render to at most `budgetChars`, splitting
+// Pack consecutive turns into rendered parts that each fit in `budgetChars`, splitting
 // at turn boundaries. Every character of every turn lands in exactly one part, in order
 // (only the whitespace at an in-turn split point is dropped).
-export function splitTurns(turns: Turn[], budgetChars: number): TurnPart[] {
-  const parts: TurnPart[] = [];
+export function splitTurns(turns: Turn[], budgetChars: number): string[] {
+  const parts: string[] = [];
   let lines: string[] = [];
   let size = 0;
-  let partStart = 0;
 
   const flush = () => {
     if (lines.length > 0) {
-      parts.push({ text: lines.join('\n'), start: partStart });
+      parts.push(lines.join('\n'));
       lines = [];
       size = 0;
     }
@@ -82,7 +76,6 @@ export function splitTurns(turns: Turn[], budgetChars: number): TurnPart[] {
     for (const piece of splitLongTurn(turn, budgetChars)) {
       const line = renderTurn(piece);
       if (lines.length > 0 && size + 1 + line.length > budgetChars) flush();
-      if (lines.length === 0) partStart = piece.start;
       size += (lines.length > 0 ? 1 : 0) + line.length;
       lines.push(line);
     }

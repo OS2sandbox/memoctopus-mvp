@@ -9,7 +9,7 @@ import {
 } from './llm-limits';
 import { mapWithLimit } from './map-with-limit';
 import { MinutesConfigError, MinutesTooLongError, MinutesTruncatedError } from './minutes-errors';
-import { formatTime, mergeSpeakerTurns, renderTurns, splitTurns, type Turn } from './transcript-text';
+import { mergeSpeakerTurns, renderTurns, splitTurns, type Turn } from './transcript-text';
 
 const MINUTES_SYSTEM_PROMPT = `Du er en dansk mødesekretær der udarbejder professionelle mødereferater.
 
@@ -94,14 +94,6 @@ Transskription:
 ${transcriptText}`;
 }
 
-// A call that stops because it ran out of output tokens returns a cut-off document with no
-// error. Never hand that to the user as if it were complete.
-function assertNotTruncated(finishReason: string | null | undefined, what: string): void {
-  if (finishReason === 'length') {
-    throw new MinutesTruncatedError(`The model hit its output limit while writing the ${what}`);
-  }
-}
-
 async function _generateBody(transcriptText: string, instruction: string): Promise<string> {
   const { maxOutputTokens } = getLlmLimits();
   const response = await getLlmClient().chat.completions.create({
@@ -113,7 +105,11 @@ async function _generateBody(transcriptText: string, instruction: string): Promi
     ],
   });
 
-  assertNotTruncated(response.choices[0]?.finish_reason, 'referat');
+  // A call that runs out of output tokens returns a cut-off document with no error. Never
+  // hand that to the user as if it were a complete referat.
+  if (response.choices[0]?.finish_reason === 'length') {
+    throw new MinutesTruncatedError('The model hit its output limit while writing the referat');
+  }
   const raw = response.choices[0]?.message?.content ?? '';
   // Strip an accidental markdown code fence if the model wraps the document.
   return raw
@@ -138,7 +134,11 @@ Returner kun en punktliste.`,
     ],
   });
 
-  assertNotTruncated(response.choices[0]?.finish_reason, 'opsummering');
+  // A summary cut off at its cap is still a usable (slightly shorter) bullet list, and it
+  // is only an input to the referat — failing the whole meeting over it would be worse.
+  if (response.choices[0]?.finish_reason === 'length') {
+    console.warn(`[minutes] summary of "${title}" hit its ${SUMMARY_MAX_OUTPUT_TOKENS}-token cap`);
+  }
   return response.choices[0]?.message?.content?.trim() ?? '';
 }
 
@@ -153,12 +153,9 @@ interface Unit {
 async function _summarizeUnits(units: Unit[], budget: number): Promise<string> {
   const jobs = units.flatMap((unit) => {
     const parts = splitTurns(unit.turns, budget);
-    return parts.map((part, i) => ({
-      heading:
-        parts.length > 1
-          ? `${unit.title} (del ${i + 1}/${parts.length}, fra ${formatTime(part.start)})`
-          : unit.title,
-      text: part.text,
+    return parts.map((text, i) => ({
+      heading: parts.length > 1 ? `${unit.title} (del ${i + 1}/${parts.length})` : unit.title,
+      text,
     }));
   });
 

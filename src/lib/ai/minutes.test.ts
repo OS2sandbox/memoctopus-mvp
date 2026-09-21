@@ -248,6 +248,18 @@ describe('generateReferatBody — context budget', () => {
     for (const c of summaryCalls) expect(c.max_tokens).toBe(1024);
   });
 
+  it('tolerates a summary cut off at its output cap instead of failing the referat', async () => {
+    mockComplete.mockImplementation(async (req: { messages: { content: string }[] }) =>
+      isSummaryCall(req)
+        ? { choices: [{ message: { content: '- punkt' }, finish_reason: 'length' }] }
+        : openaiResponse('REFERAT'),
+    );
+
+    const result = await generateReferatBody(longTranscript(40, 1000), baseSpec);
+
+    expect(result.body).toBe('REFERAT');
+  });
+
   it('runs at most 3 summary calls at a time', async () => {
     let inFlight = 0;
     let peak = 0;
@@ -285,7 +297,7 @@ describe('generateReferatBody — context budget', () => {
 
     const summaryCalls = mockComplete.mock.calls.map((c) => c[0]).filter(isSummaryCall);
     expect(summaryCalls.length).toBeGreaterThanOrEqual(3);
-    expect(lastContent(summaryCalls[0])).toContain('"Stort kapitel (del 1/');
+    expect(lastContent(summaryCalls[0])).toMatch(/"Stort kapitel \(del 1\/\d+\)"/);
   });
 
   it('keeps the per-chapter path for chaptered transcripts over the 20k-character threshold', async () => {
