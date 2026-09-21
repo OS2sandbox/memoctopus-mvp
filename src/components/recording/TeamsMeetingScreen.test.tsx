@@ -51,6 +51,10 @@ function statusBody(overrides: Status = {}): Status {
 
 /** What GET /api/meetings/<id>/pending-meta answers with; overridden per test. */
 let metaResponse: unknown = null;
+/** What GET /api/meetings/<id>/pending-transcript answers with (the "is it still there" probe). */
+let transcriptResponse: unknown = null;
+/** What POST /api/teams/meetings/<id> (re-collect) answers with. */
+let recollectResponse: unknown = null;
 
 function jsonMeta(body: unknown) {
   return {
@@ -63,11 +67,16 @@ function jsonMeta(body: unknown) {
 
 function respondWith(bodies: Status[] | Status) {
   const queue = Array.isArray(bodies) ? [...bodies] : null;
-  mockFetch.mockImplementation(async (url: string) => {
+  mockFetch.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (String(url).endsWith('/pending-transcript')) {
+      // Default: the server copy is still there.
+      return transcriptResponse ?? jsonMeta({ status: 'ready', segments: [], diarized: true });
+    }
     if (String(url).startsWith('/api/meetings/')) {
       // Default: nothing to collect, so the screen continues straight on.
       return metaResponse ?? jsonMeta({ status: 'no-recording' });
     }
+    if (init?.method === 'POST') return recollectResponse ?? jsonMeta(statusBody({ state: 'awaiting_teams' }));
     const body = queue ? (queue.length > 1 ? queue.shift()! : queue[0]) : (bodies as Status);
     return { ok: true, status: 200, json: async () => body };
   });
@@ -80,6 +89,8 @@ function renderScreen(url = MEETING_URL) {
 beforeEach(() => {
   vi.clearAllMocks();
   metaResponse = null;
+  transcriptResponse = null;
+  recollectResponse = null;
   mockSaveAudio.mockResolvedValue(undefined);
   mockUpdateMeeting.mockResolvedValue(undefined);
   mockDeleteMeeting.mockResolvedValue(undefined);
@@ -397,5 +408,121 @@ describe('TeamsMeetingScreen — error handling', () => {
     mockFetch.mockRejectedValue(new Error('offline'));
     renderScreen();
     expect(await screen.findByRole('alert')).toHaveTextContent(/Kunne ikke hente status fra Teams/);
+  });
+});
+
+
+describe('TeamsMeetingScreen — the hand-off of the collected transcript', () => {
+  const failing = (status: number) => ({ ok: false, status, headers: new Headers(), json: async () => ({}) });
+  const calls = (pred: (url: string, init?: RequestInit) => boolean) =>
+    mockFetch.mock.calls.filter(([u, i]) => pred(String(u), i as RequestInit | undefined));
+
+  // Used to be swallowed: a 401 or a 500 was read as "no names" and the screen
+  // carried on to a review with an empty participant list.
+  it.each([401, 500])('shows an error for a %s from pending-meta instead of carrying on', async (status) => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    metaResponse = failing(status);
+    respondWith(statusBody({ state: 'ready' }));
+
+    renderScreen();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Kunne ikke hente transskriptionen fra serveren/);
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(mockUpdateMeeting).not.toHaveBeenCalled();
+  });
+
+  it('lets the user try again after such an error, and then continues to the review', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    metaResponse = failing(500);
+    respondWith(statusBody({ state: 'ready' }));
+    renderScreen();
+    await screen.findByRole('alert');
+
+    metaResponse = jsonMeta({ status: 'no-recording', participants: ['Mette Hansen'], durationSeconds: 60 });
+    await act(async () => { fireEvent.click(screen.getByText('Tjek nu')); });
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/meeting/${MEETING_ID}/review`));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('still keeps asking on a 404 from pending-meta (the run has not finished)', async () => {
+    vi.useFakeTimers();
+    metaResponse = failing(404);
+    respondWith(statusBody({ state: 'ready' }));
+    renderScreen();
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    expect(calls((u) => u.endsWith('/pending-meta')).length).toBeGreaterThan(2);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('leaves the server copy alone: acknowledging it is the job of whoever saves it', async () => {
+    respondWith(statusBody({ state: 'ready' }));
+    renderScreen();
+    await waitFor(() => expect(mockPush).toHaveBeenCalled());
+    expect(calls((_u, init) => init?.method === 'DELETE')).toHaveLength(0);
+  });
+
+  describe('when the ready meeting has lost its transcript on the server', () => {
+    beforeEach(() => {
+      transcriptResponse = jsonMeta({ status: 'none' });
+      respondWith(statusBody({ state: 'ready' }));
+    });
+
+    it('offers "Hent igen" instead of opening an empty review', async () => {
+      renderScreen();
+
+      expect(await screen.findByText('Hent igen')).toBeInTheDocument();
+      expect(screen.getByText(/ikke længere på serveren/)).toBeInTheDocument();
+      expect(screen.queryByText(/Åbner gennemgangen/)).toBeNull();
+      expect(mockPush).not.toHaveBeenCalled();
+      expect(mockUpdateMeeting).not.toHaveBeenCalled();
+    });
+
+    it('asks the server to re-collect, then forces a poll and continues from there', async () => {
+      renderScreen();
+      const btn = await screen.findByText('Hent igen');
+      mockFetch.mockClear();
+
+      await act(async () => { fireEvent.click(btn); });
+
+      await waitFor(() => {
+        expect(mockFetch).toHaveBeenCalledWith(`/api/teams/meetings/${MEETING_ID}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'recollect' }),
+        });
+        expect(mockFetch).toHaveBeenCalledWith(`/api/teams/meetings/${MEETING_ID}?poll=1`);
+      });
+      const order = mockFetch.mock.calls.map(([u, i]) => `${(i as RequestInit | undefined)?.method ?? 'GET'} ${u}`);
+      expect(order.indexOf(`POST /api/teams/meetings/${MEETING_ID}`))
+        .toBeLessThan(order.indexOf(`GET /api/teams/meetings/${MEETING_ID}?poll=1`));
+    });
+
+    it('goes on to the review once the transcript is back', async () => {
+      renderScreen();
+      const btn = await screen.findByText('Hent igen');
+      transcriptResponse = null; // the re-run has stashed it again
+      await act(async () => { fireEvent.click(btn); });
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/meeting/${MEETING_ID}/review`));
+    });
+
+    it('shows an error and stays put when the server refuses (the window has closed)', async () => {
+      renderScreen();
+      const btn = await screen.findByText('Hent igen');
+      recollectResponse = { ok: false, status: 409, headers: new Headers(), json: async () => ({ error: 'window_closed' }) };
+
+      await act(async () => { fireEvent.click(btn); });
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/kan ikke længere hentes/);
+      expect(mockPush).not.toHaveBeenCalled();
+    });
+  });
+
+  it('does not offer "Hent igen" while the server copy is there', async () => {
+    respondWith(statusBody({ state: 'ready' }));
+    renderScreen();
+    await waitFor(() => expect(mockPush).toHaveBeenCalled());
+    expect(screen.queryByText('Hent igen')).toBeNull();
   });
 });
