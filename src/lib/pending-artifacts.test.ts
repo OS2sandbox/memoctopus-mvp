@@ -348,6 +348,61 @@ describe('sweepExpired', () => {
     expect(unlinked().sort()).toEqual(['old.meta.json', 'old.owner.json', 'old.transcript.json']);
   });
 
+  // A file whose content has no usable timestamp (half-written, malformed, or a createdAt
+  // that is not a number) is aged by its modification time instead. Ignoring it would judge
+  // the entry by an older sibling and delete a transcript that is being written right now;
+  // treating NaN as "old" would delete a fresh entry immediately.
+  describe('files without a usable timestamp', () => {
+    function stashWithMtimes(files: Record<string, { body: string; mtime: number }>) {
+      const nameOf = (p: unknown) => String(p).split('/').pop()!;
+      const enoent = () => Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      vi.mocked(fs.readdir).mockResolvedValue(Object.keys(files) as never);
+      vi.mocked(fs.readFile).mockImplementation(async (p) => {
+        const f = files[nameOf(p)];
+        if (!f) throw enoent();
+        return Buffer.from(f.body) as never;
+      });
+      vi.mocked(fs.stat).mockImplementation(async (p) => {
+        const f = files[nameOf(p)];
+        if (!f) throw enoent();
+        return { mtimeMs: f.mtime } as never;
+      });
+    }
+    const old = () => Date.now() - 2 * HOUR;
+
+    it('spares an entry whose newest file is half-written right now', async () => {
+      stashWithMtimes({
+        'run.owner.json': { body: JSON.stringify({ userId: 'u', createdAt: old() }), mtime: old() },
+        'run.transcript.json': { body: '{"status":"rea', mtime: Date.now() },
+      });
+
+      await sweepExpired();
+
+      expect(unlinked()).toEqual([]);
+    });
+
+    it('spares a fresh entry whose timestamp is not a number, instead of treating it as ancient', async () => {
+      stashWithMtimes({
+        'odd.meta.json': { body: JSON.stringify({ createdAt: 'yesterday' }), mtime: Date.now() - 5 * MIN },
+      });
+
+      await sweepExpired();
+
+      expect(unlinked()).toEqual([]);
+    });
+
+    it('still removes such an entry once it is past the TTL by modification time', async () => {
+      stashWithMtimes({
+        'odd.owner.json': { body: JSON.stringify({ userId: 'u' }), mtime: old() },
+        'odd.meta.json': { body: 'not json', mtime: old() },
+      });
+
+      await sweepExpired();
+
+      expect(unlinked().sort()).toEqual(['odd.meta.json', 'odd.owner.json', 'odd.transcript.json']);
+    });
+  });
+
   it('leaves an entry that is still inside the TTL', async () => {
     stashOf({
       'fresh.owner.json': { userId: 'u', createdAt: Date.now() - 5 * MIN },

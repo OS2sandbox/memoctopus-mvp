@@ -106,6 +106,22 @@ type StashKind = 'meta' | 'transcript' | 'owner';
 const STASH_FILE = /^(.+)\.(meta|transcript|owner)\.json$/;
 
 /**
+ * When a stash file was written: its own `createdAt`, or, when it has none that is a
+ * number (half-written right now, malformed, or missing), its modification time.
+ * Ignoring such a file would judge the entry by an older sibling and delete a
+ * transcript that is being written this very moment, and a NaN would make the entry
+ * look infinitely old. Null means the file is gone.
+ */
+async function fileTime(file: string, rec: { createdAt?: unknown } | null): Promise<number | null> {
+  if (typeof rec?.createdAt === 'number' && Number.isFinite(rec.createdAt)) return rec.createdAt;
+  try {
+    return (await fs.stat(file)).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Drops entries the client never collected. Best effort: it never throws.
  *
  * An entry (all the files sharing a meetingId) is judged as a whole, by its newest
@@ -141,19 +157,22 @@ export async function sweepExpired(exceptId?: string): Promise<void> {
         let newest = 0;
         let inProgress = false;
         for (const f of Object.values(files)) {
+          const file = path.join(dir, f);
+          let rec: { createdAt?: unknown; status?: string } | null = null;
           try {
-            const rec = JSON.parse(await fs.readFile(path.join(dir, f), 'utf8')) as {
-              createdAt: number;
-              status?: string;
-            };
-            newest = Math.max(newest, rec.createdAt);
-            if (f.endsWith('.transcript.json') && rec.status === 'processing') {
-              inProgress = now - rec.createdAt <= RUN_IN_PROGRESS_MAX_MS;
-            }
+            rec = JSON.parse(await fs.readFile(file, 'utf8'));
           } catch (err) {
+            // ENOENT: the file went away between readdir and read. Anything else
+            // (half-written, malformed) is aged by its modification time below.
             if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-              console.error('[pending-artifacts] sweep: skipping malformed/inaccessible entry', f, err);
+              console.error('[pending-artifacts] sweep: unreadable file, aging it by mtime', f, err);
             }
+          }
+          const at = await fileTime(file, rec);
+          if (at === null) continue;
+          newest = Math.max(newest, at);
+          if (f.endsWith('.transcript.json') && rec?.status === 'processing') {
+            inProgress = now - at <= RUN_IN_PROGRESS_MAX_MS;
           }
         }
         if (newest === 0 || inProgress || now - newest <= TTL_MS) return;
