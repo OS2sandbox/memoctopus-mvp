@@ -35,7 +35,9 @@ export type PipelineOutcome =
       transcriptId: string | null;
       recordingId: string | null;
     }
-  | { status: 'pending' }
+  // `transient`: pending because Graph was throttled or unreachable, not because
+  // Teams has nothing yet. Such a poll must not count toward RECORDING_GRACE_ATTEMPTS.
+  | { status: 'pending'; transient?: true }
   | { status: 'failed'; reason: string };
 
 export interface PipelineMeeting {
@@ -194,7 +196,7 @@ async function runPipeline(
     // this meeting's fault and no retry can fix it, so let the poller turn it into
     // the message that names the admin guide instead of leaking Graph's English.
     if (err instanceof GraphError && err.code === 'transcripts_disabled') throw err;
-    if (err instanceof GraphError && err.retryable) return { status: 'pending' };
+    if (err instanceof GraphError && err.retryable) return { status: 'pending', transient: true };
     if (err instanceof GraphError) return { status: 'failed', reason: err.message };
     throw err;
   }
@@ -233,7 +235,7 @@ async function runPipeline(
     await storePendingTranscript(meeting.id, { status: 'failed' }).catch(() => {});
     if (err instanceof GraphError && err.code === 'reauth_required') throw err;
     if (err instanceof GraphError && err.code === 'transcripts_disabled') throw err;
-    if (err instanceof GraphError && err.retryable) return { status: 'pending' };
+    if (err instanceof GraphError && err.retryable) return { status: 'pending', transient: true };
     const reason = err instanceof Error ? err.message : 'Ukendt fejl under hentning fra Microsoft Teams';
     console.error(`[teams-pipeline] ${meeting.id} failed:`, err);
     return { status: 'failed', reason };

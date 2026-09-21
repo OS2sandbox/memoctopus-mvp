@@ -25,6 +25,7 @@ describe('teamsErrorResponse', () => {
     ['disabled', 403],
     ['forbidden', 403],
     ['not_found', 404],
+    ['unavailable', 503],
     ['http', 502],
   ] as const)('maps GraphError %s to %i', async (code, status) => {
     const res = teamsErrorResponse(new GraphError(code, 'Fejl.'));

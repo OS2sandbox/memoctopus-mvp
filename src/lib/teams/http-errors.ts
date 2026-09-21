@@ -30,6 +30,9 @@ export function teamsErrorResponse(err: unknown): NextResponse {
         return NextResponse.json({ error: 'forbidden', message: err.message }, { status: 403 });
       case 'not_found':
         return NextResponse.json({ error: 'not_found', message: err.message }, { status: 404 });
+      case 'unavailable':
+        // Transient (throttle, outage, timeout): the same request is worth repeating.
+        return NextResponse.json({ error: 'unavailable', message: err.message }, { status: 503 });
       default:
         return NextResponse.json({ error: 'graph', message: err.message }, { status: 502 });
     }
