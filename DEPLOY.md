@@ -170,6 +170,20 @@ deprecation warning; on that path the provider id stays `authentik`, so your
 registered redirect URI and existing accounts are unaffected. To migrate, copy the
 three values to their `OIDC_*` names and set `OIDC_PROVIDER_ID=authentik`.
 
+## Long meetings: diarization timeout
+
+Diarization requests are cut off after 5 minutes by default. For long recordings
+(or CPU diarization) raise both values in `.env`, keeping them equal:
+
+```bash
+DIARIZATION_TIMEOUT_MS=3600000              # server → diarization service
+NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS=3600000  # browser → app
+```
+
+`DIARIZATION_TIMEOUT_MS` is read at runtime. `NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS` is
+compiled into the browser bundle, so after changing it run
+`docker compose up -d --build app`; a plain restart keeps the old value.
+
 ## Day-2 operations
 
 > These `docker compose` commands need docker-group membership (the bootstrap
