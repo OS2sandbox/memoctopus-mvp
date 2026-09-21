@@ -27,7 +27,7 @@ export function getLlmLimits(): LlmLimits {
   const hosted = usingHostedOpenAI();
   return {
     contextTokens: positiveInt(process.env.LLM_CONTEXT_TOKENS) ?? (hosted ? 128_000 : 32_768),
-    maxOutputTokens: positiveInt(process.env.LLM_MAX_OUTPUT_TOKENS) ?? (hosted ? 16_384 : 4_096),
+    maxOutputTokens: positiveInt(process.env.LLM_MAX_OUTPUT_TOKENS) ?? (hosted ? 16_384 : 8_192),
   };
 }
 

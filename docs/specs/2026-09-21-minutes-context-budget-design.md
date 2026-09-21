@@ -1,6 +1,6 @@
 # Size the minutes prompt against the model's context window
 
-Issue: [#97](https://github.com/OS2sandbox/memoctopus-mvp/issues/97). Status: design, awaiting review.
+Issue: [#97](https://github.com/OS2sandbox/memoctopus-mvp/issues/97). Status: implemented in this PR.
 
 ## Problem
 
@@ -52,9 +52,9 @@ reporter runs 16,384. The right limits are deployment-specific, so they must be 
 | Variable | Default | Meaning |
 |---|---|---|
 | `LLM_CONTEXT_TOKENS` | `128000` when talking to hosted OpenAI (`OPENAI_API_KEY` set and no `LLM_BASE_URL`); `32768` in every other case | The model's context window in tokens |
-| `LLM_MAX_OUTPUT_TOKENS` | `16384` when talking to hosted OpenAI (gpt-4o's maximum output); `4096` in every other case | Output cap for the referat call (4096 is about 3–4 pages of Danish) |
+| `LLM_MAX_OUTPUT_TOKENS` | `16384` when talking to hosted OpenAI (gpt-4o's maximum output); `8192` in every other case | Output cap for the referat call (8192 is roughly 7 pages of Danish) |
 
-Any other endpoint (`LLM_BASE_URL`, self-hosted vLLM) gets the conservative 32768 and 4096,
+Any other endpoint (`LLM_BASE_URL`, self-hosted vLLM) gets the conservative 32768 and 8192,
 because an unknown endpoint's limits are unknown. The hosted output default is the model's
 maximum so that a long referat on OpenAI is not newly cut short; the cap only exists to make
 the length an explicit decision. Values that are not positive integers fall back to the

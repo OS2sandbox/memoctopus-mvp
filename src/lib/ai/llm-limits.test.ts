@@ -17,7 +17,7 @@ afterEach(() => {
 
 describe('getLlmLimits defaults', () => {
   it('is conservative for self-hosted (no key, no base URL)', () => {
-    expect(getLlmLimits()).toEqual({ contextTokens: 32_768, maxOutputTokens: 4_096 });
+    expect(getLlmLimits()).toEqual({ contextTokens: 32_768, maxOutputTokens: 8_192 });
   });
 
   it('uses gpt-4o limits for hosted OpenAI', () => {
@@ -28,7 +28,7 @@ describe('getLlmLimits defaults', () => {
   it('stays conservative for a custom LLM_BASE_URL, even with a key', () => {
     process.env.OPENAI_API_KEY = 'sk-x';
     process.env.LLM_BASE_URL = 'http://my-llm:8000/v1';
-    expect(getLlmLimits()).toEqual({ contextTokens: 32_768, maxOutputTokens: 4_096 });
+    expect(getLlmLimits()).toEqual({ contextTokens: 32_768, maxOutputTokens: 8_192 });
   });
 });
 
@@ -42,7 +42,7 @@ describe('getLlmLimits overrides', () => {
   it.each(['', '  ', 'abc', '0', '-5', '1.5'])('falls back to the default for %j', (bad) => {
     process.env.LLM_CONTEXT_TOKENS = bad;
     process.env.LLM_MAX_OUTPUT_TOKENS = bad;
-    expect(getLlmLimits()).toEqual({ contextTokens: 32_768, maxOutputTokens: 4_096 });
+    expect(getLlmLimits()).toEqual({ contextTokens: 32_768, maxOutputTokens: 8_192 });
   });
 });
 

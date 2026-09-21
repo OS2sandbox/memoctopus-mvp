@@ -181,12 +181,14 @@ an incomplete referat.
 | Variable | Default | Meaning |
 |---|---|---|
 | `LLM_CONTEXT_TOKENS` | `128000` for hosted OpenAI, `32768` otherwise | The model's context window in tokens |
-| `LLM_MAX_OUTPUT_TOKENS` | `16384` for hosted OpenAI, `4096` otherwise | Longest referat the model may write |
+| `LLM_MAX_OUTPUT_TOKENS` | `16384` for hosted OpenAI, `8192` otherwise | Longest referat the model may write |
 
 With the bundled vLLM, `LLM_CONTEXT_TOKENS` follows `VLLM_CHAT_MAX_MODEL_LEN` automatically,
 so changing the vLLM window changes the app too. If you point `LLM_BASE_URL` at your own
 model, set `LLM_CONTEXT_TOKENS` to that model's real window; the default is deliberately
-conservative because the app cannot know it. Both are read at runtime: change them and run
+conservative because the app cannot know it. With a window below about 16k tokens, also lower
+`LLM_MAX_OUTPUT_TOKENS`: the output allowance is reserved out of the window, and too little is
+left for the transcript otherwise (the app then reports a configuration error). Both are read at runtime: change them and run
 `docker compose up -d app`, no rebuild.
 
 ## Day-2 operations

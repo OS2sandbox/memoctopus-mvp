@@ -16,8 +16,9 @@
 > throwing; the typed errors extend a shared `UserFacingError` (`src/lib/user-facing-error.ts`)
 > that `withHandler` renders, so the route has no error handling of its own;
 > `transcriptBudgetChars(fixedChars, limits)` takes the limits as an argument; and
-> `MIN_TRANSCRIPT_BUDGET_CHARS` / `SUMMARY_MAX_OUTPUT_TOKENS` live in `minutes.ts`. The spec and
-> the source are authoritative.
+> `MIN_TRANSCRIPT_BUDGET_CHARS` / `SUMMARY_MAX_OUTPUT_TOKENS` live in `minutes.ts`; and the
+> self-hosted output default is 8192, not 4096 (a 4096 cap turned referater that used to complete
+> into errors). The spec and the source are authoritative.
 
 **Conventions to know:**
 - Tests live next to the code (`foo.ts` → `foo.test.ts`). Globals (`describe`, `it`) are enabled, but existing tests import them from `vitest` explicitly. Do the same.
