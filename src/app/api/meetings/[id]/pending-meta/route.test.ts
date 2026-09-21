@@ -76,10 +76,15 @@ describe('GET /api/meetings/[id]/pending-meta', () => {
     });
   });
 
-  it('deletes the meta record as it hands it over', async () => {
+  // Reading is not consuming: the record goes when the browser acknowledges the
+  // transcript (or after the TTL). A reload between this read and the browser
+  // saving the names must find them again instead of waiting on a 404.
+  it('does not delete the meta record, so a second read returns the same answer', async () => {
     mockReadMeta.mockResolvedValue({ participants: ['Anna'], durationSeconds: 60, createdAt: Date.now() });
-    await GET(makeRequest('meeting-1'), makeParams('meeting-1'));
-    expect(mockDeleteMeta).toHaveBeenCalledWith('meeting-1');
+    const first = await (await GET(makeRequest('meeting-1'), makeParams('meeting-1'))).json();
+    const second = await (await GET(makeRequest('meeting-1'), makeParams('meeting-1'))).json();
+    expect(second).toEqual(first);
+    expect(mockDeleteMeta).not.toHaveBeenCalled();
   });
 
   it('returns JSON 500 (not bare HTML) when assertSafeId throws on an invalid meetingId', async () => {
@@ -100,9 +105,8 @@ describe('GET /api/meetings/[id]/pending-meta', () => {
     expect(res.status).toBe(404);
     expect((await res.json()).status).toBe('pending');
     // Identical to "not finished yet", so a non-owner cannot detect that a run
-    // exists — and the destructive delete is never reached.
+    // exists.
     expect(mockReadMeta).not.toHaveBeenCalled();
-    expect(mockDeleteMeta).not.toHaveBeenCalled();
   });
 
   it('returns 401 when there is no session', async () => {

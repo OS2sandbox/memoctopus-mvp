@@ -7,14 +7,29 @@ import type { TranscriptSegment } from '@/types';
 // The Graph pipeline collects a meeting's recording and transcript from Teams long
 // after whoever armed it has closed the tab. Meetings live in the user's browser
 // IndexedDB, so the server cannot persist them itself. It stashes them here instead,
-// keyed by meetingId, until the browser polls /api/meetings/[id]/pending-audio and
-// /pending-transcript and pulls them down into IndexedDB, where the normal
+// keyed by meetingId, until the browser pulls them down into IndexedDB (through
+// /api/meetings/[id]/pending-meta and /pending-transcript), where the normal
 // client-side pipeline takes over.
 //
-// Files are deleted as soon as the client downloads them; a TTL sweep drops anything
-// the client never collected (e.g. the tab was closed).
+// Reading is not consuming. The IndexedDB copy is the only durable one, so the
+// stash is deleted only when the browser acknowledges that it has saved the
+// transcript (DELETE on /pending-transcript, see acknowledgePendingTranscript).
+// Deleting on read would lose the transcript for good whenever the tab crashed, or
+// the response was lost, between the read and the save.
+//
+// Anything the browser never acknowledges is dropped once it is older than the TTL
+// by a timer (pending-sweeper.ts, started from instrumentation.ts) that runs whether
+// or not any meeting is being processed, so the retention is bounded and does not
+// depend on what else the server happens to be doing.
 
 const TTL_MS = 60 * 60 * 1000; // 1 hour
+
+// A 'processing' stash is a run that is still working, and its owner file was
+// written when it began, so on a long meeting both can outlast the TTL. They are
+// spared until they are older than this, which is deliberately far wider than the
+// pipeline's own 30 minute "this run is dead" rule (PROCESSING_STALE_MS): the sweep
+// must never beat a merely slow run to its files, only reap the remains of a dead one.
+const RUN_IN_PROGRESS_MAX_MS = 6 * 60 * 60 * 1000;
 
 function rootDir(): string {
   const base = process.env.AUDIO_STORAGE_PATH ?? path.join(process.cwd(), 'audio-storage');
@@ -75,10 +90,10 @@ export interface PendingMeta {
   createdAt: number;
 }
 
-// Server-side transcription result for a bot recording. Written as 'processing'
-// the moment the audio lands (so the client knows work is underway), then
-// overwritten with 'ready' + segments or 'failed'. Like the audio stash, this is
-// transient: the client pulls it into IndexedDB and it is deleted.
+// Server-side transcription result of a Teams meeting. Written as 'processing' when
+// a run starts (so the client knows work is underway), then overwritten with 'ready'
+// + segments or 'failed'. Transient: the client pulls it into IndexedDB and
+// acknowledges it, and it is deleted (or, if never acknowledged, swept after the TTL).
 export interface PendingTranscript {
   status: 'processing' | 'ready' | 'failed';
   segments?: TranscriptSegment[];
@@ -87,42 +102,83 @@ export interface PendingTranscript {
   createdAt: number;
 }
 
-// Best-effort cleanup of entries older than the TTL.
+type StashKind = 'meta' | 'transcript' | 'owner';
+const STASH_FILE = /^(.+)\.(meta|transcript|owner)\.json$/;
+
 /**
- * Drop anything the client never collected. `exceptId` is the meeting currently
- * being written, and excluding it is load-bearing rather than an optimisation:
- * the owner file is written once at the start of a run, while the download,
- * transcode and ASR that follow can outlast the TTL on a long meeting. Sweeping
- * blind would then delete the owner file of the very run in progress, and since
- * the hand-off routes deny by default without one, a successful transcription
- * would become uncollectable and the meeting would never finish.
+ * Drops entries the client never collected. Best effort: it never throws.
+ *
+ * An entry (all the files sharing a meetingId) is judged as a whole, by its newest
+ * file. Judging files one by one would delete a transcript that has just finished
+ * because the owner file beside it was written when the run began, hours earlier.
+ *
+ * Two kinds of entry are never removed:
+ *  - `exceptId`, the meeting a caller is writing right now;
+ *  - a run still in progress, i.e. a 'processing' transcript that is not yet absurdly
+ *    old. The owner file is written once at the start, while the download, transcode
+ *    and ASR that follow can outlast the TTL on a long meeting. Sweeping blind would
+ *    delete it, and since the hand-off routes deny by default without an owner, a
+ *    successful transcription would become uncollectable. This has to be decided
+ *    from what is on disk rather than by the caller: the timer has no run of its own
+ *    to exclude, and another instance may be the one running.
  */
-async function sweep(exceptId?: string): Promise<void> {
+export async function sweepExpired(exceptId?: string): Promise<void> {
   try {
     const dir = rootDir();
     const entries = await fs.readdir(dir);
     const now = Date.now();
+
+    const byId = new Map<string, Partial<Record<StashKind, string>>>();
+    for (const f of entries) {
+      const m = STASH_FILE.exec(f);
+      if (!m || m[1] === exceptId) continue;
+      byId.set(m[1], { ...byId.get(m[1]), [m[2] as StashKind]: f });
+    }
+
+    let swept = 0;
     await Promise.all(
-      entries
-        .filter((f) => f.endsWith('.meta.json') || f.endsWith('.transcript.json') || f.endsWith('.owner.json'))
-        .filter((f) => f.replace(/\.(meta|transcript|owner)\.json$/, '') !== exceptId)
-        .map(async (f) => {
+      [...byId].map(async ([id, files]) => {
+        let newest = 0;
+        let inProgress = false;
+        for (const f of Object.values(files)) {
           try {
-            const meta = JSON.parse(await fs.readFile(path.join(dir, f), 'utf8')) as { createdAt: number };
-            if (now - meta.createdAt > TTL_MS) {
-              const id = f.replace(/\.(meta|transcript|owner)\.json$/, '');
-              await deletePendingMeta(id);
-              await deletePendingTranscript(id);
-              await fs.unlink(ownerPath(id)).catch(() => {});
+            const rec = JSON.parse(await fs.readFile(path.join(dir, f), 'utf8')) as {
+              createdAt: number;
+              status?: string;
+            };
+            newest = Math.max(newest, rec.createdAt);
+            if (f.endsWith('.transcript.json') && rec.status === 'processing') {
+              inProgress = now - rec.createdAt <= RUN_IN_PROGRESS_MAX_MS;
             }
           } catch (err) {
             if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
               console.error('[pending-artifacts] sweep: skipping malformed/inaccessible entry', f, err);
             }
           }
-        }),
+        }
+        if (newest === 0 || inProgress || now - newest <= TTL_MS) return;
+        await deletePendingMeta(id);
+        await deletePendingTranscript(id);
+        await fs.unlink(ownerPath(id)).catch(() => {});
+        swept += 1;
+      }),
     );
+    if (swept > 0) console.log(`[pending-artifacts] swept ${swept} uncollected entr${swept === 1 ? 'y' : 'ies'} past the TTL`);
   } catch { /* dir may not exist yet */ }
+}
+
+/**
+ * The browser has saved the transcript into IndexedDB: the server copy (and the
+ * meta record and owner binding that go with it) has done its job and is removed.
+ * Idempotent, and it leaves a run in progress alone, so a stale acknowledgement can
+ * never delete the result of a re-collect that is under way.
+ */
+export async function acknowledgePendingTranscript(meetingId: string): Promise<void> {
+  assertSafeId(meetingId);
+  if ((await readPendingTranscript(meetingId))?.status === 'processing') return;
+  await deletePendingMeta(meetingId);
+  await deletePendingTranscript(meetingId);
+  await fs.unlink(ownerPath(meetingId)).catch(() => {});
 }
 
 
@@ -171,11 +227,10 @@ export async function storePendingTranscript(
 ): Promise<void> {
   assertSafeId(meetingId);
   await fs.mkdir(rootDir(), { recursive: true });
-  // The TTL sweep hangs off this write because every run reaches it, including a
-  // run that ends in `failed`. It used to hang off storePendingAudio, which no
-  // run calls any more — and which the bot's failed runs never called either,
-  // which is why production's volume still holds meta files from July.
-  await sweep(meetingId);
+  // The timer in pending-sweeper.ts is what bounds retention. This inline sweep is
+  // only a fallback for a process where the instrumentation hook never ran, and it
+  // applies the same rules, so it cannot delete anything the timer would not.
+  await sweepExpired(meetingId);
   const full: PendingTranscript = { ...transcript, createdAt: Date.now() };
   await fs.writeFile(transcriptPath(meetingId), JSON.stringify(full));
 }

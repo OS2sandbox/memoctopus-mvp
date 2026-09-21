@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
-import { readPendingMeta, deletePendingMeta, assertMeetingOwner } from '@/lib/pending-artifacts';
+import { readPendingMeta, assertMeetingOwner } from '@/lib/pending-artifacts';
 import { withHandler } from '@/lib/api-handler';
 
 // Tells the client what a server-side run produced, so the meeting record can be
@@ -17,7 +17,9 @@ import { withHandler } from '@/lib/api-handler';
 // speaker, and those names pre-fill the participant list in Gennemgang. The
 // transcript itself comes from the sibling pending-transcript route.
 //
-// The meta record is deleted as it is handed over, so this is a destructive read.
+// Reading does not delete the record: it is removed together with the transcript,
+// when the browser acknowledges that one (DELETE on pending-transcript), or by the
+// TTL sweep. So a reload after this read finds the names again.
 //
 // Wrapped in withHandler so that assertSafeId throwing on an invalid meetingId
 // returns a parseable JSON 500 instead of a bare HTML error page.
@@ -33,16 +35,13 @@ export const GET = withHandler(
     const { id: meetingId } = await params;
 
     // Only the user this meeting was registered by may read it. Answer exactly like
-    // "not finished yet" so a non-owner cannot detect that a run exists, and never
-    // reaches the destructive delete below.
+    // "not finished yet" so a non-owner cannot detect that a run exists.
     if (!(await assertMeetingOwner(meetingId, session.user.id))) {
       return NextResponse.json({ status: 'pending' }, { status: 404 });
     }
 
     const meta = await readPendingMeta(meetingId);
     if (!meta) return NextResponse.json({ status: 'pending' }, { status: 404 });
-
-    await deletePendingMeta(meetingId);
 
     return NextResponse.json({
       status: 'no-recording',

@@ -150,11 +150,16 @@ lydoptagelsen bliver aldrig gemt i Memoctopus og bliver aldrig sendt til
 medarbejderens browser.
 
 Transskriptionen lægges midlertidigt som en fil på serverens lagerplads
-(`AUDIO_STORAGE_PATH`), indtil medarbejderens browser henter den. Filen slettes,
-så snart den er hentet. Bliver den aldrig hentet (fx fordi fanen blev lukket),
-slettes den senest efter cirka en time, men oprydningen sker først, når et andet
-møde bliver behandlet. Herefter ligger transskriptionen og referatet kun i
-medarbejderens browser (IndexedDB), ikke i en central database.
+(`AUDIO_STORAGE_PATH`), indtil medarbejderens browser har hentet den og gemt den.
+Først når browseren har bekræftet, at den er gemt, slettes filen; at browseren
+henter den, er ikke nok, så en lukket fane midt i hentningen ikke koster
+transskriptionen. Bliver den aldrig hentet (fx fordi fanen blev lukket), slettes
+filen senest cirka en time efter, at den blev lagt, af en oprydning der kører
+hvert femte minut uanset om andre møder bliver behandlet. Er filen væk, når
+medarbejderen kommer tilbage, tilbyder skærmen "Hent igen", som henter
+transskriptionen fra Teams på ny, så længe mødet er under et døgn gammelt.
+Herefter ligger transskriptionen og referatet kun i medarbejderens browser
+(IndexedDB), ikke i en central database.
 
 Baggrunden er, at Teams først frigiver optagelsen efter mødet. Et Teams-møde kan
 derfor ikke følges live i Memoctopus, og så er der heller ingen grund til at

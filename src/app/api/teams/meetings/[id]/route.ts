@@ -5,7 +5,15 @@ import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
 import { disarmMeeting } from '@/lib/teams/meeting-arm';
 import { pollMeeting } from '@/lib/teams/poller';
-import { deleteTeamsMeeting, getTeamsMeeting, type TeamsMeetingRow } from '@/lib/teams/store';
+import { readPendingTranscript } from '@/lib/pending-artifacts';
+import {
+  POLL_GIVE_UP_MS,
+  deleteTeamsMeeting,
+  getTeamsMeeting,
+  giveUpAnchor,
+  setTeamsMeetingState,
+  type TeamsMeetingRow,
+} from '@/lib/teams/store';
 
 function serialize(row: TeamsMeetingRow) {
   return {
@@ -78,4 +86,44 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
 
   await deleteTeamsMeeting(userId, id);
   return NextResponse.json({ ok: true });
+}
+
+/**
+ * `{ action: 'recollect' }`: the row says `ready` but the transcript it stands for
+ * is no longer on the server (nobody collected it within the pending-artifacts TTL
+ * and the sweep removed it). Graph still holds the artifacts, so the row is put back
+ * into `awaiting_teams`; the caller then forces a poll (the same `?poll=1` that
+ * "Prøv igen" uses) and the pipeline runs again. No new state.
+ *
+ * Refused (409) for a row that is not `ready`, and once the poller would give up on
+ * the meeting anyway: pollMeeting would otherwise mark the revived row `failed` and
+ * the ready state would be lost for good.
+ */
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const { id } = await params;
+  const userId = session.user.id;
+
+  const row = await getTeamsMeeting(userId, id);
+  if (!row) return NextResponse.json({ error: 'not_found' }, { status: 404 });
+
+  const body = (await req.json().catch(() => null)) as { action?: unknown } | null;
+  if (body?.action !== 'recollect') {
+    return NextResponse.json({ error: 'unknown_action' }, { status: 400 });
+  }
+
+  if (row.state !== 'ready') return NextResponse.json({ error: 'not_ready' }, { status: 409 });
+
+  // The stash is still there: nothing is missing, the browser just has not collected it.
+  if (await readPendingTranscript(id)) return NextResponse.json(serialize(row));
+
+  const anchor = giveUpAnchor(row);
+  if (anchor && anchor.getTime() < Date.now() - POLL_GIVE_UP_MS) {
+    return NextResponse.json({ error: 'window_closed' }, { status: 409 });
+  }
+
+  await setTeamsMeetingState(userId, id, 'awaiting_teams', null);
+  return NextResponse.json(serialize((await getTeamsMeeting(userId, id)) ?? row));
 }

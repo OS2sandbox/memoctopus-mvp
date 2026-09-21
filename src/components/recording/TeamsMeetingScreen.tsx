@@ -54,6 +54,8 @@ export const ORGANIZER_REQUEST =
  * the review screen would open with an empty participant list.
  *
  * Two answers: 404 (the run has not finished — keep asking) or the meta record.
+ * Anything else (401, 500 …) throws, so the screen can say so instead of carrying
+ * on to a review with an empty participant list.
  */
 export async function collectTeamsArtifacts(meetingId: string): Promise<void> {
   const deadline = Date.now() + META_COLLECT_DEADLINE_MS;
@@ -69,6 +71,7 @@ export async function collectTeamsArtifacts(meetingId: string): Promise<void> {
       await new Promise((r) => setTimeout(r, META_COLLECT_RETRY_MS));
       continue;
     }
+    if (!res.ok) throw new Error(`pending-meta svarede ${res.status}`);
 
     const body = (await res.json().catch(() => ({}))) as {
       participants?: string[];
@@ -84,6 +87,23 @@ export async function collectTeamsArtifacts(meetingId: string): Promise<void> {
   // Nothing to collect within the deadline: the server-side transcript may still
   // be all there is, so continue to the review screen rather than dead-ending.
   await updateMeeting(meetingId, { status: 'processing' });
+}
+
+/**
+ * True when the server no longer holds the transcript of a meeting the row calls
+ * `ready`: nobody collected it within the pending-artifacts TTL and it was swept.
+ * Anything unclear (a network error, a 500) counts as "still there", so the normal
+ * path runs and reports its own error.
+ */
+async function serverCopyGone(meetingId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/meetings/${meetingId}/pending-transcript`);
+    if (res.status === 404) return true;
+    if (!res.ok) return false;
+    return ((await res.json()) as { status?: string }).status === 'none';
+  } catch {
+    return false;
+  }
 }
 
 function fmtRange(start: string | null, end: string | null): string | null {
@@ -112,6 +132,8 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
   const [checking, setChecking] = useState(false);
   const [copied, setCopied] = useState(false);
   const [intervalMs, setIntervalMs] = useState(FAST_POLL_MS);
+  // The row is ready but the server no longer holds its transcript.
+  const [copyGone, setCopyGone] = useState(false);
 
   // Guards so an effect re-run never fires a second forced poll or a second
   // navigation to the review page.
@@ -150,15 +172,25 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
         const data = (await res.json()) as TeamsMeetingStatus;
         setError(null);
         setStatus(data);
+        setCopyGone(false);
         scheduledEndRef.current = data.scheduledEnd ?? null;
 
         if (data.state === 'ready' && !routedRef.current) {
           routedRef.current = true;
+          // Checked first: with the copy gone there is nothing to open a review on.
+          if (await serverCopyGone(meetingId)) {
+            routedRef.current = false;
+            setCopyGone(true);
+            return;
+          }
           try {
             await collectTeamsArtifacts(meetingId);
           } catch (err) {
-            console.error('[TeamsMeetingScreen] kunne ikke hente optagelsen:', err);
-            await updateMeeting(meetingId, { status: 'processing' }).catch(() => {});
+            console.error('[TeamsMeetingScreen] kunne ikke hente transskriptionen:', err);
+            // "Tjek nu" polls again, and a ready row then takes this path afresh.
+            routedRef.current = false;
+            setError('Kunne ikke hente transskriptionen fra serveren. Tryk "Tjek nu" for at prøve igen.');
+            return;
           }
           routerRef.current.push(`/meeting/${meetingId}/review`);
         }
@@ -194,6 +226,34 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
     const id = setInterval(() => { void poll(false); }, intervalMs);
     return () => clearInterval(id);
   }, [poll, intervalMs, stopped]);
+
+  // Puts the ready-but-gone row back into a pollable state, then polls it with
+  // force, exactly as "Prøv igen" does for a failed one.
+  const recollect = useCallback(async () => {
+    setChecking(true);
+    try {
+      const res = await fetch(`/api/teams/meetings/${meetingId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'recollect' }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setError(body.error === 'window_closed'
+          ? 'Transskriptionen kan ikke længere hentes automatisk fra Teams.'
+          : 'Kunne ikke hente transskriptionen igen. Prøv igen om lidt.');
+        return;
+      }
+    } catch (err) {
+      console.warn('[TeamsMeetingScreen] hent igen fejlede:', err);
+      setError('Kunne ikke hente transskriptionen igen. Prøv igen om lidt.');
+      return;
+    } finally {
+      setChecking(false);
+    }
+    setError(null);
+    void poll(true);
+  }, [meetingId, poll]);
 
   const disarm = useCallback(async () => {
     try {
@@ -331,8 +391,29 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
           </p>
         )}
 
-        {state === 'ready' && (
+        {state === 'ready' && !copyGone && (
           <p style={{ margin: 0, fontSize: 15 }}>Transskriptionen er hentet. Åbner gennemgangen…</p>
+        )}
+
+        {state === 'ready' && copyGone && (
+          <>
+            <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
+              Transskriptionen ligger ikke længere på serveren, fordi den ikke blev åbnet i tide.
+              Teams har stadig mødet, så du kan hente den igen.
+            </p>
+            <button
+              type="button"
+              onClick={() => { void recollect(); }}
+              disabled={checking}
+              style={{
+                marginTop: 14, padding: '9px 16px', borderRadius: 8, fontSize: 13,
+                background: 'var(--ink)', color: 'var(--bg)', border: 'none',
+                cursor: checking ? 'default' : 'pointer',
+              }}
+            >
+              Hent igen
+            </button>
+          </>
         )}
 
         {state === 'failed' && (
