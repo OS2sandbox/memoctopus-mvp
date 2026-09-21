@@ -1,6 +1,7 @@
 import { pool } from '@/lib/db';
 import { realDate } from '@/lib/teams/graph-dates';
 import { queryUserSchema, queryUserSchemaOne } from '@/lib/db/user-schema';
+import type { ResolvedMeetingOptions } from '@/lib/teams/meeting-resolver';
 
 /**
  * Server-side record of a Teams meeting that Microsoft Graph will produce
@@ -37,6 +38,12 @@ export interface TeamsMeetingRow {
   failureReason: string | null;
   transcriptId: string | null;
   recordingId: string | null;
+  /**
+   * The meeting's options as they were before we armed it, so disarming can put
+   * them back. Null when nothing was changed or the row predates the snapshot.
+   * Optional so a row built by hand (tests, fixtures) need not spell it out.
+   */
+  originalOptions?: ResolvedMeetingOptions | null;
   createdAt: Date | null;
 }
 
@@ -52,6 +59,7 @@ export type TeamsMeetingInput = Omit<
   | 'createdAt'
   | 'eventId'
   | 'armResult'
+  | 'originalOptions'
 > &
   Partial<TeamsMeetingRow>;
 
@@ -139,6 +147,8 @@ interface RawTeamsMeeting {
   failure_reason: string | null;
   transcript_id: string | null;
   recording_id: string | null;
+  /** jsonb: the driver hands it back already parsed. */
+  original_options?: ResolvedMeetingOptions | null;
   created_at?: Date | string | null;
 }
 
@@ -166,6 +176,7 @@ function mapRow(raw: RawTeamsMeeting): TeamsMeetingRow {
     failureReason: raw.failure_reason ?? null,
     transcriptId: raw.transcript_id ?? null,
     recordingId: raw.recording_id ?? null,
+    originalOptions: raw.original_options ?? null,
     createdAt: toDate(raw.created_at ?? null),
   };
 }
@@ -173,7 +184,7 @@ function mapRow(raw: RawTeamsMeeting): TeamsMeetingRow {
 const SELECT_COLUMNS = `
   id, graph_meeting_id, event_id, join_url, subject, organizer_id, is_organizer,
   armed, arm_result, scheduled_start, scheduled_end, state, last_polled_at,
-  attempts, failure_reason, transcript_id, recording_id, created_at
+  attempts, failure_reason, transcript_id, recording_id, original_options, created_at
 `;
 
 // ─── Queries ────────────────────────────────────────────────────────────────
@@ -182,6 +193,8 @@ const SELECT_COLUMNS = `
  * Insert or update by our own meeting id. Identity fields (graph id, join url,
  * subject, organizer, armed, schedule) are always overwritten; the poller-owned
  * fields (state, attempts, …) are only overwritten when explicitly supplied.
+ * So is `originalOptions`: re-arming an armed meeting reads back the values WE
+ * set, and that must never replace the organizer's own.
  */
 export async function upsertTeamsMeeting(
   userId: string,
@@ -192,11 +205,11 @@ export async function upsertTeamsMeeting(
     `INSERT INTO teams_meetings (
        id, graph_meeting_id, event_id, join_url, subject, organizer_id, is_organizer,
        armed, arm_result, scheduled_start, scheduled_end, state, last_polled_at,
-       attempts, failure_reason, transcript_id, recording_id, updated_at
+       attempts, failure_reason, transcript_id, recording_id, original_options, updated_at
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::text, 'not_organizer'), $10, $11,
        COALESCE($12::text, 'awaiting_teams'), $13::timestamptz, COALESCE($14::int, 0),
-       $15, $16, $17, NOW()
+       $15, $16, $17, $18::jsonb, NOW()
      )
      ON CONFLICT (id) DO UPDATE SET
        graph_meeting_id = EXCLUDED.graph_meeting_id,
@@ -215,6 +228,7 @@ export async function upsertTeamsMeeting(
        failure_reason   = COALESCE($15, teams_meetings.failure_reason),
        transcript_id    = COALESCE($16, teams_meetings.transcript_id),
        recording_id     = COALESCE($17, teams_meetings.recording_id),
+       original_options = COALESCE($18::jsonb, teams_meetings.original_options),
        updated_at       = NOW()
      RETURNING ${SELECT_COLUMNS}`,
     [
@@ -235,6 +249,7 @@ export async function upsertTeamsMeeting(
       row.failureReason ?? null,
       row.transcriptId ?? null,
       row.recordingId ?? null,
+      row.originalOptions ? JSON.stringify(row.originalOptions) : null,
     ],
   );
   // RETURNING always yields a row; the null branch keeps TypeScript honest.

@@ -7,7 +7,7 @@ import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
 import { armMeeting } from '@/lib/teams/meeting-arm';
 import { resolveJoinUrl } from '@/lib/teams/meeting-resolver';
-import { upsertTeamsMeeting } from '@/lib/teams/store';
+import { getTeamsMeeting, upsertTeamsMeeting } from '@/lib/teams/store';
 
 /** ISO string → Date, tolerating a missing or unparseable value. */
 function toDate(value: string | null | undefined): Date | null {
@@ -91,9 +91,21 @@ export async function POST(req: NextRequest) {
     // Only the organizer may PATCH meeting options; an invitee is registered
     // anyway, because their transcript is readable if somebody starts
     // transcription manually.
-    const armResult = resolved.isOrganizer
-      ? (await armMeeting(userId, resolved.graphMeetingId)).result
-      : ('not_organizer' as const);
+    const outcome = resolved.isOrganizer
+      ? await armMeeting(userId, resolved.graphMeetingId)
+      : null;
+    const armResult = outcome?.result ?? ('not_organizer' as const);
+
+    // What the organizer had before we PATCHed, for the disarm to restore. Only
+    // the first arm may record it: on a re-registration of a row we already
+    // touched, the read-back holds our own values, and the upsert keeps the
+    // stored snapshot when we pass none. A refused PATCH changed nothing.
+    const previous = outcome ? await getTeamsMeeting(userId, meetingId) : null;
+    const alreadyTouched = previous && (previous.armed || previous.armResult === 'policy_blocked');
+    const originalOptions =
+      outcome && outcome.result !== 'not_organizer' && !alreadyTouched
+        ? outcome.previousOptions
+        : null;
 
     const row = await upsertTeamsMeeting(userId, {
       id: meetingId,
@@ -104,6 +116,7 @@ export async function POST(req: NextRequest) {
       isOrganizer: resolved.isOrganizer,
       armed: armResult === 'armed',
       armResult,
+      originalOptions,
       eventId,
       scheduledStart: occurrenceStart ?? toDate(resolved.scheduledStart),
       scheduledEnd: occurrenceEnd ?? toDate(resolved.scheduledEnd),

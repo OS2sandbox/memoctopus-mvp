@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { formatDate, formatDuration, statusLabel, statusVariant } from '@/lib/utils';
 import { Meeting } from '@/types';
-import { deleteMeeting } from '@/lib/storage';
+import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
 import { ErrorBanner } from '@/components/ui/error-banner';
 
 type ArchiveMeeting = Pick<Meeting, 'id' | 'title' | 'participants' | 'status' | 'createdAt'> & {
@@ -51,7 +51,7 @@ export function ArchiveMeetingRow({
     setIsDeleting(true);
     setDeleteError(null);
     try {
-      await deleteMeeting(meeting.id);
+      await deleteMeetingAndUnregister(meeting.id);
       setDeleteOpen(false);
       onDeleted?.();
     } catch (err) {

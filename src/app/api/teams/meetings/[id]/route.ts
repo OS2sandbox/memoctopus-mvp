@@ -64,7 +64,14 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   return NextResponse.json(serialize(row));
 }
 
-/** Turns Memoctopus off for a meeting: un-arm it (if we armed it) and forget it. */
+/**
+ * Turns Memoctopus off for a meeting: un-arm it (if we armed it) and forget it.
+ *
+ * The row is deleted even when the Graph side could not be undone — the user
+ * asked us to stop collecting — but `disarmed: false` says the meeting may still
+ * be armed in Teams (Graph failed, or TEAMS_GRAPH_ENABLED is off and there is no
+ * way to reach it from here).
+ */
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -75,17 +82,19 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const row = await getTeamsMeeting(userId, id);
   if (!row) return NextResponse.json({ error: 'not_found' }, { status: 404 });
 
-  if (row.armed) {
-    // A failed disarm must not block deletion — the user asked us to stop.
+  // A policy-blocked arm was still PATCHed, so it has options to put back too.
+  let disarmed = true;
+  if (row.armed || row.armResult === 'policy_blocked') {
     try {
-      await disarmMeeting(userId, row.graphMeetingId);
+      await disarmMeeting(userId, row.graphMeetingId, row.originalOptions ?? null);
     } catch (err) {
-      console.error('[teams/meetings] disarm failed for', id, err);
+      disarmed = false;
+      console.error('[teams/meetings] disarm failed for', id, '- the meeting may still be armed in Teams:', err);
     }
   }
 
   await deleteTeamsMeeting(userId, id);
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, disarmed });
 }
 
 /**

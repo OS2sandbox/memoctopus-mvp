@@ -176,16 +176,39 @@ describe('DELETE /api/teams/meetings/[id]', () => {
 
     const res = await DELETE(req(), { params });
 
-    expect(await res.json()).toEqual({ ok: true });
-    expect(mockDisarm).toHaveBeenCalledWith('user-123', 'graph-1');
+    expect(await res.json()).toEqual({ ok: true, disarmed: true });
+    expect(mockDisarm).toHaveBeenCalledWith('user-123', 'graph-1', null);
     expect(mockDelete).toHaveBeenCalledWith('user-123', 'm1');
   });
 
-  it('does not disarm a meeting we never armed', async () => {
-    mockGet.mockResolvedValueOnce(row({ armed: false }));
+  it('hands the stored pre-arm options to the disarm', async () => {
+    const original = {
+      allowRecording: false,
+      allowTranscription: false,
+      recordAutomatically: false,
+      meetingSpokenLanguageTag: 'en-GB',
+    };
+    mockGet.mockResolvedValueOnce(row({ armed: true, originalOptions: original }));
+
     await DELETE(req(), { params });
+
+    expect(mockDisarm).toHaveBeenCalledWith('user-123', 'graph-1', original);
+  });
+
+  it('also undoes a meeting whose policy blocked the arm: the PATCH went out anyway', async () => {
+    mockGet.mockResolvedValueOnce(row({ armed: false, armResult: 'policy_blocked' }));
+
+    await DELETE(req(), { params });
+
+    expect(mockDisarm).toHaveBeenCalledWith('user-123', 'graph-1', null);
+  });
+
+  it('does not disarm a meeting we never armed, and says there was nothing to undo', async () => {
+    mockGet.mockResolvedValueOnce(row({ armed: false, armResult: 'not_organizer' }));
+    const res = await DELETE(req(), { params });
     expect(mockDisarm).not.toHaveBeenCalled();
     expect(mockDelete).toHaveBeenCalled();
+    expect(await res.json()).toEqual({ ok: true, disarmed: true });
   });
 
   it('still deletes when disarming fails', async () => {
@@ -195,8 +218,25 @@ describe('DELETE /api/teams/meetings/[id]', () => {
 
     const res = await DELETE(req(), { params });
 
-    expect(await res.json()).toEqual({ ok: true });
+    expect(await res.json()).toEqual({ ok: true, disarmed: false });
     expect(mockDelete).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('says so, and logs it, when the integration is off and the meeting stays armed in Teams', async () => {
+    delete process.env.TEAMS_GRAPH_ENABLED;
+    mockGet.mockResolvedValueOnce(row({ armed: true }));
+    mockDisarm.mockRejectedValueOnce(
+      new GraphError('disabled', 'Teams-integrationen er ikke slået til.', { status: 403 }),
+    );
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await DELETE(req(), { params });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, disarmed: false });
+    expect(mockDelete).toHaveBeenCalledWith('user-123', 'm1');
+    expect(spy).toHaveBeenCalled();
     spy.mockRestore();
   });
 });

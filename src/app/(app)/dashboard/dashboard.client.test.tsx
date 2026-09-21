@@ -27,7 +27,12 @@ const mockDeleteMeeting = vi.fn();
 vi.mock('@/lib/storage', () => ({
   getAllMeetings: (...args: unknown[]) => mockGetAllMeetings(...args),
   createMeeting: (...args: unknown[]) => mockCreateMeeting(...args),
-  deleteMeeting: (...args: unknown[]) => mockDeleteMeeting(...args),
+}));
+
+// The orphan cleanup goes through the shared helper, which also unregisters the
+// meeting server-side in case the POST registered it before failing.
+vi.mock('@/lib/teams/client-delete', () => ({
+  deleteMeetingAndUnregister: (...args: unknown[]) => mockDeleteMeeting(...args),
 }));
 
 const mockSignInSocial = vi.fn();
@@ -778,6 +783,20 @@ describe('OptaqPage — Teams meeting link flow', () => {
       expect(screen.getByText('Mødelinket er ikke et gyldigt Teams-link.')).toBeInTheDocument();
       expect(mockDeleteMeeting).toHaveBeenCalledWith('teams-5');
     });
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('also unregisters through the helper when the request itself fails (the POST may have landed)', async () => {
+    mockCreateMeeting.mockResolvedValue({ id: 'teams-6' });
+    routeFetch({ arm: () => { throw new TypeError('Failed to fetch'); } });
+    renderPage();
+
+    const linkInput = screen.getByPlaceholderText('Indsæt mødelink…');
+    fireEvent.change(linkInput, { target: { value: 'https://teams.microsoft.com/abc' } });
+    await act(async () => { fireEvent.keyDown(linkInput, { key: 'Enter' }); });
+
+    await waitFor(() => expect(mockDeleteMeeting).toHaveBeenCalledWith('teams-6'));
+    expect(screen.getByText('Noget gik galt. Prøv igen.')).toBeInTheDocument();
     expect(mockPush).not.toHaveBeenCalled();
   });
 });

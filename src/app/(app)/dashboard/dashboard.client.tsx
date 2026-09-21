@@ -4,7 +4,8 @@ import React, { useState, useEffect, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useIsMobile } from '@/lib/use-is-mobile';
-import { createMeeting, deleteMeeting, getAllMeetings } from '@/lib/storage';
+import { createMeeting, getAllMeetings } from '@/lib/storage';
+import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
 import { setPendingUploadFile } from '@/lib/pending-upload';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { armErrorMessage } from '@/components/dashboard/arm-error-message';
@@ -113,13 +114,13 @@ export default function OptaqPage() {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         setLinkError(armErrorMessage(res.status, (body as { error?: string }).error));
-        await deleteMeeting(meeting.id).catch(() => {});
+        await deleteMeetingAndUnregister(meeting.id).catch(() => {});
         setLinkLoading(false);
         return;
       }
       router.push(`/meeting/${meeting.id}`);
     } catch {
-      if (localId) await deleteMeeting(localId).catch(() => {});
+      if (localId) await deleteMeetingAndUnregister(localId).catch(() => {});
       setLinkError('Noget gik galt. Prøv igen.');
       setLinkLoading(false);
     }
