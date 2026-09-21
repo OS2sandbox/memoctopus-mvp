@@ -147,8 +147,14 @@ standardopførsel og ikke noget Memoctopus styrer.
 
 Memoctopus henter en kopi, transskriberer den og sletter derefter lyden. Selve
 lydoptagelsen bliver aldrig gemt i Memoctopus og bliver aldrig sendt til
-medarbejderens browser. Memoctopus gemmer transskriptionen og referatet
-i kommunens egen database.
+medarbejderens browser.
+
+Transskriptionen lægges midlertidigt som en fil på serverens lagerplads
+(`AUDIO_STORAGE_PATH`), indtil medarbejderens browser henter den. Filen slettes,
+så snart den er hentet. Bliver den aldrig hentet (fx fordi fanen blev lukket),
+slettes den senest efter cirka en time, men oprydningen sker først, når et andet
+møde bliver behandlet. Herefter ligger transskriptionen og referatet kun i
+medarbejderens browser (IndexedDB), ikke i en central database.
 
 Baggrunden er, at Teams først frigiver optagelsen efter mødet. Et Teams-møde kan
 derfor ikke følges live i Memoctopus, og så er der heller ingen grund til at

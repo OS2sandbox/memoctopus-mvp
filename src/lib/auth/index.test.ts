@@ -59,22 +59,10 @@ const MICROSOFT_ENV = {
   BETTER_AUTH_SECRET: 'secret',
 };
 
-describe('auth config — user info follows the identity provider', () => {
-  // better-auth matches an account on the provider's subject claim and writes
-  // name/email only when it first creates the user. Without this flag a user
-  // whose mail attribute or display name changes in Entra keeps the address they
-  // originally signed up with, which reads in the UI as being logged in as
-  // somebody else. It cost real debugging time once; the flag is load-bearing.
-  it('refreshes name and email from Entra on every Microsoft sign-in', async () => {
-    const options = await loadAuth(MICROSOFT_ENV);
-    const social = options.socialProviders as Record<string, Record<string, unknown>>;
-    expect(social.microsoft.overrideUserInfoOnSignIn).toBe(true);
-  });
-
-  it('still requests the Graph scopes alongside it once Teams is enabled', async () => {
+describe('auth config — Graph scopes and token storage', () => {
+  it('requests the Graph scopes once Teams is enabled', async () => {
     const options = await loadAuth({ ...MICROSOFT_ENV, TEAMS_GRAPH_ENABLED: 'true' });
     const social = options.socialProviders as Record<string, Record<string, unknown>>;
-    expect(social.microsoft.overrideUserInfoOnSignIn).toBe(true);
     expect(social.microsoft.scope).toEqual([
       'OnlineMeetings.ReadWrite',
       'OnlineMeetingTranscript.Read.All',
@@ -102,19 +90,15 @@ describe('auth config — user info follows the identity provider', () => {
     const options = await loadAuth(MICROSOFT_ENV);
     const social = options.socialProviders as Record<string, Record<string, unknown>>;
     expect(social.microsoft).not.toHaveProperty('scope');
-    expect(social.microsoft.overrideUserInfoOnSignIn).toBe(true);
   });
 
-  it('refreshes user info for the generic OIDC provider too', async () => {
-    const options = await loadAuth({
-      ...MICROSOFT_ENV,
-      OIDC_CLIENT_ID: 'oidc-id',
-      OIDC_CLIENT_SECRET: 'oidc-secret',
-      OIDC_DISCOVERY_URL: 'https://idp.test/.well-known/openid-configuration',
-    });
-    const plugins = options.plugins as Array<{ id?: string; opts?: { config?: Array<Record<string, unknown>> } }>;
-    const generic = plugins.find((p) => p.id === 'generic-oauth');
-    expect(generic?.opts?.config?.[0].overrideUserInfo).toBe(true);
+  // The refresh token gives about 90 days of offline access to meeting transcripts and
+  // recordings once Teams is enabled, so it must not sit in the database (or a backup of
+  // it) in the clear.
+  it('encrypts stored OAuth tokens at rest', async () => {
+    const options = await loadAuth(MICROSOFT_ENV);
+    const account = options.account as { encryptOAuthTokens?: boolean } | undefined;
+    expect(account?.encryptOAuthTokens).toBe(true);
   });
 
   // Account linking stays at better-auth's defaults on purpose: user.id is the

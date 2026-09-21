@@ -190,6 +190,13 @@ login, so users who signed in before step 3 keep a token with the old scope list
 The dashboard shows them a "Giv adgang igen" button until they re-authenticate;
 this is expected, not a fault.
 
+**OAuth tokens are encrypted at rest.** The access and refresh tokens in the
+`accounts` table are encrypted with `BETTER_AUTH_SECRET` (once Teams is on, the
+refresh token reaches meeting transcripts and recordings). Rows written before this
+keep working and are encrypted the next time the user signs in or a token is
+refreshed. **Rotating `BETTER_AUTH_SECRET` makes the stored tokens unreadable**:
+those users have to sign in with Microsoft again.
+
 Behaviour is tuned with the `TEAMS_*` variables in `.env.deploy.example`. The one
 worth a deliberate decision is `TEAMS_ARTIFACT_MODE`: `prefer-recording` (default)
 downloads the Teams recording and re-transcribes it locally with hviske, while
