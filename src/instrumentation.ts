@@ -15,5 +15,8 @@ export async function register() {
     console.log('[instrumentation] register() running on the nodejs runtime');
     const { startPoller } = await import('@/lib/teams/poller');
     startPoller();
+    // Bounds how long an uncollected transcript stays on disk; see pending-sweeper.ts.
+    const { startPendingSweeper } = await import('@/lib/pending-sweeper');
+    startPendingSweeper();
   }
 }
