@@ -22,6 +22,7 @@ describe('teamsErrorResponse', () => {
     ['consent_required', 403],
     ['reauth_required', 403],
     ['transcripts_disabled', 403],
+    ['disabled', 403],
     ['forbidden', 403],
     ['not_found', 404],
     ['http', 502],

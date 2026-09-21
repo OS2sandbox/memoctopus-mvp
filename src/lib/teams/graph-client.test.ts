@@ -38,6 +38,8 @@ let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   getAccessToken.mockReset();
+  process.env.TEAMS_GRAPH_ENABLED = 'true';
+  delete process.env.TEAMS_ARTIFACT_MODE;
   fetchMock = vi.fn();
   vi.stubGlobal('fetch', fetchMock);
   delete process.env.GRAPH_BASE_URL;
@@ -46,6 +48,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.GRAPH_BASE_URL;
+  delete process.env.TEAMS_GRAPH_ENABLED;
+  delete process.env.TEAMS_ARTIFACT_MODE;
 });
 
 describe('graphOrigin', () => {
@@ -123,7 +127,64 @@ describe('getGraphAccessToken', () => {
   });
 });
 
+describe('getGraphAccessToken — integration disabled', () => {
+  // With TEAMS_GRAPH_ENABLED off the scopes were never requested, so a token
+  // without them is expected. It must not read as a consent gap: that would tell
+  // users to sign in again for scopes we never asked for.
+  it('throws disabled, not consent_required, and never asks for a token', async () => {
+    delete process.env.TEAMS_GRAPH_ENABLED;
+    okToken('openid profile email User.Read offline_access');
+    const err = await getGraphAccessToken('u').catch((e) => e);
+    expect(err).toBeInstanceOf(GraphError);
+    expect(err.code).toBe('disabled');
+    expect(err.missingScopes).toBeUndefined();
+    expect(getAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('does not call Graph', async () => {
+    delete process.env.TEAMS_GRAPH_ENABLED;
+    okToken();
+    await expect(graphFetch('u', '/me')).rejects.toMatchObject({ code: 'disabled' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('getGraphAccessToken — transcript-only', () => {
+  const NO_RECORDING = 'OnlineMeetings.ReadWrite OnlineMeetingTranscript.Read.All User.Read';
+
+  it('does not require the recording scope, which is never requested', async () => {
+    process.env.TEAMS_ARTIFACT_MODE = 'transcript-only';
+    okToken(NO_RECORDING);
+    await expect(getGraphAccessToken('u')).resolves.toBe('tok-123');
+  });
+
+  it('still reports the other missing scopes', async () => {
+    process.env.TEAMS_ARTIFACT_MODE = 'transcript-only';
+    okToken('openid profile email User.Read offline_access');
+    const err = await getGraphAccessToken('u').catch((e) => e);
+    expect(err.missingScopes).toEqual([
+      'OnlineMeetings.ReadWrite',
+      'OnlineMeetingTranscript.Read.All',
+    ]);
+  });
+
+  it('requires the recording scope again in the default mode', async () => {
+    okToken(NO_RECORDING);
+    await expect(getGraphAccessToken('u')).rejects.toMatchObject({
+      code: 'consent_required',
+      missingScopes: ['OnlineMeetingRecording.Read.All'],
+    });
+  });
+});
+
 describe('hasGraphScopes', () => {
+  it('throws disabled while the integration is off', async () => {
+    delete process.env.TEAMS_GRAPH_ENABLED;
+    okToken();
+    await expect(hasGraphScopes('u')).rejects.toMatchObject({ code: 'disabled' });
+    expect(getAccessToken).not.toHaveBeenCalled();
+  });
+
   it('reports ok for a fully consented account', async () => {
     okToken();
     await expect(hasGraphScopes('u')).resolves.toEqual({ ok: true, missing: [] });

@@ -123,7 +123,8 @@ dead end and offers the saved transcript or a delete.
   rules as everything else), plus the polling-due predicate and backoff.
 - `poller.ts` — `pollMeeting()` / `pollDueMeetings()`; started from `src/instrumentation.ts`
   inside the Next.js server process and serialised across instances by a Postgres advisory
-  lock. Disabled under test and via `TEAMS_POLLER_DISABLED`.
+  lock. Off unless `TEAMS_GRAPH_ENABLED=true`; also disabled under test and via
+  `TEAMS_POLLER_DISABLED`.
 - `http-errors.ts` — maps `GraphError` / `ResolveError` onto status codes and Danish
   messages for the API routes.
 
@@ -175,11 +176,12 @@ the container. Note also that `.env.deploy.example`, not `.env.example`, is what
 | `BETTER_AUTH_URL` / `BETTER_AUTH_SECRET` | better-auth base URL and signing secret |
 | `EMAIL_PASSWORD_ENABLED` | Kill switch for email/password (default on) |
 | `MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT_ID` | Entra ID; enables itself when the id + secret are set |
+| `TEAMS_GRAPH_ENABLED` | Opt-in (default off) for the Teams/Graph integration: adds the Graph scopes to the Microsoft sign-in, which need tenant-admin consent. Read at startup |
 | `OIDC_CLIENT_ID` / `_SECRET` / `_DISCOVERY_URL` | Generic OIDC provider (Keycloak, Authentik, …) |
 | `OIDC_PROVIDER_ID` / `_NAME` | Callback path segment + account key / button label |
 | `GRAPH_BASE_URL` | Microsoft Graph base URL (default `https://graph.microsoft.com/v1.0`) |
 | `TEAMS_SPOKEN_LANGUAGE` | Language Teams transcribes in (default `da-DK`) |
-| `TEAMS_ARTIFACT_MODE` | `prefer-recording` (default) or `transcript-only` |
+| `TEAMS_ARTIFACT_MODE` | `prefer-recording` (default) or `transcript-only` (also drops the recording scope from sign-in) |
 | `TEAMS_POLL_INTERVAL_MS` | Graph poll interval (default `120000`) |
 | `TEAMS_POLLER_DISABLED` | Set `true` to stop this instance from polling Graph |
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers()) }));
 vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
@@ -57,6 +57,7 @@ const RESOLVED = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  process.env.TEAMS_GRAPH_ENABLED = 'true';
   mockGetSession.mockResolvedValue(FAKE_SESSION as never);
   mockGetOwner.mockResolvedValue(null);
   mockSetOwner.mockResolvedValue(undefined);
@@ -74,9 +75,23 @@ beforeEach(() => {
   }));
 });
 
+afterEach(() => {
+  delete process.env.TEAMS_GRAPH_ENABLED;
+});
+
 const post = (body: unknown) => POST(makeJsonReq(URL_, 'POST', body));
 
 describe('POST /api/teams/meetings', () => {
+  it('refuses with 403 disabled, and registers nothing, while the integration is off', async () => {
+    delete process.env.TEAMS_GRAPH_ENABLED;
+    const res = await post({ meetingId: 'm1', joinUrl: JOIN });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe('disabled');
+    expect(mockSetOwner).not.toHaveBeenCalled();
+    expect(mockResolve).not.toHaveBeenCalled();
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
   it('returns 401 when not authenticated', async () => {
     mockGetSession.mockResolvedValueOnce(null as never);
     expect((await post({ meetingId: 'm1', joinUrl: JOIN })).status).toBe(401);

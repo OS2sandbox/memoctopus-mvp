@@ -8,6 +8,7 @@ describe('armErrorMessage', () => {
     expect(armErrorMessage(404, 'not_invited')).toMatch(/inviteret til mødet/);
     expect(armErrorMessage(403, 'reauth_required')).toMatch(/udløbet/);
     expect(armErrorMessage(403, 'transcripts_disabled')).toMatch(/IT-administrator/);
+    expect(armErrorMessage(403, 'disabled')).toMatch(/ikke slået til/);
   });
 
   it('falls back on an unknown error and distinguishes 401', () => {

@@ -62,12 +62,15 @@ The blob host the recording redirects to rejects any request carrying an
 ```bash
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/referat_mock \
 MICROSOFT_CLIENT_ID=mock MICROSOFT_CLIENT_SECRET=mock MICROSOFT_TENANT_ID=mock \
+TEAMS_GRAPH_ENABLED=true \
 GRAPH_BASE_URL=http://localhost:4010/v1.0 \
 TEAMS_POLL_INTERVAL_MS=10000 \
 TEAMS_ARTIFACT_MODE=transcript-only \
 npx next dev -p 3004
 ```
 
+`TEAMS_GRAPH_ENABLED=true` is required: without it the Teams entry points are
+hidden, `/api/teams/status` answers `enabled: false`, and the poller does not start.
 `MICROSOFT_*` only need to exist: better-auth refuses to hand out a token for a
 provider that is not registered, even when the account row is there. Everything
 else (hviske, OpenAI, storage) comes from `.env` as usual. Start with
@@ -133,7 +136,9 @@ for Teams (Business Basic or higher, or E3/E5).
    transcription: *Transcription* **On**, *Meeting recording* **On**. Takes up to
    an hour to propagate. Without both, arming reports `policy_blocked`.
 3. `.env`: `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT_ID`
-   (the tenant id, not `common`), `TEAMS_POLL_INTERVAL_MS=30000`, and **no**
+   (the tenant id, not `common`), `TEAMS_GRAPH_ENABLED=true` (only after step 1's
+   admin consent, or every Microsoft sign-in fails with "Need admin approval"),
+   `TEAMS_POLL_INTERVAL_MS=30000`, and **no**
    `GRAPH_BASE_URL`. Remove any mock account row first
    (`npm run mock:graph:seed -- you@example.com --remove`) or use a different database.
 4. Sign in with Microsoft. The consent screen must list the meeting and calendar

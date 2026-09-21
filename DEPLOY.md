@@ -138,11 +138,14 @@ Microsoft login enables itself as soon as `MICROSOFT_CLIENT_ID` and
    ```
 
    **⚠️ Set the real tenant id.** Left blank it falls back to `common`
-   (multi-tenant), and tenant-wide admin consent will not apply.
+   (multi-tenant): sign-in then accepts users from any tenant. Admin consent is
+   granted per tenant and covers only that tenant's users, so a blank id does not
+   make it "not apply" — it just leaves users from other tenants unconsented.
 
-3. For Teams referater, the same app registration needs these **delegated**
-   Microsoft Graph permissions, with **admin consent granted** for the
-   organisation. All three are scoped to individual meetings the user is already
+3. Teams referater are **off by default**. To use them, first give the same app
+   registration these **delegated** Microsoft Graph permissions with **admin
+   consent granted** for the organisation, and only then set
+   `TEAMS_GRAPH_ENABLED=true` (see the warning below). All three are scoped to individual meetings the user is already
    party to — no calendar or mailbox access is requested:
 
    | Permission | Used for |
@@ -151,6 +154,10 @@ Microsoft login enables itself as soon as `MICROSOFT_CLIENT_ID` and
    | `OnlineMeetingTranscript.Read.All` | Fetching the transcript afterwards |
    | `OnlineMeetingRecording.Read.All` | Fetching the recording afterwards |
    | `User.Read`, `offline_access` | Identity, and refreshing access without re-login |
+
+   `OnlineMeetingRecording.Read.All` is the widest of the three (the video of every
+   meeting the user can reach). With `TEAMS_ARTIFACT_MODE=transcript-only` it is
+   neither requested nor needed, so leave it out of the registration.
 
    Delegated means the app never sees more than the signed-in user can see — only
    that user's own meetings. Without admin consent each user is prompted
@@ -165,6 +172,19 @@ The full admin guide, written in Danish for the customer's own IT department, sh
 with the app at `public/docs/setup-microsoft-teams.md` and is linked from the error
 screens.
 
+**⚠️ Grant admin consent before you set `TEAMS_GRAPH_ENABLED=true`.** The flag makes
+every Microsoft sign-in request the Graph permissions above. The two `*.Read.All`
+ones need tenant-admin consent; a tenant that has not granted it answers *"Need
+admin approval"* to the whole sign-in, so **no one** in that tenant can log in with
+Microsoft, for any feature. Consent is **per tenant**: granting it in one tenant
+does nothing for another. If the tenant's admin-consent request workflow is off,
+there is not even a way for users to ask. With the flag unset (the default) sign-in
+asks for nothing beyond the normal login scopes and the Teams features stay hidden.
+
+The flag is read once at startup, so **restart** the app after changing it
+(`docker compose up -d app` is enough, no `--build`). `TEAMS_ARTIFACT_MODE` is
+read the same way for the sign-in scopes, so restart after changing that too.
+
 **Existing users must sign in again.** Consented scopes are stored per account at
 login, so users who signed in before step 3 keep a token with the old scope list.
 The dashboard shows them a "Giv adgang igen" button until they re-authenticate;
@@ -173,8 +193,9 @@ this is expected, not a fault.
 Behaviour is tuned with the `TEAMS_*` variables in `.env.deploy.example`. The one
 worth a deliberate decision is `TEAMS_ARTIFACT_MODE`: `prefer-recording` (default)
 downloads the Teams recording and re-transcribes it locally with hviske, while
-`transcript-only` uses Teams' own text transcript and never downloads audio —
-the right choice for a customer who does not want meeting audio at rest here.
+`transcript-only` uses Teams' own text transcript, never downloads audio and never
+asks for the recording permission — the right choice for a customer who does not
+want meeting audio at rest here.
 
 ## Single sign-on (OIDC)
 

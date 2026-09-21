@@ -99,8 +99,13 @@ services:
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-}
       # Teams via Microsoft Graph. Runtime-only, like the auth block above.
-      # Unset is fine everywhere — the code defaults to public Graph, da-DK,
-      # prefer-recording, a 120s poll, and the poller enabled.
+      # Unset is fine everywhere — the code defaults to Teams OFF, public Graph,
+      # da-DK, prefer-recording and a 120s poll.
+      # Opt-in: "true" adds the Graph scopes to the Microsoft sign-in. Two of them
+      # need tenant-admin consent, so switching this on before the admin has
+      # granted it makes EVERY Microsoft sign-in fail with "Need admin approval".
+      # Read once at startup, so changing it needs `up -d app` (a restart).
+      - TEAMS_GRAPH_ENABLED=${TEAMS_GRAPH_ENABLED:-}
       - GRAPH_BASE_URL=${GRAPH_BASE_URL:-}
       - TEAMS_SPOKEN_LANGUAGE=${TEAMS_SPOKEN_LANGUAGE:-}
       # prefer-recording (default) re-transcribes Teams' recording with hviske and

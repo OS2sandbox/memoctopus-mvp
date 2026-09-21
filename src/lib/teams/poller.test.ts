@@ -75,11 +75,31 @@ function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  process.env.TEAMS_GRAPH_ENABLED = 'true';
   mockMark.mockResolvedValue(undefined);
   mockSetState.mockResolvedValue(undefined);
 });
 
+afterEach(() => {
+  delete process.env.TEAMS_GRAPH_ENABLED;
+});
+
 describe('pollMeeting', () => {
+  it('leaves the row alone and never touches Graph while TEAMS_GRAPH_ENABLED is off', async () => {
+    // Without the scopes every poll would fail as reauth_required and park the
+    // row in needs_reauth, asking for a sign-in that cannot help.
+    delete process.env.TEAMS_GRAPH_ENABLED;
+    const r = row();
+    mockGet.mockResolvedValue(r);
+
+    expect(await pollMeeting('u1', 'm1', NOW)).toBe(r);
+    expect(await pollMeeting('u1', 'm1', NOW, { force: true })).toBe(r);
+
+    expect(mockProcess).not.toHaveBeenCalled();
+    expect(mockMark).not.toHaveBeenCalled();
+    expect(mockSetState).not.toHaveBeenCalled();
+  });
+
   it('throws when the row does not exist (caller owns the row)', async () => {
     mockGet.mockResolvedValueOnce(null);
     await expect(pollMeeting('u1', 'nope', NOW)).rejects.toThrow(/not found/i);
@@ -296,6 +316,12 @@ describe('pollMeeting', () => {
 });
 
 describe('pollDueMeetings', () => {
+  it('does not even take the lock while TEAMS_GRAPH_ENABLED is off', async () => {
+    delete process.env.TEAMS_GRAPH_ENABLED;
+    expect(await pollDueMeetings(NOW)).toEqual({ polled: 0 });
+    expect(mockConnect).not.toHaveBeenCalled();
+  });
+
   function client(locked: boolean) {
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('pg_try_advisory_lock')) return { rows: [{ locked }] };
@@ -373,6 +399,16 @@ describe('startPoller', () => {
 
   it('does nothing when TEAMS_POLLER_DISABLED is true', () => {
     process.env.TEAMS_POLLER_DISABLED = 'true';
+    const spy = vi.spyOn(global, 'setInterval');
+    startPoller()();
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('does nothing while TEAMS_GRAPH_ENABLED is off, even outside the test environment', () => {
+    delete process.env.TEAMS_GRAPH_ENABLED;
+    vi.stubEnv('VITEST', '');
+    vi.stubEnv('NODE_ENV', 'production');
     const spy = vi.spyOn(global, 'setInterval');
     startPoller()();
     expect(spy).not.toHaveBeenCalled();

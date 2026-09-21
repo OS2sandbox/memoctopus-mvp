@@ -16,6 +16,7 @@ import {
 // registered here.
 const microsoft = microsoftConfig();
 const oidc = oidcConfig();
+const graphScopes = microsoftGraphScopes();
 
 warnDeprecatedAuthEnv();
 
@@ -57,9 +58,13 @@ export const auth = betterAuth({
     enabled: emailPasswordEnabled(),
   },
   // The Teams integration reads Graph as the signed-in user (delegated), so the
-  // Graph scopes must be consented to at login. better-auth's microsoft provider
-  // already requests openid/profile/email/User.Read/offline_access and appends
-  // `scope` to them — offline_access is what yields the refresh token that
+  // Graph scopes must be consented to at login — but only when TEAMS_GRAPH_ENABLED
+  // is set: two of them need tenant-admin consent, and a tenant that has not
+  // granted it rejects the whole sign-in. With the flag off no `scope` is passed
+  // at all and sign-in is exactly what it was before the integration existed.
+  // better-auth's microsoft provider already requests
+  // openid/profile/email/User.Read/offline_access and appends `scope` to them —
+  // offline_access is what yields the refresh token that
   // auth.api.getAccessToken() later trades for a fresh access token.
   // Users who signed in before these scopes existed keep a token without them;
   // hasGraphScopes() in src/lib/teams/graph-client.ts detects that and the UI
@@ -73,7 +78,13 @@ export const auth = betterAuth({
   // address kept showing it after the user moved to a syddjurs.dk mailbox, which
   // reads as being logged in as the wrong person.
   socialProviders: microsoft
-    ? { microsoft: { ...microsoft, scope: microsoftGraphScopes(), overrideUserInfoOnSignIn: true } }
+    ? {
+        microsoft: {
+          ...microsoft,
+          ...(graphScopes.length > 0 && { scope: graphScopes }),
+          overrideUserInfoOnSignIn: true,
+        },
+      }
     : {},
   // No `account.accountLinking` override on purpose. Adding providers to
   // `trustedProviders` would drop better-auth's requirement that the *incoming*

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
+import { teamsGraphEnabled } from '@/lib/auth/providers';
+import { GraphError, TEAMS_DISABLED_MESSAGE } from '@/lib/teams/graph-client';
 import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
 import { armMeeting } from '@/lib/teams/meeting-arm';
@@ -34,6 +36,12 @@ function str(value: unknown): string | undefined {
 export async function POST(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  // Before anything is written: resolving the link needs Graph, which the sign-in
+  // never got scopes for, and the owner binding below would be left dangling.
+  if (!teamsGraphEnabled()) {
+    return teamsErrorResponse(new GraphError('disabled', TEAMS_DISABLED_MESSAGE, { status: 403 }));
+  }
 
   let body: {
     meetingId?: unknown;

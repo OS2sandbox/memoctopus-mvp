@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { pool } from '@/lib/db';
+import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { GraphError } from './graph-client';
 import { processTeamsMeeting } from './pipeline';
 import {
@@ -65,6 +66,12 @@ export async function pollMeeting(
 ): Promise<TeamsMeetingRow> {
   let row = await getTeamsMeeting(userId, id);
   if (!row) throw new Error(`Teams meeting not found: ${id}`);
+
+  // The Graph scopes were never requested, so a poll can only fail — as
+  // reauth_required, which would park the row in needs_reauth and ask for a
+  // sign-in that cannot help. Leave the row as it is; it resumes if the flag is
+  // switched on later.
+  if (!teamsGraphEnabled()) return row;
 
   // The give-up window is measured from the scheduled end, or — for an ad-hoc
   // meeting Graph gave us no window for — from when we were asked to watch it.
@@ -187,6 +194,8 @@ async function mapConcurrent<T>(
  * that running several app instances does not mean polling Graph N times.
  */
 export async function pollDueMeetings(now: Date): Promise<{ polled: number }> {
+  if (!teamsGraphEnabled()) return { polled: 0 };
+
   let client: PoolClient;
   try {
     client = await pool.connect();
@@ -236,6 +245,12 @@ function pollerDisabled(): boolean {
  * Wired from `src/instrumentation.ts` on the nodejs runtime only.
  */
 export function startPoller(): () => void {
+  // Off unless the operator opted in: without the Graph scopes there is nothing
+  // to collect, and the scan would only open a connection every interval.
+  if (!teamsGraphEnabled()) {
+    console.log('[teams/poller] TEAMS_GRAPH_ENABLED is not set, not starting');
+    return () => {};
+  }
   if (pollerDisabled()) {
     console.log('[teams/poller] disabled, not starting');
     return () => {};

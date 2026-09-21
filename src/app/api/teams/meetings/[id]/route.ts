@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
+import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
 import { disarmMeeting } from '@/lib/teams/meeting-arm';
 import { pollMeeting } from '@/lib/teams/poller';
@@ -18,6 +19,9 @@ function serialize(row: TeamsMeetingRow) {
     scheduledEnd: row.scheduledEnd ? row.scheduledEnd.toISOString() : null,
     failureReason: row.failureReason,
     lastPolledAt: row.lastPolledAt ? row.lastPolledAt.toISOString() : null,
+    // Lets the screen say "switched off" instead of showing a state that can no
+    // longer change, and instead of asking for a sign-in that cannot help.
+    enabled: teamsGraphEnabled(),
   };
 }
 

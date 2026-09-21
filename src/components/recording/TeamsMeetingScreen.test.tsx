@@ -285,6 +285,51 @@ describe('TeamsMeetingScreen — needs_reauth', () => {
   });
 });
 
+describe('TeamsMeetingScreen — integration switched off', () => {
+  // TEAMS_GRAPH_ENABLED is off on the server. Nothing here can change any more,
+  // and above all the user must not be told to sign in again for scopes that
+  // were never requested.
+  const NOTICE = /Teams-integrationen er ikke slået til/;
+
+  it.each(['awaiting_teams', 'fetching', 'needs_reauth', 'failed'] as const)(
+    'shows a neutral notice instead of the %s state',
+    async (state) => {
+      respondWith(statusBody({ state, enabled: false }));
+      renderScreen();
+      expect(await screen.findByText(NOTICE)).toBeInTheDocument();
+      expect(screen.queryByText('Log ind med Microsoft igen')).toBeNull();
+      expect(screen.queryByText(/Venter på mødet/)).toBeNull();
+      expect(screen.queryByText('Der kom intet referat ud af mødet')).toBeNull();
+      expect(screen.queryByTestId('armed-badge')).toBeNull();
+    },
+  );
+
+  it('offers no "Tjek nu" button, but still lets the user drop the meeting', async () => {
+    respondWith(statusBody({ enabled: false }));
+    renderScreen();
+    await screen.findByText(NOTICE);
+    expect(screen.queryByText('Tjek nu')).toBeNull();
+    expect(screen.getByText('Slå Memoctopus fra')).toBeInTheDocument();
+  });
+
+  it('stops polling', async () => {
+    vi.useFakeTimers();
+    respondWith(statusBody({ enabled: false }));
+    renderScreen();
+    await act(async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); });
+    mockFetch.mockClear();
+    await act(async () => { vi.advanceTimersByTime(60_000); });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('still opens the review for a meeting that was already collected', async () => {
+    respondWith(statusBody({ state: 'ready', enabled: false }));
+    renderScreen();
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/meeting/${MEETING_ID}/review`));
+    expect(screen.queryByText(NOTICE)).toBeNull();
+  });
+});
+
 describe('TeamsMeetingScreen — manual check and disarm', () => {
   it('"Tjek nu" polls with ?poll=1', async () => {
     renderScreen();

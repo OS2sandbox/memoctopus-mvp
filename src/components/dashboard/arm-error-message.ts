@@ -13,6 +13,8 @@ export function armErrorMessage(status: number, error?: string): string {
       return 'Mødelinket er ikke et gyldigt Teams-link.';
     case 'not_invited':
       return 'Du skal være inviteret til mødet for at kunne tage referat.';
+    case 'disabled':
+      return 'Teams-integrationen er ikke slået til.';
     case 'consent_required':
       return 'Memoctopus mangler adgang til dine Teams-møder. Log ind med Microsoft igen.';
     case 'reauth_required':

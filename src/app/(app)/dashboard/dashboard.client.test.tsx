@@ -811,6 +811,44 @@ describe('OptaqPage — Teams section', () => {
     expect(mockSignInSocial).toHaveBeenCalledWith({ provider: 'microsoft', callbackURL: '/dashboard' });
   });
 
+  // TEAMS_GRAPH_ENABLED is off: the link box could only fail, and "log in with
+  // Microsoft" or "Giv adgang igen" would ask for scopes that are never requested.
+  describe('when the integration is switched off', () => {
+    function routeDisabled() {
+      routeFetch({ status: () => ({ ok: true, status: 200, json: async () => ({ enabled: false, microsoftLinked: false, scopesOk: false, missing: [] }) }) });
+    }
+
+    it('hides the Teams link box', async () => {
+      routeDisabled();
+      renderPage();
+      await waitFor(() => expect(screen.queryByPlaceholderText('Indsæt mødelink…')).toBeNull());
+      expect(screen.queryByText('eller deltag i et møde')).toBeNull();
+    });
+
+    it('shows neither the Microsoft-login hint nor "Giv adgang igen"', async () => {
+      routeDisabled();
+      renderPage();
+      await waitFor(() => expect(screen.queryByPlaceholderText('Indsæt mødelink…')).toBeNull());
+      expect(screen.queryByText('Teams-referater kræver, at du logger ind med Microsoft.')).toBeNull();
+      expect(screen.queryByText('Giv adgang igen')).toBeNull();
+    });
+
+    it('leaves recording and upload alone', async () => {
+      routeDisabled();
+      renderPage();
+      await waitFor(() => expect(screen.queryByPlaceholderText('Indsæt mødelink…')).toBeNull());
+      expect(screen.getByText('upload lydfil →')).toBeInTheDocument();
+      expect(screen.getByText('optag')).toBeInTheDocument();
+    });
+  });
+
+  it('keeps the link box when the integration is on', async () => {
+    routeFetch({ status: () => ({ ok: true, status: 200, json: async () => ({ enabled: true, microsoftLinked: true, scopesOk: true, missing: [] }) }) });
+    renderPage();
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith('/api/teams/status'));
+    expect(screen.getByPlaceholderText('Indsæt mødelink…')).toBeInTheDocument();
+  });
+
   it('renders nothing Teams-related when the status request fails', async () => {
     routeFetch({ status: () => ({ ok: false, status: 500, json: async () => ({}) }) });
     renderPage();

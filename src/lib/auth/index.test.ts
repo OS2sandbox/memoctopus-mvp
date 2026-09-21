@@ -25,6 +25,7 @@ const ENV_KEYS = [
   'AUTHENTIK_CLIENT_ID', 'AUTHENTIK_CLIENT_SECRET', 'AUTHENTIK_DISCOVERY_URL',
   'EMAIL_PASSWORD_ENABLED', 'NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED', 'NEXT_PUBLIC_MICROSOFT_ENABLED',
   'BETTER_AUTH_URL', 'BETTER_AUTH_SECRET', 'BETTER_AUTH_TRUSTED_ORIGINS',
+  'TEAMS_GRAPH_ENABLED', 'TEAMS_ARTIFACT_MODE',
 ];
 const saved: Record<string, string | undefined> = {};
 
@@ -70,14 +71,38 @@ describe('auth config — user info follows the identity provider', () => {
     expect(social.microsoft.overrideUserInfoOnSignIn).toBe(true);
   });
 
-  it('still requests the Graph scopes alongside it', async () => {
-    const options = await loadAuth(MICROSOFT_ENV);
+  it('still requests the Graph scopes alongside it once Teams is enabled', async () => {
+    const options = await loadAuth({ ...MICROSOFT_ENV, TEAMS_GRAPH_ENABLED: 'true' });
     const social = options.socialProviders as Record<string, Record<string, unknown>>;
+    expect(social.microsoft.overrideUserInfoOnSignIn).toBe(true);
     expect(social.microsoft.scope).toEqual([
       'OnlineMeetings.ReadWrite',
       'OnlineMeetingTranscript.Read.All',
       'OnlineMeetingRecording.Read.All',
     ]);
+  });
+
+  it('leaves the recording scope out in transcript-only mode', async () => {
+    const options = await loadAuth({
+      ...MICROSOFT_ENV,
+      TEAMS_GRAPH_ENABLED: 'true',
+      TEAMS_ARTIFACT_MODE: 'transcript-only',
+    });
+    const social = options.socialProviders as Record<string, Record<string, unknown>>;
+    expect(social.microsoft.scope).toEqual([
+      'OnlineMeetings.ReadWrite',
+      'OnlineMeetingTranscript.Read.All',
+    ]);
+  });
+
+  // The Syddjurs tenant has not granted admin consent for the *.Read.All scopes,
+  // and Entra answers "Need admin approval" to any authorize request that names
+  // them, so requesting them unconditionally locks every Microsoft user out.
+  it('requests no scope beyond better-auth\'s defaults while Teams is disabled', async () => {
+    const options = await loadAuth(MICROSOFT_ENV);
+    const social = options.socialProviders as Record<string, Record<string, unknown>>;
+    expect(social.microsoft).not.toHaveProperty('scope');
+    expect(social.microsoft.overrideUserInfoOnSignIn).toBe(true);
   });
 
   it('refreshes user info for the generic OIDC provider too', async () => {

@@ -10,6 +10,10 @@ noget nyt i Teams, og der kommer ingen ekstra deltager i mødet.
 Opsætningen består af to trin i Microsoft-portalerne. Regn med 15 minutter, plus op
 til en times ventetid på, at Teams-politikken slår igennem.
 
+**Teams-referater er slået fra som standard.** Driften slår dem til ved at sætte
+`TEAMS_GRAPH_ENABLED=true` i Memoctopus' miljøvariabler og genstarte appen, og det
+skal først ske, **når trin 1 er gennemført**. Se rammen under trin 1.
+
 ## Trin 1. Giv appen adgang til møderne
 
 Foretages i **Entra admin center** ([entra.microsoft.com](https://entra.microsoft.com))
@@ -24,7 +28,7 @@ af en bruger med rollen *Global administrator* eller *Privileged role administra
    |---|---|
    | `OnlineMeetings.ReadWrite` | Slå automatisk transskription til på det enkelte møde |
    | `OnlineMeetingTranscript.Read.All` | Hente mødets transskription bagefter |
-   | `OnlineMeetingRecording.Read.All` | Hente mødets optagelse bagefter |
+   | `OnlineMeetingRecording.Read.All` | Hente mødets optagelse bagefter (kan udelades ved `TEAMS_ARTIFACT_MODE=transcript-only`) |
    | `User.Read` | Læse brugerens eget navn og e-mail (findes typisk allerede) |
    | `offline_access` | Fornye adgangen, så brugeren ikke skal logge ind igen hver time |
 
@@ -43,8 +47,21 @@ af en bruger med rollen *Global administrator* eller *Privileged role administra
    ```
 
 5. Bekræft, at Memoctopus' `MICROSOFT_TENANT_ID` er sat til organisationens
-   rigtige tenant-id. Står feltet tomt, bruger appen `common`, og så får
-   administrator-samtykket ikke virkning.
+   rigtige tenant-id. Står feltet tomt, bruger appen `common`, og så kan brugere
+   fra alle tenants logge ind. Administrator-samtykket gælder fortsat i jeres
+   tenant, men det gælder kun jeres tenant: samtykke gives **pr. tenant**, og det
+   følger ikke med brugere fra andre organisationer.
+
+> **Vigtigt: giv samtykke, før Teams slås til i Memoctopus.** Når driften sætter
+> `TEAMS_GRAPH_ENABLED=true`, beder Microsoft-login om de tilladelser, der står
+> ovenfor. `OnlineMeetingTranscript.Read.All` og `OnlineMeetingRecording.Read.All`
+> kræver administrator-samtykke. Har tenanten ikke givet det, svarer Microsoft
+> *"Need admin approval"* på selve login-forsøget, og **ingen** kan så logge ind med
+> Microsoft, heller ikke til andet end Teams. Er tenantens arbejdsgang til
+> samtykke-anmodninger slået fra, kan brugerne heller ikke bede om det.
+> Indstillingen læses ved opstart, så appen skal genstartes efter en ændring.
+> Med `TEAMS_ARTIFACT_MODE=transcript-only` bliver optagelses-tilladelsen slet
+> ikke bedt om.
 
 ## Trin 2. Tillad optagelse og transskription i Teams
 
@@ -77,8 +94,8 @@ ingen anden vej rundt om det end at slå indstillingen til.
 
 ## Sådan bruger medarbejderne det bagefter
 
-1. Log ind i Memoctopus med Microsoft. **Brugere, der loggede ind før denne
-   opsætning, skal logge ud og ind igen**, så den nye adgang bliver gemt. Indtil
+1. Log ind i Memoctopus med Microsoft. **Brugere, der loggede ind, før Teams blev
+   slået til, skal logge ud og ind igen**, så den nye adgang bliver gemt. Indtil
    de gør det, viser forsiden en knap *"Giv adgang igen"*.
 2. Planlæg mødet i Outlook eller Teams som altid.
 3. Kopiér mødelinket, altså det samme "Deltag i Teams-møde"-link som deltagerne
@@ -100,6 +117,8 @@ tilfælde vises en sætning, der kan sendes videre til arrangøren.
 | Det brugeren ser | Årsag | Løsning |
 |---|---|---|
 | "Teams-referater kræver, at du logger ind med Microsoft" | Brugeren er logget ind med e-mail/adgangskode eller en anden udbyder | Log ind med Microsoft |
+| Ingen mulighed for at indsætte et mødelink, eller "Teams-integrationen er ikke slået til" | `TEAMS_GRAPH_ENABLED` er ikke sat til `true`, eller appen er ikke genstartet efter ændringen | Sæt den, når trin 1 er gennemført, og genstart |
+| Microsoft-login svarer "Need admin approval" | `TEAMS_GRAPH_ENABLED=true`, men administrator-samtykket i trin 1 er ikke givet i brugerens tenant | Giv samtykket, eller sæt `TEAMS_GRAPH_ENABLED` tilbage og genstart |
 | Knappen "Giv adgang igen" | Brugeren loggede ind, før tilladelserne i trin 1 blev givet | Log ud og ind igen |
 | "Jeres Teams-politik tillader ikke optagelse eller transskription" | Trin 2 mangler, eller er endnu ikke slået igennem | Gennemgå trin 2, vent op til en time |
 | "Jeres organisation har slået Graph-adgang til transskriptioner fra" | Indstillingen i trin 3 | Gennemgå trin 3 |

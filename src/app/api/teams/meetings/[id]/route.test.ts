@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
 vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers()) }));
@@ -59,12 +59,28 @@ const req = (qs = '') => new NextRequest(`http://localhost/api/teams/meetings/m1
 
 beforeEach(() => {
   vi.clearAllMocks();
+  process.env.TEAMS_GRAPH_ENABLED = 'true';
   mockGetSession.mockResolvedValue(FAKE_SESSION as never);
   mockDelete.mockResolvedValue(undefined);
   mockDisarm.mockResolvedValue(undefined);
 });
 
+afterEach(() => {
+  delete process.env.TEAMS_GRAPH_ENABLED;
+});
+
 describe('GET /api/teams/meetings/[id]', () => {
+  it('tells the screen whether the integration is on', async () => {
+    mockGet.mockResolvedValueOnce(row());
+    expect((await (await GET(req(), { params })).json()).enabled).toBe(true);
+
+    delete process.env.TEAMS_GRAPH_ENABLED;
+    mockGet.mockResolvedValueOnce(row({ state: 'needs_reauth' }));
+    const body = await (await GET(req(), { params })).json();
+    expect(body.enabled).toBe(false);
+    expect(body.state).toBe('needs_reauth');
+  });
+
   it('returns 401 when not authenticated', async () => {
     mockGetSession.mockResolvedValueOnce(null as never);
     expect((await GET(req(), { params })).status).toBe(401);
@@ -94,6 +110,7 @@ describe('GET /api/teams/meetings/[id]', () => {
       failureReason: null,
       lastPolledAt: '2026-09-08T11:05:00.000Z',
       armResult: 'armed',
+      enabled: true,
     });
     expect(mockPoll).not.toHaveBeenCalled();
   });

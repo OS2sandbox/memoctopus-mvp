@@ -14,6 +14,8 @@
 //
 // Server-only: must not import @/lib/db (it opens a pg.Pool at module scope).
 
+import { artifactMode } from '../teams/artifact-mode';
+
 /** Crosses the server→client boundary as a prop — must carry no secrets. */
 export type AuthProvider =
   | { kind: 'social'; id: 'microsoft'; label: string }
@@ -111,9 +113,41 @@ const MICROSOFT_BUILTIN_SCOPES: readonly string[] = [
   'offline_access',
 ];
 
+const RECORDING_SCOPE = 'OnlineMeetingRecording.Read.All';
+
+/**
+ * Whether the Teams/Graph integration is on. Opt-in and OFF by default: the
+ * transcript and recording scopes are `*.Read.All`, which need tenant-admin
+ * consent, and Entra refuses the whole authorize request ("Need admin approval")
+ * when a tenant has not granted it. Requesting them at sign-in would then lock
+ * out every Microsoft user, for every feature, not just Teams.
+ *
+ * Only an explicit "true" turns it on — deliberately not flag(), which treats
+ * anything but "false" as on. That is right for a kill switch and wrong here: a
+ * stray "1" or "yes" must not be able to break sign-in for the whole tenant.
+ * Read at request time like the rest of this file; the better-auth instance
+ * captures it once at startup, so changing it needs a restart.
+ */
+export function teamsGraphEnabled(): boolean {
+  return env('TEAMS_GRAPH_ENABLED')?.toLowerCase() === 'true';
+}
+
+/**
+ * Delegated scopes the Teams integration needs in the current configuration:
+ * empty while it is off; otherwise the full list, minus the recording scope in
+ * transcript-only mode — the widest grant there is (video of every meeting the
+ * user can reach), so it is never asked for when no recording is ever fetched.
+ */
+export function teamsGraphScopes(): string[] {
+  if (!teamsGraphEnabled()) return [];
+  return GRAPH_DELEGATED_SCOPES.filter(
+    (s) => s !== RECORDING_SCOPE || artifactMode() !== 'transcript-only',
+  );
+}
+
 /** The Graph scopes to pass as `scope` on the microsoft social provider. */
 export function microsoftGraphScopes(): string[] {
-  return GRAPH_DELEGATED_SCOPES.filter((s) => !MICROSOFT_BUILTIN_SCOPES.includes(s));
+  return teamsGraphScopes().filter((s) => !MICROSOFT_BUILTIN_SCOPES.includes(s));
 }
 
 export function emailPasswordEnabled(): boolean {

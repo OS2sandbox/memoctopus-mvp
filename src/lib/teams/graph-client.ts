@@ -1,5 +1,5 @@
 import { auth } from '@/lib/auth';
-import { GRAPH_DELEGATED_SCOPES } from '@/lib/auth/providers';
+import { GRAPH_DELEGATED_SCOPES, teamsGraphEnabled, teamsGraphScopes } from '@/lib/auth/providers';
 
 // ─── Microsoft Graph, called as the signed-in user ────────────────────────────
 // Delegated auth, not application permissions: better-auth already stores the
@@ -15,10 +15,20 @@ export const GRAPH_SCOPES = GRAPH_DELEGATED_SCOPES;
 /** Scopes an OIDC login gives us for free — never part of a consent gap. */
 const OIDC_SCOPES = new Set(['openid', 'profile', 'email', 'offline_access']);
 
-/** The scopes whose absence means the user must re-consent. */
-const REQUIRED_GRAPH_SCOPES = GRAPH_SCOPES.filter((s) => !OIDC_SCOPES.has(s));
+/**
+ * The scopes whose absence means the user must re-consent: the ones sign-in
+ * actually requests, so transcript-only mode does not demand a recording scope
+ * it never asked for.
+ */
+function requiredGraphScopes(): string[] {
+  return teamsGraphScopes().filter((s) => !OIDC_SCOPES.has(s));
+}
+
+/** Shown wherever a Teams action reaches the server while the integration is off. */
+export const TEAMS_DISABLED_MESSAGE = 'Teams-integrationen er ikke slået til.';
 
 export type GraphErrorCode =
+  | 'disabled'
   | 'consent_required'
   | 'reauth_required'
   | 'transcripts_disabled'
@@ -102,7 +112,7 @@ function parseScopes(scopes: readonly string[] | string | undefined | null): Set
 }
 
 function missingFrom(granted: Set<string>): string[] {
-  return REQUIRED_GRAPH_SCOPES.filter((s) => !granted.has(normaliseScope(s)));
+  return requiredGraphScopes().filter((s) => !granted.has(normaliseScope(s)));
 }
 
 interface TokenResult {
@@ -118,6 +128,13 @@ interface TokenResult {
  * the user has to sign in with Microsoft again.
  */
 async function fetchToken(userId: string): Promise<TokenResult> {
+  // Nothing here can succeed while TEAMS_GRAPH_ENABLED is off: the scopes were
+  // never requested. Say so, rather than let it surface as a consent gap that a
+  // fresh sign-in cannot close.
+  if (!teamsGraphEnabled()) {
+    throw new GraphError('disabled', TEAMS_DISABLED_MESSAGE, { status: 403 });
+  }
+
   let result: { accessToken?: string | null; scopes?: string[] } | null = null;
   try {
     result = (await auth.api.getAccessToken({

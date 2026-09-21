@@ -14,6 +14,9 @@ import {
 } from '@/lib/pending-artifacts';
 import { transcribeRecording } from '@/lib/transcribe-recording';
 import { withMeetingLock } from './meeting-lock';
+import { artifactMode } from './artifact-mode';
+
+export { artifactMode };
 
 // One meeting's worth of work: ask Graph what artifacts exist, decide which of the
 // three processing modes applies, and land the result in the pending stash the
@@ -21,8 +24,6 @@ import { withMeetingLock } from './meeting-lock';
 //
 // Idempotent: a meeting whose stash is already 'ready' is not reprocessed, and a
 // run in flight reports 'pending' rather than starting a second download.
-
-export type ArtifactMode = 'prefer-recording' | 'transcript-only';
 
 export type ProcessingMode = 'recording+transcript' | 'transcript-only' | 'recording-only';
 
@@ -69,15 +70,6 @@ export function assertSafeMeetingId(meetingId: string): void {
   if (!/^[\w-]+$/.test(meetingId)) {
     throw new Error(`Invalid meetingId: ${meetingId}`);
   }
-}
-
-/**
- * Deployment-wide artifact policy. `transcript-only` is for customers who forbid
- * recordings: Teams' own transcript is used verbatim and no mp4 is ever fetched.
- */
-export function artifactMode(): ArtifactMode {
-  const raw = process.env.TEAMS_ARTIFACT_MODE?.trim().toLowerCase() || undefined;
-  return raw === 'transcript-only' ? 'transcript-only' : 'prefer-recording';
 }
 
 function tmpRoot(): string {

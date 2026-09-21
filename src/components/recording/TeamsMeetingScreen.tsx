@@ -24,6 +24,8 @@ interface TeamsMeetingStatus {
   lastPolledAt: string | null;
   armResult?: TeamsArmResult;
   mode?: string;
+  /** False when the server has TEAMS_GRAPH_ENABLED off. Absent means on. */
+  enabled?: boolean;
 }
 
 export type TeamsArmResult = 'armed' | 'not_organizer' | 'policy_blocked';
@@ -180,8 +182,12 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
     return () => clearTimeout(t);
   }, []);
 
-  const state = status?.state;
-  const stopped = state === 'ready' || state === 'failed' || state === 'needs_reauth';
+  // Switched off on the server: no state can change any more, and needs_reauth in
+  // particular must not ask for a sign-in that cannot help. A meeting that was
+  // already collected (`ready`) still goes on to its review.
+  const off = status?.enabled === false && status.state !== 'ready';
+  const state = off ? undefined : status?.state;
+  const stopped = off || state === 'ready' || state === 'failed' || state === 'needs_reauth';
 
   useEffect(() => {
     if (stopped) return;
@@ -242,7 +248,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
             Åbn i Teams
           </a>
         )}
-        {status?.armed && (
+        {status?.armed && !off && (
           <span
             data-testid="armed-badge"
             style={{
@@ -257,6 +263,13 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
       </div>
 
       <div style={{ marginTop: 28, borderTop: '1px solid var(--line)', paddingTop: 24 }}>
+        {off && (
+          <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
+            Teams-integrationen er ikke slået til, så Memoctopus henter ikke referatet fra dette møde.
+            Kontakt jeres IT-administrator.
+          </p>
+        )}
+
         {state === 'awaiting_teams' && status?.armed && (
           <>
             <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
@@ -356,18 +369,20 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
       </div>
 
       <div style={{ marginTop: 28, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <button
-          type="button"
-          onClick={() => { void poll(true); }}
-          disabled={checking}
-          style={{
-            padding: '9px 16px', borderRadius: 8, fontSize: 13,
-            border: '1px solid var(--line-2)', background: 'transparent',
-            color: 'var(--ink)', cursor: checking ? 'default' : 'pointer',
-          }}
-        >
-          {state === 'failed' ? 'Prøv igen' : 'Tjek nu'}
-        </button>
+        {!off && (
+          <button
+            type="button"
+            onClick={() => { void poll(true); }}
+            disabled={checking}
+            style={{
+              padding: '9px 16px', borderRadius: 8, fontSize: 13,
+              border: '1px solid var(--line-2)', background: 'transparent',
+              color: 'var(--ink)', cursor: checking ? 'default' : 'pointer',
+            }}
+          >
+            {state === 'failed' ? 'Prøv igen' : 'Tjek nu'}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => { void disarm(); }}
@@ -377,7 +392,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
             color: 'var(--muted)', cursor: 'pointer',
           }}
         >
-          {state === 'failed' ? 'Slet' : 'Slå Memoctopus fra'}
+          {status?.state === 'failed' ? 'Slet' : 'Slå Memoctopus fra'}
         </button>
       </div>
     </div>

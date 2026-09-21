@@ -22,6 +22,8 @@ export function teamsErrorResponse(err: unknown): NextResponse {
         );
       case 'reauth_required':
         return NextResponse.json({ error: 'reauth_required', message: err.message }, { status: 403 });
+      case 'disabled':
+        return NextResponse.json({ error: 'disabled', message: err.message }, { status: 403 });
       case 'transcripts_disabled':
         return NextResponse.json({ error: 'transcripts_disabled', message: err.message }, { status: 403 });
       case 'forbidden':

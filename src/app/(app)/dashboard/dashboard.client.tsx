@@ -11,6 +11,8 @@ import { armErrorMessage } from '@/components/dashboard/arm-error-message';
 import { signIn } from '@/lib/auth-client';
 
 interface TeamsStatus {
+  /** False when the server has TEAMS_GRAPH_ENABLED off. Absent means on. */
+  enabled?: boolean;
   microsoftLinked: boolean;
   scopesOk: boolean;
   missing: string[];
@@ -45,6 +47,10 @@ export default function OptaqPage() {
       .then((data: TeamsStatus | null) => { if (data) setTeamsStatus(data); })
       .catch((err) => { console.warn('[dashboard] teams status failed:', err); });
   }, []);
+
+  // Off on the server: the Graph scopes are never requested, so the link box could
+  // only fail and every hint below would point at a sign-in that cannot help.
+  const teamsOff = teamsStatus?.enabled === false;
 
   function reconsent() {
     void signIn.social({ provider: 'microsoft', callbackURL: '/dashboard' });
@@ -163,13 +169,13 @@ export default function OptaqPage() {
         {/* Teams — access hints. A Teams meeting is registered by pasting its
             mødelink into the box above; nothing is listed from the calendar. */}
         <div style={{ maxWidth: 560, margin: isMobile ? '36px auto 0' : '56px auto 0' }}>
-          {teamsStatus && !teamsStatus.microsoftLinked && (
+          {teamsStatus && !teamsOff && !teamsStatus.microsoftLinked && (
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)', textAlign: 'center' }}>
               Teams-referater kræver, at du logger ind med Microsoft.
             </div>
           )}
 
-          {teamsStatus && teamsStatus.microsoftLinked && !teamsStatus.scopesOk && (
+          {teamsStatus && !teamsOff && teamsStatus.microsoftLinked && !teamsStatus.scopesOk && (
             <div style={{ textAlign: 'center' }}>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)' }}>
                 Memoctopus mangler adgang til dine Teams-møder.
@@ -297,62 +303,64 @@ export default function OptaqPage() {
             )}
 
             {/* Teams meeting link input */}
-            <div style={{ marginTop: 30 }}>
-              <div style={{
-                fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
-                letterSpacing: 0.4, marginBottom: 10,
-              }}>eller deltag i et møde</div>
-              <div
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  width: 300, margin: '0 auto',
-                  border: '1px solid var(--line-2)', borderRadius: 999,
-                  background: 'var(--surface)', padding: '4px 4px 4px 14px',
-                  transition: 'border-color 120ms',
-                }}
-                onFocusCapture={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
-                onBlurCapture={(e) => (e.currentTarget.style.borderColor = 'var(--line-2)')}
-              >
-                <input
-                  value={meetingLink}
-                  onChange={(e) => { setMeetingLink(e.target.value); if (linkError) setLinkError(''); }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && meetingLink.trim()) {
-                      e.preventDefault();
-                      joinMeeting(meetingLink.trim());
-                    }
-                  }}
-                  placeholder="Indsæt mødelink…"
-                  style={{
-                    flex: 1, fontFamily: 'var(--mono)', fontSize: 12.5,
-                    color: 'var(--ink)', padding: '7px 0',
-                    background: 'transparent', border: 'none', outline: 'none',
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => meetingLink.trim() && joinMeeting(meetingLink.trim())}
-                  disabled={!meetingLink.trim() || linkLoading}
-                  style={{
-                    width: 30, height: 30, borderRadius: 999, flexShrink: 0,
-                    border: 'none',
-                    background: meetingLink.trim() && !linkLoading ? 'var(--accent)' : 'var(--sunk)',
-                    color: meetingLink.trim() && !linkLoading ? '#fff' : 'var(--muted-2)',
-                    cursor: meetingLink.trim() && !linkLoading ? 'pointer' : 'default',
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 14, transition: 'background 120ms',
-                  }}
-                >
-                  {linkLoading ? '…' : '→'}
-                </button>
-              </div>
-              {linkError && (
+            {!teamsOff && (
+              <div style={{ marginTop: 30 }}>
                 <div style={{
-                  marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11,
-                  color: 'var(--error, #e05252)', textAlign: 'center',
-                }}>{linkError}</div>
-              )}
-            </div>
+                  fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
+                  letterSpacing: 0.4, marginBottom: 10,
+                }}>eller deltag i et møde</div>
+                <div
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    width: 300, margin: '0 auto',
+                    border: '1px solid var(--line-2)', borderRadius: 999,
+                    background: 'var(--surface)', padding: '4px 4px 4px 14px',
+                    transition: 'border-color 120ms',
+                  }}
+                  onFocusCapture={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
+                  onBlurCapture={(e) => (e.currentTarget.style.borderColor = 'var(--line-2)')}
+                >
+                  <input
+                    value={meetingLink}
+                    onChange={(e) => { setMeetingLink(e.target.value); if (linkError) setLinkError(''); }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && meetingLink.trim()) {
+                        e.preventDefault();
+                        joinMeeting(meetingLink.trim());
+                      }
+                    }}
+                    placeholder="Indsæt mødelink…"
+                    style={{
+                      flex: 1, fontFamily: 'var(--mono)', fontSize: 12.5,
+                      color: 'var(--ink)', padding: '7px 0',
+                      background: 'transparent', border: 'none', outline: 'none',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => meetingLink.trim() && joinMeeting(meetingLink.trim())}
+                    disabled={!meetingLink.trim() || linkLoading}
+                    style={{
+                      width: 30, height: 30, borderRadius: 999, flexShrink: 0,
+                      border: 'none',
+                      background: meetingLink.trim() && !linkLoading ? 'var(--accent)' : 'var(--sunk)',
+                      color: meetingLink.trim() && !linkLoading ? '#fff' : 'var(--muted-2)',
+                      cursor: meetingLink.trim() && !linkLoading ? 'pointer' : 'default',
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 14, transition: 'background 120ms',
+                    }}
+                  >
+                    {linkLoading ? '…' : '→'}
+                  </button>
+                </div>
+                {linkError && (
+                  <div style={{
+                    marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11,
+                    color: 'var(--error, #e05252)', textAlign: 'center',
+                  }}>{linkError}</div>
+                )}
+              </div>
+            )}
 
             <div style={{
               marginTop: 18, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)',
