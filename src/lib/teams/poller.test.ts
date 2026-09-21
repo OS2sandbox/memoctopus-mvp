@@ -8,6 +8,11 @@ vi.mock('@/lib/auth', () => ({ auth: { api: {} } }));
 
 vi.mock('./pipeline', () => ({ processTeamsMeeting: vi.fn() }));
 
+const mockQuery = vi.fn();
+vi.mock('@/lib/db/user-schema', () => ({
+  queryUserSchema: (...a: unknown[]) => mockQuery(...a),
+}));
+
 vi.mock('./store', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./store')>();
   return {
@@ -77,12 +82,28 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env.TEAMS_GRAPH_ENABLED = 'true';
   mockMark.mockResolvedValue(undefined);
+  mockQuery.mockResolvedValue([]);
   mockSetState.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
   delete process.env.TEAMS_GRAPH_ENABLED;
 });
+
+/**
+ * A poll that was written without `attempts = attempts + 1` (store.markPollAttempt
+ * is the only thing that adds one), but still stamps `last_polled_at` so the
+ * backoff keeps working.
+ */
+function expectNoAttemptPoll(state: string, failureReason: string | null) {
+  expect(mockMark).not.toHaveBeenCalled();
+  expect(mockQuery).toHaveBeenCalledTimes(1);
+  const [userId, sql, params] = mockQuery.mock.calls[0];
+  expect(userId).toBe('u1');
+  expect(sql).toContain('last_polled_at = NOW()');
+  expect(sql).not.toMatch(/attempts/);
+  expect(params).toEqual(['m1', state, failureReason]);
+}
 
 describe('pollMeeting', () => {
   it('leaves the row alone and never touches Graph while TEAMS_GRAPH_ENABLED is off', async () => {
@@ -249,20 +270,74 @@ describe('pollMeeting', () => {
   it('keeps waiting when Graph throttles or is unavailable', async () => {
     // 429/5xx are routine on /onlineMeetings/*/transcripts; failing the meeting
     // for one of them means the user never gets a referat and cannot retry.
-    for (const status of [429, 503]) {
+    const errors = [
+      new GraphError('unavailable', 'Microsoft Graph svarede 429', { status: 429 }),
+      new GraphError('unavailable', 'Microsoft Graph svarede 503', { status: 503 }),
+      new GraphError('unavailable', 'Microsoft svarede ikke i tide.'),
+    ];
+    for (const err of errors) {
       vi.clearAllMocks();
       mockGet.mockResolvedValue(row());
-      mockProcess.mockRejectedValueOnce(
-        new GraphError('http', `Microsoft Graph svarede ${status}`, { status }),
-      );
+      mockQuery.mockResolvedValue([]);
+      mockProcess.mockRejectedValueOnce(err);
 
       await pollMeeting('u1', 'm1', NOW);
 
-      expect(mockMark).toHaveBeenCalledWith('u1', 'm1', {
-        state: 'awaiting_teams',
-        failureReason: `Microsoft Graph svarede ${status}`,
-      });
+      expectNoAttemptPoll('awaiting_teams', err.message);
     }
+  });
+
+  it('does not count a throttled poll toward the attempts that end the recording grace', async () => {
+    mockGet.mockResolvedValue(row({ attempts: 14 }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending', transient: true });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    // Still 14: markPollAttempt is the only writer that adds one.
+    expectNoAttemptPoll('awaiting_teams', null);
+  });
+
+  it('still counts an ordinary "nothing yet" poll', async () => {
+    mockGet.mockResolvedValue(row({ attempts: 14 }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', { state: 'awaiting_teams', failureReason: null });
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it('does not count a forced poll ("Tjek nu") that finds nothing yet', async () => {
+    mockGet.mockResolvedValue(row());
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expectNoAttemptPoll('awaiting_teams', null);
+  });
+
+  it('does not count a forced poll that needs a new sign-in', async () => {
+    mockGet.mockResolvedValue(row());
+    mockProcess.mockRejectedValueOnce(new GraphError('reauth_required', 'Log ind igen.'));
+
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expectNoAttemptPoll('needs_reauth', 'Log ind igen.');
+  });
+
+  it('records the outcome of a forced poll that finishes the meeting as usual', async () => {
+    mockGet.mockResolvedValue(row());
+    mockProcess.mockResolvedValueOnce({
+      status: 'ready',
+      mode: 'transcript-only',
+      speakers: [],
+      transcriptId: 't1',
+      recordingId: null,
+    });
+
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', expect.objectContaining({ state: 'ready' }));
   });
 
   it('maps reauth_required to needs_reauth', async () => {

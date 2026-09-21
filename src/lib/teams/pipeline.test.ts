@@ -490,10 +490,23 @@ describe('processTeamsMeeting — idempotency and errors', () => {
     // Graph throttles /transcripts routinely; one 429 must not cost the referat.
     for (const status of [429, 503, 500, 408]) {
       mockListArtifacts.mockRejectedValue(
-        new GraphError('http', `Microsoft Graph svarede ${status}`, { status }),
+        new GraphError('unavailable', `Microsoft Graph svarede ${status}`, { status }),
       );
-      expect(await processTeamsMeeting('u1', MEETING, AFTER_GRACE)).toEqual({ status: 'pending' });
+      // `transient` is what tells the poller this poll must not spend a grace attempt.
+      expect(await processTeamsMeeting('u1', MEETING, AFTER_GRACE)).toEqual({
+        status: 'pending',
+        transient: true,
+      });
     }
+  });
+
+  it('is pending and transient for a timeout while downloading, too', async () => {
+    mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [] });
+    mockDownloadVtt.mockRejectedValue(new GraphError('unavailable', 'Microsoft svarede ikke i tide.'));
+    expect(await processTeamsMeeting('u1', MEETING, AFTER_GRACE)).toEqual({
+      status: 'pending',
+      transient: true,
+    });
   });
 
   it('still fails for a non-retryable Graph error', async () => {
