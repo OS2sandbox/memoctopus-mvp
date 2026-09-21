@@ -7,6 +7,7 @@ import { users, sessions, accounts, verifications } from '@/lib/db/schema';
 import {
   emailPasswordEnabled,
   microsoftConfig,
+  microsoftSingleTenant,
   oidcConfig,
   warnDeprecatedAuthEnv,
 } from './providers';
@@ -55,7 +56,25 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: emailPasswordEnabled(),
   },
-  socialProviders: microsoft ? { microsoft } : {},
+  // overrideUserInfoOnSignIn keeps the stored name and email in step with Entra on every
+  // sign-in. Without it better-auth writes them once, at account creation, and never again:
+  // it matches the account on the provider's subject claim, so a user whose mail attribute
+  // or display name later changes keeps the address they first signed up with. That
+  // happened here: an account created under one address kept showing it after the user
+  // moved to a syddjurs.dk mailbox, which reads as being logged in as the wrong person.
+  //
+  // Only for one named tenant (MICROSOFT_TENANT_ID). There the tenant admin controls the
+  // `email` claim. Under the multi-tenant authorities (blank, common, organizations,
+  // consumers) it comes from whichever tenant the user signs in from, and Entra does not
+  // guarantee it is verified or unchanged, so it must not overwrite what we store.
+  socialProviders: microsoft
+    ? {
+        microsoft: {
+          ...microsoft,
+          ...(microsoftSingleTenant() && { overrideUserInfoOnSignIn: true }),
+        },
+      }
+    : {},
   // No `account.accountLinking` override on purpose. Adding providers to
   // `trustedProviders` would drop better-auth's requirement that the *incoming*
   // IdP asserted email_verified (see dist/oauth2/link-account.mjs) — an attacker

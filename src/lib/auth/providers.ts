@@ -104,6 +104,20 @@ export function microsoftConfig() {
   return { clientId, clientSecret, tenantId: env('MICROSOFT_TENANT_ID') || 'common' };
 }
 
+// The multi-tenant authorities: any tenant's users may sign in, so nothing they assert
+// about themselves is vouched for by *our* tenant.
+const MULTI_TENANT_AUTHORITIES = ['common', 'organizations', 'consumers'];
+
+/**
+ * True when MICROSOFT_TENANT_ID names one specific tenant, false for the multi-tenant
+ * authorities (blank, common, organizations, consumers) and when Microsoft login is off.
+ * Only in a single tenant does its admin control the `email` claim.
+ */
+export function microsoftSingleTenant(): boolean {
+  const tenant = microsoftConfig()?.tenantId.toLowerCase();
+  return !!tenant && !MULTI_TENANT_AUTHORITIES.includes(tenant);
+}
+
 /**
  * The generic OIDC provider — Keycloak, Authentik, or any compliant IdP.
  *
