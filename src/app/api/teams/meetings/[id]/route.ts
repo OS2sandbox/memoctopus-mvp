@@ -123,6 +123,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: 'unknown_action' }, { status: 400 });
   }
 
+  // While the integration is off pollMeeting does nothing, so a revived row would wait
+  // forever under a message that says it is being fetched.
+  if (!teamsGraphEnabled()) return NextResponse.json({ error: 'disabled' }, { status: 403 });
+
   if (row.state !== 'ready') return NextResponse.json({ error: 'not_ready' }, { status: 409 });
 
   // The stash is still there: nothing is missing, the browser just has not collected it.

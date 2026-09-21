@@ -276,6 +276,19 @@ describe('POST /api/teams/meetings/[id] — recollect', () => {
     expect(mockSetState).not.toHaveBeenCalled();
   });
 
+  it('refuses with 403 while the Teams integration is off, and moves nothing', async () => {
+    // With the flag off pollMeeting is a no-op, so a revived row would sit in
+    // awaiting_teams for good and the user would be told it is being fetched.
+    delete process.env.TEAMS_GRAPH_ENABLED;
+    mockGet.mockResolvedValueOnce(row({ state: 'ready', scheduledEnd: recentlyEnded() }));
+
+    const res = await POST(post(), { params });
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'disabled' });
+    expect(mockSetState).not.toHaveBeenCalled();
+  });
+
   it('puts a ready row whose stash is gone back to awaiting_teams', async () => {
     mockGet
       .mockResolvedValueOnce(row({ state: 'ready', scheduledEnd: recentlyEnded() }))
