@@ -174,8 +174,15 @@ describe('createMeeting', () => {
     expect(await getMeeting(m.id)).toMatchObject({ teamsArmed: true });
   });
 
+  it('stores the Graph marker when supplied and persists it', async () => {
+    const m = await createMeeting({ title: 'Teams', source: 'teams', status: 'awaiting_teams', graphManaged: true });
+    expect(m.graphManaged).toBe(true);
+    expect(await getMeeting(m.id)).toMatchObject({ graphManaged: true });
+  });
+
   it('leaves the Teams fields off a local recording entirely', async () => {
     const m = await createMeeting({ title: 'Diktat' });
+    expect('graphManaged' in m).toBe(false);
     expect('teamsArmed' in m).toBe(false);
     expect('scheduledStart' in m).toBe(false);
   });

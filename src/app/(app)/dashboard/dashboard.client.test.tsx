@@ -601,7 +601,7 @@ describe('OptaqPage — Teams meeting link flow', () => {
 
     await waitFor(() => {
       expect(mockCreateMeeting).toHaveBeenCalledWith(
-        expect.objectContaining({ source: 'teams', status: 'awaiting_teams' }),
+        expect.objectContaining({ source: 'teams', status: 'awaiting_teams', graphManaged: true }),
       );
       expect(mockPush).toHaveBeenCalledWith('/meeting/teams-1');
     });

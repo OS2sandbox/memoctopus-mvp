@@ -22,7 +22,7 @@ type ArchiveMeeting = Pick<Meeting, 'id' | 'title' | 'participants' | 'status' |
 };
 
 function statusHref(m: ArchiveMeeting) {
-  if (m.status === 'recording' || m.status === 'processing') return `/meeting/${m.id}`;
+  if (m.status === 'awaiting_teams' || m.status === 'recording' || m.status === 'processing') return `/meeting/${m.id}`;
   if (m.status === 'review') return `/meeting/${m.id}/review`;
   return `/meeting/${m.id}/minutes`;
 }

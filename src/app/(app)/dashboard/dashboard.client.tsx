@@ -99,6 +99,7 @@ export default function OptaqPage() {
       const meeting = await createMeeting({
         title: `Teams-møde · ${dateStr}`,
         source: 'teams',
+        graphManaged: true,
         meetingUrl: link,
         status: 'awaiting_teams',
       });

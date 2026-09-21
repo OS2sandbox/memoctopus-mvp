@@ -30,6 +30,13 @@ interface MeetingPageClientProps {
   initialTab: ProcessPhase;
 }
 
+// Where a Graph meeting's recording tab hands over to. It has no recording of its
+// own to show once Teams has been collected, so it lands on the stage it reached.
+function graphStageTab(status: StoredMeeting['status']): ProcessPhase {
+  if (status === 'minutes' || status === 'done' || status === 'redacted') return 'minutes';
+  return 'review';
+}
+
 export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<ProcessPhase>(initialTab);
@@ -165,6 +172,13 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
     },
     [meetingId, activeTab, audioUrl],
   );
+  // A collected Graph meeting reopened from the Arkiv opens the recording tab, which
+  // only has something to say while it is awaiting Teams. Hand over to its stage.
+  useEffect(() => {
+    if (!meeting || activeTab !== 'recording') return;
+    if (meeting.source !== 'teams' || !meeting.graphManaged || meeting.status === 'awaiting_teams') return;
+    switchTab(graphStageTab(meeting.status));
+  }, [meeting, activeTab, switchTab]);
 
   if (loading) {
     return (
@@ -208,6 +222,8 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
 
   const isCompleted = meeting.status !== 'recording' && meeting.status !== 'processing';
   const isTeamsMeeting = meeting.source === 'teams';
+  // Only the removed Playwright bot made a Teams meeting without the Graph marker.
+  const isLegacyBotMeeting = isTeamsMeeting && !meeting.graphManaged;
   const audioFile = !meeting.audioDeleted && audioUrl
     ? { durationSeconds: meeting.audioDurationSeconds, sizeBytes: meeting.audioSizeBytes }
     : null;
@@ -240,18 +256,18 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
         onTabChange={switchTab}
       />
 
-      {activeTab === 'recording' && isTeamsMeeting && meeting.status === 'awaiting_teams' && (
+      {activeTab === 'recording' && isTeamsMeeting && !isLegacyBotMeeting && meeting.status === 'awaiting_teams' && (
         <TeamsMeetingScreen
           meetingId={meetingId}
           meetingUrl={meeting.meetingUrl ?? ''}
         />
       )}
 
-      {/* Teams meetings from before the Graph integration, left behind in this
-          browser's IndexedDB by the removed Playwright bot. Nothing can finish
-          them, so the screen explains that and offers the transcript or a delete
-          rather than rendering an empty recording view. */}
-      {activeTab === 'recording' && isTeamsMeeting && meeting.status !== 'awaiting_teams' && (
+      {/* Teams meetings from before the Graph integration (no `graphManaged`
+          marker), left behind in this browser's IndexedDB by the removed Playwright
+          bot. Nothing can finish them, so the screen explains that and offers the
+          transcript or a delete rather than rendering an empty recording view. */}
+      {activeTab === 'recording' && isLegacyBotMeeting && (
         <LegacyBotMeetingScreen
           meetingId={meetingId}
           hasTranscript={Boolean(transcript)}

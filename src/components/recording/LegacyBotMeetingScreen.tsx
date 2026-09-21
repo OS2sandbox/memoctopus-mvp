@@ -8,7 +8,7 @@ import { deleteMeeting } from '@/lib/storage';
  * Dead end for meetings started by the old Playwright bot.
  *
  * Such a meeting exists only in a browser's IndexedDB from before the Graph
- * integration: `source: 'teams'` with a status other than `awaiting_teams`. The
+ * integration: `source: 'teams'` without the `graphManaged` marker. The
  * bot that would have finished it is gone, so there is nothing to wait for and
  * no way to resume. Without this screen those records would render nothing at
  * all, since MeetingPageClient routes every Teams-sourced meeting away from
