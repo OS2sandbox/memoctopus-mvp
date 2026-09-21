@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SpeakerAssignment, type ParticipantRow, type VoiceBite } from './SpeakerAssignment';
+import { OnboardingProvider } from '@/lib/onboarding/context';
 
 const VOICES: VoiceBite[] = [
   { speaker: 'Taler 1', start: 0, end: 5 },
@@ -25,15 +26,27 @@ function setup(overrides: Partial<React.ComponentProps<typeof SpeakerAssignment>
     { name: 'Pia', kind: 'silent' },
   ];
   const utils = render(
-    <SpeakerAssignment
-      rows={rows}
-      voices={overrides.voices ?? VOICES}
-      voicelessParticipants={overrides.voicelessParticipants ?? ['Lars', 'Pia']}
-      recognizedCount={overrides.recognizedCount ?? 1}
-      totalVoices={overrides.totalVoices ?? 3}
-      {...handlers}
-      {...overrides}
-    />,
+    <OnboardingProvider
+      initial={{
+        tourSkipped: true,
+        tourCompleted: true,
+        seen: [
+          { stepId: 'review.speaker-assign', meetingId: 'm1' },
+          { stepId: 'review.unknown-voices', meetingId: 'm1' },
+        ],
+      }}
+    >
+      <SpeakerAssignment
+        meetingId="m1"
+        rows={rows}
+        voices={overrides.voices ?? VOICES}
+        voicelessParticipants={overrides.voicelessParticipants ?? ['Lars', 'Pia']}
+        recognizedCount={overrides.recognizedCount ?? 1}
+        totalVoices={overrides.totalVoices ?? 3}
+        {...handlers}
+        {...overrides}
+      />
+    </OnboardingProvider>,
   );
   return { ...handlers, ...utils };
 }

@@ -17,6 +17,11 @@ vi.mock('@/lib/auth', () => ({
   auth: { api: { getSession: vi.fn() } },
 }));
 
+vi.mock('@/lib/onboarding/store', () => ({
+  getOnboardingState: vi.fn().mockResolvedValue({ tourSkipped: false, tourCompleted: false, lastStepId: null }),
+  getSeenSteps: vi.fn().mockResolvedValue([]),
+}));
+
 // The layout renders client components; stub them out — this test only cares
 // about the auth decision, not the rendered tree.
 vi.mock('@/components/layout/TopBar', () => ({ TopBar: () => null }));
@@ -27,6 +32,21 @@ vi.mock('@/lib/review-audio-context', () => ({
 import AppLayout from './layout';
 import { auth } from '@/lib/auth';
 import { redirect } from 'next/navigation';
+import { OnboardingProvider } from '@/lib/onboarding/context';
+import { getOnboardingState, getSeenSteps } from '@/lib/onboarding/store';
+
+// Walk the returned element tree (nothing is rendered) to the provider's props.
+function providerProps(node: unknown): { initial: Record<string, unknown> } | null {
+  if (!node || typeof node !== 'object') return null;
+  const el = node as { type?: unknown; props?: { children?: unknown } };
+  if (el.type === OnboardingProvider) return el.props as never;
+  const kids = el.props?.children;
+  for (const kid of Array.isArray(kids) ? kids : [kids]) {
+    const found = providerProps(kid);
+    if (found) return found;
+  }
+  return null;
+}
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockRedirect = vi.mocked(redirect);
@@ -56,5 +76,44 @@ describe('(app) layout — server-side auth gate', () => {
     const el = await AppLayout({ children: 'CONTENT' });
     expect(mockRedirect).not.toHaveBeenCalled();
     expect(el).toBeTruthy();
+  });
+});
+
+describe('(app) layout — onboarding state is optional', () => {
+  it('still renders the app, with onboarding switched off, when the state cannot be loaded', async () => {
+    // The pages themselves are IndexedDB-based; a hiccup in the onboarding tables must
+    // not turn every page, including the recording screen, into a 500.
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockGetSession.mockResolvedValueOnce({ user: { id: 'u1' }, session: {} } as never);
+    vi.mocked(getOnboardingState).mockRejectedValueOnce(new Error('db down'));
+
+    const el = await AppLayout({ children: 'CONTENT' });
+
+    expect(mockRedirect).not.toHaveBeenCalled();
+    expect(providerProps(el)?.initial).toMatchObject({ unavailable: true, seen: [] });
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('also falls back when only the seen-steps query fails', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockGetSession.mockResolvedValueOnce({ user: { id: 'u1' }, session: {} } as never);
+    vi.mocked(getSeenSteps).mockRejectedValueOnce(new Error('relation does not exist'));
+
+    const el = await AppLayout({ children: 'CONTENT' });
+
+    expect(providerProps(el)?.initial).toMatchObject({ unavailable: true });
+    spy.mockRestore();
+  });
+
+  it('passes the real state through when loading works', async () => {
+    mockGetSession.mockResolvedValueOnce({ user: { id: 'u1' }, session: {} } as never);
+    vi.mocked(getSeenSteps).mockResolvedValueOnce([{ stepId: 'a.b', meetingId: null }]);
+
+    const el = await AppLayout({ children: 'CONTENT' });
+
+    const initial = providerProps(el)?.initial;
+    expect(initial?.unavailable).toBeFalsy();
+    expect(initial?.seen).toEqual([{ stepId: 'a.b', meetingId: null }]);
   });
 });

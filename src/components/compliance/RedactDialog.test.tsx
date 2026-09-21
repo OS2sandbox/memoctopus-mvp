@@ -2,6 +2,9 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { tabTo } from '@/test/keyboard';
+import { getStep } from '@/lib/onboarding/steps';
 import { RedactDialog } from './RedactDialog';
 
 const MEETING_TITLE = 'Bestyrelsesmøde Q4';
@@ -426,5 +429,42 @@ describe('RedactDialog — cancel button', () => {
 
     // handleClose also calls onOpenChange(false)
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Keyboard access to the redirect tooltip
+// ---------------------------------------------------------------------------
+
+describe('RedactDialog — redirect tooltip is reachable by keyboard', () => {
+  const copy = getStep('meeting-settings.redact-redirect').copy;
+
+  it('opens on focus of the disabled confirm button\'s wrapper', async () => {
+    const user = userEvent.setup();
+    const { props } = renderDialog();
+    const button = screen.getByRole('button', { name: 'Slet permanent' });
+    expect(button).toBeDisabled();
+    const wrapper = button.parentElement as HTMLElement;
+
+    await tabTo(user, wrapper);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(copy);
+
+    // Escape cannot be asserted on the tooltip alone here: the dialog and the tooltip resolve to
+    // two different copies of @radix-ui/react-dismissable-layer, so the dialog's capture-phase
+    // handler claims Escape first and the whole dialog closes (which takes the tooltip with it).
+    await user.keyboard('{Escape}');
+    expect(props.onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('keeps a single tab stop once the button is enabled, and the tooltip still opens', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    fireEvent.change(screen.getByPlaceholderText(MEETING_TITLE), { target: { value: MEETING_TITLE } });
+    const button = screen.getByRole('button', { name: 'Slet permanent' });
+    expect(button).toBeEnabled();
+    expect(button.parentElement).not.toHaveAttribute('tabindex');
+
+    await tabTo(user, button);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(copy);
   });
 });

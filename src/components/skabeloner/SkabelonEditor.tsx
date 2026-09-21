@@ -20,6 +20,7 @@ import {
 } from '@/lib/skabeloner/share-code';
 import type { ShareConfig } from '@/lib/skabeloner/share-config';
 import type { Skabelon } from '@/types';
+import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
 interface SkabelonEditorProps {
   open: boolean;
@@ -251,32 +252,34 @@ export function SkabelonEditor({
             />
           </div>
 
-          <div className="space-y-2">
-            <Label>Kategorier (valgfri)</Label>
-            <div className="flex flex-wrap gap-2">
-              {CATEGORIES.map(([key, label]) => {
-                const active = cats[key];
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => setCats((prev) => ({ ...prev, [key]: !prev[key] }))}
-                    style={{
-                      padding: '4px 12px',
-                      border: '1px solid ' + (active ? 'var(--accent)' : 'var(--line)'),
-                      borderRadius: 999,
-                      background: active ? 'var(--accent-wash)' : 'transparent',
-                      fontSize: 12.5,
-                      color: active ? 'var(--accent)' : 'var(--ink-2)',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
+          <OnboardingTooltip stepId="skabeloner.category-helper">
+            <div className="space-y-2">
+              <Label>Kategorier (valgfri)</Label>
+              <div className="flex flex-wrap gap-2">
+                {CATEGORIES.map(([key, label]) => {
+                  const active = cats[key];
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setCats((prev) => ({ ...prev, [key]: !prev[key] }))}
+                      style={{
+                        padding: '4px 12px',
+                        border: '1px solid ' + (active ? 'var(--accent)' : 'var(--line)'),
+                        borderRadius: 999,
+                        background: active ? 'var(--accent-wash)' : 'transparent',
+                        fontSize: 12.5,
+                        color: active ? 'var(--accent)' : 'var(--ink-2)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          </OnboardingTooltip>
 
           {error && <p className="text-sm text-[var(--kill)]">{error}</p>}
         </div>

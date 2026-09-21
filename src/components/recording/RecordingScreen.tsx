@@ -12,6 +12,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { VolumeBar } from './VolumeBar';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
+import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 import { formatDuration, formatFileSize } from '@/lib/utils';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { pickRecordingMimeType } from '@/lib/audio/recording-format';
@@ -1316,17 +1318,19 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
         </div>
 
         {/* Signal bars (live volume) */}
-        <div style={{ paddingBottom: 6 }}>
-          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', marginBottom: 8, letterSpacing: 0.4 }}>signal</div>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 30 }}>
-            {Array.from({ length: isMobile ? 20 : 36 }).map((_, i) => {
-              const barHeight = recordingState === 'recording'
-                ? Math.max(4, Math.round(volumeLevel * 28 + Math.sin(i * 0.8 + elapsed) * 4))
-                : 4;
-              return <span key={i} style={{ width: 2, height: barHeight, background: 'var(--ink-2)', opacity: 0.8, display: 'block' }} />;
-            })}
+        <OnboardingTooltip stepId="recording.signal-bars">
+          <div tabIndex={0} style={{ paddingBottom: 6 }}>
+            <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', marginBottom: 8, letterSpacing: 0.4 }}>signal</div>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 30 }}>
+              {Array.from({ length: isMobile ? 20 : 36 }).map((_, i) => {
+                const barHeight = recordingState === 'recording'
+                  ? Math.max(4, Math.round(volumeLevel * 28 + Math.sin(i * 0.8 + elapsed) * 4))
+                  : 4;
+                return <span key={i} style={{ width: 2, height: barHeight, background: 'var(--ink-2)', opacity: 0.8, display: 'block' }} />;
+              })}
+            </div>
           </div>
-        </div>
+        </OnboardingTooltip>
 
         <div style={{ marginLeft: 'auto', textAlign: 'right', paddingBottom: 6 }}>
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>lagring</div>
@@ -1335,6 +1339,13 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
           </div>
         </div>
       </div>
+
+      {/* Audio lifecycle notice (direct-microphone path) */}
+      <OnboardingHint stepId="recording.audio-lifecycle" meetingId={meetingId}>
+        <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)' }}>
+          lyden gemmes lokalt og slettes automatisk, når referatet er lavet
+        </div>
+      </OnboardingHint>
 
       {/* Error */}
       {error && (
@@ -1440,7 +1451,9 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
                           );
                         })}
                       </span>
-                      <span style={{ color: 'var(--muted-2)', textAlign: 'right', animation: 'wordFadeIn 0.25s ease-out both', animationDelay: `${Math.max(0, seg.text.split(' ').length * seg.waveIntervalMs - seg.waveElapsedAtCommitMs)}ms` }}>★</span>
+                      <OnboardingTooltip stepId="recording.star-marker">
+                        <span style={{ color: 'var(--muted-2)', textAlign: 'right', animation: 'wordFadeIn 0.25s ease-out both', animationDelay: `${Math.max(0, seg.text.split(' ').length * seg.waveIntervalMs - seg.waveElapsedAtCommitMs)}ms` }}>★</span>
+                      </OnboardingTooltip>
                     </div>
                   );
                 })}
@@ -1516,46 +1529,48 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
 
           {/* Live clarifications — things worth nailing down, refreshed on a countdown */}
           {(recordingState === 'recording' || clarifications.length > 0) && (
-            <div>
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10,
-                fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4,
-              }}>
-                <span style={{ flexShrink: 0 }}>afklar · live</span>
-                {recordingState === 'recording' && (
-                  <span
-                    style={{ flex: 1, height: 2, background: 'var(--line)', borderRadius: 999, overflow: 'hidden' }}
-                    aria-hidden
-                  >
-                    <span style={{
-                      display: 'block', height: '100%',
-                      width: `${Math.round(clarifyRemaining * 100)}%`,
-                      background: 'var(--accent)', opacity: 0.6,
-                      transition: 'width 0.25s linear',
-                    }} />
-                  </span>
+            <OnboardingHint stepId="recording.clarify-panel" meetingId={meetingId}>
+              <div>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10,
+                  fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4,
+                }}>
+                  <span style={{ flexShrink: 0 }}>afklar · live</span>
+                  {recordingState === 'recording' && (
+                    <span
+                      style={{ flex: 1, height: 2, background: 'var(--line)', borderRadius: 999, overflow: 'hidden' }}
+                      aria-hidden
+                    >
+                      <span style={{
+                        display: 'block', height: '100%',
+                        width: `${Math.round(clarifyRemaining * 100)}%`,
+                        background: 'var(--accent)', opacity: 0.6,
+                        transition: 'width 0.25s linear',
+                      }} />
+                    </span>
+                  )}
+                </div>
+                {clarifications.length > 0 ? (
+                  clarifications.map((c, i) => (
+                    <div key={i} style={{ padding: '8px 0', borderTop: '1px solid var(--line)' }}>
+                      <div style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.45 }}>{c.question}</div>
+                      {c.context && (
+                        <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', marginTop: 3 }}>
+                          {c.context}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                ) : (
+                  <div style={{
+                    padding: '8px 0', borderTop: '1px solid var(--line)',
+                    fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)', fontStyle: 'italic',
+                  }}>
+                    leder efter punkter at afklare…
+                  </div>
                 )}
               </div>
-              {clarifications.length > 0 ? (
-                clarifications.map((c, i) => (
-                  <div key={i} style={{ padding: '8px 0', borderTop: '1px solid var(--line)' }}>
-                    <div style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.45 }}>{c.question}</div>
-                    {c.context && (
-                      <div style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', marginTop: 3 }}>
-                        {c.context}
-                      </div>
-                    )}
-                  </div>
-                ))
-              ) : (
-                <div style={{
-                  padding: '8px 0', borderTop: '1px solid var(--line)',
-                  fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)', fontStyle: 'italic',
-                }}>
-                  leder efter punkter at afklare…
-                </div>
-              )}
-            </div>
+            </OnboardingHint>
           )}
 
         </div>
@@ -1569,17 +1584,19 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       }}>
         {recordingState === 'idle' && (
           <>
-            <button
-              onClick={startRecording}
-              style={{
-                width: 56, height: 56, borderRadius: 999,
-                background: 'var(--ink)', border: 'none', cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}
-              aria-label="Start optagelse"
-            >
-              <span style={{ width: 18, height: 18, borderRadius: 999, background: 'var(--bg)', display: 'block' }} />
-            </button>
+            <OnboardingHint stepId="recording.start-button" meetingId={meetingId}>
+              <button
+                onClick={startRecording}
+                style={{
+                  width: 56, height: 56, borderRadius: 999,
+                  background: 'var(--ink)', border: 'none', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+                aria-label="Start optagelse"
+              >
+                <span style={{ width: 18, height: 18, borderRadius: 999, background: 'var(--bg)', display: 'block' }} />
+              </button>
+            </OnboardingHint>
             <button
               onClick={() => setShowCancelDialog(true)}
               style={{
@@ -1632,18 +1649,20 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
                 }} />
               )}
             </button>
-            <button
-              onClick={stopAndSave}
-              style={{
-                fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
-                padding: '8px 14px', borderRadius: 'var(--radius)',
-                border: '1px solid var(--line-2)', background: 'transparent',
-                color: 'var(--ink)', cursor: 'pointer',
-                position: 'absolute', right: isMobile ? 16 : 48,
-              }}
-            >
-              gem &amp; fortsæt
-            </button>
+            <OnboardingHint stepId="recording.stop-save-continue" meetingId={meetingId}>
+              <button
+                onClick={stopAndSave}
+                style={{
+                  fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
+                  padding: '8px 14px', borderRadius: 'var(--radius)',
+                  border: '1px solid var(--line-2)', background: 'transparent',
+                  color: 'var(--ink)', cursor: 'pointer',
+                  position: 'absolute', right: isMobile ? 16 : 48,
+                }}
+              >
+                gem &amp; fortsæt
+              </button>
+            </OnboardingHint>
           </>
         )}
 
