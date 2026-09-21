@@ -4,7 +4,9 @@ import {
   enabledAuthProviders,
   microsoftConfig,
   microsoftSingleTenant,
+  microsoftGraphScopes,
   oidcConfig,
+  teamsGraphEnabled,
   warnDeprecatedAuthEnv,
 } from './providers';
 
@@ -32,7 +34,7 @@ beforeEach(() => {
   // ambient .env can't leak in and make assertions pass for the wrong reason.
   const clean = { ...ENV } as Record<string, string | undefined>;
   for (const key of Object.keys(clean)) {
-    if (/^(OIDC_|AUTHENTIK_|MICROSOFT_|EMAIL_PASSWORD_|NEXT_PUBLIC_)/.test(key)) delete clean[key];
+    if (/^(OIDC_|AUTHENTIK_|MICROSOFT_|EMAIL_PASSWORD_|TEAMS_|NEXT_PUBLIC_)/.test(key)) delete clean[key];
   }
   process.env = clean as NodeJS.ProcessEnv;
 });
@@ -66,6 +68,64 @@ describe('emailPasswordEnabled', () => {
     process.env.EMAIL_PASSWORD_ENABLED = 'true';
     process.env.NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED = 'false';
     expect(emailPasswordEnabled()).toBe(true);
+  });
+});
+
+describe('teamsGraphEnabled', () => {
+  // Opt-in, unlike the kill switches above: turning it on makes every Microsoft
+  // sign-in request tenant-admin-consent scopes, so only an explicit "true" counts.
+  it('is off by default', () => {
+    expect(teamsGraphEnabled()).toBe(false);
+  });
+
+  it('is off when blank, as docker-compose passes an unset variable', () => {
+    process.env.TEAMS_GRAPH_ENABLED = '  ';
+    expect(teamsGraphEnabled()).toBe(false);
+  });
+
+  it('is on for "true", whitespace and case included', () => {
+    process.env.TEAMS_GRAPH_ENABLED = ' True ';
+    expect(teamsGraphEnabled()).toBe(true);
+  });
+
+  it.each(['false', '0', '1', 'yes', 'ture'])('is off for %j', (value) => {
+    process.env.TEAMS_GRAPH_ENABLED = value;
+    expect(teamsGraphEnabled()).toBe(false);
+  });
+});
+
+describe('microsoftGraphScopes', () => {
+  it('requests nothing beyond better-auth\'s defaults while the flag is off', () => {
+    expect(microsoftGraphScopes()).toEqual([]);
+  });
+
+  it('requests the Graph scopes when the flag is on', () => {
+    process.env.TEAMS_GRAPH_ENABLED = 'true';
+    expect(microsoftGraphScopes()).toEqual([
+      'OnlineMeetings.ReadWrite',
+      'OnlineMeetingTranscript.Read.All',
+      'OnlineMeetingRecording.Read.All',
+    ]);
+  });
+
+  it('leaves out the recording scope in transcript-only mode', () => {
+    process.env.TEAMS_GRAPH_ENABLED = 'true';
+    process.env.TEAMS_ARTIFACT_MODE = 'transcript-only';
+    expect(microsoftGraphScopes()).toEqual([
+      'OnlineMeetings.ReadWrite',
+      'OnlineMeetingTranscript.Read.All',
+    ]);
+  });
+
+  it('keeps the recording scope for an unknown artifact mode', () => {
+    process.env.TEAMS_GRAPH_ENABLED = 'true';
+    process.env.TEAMS_ARTIFACT_MODE = 'nonsense';
+    expect(microsoftGraphScopes()).toContain('OnlineMeetingRecording.Read.All');
+  });
+
+  it('ignores the artifact mode while the flag is off', () => {
+    process.env.TEAMS_ARTIFACT_MODE = 'prefer-recording';
+    expect(microsoftGraphScopes()).toEqual([]);
   });
 });
 

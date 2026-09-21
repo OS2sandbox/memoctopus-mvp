@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { formatDate, formatDuration, statusLabel, statusVariant } from '@/lib/utils';
 import { Meeting } from '@/types';
-import { deleteMeeting } from '@/lib/storage';
+import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
@@ -23,7 +23,7 @@ type ArchiveMeeting = Pick<Meeting, 'id' | 'title' | 'participants' | 'status' |
 };
 
 function statusHref(m: ArchiveMeeting) {
-  if (m.status === 'recording' || m.status === 'processing') return `/meeting/${m.id}`;
+  if (m.status === 'awaiting_teams' || m.status === 'recording' || m.status === 'processing') return `/meeting/${m.id}`;
   if (m.status === 'review') return `/meeting/${m.id}/review`;
   return `/meeting/${m.id}/minutes`;
 }
@@ -52,7 +52,7 @@ export function ArchiveMeetingRow({
     setIsDeleting(true);
     setDeleteError(null);
     try {
-      await deleteMeeting(meeting.id);
+      await deleteMeetingAndUnregister(meeting.id);
       setDeleteOpen(false);
       onDeleted?.();
     } catch (err) {

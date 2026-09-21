@@ -48,11 +48,36 @@ vi.mock('next/link', () => ({
 
 const mockGetAllMeetings = vi.fn();
 const mockCreateMeeting = vi.fn();
+const mockDeleteMeeting = vi.fn();
 
 vi.mock('@/lib/storage', () => ({
   getAllMeetings: (...args: unknown[]) => mockGetAllMeetings(...args),
   createMeeting: (...args: unknown[]) => mockCreateMeeting(...args),
 }));
+
+// The orphan cleanup goes through the shared helper, which also unregisters the
+// meeting server-side in case the POST registered it before failing.
+vi.mock('@/lib/teams/client-delete', () => ({
+  deleteMeetingAndUnregister: (...args: unknown[]) => mockDeleteMeeting(...args),
+}));
+
+const mockSignInSocial = vi.fn();
+vi.mock('@/lib/auth-client', () => ({
+  signIn: { social: (...args: unknown[]) => mockSignInSocial(...args) },
+}));
+
+const mockFetch = vi.fn();
+vi.stubGlobal('fetch', mockFetch);
+
+/** Default routing: no Microsoft account linked, and the arm POST succeeds. */
+function routeFetch(opts: { status?: () => unknown; arm?: () => unknown } = {}) {
+  mockFetch.mockImplementation(async (url: string) => {
+    if (url === '/api/teams/status') {
+      return opts.status?.() ?? { ok: true, status: 200, json: async () => ({ microsoftLinked: false, scopesOk: false, missing: [] }) };
+    }
+    return opts.arm?.() ?? { ok: true, status: 200, json: async () => ({ armed: true, armResult: 'armed', isOrganizer: true }) };
+  });
+}
 
 const mockSetPendingUploadFile = vi.fn();
 
@@ -77,6 +102,11 @@ beforeEach(() => {
   mockGetAllMeetings.mockReset();
   mockCreateMeeting.mockReset();
   mockSetPendingUploadFile.mockReset();
+  mockDeleteMeeting.mockReset();
+  mockDeleteMeeting.mockResolvedValue(undefined);
+  mockSignInSocial.mockReset();
+  mockFetch.mockReset();
+  routeFetch();
 
   // Default: zero meetings (no prior meetings link shown)
   mockGetAllMeetings.mockResolvedValue([]);
@@ -589,7 +619,7 @@ describe('OptaqPage — upload flow', () => {
 // ---------------------------------------------------------------------------
 
 describe('OptaqPage — Teams meeting link flow', () => {
-  it('submits the Teams link and navigates to /meeting/:id?join=1 on Enter', async () => {
+  it('submits the Teams link and navigates to /meeting/:id on Enter', async () => {
     mockCreateMeeting.mockResolvedValue({ id: 'teams-1' });
     renderPage();
 
@@ -602,9 +632,9 @@ describe('OptaqPage — Teams meeting link flow', () => {
 
     await waitFor(() => {
       expect(mockCreateMeeting).toHaveBeenCalledWith(
-        expect.objectContaining({ source: 'teams', status: 'joining' }),
+        expect.objectContaining({ source: 'teams', status: 'awaiting_teams', graphManaged: true }),
       );
-      expect(mockPush).toHaveBeenCalledWith('/meeting/teams-1?join=1');
+      expect(mockPush).toHaveBeenCalledWith('/meeting/teams-1');
     });
   });
 
@@ -621,7 +651,7 @@ describe('OptaqPage — Teams meeting link flow', () => {
     });
 
     await waitFor(() => {
-      expect(mockPush).toHaveBeenCalledWith('/meeting/teams-2?join=1');
+      expect(mockPush).toHaveBeenCalledWith('/meeting/teams-2');
     });
   });
 
@@ -746,6 +776,129 @@ describe('OptaqPage — Teams meeting link flow', () => {
     await act(async () => { resolve({ id: 'x' }); });
 
     expect(mockCreateMeeting).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers the pasted link with the Teams API', async () => {
+    mockCreateMeeting.mockResolvedValue({ id: 'teams-4' });
+    renderPage();
+
+    const linkInput = screen.getByPlaceholderText('Indsæt mødelink…');
+    fireEvent.change(linkInput, { target: { value: 'https://teams.microsoft.com/abc' } });
+    await act(async () => { fireEvent.keyDown(linkInput, { key: 'Enter' }); });
+
+    await waitFor(() => {
+      const post = mockFetch.mock.calls.find((c) => c[0] === '/api/teams/meetings');
+      expect(post).toBeTruthy();
+      expect(JSON.parse(post![1].body)).toEqual({
+        meetingId: 'teams-4',
+        joinUrl: 'https://teams.microsoft.com/abc',
+      });
+    });
+  });
+
+  it('shows a Danish error and removes the orphan meeting when the Teams API rejects the link', async () => {
+    mockCreateMeeting.mockResolvedValue({ id: 'teams-5' });
+    routeFetch({ arm: () => ({ ok: false, status: 400, json: async () => ({ error: 'wrong-host' }) }) });
+    renderPage();
+
+    const linkInput = screen.getByPlaceholderText('Indsæt mødelink…');
+    fireEvent.change(linkInput, { target: { value: 'https://example.com/abc' } });
+    await act(async () => { fireEvent.keyDown(linkInput, { key: 'Enter' }); });
+
+    await waitFor(() => {
+      expect(screen.getByText('Mødelinket er ikke et gyldigt Teams-link.')).toBeInTheDocument();
+      expect(mockDeleteMeeting).toHaveBeenCalledWith('teams-5');
+    });
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('also unregisters through the helper when the request itself fails (the POST may have landed)', async () => {
+    mockCreateMeeting.mockResolvedValue({ id: 'teams-6' });
+    routeFetch({ arm: () => { throw new TypeError('Failed to fetch'); } });
+    renderPage();
+
+    const linkInput = screen.getByPlaceholderText('Indsæt mødelink…');
+    fireEvent.change(linkInput, { target: { value: 'https://teams.microsoft.com/abc' } });
+    await act(async () => { fireEvent.keyDown(linkInput, { key: 'Enter' }); });
+
+    await waitFor(() => expect(mockDeleteMeeting).toHaveBeenCalledWith('teams-6'));
+    expect(screen.getByText('Noget gik galt. Prøv igen.')).toBeInTheDocument();
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Teams section
+// ---------------------------------------------------------------------------
+
+describe('OptaqPage — Teams section', () => {
+  // Teams meetings are registered by pasting a mødelink, which is always
+  // available, so a fully-consented user needs no Teams hint at all. The section
+  // exists only to explain why the link box would not work yet.
+  it('shows no Teams hint when Microsoft is linked and scopes are granted', async () => {
+    routeFetch({ status: () => ({ ok: true, status: 200, json: async () => ({ microsoftLinked: true, scopesOk: true, missing: [] }) }) });
+    renderPage();
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith('/api/teams/status'));
+    expect(screen.queryByText('Teams-referater kræver, at du logger ind med Microsoft.')).toBeNull();
+    expect(screen.queryByText('Giv adgang igen')).toBeNull();
+  });
+
+  it('shows the Microsoft-login hint when no Microsoft account is linked', async () => {
+    renderPage();
+    expect(await screen.findByText('Teams-referater kræver, at du logger ind med Microsoft.')).toBeInTheDocument();
+  });
+
+  it('offers "Giv adgang igen" when the stored scopes are insufficient', async () => {
+    routeFetch({ status: () => ({ ok: true, status: 200, json: async () => ({ microsoftLinked: true, scopesOk: false, missing: ['OnlineMeetings.ReadWrite'] }) }) });
+    renderPage();
+    const btn = await screen.findByText('Giv adgang igen');
+    await act(async () => { fireEvent.click(btn); });
+    expect(mockSignInSocial).toHaveBeenCalledWith({ provider: 'microsoft', callbackURL: '/dashboard' });
+  });
+
+  // TEAMS_GRAPH_ENABLED is off: the link box could only fail, and "log in with
+  // Microsoft" or "Giv adgang igen" would ask for scopes that are never requested.
+  describe('when the integration is switched off', () => {
+    function routeDisabled() {
+      routeFetch({ status: () => ({ ok: true, status: 200, json: async () => ({ enabled: false, microsoftLinked: false, scopesOk: false, missing: [] }) }) });
+    }
+
+    it('hides the Teams link box', async () => {
+      routeDisabled();
+      renderPage();
+      await waitFor(() => expect(screen.queryByPlaceholderText('Indsæt mødelink…')).toBeNull());
+      expect(screen.queryByText('eller deltag i et møde')).toBeNull();
+    });
+
+    it('shows neither the Microsoft-login hint nor "Giv adgang igen"', async () => {
+      routeDisabled();
+      renderPage();
+      await waitFor(() => expect(screen.queryByPlaceholderText('Indsæt mødelink…')).toBeNull());
+      expect(screen.queryByText('Teams-referater kræver, at du logger ind med Microsoft.')).toBeNull();
+      expect(screen.queryByText('Giv adgang igen')).toBeNull();
+    });
+
+    it('leaves recording and upload alone', async () => {
+      routeDisabled();
+      renderPage();
+      await waitFor(() => expect(screen.queryByPlaceholderText('Indsæt mødelink…')).toBeNull());
+      expect(screen.getByText('upload lydfil →')).toBeInTheDocument();
+      expect(screen.getByText('optag')).toBeInTheDocument();
+    });
+  });
+
+  it('keeps the link box when the integration is on', async () => {
+    routeFetch({ status: () => ({ ok: true, status: 200, json: async () => ({ enabled: true, microsoftLinked: true, scopesOk: true, missing: [] }) }) });
+    renderPage();
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith('/api/teams/status'));
+    expect(screen.getByPlaceholderText('Indsæt mødelink…')).toBeInTheDocument();
+  });
+
+  it('renders nothing Teams-related when the status request fails', async () => {
+    routeFetch({ status: () => ({ ok: false, status: 500, json: async () => ({}) }) });
+    renderPage();
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledWith('/api/teams/status'));
+    expect(screen.queryByText('Teams-referater kræver, at du logger ind med Microsoft.')).toBeNull();
   });
 });
 

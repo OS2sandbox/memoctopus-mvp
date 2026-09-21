@@ -24,7 +24,7 @@ interface ServerTranscript {
   diarized?: boolean;
 }
 
-// Collect the transcript that the server began producing when the bot uploaded the
+// Collect the transcript that the server began producing when it stashed the
 // recording. Resolves null when there is no server-side run (e.g. an uploaded file
 // resumed after a refresh), it failed, or the deadline passes — callers fall back.
 async function collectServerTranscript(
@@ -35,7 +35,7 @@ async function collectServerTranscript(
   while (!isCancelled() && Date.now() < deadline) {
     let data: ServerTranscript;
     try {
-      const res = await fetch(`/api/bot/transcript/${meetingId}`);
+      const res = await fetch(`/api/meetings/${meetingId}/pending-transcript`);
       if (!res.ok) return null;
       data = await res.json() as ServerTranscript;
     } catch {
@@ -46,6 +46,18 @@ async function collectServerTranscript(
     await new Promise((r) => setTimeout(r, SERVER_TRANSCRIPT_POLL_MS));
   }
   return null;
+}
+
+// Tell the server the transcript is safely in IndexedDB, so it can drop its copy.
+// The server deletes nothing on read, so this is the only thing that does. Called
+// strictly AFTER the save. It is best effort: if it fails the server copy is swept
+// after its TTL, which is harmless, whereas failing the hand-off here would not be.
+async function acknowledgeServerTranscript(meetingId: string): Promise<void> {
+  try {
+    await fetch(`/api/meetings/${meetingId}/pending-transcript`, { method: 'DELETE' });
+  } catch (err) {
+    console.warn('[ProcessingTranscription] kunne ikke kvittere for transskriptionen:', err);
+  }
 }
 
 interface BatchProgress {
@@ -74,22 +86,26 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
 
     async function run() {
       try {
-        // 1. Load the archived audio from IndexedDB (needed for fallback + diarization).
+        // 1. Load the archived audio from IndexedDB. It is REQUIRED only for the
+        // fallback and for client-side diarization — a Teams meeting recorded in
+        // transcript-only mode has no audio at all, and one whose recording the
+        // server already transcribed does not need it either. So a missing blob
+        // is not an error until we actually need it (step 3).
         setPhase('downloading');
         const audioEntry = await getAudio(meetingId);
-        if (!audioEntry) throw new Error('Lydfil ikke fundet');
-        const blob = audioEntry.blob;
+        const blob = audioEntry?.blob ?? null;
         if (cancelled) return;
 
-        // 2. Bot recordings: the server started transcription + diarization the
-        // moment the bot uploaded — usually it is already done by the time the user
-        // lands here. Collect it instead of re-doing the work.
+        // 2. Server-side runs (Teams bot, or the Microsoft Graph pipeline) started
+        // transcription + diarization before the user got here. Collect it instead
+        // of re-doing the work.
         setPhase('analyzing');
         const serverTranscript = await collectServerTranscript(meetingId, () => cancelled);
         if (cancelled) return;
         if (serverTranscript?.segments?.length) {
-          if (serverTranscript.diarized) {
-            // Already diarized server-side — labels are final.
+          if (serverTranscript.diarized || !blob) {
+            // Already diarized server-side — labels are final. With no audio there
+            // is nothing to diarize from either, so the labels stand as they are.
             await save(serverTranscript.segments, 'done');
           } else {
             // Server-side diarization failed — save as 'pending' (uncertainty state)
@@ -98,9 +114,15 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
             const turns = startDiarization(meetingId, blob);
             void turns.then((t) => finishDiarization(meetingId, t));
           }
+          // Saved: only now may the server drop its copy.
+          await acknowledgeServerTranscript(meetingId);
           onComplete?.();
           return;
         }
+
+        // Nothing server-side and nothing local: there is no work left to do here
+        // and no way to do it — say so rather than crashing on a null blob.
+        if (!blob) throw new Error('Lydfil ikke fundet');
 
         // 3. Fallback: drive transcription from here. One upload of the original
         // compressed audio; the server decodes, runs VAD, and fans out all batches

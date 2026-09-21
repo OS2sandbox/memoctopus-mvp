@@ -13,7 +13,8 @@ import {
 } from '@/components/ui/dialog';
 import { ProcessStrip } from '@/components/layout/ProcessStrip';
 import { RedactDialog } from '@/components/compliance/RedactDialog';
-import { getMeeting, updateMeeting, deleteMeeting, deleteAudio, getTranscript, saveTranscript } from '@/lib/storage';
+import { getMeeting, updateMeeting, deleteAudio, getTranscript, saveTranscript } from '@/lib/storage';
+import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 
@@ -118,7 +119,7 @@ export default function MeetingSettingsPage() {
     setIsDeleting(true);
     setDeleteError(null);
     try {
-      await deleteMeeting(id);
+      await deleteMeetingAndUnregister(id);
       router.push('/arkiv');
     } catch (err) {
       console.error('[settings] kunne ikke slette møde:', err);

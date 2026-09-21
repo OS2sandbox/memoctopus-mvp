@@ -24,6 +24,13 @@ interface TranscriptReviewProps {
   audioUrl?: string;
   audioDurationSeconds?: number | null;
   audioDeleted?: boolean;
+  /**
+   * The meeting was transcribed server-side and its audio discarded, so no audio
+   * ever reached this browser. Distinct from `audioDeleted`, which means a local
+   * copy existed and was removed. Both render as "no player", but only one of
+   * them can honestly say the audio was deleted.
+   */
+  audioDiscarded?: boolean;
   initialChapters?: TranscriptChapter[];
   participants?: string[];
   initialDiarizing?: boolean;
@@ -180,6 +187,7 @@ export function TranscriptReview({
   audioUrl: initialAudioUrl,
   audioDurationSeconds,
   audioDeleted = false,
+  audioDiscarded = false,
   initialChapters,
   participants,
   initialDiarizing = false,
@@ -1746,6 +1754,13 @@ export function TranscriptReview({
               <path d="M2 4h12M5 4V2.5A.5.5 0 015.5 2h5a.5.5 0 01.5.5V4M6 7v5M10 7v5M3 4l.8 9.1A.5.5 0 004.3 13.6h7.4a.5.5 0 00.5-.5L13 4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
             lydfil slettet
+          </span>
+        ) : audioDiscarded ? (
+          <span
+            title="Teams frigiver først optagelsen efter mødet, så lyden kan ikke følges live. Den transskriberes på serveren og slettes derefter."
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}
+          >
+            lyden blev slettet efter transskription
           </span>
         ) : (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}>

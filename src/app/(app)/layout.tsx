@@ -4,6 +4,7 @@ import { TopBar } from '@/components/layout/TopBar';
 import { ReviewAudioProvider } from '@/lib/review-audio-context';
 import { StorageScope } from '@/components/providers/StorageScope';
 import { auth } from '@/lib/auth';
+import { SESSION_EXPIRED_PARAM } from '@/middleware';
 import { OnboardingProvider, type OnboardingInitialState } from '@/lib/onboarding/context';
 import { WelcomeTour } from '@/components/onboarding/WelcomeTour';
 import { getOnboardingState, getSeenSteps } from '@/lib/onboarding/store';
@@ -28,7 +29,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Validating the actual token server-side here — before any authenticated UI
   // is sent — closes that bypass and cannot be defeated from the client.
   const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) redirect('/');
+  // The marker tells the middleware not to bounce this request straight back
+  // here on the strength of the same cookie we just rejected — see
+  // SESSION_EXPIRED_PARAM.
+  if (!session) redirect(`/?${SESSION_EXPIRED_PARAM}=1`);
 
   const onboarding = await loadOnboarding(session.user.id);
 

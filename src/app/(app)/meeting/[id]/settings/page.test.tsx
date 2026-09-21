@@ -45,10 +45,14 @@ const mockSaveTranscript = vi.fn();
 vi.mock('@/lib/storage', () => ({
   getMeeting: (...args: unknown[]) => mockGetMeeting(...args),
   updateMeeting: (...args: unknown[]) => mockUpdateMeeting(...args),
-  deleteMeeting: (...args: unknown[]) => mockDeleteMeeting(...args),
   deleteAudio: (...args: unknown[]) => mockDeleteAudio(...args),
   getTranscript: (...args: unknown[]) => mockGetTranscript(...args),
   saveTranscript: (...args: unknown[]) => mockSaveTranscript(...args),
+}));
+
+// Deleting goes through the shared helper, which also unregisters a Teams meeting.
+vi.mock('@/lib/teams/client-delete', () => ({
+  deleteMeetingAndUnregister: (...args: unknown[]) => mockDeleteMeeting(...args),
 }));
 
 // ─── Heavy child components ────────────────────────────────────────────────────
