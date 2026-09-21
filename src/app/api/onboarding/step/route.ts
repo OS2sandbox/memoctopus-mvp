@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
-import { markStepSeen, skipTour, completeTour } from '@/lib/onboarding/store';
+import { markStepSeen, skipTour, completeTour, resetHints } from '@/lib/onboarding/store';
 import { withHandler } from '@/lib/api-handler';
 
 async function postHandler(req: NextRequest): Promise<NextResponse> {
@@ -9,10 +9,14 @@ async function postHandler(req: NextRequest): Promise<NextResponse> {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));
-  const action = body.action as 'seen' | 'skip-tour' | 'complete-tour' | undefined;
+  const action = body.action as 'seen' | 'skip-tour' | 'complete-tour' | 'reset-hints' | undefined;
 
   if (action === 'skip-tour') {
     await skipTour(session.user.id);
+    return NextResponse.json({ ok: true });
+  }
+  if (action === 'reset-hints') {
+    await resetHints(session.user.id);
     return NextResponse.json({ ok: true });
   }
   if (action === 'complete-tour') {

@@ -11,6 +11,8 @@ type OnboardingContextValue = {
   showWelcome: boolean;
   openWelcome: () => void;
   closeWelcome: (skip?: boolean) => void;
+  /** "kom i gang": closes the welcome dialog and makes every hint show again. */
+  startTour: () => void;
   /**
    * One hint at a time, app-wide, so a page never shows several onboarding
    * bubbles at once. `claim` registers a step as pending (FIFO — first
@@ -127,6 +129,16 @@ export function OnboardingProvider({
     }
   }, []);
 
+  const startTour = useCallback(() => {
+    setShowWelcome(false);
+    setSeen(new Set());
+    fetch('/api/onboarding/step', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'reset-hints' }),
+    }).catch(() => {});
+  }, []);
+
   const value = useMemo(
     () => ({
       isStepSeen,
@@ -135,11 +147,12 @@ export function OnboardingProvider({
       showWelcome,
       openWelcome,
       closeWelcome,
+      startTour,
       claim,
       release,
       isActive,
     }),
-    [isStepSeen, markSeen, isFirstTimeUser, showWelcome, openWelcome, closeWelcome, claim, release, isActive],
+    [isStepSeen, markSeen, isFirstTimeUser, showWelcome, openWelcome, closeWelcome, startTour, claim, release, isActive],
   );
 
   return <OnboardingContext.Provider value={value}>{children}</OnboardingContext.Provider>;

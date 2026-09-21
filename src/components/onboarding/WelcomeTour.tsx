@@ -18,7 +18,7 @@ const POINTS = [
  * src/lib/onboarding/steps.ts), not a designed narrative sequence.
  */
 export function WelcomeTour() {
-  const { showWelcome, closeWelcome } = useOnboarding();
+  const { showWelcome, closeWelcome, startTour } = useOnboarding();
 
   return (
     <Dialog open={showWelcome} onOpenChange={(open) => !open && closeWelcome(true)}>
@@ -70,7 +70,7 @@ export function WelcomeTour() {
           </button>
           <button
             type="button"
-            onClick={() => closeWelcome(false)}
+            onClick={startTour}
             style={{
               fontFamily: 'var(--mono)', fontSize: 12, color: '#fff',
               background: 'var(--accent)', border: 'none', borderRadius: 'var(--radius)',

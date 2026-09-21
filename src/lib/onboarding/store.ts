@@ -77,3 +77,18 @@ export async function completeTour(userId: string): Promise<void> {
      ON CONFLICT (id) DO UPDATE SET tour_completed_at = NOW(), updated_at = NOW()`,
   );
 }
+
+/**
+ * Replay: forget every seen hint so they all show again, and mark the tour
+ * as completed so an empty progress table isn't mistaken for a first-time
+ * user (which would re-open the welcome dialog on the next page load).
+ */
+export async function resetHints(userId: string): Promise<void> {
+  await queryUserSchema(userId, `DELETE FROM onboarding_progress`);
+  await queryUserSchema(
+    userId,
+    `INSERT INTO onboarding_state (id, tour_completed_at, tour_skipped_at, last_step_id, updated_at)
+     VALUES ('singleton', NOW(), NULL, NULL, NOW())
+     ON CONFLICT (id) DO UPDATE SET tour_completed_at = NOW(), tour_skipped_at = NULL, last_step_id = NULL, updated_at = NOW()`,
+  );
+}
