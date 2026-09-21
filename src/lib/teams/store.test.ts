@@ -323,8 +323,9 @@ describe('upsertTeamsMeeting', () => {
     const [, sql, params] = mockQueryOne.mock.calls[0] as [string, string, unknown[]];
     expect(params[17]).toBe(JSON.stringify(original));
     // Re-registering an armed meeting reads the ALREADY armed values; the first
-    // snapshot must survive it.
-    expect(sql).toMatch(/original_options\s*=\s*COALESCE\(\$18::jsonb, teams_meetings\.original_options\)/);
+    // snapshot must survive it, even against a later non-null one (two registrations
+    // racing, or a second local id for the same Graph meeting), so the stored value comes first.
+    expect(sql).toMatch(/original_options\s*=\s*COALESCE\(teams_meetings\.original_options, \$18::jsonb\)/);
     expect(result.originalOptions).toEqual(original);
   });
 

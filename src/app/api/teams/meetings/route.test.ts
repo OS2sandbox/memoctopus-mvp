@@ -13,7 +13,11 @@ vi.mock('@/lib/teams/meeting-resolver', async (importOriginal) => {
   return { ...actual, resolveJoinUrl: vi.fn() };
 });
 vi.mock('@/lib/teams/meeting-arm', () => ({ armMeeting: vi.fn() }));
-vi.mock('@/lib/teams/store', () => ({ upsertTeamsMeeting: vi.fn(), getTeamsMeeting: vi.fn() }));
+vi.mock('@/lib/teams/store', () => ({
+  upsertTeamsMeeting: vi.fn(),
+  getTeamsMeeting: vi.fn(),
+  getTeamsMeetingByGraphId: vi.fn(),
+}));
 vi.mock('@/lib/pending-artifacts', () => ({
   getMeetingOwner: vi.fn(),
   setMeetingOwner: vi.fn(),
@@ -24,7 +28,12 @@ import { auth } from '@/lib/auth';
 import { GraphError } from '@/lib/teams/graph-client';
 import { armMeeting } from '@/lib/teams/meeting-arm';
 import { ResolveError, resolveJoinUrl } from '@/lib/teams/meeting-resolver';
-import { getTeamsMeeting, upsertTeamsMeeting, type TeamsMeetingRow } from '@/lib/teams/store';
+import {
+  getTeamsMeeting,
+  getTeamsMeetingByGraphId,
+  upsertTeamsMeeting,
+  type TeamsMeetingRow,
+} from '@/lib/teams/store';
 import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
 import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
 
@@ -33,6 +42,7 @@ const mockResolve = vi.mocked(resolveJoinUrl);
 const mockArm = vi.mocked(armMeeting);
 const mockUpsert = vi.mocked(upsertTeamsMeeting);
 const mockGetRow = vi.mocked(getTeamsMeeting);
+const mockGetSibling = vi.mocked(getTeamsMeetingByGraphId);
 const mockGetOwner = vi.mocked(getMeetingOwner);
 const mockSetOwner = vi.mocked(setMeetingOwner);
 
@@ -67,6 +77,7 @@ const ORIGINAL = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetRow.mockResolvedValue(null);
+  mockGetSibling.mockResolvedValue(null);
   process.env.TEAMS_GRAPH_ENABLED = 'true';
   mockGetSession.mockResolvedValue(FAKE_SESSION as never);
   mockGetOwner.mockResolvedValue(null);
@@ -299,6 +310,79 @@ describe('POST /api/teams/meetings', () => {
       'user-123',
       expect.objectContaining({ originalOptions: ORIGINAL }),
     );
+  });
+
+  // A recurring series shares ONE Graph onlineMeeting, and the dashboard mints a new local
+  // id for every pasted link. Looking the row up by local id alone finds nothing for
+  // occurrence 2, so the pre-PATCH read (which by then holds OUR values) would be stored
+  // as the "original", and deleting that occurrence would "restore" Teams to armed.
+  describe('the same Graph meeting registered under another local id', () => {
+    it('inherits the snapshot of the sibling we already armed instead of recording our own values', async () => {
+      mockGetRow.mockResolvedValueOnce(null);
+      mockGetSibling.mockResolvedValueOnce({
+        armed: true,
+        armResult: 'armed',
+        originalOptions: ORIGINAL,
+      } as TeamsMeetingRow);
+      mockResolve.mockResolvedValueOnce(RESOLVED);
+      mockArm.mockResolvedValueOnce({
+        result: 'armed',
+        options: RESOLVED.options,
+        previousOptions: RESOLVED.options, // read-back of our own earlier arming
+      });
+
+      await post({ meetingId: 'm2', joinUrl: JOIN });
+
+      expect(mockGetSibling).toHaveBeenCalledWith('user-123', 'graph-1');
+      expect(mockUpsert).toHaveBeenCalledWith(
+        'user-123',
+        expect.objectContaining({ id: 'm2', originalOptions: ORIGINAL }),
+      );
+    });
+
+    it('records no snapshot when the armed sibling has none (armed before snapshots existed)', async () => {
+      mockGetRow.mockResolvedValueOnce(null);
+      mockGetSibling.mockResolvedValueOnce({
+        armed: true,
+        armResult: 'armed',
+        originalOptions: null,
+      } as TeamsMeetingRow);
+      mockResolve.mockResolvedValueOnce(RESOLVED);
+      mockArm.mockResolvedValueOnce({
+        result: 'armed',
+        options: RESOLVED.options,
+        previousOptions: RESOLVED.options,
+      });
+
+      await post({ meetingId: 'm2', joinUrl: JOIN });
+
+      // Falling back to "reset recordAutomatically" beats storing our own values as originals.
+      expect(mockUpsert.mock.calls[0][1].originalOptions ?? null).toBeNull();
+    });
+
+    it('takes a fresh snapshot when the sibling never touched the meeting', async () => {
+      mockGetRow.mockResolvedValueOnce(null);
+      mockGetSibling.mockResolvedValueOnce({ armed: false, armResult: 'not_organizer' } as TeamsMeetingRow);
+      mockResolve.mockResolvedValueOnce(RESOLVED);
+      mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options, previousOptions: ORIGINAL });
+
+      await post({ meetingId: 'm2', joinUrl: JOIN });
+
+      expect(mockUpsert).toHaveBeenCalledWith(
+        'user-123',
+        expect.objectContaining({ originalOptions: ORIGINAL }),
+      );
+    });
+
+    it('does not look for a sibling when this very id was already armed', async () => {
+      mockGetRow.mockResolvedValueOnce({ armed: true, armResult: 'armed' } as TeamsMeetingRow);
+      mockResolve.mockResolvedValueOnce(RESOLVED);
+      mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options, previousOptions: RESOLVED.options });
+
+      await post({ meetingId: 'm1', joinUrl: JOIN });
+
+      expect(mockGetSibling).not.toHaveBeenCalled();
+    });
   });
 
   it('registers an invitee without arming', async () => {

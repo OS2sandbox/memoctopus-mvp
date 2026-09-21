@@ -7,7 +7,7 @@ import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
 import { armMeeting } from '@/lib/teams/meeting-arm';
 import { resolveJoinUrl } from '@/lib/teams/meeting-resolver';
-import { getTeamsMeeting, upsertTeamsMeeting } from '@/lib/teams/store';
+import { getTeamsMeeting, getTeamsMeetingByGraphId, upsertTeamsMeeting } from '@/lib/teams/store';
 
 /** ISO string → Date, tolerating a missing or unparseable value. */
 function toDate(value: string | null | undefined): Date | null {
@@ -97,14 +97,28 @@ export async function POST(req: NextRequest) {
     const armResult = outcome?.result ?? ('not_organizer' as const);
 
     // What the organizer had before we PATCHed, for the disarm to restore. Only
-    // the first arm may record it: on a re-registration of a row we already
-    // touched, the read-back holds our own values, and the upsert keeps the
-    // stored snapshot when we pass none. A refused PATCH changed nothing.
+    // the first arm may record it: once we have touched the meeting, the read-back
+    // holds our own values, and the upsert keeps the stored snapshot when we pass
+    // none. A refused PATCH changed nothing.
+    //
+    // "Touched" has to be judged per Graph meeting, not per local id: a recurring
+    // series shares ONE onlineMeeting, and the dashboard mints a new local id for
+    // every pasted link. Occurrence 2 finds no row under its own id, so its pre-PATCH
+    // read (our values by then) would be stored as the original, and deleting it
+    // would "restore" Teams to armed. It inherits its sibling's snapshot instead,
+    // or records none, which falls back to resetting recordAutomatically.
     const previous = outcome ? await getTeamsMeeting(userId, meetingId) : null;
     const alreadyTouched = previous && (previous.armed || previous.armResult === 'policy_blocked');
+    const sibling =
+      outcome && !alreadyTouched
+        ? await getTeamsMeetingByGraphId(userId, resolved.graphMeetingId)
+        : null;
+    const siblingTouched = !!sibling && (sibling.armed || sibling.armResult === 'policy_blocked');
     const originalOptions =
       outcome && outcome.result !== 'not_organizer' && !alreadyTouched
-        ? outcome.previousOptions
+        ? siblingTouched
+          ? (sibling?.originalOptions ?? null)
+          : outcome.previousOptions
         : null;
 
     const row = await upsertTeamsMeeting(userId, {

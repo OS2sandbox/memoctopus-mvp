@@ -228,7 +228,7 @@ export async function upsertTeamsMeeting(
        failure_reason   = COALESCE($15, teams_meetings.failure_reason),
        transcript_id    = COALESCE($16, teams_meetings.transcript_id),
        recording_id     = COALESCE($17, teams_meetings.recording_id),
-       original_options = COALESCE($18::jsonb, teams_meetings.original_options),
+       original_options = COALESCE(teams_meetings.original_options, $18::jsonb),
        updated_at       = NOW()
      RETURNING ${SELECT_COLUMNS}`,
     [
