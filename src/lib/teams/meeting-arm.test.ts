@@ -61,7 +61,7 @@ describe('armMeeting', () => {
   it('PATCHes the four meeting options as JSON', async () => {
     const outcome = await armMeeting(USER, ID);
 
-    expect(outcome).toEqual({ result: 'armed', options: ARMED });
+    expect(outcome).toMatchObject({ result: 'armed', options: ARMED });
     const { path, init } = patchCall();
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(path).toBe('/me/onlineMeetings/GRAPH-1');
@@ -129,7 +129,7 @@ describe('armMeeting', () => {
 
     const outcome = await armMeeting(USER, ID);
 
-    expect(outcome).toEqual({
+    expect(outcome).toMatchObject({
       result: 'not_organizer',
       options: {
         allowRecording: null,
@@ -163,27 +163,146 @@ describe('armMeeting', () => {
   });
 });
 
+describe('armMeeting — snapshot of the original options', () => {
+  const ORIGINAL = {
+    allowRecording: false,
+    allowTranscription: false,
+    recordAutomatically: false,
+    meetingSpokenLanguageTag: 'en-GB',
+  };
+
+  /** Graph answers with `first` until the PATCH has gone out, then with `after`. */
+  function stateChangesOnPatch(first: Record<string, unknown>, after: Record<string, unknown>) {
+    let patched = false;
+    mockFetch.mockImplementation(async () => {
+      patched = true;
+      return new Response(null, { status: 200 });
+    });
+    mockJson.mockImplementation(async (_user: string, path: string) => {
+      if (path.startsWith('/me?')) return { id: 'me-oid' } as never;
+      return {
+        id: ID,
+        participants: { organizer: { identity: { user: { id: 'me-oid' } } } },
+        ...(patched ? after : first),
+      } as never;
+    });
+  }
+
+  it('returns the options as they were BEFORE the PATCH', async () => {
+    stateChangesOnPatch(ORIGINAL, ARMED);
+
+    const outcome = await armMeeting(USER, ID);
+
+    expect(outcome.previousOptions).toEqual(ORIGINAL);
+    expect(outcome.options).toEqual(ARMED);
+  });
+
+  it('reads the meeting before it sends the PATCH', async () => {
+    stateChangesOnPatch(ORIGINAL, ARMED);
+
+    await armMeeting(USER, ID);
+
+    const firstRead = mockJson.mock.invocationCallOrder[0];
+    const patch = mockFetch.mock.invocationCallOrder[0];
+    expect(firstRead).toBeLessThan(patch);
+  });
+
+  it('reports nothing readable when the pre-read fails, and still arms', async () => {
+    let patched = false;
+    mockFetch.mockImplementation(async () => {
+      patched = true;
+      return new Response(null, { status: 200 });
+    });
+    mockJson.mockImplementation(async (_user: string, path: string) => {
+      if (!patched) throw new GraphError('http', 'Graph-fejl', { status: 500 });
+      if (path.startsWith('/me?')) return { id: 'me-oid' } as never;
+      return { id: ID, ...ARMED } as never;
+    });
+
+    const outcome = await armMeeting(USER, ID);
+
+    expect(outcome.result).toBe('armed');
+    expect(outcome.previousOptions).toEqual({
+      allowRecording: null,
+      allowTranscription: null,
+      recordAutomatically: null,
+      meetingSpokenLanguageTag: null,
+    });
+  });
+});
+
 describe('disarmMeeting', () => {
-  it('PATCHes only recordAutomatically:false', async () => {
-    await disarmMeeting(USER, ID);
+  const ORIGINAL = {
+    allowRecording: false,
+    allowTranscription: false,
+    recordAutomatically: false,
+    meetingSpokenLanguageTag: 'en-GB',
+  };
+
+  it('restores every original value exactly, including the ones that were off', async () => {
+    await disarmMeeting(USER, ID, ORIGINAL);
+
     const { path, init } = patchCall();
     expect(path).toBe('/me/onlineMeetings/GRAPH-1');
     expect(init.method).toBe('PATCH');
-    expect(JSON.parse(init.body as string)).toEqual({ recordAutomatically: false });
+    expect(JSON.parse(init.body as string)).toEqual(ORIGINAL);
+  });
+
+  it('restores originals that were on as on', async () => {
+    const before = { ...ORIGINAL, allowRecording: true, meetingSpokenLanguageTag: 'da-DK' };
+    await disarmMeeting(USER, ID, before);
+    expect(JSON.parse(patchCall().init.body as string)).toEqual(before);
+  });
+
+  it('leaves unreadable (null) values alone', async () => {
+    await disarmMeeting(USER, ID, {
+      allowRecording: true,
+      allowTranscription: null,
+      recordAutomatically: false,
+      meetingSpokenLanguageTag: null,
+    });
+
+    expect(JSON.parse(patchCall().init.body as string)).toEqual({
+      allowRecording: true,
+      recordAutomatically: false,
+    });
+  });
+
+  it('falls back to resetting recordAutomatically for a row armed before snapshots existed', async () => {
+    await disarmMeeting(USER, ID, null);
+    expect(JSON.parse(patchCall().init.body as string)).toEqual({ recordAutomatically: false });
+  });
+
+  it('falls back the same way when nothing in the snapshot was readable', async () => {
+    await disarmMeeting(USER, ID, {
+      allowRecording: null,
+      allowTranscription: null,
+      recordAutomatically: null,
+      meetingSpokenLanguageTag: null,
+    });
+    expect(JSON.parse(patchCall().init.body as string)).toEqual({ recordAutomatically: false });
   });
 
   it('does not read the meeting back', async () => {
-    await disarmMeeting(USER, ID);
+    await disarmMeeting(USER, ID, ORIGINAL);
     expect(mockJson).not.toHaveBeenCalled();
+  });
+
+  it('is harmless twice: the same PATCH is sent both times', async () => {
+    await disarmMeeting(USER, ID, ORIGINAL);
+    const first = patchCall().init.body;
+    mockFetch.mockClear();
+    await expect(disarmMeeting(USER, ID, ORIGINAL)).resolves.toBeUndefined();
+    expect(patchCall().init.body).toBe(first);
   });
 
   it('swallows a 403 from a non-organizer', async () => {
     mockFetch.mockRejectedValue(new GraphError('forbidden', 'Ingen adgang', { status: 403 }));
-    await expect(disarmMeeting(USER, ID)).resolves.toBeUndefined();
+    await expect(disarmMeeting(USER, ID, ORIGINAL)).resolves.toBeUndefined();
   });
 
   it('rethrows other Graph errors', async () => {
     mockFetch.mockRejectedValue(new GraphError('not_found', 'Findes ikke', { status: 404 }));
-    await expect(disarmMeeting(USER, ID)).rejects.toMatchObject({ code: 'not_found' });
+    await expect(disarmMeeting(USER, ID, ORIGINAL)).rejects.toMatchObject({ code: 'not_found' });
   });
 });

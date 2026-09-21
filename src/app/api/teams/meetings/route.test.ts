@@ -13,7 +13,7 @@ vi.mock('@/lib/teams/meeting-resolver', async (importOriginal) => {
   return { ...actual, resolveJoinUrl: vi.fn() };
 });
 vi.mock('@/lib/teams/meeting-arm', () => ({ armMeeting: vi.fn() }));
-vi.mock('@/lib/teams/store', () => ({ upsertTeamsMeeting: vi.fn() }));
+vi.mock('@/lib/teams/store', () => ({ upsertTeamsMeeting: vi.fn(), getTeamsMeeting: vi.fn() }));
 vi.mock('@/lib/pending-artifacts', () => ({
   getMeetingOwner: vi.fn(),
   setMeetingOwner: vi.fn(),
@@ -24,7 +24,7 @@ import { auth } from '@/lib/auth';
 import { GraphError } from '@/lib/teams/graph-client';
 import { armMeeting } from '@/lib/teams/meeting-arm';
 import { ResolveError, resolveJoinUrl } from '@/lib/teams/meeting-resolver';
-import { upsertTeamsMeeting } from '@/lib/teams/store';
+import { getTeamsMeeting, upsertTeamsMeeting, type TeamsMeetingRow } from '@/lib/teams/store';
 import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
 import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
 
@@ -32,6 +32,7 @@ const mockGetSession = vi.mocked(auth.api.getSession);
 const mockResolve = vi.mocked(resolveJoinUrl);
 const mockArm = vi.mocked(armMeeting);
 const mockUpsert = vi.mocked(upsertTeamsMeeting);
+const mockGetRow = vi.mocked(getTeamsMeeting);
 const mockGetOwner = vi.mocked(getMeetingOwner);
 const mockSetOwner = vi.mocked(setMeetingOwner);
 
@@ -55,8 +56,17 @@ const RESOLVED = {
   },
 };
 
+/** What the organizer had before we armed the meeting. */
+const ORIGINAL = {
+  allowRecording: false,
+  allowTranscription: false,
+  recordAutomatically: false,
+  meetingSpokenLanguageTag: 'en-GB',
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetRow.mockResolvedValue(null);
   process.env.TEAMS_GRAPH_ENABLED = 'true';
   mockGetSession.mockResolvedValue(FAKE_SESSION as never);
   mockGetOwner.mockResolvedValue(null);
@@ -124,7 +134,7 @@ describe('POST /api/teams/meetings', () => {
     // what makes the Teams hand-off work at all — and what keeps the stash from
     // being readable by whoever else guesses the id.
     mockResolve.mockResolvedValueOnce(RESOLVED);
-    mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options });
+    mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options, previousOptions: ORIGINAL });
 
     await post({ meetingId: 'm1', joinUrl: JOIN });
 
@@ -145,7 +155,7 @@ describe('POST /api/teams/meetings', () => {
   it('re-registering your own meeting is fine', async () => {
     mockGetOwner.mockResolvedValueOnce('user-123');
     mockResolve.mockResolvedValueOnce(RESOLVED);
-    mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options });
+    mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options, previousOptions: ORIGINAL });
 
     expect((await post({ meetingId: 'm1', joinUrl: JOIN })).status).toBe(200);
   });
@@ -154,7 +164,7 @@ describe('POST /api/teams/meetings', () => {
     // A recurring series has one onlineMeeting whose window is the series';
     // occurrence 2+ would otherwise never have its artifacts picked up.
     mockResolve.mockResolvedValueOnce(RESOLVED);
-    mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options });
+    mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options, previousOptions: ORIGINAL });
 
     await post({
       meetingId: 'm1',
@@ -176,7 +186,7 @@ describe('POST /api/teams/meetings', () => {
 
   it('falls back to the Graph window when the client sends no occurrence', async () => {
     mockResolve.mockResolvedValueOnce(RESOLVED);
-    mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options });
+    mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options, previousOptions: ORIGINAL });
 
     await post({ meetingId: 'm1', joinUrl: JOIN });
 
@@ -191,7 +201,7 @@ describe('POST /api/teams/meetings', () => {
 
   it('arms the meeting and stores the row when we are the organizer', async () => {
     mockResolve.mockResolvedValueOnce(RESOLVED);
-    mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options });
+    mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options, previousOptions: ORIGINAL });
 
     const res = await post({ meetingId: 'm1', joinUrl: JOIN });
 
@@ -220,6 +230,77 @@ describe('POST /api/teams/meetings', () => {
     );
   });
 
+  it('stores the pre-arm options on the row so a disarm can restore them', async () => {
+    mockResolve.mockResolvedValueOnce(RESOLVED);
+    mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options, previousOptions: ORIGINAL });
+
+    await post({ meetingId: 'm1', joinUrl: JOIN });
+
+    expect(mockUpsert).toHaveBeenCalledWith(
+      'user-123',
+      expect.objectContaining({ originalOptions: ORIGINAL }),
+    );
+  });
+
+  it('stores the snapshot for a policy_blocked meeting too: the PATCH still went out', async () => {
+    mockResolve.mockResolvedValueOnce(RESOLVED);
+    mockArm.mockResolvedValueOnce({
+      result: 'policy_blocked',
+      options: { ...RESOLVED.options, recordAutomatically: false },
+      previousOptions: ORIGINAL,
+    });
+
+    await post({ meetingId: 'm1', joinUrl: JOIN });
+
+    expect(mockUpsert).toHaveBeenCalledWith(
+      'user-123',
+      expect.objectContaining({ originalOptions: ORIGINAL }),
+    );
+  });
+
+  it('stores no snapshot when the PATCH was refused (not the organizer)', async () => {
+    mockResolve.mockResolvedValueOnce(RESOLVED);
+    mockArm.mockResolvedValueOnce({
+      result: 'not_organizer',
+      options: ORIGINAL,
+      previousOptions: ORIGINAL,
+    });
+
+    await post({ meetingId: 'm1', joinUrl: JOIN });
+
+    expect(mockUpsert.mock.calls[0][1].originalOptions ?? null).toBeNull();
+  });
+
+  it('does not replace the snapshot of a row we already armed', async () => {
+    // Re-registering reads back the values WE set; taking those as the
+    // organizer's originals would make the disarm a no-op.
+    mockGetRow.mockResolvedValueOnce({ armed: true, armResult: 'armed' } as TeamsMeetingRow);
+    mockResolve.mockResolvedValueOnce(RESOLVED);
+    mockArm.mockResolvedValueOnce({
+      result: 'armed',
+      options: RESOLVED.options,
+      previousOptions: RESOLVED.options,
+    });
+
+    await post({ meetingId: 'm1', joinUrl: JOIN });
+
+    expect(mockGetRow).toHaveBeenCalledWith('user-123', 'm1');
+    expect(mockUpsert.mock.calls[0][1].originalOptions ?? null).toBeNull();
+  });
+
+  it('takes a fresh snapshot when the earlier registration never touched the meeting', async () => {
+    mockGetRow.mockResolvedValueOnce({ armed: false, armResult: 'not_organizer' } as TeamsMeetingRow);
+    mockResolve.mockResolvedValueOnce(RESOLVED);
+    mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options, previousOptions: ORIGINAL });
+
+    await post({ meetingId: 'm1', joinUrl: JOIN });
+
+    expect(mockUpsert).toHaveBeenCalledWith(
+      'user-123',
+      expect.objectContaining({ originalOptions: ORIGINAL }),
+    );
+  });
+
   it('registers an invitee without arming', async () => {
     mockResolve.mockResolvedValueOnce({ ...RESOLVED, isOrganizer: false });
 
@@ -237,6 +318,7 @@ describe('POST /api/teams/meetings', () => {
     mockArm.mockResolvedValueOnce({
       result: 'policy_blocked',
       options: { ...RESOLVED.options, recordAutomatically: false },
+      previousOptions: ORIGINAL,
     });
 
     const body = await (await post({ meetingId: 'm1', joinUrl: JOIN })).json();

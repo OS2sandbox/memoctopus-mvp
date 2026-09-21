@@ -28,7 +28,13 @@ export type ArmResult = 'armed' | 'not_organizer' | 'policy_blocked';
 
 export interface ArmOutcome {
   result: ArmResult;
+  /** The options after arming (or, for `not_organizer`, as far as we can read them). */
   options: ResolvedMeeting['options'];
+  /**
+   * The options as they were before the PATCH, so a later disarm can put back
+   * exactly what the organizer had. A value we could not read is null.
+   */
+  previousOptions: ResolvedMeeting['options'];
 }
 
 const UNKNOWN_OPTIONS: ResolvedMeeting['options'] = {
@@ -78,18 +84,27 @@ function isNotOrganizer(error: unknown): boolean {
  * forbids the feature makes Graph accept the PATCH and silently keep the flag
  * false, which is the difference between "it will record" and "the user thinks
  * it will record" — so we only claim `armed` when Graph says so.
+ *
+ * The options are read once BEFORE the PATCH: it overwrites them, and
+ * {@link disarmMeeting} can only give the organizer back what we saw here.
  */
 export async function armMeeting(userId: string, graphMeetingId: string): Promise<ArmOutcome> {
+  const previousOptions = await readOptions(userId, graphMeetingId);
+
   try {
     await patchOptions(userId, graphMeetingId, armBody());
   } catch (error) {
     if (!isNotOrganizer(error)) throw error;
-    return { result: 'not_organizer', options: await readOptions(userId, graphMeetingId) };
+    return {
+      result: 'not_organizer',
+      options: await readOptions(userId, graphMeetingId),
+      previousOptions,
+    };
   }
 
   const after = await getMeeting(userId, graphMeetingId);
   const blocked = after.options.recordAutomatically === false || after.options.allowTranscription === false;
-  return { result: blocked ? 'policy_blocked' : 'armed', options: after.options };
+  return { result: blocked ? 'policy_blocked' : 'armed', options: after.options, previousOptions };
 }
 
 /** Best effort — an invitee may not even be allowed to read the options back. */
@@ -105,16 +120,36 @@ async function readOptions(
 }
 
 /**
- * "Slå Memoctopus fra". Only `recordAutomatically` is reset: allowRecording and
- * allowTranscription may have been on before we ever touched the meeting, and
- * turning them off would take away capabilities the organizer set themselves.
+ * "Slå Memoctopus fra". Puts back the options as they were before arming
+ * (`original`, snapshotted by {@link armMeeting}) — including the ones that were
+ * off, so we do not leave recording and transcription enabled on a meeting whose
+ * organizer never wanted them.
+ *
+ * A null value is one we could not read then. It is left alone: turning off
+ * something we cannot show we turned on would take away a capability the
+ * organizer set themselves.
+ *
+ * A row armed before snapshots existed has no `original`. It gets the old
+ * behaviour: only `recordAutomatically` is reset, because allowRecording and
+ * allowTranscription may have been on before we touched the meeting.
  *
  * A 403 here means we never armed it in the first place (invitee), so there is
- * nothing to undo and nothing to report.
+ * nothing to undo and nothing to report. Sending the same PATCH again is
+ * harmless, so disarming twice is too.
  */
-export async function disarmMeeting(userId: string, graphMeetingId: string): Promise<void> {
+export async function disarmMeeting(
+  userId: string,
+  graphMeetingId: string,
+  original: ResolvedMeeting['options'] | null = null,
+): Promise<void> {
+  const restore = Object.fromEntries(
+    // An empty tag is as good as unreadable: Graph rejects it.
+    Object.entries(original ?? {}).filter(([, value]) => value !== null && value !== ''),
+  );
+  const body = Object.keys(restore).length > 0 ? restore : { recordAutomatically: false };
+
   try {
-    await patchOptions(userId, graphMeetingId, { recordAutomatically: false });
+    await patchOptions(userId, graphMeetingId, body);
   } catch (error) {
     if (!isNotOrganizer(error)) throw error;
   }

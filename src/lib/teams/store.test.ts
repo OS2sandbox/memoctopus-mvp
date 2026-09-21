@@ -254,6 +254,7 @@ describe('upsertTeamsMeeting', () => {
       null,
       null,
       null,
+      null,
     ]);
 
     expect(result).toEqual({
@@ -274,6 +275,7 @@ describe('upsertTeamsMeeting', () => {
       failureReason: null,
       transcriptId: null,
       recordingId: null,
+      originalOptions: null,
       createdAt: CREATED,
     });
   });
@@ -305,6 +307,31 @@ describe('upsertTeamsMeeting', () => {
     expect(params[8]).toBe('policy_blocked');
     expect(result.armResult).toBe('policy_blocked');
     expect(result.eventId).toBe('evt-2');
+  });
+
+  it('stores the options as they were before arming as JSON, and keeps an earlier snapshot when none is supplied', async () => {
+    const original = {
+      allowRecording: false,
+      allowTranscription: false,
+      recordAutomatically: false,
+      meetingSpokenLanguageTag: 'en-GB',
+    };
+    mockQueryOne.mockResolvedValue({ ...RAW, original_options: original } as never);
+
+    const result = await upsertTeamsMeeting(USER, { ...row(), originalOptions: original });
+
+    const [, sql, params] = mockQueryOne.mock.calls[0] as [string, string, unknown[]];
+    expect(params[17]).toBe(JSON.stringify(original));
+    // Re-registering an armed meeting reads the ALREADY armed values; the first
+    // snapshot must survive it.
+    expect(sql).toMatch(/original_options\s*=\s*COALESCE\(\$18::jsonb, teams_meetings\.original_options\)/);
+    expect(result.originalOptions).toEqual(original);
+  });
+
+  it('passes null when no snapshot is supplied', async () => {
+    mockQueryOne.mockResolvedValue(RAW as never);
+    await upsertTeamsMeeting(USER, row());
+    expect((mockQueryOne.mock.calls[0][2] as unknown[])[17]).toBeNull();
   });
 
   it('coerces string timestamps and numeric strings from the driver', async () => {
