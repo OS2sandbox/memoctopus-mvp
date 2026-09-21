@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, waitFor } from '@testing-library/react';
+import { OnboardingProvider } from '@/lib/onboarding/context';
 
 vi.mock('next/link', () => ({
   default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a>,
@@ -21,6 +22,22 @@ vi.mock('@/lib/teams/client-delete', () => ({
 }));
 
 import ArkivPage from './page';
+
+// The page mounts under the app-level OnboardingProvider. Mark its hint as seen so the
+// popover doesn't cover the "Rediger arkiv" button the tests click.
+function render(ui: React.ReactElement) {
+  return rtlRender(
+    <OnboardingProvider
+      initial={{
+        tourSkipped: true,
+        tourCompleted: true,
+        seen: [{ stepId: 'arkiv.bulk-edit-button', meetingId: null }],
+      }}
+    >
+      {ui}
+    </OnboardingProvider>,
+  );
+}
 
 function stored(id: string, title: string) {
   return {
