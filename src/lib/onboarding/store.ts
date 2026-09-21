@@ -84,10 +84,13 @@ export async function completeTour(userId: string): Promise<void> {
  * user (which would re-open the welcome dialog on the next page load).
  */
 export async function resetHints(userId: string): Promise<void> {
-  await queryUserSchema(userId, `DELETE FROM onboarding_progress`);
+  // One statement (a data-modifying CTE always runs to completion, referenced or not), so
+  // the delete and the state write commit together and a concurrent markStepSeen cannot
+  // land between them. Two separate queries would run on two pooled connections.
   await queryUserSchema(
     userId,
-    `INSERT INTO onboarding_state (id, tour_completed_at, tour_skipped_at, last_step_id, updated_at)
+    `WITH cleared AS (DELETE FROM onboarding_progress)
+     INSERT INTO onboarding_state (id, tour_completed_at, tour_skipped_at, last_step_id, updated_at)
      VALUES ('singleton', NOW(), NULL, NULL, NOW())
      ON CONFLICT (id) DO UPDATE SET tour_completed_at = NOW(), tour_skipped_at = NULL, last_step_id = NULL, updated_at = NOW()`,
   );
