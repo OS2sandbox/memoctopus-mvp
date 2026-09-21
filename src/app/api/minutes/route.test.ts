@@ -24,6 +24,11 @@ vi.mock('@/lib/skabeloner/server', () => ({
 import { POST } from './route';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
+import {
+  MinutesConfigError,
+  MinutesTooLongError,
+  MinutesTruncatedError,
+} from '@/lib/ai/minutes-errors';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 
@@ -143,5 +148,32 @@ describe('POST /api/minutes', () => {
     expect(body).toHaveProperty('error');
     // Must be JSON (not HTML) so the client can parse it without crashing.
     expect(typeof body.error).toBe('string');
+  });
+
+  it('maps MinutesTooLongError to a 422 with a Danish message', async () => {
+    mockGenerateReferatBody.mockRejectedValueOnce(new MinutesTooLongError('still too long'));
+
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
+
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toContain('for langt');
+  });
+
+  it('maps MinutesTruncatedError to a 422 with a Danish message', async () => {
+    mockGenerateReferatBody.mockRejectedValueOnce(new MinutesTruncatedError('hit output limit'));
+
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
+
+    expect(res.status).toBe(422);
+    expect((await res.json()).error).toContain('svargrænse');
+  });
+
+  it('maps MinutesConfigError to a 500 with a Danish message', async () => {
+    mockGenerateReferatBody.mockRejectedValueOnce(new MinutesConfigError('window too small'));
+
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
+
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toContain('indstillinger');
   });
 });

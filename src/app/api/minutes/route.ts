@@ -6,6 +6,11 @@ import { getSkabelon, getDefaultSkabelon } from '@/lib/skabeloner/server';
 import { TranscriptChapter } from '@/lib/ai/chapters';
 import { TranscriptSegment, Skabelon } from '@/types';
 import { withHandler } from '@/lib/api-handler';
+import {
+  MinutesConfigError,
+  MinutesTooLongError,
+  MinutesTruncatedError,
+} from '@/lib/ai/minutes-errors';
 
 export const maxDuration = 120;
 
@@ -64,13 +69,35 @@ async function postHandler(req: NextRequest) {
     includeDato: includeDato ?? skabelon?.includeDato ?? false,
   };
 
-  const content = await generateReferatBody(
-    segments,
-    spec,
-    participants,
-    chapters,
-    customPrompt,
-  );
+  let content;
+  try {
+    content = await generateReferatBody(segments, spec, participants, chapters, customPrompt);
+  } catch (err) {
+    // Known limits get a message the UI shows as-is (it displays `data.error`); the
+    // details go to the server log. Anything else falls through to withHandler's generic 500.
+    if (err instanceof MinutesTooLongError) {
+      console.error('[minutes]', err);
+      return NextResponse.json(
+        { error: 'Mødet er for langt til at blive opsummeret med den nuværende AI-model. Kontakt administratoren.' },
+        { status: 422 },
+      );
+    }
+    if (err instanceof MinutesTruncatedError) {
+      console.error('[minutes]', err);
+      return NextResponse.json(
+        { error: 'Referatet blev ikke færdigt, fordi AI-modellens svargrænse blev nået. Prøv igen med en kortere skabelon, eller kontakt administratoren.' },
+        { status: 422 },
+      );
+    }
+    if (err instanceof MinutesConfigError) {
+      console.error('[minutes]', err);
+      return NextResponse.json(
+        { error: 'AI-modellens indstillinger tillader ikke at generere et referat. Kontakt administratoren.' },
+        { status: 500 },
+      );
+    }
+    throw err;
+  }
 
   return NextResponse.json({ content, skabelonId: skabelon?.id ?? null });
 }
