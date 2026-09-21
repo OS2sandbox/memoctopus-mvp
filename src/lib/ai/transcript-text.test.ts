@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  formatTime,
   mergeSpeakerTurns,
   renderTurns,
   splitTurns,
@@ -13,14 +12,6 @@ const seg = (speaker: string, start: number, text: string): TranscriptSegment =>
   start,
   end: start + 1,
   text,
-});
-
-describe('formatTime', () => {
-  it('formats seconds as m:ss', () => {
-    expect(formatTime(0)).toBe('0:00');
-    expect(formatTime(65)).toBe('1:05');
-    expect(formatTime(3600)).toBe('60:00');
-  });
 });
 
 describe('mergeSpeakerTurns', () => {

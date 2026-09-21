@@ -10,13 +10,12 @@ export interface Turn {
   text: string;
 }
 
-export function formatTime(seconds: number): string {
+function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-// Collapse consecutive segments from the same speaker into one turn (start of the first).
 export function mergeSpeakerTurns(segments: TranscriptSegment[]): Turn[] {
   const turns: Turn[] = [];
   for (const s of segments) {

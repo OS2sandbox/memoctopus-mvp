@@ -10,6 +10,15 @@
 
 **Spec:** `docs/specs/2026-09-21-minutes-context-budget-design.md`. Fixes #97.
 
+> **Note (after code review and simplify):** the code in the tasks below is the first cut. The
+> merged code differs in a few places: `splitTurns` returns plain `string[]` (no `TurnPart`,
+> no timestamps in part headings); a summary cut off at its cap logs a warning instead of
+> throwing; the typed errors extend a shared `UserFacingError` (`src/lib/user-facing-error.ts`)
+> that `withHandler` renders, so the route has no error handling of its own;
+> `transcriptBudgetChars(fixedChars, limits)` takes the limits as an argument; and
+> `MIN_TRANSCRIPT_BUDGET_CHARS` / `SUMMARY_MAX_OUTPUT_TOKENS` live in `minutes.ts`. The spec and
+> the source are authoritative.
+
 **Conventions to know:**
 - Tests live next to the code (`foo.ts` → `foo.test.ts`). Globals (`describe`, `it`) are enabled, but existing tests import them from `vitest` explicitly. Do the same.
 - Env is read **inside functions**, never at module load (same idiom as `src/lib/auth/providers.ts`).

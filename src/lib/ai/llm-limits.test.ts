@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { getLlmLimits, transcriptBudgetChars, CHARS_PER_TOKEN } from './llm-limits';
+import { getLlmLimits, transcriptBudgetChars } from './llm-limits';
 
 const ENV = process.env;
 
@@ -48,16 +48,11 @@ describe('getLlmLimits overrides', () => {
 
 describe('transcriptBudgetChars', () => {
   it('subtracts output and fixed-prompt tokens, then converts to characters', () => {
-    process.env.LLM_CONTEXT_TOKENS = '10000';
-    process.env.LLM_MAX_OUTPUT_TOKENS = '2000';
     // 1000 fixed chars / 2.5 = 400 tokens; (10000 - 2000 - 400) * 2.5 = 19000
-    expect(CHARS_PER_TOKEN).toBe(2.5);
-    expect(transcriptBudgetChars(1000)).toBe(19_000);
+    expect(transcriptBudgetChars(1000, { contextTokens: 10_000, maxOutputTokens: 2_000 })).toBe(19_000);
   });
 
   it('can be negative when the context is too small', () => {
-    process.env.LLM_CONTEXT_TOKENS = '1000';
-    process.env.LLM_MAX_OUTPUT_TOKENS = '2000';
-    expect(transcriptBudgetChars(0)).toBeLessThan(0);
+    expect(transcriptBudgetChars(0, { contextTokens: 1_000, maxOutputTokens: 2_000 })).toBeLessThan(0);
   });
 });

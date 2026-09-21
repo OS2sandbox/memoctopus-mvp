@@ -11,15 +11,9 @@ import { usingHostedOpenAI } from './llm-client';
 // Deliberately pessimistic for Danish (measured 2.33–2.97 chars/token; names, numbers and
 // loanwords tokenise worse). Summarising a transcript that would have fit costs some
 // quality; exceeding the window costs the whole request.
-export const CHARS_PER_TOKEN = 2.5;
+const CHARS_PER_TOKEN = 2.5;
 
-// Below this many characters of transcript budget the configuration cannot work.
-export const MIN_TRANSCRIPT_BUDGET_CHARS = 4_000;
-
-// Output cap for the per-part summaries (max 8 bullet points).
-export const SUMMARY_MAX_OUTPUT_TOKENS = 1_024;
-
-export interface LlmLimits {
+interface LlmLimits {
   contextTokens: number;
   maxOutputTokens: number;
 }
@@ -40,8 +34,8 @@ export function getLlmLimits(): LlmLimits {
 // Characters of transcript that fit in one call, given the length of everything else in
 // the prompt (system prompt, instruction, wrapper text). May be negative for a
 // misconfigured (too small) context.
-export function transcriptBudgetChars(fixedPromptChars: number): number {
-  const { contextTokens, maxOutputTokens } = getLlmLimits();
+export function transcriptBudgetChars(fixedPromptChars: number, limits: LlmLimits): number {
+  const { contextTokens, maxOutputTokens } = limits;
   const fixedTokens = Math.ceil(fixedPromptChars / CHARS_PER_TOKEN);
   return Math.floor((contextTokens - maxOutputTokens - fixedTokens) * CHARS_PER_TOKEN);
 }

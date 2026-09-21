@@ -150,30 +150,19 @@ describe('POST /api/minutes', () => {
     expect(typeof body.error).toBe('string');
   });
 
-  it('maps MinutesTooLongError to a 422 with a Danish message', async () => {
-    mockGenerateReferatBody.mockRejectedValueOnce(new MinutesTooLongError('still too long'));
+  // The typed errors carry their own status and Danish message; withHandler renders them.
+  it.each([
+    [MinutesTooLongError, 422, 'for langt'],
+    [MinutesTruncatedError, 422, 'svargrænse'],
+    [MinutesConfigError, 500, 'indstillinger'],
+  ])('shows %o as its own status and Danish message', async (ErrorClass, status, fragment) => {
+    mockGenerateReferatBody.mockRejectedValueOnce(new ErrorClass('technical detail'));
 
     const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
 
-    expect(res.status).toBe(422);
-    expect((await res.json()).error).toContain('for langt');
-  });
-
-  it('maps MinutesTruncatedError to a 422 with a Danish message', async () => {
-    mockGenerateReferatBody.mockRejectedValueOnce(new MinutesTruncatedError('hit output limit'));
-
-    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
-
-    expect(res.status).toBe(422);
-    expect((await res.json()).error).toContain('svargrænse');
-  });
-
-  it('maps MinutesConfigError to a 500 with a Danish message', async () => {
-    mockGenerateReferatBody.mockRejectedValueOnce(new MinutesConfigError('window too small'));
-
-    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
-
-    expect(res.status).toBe(500);
-    expect((await res.json()).error).toContain('indstillinger');
+    expect(res.status).toBe(status);
+    const { error } = await res.json();
+    expect(error).toContain(fragment);
+    expect(error).not.toContain('technical detail');
   });
 });

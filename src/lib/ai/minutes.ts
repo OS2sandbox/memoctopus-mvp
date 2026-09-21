@@ -1,12 +1,7 @@
 import { TranscriptSegment } from '@/types';
 import { TranscriptChapter } from '@/lib/ai/chapters';
 import { getLlmClient, llmModel } from './llm-client';
-import {
-  getLlmLimits,
-  transcriptBudgetChars,
-  MIN_TRANSCRIPT_BUDGET_CHARS,
-  SUMMARY_MAX_OUTPUT_TOKENS,
-} from './llm-limits';
+import { getLlmLimits, transcriptBudgetChars } from './llm-limits';
 import { mapWithLimit } from './map-with-limit';
 import { MinutesConfigError, MinutesTooLongError, MinutesTruncatedError } from './minutes-errors';
 import { mergeSpeakerTurns, renderTurns, splitTurns, type Turn } from './transcript-text';
@@ -31,6 +26,12 @@ const MAX_SUMMARY_ROUNDS = 3;
 
 // Concurrent summary calls. The bundled vLLM runs with --max-num-seqs 4.
 const SUMMARY_CONCURRENCY = 3;
+
+// Output cap for a per-part summary (max 8 bullet points).
+const SUMMARY_MAX_OUTPUT_TOKENS = 1_024;
+
+// Below this many characters of transcript budget the configuration cannot work.
+const MIN_TRANSCRIPT_BUDGET_CHARS = 4_000;
 
 // The generation-relevant subset of a Skabelon.
 export interface SkabelonSpec {
@@ -83,8 +84,7 @@ export function buildSkabelonInstruction(
 
 // ─── Generation ───────────────────────────────────────────────────────────────
 
-// The user message for the referat call. Also used with an empty transcript to measure
-// the fixed part of the prompt, so keep the transcript last.
+// Keep the transcript last: also called with '' to measure the fixed part of the prompt.
 function buildBodyPrompt(transcriptText: string, instruction: string): string {
   return `Udarbejd et mødereferat baseret på denne transskription.
 ${instruction ? `\n${instruction}\n` : ''}
@@ -94,8 +94,11 @@ Transskription:
 ${transcriptText}`;
 }
 
-async function _generateBody(transcriptText: string, instruction: string): Promise<string> {
-  const { maxOutputTokens } = getLlmLimits();
+async function _generateBody(
+  transcriptText: string,
+  instruction: string,
+  maxOutputTokens: number,
+): Promise<string> {
   const response = await getLlmClient().chat.completions.create({
     model: llmModel('gpt-4o'),
     max_tokens: maxOutputTokens,
@@ -184,13 +187,13 @@ export async function generateReferatBody(
   const t0 = Date.now();
   const instruction = buildSkabelonInstruction(spec, participants, customPrompt);
 
+  const limits = getLlmLimits();
   const fixedChars = MINUTES_SYSTEM_PROMPT.length + buildBodyPrompt('', instruction).length;
-  const budget = transcriptBudgetChars(fixedChars);
+  const budget = transcriptBudgetChars(fixedChars, limits);
   if (budget < MIN_TRANSCRIPT_BUDGET_CHARS) {
-    const { contextTokens, maxOutputTokens } = getLlmLimits();
     throw new MinutesConfigError(
-      `LLM_CONTEXT_TOKENS=${contextTokens} leaves ${Math.max(budget, 0)} characters for the ` +
-        `transcript after reserving ${maxOutputTokens} output tokens ` +
+      `LLM_CONTEXT_TOKENS=${limits.contextTokens} leaves ${Math.max(budget, 0)} characters for the ` +
+        `transcript after reserving ${limits.maxOutputTokens} output tokens ` +
         `(minimum ${MIN_TRANSCRIPT_BUDGET_CHARS}). Raise LLM_CONTEXT_TOKENS or lower LLM_MAX_OUTPUT_TOKENS.`,
     );
   }
@@ -198,14 +201,17 @@ export async function generateReferatBody(
   const turns = mergeSpeakerTurns(transcript);
   const transcriptText = renderTurns(turns);
   const chapterList = chapters && chapters.length > 1 ? chapters : null;
-  const overQualityThreshold =
-    chapterList !== null && transcriptText.length > CHAPTER_SPLIT_THRESHOLD;
-
-  if (transcriptText.length <= budget && !overQualityThreshold) {
-    const body = await _generateBody(transcriptText, instruction);
+  const log = (mode: string, rounds: number) =>
     console.log(
-      `[minutes] chars=${transcriptText.length} budget=${budget} mode=single parts=1 rounds=0 ms=${Date.now() - t0}`,
+      `[minutes] chars=${transcriptText.length} budget=${budget} mode=${mode} rounds=${rounds} ms=${Date.now() - t0}`,
     );
+
+  if (
+    transcriptText.length <= budget &&
+    !(chapterList !== null && transcriptText.length > CHAPTER_SPLIT_THRESHOLD)
+  ) {
+    const body = await _generateBody(transcriptText, instruction, limits.maxOutputTokens);
+    log('single', 0);
     return { body };
   }
 
@@ -231,9 +237,7 @@ export async function generateReferatBody(
     );
   }
 
-  const body = await _generateBody(condensed, instruction);
-  console.log(
-    `[minutes] chars=${transcriptText.length} budget=${budget} mode=split units=${units.length} rounds=${rounds} ms=${Date.now() - t0}`,
-  );
+  const body = await _generateBody(condensed, instruction, limits.maxOutputTokens);
+  log('split', rounds);
   return { body };
 }

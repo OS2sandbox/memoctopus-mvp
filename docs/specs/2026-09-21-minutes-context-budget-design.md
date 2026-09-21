@@ -88,12 +88,10 @@ Pure functions, no I/O:
 - `mergeSpeakerTurns(segments)`: collapses consecutive segments with the same `speaker` into
   one turn `{ speaker, start, text }` (texts joined with a space, `start` from the first).
 - `renderTurns(turns)`: `[Taler N] (m:ss): text`, one line per turn.
-- `splitTurns(turns, budgetChars)`: packs consecutive turns into parts `{ text, start }`
-  (`start` = the first turn's start in seconds), each `text` at most `budgetChars`,
-  splitting at turn boundaries. A single turn longer than the budget is split at the last
+- `splitTurns(turns, budgetChars)`: packs consecutive turns into rendered parts (strings),
+  each at most `budgetChars`, splitting at turn boundaries. A single turn longer than the budget is split at the last
   whitespace before the limit (hard split if none). Every input character appears in exactly
   one part, in order (only the whitespace at a split point is dropped).
-- `formatTime(seconds)`: `m:ss`, moved here from `minutes.ts`.
 
 ### 3. Generation flow (`src/lib/ai/minutes.ts`)
 
@@ -105,15 +103,18 @@ Pure functions, no I/O:
      transcript is one unit.
    - A unit over the budget is split with `splitTurns`. Each part is summarised (max 8
      points, 1,024 output tokens) and gets its own heading: the unit's title, plus
-     `(del i/n, fra m:ss)` when the unit was split into several parts.
+     `(del i/n)` when the unit was split into several parts. (Timestamps were dropped: later
+     summarise rounds have none to give.)
    - Summary calls run at most **3 at a time** (a small `mapWithLimit` helper, no new
      dependency). The vLLM compose file uses `--max-num-seqs 4`.
    - If the joined summaries still exceed the budget, summarise them again. At most 3
      summarise rounds run in total (the first pass counts as round 1); if the text is still
      over budget after round 3, it throws `MinutesTooLongError`.
 4. The final call passes `max_tokens = maxOutputTokens`.
-5. If any call returns `finish_reason === 'length'`, throw `MinutesTruncatedError` instead of
-   returning a cut-off document.
+5. If the final referat call returns `finish_reason === 'length'`, throw
+   `MinutesTruncatedError` instead of returning a cut-off document. A per-part *summary* cut
+   off at its cap is tolerated (a shorter bullet list is still a usable input) and logs a
+   warning: failing the whole meeting over an intermediate step would be worse.
 
 The existing chapter branch stays as an optional refinement (chapter boundaries make better
 summary units). It is currently unreachable from the UI.
@@ -121,15 +122,19 @@ summary units). It is currently unreachable from the UI.
 ### 4. Errors and user experience
 
 `MinutesConfigError`, `MinutesTruncatedError` and `MinutesTooLongError` live in
-`src/lib/ai/minutes-errors.ts`, a separate module because the route tests replace
-`@/lib/ai/minutes` with a mock, which would break `instanceof` checks. `src/app/api/minutes/route.ts` maps them to a JSON error with a Danish message
+`src/lib/ai/minutes-errors.ts`. Each extends a small shared base, `UserFacingError`
+(`src/lib/user-facing-error.ts`), which carries the HTTP `status` and the Danish `userMessage`
 the UI already displays (`data.error`), e.g. *"Mødet er for langt til at blive opsummeret med
-den nuværende AI-model. Kontakt administratoren."*, and logs the details. Other errors keep
-going through `withHandler`.
+den nuværende AI-model. Kontakt administratoren."*; the technical detail stays in `message`
+for the log and is never sent to the user. `withHandler` (`src/lib/api-handler.ts`) renders a
+`UserFacingError` as its own status and message and still logs it, so the minutes route needs
+no error handling of its own and any future route can do the same. All other errors keep the
+generic 500. The errors are a separate module from `minutes.ts` because the route tests
+replace `@/lib/ai/minutes` with a mock, which would break `instanceof` checks.
 
 No data is lost on failure: the UI deletes the audio only after a successful generation.
 
-Each generation logs one line: `[minutes] chars=… budget=… mode=single|split parts=… rounds=… ms=…`.
+Each generation logs one line: `[minutes] chars=… budget=… mode=single|split rounds=… ms=…`.
 
 The UI aborts after 5 minutes. Split runs make several sequential LLM rounds, so duration is
 measured on a real long meeting during verification and revisited if it gets close.
