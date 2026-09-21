@@ -34,6 +34,7 @@ export type GraphErrorCode =
   | 'transcripts_disabled'
   | 'not_found'
   | 'forbidden'
+  | 'unavailable'
   | 'http';
 
 export class GraphError extends Error {
@@ -41,10 +42,10 @@ export class GraphError extends Error {
   readonly status: number;
   readonly missingScopes?: string[];
   /**
-   * True when the failure is transient (throttling, gateway, outage) and the
-   * same request is worth repeating later. Graph throttles the transcript and
-   * recording collections routinely, so a 429 five minutes after a meeting must
-   * mean "not yet", never "this meeting will never produce a referat".
+   * True when the failure is transient (throttling, gateway, outage, timeout)
+   * and the same request is worth repeating later. Graph throttles the transcript
+   * and recording collections routinely, so a 429 five minutes after a meeting
+   * must mean "not yet", never "this meeting will never produce a referat".
    */
   readonly retryable: boolean;
   /** `Retry-After` in milliseconds, when Graph told us how long to wait. */
@@ -66,7 +67,7 @@ export class GraphError extends Error {
     this.code = code;
     this.status = options.status ?? 0;
     if (options.missingScopes) this.missingScopes = options.missingScopes;
-    this.retryable = options.retryable ?? isRetryableStatus(this.status);
+    this.retryable = options.retryable ?? (code === 'unavailable' || isRetryableStatus(this.status));
     this.retryAfterMs = options.retryAfterMs ?? null;
   }
 }
@@ -86,6 +87,32 @@ export function parseRetryAfter(header: string | null, now: number = Date.now())
   if (Number.isNaN(at)) return null;
   return Math.max(0, at - now);
 }
+
+/**
+ * How long one Graph call may take before it is abandoned as transient. Without
+ * a bound only undici's own defaults apply (about 5 minutes of silence), and the
+ * poller runs one meeting at a time under an advisory lock, so a single stalled
+ * request would hold up every user's polling.
+ *
+ * The AbortSignal also covers reading the body. JSON calls are small and get the
+ * short bound; transcript and recording downloads get the long one, sized for a
+ * recording of several hundred MB on a slow link. Fixed on purpose: nothing
+ * documents an environment override, so there is none.
+ */
+export const GRAPH_TIMEOUT_MS = 30_000;
+export const GRAPH_DOWNLOAD_TIMEOUT_MS = 20 * 60_000;
+
+/**
+ * A throttled call (429/503 with `Retry-After`) is repeated in place at most this
+ * many times, and never by waiting longer than the budget in total. A longer
+ * wait is not ours to sit through: it is raised as `unavailable` carrying
+ * `retryAfterMs`, and the poller tries again on its next pass.
+ */
+const RETRY_AFTER_MAX_RETRIES = 2;
+const RETRY_AFTER_BUDGET_MS = 30_000;
+
+const UNAVAILABLE_MESSAGE = 'Microsoft er midlertidigt utilgængelig. Prøv igen om lidt.';
+const TIMEOUT_MESSAGE = 'Microsoft svarede ikke i tide. Prøv igen om lidt.';
 
 /**
  * Graph base URL. `||` not `??` — docker-compose passes unset variables through
@@ -120,12 +147,75 @@ interface TokenResult {
   scopes: Set<string>;
 }
 
+function isAbortError(err: unknown): boolean {
+  const name = (err as { name?: unknown } | null)?.name;
+  return name === 'TimeoutError' || name === 'AbortError';
+}
+
+/** Rejects with `unavailable` if `promise` has not settled after `ms`. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new GraphError('unavailable', TIMEOUT_MESSAGE)),
+      ms,
+    );
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
+/**
+ * What a failed better-auth token call means. better-auth's /get-access-token and
+ * /refresh-token wrap the whole refresh in a try/catch that throws a fresh APIError
+ * and drops the cause (verified against better-auth 1.6.11 with a stubbed token
+ * endpoint): an Entra `invalid_grant`, a 429, a 503, a timeout and a network error
+ * all leave as the same `{ body: { code: 'FAILED_TO_GET_ACCESS_TOKEN' } }`. So an
+ * APIError cannot be told transient from permanent, and stays `reauth_required` — a
+ * revoked or expired refresh token is the case a retry cannot fix and the one users
+ * hit most. Anything that is NOT an APIError never went through that catch (the
+ * database read before it, for one) and is not the user's sign-in at fault.
+ */
+function tokenFailure(cause: unknown): GraphError {
+  const code = (cause as { body?: { code?: unknown } } | null)?.body?.code;
+  if (typeof code === 'string') {
+    return new GraphError(
+      'reauth_required',
+      'Kunne ikke hente et Microsoft-token. Log ind med Microsoft igen.',
+      { status: 401, cause },
+    );
+  }
+  return new GraphError('unavailable', UNAVAILABLE_MESSAGE, { cause });
+}
+
+// One in-flight token call per user, shared by everyone who asks meanwhile.
+// better-auth has no lock: two concurrent calls on an expired token would each
+// refresh, and the last write wins the stored refresh token (Entra rotates it, so
+// the loser's is dead). resolveJoinUrl, getMeeting and listArtifacts all fan out
+// several Graph calls at once, so this is the normal case. The entry lives only
+// while the call is pending — a failure is never remembered.
+const tokenFlights = new Map<string, Promise<TokenResult>>();
+const refreshFlights = new Map<string, Promise<string>>();
+
+function singleFlight<T>(flights: Map<string, Promise<T>>, userId: string, start: () => Promise<T>) {
+  const existing = flights.get(userId);
+  if (existing) return existing;
+  const flight = withTimeout(start(), GRAPH_TIMEOUT_MS).finally(() => flights.delete(userId));
+  flights.set(userId, flight);
+  return flight;
+}
+
 /**
  * better-auth refreshes the access token here when it has expired (see
  * node_modules/better-auth/dist/api/routes/account.mjs → /get-access-token).
- * Any failure — no Microsoft account linked, refresh token expired or revoked —
- * comes back as an APIError, and there is nothing the server can do about it:
- * the user has to sign in with Microsoft again.
+ * See {@link tokenFailure} for how its failures are read.
  */
 async function fetchToken(userId: string): Promise<TokenResult> {
   // Nothing here can succeed while TEAMS_GRAPH_ENABLED is off: the scopes were
@@ -135,28 +225,49 @@ async function fetchToken(userId: string): Promise<TokenResult> {
     throw new GraphError('disabled', TEAMS_DISABLED_MESSAGE, { status: 403 });
   }
 
-  let result: { accessToken?: string | null; scopes?: string[] } | null = null;
-  try {
-    result = (await auth.api.getAccessToken({
-      body: { providerId: 'microsoft', userId },
-    })) as { accessToken?: string | null; scopes?: string[] };
-  } catch (cause) {
-    throw new GraphError(
-      'reauth_required',
-      'Kunne ikke hente et Microsoft-token. Log ind med Microsoft igen.',
-      { status: 401, cause },
-    );
-  }
+  return singleFlight(tokenFlights, userId, async () => {
+    let result: { accessToken?: string | null; scopes?: string[] } | null = null;
+    try {
+      result = (await auth.api.getAccessToken({
+        body: { providerId: 'microsoft', userId },
+      })) as { accessToken?: string | null; scopes?: string[] };
+    } catch (cause) {
+      throw tokenFailure(cause);
+    }
 
-  if (!result?.accessToken) {
+    if (!result?.accessToken) {
+      throw new GraphError(
+        'reauth_required',
+        'Ingen Microsoft-konto er forbundet. Log ind med Microsoft igen.',
+        { status: 401 },
+      );
+    }
+
+    return { accessToken: result.accessToken, scopes: parseScopes(result.scopes) };
+  });
+}
+
+/**
+ * A new access token whether or not the stored one has expired — for a Graph 401
+ * on a token better-auth still believed was good (revoked session, clock skew).
+ * Shares one flight per user, so calls rejected together refresh once.
+ */
+function forceRefreshToken(userId: string): Promise<string> {
+  return singleFlight(refreshFlights, userId, async () => {
+    try {
+      const result = (await auth.api.refreshToken({
+        body: { providerId: 'microsoft', userId },
+      })) as { accessToken?: string | null };
+      if (result?.accessToken) return result.accessToken;
+    } catch (cause) {
+      throw tokenFailure(cause);
+    }
     throw new GraphError(
       'reauth_required',
       'Ingen Microsoft-konto er forbundet. Log ind med Microsoft igen.',
       { status: 401 },
     );
-  }
-
-  return { accessToken: result.accessToken, scopes: parseScopes(result.scopes) };
+  });
 }
 
 /**
@@ -224,25 +335,99 @@ async function errorBody(res: Response): Promise<{ text: string; innerCode?: str
   }
 }
 
+/** One fetch, bounded by `timeoutMs`; a timeout or a network failure is the transient error. */
+async function timedFetch(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+  try {
+    return await fetch(url, { ...init, signal });
+  } catch (cause) {
+    throw new GraphError('unavailable', isAbortError(cause) ? TIMEOUT_MESSAGE : UNAVAILABLE_MESSAGE, {
+      cause,
+    });
+  }
+}
+
+/**
+ * The same mapping for a body that stalls or is cut off after the headers came
+ * back — the request's timeout keeps running while it is read.
+ */
+export function asTransient(err: unknown): unknown {
+  if (err instanceof GraphError) return err;
+  if (isAbortError(err)) return new GraphError('unavailable', TIMEOUT_MESSAGE, { cause: err });
+  // undici reports a connection dropped mid-body as TypeError('terminated').
+  if (err instanceof TypeError) return new GraphError('unavailable', UNAVAILABLE_MESSAGE, { cause: err });
+  return err;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Read the failed response's body no further: it is being replaced by a retry. */
+async function discard(res: Response): Promise<void> {
+  await res.body?.cancel().catch(() => {});
+}
+
 /**
  * One Graph call. Returns the raw Response on 2xx so callers can stream a
- * recording body straight to disk; every non-2xx becomes a typed GraphError.
+ * recording body straight to disk (and on a 3xx when the caller follows
+ * redirects itself); every other status becomes a typed GraphError.
+ *
+ * Three things are repeated here so no caller has to: a 401 once with a forced
+ * token refresh, a 429/503 that says how long to wait (see the constants), and
+ * nothing else — every other failure is the caller's to classify.
  */
 export async function graphFetch(
   userId: string,
   path: string,
   init: RequestInit = {},
+  options: { timeoutMs?: number } = {},
 ): Promise<Response> {
   const { url, isGraph } = resolveUrl(path);
-  const headers = new Headers(init.headers);
-  if (isGraph) {
-    const token = await getGraphAccessToken(userId);
-    headers.set('Authorization', `Bearer ${token}`);
+  const timeoutMs = options.timeoutMs ?? GRAPH_TIMEOUT_MS;
+  let token = isGraph ? await getGraphAccessToken(userId) : null;
+  let refreshed = false;
+  let retries = 0;
+  let waitedMs = 0;
+
+  for (;;) {
+    const headers = new Headers(init.headers);
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+
+    const res = await timedFetch(url, { ...init, headers }, timeoutMs);
+    if (res.ok) return res;
+    if (init.redirect === 'manual' && res.status >= 300 && res.status < 400) return res;
+
+    if (res.status === 401 && token && !refreshed) {
+      refreshed = true;
+      await discard(res);
+      // Someone else may have refreshed since this call took its token; only
+      // force one when better-auth still hands back the token that was refused.
+      const current = await getGraphAccessToken(userId);
+      token = current !== token ? current : await forceRefreshToken(userId);
+      continue;
+    }
+
+    const retryAfterMs = parseRetryAfter(res.headers.get('retry-after'));
+    if (
+      (res.status === 429 || res.status === 503) &&
+      retryAfterMs !== null &&
+      retries < RETRY_AFTER_MAX_RETRIES &&
+      waitedMs + retryAfterMs <= RETRY_AFTER_BUDGET_MS
+    ) {
+      await discard(res);
+      await sleep(retryAfterMs);
+      retries += 1;
+      waitedMs += retryAfterMs;
+      continue;
+    }
+
+    return raise(res, retryAfterMs);
   }
+}
 
-  const res = await fetch(url, { ...init, headers });
-  if (res.ok) return res;
-
+async function raise(res: Response, retryAfterMs: number | null): Promise<never> {
   const { text, innerCode } = await errorBody(res);
   const detail = text ? ` — ${text}` : '';
 
@@ -266,10 +451,11 @@ export async function graphFetch(
   if (res.status === 404) {
     throw new GraphError('not_found', `Ressourcen findes ikke${detail}`, { status: 404 });
   }
-  throw new GraphError('http', `Microsoft Graph svarede ${res.status}${detail}`, {
-    status: res.status,
-    retryAfterMs: parseRetryAfter(res.headers.get('retry-after')),
-  });
+  throw new GraphError(
+    isRetryableStatus(res.status) ? 'unavailable' : 'http',
+    `Microsoft Graph svarede ${res.status}${detail}`,
+    { status: res.status, retryAfterMs },
+  );
 }
 
 /** graphFetch + JSON. Paging (`@odata.nextLink`) is the caller's business. */
@@ -279,5 +465,9 @@ export async function graphJson<T>(
   init: RequestInit = {},
 ): Promise<T> {
   const res = await graphFetch(userId, path, init);
-  return (await res.json()) as T;
+  try {
+    return (await res.json()) as T;
+  } catch (err) {
+    throw asTransient(err);
+  }
 }

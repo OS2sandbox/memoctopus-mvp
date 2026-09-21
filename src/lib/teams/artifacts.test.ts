@@ -6,7 +6,6 @@ import { Readable } from 'stream';
 
 const mockGraphJson = vi.hoisted(() => vi.fn());
 const mockGraphFetch = vi.hoisted(() => vi.fn());
-const mockGetToken = vi.hoisted(() => vi.fn(async () => 'tok-123'));
 
 vi.mock('./graph-client', async () => {
   const actual = await vi.importActual<typeof import('./graph-client')>('./graph-client');
@@ -15,11 +14,12 @@ vi.mock('./graph-client', async () => {
     graphOrigin: () => 'https://graph.microsoft.com/v1.0',
     graphJson: mockGraphJson,
     graphFetch: mockGraphFetch,
-    getGraphAccessToken: mockGetToken,
+    asTransient: actual.asTransient,
+    GRAPH_DOWNLOAD_TIMEOUT_MS: actual.GRAPH_DOWNLOAD_TIMEOUT_MS,
   };
 });
 
-import { GraphError } from './graph-client';
+import { GRAPH_DOWNLOAD_TIMEOUT_MS, GraphError } from './graph-client';
 import { listArtifacts, pickArtifact, downloadTranscriptVtt, downloadRecording } from './artifacts';
 
 const MEETING = 'MSpiZGE=';
@@ -27,7 +27,6 @@ const MEETING = 'MSpiZGE=';
 beforeEach(() => {
   mockGraphJson.mockReset();
   mockGraphFetch.mockReset();
-  mockGetToken.mockReset().mockResolvedValue('tok-123');
 });
 
 describe('listArtifacts', () => {
@@ -134,17 +133,30 @@ describe('downloadTranscriptVtt', () => {
     expect(path).toContain('/transcripts/t1/content');
     expect(path).toContain('$format=text/vtt');
   });
+
+  it('gives the download the long timeout', async () => {
+    mockGraphFetch.mockResolvedValue(new Response('WEBVTT\n\n'));
+    await downloadTranscriptVtt('u1', MEETING, 't1');
+    expect(mockGraphFetch.mock.calls[0][3]).toEqual({ timeoutMs: GRAPH_DOWNLOAD_TIMEOUT_MS });
+  });
+
+  it('reports a body that stalls after the headers as the transient error', async () => {
+    const stalled = { text: async () => { throw new DOMException('timed out', 'TimeoutError'); } };
+    mockGraphFetch.mockResolvedValue(stalled);
+    await expect(downloadTranscriptVtt('u1', MEETING, 't1')).rejects.toMatchObject({
+      code: 'unavailable',
+      retryable: true,
+    });
+  });
 });
 
 describe('downloadRecording', () => {
   let dir: string;
-  const realFetch = globalThis.fetch;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'artifacts-test-'));
   });
   afterEach(async () => {
-    globalThis.fetch = realFetch;
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -153,59 +165,76 @@ describe('downloadRecording', () => {
     return new Response(stream, { status: 200 });
   }
 
+  // Token handling, the bearer rule for off-Graph hosts, the 401 retry and the
+  // Retry-After wait all live in graphFetch (graph-client.test.ts); here it is a
+  // stand-in that answers each hop in turn.
   it('streams the body to disk and reports the byte count', async () => {
-    const fetchMock = vi.fn(async () => bodyResponse('mp4-bytes'));
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    mockGraphFetch.mockResolvedValueOnce(bodyResponse('mp4-bytes'));
 
     const dest = join(dir, 'rec.mp4');
     const { bytes } = await downloadRecording('u1', MEETING, 'r1', dest);
 
     expect(bytes).toBe(9);
     expect(await readFile(dest, 'utf8')).toBe('mp4-bytes');
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const [userId, url, init, options] = mockGraphFetch.mock.calls[0];
+    expect(userId).toBe('u1');
     expect(url).toContain('/recordings/r1/content');
-    expect(init.redirect).toBe('manual');
-    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tok-123');
+    expect(init).toEqual({ redirect: 'manual' });
+    expect(options).toEqual({ timeoutMs: GRAPH_DOWNLOAD_TIMEOUT_MS });
   });
 
-  it('follows the 302 to storage without leaking the bearer token', async () => {
-    const fetchMock = vi.fn()
+  it('follows the 302 to storage, again through graphFetch and with the long timeout', async () => {
+    mockGraphFetch
       .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: 'https://contoso.sharepoint.com/signed' } }))
       .mockResolvedValueOnce(bodyResponse('abc'));
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     await downloadRecording('u1', MEETING, 'r1', join(dir, 'rec.mp4'));
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [url, init] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(mockGraphFetch).toHaveBeenCalledTimes(2);
+    const [, url, init, options] = mockGraphFetch.mock.calls[1];
     expect(url).toBe('https://contoso.sharepoint.com/signed');
-    expect(init.headers).toEqual({});
+    expect(init).toEqual({ redirect: 'manual' });
+    expect(options).toEqual({ timeoutMs: GRAPH_DOWNLOAD_TIMEOUT_MS });
   });
 
-  it('keeps the bearer on a redirect that stays on the Graph origin', async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: 'https://graph.microsoft.com/v1.0/other' } }))
+  it('resolves a relative redirect against the URL it came from', async () => {
+    mockGraphFetch
+      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: '/v1.0/other' } }))
       .mockResolvedValueOnce(bodyResponse('abc'));
-    globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     await downloadRecording('u1', MEETING, 'r1', join(dir, 'rec.mp4'));
-    const [, init] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
-    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tok-123');
+    expect(mockGraphFetch.mock.calls[1][1]).toBe('https://graph.microsoft.com/v1.0/other');
   });
 
-  it('maps a non-2xx download onto a typed GraphError', async () => {
-    globalThis.fetch = vi.fn(async () => new Response('no', { status: 404 })) as unknown as typeof fetch;
+  it('propagates the typed error graphFetch raises', async () => {
+    mockGraphFetch.mockRejectedValueOnce(new GraphError('not_found', 'nope', { status: 404 }));
     await expect(downloadRecording('u1', MEETING, 'r1', join(dir, 'rec.mp4')))
       .rejects.toMatchObject({ name: 'GraphError', code: 'not_found' });
-
-    globalThis.fetch = vi.fn(async () => new Response('no', { status: 401 })) as unknown as typeof fetch;
-    await expect(downloadRecording('u1', MEETING, 'r1', join(dir, 'rec.mp4')))
-      .rejects.toMatchObject({ code: 'reauth_required' });
   });
 
   it('fails when a redirect has no location header', async () => {
-    globalThis.fetch = vi.fn(async () => new Response(null, { status: 302 })) as unknown as typeof fetch;
+    mockGraphFetch.mockResolvedValueOnce(new Response(null, { status: 302 }));
     await expect(downloadRecording('u1', MEETING, 'r1', join(dir, 'rec.mp4')))
       .rejects.toMatchObject({ name: 'GraphError' });
+  });
+
+  it('gives up on a redirect chain that does not end', async () => {
+    mockGraphFetch.mockImplementation(async () =>
+      new Response(null, { status: 302, headers: { location: 'https://contoso.sharepoint.com/again' } }));
+    await expect(downloadRecording('u1', MEETING, 'r1', join(dir, 'rec.mp4')))
+      .rejects.toMatchObject({ name: 'GraphError', code: 'http', status: 302 });
+  });
+
+  it('reports a download that stalls part-way as the transient error', async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('partial'));
+        controller.error(new DOMException('The operation timed out.', 'TimeoutError'));
+      },
+    });
+    mockGraphFetch.mockResolvedValueOnce(new Response(stream, { status: 200 }));
+
+    await expect(downloadRecording('u1', MEETING, 'r1', join(dir, 'rec.mp4')))
+      .rejects.toMatchObject({ code: 'unavailable', retryable: true });
   });
 });

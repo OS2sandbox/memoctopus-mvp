@@ -1,7 +1,14 @@
 import { createWriteStream } from 'fs';
 import { Readable } from 'stream';
 import { pipeline as streamPipeline } from 'stream/promises';
-import { GraphError, graphFetch, graphJson, getGraphAccessToken, graphOrigin } from './graph-client';
+import {
+  GRAPH_DOWNLOAD_TIMEOUT_MS,
+  GraphError,
+  asTransient,
+  graphFetch,
+  graphJson,
+  graphOrigin,
+} from './graph-client';
 
 // Reading a meeting's artifacts out of Microsoft Graph: the Teams transcript (VTT,
 // with `<v Display Name>` cues) and the recording (mp4). Both live under the
@@ -104,29 +111,23 @@ export async function downloadTranscriptVtt(
   const res = await graphFetch(
     userId,
     `/me/onlineMeetings/${encodeId(graphMeetingId)}/transcripts/${encodeId(transcriptId)}/content?$format=text/vtt`,
+    {},
+    { timeoutMs: GRAPH_DOWNLOAD_TIMEOUT_MS },
   );
-  return await res.text();
-}
-
-/** Map a failed recording-download response onto the same typed errors graphFetch uses. */
-function downloadError(status: number): GraphError {
-  if (status === 401) {
-    return new GraphError('reauth_required', 'Microsoft afviste tokenet under hentning af optagelsen', { status });
+  try {
+    return await res.text();
+  } catch (err) {
+    throw asTransient(err);
   }
-  if (status === 403) {
-    return new GraphError('forbidden', 'Ingen adgang til optagelsen', { status });
-  }
-  if (status === 404) {
-    return new GraphError('not_found', 'Optagelsen findes ikke', { status });
-  }
-  return new GraphError('http', `Microsoft Graph svarede ${status} på optagelsen`, { status });
 }
 
 /**
  * Stream a recording to disk. Recordings run to hundreds of MB, so the body is
  * never buffered in memory. Graph 302s recording content to a pre-signed
  * SharePoint/blob URL; redirects are followed by hand with `redirect: 'manual'`
- * so the bearer is dropped the moment we leave the Graph origin.
+ * so graphFetch can drop the bearer the moment we leave the Graph origin (it
+ * only ever sends one to that origin), and every hop is bounded by the download
+ * timeout, which keeps running while the body streams.
  */
 export async function downloadRecording(
   userId: string,
@@ -134,22 +135,19 @@ export async function downloadRecording(
   recordingId: string,
   destPath: string,
 ): Promise<{ bytes: number }> {
-  const origin = graphOrigin();
-  let url = `${origin}/me/onlineMeetings/${encodeId(graphMeetingId)}/recordings/${encodeId(recordingId)}/content`;
-  let headers: Record<string, string> = { Authorization: `Bearer ${await getGraphAccessToken(userId)}` };
+  let url = `${graphOrigin()}/me/onlineMeetings/${encodeId(graphMeetingId)}/recordings/${encodeId(recordingId)}/content`;
+  const hop = (target: string) =>
+    graphFetch(userId, target, { redirect: 'manual' }, { timeoutMs: GRAPH_DOWNLOAD_TIMEOUT_MS });
 
-  let res = await fetch(url, { redirect: 'manual', headers });
-  for (let hop = 0; res.status >= 300 && res.status < 400 && hop < 5; hop++) {
+  let res = await hop(url);
+  for (let n = 0; res.status >= 300 && res.status < 400 && n < 5; n++) {
     const location = res.headers.get('location');
-    if (!location) throw downloadError(res.status);
+    if (!location) throw redirectError(res.status);
     url = new URL(location, url).href;
-    // Off-Graph storage hosts carry their own signature in the URL; sending our
-    // token there would leak it.
-    if (!sameOrigin(url, origin)) headers = {};
-    res = await fetch(url, { redirect: 'manual', headers });
+    res = await hop(url);
   }
 
-  if (!res.ok) throw downloadError(res.status);
+  if (res.status >= 300) throw redirectError(res.status);
   if (!res.body) throw new GraphError('http', 'Optagelsen fra Microsoft Teams var tom', { status: res.status });
 
   let bytes = 0;
@@ -157,14 +155,15 @@ export async function downloadRecording(
   source.on('data', (chunk: Buffer | string) => {
     bytes += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length;
   });
-  await streamPipeline(source, createWriteStream(destPath));
+  try {
+    await streamPipeline(source, createWriteStream(destPath));
+  } catch (err) {
+    throw asTransient(err);
+  }
   return { bytes };
 }
 
-function sameOrigin(url: string, base: string): boolean {
-  try {
-    return new URL(url).origin === new URL(base).origin;
-  } catch {
-    return false;
-  }
+/** A redirect that names no place to go, or that never ends. */
+function redirectError(status: number): GraphError {
+  return new GraphError('http', `Microsoft Graph svarede ${status} på optagelsen`, { status });
 }
