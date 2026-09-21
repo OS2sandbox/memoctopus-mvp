@@ -88,10 +88,12 @@ Pure functions, no I/O:
 - `mergeSpeakerTurns(segments)`: collapses consecutive segments with the same `speaker` into
   one turn `{ speaker, start, text }` (texts joined with a space, `start` from the first).
 - `renderTurns(turns)`: `[Taler N] (m:ss): text`, one line per turn.
-- `splitTurns(turns, budgetChars)`: packs consecutive turns into parts, each rendering to at
-  most `budgetChars`, splitting at turn boundaries. A single turn longer than the budget is
-  split at the last whitespace before the limit (hard split if none). Every input character
-  appears in exactly one part, in order.
+- `splitTurns(turns, budgetChars)`: packs consecutive turns into parts `{ text, start }`
+  (`start` = the first turn's start in seconds), each `text` at most `budgetChars`,
+  splitting at turn boundaries. A single turn longer than the budget is split at the last
+  whitespace before the limit (hard split if none). Every input character appears in exactly
+  one part, in order (only the whitespace at a split point is dropped).
+- `formatTime(seconds)`: `m:ss`, moved here from `minutes.ts`.
 
 ### 3. Generation flow (`src/lib/ai/minutes.ts`)
 
@@ -102,8 +104,8 @@ Pure functions, no I/O:
    - With `chapters` (more than one): each chapter's turns are a unit. Otherwise the whole
      transcript is one unit.
    - A unit over the budget is split with `splitTurns`. Each part is summarised (max 8
-     points, 1,024 output tokens). A chapter's part summaries are joined under its heading;
-     a chapter-less transcript's under time-range headings.
+     points, 1,024 output tokens) and gets its own heading: the unit's title, plus
+     `(del i/n, fra m:ss)` when the unit was split into several parts.
    - Summary calls run at most **3 at a time** (a small `mapWithLimit` helper, no new
      dependency). The vLLM compose file uses `--max-num-seqs 4`.
    - If the joined summaries still exceed the budget, summarise them again. At most 3
@@ -118,8 +120,9 @@ summary units). It is currently unreachable from the UI.
 
 ### 4. Errors and user experience
 
-`MinutesConfigError`, `MinutesTruncatedError` and `MinutesTooLongError` are exported from
-`minutes.ts`. `src/app/api/minutes/route.ts` maps them to a JSON error with a Danish message
+`MinutesConfigError`, `MinutesTruncatedError` and `MinutesTooLongError` live in
+`src/lib/ai/minutes-errors.ts`, a separate module because the route tests replace
+`@/lib/ai/minutes` with a mock, which would break `instanceof` checks. `src/app/api/minutes/route.ts` maps them to a JSON error with a Danish message
 the UI already displays (`data.error`), e.g. *"Mødet er for langt til at blive opsummeret med
 den nuværende AI-model. Kontakt administratoren."*, and logs the details. Other errors keep
 going through `withHandler`.
