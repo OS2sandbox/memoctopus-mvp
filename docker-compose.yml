@@ -62,6 +62,9 @@ services:
       # not here on purpose — it is runtime-only, see `environment` below.
       args:
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:8080}
+        # Browser-side diarization timeout. Build-time only: set it → rebuild.
+        # Keep it equal to DIARIZATION_TIMEOUT_MS below.
+        NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS: ${NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS:-300000}
     ports:
       - "${APP_PORT:-8080}:3000"
     # Lets the container reach services on the Docker host (e.g. an SSH tunnel to a
@@ -90,6 +93,9 @@ services:
       - ASR_LANGUAGE=${ASR_LANGUAGE:-da}
       - DIARIZATION_URL=${DIARIZATION_URL}
       - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
+      # Server-side diarization timeout (app → diarization service). Runtime: change
+      # it and `up -d app` is enough. Pair with NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS.
+      - DIARIZATION_TIMEOUT_MS=${DIARIZATION_TIMEOUT_MS:-300000}
       - AUDIO_STORAGE_PATH=/audio-storage
       - BOT_SERVICE_URL=http://bot-service:3001
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
