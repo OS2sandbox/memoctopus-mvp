@@ -11,11 +11,15 @@ vi.mock('next/link', () => ({
   ),
 }));
 
-// Mock @/lib/storage so tests never touch IndexedDB
+// The row deletes through the shared helper (which also unregisters a Teams
+// meeting server-side); mocking it keeps the tests off IndexedDB and the network.
+// @/lib/storage is deliberately not mocked with a deleteMeeting: a row that
+// called it directly would fail here.
 const mockDeleteMeeting = vi.fn();
-vi.mock('@/lib/storage', () => ({
-  deleteMeeting: (...args: unknown[]) => mockDeleteMeeting(...args),
+vi.mock('@/lib/teams/client-delete', () => ({
+  deleteMeetingAndUnregister: (...args: unknown[]) => mockDeleteMeeting(...args),
 }));
+vi.mock('@/lib/storage', () => ({}));
 
 // ---------------------------------------------------------------------------
 // Factories / helpers

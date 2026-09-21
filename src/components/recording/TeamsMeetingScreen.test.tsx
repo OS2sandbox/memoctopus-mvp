@@ -18,13 +18,17 @@ vi.mock('@/lib/auth-client', () => ({
 vi.mock('@/lib/storage', () => ({
   saveAudio: vi.fn().mockResolvedValue(undefined),
   updateMeeting: vi.fn().mockResolvedValue(undefined),
-  deleteMeeting: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { saveAudio, updateMeeting, deleteMeeting } from '@/lib/storage';
+vi.mock('@/lib/teams/client-delete', () => ({
+  deleteMeetingAndUnregister: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { saveAudio, updateMeeting } from '@/lib/storage';
+import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
 const mockSaveAudio = vi.mocked(saveAudio);
 const mockUpdateMeeting = vi.mocked(updateMeeting);
-const mockDeleteMeeting = vi.mocked(deleteMeeting);
+const mockDeleteMeeting = vi.mocked(deleteMeetingAndUnregister);
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -341,15 +345,26 @@ describe('TeamsMeetingScreen — manual check and disarm', () => {
     });
   });
 
-  it('"Slå Memoctopus fra" deletes server-side and locally, then returns to the dashboard', async () => {
+  it('"Slå Memoctopus fra" deletes through the shared helper, then returns to the dashboard', async () => {
     renderScreen();
     const btn = await screen.findByText('Slå Memoctopus fra');
     await act(async () => { fireEvent.click(btn); });
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith(`/api/teams/meetings/${MEETING_ID}`, { method: 'DELETE' });
       expect(mockDeleteMeeting).toHaveBeenCalledWith(MEETING_ID);
       expect(mockPush).toHaveBeenCalledWith('/dashboard');
     });
+  });
+
+  it('stays on the screen with an error when the meeting could not be unregistered', async () => {
+    mockDeleteMeeting.mockRejectedValueOnce(new Error('offline'));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderScreen();
+    const btn = await screen.findByText('Slå Memoctopus fra');
+    await act(async () => { fireEvent.click(btn); });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Kunne ikke slå Memoctopus fra');
+    expect(mockPush).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });
 

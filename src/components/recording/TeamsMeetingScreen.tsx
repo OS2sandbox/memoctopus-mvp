@@ -3,7 +3,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { signIn } from '@/lib/auth-client';
-import { updateMeeting, deleteMeeting } from '@/lib/storage';
+import { updateMeeting } from '@/lib/storage';
+import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
 
 export interface TeamsMeetingScreenProps {
   meetingId: string;
@@ -195,16 +196,15 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
     return () => clearInterval(id);
   }, [poll, intervalMs, stopped]);
 
+  // Stay on the screen when the server could not be told: leaving would strand a
+  // meeting that keeps being collected, with nothing left to press.
   const disarm = useCallback(async () => {
     try {
-      await fetch(`/api/teams/meetings/${meetingId}`, { method: 'DELETE' });
+      await deleteMeetingAndUnregister(meetingId);
     } catch (err) {
-      console.warn('[TeamsMeetingScreen] disarm fejlede:', err);
-    }
-    try {
-      await deleteMeeting(meetingId);
-    } catch (err) {
-      console.error('[TeamsMeetingScreen] deleteMeeting fejlede:', err);
+      console.error('[TeamsMeetingScreen] kunne ikke slå Memoctopus fra:', err);
+      setError('Kunne ikke slå Memoctopus fra. Prøv igen.');
+      return;
     }
     routerRef.current.push('/dashboard');
   }, [meetingId]);
