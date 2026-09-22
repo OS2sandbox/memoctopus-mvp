@@ -25,6 +25,12 @@ function usingHostedApi(): boolean {
   return !!process.env.LLM_BASE_URL?.trim() || hasOpenAIKey();
 }
 
+// True only for the real OpenAI API: a key is set and no custom base URL redirects it.
+// Distinct from usingHostedApi(), which is also true for any custom LLM_BASE_URL.
+export function usingHostedOpenAI(): boolean {
+  return hasOpenAIKey() && !process.env.LLM_BASE_URL?.trim();
+}
+
 function llmBaseURL(): string {
   const explicit = process.env.LLM_BASE_URL?.trim();
   if (explicit) return explicit.replace(/\/+$/, '');

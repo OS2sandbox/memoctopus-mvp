@@ -83,6 +83,11 @@ services:
       # (vllm-chat). LLM_BASE_URL / LLM_MODEL override the endpoint + model explicitly.
       - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_MODEL=${LLM_MODEL:-}
+      # Context window and output cap of the chat model; minutes generation sizes its
+      # prompt from them. LLM_CONTEXT_TOKENS falls back to VLLM_CHAT_MAX_MODEL_LEN so one
+      # number configures both vLLM and the app; empty → the app's own default.
+      - LLM_CONTEXT_TOKENS=${LLM_CONTEXT_TOKENS:-${VLLM_CHAT_MAX_MODEL_LEN:-}}
+      - LLM_MAX_OUTPUT_TOKENS=${LLM_MAX_OUTPUT_TOKENS:-}
       # AI service endpoints. In the base ("small") stack these point at a
       # remote host (set in .env). The AI overlay overrides them to the in-compose
       # service names (http://hviske:8000/v1, http://diarization-service:5000).

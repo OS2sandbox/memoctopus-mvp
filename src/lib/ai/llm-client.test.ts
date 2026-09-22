@@ -11,7 +11,7 @@ vi.mock('openai', () => ({
   },
 }));
 
-import { llmModel, getLlmClient, resetLlmClient } from './llm-client';
+import { llmModel, getLlmClient, resetLlmClient, usingHostedOpenAI } from './llm-client';
 
 const ENV = process.env;
 
@@ -81,5 +81,27 @@ describe('getLlmClient (base URL)', () => {
       'http://vllm-chat:8000/v1',
       'https://api.openai.com/v1',
     ]);
+  });
+});
+
+describe('usingHostedOpenAI', () => {
+  it('is false with no key and no base URL', () => {
+    expect(usingHostedOpenAI()).toBe(false);
+  });
+
+  it('is true when only an API key is set', () => {
+    process.env.OPENAI_API_KEY = 'sk-x';
+    expect(usingHostedOpenAI()).toBe(true);
+  });
+
+  it('is false when LLM_BASE_URL points elsewhere, even with a key', () => {
+    process.env.OPENAI_API_KEY = 'sk-x';
+    process.env.LLM_BASE_URL = 'http://my-llm:8000/v1';
+    expect(usingHostedOpenAI()).toBe(false);
+  });
+
+  it('treats a blank key as no key', () => {
+    process.env.OPENAI_API_KEY = '   ';
+    expect(usingHostedOpenAI()).toBe(false);
   });
 });
