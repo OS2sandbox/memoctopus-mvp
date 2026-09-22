@@ -248,6 +248,29 @@ describe('generateReferatBody — context budget', () => {
     for (const c of summaryCalls) expect(c.max_tokens).toBe(1024);
   });
 
+  it('sizes summary-call prompts against SUMMARY_MAX_OUTPUT_TOKENS, not the final referat cap', async () => {
+    // A small LLM_MAX_OUTPUT_TOKENS (DEPLOY.md's own advice for a small context window)
+    // must not make the transcript-splitting budget for summary calls bigger than it
+    // should be: those calls always request 1024 output tokens regardless of this
+    // setting, so packing their input against a 300-token reservation instead of 1024's
+    // would leave too little real headroom.
+    process.env.LLM_MAX_OUTPUT_TOKENS = '300';
+    answerSummariesAndReferat();
+
+    await generateReferatBody(longTranscript(40, 1000), baseSpec);
+
+    const summaryCalls = mockComplete.mock.calls.map((c) => c[0]).filter(isSummaryCall);
+    expect(summaryCalls.length).toBeGreaterThan(0);
+    for (const c of summaryCalls) {
+      expect(c.max_tokens).toBe(1024);
+      const promptChars = c.messages.reduce(
+        (n: number, m: { content: string }) => n + m.content.length,
+        0,
+      );
+      expect(promptChars).toBeLessThanOrEqual((8000 - 1024) * 2.5);
+    }
+  });
+
   it('tolerates a summary cut off at its output cap instead of failing the referat', async () => {
     mockComplete.mockImplementation(async (req: { messages: { content: string }[] }) =>
       isSummaryCall(req)
@@ -298,6 +321,14 @@ describe('generateReferatBody — context budget', () => {
     const summaryCalls = mockComplete.mock.calls.map((c) => c[0]).filter(isSummaryCall);
     expect(summaryCalls.length).toBeGreaterThanOrEqual(3);
     expect(lastContent(summaryCalls[0])).toMatch(/"Stort kapitel \(del 1\/\d+\)"/);
+
+    // "Andet" has segmentIndices: [] — an agenda topic nothing was assigned to. It must
+    // still reach the model as a heading, not vanish from the condensed input entirely.
+    const calls = mockComplete.mock.calls.map((c) => c[0]);
+    const referatCall = calls[calls.length - 1];
+    expect(lastContent(referatCall)).toContain('## Andet');
+    // And no wasted LLM call summarising an empty section.
+    expect(summaryCalls.some((c) => lastContent(c).includes('"Andet"'))).toBe(false);
   });
 
   it('keeps the per-chapter path for chaptered transcripts over the 20k-character threshold', async () => {

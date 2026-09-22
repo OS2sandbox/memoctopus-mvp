@@ -265,6 +265,14 @@ async def diarize(
             inference_started = time.monotonic()
             output = await asyncio.to_thread(get_pipeline(), {"waveform": waveform, "sample_rate": sample_rate})
             inference_ended = time.monotonic()
+        # Logged here, before the two steps below that can raise, so a failure there
+        # still leaves byte count / audio duration / elapsed time in the logs — the
+        # decode+inference work (the expensive part) is done either way by this point.
+        print(
+            f"[diarization] {len(data)} bytes ({waveform.shape[1] / sample_rate:.0f} s audio) "
+            f"on {DEVICE} in {time.monotonic() - t0:.1f} s",
+            flush=True,
+        )
         annotation = _annotation_from(output)
         # Inside the try: _annotation_from raises when pyannote's output shape drifts,
         # and itertracks can raise for the same reason. Counting those as failures is
@@ -286,11 +294,6 @@ async def diarize(
     diarization_queue_wait_seconds.observe(inference_started - decoded_at)
     diarization_duration_seconds.observe(
         (decoded_at - t0) + (inference_ended - inference_started)
-    )
-    print(
-        f"[diarization] {len(data)} bytes ({waveform.shape[1] / sample_rate:.0f} s audio) "
-        f"on {DEVICE} in {time.monotonic() - t0:.1f} s",
-        flush=True,
     )
 
     turns.sort(key=lambda t: t["start"])

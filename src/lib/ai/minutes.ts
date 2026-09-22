@@ -121,20 +121,20 @@ async function _generateBody(
     .trim();
 }
 
+// Keep the text last: also called with '' to measure the fixed part of the prompt.
+function buildSummaryPrompt(text: string, title: string): string {
+  return `Opsummer mødeafsnittet "${title}" i korte punkter på dansk (max 8 punkter). Fokus på beslutninger, aftaler og vigtige diskussionspunkter.
+
+${text}
+
+Returner kun en punktliste.`;
+}
+
 async function _summarizePart(text: string, title: string): Promise<string> {
   const response = await getLlmClient().chat.completions.create({
     model: llmModel('gpt-4o'),
     max_tokens: SUMMARY_MAX_OUTPUT_TOKENS,
-    messages: [
-      {
-        role: 'user',
-        content: `Opsummer mødeafsnittet "${title}" i korte punkter på dansk (max 8 punkter). Fokus på beslutninger, aftaler og vigtige diskussionspunkter.
-
-${text}
-
-Returner kun en punktliste.`,
-      },
-    ],
+    messages: [{ role: 'user', content: buildSummaryPrompt(text, title) }],
   });
 
   // A summary cut off at its cap is still a usable (slightly shorter) bullet list, and it
@@ -152,10 +152,13 @@ interface Unit {
 }
 
 // Summarise every unit, splitting any unit larger than `budget` into parts. Returns one
-// markdown section per part, in meeting order.
+// markdown section per part, in meeting order. A unit with no turns (an agenda topic
+// nothing was assigned to) still gets its heading, with an empty body — every chapter
+// appears in the condensed text, even one nothing was said under.
 async function _summarizeUnits(units: Unit[], budget: number): Promise<string> {
   const jobs = units.flatMap((unit) => {
     const parts = splitTurns(unit.turns, budget);
+    if (parts.length === 0) return [{ heading: unit.title, text: '' }];
     return parts.map((text, i) => ({
       heading: parts.length > 1 ? `${unit.title} (del ${i + 1}/${parts.length})` : unit.title,
       text,
@@ -163,7 +166,7 @@ async function _summarizeUnits(units: Unit[], budget: number): Promise<string> {
   });
 
   const summaries = await mapWithLimit(jobs, SUMMARY_CONCURRENCY, (job) =>
-    _summarizePart(job.text, job.heading),
+    job.text ? _summarizePart(job.text, job.heading) : Promise.resolve(''),
   );
   return jobs.map((job, i) => `## ${job.heading}\n${summaries[i]}`).join('\n\n');
 }
@@ -198,6 +201,22 @@ export async function generateReferatBody(
     );
   }
 
+  // _summarizePart always requests SUMMARY_MAX_OUTPUT_TOKENS, not limits.maxOutputTokens
+  // (a summary needs far less room than the final referat) — so the parts it is fed have
+  // to be sized against that smaller reservation, not `budget`, or the prompt plus the
+  // summary's own output can together exceed the real context window.
+  const summaryFixedChars = buildSummaryPrompt('', '').length;
+  const summaryBudget = transcriptBudgetChars(summaryFixedChars, {
+    contextTokens: limits.contextTokens,
+    maxOutputTokens: SUMMARY_MAX_OUTPUT_TOKENS,
+  });
+  if (summaryBudget < MIN_TRANSCRIPT_BUDGET_CHARS) {
+    throw new MinutesConfigError(
+      `LLM_CONTEXT_TOKENS=${limits.contextTokens} leaves too little room for even a part-summary ` +
+        `call (reserving ${SUMMARY_MAX_OUTPUT_TOKENS} output tokens). Raise LLM_CONTEXT_TOKENS.`,
+    );
+  }
+
   const turns = mergeSpeakerTurns(transcript);
   const transcriptText = renderTurns(turns);
   const chapterList = chapters && chapters.length > 1 ? chapters : null;
@@ -223,7 +242,7 @@ export async function generateReferatBody(
     : [{ title: 'Mødet', turns }];
 
   let rounds = 1;
-  let condensed = await _summarizeUnits(units, budget);
+  let condensed = await _summarizeUnits(units, summaryBudget);
   while (condensed.length > budget) {
     if (rounds >= MAX_SUMMARY_ROUNDS) {
       throw new MinutesTooLongError(
@@ -233,7 +252,7 @@ export async function generateReferatBody(
     rounds++;
     condensed = await _summarizeUnits(
       [{ title: 'Opsummering', turns: [{ speaker: 'Resumé', start: 0, text: condensed }] }],
-      budget,
+      summaryBudget,
     );
   }
 

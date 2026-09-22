@@ -26,7 +26,14 @@ function positiveInt(raw: string | undefined): number | null {
 export function getLlmLimits(): LlmLimits {
   const hosted = usingHostedOpenAI();
   return {
-    contextTokens: positiveInt(process.env.LLM_CONTEXT_TOKENS) ?? (hosted ? 128_000 : 32_768),
+    // VLLM_CHAT_MAX_MODEL_LEN also sets the bundled vLLM's own --max-model-len (see
+    // docker-compose.ai.yml), so one number configures both it and this fallback — the
+    // app reads both env vars itself rather than relying on Compose to resolve a
+    // ${VAR:-${VAR2:-}} nested substitution, which not every Compose version does.
+    contextTokens:
+      positiveInt(process.env.LLM_CONTEXT_TOKENS) ??
+      positiveInt(process.env.VLLM_CHAT_MAX_MODEL_LEN) ??
+      (hosted ? 128_000 : 32_768),
     maxOutputTokens: positiveInt(process.env.LLM_MAX_OUTPUT_TOKENS) ?? (hosted ? 16_384 : 8_192),
   };
 }
