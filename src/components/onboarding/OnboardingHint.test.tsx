@@ -171,3 +171,22 @@ describe('OnboardingHint — repeated step', () => {
     expect(screen.getAllByText(getStep(D).copy)).toHaveLength(1);
   });
 });
+
+describe('OnboardingHint — unknown stepId', () => {
+  it('renders children plainly and never opens a hint, instead of crashing', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(
+      <Provider>
+        <OnboardingHint stepId="not.a.real.step">
+          <span>anchor content</span>
+        </OnboardingHint>
+      </Provider>,
+    );
+
+    expect(screen.getByText('anchor content')).toBeTruthy();
+    expect(screen.queryByText('forstået')).toBeNull();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('not.a.real.step'));
+    spy.mockRestore();
+  });
+});

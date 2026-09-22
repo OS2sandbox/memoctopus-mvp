@@ -315,12 +315,16 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       WHERE NOT EXISTS (SELECT 1 FROM "${schema}".skabeloner LIMIT 1)
     `);
 
-    // onboarding_progress — which onboarding hints this user has seen/dismissed
+    // onboarding_progress — which onboarding hints this user has seen/dismissed.
+    // meeting_id is NOT NULL with '' standing in for "global, not tied to a
+    // meeting" (store.ts converts null <-> '' at the boundary): Postgres treats
+    // every NULL as distinct under a UNIQUE constraint, which would otherwise
+    // need a second partial index just to dedupe the global steps.
     await client.query(`
       CREATE TABLE IF NOT EXISTS "${schema}".onboarding_progress (
         id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
         step_id     TEXT NOT NULL,
-        meeting_id  TEXT,
+        meeting_id  TEXT NOT NULL DEFAULT '',
         status      TEXT NOT NULL DEFAULT 'seen',
         seen_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
@@ -333,6 +337,17 @@ export async function ensureUserSchema(userId: string): Promise<void> {
     await client.query(`
       ALTER TABLE "${schema}".onboarding_progress
         DROP CONSTRAINT IF EXISTS onboarding_progress_meeting_id_fkey
+    `);
+
+    // A database created before meeting_id became NOT NULL still has real NULLs;
+    // fold them into the sentinel so the unique constraint below covers every row.
+    await client.query(`
+      UPDATE "${schema}".onboarding_progress SET meeting_id = '' WHERE meeting_id IS NULL
+    `);
+    await client.query(`
+      ALTER TABLE "${schema}".onboarding_progress
+        ALTER COLUMN meeting_id SET DEFAULT '',
+        ALTER COLUMN meeting_id SET NOT NULL
     `);
 
     await client.query(`
@@ -352,13 +367,10 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       $body$
     `);
 
-    // Postgres treats every NULL as distinct under a plain UNIQUE constraint, so
-    // the constraint above only dedupes per-meeting rows. Global steps (no
-    // meeting_id) need a separate partial index to stay idempotent on upsert.
+    // Databases from before the sentinel change may still carry the old partial
+    // index; it is redundant now that the constraint above covers every row.
     await client.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS onboarding_progress_global_step_unique
-        ON "${schema}".onboarding_progress (step_id)
-        WHERE meeting_id IS NULL
+      DROP INDEX IF EXISTS "${schema}".onboarding_progress_global_step_unique
     `);
 
     // onboarding_state — single-row per-user flags for the guided tour as a whole

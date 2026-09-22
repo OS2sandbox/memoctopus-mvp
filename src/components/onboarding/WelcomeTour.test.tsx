@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import { OnboardingProvider, useOnboarding } from '@/lib/onboarding/context';
+import { screen, fireEvent, cleanup } from '@testing-library/react';
+import { useOnboarding } from '@/lib/onboarding/context';
+import { renderWithOnboarding } from '@/test/onboarding';
 import { WelcomeTour } from './WelcomeTour';
 
 function Probe() {
@@ -16,13 +17,12 @@ function Probe() {
 }
 
 function setup() {
-  return render(
-    <OnboardingProvider
-      initial={{ tourSkipped: false, tourCompleted: true, seen: [{ stepId: 'topbar.arkiv-explainer', meetingId: null }] }}
-    >
+  return renderWithOnboarding(
+    <>
       <Probe />
       <WelcomeTour />
-    </OnboardingProvider>,
+    </>,
+    { tourSkipped: false, tourCompleted: true, seen: [{ stepId: 'topbar.arkiv-explainer', meetingId: null }] },
   );
 }
 

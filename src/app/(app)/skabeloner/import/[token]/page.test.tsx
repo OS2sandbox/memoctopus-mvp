@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ImportSkabelonPage from './page';
-import { OnboardingProvider } from '@/lib/onboarding/context';
 import { getStep } from '@/lib/onboarding/steps';
 import { tabTo } from '@/test/keyboard';
+import { renderWithOnboarding } from '@/test/onboarding';
 
 vi.mock('next/navigation', () => ({
   useParams: () => ({ token: 'tok-1' }),
@@ -15,17 +15,11 @@ vi.mock('next/navigation', () => ({
 
 // The explainer hint wraps the heading; mark it seen so only the tooltip is under test.
 function render(ui: React.ReactElement) {
-  return rtlRender(
-    <OnboardingProvider
-      initial={{
-        tourSkipped: true,
-        tourCompleted: true,
-        seen: [{ stepId: 'skabelon-import.explainer', meetingId: null }],
-      }}
-    >
-      {ui}
-    </OnboardingProvider>,
-  );
+  return renderWithOnboarding(ui, {
+    tourSkipped: true,
+    tourCompleted: true,
+    seen: [{ stepId: 'skabelon-import.explainer', meetingId: null }],
+  });
 }
 
 beforeEach(() => {

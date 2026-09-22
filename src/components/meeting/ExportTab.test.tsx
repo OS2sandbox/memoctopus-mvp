@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { ExportTab } from './ExportTab';
-import { OnboardingProvider } from '@/lib/onboarding/context';
+import { renderWithOnboarding } from '@/test/onboarding';
 
 // ─── Mock next/link (used for "tilbage til referat" and "nyt møde →") ──────────
 vi.mock('next/link', () => ({
@@ -34,20 +34,14 @@ const MEETING_ID = 'mtg-abc';
 // targeting the underlying text (mirrors the real app, which mounts
 // ExportTab under the app-level OnboardingProvider).
 function render(ui: React.ReactElement) {
-  return rtlRender(
-    <OnboardingProvider
-      initial={{
-        tourSkipped: true,
-        tourCompleted: true,
-        seen: [
-          { stepId: 'export.audio-deleted-timing', meetingId: MEETING_ID },
-          { stepId: 'share.terminology-bridge', meetingId: MEETING_ID },
-        ],
-      }}
-    >
-      {ui}
-    </OnboardingProvider>,
-  );
+  return renderWithOnboarding(ui, {
+    tourSkipped: true,
+    tourCompleted: true,
+    seen: [
+      { stepId: 'export.audio-deleted-timing', meetingId: MEETING_ID },
+      { stepId: 'share.terminology-bridge', meetingId: MEETING_ID },
+    ],
+  });
 }
 
 function renderTab() {

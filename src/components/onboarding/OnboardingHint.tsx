@@ -2,12 +2,8 @@
 
 import React, { useEffect, useId, useRef } from 'react';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
-import { useOnboarding } from '@/lib/onboarding/context';
-import { getStep } from '@/lib/onboarding/steps';
-
-function hintKey(stepId: string, meetingId: string | null): string {
-  return `${stepId}:${meetingId ?? ''}`;
-}
+import { seenKey, useOnboarding } from '@/lib/onboarding/context';
+import { findStep } from '@/lib/onboarding/steps';
 
 /**
  * Wraps a target element and, the first time this step hasn't been seen,
@@ -40,11 +36,13 @@ export function OnboardingHint({
   condition?: boolean;
   children: React.ReactNode;
 }) {
-  const step = getStep(stepId);
+  const step = findStep(stepId);
   const { isStepSeen, markSeen, showWelcome, claim, release, isActive } = useOnboarding();
   const instanceId = useId();
-  const key = hintKey(stepId, meetingId);
-  const pending = condition && !isStepSeen(stepId, meetingId);
+  const key = seenKey(stepId, meetingId);
+  // An unknown stepId must never show a hint — the wrapped real content below still
+  // renders regardless, findStep already logged the mistake.
+  const pending = !!step && condition && !isStepSeen(stepId, meetingId);
 
   // Never overlap the welcome dialog — it should be the only thing on screen
   // until the user closes/skips it, after which the hint queue can take over.
@@ -83,7 +81,7 @@ export function OnboardingHint({
   return (
     <PopoverPrimitive.Root open={open}>
       <PopoverPrimitive.Anchor asChild>{children}</PopoverPrimitive.Anchor>
-      {open && (
+      {open && step && (
         <PopoverPrimitive.Portal>
           <PopoverPrimitive.Content
             side={step.placement}

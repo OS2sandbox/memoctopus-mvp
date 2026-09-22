@@ -22,42 +22,38 @@ export async function getOnboardingState(userId: string): Promise<OnboardingStat
   };
 }
 
+// '' stands for "global, not tied to a meeting" in the meeting_id column — see
+// ensureUserSchema. Converted back to null here so the rest of the app only
+// ever deals with the null it already expects.
+function realMeetingId(dbValue: string): string | null {
+  return dbValue === '' ? null : dbValue;
+}
+
 export async function getSeenSteps(userId: string): Promise<SeenStep[]> {
-  const rows = await queryUserSchema<{ step_id: string; meeting_id: string | null }>(
+  const rows = await queryUserSchema<{ step_id: string; meeting_id: string }>(
     userId,
     `SELECT step_id, meeting_id FROM onboarding_progress`,
   );
-  return rows.map((r) => ({ stepId: r.step_id, meetingId: r.meeting_id }));
+  return rows.map((r) => ({ stepId: r.step_id, meetingId: realMeetingId(r.meeting_id) }));
 }
 
 export async function markStepSeen(userId: string, stepId: string, meetingId: string | null): Promise<void> {
-  // Plain UNIQUE(step_id, meeting_id) treats every NULL as distinct, so the
-  // global (meeting_id IS NULL) case is deduped by its own partial index
-  // instead — the two cases need separate ON CONFLICT targets.
-  if (meetingId === null) {
-    await queryUserSchema(
-      userId,
-      `INSERT INTO onboarding_progress (step_id, meeting_id, status)
-       VALUES ($1, NULL, 'seen')
-       ON CONFLICT (step_id) WHERE meeting_id IS NULL DO NOTHING`,
-      [stepId],
-    );
-  } else {
-    await queryUserSchema(
+  await Promise.all([
+    queryUserSchema(
       userId,
       `INSERT INTO onboarding_progress (step_id, meeting_id, status)
        VALUES ($1, $2, 'seen')
        ON CONFLICT ON CONSTRAINT onboarding_progress_step_meeting_unique DO NOTHING`,
-      [stepId, meetingId],
-    );
-  }
-  await queryUserSchema(
-    userId,
-    `INSERT INTO onboarding_state (id, last_step_id, updated_at)
-     VALUES ('singleton', $1, NOW())
-     ON CONFLICT (id) DO UPDATE SET last_step_id = EXCLUDED.last_step_id, updated_at = NOW()`,
-    [stepId],
-  );
+      [stepId, meetingId ?? ''],
+    ),
+    queryUserSchema(
+      userId,
+      `INSERT INTO onboarding_state (id, last_step_id, updated_at)
+       VALUES ('singleton', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET last_step_id = EXCLUDED.last_step_id, updated_at = NOW()`,
+      [stepId],
+    ),
+  ]);
 }
 
 export async function skipTour(userId: string): Promise<void> {

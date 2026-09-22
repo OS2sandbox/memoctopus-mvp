@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act, cleanup } from '@testing-library/react';
+import { render, screen, act, cleanup, waitFor } from '@testing-library/react';
 import { OnboardingProvider, useOnboarding } from './context';
+import { renderWithOnboarding } from '@/test/onboarding';
 
 const fetchMock = vi.fn();
 
@@ -31,11 +32,7 @@ const fresh = { tourSkipped: false, tourCompleted: false, seen: [] };
 
 describe('OnboardingProvider — unavailable state', () => {
   it('shows nothing when the server could not load onboarding state', () => {
-    render(
-      <OnboardingProvider initial={{ ...fresh, unavailable: true }}>
-        <Probe />
-      </OnboardingProvider>,
-    );
+    renderWithOnboarding(<Probe />, { ...fresh, unavailable: true });
 
     // Every hint counts as seen (so none render) and no welcome dialog opens, even though
     // the seen list is empty, which would otherwise look like a brand-new user.
@@ -44,11 +41,7 @@ describe('OnboardingProvider — unavailable state', () => {
   });
 
   it('still behaves normally for a genuinely new user', () => {
-    render(
-      <OnboardingProvider initial={fresh}>
-        <Probe />
-      </OnboardingProvider>,
-    );
+    renderWithOnboarding(<Probe />, fresh);
 
     expect(screen.getByTestId('seen').textContent).toBe('false');
     expect(screen.getByTestId('first').textContent).toBe('true');
@@ -58,11 +51,7 @@ describe('OnboardingProvider — unavailable state', () => {
 describe('OnboardingProvider — saving', () => {
   async function markSeenOnce() {
     let markSeen!: (id: string, meetingId?: string | null) => void;
-    render(
-      <OnboardingProvider initial={fresh}>
-        <Probe onReady={(c) => (markSeen = c.markSeen)} />
-      </OnboardingProvider>,
-    );
+    renderWithOnboarding(<Probe onReady={(c) => (markSeen = c.markSeen)} />, fresh);
     await act(async () => {
       markSeen('recording.audio-lifecycle', 'm-1');
     });
@@ -97,5 +86,67 @@ describe('OnboardingProvider — saving', () => {
 
     await expect(markSeenOnce()).resolves.toBeUndefined();
     expect(warn).not.toHaveBeenCalled(); // offline is expected, not worth noise
+  });
+
+  it('does not re-POST when the same step is marked seen again', async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
+    let markSeen!: (id: string, meetingId?: string | null) => void;
+    renderWithOnboarding(<Probe onReady={(c) => (markSeen = c.markSeen)} />, fresh);
+
+    await act(async () => markSeen('recording.audio-lifecycle', 'm-1'));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Dismissing an already-seen hint a second time (e.g. a second mounted
+    // instance of the same step) must not fire a wasted request.
+    await act(async () => markSeen('recording.audio-lifecycle', 'm-1'));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('OnboardingProvider — client-side fetch (no `initial` prop)', () => {
+  it('fetches /api/onboarding/state itself and behaves like "unavailable" until it resolves', async () => {
+    let resolveFetch!: (value: unknown) => void;
+    fetchMock.mockReturnValueOnce(new Promise((r) => (resolveFetch = r)));
+
+    render(
+      <OnboardingProvider>
+        <Probe />
+      </OnboardingProvider>,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/onboarding/state');
+    // Nothing known yet — must not flash "first-time user" before the fetch resolves.
+    expect(screen.getByTestId('seen').textContent).toBe('true');
+    expect(screen.getByTestId('first').textContent).toBe('false');
+
+    await act(async () => {
+      resolveFetch({
+        ok: true,
+        json: async () => ({ tourSkipped: false, tourCompleted: false, seen: [] }),
+      });
+    });
+
+    await waitFor(() => expect(screen.getByTestId('first').textContent).toBe('true'));
+  });
+
+  it('treats a fetch failure the same as the server-side "could not load" fallback', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 500 });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(
+      <OnboardingProvider>
+        <Probe />
+      </OnboardingProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('seen').textContent).toBe('true'));
+    expect(screen.getByTestId('first').textContent).toBe('false');
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('does not fetch at all when `initial` is supplied', () => {
+    renderWithOnboarding(<Probe />, fresh);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render as rtlRender, screen, waitFor, act } from '@testing-library/react';
+import { screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { OnboardingProvider } from '@/lib/onboarding/context';
+import { renderWithOnboarding } from '@/test/onboarding';
 
 // Onboarding hints wrap the ProcessStrip and "Slet følsomt indhold" controls;
 // mark them already-seen so the popovers don't render and DOM queries keep
@@ -11,20 +11,14 @@ import { OnboardingProvider } from '@/lib/onboarding/context';
 // page under the app-level OnboardingProvider). useParams() in this file is
 // mocked to always return id: 'meeting-abc'.
 function render(ui: React.ReactElement) {
-  return rtlRender(
-    <OnboardingProvider
-      initial={{
-        tourSkipped: true,
-        tourCompleted: true,
-        seen: [
-          { stepId: 'meeting-settings.processstrip-export', meetingId: 'meeting-abc' },
-          { stepId: 'meeting-settings.redact-purpose', meetingId: 'meeting-abc' },
-        ],
-      }}
-    >
-      {ui}
-    </OnboardingProvider>,
-  );
+  return renderWithOnboarding(ui, {
+    tourSkipped: true,
+    tourCompleted: true,
+    seen: [
+      { stepId: 'meeting-settings.processstrip-export', meetingId: 'meeting-abc' },
+      { stepId: 'meeting-settings.redact-purpose', meetingId: 'meeting-abc' },
+    ],
+  });
 }
 
 // ─── next/navigation ──────────────────────────────────────────────────────────

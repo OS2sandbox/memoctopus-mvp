@@ -1,29 +1,23 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import { OnboardingProvider } from '@/lib/onboarding/context';
+import { screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { renderWithOnboarding } from '@/test/onboarding';
 
 // Onboarding hints wrap the upload-mode toggle, the record submit button, and
 // the participants field; mark them already-seen so the popovers don't render
 // and DOM queries keep targeting the underlying controls (mirrors the real
 // app, which mounts this page under the app-level OnboardingProvider).
 function render(ui: React.ReactElement) {
-  return rtlRender(
-    <OnboardingProvider
-      initial={{
-        tourSkipped: true,
-        tourCompleted: true,
-        seen: [
-          { stepId: 'meeting-new.upload-mode', meetingId: null },
-          { stepId: 'meeting-new.record-mic-permission', meetingId: null },
-          { stepId: 'meeting-new.participants-field', meetingId: null },
-        ],
-      }}
-    >
-      {ui}
-    </OnboardingProvider>,
-  );
+  return renderWithOnboarding(ui, {
+    tourSkipped: true,
+    tourCompleted: true,
+    seen: [
+      { stepId: 'meeting-new.upload-mode', meetingId: null },
+      { stepId: 'meeting-new.record-mic-permission', meetingId: null },
+      { stepId: 'meeting-new.participants-field', meetingId: null },
+    ],
+  });
 }
 
 // ---------------------------------------------------------------------------

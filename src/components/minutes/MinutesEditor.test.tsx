@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render as rtlRender, screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MinutesEditor } from './MinutesEditor';
-import { OnboardingProvider } from '@/lib/onboarding/context';
+import { renderWithOnboarding } from '@/test/onboarding';
 import type { MinutesContent } from '@/types';
 
 // ---------------------------------------------------------------------------
@@ -55,20 +55,14 @@ const MEETING_TITLE = 'Ugentligt møde';
 // targeting the underlying controls (mirrors the real app, which mounts
 // MinutesEditor under the app-level OnboardingProvider).
 function render(ui: React.ReactElement) {
-  return rtlRender(
-    <OnboardingProvider
-      initial={{
-        tourSkipped: true,
-        tourCompleted: true,
-        seen: [
-          { stepId: 'minutes.save-version', meetingId: MEETING_ID },
-          { stepId: 'minutes.version-dropdown', meetingId: MEETING_ID },
-        ],
-      }}
-    >
-      {ui}
-    </OnboardingProvider>,
-  );
+  return renderWithOnboarding(ui, {
+    tourSkipped: true,
+    tourCompleted: true,
+    seen: [
+      { stepId: 'minutes.save-version', meetingId: MEETING_ID },
+      { stepId: 'minutes.version-dropdown', meetingId: MEETING_ID },
+    ],
+  });
 }
 
 function makeContent(

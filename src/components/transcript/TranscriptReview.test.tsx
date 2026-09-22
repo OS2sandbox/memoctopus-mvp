@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TranscriptReview } from './TranscriptReview';
-import { OnboardingProvider } from '@/lib/onboarding/context';
+import { renderWithOnboarding } from '@/test/onboarding';
 import type { TranscriptSegment, PiiReplacement } from '@/types';
 
 // ── Mock all external dependencies ──────────────────────────────────────────
@@ -115,10 +115,9 @@ const ONBOARDING_INITIAL = {
 
 function setup(overrides: Partial<React.ComponentProps<typeof TranscriptReview>> = {}) {
   const onDataChange = vi.fn();
-  const utils = render(
-    <OnboardingProvider initial={ONBOARDING_INITIAL}>
-      <TranscriptReview {...DEFAULT_PROPS} onDataChange={onDataChange} {...overrides} />
-    </OnboardingProvider>,
+  const utils = renderWithOnboarding(
+    <TranscriptReview {...DEFAULT_PROPS} onDataChange={onDataChange} {...overrides} />,
+    ONBOARDING_INITIAL,
   );
   return { onDataChange, ...utils };
 }

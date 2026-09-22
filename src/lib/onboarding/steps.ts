@@ -377,3 +377,14 @@ export function getStep(id: string): OnboardingStep {
   if (!step) throw new Error(`Unknown onboarding step id: ${id}`);
   return step;
 }
+
+/**
+ * Non-throwing lookup for OnboardingHint/OnboardingTooltip: both wrap real page
+ * content (e.g. a download button), so a typo'd stepId must not crash `children`
+ * along with the hint. Logs so the mistake is still visible in review/testing.
+ */
+export function findStep(id: string): OnboardingStep | undefined {
+  const step = ONBOARDING_STEPS[id];
+  if (!step) console.error(`[onboarding] unknown step id: ${id}`);
+  return step;
+}

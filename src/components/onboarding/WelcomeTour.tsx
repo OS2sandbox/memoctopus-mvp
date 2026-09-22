@@ -1,5 +1,6 @@
 'use client';
 
+import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useOnboarding } from '@/lib/onboarding/context';
 
@@ -57,28 +58,12 @@ export function WelcomeTour() {
           ))}
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 22 }}>
-          <button
-            type="button"
-            onClick={() => closeWelcome(true)}
-            style={{
-              fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)',
-              background: 'none', border: '1px solid var(--line)', borderRadius: 'var(--radius)',
-              padding: '6px 12px', cursor: 'pointer',
-            }}
-          >
+          <Button type="button" variant="outline" size="sm" onClick={() => closeWelcome(true)}>
             spring over
-          </button>
-          <button
-            type="button"
-            onClick={startTour}
-            style={{
-              fontFamily: 'var(--mono)', fontSize: 12, color: '#fff',
-              background: 'var(--accent)', border: 'none', borderRadius: 'var(--radius)',
-              padding: '6px 14px', cursor: 'pointer',
-            }}
-          >
+          </Button>
+          <Button type="button" size="sm" onClick={startTour}>
             kom i gang
-          </button>
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

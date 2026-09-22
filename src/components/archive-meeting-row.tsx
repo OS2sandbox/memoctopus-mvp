@@ -43,7 +43,6 @@ export function ArchiveMeetingRow({
   selected?: boolean;
   onToggleSelect?: () => void;
 }) {
-  const [hovered, setHovered] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -108,11 +107,7 @@ export function ArchiveMeetingRow({
 
   return (
     <>
-      <div
-        className="relative flex items-center gap-4 px-5 py-4 hover:bg-[var(--surface-2)] transition-colors"
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-      >
+      <div className="group relative flex items-center gap-4 px-5 py-4 hover:bg-[var(--surface-2)] transition-colors">
         <Link href={statusHref(meeting)} className="flex flex-1 min-w-0 items-center gap-4">
           {rowBody}
         </Link>
@@ -124,8 +119,7 @@ export function ArchiveMeetingRow({
               setDeleteError(null);
               setDeleteOpen(true);
             }}
-            className="ml-1 p-1.5 rounded text-[var(--muted)] hover:text-red-500 hover:bg-red-50 transition-colors"
-            style={{ opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none' }}
+            className="ml-1 p-1.5 rounded text-[var(--muted)] hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100"
             aria-label="Slet møde"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

@@ -1,6 +1,7 @@
 'use client';
 
-import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import * as TooltipPrimitive from '@radix-ui/react-tooltip';
 
 type SeenStep = { stepId: string; meetingId: string | null };
 
@@ -31,7 +32,7 @@ type OnboardingContextValue = {
 
 const OnboardingContext = createContext<OnboardingContextValue | null>(null);
 
-function seenKey(stepId: string, meetingId: string | null): string {
+export function seenKey(stepId: string, meetingId: string | null): string {
   return `${stepId}:${meetingId ?? ''}`;
 }
 
@@ -63,20 +64,79 @@ async function postStep(body: Record<string, unknown>): Promise<void> {
   }
 }
 
+// While the client fetch below is in flight, behave exactly like "the server could not
+// load state" (see OnboardingInitialState.unavailable) — show nothing rather than
+// flashing the welcome dialog and every hint open before we actually know.
+const LOADING_STATE: OnboardingInitialState = {
+  tourSkipped: false,
+  tourCompleted: false,
+  seen: [],
+  unavailable: true,
+};
+
+/**
+ * `initial` is optional: pass it (tests, or a caller that already has the state) to skip
+ * the fetch entirely and behave synchronously, exactly as before. Omit it — the real
+ * app does — and this fetches `/api/onboarding/state` itself on mount instead of the
+ * server component that renders this having to await a DB round trip on every
+ * authenticated page load just for a client-interactive nicety.
+ */
 export function OnboardingProvider({
   initial,
   children,
 }: {
-  initial: OnboardingInitialState;
+  initial?: OnboardingInitialState;
   children: React.ReactNode;
 }) {
+  const [fetched, setFetched] = useState<OnboardingInitialState | null>(null);
+  const current = initial ?? fetched ?? LOADING_STATE;
+
+  useEffect(() => {
+    if (initial !== undefined) return; // caller already has the state
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/onboarding/state');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as OnboardingInitialState;
+        if (!cancelled) setFetched(data);
+      } catch (err) {
+        console.error('[onboarding] could not load state; continuing without onboarding', err);
+        if (!cancelled) setFetched({ tourSkipped: false, tourCompleted: false, seen: [], unavailable: true });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Seeded from `initial` when the caller has it synchronously (tests, or a caller
+  // that already fetched); otherwise starts empty and is re-seeded once by the effect
+  // below when the fetch resolves. Independent state from then on — markSeen/startTour
+  // mutate it locally, ahead of the save reaching the server.
   const [seen, setSeen] = useState<Set<string>>(
-    () => new Set(initial.seen.map((s) => seenKey(s.stepId, s.meetingId))),
+    () => new Set((initial ?? LOADING_STATE).seen.map((s) => seenKey(s.stepId, s.meetingId))),
   );
-  const unavailable = initial.unavailable === true;
+  // Mirrors `seen`, but as a ref: markSeen reads this synchronously to decide whether to
+  // POST, and React 18 batches setState updaters (their timing relative to the rest of
+  // the call is not guaranteed), so that decision cannot be made inside setSeen's updater.
+  const postedRef = useRef<Set<string>>(new Set(seen));
+  useEffect(() => {
+    if (fetched) {
+      const keys = new Set(fetched.seen.map((s) => seenKey(s.stepId, s.meetingId)));
+      setSeen(keys);
+      postedRef.current = new Set(keys);
+    }
+  }, [fetched]);
+
+  const unavailable = current.unavailable === true;
   const isFirstTimeUser =
-    !unavailable && !initial.tourSkipped && !initial.tourCompleted && initial.seen.length === 0;
-  const [showWelcome, setShowWelcome] = useState(isFirstTimeUser);
+    !unavailable && !current.tourSkipped && !current.tourCompleted && current.seen.length === 0;
+  const [showWelcome, setShowWelcome] = useState(false);
+  useEffect(() => {
+    if (isFirstTimeUser) setShowWelcome(true);
+  }, [isFirstTimeUser]);
 
   // FIFO queue of pending (unseen, mounted) hint keys and the component
   // instances waiting on each one (the first is the owner). Not reactive
@@ -145,7 +205,13 @@ export function OnboardingProvider({
       queueRef.current = queueRef.current.filter((k) => k !== key);
       setQueueVersion((v) => v + 1);
     }
-    void postStep({ stepId, meetingId });
+    // postedRef, not `seen`/the updater above: an already-seen step (from `initial`,
+    // a prior call this session, or a duplicate call arriving before the matching
+    // setSeen has committed) must not re-POST.
+    if (!postedRef.current.has(key)) {
+      postedRef.current.add(key);
+      void postStep({ stepId, meetingId });
+    }
   }, []);
 
   const openWelcome = useCallback(() => setShowWelcome(true), []);
@@ -158,6 +224,7 @@ export function OnboardingProvider({
   const startTour = useCallback(() => {
     setShowWelcome(false);
     setSeen(new Set());
+    postedRef.current = new Set();
     void postStep({ action: 'reset-hints' });
   }, []);
 
@@ -177,7 +244,17 @@ export function OnboardingProvider({
     [isStepSeen, markSeen, isFirstTimeUser, showWelcome, openWelcome, closeWelcome, startTour, claim, release, isActive],
   );
 
-  return <OnboardingContext.Provider value={value}>{children}</OnboardingContext.Provider>;
+  return (
+    <OnboardingContext.Provider value={value}>
+      {/*
+        One Provider for every OnboardingTooltip in the tree — including the ones
+        that remount on every new live-transcript segment during recording — instead
+        of each mounting its own. Radix's Tooltip.Root reads this via context; the
+        delay here is the shared default.
+      */}
+      <TooltipPrimitive.Provider delayDuration={200}>{children}</TooltipPrimitive.Provider>
+    </OnboardingContext.Provider>
+  );
 }
 
 export function useOnboarding(): OnboardingContextValue {

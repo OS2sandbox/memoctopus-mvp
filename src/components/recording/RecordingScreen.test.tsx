@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render as rtlRender, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { tabTo } from '@/test/keyboard';
 import { getStep } from '@/lib/onboarding/steps';
 import { RecordingScreen } from './RecordingScreen';
-import { OnboardingProvider } from '@/lib/onboarding/context';
+import { renderWithOnboarding } from '@/test/onboarding';
 
 // Onboarding hints wrap the start button, stop button, clarify panel, and
 // audio-lifecycle caption; mark them already-seen (for the "meeting-abc" id
@@ -14,22 +14,16 @@ import { OnboardingProvider } from '@/lib/onboarding/context';
 // keep targeting the underlying controls (mirrors the real app, which mounts
 // RecordingScreen under the app-level OnboardingProvider).
 function render(ui: React.ReactElement) {
-  return rtlRender(
-    <OnboardingProvider
-      initial={{
-        tourSkipped: true,
-        tourCompleted: true,
-        seen: [
-          { stepId: 'recording.start-button', meetingId: 'meeting-abc' },
-          { stepId: 'recording.stop-save-continue', meetingId: 'meeting-abc' },
-          { stepId: 'recording.clarify-panel', meetingId: 'meeting-abc' },
-          { stepId: 'recording.audio-lifecycle', meetingId: 'meeting-abc' },
-        ],
-      }}
-    >
-      {ui}
-    </OnboardingProvider>,
-  );
+  return renderWithOnboarding(ui, {
+    tourSkipped: true,
+    tourCompleted: true,
+    seen: [
+      { stepId: 'recording.start-button', meetingId: 'meeting-abc' },
+      { stepId: 'recording.stop-save-continue', meetingId: 'meeting-abc' },
+      { stepId: 'recording.clarify-panel', meetingId: 'meeting-abc' },
+      { stepId: 'recording.audio-lifecycle', meetingId: 'meeting-abc' },
+    ],
+  });
 }
 
 // ── Next.js navigation mocks ───────────────────────────────────────────────

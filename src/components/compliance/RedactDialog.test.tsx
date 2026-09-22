@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { tabTo } from '@/test/keyboard';
 import { getStep } from '@/lib/onboarding/steps';
+import { renderWithOnboarding } from '@/test/onboarding';
 import { RedactDialog } from './RedactDialog';
 
 const MEETING_TITLE = 'Bestyrelsesmøde Q4';
@@ -17,7 +18,7 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof RedactDialo
     onConfirm: vi.fn().mockResolvedValue(undefined),
   };
   const props = { ...defaults, ...overrides };
-  return { ...render(<RedactDialog {...props} />), props };
+  return { ...renderWithOnboarding(<RedactDialog {...props} />), props };
 }
 
 beforeEach(() => {
