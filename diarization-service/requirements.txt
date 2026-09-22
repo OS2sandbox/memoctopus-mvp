@@ -4,3 +4,5 @@ pyannote.audio>=4.0
 fastapi>=0.115
 uvicorn[standard]>=0.30
 python-multipart>=0.0.9
+prometheus-fastapi-instrumentator>=7.0
+prometheus-client>=0.20
