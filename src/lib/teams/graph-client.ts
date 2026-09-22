@@ -77,6 +77,31 @@ export function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 429 || (status >= 500 && status < 600);
 }
 
+/**
+ * The one classification every Graph-calling site in this codebase branches
+ * on: is this the poller's business to escalate (`reauth_required`), a
+ * tenant-config problem no retry can fix (`transcripts_disabled`), worth
+ * trying again later (`retryable`), this meeting's own failure
+ * (`graph_error`), or not a Graph error at all (`unknown`). Each call site
+ * still decides what to *do* for each case — this only names the case, so the
+ * `err instanceof GraphError && err.code === …` chain is not copy-pasted at
+ * every site that needs it.
+ */
+export type GraphErrorKind =
+  | 'reauth_required'
+  | 'transcripts_disabled'
+  | 'retryable'
+  | 'graph_error'
+  | 'unknown';
+
+export function classifyGraphError(err: unknown): GraphErrorKind {
+  if (!(err instanceof GraphError)) return 'unknown';
+  if (err.code === 'reauth_required') return 'reauth_required';
+  if (err.code === 'transcripts_disabled') return 'transcripts_disabled';
+  if (err.retryable) return 'retryable';
+  return 'graph_error';
+}
+
 /** `Retry-After` is either delta-seconds or an HTTP date; both become ms. */
 export function parseRetryAfter(header: string | null, now: number = Date.now()): number | null {
   if (!header) return null;

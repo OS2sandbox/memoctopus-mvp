@@ -1,16 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockConnect = vi.fn();
-vi.mock('@/lib/db', () => ({ pool: { connect: (...a: unknown[]) => mockConnect(...a) }, db: {} }));
+const mockCreateDbClient = vi.fn();
+vi.mock('@/lib/db', () => ({ createDbClient: (...a: unknown[]) => mockCreateDbClient(...a), db: {} }));
 
 import { meetingLockKey, withMeetingLock, MEETING_LOCK_NAMESPACE } from './meeting-lock';
 
-function fakeClient(locked: boolean) {
+function fakeClient(locked: boolean, connectImpl: () => Promise<void> = async () => {}) {
   const query = vi.fn(async (sql: string) => {
     if (sql.includes('pg_try_advisory_lock')) return { rows: [{ locked }] };
     return { rows: [] };
   });
-  return { query, release: vi.fn() };
+  return { connect: vi.fn(connectImpl), query, end: vi.fn(async () => {}) };
 }
 
 beforeEach(() => {
@@ -19,13 +19,14 @@ beforeEach(() => {
 });
 
 describe('withMeetingLock', () => {
-  it('runs the work and releases the lock and the connection', async () => {
+  it('runs the work and releases the lock and the connection, on a standalone client outside the pool', async () => {
     const client = fakeClient(true);
-    mockConnect.mockResolvedValue(client);
+    mockCreateDbClient.mockReturnValue(client);
 
     const result = await withMeetingLock('u1:m1', async () => 'done', () => 'busy');
 
     expect(result).toBe('done');
+    expect(client.connect).toHaveBeenCalled();
     expect(client.query).toHaveBeenCalledWith('SELECT pg_try_advisory_lock($1, $2) AS locked', [
       MEETING_LOCK_NAMESPACE,
       meetingLockKey('u1:m1'),
@@ -34,14 +35,14 @@ describe('withMeetingLock', () => {
       MEETING_LOCK_NAMESPACE,
       meetingLockKey('u1:m1'),
     ]);
-    expect(client.release).toHaveBeenCalled();
+    expect(client.end).toHaveBeenCalled();
   });
 
   it('does not run the work when another run holds the lock', async () => {
     // The "Tjek nu" route and the background poller both reach the pipeline; two
     // concurrent runs would download the same recording twice and delete each
     // other's scratch files mid-transcode.
-    mockConnect.mockResolvedValue(fakeClient(false));
+    mockCreateDbClient.mockReturnValue(fakeClient(false));
     const work = vi.fn();
 
     expect(await withMeetingLock('u1:m1', work, () => 'busy')).toBe('busy');
@@ -50,19 +51,23 @@ describe('withMeetingLock', () => {
 
   it('releases the lock even when the work throws', async () => {
     const client = fakeClient(true);
-    mockConnect.mockResolvedValue(client);
+    mockCreateDbClient.mockReturnValue(client);
 
     await expect(
       withMeetingLock('u1:m1', async () => { throw new Error('boom'); }, () => 'busy'),
     ).rejects.toThrow('boom');
 
     expect(client.query).toHaveBeenCalledWith('SELECT pg_advisory_unlock($1, $2)', expect.anything());
-    expect(client.release).toHaveBeenCalled();
+    expect(client.end).toHaveBeenCalled();
   });
 
   it('fails open when Postgres is unreachable', async () => {
     // A duplicated download beats a meeting that never produces a referat.
-    mockConnect.mockRejectedValue(new Error('no connection'));
+    mockCreateDbClient.mockReturnValue(
+      fakeClient(true, async () => {
+        throw new Error('no connection');
+      }),
+    );
     expect(await withMeetingLock('u1:m1', async () => 'done', () => 'busy')).toBe('done');
   });
 

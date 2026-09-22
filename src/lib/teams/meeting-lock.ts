@@ -1,4 +1,4 @@
-import { pool } from '@/lib/db';
+import { createDbClient } from '@/lib/db';
 
 /**
  * Per-meeting mutual exclusion for the Graph pipeline.
@@ -12,7 +12,13 @@ import { pool } from '@/lib/db';
  * recording into the same scratch files and delete each other's mid-transcode.
  *
  * A Postgres advisory lock is used rather than an in-process mutex because the
- * two callers can genuinely land on different app instances.
+ * two callers can genuinely land on different app instances. It is session-
+ * scoped — held (and later released) on the exact connection that took it, not
+ * portable to another one — which is why this uses its own standalone
+ * connection via {@link createDbClient} rather than one borrowed from `pool`:
+ * `fn` can run for up to `GRAPH_DOWNLOAD_TIMEOUT_MS` (20 min), and holding a
+ * pooled connection idle for that long would starve every other request of a
+ * connection under concurrent Teams meetings.
  */
 
 /** Namespace half of the two-int advisory key; the meeting hash is the other. */
@@ -40,9 +46,9 @@ export async function withMeetingLock<T>(
   fn: () => Promise<T>,
   onBusy: () => T,
 ): Promise<T> {
-  let client;
+  const client = createDbClient();
   try {
-    client = await pool.connect();
+    await client.connect();
   } catch (err) {
     console.error('[teams/meeting-lock] no connection, running unguarded:', err);
     return await fn();
@@ -64,6 +70,6 @@ export async function withMeetingLock<T>(
         .catch((err) => console.error('[teams/meeting-lock] unlock failed:', err));
     }
   } finally {
-    client.release();
+    await client.end().catch((err) => console.error('[teams/meeting-lock] close failed:', err));
   }
 }

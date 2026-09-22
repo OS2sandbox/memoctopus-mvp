@@ -1,8 +1,7 @@
 import type { PoolClient } from 'pg';
 import { pool } from '@/lib/db';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
-import { queryUserSchema } from '@/lib/db/user-schema';
-import { GraphError } from './graph-client';
+import { classifyGraphError } from './graph-client';
 import { processTeamsMeeting } from './pipeline';
 import {
   POLL_GIVE_UP_MS,
@@ -45,30 +44,6 @@ function isTerminal(state: TeamsMeetingRow['state']): boolean {
   return state === 'ready' || state === 'failed';
 }
 
-/**
- * `markPollAttempt` without the `attempts = attempts + 1`. That counter is what
- * ends the wait for a recording (RECORDING_GRACE_ATTEMPTS) and moves a meeting
- * from the 2-minute to the 15-minute backoff, so it has to count polls that
- * actually asked Teams something — not a throttle, an outage, or a user pressing
- * "Tjek nu". `last_polled_at` is still stamped, or a throttled meeting would be
- * due again on the very next tick. (Local rather than in store.ts, which this
- * change leaves alone; it belongs there as an option on markPollAttempt.)
- */
-async function markPollWithoutAttempt(
-  userId: string,
-  id: string,
-  state: TeamsMeetingState,
-  failureReason: string | null,
-): Promise<void> {
-  await queryUserSchema(
-    userId,
-    `UPDATE teams_meetings
-        SET state = $2, failure_reason = $3, last_polled_at = NOW(), updated_at = NOW()
-      WHERE id = $1`,
-    [id, state, failureReason],
-  );
-}
-
 export interface PollOptions {
   /**
    * The user pressed "Prøv igen": a `failed` row is put back into
@@ -106,8 +81,7 @@ export async function pollMeeting(
   const gaveUp = anchor != null && anchor.getTime() < now.getTime() - POLL_GIVE_UP_MS;
 
   if (options.force && row.state === 'failed' && !gaveUp) {
-    await setTeamsMeetingState(userId, id, 'awaiting_teams', null);
-    row = (await getTeamsMeeting(userId, id)) ?? { ...row, state: 'awaiting_teams', failureReason: null };
+    row = await setTeamsMeetingState(userId, id, 'awaiting_teams', null);
   }
 
   // Already settled, or the meeting has not happened yet: do not touch Graph
@@ -116,8 +90,7 @@ export async function pollMeeting(
   if (anchor && anchor.getTime() > now.getTime()) return row;
 
   if (gaveUp) {
-    await markPollAttempt(userId, id, { state: 'failed', failureReason: GIVE_UP_MESSAGE });
-    return (await getTeamsMeeting(userId, id)) ?? row;
+    return await markPollAttempt(userId, id, { state: 'failed', failureReason: GIVE_UP_MESSAGE });
   }
 
   await setTeamsMeetingState(userId, id, 'fetching');
@@ -130,10 +103,13 @@ export async function pollMeeting(
     state: TeamsMeetingState,
     failureReason: string | null,
     transient = false,
-  ): Promise<void> =>
-    transient || options.force
-      ? markPollWithoutAttempt(userId, id, state, failureReason)
-      : markPollAttempt(userId, id, { state, failureReason });
+  ): Promise<TeamsMeetingRow> =>
+    markPollAttempt(
+      userId,
+      id,
+      { state, failureReason },
+      { incrementAttempts: !(transient || options.force) },
+    );
 
   try {
     const outcome = await processTeamsMeeting(
@@ -149,40 +125,39 @@ export async function pollMeeting(
     );
 
     if (outcome.status === 'ready') {
-      await markPollAttempt(userId, id, {
+      return await markPollAttempt(userId, id, {
         state: 'ready',
         failureReason: null,
         transcriptId: outcome.transcriptId,
         recordingId: outcome.recordingId,
       });
-    } else if (outcome.status === 'failed') {
-      await markPollAttempt(userId, id, { state: 'failed', failureReason: outcome.reason });
-    } else {
-      // Nothing yet — back to waiting, and try again after the backoff.
-      await waiting('awaiting_teams', null, outcome.transient);
     }
+    if (outcome.status === 'failed') {
+      return await markPollAttempt(userId, id, { state: 'failed', failureReason: outcome.reason });
+    }
+    // Nothing yet — back to waiting, and try again after the backoff.
+    return await waiting('awaiting_teams', null, outcome.transient);
   } catch (err) {
-    if (err instanceof GraphError && err.code === 'reauth_required') {
-      await waiting('needs_reauth', err.message);
-    } else if (err instanceof GraphError && err.retryable) {
-      // Graph throttles /transcripts routinely; a 429, a 503 or a timeout is "not yet".
-      await waiting('awaiting_teams', err.message, true);
-    } else if (err instanceof GraphError && err.code === 'transcripts_disabled') {
-      await markPollAttempt(userId, id, {
-        state: 'failed',
-        failureReason: TRANSCRIPTS_DISABLED_MESSAGE,
-      });
-    } else if (err instanceof GraphError) {
-      await markPollAttempt(userId, id, { state: 'failed', failureReason: err.message });
-    } else {
-      // A bug or a transient network error: keep waiting, record why.
-      console.error('[teams/poller] unexpected error polling', id, err);
-      const reason = err instanceof Error ? err.message : String(err);
-      await waiting('awaiting_teams', reason);
+    const message = err instanceof Error ? err.message : String(err);
+    switch (classifyGraphError(err)) {
+      case 'reauth_required':
+        return await waiting('needs_reauth', message);
+      case 'retryable':
+        // Graph throttles /transcripts routinely; a 429, a 503 or a timeout is "not yet".
+        return await waiting('awaiting_teams', message, true);
+      case 'transcripts_disabled':
+        return await markPollAttempt(userId, id, {
+          state: 'failed',
+          failureReason: TRANSCRIPTS_DISABLED_MESSAGE,
+        });
+      case 'graph_error':
+        return await markPollAttempt(userId, id, { state: 'failed', failureReason: message });
+      case 'unknown':
+        // A bug or a transient network error: keep waiting, record why.
+        console.error('[teams/poller] unexpected error polling', id, err);
+        return await waiting('awaiting_teams', message);
     }
   }
-
-  return (await getTeamsMeeting(userId, id)) ?? row;
 }
 
 async function pollUser(userId: string, now: Date): Promise<number> {

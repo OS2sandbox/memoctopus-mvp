@@ -44,8 +44,3 @@ export function teamsErrorResponse(err: unknown): NextResponse {
     { status: 500 },
   );
 }
-
-/** True for the errors {@link teamsErrorResponse} maps to a documented status. */
-export function isTeamsKnownError(err: unknown): boolean {
-  return err instanceof GraphError || err instanceof ResolveError;
-}

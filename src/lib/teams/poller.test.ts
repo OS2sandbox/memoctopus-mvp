@@ -81,9 +81,9 @@ function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.TEAMS_GRAPH_ENABLED = 'true';
-  mockMark.mockResolvedValue(undefined);
+  mockMark.mockResolvedValue(row());
   mockQuery.mockResolvedValue([]);
-  mockSetState.mockResolvedValue(undefined);
+  mockSetState.mockResolvedValue(row());
 });
 
 afterEach(() => {
@@ -91,18 +91,12 @@ afterEach(() => {
 });
 
 /**
- * A poll that was written without `attempts = attempts + 1` (store.markPollAttempt
- * is the only thing that adds one), but still stamps `last_polled_at` so the
- * backoff keeps working.
+ * A poll recorded with `incrementAttempts: false` — `attempts` is left alone,
+ * but `last_polled_at` is still stamped by markPollAttempt so the backoff
+ * keeps working.
  */
 function expectNoAttemptPoll(state: string, failureReason: string | null) {
-  expect(mockMark).not.toHaveBeenCalled();
-  expect(mockQuery).toHaveBeenCalledTimes(1);
-  const [userId, sql, params] = mockQuery.mock.calls[0];
-  expect(userId).toBe('u1');
-  expect(sql).toContain('last_polled_at = NOW()');
-  expect(sql).not.toMatch(/attempts/);
-  expect(params).toEqual(['m1', state, failureReason]);
+  expect(mockMark).toHaveBeenCalledWith('u1', 'm1', { state, failureReason }, { incrementAttempts: false });
 }
 
 describe('pollMeeting', () => {
@@ -249,10 +243,12 @@ describe('pollMeeting', () => {
 
     await pollMeeting('u1', 'm1', NOW);
 
-    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', {
-      state: 'awaiting_teams',
-      failureReason: null,
-    });
+    expect(mockMark).toHaveBeenCalledWith(
+      'u1',
+      'm1',
+      { state: 'awaiting_teams', failureReason: null },
+      { incrementAttempts: true },
+    );
   });
 
   it('records a pipeline failure', async () => {
@@ -303,7 +299,12 @@ describe('pollMeeting', () => {
 
     await pollMeeting('u1', 'm1', NOW);
 
-    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', { state: 'awaiting_teams', failureReason: null });
+    expect(mockMark).toHaveBeenCalledWith(
+      'u1',
+      'm1',
+      { state: 'awaiting_teams', failureReason: null },
+      { incrementAttempts: true },
+    );
     expect(mockQuery).not.toHaveBeenCalled();
   });
 
@@ -346,10 +347,12 @@ describe('pollMeeting', () => {
 
     await pollMeeting('u1', 'm1', NOW);
 
-    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', {
-      state: 'needs_reauth',
-      failureReason: 'Log ind igen.',
-    });
+    expect(mockMark).toHaveBeenCalledWith(
+      'u1',
+      'm1',
+      { state: 'needs_reauth', failureReason: 'Log ind igen.' },
+      { incrementAttempts: true },
+    );
   });
 
   it('maps transcripts_disabled to failed with the admin-guide message', async () => {
@@ -372,21 +375,26 @@ describe('pollMeeting', () => {
 
     await expect(pollMeeting('u1', 'm1', NOW)).resolves.toBeTruthy();
 
-    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', {
-      state: 'awaiting_teams',
-      failureReason: 'socket hang up',
-    });
+    expect(mockMark).toHaveBeenCalledWith(
+      'u1',
+      'm1',
+      { state: 'awaiting_teams', failureReason: 'socket hang up' },
+      { incrementAttempts: true },
+    );
     spy.mockRestore();
   });
 
-  it('returns the re-read row', async () => {
+  it('returns the row markPollAttempt just wrote, via RETURNING, without a re-SELECT', async () => {
     const after = row({ state: 'ready' });
-    mockGet.mockResolvedValueOnce(row()).mockResolvedValueOnce(after);
+    mockGet.mockResolvedValueOnce(row());
+    mockMark.mockResolvedValueOnce(after);
     mockProcess.mockResolvedValueOnce({
       status: 'ready', mode: 'transcript-only', speakers: [], transcriptId: null, recordingId: null,
     });
 
     expect(await pollMeeting('u1', 'm1', NOW)).toBe(after);
+    // getTeamsMeeting is called once, to load the row at the top — never again.
+    expect(mockGet).toHaveBeenCalledTimes(1);
   });
 });
 

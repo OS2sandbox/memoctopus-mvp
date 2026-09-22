@@ -9,6 +9,7 @@ import { readPendingTranscript } from '@/lib/pending-artifacts';
 import {
   POLL_GIVE_UP_MS,
   deleteTeamsMeeting,
+  getMeetingSnapshot,
   getTeamsMeeting,
   giveUpAnchor,
   setTeamsMeetingState,
@@ -86,7 +87,8 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   let disarmed = true;
   if (row.armed || row.armResult === 'policy_blocked') {
     try {
-      await disarmMeeting(userId, row.graphMeetingId, row.originalOptions ?? null);
+      const originalOptions = await getMeetingSnapshot(userId, row.graphMeetingId);
+      await disarmMeeting(userId, row.graphMeetingId, originalOptions);
     } catch (err) {
       disarmed = false;
       console.error('[teams/meetings] disarm failed for', id, '- the meeting may still be armed in Teams:', err);

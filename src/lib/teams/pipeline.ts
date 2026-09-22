@@ -1,7 +1,7 @@
-import { spawn } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
-import { GraphError } from './graph-client';
+import { runFfmpeg } from '@/lib/audio/decode-server';
+import { GraphError, classifyGraphError } from './graph-client';
 import { realDate } from './graph-dates';
 import { listArtifacts, pickArtifact, downloadTranscriptVtt, downloadRecording } from './artifacts';
 import { parseVtt, turnsFromVtt, segmentsFromVtt, speakersFromVtt, type VttCue } from './vtt';
@@ -92,43 +92,10 @@ function durationFromCues(cues: VttCue[]): number | null {
  * nothing buffered (a recording can be hundreds of MB).
  */
 export function transcodeToWav(inputPath: string, outputPath: string): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const ff = spawn('ffmpeg', [
-      '-loglevel', 'error',
-      '-nostdin',
-      '-y',
-      '-i', inputPath,
-      '-vn',
-      '-ar', '16000',
-      '-ac', '1',
-      '-c:a', 'pcm_s16le',
-      outputPath,
-    ]);
-
-    const errChunks: Buffer[] = [];
-    let settled = false;
-    ff.stderr?.on('data', (chunk: Buffer) => errChunks.push(Buffer.from(chunk)));
-
-    ff.on('error', (err: NodeJS.ErrnoException) => {
-      if (settled) return;
-      settled = true;
-      if (err.code === 'ENOENT') {
-        reject(new Error(
-          'ffmpeg not found on PATH. Converting the Teams recording requires ffmpeg. ' +
-          'Install it locally (macOS: `brew install ffmpeg`); the production Docker image already includes it.',
-        ));
-        return;
-      }
-      reject(err);
-    });
-
-    ff.on('close', (code) => {
-      if (settled) return;
-      settled = true;
-      if (code === 0) { resolve(); return; }
-      reject(new Error(`ffmpeg exited ${code}: ${Buffer.concat(errChunks).toString().trim()}`));
-    });
-  });
+  return runFfmpeg(
+    ['-loglevel', 'error', '-nostdin', '-y', '-i', inputPath, '-vn', '-ar', '16000', '-ac', '1', '-c:a', 'pcm_s16le', outputPath],
+    { context: 'Converting the Teams recording' },
+  );
 }
 
 export async function processTeamsMeeting(
@@ -191,14 +158,22 @@ async function runPipeline(
     // A dead refresh token is the poller's business (state needs_reauth), so it
     // propagates; a throttle or a gateway error is "not yet", not a failure;
     // everything else is this meeting's own failure.
-    if (err instanceof GraphError && err.code === 'reauth_required') throw err;
-    // So is a tenant that has switched off Graph access to transcripts: it is not
-    // this meeting's fault and no retry can fix it, so let the poller turn it into
-    // the message that names the admin guide instead of leaking Graph's English.
-    if (err instanceof GraphError && err.code === 'transcripts_disabled') throw err;
-    if (err instanceof GraphError && err.retryable) return { status: 'pending', transient: true };
-    if (err instanceof GraphError) return { status: 'failed', reason: err.message };
-    throw err;
+    //
+    // A tenant that has switched off Graph access to transcripts also propagates:
+    // it is not this meeting's fault and no retry can fix it, so let the poller
+    // turn it into the message that names the admin guide instead of leaking
+    // Graph's English.
+    switch (classifyGraphError(err)) {
+      case 'reauth_required':
+      case 'transcripts_disabled':
+        throw err;
+      case 'retryable':
+        return { status: 'pending', transient: true };
+      case 'graph_error':
+        return { status: 'failed', reason: (err as GraphError).message };
+      case 'unknown':
+        throw err;
+    }
   }
 
   // realDate drops Graph's 0001-01-01 zero value, which an instant meeting has for
@@ -233,9 +208,9 @@ async function runPipeline(
     return await runRecordingOnly(userId, meeting, recording!.id);
   } catch (err) {
     await storePendingTranscript(meeting.id, { status: 'failed' }).catch(() => {});
-    if (err instanceof GraphError && err.code === 'reauth_required') throw err;
-    if (err instanceof GraphError && err.code === 'transcripts_disabled') throw err;
-    if (err instanceof GraphError && err.retryable) return { status: 'pending', transient: true };
+    const cls = classifyGraphError(err);
+    if (cls === 'reauth_required' || cls === 'transcripts_disabled') throw err;
+    if (cls === 'retryable') return { status: 'pending', transient: true };
     const reason = err instanceof Error ? err.message : 'Ukendt fejl under hentning fra Microsoft Teams';
     console.error(`[teams-pipeline] ${meeting.id} failed:`, err);
     return { status: 'failed', reason };

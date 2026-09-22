@@ -3,11 +3,12 @@ import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { GraphError, TEAMS_DISABLED_MESSAGE } from '@/lib/teams/graph-client';
+import { graphDate } from '@/lib/teams/graph-dates';
 import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
 import { armMeeting } from '@/lib/teams/meeting-arm';
 import { resolveJoinUrl } from '@/lib/teams/meeting-resolver';
-import { getTeamsMeeting, getTeamsMeetingByGraphId, upsertTeamsMeeting } from '@/lib/teams/store';
+import { claimMeetingSnapshot, upsertTeamsMeeting } from '@/lib/teams/store';
 
 /** ISO string → Date, tolerating a missing or unparseable value. */
 function toDate(value: string | null | undefined): Date | null {
@@ -82,8 +83,8 @@ export async function POST(req: NextRequest) {
   // onlineMeeting only knows the series-level window. Prefer the occurrence, or
   // artifacts of occurrence 2+ fall outside the pick window and are never found.
   const eventId = str(body.eventId) ?? null;
-  const occurrenceStart = toDate(str(body.scheduledStart));
-  const occurrenceEnd = toDate(str(body.scheduledEnd));
+  const occurrenceStart = toDate(graphDate(str(body.scheduledStart)));
+  const occurrenceEnd = toDate(graphDate(str(body.scheduledEnd)));
 
   try {
     const resolved = await resolveJoinUrl(userId, joinUrl);
@@ -96,30 +97,15 @@ export async function POST(req: NextRequest) {
       : null;
     const armResult = outcome?.result ?? ('not_organizer' as const);
 
-    // What the organizer had before we PATCHed, for the disarm to restore. Only
-    // the first arm may record it: once we have touched the meeting, the read-back
-    // holds our own values, and the upsert keeps the stored snapshot when we pass
-    // none. A refused PATCH changed nothing.
-    //
-    // "Touched" has to be judged per Graph meeting, not per local id: a recurring
-    // series shares ONE onlineMeeting, and the dashboard mints a new local id for
-    // every pasted link. Occurrence 2 finds no row under its own id, so its pre-PATCH
-    // read (our values by then) would be stored as the original, and deleting it
-    // would "restore" Teams to armed. It inherits its sibling's snapshot instead,
-    // or records none, which falls back to resetting recordAutomatically.
-    const previous = outcome ? await getTeamsMeeting(userId, meetingId) : null;
-    const alreadyTouched = previous && (previous.armed || previous.armResult === 'policy_blocked');
-    const sibling =
-      outcome && !alreadyTouched
-        ? await getTeamsMeetingByGraphId(userId, resolved.graphMeetingId)
-        : null;
-    const siblingTouched = !!sibling && (sibling.armed || sibling.armResult === 'policy_blocked');
-    const originalOptions =
-      outcome && outcome.result !== 'not_organizer' && !alreadyTouched
-        ? siblingTouched
-          ? (sibling?.originalOptions ?? null)
-          : outcome.previousOptions
-        : null;
+    // What the organizer had before we ever PATCHed this Graph meeting, for the
+    // disarm to restore — claimed once per graphMeetingId, not per local id, so
+    // a recurring series' second+ occurrence (its own local id, same Graph
+    // meeting) gets back the true original instead of its own already-armed
+    // values. See claimMeetingSnapshot. The claimed value itself is not needed
+    // here — disarm reads it back later by graphMeetingId.
+    if (outcome && outcome.result !== 'not_organizer') {
+      await claimMeetingSnapshot(userId, resolved.graphMeetingId, outcome.previousOptions);
+    }
 
     const row = await upsertTeamsMeeting(userId, {
       id: meetingId,
@@ -130,7 +116,6 @@ export async function POST(req: NextRequest) {
       isOrganizer: resolved.isOrganizer,
       armed: armResult === 'armed',
       armResult,
-      originalOptions,
       eventId,
       scheduledStart: occurrenceStart ?? toDate(resolved.scheduledStart),
       scheduledEnd: occurrenceEnd ?? toDate(resolved.scheduledEnd),

@@ -4,7 +4,7 @@ vi.mock('@/lib/db', () => ({ pool: {}, db: {} }));
 vi.mock('@/lib/auth', () => ({ auth: { api: {} } }));
 
 import { GraphError } from './graph-client';
-import { isTeamsKnownError, teamsErrorResponse } from './http-errors';
+import { teamsErrorResponse } from './http-errors';
 import { ResolveError } from './meeting-resolver';
 
 describe('teamsErrorResponse', () => {
@@ -44,11 +44,5 @@ describe('teamsErrorResponse', () => {
     expect(res.status).toBe(500);
     expect((await res.json()).message).toMatch(/uventet fejl/i);
     spy.mockRestore();
-  });
-
-  it('recognises the errors it can map', () => {
-    expect(isTeamsKnownError(new GraphError('http', 'x'))).toBe(true);
-    expect(isTeamsKnownError(new ResolveError('invalid-url'))).toBe(true);
-    expect(isTeamsKnownError(new Error('x'))).toBe(false);
   });
 });

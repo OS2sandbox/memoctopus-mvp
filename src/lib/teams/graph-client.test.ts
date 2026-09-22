@@ -17,6 +17,7 @@ import {
   GRAPH_SCOPES,
   GRAPH_TIMEOUT_MS,
   GraphError,
+  classifyGraphError,
   graphOrigin,
   getGraphAccessToken,
   hasGraphScopes,
@@ -431,6 +432,37 @@ describe('retry classification', () => {
 
   it('lets a caller override the classification explicitly', () => {
     expect(new GraphError('http', 'x', { status: 400, retryable: true }).retryable).toBe(true);
+  });
+});
+
+describe('classifyGraphError', () => {
+  it('names reauth_required and transcripts_disabled by their code, ahead of retryable', () => {
+    expect(classifyGraphError(new GraphError('reauth_required', 'x', { status: 401 }))).toBe(
+      'reauth_required',
+    );
+    expect(classifyGraphError(new GraphError('transcripts_disabled', 'x', { status: 403 }))).toBe(
+      'transcripts_disabled',
+    );
+    // Even if a caller marked it retryable, the specific code still wins.
+    expect(
+      classifyGraphError(new GraphError('transcripts_disabled', 'x', { status: 403, retryable: true })),
+    ).toBe('transcripts_disabled');
+  });
+
+  it('names a retryable GraphError of any other code as retryable', () => {
+    expect(classifyGraphError(new GraphError('unavailable', 'x', { status: 503 }))).toBe('retryable');
+    expect(classifyGraphError(new GraphError('http', 'x', { status: 429 }))).toBe('retryable');
+  });
+
+  it('names a non-retryable GraphError as graph_error', () => {
+    expect(classifyGraphError(new GraphError('forbidden', 'x', { status: 403 }))).toBe('graph_error');
+    expect(classifyGraphError(new GraphError('not_found', 'x', { status: 404 }))).toBe('graph_error');
+  });
+
+  it('names anything that is not a GraphError as unknown', () => {
+    expect(classifyGraphError(new Error('socket hang up'))).toBe('unknown');
+    expect(classifyGraphError('nope')).toBe('unknown');
+    expect(classifyGraphError(null)).toBe('unknown');
   });
 });
 

@@ -13,6 +13,7 @@ vi.mock('@/lib/teams/store', async (importOriginal) => ({
   // The real POLL_GIVE_UP_MS / giveUpAnchor, so the re-collect window is the poller's.
   ...(await importOriginal<typeof import('@/lib/teams/store')>()),
   getTeamsMeeting: vi.fn(),
+  getMeetingSnapshot: vi.fn(),
   deleteTeamsMeeting: vi.fn().mockResolvedValue(undefined),
   setTeamsMeetingState: vi.fn().mockResolvedValue(undefined),
 }));
@@ -28,6 +29,7 @@ import { pollMeeting } from '@/lib/teams/poller';
 import {
   POLL_GIVE_UP_MS,
   deleteTeamsMeeting,
+  getMeetingSnapshot,
   getTeamsMeeting,
   setTeamsMeetingState,
   type TeamsMeetingRow,
@@ -37,6 +39,7 @@ import { FAKE_SESSION } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockGet = vi.mocked(getTeamsMeeting);
+const mockGetSnapshot = vi.mocked(getMeetingSnapshot);
 const mockPoll = vi.mocked(pollMeeting);
 const mockDisarm = vi.mocked(disarmMeeting);
 const mockDelete = vi.mocked(deleteTeamsMeeting);
@@ -76,6 +79,7 @@ beforeEach(() => {
   mockGetSession.mockResolvedValue(FAKE_SESSION as never);
   mockDelete.mockResolvedValue(undefined);
   mockDisarm.mockResolvedValue(undefined);
+  mockGetSnapshot.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -188,10 +192,12 @@ describe('DELETE /api/teams/meetings/[id]', () => {
       recordAutomatically: false,
       meetingSpokenLanguageTag: 'en-GB',
     };
-    mockGet.mockResolvedValueOnce(row({ armed: true, originalOptions: original }));
+    mockGet.mockResolvedValueOnce(row({ armed: true }));
+    mockGetSnapshot.mockResolvedValueOnce(original);
 
     await DELETE(req(), { params });
 
+    expect(mockGetSnapshot).toHaveBeenCalledWith('user-123', 'graph-1');
     expect(mockDisarm).toHaveBeenCalledWith('user-123', 'graph-1', original);
   });
 
@@ -255,7 +261,7 @@ describe('POST /api/teams/meetings/[id] — recollect', () => {
   const recentlyEnded = () => new Date(Date.now() - 2 * 60 * 60 * 1000);
 
   beforeEach(() => {
-    mockSetState.mockResolvedValue(undefined);
+    mockSetState.mockResolvedValue(row());
     mockReadStash.mockResolvedValue(null);
   });
 

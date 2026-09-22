@@ -268,7 +268,6 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         ADD COLUMN IF NOT EXISTS event_id      TEXT,
         ADD COLUMN IF NOT EXISTS transcript_id TEXT,
         ADD COLUMN IF NOT EXISTS recording_id  TEXT,
-        ADD COLUMN IF NOT EXISTS original_options JSONB,
         ADD COLUMN IF NOT EXISTS created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         ADD COLUMN IF NOT EXISTS updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     `);
@@ -281,6 +280,20 @@ export async function ensureUserSchema(userId: string): Promise<void> {
     await client.query(`
       CREATE INDEX IF NOT EXISTS teams_meetings_state_idx
         ON "${schema}".teams_meetings (state, scheduled_end)
+    `);
+
+    // teams_meeting_snapshots — the organizer's meeting options as they were
+    // before we ever armed the meeting, one row per Graph meeting (not per local
+    // id). A recurring series shares ONE onlineMeeting but mints a new local id
+    // per pasted link, so the snapshot cannot live on teams_meetings without a
+    // multi-row "which sibling holds the real one?" lookup; keying it on
+    // graph_meeting_id directly makes there only ever be one to find.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".teams_meeting_snapshots (
+        graph_meeting_id TEXT PRIMARY KEY,
+        original_options JSONB,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
     `);
 
     // Seed default templates if none exist

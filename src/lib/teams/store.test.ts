@@ -27,6 +27,8 @@ import {
   POLL_GIVE_UP_MS,
   STALE_FETCHING_MS,
   giveUpAnchor,
+  claimMeetingSnapshot,
+  getMeetingSnapshot,
   type TeamsMeetingRow,
 } from './store';
 
@@ -254,7 +256,6 @@ describe('upsertTeamsMeeting', () => {
       null,
       null,
       null,
-      null,
     ]);
 
     expect(result).toEqual({
@@ -275,7 +276,6 @@ describe('upsertTeamsMeeting', () => {
       failureReason: null,
       transcriptId: null,
       recordingId: null,
-      originalOptions: null,
       createdAt: CREATED,
     });
   });
@@ -309,30 +309,68 @@ describe('upsertTeamsMeeting', () => {
     expect(result.eventId).toBe('evt-2');
   });
 
-  it('stores the options as they were before arming as JSON, and keeps an earlier snapshot when none is supplied', async () => {
+  describe('claimMeetingSnapshot', () => {
     const original = {
       allowRecording: false,
       allowTranscription: false,
       recordAutomatically: false,
       meetingSpokenLanguageTag: 'en-GB',
     };
-    mockQueryOne.mockResolvedValue({ ...RAW, original_options: original } as never);
 
-    const result = await upsertTeamsMeeting(USER, { ...row(), originalOptions: original });
+    it('inserts the given options and returns them back on a first claim', async () => {
+      mockQueryOne.mockResolvedValue({ original_options: original } as never);
 
-    const [, sql, params] = mockQueryOne.mock.calls[0] as [string, string, unknown[]];
-    expect(params[17]).toBe(JSON.stringify(original));
-    // Re-registering an armed meeting reads the ALREADY armed values; the first
-    // snapshot must survive it, even against a later non-null one (two registrations
-    // racing, or a second local id for the same Graph meeting), so the stored value comes first.
-    expect(sql).toMatch(/original_options\s*=\s*COALESCE\(teams_meetings\.original_options, \$18::jsonb\)/);
-    expect(result.originalOptions).toEqual(original);
+      const result = await claimMeetingSnapshot(USER, 'GRAPH1', original);
+
+      const [userId, sql, params] = mockQueryOne.mock.calls[0] as [string, string, unknown[]];
+      expect(userId).toBe(USER);
+      expect(sql).toMatch(/INSERT INTO teams_meeting_snapshots/);
+      expect(sql).toMatch(/ON CONFLICT \(graph_meeting_id\) DO UPDATE SET/);
+      expect(params).toEqual(['GRAPH1', JSON.stringify(original)]);
+      expect(result).toEqual(original);
+    });
+
+    it('keeps an earlier snapshot instead of the one just offered (first claim wins)', async () => {
+      // Re-registering an armed meeting reads the ALREADY armed values, and a
+      // recurring series' second local id claims the same graph_meeting_id
+      // again — in both cases RETURNING has to hand back the first-ever
+      // snapshot, not whatever this call tried to insert.
+      mockQueryOne.mockResolvedValue({ original_options: original } as never);
+
+      const result = await claimMeetingSnapshot(USER, 'GRAPH1', {
+        ...original,
+        allowRecording: true, // our own already-armed values, not the organizer's original
+      });
+
+      expect(result).toEqual(original);
+    });
+
+    it('passes null when there is nothing to snapshot', async () => {
+      mockQueryOne.mockResolvedValue({ original_options: null } as never);
+      await claimMeetingSnapshot(USER, 'GRAPH1', null);
+      expect((mockQueryOne.mock.calls[0][2] as unknown[])[1]).toBeNull();
+    });
   });
 
-  it('passes null when no snapshot is supplied', async () => {
-    mockQueryOne.mockResolvedValue(RAW as never);
-    await upsertTeamsMeeting(USER, row());
-    expect((mockQueryOne.mock.calls[0][2] as unknown[])[17]).toBeNull();
+  describe('getMeetingSnapshot', () => {
+    it('reads back the stored snapshot for a Graph meeting', async () => {
+      const original = { allowRecording: true, allowTranscription: true, recordAutomatically: true, meetingSpokenLanguageTag: 'da-DK' };
+      mockQueryOne.mockResolvedValue({ original_options: original } as never);
+
+      const result = await getMeetingSnapshot(USER, 'GRAPH1');
+
+      expect(mockQueryOne).toHaveBeenCalledWith(
+        USER,
+        expect.stringMatching(/SELECT original_options FROM teams_meeting_snapshots/),
+        ['GRAPH1'],
+      );
+      expect(result).toEqual(original);
+    });
+
+    it('returns null when nothing was ever claimed', async () => {
+      mockQueryOne.mockResolvedValue(null);
+      expect(await getMeetingSnapshot(USER, 'GRAPH1')).toBeNull();
+    });
   });
 
   it('coerces string timestamps and numeric strings from the driver', async () => {
@@ -411,19 +449,25 @@ describe('listDueTeamsMeetings', () => {
 });
 
 describe('markPollAttempt', () => {
-  it('bumps attempts and stamps last_polled_at with no patch', async () => {
-    await markPollAttempt(USER, 'm1');
-    const [, sql, params] = mockQuery.mock.calls[0];
+  beforeEach(() => {
+    mockQueryOne.mockResolvedValue(RAW as never);
+  });
+
+  it('bumps attempts and stamps last_polled_at with no patch, and returns the updated row', async () => {
+    const result = await markPollAttempt(USER, 'm1');
+    const [, sql, params] = mockQueryOne.mock.calls[0];
     expect(sql).toMatch(/attempts = attempts \+ 1/);
     expect(sql).toMatch(/last_polled_at = NOW\(\)/);
     expect(sql).toMatch(/WHERE id = \$1/);
+    expect(sql).toMatch(/RETURNING/);
     expect(sql).not.toMatch(/state =/);
     expect(params).toEqual(['m1']);
+    expect(result.id).toBe(RAW.id);
   });
 
   it('only writes the patched columns', async () => {
     await markPollAttempt(USER, 'm1', { state: 'fetching', transcriptId: 'T1' });
-    const [, sql, params] = mockQuery.mock.calls[0];
+    const [, sql, params] = mockQueryOne.mock.calls[0];
     expect(sql).toMatch(/state = \$2/);
     expect(sql).toMatch(/transcript_id = \$3/);
     expect(sql).not.toMatch(/failure_reason =/);
@@ -432,27 +476,54 @@ describe('markPollAttempt', () => {
 
   it('writes an explicit null to clear a column', async () => {
     await markPollAttempt(USER, 'm1', { failureReason: null });
-    const [, sql, params] = mockQuery.mock.calls[0];
+    const [, sql, params] = mockQueryOne.mock.calls[0];
     expect(sql).toMatch(/failure_reason = \$2/);
     expect(params).toEqual(['m1', null]);
+  });
+
+  it('stamps last_polled_at without bumping attempts when incrementAttempts is false', async () => {
+    // A poll that was merely throttled, unreachable, or forced by the user
+    // ("Tjek nu") should not count toward the give-up/backoff attempts.
+    await markPollAttempt(USER, 'm1', { state: 'awaiting_teams' }, { incrementAttempts: false });
+    const [, sql, params] = mockQueryOne.mock.calls[0];
+    expect(sql).not.toMatch(/attempts = attempts \+ 1/);
+    expect(sql).toMatch(/last_polled_at = NOW\(\)/);
+    expect(sql).toMatch(/state = \$2/);
+    expect(params).toEqual(['m1', 'awaiting_teams']);
+  });
+
+  it('throws when the row no longer exists', async () => {
+    mockQueryOne.mockResolvedValue(null);
+    await expect(markPollAttempt(USER, 'gone')).rejects.toThrow(/no such Teams meeting/);
   });
 });
 
 describe('setTeamsMeetingState', () => {
-  it('sets state and clears the failure reason by default', async () => {
-    await setTeamsMeetingState(USER, 'm1', 'ready');
-    const [, sql, params] = mockQuery.mock.calls[0];
+  beforeEach(() => {
+    mockQueryOne.mockResolvedValue(RAW as never);
+  });
+
+  it('sets state and clears the failure reason by default, and returns the updated row', async () => {
+    const result = await setTeamsMeetingState(USER, 'm1', 'ready');
+    const [, sql, params] = mockQueryOne.mock.calls[0];
     expect(sql).toMatch(/SET state = \$2, failure_reason = \$3/);
+    expect(sql).toMatch(/RETURNING/);
     expect(params).toEqual(['m1', 'ready', null]);
+    expect(result.id).toBe(RAW.id);
   });
 
   it('stores a failure reason', async () => {
     await setTeamsMeetingState(USER, 'm1', 'failed', 'Ingen transskription i Teams');
-    expect(mockQuery.mock.calls[0][2]).toEqual([
+    expect(mockQueryOne.mock.calls[0][2]).toEqual([
       'm1',
       'failed',
       'Ingen transskription i Teams',
     ]);
+  });
+
+  it('throws when the row no longer exists', async () => {
+    mockQueryOne.mockResolvedValue(null);
+    await expect(setTeamsMeetingState(USER, 'gone', 'ready')).rejects.toThrow(/no such Teams meeting/);
   });
 });
 
