@@ -747,3 +747,26 @@ describe('ProcessingTranscription — acknowledging the server copy', () => {
   });
 });
 
+describe('ProcessingTranscription — a server-side run that produced nothing', () => {
+  it('says the meeting had no speech, not that a file is missing', async () => {
+    // A Teams meeting has no local audio by design, so "Lydfil ikke fundet" told
+    // the user about the fallback failing rather than about their meeting.
+    mockGetAudio.mockResolvedValue(null);
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'ready', segments: [], diarized: true }),
+    });
+    renderComponent();
+
+    expect(await screen.findByText(/Der blev ikke fundet tale i mødet/)).toBeInTheDocument();
+    expect(screen.queryByText('Lydfil ikke fundet')).not.toBeInTheDocument();
+  });
+
+  it('says the server run failed, and invites a retry', async () => {
+    mockGetAudio.mockResolvedValue(null);
+    mockFetch.mockResolvedValue(makeServerTranscript('failed'));
+    renderComponent();
+
+    expect(await screen.findByText(/Transskriptionen på serveren fejlede/)).toBeInTheDocument();
+  });
+});
