@@ -6,7 +6,7 @@ import { GraphError, TEAMS_DISABLED_MESSAGE } from '@/lib/teams/graph-client';
 import { graphDate } from '@/lib/teams/graph-dates';
 import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
-import { armMeeting } from '@/lib/teams/meeting-arm';
+import { armMeeting, isArmed } from '@/lib/teams/meeting-arm';
 import { resolveJoinUrl } from '@/lib/teams/meeting-resolver';
 import { claimMeetingSnapshot, upsertTeamsMeeting } from '@/lib/teams/store';
 
@@ -114,7 +114,7 @@ export async function POST(req: NextRequest) {
       subject: resolved.subject,
       organizerId: resolved.organizerId,
       isOrganizer: resolved.isOrganizer,
-      armed: armResult === 'armed',
+      armed: isArmed(armResult),
       armResult,
       eventId,
       scheduledStart: occurrenceStart ?? toDate(resolved.scheduledStart),

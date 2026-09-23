@@ -12,7 +12,10 @@ vi.mock('@/lib/teams/meeting-resolver', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/teams/meeting-resolver')>();
   return { ...actual, resolveJoinUrl: vi.fn() };
 });
-vi.mock('@/lib/teams/meeting-arm', () => ({ armMeeting: vi.fn() }));
+vi.mock('@/lib/teams/meeting-arm', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/teams/meeting-arm')>()),
+  armMeeting: vi.fn(),
+}));
 vi.mock('@/lib/teams/store', () => ({
   upsertTeamsMeeting: vi.fn(),
   claimMeetingSnapshot: vi.fn(),

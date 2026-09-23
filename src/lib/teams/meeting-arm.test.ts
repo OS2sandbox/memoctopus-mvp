@@ -16,12 +16,18 @@ vi.mock('@/lib/teams/graph-client', () => ({
 }));
 
 import { graphFetch, graphJson, GraphError } from '@/lib/teams/graph-client';
-import { armMeeting, disarmMeeting, ARM_OPTIONS } from './meeting-arm';
+import { armMeeting, disarmMeeting, isArmed, isInstantMeeting, ARM_OPTIONS } from './meeting-arm';
 
 const mockFetch = vi.mocked(graphFetch);
 const mockJson = vi.mocked(graphJson);
 const USER = 'user-1';
 const ID = 'GRAPH-1';
+
+/** A scheduled meeting: a real, non-empty window, so arming is `armed`. */
+const SCHEDULED = {
+  startDateTime: '2026-09-23T09:00:00Z',
+  endDateTime: '2026-09-23T09:30:00Z',
+};
 
 /** What Graph reports when we read the meeting back after the PATCH. */
 function readBack(options: Record<string, unknown>) {
@@ -30,6 +36,7 @@ function readBack(options: Record<string, unknown>) {
     return {
       id: ID,
       participants: { organizer: { identity: { user: { id: 'me-oid' } } } },
+      ...SCHEDULED,
       ...options,
     } as never;
   });
@@ -216,7 +223,7 @@ describe('armMeeting — snapshot of the original options', () => {
     mockJson.mockImplementation(async (_user: string, path: string) => {
       if (!patched) throw new GraphError('http', 'Graph-fejl', { status: 500 });
       if (path.startsWith('/me?')) return { id: 'me-oid' } as never;
-      return { id: ID, ...ARMED } as never;
+      return { id: ID, ...SCHEDULED, ...ARMED } as never;
     });
 
     const outcome = await armMeeting(USER, ID);
@@ -304,5 +311,63 @@ describe('disarmMeeting', () => {
   it('rethrows other Graph errors', async () => {
     mockFetch.mockRejectedValue(new GraphError('not_found', 'Findes ikke', { status: 404 }));
     await expect(disarmMeeting(USER, ID, ORIGINAL)).rejects.toMatchObject({ code: 'not_found' });
+  });
+});
+
+describe('armMeeting on a meeting that is already under way', () => {
+  it('reports armed_in_progress for an instant meeting Graph gives no window', async () => {
+    // "Mød nu": Graph answers the year-1 sentinel, which graphDate makes null.
+    readBack({ ...ARMED, startDateTime: '0001-01-01T00:00:00Z', endDateTime: '0001-01-01T00:00:00Z' });
+
+    const outcome = await armMeeting(USER, ID);
+
+    expect(outcome.result).toBe('armed_in_progress');
+    expect(isArmed(outcome.result)).toBe(true);
+  });
+
+  it('reports armed_in_progress for a zero-length window', async () => {
+    // What Graph actually returned for a real "Mød nu" meeting: start == end ==
+    // the moment it was created.
+    readBack({ ...ARMED, startDateTime: '2026-09-23T09:11:21Z', endDateTime: '2026-09-23T09:11:21Z' });
+
+    expect((await armMeeting(USER, ID)).result).toBe('armed_in_progress');
+  });
+
+  it('still PATCHes allowTranscription, so it can be started by hand', async () => {
+    readBack({ ...ARMED, startDateTime: '2026-09-23T09:11:21Z', endDateTime: '2026-09-23T09:11:21Z' });
+
+    await armMeeting(USER, ID);
+
+    expect(JSON.parse(patchCall().init.body as string)).toMatchObject({ allowTranscription: true });
+  });
+
+  it('leaves a scheduled meeting whose start has passed as armed', async () => {
+    // Teams starts transcribing on the first join, not at the scheduled time,
+    // so arming five minutes late still works and must not be warned about.
+    readBack({ ...ARMED, ...SCHEDULED });
+
+    expect((await armMeeting(USER, ID)).result).toBe('armed');
+  });
+
+  it('lets a blocking policy win over an instant meeting', async () => {
+    readBack({
+      ...ARMED,
+      allowTranscription: false,
+      startDateTime: '2026-09-23T09:11:21Z',
+      endDateTime: '2026-09-23T09:11:21Z',
+    });
+
+    expect((await armMeeting(USER, ID)).result).toBe('policy_blocked');
+  });
+});
+
+describe('isInstantMeeting', () => {
+  it('is true without a start, false for a real window', () => {
+    expect(isInstantMeeting(null, null)).toBe(true);
+    expect(isInstantMeeting('2026-09-23T09:00:00Z', '2026-09-23T09:30:00Z')).toBe(false);
+  });
+
+  it('does not guess when only the end is missing', () => {
+    expect(isInstantMeeting('2026-09-23T09:00:00Z', null)).toBe(false);
   });
 });

@@ -17,7 +17,7 @@ export type TeamsMeetingState =
   | 'needs_reauth';
 
 /** Outcome of the one-shot arm PATCH, kept so the UI can explain itself later. */
-export type TeamsArmResult = 'armed' | 'not_organizer' | 'policy_blocked';
+export type TeamsArmResult = 'armed' | 'armed_in_progress' | 'not_organizer' | 'policy_blocked';
 
 export interface TeamsMeetingRow {
   id: string;

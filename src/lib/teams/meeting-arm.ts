@@ -7,7 +7,12 @@ import { getMeeting, type ResolvedMeeting } from '@/lib/teams/meeting-resolver';
  * Arming is a single PATCH of the meeting's own options — exactly what the
  * organizer would tick in Teams' meeting options — so Teams records and
  * transcribes the meeting itself and we only collect the artifacts afterwards
- * (plan §3). No bot joins, nobody has to press anything during the meeting.
+ * (plan §3). No bot joins, and for a scheduled meeting nobody has to press
+ * anything during it.
+ *
+ * A meeting that is already running is the exception, reported as
+ * `armed_in_progress`: see {@link isInstantMeeting} for why Teams cannot be made
+ * to start on its own there.
  *
  * Only the organizer may update meeting options. An invitee gets 403 and we
  * report `not_organizer` so the UI can show the copy-paste sentence to send to
@@ -24,7 +29,42 @@ export const ARM_OPTIONS = {
   meetingSpokenLanguageTag: DEFAULT_SPOKEN_LANGUAGE,
 } as const;
 
-export type ArmResult = 'armed' | 'not_organizer' | 'policy_blocked';
+export type ArmResult = 'armed' | 'armed_in_progress' | 'not_organizer' | 'policy_blocked';
+
+/**
+ * Teams acts on `recordAutomatically` when a meeting *starts*, so a meeting that
+ * is already under way cannot be armed into transcribing itself — and Graph has
+ * no delegated API to start transcription on a running meeting either. All we
+ * can do is `allowTranscription`, so the organizer can start it by hand in one
+ * tap; the collection afterwards is unchanged.
+ *
+ * An instant meeting ("Mød nu") is always already under way, because joining it
+ * is what creates it. Graph describes one either with the year-1 sentinel (which
+ * {@link graphDate} has already turned into null) or with a zero-length window
+ * whose start and end are both the moment it came into being.
+ *
+ * A scheduled meeting is left alone even when its start has passed: Teams starts
+ * transcribing on the first join, not at the scheduled time, so arming a meeting
+ * five minutes late still works and must not be warned about.
+ */
+export function isInstantMeeting(
+  scheduledStart: string | null,
+  scheduledEnd: string | null,
+): boolean {
+  if (scheduledStart === null) return true;
+  const start = Date.parse(scheduledStart);
+  const end = scheduledEnd === null ? NaN : Date.parse(scheduledEnd);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+  return end <= start;
+}
+
+/**
+ * Both arming outcomes leave the meeting armed and worth polling — they differ
+ * only in what we may promise the user about who starts the transcription.
+ */
+export function isArmed(result: ArmResult): boolean {
+  return result === 'armed' || result === 'armed_in_progress';
+}
 
 export interface ArmOutcome {
   result: ArmResult;
@@ -104,7 +144,14 @@ export async function armMeeting(userId: string, graphMeetingId: string): Promis
 
   const after = await getMeeting(userId, graphMeetingId);
   const blocked = after.options.recordAutomatically === false || after.options.allowTranscription === false;
-  return { result: blocked ? 'policy_blocked' : 'armed', options: after.options, previousOptions };
+  // Policy wins: if Teams refused the options outright, how the meeting was
+  // started is beside the point — nobody can transcribe it, by hand or not.
+  const result: ArmResult = blocked
+    ? 'policy_blocked'
+    : isInstantMeeting(after.scheduledStart, after.scheduledEnd)
+      ? 'armed_in_progress'
+      : 'armed';
+  return { result, options: after.options, previousOptions };
 }
 
 /** Best effort — an invitee may not even be allowed to read the options back. */

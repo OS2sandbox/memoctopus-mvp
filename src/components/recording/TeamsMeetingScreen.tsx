@@ -29,7 +29,7 @@ interface TeamsMeetingStatus {
   enabled?: boolean;
 }
 
-export type TeamsArmResult = 'armed' | 'not_organizer' | 'policy_blocked';
+export type TeamsArmResult = 'armed' | 'armed_in_progress' | 'not_organizer' | 'policy_blocked';
 
 const ADMIN_GUIDE = '/docs/setup-microsoft-teams.md';
 
@@ -317,7 +317,9 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
               border: '1px solid var(--line-2)',
             }}
           >
-            Memoctopus er slået til
+            {status.armResult === 'armed_in_progress'
+              ? 'Start transskription i Teams'
+              : 'Memoctopus er slået til'}
           </span>
         )}
       </div>
@@ -330,12 +332,26 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
           </p>
         )}
 
-        {state === 'awaiting_teams' && status?.armed && (
+        {state === 'awaiting_teams' && status?.armed && status.armResult !== 'armed_in_progress' && (
           <>
             <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
               Mødet optages og transskriberes automatisk. Referatet er klar automatisk et par minutter efter mødet.
             </p>
             <p style={{ marginTop: 10, fontSize: 13.5, color: 'var(--muted)' }}>Venter på mødet…</p>
+          </>
+        )}
+
+        {state === 'awaiting_teams' && status?.armResult === 'armed_in_progress' && (
+          <>
+            <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
+              Mødet er allerede i gang. Teams starter kun transskription af sig selv på et møde, der
+              endnu ikke er begyndt, så du skal starte den i mødet:{' '}
+              <strong>Flere handlinger → Optag og transskriber → Start transskription</strong>.
+            </p>
+            <p style={{ marginTop: 10, fontSize: 13.5, color: 'var(--muted)' }}>
+              Memoctopus henter referatet automatisk et par minutter efter mødet. Planlægger du mødet
+              i kalenderen i stedet og indsætter linket, inden mødet begynder, sker det hele af sig selv.
+            </p>
           </>
         )}
 

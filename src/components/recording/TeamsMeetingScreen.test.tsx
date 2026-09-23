@@ -238,6 +238,40 @@ describe('TeamsMeetingScreen — ready', () => {
   });
 });
 
+describe('TeamsMeetingScreen — a meeting that was already running when armed', () => {
+  it('asks for a manual start instead of promising it happens automatically', async () => {
+    // An instant meeting cannot be armed into transcribing itself: Teams acts on
+    // recordAutomatically when a meeting starts, and this one already had.
+    // Promising "automatisk" here bought a silent 24-hour wait.
+    respondWith(statusBody({ armed: true, armResult: 'armed_in_progress' }));
+    renderScreen();
+
+    expect(await screen.findByText(/Mødet er allerede i gang/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Flere handlinger → Optag og transskriber → Start transskription/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Mødet optages og transskriberes automatisk/),
+    ).not.toBeInTheDocument();
+  });
+
+  it('labels the badge with the action the user still has to take', async () => {
+    respondWith(statusBody({ armed: true, armResult: 'armed_in_progress' }));
+    renderScreen();
+
+    expect(await screen.findByTestId('armed-badge'))
+      .toHaveTextContent('Start transskription i Teams');
+  });
+
+  it('does not show the invitee copy — the user is the organizer', async () => {
+    respondWith(statusBody({ armed: true, armResult: 'armed_in_progress' }));
+    renderScreen();
+
+    expect(await screen.findByText(/Mødet er allerede i gang/)).toBeInTheDocument();
+    expect(screen.queryByText(/ikke organisator/)).not.toBeInTheDocument();
+  });
+});
+
 describe('TeamsMeetingScreen — blocked by tenant policy', () => {
   it('explains the policy and links the admin guide instead of the invitee copy', async () => {
     // An organizer whose tenant blocks recording used to be told they were not
