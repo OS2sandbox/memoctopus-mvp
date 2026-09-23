@@ -135,6 +135,7 @@ export function TopBar() {
               type="button"
               onClick={openWelcome}
               title="Se en hurtig gennemgang af Referat"
+              aria-label="Se en hurtig gennemgang af Referat"
               style={{
                 fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)',
                 background: 'none', border: '1px solid var(--line)', borderRadius: 4,

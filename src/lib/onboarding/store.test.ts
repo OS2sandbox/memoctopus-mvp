@@ -14,22 +14,16 @@ beforeEach(() => {
 });
 
 describe('markStepSeen', () => {
-  it('runs the progress insert and the state upsert concurrently, not sequentially', async () => {
-    let progressResolved = false;
-    db.queryUserSchema.mockImplementation(async (_userId: string, sql: string) => {
-      if (/INSERT INTO onboarding_progress/.test(sql)) {
-        await new Promise((r) => setTimeout(r, 5));
-        progressResolved = true;
-        return [];
-      }
-      // The state upsert must have started before the progress insert finished.
-      expect(progressResolved).toBe(false);
-      return [];
-    });
-
+  it('runs as a single statement so an in-flight resetHints cannot interleave', async () => {
     await markStepSeen('user-1', 'some.step', null);
 
-    expect(db.queryUserSchema).toHaveBeenCalledTimes(2);
+    // Two statements on two pooled connections were not atomic with resetHints.
+    expect(db.queryUserSchema).toHaveBeenCalledTimes(1);
+    const [userId, sql] = db.queryUserSchema.mock.calls[0];
+    expect(userId).toBe('user-1');
+    expect(sql).toMatch(/INSERT INTO onboarding_progress/);
+    expect(sql).toMatch(/INSERT INTO onboarding_state/);
+    expect(sql).toMatch(/last_step_id = EXCLUDED\.last_step_id/);
   });
 
   it('stores the sentinel (not a literal NULL) for a global step', async () => {

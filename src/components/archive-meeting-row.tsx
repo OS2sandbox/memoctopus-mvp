@@ -119,7 +119,7 @@ export function ArchiveMeetingRow({
               setDeleteError(null);
               setDeleteOpen(true);
             }}
-            className="ml-1 p-1.5 rounded text-[var(--muted)] hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100"
+            className="ml-1 p-1.5 rounded text-[var(--muted)] hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus:opacity-100 focus:pointer-events-auto"
             aria-label="Slet møde"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

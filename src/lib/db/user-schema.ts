@@ -339,6 +339,18 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         DROP CONSTRAINT IF EXISTS onboarding_progress_meeting_id_fkey
     `);
 
+    // Legacy rows may carry duplicate (step_id, COALESCE(meeting_id, '')) pairs
+    // (real NULLs alongside an existing '' row, or duplicate NULLs themselves).
+    // Collapse each group to its most recently seen row before folding NULLs
+    // into the sentinel, or the UPDATE/constraint below fails on the dupes.
+    await client.query(`
+      DELETE FROM "${schema}".onboarding_progress a
+      USING "${schema}".onboarding_progress b
+      WHERE a.step_id = b.step_id
+        AND COALESCE(a.meeting_id, '') = COALESCE(b.meeting_id, '')
+        AND (a.seen_at, a.id) < (b.seen_at, b.id)
+    `);
+
     // A database created before meeting_id became NOT NULL still has real NULLs;
     // fold them into the sentinel so the unique constraint below covers every row.
     await client.query(`

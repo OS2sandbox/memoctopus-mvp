@@ -180,23 +180,23 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
               <div style={{ fontSize: 14.5, color: 'var(--ink)' }}>
                 {fmt.file} downloadet
               </div>
-              <OnboardingTooltip stepId="export.post-download-link">
-                <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>
-                  referatet ligger i arkivet
-                </div>
-              </OnboardingTooltip>
+              <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', marginTop: 3 }}>
+                referatet ligger i arkivet
+              </div>
             </div>
-            <Link
-              href="/arkiv"
-              style={{
-                fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
-                padding: '8px 14px', borderRadius: 'var(--radius)',
-                border: '1px solid var(--line-2)', background: 'transparent',
-                color: 'var(--ink)', textDecoration: 'none',
-              }}
-            >
-              se i arkivet
-            </Link>
+            <OnboardingTooltip stepId="export.post-download-link">
+              <Link
+                href="/arkiv"
+                style={{
+                  fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
+                  padding: '8px 14px', borderRadius: 'var(--radius)',
+                  border: '1px solid var(--line-2)', background: 'transparent',
+                  color: 'var(--ink)', textDecoration: 'none',
+                }}
+              >
+                se i arkivet
+              </Link>
+            </OnboardingTooltip>
             <Link
               href="/dashboard"
               style={{

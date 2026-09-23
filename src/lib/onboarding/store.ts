@@ -38,22 +38,21 @@ export async function getSeenSteps(userId: string): Promise<SeenStep[]> {
 }
 
 export async function markStepSeen(userId: string, stepId: string, meetingId: string | null): Promise<void> {
-  await Promise.all([
-    queryUserSchema(
-      userId,
-      `INSERT INTO onboarding_progress (step_id, meeting_id, status)
+  // One statement, same reasoning as resetHints below: the progress insert and the
+  // state upsert must commit together on the same connection, or a concurrent
+  // resetHints can land between them and leave the two tables inconsistent.
+  await queryUserSchema(
+    userId,
+    `WITH progress AS (
+       INSERT INTO onboarding_progress (step_id, meeting_id, status)
        VALUES ($1, $2, 'seen')
-       ON CONFLICT ON CONSTRAINT onboarding_progress_step_meeting_unique DO NOTHING`,
-      [stepId, meetingId ?? ''],
-    ),
-    queryUserSchema(
-      userId,
-      `INSERT INTO onboarding_state (id, last_step_id, updated_at)
-       VALUES ('singleton', $1, NOW())
-       ON CONFLICT (id) DO UPDATE SET last_step_id = EXCLUDED.last_step_id, updated_at = NOW()`,
-      [stepId],
-    ),
-  ]);
+       ON CONFLICT ON CONSTRAINT onboarding_progress_step_meeting_unique DO NOTHING
+     )
+     INSERT INTO onboarding_state (id, last_step_id, updated_at)
+     VALUES ('singleton', $1, NOW())
+     ON CONFLICT (id) DO UPDATE SET last_step_id = EXCLUDED.last_step_id, updated_at = NOW()`,
+    [stepId, meetingId ?? ''],
+  );
 }
 
 export async function skipTour(userId: string): Promise<void> {

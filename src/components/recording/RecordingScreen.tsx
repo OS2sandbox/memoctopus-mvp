@@ -1452,7 +1452,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
                         })}
                       </span>
                       <OnboardingTooltip stepId="recording.star-marker">
-                        <span style={{ color: 'var(--muted-2)', textAlign: 'right', animation: 'wordFadeIn 0.25s ease-out both', animationDelay: `${Math.max(0, seg.text.split(' ').length * seg.waveIntervalMs - seg.waveElapsedAtCommitMs)}ms` }}>★</span>
+                        <span tabIndex={0} style={{ color: 'var(--muted-2)', textAlign: 'right', animation: 'wordFadeIn 0.25s ease-out both', animationDelay: `${Math.max(0, seg.text.split(' ').length * seg.waveIntervalMs - seg.waveElapsedAtCommitMs)}ms` }}>★</span>
                       </OnboardingTooltip>
                     </div>
                   );
