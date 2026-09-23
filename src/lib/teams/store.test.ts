@@ -139,7 +139,11 @@ describe('isTeamsMeetingDue', () => {
     // An ad-hoc "Mød nu" link Graph gives no window for used to poll forever.
     expect(
       isTeamsMeetingDue(
-        row({ scheduledEnd: null, createdAt: new Date(ms - POLL_GIVE_UP_MS - 1000) }),
+        row({
+          scheduledEnd: null,
+          createdAt: new Date(ms - POLL_GIVE_UP_MS - 1000),
+          lastPolledAt: new Date(ms - 60 * 60_000),
+        }),
         now,
       ),
     ).toBe(false);
@@ -172,6 +176,7 @@ describe('isTeamsMeetingDue', () => {
         row({
           scheduledEnd: new Date('0001-01-01T00:00:00Z'),
           createdAt: new Date(ms - POLL_GIVE_UP_MS - 1000),
+          lastPolledAt: new Date(ms - 60 * 60_000),
         }),
         now,
       ),
@@ -208,11 +213,53 @@ describe('isTeamsMeetingDue', () => {
   });
 
   it('gives up 24 hours after the scheduled end', () => {
+    const polled = { lastPolledAt: new Date(ms - 60 * 60_000) };
     expect(
-      isTeamsMeetingDue(row({ scheduledEnd: new Date(ms - POLL_GIVE_UP_MS - 1000) }), now),
+      isTeamsMeetingDue(
+        row({
+          ...polled,
+          scheduledEnd: new Date(ms - POLL_GIVE_UP_MS - 1000),
+          createdAt: new Date(ms - POLL_GIVE_UP_MS - 2000),
+        }),
+        now,
+      ),
     ).toBe(false);
     expect(
-      isTeamsMeetingDue(row({ scheduledEnd: new Date(ms - POLL_GIVE_UP_MS + 1000) }), now),
+      isTeamsMeetingDue(row({ ...polled, scheduledEnd: new Date(ms - POLL_GIVE_UP_MS + 1000) }), now),
+    ).toBe(true);
+  });
+
+  it('measures the give-up window from registration for a meeting already long over', () => {
+    // Pasting a link for a meeting held days ago used to be answered `failed`
+    // before Graph was asked once, while Graph still had the transcript.
+    expect(
+      isTeamsMeetingDue(
+        row({
+          scheduledEnd: new Date(ms - 5 * POLL_GIVE_UP_MS),
+          createdAt: new Date(ms - 60_000),
+        }),
+        now,
+      ),
+    ).toBe(true);
+    expect(
+      giveUpAnchor({
+        scheduledEnd: new Date(ms - 5 * POLL_GIVE_UP_MS),
+        createdAt: CREATED,
+      }),
+    ).toBe(CREATED);
+  });
+
+  it('never abandons a row on the clock alone before it has ever been polled', () => {
+    // The window elapses while TEAMS_GRAPH_ENABLED is off or the instance is down.
+    expect(
+      isTeamsMeetingDue(
+        row({
+          scheduledEnd: new Date(ms - POLL_GIVE_UP_MS - 1000),
+          createdAt: new Date(ms - POLL_GIVE_UP_MS - 2000),
+          lastPolledAt: null,
+        }),
+        now,
+      ),
     ).toBe(true);
   });
 });
@@ -440,8 +487,8 @@ describe('listDueTeamsMeetings', () => {
     // rescued, and a row with no schedule is bounded by created_at.
     expect(sql).toMatch(/state IN \('awaiting_teams', 'needs_reauth'\)/);
     expect(sql).toMatch(/state = 'fetching'/);
-    expect(sql).toMatch(/COALESCE\(scheduled_end, created_at\) <= \$1::timestamptz/);
-    expect(sql).toMatch(/COALESCE\(scheduled_end, created_at\)\s*\n?\s*>= \$1::timestamptz -/);
+    expect(sql).toMatch(/GREATEST\(scheduled_end, created_at\) <= \$1::timestamptz/);
+    expect(sql).toMatch(/GREATEST\(scheduled_end, created_at\)\s*\n?\s*>= \$1::timestamptz -/);
     expect(sql).toMatch(/CASE WHEN attempts < \$3::int THEN \$4::int ELSE \$5::int END/);
     expect(params).toEqual([now, POLL_GIVE_UP_MS, 15, 120_000, 900_000, STALE_FETCHING_MS]);
     expect(rows).toHaveLength(1);

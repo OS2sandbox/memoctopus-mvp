@@ -92,6 +92,17 @@ export function pickArtifact<T extends { createdDateTime: string | null }>(
     const from = window.start.getTime() - WINDOW_BEFORE_MS;
     const to = window.end.getTime() + WINDOW_AFTER_MS;
     const inWindow = dated.filter((entry) => entry.at >= from && entry.at <= to);
+    // Nothing in the window is NOT the same as nothing at all: a meeting that ran
+    // more than WINDOW_AFTER_MS over, or was held before WINDOW_BEFORE_MS of its
+    // booking, has its artifact discarded here and is then lost for good.
+    //
+    // Falling through to the newest dated artifact would fix that — but it would
+    // also hand one occurrence of a recurring series the transcript of another,
+    // which is what this window exists to prevent, and createdDateTime alone cannot
+    // tell "ran four hours over" from "last Tuesday". The honest discriminator is
+    // the artifact's own span (ArtifactRef.endDateTime, already fetched and unused).
+    // Blocked on confirming against a real tenant what Graph reports for a series'
+    // occurrence and whether createdDateTime is call start or publication time.
     if (inWindow.length === 0) return null;
     return inWindow.reduce((best, entry) => (entry.at > best.at ? entry : best)).item;
   }

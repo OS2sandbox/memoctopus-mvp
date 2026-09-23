@@ -78,7 +78,14 @@ export async function pollMeeting(
   // meeting Graph gave us no window for — from when we were asked to watch it.
   // Without the fallback such a row polls Graph forever and never gives up.
   const anchor = giveUpAnchor(row);
-  const gaveUp = anchor != null && anchor.getTime() < now.getTime() - POLL_GIVE_UP_MS;
+  // Never declare a meeting hopeless without having asked Graph about it even once.
+  // The window can elapse while TEAMS_GRAPH_ENABLED is off, or while this instance
+  // is down, and Graph keeps artifacts far longer than our 24 h — so the clock alone
+  // must not turn a meeting nobody ever looked for into "Teams never started".
+  const gaveUp =
+    anchor != null
+    && anchor.getTime() < now.getTime() - POLL_GIVE_UP_MS
+    && row.lastPolledAt != null;
 
   if (options.force && row.state === 'failed' && !gaveUp) {
     row = await setTeamsMeetingState(userId, id, 'awaiting_teams', null);

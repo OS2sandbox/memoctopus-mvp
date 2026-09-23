@@ -104,7 +104,10 @@ export function isTeamsMeetingDue(row: TeamsMeetingRow, now: Date): boolean {
   if (bound) {
     const boundMs = bound.getTime();
     if (boundMs > nowMs) return false;
-    if (boundMs < nowMs - POLL_GIVE_UP_MS) return false;
+    // A row we have never actually polled is never abandoned on the clock alone:
+    // the window can elapse while TEAMS_GRAPH_ENABLED is off or the instance is
+    // down, and Graph keeps artifacts far longer than our 24 h.
+    if (boundMs < nowMs - POLL_GIVE_UP_MS && row.lastPolledAt != null) return false;
   }
   if (row.lastPolledAt && row.lastPolledAt.getTime() > nowMs - pollBackoffMs(row.attempts)) {
     return false;
@@ -112,12 +115,24 @@ export function isTeamsMeetingDue(row: TeamsMeetingRow, now: Date): boolean {
   return true;
 }
 
-/** The instant the 24 h give-up window is measured from. */
+/**
+ * The instant the 24 h give-up window is measured from: the LATER of the meeting's
+ * scheduled end and when we were asked to watch it.
+ *
+ * Not the scheduled end alone. A link pasted for a meeting that finished days ago
+ * would be born outside its own window and answered `failed` before Graph was asked
+ * even once — while Graph still had the transcript. Being handed a link now earns
+ * the meeting a full window from now, whenever it was actually held.
+ */
 export function giveUpAnchor(row: Pick<TeamsMeetingRow, 'scheduledEnd' | 'createdAt'>): Date | null {
   // realDate, not a bare ??: rows written before the resolver filtered it carry
   // Graph's 0001-01-01 zero value, and treating that as a real scheduled end
   // makes the meeting look two thousand years overdue and abandoned on sight.
-  return realDate(row.scheduledEnd) ?? row.createdAt ?? null;
+  const end = realDate(row.scheduledEnd);
+  const created = row.createdAt ?? null;
+  if (!end) return created;
+  if (!created) return end;
+  return end.getTime() >= created.getTime() ? end : created;
 }
 
 // ─── Row mapping ────────────────────────────────────────────────────────────
@@ -336,14 +351,17 @@ export async function listDueTeamsMeetings(
                   AND COALESCE(last_polled_at, created_at)
                       <= $1::timestamptz - ($6::int * INTERVAL '1 millisecond'))
             )
-        AND COALESCE(scheduled_end, created_at) <= $1::timestamptz
-        AND COALESCE(scheduled_end, created_at)
-            >= $1::timestamptz - ($2::int * INTERVAL '1 millisecond')
+        -- GREATEST, not COALESCE: see giveUpAnchor. GREATEST skips NULLs, so a
+        -- meeting with no schedule still falls back to created_at.
+        AND GREATEST(scheduled_end, created_at) <= $1::timestamptz
+        AND (last_polled_at IS NULL
+             OR GREATEST(scheduled_end, created_at)
+                >= $1::timestamptz - ($2::int * INTERVAL '1 millisecond'))
         AND (last_polled_at IS NULL
              OR last_polled_at <= $1::timestamptz
                 - (CASE WHEN attempts < $3::int THEN $4::int ELSE $5::int END)
                   * INTERVAL '1 millisecond')
-      ORDER BY COALESCE(scheduled_end, created_at) ASC`,
+      ORDER BY GREATEST(scheduled_end, created_at) ASC`,
     [now, POLL_GIVE_UP_MS, FAST_POLL_ATTEMPTS, FAST_POLL_MS, SLOW_POLL_MS, STALE_FETCHING_MS],
   );
   return rows.map(mapRow);

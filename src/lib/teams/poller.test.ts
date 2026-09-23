@@ -149,7 +149,11 @@ describe('pollMeeting', () => {
   it('gives up 24h after creation when the meeting has no schedule', async () => {
     // An ad-hoc meeting Graph gave us no window for used to poll Graph forever.
     mockGet.mockResolvedValue(
-      row({ scheduledEnd: null, createdAt: new Date(NOW.getTime() - POLL_GIVE_UP_MS - 1000) }),
+      row({
+        scheduledEnd: null,
+        createdAt: new Date(NOW.getTime() - POLL_GIVE_UP_MS - 1000),
+        lastPolledAt: new Date(NOW.getTime() - 60 * 60_000),
+      }),
     );
 
     await pollMeeting('u1', 'm1', NOW);
@@ -176,7 +180,12 @@ describe('pollMeeting', () => {
 
   it('does not revive a failed row that is past the give-up window', async () => {
     mockGet.mockResolvedValue(
-      row({ state: 'failed', scheduledEnd: new Date(NOW.getTime() - POLL_GIVE_UP_MS - 1000) }),
+      row({
+        state: 'failed',
+        scheduledEnd: new Date(NOW.getTime() - POLL_GIVE_UP_MS - 1000),
+        createdAt: new Date(NOW.getTime() - POLL_GIVE_UP_MS - 2000),
+        lastPolledAt: new Date(NOW.getTime() - 60 * 60_000),
+      }),
     );
 
     const result = await pollMeeting('u1', 'm1', NOW, { force: true });
@@ -194,7 +203,13 @@ describe('pollMeeting', () => {
 
   it('gives up 24h after the scheduled end', async () => {
     const end = new Date(NOW.getTime() - POLL_GIVE_UP_MS - 1000);
-    mockGet.mockResolvedValue(row({ scheduledEnd: end }));
+    mockGet.mockResolvedValue(
+      row({
+        scheduledEnd: end,
+        createdAt: new Date(end.getTime() - 1000),
+        lastPolledAt: new Date(NOW.getTime() - 60 * 60_000),
+      }),
+    );
 
     await pollMeeting('u1', 'm1', NOW);
 
@@ -514,5 +529,44 @@ describe('startPoller', () => {
     stop();
     await vi.advanceTimersByTimeAsync(5000);
     expect(mockConnect).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('pollMeeting — a meeting whose window has already gone', () => {
+  it('polls a link pasted long after the meeting instead of failing it unasked', async () => {
+    // giveUpAnchor takes the LATER of scheduled end and registration, so being
+    // handed the link now earns a full window from now.
+    mockGet.mockResolvedValue(
+      row({
+        scheduledEnd: new Date(NOW.getTime() - 5 * POLL_GIVE_UP_MS),
+        createdAt: new Date(NOW.getTime() - 60_000),
+        lastPolledAt: null,
+      }),
+    );
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockProcess).toHaveBeenCalled();
+    expect(mockMark).not.toHaveBeenCalledWith('u1', 'm1', {
+      state: 'failed',
+      failureReason: GIVE_UP_MESSAGE,
+    });
+  });
+
+  it('asks Graph once before giving up on a row it never polled', async () => {
+    // The 24 h window elapses while TEAMS_GRAPH_ENABLED is off or the box is down.
+    mockGet.mockResolvedValue(
+      row({
+        scheduledEnd: new Date(NOW.getTime() - POLL_GIVE_UP_MS - 1000),
+        createdAt: new Date(NOW.getTime() - POLL_GIVE_UP_MS - 2000),
+        lastPolledAt: null,
+      }),
+    );
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockProcess).toHaveBeenCalled();
   });
 });
