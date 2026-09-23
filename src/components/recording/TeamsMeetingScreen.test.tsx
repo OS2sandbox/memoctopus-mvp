@@ -267,6 +267,25 @@ describe('TeamsMeetingScreen — waiting copy before vs after the scheduled end'
   });
 });
 
+describe('TeamsMeetingScreen — pressing the button is never silent', () => {
+  it('answers a hand-pressed check that found nothing', async () => {
+    // The button used only to grey itself out, so a check that found nothing
+    // looked identical to a button that did not work.
+    respondWith(statusBody({
+      armed: true,
+      scheduledEnd: new Date(Date.now() + 30 * 60_000).toISOString(),
+    }));
+    renderScreen();
+
+    const button = await screen.findByRole('button', { name: /Mødet er slut – hent nu/ });
+    fireEvent.click(button);
+
+    expect(await screen.findByTestId('last-check')).toHaveTextContent(
+      /Teams har ikke frigivet transskriptionen endnu/,
+    );
+  });
+});
+
 describe('TeamsMeetingScreen — ending a meeting before its booked end', () => {
   it('offers to fetch now, and says why, while the booked end is still ahead', async () => {
     respondWith(statusBody({

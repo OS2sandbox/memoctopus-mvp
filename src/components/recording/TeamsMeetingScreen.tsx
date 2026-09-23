@@ -131,6 +131,8 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
   const [status, setStatus] = useState<TeamsMeetingStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
+  /** Result of the last hand-pressed check, so pressing the button is never silent. */
+  const [lastCheck, setLastCheck] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [intervalMs, setIntervalMs] = useState(FAST_POLL_MS);
   // The row is ready but the server no longer holds its transcript.
@@ -172,6 +174,14 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
         }
         const data = (await res.json()) as TeamsMeetingStatus;
         setError(null);
+        if (explicitForce && data.state === 'awaiting_teams') {
+          setLastCheck(
+            'Teams har ikke frigivet transskriptionen endnu. Vi bliver ved med at prøve — '
+            + 'du kan roligt lukke fanen.',
+          );
+        } else if (explicitForce) {
+          setLastCheck(null);
+        }
         setStatus(data);
         setCopyGone(false);
         scheduledEndRef.current = data.scheduledEnd ?? null;
@@ -349,10 +359,18 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
             <p style={{ marginTop: 10, fontSize: 13.5, color: 'var(--muted)' }}>
               {meetingOver ? 'Henter fra Teams…' : 'Venter på mødet…'}
             </p>
-            {!meetingOver && (
+            {!meetingOver && !lastCheck && (
               <p style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
                 Memoctopus venter til mødet er planlagt til at slutte. Sluttede I før tid,
                 så tryk <strong>Mødet er slut – hent nu</strong>, så henter vi den med det samme.
+              </p>
+            )}
+            {lastCheck && (
+              <p
+                data-testid="last-check"
+                style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}
+              >
+                {lastCheck}
               </p>
             )}
           </>
@@ -494,11 +512,13 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
               color: 'var(--ink)', cursor: checking ? 'default' : 'pointer',
             }}
           >
-            {state === 'failed'
-              ? 'Prøv igen'
-              : state === 'awaiting_teams' && !meetingOver
-                ? 'Mødet er slut – hent nu'
-                : 'Tjek nu'}
+            {checking
+              ? 'Henter…'
+              : state === 'failed'
+                ? 'Prøv igen'
+                : state === 'awaiting_teams' && !meetingOver
+                  ? 'Mødet er slut – hent nu'
+                  : 'Tjek nu'}
           </button>
         )}
         <button

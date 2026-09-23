@@ -116,7 +116,13 @@ beforeEach(() => {
   mockRm.mockReset().mockResolvedValue(undefined);
   // transcribeRecording is fail-soft; by default it succeeds and leaves a ready stash.
   mockTranscribeRecording.mockReset().mockImplementation(async () => {
-    mockReadPendingTranscript.mockResolvedValue({ status: 'ready', segments: [], createdAt: 1 });
+    // A successful run leaves segments behind; an empty `ready` stash means hviske
+    // heard nothing, which the pipeline now treats as a failure to fall back from.
+    mockReadPendingTranscript.mockResolvedValue({
+      status: 'ready',
+      segments: [{ start: 0, end: 2, text: 'Goddag', speaker: 'Mette Hansen' }],
+      createdAt: 1,
+    });
   });
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -580,5 +586,35 @@ describe('transcodeToWav', () => {
       return child;
     });
     await expect(transcodeToWav('/in.mp4', '/out.wav')).rejects.toThrow(/ffmpeg not found on PATH/);
+  });
+});
+
+describe('processTeamsMeeting — hviske heard nothing', () => {
+  beforeEach(() => {
+    mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [RECORDING_REF] });
+    mockTranscribeRecording.mockImplementation(async () => {
+      mockReadPendingTranscript.mockResolvedValue({ status: 'ready', segments: [], createdAt: 1 });
+    });
+  });
+
+  it("falls back to Teams' own transcript instead of shipping an empty one", async () => {
+    // Observed in production: a 9-second meeting where hviske returned 0 segments
+    // while the VTT held two turns. The empty stash sent the browser looking for a
+    // local audio file, and the user was told "Lydfil ikke fundet".
+    const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
+
+    expect(outcome).toMatchObject({ status: 'ready', mode: 'transcript-only' });
+    const stashed = mockStorePendingTranscript.mock.calls.at(-1)?.[1];
+    expect(stashed.status).toBe('ready');
+    expect(stashed.segments.length).toBeGreaterThan(0);
+  });
+
+  it('fails cleanly when neither the recording nor the transcript had speech', async () => {
+    mockDownloadVtt.mockResolvedValue('WEBVTT\n\n');
+
+    const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
+
+    expect(outcome.status).toBe('failed');
+    expect(mockStorePendingTranscript).toHaveBeenCalledWith(MEETING.id, { status: 'failed' });
   });
 });

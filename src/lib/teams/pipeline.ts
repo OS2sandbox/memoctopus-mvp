@@ -11,6 +11,7 @@ import {
   readPendingMeta,
   markNoRecording,
   setMeetingOwner,
+  type PendingTranscript,
 } from '@/lib/pending-artifacts';
 import { transcribeRecording } from '@/lib/transcribe-recording';
 import { withMeetingLock } from './meeting-lock';
@@ -251,7 +252,24 @@ async function runRecordingWithTranscript(
     turns: turnsFromVtt(cues),
     preserveNames: true,
   });
-  await assertTranscribed(meeting.id);
+  let mode: ProcessingMode = 'recording+transcript';
+  if (heardNothing(await assertTranscribed(meeting.id))) {
+    // Teams' own transcript is already in hand and regularly has words where hviske
+    // found none, so prefer it over shipping an empty transcript. Losing hviske's
+    // Danish costs quality; shipping nothing costs the meeting.
+    const fromTeams = segmentsFromVtt(cues);
+    if (fromTeams.length === 0) {
+      await storePendingTranscript(meeting.id, { status: 'failed' });
+      throw new Error('Hverken optagelsen eller Teams\' transskription indeholdt tale.');
+    }
+    await storePendingTranscript(meeting.id, {
+      status: 'ready',
+      segments: fromTeams,
+      diarized: true,
+    });
+    mode = 'transcript-only';
+  }
+
   // After the verdict, so a run that failed transcription never advertises itself
   // as finished-with-no-audio to a client that would then stop waiting.
   await markNoRecording(meeting.id, {
@@ -259,7 +277,7 @@ async function runRecordingWithTranscript(
     durationSeconds: durationFromCues(cues),
   });
 
-  return { status: 'ready', mode: 'recording+transcript', speakers, transcriptId, recordingId };
+  return { status: 'ready', mode, speakers, transcriptId, recordingId };
 }
 
 // Mode 2 — no audio ever touches disk: Teams' transcript text is the transcript.
@@ -304,7 +322,11 @@ async function runRecordingOnly(
 
   // Transcribed and dropped, as in mode 1 — see the note there.
   await transcribeRecording(meeting.id, wav, 'audio/wav');
-  await assertTranscribed(meeting.id);
+  if (heardNothing(await assertTranscribed(meeting.id))) {
+    // No Teams transcript in this mode, so there is nothing to fall back to.
+    await storePendingTranscript(meeting.id, { status: 'failed' });
+    throw new Error('Optagelsen fra Teams indeholdt ingen tale.');
+  }
   await markNoRecording(meeting.id, { participants: [], durationSeconds: null });
 
   return { status: 'ready', mode: 'recording-only', speakers: [], transcriptId: null, recordingId };
@@ -313,11 +335,24 @@ async function runRecordingOnly(
 // transcribeRecording is fail-soft: it records its own failure in the stash rather
 // than throwing, so the pipeline has to read the verdict back to know whether the
 // meeting is genuinely ready.
-async function assertTranscribed(meetingId: string): Promise<void> {
+async function assertTranscribed(meetingId: string): Promise<PendingTranscript> {
   const stash = await readPendingTranscript(meetingId);
   if (stash?.status !== 'ready') {
     throw new Error('Transskriptionen af optagelsen fra Teams fejlede.');
   }
+  return stash;
+}
+
+/**
+ * hviske can answer `ready` with nothing in it — a near-silent recording, or one
+ * too short to get a word out of. Stashed as-is that is indistinguishable, to the
+ * browser, from a transcript that is still being written: it stops waiting, finds
+ * no segments, and falls back to transcribing local audio, which a Teams meeting
+ * never has. The user is then told "Lydfil ikke fundet" about a meeting whose
+ * transcript Teams was holding all along.
+ */
+function heardNothing(stash: PendingTranscript): boolean {
+  return (stash.segments?.length ?? 0) === 0;
 }
 
 /** Download the mp4 to a scratch file, transcode, read the wav back, clean up. */
