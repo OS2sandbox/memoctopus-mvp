@@ -7,6 +7,7 @@ vi.mock('@/lib/db', () => ({ pool: { connect: (...a: unknown[]) => mockConnect(.
 vi.mock('@/lib/auth', () => ({ auth: { api: {} } }));
 
 vi.mock('./pipeline', () => ({ processTeamsMeeting: vi.fn() }));
+vi.mock('./meeting-resolver', () => ({ getMeeting: vi.fn() }));
 
 const mockQuery = vi.fn();
 vi.mock('@/lib/db/user-schema', () => ({
@@ -22,11 +23,13 @@ vi.mock('./store', async (importOriginal) => {
     listUserSchemaIds: vi.fn(),
     markPollAttempt: vi.fn().mockResolvedValue(undefined),
     setTeamsMeetingState: vi.fn().mockResolvedValue(undefined),
+    refreshTeamsMeetingSchedule: vi.fn(),
   };
 });
 
 import {
   GIVE_UP_MESSAGE,
+  MEETING_GONE_MESSAGE,
   POLL_LOCK_KEY,
   TRANSCRIPTS_DISABLED_MESSAGE,
   pollDueMeetings,
@@ -35,6 +38,7 @@ import {
 } from './poller';
 import { GraphError } from './graph-client';
 import { processTeamsMeeting } from './pipeline';
+import { getMeeting } from './meeting-resolver';
 import {
   POLL_GIVE_UP_MS,
   getTeamsMeeting,
@@ -42,6 +46,7 @@ import {
   listUserSchemaIds,
   markPollAttempt,
   setTeamsMeetingState,
+  refreshTeamsMeetingSchedule,
   type TeamsMeetingRow,
 } from './store';
 
@@ -51,6 +56,27 @@ const mockListDue = vi.mocked(listDueTeamsMeetings);
 const mockListUsers = vi.mocked(listUserSchemaIds);
 const mockMark = vi.mocked(markPollAttempt);
 const mockSetState = vi.mocked(setTeamsMeetingState);
+const mockGetMeeting = vi.mocked(getMeeting);
+const mockRefresh = vi.mocked(refreshTeamsMeetingSchedule);
+
+/** What getMeeting answers by default: the same window the row already has. */
+function graphMeeting(over: Record<string, unknown> = {}) {
+  return {
+    graphMeetingId: 'graph-1',
+    joinUrl: 'https://teams.microsoft.com/l/meetup-join/x',
+    subject: 'Ugentligt møde',
+    organizerId: 'org-1',
+    isOrganizer: true,
+    scheduledStart: '2026-09-08T10:00:00Z',
+    scheduledEnd: '2026-09-08T11:00:00Z',
+    meetingType: 'scheduled',
+    options: {
+      allowRecording: true, allowTranscription: true,
+      recordAutomatically: true, meetingSpokenLanguageTag: 'da-DK',
+    },
+    ...over,
+  } as never;
+}
 
 const NOW = new Date('2026-09-08T12:00:00Z');
 
@@ -82,6 +108,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   process.env.TEAMS_GRAPH_ENABLED = 'true';
   mockMark.mockResolvedValue(row());
+  mockGetMeeting.mockResolvedValue(graphMeeting());
+  mockRefresh.mockImplementation(async (_u, _id, f) =>
+    row({ scheduledStart: f.scheduledStart, scheduledEnd: f.scheduledEnd, subject: f.subject }));
   mockQuery.mockResolvedValue([]);
   mockSetState.mockResolvedValue(row());
 });
@@ -123,6 +152,7 @@ describe('pollMeeting', () => {
   it('is a no-op while the meeting has not ended yet', async () => {
     const r = row({ scheduledEnd: new Date('2026-09-08T13:00:00Z') });
     mockGet.mockResolvedValueOnce(r);
+    mockGetMeeting.mockResolvedValue(graphMeeting({ scheduledEnd: '2026-09-08T13:00:00Z' }));
 
     const result = await pollMeeting('u1', 'm1', NOW);
 
@@ -150,10 +180,14 @@ describe('pollMeeting', () => {
     // An ad-hoc meeting Graph gave us no window for used to poll Graph forever.
     mockGet.mockResolvedValue(
       row({
+        scheduledStart: null,
         scheduledEnd: null,
         createdAt: new Date(NOW.getTime() - POLL_GIVE_UP_MS - 1000),
         lastPolledAt: new Date(NOW.getTime() - 60 * 60_000),
       }),
+    );
+    mockGetMeeting.mockResolvedValue(
+      graphMeeting({ scheduledStart: null, scheduledEnd: null }),
     );
 
     await pollMeeting('u1', 'm1', NOW);
@@ -182,11 +216,16 @@ describe('pollMeeting', () => {
     mockGet.mockResolvedValue(
       row({
         state: 'failed',
+        scheduledStart: null,
         scheduledEnd: new Date(NOW.getTime() - POLL_GIVE_UP_MS - 1000),
         createdAt: new Date(NOW.getTime() - POLL_GIVE_UP_MS - 2000),
         lastPolledAt: new Date(NOW.getTime() - 60 * 60_000),
       }),
     );
+    mockGetMeeting.mockResolvedValue(graphMeeting({
+      scheduledStart: null,
+      scheduledEnd: new Date(NOW.getTime() - POLL_GIVE_UP_MS - 1000).toISOString(),
+    }));
 
     const result = await pollMeeting('u1', 'm1', NOW, { force: true });
 
@@ -205,10 +244,14 @@ describe('pollMeeting', () => {
     const end = new Date(NOW.getTime() - POLL_GIVE_UP_MS - 1000);
     mockGet.mockResolvedValue(
       row({
+        scheduledStart: null,
         scheduledEnd: end,
         createdAt: new Date(end.getTime() - 1000),
         lastPolledAt: new Date(NOW.getTime() - 60 * 60_000),
       }),
+    );
+    mockGetMeeting.mockResolvedValue(
+      graphMeeting({ scheduledStart: null, scheduledEnd: end.toISOString() }),
     );
 
     await pollMeeting('u1', 'm1', NOW);
@@ -568,5 +611,79 @@ describe('pollMeeting — a meeting whose window has already gone', () => {
     await pollMeeting('u1', 'm1', NOW);
 
     expect(mockProcess).toHaveBeenCalled();
+  });
+});
+
+describe('pollMeeting — re-reading the meeting from Graph', () => {
+  it('writes back a window the organizer moved', async () => {
+    mockGet.mockResolvedValue(row());
+    mockGetMeeting.mockResolvedValue(graphMeeting({
+      scheduledStart: '2026-09-08T14:00:00Z',
+      scheduledEnd: '2026-09-08T15:00:00Z',
+      subject: 'Flyttet møde',
+    }));
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockRefresh).toHaveBeenCalledWith('u1', 'm1', {
+      scheduledStart: new Date('2026-09-08T14:00:00Z'),
+      scheduledEnd: new Date('2026-09-08T15:00:00Z'),
+      subject: 'Flyttet møde',
+    });
+  });
+
+  it('does not poll a meeting that has been moved into the future', async () => {
+    // The row was due on its OLD window; after the re-read it is not yet time.
+    mockGet.mockResolvedValue(row());
+    mockGetMeeting.mockResolvedValue(graphMeeting({
+      scheduledStart: '2026-09-08T16:00:00Z',
+      scheduledEnd: '2026-09-08T17:00:00Z',
+    }));
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when Graph says exactly what we already had', async () => {
+    mockGet.mockResolvedValue(row());
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockRefresh).not.toHaveBeenCalled();
+    expect(mockProcess).toHaveBeenCalled();
+  });
+
+  it('fails a meeting Graph no longer has, instead of blaming the admin a day later', async () => {
+    mockGet.mockResolvedValue(row());
+    mockGetMeeting.mockRejectedValue(new GraphError('not_found', 'Ressourcen findes ikke'));
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', {
+      state: 'failed',
+      failureReason: MEETING_GONE_MESSAGE,
+    });
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('polls anyway when the re-read is merely throttled', async () => {
+    // A 429 on the refresh must not cost us the poll it precedes.
+    mockGet.mockResolvedValue(row());
+    mockGetMeeting.mockRejectedValue(new GraphError('http', 'Graph er optaget', { status: 429 }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockProcess).toHaveBeenCalled();
+  });
+
+  it('does not re-read a meeting it has already collected', async () => {
+    mockGet.mockResolvedValue(row({ state: 'ready' }));
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockGetMeeting).not.toHaveBeenCalled();
   });
 });

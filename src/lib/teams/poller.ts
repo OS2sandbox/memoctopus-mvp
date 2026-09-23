@@ -1,12 +1,15 @@
 import type { PoolClient } from 'pg';
 import { pool } from '@/lib/db';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
-import { classifyGraphError } from './graph-client';
+import { classifyGraphError, GraphError } from './graph-client';
+import { graphDate } from './graph-dates';
+import { getMeeting } from './meeting-resolver';
 import { processTeamsMeeting } from './pipeline';
 import {
   POLL_GIVE_UP_MS,
   giveUpAnchor,
   getTeamsMeeting,
+  refreshTeamsMeetingSchedule,
   listDueTeamsMeetings,
   listUserSchemaIds,
   markPollAttempt,
@@ -74,9 +77,21 @@ export async function pollMeeting(
   // switched on later.
   if (!teamsGraphEnabled()) return row;
 
-  // The give-up window is measured from the scheduled end, or — for an ad-hoc
-  // meeting Graph gave us no window for — from when we were asked to watch it.
-  // Without the fallback such a row polls Graph forever and never gives up.
+  // What Graph says about the meeting NOW, before any decision keyed on its window.
+  // Organizers move, rename and shorten meetings after the link was pasted, and the
+  // stale booking decides both when we may poll and which artifact we accept.
+  //
+  // A settled row is left alone unless the user is retrying it by hand: re-reading a
+  // meeting we already collected buys nothing.
+  if (!isTerminal(row.state) || options.force) {
+    const refreshed = await refreshSchedule(userId, row);
+    if (refreshed.gone) return refreshed.row;
+    row = refreshed.row;
+  }
+
+  // The give-up window is measured from the (now refreshed) scheduled end, or — for
+  // an ad-hoc meeting Graph gave us no window for — from when we were asked to watch
+  // it. Without the fallback such a row polls Graph forever and never gives up.
   const anchor = giveUpAnchor(row);
   // Never declare a meeting hopeless without having asked Graph about it even once.
   // The window can elapse while TEAMS_GRAPH_ENABLED is off, or while this instance
@@ -165,6 +180,72 @@ export async function pollMeeting(
         return await waiting('awaiting_teams', message);
     }
   }
+}
+
+/** Danish, user-safe: the row can outlive the meeting it was created for. */
+export const MEETING_GONE_MESSAGE =
+  'Mødet findes ikke længere i Teams. Det er sandsynligvis aflyst eller slettet.';
+
+/**
+ * Re-reads the meeting from Graph and writes its current window and subject back.
+ *
+ * A 404 means the meeting is gone — cancelled or deleted. Without this the row
+ * polls into 404s for a whole day and is then reported as "Teams never started the
+ * transcription", blaming the admin for a meeting that never happened.
+ *
+ * Every other Graph failure is swallowed: a throttle or a blip must not stop the
+ * poll it precedes, which has its own error handling and is the call that matters.
+ * The stale window is then used for one more round, exactly as before.
+ */
+async function refreshSchedule(
+  userId: string,
+  row: TeamsMeetingRow,
+): Promise<{ row: TeamsMeetingRow; gone: boolean }> {
+  let fresh;
+  try {
+    fresh = await getMeeting(userId, row.graphMeetingId);
+  } catch (err) {
+    if (err instanceof GraphError && err.code === 'not_found') {
+      return {
+        row: await markPollAttempt(userId, row.id, {
+          state: 'failed',
+          failureReason: MEETING_GONE_MESSAGE,
+        }),
+        gone: true,
+      };
+    }
+    return { row, gone: false };
+  }
+
+  const start = toDate(graphDate(fresh.scheduledStart));
+  const end = toDate(graphDate(fresh.scheduledEnd));
+  const unchanged =
+    sameInstant(start, row.scheduledStart)
+    && sameInstant(end, row.scheduledEnd)
+    && (fresh.subject ?? null) === row.subject;
+  if (unchanged) return { row, gone: false };
+
+  console.log(
+    `[teams/poller] ${row.id}: Graph window moved to ${start ? start.toISOString() : 'none'}`
+    + ` – ${end ? end.toISOString() : 'none'}`,
+  );
+  return {
+    row: await refreshTeamsMeetingSchedule(userId, row.id, {
+      scheduledStart: start,
+      scheduledEnd: end,
+      subject: fresh.subject ?? null,
+    }),
+    gone: false,
+  };
+}
+
+function sameInstant(a: Date | null, b: Date | null): boolean {
+  if (a == null || b == null) return a === b;
+  return a.getTime() === b.getTime();
+}
+
+function toDate(value: string | null): Date | null {
+  return value ? new Date(value) : null;
 }
 
 async function pollUser(userId: string, now: Date): Promise<number> {

@@ -425,6 +425,37 @@ export async function markPollAttempt(
   return mapRow(result);
 }
 
+/**
+ * Writes back what Graph currently says about the meeting itself — its window and
+ * subject — without touching any polling state.
+ *
+ * The booked window is a snapshot taken once at registration, and organizers move,
+ * rename and shorten meetings afterwards. Left stale it decides when we are allowed
+ * to poll and which artifact we accept, so a rescheduled meeting is polled at the
+ * wrong time or, moved more than the give-up window, never polled at all.
+ *
+ * Returns the updated row via `RETURNING`, for the same reason as
+ * {@link markPollAttempt}.
+ */
+export async function refreshTeamsMeetingSchedule(
+  userId: string,
+  id: string,
+  fields: { scheduledStart: Date | null; scheduledEnd: Date | null; subject: string | null },
+): Promise<TeamsMeetingRow> {
+  const result = await queryUserSchemaOne<RawTeamsMeeting>(
+    userId,
+    `UPDATE teams_meetings
+        SET scheduled_start = $2, scheduled_end = $3,
+            subject = COALESCE($4, subject),
+            updated_at = NOW()
+      WHERE id = $1
+      RETURNING ${SELECT_COLUMNS}`,
+    [id, fields.scheduledStart, fields.scheduledEnd, fields.subject],
+  );
+  if (!result) throw new Error(`refreshTeamsMeetingSchedule: no such Teams meeting: ${id}`);
+  return mapRow(result);
+}
+
 /** Returns the updated row via `RETURNING`, for the same reason as {@link markPollAttempt}. */
 export async function setTeamsMeetingState(
   userId: string,
