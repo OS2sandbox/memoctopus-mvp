@@ -220,6 +220,13 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
   // already collected (`ready`) still goes on to its review.
   const off = status?.enabled === false && status.state !== 'ready';
   const state = off ? undefined : status?.state;
+
+  // Before the scheduled end we are waiting for the meeting; after it we are
+  // waiting for Microsoft to publish. Saying "Venter på mødet…" for both told
+  // the user their finished meeting had not started yet.
+  // Re-evaluated on every status poll, so it flips on its own without a reload.
+  const meetingOver =
+    status?.scheduledEnd != null && Date.parse(status.scheduledEnd) <= Date.now();
   const stopped = off || state === 'ready' || state === 'failed' || state === 'needs_reauth';
 
   useEffect(() => {
@@ -335,9 +342,13 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
         {state === 'awaiting_teams' && status?.armed && status.armResult !== 'armed_in_progress' && (
           <>
             <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
-              Mødet optages og transskriberes automatisk. Referatet er klar automatisk et par minutter efter mødet.
+              {meetingOver
+                ? 'Mødet er slut. Memoctopus henter transskriptionen fra Teams, så snart Microsoft frigiver den — det tager typisk et par minutter, men kan tage længere.'
+                : 'Mødet optages og transskriberes automatisk. Referatet er klar automatisk et par minutter efter mødet.'}
             </p>
-            <p style={{ marginTop: 10, fontSize: 13.5, color: 'var(--muted)' }}>Venter på mødet…</p>
+            <p style={{ marginTop: 10, fontSize: 13.5, color: 'var(--muted)' }}>
+              {meetingOver ? 'Henter fra Teams…' : 'Venter på mødet…'}
+            </p>
           </>
         )}
 

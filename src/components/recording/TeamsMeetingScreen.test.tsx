@@ -113,6 +113,8 @@ describe('TeamsMeetingScreen — armed, awaiting', () => {
   });
 
   it('shows subject, the armed badge and the automatic-recording copy', async () => {
+    // Before the scheduled end: the promise of automatic recording still stands.
+    respondWith(statusBody({ scheduledEnd: new Date(Date.now() + 30 * 60_000).toISOString() }));
     renderScreen();
     expect(await screen.findByText('Ugentligt teammøde')).toBeInTheDocument();
     expect(screen.getByTestId('armed-badge')).toHaveTextContent('Memoctopus er slået til');
@@ -235,6 +237,33 @@ describe('TeamsMeetingScreen — ready', () => {
     await act(async () => { await Promise.resolve(); });
     await act(async () => { vi.advanceTimersByTime(60_000); });
     expect(mockPush).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('TeamsMeetingScreen — waiting copy before vs after the scheduled end', () => {
+  it('waits for the meeting while its end is still ahead', async () => {
+    respondWith(statusBody({
+      armed: true,
+      scheduledEnd: new Date(Date.now() + 30 * 60_000).toISOString(),
+    }));
+    renderScreen();
+
+    expect(await screen.findByText(/Venter på mødet/)).toBeInTheDocument();
+    expect(screen.queryByText(/Henter fra Teams/)).not.toBeInTheDocument();
+  });
+
+  it('waits for Microsoft once the meeting has ended', async () => {
+    // "Venter på mødet…" after the meeting finished read as though it had never
+    // started, which is what the transcript wait actually looks like from here.
+    respondWith(statusBody({
+      armed: true,
+      scheduledEnd: new Date(Date.now() - 10 * 60_000).toISOString(),
+    }));
+    renderScreen();
+
+    expect(await screen.findByText(/Henter fra Teams/)).toBeInTheDocument();
+    expect(screen.getByText(/Mødet er slut/)).toBeInTheDocument();
+    expect(screen.queryByText(/Venter på mødet/)).not.toBeInTheDocument();
   });
 });
 
