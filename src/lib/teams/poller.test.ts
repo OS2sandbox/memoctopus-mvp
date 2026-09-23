@@ -687,3 +687,67 @@ describe('pollMeeting — re-reading the meeting from Graph', () => {
     expect(mockGetMeeting).not.toHaveBeenCalled();
   });
 });
+
+describe('pollMeeting — "Mødet er slut – hent nu" before the booked end', () => {
+  const STARTED = {
+    scheduledStart: new Date('2026-09-08T11:30:00Z'),
+    scheduledEnd: new Date('2026-09-08T13:00:00Z'),
+  };
+  const started = () => graphMeeting({
+    scheduledStart: '2026-09-08T11:30:00Z',
+    scheduledEnd: '2026-09-08T13:00:00Z',
+  });
+
+  it('asks Graph when the user says the meeting is already over', async () => {
+    // Delegated Graph has no roster and no in-progress flag, so a person pressing
+    // the button is the only signal that a meeting ended before it was booked to.
+    mockGet.mockResolvedValue(row(STARTED));
+    mockGetMeeting.mockResolvedValue(started());
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expect(mockProcess).toHaveBeenCalled();
+  });
+
+  it('still waits when nobody asked', async () => {
+    mockGet.mockResolvedValue(row(STARTED));
+    mockGetMeeting.mockResolvedValue(started());
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when the meeting has not even begun', async () => {
+    // Nothing exists to publish yet, so the button must not spend a Graph call.
+    mockGet.mockResolvedValue(row({
+      scheduledStart: new Date('2026-09-08T14:00:00Z'),
+      scheduledEnd: new Date('2026-09-08T15:00:00Z'),
+    }));
+    mockGetMeeting.mockResolvedValue(graphMeeting({
+      scheduledStart: '2026-09-08T14:00:00Z',
+      scheduledEnd: '2026-09-08T15:00:00Z',
+    }));
+
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('treats an instant meeting as already begun', async () => {
+    mockGet.mockResolvedValue(row({
+      scheduledStart: null,
+      scheduledEnd: new Date('2026-09-08T13:00:00Z'),
+    }));
+    mockGetMeeting.mockResolvedValue(graphMeeting({
+      scheduledStart: null,
+      scheduledEnd: '2026-09-08T13:00:00Z',
+    }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expect(mockProcess).toHaveBeenCalled();
+  });
+});

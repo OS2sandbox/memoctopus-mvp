@@ -349,6 +349,12 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
             <p style={{ marginTop: 10, fontSize: 13.5, color: 'var(--muted)' }}>
               {meetingOver ? 'Henter fra Teams…' : 'Venter på mødet…'}
             </p>
+            {!meetingOver && (
+              <p style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+                Memoctopus venter til mødet er planlagt til at slutte. Sluttede I før tid,
+                så tryk <strong>Mødet er slut – hent nu</strong>, så henter vi den med det samme.
+              </p>
+            )}
           </>
         )}
 
@@ -488,7 +494,11 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
               color: 'var(--ink)', cursor: checking ? 'default' : 'pointer',
             }}
           >
-            {state === 'failed' ? 'Prøv igen' : 'Tjek nu'}
+            {state === 'failed'
+              ? 'Prøv igen'
+              : state === 'awaiting_teams' && !meetingOver
+                ? 'Mødet er slut – hent nu'
+                : 'Tjek nu'}
           </button>
         )}
         <button

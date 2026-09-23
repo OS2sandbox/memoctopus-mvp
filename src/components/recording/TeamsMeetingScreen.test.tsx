@@ -267,6 +267,30 @@ describe('TeamsMeetingScreen — waiting copy before vs after the scheduled end'
   });
 });
 
+describe('TeamsMeetingScreen — ending a meeting before its booked end', () => {
+  it('offers to fetch now, and says why, while the booked end is still ahead', async () => {
+    respondWith(statusBody({
+      armed: true,
+      scheduledEnd: new Date(Date.now() + 30 * 60_000).toISOString(),
+    }));
+    renderScreen();
+
+    expect(await screen.findByRole('button', { name: /Mødet er slut – hent nu/ })).toBeInTheDocument();
+    expect(screen.getByText(/Sluttede I før tid/)).toBeInTheDocument();
+  });
+
+  it('goes back to plain "Tjek nu" once the booked end has passed', async () => {
+    respondWith(statusBody({
+      armed: true,
+      scheduledEnd: new Date(Date.now() - 10 * 60_000).toISOString(),
+    }));
+    renderScreen();
+
+    expect(await screen.findByRole('button', { name: 'Tjek nu' })).toBeInTheDocument();
+    expect(screen.queryByText(/Sluttede I før tid/)).not.toBeInTheDocument();
+  });
+});
+
 describe('TeamsMeetingScreen — a meeting that was already running when armed', () => {
   it('asks for a manual start instead of promising it happens automatically', async () => {
     // An instant meeting cannot be armed into transcribing itself: Teams acts on

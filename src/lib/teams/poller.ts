@@ -2,7 +2,7 @@ import type { PoolClient } from 'pg';
 import { pool } from '@/lib/db';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { classifyGraphError, GraphError } from './graph-client';
-import { graphDate } from './graph-dates';
+import { graphDate, realDate } from './graph-dates';
 import { getMeeting } from './meeting-resolver';
 import { processTeamsMeeting } from './pipeline';
 import {
@@ -106,10 +106,20 @@ export async function pollMeeting(
     row = await setTeamsMeetingState(userId, id, 'awaiting_teams', null);
   }
 
-  // Already settled, or the meeting has not happened yet: do not touch Graph
-  // and do not burn an attempt.
+  // Already settled: do not touch Graph and do not burn an attempt.
   if (isTerminal(row.state)) return row;
-  if (anchor && anchor.getTime() > now.getTime()) return row;
+
+  // The meeting has not happened yet — with one exception. "Tjek nu" is a person
+  // telling us the meeting is over, which is the one liveness signal delegated
+  // Graph will not give us: there is no roster and no in-progress flag, only the
+  // booked window, and meetings routinely end long before it. Refusing to look
+  // until the booked end makes the button useless exactly when it is wanted.
+  //
+  // It still cannot help before the meeting has begun: Teams has nothing to
+  // publish, so that stays a no-op rather than a wasted Graph call.
+  if (anchor && anchor.getTime() > now.getTime() && !(options.force && hasStarted(row, now))) {
+    return row;
+  }
 
   if (gaveUp) {
     return await markPollAttempt(userId, id, { state: 'failed', failureReason: GIVE_UP_MESSAGE });
@@ -180,6 +190,15 @@ export async function pollMeeting(
         return await waiting('awaiting_teams', message);
     }
   }
+}
+
+/**
+ * Has the meeting begun? A meeting Graph gives no start for is an instant one,
+ * which by definition already has.
+ */
+function hasStarted(row: TeamsMeetingRow, now: Date): boolean {
+  const start = realDate(row.scheduledStart);
+  return start == null || start.getTime() <= now.getTime();
 }
 
 /** Danish, user-safe: the row can outlive the meeting it was created for. */
