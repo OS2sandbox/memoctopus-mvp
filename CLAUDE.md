@@ -112,8 +112,13 @@ dead end and offers the saved transcript or a delete.
 - `meeting-resolver.ts` — `resolveJoinUrl()` looks the meeting up via
   `$filter=JoinWebUrl eq '…'` and decides `isOrganizer` against `/me`.
 - `meeting-arm.ts` — `armMeeting()` PATCHes `recordAutomatically` / `allowTranscription`;
-  returns `armed | not_organizer | policy_blocked`. `disarmMeeting()` only clears
-  `recordAutomatically`.
+  returns `armed | armed_in_progress | not_organizer | policy_blocked`. `disarmMeeting()`
+  restores the options snapshotted before the PATCH. **`armed_in_progress` means only
+  "Graph gave this meeting no window"** (an instant meeting or a personal meeting link) —
+  not that the meeting is running. Delegated Graph has no roster and no in-progress flag,
+  so the two are indistinguishable, and such a link is routinely pasted in before anyone
+  joins, where `recordAutomatically` works fine. The screen therefore leads with
+  "Memoctopus er slået til" and offers the manual start as a condition, never as a fact.
 - `artifacts.ts` — lists and downloads transcripts (VTT) and recordings; recording download
   follows Graph's 302 by hand with `redirect: 'manual'`, dropping the bearer once the URL
   leaves the Graph origin.

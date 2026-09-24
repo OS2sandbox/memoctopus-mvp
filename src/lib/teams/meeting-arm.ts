@@ -10,9 +10,9 @@ import { getMeeting, type ResolvedMeeting } from '@/lib/teams/meeting-resolver';
  * (plan §3). No bot joins, and for a scheduled meeting nobody has to press
  * anything during it.
  *
- * A meeting that is already running is the exception, reported as
- * `armed_in_progress`: see {@link isInstantMeeting} for why Teams cannot be made
- * to start on its own there.
+ * A meeting Graph gives no window for is the exception, reported as
+ * `armed_in_progress`: see {@link isInstantMeeting} for what we can and cannot
+ * tell about such a meeting.
  *
  * Only the organizer may update meeting options. An invitee gets 403 and we
  * report `not_organizer` so the UI can show the copy-paste sentence to send to
@@ -38,10 +38,17 @@ export type ArmResult = 'armed' | 'armed_in_progress' | 'not_organizer' | 'polic
  * can do is `allowTranscription`, so the organizer can start it by hand in one
  * tap; the collection afterwards is unchanged.
  *
- * An instant meeting ("Mød nu") is always already under way, because joining it
- * is what creates it. Graph describes one either with the year-1 sentinel (which
- * {@link graphDate} has already turned into null) or with a zero-length window
- * whose start and end are both the moment it came into being.
+ * An instant meeting ("Mød nu", or a personal meeting link) is one Graph gives no
+ * real window for: either the year-1 sentinel (which {@link graphDate} has already
+ * turned into null) or a zero-length window whose start and end are the moment it
+ * came into being.
+ *
+ * That is NOT the same as "already running", and the UI must not say it is. The
+ * link to such a meeting is routinely pasted into Memoctopus before anyone joins,
+ * and then `recordAutomatically` works perfectly. But delegated Graph offers no
+ * roster and no in-progress flag, so we cannot tell the two apart — which is why
+ * the result is reported separately and the screen offers the manual start as a
+ * condition ("var mødet begyndt, inden du indsatte linket…") rather than a fact.
  *
  * A scheduled meeting is left alone even when its start has passed: Teams starts
  * transcribing on the first join, not at the scheduled time, so arming a meeting

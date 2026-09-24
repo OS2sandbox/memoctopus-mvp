@@ -373,9 +373,12 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
               border: '1px solid var(--line-2)',
             }}
           >
-            {status.armResult === 'armed_in_progress'
-              ? 'Start transskription i Teams'
-              : 'Memoctopus er slået til'}
+            {/* Both arm outcomes left the meeting armed (isArmed), so both say so.
+                A badge reading "Start transskription i Teams" next to copy that
+                says Memoctopus is on contradicted itself — and demanded an action
+                for a meeting nobody had joined yet. The nuance belongs in the
+                body text below, where it can be stated conditionally. */}
+            Memoctopus er slået til
           </span>
         )}
       </div>
@@ -413,17 +416,37 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
           </>
         )}
 
+        {/* A meeting Graph gives no window for. `armed_in_progress` says only that —
+            not that the meeting is running. The link to an instant meeting can be
+            pasted here long before anyone joins it, and telling that user the
+            meeting "er allerede i gang", under a green badge demanding they start
+            what we just switched on, described neither the meeting nor our state. */}
         {state === 'awaiting_teams' && status?.armResult === 'armed_in_progress' && (
           <>
             <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
-              Mødet er allerede i gang. Teams starter kun transskription af sig selv på et møde, der
-              endnu ikke er begyndt, så du skal starte den i mødet:{' '}
+              Memoctopus er slået til for mødet. Teams begynder at transskribere, når mødet går i gang,
+              og referatet er klar et par minutter efter, I er færdige.
+            </p>
+            <WorkingIndicator label="Venter på mødet…" />
+            <p style={{ marginTop: 12, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+              Mødet har ikke noget fast tidspunkt, så vi kan ikke se i Teams, om I allerede er gået
+              i gang. Var mødet begyndt, inden du indsatte linket, starter Teams ikke af sig selv —
+              så start den i mødet:{' '}
               <strong>Flere handlinger → Optag og transskriber → Start transskription</strong>.
             </p>
-            <p style={{ marginTop: 10, fontSize: 13.5, color: 'var(--muted)' }}>
-              Memoctopus henter referatet automatisk et par minutter efter mødet. Planlægger du mødet
-              i kalenderen i stedet og indsætter linket, inden mødet begynder, sker det hele af sig selv.
-            </p>
+            {lastCheck ? (
+              <p
+                data-testid="last-check"
+                style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}
+              >
+                {lastCheck}
+              </p>
+            ) : (
+              <p style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+                Tryk <strong>Mødet er slut – hent nu</strong>, når I er færdige, så henter vi
+                referatet med det samme.
+              </p>
+            )}
           </>
         )}
 

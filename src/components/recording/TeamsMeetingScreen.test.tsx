@@ -322,36 +322,49 @@ describe('TeamsMeetingScreen — ending a meeting before its booked end', () => 
   });
 });
 
-describe('TeamsMeetingScreen — a meeting that was already running when armed', () => {
-  it('asks for a manual start instead of promising it happens automatically', async () => {
-    // An instant meeting cannot be armed into transcribing itself: Teams acts on
-    // recordAutomatically when a meeting starts, and this one already had.
-    // Promising "automatisk" here bought a silent 24-hour wait.
+describe('TeamsMeetingScreen — a meeting Graph gives no window for', () => {
+  // `armed_in_progress` means only that: the meeting has no scheduled window, so
+  // we cannot see whether it has begun. The link to an instant meeting is often
+  // pasted here BEFORE anyone joins, and the screen used to tell that user their
+  // meeting was "allerede i gang" and demand they start what we had just armed.
+  it('leads with the fact that Memoctopus is on', async () => {
     respondWith(statusBody({ armed: true, armResult: 'armed_in_progress' }));
     renderScreen();
 
-    expect(await screen.findByText(/Mødet er allerede i gang/)).toBeInTheDocument();
+    expect(await screen.findByText(/Memoctopus er slået til for mødet/)).toBeInTheDocument();
+    expect(screen.queryByText(/Mødet er allerede i gang/)).not.toBeInTheDocument();
+  });
+
+  // Still says it, because we genuinely cannot tell — but as a condition, not a fact.
+  it('offers the manual start only for the case where the meeting had already begun', async () => {
+    respondWith(statusBody({ armed: true, armResult: 'armed_in_progress' }));
+    renderScreen();
+
+    expect(await screen.findByText(/vi kan ikke se i Teams, om I allerede er gået/)).toBeInTheDocument();
     expect(
       screen.getByText(/Flere handlinger → Optag og transskriber → Start transskription/),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/Mødet optages og transskriberes automatisk/),
-    ).not.toBeInTheDocument();
   });
 
-  it('labels the badge with the action the user still has to take', async () => {
+  it('does not put an action in the badge for something already switched on', async () => {
     respondWith(statusBody({ armed: true, armResult: 'armed_in_progress' }));
     renderScreen();
 
-    expect(await screen.findByTestId('armed-badge'))
-      .toHaveTextContent('Start transskription i Teams');
+    expect(await screen.findByTestId('armed-badge')).toHaveTextContent('Memoctopus er slået til');
+  });
+
+  it('says how to collect the referat when the meeting ends', async () => {
+    respondWith(statusBody({ armed: true, armResult: 'armed_in_progress' }));
+    renderScreen();
+
+    expect(await screen.findByText(/når I er færdige/)).toBeInTheDocument();
   });
 
   it('does not show the invitee copy — the user is the organizer', async () => {
     respondWith(statusBody({ armed: true, armResult: 'armed_in_progress' }));
     renderScreen();
 
-    expect(await screen.findByText(/Mødet er allerede i gang/)).toBeInTheDocument();
+    expect(await screen.findByText(/Memoctopus er slået til for mødet/)).toBeInTheDocument();
     expect(screen.queryByText(/ikke organisator/)).not.toBeInTheDocument();
   });
 });
