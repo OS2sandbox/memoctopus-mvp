@@ -128,8 +128,18 @@ describe('GET /api/teams/meetings/[id]', () => {
       lastPolledAt: '2026-09-08T11:05:00.000Z',
       armResult: 'armed',
       enabled: true,
+      working: false,
     });
     expect(mockPoll).not.toHaveBeenCalled();
+  });
+
+  // The screen says "vi er i gang med mødet" off this flag, instead of reporting a
+  // run that is downloading and transcribing as "Teams har ikke frigivet noget".
+  it('reports working while a run holds the meeting', async () => {
+    mockGet.mockResolvedValueOnce(row({ state: 'fetching' }));
+
+    const body = await (await GET(req(), { params })).json();
+    expect(body).toMatchObject({ state: 'fetching', working: true });
   });
 
   it('polls first and answers with the resulting state when poll=1', async () => {

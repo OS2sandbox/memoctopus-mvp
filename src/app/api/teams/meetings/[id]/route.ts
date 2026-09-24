@@ -31,8 +31,21 @@ function serialize(row: TeamsMeetingRow) {
     // Lets the screen say "switched off" instead of showing a state that can no
     // longer change, and instead of asking for a sign-in that cannot help.
     enabled: teamsGraphEnabled(),
+    // A run has this meeting's artifacts and is downloading/transcribing them.
+    // The screen shows that instead of "Teams har ikke frigivet noget endnu".
+    working: row.state === 'fetching',
   };
 }
+
+/**
+ * How long a forced poll is allowed to hold the HTTP request open before it
+ * answers with whatever the row says now and lets the run finish in the
+ * background. A Teams recording runs to hundreds of MB and its transcription to
+ * minutes; waiting for all of that meant "Tjek nu" either timed out at the proxy
+ * or sat there with no sign of life. The poller has already written `fetching`
+ * by then, so the answer is accurate — the work is under way.
+ */
+const FORCED_POLL_BUDGET_MS = 8_000;
 
 /**
  * Status of one registered Teams meeting. `?poll=1` runs the poller for it
@@ -53,12 +66,34 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   if (!row) return NextResponse.json({ error: 'not_found' }, { status: 404 });
 
   if (req.nextUrl.searchParams.get('poll') === '1') {
-    try {
-      // A forced poll is also the "Prøv igen" button, so it has to be able to
-      // revive a row the poller has already written off as failed.
-      row = await pollMeeting(userId, id, new Date(), { force: true });
-    } catch (err) {
-      return teamsErrorResponse(err);
+    // A forced poll is also the "Prøv igen" button, so it has to be able to
+    // revive a row the poller has already written off as failed.
+    //
+    // The run keeps going after the budget expires — this is the same long-lived
+    // Node process the background poller runs in, so an unawaited promise is not
+    // cut short. Its outcome lands on the row, which the screen is polling.
+    let failure: unknown = null;
+    const run = pollMeeting(userId, id, new Date(), { force: true }).catch((err: unknown) => {
+      failure = err;
+      console.error('[teams/meetings] forced poll failed for', id, err);
+      return null;
+    });
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const budget = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), FORCED_POLL_BUDGET_MS);
+    });
+    const raced = await Promise.race([run, budget]);
+    clearTimeout(timer);
+
+    if (raced === 'timeout') {
+      // Still going. The poller wrote `fetching` before it started, so the row
+      // now says so and the screen can too.
+      row = (await getTeamsMeeting(userId, id)) ?? row;
+    } else if (raced) {
+      row = raced;
+    } else if (failure) {
+      return teamsErrorResponse(failure);
     }
   }
 

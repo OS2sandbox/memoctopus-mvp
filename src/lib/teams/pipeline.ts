@@ -4,7 +4,7 @@ import { runFfmpeg } from '@/lib/audio/decode-server';
 import { GraphError, classifyGraphError } from './graph-client';
 import { realDate } from './graph-dates';
 import { listArtifacts, pickArtifact, downloadTranscriptVtt, downloadRecording } from './artifacts';
-import { parseVtt, turnsFromVtt, segmentsFromVtt, speakersFromVtt, type VttCue } from './vtt';
+import { parseVtt, segmentsFromVtt, speakersFromVtt, type VttCue } from './vtt';
 import {
   storePendingTranscript,
   readPendingTranscript,
@@ -14,6 +14,8 @@ import {
   type PendingTranscript,
 } from '@/lib/pending-artifacts';
 import { transcribeRecording } from '@/lib/transcribe-recording';
+import type { TranscriptSegment } from '@/types';
+import { transcribeAlongCues } from './transcribe-cues';
 import { withMeetingLock } from './meeting-lock';
 import { artifactMode } from './artifact-mode';
 
@@ -38,7 +40,14 @@ export type PipelineOutcome =
     }
   // `transient`: pending because Graph was throttled or unreachable, not because
   // Teams has nothing yet. Such a poll must not count toward RECORDING_GRACE_ATTEMPTS.
-  | { status: 'pending'; transient?: true }
+  //
+  // `phase` is what the waiting screen shows. 'waiting' means Teams has published
+  // nothing yet; 'working' means this meeting's artifacts are in hand and a run is
+  // downloading and transcribing them right now. Reporting the second as the first
+  // was why pressing "Tjek nu" during a ten-minute download answered "Teams har ikke
+  // frigivet transskriptionen endnu" — true of nothing, and indistinguishable from
+  // being stuck.
+  | { status: 'pending'; transient?: true; phase?: 'waiting' | 'working' }
   | { status: 'failed'; reason: string };
 
 export interface PipelineMeeting {
@@ -114,7 +123,7 @@ export async function processTeamsMeeting(
   return await withMeetingLock(
     `${userId}:${meeting.id}`,
     () => runPipeline(userId, meeting, now),
-    () => ({ status: 'pending' }),
+    () => ({ status: 'pending', phase: 'working' }),
   );
 }
 
@@ -141,7 +150,7 @@ async function runPipeline(
   }
   if (existing?.status === 'processing') {
     const age = now.getTime() - (existing.createdAt ?? 0);
-    if (age < PROCESSING_STALE_MS) return { status: 'pending' };
+    if (age < PROCESSING_STALE_MS) return { status: 'pending', phase: 'working' };
     // Older than the timeout: the run that wrote it is gone. Fall through and
     // redo the work rather than leaving the meeting pending forever.
   }
@@ -230,14 +239,15 @@ function graceElapsed(meeting: PipelineMeeting, now: Date): boolean {
 }
 
 // Mode 1 — the target: Teams' recording transcribed by hviske (good Danish), with
-// the speaker timeline lifted from Teams' own transcript (real display names).
+// the timing and the real speaker display names taken from Teams' own transcript.
 //
-// The recording is transcribed and then dropped. It is deliberately never stashed
-// for the browser: Graph publishes nothing until the meeting has ended, so nobody
-// can follow a meeting live here, and a copy of the raw audio in IndexedDB would
-// then outlive the transcription it was fetched for with no user able to act on it.
-// The only thing handed over is the transcript, plus the speaker names and duration
-// that pre-fill Gennemgang.
+// The recording is cut along Teams' cues rather than by the generic energy VAD —
+// see cue-batches.ts for the measurement behind that. It is then dropped. It is
+// deliberately never stashed for the browser: Graph publishes nothing until the
+// meeting has ended, so nobody can follow a meeting live here, and a copy of the
+// raw audio in IndexedDB would then outlive the transcription it was fetched for
+// with no user able to act on it. The only thing handed over is the transcript,
+// plus the speaker names and duration that pre-fill Gennemgang.
 async function runRecordingWithTranscript(
   userId: string,
   meeting: PipelineMeeting,
@@ -246,29 +256,35 @@ async function runRecordingWithTranscript(
 ): Promise<PipelineOutcome> {
   const cues = parseVtt(await downloadTranscriptVtt(userId, meeting.graphMeetingId, transcriptId));
   const speakers = speakersFromVtt(cues);
+  const fromTeams = segmentsFromVtt(cues);
   const wav = await fetchRecordingAsWav(userId, meeting, recordingId);
 
-  await transcribeRecording(meeting.id, wav, 'audio/wav', {
-    turns: turnsFromVtt(cues),
-    preserveNames: true,
-  });
+  let heard: TranscriptSegment[] = [];
+  try {
+    const result = await transcribeAlongCues(wav, cues);
+    heard = result.segments;
+    console.log(
+      `[teams-pipeline] ${meeting.id}: ${heard.length} segments from ${result.batches} cue slices`
+      + ` (${result.emptyBatches} empty), Teams' own transcript has ${fromTeams.length}`,
+    );
+  } catch (err) {
+    // Not fatal while Teams' own transcript is in hand: losing hviske's Danish
+    // costs quality, shipping nothing costs the meeting.
+    console.error(`[teams-pipeline] ${meeting.id} cue transcription failed:`, err);
+  }
+
+  let segments = heard;
   let mode: ProcessingMode = 'recording+transcript';
-  if (heardNothing(await assertTranscribed(meeting.id))) {
-    // Teams' own transcript is already in hand and regularly has words where hviske
-    // found none, so prefer it over shipping an empty transcript. Losing hviske's
-    // Danish costs quality; shipping nothing costs the meeting.
-    const fromTeams = segmentsFromVtt(cues);
+  if (!coversMeeting(heard, fromTeams)) {
     if (fromTeams.length === 0) {
       await storePendingTranscript(meeting.id, { status: 'failed' });
-      throw new Error('Hverken optagelsen eller Teams\' transskription indeholdt tale.');
+      throw new Error("Hverken optagelsen eller Teams' transskription indeholdt tale.");
     }
-    await storePendingTranscript(meeting.id, {
-      status: 'ready',
-      segments: fromTeams,
-      diarized: true,
-    });
+    segments = fromTeams;
     mode = 'transcript-only';
   }
+
+  await storePendingTranscript(meeting.id, { status: 'ready', segments, diarized: true });
 
   // After the verdict, so a run that failed transcription never advertises itself
   // as finished-with-no-audio to a client that would then stop waiting.
@@ -278,6 +294,29 @@ async function runRecordingWithTranscript(
   });
 
   return { status: 'ready', mode, speakers, transcriptId, recordingId };
+}
+
+/**
+ * Below this share of the words Teams itself heard, hviske's pass is treated as
+ * having lost the meeting rather than transcribed it.
+ *
+ * hviske normally produces MORE words than Teams — that is the whole reason for
+ * preferring the recording. Coming back with half of them means the model skipped
+ * passages (quiet speech in a 22 kbit/s Teams mixdown is where it happens), and
+ * Teams' own transcript, already downloaded, is then the better referat.
+ */
+export const MIN_COVERAGE_RATIO = 0.5;
+
+function wordCount(segments: TranscriptSegment[]): number {
+  return segments.reduce((n, s) => n + s.text.split(/\s+/).filter(Boolean).length, 0);
+}
+
+/** Did hviske hear enough of the meeting to be worth preferring over Teams? */
+export function coversMeeting(heard: TranscriptSegment[], fromTeams: TranscriptSegment[]): boolean {
+  if (heard.length === 0) return false;
+  const teamsWords = wordCount(fromTeams);
+  if (teamsWords === 0) return true; // nothing to compare against — hviske is all there is
+  return wordCount(heard) >= MIN_COVERAGE_RATIO * teamsWords;
 }
 
 // Mode 2 — no audio ever touches disk: Teams' transcript text is the transcript.

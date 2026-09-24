@@ -11,6 +11,7 @@ const mockReadPendingTranscript = vi.hoisted(() => vi.fn());
 const mockReadPendingMeta = vi.hoisted(() => vi.fn());
 const mockMarkNoRecording = vi.hoisted(() => vi.fn());
 const mockTranscribeRecording = vi.hoisted(() => vi.fn());
+const mockTranscribeAlongCues = vi.hoisted(() => vi.fn());
 const mockSetOwner = vi.hoisted(() => vi.fn());
 const mockMkdir = vi.hoisted(() => vi.fn());
 const mockMkdtemp = vi.hoisted(() => vi.fn());
@@ -49,6 +50,10 @@ vi.mock('@/lib/pending-artifacts', () => ({
 }));
 
 vi.mock('@/lib/transcribe-recording', () => ({ transcribeRecording: mockTranscribeRecording }));
+
+// Mode 1 transcribes the recording along Teams' own cues; the slicing itself is
+// covered in cue-batches.test.ts and transcribe-cues.test.ts.
+vi.mock('./transcribe-cues', () => ({ transcribeAlongCues: mockTranscribeAlongCues }));
 
 import { GraphError } from './graph-client';
 import { artifactMode, processTeamsMeeting, transcodeToWav } from './pipeline';
@@ -114,6 +119,16 @@ beforeEach(() => {
   mockSetOwner.mockReset().mockResolvedValue(undefined);
   mockReadFile.mockReset().mockResolvedValue(WAV);
   mockRm.mockReset().mockResolvedValue(undefined);
+  // hviske hears the meeting at least as fully as Teams did — the normal case,
+  // and what `coversMeeting` decides on.
+  mockTranscribeAlongCues.mockReset().mockResolvedValue({
+    segments: [
+      { start: 0, end: 4, text: 'Velkommen til mødet igen.', speaker: 'Mette Hansen' },
+      { start: 4.5, end: 9.25, text: 'Tak, lad os komme godt i gang.', speaker: 'Jens Poulsen' },
+    ],
+    batches: 1,
+    emptyBatches: 0,
+  });
   // transcribeRecording is fail-soft; by default it succeeds and leaves a ready stash.
   mockTranscribeRecording.mockReset().mockImplementation(async () => {
     // A successful run leaves segments behind; an empty `ready` stash means hviske
@@ -200,12 +215,54 @@ describe('processTeamsMeeting — recording + transcript', () => {
       durationSeconds: 9,
     });
 
-    const [id, buffer, mime, opts] = mockTranscribeRecording.mock.calls[0];
-    expect(id).toBe('meet-1');
+    // Cut along Teams' own cues, not by the generic energy VAD — see cue-batches.ts.
+    const [buffer, cues] = mockTranscribeAlongCues.mock.calls[0];
     expect(buffer).toBe(WAV);
-    expect(mime).toBe('audio/wav');
-    expect(opts.preserveNames).toBe(true);
-    expect(opts.turns.map((t: { speaker: string }) => t.speaker)).toEqual(['Mette Hansen', 'Jens Poulsen']);
+    expect(cues.map((c: { speaker: string }) => c.speaker)).toEqual(['Mette Hansen', 'Jens Poulsen']);
+    expect(mockTranscribeRecording).not.toHaveBeenCalled();
+
+    // hviske's text is what ships, carrying the cues' real display names.
+    expect(mockStorePendingTranscript).toHaveBeenCalledWith('meet-1', {
+      status: 'ready',
+      diarized: true,
+      segments: [
+        { start: 0, end: 4, text: 'Velkommen til mødet igen.', speaker: 'Mette Hansen' },
+        { start: 4.5, end: 9.25, text: 'Tak, lad os komme godt i gang.', speaker: 'Jens Poulsen' },
+      ],
+    });
+  });
+
+  // The measured failure mode on real Teams audio: hviske skips the quieter
+  // passages and comes back with a fraction of the meeting. Teams' own transcript
+  // is already downloaded and is then the better referat.
+  it("prefers Teams' own transcript when hviske heard only part of the meeting", async () => {
+    mockTranscribeAlongCues.mockResolvedValue({
+      segments: [{ start: 4.5, end: 9.25, text: 'Tak', speaker: 'Jens Poulsen' }],
+      batches: 2,
+      emptyBatches: 1,
+    });
+
+    const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
+
+    expect(outcome).toMatchObject({ status: 'ready', mode: 'transcript-only' });
+    expect(mockStorePendingTranscript).toHaveBeenCalledWith('meet-1', {
+      status: 'ready',
+      diarized: true,
+      segments: [
+        { start: 0, end: 4, text: 'Velkommen til mødet.', speaker: 'Mette Hansen' },
+        { start: 4.5, end: 9.25, text: 'Tak, lad os komme i gang.', speaker: 'Jens Poulsen' },
+      ],
+    });
+  });
+
+  // A thrown transcription is not a lost meeting while Teams' text is in hand.
+  it("falls back to Teams' transcript when the cue pass throws", async () => {
+    mockTranscribeAlongCues.mockRejectedValue(new Error('hviske svarede 503'));
+
+    const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
+
+    expect(outcome).toMatchObject({ status: 'ready', mode: 'transcript-only' });
+    expect(mockMarkNoRecording).toHaveBeenCalled();
   });
 
   it('marks the run in flight so a concurrent poll does not start a second download', async () => {
@@ -231,13 +288,13 @@ describe('processTeamsMeeting — recording + transcript', () => {
     expect(outcome.status).toBe('failed');
     expect((outcome as { reason: string }).reason).toContain('moov atom not found');
     expect(mockRm).toHaveBeenCalledWith(SCRATCH, { recursive: true, force: true });
-    expect(mockTranscribeRecording).not.toHaveBeenCalled();
+    expect(mockTranscribeAlongCues).not.toHaveBeenCalled();
   });
 
-  it('fails when the fail-soft transcription left a failed stash', async () => {
-    mockTranscribeRecording.mockImplementation(async () => {
-      mockReadPendingTranscript.mockResolvedValue({ status: 'failed', createdAt: 1 });
-    });
+  it('fails when neither hviske nor Teams heard anything', async () => {
+    // A transcript whose cues are all empty: nothing to fall back to either.
+    mockDownloadVtt.mockResolvedValue(['WEBVTT', '', '00:00:00.000 --> 00:00:04.000', '<v Mette Hansen></v>', ''].join('\n'));
+    mockTranscribeAlongCues.mockResolvedValue({ segments: [], batches: 0, emptyBatches: 0 });
 
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
     expect(outcome.status).toBe('failed');
@@ -414,9 +471,9 @@ describe('processTeamsMeeting — no mode hands raw audio to the browser', () =>
   // Ordering matters: a run whose transcription failed must not leave behind a
   // "finished, no audio" marker, or the client stops waiting on a failed meeting.
   it('does not mark no-recording when transcription fails', async () => {
-    mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [RECORDING_REF] });
-    // transcribeRecording is fail-soft: it records the verdict in the stash rather
-    // than throwing, which is what assertTranscribed reads back.
+    // Recording-only: no Teams transcript to fall back to, so a fail-soft
+    // transcription that left a failed stash is the meeting's own failure.
+    mockListArtifacts.mockResolvedValue({ transcripts: [], recordings: [RECORDING_REF] });
     mockTranscribeRecording.mockImplementation(async () => {
       mockReadPendingTranscript.mockResolvedValue({ status: 'failed', createdAt: 1 });
     });
@@ -446,7 +503,10 @@ describe('processTeamsMeeting — idempotency and errors', () => {
       status: 'processing',
       createdAt: AFTER_GRACE.getTime() - 60_000,
     });
-    expect(await processTeamsMeeting('u1', MEETING, AFTER_GRACE)).toEqual({ status: 'pending' });
+    expect(await processTeamsMeeting('u1', MEETING, AFTER_GRACE)).toEqual({
+      status: 'pending',
+      phase: 'working',
+    });
     expect(mockListArtifacts).not.toHaveBeenCalled();
   });
 
@@ -592,9 +652,7 @@ describe('transcodeToWav', () => {
 describe('processTeamsMeeting — hviske heard nothing', () => {
   beforeEach(() => {
     mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [RECORDING_REF] });
-    mockTranscribeRecording.mockImplementation(async () => {
-      mockReadPendingTranscript.mockResolvedValue({ status: 'ready', segments: [], createdAt: 1 });
-    });
+    mockTranscribeAlongCues.mockResolvedValue({ segments: [], batches: 2, emptyBatches: 2 });
   });
 
   it("falls back to Teams' own transcript instead of shipping an empty one", async () => {

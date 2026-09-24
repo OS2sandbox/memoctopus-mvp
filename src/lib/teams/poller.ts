@@ -167,6 +167,15 @@ export async function pollMeeting(
     if (outcome.status === 'failed') {
       return await markPollAttempt(userId, id, { state: 'failed', failureReason: outcome.reason });
     }
+    // A run is already downloading and transcribing this meeting (the poller and
+    // "Tjek nu" both land here, and the pipeline serialises them). Leaving the row
+    // in `fetching` is what lets the screen say so; writing `awaiting_teams` back
+    // told the user Teams had published nothing while we were busy with what it
+    // had published. It is not an attempt either: it says nothing about how long
+    // Teams has had.
+    if (outcome.phase === 'working') {
+      return await markPollAttempt(userId, id, { state: 'fetching', failureReason: null }, { incrementAttempts: false });
+    }
     // Nothing yet — back to waiting, and try again after the backoff.
     return await waiting('awaiting_teams', null, outcome.transient);
   } catch (err) {

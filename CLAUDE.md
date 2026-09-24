@@ -55,6 +55,10 @@ Auth config is deliberately **runtime-only**, never `NEXT_PUBLIC_*`: an operator
 
 **AI pipeline** (after a meeting is recorded):
 1. `src/lib/ai/transcription.ts` — STT via the hviske (`syvai/hviske-ensemble`) server's OpenAI-compatible API. Used for both the per-utterance live path (`/api/meetings/[id]/utterance`) and the batch transcribe pass. Configured via `HVISKE_URL` / `HVISKE_API_KEY`. Speaker diarization (`src/lib/ai/diarization.ts`) is now co-hosted on the same server at `POST /diarize`; hviske still returns plain text only, so segment timestamps are VAD-estimated and the diarization turns are merged on by time-overlap (`src/lib/audio/merge-speakers.ts`).
+   Whisper-family degeneration — runaway repetition and learned subtitle credits
+   ("Danske tekster af …") — is handled in `src/lib/audio/hallucinations.ts`:
+   `cleanTranscribedText()` cuts a loop off at its first echo and keeps the real words
+   before it, rather than discarding the whole batch as the old boolean guard did.
 2. `src/lib/ai/pii.ts` — PII detection and replacement using OpenAI `gpt-4o`.
 3. `src/lib/ai/chapters.ts` — Chapter/topic segmentation using OpenAI.
 4. `src/lib/ai/minutes.ts` — Meeting minutes generation using OpenAI `gpt-4o`. Prompts are in Danish.
@@ -116,9 +120,23 @@ dead end and offers the saved transcript or a delete.
 - `vtt.ts` — VTT parser; `turnsFromVtt()` feeds real speaker names into
   `src/lib/audio/merge-speakers.ts` (`preserveNames`), `segmentsFromVtt()` is the
   transcript-only path.
-- `pipeline.ts` — `processTeamsMeeting()`: pick artifact → download → transcode → reuse the
-  existing `transcribeRecording()` stash, so the pending-artifact hand-off and
-  the Gennemgang flow are unchanged. Returns `ready | pending | failed`.
+- `cue-batches.ts` / `transcribe-cues.ts` — how a Teams recording is cut up for hviske.
+  The generic path (`prepareVadBatches`) runs an energy VAD and then **splices** the
+  surviving fragments into 27 s windows. A browser microphone recording survives that;
+  a Teams cloud recording (16 kHz mono AAC at ~22 kbit/s) does not — measured against
+  the production hviske, the spliced window transcribed only its loudest passage and
+  silently dropped the first minute of the meeting. Cut instead into **contiguous**
+  slices along Teams' own transcript cues, the same audio came back complete, with no
+  repetition loops and no subtitle-credit hallucinations. Slice boundaries are speaker
+  turns, so each segment's speaker is read off its cue rather than guessed by overlap.
+- `pipeline.ts` — `processTeamsMeeting()`: pick artifact → download → transcode →
+  transcribe along the cues (mode 1) or via `transcribeRecording()` (mode 3), landing in
+  the same pending-artifact stash, so the hand-off and the Gennemgang flow are unchanged.
+  Returns `ready | pending | failed`; a pending outcome carries `phase: 'waiting' |
+  'working'` so the screen can tell "Teams has published nothing" from "we are busy with
+  what it published". `coversMeeting()` is the safety net: when hviske comes back with
+  less than `MIN_COVERAGE_RATIO` of the words Teams itself heard, Teams' own transcript
+  (already downloaded) ships instead.
 - `store.ts` — raw-SQL CRUD over the per-user `teams_meetings` table (same per-user schema
   rules as everything else), plus the polling-due predicate and backoff.
 - `poller.ts` — `pollMeeting()` / `pollDueMeetings()`; started from `src/instrumentation.ts`
@@ -142,8 +160,12 @@ of the flow needs. `resolveJoinUrl()` gets subject and start/end off the
 lives in `src/components/dashboard/arm-error-message.ts`.
 
 **Teams meeting state** (`teams_meetings.state`):
-`awaiting_teams` → `ready` | `failed` | `needs_reauth`. The client-side meeting status gains
-a matching `awaiting_teams`.
+`awaiting_teams` → `fetching` → `ready` | `failed` | `needs_reauth`. The client-side meeting
+status gains a matching `awaiting_teams`. `fetching` means a run holds this meeting's
+artifacts and is downloading/transcribing them; `GET /meetings/[id]` reports it as
+`working: true` and the screen says so instead of "Teams har ikke frigivet noget endnu".
+`?poll=1` no longer blocks the request on the whole run — it waits `FORCED_POLL_BUDGET_MS`
+and then answers with the row, leaving the run going in the same Node process.
 
 ### Docker / deployment
 `docker-compose.yml` at repo root defines three services: `db` (Postgres), `migrate`

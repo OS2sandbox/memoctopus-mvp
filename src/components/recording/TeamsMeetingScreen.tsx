@@ -27,6 +27,8 @@ interface TeamsMeetingStatus {
   mode?: string;
   /** False when the server has TEAMS_GRAPH_ENABLED off. Absent means on. */
   enabled?: boolean;
+  /** A run holds this meeting's artifacts and is downloading/transcribing them. */
+  working?: boolean;
 }
 
 export type TeamsArmResult = 'armed' | 'armed_in_progress' | 'not_organizer' | 'policy_blocked';
@@ -120,6 +122,38 @@ function fmtRange(start: string | null, end: string | null): string | null {
   return endTime ? `${day} · ${time}–${endTime}` : `${day} · ${time}`;
 }
 
+/**
+ * A moving line under the status text. The screen can sit on one sentence for a
+ * quarter of an hour while a recording is downloaded and transcribed, and a page
+ * that never changes reads as a page that has stopped working.
+ */
+function WorkingIndicator({ label }: { label: string }) {
+  return (
+    <div
+      data-testid="working-indicator"
+      style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10 }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 90, height: 3, borderRadius: 999, overflow: 'hidden',
+          background: 'var(--line)', position: 'relative', display: 'inline-block',
+        }}
+      >
+        <span
+          style={{
+            position: 'absolute', inset: 0, width: '40%', borderRadius: 999,
+            background: 'var(--ink-2, #666)',
+            animation: 'memoctopus-sweep 1.5s ease-in-out infinite',
+          }}
+        />
+      </span>
+      <span style={{ fontSize: 13.5, color: 'var(--muted)' }}>{label}</span>
+      <style>{'@keyframes memoctopus-sweep{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}'}</style>
+    </div>
+  );
+}
+
 export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreenProps) {
   const router = useRouter();
   // next/navigation returns a stable router, but keeping it in a ref means the
@@ -174,7 +208,12 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
         }
         const data = (await res.json()) as TeamsMeetingStatus;
         setError(null);
-        if (explicitForce && data.state === 'awaiting_teams') {
+        if (explicitForce && data.state === 'fetching') {
+          setLastCheck(
+            'Vi er i gang med mødet lige nu. Du kan roligt lukke fanen — '
+            + 'referatet ligger klar, når du kommer tilbage.',
+          );
+        } else if (explicitForce && data.state === 'awaiting_teams') {
           setLastCheck(
             'Teams har ikke frigivet transskriptionen endnu. Vi bliver ved med at prøve — '
             + 'du kan roligt lukke fanen.',
@@ -356,9 +395,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
                 ? 'Mødet er slut. Memoctopus henter transskriptionen fra Teams, så snart Microsoft frigiver den — det tager typisk et par minutter, men kan tage længere.'
                 : 'Mødet optages og transskriberes automatisk. Referatet er klar automatisk et par minutter efter mødet.'}
             </p>
-            <p style={{ marginTop: 10, fontSize: 13.5, color: 'var(--muted)' }}>
-              {meetingOver ? 'Henter fra Teams…' : 'Venter på mødet…'}
-            </p>
+            <WorkingIndicator label={meetingOver ? 'Spørger Teams…' : 'Venter på mødet…'} />
             {!meetingOver && !lastCheck && (
               <p style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
                 Memoctopus venter til mødet er planlagt til at slutte. Sluttede I før tid,
@@ -437,13 +474,33 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
         )}
 
         {state === 'fetching' && (
-          <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
-            Mødet er slut. Henter transskription fra Teams — det tager typisk et par minutter.
-          </p>
+          <div data-testid="fetching">
+            <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
+              Teams har frigivet mødet, og Memoctopus er i gang med det nu: optagelsen hentes
+              ned og transskriberes. Det tager typisk et par minutter — for et langt møde kan
+              det tage et kvarter.
+            </p>
+            <WorkingIndicator label="Behandler mødet…" />
+            <p style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
+              Du behøver ikke blive på siden. Gennemgangen åbner af sig selv, når den er klar,
+              og mødet ligger også på forsiden bagefter.
+            </p>
+            {lastCheck && (
+              <p
+                data-testid="last-check"
+                style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}
+              >
+                {lastCheck}
+              </p>
+            )}
+          </div>
         )}
 
         {state === 'ready' && !copyGone && (
-          <p style={{ margin: 0, fontSize: 15 }}>Transskriptionen er hentet. Åbner gennemgangen…</p>
+          <>
+            <p style={{ margin: 0, fontSize: 15 }}>Transskriptionen er hentet. Åbner gennemgangen…</p>
+            <WorkingIndicator label="Henter referatet ned…" />
+          </>
         )}
 
         {state === 'ready' && copyGone && (

@@ -168,10 +168,22 @@ describe('TeamsMeetingScreen — invitee (not armed)', () => {
 });
 
 describe('TeamsMeetingScreen — fetching state', () => {
-  it('shows the "henter transskription" line', async () => {
+  // The state the screen used to hide: Teams has published, and the recording is
+  // being downloaded and transcribed. Saying "Teams har ikke frigivet noget endnu"
+  // for that was both wrong and indistinguishable from being stuck.
+  it('says the meeting is being processed right now', async () => {
     respondWith(statusBody({ state: 'fetching' }));
     renderScreen();
-    expect(await screen.findByText(/Henter transskription fra Teams/)).toBeInTheDocument();
+
+    expect(await screen.findByText(/Teams har frigivet mødet/)).toBeInTheDocument();
+    expect(screen.getByText(/optagelsen hentes/)).toBeInTheDocument();
+    expect(screen.getByTestId('working-indicator')).toBeInTheDocument();
+  });
+
+  it('tells the user the tab can be closed', async () => {
+    respondWith(statusBody({ state: 'fetching' }));
+    renderScreen();
+    expect(await screen.findByText(/Du behøver ikke blive på siden/)).toBeInTheDocument();
   });
 });
 
@@ -249,7 +261,7 @@ describe('TeamsMeetingScreen — waiting copy before vs after the scheduled end'
     renderScreen();
 
     expect(await screen.findByText(/Venter på mødet/)).toBeInTheDocument();
-    expect(screen.queryByText(/Henter fra Teams/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Spørger Teams/)).not.toBeInTheDocument();
   });
 
   it('waits for Microsoft once the meeting has ended', async () => {
@@ -261,7 +273,7 @@ describe('TeamsMeetingScreen — waiting copy before vs after the scheduled end'
     }));
     renderScreen();
 
-    expect(await screen.findByText(/Henter fra Teams/)).toBeInTheDocument();
+    expect(await screen.findByText(/Spørger Teams/)).toBeInTheDocument();
     expect(screen.getByText(/Mødet er slut/)).toBeInTheDocument();
     expect(screen.queryByText(/Venter på mødet/)).not.toBeInTheDocument();
   });
