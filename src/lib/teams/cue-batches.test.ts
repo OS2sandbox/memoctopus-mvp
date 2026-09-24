@@ -75,6 +75,51 @@ describe('planCueBatches', () => {
     expect(batch.cues.map((c) => c.start)).toEqual([10, 12]);
   });
 
+  // Teams transcribes each participant's OWN stream, so two people talking at once
+  // are two cues covering the same instant — the grouping must not read that as a
+  // negative gap followed by a huge one.
+  it('groups overlapping cues from two speakers', () => {
+    const batches = planCueBatches(
+      [
+        cue(39.2, 40.3, 'Velkommen til syddjurs', 'Nikolaj'),
+        cue(39.4, 41.2, '5 til udstyring thank you', 'Peter'),
+        cue(46.2, 47.5, 'En blå baggrund det her', 'Peter'),
+      ],
+      90,
+    );
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0].cues).toHaveLength(3);
+    expect(batches[0].end).toBeGreaterThanOrEqual(47.5);
+  });
+
+  // Otherwise the padded slices overlap and the same words are transcribed — and
+  // then shown — twice.
+  it('never lets two slices cover the same audio', () => {
+    const batches = planCueBatches(
+      [cue(10, 10.3), cue(30, 30.3), cue(45, 45.2), cue(59, 59.4)],
+      70,
+    );
+
+    expect(batches).toHaveLength(4);
+    for (let i = 1; i < batches.length; i++) {
+      expect(batches[i].start).toBeGreaterThanOrEqual(batches[i - 1].end);
+    }
+    // …and every slice still holds all of its own cues' audio.
+    for (const batch of batches) {
+      expect(batch.start).toBeLessThanOrEqual(batch.cues[0].start);
+      expect(batch.end).toBeGreaterThanOrEqual(batch.cues[batch.cues.length - 1].end);
+    }
+  });
+
+  it('still pads towards whichever side has room', () => {
+    // Two cues 12 s apart: each can only grow into the silence between them.
+    const batches = planCueBatches([cue(10, 10.3), cue(22, 22.3)], 60);
+    expect(batches[0].end - batches[0].start).toBeGreaterThan(1);
+    expect(batches[1].end - batches[1].start).toBeGreaterThan(1);
+    expect(batches[0].end).toBeLessThanOrEqual(batches[1].start);
+  });
+
   it('works without a known duration', () => {
     const [batch] = planCueBatches([cue(1, 3)], null);
     expect(batch.end).toBeGreaterThan(3);

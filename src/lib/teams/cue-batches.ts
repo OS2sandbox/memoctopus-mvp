@@ -22,17 +22,30 @@ import type { VttCue } from './vtt';
 /** Longest slice handed to hviske. Matches BATCH_DURATION_S. */
 export const MAX_BATCH_SECONDS = 27;
 
-/** A silence longer than this ends a slice: nobody is mid-sentence across it. */
-export const CUE_GAP_SECONDS = 5;
+/**
+ * A silence longer than this ends a slice.
+ *
+ * Measured, not guessed: at 5 s a two-speaker meeting broke into slices short
+ * enough that hviske lost words at their edges ("Velkommen til Sydjurs" alone,
+ * with the two "Hej" and a "Thank you" around it gone). At 10 s the same cues
+ * merged into one 24 s slice that transcribed all of it. Longer silences inside
+ * a slice are no longer a hazard now that {@link MAX_BATCH_SECONDS} caps the span
+ * and cleanTranscribedText removes the credits a model emits over them.
+ */
+export const CUE_GAP_SECONDS = 10;
 
 /** Context kept either side of a slice, so no word is clipped at the boundary. */
 export const CUE_PAD_SECONDS = 0.6;
 
 /**
- * Very short slices are where the model invents subtitle credits, so a lone
- * two-word cue is padded out to at least this much surrounding audio.
+ * Very short slices are where the model invents subtitle credits and mangles what
+ * it does hear, so a lone short cue is padded out to at least this much audio.
+ *
+ * Also measured: a 3.1 s slice of "Hvad er du joine mit møde, Peter." came back
+ * as "Jørgen mit mødepiller"; the same cue in an 8 s slice came back as "Vær du
+ * joinde mit møde Peter?". Whisper needs context either side of a short utterance.
  */
-export const MIN_BATCH_SECONDS = 3;
+export const MIN_BATCH_SECONDS = 8;
 
 export interface CueBatch {
   /** Slice bounds in recording seconds. */
@@ -66,9 +79,12 @@ export function planCueBatches(cues: VttCue[], durationSeconds: number | null): 
   for (const cue of usable) {
     const current = groups[groups.length - 1];
     if (current) {
-      const last = current[current.length - 1];
-      const gap = cue.start - last.end;
-      const span = cue.end - current[0].start;
+      // Teams cues OVERLAP — it transcribes each participant's own stream, so two
+      // people talking at once are two cues covering the same instant. The gap is
+      // therefore measured against the furthest end so far, not the previous cue's.
+      const reached = current.reduce((max, c) => (c.end > max ? c.end : max), current[0].end);
+      const gap = cue.start - reached;
+      const span = Math.max(cue.end, reached) - current[0].start;
       if (gap <= CUE_GAP_SECONDS && span <= MAX_BATCH_SECONDS) {
         current.push(cue);
         continue;
@@ -77,18 +93,34 @@ export function planCueBatches(cues: VttCue[], durationSeconds: number | null): 
     groups.push([cue]);
   }
 
-  return groups.map((group) => {
-    const first = group[0];
-    const last = group[group.length - 1];
-    let start = Math.max(0, first.start - CUE_PAD_SECONDS);
-    let end = Math.min(limit, last.end + CUE_PAD_SECONDS);
+  // A group's own span, before padding — the bounds the neighbours are clamped to.
+  const spans = groups.map((group) => ({
+    from: group[0].start,
+    to: group.reduce((max, cue) => (cue.end > max ? cue.end : max), group[0].end),
+  }));
+
+  return groups.map((group, i) => {
+    // Two slices must never cover the same audio: a word caught by both would be
+    // transcribed twice and appear twice in the referat. Each slice may grow into
+    // at most half of the silence on either side, so neighbours meet and never
+    // overlap — whatever the constants above are tuned to.
+    const floor = i > 0 ? spans[i - 1].to + (spans[i].from - spans[i - 1].to) / 2 : 0;
+    const ceiling =
+      i + 1 < spans.length ? spans[i].to + (spans[i + 1].from - spans[i].to) / 2 : limit;
+
+    let start = Math.max(floor, spans[i].from - CUE_PAD_SECONDS);
+    let end = Math.min(ceiling, spans[i].to + CUE_PAD_SECONDS);
 
     // Pad a very short slice outwards (never inwards — no cue audio is lost).
     if (end - start < MIN_BATCH_SECONDS) {
       const missing = MIN_BATCH_SECONDS - (end - start);
-      start = Math.max(0, start - missing / 2);
-      end = Math.min(limit, end + missing / 2);
-      if (end - start < MIN_BATCH_SECONDS) start = Math.max(0, end - MIN_BATCH_SECONDS);
+      start = Math.max(floor, start - missing / 2);
+      end = Math.min(ceiling, end + missing / 2);
+      // One side ran out of room — take what is left on the other.
+      if (end - start < MIN_BATCH_SECONDS) {
+        start = Math.max(floor, end - MIN_BATCH_SECONDS);
+        end = Math.min(ceiling, start + MIN_BATCH_SECONDS);
+      }
     }
 
     return { start, end, cues: group };

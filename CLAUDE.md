@@ -129,6 +129,10 @@ dead end and offers the saved transcript or a delete.
   slices along Teams' own transcript cues, the same audio came back complete, with no
   repetition loops and no subtitle-credit hallucinations. Slice boundaries are speaker
   turns, so each segment's speaker is read off its cue rather than guessed by overlap.
+  Note that **Teams cues overlap**: Teams transcribes each participant's own client-side
+  stream, so two people talking at once are two simultaneous cues, and it hears things
+  the mono 16 kHz mixdown we download has physically merged. That is the ceiling on how
+  much of a Teams meeting any single-stream ASR can recover from the recording.
 - `pipeline.ts` — `processTeamsMeeting()`: pick artifact → download → transcode →
   transcribe along the cues (mode 1) or via `transcribeRecording()` (mode 3), landing in
   the same pending-artifact stash, so the hand-off and the Gennemgang flow are unchanged.
