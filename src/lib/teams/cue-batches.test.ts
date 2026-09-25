@@ -46,6 +46,24 @@ describe('planCueBatches', () => {
     for (const batch of batches) {
       const span = batch.cues[batch.cues.length - 1].end - batch.cues[0].start;
       expect(span).toBeLessThanOrEqual(MAX_BATCH_SECONDS);
+      // And the slice actually handed to hviske — the cue span plus its padding —
+      // still fits the model's ~30 s window. Asserting only the span let padding
+      // push the real request past the cap unnoticed.
+      expect(batch.end - batch.start).toBeLessThanOrEqual(MAX_BATCH_SECONDS + 2 * CUE_PAD_SECONDS);
+    }
+  });
+
+  // Teams cues overlap, so two GROUPS can overlap once the cap splits a pair of
+  // simultaneous speakers. Clamping each slice to the midpoint between groups
+  // then cut real speech off both sides of the split.
+  it('keeps a slice whole when the cap splits overlapping speakers', () => {
+    const batches = planCueBatches([cue(0, 20, 'x', 'A'), cue(19, 35, 'x', 'B')], 60);
+
+    expect(batches).toHaveLength(2);
+    for (const batch of batches) {
+      const last = batch.cues.reduce((max, c) => (c.end > max ? c.end : max), batch.cues[0].end);
+      expect(batch.start).toBeLessThanOrEqual(batch.cues[0].start);
+      expect(batch.end).toBeGreaterThanOrEqual(last);
     }
   });
 
@@ -94,7 +112,8 @@ describe('planCueBatches', () => {
   });
 
   // Otherwise the padded slices overlap and the same words are transcribed — and
-  // then shown — twice.
+  // then shown — twice. (Only guaranteed for groups separated by silence; when
+  // the groups themselves overlap, keeping each slice whole wins — see above.)
   it('never lets two slices cover the same audio', () => {
     const batches = planCueBatches(
       [cue(10, 10.3), cue(30, 30.3), cue(45, 45.2), cue(59, 59.4)],

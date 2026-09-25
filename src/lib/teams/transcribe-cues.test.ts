@@ -103,6 +103,56 @@ describe('transcribeAlongCues', () => {
     expect(mockTranscribeRaw).not.toHaveBeenCalled();
   });
 
+  // speakerAt only lets cues that carry a <v Name> span win the overlap. Every
+  // cue in the fixture above is named, so these branches need their own VTT.
+  describe('cues Teams left unattributed', () => {
+    const MIXED = parseVtt([
+      'WEBVTT',
+      '',
+      '00:00:05.000 --> 00:00:09.000',
+      'Noget uden navn.',            // no <v> span — Teams does emit these
+      '',
+      '00:00:09.200 --> 00:00:12.000',
+      '<v Mette Hansen>Og noget med.</v>',
+      '',
+    ].join('\n'));
+
+    it('never gives a segment the placeholder when any cue is named', async () => {
+      mockTranscribeRaw.mockResolvedValue({ text: 'Noget uden navn. Og noget med.', latencyMs: 5 });
+      const { segments } = await transcribeAlongCues(Buffer.from('mp4'), MIXED);
+
+      expect(segments.length).toBeGreaterThan(0);
+      for (const segment of segments) {
+        expect(segment.speaker).toBe('Mette Hansen');
+      }
+    });
+
+    it('keeps the placeholder when Teams named nobody at all', async () => {
+      const ANON = parseVtt('WEBVTT\n\n00:00:05.000 --> 00:00:09.000\nIngen navne her.\n');
+      mockTranscribeRaw.mockResolvedValue({ text: 'Ingen navne her.', latencyMs: 5 });
+      const { segments } = await transcribeAlongCues(Buffer.from('mp4'), ANON);
+
+      expect(segments.length).toBeGreaterThan(0);
+      expect(segments.every((s) => s.speaker === 'Taler 1')).toBe(true);
+    });
+  });
+
+  // A regression that dumped a slice's whole text onto its first cue would
+  // otherwise keep the suite green.
+  it('divides a slice text across the cues it covers', async () => {
+    mockTranscribeRaw.mockResolvedValue({
+      text: 'Velkommen til mødet. Tak, lad os komme i gang.',
+      latencyMs: 5,
+    });
+    const { segments } = await transcribeAlongCues(Buffer.from('mp4'), CUES);
+
+    // The first slice holds two cues from two speakers; its text must not all
+    // land on one of them.
+    const firstSlice = segments.filter((s) => s.start < 20);
+    expect(firstSlice.length).toBeGreaterThan(1);
+    expect(new Set(firstSlice.map((s) => s.speaker)).size).toBe(2);
+  });
+
   it('hands hviske a wav, never the mp4 it was given', async () => {
     await transcribeAlongCues(Buffer.from('mp4'), CUES);
     const [buffer, mime] = mockTranscribeRaw.mock.calls[0];

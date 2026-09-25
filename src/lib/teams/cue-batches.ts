@@ -100,13 +100,23 @@ export function planCueBatches(cues: VttCue[], durationSeconds: number | null): 
   }));
 
   return groups.map((group, i) => {
-    // Two slices must never cover the same audio: a word caught by both would be
-    // transcribed twice and appear twice in the referat. Each slice may grow into
-    // at most half of the silence on either side, so neighbours meet and never
-    // overlap — whatever the constants above are tuned to.
-    const floor = i > 0 ? spans[i - 1].to + (spans[i].from - spans[i - 1].to) / 2 : 0;
-    const ceiling =
+    // Two slices should not cover the same audio: a word caught by both would be
+    // transcribed twice and appear twice in the referat. Each slice may therefore
+    // grow into at most half of the silence on either side, so neighbours meet
+    // rather than overlap.
+    //
+    // That is a preference, not an invariant, and it loses to keeping a slice's
+    // own cues whole. Teams cues OVERLAP, so two groups can too — when the
+    // MAX_BATCH_SECONDS cap splits a pair of simultaneous speakers, the second
+    // group starts BEFORE the first one ends. Clamping to the midpoint then cut
+    // half a second off the end of one speaker and the start of the other, which
+    // is real speech lost from a recording we already struggle to transcribe.
+    // Duplicating a word across two slices is recoverable; deleting one is not.
+    const midBefore = i > 0 ? spans[i - 1].to + (spans[i].from - spans[i - 1].to) / 2 : 0;
+    const midAfter =
       i + 1 < spans.length ? spans[i].to + (spans[i + 1].from - spans[i].to) / 2 : limit;
+    const floor = Math.min(midBefore, spans[i].from);
+    const ceiling = Math.max(midAfter, spans[i].to);
 
     let start = Math.max(floor, spans[i].from - CUE_PAD_SECONDS);
     let end = Math.min(ceiling, spans[i].to + CUE_PAD_SECONDS);

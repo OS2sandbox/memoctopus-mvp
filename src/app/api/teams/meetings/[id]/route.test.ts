@@ -164,6 +164,51 @@ describe('GET /api/teams/meetings/[id]', () => {
     expect(body.armed).toBe(false);
   });
 
+  // A Teams recording runs to hundreds of MB and its transcription to minutes.
+  // Holding the HTTP request open for all of that made "Tjek nu" either time out
+  // at the proxy or sit there with no sign of life. The run keeps going in the
+  // background; the response is whatever the row says by the budget.
+  it('answers from the row when the poll outruns its budget, and lets the run finish', async () => {
+    vi.useFakeTimers();
+    try {
+      let settle: (v: unknown) => void = () => {};
+      const never = new Promise((resolve) => { settle = resolve; });
+      mockGet
+        .mockResolvedValueOnce(row())                      // pre-poll read
+        .mockResolvedValueOnce(row({ state: 'fetching' })); // re-read after the budget
+      mockPoll.mockReturnValueOnce(never as never);
+
+      const pending = GET(req('?poll=1'), { params });
+      await vi.advanceTimersByTimeAsync(10_000);
+      const res = await pending;
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ state: 'fetching', working: true });
+      settle(row({ state: 'ready' })); // the run completes afterwards, unharmed
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('falls back to the pre-poll row if the re-read finds nothing', async () => {
+    vi.useFakeTimers();
+    try {
+      mockGet
+        .mockResolvedValueOnce(row({ state: 'awaiting_teams' }))
+        .mockResolvedValueOnce(null as never);
+      mockPoll.mockReturnValueOnce(new Promise(() => {}) as never);
+
+      const pending = GET(req('?poll=1'), { params });
+      await vi.advanceTimersByTimeAsync(10_000);
+      const res = await pending;
+
+      expect(res.status).toBe(200);
+      expect((await res.json()).state).toBe('awaiting_teams');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('maps a Graph failure during poll=1 to its documented status', async () => {
     mockGet.mockResolvedValueOnce(row());
     mockPoll.mockRejectedValueOnce(new GraphError('reauth_required', 'Log ind igen.'));

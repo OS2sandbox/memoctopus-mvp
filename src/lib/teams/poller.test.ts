@@ -341,6 +341,51 @@ describe('pollMeeting', () => {
     }
   });
 
+  // A run already holds this meeting and is downloading/transcribing it. Writing
+  // awaiting_teams back over that told the user Teams had published nothing while
+  // we were busy with what it HAD published — and the screen has no other way to
+  // know the difference.
+  it('keeps a meeting in fetching while another run is working on it', async () => {
+    mockGet.mockResolvedValue(row({ attempts: 4 }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending', phase: 'working' });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockMark).toHaveBeenCalledWith(
+      'u1', 'm1', { state: 'fetching', failureReason: null }, { incrementAttempts: false },
+    );
+    expect(mockMark).not.toHaveBeenCalledWith(
+      'u1', 'm1', expect.objectContaining({ state: 'awaiting_teams' }), expect.anything(),
+    );
+  });
+
+  it('still goes back to awaiting_teams when Teams simply has nothing yet', async () => {
+    mockGet.mockResolvedValue(row({ attempts: 4 }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockMark).toHaveBeenCalledWith(
+      'u1', 'm1', { state: 'awaiting_teams', failureReason: null }, { incrementAttempts: true },
+    );
+  });
+
+  // classifyGraphError -> 'graph_error': a non-retryable Graph failure that is
+  // neither a dead token nor a tenant policy block. It fails the meeting with
+  // Graph's own Danish message rather than retrying for 24 h.
+  it('fails the meeting on a non-retryable Graph error, keeping its message', async () => {
+    const err = new GraphError('forbidden', 'Du har ikke adgang til dette møde', { status: 403 });
+    mockGet.mockResolvedValue(row());
+    mockProcess.mockRejectedValueOnce(err);
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', {
+      state: 'failed',
+      failureReason: 'Du har ikke adgang til dette møde',
+    });
+  });
+
   it('does not count a throttled poll toward the attempts that end the recording grace', async () => {
     mockGet.mockResolvedValue(row({ attempts: 14 }));
     mockProcess.mockResolvedValueOnce({ status: 'pending', transient: true });

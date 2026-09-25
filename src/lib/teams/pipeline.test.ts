@@ -5,7 +5,6 @@ const mockListArtifacts = vi.hoisted(() => vi.fn());
 const mockDownloadVtt = vi.hoisted(() => vi.fn());
 const mockDownloadRecording = vi.hoisted(() => vi.fn());
 const mockSpawn = vi.hoisted(() => vi.fn());
-const mockStorePendingAudio = vi.hoisted(() => vi.fn());
 const mockStorePendingTranscript = vi.hoisted(() => vi.fn());
 const mockReadPendingTranscript = vi.hoisted(() => vi.fn());
 const mockReadPendingMeta = vi.hoisted(() => vi.fn());
@@ -41,7 +40,6 @@ vi.mock('./meeting-lock', () => ({
 }));
 
 vi.mock('@/lib/pending-artifacts', () => ({
-  storePendingAudio: mockStorePendingAudio,
   storePendingTranscript: mockStorePendingTranscript,
   readPendingTranscript: mockReadPendingTranscript,
   readPendingMeta: mockReadPendingMeta,
@@ -56,7 +54,7 @@ vi.mock('@/lib/transcribe-recording', () => ({ transcribeRecording: mockTranscri
 vi.mock('./transcribe-cues', () => ({ transcribeAlongCues: mockTranscribeAlongCues }));
 
 import { GraphError } from './graph-client';
-import { artifactMode, processTeamsMeeting, transcodeToWav } from './pipeline';
+import { artifactMode, processTeamsMeeting, transcodeToWav, coversMeeting, MIN_COVERAGE_RATIO } from './pipeline';
 
 const VTT = [
   'WEBVTT',
@@ -109,7 +107,6 @@ beforeEach(() => {
   mockDownloadVtt.mockReset().mockResolvedValue(VTT);
   mockDownloadRecording.mockReset().mockResolvedValue({ bytes: 1234 });
   mockSpawn.mockReset().mockImplementation(() => fakeFfmpeg(0));
-  mockStorePendingAudio.mockReset().mockResolvedValue(undefined);
   mockStorePendingTranscript.mockReset().mockResolvedValue(undefined);
   mockReadPendingTranscript.mockReset().mockResolvedValue(null);
   mockReadPendingMeta.mockReset().mockResolvedValue(null);
@@ -209,7 +206,6 @@ describe('processTeamsMeeting — recording + transcript', () => {
     // The stash carries the real names and the VTT duration, and no audio: a Graph
     // meeting cannot be followed live, so the raw recording is transcribed and
     // dropped rather than handed to the browser.
-    expect(mockStorePendingAudio).not.toHaveBeenCalled();
     expect(mockMarkNoRecording).toHaveBeenCalledWith('meet-1', {
       participants: ['Mette Hansen', 'Jens Poulsen'],
       durationSeconds: 9,
@@ -421,7 +417,6 @@ describe('processTeamsMeeting — recording only', () => {
     expect(mockDownloadVtt).not.toHaveBeenCalled();
     // No turns injected — transcribe-recording runs its own diarization pass.
     expect(mockTranscribeRecording).toHaveBeenCalledWith('meet-1', WAV, 'audio/wav');
-    expect(mockStorePendingAudio).not.toHaveBeenCalled();
     expect(mockMarkNoRecording).toHaveBeenCalledWith('meet-1', {
       participants: [],
       durationSeconds: null,
@@ -434,19 +429,39 @@ describe('processTeamsMeeting — recording only', () => {
 // therefore transcribed server-side and dropped, never stashed for a browser to
 // keep. Asserted per mode rather than once, so adding a fourth mode that stashes
 // audio fails here instead of shipping.
+//
+// This used to assert `storePendingAudio` was never called — an export that has
+// never existed on @/lib/pending-artifacts. The mock was a spy on nothing and all
+// five assertions were vacuous. The guard now names the writers the stash DOES
+// have, so a mode that starts writing audio through any of them fails here.
+const STASH_WRITERS = () => ({
+  storePendingTranscript: mockStorePendingTranscript.mock.calls.length,
+  markNoRecording: mockMarkNoRecording.mock.calls.length,
+  setMeetingOwner: mockSetOwner.mock.calls.length,
+});
+
 describe('processTeamsMeeting — no mode hands raw audio to the browser', () => {
   it('recording+transcript stashes no audio', async () => {
     mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [RECORDING_REF] });
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
     expect(outcome).toMatchObject({ status: 'ready', mode: 'recording+transcript' });
-    expect(mockStorePendingAudio).not.toHaveBeenCalled();
+    // Everything written to the stash, and none of it audio.
+    expect(mockMarkNoRecording).toHaveBeenCalled();
+    for (const [, payload] of mockStorePendingTranscript.mock.calls) {
+      expect(payload).not.toHaveProperty('audio');
+      expect(payload).not.toHaveProperty('mimeType');
+    }
+    expect(Object.keys(STASH_WRITERS())).toHaveLength(3);
   });
 
   it('recording-only stashes no audio', async () => {
     mockListArtifacts.mockResolvedValue({ transcripts: [], recordings: [RECORDING_REF] });
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
     expect(outcome).toMatchObject({ status: 'ready', mode: 'recording-only' });
-    expect(mockStorePendingAudio).not.toHaveBeenCalled();
+    expect(mockMarkNoRecording).toHaveBeenCalledWith('meet-1', { participants: [], durationSeconds: null });
+    for (const [, payload] of mockStorePendingTranscript.mock.calls) {
+      expect(payload).not.toHaveProperty('audio');
+    }
   });
 
   it('transcript-only stashes no audio', async () => {
@@ -454,7 +469,10 @@ describe('processTeamsMeeting — no mode hands raw audio to the browser', () =>
     mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [RECORDING_REF] });
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
     expect(outcome).toMatchObject({ status: 'ready', mode: 'transcript-only' });
-    expect(mockStorePendingAudio).not.toHaveBeenCalled();
+    expect(mockDownloadRecording).not.toHaveBeenCalled();
+    for (const [, payload] of mockStorePendingTranscript.mock.calls) {
+      expect(payload).not.toHaveProperty('audio');
+    }
   });
 
   // The transcript is what the browser gets instead, so the meeting still reaches
@@ -481,6 +499,28 @@ describe('processTeamsMeeting — no mode hands raw audio to the browser', () =>
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
     expect(outcome).toMatchObject({ status: 'failed' });
     expect(mockMarkNoRecording).not.toHaveBeenCalled();
+  });
+});
+
+// MIN_COVERAGE_RATIO decides when hviske's pass is treated as having lost the
+// meeting. It is exported but was never imported by a test, so the threshold
+// could be changed to anything without failing the suite.
+describe('coversMeeting', () => {
+  const s = (text: string) => ({ speaker: 'A', start: 0, end: 1, text });
+
+  it('is false when nothing was heard', () => {
+    expect(coversMeeting([], [s('en to tre fire')])).toBe(false);
+  });
+
+  it('is true when Teams heard nothing to compare against', () => {
+    expect(coversMeeting([s('noget')], [])).toBe(true);
+  });
+
+  it('accepts exactly the ratio and rejects just under it', () => {
+    const teams = [s('en to tre fire fem seks syv otte ni ti')]; // 10 words
+    expect(coversMeeting([s('en to tre fire fem')], teams)).toBe(true);   // 5/10
+    expect(coversMeeting([s('en to tre fire')], teams)).toBe(false);      // 4/10
+    expect(MIN_COVERAGE_RATIO).toBe(0.5);
   });
 });
 

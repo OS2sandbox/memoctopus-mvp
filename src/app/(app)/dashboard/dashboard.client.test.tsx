@@ -713,7 +713,7 @@ describe('OptaqPage — Teams meeting link flow', () => {
     });
   });
 
-  it('shows loading indicator (…) while joining', async () => {
+  it('shows loading indicator (…) while the link is being registered', async () => {
     let resolve!: (v: unknown) => void;
     mockCreateMeeting.mockReturnValue(new Promise((r) => { resolve = r; }));
     renderPage();

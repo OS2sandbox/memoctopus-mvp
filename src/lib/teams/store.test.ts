@@ -21,6 +21,7 @@ import {
   listDueTeamsMeetings,
   markPollAttempt,
   setTeamsMeetingState,
+  refreshTeamsMeetingSchedule,
   deleteTeamsMeeting,
   listUserSchemaIds,
   userIdFromSchemaName,
@@ -542,6 +543,48 @@ describe('markPollAttempt', () => {
   it('throws when the row no longer exists', async () => {
     mockQueryOne.mockResolvedValue(null);
     await expect(markPollAttempt(USER, 'gone')).rejects.toThrow(/no such Teams meeting/);
+  });
+});
+
+// Organizers move, rename and shorten meetings after the link was pasted, and the
+// stale booking decides both when we may poll and which artifact we accept — so
+// the poller writes the fresh window back on every poll.
+describe('refreshTeamsMeetingSchedule', () => {
+  beforeEach(() => {
+    mockQueryOne.mockResolvedValue(RAW as never);
+  });
+
+  it('writes the new window and returns the updated row', async () => {
+    const start = new Date('2026-09-08T09:00:00Z');
+    const end = new Date('2026-09-08T09:30:00Z');
+
+    const result = await refreshTeamsMeetingSchedule(USER, 'm1', {
+      scheduledStart: start, scheduledEnd: end, subject: 'Nyt navn',
+    });
+
+    const [, sql, params] = mockQueryOne.mock.calls[0];
+    expect(sql).toMatch(/SET scheduled_start = \$2, scheduled_end = \$3/);
+    expect(sql).toMatch(/RETURNING/);
+    expect(params).toEqual(['m1', start, end, 'Nyt navn']);
+    expect(result.id).toBe(RAW.id);
+  });
+
+  // COALESCE: Graph omitting the subject must not blank the one we already show.
+  it('keeps the stored subject when Graph gives none', async () => {
+    await refreshTeamsMeetingSchedule(USER, 'm1', {
+      scheduledStart: null, scheduledEnd: null, subject: null,
+    });
+
+    const [, sql, params] = mockQueryOne.mock.calls[0];
+    expect(sql).toMatch(/subject = COALESCE\(\$4, subject\)/);
+    expect(params?.[3]).toBeNull();
+  });
+
+  it('throws when the row was deleted mid-poll', async () => {
+    mockQueryOne.mockResolvedValue(null);
+    await expect(
+      refreshTeamsMeetingSchedule(USER, 'gone', { scheduledStart: null, scheduledEnd: null, subject: null }),
+    ).rejects.toThrow(/no such Teams meeting/);
   });
 });
 

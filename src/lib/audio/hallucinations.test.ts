@@ -56,6 +56,26 @@ describe('cleanTranscribedText — repetition loops', () => {
   it('is empty for empty input', () => {
     expect(cleanTranscribedText('   ')).toBe('');
   });
+
+  // The cut keeps the FIRST occurrence of the repeated word — it is usually real
+  // speech and only the echo after it is not. So a word before the loop survives
+  // together with one copy of the loop's word, not alone.
+  it('keeps the words before a loop plus its first occurrence', () => {
+    expect(cleanTranscribedText('Ja ' + 'nej '.repeat(20))).toBe('Ja nej');
+  });
+
+  // …which is why the under-two-words rule only fires when the window OPENS with
+  // the loop, leaving a single word behind. (See also 'returns nothing when the
+  // window was only the loop'.)
+  it('drops a window that opens straight into a loop', () => {
+    expect(cleanTranscribedText('nej '.repeat(20))).toBe('');
+  });
+
+  // The loop can follow a credit rather than speech, and the credit patterns are
+  // prefix matches — so the surviving prefix has to be re-checked after the cut.
+  it('drops a surviving prefix that is itself a credit', () => {
+    expect(cleanTranscribedText('Undertekster af Nicolai Winther ' + 'nej '.repeat(20))).toBe('');
+  });
 });
 
 describe('degenerationStart', () => {

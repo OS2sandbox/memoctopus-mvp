@@ -42,7 +42,7 @@ export default function ArkivPage() {
     getAllMeetings()
       .then((rows) => {
         const mapped = rows
-          // Hide meetings that never got off the ground: a bot still joining, or an
+          // Hide meetings that never got off the ground: an abandoned local recording, or an
           // abandoned recording that produced nothing (still 'recording', no saved
           // audio). RecordingScreen deletes these on unmount; this also covers the
           // navigation race and orphans left by a crash or closed tab.
