@@ -100,12 +100,6 @@ def require_auth(creds: HTTPAuthorizationCredentials | None = Depends(_bearer)) 
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-# Job outcomes. Diarization is the slowest and least predictable step in the
-# pipeline, and it fails in ways users only notice much later (missing or wrong
-# speaker labels), so failures are counted separately from successes and split by
-# cause: `invalid_audio` is a bad or undecodable upload (the client's problem),
-# `internal_error` is ours. `failure_reason` is empty on success — a label has to be
-# present on every sample of a series, so it cannot simply be omitted.
 diarization_jobs_total = Counter(
     "memoctopus_diarization_jobs_total",
     "Diarization job outcomes",
