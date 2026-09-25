@@ -83,6 +83,25 @@ describe('SpeakerRow', () => {
     });
   });
 
+  // It used to sit in the 96 px left rail *under* the timestamp, so it read as a
+  // caption on the line above it — and got truncated to "Nikolaj Bac…".
+  it('puts the speaker name above the run, not beside or under its first line', () => {
+    setup({ onSeek: vi.fn() });
+    const name = screen.getByRole('button', { name: 'Taler 2' });
+    const text = screen.getByDisplayValue('Hej med jer');
+    const time = screen.getByTitle('Lyt til dette segment');
+
+    expect(name.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(name.compareDocumentPosition(time) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('gives the name the full width rather than the rail', () => {
+    setup();
+    const name = screen.getByRole('button', { name: 'Taler 2' });
+    expect(name.className).not.toContain('truncate');
+    expect(name.closest('.w-24')).toBeNull();
+  });
+
   // The old `rows={Math.max(2, len/80)}` gave "Ja." the height of two lines.
   it('does not reserve two lines for a one-word utterance', () => {
     render(
