@@ -62,3 +62,30 @@ export function resetLlmClient(): void {
   client = null;
   clientBaseURL = null;
 }
+
+// vLLM's OpenAI-compatible server exposes exact token counting at POST /tokenize — mounted
+// at the server root, not under /v1. Real OpenAI has no equivalent public endpoint, so this
+// only works against vLLM (bundled or a custom LLM_BASE_URL that speaks the same API).
+function tokenizeURL(): string {
+  return llmBaseURL().replace(/\/v1\/?$/, '') + '/tokenize';
+}
+
+// Exact token count for `text` against the configured model, via vLLM's tokenizer. Returns
+// null when the backend is hosted OpenAI (no tokenizer endpoint) or the call fails for any
+// reason (network error, older vLLM without /tokenize, non-vLLM LLM_BASE_URL) — callers fall
+// back to an estimate in that case.
+export async function countTokensExact(text: string): Promise<number | null> {
+  if (usingHostedOpenAI()) return null;
+  try {
+    const res = await fetch(tokenizeURL(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: llmModel('gpt-4o'), prompt: text }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return typeof data?.count === 'number' ? data.count : null;
+  } catch {
+    return null;
+  }
+}

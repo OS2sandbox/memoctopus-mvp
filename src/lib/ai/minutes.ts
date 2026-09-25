@@ -191,8 +191,10 @@ export async function generateReferatBody(
   const instruction = buildSkabelonInstruction(spec, participants, customPrompt);
 
   const limits = getLlmLimits();
-  const fixedChars = MINUTES_SYSTEM_PROMPT.length + buildBodyPrompt('', instruction).length;
-  const budget = transcriptBudgetChars(fixedChars, limits);
+  const turns = mergeSpeakerTurns(transcript);
+  const transcriptText = renderTurns(turns);
+  const fixedPromptText = MINUTES_SYSTEM_PROMPT + buildBodyPrompt('', instruction);
+  const budget = await transcriptBudgetChars(fixedPromptText, transcriptText, limits);
   if (budget < MIN_TRANSCRIPT_BUDGET_CHARS) {
     throw new MinutesConfigError(
       `LLM_CONTEXT_TOKENS=${limits.contextTokens} leaves ${Math.max(budget, 0)} characters for the ` +
@@ -205,8 +207,8 @@ export async function generateReferatBody(
   // (a summary needs far less room than the final referat) — so the parts it is fed have
   // to be sized against that smaller reservation, not `budget`, or the prompt plus the
   // summary's own output can together exceed the real context window.
-  const summaryFixedChars = buildSummaryPrompt('', '').length;
-  const summaryBudget = transcriptBudgetChars(summaryFixedChars, {
+  const summaryFixedText = buildSummaryPrompt('', '');
+  const summaryBudget = await transcriptBudgetChars(summaryFixedText, transcriptText, {
     contextTokens: limits.contextTokens,
     maxOutputTokens: SUMMARY_MAX_OUTPUT_TOKENS,
   });
@@ -217,8 +219,6 @@ export async function generateReferatBody(
     );
   }
 
-  const turns = mergeSpeakerTurns(transcript);
-  const transcriptText = renderTurns(turns);
   const chapterList = chapters && chapters.length > 1 ? chapters : null;
   const log = (mode: string, rounds: number) =>
     console.log(
