@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within, fireEvent } from '@testing-library/react';
+import { screen, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SpeakerAssignment, type ParticipantRow, type VoiceBite } from './SpeakerAssignment';
+import { renderWithOnboarding } from '@/test/onboarding';
 
 const VOICES: VoiceBite[] = [
   { speaker: 'Taler 1', start: 0, end: 5 },
@@ -24,8 +25,9 @@ function setup(overrides: Partial<React.ComponentProps<typeof SpeakerAssignment>
     { name: 'Lars', kind: 'pending' },
     { name: 'Pia', kind: 'silent' },
   ];
-  const utils = render(
+  const utils = renderWithOnboarding(
     <SpeakerAssignment
+      meetingId="m1"
       rows={rows}
       voices={overrides.voices ?? VOICES}
       voicelessParticipants={overrides.voicelessParticipants ?? ['Lars', 'Pia']}
@@ -34,6 +36,14 @@ function setup(overrides: Partial<React.ComponentProps<typeof SpeakerAssignment>
       {...handlers}
       {...overrides}
     />,
+    {
+      tourSkipped: true,
+      tourCompleted: true,
+      seen: [
+        { stepId: 'review.speaker-assign', meetingId: 'm1' },
+        { stepId: 'review.unknown-voices', meetingId: 'm1' },
+      ],
+    },
   );
   return { ...handlers, ...utils };
 }

@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MinutesEditor } from './MinutesEditor';
+import { renderWithOnboarding } from '@/test/onboarding';
 import type { MinutesContent } from '@/types';
 
 // ---------------------------------------------------------------------------
@@ -48,6 +49,21 @@ vi.mock('./RichEditor', () => ({
 // ---------------------------------------------------------------------------
 const MEETING_ID = 'meeting-1';
 const MEETING_TITLE = 'Ugentligt møde';
+
+// Onboarding hints wrap the save/version controls exercised by this suite;
+// mark them already-seen so the popovers don't render and DOM queries keep
+// targeting the underlying controls (mirrors the real app, which mounts
+// MinutesEditor under the app-level OnboardingProvider).
+function render(ui: React.ReactElement) {
+  return renderWithOnboarding(ui, {
+    tourSkipped: true,
+    tourCompleted: true,
+    seen: [
+      { stepId: 'minutes.save-version', meetingId: MEETING_ID },
+      { stepId: 'minutes.version-dropdown', meetingId: MEETING_ID },
+    ],
+  });
+}
 
 function makeContent(
   body = 'Mødereferat',

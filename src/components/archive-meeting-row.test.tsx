@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { ArchiveMeetingRow } from './archive-meeting-row';
+import { renderWithOnboarding, FRESH_ONBOARDING } from '@/test/onboarding';
 
 // Mock next/link to render a simple anchor so we can inspect href
 vi.mock('next/link', () => ({
@@ -51,8 +52,9 @@ function renderRow(
     onToggleSelect?: () => void;
   } = {},
 ) {
-  return render(
+  return renderWithOnboarding(
     <ArchiveMeetingRow meeting={meeting as never} {...props} />,
+    { tourSkipped: true, tourCompleted: true, seen: FRESH_ONBOARDING.seen },
   );
 }
 
@@ -119,6 +121,16 @@ describe('ArchiveMeetingRow — basic rendering', () => {
   it('renders the delete button (aria-label "Slet møde")', () => {
     renderRow(makeRow());
     expect(screen.getByRole('button', { name: 'Slet møde' })).toBeInTheDocument();
+  });
+
+  it('reveals the delete button on keyboard focus, not just mouse hover', () => {
+    renderRow(makeRow());
+    const deleteBtn = screen.getByRole('button', { name: 'Slet møde' });
+    // Visibility is CSS-driven (group-hover / group-focus-within), so a keyboard
+    // user tabbing to the button must not be left with an invisible target.
+    expect(deleteBtn.className).toMatch(/opacity-0/);
+    expect(deleteBtn.className).toMatch(/group-focus-within:opacity-100/);
+    expect(deleteBtn.className).toMatch(/focus:opacity-100/);
   });
 });
 

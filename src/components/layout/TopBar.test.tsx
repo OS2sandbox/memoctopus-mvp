@@ -1,8 +1,27 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { TopBar } from './TopBar';
+import { renderWithOnboarding } from '@/test/onboarding';
+
+// Onboarding hints wrap the Arkiv nav link and, on a review page with unsaved
+// audio, the nav links themselves; mark them already-seen (for every meeting
+// id this suite's mockPathname uses) so the popovers don't render and DOM
+// queries keep targeting the underlying nav links/dialog (mirrors the real
+// app, which mounts TopBar under the app-level OnboardingProvider).
+function render(ui: React.ReactElement) {
+  return renderWithOnboarding(ui, {
+    tourSkipped: true,
+    tourCompleted: true,
+    seen: [
+      { stepId: 'topbar.arkiv-explainer', meetingId: null },
+      { stepId: 'topbar.unsaved-audio', meetingId: 'abc-123' },
+      { stepId: 'topbar.unsaved-audio', meetingId: 'abc' },
+      { stepId: 'topbar.unsaved-audio', meetingId: 'meeting-id-42' },
+    ],
+  });
+}
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 

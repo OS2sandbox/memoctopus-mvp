@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TranscriptReview } from './TranscriptReview';
+import { renderWithOnboarding } from '@/test/onboarding';
 import type { TranscriptSegment, PiiReplacement } from '@/types';
 
 // ── Mock all external dependencies ──────────────────────────────────────────
@@ -97,10 +98,26 @@ const DEFAULT_PROPS = {
 };
 
 // Helper
+// Onboarding hints wrap several elements exercised by these tests; mark them
+// already-seen so the hint popovers don't render (they're covered separately)
+// and this suite's DOM queries keep targeting the underlying controls.
+const ONBOARDING_INITIAL = {
+  tourSkipped: true,
+  tourCompleted: true,
+  seen: [
+    { stepId: 'review.pii-checkboxes', meetingId: 'meeting-abc' },
+    { stepId: 'review.skabelon-panel', meetingId: 'meeting-abc' },
+    { stepId: 'review.generate-button', meetingId: 'meeting-abc' },
+    { stepId: 'review.speaker-assign', meetingId: 'meeting-abc' },
+    { stepId: 'review.unknown-voices', meetingId: 'meeting-abc' },
+  ],
+};
+
 function setup(overrides: Partial<React.ComponentProps<typeof TranscriptReview>> = {}) {
   const onDataChange = vi.fn();
-  const utils = render(
+  const utils = renderWithOnboarding(
     <TranscriptReview {...DEFAULT_PROPS} onDataChange={onDataChange} {...overrides} />,
+    ONBOARDING_INITIAL,
   );
   return { onDataChange, ...utils };
 }

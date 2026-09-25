@@ -7,6 +7,7 @@ import { SaveStatus, SaveState } from '@/components/layout/SaveStatus';
 import { RichEditor } from './RichEditor';
 import { saveMinutes, snapshotMinutes, setActiveMinutesVersion, updateMeeting } from '@/lib/storage';
 import { minutesToBody } from '@/lib/minutes-format';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 
 interface VersionRecord {
   id: string;
@@ -313,19 +314,25 @@ export function MinutesEditor({
             >
               Referat
             </h1>
-            <VersionDropdown version={version} activeVersionId={activeId} versions={versions} onSelect={loadVersion} />
+            <OnboardingHint stepId="minutes.version-dropdown" meetingId={meetingId} condition={versions.length > 1}>
+              <span>
+                <VersionDropdown version={version} activeVersionId={activeId} versions={versions} onSelect={loadVersion} />
+              </span>
+            </OnboardingHint>
           </div>
           <div className="flex items-center gap-3 mt-1">
             <SaveStatus state={saveState} />
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => void snapshot()}
-              disabled={!dirty}
-              title="Gem den nuværende tekst som en version du kan vende tilbage til"
-            >
-              Gem version
-            </Button>
+            <OnboardingHint stepId="minutes.save-version" meetingId={meetingId}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void snapshot()}
+                disabled={!dirty}
+                title="Gem den nuværende tekst som en version du kan vende tilbage til"
+              >
+                Gem version
+              </Button>
+            </OnboardingHint>
             <Button
               variant="default"
               size="sm"
