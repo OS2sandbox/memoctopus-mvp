@@ -123,4 +123,32 @@ describe('transcribeVadBatches', () => {
     const { segments } = await transcribeVadBatches([makeBatch(0)]);
     expect(segments).toEqual([]);
   });
+
+  // The old guard answered a boolean and this path dropped the WHOLE batch, so a
+  // window that transcribed correctly for eight seconds and then span out
+  // contributed nothing at all. A pure-loop batch is empty either way, which is
+  // why that case alone did not pin the change.
+  it('keeps the real words a degenerating batch produced before the loop', async () => {
+    mockTranscribeRaw.mockResolvedValue({
+      text: 'Vi tager budgettet på næste møde. ' + 'det er fastet. '.repeat(20),
+      latencyMs: 1,
+    });
+
+    const { segments } = await transcribeVadBatches([makeBatch(0)]);
+
+    const text = segments.map((s) => s.text).join(' ');
+    expect(text).toContain('Vi tager budgettet på næste møde.');
+    expect(text.match(/fastet/g)?.length ?? 0).toBeLessThanOrEqual(1);
+  });
+
+  // Subtitle credits are not repetitive, so the repetition guard never saw them
+  // and they reached the referat as if somebody had said them.
+  it('drops a subtitle credit emitted over near-silence', async () => {
+    mockTranscribeRaw.mockResolvedValue({
+      text: 'Danske tekster af Jesper Buhl Scandinavian Text Service 2018',
+      latencyMs: 1,
+    });
+    const { segments } = await transcribeVadBatches([makeBatch(0)]);
+    expect(segments).toEqual([]);
+  });
 });

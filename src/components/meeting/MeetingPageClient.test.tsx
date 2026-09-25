@@ -44,9 +44,23 @@ vi.mock('@/components/recording/RecordingScreen', () => ({
   ),
 }));
 
-vi.mock('@/components/recording/MeetingBotScreen', () => ({
-  MeetingBotScreen: (props: { meetingId: string }) => (
-    <div data-testid="meeting-bot-screen" data-meeting-id={props.meetingId}>MeetingBotScreen</div>
+vi.mock('@/components/recording/LegacyBotMeetingScreen', () => ({
+  LegacyBotMeetingScreen: (props: { meetingId: string; hasTranscript: boolean }) => (
+    <div
+      data-testid="legacy-bot-screen"
+      data-meeting-id={props.meetingId}
+      data-has-transcript={String(props.hasTranscript)}
+    >
+      LegacyBotMeetingScreen
+    </div>
+  ),
+}));
+
+vi.mock('@/components/recording/TeamsMeetingScreen', () => ({
+  TeamsMeetingScreen: (props: { meetingId: string; meetingUrl: string }) => (
+    <div data-testid="teams-meeting-screen" data-meeting-id={props.meetingId} data-meeting-url={props.meetingUrl}>
+      TeamsMeetingScreen
+    </div>
   ),
 }));
 
@@ -143,7 +157,6 @@ function makeMeeting(overrides: Partial<StoredMeeting> = {}): StoredMeeting {
     audioDurationSeconds: 120,
     audioSizeBytes: 1024,
     audioDeleted: false,
-    botSession: null,
     ...overrides,
   };
 }
@@ -330,33 +343,112 @@ describe('MeetingPageClient — recording tab (local source)', () => {
     });
   });
 
-  it('does not render MeetingBotScreen for local meeting on recording tab', async () => {
+  it('does not render the legacy bot notice for a local meeting on the recording tab', async () => {
     mockGetMeeting.mockResolvedValue(makeMeeting({ source: 'local' }));
 
     renderClient({ initialTab: 'recording' });
     await waitFor(() => screen.getByTestId('recording-screen'));
-    expect(screen.queryByTestId('meeting-bot-screen')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('legacy-bot-screen')).not.toBeInTheDocument();
   });
 });
 
 // ─── Recording tab — teams source ─────────────────────────────────────────────
 
 describe('MeetingPageClient — recording tab (teams source)', () => {
-  it('renders MeetingBotScreen for teams meeting on recording tab', async () => {
+  const JOIN_URL = 'https://teams.microsoft.com/l/meetup-join/19:abc@thread.v2/0';
+
+  // Only the removed Playwright bot created a teams-sourced meeting without the
+  // Graph marker. It gets the notice, never an empty recording view.
+  it('renders the legacy bot notice for a teams meeting without the Graph marker', async () => {
     mockGetMeeting.mockResolvedValue(makeMeeting({ source: 'teams', status: 'recording' }));
 
     renderClient({ initialTab: 'recording' });
     await waitFor(() => {
-      expect(screen.getByTestId('meeting-bot-screen')).toBeInTheDocument();
+      expect(screen.getByTestId('legacy-bot-screen')).toBeInTheDocument();
     });
+    expect(screen.queryByTestId('recording-screen')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('teams-meeting-screen')).not.toBeInTheDocument();
   });
 
-  it('does not render RecordingScreen for teams meeting', async () => {
-    mockGetMeeting.mockResolvedValue(makeMeeting({ source: 'teams', status: 'recording' }));
+  it.each(['processing', 'review', 'minutes', 'done', 'redacted', 'failed'] as const)(
+    'keeps the legacy bot notice for an unmarked teams meeting in status %s',
+    async (status) => {
+      mockGetMeeting.mockResolvedValue(makeMeeting({ source: 'teams', status }));
+
+      renderClient({ initialTab: 'recording' });
+      await screen.findByTestId('legacy-bot-screen');
+      expect(screen.queryByTestId('teams-meeting-screen')).not.toBeInTheDocument();
+    },
+  );
+
+  it('renders TeamsMeetingScreen for a Graph meeting awaiting Teams', async () => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({
+      source: 'teams',
+      graphManaged: true,
+      status: 'awaiting_teams',
+      meetingUrl: JOIN_URL,
+    }));
 
     renderClient({ initialTab: 'recording' });
-    await waitFor(() => screen.getByTestId('meeting-bot-screen'));
-    expect(screen.queryByTestId('recording-screen')).not.toBeInTheDocument();
+    const screenEl = await screen.findByTestId('teams-meeting-screen');
+    expect(screenEl).toHaveAttribute('data-meeting-id', MEETING_ID);
+    expect(screenEl).toHaveAttribute('data-meeting-url', JOIN_URL);
+    expect(screen.queryByTestId('legacy-bot-screen')).not.toBeInTheDocument();
+  });
+
+  it('passes an empty url to TeamsMeetingScreen when the meeting has none', async () => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({
+      source: 'teams', graphManaged: true, status: 'awaiting_teams', meetingUrl: null,
+    }));
+
+    renderClient({ initialTab: 'recording' });
+    expect(await screen.findByTestId('teams-meeting-screen')).toHaveAttribute('data-meeting-url', '');
+  });
+
+  // A collected Graph meeting reopened from the Arkiv lands on the recording tab.
+  // It has no recording to show, so it hands over to the stage it has reached
+  // instead of the legacy dead end.
+  it.each([
+    ['processing', 'review', 'processing-transcription'],
+    ['review', 'review', 'transcript-review'],
+    ['failed', 'review', null],
+    ['minutes', 'minutes', 'minutes-editor'],
+    ['done', 'minutes', 'minutes-editor'],
+    ['redacted', 'minutes', 'minutes-editor'],
+  ] as const)(
+    'hands a Graph meeting in status %s over to the %s tab',
+    async (status, tab, testId) => {
+      mockGetMeeting.mockResolvedValue(makeMeeting({ source: 'teams', graphManaged: true, status }));
+      mockGetTranscript.mockResolvedValue(status === 'processing' ? null : makeTranscript());
+      mockGetMinutes.mockResolvedValue(makeMinutes());
+
+      renderClient({ initialTab: 'recording' });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('process-strip')).toHaveAttribute('data-active-phase', tab);
+      });
+      if (testId) expect(screen.getByTestId(testId)).toBeInTheDocument();
+      expect(screen.queryByTestId('legacy-bot-screen')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('recording-screen')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('teams-meeting-screen')).not.toBeInTheDocument();
+      expect(mockReplaceState).toHaveBeenCalledWith(null, '', `/meeting/${MEETING_ID}/${tab}`);
+    },
+  );
+
+  it('does not hand a Graph meeting over while it is still awaiting Teams', async () => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({ source: 'teams', graphManaged: true, status: 'awaiting_teams' }));
+
+    renderClient({ initialTab: 'recording' });
+    await screen.findByTestId('teams-meeting-screen');
+    expect(screen.getByTestId('process-strip')).toHaveAttribute('data-active-phase', 'recording');
+  });
+
+  it('does not render TeamsMeetingScreen for a local meeting', async () => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({ source: 'local', status: 'awaiting_teams' }));
+
+    renderClient({ initialTab: 'recording' });
+    await waitFor(() => screen.getByTestId('recording-screen'));
+    expect(screen.queryByTestId('teams-meeting-screen')).not.toBeInTheDocument();
   });
 });
 
