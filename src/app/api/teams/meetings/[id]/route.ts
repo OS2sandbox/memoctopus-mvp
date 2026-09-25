@@ -28,6 +28,10 @@ function serialize(row: TeamsMeetingRow) {
     scheduledEnd: row.scheduledEnd ? row.scheduledEnd.toISOString() : null,
     failureReason: row.failureReason,
     lastPolledAt: row.lastPolledAt ? row.lastPolledAt.toISOString() : null,
+    // How many times we have asked Graph and been told "nothing yet". The screen
+    // uses it to decide when a meeting with no window has waited long enough that
+    // the manual-start fallback is worth raising.
+    attempts: row.attempts,
     // Lets the screen say "switched off" instead of showing a state that can no
     // longer change, and instead of asking for a sign-in that cannot help.
     enabled: teamsGraphEnabled(),

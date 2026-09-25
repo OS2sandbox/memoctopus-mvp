@@ -5,6 +5,7 @@ import { splitTextWithIntervals, type VadInterval } from '@/lib/audio/vad-batch'
 import { DEFAULT_SPEAKER_LABEL } from '@/lib/audio/speaker-labels';
 import type { TranscriptSegment } from '@/types';
 import { planCueBatches, type CueBatch } from './cue-batches';
+import { fillSpeakerNames } from './name-speakers';
 import type { VttCue } from './vtt';
 
 // Transcribes a Teams recording along Microsoft's own transcript cues — see
@@ -69,18 +70,42 @@ function cueIntervals(batch: CueBatch): { intervals: VadInterval[]; total: numbe
   return { intervals, total: offset };
 }
 
-/** The cue a produced segment sits in — the one it overlaps most. */
+/**
+ * The cue a produced segment sits in — the one it overlaps most.
+ *
+ * Only cues that actually carry a display name are considered. Teams emits the
+ * occasional cue with no `<v Name>` span, and letting one of those win the
+ * overlap put a `Taler 1` in the middle of a meeting whose speakers we knew.
+ * A batch with no named cue at all falls back to the nearest named cue by
+ * distance, and failing that to the placeholder, which fillSpeakerNames then
+ * resolves from the surrounding segments.
+ */
 function speakerAt(batch: CueBatch, start: number, end: number): string {
+  const named = batch.cues.filter((cue) => cue.speaker);
+  if (named.length === 0) return DEFAULT_SPEAKER_LABEL;
+
   let best: VttCue | null = null;
-  let bestOverlap = -1;
-  for (const cue of batch.cues) {
+  let bestOverlap = 0;
+  for (const cue of named) {
     const overlap = Math.min(end, cue.end) - Math.max(start, cue.start);
     if (overlap > bestOverlap) {
       bestOverlap = overlap;
       best = cue;
     }
   }
-  return best?.speaker ?? batch.cues[0]?.speaker ?? DEFAULT_SPEAKER_LABEL;
+  if (best) return best.speaker!;
+
+  // No overlap with any named cue: take the closest one in time.
+  let nearest = named[0];
+  let shortest = Infinity;
+  for (const cue of named) {
+    const gap = start > cue.end ? start - cue.end : cue.start - end;
+    if (gap < shortest) {
+      shortest = gap;
+      nearest = cue;
+    }
+  }
+  return nearest.speaker!;
 }
 
 export interface CueTranscriptionResult {
@@ -152,7 +177,7 @@ export async function transcribeAlongCues(
     }),
   );
 
-  const segments = perBatch.flat().sort((a, b) => a.start - b.start);
+  const segments = fillSpeakerNames(perBatch.flat().sort((a, b) => a.start - b.start));
   return {
     segments,
     batches: batches.length,

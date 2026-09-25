@@ -1,6 +1,7 @@
 import type { TranscriptSegment } from '@/types';
 import type { SpeakerTurn } from '@/lib/ai/diarization';
 import { DEFAULT_SPEAKER_LABEL } from '@/lib/audio/speaker-labels';
+import { fillSpeakerNames } from './name-speakers';
 
 // ─── WebVTT parsing for Microsoft Teams transcripts ───────────────────────────
 // Teams exposes a meeting transcript through Graph as WebVTT where every cue
@@ -140,14 +141,19 @@ export function turnsFromVtt(cues: VttCue[]): SpeakerTurn[] {
 // no voice span falls back to the app's default label so the review screen still
 // has something to rename.
 export function segmentsFromVtt(cues: VttCue[]): TranscriptSegment[] {
-  return cues
-    .filter((cue) => cue.text !== '')
-    .map((cue) => ({
-      speaker: cue.speaker ?? DEFAULT_SPEAKER_LABEL,
-      start: cue.start,
-      end: cue.end,
-      text: cue.text,
-    }));
+  // A cue with no voice span gets the placeholder here and then the name of
+  // whoever was speaking around it — see fillSpeakerNames. A Teams meeting
+  // should never reach the review screen with an unattributed "Taler 1".
+  return fillSpeakerNames(
+    cues
+      .filter((cue) => cue.text !== '')
+      .map((cue) => ({
+        speaker: cue.speaker ?? DEFAULT_SPEAKER_LABEL,
+        start: cue.start,
+        end: cue.end,
+        text: cue.text,
+      })),
+  );
 }
 
 // Distinct display names in first-appearance order — the pre-filled participant

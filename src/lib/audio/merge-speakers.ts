@@ -63,8 +63,12 @@ export function assignSpeakers(
       }
     }
 
-    const rawSpeaker = bestTurn?.speaker ?? lastSpeaker;
-    if (rawSpeaker === null) return segment; // no overlap and no prior speaker — leave as-is
+    // The doc above promises the first such segment falls back to the first
+    // speaker; it used to return the segment untouched instead, which is how a
+    // meeting whose speakers were fully known still opened with "Taler 1" on
+    // every line before the first turn.
+    const rawSpeaker = bestTurn?.speaker ?? lastSpeaker ?? turns[0]?.speaker ?? null;
+    if (rawSpeaker === null) return segment; // nothing to name it after
     lastSpeaker = rawSpeaker;
     return { ...segment, speaker: labelFor(rawSpeaker) };
   });

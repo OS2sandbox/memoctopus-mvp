@@ -335,12 +335,28 @@ describe('TeamsMeetingScreen — a meeting Graph gives no window for', () => {
     expect(screen.queryByText(/Mødet er allerede i gang/)).not.toBeInTheDocument();
   });
 
-  // Still says it, because we genuinely cannot tell — but as a condition, not a fact.
-  it('offers the manual start only for the case where the meeting had already begun', async () => {
-    respondWith(statusBody({ armed: true, armResult: 'armed_in_progress' }));
+  // The meeting is armed. If it had not begun when the link was pasted, Teams
+  // starts on its own and there is nothing to do — so do not open by telling the
+  // user to fix something that is already working.
+  it('does not ask for a manual start while Teams may simply not have begun', async () => {
+    respondWith(statusBody({ armed: true, armResult: 'armed_in_progress', attempts: 0 }));
     renderScreen();
 
-    expect(await screen.findByText(/vi kan ikke se i Teams, om I allerede er gået/)).toBeInTheDocument();
+    await screen.findByText(/Memoctopus er slået til for mødet/);
+    expect(screen.queryByTestId('manual-start-hint')).toBeNull();
+    expect(
+      screen.queryByText(/Flere handlinger → Optag og transskriber → Start transskription/),
+    ).not.toBeInTheDocument();
+  });
+
+  // …but we cannot see whether a meeting is running, so the instruction cannot be
+  // dropped either: once Teams has had several polls and produced nothing, "it
+  // was never started" has become the likely explanation.
+  it('offers the manual start once Teams has produced nothing for several polls', async () => {
+    respondWith(statusBody({ armed: true, armResult: 'armed_in_progress', attempts: 3 }));
+    renderScreen();
+
+    expect(await screen.findByTestId('manual-start-hint')).toBeInTheDocument();
     expect(
       screen.getByText(/Flere handlinger → Optag og transskriber → Start transskription/),
     ).toBeInTheDocument();

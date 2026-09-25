@@ -135,10 +135,14 @@ describe('assignSpeakers with preserveNames', () => {
     expect(assignSpeakers(segments, [], { preserveNames: true })).toEqual(segments);
   });
 
-  it('leaves a leading no-overlap segment untouched with preserveNames', () => {
+  // Speech before the first turn is still somebody's, and the only name we have
+  // for it is the first one. Leaving it as 'Taler 1' put a phantom unrecognised
+  // voice at the top of every Teams transcript — which is what the doc comment
+  // always said should not happen.
+  it('names a leading no-overlap segment after the first turn', () => {
     const segments = [seg(0, 1), seg(5, 7)];
     const turns: SpeakerTurn[] = [{ speaker: 'Ida Bang', start: 5, end: 7 }];
     const result = assignSpeakers(segments, turns, { preserveNames: true });
-    expect(result.map((s) => s.speaker)).toEqual(['Taler 1', 'Ida Bang']);
+    expect(result.map((s) => s.speaker)).toEqual(['Ida Bang', 'Ida Bang']);
   });
 });

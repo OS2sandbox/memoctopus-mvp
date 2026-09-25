@@ -171,7 +171,10 @@ describe('turnsFromVtt', () => {
 });
 
 describe('segmentsFromVtt', () => {
-  it('maps cues one-to-one and falls back to the default label', () => {
+  // A cue with no <v> span used to reach the review screen as "Taler 1" — an
+  // unrecognised voice in a meeting whose speakers Teams had already named. It
+  // now takes the name of whoever was speaking around it.
+  it('maps cues one-to-one and names an unattributed cue after its neighbour', () => {
     expect(segmentsFromVtt(parseVtt(TEAMS_VTT))).toEqual([
       {
         speaker: 'Mette Hansen',
@@ -185,7 +188,7 @@ describe('segmentsFromVtt', () => {
         end: 12,
         text: 'Tak. Jeg har et spørgsmål til punkt tre på dagsordenen.',
       },
-      { speaker: 'Taler 1', start: 12.4, end: 14, text: 'Uklar tale i baggrunden' },
+      { speaker: 'Søren Østergaard', start: 12.4, end: 14, text: 'Uklar tale i baggrunden' },
     ]);
   });
 

@@ -29,6 +29,8 @@ interface TeamsMeetingStatus {
   enabled?: boolean;
   /** A run holds this meeting's artifacts and is downloading/transcribing them. */
   working?: boolean;
+  /** Polls that found nothing yet — see MANUAL_START_HINT_ATTEMPTS. */
+  attempts?: number;
 }
 
 export type TeamsArmResult = 'armed' | 'armed_in_progress' | 'not_organizer' | 'policy_blocked';
@@ -38,6 +40,25 @@ const ADMIN_GUIDE = '/docs/setup-microsoft-teams.md';
 /** How long to keep asking for the run’s meta record before giving up on it. */
 const META_COLLECT_DEADLINE_MS = 2 * 60_000;
 const META_COLLECT_RETRY_MS = 500;
+
+/**
+ * Polls with nothing from Teams before the manual-start fallback is offered on a
+ * meeting Graph gives no window for.
+ *
+ * Such a meeting is armed — Graph confirmed `recordAutomatically` — and if it had
+ * not begun when the link was pasted, Teams starts transcribing on the first join
+ * and there is nothing for anyone to do. Leading with "du skal starte den i
+ * mødet" told people to fix something that was already working, which is worse
+ * than saying nothing. But we cannot see whether the meeting is running (no
+ * roster, no in-progress flag in delegated Graph), so the instruction cannot be
+ * dropped either: if it WAS already running, nobody gets a referat without it.
+ *
+ * The resolution is timing. The poller runs every two minutes, so three empty
+ * polls is roughly six minutes of Teams having published nothing — by which point
+ * "maybe it never started" has become the likely explanation rather than an
+ * insult to a meeting that is recording fine.
+ */
+const MANUAL_START_HINT_ATTEMPTS = 3;
 
 const FAST_POLL_MS = 15_000;
 const SLOW_POLL_MS = 60_000;
@@ -428,12 +449,16 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
               og referatet er klar et par minutter efter, I er færdige.
             </p>
             <WorkingIndicator label="Venter på mødet…" />
-            <p style={{ marginTop: 12, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-              Mødet har ikke noget fast tidspunkt, så vi kan ikke se i Teams, om I allerede er gået
-              i gang. Var mødet begyndt, inden du indsatte linket, starter Teams ikke af sig selv —
-              så start den i mødet:{' '}
-              <strong>Flere handlinger → Optag og transskriber → Start transskription</strong>.
-            </p>
+            {(status.attempts ?? 0) >= MANUAL_START_HINT_ATTEMPTS && (
+              <p
+                data-testid="manual-start-hint"
+                style={{ marginTop: 12, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}
+              >
+                Vi har ikke hørt noget fra Teams endnu. Var mødet allerede i gang, da du indsatte
+                linket, starter Teams ikke transskriptionen af sig selv — så skal den startes i mødet:{' '}
+                <strong>Flere handlinger → Optag og transskriber → Start transskription</strong>.
+              </p>
+            )}
             {lastCheck ? (
               <p
                 data-testid="last-check"

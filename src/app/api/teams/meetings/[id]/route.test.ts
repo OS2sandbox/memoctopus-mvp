@@ -129,6 +129,7 @@ describe('GET /api/teams/meetings/[id]', () => {
       armResult: 'armed',
       enabled: true,
       working: false,
+      attempts: 0,
     });
     expect(mockPoll).not.toHaveBeenCalled();
   });
