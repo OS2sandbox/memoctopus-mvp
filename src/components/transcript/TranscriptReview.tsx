@@ -1227,9 +1227,12 @@ export function TranscriptReview({
                   </div>
                   {isOpen && (
                     <div style={{ paddingBottom: 18 }}>
-                      {chSegs.map(({ seg, idx }) => {
+                      {chSegs.map(({ seg, idx }, i) => {
                         const isCurrentMatch = matchIndex >= 0 && matches[matchIndex] === idx;
                         const isAnyMatch = search.trim() && matches.includes(idx);
+                        // Runs are per chapter: the first line under a chapter
+                        // heading always names its speaker, even mid-run.
+                        const continuesSpeaker = i > 0 && chSegs[i - 1].seg.speaker === seg.speaker;
                         return (
                         <div key={idx} ref={(el) => { segmentRefs.current[idx] = el; }} style={{
                           borderRadius: 'var(--radius)',
@@ -1249,6 +1252,7 @@ export function TranscriptReview({
                             hasPii={piiSegmentIndices.has(idx)}
                             isHighlighted={highlightedSegment === idx}
                             diarizing={diarizing}
+                            continuesSpeaker={continuesSpeaker}
                           />
                         </div>
                         );
@@ -1279,6 +1283,7 @@ export function TranscriptReview({
                         hasPii={piiSegmentIndices.has(i)}
                         isHighlighted={highlightedSegment === i}
                         diarizing={diarizing}
+                        continuesSpeaker={i > 0 && displaySegments[i - 1].speaker === seg.speaker}
                       />
                     </div>
                   ))

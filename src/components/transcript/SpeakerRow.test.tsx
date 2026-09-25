@@ -37,4 +37,64 @@ describe('SpeakerRow', () => {
     expect(screen.getByLabelText('Genkender taler')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Taler 2' })).not.toBeInTheDocument();
   });
+
+  // A real conversation is mostly runs of one speaker. Printing the name on
+  // every line buried the words; Teams prints it once per run and so do we.
+  describe('a row that continues the same speaker', () => {
+    it('does not repeat the speaker name', () => {
+      setup({ continuesSpeaker: true });
+      expect(screen.queryByRole('button', { name: 'Taler 2' })).not.toBeInTheDocument();
+    });
+
+    it('keeps the timestamp, so every line can still be played', () => {
+      const onSeek = vi.fn();
+      setup({ continuesSpeaker: true, onSeek });
+      expect(screen.getByTitle('Lyt til dette segment')).toBeInTheDocument();
+    });
+
+    it('still shows the text, and it is still editable', async () => {
+      const user = userEvent.setup();
+      const onUpdate = vi.fn();
+      setup({ continuesSpeaker: true, onUpdate });
+      const box = screen.getByDisplayValue('Hej med jer');
+      await user.type(box, '!');
+      expect(onUpdate).toHaveBeenCalled();
+    });
+
+    it('sits tighter than a row that starts a run', () => {
+      const { container } = render(
+        <SpeakerRow
+          segment={seg}
+          index={0}
+          onUpdate={vi.fn()}
+          onAssign={vi.fn()}
+          speakerSegmentCount={3}
+          participants={[]}
+          continuesSpeaker
+        />,
+      );
+      expect(container.firstElementChild?.className).toContain('pt-0.5');
+      expect(container.firstElementChild?.className).not.toContain('pt-5');
+    });
+
+    it('names the speaker when it starts a run', () => {
+      setup({ continuesSpeaker: false });
+      expect(screen.getByRole('button', { name: 'Taler 2' })).toBeInTheDocument();
+    });
+  });
+
+  // The old `rows={Math.max(2, len/80)}` gave "Ja." the height of two lines.
+  it('does not reserve two lines for a one-word utterance', () => {
+    render(
+      <SpeakerRow
+        segment={{ speaker: 'Taler 1', start: 0, end: 1, text: 'Ja.' }}
+        index={0}
+        onUpdate={vi.fn()}
+        onAssign={vi.fn()}
+        speakerSegmentCount={1}
+        participants={[]}
+      />,
+    );
+    expect(screen.getByDisplayValue('Ja.')).toHaveAttribute('rows', '1');
+  });
 });
