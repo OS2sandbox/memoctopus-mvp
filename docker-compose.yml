@@ -62,6 +62,9 @@ services:
       # not here on purpose — it is runtime-only, see `environment` below.
       args:
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:8080}
+        # Browser-side diarization timeout. Build-time only: set it → rebuild.
+        # Keep it equal to DIARIZATION_TIMEOUT_MS below.
+        NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS: ${NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS:-300000}
     ports:
       - "${APP_PORT:-8080}:3000"
     # Lets the container reach services on the Docker host (e.g. an SSH tunnel to a
@@ -80,6 +83,14 @@ services:
       # (vllm-chat). LLM_BASE_URL / LLM_MODEL override the endpoint + model explicitly.
       - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_MODEL=${LLM_MODEL:-}
+      # Context window and output cap of the chat model; minutes generation sizes its
+      # prompt from them. The app itself falls back to VLLM_CHAT_MAX_MODEL_LEN when
+      # LLM_CONTEXT_TOKENS is unset, so one number configures both vLLM and the app —
+      # done in app code (getLlmLimits), not here, so it does not depend on a Compose
+      # version resolving a ${VAR:-${VAR2:-}} nested substitution.
+      - LLM_CONTEXT_TOKENS=${LLM_CONTEXT_TOKENS:-}
+      - VLLM_CHAT_MAX_MODEL_LEN=${VLLM_CHAT_MAX_MODEL_LEN:-}
+      - LLM_MAX_OUTPUT_TOKENS=${LLM_MAX_OUTPUT_TOKENS:-}
       # AI service endpoints. In the base ("small") stack these point at a
       # remote host (set in .env). The AI overlay overrides them to the in-compose
       # service names (http://hviske:8000/v1, http://diarization-service:5000).
@@ -90,6 +101,9 @@ services:
       - ASR_LANGUAGE=${ASR_LANGUAGE:-da}
       - DIARIZATION_URL=${DIARIZATION_URL}
       - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
+      # Server-side diarization timeout (app → diarization service). Runtime: change
+      # it and `up -d app` is enough. Pair with NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS.
+      - DIARIZATION_TIMEOUT_MS=${DIARIZATION_TIMEOUT_MS:-300000}
       - AUDIO_STORAGE_PATH=/audio-storage
       - BOT_SERVICE_URL=http://bot-service:3001
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}

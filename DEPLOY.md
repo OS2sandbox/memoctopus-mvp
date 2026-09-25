@@ -170,6 +170,41 @@ deprecation warning; on that path the provider id stays `authentik`, so your
 registered redirect URI and existing accounts are unaffected. To migrate, copy the
 three values to their `OIDC_*` names and set `OIDC_PROVIDER_ID=authentik`.
 
+## Long meetings: diarization timeout
+
+Diarization requests are cut off after 5 minutes by default. For long recordings
+(or CPU diarization) raise both values in `.env`, keeping them equal:
+
+```bash
+DIARIZATION_TIMEOUT_MS=3600000              # server → diarization service
+NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS=3600000  # browser → app
+```
+
+`DIARIZATION_TIMEOUT_MS` is read at runtime. `NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS` is
+compiled into the browser bundle, so after changing it run
+`docker compose up -d --build app`; a plain restart keeps the old value.
+
+## Long meetings: LLM context window
+
+Minutes generation sizes its prompt from the chat model's context window. A transcript
+that fits goes to the model in one call; a longer one is summarised in parts and the
+referat is written from the summaries, so a long meeting never overflows the window or
+comes back cut off. If even that is not possible the user sees a clear error instead of
+an incomplete referat.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LLM_CONTEXT_TOKENS` | `128000` for hosted OpenAI, `32768` otherwise | The model's context window in tokens |
+| `LLM_MAX_OUTPUT_TOKENS` | `16384` for hosted OpenAI, `8192` otherwise | Longest referat the model may write |
+
+With the bundled vLLM, `LLM_CONTEXT_TOKENS` follows `VLLM_CHAT_MAX_MODEL_LEN` automatically,
+so changing the vLLM window changes the app too. If you point `LLM_BASE_URL` at your own
+model, set `LLM_CONTEXT_TOKENS` to that model's real window; the default is deliberately
+conservative because the app cannot know it. With a window below about 16k tokens, also lower
+`LLM_MAX_OUTPUT_TOKENS`: the output allowance is reserved out of the window, and too little is
+left for the transcript otherwise (the app then reports a configuration error). Both are read at runtime: change them and run
+`docker compose up -d app`, no rebuild.
+
 ## Day-2 operations
 
 > These `docker compose` commands need docker-group membership (the bootstrap
