@@ -373,7 +373,9 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
 };
 
 export function getStep(id: string): OnboardingStep {
-  const step = ONBOARDING_STEPS[id];
+  // Own keys only: 'constructor', 'toString' etc. are inherited from Object.prototype,
+  // not real steps, and would otherwise resolve here instead of failing loudly.
+  const step = Object.prototype.hasOwnProperty.call(ONBOARDING_STEPS, id) ? ONBOARDING_STEPS[id] : undefined;
   if (!step) throw new Error(`Unknown onboarding step id: ${id}`);
   return step;
 }
@@ -384,7 +386,7 @@ export function getStep(id: string): OnboardingStep {
  * along with the hint. Logs so the mistake is still visible in review/testing.
  */
 export function findStep(id: string): OnboardingStep | undefined {
-  const step = ONBOARDING_STEPS[id];
+  const step = Object.prototype.hasOwnProperty.call(ONBOARDING_STEPS, id) ? ONBOARDING_STEPS[id] : undefined;
   if (!step) console.error(`[onboarding] unknown step id: ${id}`);
   return step;
 }
