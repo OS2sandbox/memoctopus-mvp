@@ -1,8 +1,25 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { renderWithOnboarding } from '@/test/onboarding';
+
+// Onboarding hints wrap the ProcessStrip and "Slet følsomt indhold" controls;
+// mark them already-seen so the popovers don't render and DOM queries keep
+// targeting the underlying controls (mirrors the real app, which mounts this
+// page under the app-level OnboardingProvider). useParams() in this file is
+// mocked to always return id: 'meeting-abc'.
+function render(ui: React.ReactElement) {
+  return renderWithOnboarding(ui, {
+    tourSkipped: true,
+    tourCompleted: true,
+    seen: [
+      { stepId: 'meeting-settings.processstrip-export', meetingId: 'meeting-abc' },
+      { stepId: 'meeting-settings.redact-purpose', meetingId: 'meeting-abc' },
+    ],
+  });
+}
 
 // ─── next/navigation ──────────────────────────────────────────────────────────
 const mockRouterPush = vi.fn();

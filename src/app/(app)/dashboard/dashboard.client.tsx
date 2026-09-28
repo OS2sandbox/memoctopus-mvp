@@ -7,6 +7,8 @@ import { useIsMobile } from '@/lib/use-is-mobile';
 import { createMeeting, getAllMeetings } from '@/lib/storage';
 import { setPendingUploadFile } from '@/lib/pending-upload';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
+import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
 export default function OptaqPage() {
   const router = useRouter();
@@ -178,46 +180,59 @@ export default function OptaqPage() {
                       }}>×</button>
                   </span>
                 ))}
-                <input
-                  value={adding}
-                  onChange={(e) => setAdding(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addParticipant(); } }}
-                  placeholder="+ tilføj"
-                  style={{
-                    fontFamily: 'var(--mono)', fontSize: 12,
-                    padding: '4px 10px', borderRadius: 999,
-                    border: '1px dashed var(--line-2)',
-                    color: 'var(--ink-2)', width: 90,
-                    background: 'transparent', outline: 'none',
-                  }}
-                />
+                <OnboardingHint stepId="dashboard.participant-chip">
+                  <input
+                    value={adding}
+                    onChange={(e) => setAdding(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addParticipant(); } }}
+                    placeholder="+ tilføj"
+                    style={{
+                      fontFamily: 'var(--mono)', fontSize: 12,
+                      padding: '4px 10px', borderRadius: 999,
+                      border: '1px dashed var(--line-2)',
+                      color: 'var(--ink-2)', width: 90,
+                      background: 'transparent', outline: 'none',
+                    }}
+                  />
+                </OnboardingHint>
               </div>
             </div>
           </div>
 
           {/* CENTER — record button + meeting link input */}
           <div style={{ textAlign: 'center', order: isMobile ? 1 : 0 }}>
-            <button
-              onClick={startRecording}
-              disabled={loading}
-              style={{
-                width: 200, height: 200, borderRadius: 999,
-                margin: '0 auto',
-                background: loading ? 'var(--ink-2)' : 'var(--ink)',
-                color: 'var(--bg)',
-                border: 'none', cursor: loading ? 'not-allowed' : 'pointer',
-                display: 'flex', flexDirection: 'column',
-                alignItems: 'center', justifyContent: 'center', gap: 14,
-                boxShadow: '0 1px 0 var(--line-2)',
-                transition: 'background 150ms',
-              }}
-            >
-              <span style={{ width: 22, height: 22, borderRadius: 999, background: 'var(--bg)' }} />
-              <span style={{
-                fontFamily: 'var(--mono)', fontSize: 13,
-                letterSpacing: 0.6, opacity: 0.85,
-              }}>optag</span>
-            </button>
+            <OnboardingHint stepId="dashboard.record-button">
+              <button
+                onClick={startRecording}
+                disabled={loading}
+                style={{
+                  width: 200, height: 200, borderRadius: 999,
+                  margin: '0 auto',
+                  background: loading ? 'var(--ink-2)' : 'var(--ink)',
+                  color: 'var(--bg)',
+                  border: 'none', cursor: loading ? 'not-allowed' : 'pointer',
+                  display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center', gap: 14,
+                  boxShadow: '0 1px 0 var(--line-2)',
+                  transition: 'background 150ms',
+                }}
+              >
+                <span style={{ width: 22, height: 22, borderRadius: 999, background: 'var(--bg)' }} />
+                <span style={{
+                  fontFamily: 'var(--mono)', fontSize: 13,
+                  letterSpacing: 0.6, opacity: 0.85,
+                }}>optag</span>
+              </button>
+            </OnboardingHint>
+
+            <OnboardingTooltip stepId="dashboard.keyboard-shortcuts">
+              <div tabIndex={0} style={{
+                marginTop: 10, fontFamily: 'var(--mono)', fontSize: 11,
+                color: 'var(--muted)', cursor: 'default', display: 'inline-block',
+              }}>
+                genveje: R · U
+              </div>
+            </OnboardingTooltip>
 
             {recordError && (
               <div style={{ marginTop: 14, maxWidth: 300, margin: '14px auto 0' }}>
@@ -231,50 +246,52 @@ export default function OptaqPage() {
                 fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
                 letterSpacing: 0.4, marginBottom: 10,
               }}>eller deltag i et møde</div>
-              <div
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  width: 300, margin: '0 auto',
-                  border: '1px solid var(--line-2)', borderRadius: 999,
-                  background: 'var(--surface)', padding: '4px 4px 4px 14px',
-                  transition: 'border-color 120ms',
-                }}
-                onFocusCapture={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
-                onBlurCapture={(e) => (e.currentTarget.style.borderColor = 'var(--line-2)')}
-              >
-                <input
-                  value={meetingLink}
-                  onChange={(e) => { setMeetingLink(e.target.value); if (linkError) setLinkError(''); }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && meetingLink.trim()) {
-                      e.preventDefault();
-                      joinMeeting(meetingLink.trim());
-                    }
-                  }}
-                  placeholder="Indsæt mødelink…"
+              <OnboardingHint stepId="dashboard.teams-link">
+                <div
                   style={{
-                    flex: 1, fontFamily: 'var(--mono)', fontSize: 12.5,
-                    color: 'var(--ink)', padding: '7px 0',
-                    background: 'transparent', border: 'none', outline: 'none',
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    width: 300, margin: '0 auto',
+                    border: '1px solid var(--line-2)', borderRadius: 999,
+                    background: 'var(--surface)', padding: '4px 4px 4px 14px',
+                    transition: 'border-color 120ms',
                   }}
-                />
-                <button
-                  type="button"
-                  onClick={() => meetingLink.trim() && joinMeeting(meetingLink.trim())}
-                  disabled={!meetingLink.trim() || linkLoading}
-                  style={{
-                    width: 30, height: 30, borderRadius: 999, flexShrink: 0,
-                    border: 'none',
-                    background: meetingLink.trim() && !linkLoading ? 'var(--accent)' : 'var(--sunk)',
-                    color: meetingLink.trim() && !linkLoading ? '#fff' : 'var(--muted-2)',
-                    cursor: meetingLink.trim() && !linkLoading ? 'pointer' : 'default',
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 14, transition: 'background 120ms',
-                  }}
+                  onFocusCapture={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
+                  onBlurCapture={(e) => (e.currentTarget.style.borderColor = 'var(--line-2)')}
                 >
-                  {linkLoading ? '…' : '→'}
-                </button>
-              </div>
+                  <input
+                    value={meetingLink}
+                    onChange={(e) => { setMeetingLink(e.target.value); if (linkError) setLinkError(''); }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && meetingLink.trim()) {
+                        e.preventDefault();
+                        joinMeeting(meetingLink.trim());
+                      }
+                    }}
+                    placeholder="Indsæt mødelink…"
+                    style={{
+                      flex: 1, fontFamily: 'var(--mono)', fontSize: 12.5,
+                      color: 'var(--ink)', padding: '7px 0',
+                      background: 'transparent', border: 'none', outline: 'none',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => meetingLink.trim() && joinMeeting(meetingLink.trim())}
+                    disabled={!meetingLink.trim() || linkLoading}
+                    style={{
+                      width: 30, height: 30, borderRadius: 999, flexShrink: 0,
+                      border: 'none',
+                      background: meetingLink.trim() && !linkLoading ? 'var(--accent)' : 'var(--sunk)',
+                      color: meetingLink.trim() && !linkLoading ? '#fff' : 'var(--muted-2)',
+                      cursor: meetingLink.trim() && !linkLoading ? 'pointer' : 'default',
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 14, transition: 'background 120ms',
+                    }}
+                  >
+                    {linkLoading ? '…' : '→'}
+                  </button>
+                </div>
+              </OnboardingHint>
               {linkError && (
                 <div style={{
                   marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11,

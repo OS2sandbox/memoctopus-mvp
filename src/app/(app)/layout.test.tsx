@@ -27,6 +27,20 @@ vi.mock('@/lib/review-audio-context', () => ({
 import AppLayout from './layout';
 import { auth } from '@/lib/auth';
 import { redirect } from 'next/navigation';
+import { OnboardingProvider } from '@/lib/onboarding/context';
+
+// Walk the returned element tree (nothing is rendered) to find the OnboardingProvider node.
+function findOnboardingProvider(node: unknown): { props: { initial?: unknown } } | null {
+  if (!node || typeof node !== 'object') return null;
+  const el = node as { type?: unknown; props?: { children?: unknown } };
+  if (el.type === OnboardingProvider) return el as never;
+  const kids = el.props?.children;
+  for (const kid of Array.isArray(kids) ? kids : [kids]) {
+    const found = findOnboardingProvider(kid);
+    if (found) return found;
+  }
+  return null;
+}
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockRedirect = vi.mocked(redirect);
@@ -56,5 +70,22 @@ describe('(app) layout — server-side auth gate', () => {
     const el = await AppLayout({ children: 'CONTENT' });
     expect(mockRedirect).not.toHaveBeenCalled();
     expect(el).toBeTruthy();
+  });
+});
+
+describe('(app) layout — onboarding', () => {
+  // Onboarding state is fetched client-side by OnboardingProvider itself (GET
+  // /api/onboarding/state — see context.test.tsx for that behavior, including the
+  // "state cannot be loaded" fallback), not read here. This layout no longer awaits
+  // a DB round trip for it on every authenticated page load — it just mounts the
+  // provider with no `initial`, letting it fetch its own state.
+  it('mounts OnboardingProvider without an initial prop, so it fetches its own state', async () => {
+    mockGetSession.mockResolvedValueOnce({ user: { id: 'u1' }, session: {} } as never);
+
+    const el = await AppLayout({ children: 'CONTENT' });
+
+    const provider = findOnboardingProvider(el);
+    expect(provider).toBeTruthy();
+    expect(provider?.props.initial).toBeUndefined();
   });
 });

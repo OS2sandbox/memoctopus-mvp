@@ -14,6 +14,8 @@ import type { MinutesContent, Skabelon } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { formatDate } from '@/lib/utils';
 import { SaveStatus, type SaveState } from '@/components/layout/SaveStatus';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
+import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
 interface TranscriptReviewProps {
   meetingId: string;
@@ -1182,34 +1184,36 @@ export function TranscriptReview({
                       {fmtTime(ch.startTime)} — {fmtTime(ch.endTime)}
                     </span>
                     <div>
-                      <div
-                        contentEditable
-                        suppressContentEditableWarning
-                        onClick={(e) => e.stopPropagation()}
-                        onBlur={(e) => {
-                          const t = e.currentTarget.textContent?.trim() ?? '';
-                          if (t && t !== ch.title) {
-                            const updated = (chapters ?? []).map((c) => c.id === ch.id ? { ...c, title: t } : c);
-                            setChapters(updated);
-                            saveChapters(updated);
-                          } else if (!t) {
-                            e.currentTarget.textContent = ch.title;
-                          }
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
-                          if (e.key === 'Escape') { e.currentTarget.textContent = ch.title; e.currentTarget.blur(); }
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.borderBottomColor = 'var(--line-2)'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.borderBottomColor = 'transparent'; }}
-                        style={{
-                          fontSize: 17, color: 'var(--ink)', fontWeight: 500, letterSpacing: '-0.005em',
-                          outline: 'none', cursor: 'text', display: 'inline-block',
-                          borderBottom: '1px dashed transparent',
-                        }}
-                      >
-                        {ch.title}
-                      </div>
+                      <OnboardingTooltip stepId="review.chapter-title-edit">
+                        <div
+                          contentEditable
+                          suppressContentEditableWarning
+                          onClick={(e) => e.stopPropagation()}
+                          onBlur={(e) => {
+                            const t = e.currentTarget.textContent?.trim() ?? '';
+                            if (t && t !== ch.title) {
+                              const updated = (chapters ?? []).map((c) => c.id === ch.id ? { ...c, title: t } : c);
+                              setChapters(updated);
+                              saveChapters(updated);
+                            } else if (!t) {
+                              e.currentTarget.textContent = ch.title;
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
+                            if (e.key === 'Escape') { e.currentTarget.textContent = ch.title; e.currentTarget.blur(); }
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.borderBottomColor = 'var(--line-2)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.borderBottomColor = 'transparent'; }}
+                          style={{
+                            fontSize: 17, color: 'var(--ink)', fontWeight: 500, letterSpacing: '-0.005em',
+                            outline: 'none', cursor: 'text', display: 'inline-block',
+                            borderBottom: '1px dashed transparent',
+                          }}
+                        >
+                          {ch.title}
+                        </div>
+                      </OnboardingTooltip>
                       {!isOpen && (
                         <div style={{ marginTop: 6, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: '60ch' }}>
                           {ch.summary}
@@ -1302,6 +1306,7 @@ export function TranscriptReview({
           </div>
 
           {piiReplacements.length > 0 && (
+            <OnboardingHint stepId="review.pii-checkboxes" meetingId={meetingId}>
             <div style={{ marginTop: 18 }}>
               {piiReplacements.map((r, i) => (
                 <div
@@ -1363,6 +1368,7 @@ export function TranscriptReview({
                 <span style={{ marginLeft: 'auto' }}>{checkedPii.size}/{piiReplacements.length}</span>
               </div>
             </div>
+            </OnboardingHint>
           )}
 
           {/* Talere & deltagere — one participant-first list that connects each
@@ -1370,6 +1376,7 @@ export function TranscriptReview({
               matcher shows a recognising state but keeps the roster editable. */}
           <div style={{ marginTop: 28 }}>
             <SpeakerAssignment
+              meetingId={meetingId}
               rows={participantRows}
               voices={unassignedSpeakers}
               voicelessParticipants={voicelessParticipants}
@@ -1398,6 +1405,7 @@ export function TranscriptReview({
           </div>
 
           {/* Skabelon, kategorier & ekstra instruktioner */}
+          <OnboardingHint stepId="review.skabelon-panel" meetingId={meetingId}>
           <div style={{ marginTop: 28 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>skabelon</div>
 
@@ -1597,6 +1605,7 @@ export function TranscriptReview({
               )}
             </div>
           </div>
+          </OnboardingHint>
 
           {/* Compliance */}
           <div style={{
@@ -1617,20 +1626,24 @@ export function TranscriptReview({
           </div>
 
           {/* Generate button */}
-          <button
-            onClick={proceedToMinutes}
-            disabled={isGenerating || segments.length === 0}
-            style={{
-              marginTop: 12, width: '100%', padding: '12px 16px',
-              background: 'var(--accent)', color: '#fff',
-              border: '1px solid var(--accent)', borderRadius: 'var(--radius)',
-              fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
-              cursor: isGenerating || segments.length === 0 ? 'not-allowed' : 'pointer',
-              opacity: isGenerating || segments.length === 0 ? 0.5 : 1,
-            }}
-          >
-            {isGenerating ? 'genererer…' : 'generér referat →'}
-          </button>
+          <OnboardingHint stepId="review.generate-button" meetingId={meetingId}>
+            <div style={{ display: 'inline-block', width: '100%' }}>
+              <button
+                onClick={proceedToMinutes}
+                disabled={isGenerating || segments.length === 0}
+                style={{
+                  marginTop: 12, width: '100%', padding: '12px 16px',
+                  background: 'var(--accent)', color: '#fff',
+                  border: '1px solid var(--accent)', borderRadius: 'var(--radius)',
+                  fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
+                  cursor: isGenerating || segments.length === 0 ? 'not-allowed' : 'pointer',
+                  opacity: isGenerating || segments.length === 0 ? 0.5 : 1,
+                }}
+              >
+                {isGenerating ? 'genererer…' : 'generér referat →'}
+              </button>
+            </div>
+          </OnboardingHint>
           <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', textAlign: 'center' }}>
             transkription kan stadig redigeres efter
           </div>

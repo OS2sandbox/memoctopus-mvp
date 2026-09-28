@@ -13,3 +13,12 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
     dispatchEvent: () => false,
   }) as unknown as MediaQueryList;
 }
+
+// jsdom has no ResizeObserver; Radix Popper (tooltips, popovers) measures with it.
+if (typeof window !== 'undefined' && typeof window.ResizeObserver !== 'function') {
+  window.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}

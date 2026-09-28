@@ -315,6 +315,87 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       WHERE NOT EXISTS (SELECT 1 FROM "${schema}".skabeloner LIMIT 1)
     `);
 
+    // onboarding_progress — which onboarding hints this user has seen/dismissed.
+    // meeting_id is NOT NULL with '' standing in for "global, not tied to a
+    // meeting" (store.ts converts null <-> '' at the boundary): Postgres treats
+    // every NULL as distinct under a UNIQUE constraint, which would otherwise
+    // need a second partial index just to dedupe the global steps.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".onboarding_progress (
+        id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        step_id     TEXT NOT NULL,
+        meeting_id  TEXT NOT NULL DEFAULT '',
+        status      TEXT NOT NULL DEFAULT 'seen',
+        seen_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    // meeting_id is a plain id, NOT a foreign key: meetings live in the browser's IndexedDB
+    // and nothing inserts into this schema's meetings table, so a REFERENCES there rejects
+    // every per-meeting hint. Databases that already created the table with the constraint
+    // lose it here (idempotent).
+    await client.query(`
+      ALTER TABLE "${schema}".onboarding_progress
+        DROP CONSTRAINT IF EXISTS onboarding_progress_meeting_id_fkey
+    `);
+
+    // Legacy rows may carry duplicate (step_id, COALESCE(meeting_id, '')) pairs
+    // (real NULLs alongside an existing '' row, or duplicate NULLs themselves).
+    // Collapse each group to its most recently seen row before folding NULLs
+    // into the sentinel, or the UPDATE/constraint below fails on the dupes.
+    await client.query(`
+      DELETE FROM "${schema}".onboarding_progress a
+      USING "${schema}".onboarding_progress b
+      WHERE a.step_id = b.step_id
+        AND COALESCE(a.meeting_id, '') = COALESCE(b.meeting_id, '')
+        AND (a.seen_at, a.id) < (b.seen_at, b.id)
+    `);
+
+    // A database created before meeting_id became NOT NULL still has real NULLs;
+    // fold them into the sentinel so the unique constraint below covers every row.
+    await client.query(`
+      UPDATE "${schema}".onboarding_progress SET meeting_id = '' WHERE meeting_id IS NULL
+    `);
+    await client.query(`
+      ALTER TABLE "${schema}".onboarding_progress
+        ALTER COLUMN meeting_id SET DEFAULT '',
+        ALTER COLUMN meeting_id SET NOT NULL
+    `);
+
+    await client.query(`
+      DO $body$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint c
+          JOIN pg_class cl ON cl.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = cl.relnamespace
+          WHERE c.conname = 'onboarding_progress_step_meeting_unique'
+            AND n.nspname = '${schema}'
+        ) THEN
+          ALTER TABLE "${schema}".onboarding_progress
+            ADD CONSTRAINT onboarding_progress_step_meeting_unique UNIQUE (step_id, meeting_id);
+        END IF;
+      END
+      $body$
+    `);
+
+    // Databases from before the sentinel change may still carry the old partial
+    // index; it is redundant now that the constraint above covers every row.
+    await client.query(`
+      DROP INDEX IF EXISTS "${schema}".onboarding_progress_global_step_unique
+    `);
+
+    // onboarding_state — single-row per-user flags for the guided tour as a whole
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".onboarding_state (
+        id                 TEXT PRIMARY KEY DEFAULT 'singleton',
+        tour_skipped_at    TIMESTAMPTZ,
+        tour_completed_at  TIMESTAMPTZ,
+        last_step_id       TEXT,
+        updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -330,9 +411,20 @@ export function getUserSchemaName(userId: string): string {
 
 // ─── Per-user query helpers ─────────────────────────────────────────────────
 
-const globalForSchema = globalThis as unknown as { initializedSchemas: Set<string> | undefined };
+const globalForSchema = globalThis as unknown as {
+  initializedSchemas: Set<string> | undefined;
+  ensuringSchemas: Map<string, Promise<void>> | undefined;
+};
 if (!globalForSchema.initializedSchemas) globalForSchema.initializedSchemas = new Set<string>();
+if (!globalForSchema.ensuringSchemas) globalForSchema.ensuringSchemas = new Map<string, Promise<void>>();
 const initializedSchemas = globalForSchema.initializedSchemas;
+// Tracks in-flight ensureUserSchema() calls per user so concurrent callers
+// (e.g. two queryUserSchema calls fired in the same Promise.all) await the
+// SAME run instead of each racing their own — two racing CREATE TYPE ...
+// IF NOT EXISTS statements can both pass the "not exists" check before
+// either commits, and the second one's CREATE then fails with a unique
+// constraint violation.
+const ensuringSchemas = globalForSchema.ensuringSchemas;
 
 export async function queryUserSchema<T = Record<string, unknown>>(
   userId: string,
@@ -340,7 +432,12 @@ export async function queryUserSchema<T = Record<string, unknown>>(
   params: unknown[] = [],
 ): Promise<T[]> {
   if (!initializedSchemas.has(userId)) {
-    await ensureUserSchema(userId);
+    let ensuring = ensuringSchemas.get(userId);
+    if (!ensuring) {
+      ensuring = ensureUserSchema(userId).finally(() => ensuringSchemas.delete(userId));
+      ensuringSchemas.set(userId, ensuring);
+    }
+    await ensuring;
     initializedSchemas.add(userId);
   }
   const client = await pool.connect();
