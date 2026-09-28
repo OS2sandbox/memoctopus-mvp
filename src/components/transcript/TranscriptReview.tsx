@@ -71,7 +71,7 @@ function skabelonToCats(s?: Skabelon | null) {
 
 // Styled skabelon picker — a native <select> can't be themed or show the
 // favorite heart, so this mirrors the app's surface/line/accent tokens, marks
-// the current choice, and flags the user's default with a small blue heart.
+// the current choice, and flags the user's default with a small green heart.
 function SkabelonSelect({
   skabeloner,
   value,

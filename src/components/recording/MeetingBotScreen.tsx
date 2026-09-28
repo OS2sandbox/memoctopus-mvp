@@ -317,10 +317,10 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
 
   const noticeBodyMap: Partial<Record<BotStatus, string>> = {
     cancelled: 'Mødet blev afbrudt og ingen optagelse blev gemt.',
-    forbinder: 'Memoctopus ringer op til mødet og venter på at blive lukket ind…',
+    forbinder: 'OS2taletiltekst ringer op til mødet og venter på at blive lukket ind…',
     pause: 'Optagelsen er sat på pause. Tryk fortsæt for at optage igen.',
     processing: 'Mødet er slut. Transskription og referat er ved at blive lavet — det tager et øjeblik…',
-    optager: 'Memoctopus optager mødet. Når du stopper, laves transskription og referat automatisk.',
+    optager: 'OS2taletiltekst optager mødet. Når du stopper, laves transskription og referat automatisk.',
   };
   const noticeBody = status === 'error'
     ? (errorMessage ?? 'Der opstod en fejl ved forbindelsen til mødet.')
@@ -485,7 +485,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontFamily: 'var(--mono)', fontSize: 9, flexShrink: 0,
               }}>M</span>
-              <span style={{ flex: 1, fontSize: 13.5, color: 'var(--ink)' }}>Memoctopus</span>
+              <span style={{ flex: 1, fontSize: 13.5, color: 'var(--ink)' }}>OS2taletiltekst</span>
               <span style={{
                 fontFamily: 'var(--mono)', fontSize: 10,
                 color: isConnecting ? 'var(--muted)' : isPaused ? 'var(--muted)' : 'var(--kill)',

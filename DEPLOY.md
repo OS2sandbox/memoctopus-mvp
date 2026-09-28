@@ -109,7 +109,7 @@ account accepted the terms once; access is auto-granted).
 
 ## Single sign-on (OIDC)
 
-Memoctopus can sign users in against any standards-compliant OIDC provider —
+OS2taletiltekst can sign users in against any standards-compliant OIDC provider —
 Keycloak, Authentik, Entra ID via OIDC, and so on. There is no provider-specific
 code: you supply a discovery URL, a client id and a client secret.
 
