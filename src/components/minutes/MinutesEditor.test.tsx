@@ -58,9 +58,12 @@ function render(ui: React.ReactElement) {
   return renderWithOnboarding(ui, {
     tourSkipped: true,
     tourCompleted: true,
+    // Both are `scope: 'global'` — remembered once, not once per meeting — so
+    // they are seeded without a meetingId, or the hint renders and its copy
+    // collides with the page's own "gemmes automatisk" text.
     seen: [
-      { stepId: 'minutes.save-version', meetingId: MEETING_ID },
-      { stepId: 'minutes.version-dropdown', meetingId: MEETING_ID },
+      { stepId: 'minutes.save-version', meetingId: null },
+      { stepId: 'minutes.version-dropdown', meetingId: null },
     ],
   });
 }

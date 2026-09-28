@@ -17,11 +17,15 @@ function render(ui: React.ReactElement) {
   return renderWithOnboarding(ui, {
     tourSkipped: true,
     tourCompleted: true,
+    // These four are `scope: 'global'` — remembered once, not once per meeting —
+    // so they are seeded without a meetingId. Seeding them per meeting left them
+    // unseen, and the popover that then opened swallowed the Escape key the
+    // signal-bars tooltip test presses.
     seen: [
-      { stepId: 'recording.start-button', meetingId: 'meeting-abc' },
-      { stepId: 'recording.stop-save-continue', meetingId: 'meeting-abc' },
-      { stepId: 'recording.clarify-panel', meetingId: 'meeting-abc' },
-      { stepId: 'recording.audio-lifecycle', meetingId: 'meeting-abc' },
+      { stepId: 'recording.start-button', meetingId: null },
+      { stepId: 'recording.stop-save-continue', meetingId: null },
+      { stepId: 'recording.clarify-panel', meetingId: null },
+      { stepId: 'recording.audio-lifecycle', meetingId: null },
     ],
   });
 }

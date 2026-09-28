@@ -190,3 +190,70 @@ describe('OnboardingHint — unknown stepId', () => {
     spy.mockRestore();
   });
 });
+
+// The reported bug: "Optagelsen gemmes kun lokalt i din browser" came back at
+// the start of every single recording. The step is a product explainer, but it
+// was declared `scope: 'per-meeting'` AND handed a meetingId, so its seen-key
+// carried the meeting and no two recordings ever shared one.
+describe('OnboardingHint — scope decides what the seen-key remembers', () => {
+  const GLOBAL = 'recording.audio-lifecycle'; // scope: 'global'
+  const PER_MEETING = 'topbar.unsaved-audio'; // scope: 'per-meeting'
+
+  function show(stepId: string, meetingId: string | null) {
+    return render(
+      <Provider>
+        <OnboardingHint stepId={stepId} meetingId={meetingId}>
+          <span>anchor</span>
+        </OnboardingHint>
+      </Provider>,
+    );
+  }
+
+  it('saves a global step without a meeting, even when the call site passes one', async () => {
+    show(GLOBAL, 'meeting-1');
+    await act(async () => { fireEvent.click(screen.getByText('forstået')); });
+
+    expect(saves()).toEqual([{ stepId: GLOBAL, meetingId: null }]);
+  });
+
+  it('does not show a dismissed global hint again in the next meeting', () => {
+    render(
+      <OnboardingProvider
+        initial={{ tourSkipped: true, tourCompleted: false, seen: [{ stepId: GLOBAL, meetingId: null }] }}
+      >
+        {/* A brand new recording — a meeting id this hint has never seen. */}
+        <OnboardingHint stepId={GLOBAL} meetingId="a-later-meeting">
+          <span>anchor</span>
+        </OnboardingHint>
+      </OnboardingProvider>,
+    );
+
+    expect(screen.getByText('anchor')).toBeTruthy();
+    expect(screen.queryByText(getStep(GLOBAL).copy)).toBeNull();
+  });
+
+  it('still remembers a per-meeting step per meeting', async () => {
+    show(PER_MEETING, 'meeting-1');
+    await act(async () => { fireEvent.click(screen.getByText('forstået')); });
+
+    expect(saves()).toEqual([{ stepId: PER_MEETING, meetingId: 'meeting-1' }]);
+  });
+
+  it('shows a per-meeting step again for a different meeting', () => {
+    render(
+      <OnboardingProvider
+        initial={{
+          tourSkipped: true,
+          tourCompleted: false,
+          seen: [{ stepId: PER_MEETING, meetingId: 'meeting-1' }],
+        }}
+      >
+        <OnboardingHint stepId={PER_MEETING} meetingId="meeting-2">
+          <span>anchor</span>
+        </OnboardingHint>
+      </OnboardingProvider>,
+    );
+
+    expect(screen.getByText(getStep(PER_MEETING).copy)).toBeTruthy();
+  });
+});
