@@ -124,7 +124,7 @@ export function createBotService(opts: BotServiceOptions): BotService {
       meetingUrl,
       meetingId,
       userId,
-      botName: botName ?? 'Memoctopus',
+      botName: botName ?? 'OS2taletiltekst',
       callbackUrl: `${nextAppUrl}/api/bot/audio-upload`,
       internalSecret,
     };

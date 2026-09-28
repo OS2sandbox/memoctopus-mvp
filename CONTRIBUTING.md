@@ -1,4 +1,4 @@
-# Contributing to MemOctopus
+# Contributing to OS2taletiltekst
 
 ## Development Team
 

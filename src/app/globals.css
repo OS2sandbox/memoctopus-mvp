@@ -20,10 +20,10 @@
   --line-2:       #cccccc;
   --line-strong:  #cccccc;
 
-  /* Accent — vivid syv.ai blue */
-  --accent:       oklch(0.46 0.28 264);
-  --accent-ink:   oklch(0.32 0.20 264);
-  --accent-wash:  oklch(0.97 0.05 264);
+  /* Accent — OS2 green (#3A7F3B) */
+  --accent:       #3A7F3B;
+  --accent-ink:   #2A5C2B;
+  --accent-wash:  #EEF5EE;
 
   /* Signal */
   --kill:         oklch(0.52 0.17 25);

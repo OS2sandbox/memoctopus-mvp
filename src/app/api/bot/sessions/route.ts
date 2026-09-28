@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
         meetingUrl,
         meetingId,
         userId: session.user.id,
-        botName: 'Memoctopus',
+        botName: 'OS2taletiltekst',
       }),
     });
   } catch (err) {

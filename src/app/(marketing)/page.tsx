@@ -31,7 +31,7 @@ export default function SignInPage() {
             color: 'var(--ink)',
             whiteSpace: 'nowrap',
           }}>
-            memoctopus<span style={{ color: 'var(--accent)', padding: '0 5px' }}>·</span>referat
+            OS2taletiltekst<span style={{ color: 'var(--accent)', padding: '0 5px' }}>·</span>referat
           </span>
         </div>
         <div style={{
