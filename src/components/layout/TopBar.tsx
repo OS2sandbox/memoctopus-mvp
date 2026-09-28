@@ -86,7 +86,7 @@ export function TopBar() {
             textDecoration: 'none', flexShrink: 0,
           }}
         >
-          memoctopus<span style={{ color: 'var(--accent)', padding: '0 5px' }}>·</span>referat
+          OS2taletiltekst<span style={{ color: 'var(--accent)', padding: '0 5px' }}>·</span>referat
         </Link>
 
         {/* Nav */}

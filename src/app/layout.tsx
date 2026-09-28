@@ -7,7 +7,7 @@ const geistSans = GeistSans;
 const geistMono = GeistMono;
 
 export const metadata: Metadata = {
-  title: 'Memoctopus Referat',
+  title: 'OS2taletiltekst Referat',
   description: 'Opret og administrér mødereferater med automatisk transskribering',
   icons: {
     icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }],

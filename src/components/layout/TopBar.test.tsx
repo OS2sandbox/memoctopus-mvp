@@ -110,10 +110,10 @@ beforeEach(() => {
 describe('TopBar — basic rendering', () => {
   it('renders the wordmark', () => {
     renderTopBar();
-    // The wordmark link contains "memoctopus · referat" across text nodes
-    const wordmarkLink = screen.getByRole('link', { name: /memoctopus/ });
+    // The wordmark link contains "OS2taletiltekst · referat" across text nodes
+    const wordmarkLink = screen.getByRole('link', { name: /OS2taletiltekst/ });
     expect(wordmarkLink).toBeInTheDocument();
-    expect(wordmarkLink.textContent).toContain('memoctopus');
+    expect(wordmarkLink.textContent).toContain('OS2taletiltekst');
     expect(wordmarkLink.textContent).toContain('referat');
   });
 
@@ -280,7 +280,7 @@ describe('TopBar — navigation without pending audio', () => {
     mockPathname = '/arkiv';
     mockHasAudio = false;
     renderTopBar();
-    const wordmarkLink = screen.getByRole('link', { name: /memoctopus/ });
+    const wordmarkLink = screen.getByRole('link', { name: /OS2taletiltekst/ });
     fireEvent.click(wordmarkLink);
     expect(mockPush).toHaveBeenCalledWith('/dashboard');
   });
@@ -443,7 +443,7 @@ describe('TopBar — sign-out action', () => {
 describe('TopBar — wordmark link', () => {
   it('wordmark link points to /dashboard', () => {
     renderTopBar();
-    const link = screen.getByRole('link', { name: /memoctopus/ });
+    const link = screen.getByRole('link', { name: /OS2taletiltekst/ });
     expect(link).toHaveAttribute('href', '/dashboard');
   });
 });

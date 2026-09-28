@@ -75,10 +75,10 @@ describe('LogoMark', () => {
     expect(getCircles(container)).toHaveLength(17);
   });
 
-  it('renders 8 orbit-mask circles (fill #1535EB)', () => {
+  it('renders 8 orbit-mask circles (fill #3A7F3B)', () => {
     const { container } = render(<LogoMark />);
     const orbitCircles = getCircles(container).filter(
-      (c) => c.getAttribute('fill') === '#1535EB' && c.getAttribute('r') === '2.2',
+      (c) => c.getAttribute('fill') === '#3A7F3B' && c.getAttribute('r') === '2.2',
     );
     expect(orbitCircles).toHaveLength(8);
   });
@@ -122,11 +122,11 @@ describe('LogoMark', () => {
 
   // ── Background rect ────────────────────────────────────────────────────────
 
-  it('renders a background rect with the brand blue fill', () => {
+  it('renders a background rect with the brand green fill', () => {
     const { container } = render(<LogoMark />);
     const rect = container.querySelector<SVGRectElement>('svg rect');
     expect(rect).not.toBeNull();
-    expect(rect!.getAttribute('fill')).toBe('#1535EB');
+    expect(rect!.getAttribute('fill')).toBe('#3A7F3B');
     expect(rect!.getAttribute('rx')).toBe('7');
     expect(rect!.getAttribute('width')).toBe('32');
     expect(rect!.getAttribute('height')).toBe('32');
