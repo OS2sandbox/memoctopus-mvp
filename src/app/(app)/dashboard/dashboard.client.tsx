@@ -10,6 +10,8 @@ import { setPendingUploadFile } from '@/lib/pending-upload';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { armErrorMessage } from '@/components/dashboard/arm-error-message';
 import { signIn } from '@/lib/auth-client';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
+import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
 interface TeamsStatus {
   /** False when the server has TEAMS_GRAPH_ENABLED off. Absent means on. */
@@ -257,46 +259,59 @@ export default function OptaqPage() {
                       }}>×</button>
                   </span>
                 ))}
-                <input
-                  value={adding}
-                  onChange={(e) => setAdding(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addParticipant(); } }}
-                  placeholder="+ tilføj"
-                  style={{
-                    fontFamily: 'var(--mono)', fontSize: 12,
-                    padding: '4px 10px', borderRadius: 999,
-                    border: '1px dashed var(--line-2)',
-                    color: 'var(--ink-2)', width: 90,
-                    background: 'transparent', outline: 'none',
-                  }}
-                />
+                <OnboardingHint stepId="dashboard.participant-chip">
+                  <input
+                    value={adding}
+                    onChange={(e) => setAdding(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addParticipant(); } }}
+                    placeholder="+ tilføj"
+                    style={{
+                      fontFamily: 'var(--mono)', fontSize: 12,
+                      padding: '4px 10px', borderRadius: 999,
+                      border: '1px dashed var(--line-2)',
+                      color: 'var(--ink-2)', width: 90,
+                      background: 'transparent', outline: 'none',
+                    }}
+                  />
+                </OnboardingHint>
               </div>
             </div>
           </div>
 
           {/* CENTER — record button + meeting link input */}
           <div style={{ textAlign: 'center', order: isMobile ? 1 : 0 }}>
-            <button
-              onClick={startRecording}
-              disabled={loading}
-              style={{
-                width: 200, height: 200, borderRadius: 999,
-                margin: '0 auto',
-                background: loading ? 'var(--ink-2)' : 'var(--ink)',
-                color: 'var(--bg)',
-                border: 'none', cursor: loading ? 'not-allowed' : 'pointer',
-                display: 'flex', flexDirection: 'column',
-                alignItems: 'center', justifyContent: 'center', gap: 14,
-                boxShadow: '0 1px 0 var(--line-2)',
-                transition: 'background 150ms',
-              }}
-            >
-              <span style={{ width: 22, height: 22, borderRadius: 999, background: 'var(--bg)' }} />
-              <span style={{
-                fontFamily: 'var(--mono)', fontSize: 13,
-                letterSpacing: 0.6, opacity: 0.85,
-              }}>optag</span>
-            </button>
+            <OnboardingHint stepId="dashboard.record-button">
+              <button
+                onClick={startRecording}
+                disabled={loading}
+                style={{
+                  width: 200, height: 200, borderRadius: 999,
+                  margin: '0 auto',
+                  background: loading ? 'var(--ink-2)' : 'var(--ink)',
+                  color: 'var(--bg)',
+                  border: 'none', cursor: loading ? 'not-allowed' : 'pointer',
+                  display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center', gap: 14,
+                  boxShadow: '0 1px 0 var(--line-2)',
+                  transition: 'background 150ms',
+                }}
+              >
+                <span style={{ width: 22, height: 22, borderRadius: 999, background: 'var(--bg)' }} />
+                <span style={{
+                  fontFamily: 'var(--mono)', fontSize: 13,
+                  letterSpacing: 0.6, opacity: 0.85,
+                }}>optag</span>
+              </button>
+            </OnboardingHint>
+
+            <OnboardingTooltip stepId="dashboard.keyboard-shortcuts">
+              <div tabIndex={0} style={{
+                marginTop: 10, fontFamily: 'var(--mono)', fontSize: 11,
+                color: 'var(--muted)', cursor: 'default', display: 'inline-block',
+              }}>
+                genveje: R · U
+              </div>
+            </OnboardingTooltip>
 
             {recordError && (
               <div style={{ marginTop: 14, maxWidth: 300, margin: '14px auto 0' }}>
@@ -311,6 +326,7 @@ export default function OptaqPage() {
                   fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
                   letterSpacing: 0.4, marginBottom: 10,
                 }}>eller deltag i et møde</div>
+                <OnboardingHint stepId="dashboard.teams-link">
                 <div
                   style={{
                     display: 'flex', alignItems: 'center', gap: 6,
@@ -355,6 +371,7 @@ export default function OptaqPage() {
                     {linkLoading ? '…' : '→'}
                   </button>
                 </div>
+                </OnboardingHint>
                 {linkError && (
                   <div style={{
                     marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11,

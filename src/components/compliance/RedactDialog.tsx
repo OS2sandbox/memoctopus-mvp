@@ -9,6 +9,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
 interface RedactDialogProps {
   open: boolean;
@@ -102,13 +103,19 @@ export function RedactDialog({ open, onOpenChange, meetingTitle, onConfirm }: Re
           <Button variant="ghost" onClick={handleClose} disabled={loading}>
             Afbryd
           </Button>
-          <Button
-            variant="destructive"
-            onClick={handleConfirm}
-            disabled={!isMatch || loading}
-          >
-            {loading ? 'Sletter…' : 'Slet permanent'}
-          </Button>
+          <OnboardingTooltip stepId="meeting-settings.redact-redirect">
+            {/* A disabled button fires no pointer or focus events, so the span is what the tooltip
+                hangs on. It only takes a tab stop while the button can't (an enabled button is one itself). */}
+            <span className="inline-flex" tabIndex={isMatch && !loading ? undefined : 0}>
+              <Button
+                variant="destructive"
+                onClick={handleConfirm}
+                disabled={!isMatch || loading}
+              >
+                {loading ? 'Sletter…' : 'Slet permanent'}
+              </Button>
+            </span>
+          </OnboardingTooltip>
         </DialogFooter>
       </DialogContent>
     </Dialog>

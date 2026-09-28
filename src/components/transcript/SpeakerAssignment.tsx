@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { SpeakerCombobox } from './SpeakerCombobox';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 
 // A diarized voice still labelled "Taler N", with its representative soundbite.
 export interface VoiceBite {
@@ -22,6 +23,7 @@ export interface ParticipantRow {
 }
 
 interface SpeakerAssignmentProps {
+  meetingId: string;
   rows: ParticipantRow[];
   // Voices nobody is linked to yet (the "Taler N" leftovers).
   voices: VoiceBite[];
@@ -84,6 +86,7 @@ function EditableName({ name, onRename }: { name: string; onRename: (oldName: st
 // diarization output and the referat roster in one connected list. Leftover voices
 // nobody claimed surface in a small secondary section only once everyone is placed.
 export function SpeakerAssignment({
+  meetingId,
   rows,
   voices,
   voicelessParticipants,
@@ -256,11 +259,13 @@ export function SpeakerAssignment({
             <span className="sa-dot" />
             <EditableName name={row.name} onRename={onRename} />
             <span className="sa-tag">talte ikke</span>
-            <button
-              type="button"
-              className="sa-trigger"
-              onClick={() => setOpenName(open ? null : row.name)}
-            >knyt stemme {open ? '▴' : '▾'}</button>
+            <OnboardingHint stepId="review.speaker-assign" meetingId={meetingId}>
+              <button
+                type="button"
+                className="sa-trigger"
+                onClick={() => setOpenName(open ? null : row.name)}
+              >knyt stemme {open ? '▴' : '▾'}</button>
+            </OnboardingHint>
             <button
               type="button"
               className="sa-x"
@@ -279,11 +284,13 @@ export function SpeakerAssignment({
         <div className="sa-row pending unnamed">
           <span className="sa-dot" />
           <EditableName name={row.name} onRename={onRename} />
-          <button
-            type="button"
-            className="sa-trigger primary"
-            onClick={() => setOpenName(open ? null : row.name)}
-          >tildel stemme {open ? '▴' : '▾'}</button>
+          <OnboardingHint stepId="review.speaker-assign" meetingId={meetingId}>
+            <button
+              type="button"
+              className="sa-trigger primary"
+              onClick={() => setOpenName(open ? null : row.name)}
+            >tildel stemme {open ? '▴' : '▾'}</button>
+          </OnboardingHint>
           <button
             type="button"
             className="sa-x"
@@ -331,14 +338,16 @@ export function SpeakerAssignment({
           machine's "Taler N" labels never lead the view. Collapsed by default. */}
       {!hasPending && voices.length > 0 && (
         <div>
-          <button
-            type="button"
-            className="sa-sub"
-            aria-expanded={showLeftover}
-            onClick={() => setShowLeftover((v) => !v)}
-          >
-            ukendte stemmer · {voices.length} <span aria-hidden>{showLeftover ? '▾' : '▸'}</span>
-          </button>
+          <OnboardingHint stepId="review.unknown-voices" meetingId={meetingId}>
+            <button
+              type="button"
+              className="sa-sub"
+              aria-expanded={showLeftover}
+              onClick={() => setShowLeftover((v) => !v)}
+            >
+              ukendte stemmer · {voices.length} <span aria-hidden>{showLeftover ? '▾' : '▸'}</span>
+            </button>
+          </OnboardingHint>
           {showLeftover && voices.map((v) => {
             const naming = leftoverVoice === v.speaker;
             return (
