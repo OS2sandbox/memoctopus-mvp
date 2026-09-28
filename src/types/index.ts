@@ -1,4 +1,17 @@
-export type MeetingStatus = 'joining' | 'recording' | 'processing' | 'review' | 'minutes' | 'done' | 'redacted' | 'failed';
+// `awaiting_teams` is the Graph-era pre-meeting state: Memoctopus is armed on the
+// meeting and we are waiting for Teams to hold it and produce its artifacts.
+// The removed bot's `joining` state is gone from this union. Its Postgres enum
+// value stays, since a value cannot be dropped from a Postgres enum, and an old
+// IndexedDB record may still carry it.
+export type MeetingStatus =
+  | 'awaiting_teams'
+  | 'recording'
+  | 'processing'
+  | 'review'
+  | 'minutes'
+  | 'done'
+  | 'redacted'
+  | 'failed';
 
 export interface TranscriptSegment {
   speaker: string;
