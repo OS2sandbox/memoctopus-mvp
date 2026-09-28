@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { TopBar } from './TopBar';
 import { renderWithOnboarding } from '@/test/onboarding';
 
@@ -110,11 +110,15 @@ beforeEach(() => {
 describe('TopBar — basic rendering', () => {
   it('renders the wordmark', () => {
     renderTopBar();
-    // The wordmark link contains "OS2taletiltekst · referat" across text nodes
+    // "OS2taletiltekst" is now the official SVG lockup rather than type, so it
+    // reaches the accessible name through the image's alt text; only "· referat"
+    // is still text. The link must read as the whole thing either way.
     const wordmarkLink = screen.getByRole('link', { name: /OS2taletiltekst/ });
     expect(wordmarkLink).toBeInTheDocument();
-    expect(wordmarkLink.textContent).toContain('OS2taletiltekst');
     expect(wordmarkLink.textContent).toContain('referat');
+
+    const logo = within(wordmarkLink).getByAltText('OS2taletiltekst');
+    expect(logo).toHaveAttribute('src', '/brand/os2taletiltekst.svg');
   });
 
   it('renders both nav items', () => {
