@@ -19,6 +19,19 @@ export type OnboardingStep = {
   id: string;
   cluster: OnboardingCluster;
   severity: 'high' | 'medium' | 'low';
+  /**
+   * `global` — shown once ever, then never again until the user asks for the
+   * tour again with the "?" button. Right for anything that explains how the
+   * product works: once you know it, you know it.
+   *
+   * `per-meeting` — shown once for each meeting. Only right for a warning about
+   * THIS meeting's state, where the cost of not seeing it again is losing data.
+   * An explainer scoped this way reappears on every new recording, which is how
+   * "the recording is only stored in your browser" came back every time.
+   *
+   * OnboardingHint honours this; a `meetingId` passed at a `global` step is
+   * ignored, so the registry and the call sites cannot drift apart.
+   */
   scope: 'global' | 'per-meeting';
   placement: 'top' | 'bottom' | 'left' | 'right';
   engine: 'popover' | 'tooltip';
@@ -43,7 +56,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     scope: 'global',
     placement: 'top',
     engine: 'popover',
-    copy: 'Indsæt et Teams-mødelink her, så deltager en bot automatisk i mødet og optager det for dig. Husk at lukke botten ind, hvis mødet har et venteværelse.',
+    copy: 'Indsæt et Teams-mødelink her, så slår Memoctopus optagelse og transskription til for mødet. Der deltager ingen bot — Teams optager selv, og referatet hentes automatisk et par minutter efter, mødet er slut.',
   },
   'dashboard.keyboard-shortcuts': {
     id: 'dashboard.keyboard-shortcuts',
@@ -114,7 +127,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'meeting-settings.processstrip-export',
     cluster: 'meeting-creation',
     severity: 'medium',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'bottom',
     engine: 'popover',
     copy: 'Du finder disse indstillinger igen under fanen Eksport.',
@@ -123,7 +136,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'meeting-settings.redact-purpose',
     cluster: 'meeting-creation',
     severity: 'high',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'top',
     engine: 'popover',
     copy: 'Brug denne funktion, når referatet er færdigt, og I ikke længere har brug for lyd og rå transskription — f.eks. for at overholde regler om sletning af persondata.',
@@ -132,7 +145,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'meeting-settings.redact-redirect',
     cluster: 'meeting-creation',
     severity: 'low',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'top',
     engine: 'tooltip',
     copy: 'Indholdet slettes nu, og du sendes til arkivet.',
@@ -143,7 +156,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'recording.start-button',
     cluster: 'recording',
     severity: 'high',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'top',
     engine: 'popover',
     copy: 'Tryk her for at starte optagelsen. Din browser beder om adgang til mikrofonen — optagelsen starter med det samme, du siger ja.',
@@ -152,7 +165,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'recording.stop-save-continue',
     cluster: 'recording',
     severity: 'high',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'top',
     engine: 'popover',
     copy: 'Stopper optagelsen her og gemmer den. Du sendes videre til Gennemgang, hvor transskriptionen bliver klar.',
@@ -161,7 +174,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'recording.clarify-panel',
     cluster: 'recording',
     severity: 'medium',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'left',
     engine: 'popover',
     copy: 'Her foreslår AI’en spørgsmål, I bør få afklaret i mødet, ud fra det, der er sagt indtil nu. Brug dem som en live-huskeliste — de opdateres automatisk undervejs.',
@@ -170,7 +183,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'recording.audio-lifecycle',
     cluster: 'recording',
     severity: 'medium',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'bottom',
     engine: 'popover',
     copy: 'Optagelsen gemmes kun lokalt i din browser. Den bruges til at lave transskription og referat og slettes automatisk bagefter.',
@@ -199,7 +212,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'review.pii-checkboxes',
     cluster: 'review-minutes',
     severity: 'high',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'left',
     engine: 'popover',
     copy: 'Markér de oplysninger, der skal skjules i referatet. Fjern fluebenet for at beholde teksten som den er.',
@@ -208,7 +221,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'review.skabelon-panel',
     cluster: 'review-minutes',
     severity: 'high',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'left',
     engine: 'popover',
     copy: 'Vælg hvilke afsnit referatet skal have, og skriv evt. ekstra instruktioner nedenfor — de bruges sammen med skabelonen, når referatet genereres.',
@@ -217,7 +230,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'review.generate-button',
     cluster: 'review-minutes',
     severity: 'high',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'top',
     engine: 'popover',
     copy: 'Bemærk: Lydfilen slettes automatisk, når referatet genereres, og kan ikke gendannes. Sørg for at gennemgangen er færdig først.',
@@ -226,7 +239,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'review.speaker-assign',
     cluster: 'review-minutes',
     severity: 'medium',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'right',
     engine: 'popover',
     copy: 'Klik for at høre stemmen, og vælg derefter hvem den tilhører. Alle den persons replikker bliver navngivet med det samme.',
@@ -235,7 +248,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'review.unknown-voices',
     cluster: 'review-minutes',
     severity: 'medium',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'right',
     engine: 'popover',
     copy: 'Der er stadig stemmer, der ikke er knyttet til en deltager. Klik for at navngive dem, så de kommer med i referatet.',
@@ -244,7 +257,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'review.chapter-title-edit',
     cluster: 'review-minutes',
     severity: 'low',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'top',
     engine: 'tooltip',
     copy: 'Klik på en kapiteloverskrift for at omdøbe den.',
@@ -253,7 +266,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'minutes.save-version',
     cluster: 'review-minutes',
     severity: 'medium',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'bottom',
     engine: 'popover',
     copy: 'Dine rettelser gemmes automatisk løbende. Klik Gem version, hvis du vil kunne vende tilbage til denne udgave senere.',
@@ -262,7 +275,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'minutes.version-dropdown',
     cluster: 'review-minutes',
     severity: 'low',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'bottom',
     engine: 'popover',
     copy: 'Du har nu flere versioner. Klik her for at se og skifte mellem dem.',
@@ -273,7 +286,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'export.audio-deleted-timing',
     cluster: 'export-share',
     severity: 'high',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'top',
     engine: 'popover',
     copy: 'Lydfilen er allerede slettet — det sker automatisk, når referatet dannes, ikke når du trykker download. Selve transskriptionen ligger fortsat i arkivet.',
@@ -282,7 +295,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'export.post-download-link',
     cluster: 'export-share',
     severity: 'medium',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'top',
     engine: 'tooltip',
     copy: 'Referatet er nu gemt i arkivet.',
@@ -291,7 +304,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     id: 'share.terminology-bridge',
     cluster: 'export-share',
     severity: 'low',
-    scope: 'per-meeting',
+    scope: 'global',
     placement: 'top',
     engine: 'popover',
     copy: 'Sådan deler du referatet: eksportér det som PDF eller Markdown, og send filen videre til dine kolleger.',

@@ -38,11 +38,19 @@ export function OnboardingHint({
 }) {
   const step = findStep(stepId);
   const { isStepSeen, markSeen, showWelcome, claim, release, isActive } = useOnboarding();
+
+  // The registry decides whether a hint is remembered once or once per meeting —
+  // not the call site. Passing meetingId at a `global` step used to scope its
+  // seen-key to that meeting, so an explainer like "the recording is only stored
+  // in your browser" came back for every new recording. The prop is now a
+  // suggestion the step's own scope has to agree with, which keeps the two from
+  // drifting apart: a step's behaviour is whatever steps.ts says it is.
+  const scopedMeetingId = step?.scope === 'per-meeting' ? meetingId : null;
   const instanceId = useId();
-  const key = seenKey(stepId, meetingId);
+  const key = seenKey(stepId, scopedMeetingId);
   // An unknown stepId must never show a hint — the wrapped real content below still
   // renders regardless, findStep already logged the mistake.
-  const pending = !!step && condition && !isStepSeen(stepId, meetingId);
+  const pending = !!step && condition && !isStepSeen(stepId, scopedMeetingId);
 
   // Never overlap the welcome dialog — it should be the only thing on screen
   // until the user closes/skips it, after which the hint queue can take over.
@@ -62,7 +70,7 @@ export function OnboardingHint({
 
   const dismiss = () => {
     shownKeyRef.current = null;
-    markSeen(stepId, meetingId);
+    markSeen(stepId, scopedMeetingId);
   };
 
   useEffect(() => {
@@ -72,7 +80,7 @@ export function OnboardingHint({
       release(key, instanceId);
       if (shownKeyRef.current === key) {
         shownKeyRef.current = null;
-        markSeen(stepId, meetingId);
+        markSeen(stepId, scopedMeetingId);
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
