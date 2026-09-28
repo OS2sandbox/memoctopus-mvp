@@ -84,16 +84,14 @@ export function TopBar() {
             display: 'flex', alignItems: 'center',
           }}
         >
-          {/* The official OS2 lockup, which already reads "OS2taletiltekst" — so only
-              the product half of the wordmark is set in type beside it. A plain <img>
-              rather than next/image: it is a static SVG in public/, and next/image
-              would need dangerouslyAllowSVG to serve it at all. */}
+          {/* The official OS2 lockup, and nothing beside it. A plain <img> rather
+              than next/image: it is a static SVG in public/, and next/image would
+              need dangerouslyAllowSVG to serve it at all. */}
           <img
             src="/brand/os2taletiltekst.svg"
             alt="OS2taletiltekst"
             style={{ height: 22, width: 'auto', display: 'block' }}
           />
-          <span style={{ color: 'var(--accent)', padding: '0 5px' }}>·</span>referat
         </Link>
 
         {/* Nav */}

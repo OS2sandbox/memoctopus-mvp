@@ -91,12 +91,11 @@ beforeEach(() => {
 describe('TopBar — basic rendering', () => {
   it('renders the wordmark', () => {
     renderTopBar();
-    // "OS2taletiltekst" is now the official SVG lockup rather than type, so it
-    // reaches the accessible name through the image's alt text; only "· referat"
-    // is still text. The link must read as the whole thing either way.
+    // The wordmark is the official SVG lockup on its own — no type beside it —
+    // so it reaches the accessible name through the image's alt text.
     const wordmarkLink = screen.getByRole('link', { name: /OS2taletiltekst/ });
     expect(wordmarkLink).toBeInTheDocument();
-    expect(wordmarkLink.textContent).toContain('referat');
+    expect(wordmarkLink.textContent).toBe('');
 
     const logo = within(wordmarkLink).getByAltText('OS2taletiltekst');
     expect(logo).toHaveAttribute('src', '/brand/os2taletiltekst.svg');
