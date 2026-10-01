@@ -47,7 +47,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     scope: 'global',
     placement: 'top',
     engine: 'popover',
-    copy: 'Klik her for at starte optagelsen med det samme. Din browser beder om adgang til mikrofonen lige efter.',
+    copy: 'Klik her for at starte optagelsen. Vi guider dig gennem de næste trin, herunder at give adgang til mikrofonen.',
   },
   'dashboard.teams-link': {
     id: 'dashboard.teams-link',
@@ -56,7 +56,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     scope: 'global',
     placement: 'top',
     engine: 'popover',
-    copy: 'Indsæt et Teams-mødelink her, så slår Memoctopus optagelse og transskription til for mødet. Der deltager ingen bot — Teams optager selv, og referatet hentes automatisk et par minutter efter, mødet er slut.',
+    copy: 'Indsæt et Teams-mødelink, så klarer OS2taletiltekst resten. Der deltager ingen bot — Teams optager selv, og du kan gennemgå referatudkastet, kort efter mødet er slut.',
   },
   'dashboard.keyboard-shortcuts': {
     id: 'dashboard.keyboard-shortcuts',
@@ -92,7 +92,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     scope: 'global',
     placement: 'bottom',
     engine: 'popover',
-    copy: 'Her samler vi alle dine møder, optagelser og referater, så snart du har afsluttet det første.',
+    copy: 'Her finder du alle dine møder og skabeloner samlet ét sted.\n\nI fanen Møder kan du finde tidligere referater samt generere nye referater.\n\nI fanen Skabeloner kan du oprette nye skabeloner eller redigere eksisterende, så fremtidige referater får den ønskede struktur.',
   },
 
   // ── Meeting creation + settings ─────────────────────────────────────────
@@ -161,6 +161,15 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     engine: 'popover',
     copy: 'Tryk her for at starte optagelsen. Din browser beder om adgang til mikrofonen — optagelsen starter med det samme, du siger ja.',
   },
+  'recording.pause-button': {
+    id: 'recording.pause-button',
+    cluster: 'recording',
+    severity: 'medium',
+    scope: 'global',
+    placement: 'top',
+    engine: 'popover',
+    copy: 'Pauser optagelsen uden at afslutte den. Når du er klar, kan du fortsætte ved at klikke på knappen igen.',
+  },
   'recording.stop-save-continue': {
     id: 'recording.stop-save-continue',
     cluster: 'recording',
@@ -168,7 +177,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     scope: 'global',
     placement: 'top',
     engine: 'popover',
-    copy: 'Stopper optagelsen her og gemmer den. Du sendes videre til Gennemgang, hvor transskriptionen bliver klar.',
+    copy: 'Stopper optagelsen og sender dig videre til Gennemgang.',
   },
   'recording.clarify-panel': {
     id: 'recording.clarify-panel',
@@ -177,7 +186,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     scope: 'global',
     placement: 'left',
     engine: 'popover',
-    copy: 'Her foreslår AI’en spørgsmål, I bør få afklaret i mødet, ud fra det, der er sagt indtil nu. Brug dem som en live-huskeliste — de opdateres automatisk undervejs.',
+    copy: 'Forslag til emner og spørgsmål, der kan være værd at få afklaret. Listen opdateres løbende ud fra samtalen.',
   },
   'recording.audio-lifecycle': {
     id: 'recording.audio-lifecycle',
@@ -224,7 +233,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     scope: 'global',
     placement: 'left',
     engine: 'popover',
-    copy: 'Vælg hvilke afsnit referatet skal have, og skriv evt. ekstra instruktioner nedenfor — de bruges sammen med skabelonen, når referatet genereres.',
+    copy: 'Start med at vælge en skabelon. Tilpas den ved at tilføje kategorier eller mødespecifikke instruktioner, så referatet passer til netop dette møde.',
   },
   'review.generate-button': {
     id: 'review.generate-button',
@@ -233,7 +242,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     scope: 'global',
     placement: 'top',
     engine: 'popover',
-    copy: 'Bemærk: Lydfilen slettes automatisk, når referatet genereres, og kan ikke gendannes. Sørg for at gennemgangen er færdig først.',
+    copy: 'Klik for at generere referatet ud fra den valgte skabelon. Bemærk: Lydfilen slettes automatisk, når referatet genereres, og kan ikke gendannes.',
   },
   'review.speaker-assign': {
     id: 'review.speaker-assign',
@@ -242,7 +251,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     scope: 'global',
     placement: 'right',
     engine: 'popover',
-    copy: 'Klik for at høre stemmen, og vælg derefter hvem den tilhører. Alle den persons replikker bliver navngivet med det samme.',
+    copy: 'Knyt navn til stemmer, så de vises korrekt i referatet.',
   },
   'review.unknown-voices': {
     id: 'review.unknown-voices',
@@ -269,7 +278,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     scope: 'global',
     placement: 'bottom',
     engine: 'popover',
-    copy: 'Dine rettelser gemmes automatisk løbende. Klik Gem version, hvis du vil kunne vende tilbage til denne udgave senere.',
+    copy: 'Gem en version af referatet, så du nemt kan vende tilbage til denne udgave senere.',
   },
   'minutes.version-dropdown': {
     id: 'minutes.version-dropdown',
@@ -278,19 +287,10 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     scope: 'global',
     placement: 'bottom',
     engine: 'popover',
-    copy: 'Du har nu flere versioner. Klik her for at se og skifte mellem dem.',
+    copy: 'Se og skift mellem dine versioner af referatet.',
   },
 
   // ── Export/share + skabelon import ──────────────────────────────────────
-  'export.audio-deleted-timing': {
-    id: 'export.audio-deleted-timing',
-    cluster: 'export-share',
-    severity: 'high',
-    scope: 'global',
-    placement: 'top',
-    engine: 'popover',
-    copy: 'Lydfilen er allerede slettet — det sker automatisk, når referatet dannes, ikke når du trykker download. Selve transskriptionen ligger fortsat i arkivet.',
-  },
   'export.post-download-link': {
     id: 'export.post-download-link',
     cluster: 'export-share',
@@ -307,7 +307,7 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     scope: 'global',
     placement: 'top',
     engine: 'popover',
-    copy: 'Sådan deler du referatet: eksportér det som PDF eller Markdown, og send filen videre til dine kolleger.',
+    copy: 'Eksportér referatet som PDF eller Markdown, så det er klar til deling.',
   },
   'skabelon-import.explainer': {
     id: 'skabelon-import.explainer',

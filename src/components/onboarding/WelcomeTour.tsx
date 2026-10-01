@@ -5,10 +5,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { useOnboarding } from '@/lib/onboarding/context';
 
 const POINTS = [
-  { title: 'Optag eller upload', body: 'Start en optagelse, indsæt et Teams-mødelink, eller upload en lydfil fra dashboardet.' },
-  { title: 'Gennemgå', body: 'Ret følsomme oplysninger, tildel talere, og vælg hvad referatet skal indeholde.' },
-  { title: 'Referat og eksport', body: 'Referatet genereres automatisk, kan redigeres, og eksporteres som PDF eller Markdown.' },
-  { title: 'Arkiv og skabeloner', body: 'Alle dine møder ligger i Arkiv. Skabeloner styrer, hvordan fremtidige referater skrives.' },
+  { title: 'Optag eller upload', body: 'Start en optagelse, tilføj et Teams-mødelink eller upload en lydfil.' },
+  { title: 'Gennemgå', body: 'Vælg skabelon, tildel talere og håndter følsomme oplysninger.' },
+  { title: 'Generér referat og eksportér', body: 'Få et automatisk udkast, som du kan redigere og eksportere.' },
+  { title: 'Arkiv', body: 'Find tidligere møder og dine skabeloner samlet ét sted. Rediger eksisterende skabeloner, hent tidligere referater eller opret et nyt referat.' },
 ];
 
 /**
@@ -25,7 +25,7 @@ export function WelcomeTour() {
     <Dialog open={showWelcome} onOpenChange={(open) => !open && closeWelcome(true)}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Velkommen til Referat</DialogTitle>
+          <DialogTitle>Sådan fungerer OS2taletiltekst</DialogTitle>
         </DialogHeader>
         <p style={{ fontSize: 13.5, color: 'var(--muted)', marginTop: -4, marginBottom: 16 }}>
           Sådan kommer et møde igennem platformen — undervejs viser vi korte forklaringer, første gang du støder på noget.

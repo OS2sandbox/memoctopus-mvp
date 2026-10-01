@@ -118,7 +118,8 @@ export function OnboardingHint({
               gap: 8,
             }}
           >
-            <span>{step.copy}</span>
+            {/* pre-line: longer copy separates its paragraphs with blank lines */}
+            <span style={{ whiteSpace: 'pre-line' }}>{step.copy}</span>
             <button
               type="button"
               onClick={dismiss}

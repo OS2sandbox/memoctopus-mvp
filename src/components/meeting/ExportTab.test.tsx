@@ -29,16 +29,15 @@ vi.mock('@/lib/storage', () => ({
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const MEETING_ID = 'mtg-abc';
 
-// Onboarding hints wrap the audio-deleted caption and the eyebrow label;
-// mark them already-seen so the popovers don't render and DOM queries keep
-// targeting the underlying text (mirrors the real app, which mounts
-// ExportTab under the app-level OnboardingProvider).
+// An onboarding hint wraps the eyebrow label; mark it already-seen so the
+// popover doesn't render and DOM queries keep targeting the underlying text
+// (mirrors the real app, which mounts ExportTab under the app-level
+// OnboardingProvider).
 function render(ui: React.ReactElement) {
   return renderWithOnboarding(ui, {
     tourSkipped: true,
     tourCompleted: true,
     seen: [
-      { stepId: 'export.audio-deleted-timing', meetingId: MEETING_ID },
       { stepId: 'share.terminology-bridge', meetingId: MEETING_ID },
     ],
   });
