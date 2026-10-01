@@ -1624,31 +1624,33 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
             >
               annullér
             </button>
-            <button
-              onClick={recordingState === 'recording' ? pauseRecording : resumeRecording}
-              style={{
-                width: 56, height: 56, borderRadius: 999,
-                background: 'var(--ink)', border: 'none',
-                cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}
-              aria-label={recordingState === 'recording' ? 'Pause' : 'Fortsæt'}
-            >
-              {recordingState === 'recording' ? (
-                <span style={{ display: 'flex', gap: 4 }}>
-                  <span style={{ width: 4, height: 16, background: 'var(--bg)', borderRadius: 2 }} />
-                  <span style={{ width: 4, height: 16, background: 'var(--bg)', borderRadius: 2 }} />
-                </span>
-              ) : (
-                <span style={{
-                  width: 0, height: 0,
-                  borderTop: '8px solid transparent',
-                  borderBottom: '8px solid transparent',
-                  borderLeft: '14px solid var(--bg)',
-                  marginLeft: 3,
-                }} />
-              )}
-            </button>
+            <OnboardingHint stepId="recording.pause-button" meetingId={meetingId}>
+              <button
+                onClick={recordingState === 'recording' ? pauseRecording : resumeRecording}
+                style={{
+                  width: 56, height: 56, borderRadius: 999,
+                  background: 'var(--ink)', border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+                aria-label={recordingState === 'recording' ? 'Pause' : 'Fortsæt'}
+              >
+                {recordingState === 'recording' ? (
+                  <span style={{ display: 'flex', gap: 4 }}>
+                    <span style={{ width: 4, height: 16, background: 'var(--bg)', borderRadius: 2 }} />
+                    <span style={{ width: 4, height: 16, background: 'var(--bg)', borderRadius: 2 }} />
+                  </span>
+                ) : (
+                  <span style={{
+                    width: 0, height: 0,
+                    borderTop: '8px solid transparent',
+                    borderBottom: '8px solid transparent',
+                    borderLeft: '14px solid var(--bg)',
+                    marginLeft: 3,
+                  }} />
+                )}
+              </button>
+            </OnboardingHint>
             <OnboardingHint stepId="recording.stop-save-continue" meetingId={meetingId}>
               <button
                 onClick={stopAndSave}

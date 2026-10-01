@@ -27,6 +27,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// getByText collapses whitespace in the DOM text but not in a string matcher,
+// so multi-paragraph copy (blank-line separated) has to be collapsed the same way.
+const copyOf = (id: string) => getStep(id).copy.replace(/\s+/g, ' ');
+
 const fresh = { tourSkipped: true, tourCompleted: false, seen: [] };
 
 function Provider({ children }: { children: React.ReactNode }) {
@@ -51,13 +55,13 @@ describe('OnboardingHint — dismissal saves once', () => {
         </OnboardingHint>
       </Provider>,
     );
-    expect(screen.getByText(getStep(A).copy)).toBeTruthy();
+    expect(screen.getByText(copyOf(A))).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(screen.getByText('forstået'));
     });
 
-    expect(screen.queryByText(getStep(A).copy)).toBeNull();
+    expect(screen.queryByText(copyOf(A))).toBeNull();
     expect(saves()).toEqual([{ stepId: A, meetingId: null }]);
   });
 
@@ -69,13 +73,13 @@ describe('OnboardingHint — dismissal saves once', () => {
         </OnboardingHint>
       </Provider>,
     );
-    expect(screen.getByText(getStep(A).copy)).toBeTruthy();
+    expect(screen.getByText(copyOf(A))).toBeTruthy();
 
     await act(async () => {
       fireEvent.keyDown(document, { key: 'Escape' });
     });
 
-    expect(screen.queryByText(getStep(A).copy)).toBeNull();
+    expect(screen.queryByText(copyOf(A))).toBeNull();
     expect(saves()).toEqual([{ stepId: A, meetingId: null }]);
   });
 
@@ -119,12 +123,12 @@ describe('OnboardingHint — one instance reused for different steps', () => {
       );
     }
     const { rerender, unmount } = render(<Tree step={A} meetingId={null} />);
-    expect(screen.getByText(getStep(A).copy)).toBeTruthy();
+    expect(screen.getByText(copyOf(A))).toBeTruthy();
 
     rerender(<Tree step={B} meetingId="m-1" />);
     // A was shown, so leaving it counts as seen; B is queued behind C.
     expect(saves()).toEqual([{ stepId: A, meetingId: null }]);
-    expect(screen.queryByText(getStep(B).copy)).toBeNull();
+    expect(screen.queryByText(copyOf(B))).toBeNull();
 
     unmount();
     // B was never on screen: it must not be recorded as seen.
@@ -134,7 +138,7 @@ describe('OnboardingHint — one instance reused for different steps', () => {
   it('does mark the new step seen when it was shown', () => {
     const { rerender, unmount } = render(<Bar step={A} meetingId={null} />);
     rerender(<Bar step={B} meetingId="m-1" />);
-    expect(screen.getByText(getStep(B).copy)).toBeTruthy();
+    expect(screen.getByText(copyOf(B))).toBeTruthy();
     unmount();
     expect(saves()).toEqual([
       { stepId: A, meetingId: null },
@@ -162,13 +166,13 @@ describe('OnboardingHint — repeated step', () => {
       );
     }
     const { rerender } = render(<Rows rows={['row-1', 'row-2', 'row-3']} />);
-    expect(screen.queryByText(getStep(D).copy)).toBeNull();
+    expect(screen.queryByText(copyOf(D))).toBeNull();
 
     // The row that owns the slot goes away while still queued (never shown).
     rerender(<Rows rows={['row-2', 'row-3']} />);
     // Dismiss C: the step must now show on a remaining row, once.
     fireEvent.click(screen.getByText('forstået'));
-    expect(screen.getAllByText(getStep(D).copy)).toHaveLength(1);
+    expect(screen.getAllByText(copyOf(D))).toHaveLength(1);
   });
 });
 
@@ -229,7 +233,7 @@ describe('OnboardingHint — scope decides what the seen-key remembers', () => {
     );
 
     expect(screen.getByText('anchor')).toBeTruthy();
-    expect(screen.queryByText(getStep(GLOBAL).copy)).toBeNull();
+    expect(screen.queryByText(copyOf(GLOBAL))).toBeNull();
   });
 
   it('still remembers a per-meeting step per meeting', async () => {
@@ -254,6 +258,6 @@ describe('OnboardingHint — scope decides what the seen-key remembers', () => {
       </OnboardingProvider>,
     );
 
-    expect(screen.getByText(getStep(PER_MEETING).copy)).toBeTruthy();
+    expect(screen.getByText(copyOf(PER_MEETING))).toBeTruthy();
   });
 });
