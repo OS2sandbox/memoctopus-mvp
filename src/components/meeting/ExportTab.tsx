@@ -123,12 +123,10 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
 
         {/* Bottom row */}
         <div style={{ marginTop: 24, display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
-          <OnboardingHint stepId="export.audio-deleted-timing" meetingId={meetingId}>
-            <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
-              lydfil slettet ved generering<br />
-              <span style={{ color: 'var(--muted-2)' }}>transskription bevares i arkivet</span>
-            </div>
-          </OnboardingHint>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)', lineHeight: 1.6 }}>
+            lydfil slettet ved generering<br />
+            <span style={{ color: 'var(--muted-2)' }}>transskription bevares i arkivet</span>
+          </div>
           <button
             onClick={handleExport}
             disabled={exporting}
