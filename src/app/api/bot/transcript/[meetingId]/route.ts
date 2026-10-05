@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
+import { withHandler } from '@/lib/api-handler';
+import { recordServerEvent } from '@/lib/audit/record';
+import { meetingEntity } from '../../_audit';
 import { readPendingTranscript, deletePendingTranscript, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
 
 // Client collects the server-side transcription of a Teams-bot recording
@@ -11,10 +14,10 @@ import { readPendingTranscript, deletePendingTranscript, assertBotMeetingOwner }
 //   { status: 'processing' }          → still working — poll again shortly
 //   { status: 'failed' }              → server-side run failed — client fallback
 //   { status: 'ready', segments, diarized } → done; the stash is deleted on hand-off
-export async function GET(
-  _req: NextRequest,
+export const GET = withHandler('bot/transcript', async (
+  req: NextRequest,
   { params }: { params: Promise<{ meetingId: string }> },
-) {
+) => {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -35,12 +38,21 @@ export async function GET(
   }
 
   await deletePendingTranscript(meetingId);
+  const entity = meetingEntity(meetingId);
   if (transcript.status === 'failed') {
+    await recordServerEvent(req, { type: 'bot.transcript_collect', outcome: 'error', actorUserId: session.user.id, ...entity });
     return NextResponse.json({ status: 'failed' });
   }
+  const segments = transcript.segments ?? [];
+  await recordServerEvent(req, {
+    type: 'bot.transcript_collect',
+    actorUserId: session.user.id,
+    ...entity,
+    details: { segmentCount: segments.length },
+  });
   return NextResponse.json({
     status: 'ready',
-    segments: transcript.segments ?? [],
+    segments,
     diarized: transcript.diarized ?? false,
   });
-}
+});

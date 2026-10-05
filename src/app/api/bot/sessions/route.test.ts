@@ -13,6 +13,10 @@ vi.mock('@/lib/bot-service', async (importOriginal) => {
   return { ...actual, getBotServiceConfig: vi.fn() };
 });
 
+vi.mock('@/lib/audit/record', () => ({
+  recordServerEvent: vi.fn().mockResolvedValue({ status: 'stored' }),
+}));
+
 vi.mock('@/lib/bot-pending-audio', () => ({
   setBotMeetingOwner: vi.fn().mockResolvedValue(undefined),
 }));
@@ -20,7 +24,10 @@ vi.mock('@/lib/bot-pending-audio', () => ({
 import { POST } from './route';
 import { auth } from '@/lib/auth';
 import { getBotServiceConfig } from '@/lib/bot-service';
+import { recordServerEvent } from '@/lib/audit/record';
 import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
+
+const mockRecord = vi.mocked(recordServerEvent);
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockGetBotConfig = vi.mocked(getBotServiceConfig);
@@ -36,6 +43,7 @@ beforeEach(() => {
   mockFetch.mockReset();
   mockGetBotConfig.mockReset();
   mockGetBotConfig.mockReturnValue(BOT_CONFIG);
+  mockRecord.mockReset().mockResolvedValue({ status: 'stored' });
 });
 
 describe('POST /api/bot/sessions', () => {
@@ -92,5 +100,42 @@ describe('POST /api/bot/sessions', () => {
     mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
     const res = await POST(makeJsonReq(URL, 'POST', { meetingId: 'm1', meetingUrl: MEETING_URL }));
     expect(res.status).toBe(503);
+  });
+});
+
+describe('audit: bot.session_start', () => {
+  const MEETING = '11111111-1111-4111-8111-111111111111';
+
+  it('emits one bot.session_start with the meeting uuid as entity and no URL or name in the event', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ sessionId: 'sess-1' }), { status: 200 }));
+    await POST(makeJsonReq(URL, 'POST', { meetingId: MEETING, meetingUrl: MEETING_URL }));
+
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    const [, event] = mockRecord.mock.calls[0];
+    expect(event).toEqual({ type: 'bot.session_start', actorUserId: FAKE_SESSION.user.id, entityId: MEETING });
+    expect(JSON.stringify(event)).not.toContain('teams.microsoft.com');
+  });
+
+  it('leaves the entity out when the meetingId is not a uuid (event still recorded)', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ sessionId: 'sess-1' }), { status: 200 }));
+    await POST(makeJsonReq(URL, 'POST', { meetingId: 'm1', meetingUrl: MEETING_URL }));
+    const [, event] = mockRecord.mock.calls[0];
+    expect(event).not.toHaveProperty('entityId');
+  });
+
+  it('records outcome error (still once) when the bot service fails', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'boom' }), { status: 500 }));
+    await POST(makeJsonReq(URL, 'POST', { meetingId: MEETING, meetingUrl: MEETING_URL }));
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(mockRecord.mock.calls[0][1]).toMatchObject({ type: 'bot.session_start', outcome: 'error' });
+  });
+
+  it('does not record anything for an unauthenticated request', async () => {
+    mockGetSession.mockResolvedValueOnce(null as never);
+    await POST(makeJsonReq(URL, 'POST', { meetingId: MEETING, meetingUrl: MEETING_URL }));
+    expect(mockRecord).not.toHaveBeenCalled();
   });
 });

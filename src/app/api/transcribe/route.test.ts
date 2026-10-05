@@ -28,7 +28,14 @@ vi.mock('@/lib/auth', () => ({
   auth: { api: { getSession: vi.fn() } },
 }));
 
+const mockRecord = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
+  recordServerEvent: mockRecord,
+}));
+
 import { POST } from './route';
+import { expectValidMetadataOnly, leakyError } from '@/app/api/meetings/ai-audit.test-utils';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION } from '@/test/helpers';
 
@@ -118,5 +125,102 @@ describe('POST /api/transcribe', () => {
     const data = await res.json();
     expect(data.segments).toEqual(SEGMENTS);
     expect(data.chapters).toEqual([]);
+  });
+});
+
+describe('audit: transcription.request (upload) and chapters.request', () => {
+  const MEETING = '11111111-2222-4333-8444-555555555555';
+  const events = () => mockRecord.mock.calls.map((c) => c[1]);
+  const ofType = (t: string) => events().filter((e) => e.type === t);
+  beforeEach(() => {
+    mockRecord.mockReset();
+    mockRecord.mockResolvedValue({ status: 'stored' });
+  });
+
+  it('emits one transcription.request (mode upload) with bytes, audioSeconds and duration, no content', async () => {
+    const res = await POST(makeFormRequest(MEETING));
+    expect(res.status).toBe(200);
+
+    const [e, ...rest] = ofType('transcription.request');
+    expect(rest).toHaveLength(0);
+    expect(e).toMatchObject({
+      actorUserId: 'user-123',
+      entityId: MEETING,
+      details: { mode: 'upload', bytes: 11, audioSeconds: 30 },
+    });
+    expect(typeof e.details.durationMs).toBe('number');
+    expect(e.outcome ?? 'success').toBe('success');
+    expectValidMetadataOnly(e, ['Hej verden', 'recording.webm']);
+  });
+
+  it('emits chapters.request with counts only', async () => {
+    await POST(makeFormRequest(MEETING));
+    const [e] = ofType('chapters.request');
+    expect(e).toMatchObject({ entityId: MEETING, details: { segmentCount: 1, chapterCount: 1 } });
+    expectValidMetadataOnly(e, ['Intro', 'Hej verden']);
+  });
+
+  it('omits the entity when meetingId is not a UUID', async () => {
+    await POST(makeFormRequest('meet-1'));
+    for (const e of events()) {
+      expect(e.entityId).toBeUndefined();
+      expectValidMetadataOnly(e, ['meet-1']);
+    }
+  });
+
+  it('on transcription failure records outcome error with a code, never the message, and answers 500', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockTranscribe.mockRejectedValueOnce(leakyError('Hej verden', { status: 503 }));
+    const res = await POST(makeFormRequest(MEETING));
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'Transcription failed' });
+    const [e] = ofType('transcription.request');
+    expect(e).toMatchObject({ outcome: 'error', details: { mode: 'upload', outcomeCode: 'http_503' } });
+    expectValidMetadataOnly(e, ['Hej verden']);
+    expect(ofType('chapters.request')).toHaveLength(0);
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('Hej verden');
+    spy.mockRestore();
+  });
+
+  it('records a failing chapters call as outcome error and keeps the response unchanged', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockGroupChapters.mockRejectedValueOnce(leakyError('Hej verden'));
+    const res = await POST(makeFormRequest(MEETING));
+    expect(res.status).toBe(200);
+    expect((await res.json()).chapters).toEqual([]);
+    expect(ofType('chapters.request')[0]).toMatchObject({ outcome: 'error' });
+    expectValidMetadataOnly(ofType('chapters.request')[0], ['Hej verden']);
+    // PII and chapter failures are non-fatal and must not log the message either.
+    mockDetectPii.mockRejectedValueOnce(leakyError('Hej verden'));
+    await POST(makeFormRequest(MEETING));
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('Hej verden');
+    spy.mockRestore();
+  });
+
+  it('still answers 200 with the transcript when the audit write rejects', async () => {
+    mockRecord.mockRejectedValue(new Error('db down'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await POST(makeFormRequest(MEETING));
+    expect(res.status).toBe(200);
+    expect((await res.json()).segments).toEqual(SEGMENTS);
+    warn.mockRestore();
+  });
+
+  it('emits nothing for 401 or 400', async () => {
+    mockGetSession.mockResolvedValueOnce(null as never);
+    await POST(makeFormRequest(MEETING));
+    await POST(makeFormRequest(MEETING, false));
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('returns a JSON 500 (withHandler) for an unexpected failure', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockGetSession.mockRejectedValueOnce(leakyError('Hej verden'));
+    const res = await POST(makeFormRequest(MEETING));
+    expect(res.status).toBe(500);
+    expect(res.headers.get('x-request-id')).toBeTruthy();
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('Hej verden');
+    spy.mockRestore();
   });
 });

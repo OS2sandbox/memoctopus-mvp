@@ -13,6 +13,10 @@ vi.mock('next/headers', () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
 
+vi.mock('@/lib/audit/record', () => ({
+  recordServerEvent: vi.fn().mockResolvedValue({ status: 'stored' }),
+}));
+
 vi.mock('@/lib/bot-pending-audio', () => ({
   readPendingMeta: vi.fn(),
   readPendingAudio: vi.fn(),
@@ -21,11 +25,13 @@ vi.mock('@/lib/bot-pending-audio', () => ({
 }));
 
 import { GET } from './route';
+import { recordServerEvent } from '@/lib/audit/record';
 import { readPendingMeta, readPendingAudio, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
 
 const mockReadMeta = vi.mocked(readPendingMeta);
 const mockReadAudio = vi.mocked(readPendingAudio);
 const mockAssertOwner = vi.mocked(assertBotMeetingOwner);
+const mockRecord = vi.mocked(recordServerEvent);
 
 function makeRequest(meetingId: string): NextRequest {
   return new NextRequest(`http://localhost/api/bot/audio/${meetingId}`, { method: 'GET' });
@@ -40,6 +46,7 @@ beforeEach(() => {
   mockReadAudio.mockReset();
   mockAssertOwner.mockReset();
   mockAssertOwner.mockResolvedValue(true);
+  mockRecord.mockReset().mockResolvedValue({ status: 'stored' });
 });
 
 describe('GET /api/bot/audio/[meetingId]', () => {
@@ -114,5 +121,40 @@ describe('GET /api/bot/audio/[meetingId]', () => {
     mockReadMeta.mockResolvedValue(null);
     const res = await GET(makeRequest('meeting-1'), makeParams('meeting-1'));
     expect(res.status).toBe(401);
+  });
+});
+
+describe('audit: bot.audio_collect', () => {
+  const MEETING = '11111111-1111-4111-8111-111111111111';
+  const META = {
+    mimeType: 'audio/webm', participants: ['Anna', 'Bo'], durationSeconds: 120,
+    hasRecording: true, createdAt: Date.now(),
+  };
+
+  it('emits one bot.audio_collect with byte count only when a recording is handed over', async () => {
+    mockReadMeta.mockResolvedValue(META);
+    mockReadAudio.mockResolvedValue(Buffer.from('fake-audio'));
+    const res = await GET(makeRequest(MEETING), makeParams(MEETING));
+    expect(res.status).toBe(200);
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    const [, event] = mockRecord.mock.calls[0];
+    expect(event).toEqual({
+      type: 'bot.audio_collect',
+      actorUserId: 'u1',
+      entityId: MEETING,
+      details: { bytes: 'fake-audio'.length },
+    });
+    // Participant names from the stash must never reach the event.
+    expect(JSON.stringify(event)).not.toContain('Anna');
+  });
+
+  it('emits nothing for pending, no-recording or non-owner responses', async () => {
+    mockReadMeta.mockResolvedValueOnce(null);
+    await GET(makeRequest(MEETING), makeParams(MEETING));
+    mockReadMeta.mockResolvedValueOnce({ ...META, hasRecording: false });
+    await GET(makeRequest(MEETING), makeParams(MEETING));
+    mockAssertOwner.mockResolvedValueOnce(false);
+    await GET(makeRequest(MEETING), makeParams(MEETING));
+    expect(mockRecord).not.toHaveBeenCalled();
   });
 });

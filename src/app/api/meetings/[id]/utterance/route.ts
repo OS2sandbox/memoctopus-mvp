@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { HviskeProvider } from '@/lib/ai/transcription';
+import { withHandler } from '@/lib/api-handler';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { asEntityUuid, elapsedMs, emitAudit, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
+import { liveTranscriptionCoalescer, liveTranscriptionKey } from './coalesce';
 
 // Reuse a single provider instance across requests — creating one per request
 // would spin up a new OpenAI client each time, losing connection pooling.
@@ -41,8 +45,8 @@ function isHallucinatedRepetition(text: string): boolean {
 // Stateless compute: transcribes one audio batch via Hviske and returns the text.
 // No persistence — the client accumulates segments and stores the transcript in
 // IndexedDB (see RecordingScreen / upload-confirm / ProcessingTranscription).
-export async function POST(req: NextRequest, { params }: Params) {
-  const { id: _id } = await params;
+async function postHandler(req: NextRequest, { params }: Params) {
+  const { id } = await params;
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -54,19 +58,39 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (buffer.length < 2_000) return NextResponse.json({ text: '' });
 
   const audioBytes = buffer.length;
+  const userId = session.user.id;
+  // One request every few seconds per meeting would flood the log, so at most one
+  // event per actor+meeting per hour is written (best-effort, per process); it
+  // marks that live transcription happened, it is not a count of utterances.
+  const audit = async (outcome: 'success' | 'error', t0: number, outcomeCode?: string) => {
+    if (!liveTranscriptionCoalescer.shouldEmit(liveTranscriptionKey(userId, id))) return;
+    await emitAudit(req, {
+      type: 'transcription.request',
+      actorUserId: userId,
+      outcome,
+      // The id in the URL is never verified against a meeting: UUID or no entity.
+      entityId: asEntityUuid(id),
+      details: { mode: 'live', durationMs: elapsedMs(t0), ...(outcomeCode ? { outcomeCode } : {}) },
+    });
+  };
+
   const t0 = Date.now();
   try {
     const { text, latencyMs } = await getProvider().transcribeRaw(buffer, audioFile.type || 'audio/wav');
     const totalMs = Date.now() - t0;
     console.log(`[utterance] ${audioBytes} bytes → ${latencyMs} ms hviske / ${totalMs} ms total`);
+    await audit('success', t0);
     if (isHallucinatedRepetition(text)) return NextResponse.json({ text: '', latencyMs });
     return NextResponse.json({ text, latencyMs });
   } catch (err) {
     const totalMs = Date.now() - t0;
-    console.error(`[utterance] failed after ${totalMs} ms:`, err);
+    safeLogError(`utterance failed after ${totalMs} ms`, err);
+    await audit('error', t0, outcomeCodeOf(err));
     // 502, not 200-with-empty-text: callers must be able to tell "silence" from
     // "transcription failed" so failed batches are retried instead of silently
     // dropping ~27 s of audio from the transcript.
     return NextResponse.json({ error: 'Transcription failed', latencyMs: totalMs }, { status: 502 });
   }
 }
+
+export const POST = withHandler('utterance', postHandler);

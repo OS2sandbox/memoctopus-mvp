@@ -8,6 +8,9 @@ vi.mock('@/lib/auth', () => ({
   auth: { api: { getSession: vi.fn() } },
 }));
 
+const mockRecord = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audit/record', () => ({ recordServerEvent: mockRecord }));
+
 vi.mock('@/lib/skabeloner/server', () => ({
   getSkabelon: vi.fn(),
   updateSkabelon: vi.fn(),
@@ -24,14 +27,15 @@ const mockGetSkabelon = vi.mocked(getSkabelon);
 const mockUpdateSkabelon = vi.mocked(updateSkabelon);
 const mockDeleteSkabelon = vi.mocked(deleteSkabelon);
 
-const BASE_URL = 'http://localhost/api/skabeloner/sk-1';
-const CTX = { params: Promise.resolve({ id: 'sk-1' }) };
+const SK_ID = '11111111-2222-4333-8444-555555555555';
+const BASE_URL = `http://localhost/api/skabeloner/${SK_ID}`;
+const CTX = { params: Promise.resolve({ id: SK_ID }) };
 
 const SAMPLE_SKABELON = {
-  id: 'sk-1',
+  id: SK_ID,
   name: 'Testskabelon',
-  description: null,
-  prompt: null,
+  description: '',
+  prompt: '',
   includeDeltagere: true,
   includeBeslutningspunkter: true,
   includeDagsorden: false,
@@ -63,7 +67,7 @@ describe('GET /api/skabeloner/[id]', () => {
     mockGetSkabelon.mockResolvedValueOnce(SAMPLE_SKABELON as never);
     const res = await GET(makeJsonReq(BASE_URL, 'GET'), CTX);
     expect(res.status).toBe(200);
-    expect((await res.json()).skabelon).toMatchObject({ id: 'sk-1' });
+    expect((await res.json()).skabelon).toMatchObject({ id: SK_ID });
   });
 
   it('returns a parseable JSON 500 when getSkabelon throws', async () => {
@@ -81,6 +85,10 @@ describe('PUT /api/skabeloner/[id]', () => {
     mockGetSession.mockReset();
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
     mockUpdateSkabelon.mockReset();
+    mockGetSkabelon.mockReset();
+    mockGetSkabelon.mockResolvedValue(SAMPLE_SKABELON as never);
+    mockRecord.mockReset();
+    mockRecord.mockResolvedValue({ status: 'stored' });
   });
 
   it('returns 401 when not authenticated', async () => {
@@ -101,9 +109,51 @@ describe('PUT /api/skabeloner/[id]', () => {
   });
 
   it('returns 404 when skabelon does not exist', async () => {
+    mockGetSkabelon.mockResolvedValueOnce(null as never);
+    const res = await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Ny' }), CTX);
+    expect(res.status).toBe(404);
+    expect(mockUpdateSkabelon).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 and emits nothing when the row disappears before the update', async () => {
     mockUpdateSkabelon.mockResolvedValueOnce(null as never);
     const res = await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Ny' }), CTX);
     expect(res.status).toBe(404);
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('emits template.update once listing only the changed field names', async () => {
+    mockUpdateSkabelon.mockResolvedValueOnce({
+      ...SAMPLE_SKABELON,
+      name: 'Fortrolig titel',
+      prompt: 'Fortrolig prompt',
+      includeDato: false,
+    } as never);
+    const res = await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Fortrolig titel' }), CTX);
+    expect(res.status).toBe(200);
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    const [, event] = mockRecord.mock.calls[0];
+    expect(event).toEqual({
+      type: 'template.update',
+      actorUserId: 'user-123',
+      entityId: SK_ID,
+      details: { changedFields: ['name', 'prompt', 'includeDato'] },
+    });
+    expect(JSON.stringify(event)).not.toMatch(/Fortrolig|Testskabelon/);
+  });
+
+  it('emits an empty changedFields list when nothing changed', async () => {
+    mockUpdateSkabelon.mockResolvedValueOnce({ ...SAMPLE_SKABELON } as never);
+    await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Testskabelon' }), CTX);
+    expect(mockRecord.mock.calls[0][1].details).toEqual({ changedFields: [] });
+  });
+
+  it('still returns 200 when the audit write is dropped', async () => {
+    mockUpdateSkabelon.mockResolvedValueOnce({ ...SAMPLE_SKABELON, name: 'Ny' } as never);
+    mockRecord.mockResolvedValue({ status: 'dropped', code: 'db_error' });
+    const res = await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Ny' }), CTX);
+    expect(res.status).toBe(200);
   });
 
   it('returns the updated skabelon on success', async () => {
@@ -129,6 +179,8 @@ describe('DELETE /api/skabeloner/[id]', () => {
     mockGetSession.mockReset();
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
     mockDeleteSkabelon.mockReset();
+    mockRecord.mockReset();
+    mockRecord.mockResolvedValue({ status: 'stored' });
   });
 
   it('returns 401 when not authenticated', async () => {
@@ -148,6 +200,26 @@ describe('DELETE /api/skabeloner/[id]', () => {
     const res = await DELETE(makeJsonReq(BASE_URL, 'DELETE'), CTX);
     expect(res.status).toBe(200);
     expect((await res.json()).ok).toBe(true);
+  });
+
+  it('emits template.delete once with the id only', async () => {
+    mockDeleteSkabelon.mockResolvedValueOnce(true as never);
+    await DELETE(makeJsonReq(BASE_URL, 'DELETE'), CTX);
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(mockRecord.mock.calls[0][1]).toEqual({ type: 'template.delete', actorUserId: 'user-123', entityId: SK_ID });
+  });
+
+  it('does not emit when nothing was deleted', async () => {
+    mockDeleteSkabelon.mockResolvedValueOnce(false as never);
+    await DELETE(makeJsonReq(BASE_URL, 'DELETE'), CTX);
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('still returns ok when the audit write is dropped', async () => {
+    mockDeleteSkabelon.mockResolvedValueOnce(true as never);
+    mockRecord.mockResolvedValue({ status: 'dropped', code: 'db_error' });
+    const res = await DELETE(makeJsonReq(BASE_URL, 'DELETE'), CTX);
+    expect(res.status).toBe(200);
   });
 
   it('returns a parseable JSON 500 when deleteSkabelon throws', async () => {

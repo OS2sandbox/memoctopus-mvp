@@ -8,6 +8,9 @@ vi.mock('@/lib/auth', () => ({
   auth: { api: { getSession: vi.fn() } },
 }));
 
+const mockRecord = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audit/record', () => ({ recordServerEvent: mockRecord }));
+
 vi.mock('@/lib/skabeloner/server', () => ({
   listSkabeloner: vi.fn(),
   createSkabelon: vi.fn(),
@@ -23,9 +26,10 @@ const mockList = vi.mocked(listSkabeloner);
 const mockCreate = vi.mocked(createSkabelon);
 
 const BASE_URL = 'http://localhost/api/skabeloner';
+const SK_ID = '11111111-2222-4333-8444-555555555555';
 
 const FAKE_SKABELON = {
-  id: 'sk-1',
+  id: SK_ID,
   name: 'Standardreferat',
   description: '',
   prompt: '',
@@ -58,7 +62,7 @@ describe('GET /api/skabeloner', () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.skabeloner).toHaveLength(1);
-    expect(json.skabeloner[0].id).toBe('sk-1');
+    expect(json.skabeloner[0].id).toBe(SK_ID);
   });
 
   it('returns a parseable JSON 500 when listSkabeloner throws', async () => {
@@ -75,6 +79,8 @@ describe('POST /api/skabeloner', () => {
   beforeEach(() => {
     mockGetSession.mockReset();
     mockCreate.mockReset();
+    mockRecord.mockReset();
+    mockRecord.mockResolvedValue({ status: 'stored' });
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
   });
 
@@ -107,7 +113,7 @@ describe('POST /api/skabeloner', () => {
     }));
     expect(res.status).toBe(201);
     const json = await res.json();
-    expect(json.skabelon.id).toBe('sk-1');
+    expect(json.skabelon.id).toBe(SK_ID);
     expect(mockCreate).toHaveBeenCalledWith('user-123', expect.objectContaining({ name: 'Standardreferat' }));
   });
 
@@ -125,5 +131,32 @@ describe('POST /api/skabeloner', () => {
     // req.json() will throw; the .catch(() => ({})) fallback returns {} → name is missing
     const res = await POST(req as never);
     expect(res.status).toBe(400);
+  });
+
+  it('emits template.create once with the new id and no content in details', async () => {
+    mockCreate.mockResolvedValue({ ...FAKE_SKABELON, prompt: 'Hemmelig prompt om Hr. Jensen' });
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { name: 'Standardreferat', prompt: 'Hemmelig prompt om Hr. Jensen' }));
+    expect(res.status).toBe(201);
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    const [, event] = mockRecord.mock.calls[0];
+    expect(event).toEqual({
+      type: 'template.create',
+      actorUserId: 'user-123',
+      entityId: SK_ID,
+      details: { hasPrompt: true },
+    });
+    expect(JSON.stringify(event)).not.toMatch(/Standardreferat|Hemmelig|Jensen/);
+  });
+
+  it('does not emit on validation failure', async () => {
+    await POST(makeJsonReq(BASE_URL, 'POST', {}));
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('still returns 201 when the audit write is dropped', async () => {
+    mockCreate.mockResolvedValue(FAKE_SKABELON);
+    mockRecord.mockResolvedValue({ status: 'dropped', code: 'db_error' });
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { name: 'Test' }));
+    expect(res.status).toBe(201);
   });
 });

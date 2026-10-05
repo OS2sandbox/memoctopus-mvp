@@ -6,6 +6,9 @@ import { detectPiiInSegments } from '@/lib/ai/pii';
 import { groupIntoChapters } from '@/lib/ai/chapters';
 import { TranscriptSegment, PiiReplacement } from '@/types';
 import type { TranscriptChapter } from '@/lib/ai/chapters';
+import { withHandler } from '@/lib/api-handler';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { asEntityUuid, elapsedMs, emitAudit, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
 
 export const maxDuration = 300;
 
@@ -15,7 +18,7 @@ function parseDuration(raw: string | null): number | null {
   return isNaN(n) ? null : Math.max(0, Math.min(7_200, n));
 }
 
-export async function POST(req: NextRequest) {
+async function postHandler(req: NextRequest) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -30,37 +33,81 @@ export async function POST(req: NextRequest) {
 
   const buffer = Buffer.from(await audioFile.arrayBuffer());
   const mimeType = audioFile.type || 'audio/webm';
+  const userId = session.user.id;
+  // Unverified client field: only a well-formed UUID becomes an audit entity.
+  const entityId = asEntityUuid(meetingId);
 
   let segments: TranscriptSegment[] = [];
   let piiReplacements: PiiReplacement[] = [];
 
+  const tTranscribe = Date.now();
   try {
     const provider = getTranscriptionProvider();
     // Pass the actual recording duration so timestamps reflect real wall-clock time,
     // not a bitrate estimate (Chrome records at ~200 kbps, not the assumed 64 kbps).
     segments = await provider.transcribe(buffer, mimeType, duration ?? undefined);
   } catch (err) {
-    console.error('Transcription error:', err);
+    safeLogError('transcribe', err);
+    await emitAudit(req, {
+      type: 'transcription.request',
+      actorUserId: userId,
+      outcome: 'error',
+      entityId,
+      details: {
+        mode: 'upload',
+        bytes: buffer.length,
+        ...(duration !== null ? { audioSeconds: duration } : {}),
+        durationMs: elapsedMs(tTranscribe),
+        outcomeCode: outcomeCodeOf(err),
+      },
+    });
     return NextResponse.json({ error: 'Transcription failed' }, { status: 500 });
   }
+  await emitAudit(req, {
+    type: 'transcription.request',
+    actorUserId: userId,
+    entityId,
+    details: {
+      mode: 'upload',
+      bytes: buffer.length,
+      ...(duration !== null ? { audioSeconds: duration } : {}),
+      durationMs: elapsedMs(tTranscribe),
+    },
+  });
 
   try {
     const piiResult = await detectPiiInSegments(segments);
     piiReplacements = piiResult.replacements;
   } catch (piiErr) {
-    console.error('PII detection failed (non-fatal):', piiErr);
+    safeLogError('transcribe pii (non-fatal)', piiErr);
   }
 
   let chapters: TranscriptChapter[] = [];
-  try {
-    if (segments.length > 0) {
+  if (segments.length > 0) {
+    const tChapters = Date.now();
+    try {
       chapters = await groupIntoChapters(segments);
+      await emitAudit(req, {
+        type: 'chapters.request',
+        actorUserId: userId,
+        entityId,
+        details: { segmentCount: segments.length, chapterCount: chapters.length, durationMs: elapsedMs(tChapters) },
+      });
+    } catch (chapErr) {
+      safeLogError('transcribe chapters (non-fatal)', chapErr);
+      await emitAudit(req, {
+        type: 'chapters.request',
+        actorUserId: userId,
+        outcome: 'error',
+        entityId,
+        details: { segmentCount: segments.length, durationMs: elapsedMs(tChapters), outcomeCode: outcomeCodeOf(chapErr) },
+      });
     }
-  } catch (chapErr) {
-    console.error('Chapter generation failed (non-fatal):', chapErr);
   }
 
   const rawText = segments.map((s) => s.text).join(' ');
 
   return NextResponse.json({ segments, piiReplacements, rawText, chapters });
 }
+
+export const POST = withHandler('transcribe', postHandler);

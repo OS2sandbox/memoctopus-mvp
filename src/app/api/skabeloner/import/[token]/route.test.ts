@@ -12,6 +12,8 @@ const mockEnsureSharedSkabelonerTable = vi.hoisted(() => vi.fn().mockResolvedVal
 const mockDbSelect = vi.hoisted(() => vi.fn());
 const mockCreateSkabelon = vi.hoisted(() => vi.fn());
 const mockGetShareConfig = vi.hoisted(() => vi.fn());
+const mockRecord = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audit/record', () => ({ recordServerEvent: mockRecord }));
 
 vi.mock('@/lib/skabeloner/shared-table', () => ({
   ensureSharedSkabelonerTable: mockEnsureSharedSkabelonerTable,
@@ -43,6 +45,7 @@ import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 
+const NEW_ID = '11111111-2222-4333-8444-555555555555';
 const BASE_URL = 'http://localhost/api/skabeloner/import/abc123';
 
 const sharedRow = {
@@ -122,7 +125,9 @@ describe('POST /api/skabeloner/import/[token]', () => {
     mockGetShareConfig.mockReturnValue({ link: true });
     setupDbReturning([sharedRow]);
     mockCreateSkabelon.mockReset();
-    mockCreateSkabelon.mockResolvedValue({ ...sharedRow, id: 'sk-new' });
+    mockCreateSkabelon.mockResolvedValue({ ...sharedRow, id: NEW_ID });
+    mockRecord.mockReset();
+    mockRecord.mockResolvedValue({ status: 'stored' });
   });
 
   it('returns 401 when not authenticated', async () => {
@@ -148,7 +153,7 @@ describe('POST /api/skabeloner/import/[token]', () => {
     const res = await POST(makeJsonReq(BASE_URL, 'POST'), makeCtx());
     expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body.skabelon.id).toBe('sk-new');
+    expect(body.skabelon.id).toBe(NEW_ID);
     expect(mockCreateSkabelon).toHaveBeenCalledWith('user-123', expect.objectContaining({ name: 'Bestyrelsesmøde' }));
   });
 
@@ -158,5 +163,34 @@ describe('POST /api/skabeloner/import/[token]', () => {
     expect(res.status).toBe(500);
     const body = await res.json();
     expect(typeof body.error).toBe('string');
+  });
+
+  it('emits template.import once for the NEW copy, without token or content', async () => {
+    await POST(makeJsonReq(BASE_URL, 'POST'), makeCtx());
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    const [, event] = mockRecord.mock.calls[0];
+    expect(event).toEqual({
+      type: 'template.import',
+      actorUserId: 'user-123',
+      entityId: NEW_ID,
+      details: { kind: 'link' },
+    });
+    expect(JSON.stringify(event)).not.toMatch(/abc123|Bestyrelsesmøde|Lav et referat/);
+  });
+
+  it('does not emit for 403/404 or a preview GET', async () => {
+    mockGetShareConfig.mockReturnValueOnce({ link: false });
+    await POST(makeJsonReq(BASE_URL, 'POST'), makeCtx());
+    setupDbReturning([]);
+    await POST(makeJsonReq(BASE_URL, 'POST'), makeCtx());
+    setupDbReturning([sharedRow]);
+    await GET(makeJsonReq(BASE_URL, 'GET'), makeCtx());
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('still returns 201 when the audit write is dropped', async () => {
+    mockRecord.mockResolvedValue({ status: 'dropped', code: 'db_error' });
+    const res = await POST(makeJsonReq(BASE_URL, 'POST'), makeCtx());
+    expect(res.status).toBe(201);
   });
 });

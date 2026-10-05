@@ -77,7 +77,7 @@ describe('GET /api/bot/status/[meetingId]', () => {
   });
 
   it('returns connecting fallback when bot service is unreachable', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     const connErr = new Error('ECONNREFUSED');
     mockFetch.mockRejectedValueOnce(connErr);
@@ -85,7 +85,9 @@ describe('GET /api/bot/status/[meetingId]', () => {
     const data = await res.json();
     expect(res.status).toBe(200);
     expect(data.status).toBe('forbinder');
-    expect(warnSpy).toHaveBeenCalledWith('[bot/status] unreachable, returning forbinder:', connErr);
-    warnSpy.mockRestore();
+    const line = String(errorSpy.mock.calls[0][0]);
+    expect(line).toContain('[bot/status unreachable');
+    expect(line).not.toContain('ECONNREFUSED');
+    errorSpy.mockRestore();
   });
 });

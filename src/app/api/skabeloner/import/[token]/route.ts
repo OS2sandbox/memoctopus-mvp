@@ -8,6 +8,7 @@ import { createSkabelon } from '@/lib/skabeloner/server';
 import { getShareConfig } from '@/lib/skabeloner/share-config';
 import { ensureSharedSkabelonerTable } from '@/lib/skabeloner/shared-table';
 import { withHandler } from '@/lib/api-handler';
+import { recordServerEvent } from '@/lib/audit/record';
 
 type Ctx = { params: Promise<{ token: string }> };
 
@@ -47,7 +48,7 @@ async function getHandler(_req: NextRequest, { params }: Ctx): Promise<NextRespo
 }
 
 // Import a shared Skabelon as a copy into the caller's own list.
-async function postHandler(_req: NextRequest, { params }: Ctx): Promise<NextResponse> {
+async function postHandler(req: NextRequest, { params }: Ctx): Promise<NextResponse> {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!getShareConfig().link) {
@@ -68,6 +69,13 @@ async function postHandler(_req: NextRequest, { params }: Ctx): Promise<NextResp
     includeDato: shared.includeDato,
   });
 
+  // Entity is the NEW copy; the share token is never logged.
+  await recordServerEvent(req, {
+    type: 'template.import',
+    actorUserId: session.user.id,
+    entityId: skabelon.id,
+    details: { kind: 'link' },
+  });
   return NextResponse.json({ skabelon }, { status: 201 });
 }
 

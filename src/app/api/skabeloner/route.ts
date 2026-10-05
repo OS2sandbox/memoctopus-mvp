@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { listSkabeloner, createSkabelon } from '@/lib/skabeloner/server';
 import { withHandler } from '@/lib/api-handler';
+import { recordServerEvent } from '@/lib/audit/record';
 
 async function getHandler(): Promise<NextResponse> {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -28,6 +29,12 @@ async function postHandler(req: NextRequest): Promise<NextResponse> {
     includeBeslutningspunkter: body.includeBeslutningspunkter,
     includeDagsorden: body.includeDagsorden,
     includeDato: body.includeDato,
+  });
+  await recordServerEvent(req, {
+    type: 'template.create',
+    actorUserId: session.user.id,
+    entityId: skabelon.id,
+    details: { hasPrompt: skabelon.prompt.trim().length > 0 },
   });
   return NextResponse.json({ skabelon }, { status: 201 });
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { storePendingAudio, storePendingTranscript, markNoRecording } from '@/lib/bot-pending-audio';
 import { processBotRecording } from '@/lib/bot-transcribe';
 import { withHandler } from '@/lib/api-handler';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 // Called by the bot service — authenticated with BOT_INTERNAL_SECRET, not a user session.
 //
@@ -26,7 +27,7 @@ export const POST = withHandler('bot/audio-upload', async (req: NextRequest) => 
     // Log failures: a silently dropped markNoRecording leaves the client polling
     // indefinitely instead of showing the correct cancelled state.
     await markNoRecording(body.meetingId).catch((err) => {
-      console.error('[bot/audio-upload] markNoRecording failed for', body.meetingId, err);
+      safeLogError('bot/audio-upload markNoRecording', err);
     });
     return NextResponse.json({ ok: true });
   }
@@ -53,7 +54,7 @@ export const POST = withHandler('bot/audio-upload', async (req: NextRequest) => 
       if (Array.isArray(parsed)) participants = parsed.filter((p) => typeof p === 'string');
     } catch (err) {
       // Non-fatal: participants list is best-effort metadata; missing it does not block transcription.
-      console.warn('[bot/audio-upload] could not parse participants JSON for', meetingId, err);
+      safeLogError('bot/audio-upload participants JSON unparseable (non-fatal)', err);
     }
   }
 
@@ -68,7 +69,7 @@ export const POST = withHandler('bot/audio-upload', async (req: NextRequest) => 
       hasRecording: true,
     });
   } catch (err) {
-    console.error('[bot/audio-upload] failed to stash audio:', err);
+    safeLogError('bot/audio-upload stash audio', err);
     return NextResponse.json({ error: 'Failed to store audio' }, { status: 500 });
   }
 
@@ -79,7 +80,7 @@ export const POST = withHandler('bot/audio-upload', async (req: NextRequest) => 
   // must not block on minutes of inference, and failures degrade to the client-side
   // fallback path.
   await storePendingTranscript(meetingId, { status: 'processing' }).catch((err) => {
-    console.error('[bot/audio-upload] storePendingTranscript failed for', meetingId, err);
+    safeLogError('bot/audio-upload storePendingTranscript', err);
   });
   void processBotRecording(meetingId, buffer, mimeType);
 

@@ -3,6 +3,8 @@ import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { readPendingMeta, readPendingAudio, deletePendingAudio, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
 import { withHandler } from '@/lib/api-handler';
+import { recordServerEvent } from '@/lib/audit/record';
+import { meetingEntity } from '../../_audit';
 
 // Client pulls down a finished Teams-bot recording so it can be saved into IndexedDB
 // and transcribed client-side. The bot stashes audio here via /api/bot/audio-upload.
@@ -18,7 +20,7 @@ import { withHandler } from '@/lib/api-handler';
 export const GET = withHandler(
   'bot/audio',
   async (
-    _req: NextRequest,
+    req: NextRequest,
     { params }: { params: Promise<{ meetingId: string }> },
   ) => {
     const session = await auth.api.getSession({ headers: await headers() });
@@ -45,6 +47,14 @@ export const GET = withHandler(
     if (!buffer) return NextResponse.json({ status: 'pending' }, { status: 404 });
 
     await deletePendingAudio(meetingId);
+
+    // Only the hand-off of an actual recording counts as a collect.
+    await recordServerEvent(req, {
+      type: 'bot.audio_collect',
+      actorUserId: session.user.id,
+      ...meetingEntity(meetingId),
+      details: { bytes: buffer.byteLength },
+    });
 
     return new NextResponse(new Uint8Array(buffer), {
       status: 200,

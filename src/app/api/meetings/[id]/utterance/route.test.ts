@@ -17,7 +17,15 @@ vi.mock('@/lib/ai/transcription', () => ({
 }));
 
 import { NextRequest } from 'next/server';
+const mockRecord = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
+  recordServerEvent: mockRecord,
+}));
+
 import { POST } from './route';
+import { liveTranscriptionCoalescer } from './coalesce';
+import { expectValidMetadataOnly, leakyError } from '@/app/api/meetings/ai-audit.test-utils';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION } from '@/test/helpers';
 
@@ -174,5 +182,98 @@ describe('POST /api/meetings/[id]/utterance', () => {
 
       await expect(POST(makeAudioRequest(5_000), PARAMS)).resolves.toBeDefined();
     });
+  });
+});
+
+describe('audit: transcription.request (live, coalesced)', () => {
+  const MEETING = '11111111-2222-4333-8444-555555555555';
+  const OTHER_MEETING = '99999999-2222-4333-8444-555555555555';
+  const paramsFor = (id: string) => ({ params: Promise.resolve({ id }) });
+  const events = () => mockRecord.mock.calls.map((c) => c[1]);
+  beforeEach(() => {
+    mockRecord.mockReset();
+    mockRecord.mockResolvedValue({ status: 'stored' });
+  });
+
+  beforeEach(() => {
+    liveTranscriptionCoalescer.clear();
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    mockTranscribeRaw.mockReset();
+    mockTranscribeRaw.mockResolvedValue({ text: 'Hemmelig udtalelse fra Alice', latencyMs: 5 });
+  });
+
+  it('emits one event (mode live) with duration only and no content', async () => {
+    const res = await POST(makeAudioRequest(5_000), paramsFor(MEETING));
+    expect(res.status).toBe(200);
+
+    expect(events()).toHaveLength(1);
+    const e = events()[0];
+    expect(e).toMatchObject({
+      type: 'transcription.request',
+      actorUserId: 'user-123',
+      entityId: MEETING,
+      details: { mode: 'live' },
+    });
+    expect(typeof e.details.durationMs).toBe('number');
+    expect(e.details).not.toHaveProperty('outcomeCode');
+    expectValidMetadataOnly(e, ['Hemmelig', 'Alice', 'audio.wav']);
+  });
+
+  it('writes at most one event per actor+meeting across many utterances', async () => {
+    for (let i = 0; i < 25; i++) await POST(makeAudioRequest(5_000), paramsFor(MEETING));
+    expect(mockTranscribeRaw).toHaveBeenCalledTimes(25);
+    expect(events()).toHaveLength(1);
+  });
+
+  it('keeps separate events for another meeting and for another user', async () => {
+    await POST(makeAudioRequest(5_000), paramsFor(MEETING));
+    await POST(makeAudioRequest(5_000), paramsFor(OTHER_MEETING));
+    mockGetSession.mockResolvedValue({ user: { id: 'user-456' } } as never);
+    await POST(makeAudioRequest(5_000), paramsFor(MEETING));
+    expect(events()).toHaveLength(3);
+    expect(events().map((e) => e.actorUserId)).toEqual(['user-123', 'user-123', 'user-456']);
+  });
+
+  it('does not emit for the hallucination-filtered response differently: still one coalesced event', async () => {
+    mockTranscribeRaw.mockResolvedValue({ text: 'tak tak tak tak tak okay', latencyMs: 0 });
+    const res = await POST(makeAudioRequest(5_000), paramsFor(MEETING));
+    expect((await res.json()).text).toBe('');
+    expect(events()).toHaveLength(1);
+  });
+
+  it('omits the entity for a non-UUID id', async () => {
+    await POST(makeAudioRequest(5_000), PARAMS);
+    expect(events()[0].entityId).toBeUndefined();
+    expectValidMetadataOnly(events()[0], ['meet-1']);
+  });
+
+  it('records outcome error with a code, never the message, and keeps the 502', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockTranscribeRaw.mockRejectedValueOnce(leakyError('Hemmelig udtalelse', { status: 502 }));
+    const res = await POST(makeAudioRequest(5_000), paramsFor(MEETING));
+
+    expect(res.status).toBe(502);
+    expect(events()[0]).toMatchObject({ outcome: 'error', details: { mode: 'live', outcomeCode: 'http_502' } });
+    expectValidMetadataOnly(events()[0], ['Hemmelig']);
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('Hemmelig');
+    spy.mockRestore();
+  });
+
+  it('still answers 200 with the text when the audit write rejects', async () => {
+    mockRecord.mockRejectedValueOnce(new Error('db down'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await POST(makeAudioRequest(5_000), paramsFor(MEETING));
+    expect(res.status).toBe(200);
+    expect((await res.json()).text).toBe('Hemmelig udtalelse fra Alice');
+    warn.mockRestore();
+  });
+
+  it('emits nothing for 401, missing audio or a too-short clip', async () => {
+    mockGetSession.mockResolvedValueOnce(null as never);
+    await POST(makeAudioRequest(5_000), paramsFor(MEETING));
+    await POST(makeRequestWithoutAudio(), paramsFor(MEETING));
+    await POST(makeAudioRequest(1_999), paramsFor(MEETING));
+    expect(mockRecord).not.toHaveBeenCalled();
   });
 });

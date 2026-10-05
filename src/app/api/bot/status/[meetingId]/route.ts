@@ -2,16 +2,18 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { getBotServiceConfig, botFetch } from '@/lib/bot-service';
+import { withHandler } from '@/lib/api-handler';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 // Polls the live bot-service session status. Stateless: the client supplies the
 // sessionId (stored in its IndexedDB meeting record) as a query param. No DB.
 //
 // Returns a neutral 'forbinder' (connecting) state when no session is known yet
 // or the bot-service can't be reached, so the client keeps polling cleanly.
-export async function GET(
+export const GET = withHandler('bot/status', async (
   req: NextRequest,
   { params }: { params: Promise<{ meetingId: string }> },
-) {
+) => {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -35,7 +37,7 @@ export async function GET(
   try {
     res = await botFetch(bot, `/sessions/${sessionId}`);
   } catch (err) {
-    console.warn('[bot/status] unreachable, returning forbinder:', err);
+    safeLogError('bot/status unreachable, returning forbinder', err);
     return connecting();
   }
   if (!res.ok) return connecting();
@@ -61,4 +63,4 @@ export async function GET(
     participants,
     elapsed: botState.elapsed ?? 0,
   });
-}
+});

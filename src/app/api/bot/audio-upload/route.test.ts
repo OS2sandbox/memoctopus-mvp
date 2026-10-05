@@ -23,7 +23,6 @@ const mockProcess = vi.mocked(processBotRecording);
 const SECRET = 'test-bot-secret';
 
 const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
 beforeEach(() => {
   mockStore.mockReset().mockResolvedValue(undefined);
@@ -31,13 +30,11 @@ beforeEach(() => {
   mockMarkNoRecording.mockReset().mockResolvedValue(undefined);
   mockProcess.mockReset().mockResolvedValue(undefined);
   consoleErrorSpy.mockClear();
-  consoleWarnSpy.mockClear();
   process.env.BOT_INTERNAL_SECRET = SECRET;
 });
 
 afterEach(() => {
   consoleErrorSpy.mockClear();
-  consoleWarnSpy.mockClear();
 });
 
 function jsonReq(body: unknown, auth = `Bearer ${SECRET}`): NextRequest {
@@ -129,11 +126,12 @@ describe('POST /api/bot/audio-upload', () => {
     const res = await POST(jsonReq({ meetingId: 'm1', hasRecording: false }));
     // Still returns 200 (best-effort), but the error must be logged.
     expect(res.status).toBe(200);
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('markNoRecording'),
-      'm1',
-      expect.any(Error),
-    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('markNoRecording'));
+    // safeLogError: error name only, never the message ('fs error') or the meeting id.
+    const line = String(consoleErrorSpy.mock.calls[0][0]);
+    expect(line).toContain('name=Error');
+    expect(line).not.toContain('fs error');
+    expect(line).not.toContain('m1');
   });
 
   it('logs a warning when participants JSON is malformed, but still stores audio', async () => {
@@ -144,11 +142,8 @@ describe('POST /api/bot/audio-upload', () => {
 
     const res = await POST(formReq(form));
     expect(res.status).toBe(200);
-    expect(consoleWarnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('participants'),
-      'm1',
-      expect.any(SyntaxError),
-    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('participants'));
+    expect(String(consoleErrorSpy.mock.calls[0][0])).toContain('name=SyntaxError');
     // Participants defaults to empty array — stash still proceeds.
     expect(mockStore).toHaveBeenCalledTimes(1);
     expect(mockStore.mock.calls[0][2]).toMatchObject({ participants: [] });
@@ -162,11 +157,8 @@ describe('POST /api/bot/audio-upload', () => {
 
     const res = await POST(formReq(form));
     expect(res.status).toBe(200);
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('storePendingTranscript'),
-      'm1',
-      expect.any(Error),
-    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('storePendingTranscript'));
+    expect(String(consoleErrorSpy.mock.calls[0][0])).not.toContain('write error');
     // Fire-and-forget processing should still be kicked off despite transcript marker failure.
     expect(mockProcess).toHaveBeenCalledTimes(1);
   });

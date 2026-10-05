@@ -3,8 +3,25 @@ import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { getSkabelon, updateSkabelon, deleteSkabelon } from '@/lib/skabeloner/server';
 import { withHandler } from '@/lib/api-handler';
+import { recordServerEvent } from '@/lib/audit/record';
+import type { Skabelon } from '@/types';
 
 type Ctx = { params: Promise<{ id: string }> };
+
+const TRACKED_FIELDS = [
+  'name',
+  'description',
+  'prompt',
+  'includeDeltagere',
+  'includeBeslutningspunkter',
+  'includeDagsorden',
+  'includeDato',
+] as const;
+
+// Field NAMES only: the audit log must never carry the values (names, prompt text).
+function changedFields(prev: Skabelon, next: Skabelon) {
+  return TRACKED_FIELDS.filter((f) => prev[f] !== next[f]);
+}
 
 export const GET = withHandler('skabeloner/[id] GET', async (_req: NextRequest, { params }: Ctx) => {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -25,6 +42,9 @@ export const PUT = withHandler('skabeloner/[id] PUT', async (req: NextRequest, {
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   if (!name) return NextResponse.json({ error: 'Navn er påkrævet' }, { status: 400 });
 
+  const prev = await getSkabelon(session.user.id, id);
+  if (!prev) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
+
   const skabelon = await updateSkabelon(session.user.id, id, {
     name,
     description: body.description,
@@ -35,15 +55,22 @@ export const PUT = withHandler('skabeloner/[id] PUT', async (req: NextRequest, {
     includeDato: body.includeDato,
   });
   if (!skabelon) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
+  await recordServerEvent(req, {
+    type: 'template.update',
+    actorUserId: session.user.id,
+    entityId: skabelon.id,
+    details: { changedFields: changedFields(prev, skabelon) },
+  });
   return NextResponse.json({ skabelon });
 });
 
-export const DELETE = withHandler('skabeloner/[id] DELETE', async (_req: NextRequest, { params }: Ctx) => {
+export const DELETE = withHandler('skabeloner/[id] DELETE', async (req: NextRequest, { params }: Ctx) => {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { id } = await params;
   const ok = await deleteSkabelon(session.user.id, id);
   if (!ok) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
+  await recordServerEvent(req, { type: 'template.delete', actorUserId: session.user.id, entityId: id });
   return NextResponse.json({ ok: true });
 });

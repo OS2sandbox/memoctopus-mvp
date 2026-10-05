@@ -14,7 +14,15 @@ vi.mock('@/lib/ai/clarifications', () => ({
   analyzeClarifications: mockAnalyzeClarifications,
 }));
 
+const mockRecord = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
+  recordServerEvent: mockRecord,
+}));
+
 import { POST } from './route';
+import { clarificationCoalescer } from './coalesce';
+import { expectValidMetadataOnly, leakyError } from '@/app/api/meetings/ai-audit.test-utils';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
 
@@ -92,5 +100,99 @@ describe('POST /api/meetings/[id]/clarifications', () => {
     await POST(makeJsonReq(BASE_URL, 'POST', { transcript: 'budgetmøde transskription' }), PARAMS);
 
     expect(mockAnalyzeClarifications).toHaveBeenCalledWith('budgetmøde transskription');
+  });
+});
+
+describe('audit: clarifications.request', () => {
+  const MEETING = '11111111-2222-4333-8444-555555555555';
+  const UUID_PARAMS = { params: Promise.resolve({ id: MEETING }) };
+  const events = () => mockRecord.mock.calls.map((c) => c[1]);
+  beforeEach(() => {
+    mockRecord.mockReset();
+    mockRecord.mockResolvedValue({ status: 'stored' });
+    clarificationCoalescer.clear();
+  });
+
+  beforeEach(() => {
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    mockAnalyzeClarifications.mockReset();
+  });
+
+  it('emits one event with the question count and duration only', async () => {
+    mockAnalyzeClarifications.mockResolvedValueOnce(sampleClarifications);
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { transcript: 'Budget 2024 er uklart' }), UUID_PARAMS);
+    expect(res.status).toBe(200);
+
+    expect(events()).toHaveLength(1);
+    const e = events()[0];
+    expect(e).toMatchObject({
+      type: 'clarifications.request',
+      actorUserId: 'user-123',
+      entityId: MEETING,
+      details: { questionCount: 2 },
+    });
+    expect(typeof e.details.durationMs).toBe('number');
+    expectValidMetadataOnly(e, ['Budget', 'ansvarlig', 'deadline', 'Personalemøde']);
+  });
+
+  it('writes one event per actor+meeting per hour however often the recording screen polls, but keeps success and error apart', async () => {
+    mockAnalyzeClarifications.mockResolvedValue(sampleClarifications);
+    for (let i = 0; i < 12; i++) {
+      const res = await POST(makeJsonReq(BASE_URL, 'POST', { transcript: `tekst ${i}` }), UUID_PARAMS);
+      expect(res.status).toBe(200);
+      expect((await res.json()).clarifications).toHaveLength(2);
+    }
+    expect(mockAnalyzeClarifications).toHaveBeenCalledTimes(12);
+    expect(events()).toHaveLength(1);
+
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockAnalyzeClarifications.mockRejectedValue(new Error('down'));
+    for (let i = 0; i < 5; i++) await POST(makeJsonReq(BASE_URL, 'POST', { transcript: 'tekst' }), UUID_PARAMS);
+    spy.mockRestore();
+    expect(events()).toHaveLength(2);
+    expect(events()[1]).toMatchObject({ outcome: 'error' });
+
+    // Another meeting is not suppressed by the first.
+    mockAnalyzeClarifications.mockResolvedValue([]);
+    await POST(makeJsonReq(BASE_URL, 'POST', { transcript: 'tekst' }), { params: Promise.resolve({ id: '99999999-2222-4333-8444-555555555555' }) });
+    expect(events()).toHaveLength(3);
+  });
+
+  it('omits the entity for a non-UUID id', async () => {
+    mockAnalyzeClarifications.mockResolvedValueOnce([]);
+    await POST(makeJsonReq(BASE_URL, 'POST', { transcript: 'tekst' }), PARAMS);
+    expect(events()[0].entityId).toBeUndefined();
+    expectValidMetadataOnly(events()[0], ['meet-1']);
+  });
+
+  it('records outcome error with a code, never the message, and keeps the empty fallback', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockAnalyzeClarifications.mockRejectedValueOnce(leakyError('Budget 2024', { status: 500 }));
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { transcript: 'Budget 2024' }), UUID_PARAMS);
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).clarifications).toEqual([]);
+    expect(events()[0]).toMatchObject({ outcome: 'error', details: { outcomeCode: 'http_500' } });
+    expectValidMetadataOnly(events()[0], ['Budget']);
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('Budget');
+    spy.mockRestore();
+  });
+
+  it('still answers when the audit write rejects', async () => {
+    mockAnalyzeClarifications.mockResolvedValueOnce(sampleClarifications);
+    mockRecord.mockRejectedValueOnce(new Error('db down'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { transcript: 'tekst' }), UUID_PARAMS);
+    expect(res.status).toBe(200);
+    expect((await res.json()).clarifications).toHaveLength(2);
+    warn.mockRestore();
+  });
+
+  it('emits nothing for 401 or an empty transcript', async () => {
+    mockGetSession.mockResolvedValueOnce(null as never);
+    await POST(makeJsonReq(BASE_URL, 'POST', { transcript: 'tekst' }), UUID_PARAMS);
+    await POST(makeJsonReq(BASE_URL, 'POST', { transcript: '  ' }), UUID_PARAMS);
+    expect(mockRecord).not.toHaveBeenCalled();
   });
 });

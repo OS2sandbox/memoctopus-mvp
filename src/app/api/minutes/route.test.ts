@@ -21,7 +21,14 @@ vi.mock('@/lib/skabeloner/server', () => ({
   getDefaultSkabelon: mockGetDefaultSkabelon,
 }));
 
+const mockRecord = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
+  recordServerEvent: mockRecord,
+}));
+
 import { POST } from './route';
+import { expectValidMetadataOnly, leakyError } from '@/app/api/meetings/ai-audit.test-utils';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
 
@@ -143,5 +150,121 @@ describe('POST /api/minutes', () => {
     expect(body).toHaveProperty('error');
     // Must be JSON (not HTML) so the client can parse it without crashing.
     expect(typeof body.error).toBe('string');
+  });
+});
+
+describe('audit: minutes.generate', () => {
+  const MEETING = '11111111-2222-4333-8444-555555555555';
+  const TEMPLATE = '22222222-3333-4444-8555-666666666666';
+  const events = () => mockRecord.mock.calls.map((c) => c[1]);
+
+  beforeEach(() => {
+    mockRecord.mockReset();
+    mockRecord.mockResolvedValue({ status: 'stored' });
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    mockGenerateReferatBody.mockReset();
+    mockGenerateReferatBody.mockResolvedValue(sampleContent);
+    mockGetSkabelon.mockReset();
+    mockGetDefaultSkabelon.mockReset();
+    mockGetDefaultSkabelon.mockResolvedValue({ ...defaultSkabelon, id: TEMPLATE });
+  });
+
+  const CONTENT_STRINGS = ['Vi besluttede', 'Bestyrelsesmøde', 'Lav et referat', 'Gå videre', 'Alice'];
+
+  it('emits one event with the default template as secondary entity and no meeting entity when none is sent', async () => {
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, participants: ['Alice'] }));
+    expect(res.status).toBe(200);
+
+    expect(events()).toHaveLength(1);
+    const e = events()[0];
+    expect(e).toMatchObject({
+      type: 'minutes.generate',
+      actorUserId: 'user-123',
+      secondaryEntityId: TEMPLATE,
+      details: { templateSource: 'default', segmentCount: 1 },
+    });
+    expect(e.entityId).toBeUndefined();
+    expect(e.outcome ?? 'success').toBe('success');
+    expect(typeof e.details.durationMs).toBe('number');
+    expect(e.details).not.toHaveProperty('outcomeCode');
+    expectValidMetadataOnly(e, CONTENT_STRINGS);
+  });
+
+  it('marks an explicitly chosen template as personal and records a valid meeting id', async () => {
+    mockGetSkabelon.mockResolvedValueOnce({ ...defaultSkabelon, id: TEMPLATE, isDefault: false });
+    await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, skabelonId: TEMPLATE, meetingId: MEETING }));
+
+    const e = events()[0];
+    expect(e).toMatchObject({ entityId: MEETING, secondaryEntityId: TEMPLATE, details: { templateSource: 'personal' } });
+    expectValidMetadataOnly(e, CONTENT_STRINGS);
+  });
+
+  it('reports "default" when a stale template id falls back to the default', async () => {
+    mockGetSkabelon.mockResolvedValueOnce(null);
+    await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, skabelonId: 'gone' }));
+    expect(events()[0].details.templateSource).toBe('default');
+  });
+
+  it('reports "none" and no secondary entity for "Ingen skabelon"', async () => {
+    await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, skabelonId: '' }));
+    const e = events()[0];
+    expect(e.details.templateSource).toBe('none');
+    expect(e.secondaryEntityId).toBeUndefined();
+    expectValidMetadataOnly(e);
+  });
+
+  it('never uses a non-UUID meeting id or template id as an entity (the event stays valid)', async () => {
+    mockGetDefaultSkabelon.mockResolvedValueOnce(defaultSkabelon); // id 'sk-default'
+    await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, meetingId: 'Referat om sag 42' }));
+
+    const e = events()[0];
+    expect(e.entityId).toBeUndefined();
+    expect(e.secondaryEntityId).toBeUndefined();
+    expectValidMetadataOnly(e, ['sag 42', 'sk-default']);
+  });
+
+  it('records outcome error with a code, never the error message, and still answers 500', async () => {
+    mockGenerateReferatBody.mockRejectedValueOnce(
+      leakyError('Vi besluttede at gå videre med Alice', { status: 429, code: 'rate_limit_exceeded' }),
+    );
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, participants: ['Alice'] }));
+
+    expect(res.status).toBe(500);
+    expect(events()).toHaveLength(1);
+    const e = events()[0];
+    expect(e.outcome).toBe('error');
+    expect(e.details.outcomeCode).toBe('rate_limit_exceeded');
+    expectValidMetadataOnly(e, CONTENT_STRINGS);
+  });
+
+  it('does not log the AI error message to the server log', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockGenerateReferatBody.mockRejectedValueOnce(leakyError('Vi besluttede at gå videre'));
+    await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('Vi besluttede');
+    spy.mockRestore();
+  });
+
+  it('still answers 200 with the minutes when the audit write rejects', async () => {
+    mockRecord.mockRejectedValueOnce(new Error('db down'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).content).toEqual(sampleContent);
+    warn.mockRestore();
+  });
+
+  it('still answers 200 when the event is dropped as invalid', async () => {
+    mockRecord.mockResolvedValueOnce({ status: 'dropped', code: 'invalid_details' });
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
+    expect(res.status).toBe(200);
+  });
+
+  it('emits nothing for unauthenticated or invalid requests', async () => {
+    mockGetSession.mockResolvedValueOnce(null as never);
+    await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
+    await POST(makeJsonReq(BASE_URL, 'POST', {}));
+    expect(mockRecord).not.toHaveBeenCalled();
   });
 });
