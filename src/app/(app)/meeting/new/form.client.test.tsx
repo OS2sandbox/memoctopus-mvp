@@ -229,6 +229,7 @@ describe('NewMeetingPage — Record mode submit', () => {
         participants: undefined,
         source: 'local',
         status: 'recording',
+        origin: 'live',
       });
     });
   });

@@ -131,6 +131,14 @@ describe('MeetingBotScreen', () => {
     });
   });
 
+  it('saves the polled roster as an automatic write, so it is not reported as a user participants edit', async () => {
+    routeFetch({ status: () => jsonOk({ status: 'optager', botStatus: 'recording', participants: ['Alice', 'Bob'], elapsed: 5 }) });
+    renderBot();
+    await waitFor(() => {
+      expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, { participants: ['Alice', 'Bob'] }, { automatic: true });
+    });
+  });
+
   it('shows error state when poll returns error status', async () => {
     routeFetch({ status: () => jsonOk({ status: 'error', botStatus: 'error', participants: [], elapsed: 0 }) });
     renderBot();
@@ -158,7 +166,7 @@ describe('MeetingBotScreen', () => {
       status: 'processing',
       botSession: null,
       audioDurationSeconds: 42,
-    }));
+    }), { automatic: true });
   });
 
   it('shows cancelled and discards the meeting when the bot has no recording', async () => {

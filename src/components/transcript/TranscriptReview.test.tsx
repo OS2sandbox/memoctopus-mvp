@@ -428,6 +428,42 @@ describe('TranscriptReview', () => {
       Object.defineProperty(window, 'location', { value: originalLocation, configurable: true });
     });
 
+    it('sends the meeting id to /api/minutes so the audit event carries the meeting entity', async () => {
+      const { getMeeting } = await import('@/lib/storage');
+      vi.mocked(getMeeting).mockResolvedValue({
+        id: 'meeting-abc',
+        title: 'Test møde',
+        status: 'review',
+        createdAt: new Date().toISOString(),
+      } as never);
+
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url === '/api/skabeloner') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ skabeloner: [] }) });
+        }
+        if (typeof url === 'string' && url.includes('/chapters')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ chapters: [] }) });
+        }
+        if (url === '/api/minutes') {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ content: { body: '# Referat' }, skabelonId: null }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+      });
+      global.fetch = fetchMock;
+
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(screen.getByText('generér referat →')).toBeInTheDocument());
+      await user.click(screen.getByText('generér referat →'));
+
+      await waitFor(() => expect(fetchMock.mock.calls.some((c) => c[0] === '/api/minutes')).toBe(true));
+      const call = fetchMock.mock.calls.find((c) => c[0] === '/api/minutes')!;
+      expect(JSON.parse(call[1].body as string).meetingId).toBe('meeting-abc');
+    });
+
     it('shows error message when minutes generation fails', async () => {
       const { getMeeting } = await import('@/lib/storage');
       vi.mocked(getMeeting).mockResolvedValue({

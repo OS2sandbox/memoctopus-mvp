@@ -71,6 +71,7 @@ export default function NewMeetingPage() {
         participants: participants.length > 0 ? participants : undefined,
         source: 'local',
         status: 'recording',
+        origin: 'live',
       });
       router.push(`/meeting/${meeting.id}?autostart=1`);
     } catch (err) {
