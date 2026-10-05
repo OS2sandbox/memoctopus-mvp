@@ -1,0 +1,223 @@
+{
+  "users": [
+    {
+      "extUuid": "9d3c0000-0000-4000-8000-000000000001",
+      "uuid": "7e5e0000-0000-4000-8000-000000000001",
+      "userId": "mette.e",
+      "name": "Mette Eksempelsen",
+      "email": "mette.e@example.dk",
+      "phone": "00000001",
+      "cpr": "0000000000",
+      "nemloginUuid": null,
+      "doNotInherit": false,
+      "disabled": false,
+      "positions": [
+        {
+          "name": "Kommunaldirektør",
+          "orgUnitUuid": "5a1b0000-0000-4000-8000-000000000001",
+          "titleUuid": "c0de0000-0000-4000-8000-000000000001",
+          "doNotInherit": false
+        }
+      ],
+      "functions": [],
+      "klePerforming": [],
+      "kleInterest": []
+    },
+    {
+      "extUuid": "9d3c0000-0000-4000-8000-000000000002",
+      "uuid": "7e5e0000-0000-4000-8000-000000000002",
+      "userId": "jens.t",
+      "name": "Jens Testesen",
+      "email": "jens.t@example.dk",
+      "phone": "00000002",
+      "cpr": "0000000000",
+      "nemloginUuid": null,
+      "doNotInherit": false,
+      "disabled": false,
+      "positions": [
+        {
+          "name": "Afdelingsleder",
+          "orgUnitUuid": "5a1b0000-0000-4000-8000-000000000002",
+          "titleUuid": "c0de0000-0000-4000-8000-000000000002",
+          "doNotInherit": false
+        },
+        {
+          "name": "Projektleder",
+          "orgUnitUuid": "5a1b0000-0000-4000-8000-000000000003",
+          "titleUuid": "c0de0000-0000-4000-8000-000000000003",
+          "doNotInherit": false
+        }
+      ],
+      "functions": [
+        {
+          "ouUuid": "5a1b0000-0000-4000-8000-000000000002",
+          "functionUuid": "f00d0000-0000-4000-8000-000000000001"
+        }
+      ],
+      "klePerforming": ["27.45.00"],
+      "kleInterest": ["27.48.00"]
+    },
+    {
+      "extUuid": "9d3c0000-0000-4000-8000-000000000003",
+      "uuid": "7e5e0000-0000-4000-8000-000000000003",
+      "userId": "anne.p",
+      "name": "Anne Prøvesen",
+      "email": "anne.p@example.dk",
+      "phone": "00000003",
+      "cpr": "0000000000",
+      "nemloginUuid": null,
+      "doNotInherit": false,
+      "disabled": false,
+      "positions": [
+        {
+          "name": "Sagsbehandler",
+          "orgUnitUuid": "5a1b0000-0000-4000-8000-000000000003",
+          "titleUuid": "c0de0000-0000-4000-8000-000000000004",
+          "doNotInherit": false
+        },
+        {
+          "name": "Studentermedhjælper",
+          "orgUnitUuid": "5a1b0000-0000-4000-8000-000000000004",
+          "titleUuid": "c0de0000-0000-4000-8000-000000000005",
+          "doNotInherit": false
+        }
+      ],
+      "functions": [],
+      "klePerforming": [],
+      "kleInterest": []
+    },
+    {
+      "extUuid": "9d3c0000-0000-4000-8000-000000000004",
+      "uuid": "7e5e0000-0000-4000-8000-000000000004",
+      "userId": "lars.f",
+      "name": "Lars Fiktivsen",
+      "email": "lars.f@example.dk",
+      "phone": "00000004",
+      "cpr": "0000000000",
+      "nemloginUuid": null,
+      "doNotInherit": false,
+      "disabled": false,
+      "positions": [
+        {
+          "name": "Økonomichef",
+          "orgUnitUuid": "5a1b0000-0000-4000-8000-000000000004",
+          "titleUuid": "c0de0000-0000-4000-8000-000000000002",
+          "doNotInherit": false
+        }
+      ],
+      "functions": [],
+      "klePerforming": [],
+      "kleInterest": []
+    },
+    {
+      "extUuid": "9d3c0000-0000-4000-8000-000000000005",
+      "uuid": "7e5e0000-0000-4000-8000-000000000005",
+      "userId": "sofie.s",
+      "name": "Sofie Syntetisk",
+      "email": "sofie.s@example.dk",
+      "phone": "00000005",
+      "cpr": "0000000000",
+      "nemloginUuid": null,
+      "doNotInherit": false,
+      "disabled": true,
+      "positions": [
+        {
+          "name": "Sagsbehandler",
+          "orgUnitUuid": "5a1b0000-0000-4000-8000-000000000002",
+          "titleUuid": "c0de0000-0000-4000-8000-000000000004",
+          "doNotInherit": false
+        }
+      ],
+      "functions": [],
+      "klePerforming": [],
+      "kleInterest": []
+    },
+    {
+      "extUuid": "9d3c0000-0000-4000-8000-000000000006",
+      "uuid": "7e5e0000-0000-4000-8000-000000000006",
+      "userId": "peter.d",
+      "name": "Peter Dummysen",
+      "email": "peter.d@example.dk",
+      "phone": "00000006",
+      "cpr": "0000000000",
+      "nemloginUuid": null,
+      "doNotInherit": true,
+      "disabled": false,
+      "positions": [
+        {
+          "name": "Konsulent",
+          "orgUnitUuid": "5a1b0000-0000-4000-8000-000000000003",
+          "titleUuid": "c0de0000-0000-4000-8000-000000000004",
+          "doNotInherit": true
+        }
+      ],
+      "functions": [],
+      "klePerforming": [],
+      "kleInterest": []
+    }
+  ],
+  "orgUnits": [
+    {
+      "uuid": "5a1b0000-0000-4000-8000-000000000001",
+      "name": "Eksempel Kommune",
+      "parentOrgUnitUuid": null,
+      "inheritKle": false,
+      "level": "LEVEL_1",
+      "klePerforming": [],
+      "kleInterest": [],
+      "manager": {
+        "uuid": "7e5e0000-0000-4000-8000-000000000001",
+        "userId": "mette.e"
+      },
+      "titleIdentifiers": ["c0de0000-0000-4000-8000-000000000001"]
+    },
+    {
+      "uuid": "5a1b0000-0000-4000-8000-000000000002",
+      "name": "Borgerservice",
+      "parentOrgUnitUuid": "5a1b0000-0000-4000-8000-000000000001",
+      "inheritKle": true,
+      "level": "LEVEL_2",
+      "klePerforming": ["27.45.00"],
+      "kleInterest": [],
+      "manager": {
+        "uuid": "7e5e0000-0000-4000-8000-000000000002",
+        "userId": "jens.t"
+      },
+      "titleIdentifiers": [
+        "c0de0000-0000-4000-8000-000000000002",
+        "c0de0000-0000-4000-8000-000000000004"
+      ]
+    },
+    {
+      "uuid": "5a1b0000-0000-4000-8000-000000000003",
+      "name": "Team Selvbetjening",
+      "parentOrgUnitUuid": "5a1b0000-0000-4000-8000-000000000002",
+      "inheritKle": true,
+      "level": "LEVEL_3",
+      "klePerforming": [],
+      "kleInterest": [],
+      "manager": null,
+      "titleIdentifiers": [
+        "c0de0000-0000-4000-8000-000000000003",
+        "c0de0000-0000-4000-8000-000000000004"
+      ]
+    },
+    {
+      "uuid": "5a1b0000-0000-4000-8000-000000000004",
+      "name": "Økonomi",
+      "parentOrgUnitUuid": "5a1b0000-0000-4000-8000-000000000001",
+      "inheritKle": false,
+      "level": "LEVEL_2",
+      "klePerforming": [],
+      "kleInterest": [],
+      "manager": {
+        "uuid": "7e5e0000-0000-4000-8000-000000000004",
+        "userId": "lars.f"
+      },
+      "titleIdentifiers": [
+        "c0de0000-0000-4000-8000-000000000002",
+        "c0de0000-0000-4000-8000-000000000005"
+      ]
+    }
+  ]
+}

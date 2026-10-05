@@ -1,0 +1,11 @@
+{
+  "nameID": "C=DK,O=00000000,CN=Sofie Syntetisk,Serial=9d3c0000-0000-4000-8000-000000000005",
+  "userRoles": ["referat_userrole_bruger"],
+  "systemRoles": ["referat_user"],
+  "dataRoles": [],
+  "functionRoles": [],
+  "roleMap": {
+    "referat_userrole_bruger": "Referat bruger (Referat)"
+  },
+  "disabled": true
+}
