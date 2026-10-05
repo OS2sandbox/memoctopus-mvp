@@ -1,0 +1,136 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// A minimal in-memory stand-in for the idb calls outbox.ts uses (no IndexedDB in node).
+const h = vi.hoisted(() => ({
+  dbs: new Map<string, Map<string, Record<string, unknown>>>(),
+  opened: [] as Array<{ name: string; version: number }>,
+  failOpen: false,
+}));
+
+vi.mock('idb', () => ({
+  openDB: vi.fn(async (name: string, version: number, opts?: { upgrade?: (db: unknown) => void }) => {
+    if (h.failOpen) throw new Error('blocked');
+    h.opened.push({ name, version });
+    const isNew = !h.dbs.has(name);
+    if (isNew) h.dbs.set(name, new Map());
+    const rows = h.dbs.get(name)!;
+    if (isNew) opts?.upgrade?.({ createObjectStore: () => ({ createIndex: () => {} }) });
+    const byQueued = () => [...rows.values()].sort((a, b) => (a.queuedAt as number) - (b.queuedAt as number));
+    return {
+      put: async (_s: string, v: Record<string, unknown>) => void rows.set(v.clientEventId as string, { ...v }),
+      get: async (_s: string, k: string) => rows.get(k),
+      delete: async (_s: string, k: string) => void rows.delete(k),
+      count: async () => rows.size,
+      getAllFromIndex: async () => byQueued().map((r) => ({ ...r })),
+      getAllKeysFromIndex: async (_s: string, _i: string, _q: unknown, n: number) =>
+        byQueued().slice(0, n).map((r) => r.clientEventId),
+    };
+  }),
+}));
+
+import {
+  addToOutbox,
+  backoffMs,
+  markFailed,
+  nextDueAt,
+  outboxAvailable,
+  outboxDbName,
+  OUTBOX_MAX_EVENTS,
+  OUTBOX_TTL_MS,
+  outboxSize,
+  removeFromOutbox,
+  takeDue,
+  __resetOutbox,
+} from './outbox';
+
+const ev = (n: number) => ({
+  clientEventId: `id-${n}`,
+  type: 'meeting.delete',
+  entityId: '11111111-2222-4333-8444-555555555555',
+  details: {},
+  occurredAt: '2026-10-05T12:00:00.000Z',
+});
+
+beforeEach(() => {
+  h.dbs.clear();
+  h.opened.length = 0;
+  h.failOpen = false;
+  __resetOutbox();
+  vi.stubGlobal('indexedDB', {});
+});
+
+describe('outbox', () => {
+  it('uses its own per-user database, separate from the meetings database', async () => {
+    await addToOutbox('u1', ev(1));
+    await addToOutbox('u2', ev(2));
+    expect(outboxDbName('u1')).toBe('referat-audit-outbox-u-u1');
+    expect(h.opened.map((o) => o.name).sort()).toEqual(['referat-audit-outbox-u-u1', 'referat-audit-outbox-u-u2']);
+    expect(h.opened.every((o) => !o.name.startsWith('referat-db'))).toBe(true);
+    expect((await takeDue('u1', 10)).map((e) => e.clientEventId)).toEqual(['id-1']);
+    expect((await takeDue('u2', 10)).map((e) => e.clientEventId)).toEqual(['id-2']);
+  });
+
+  it('returns events oldest first, limited, and only the due ones', async () => {
+    await addToOutbox('u', ev(1), 1000);
+    await addToOutbox('u', ev(2), 2000);
+    await addToOutbox('u', ev(3), 3000);
+    expect((await takeDue('u', 2, 4000)).map((e) => e.clientEventId)).toEqual(['id-1', 'id-2']);
+    await markFailed('u', ['id-1'], 4000);
+    expect((await takeDue('u', 10, 4000)).map((e) => e.clientEventId)).toEqual(['id-2', 'id-3']);
+    expect((await takeDue('u', 10, 4000 + backoffMs(1))).map((e) => e.clientEventId)).toEqual(['id-1', 'id-2', 'id-3']);
+  });
+
+  it('removes events and reports the size', async () => {
+    await addToOutbox('u', ev(1));
+    await addToOutbox('u', ev(2));
+    await removeFromOutbox('u', ['id-1']);
+    expect(await outboxSize('u')).toBe(1);
+  });
+
+  it('drops events older than 7 days when reading', async () => {
+    await addToOutbox('u', ev(1), 1000);
+    await addToOutbox('u', ev(2), 1000 + OUTBOX_TTL_MS);
+    const due = await takeDue('u', 10, 1000 + OUTBOX_TTL_MS + 1);
+    expect(due.map((e) => e.clientEventId)).toEqual(['id-2']);
+    expect(await outboxSize('u')).toBe(1);
+  });
+
+  it('is bounded: the oldest events are evicted beyond 1000', async () => {
+    for (let i = 0; i < OUTBOX_MAX_EVENTS + 5; i++) await addToOutbox('u', ev(i), i);
+    expect(await outboxSize('u')).toBe(OUTBOX_MAX_EVENTS);
+    const all = await takeDue('u', 2000, OUTBOX_MAX_EVENTS + 10);
+    expect(all[0].clientEventId).toBe('id-5');
+  });
+
+  it('backs off exponentially up to 15 minutes', () => {
+    expect([1, 2, 3, 4].map(backoffMs)).toEqual([5000, 10000, 20000, 40000]);
+    expect(backoffMs(30)).toBe(15 * 60 * 1000);
+  });
+
+  it('counts attempts and reports the earliest due time', async () => {
+    await addToOutbox('u', ev(1), 1000);
+    await markFailed('u', ['id-1'], 2000);
+    await markFailed('u', ['id-1'], 3000);
+    const [row] = await takeDue('u', 1, 3000 + backoffMs(2));
+    expect(row.attempts).toBe(2);
+    expect(await nextDueAt('u')).toBe(3000 + backoffMs(2));
+  });
+
+  it('never throws: a blocked IndexedDB just stores nothing', async () => {
+    h.failOpen = true;
+    expect(await addToOutbox('u', ev(1))).toBe(false);
+    expect(await takeDue('u', 10)).toEqual([]);
+    await expect(removeFromOutbox('u', ['x'])).resolves.toBeUndefined();
+    await expect(markFailed('u', ['x'])).resolves.toBeUndefined();
+    expect(await outboxSize('u')).toBe(0);
+    h.failOpen = false;
+    expect(await addToOutbox('u', ev(1))).toBe(true); // a failed open is not cached
+  });
+
+  it('is a no-op without IndexedDB (server, tests)', async () => {
+    vi.stubGlobal('indexedDB', undefined);
+    expect(outboxAvailable()).toBe(false);
+    expect(await addToOutbox('u', ev(1))).toBe(false);
+    expect(h.opened).toHaveLength(0);
+  });
+});

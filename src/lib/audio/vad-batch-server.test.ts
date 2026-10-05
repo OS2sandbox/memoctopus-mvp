@@ -107,6 +107,18 @@ describe('transcribeVadBatches', () => {
     expect(failedSeconds).toBe(27);
   });
 
+  it('logs only the error class for failed batches, never the message', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockTranscribeRaw.mockRejectedValue(Object.assign(new Error('body: Budget 2024 hemmeligt'), { status: 503 }));
+
+    await transcribeVadBatches([makeBatch(0)]);
+
+    expect(spy).toHaveBeenCalledTimes(2); // first wave + permanent failure
+    for (const call of spy.mock.calls) expect(call).toHaveLength(1);
+    expect(JSON.stringify(spy.mock.calls)).not.toMatch(/Budget|hemmeligt/);
+    spy.mockRestore();
+  });
+
   it('emits one progress event per batch with running counts', async () => {
     mockTranscribeRaw.mockResolvedValue({ text: 'hej', latencyMs: 1 });
     const events: BatchEvent[] = [];

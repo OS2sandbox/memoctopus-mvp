@@ -1,9 +1,16 @@
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { nextCookies } from 'better-auth/next-js';
+import { createAuthMiddleware } from 'better-auth/api';
 import { genericOAuth } from 'better-auth/plugins';
 import { db } from '@/lib/db';
-import { runLoginHooks } from '@/lib/authz/login-hook';
+import {
+  auditAuthFailure,
+  auditLogin,
+  auditLogout,
+  runLoginHooks,
+  type AuthHookContext,
+} from '@/lib/authz/login-hook';
 import { users, sessions, accounts, verifications } from '@/lib/db/schema';
 import {
   emailPasswordEnabled,
@@ -62,14 +69,30 @@ export const auth = betterAuth({
   // Identity capture / first-admin bootstrap / directory link. Fires after the
   // session row is committed; runLoginHooks never throws, so it cannot block a
   // login. No session.cookieCache: roles are resolved live per request.
+  // The audit* helpers share that contract (never throw, bounded wait).
   databaseHooks: {
     session: {
       create: {
-        after: async (session) => {
+        after: async (session, ctx) => {
           await runLoginHooks(session.userId);
+          // After the hooks above, so the actor snapshot sees a freshly linked org unit.
+          await auditLogin(session, ctx as AuthHookContext | null);
+        },
+      },
+      delete: {
+        // Fires for expiry cleanup and revocation too; auditLogout keeps only /sign-out.
+        after: async (session, ctx) => {
+          await auditLogout(session, ctx as AuthHookContext | null);
         },
       },
     },
+  },
+  // Failed sign-ins have no session, so they cannot come from databaseHooks.
+  // Returns nothing: it must never change the response.
+  hooks: {
+    after: createAuthMiddleware(async (ctx) => {
+      await auditAuthFailure(ctx as unknown as AuthHookContext);
+    }),
   },
   socialProviders: microsoft ? { microsoft } : {},
   // No `account.accountLinking` override on purpose. Adding providers to

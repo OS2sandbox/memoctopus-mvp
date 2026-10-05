@@ -49,18 +49,17 @@ describe('analyzeClarifications', () => {
     expect(result[0].question).toBe('Q?');
   });
 
-  it('returns empty array when JSON is invalid and logs the error', async () => {
+  it('returns empty array when JSON is invalid and logs the error class only', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     mockCreate.mockResolvedValueOnce(openaiResponse('not json'));
 
     const result = await analyzeClarifications('test');
 
     expect(result).toEqual([]);
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[clarifications]'),
-      expect.stringContaining('not json'),
-      expect.any(SyntaxError),
-    );
+    expect(consoleSpy).toHaveBeenCalledOnce();
+    expect(consoleSpy.mock.calls[0][0]).toContain('[clarifications parse failed]');
+    // The model reply and the SyntaxError text can quote the transcript.
+    expect(JSON.stringify(consoleSpy.mock.calls)).not.toContain('not json');
     consoleSpy.mockRestore();
   });
 

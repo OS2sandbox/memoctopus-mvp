@@ -2,6 +2,7 @@ import { transcribeWithVadBatches, transcribeEnsemble, isEnsembleDiarization } f
 import { getDiarizationProvider } from '@/lib/ai/diarization';
 import { assignSpeakers } from '@/lib/audio/merge-speakers';
 import { storePendingTranscript } from '@/lib/bot-pending-audio';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 // Server-side processing of a Teams-bot recording, kicked off the moment the bot
 // uploads — NOT when the user's browser eventually polls the audio down. The server
@@ -35,7 +36,7 @@ export async function processBotRecording(
     ]);
 
     if (transcription.status === 'rejected') {
-      console.error(`[bot-transcribe] ${meetingId} transcription failed:`, transcription.reason);
+      safeLogError(`bot-transcribe ${meetingId} transcription failed`, transcription.reason);
       await storePendingTranscript(meetingId, { status: 'failed' });
       return;
     }
@@ -43,7 +44,7 @@ export async function processBotRecording(
     const turns = diarization.status === 'fulfilled' ? diarization.value : [];
     if (diarization.status === 'rejected') {
       // Non-fatal: ship the transcript with default labels; the client can diarize.
-      console.error(`[bot-transcribe] ${meetingId} diarization failed:`, diarization.reason);
+      safeLogError(`bot-transcribe ${meetingId} diarization failed`, diarization.reason);
     }
 
     const segments = assignSpeakers(transcription.value, turns);
@@ -57,7 +58,7 @@ export async function processBotRecording(
       `(diarized=${turns.length > 0}) in ${Date.now() - t0} ms`,
     );
   } catch (err) {
-    console.error(`[bot-transcribe] ${meetingId} failed:`, err);
+    safeLogError(`bot-transcribe ${meetingId} failed`, err);
     await storePendingTranscript(meetingId, { status: 'failed' }).catch(() => {});
   }
 }

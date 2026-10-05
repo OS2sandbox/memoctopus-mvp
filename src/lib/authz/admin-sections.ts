@@ -3,7 +3,7 @@
 import { hasAnyCapability } from './permissions';
 import type { Capability, Principal } from './types';
 
-export type AdminSectionKey = 'overview' | 'users' | 'organisation';
+export type AdminSectionKey = 'overview' | 'users' | 'organisation' | 'log';
 
 export interface AdminSection {
   key: AdminSectionKey;
@@ -45,12 +45,21 @@ export const sectionByKey: Record<AdminSectionKey, AdminSection> = {
     requiredCapability: ['directory.read'],
     readOnlyInRollekatalogMode: true,
   },
+  log: {
+    key: 'log',
+    href: '/admin/log',
+    label: 'Log',
+    requiredCapability: ['audit.read'],
+    // The log is never owned by Rollekatalog, so its mode does not change it.
+    readOnlyInRollekatalogMode: false,
+  },
 };
 
 export const ADMIN_SECTIONS: readonly AdminSection[] = [
   sectionByKey.overview,
   sectionByKey.users,
   sectionByKey.organisation,
+  sectionByKey.log,
 ];
 
 export function canAccessSection(p: Principal, key: AdminSectionKey): boolean {

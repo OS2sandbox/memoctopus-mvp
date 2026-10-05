@@ -10,6 +10,7 @@ import {
 } from '@/lib/audio/vad-batch';
 import { decodeToMono16k } from '@/lib/audio/decode-server';
 import type { TranscriptSegment } from '@/types';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 const SAMPLE_RATE = 16_000;
 // Per-request timeout for batch transcription. Longer than the live-caption 20 s
@@ -133,7 +134,7 @@ export async function transcribeVadBatches(
     try {
       perBatch[i] = await transcribeOneBatch(batch);
     } catch (err) {
-      console.error(`[vad-batch-server] batch ${i} failed (will retry):`, err);
+      safeLogError(`vad-batch-server batch ${i} failed (will retry)`, err);
       failedIndices.push(i);
       return;
     }
@@ -155,7 +156,7 @@ export async function transcribeVadBatches(
     try {
       perBatch[i] = await transcribeOneBatch(batches[i]);
     } catch (err) {
-      console.error(`[vad-batch-server] batch ${i} failed permanently:`, err);
+      safeLogError(`vad-batch-server batch ${i} failed permanently`, err);
       perBatch[i] = [];
       failedSeconds += batches[i].totalWavDuration;
       failed = true;

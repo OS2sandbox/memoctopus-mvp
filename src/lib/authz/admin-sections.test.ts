@@ -25,11 +25,12 @@ const keysFor = (role: RoleKey, disabled = false) =>
   visibleSections(principalFor(role, disabled)).map((s) => s.key);
 
 describe('admin sections table', () => {
-  it('has exactly the three sections with their hrefs and labels', () => {
+  it('has exactly the four sections with their hrefs and labels', () => {
     expect(ADMIN_SECTIONS.map((s) => [s.key, s.href, s.label])).toEqual([
       ['overview', '/admin', 'Overblik'],
       ['users', '/admin/brugere', 'Brugere og roller'],
       ['organisation', '/admin/organisation', 'Organisation'],
+      ['log', '/admin/log', 'Log'],
     ]);
   });
 
@@ -49,6 +50,17 @@ describe('admin sections table', () => {
     expect(sectionByKey.overview.requiredCapability).not.toContain('template.use');
   });
 
+  it('the log section is any-of audit.read and not read-only in rollekatalog mode', () => {
+    expect(sectionByKey.log.requiredCapability).toEqual(['audit.read']);
+    expect(sectionByKey.log.readOnlyInRollekatalogMode).toBe(false);
+  });
+
+  it('audit.export alone opens the overview but not the log', () => {
+    const p = makePrincipal({ capabilities: ['template.use', 'audit.export'] });
+    expect(canAccessSection(p, 'log')).toBe(false);
+    expect(canAccessSection(makePrincipal({ capabilities: ['template.use', 'audit.read'] }), 'log')).toBe(true);
+  });
+
   it('flags users and organisation read-only in rollekatalog mode', () => {
     expect(sectionByKey.overview.readOnlyInRollekatalogMode).toBe(false);
     expect(sectionByKey.users.readOnlyInRollekatalogMode).toBe(true);
@@ -60,8 +72,8 @@ describe('visibleSections per role (snapshot)', () => {
   it.each<[RoleKey, AdminSectionKey[]]>([
     ['tt-bruger', []],
     ['tt-skabelonansvarlig', ['overview', 'organisation']],
-    ['tt-logleser', ['overview', 'organisation']],
-    ['tt-administrator', ['overview', 'users', 'organisation']],
+    ['tt-logleser', ['overview', 'organisation', 'log']],
+    ['tt-administrator', ['overview', 'users', 'organisation', 'log']],
   ])('%s sees %j', (role, expected) => {
     expect(keysFor(role)).toEqual(expected);
   });
@@ -89,6 +101,6 @@ describe('visibleSections per role (snapshot)', () => {
   });
 
   it('the hand-built admin fixture sees everything', () => {
-    expect(visibleSections(FAKE_PRINCIPAL_ADMIN)).toHaveLength(3);
+    expect(visibleSections(FAKE_PRINCIPAL_ADMIN)).toHaveLength(4);
   });
 });
