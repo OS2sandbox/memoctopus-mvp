@@ -75,6 +75,19 @@ describe('POST /sessions', () => {
     ({ service, instances } = makeService());
   });
 
+  it('hands the bot the lifecycle callback URL derived from the Next app URL', async () => {
+    const seen: Parameters<BotFactory>[0][] = [];
+    const { service: svc } = makeService({
+      botFactory: (config) => {
+        seen.push(config);
+        return makeStubFactory().factory(config);
+      },
+    });
+    const res = await request(svc.app).post('/sessions').set('Authorization', auth).send(validJoin);
+    expect(res.status).toBe(201);
+    expect(seen[0].lifecycleUrl).toBe(`${NEXT_APP_URL}/api/bot/lifecycle`);
+  });
+
   it('rejects without Authorization header', async () => {
     const res = await request(service.app).post('/sessions').send(validJoin);
     expect(res.status).toBe(401);

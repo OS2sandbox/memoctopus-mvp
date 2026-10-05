@@ -126,6 +126,7 @@ export function createBotService(opts: BotServiceOptions): BotService {
       userId,
       botName: botName ?? 'Memoctopus',
       callbackUrl: `${nextAppUrl}/api/bot/audio-upload`,
+      lifecycleUrl: `${nextAppUrl}/api/bot/lifecycle`,
       internalSecret,
     };
     const bot = botFactory(config);
