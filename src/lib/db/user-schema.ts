@@ -344,13 +344,21 @@ export async function queryUserSchema<T = Record<string, unknown>>(
     initializedSchemas.add(userId);
   }
   const client = await pool.connect();
+  let discard = false;
   try {
     const schema = schemaName(userId);
     await client.query(`SET search_path TO "${schema}", public`);
     const result = await client.query(sql, params);
     return result.rows as T[];
   } finally {
-    client.release();
+    // The pooled connection would otherwise keep this user's search_path for the
+    // next borrower. If the reset fails its state is unknown, so destroy it.
+    try {
+      await client.query('RESET search_path');
+    } catch {
+      discard = true;
+    }
+    client.release(discard);
   }
 }
 
