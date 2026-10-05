@@ -7,7 +7,7 @@ Audience: engineers working on Phases 1-5. This describes what is in the code af
 - Seven central tables in the shared `public` schema (Drizzle, migration `drizzle/0001_central_access.sql`): `directory_users`, `org_units`, `org_unit_members`, `org_unit_substitutes`, `role_assignments`, `external_identities`, `sync_runs`.
 - A pure role/capability resolver, a live `Principal` loader, scope (org tree) helpers, pure permission predicates and the `withAuthz` route wrapper, all in `src/lib/authz/`.
 - Login-time hooks: capture of whitelisted SSO claims, first-administrator bootstrap and (rollekatalog mode only) directory matching.
-- A no-op audit seam (`src/lib/audit/seam.ts`) that every admin write and every authz denial already calls.
+- An audit seam (`src/lib/audit/seam.ts`) that every admin write and every authz denial already calls (a no-op in Phase 1, persisted since Phase 2).
 
 Data flow: login (better-auth) -> session cookie with **no roles in it** -> on each request `resolvePrincipal(userId)` reads `directory_users` + `role_assignments` live -> `Principal` -> `withAuthz` / predicates. There is no cache, so a revoked role or a disabled user takes effect on the next request.
 
@@ -36,7 +36,7 @@ Role keys must match what is registered in Rollekatalog as IT system roles (`^[A
 | `access.manage` | no | `tt-administrator` |
 | `sync.run` | no | `tt-administrator` |
 
-`audit.export` carries no scope of its own and only takes effect from a global assignment (see Scope semantics), so a unit-scoped log reader cannot export. If Phase 2 wants scoped exports it must limit rows by the caller's `audit.read` scope and relax `GLOBAL_ONLY_CAPABILITIES` deliberately.
+`audit.export` carries no scope of its own and only takes effect from a global assignment (see Scope semantics), so a unit-scoped log reader cannot export. Phase 2 kept it that way: the CSV export still limits its rows by the caller's `audit.read` scope, so an export never shows more than the viewer does (see `audit.md`).
 
 ## Scope semantics
 
@@ -95,11 +95,15 @@ Read at call time in `src/lib/authz/config.ts` (never `NEXT_PUBLIC_*`; restart, 
 - Pure resolver, predicates, config, guard and matching logic: ordinary Vitest tests next to the code. Build principals with `makePrincipal()` / `FAKE_PRINCIPAL_ADMIN` from `src/test/helpers.ts`.
 - `*.pg.test.ts` (migration, constraints, recursive org-tree queries, identity capture) need PostgreSQL 15+ (`NULLS NOT DISTINCT`) and run only when `TEST_DATABASE_URL` is set; see the header of `src/test/pg.ts`. They were written without a database available, so treat them as unexecuted until you have run them once.
 
-## Deliberately not in Phase 1
+## Status after Phase 2
 
-- **Audit log.** `recordAdminAction(tx, event)` and `recordAuthzDenied(event)` are no-ops marked `TODO(phase2)`. Phase 2 implements the table and the bodies; callers do not change. Events carry ids and codes only, never meeting titles or free text.
+Phase 2 (the audit log) is done; see `audit.md` for the full contract. `recordAdminAction(tx, event)` and `recordAuthzDenied(event)` in `src/lib/audit/seam.ts` now persist to `public.audit_events` (migration `0002_audit_events`); the Phase 1 call sites did not change. Events carry ids and codes only, never meeting titles or free text. The log viewer is the `/admin/log` section (any holder of `audit.read`), the CSV export needs `audit.export`, and a SIEM feed and a retention prune route exist (both off until their env vars are set).
+
+## Still not done (Phases 3 to 5)
+
+- **Phase 2 gaps worth knowing**: the older `/api` routes still only check the session, so a denial there is never an `authz.denied` event; the share-code flow for templates is client-side and not logged; the `(app)/layout.tsx` fail-open question is unchanged. The full list is under "Known limitations" in `audit.md`.
 - **Rollekatalog client and sync** (Phase 3): no HTTP client, no `sync_runs` writes, no login refresh. `dropStaleAssignments` in `principal.ts` is a pass-through placeholder for the staleness limit (elevated capabilities dropped, baseline kept) that Phase 3 must fill in. Nothing reads `cpr` or `nemloginUuid`, and nothing must ever persist them.
 - **Existing API routes** (`/api/meetings`, `/api/bot`, `/api/minutes` and so on) still only check the session. Disabled users and `REQUIRE_ROLE_TO_LOGIN` are enforced by `withAuthz` and the `(app)` layout only; routes migrate to `withAuthz` gradually.
 - **Central templates** (Phase 4): no template tables, no resolution or enforcement in `/api/minutes`.
-- Admin UI is limited to what `src/lib/authz/admin-sections.ts` lists (Overblik, Brugere og roller, Organisation); the template and log sections arrive with their phases. UI checks are advisory, the server re-checks everything.
+- Admin UI is limited to what `src/lib/authz/admin-sections.ts` lists (Overblik, Brugere og roller, Organisation, and since Phase 2 Log); the template section arrives with Phase 4. UI checks are advisory, the server re-checks everything.
 - The unjournaled `drizzle/0000_wet_impossible_man.sql` is untouched (a human decision, see `phase0-findings.md`).

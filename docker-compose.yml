@@ -128,6 +128,15 @@ services:
       # "false"; link sharing is opt-in and only on when "true".
       - SKABELON_SHARE_CODE=${SKABELON_SHARE_CODE:-true}
       - SKABELON_SHARE_LINK=${SKABELON_SHARE_LINK:-false}
+      # Audit log. Read at runtime (no rebuild). Records activity metadata only, never
+      # content; see docs/central-access/audit.md. Feed and prune stay off (404) until
+      # AUDIT_FEED_API_KEY_HASH / INTERNAL_CRON_SECRET are set.
+      - AUDIT_STDOUT=${AUDIT_STDOUT:-false}
+      - AUDIT_STORE_IP=${AUDIT_STORE_IP:-true}
+      - AUDIT_RETENTION_DAYS=${AUDIT_RETENTION_DAYS:-}
+      - AUDIT_FEED_API_KEY_HASH=${AUDIT_FEED_API_KEY_HASH:-}
+      - AUDIT_FEED_DELAY_SECONDS=${AUDIT_FEED_DELAY_SECONDS:-10}
+      - INTERNAL_CRON_SECRET=${INTERNAL_CRON_SECRET:-}
     volumes:
       - audio-storage:/audio-storage
     networks:
