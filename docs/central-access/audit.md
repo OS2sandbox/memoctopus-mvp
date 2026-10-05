@@ -78,6 +78,7 @@ Closed list: `src/lib/audit/events/*.ts`, aggregated in `events/index.ts` (`EVEN
 | `meeting.minutes_version` | client | meeting (required) | `versionNumber`, `action?` |
 | `audit.export` | server | - | `rowCount`, `format`, `truncated?` |
 | `audit.prune` | system | - | `deletedCount`, `olderThanDays` |
+| `directory.sync` | system, server | sync_run (optional) | `trigger`, `status`, nine counters (`usersUpserted`, `usersDisabled`, `orgUnitsUpserted`, `orgUnitsOrphaned`, `assignmentsUpserted`, `assignmentsRemoved`, `assignmentsIgnoredRole`, `assignmentsSkippedUnknownUser`, `assignmentsWithoutScope`), `orgUnitCyclesBroken?`, `errorCode?` |
 
 Notes on specific events:
 

@@ -1,6 +1,6 @@
 # Central access control: architecture overview
 
-Audience: engineers working on Phases 1-5. This describes what is in the code after Phase 1. Where the original plan differs from the code, the code is documented here. Evidence for the Rollekatalog and better-auth facts is in `phase0-findings.md`.
+Audience: engineers working on Phases 1-5. This describes what is in the code after Phase 3 (the sections on roles, scope and local mode are from Phase 1 and still hold). Where the original plan differs from the code, the code is documented here. Evidence for the Rollekatalog and better-auth facts is in `phase0-findings.md`.
 
 ## What Phase 1 delivers
 
@@ -62,7 +62,7 @@ Both modes write the same tables, told apart by the `source` column. Permission 
 | | `ACCESS_SOURCE=local` (default) | `ACCESS_SOURCE=rollekatalog` |
 |---|---|---|
 | Who edits roles and org units | administrators in the app (`access.manage`) | Rollekatalog; the sync (Phase 3) writes `source='rollekatalog'` rows |
-| Local write endpoints (`withAuthz(..., { requireLocalSource: true })`) | work | answer 409; only `source='local'` rows are ever editable. Leftover `source='local'` assignments are **ignored** when resolving a principal (they could not be revoked any more) |
+| Local write endpoints (`withAuthz(..., { requireLocalSource: true })`) | work | answer 409; only `source='local'` rows are ever editable. Leftover `source='local'` assignments are **ignored** when resolving a principal (they could not be revoked any more). The reverse holds too: in local mode `source='rollekatalog'` rows are ignored |
 | Link login -> directory user | explicit: `directory_users.app_user_id`, set by an admin | automatic via `matchDirectoryUser`, from trusted SSO claims |
 | Bootstrap administrator | `BOOTSTRAP_ADMIN_EMAILS` | not applicable |
 
@@ -89,6 +89,7 @@ Read at call time in `src/lib/authz/config.ts` (never `NEXT_PUBLIC_*`; restart, 
 | `DIRECTORY_MATCH` | `userid-claim` | `userid-claim`, `extuuid-claim` or `email` |
 | `DIRECTORY_USERID_CLAIM` | `preferred_username` | claim carrying the Rollekatalog user id |
 | `AUTH_IP_HEADERS` | unset | headers better-auth reads the client IP from; read once at startup in `src/lib/auth/ip-headers.ts` |
+| `DIRECTORY_USERID_TRANSFORM` and the `ROLLEKATALOG_*` / `ROLE_STALE_MAX_SECONDS` settings | see `rollekatalog.md` | Phase 3, read in `src/lib/rollekatalog/config.ts` (same rules: call time, invalid value falls back to the default) |
 
 ## Testing
 
@@ -99,10 +100,22 @@ Read at call time in `src/lib/authz/config.ts` (never `NEXT_PUBLIC_*`; restart, 
 
 Phase 2 (the audit log) is done; see `audit.md` for the full contract. `recordAdminAction(tx, event)` and `recordAuthzDenied(event)` in `src/lib/audit/seam.ts` now persist to `public.audit_events` (migration `0002_audit_events`); the Phase 1 call sites did not change. Events carry ids and codes only, never meeting titles or free text. The log viewer is the `/admin/log` section (any holder of `audit.read`), the CSV export needs `audit.export`, and a SIEM feed and a retention prune route exist (both off until their env vars are set).
 
-## Still not done (Phases 3 to 5)
+## Status after Phase 3
 
-- **Phase 2 gaps worth knowing**: the older `/api` routes still only check the session, so a denial there is never an `authz.denied` event; the share-code flow for templates is client-side and not logged; the `(app)/layout.tsx` fail-open question is unchanged. The full list is under "Known limitations" in `audit.md`.
-- **Rollekatalog client and sync** (Phase 3): no HTTP client, no `sync_runs` writes, no login refresh. `dropStaleAssignments` in `principal.ts` is a pass-through placeholder for the staleness limit (elevated capabilities dropped, baseline kept) that Phase 3 must fill in. Nothing reads `cpr` or `nemloginUuid`, and nothing must ever persist them.
+Phase 3 (the Rollekatalog provider) is implemented; the operator guide is `rollekatalog.md`, the code is in `src/lib/rollekatalog/`.
+
+- **Read-only authority.** A GET-only client (`ApiKey` header, two keys: READ_ACCESS and ORGANISATION), whitelisting zod schemas (cpr, nemloginUuid, phones and KLE never enter our types), and error codes only, never messages. The app never calls a Rollekatalog write endpoint; `scripts/rollekatalog-register.mjs` (dry-run by default) is the one-off, operator-run registration of the IT system and its four roles.
+- **Sync** (`sync.ts`): advisory lock, fetch first, then one transaction; mirror of users, org units, memberships, substitutes and role assignments with `source='rollekatalog'`. Empty-response guard, removal threshold with a `force` override on the admin button, a `sync_runs` row and a `directory.sync` audit event per run. Scheduled from outside (cron route `POST /api/internal/rollekatalog/sync`, optional compose service `rollekatalog-sync`); admin routes `POST/GET /api/admin/access/sync` and `POST /api/admin/access/rollekatalog/check` ("Test forbindelse").
+- **Scope** (`scope.ts`, pure): `ROLLEKATALOG_SCOPE_STRATEGY` of `constraint`, `constraint-or-manager` or `manager`; no usable scope never means "everywhere" except for the roles in `ROLLEKATALOG_GLOBAL_ROLES` (default `tt-administrator`).
+- **Staleness** (`dropStaleAssignments`): Rollekatalog-sourced assignments older than `ROLE_STALE_MAX_SECONDS` are ignored; the baseline stays. Mode symmetry in both directions.
+- **Login** (`login-refresh.ts`, `directory-match.ts`): a short, never-blocking `rolesAsList` check that can only revoke or disable; `DIRECTORY_USERID_TRANSFORM`; relinking of an app user from a local directory row to the Rollekatalog row when the mode is switched.
+- **Tests**: unit tests against an in-process mock (`mock-server.ts`, also runnable as `node scripts/mock-rollekatalog.mjs`) and gated `*.pg.test.ts` (sync, lock, transaction, login refresh, relink, end to end).
+- **Not verified**: everything ran against synthetic fixtures and the mock, never against a live Rollekatalog. Run "Test forbindelse" on the real instance before go-live. The compose service was never started. Of the gated Postgres tests, `sync.pg.test.ts` and `e2e.pg.test.ts` were run once on PostgreSQL 18 (not on 15, the documented minimum); `login-refresh.pg.test.ts` and the Phase 3 additions to `directory-match.pg.test.ts` were written without a database and have not been run, so treat them as unexecuted until you run them with `TEST_DATABASE_URL`.
+- **Known gaps**: org units that disappear upstream are never deleted (no stale flag in the schema); the removal-threshold numbers are only in the server log, not in the UI; `rolesAsList` identifies roles by system-role identifier and filters by weight, so keep all four roles at weight 1; the local link of a user relinked to a Rollekatalog row is not restored when you switch back to local mode.
+
+## Still not done (Phases 4 and 5)
+
+- **Phase 2 gaps worth knowing**: the older `/api` routes still only check the session, so a denial there is never an `authz.denied` event; the share-code flow for templates is client-side and not logged; the `(app)/layout.tsx` fail-open question is unchanged (deliberately left alone in Phase 3 as well). The full list is under "Known limitations" in `audit.md`.
 - **Existing API routes** (`/api/meetings`, `/api/bot`, `/api/minutes` and so on) still only check the session. Disabled users and `REQUIRE_ROLE_TO_LOGIN` are enforced by `withAuthz` and the `(app)` layout only; routes migrate to `withAuthz` gradually.
 - **Central templates** (Phase 4): no template tables, no resolution or enforcement in `/api/minutes`.
 - Admin UI is limited to what `src/lib/authz/admin-sections.ts` lists (Overblik, Brugere og roller, Organisation, and since Phase 2 Log); the template section arrives with Phase 4. UI checks are advisory, the server re-checks everything.
