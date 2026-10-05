@@ -57,6 +57,8 @@ export const eventTypeLabels: Record<EventType, string> = {
   'meeting.transcript_edit': 'Transskription redigeret',
   'meeting.minutes_save': 'Referat gemt',
   'meeting.minutes_version': 'Referatversion oprettet',
+  // Synkronisering
+  'directory.sync': 'Organisation synkroniseret fra Rollekatalog',
   // Loggen selv
   'audit.export': 'Log eksporteret',
   'audit.prune': 'Gamle logposter slettet',

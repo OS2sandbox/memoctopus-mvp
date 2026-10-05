@@ -8,6 +8,7 @@ import { aiEvents } from './ai';
 import { auditEvents } from './audit';
 import { authEvents } from './auth';
 import { botEvents } from './bot';
+import { directoryEvents } from './directory';
 import { meetingEvents } from './meeting';
 import { templateEvents } from './template';
 import type { EventDef, EventOutcome, EventSource } from './types';
@@ -20,6 +21,7 @@ export const EVENT_CATALOGUE = {
   ...botEvents,
   ...meetingEvents,
   ...auditEvents,
+  ...directoryEvents,
 } as const;
 
 export type EventType = keyof typeof EVENT_CATALOGUE;

@@ -37,3 +37,17 @@ export function directoryMatchMode(): DirectoryMatchMode {
 export function directoryUserIdClaim(): string {
   return clean('DIRECTORY_USERID_CLAIM') || 'preferred_username';
 }
+
+// Multi-tenant aliases are not a single tenant: any Entra tenant can sign in.
+const MULTI_TENANT_ALIASES = new Set(['common', 'organizations', 'consumers']);
+
+/** MICROSOFT_TENANT_ID when it names exactly one tenant, else null. */
+export function singleTenantId(): string | null {
+  const tenant = clean('MICROSOFT_TENANT_ID').toLowerCase();
+  return tenant && !MULTI_TENANT_ALIASES.has(tenant) ? tenant : null;
+}
+
+// DIRECTORY_USERID_TRANSFORM lives with the other Rollekatalog settings (read at
+// call time, invalid value => 'none'); re-exported so the identity-matching code
+// finds every login-matching setting in one module.
+export { directoryUserIdTransform, transformUserId, type UserIdTransform } from '@/lib/rollekatalog/config';

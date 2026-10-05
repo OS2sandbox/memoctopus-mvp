@@ -7,6 +7,7 @@ import { asHeaderSource, clientIp, requestIdOf, userAgentOf, type HeaderSource }
 import { CODE_RE } from '@/lib/audit/events/types';
 import { maybeBootstrapAdmin } from './bootstrap';
 import { enabledAuthProviders } from '@/lib/auth/providers';
+import { refreshUserFromRollekatalog } from '@/lib/rollekatalog/login-refresh';
 import { accessSource } from './config';
 import { matchDirectoryUser } from './directory-match';
 import { captureExternalIdentity, type ExternalIdentity } from './identity';
@@ -35,6 +36,14 @@ export async function runLoginHooks(userId: string): Promise<void> {
     } catch (err) {
       console.error(`[authz] login step failed: match_directory_user (${errorLabel(err)})`);
     }
+  }
+
+  // After matching, so a user linked just now is refreshed too. It can only take
+  // access away (revoke / disable), and never waits longer than its short budget.
+  try {
+    await refreshUserFromRollekatalog(userId);
+  } catch (err) {
+    console.error(`[authz] login step failed: rollekatalog_refresh (${errorLabel(err)})`);
   }
 }
 

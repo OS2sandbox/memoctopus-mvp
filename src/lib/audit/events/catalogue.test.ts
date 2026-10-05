@@ -15,6 +15,7 @@ import { aiEvents } from './ai';
 import { auditEvents } from './audit';
 import { authEvents } from './auth';
 import { botEvents } from './bot';
+import { directoryEvents } from './directory';
 import { meetingEvents } from './meeting';
 import { templateEvents } from './template';
 import { CODE_RE } from './types';
@@ -124,12 +125,13 @@ describe('catalogue structure', () => {
         'meeting.create', 'meeting.status_change', 'meeting.rename', 'meeting.participants_edit', 'meeting.delete',
         'meeting.redact', 'meeting.audio_delete', 'meeting.transcript_edit', 'meeting.minutes_save', 'meeting.minutes_version',
         'audit.export', 'audit.prune',
+        'directory.sync',
       ].sort(),
     );
   });
 
   it('has no event type defined in two domain files (a spread would silently override)', () => {
-    const files = [accessEvents, authEvents, templateEvents, aiEvents, botEvents, meetingEvents, auditEvents];
+    const files = [accessEvents, authEvents, templateEvents, aiEvents, botEvents, meetingEvents, auditEvents, directoryEvents];
     const all = files.flatMap((f) => Object.keys(f));
     expect(new Set(all).size).toBe(all.length);
     expect(all.length).toBe(EVENT_TYPES.length);
@@ -144,6 +146,7 @@ describe('catalogue structure', () => {
     expect([...prefixes(botEvents)]).toEqual(['bot']);
     expect([...prefixes(meetingEvents)]).toEqual(['meeting']);
     expect([...prefixes(auditEvents)]).toEqual(['audit']);
+    expect([...prefixes(directoryEvents)]).toEqual(['directory']);
   });
 
   it('allows the browser to report only meeting.* and auth.login_failed', () => {

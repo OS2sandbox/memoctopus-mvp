@@ -132,14 +132,30 @@ describe.skipIf(!hasPg)('identity link and bootstrap (real Postgres)', () => {
         await close();
       }));
 
-    it('refuses to link a user who already has another directory entry (unique app_user_id)', () =>
+    it('moves a leftover source=local link to the rollekatalog row (mode switch)', () =>
       withFreshSchema(async (c, schema) => {
         vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
         const { runner, close } = schemaRunner(c, schema);
         await addUser(c, 'u1', 'a@example.dk');
         await c.query("INSERT INTO directory_users (name, source, app_user_id) VALUES ('Own', 'local', 'u1')");
         await c.query("INSERT INTO directory_users (name, ext_user_id, source) VALUES ('X', 'abc123', 'rollekatalog')");
+        expect((await matchDirectoryUser(identity('u1'), 'userid-claim', runner)).status).toBe('linked');
+        expect((await c.query('SELECT source, app_user_id FROM directory_users ORDER BY source')).rows).toEqual([
+          { source: 'local', app_user_id: null },
+          { source: 'rollekatalog', app_user_id: 'u1' },
+        ]);
+        await close();
+      }));
+
+    it('refuses to link a user who already holds a link to another ROLLEKATALOG row (unique app_user_id)', () =>
+      withFreshSchema(async (c, schema) => {
+        vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+        const { runner, close } = schemaRunner(c, schema);
+        await addUser(c, 'u1', 'a@example.dk');
+        await c.query("INSERT INTO directory_users (name, ext_user_id, source, app_user_id) VALUES ('Own', 'other', 'rollekatalog', 'u1')");
+        await c.query("INSERT INTO directory_users (name, ext_user_id, source) VALUES ('X', 'abc123', 'rollekatalog')");
         expect((await matchDirectoryUser(identity('u1'), 'userid-claim', runner)).status).toBe('conflict');
+        expect((await c.query("SELECT name FROM directory_users WHERE app_user_id = 'u1'")).rows).toEqual([{ name: 'Own' }]);
         await close();
       }));
 

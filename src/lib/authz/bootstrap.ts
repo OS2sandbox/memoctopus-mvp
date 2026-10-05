@@ -4,7 +4,7 @@
 // address, and only when the address was asserted by a trusted SSO provider.
 import { recordAdminAction } from '@/lib/audit/seam';
 import { USABLE_LOCAL_ADMIN_SQL } from './admin-sql';
-import { accessSource, bootstrapAdminEmails } from './config';
+import { accessSource, bootstrapAdminEmails, singleTenantId } from './config';
 import type { IdentityClaims } from './identity';
 import { defaultRunner, type SqlQueryable, type SqlRunner } from './pg-runner';
 
@@ -24,14 +24,6 @@ export interface BootstrapResult {
 const ADMIN_ROLE = 'tt-administrator';
 // Any constant: it only has to be the same for every bootstrap attempt.
 const LOCK_NAME = 'referat:bootstrap-admin';
-// Multi-tenant aliases are not a single tenant: any Entra tenant can sign in.
-const MULTI_TENANT_ALIASES = new Set(['common', 'organizations', 'consumers']);
-
-function singleTenantId(): string | null {
-  const tenant = (process.env.MICROSOFT_TENANT_ID ?? '').trim().toLowerCase();
-  return tenant && !MULTI_TENANT_ALIASES.has(tenant) ? tenant : null;
-}
-
 /** Pure rule table: does this SSO identity prove ownership of an allow-listed address? */
 export function identityQualifies(
   providerId: string,

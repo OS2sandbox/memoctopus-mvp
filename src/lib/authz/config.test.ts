@@ -4,7 +4,9 @@ import {
   bootstrapAdminEmails,
   directoryMatchMode,
   directoryUserIdClaim,
+  directoryUserIdTransform,
   requireRoleToLogin,
+  transformUserId,
 } from './config';
 
 afterEach(() => vi.unstubAllEnvs());
@@ -83,5 +85,30 @@ describe('directoryUserIdClaim', () => {
   it('uses a trimmed override and keeps its case (claim names are case-sensitive)', () => {
     vi.stubEnv('DIRECTORY_USERID_CLAIM', ' sAMAccountName ');
     expect(directoryUserIdClaim()).toBe('sAMAccountName');
+  });
+});
+
+describe('DIRECTORY_USERID_TRANSFORM', () => {
+  it('defaults to none and ignores unknown values without throwing', () => {
+    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', '');
+    expect(directoryUserIdTransform()).toBe('none');
+    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'lowercase');
+    expect(directoryUserIdTransform()).toBe('none');
+  });
+  it('accepts strip-upn-domain case-insensitively and trimmed, at call time', () => {
+    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', ' Strip-UPN-Domain ');
+    expect(directoryUserIdTransform()).toBe('strip-upn-domain');
+    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'none');
+    expect(directoryUserIdTransform()).toBe('none');
+  });
+  it.each([
+    ['none', 'ABC123@kommune.dk', 'ABC123@kommune.dk'],
+    ['strip-upn-domain', 'ABC123@kommune.dk', 'ABC123'],
+    ['strip-upn-domain', 'ABC123', 'ABC123'],
+    ['strip-upn-domain', 'a@b@c.dk', 'a'],
+    ['strip-upn-domain', '@kommune.dk', '@kommune.dk'],
+  ])('transformUserId with %s: %s -> %s', (mode, input, expected) => {
+    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', mode);
+    expect(transformUserId(input)).toBe(expected);
   });
 });

@@ -7,6 +7,8 @@ const match = vi.fn();
 vi.mock('./identity', () => ({ captureExternalIdentity: (...a: unknown[]) => capture(...a) }));
 vi.mock('./bootstrap', () => ({ maybeBootstrapAdmin: (...a: unknown[]) => bootstrap(...a) }));
 vi.mock('./directory-match', () => ({ matchDirectoryUser: (...a: unknown[]) => match(...a) }));
+const refresh = vi.fn();
+vi.mock('@/lib/rollekatalog/login-refresh', () => ({ refreshUserFromRollekatalog: (...a: unknown[]) => refresh(...a) }));
 const recordEvent = vi.fn();
 vi.mock('@/lib/audit/record', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/audit/record')>()),
@@ -42,6 +44,7 @@ beforeEach(() => {
   capture.mockReset().mockResolvedValue([ID]);
   bootstrap.mockReset().mockResolvedValue({ granted: false, reason: 'no_allowlist' });
   match.mockReset().mockResolvedValue({ status: 'linked' });
+  refresh.mockReset().mockResolvedValue({ status: 'refreshed', markedDisabled: false, revokedRoles: 0 });
   recordEvent.mockReset().mockResolvedValue({ status: 'stored' });
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -75,6 +78,53 @@ describe('runLoginHooks', () => {
     expect(logged).toContain('capture_identity');
     expect(logged).toContain('TypeError/08006');
     expect(logged).not.toContain('secret@example.dk');
+  });
+
+  it('does not refresh from Rollekatalog in local mode', async () => {
+    await runLoginHooks('u1');
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the user from Rollekatalog AFTER matching, in rollekatalog mode', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+    const order: string[] = [];
+    capture.mockImplementation(async () => (order.push('capture'), [ID]));
+    match.mockImplementation(async () => (order.push('match'), { status: 'linked' }));
+    refresh.mockImplementation(async () => (order.push('refresh'), { status: 'skipped', reason: 'not_linked' }));
+    await runLoginHooks('u1');
+    expect(refresh).toHaveBeenCalledWith('u1');
+    expect(order).toEqual(['capture', 'match', 'refresh']);
+  });
+
+  it('still refreshes when matching fails or no identity was captured', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+    match.mockRejectedValue(new Error('boom'));
+    await runLoginHooks('u1');
+    expect(refresh).toHaveBeenCalledTimes(1);
+    capture.mockResolvedValue([]);
+    await runLoginHooks('u1');
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('a refresh failure never blocks login (rejection is swallowed, logged by label only)', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+    refresh.mockRejectedValue(Object.assign(new TypeError('http://rk.example/secret-url key=abc'), { code: '08006' }));
+    await expect(runLoginHooks('u1')).resolves.toBeUndefined();
+    const logged = JSON.stringify((console.error as any).mock.calls);
+    expect(logged).toContain('rollekatalog_refresh');
+    expect(logged).toContain('TypeError/08006');
+    expect(logged).not.toContain('secret-url');
+    expect(logged).not.toContain('key=abc');
+  });
+
+  it('a refresh failure does not undo earlier steps, and earlier failures do not skip it', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+    capture.mockRejectedValue(new Error('x'));
+    bootstrap.mockRejectedValue(new Error('y'));
+    refresh.mockRejectedValue(new Error('z'));
+    await expect(runLoginHooks('u1')).resolves.toBeUndefined();
+    expect(bootstrap).toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalled();
   });
 
   it('swallows matching errors', async () => {

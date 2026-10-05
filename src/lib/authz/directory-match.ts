@@ -3,7 +3,15 @@
 // (directory_users.app_user_id) and must never be inferred from claims: an
 // attacker could password-sign-up with a pre-assigned address.
 import { recordAdminAction } from '@/lib/audit/seam';
-import { accessSource, directoryMatchMode, directoryUserIdClaim, type DirectoryMatchMode } from './config';
+import {
+  accessSource,
+  directoryMatchMode,
+  directoryUserIdClaim,
+  directoryUserIdTransform,
+  singleTenantId,
+  transformUserId,
+  type DirectoryMatchMode,
+} from './config';
 import type { ExternalIdentity } from './identity';
 import { defaultRunner, type SqlQueryable, type SqlRunner } from './pg-runner';
 
@@ -35,11 +43,14 @@ function lookupFor(identity: ExternalIdentity, mode: DirectoryMatchMode): Lookup
   const claims = identity.claims as Record<string, unknown>;
   const clean = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
 
-  // Only rows that Rollekatalog itself synced are link targets here.
-  const base = `SELECT uuid, app_user_id FROM public.directory_users WHERE source = 'rollekatalog' AND `;
+  // Only rows that Rollekatalog itself synced are link targets here. Disabled rows keep
+  // their ext_user_id, so a reused userId would otherwise make the new person ambiguous.
+  const base = `SELECT uuid, app_user_id FROM public.directory_users WHERE source = 'rollekatalog' AND disabled = false AND `;
 
   if (mode === 'userid-claim') {
-    const value = clean(claims[directoryUserIdClaim()]);
+    // e.g. a UPN claim "abc123@kommune.dk" against Rollekatalog's plain userId "abc123".
+    const raw = clean(claims[directoryUserIdClaim()]);
+    const value = raw ? clean(transformUserId(raw)) : null;
     return value ? { sql: `${base}lower(ext_user_id) = lower($1) LIMIT 2 FOR UPDATE`, param: value } : null;
   }
   if (mode === 'extuuid-claim') {
@@ -62,6 +73,14 @@ export async function matchDirectoryUser(
   // Email/password "identities" are self-asserted; only trusted SSO may link.
   if (!identity.providerId || identity.providerId === 'credential') return { status: 'refused' };
 
+  // strip-upn-domain throws the tenant boundary away (alice@evil.example -> alice), so a
+  // Microsoft login may only be matched that way when it provably comes from our one tenant.
+  if (directoryUserIdTransform() === 'strip-upn-domain' && identity.providerId === 'microsoft') {
+    const tenant = singleTenantId();
+    const tid = (identity.claims as Record<string, unknown>).tid;
+    if (tenant === null || typeof tid !== 'string' || tid.trim().toLowerCase() !== tenant) return { status: 'refused' };
+  }
+
   const lookup = lookupFor(identity, mode);
   if (lookup === 'refused') return { status: 'refused' };
   if (!lookup) return { status: 'no_match' };
@@ -80,11 +99,28 @@ export async function matchDirectoryUser(
       }
       if (target.app_user_id !== null) return conflict('target_linked_to_other_user');
 
-      const own = await tx.query<{ uuid: string }>(
-        'SELECT uuid FROM public.directory_users WHERE app_user_id = $1',
+      // app_user_id is unique, so a user can hold one link only. An existing link
+      // to a source='local' row is a leftover from before the switch to
+      // rollekatalog mode (those rows are ignored there): it is moved to the
+      // Rollekatalog row in this one transaction. A link to anything else
+      // (another Rollekatalog row, or one we cannot classify) is never touched.
+      const own = await tx.query<{ uuid: string; source: string }>(
+        'SELECT uuid, source FROM public.directory_users WHERE app_user_id = $1',
         [identity.userId],
       );
-      if (own.rows.length > 0) return conflict('user_linked_to_other_entry');
+      const ownRow = own.rows[0];
+      if (ownRow) {
+        if (ownRow.source !== 'local') return conflict('user_linked_to_other_entry');
+        // The guard repeats the ownership check on the row lock, so a concurrent
+        // login that already moved this link makes this release a no-op => conflict.
+        const released = await tx.query(
+          `UPDATE public.directory_users SET app_user_id = NULL, updated_at = now()
+            WHERE uuid = $1 AND source = 'local' AND app_user_id = $2
+            RETURNING uuid`,
+          [ownRow.uuid, identity.userId],
+        );
+        if (released.rows.length === 0) return conflict('user_linked_to_other_entry');
+      }
 
       const updated = await linkRow(tx, target.uuid, identity.userId);
       if (updated.rows.length === 0) return conflict('target_linked_to_other_user');

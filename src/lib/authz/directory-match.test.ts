@@ -56,6 +56,7 @@ describe('userid-claim', () => {
     const select = calls.find((c) => c.sql.includes('FOR UPDATE'))!;
     expect(select.sql).toContain('lower(ext_user_id) = lower($1)');
     expect(select.sql).toContain("source = 'rollekatalog'");
+    expect(select.sql).toContain('disabled = false');
     expect(select.params).toEqual(['ABC123']);
     expect(calls.map((c) => c.sql)[0]).toBe('BEGIN');
     expect(calls.at(-1)!.sql).toBe('COMMIT');
@@ -67,6 +68,77 @@ describe('userid-claim', () => {
     const { runner, calls } = db([D1]);
     await matchDirectoryUser(identity({ claims: { sub: 's', upn: 'x@corp.dk' } }), 'userid-claim', runner);
     expect(calls.find((c) => c.sql.includes('FOR UPDATE'))!.params).toEqual(['x@corp.dk']);
+  });
+
+  it('strips the UPN domain before comparing when DIRECTORY_USERID_TRANSFORM=strip-upn-domain', async () => {
+    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'strip-upn-domain');
+    vi.stubEnv('DIRECTORY_USERID_CLAIM', 'upn');
+    const { runner, calls } = db([D1]);
+    const res = await matchDirectoryUser(identity({ claims: { sub: 's', upn: 'ABC123@kommune.dk' } }), 'userid-claim', runner);
+    expect(res.status).toBe('linked');
+    const select = calls.find((c) => c.sql.includes('FOR UPDATE'))!;
+    expect(select.params).toEqual(['ABC123']);
+    expect(select.sql).toContain('lower(ext_user_id) = lower($1)');
+  });
+
+  describe('strip-upn-domain on Microsoft logins needs a proven single tenant', () => {
+    const TID = '99999999-8888-4777-8666-555555555555';
+    const ms = (tid?: string) =>
+      identity({ providerId: 'microsoft', claims: { sub: 's', preferred_username: 'alice@evil.onmicrosoft.com', ...(tid ? { tid } : {}) } });
+    beforeEach(() => vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'strip-upn-domain'));
+
+    it('refuses with the default multi-tenant authority (common) and runs no SQL', async () => {
+      for (const t of ['', 'common', 'organizations', 'consumers']) {
+        vi.stubEnv('MICROSOFT_TENANT_ID', t);
+        const { runner, calls } = db([D1]);
+        expect((await matchDirectoryUser(ms(TID), 'userid-claim', runner)).status).toBe('refused');
+        expect(calls).toHaveLength(0);
+      }
+    });
+
+    it('refuses a tid from another tenant or a missing tid', async () => {
+      vi.stubEnv('MICROSOFT_TENANT_ID', TID);
+      for (const tid of ['00000000-0000-4000-8000-000000000000', undefined]) {
+        const { runner, calls } = db([D1]);
+        expect((await matchDirectoryUser(ms(tid), 'userid-claim', runner)).status).toBe('refused');
+        expect(calls).toHaveLength(0);
+      }
+    });
+
+    it('matches when tid equals the configured single tenant (case-insensitive)', async () => {
+      vi.stubEnv('MICROSOFT_TENANT_ID', TID.toUpperCase());
+      const { runner, calls } = db([D1]);
+      expect((await matchDirectoryUser(ms(TID), 'userid-claim', runner)).status).toBe('linked');
+      expect(calls.find((c) => c.sql.includes('FOR UPDATE'))!.params).toEqual(['alice']);
+    });
+
+    it('does not restrict generic OIDC logins', async () => {
+      vi.stubEnv('DIRECTORY_USERID_CLAIM', 'upn');
+      const { runner } = db([D1]);
+      expect((await matchDirectoryUser(identity({ claims: { sub: 's', upn: 'a@k.dk' } }), 'userid-claim', runner)).status).toBe('linked');
+    });
+  });
+
+  it('leaves the claim untouched without the transform (a UPN then simply does not match)', async () => {
+    vi.stubEnv('DIRECTORY_USERID_CLAIM', 'upn');
+    const { runner, calls } = db([]);
+    await matchDirectoryUser(identity({ claims: { sub: 's', upn: 'ABC123@kommune.dk' } }), 'userid-claim', runner);
+    expect(calls.find((c) => c.sql.includes('FOR UPDATE'))!.params).toEqual(['ABC123@kommune.dk']);
+  });
+
+  it('matches a leading-@ value verbatim (nothing to strip), so it cannot collapse to an empty id', async () => {
+    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'strip-upn-domain');
+    const { runner, calls } = db([]);
+    const res = await matchDirectoryUser(identity({ claims: { sub: 's', preferred_username: '@kommune.dk' } }), 'userid-claim', runner);
+    expect(calls.find((c) => c.sql.includes('FOR UPDATE'))!.params).toEqual(['@kommune.dk']);
+    expect(res.status).toBe('no_match');
+  });
+
+  it('does not apply the transform to extuuid or email matching', async () => {
+    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'strip-upn-domain');
+    const { runner, calls } = db([D1]);
+    await matchDirectoryUser(identity(), 'email', runner);
+    expect(calls.find((c) => c.sql.includes('FOR UPDATE'))!.params).toEqual(['a@example.dk']);
   });
 
   it('is no_match without querying when the claim is absent', async () => {
@@ -172,5 +244,86 @@ describe('links', () => {
       throw new Error('boom');
     });
     await expect(matchDirectoryUser(identity(), 'userid-claim', runner)).rejects.toThrow('boom');
+  });
+});
+
+describe('mode-switch relink (local row -> rollekatalog row)', () => {
+  const OLD_LOCAL = { uuid: 'old-local', source: 'local' };
+
+  it('moves the link in ONE transaction: release the local row first, then link the Rollekatalog row, then audit', async () => {
+    const { runner, calls } = db([D1], [OLD_LOCAL]);
+    const res = await matchDirectoryUser(identity(), 'userid-claim', runner);
+    expect(res).toEqual({ status: 'linked', directoryUserUuid: 'd1' });
+
+    const sqls = calls.map((c) => c.sql);
+    expect(sqls[0]).toBe('BEGIN');
+    expect(sqls.at(-1)).toBe('COMMIT');
+    expect(calls.every((c) => c.tx)).toBe(true);
+    const release = calls.findIndex((c) => c.sql.includes('SET app_user_id = NULL'));
+    const link = calls.findIndex((c) => c.sql.includes('SET app_user_id = $1'));
+    expect(release).toBeGreaterThan(-1);
+    expect(link).toBeGreaterThan(release);
+    expect(calls[release]!.params).toEqual(['old-local', 'u1']);
+    expect(calls[release]!.sql).toContain("source = 'local'");
+    expect(calls[link]!.params).toEqual(['u1', 'd1']);
+    expect(recordAdminAction).toHaveBeenCalledOnce();
+    expect(recordAdminAction).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      type: 'access.user_link',
+      actorUserId: 'u1',
+      entityType: 'directory_user',
+      entityId: 'd1',
+      details: { via: 'userid-claim', automatic: true },
+    }));
+  });
+
+  it('does not relink when the existing link is to a rollekatalog row', async () => {
+    const { runner, calls } = db([D1], [{ uuid: 'other-rk', source: 'rollekatalog' }]);
+    expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('conflict');
+    expect(calls.some((c) => c.sql.startsWith('UPDATE'))).toBe(false);
+    expect(recordAdminAction).not.toHaveBeenCalled();
+  });
+
+  it('never steals a target that belongs to a DIFFERENT app user, even when the own link is local', async () => {
+    const { runner, calls } = db([{ uuid: 'd1', app_user_id: 'someone-else' }], [OLD_LOCAL]);
+    expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('conflict');
+    expect(calls.some((c) => c.sql.startsWith('UPDATE'))).toBe(false);
+    expect(recordAdminAction).not.toHaveBeenCalled();
+  });
+
+  it('is a conflict (and links nothing) when the release finds the row already moved by a concurrent login', async () => {
+    const { runner, calls } = makeFakeRunner((sql) => {
+      if (sql.includes('FOR UPDATE')) return [D1];
+      if (sql.includes('WHERE app_user_id = $1')) return [OLD_LOCAL];
+      if (sql.includes('SET app_user_id = NULL')) return [];
+      return [{ uuid: 'd1' }];
+    });
+    expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('conflict');
+    expect(calls.some((c) => c.sql.includes('SET app_user_id = $1'))).toBe(false);
+    expect(recordAdminAction).not.toHaveBeenCalled();
+  });
+
+  it('rolls everything back (release included) when the link hits the unique index', async () => {
+    const { runner, calls } = makeFakeRunner((sql) => {
+      if (sql.includes('FOR UPDATE')) return [D1];
+      if (sql.includes('WHERE app_user_id = $1')) return [OLD_LOCAL];
+      if (sql.includes('SET app_user_id = NULL')) return [{ uuid: 'old-local' }];
+      if (sql.includes('SET app_user_id = $1')) throw Object.assign(new Error('dup'), { code: '23505' });
+      return [];
+    });
+    expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('conflict');
+    expect(calls.at(-1)!.sql).toBe('ROLLBACK');
+    expect(calls.some((c) => c.sql === 'COMMIT')).toBe(false);
+  });
+
+  it('still refuses the credential provider even when a relink would be possible', async () => {
+    const { runner, calls } = db([D1], [OLD_LOCAL]);
+    expect((await matchDirectoryUser(identity({ providerId: 'credential' }), 'userid-claim', runner)).status).toBe('refused');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('still refuses on ambiguity without releasing the local link', async () => {
+    const { runner, calls } = db([D1, { uuid: 'd2', app_user_id: null }], [OLD_LOCAL]);
+    expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('ambiguous');
+    expect(calls.some((c) => c.sql.startsWith('UPDATE'))).toBe(false);
   });
 });
