@@ -1,11 +1,15 @@
 {
   "nameID": "C=DK,O=00000000,CN=Sofie Syntetisk,Serial=9d3c0000-0000-4000-8000-000000000005",
-  "userRoles": ["referat_userrole_bruger"],
-  "systemRoles": ["referat_user"],
+  "userRoles": [
+    "tt-bruger-rolle"
+  ],
+  "systemRoles": [
+    "tt-bruger"
+  ],
   "dataRoles": [],
   "functionRoles": [],
   "roleMap": {
-    "referat_userrole_bruger": "Referat bruger (Referat)"
+    "tt-bruger-rolle": "Bruger (Taletiltekst)"
   },
   "disabled": true
 }

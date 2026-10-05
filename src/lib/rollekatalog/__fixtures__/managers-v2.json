@@ -26,5 +26,21 @@
     "name": "Lars Fiktivsen",
     "userId": "lars.f",
     "managerSubstitutes": []
+  },
+  {
+    "uuid": "7e5e0000-0000-4000-8000-000000000099",
+    "name": "Gitte Hjemløs",
+    "userId": "ghost.m",
+    "managerSubstitutes": [
+      {
+        "uuid": "7e5e0000-0000-4000-8000-000000000007",
+        "name": "Ida Logsen",
+        "userId": "ida.l",
+        "orgUnitUuid": "5a1b0000-0000-4000-8000-000000000005",
+        "orgUnitName": "Digital Support",
+        "managerUuid": "7e5e0000-0000-4000-8000-000000000099",
+        "managerUserId": "ghost.m"
+      }
+    ]
   }
 ]

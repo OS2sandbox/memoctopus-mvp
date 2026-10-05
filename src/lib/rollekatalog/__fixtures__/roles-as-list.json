@@ -1,12 +1,20 @@
 {
   "nameID": "C=DK,O=00000000,CN=Anne Prøvesen,Serial=9d3c0000-0000-4000-8000-000000000003",
-  "userRoles": ["referat_userrole_bruger", "referat_userrole_leder"],
-  "systemRoles": ["referat_user", "referat_lead"],
+  "userRoles": [
+    "tt-bruger-rolle",
+    "tt-skabelonansvarlig-rolle"
+  ],
+  "systemRoles": [
+    "tt-bruger",
+    "tt-skabelonansvarlig"
+  ],
   "dataRoles": [],
-  "functionRoles": ["referat_lead"],
+  "functionRoles": [
+    "tt-skabelonansvarlig"
+  ],
   "roleMap": {
-    "referat_userrole_bruger": "Referat bruger (Referat)",
-    "referat_userrole_leder": "Referat leder (Referat)"
+    "tt-bruger-rolle": "Bruger (Taletiltekst)",
+    "tt-skabelonansvarlig-rolle": "Skabelonansvarlig (Taletiltekst)"
   },
   "disabled": false
 }

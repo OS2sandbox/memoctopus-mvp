@@ -4,13 +4,13 @@
     "userId": "anne.p",
     "assignments": [
       {
-        "roleIdentifier": "referat_user",
-        "roleName": "Referat bruger",
+        "roleIdentifier": "tt-bruger",
+        "roleName": "Bruger",
         "roleConstraintValues": []
       },
       {
-        "roleIdentifier": "referat_lead",
-        "roleName": "Referat leder",
+        "roleIdentifier": "tt-skabelonansvarlig",
+        "roleName": "Skabelonansvarlig",
         "roleConstraintValues": [
           {
             "constraintType": "http://sts.kombit.dk/constraints/orgenhed/1",
@@ -28,16 +28,21 @@
     "userId": "jens.t",
     "assignments": [
       {
-        "roleIdentifier": "referat_lead",
-        "roleName": "Referat leder",
+        "roleIdentifier": "tt-skabelonansvarlig",
+        "roleName": "Skabelonansvarlig",
         "roleConstraintValues": [
           {
             "constraintType": "http://digital-identity.dk/constraints/orgunit/1",
-            "constraintValues": ["5a1b0000-0000-4000-8000-000000000002"]
+            "constraintValues": [
+              "5a1b0000-0000-4000-8000-000000000002"
+            ]
           },
           {
             "constraintType": "http://sts.kombit.dk/constraints/KLE/1",
-            "constraintValues": ["27.45.00", "27.48.00"]
+            "constraintValues": [
+              "27.45.00",
+              "27.48.00"
+            ]
           }
         ]
       }
@@ -48,18 +53,20 @@
     "userId": "peter.d",
     "assignments": [
       {
-        "roleIdentifier": "referat_lead",
-        "roleName": "Referat leder",
+        "roleIdentifier": "tt-skabelonansvarlig",
+        "roleName": "Skabelonansvarlig",
         "roleConstraintValues": [
           {
             "constraintType": "http://sts.kombit.dk/constraints/orgenhed/1",
-            "constraintValues": ["5a1b0000-0000-4000-8000-000000000003"]
+            "constraintValues": [
+              "5a1b0000-0000-4000-8000-000000000003"
+            ]
           }
         ]
       },
       {
-        "roleIdentifier": "referat_lead",
-        "roleName": "Referat leder",
+        "roleIdentifier": "tt-skabelonansvarlig",
+        "roleName": "Skabelonansvarlig",
         "roleConstraintValues": []
       }
     ]
@@ -69,8 +76,106 @@
     "userId": "sofie.s",
     "assignments": [
       {
-        "roleIdentifier": "referat_user",
-        "roleName": "Referat bruger",
+        "roleIdentifier": "tt-bruger",
+        "roleName": "Bruger",
+        "roleConstraintValues": []
+      }
+    ]
+  },
+  {
+    "extUuid": "9d3c0000-0000-4000-8000-000000000004",
+    "userId": "lars.f",
+    "assignments": [
+      {
+        "roleIdentifier": "tt-bruger",
+        "roleName": "Bruger",
+        "roleConstraintValues": []
+      },
+      {
+        "roleIdentifier": "tt-logleser",
+        "roleName": "Logleser",
+        "roleConstraintValues": [
+          {
+            "constraintType": "http://digital-identity.dk/constraints/orgunit/1",
+            "constraintValues": [
+              "5a1b0000-0000-4000-8000-000000000004",
+              "5a1b0000-0000-4000-8000-000000000077"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extUuid": "9d3c0000-0000-4000-8000-000000000001",
+    "userId": "mette.e",
+    "assignments": [
+      {
+        "roleIdentifier": "tt-administrator",
+        "roleName": "Administrator",
+        "roleConstraintValues": [
+          {
+            "constraintType": "http://digital-identity.dk/constraints/orgunit/1",
+            "constraintValues": [
+              "5a1b0000-0000-4000-8000-000000000001"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "extUuid": "9d3c0000-0000-4000-8000-000000000007",
+    "userId": "ida.l",
+    "assignments": [
+      {
+        "roleIdentifier": "tt-logleser",
+        "roleName": "Logleser",
+        "roleConstraintValues": []
+      }
+    ]
+  },
+  {
+    "extUuid": "9d3c0000-0000-4000-8000-000000000008",
+    "userId": "ole.k",
+    "assignments": [
+      {
+        "roleIdentifier": "tt-skabelonansvarlig",
+        "roleName": "Skabelonansvarlig",
+        "roleConstraintValues": [
+          {
+            "constraintType": "http://digital-identity.dk/constraints/orgunit/1",
+            "constraintValues": [
+              "5a1b0000-0000-4000-8000-000000000077"
+            ]
+          }
+        ]
+      },
+      {
+        "roleIdentifier": "referat_legacy",
+        "roleName": "Gammel rolle",
+        "roleConstraintValues": []
+      }
+    ]
+  },
+  {
+    "extUuid": "9d3c0000-0000-4000-8000-000000000009",
+    "userId": "rune.a",
+    "assignments": [
+      {
+        "roleIdentifier": "tt-administrator",
+        "roleName": "Administrator",
+        "roleConstraintValues": []
+      }
+    ]
+  },
+  {
+    "extUuid": "9d3c0000-0000-4000-8000-000000000099",
+    "userId": "ghost.u",
+    "assignments": [
+      {
+        "roleIdentifier": "tt-bruger",
+        "roleName": "Bruger",
         "roleConstraintValues": []
       }
     ]

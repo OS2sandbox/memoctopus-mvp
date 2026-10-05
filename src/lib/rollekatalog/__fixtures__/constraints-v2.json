@@ -1,0 +1,29 @@
+[
+  {
+    "id": 1,
+    "uuid": "49be31cf-a1c5-4be1-bb96-73e693cce3ef",
+    "entityId": "http://digital-identity.dk/constraints/orgunit/1",
+    "name": "Enhed",
+    "description": null,
+    "uiType": "REGEX",
+    "regex": null
+  },
+  {
+    "id": 7,
+    "uuid": "c0a50000-0000-4000-8000-000000000007",
+    "entityId": "http://sts.kombit.dk/constraints/orgenhed/1",
+    "name": "Organisation",
+    "description": null,
+    "uiType": "REGEX",
+    "regex": null
+  },
+  {
+    "id": 8,
+    "uuid": "c0a50000-0000-4000-8000-000000000008",
+    "entityId": "http://sts.kombit.dk/constraints/KLE/1",
+    "name": "KLE",
+    "description": null,
+    "uiType": "REGEX",
+    "regex": null
+  }
+]

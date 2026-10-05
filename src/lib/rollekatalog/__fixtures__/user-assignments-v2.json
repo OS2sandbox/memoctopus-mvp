@@ -16,8 +16,8 @@
     ],
     "userRole": {
       "id": 11,
-      "name": "Referat leder",
-      "identifier": "referat_userrole_leder",
+      "name": "Skabelonansvarlig",
+      "identifier": "tt-skabelonansvarlig-rolle",
       "description": null,
       "delegatedFromCvr": null,
       "userOnly": false,
@@ -27,7 +27,7 @@
       "systemRoleAssignments": [
         {
           "systemRoleId": 42,
-          "systemRoleIdentifier": "referat_lead",
+          "systemRoleIdentifier": "tt-skabelonansvarlig",
           "constraintValues": [
             {
               "constraintTypeId": 7,

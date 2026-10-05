@@ -1,0 +1,257 @@
+// Read-only HTTP client for OS2rollekatalog. GET only (the app never calls the
+// write/assign endpoints), auth via the `ApiKey` header (never Authorization),
+// never logs anything, and every failure is a RollekatalogError carrying a short
+// code: no URL query, header, key or body can leak through an error.
+import {
+  ROLES_AS_LIST_MAX_BYTES,
+  itSystemId as configuredItSystemId,
+  loginRefreshTimeoutMs,
+  maxResponseBytes,
+  orgKey as configuredOrgKey,
+  readKey as configuredReadKey,
+  rollekatalogDomain,
+  rollekatalogUrl,
+  timeoutMs as configuredTimeoutMs,
+  validateRollekatalogUrl,
+} from './config';
+import { RollekatalogError } from './errors';
+import {
+  constraintTypesSchema,
+  managersSchema,
+  organisationSchema,
+  parseOrThrow,
+  roleAssignmentsSchema,
+  rolesAsListSchema,
+  type RkConstraintType,
+  type RkManager,
+  type RkOrganisation,
+  type RkRolesAsList,
+  type RkUserAssignments,
+} from './schemas';
+
+export const API_KEY_HEADER = 'ApiKey';
+/** Retries after the first attempt (timeout, 5xx, 429, network only). */
+export const MAX_RETRIES = 2;
+const BASE_BACKOFF_MS = 250;
+
+export interface ClientOptions {
+  /** Test seam: replaces global fetch. */
+  fetch?: typeof fetch;
+  /** Test seam: replaces ROLLEKATALOG_URL (still validated: https rule applies). */
+  baseUrl?: string;
+  /** Test seam: replace the env keys. null forces "unset". */
+  readKey?: string | null;
+  orgKey?: string | null;
+  itSystemId?: string;
+  domain?: string | null;
+  timeoutMs?: number;
+  maxBytes?: number;
+  /** Retries after the first attempt, at most MAX_RETRIES. */
+  retries?: number;
+  /** Base for the exponential backoff between attempts. */
+  backoffMs?: number;
+  /** Test seam: replaces the real sleep. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+type KeyKind = 'read' | 'org';
+
+interface RequestSpec {
+  path: string;
+  query?: Record<string, string | null | undefined>;
+  key: KeyKind;
+  /** Per-call overrides of the client options (the login refresh is tighter). */
+  timeoutMs?: number;
+  maxBytes?: number;
+  /** Per-call cap on retries (the login refresh never retries: it sits on the sign-in path). */
+  maxRetries?: number;
+}
+
+const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function statusToError(status: number): RollekatalogError {
+  if (status === 401) return new RollekatalogError('unauthorized', status);
+  if (status === 403) return new RollekatalogError('forbidden', status);
+  if (status === 404) return new RollekatalogError('not_found', status);
+  // 429 is retried like a 5xx: the server asked us to slow down, not to give up.
+  if (status >= 500 || status === 429) return new RollekatalogError('server_error', status);
+  // Other 4xx and any redirect: not something retrying would fix. Redirects are
+  // not followed, because a custom header such as ApiKey would be re-sent to the target.
+  return new RollekatalogError('invalid_response', status);
+}
+
+const RETRYABLE = new Set(['timeout', 'network', 'server_error']);
+
+async function readBody(res: Response, maxBytes: number): Promise<string> {
+  const declared = Number(res.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    void res.body?.cancel().catch(() => {});
+    throw new RollekatalogError('too_large', res.status);
+  }
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      void reader.cancel().catch(() => {});
+      throw new RollekatalogError('too_large', res.status);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+export class RollekatalogClient {
+  constructor(private readonly opts: ClientOptions = {}) {}
+
+  private baseUrl(): string {
+    const resolved = this.opts.baseUrl !== undefined ? validateRollekatalogUrl(this.opts.baseUrl) : rollekatalogUrl();
+    if (resolved.issue) throw new RollekatalogError(resolved.issue);
+    return resolved.url;
+  }
+
+  private key(kind: KeyKind): string {
+    const k =
+      kind === 'read'
+        ? this.opts.readKey !== undefined
+          ? this.opts.readKey
+          : configuredReadKey()
+        : this.opts.orgKey !== undefined
+          ? this.opts.orgKey
+          : configuredOrgKey();
+    if (!k) throw new RollekatalogError('not_configured');
+    return k;
+  }
+
+  private system(): string {
+    return this.opts.itSystemId ?? configuredItSystemId();
+  }
+
+  private domain(): string | null {
+    return this.opts.domain !== undefined ? this.opts.domain : rollekatalogDomain();
+  }
+
+  private async attempt(url: string, key: string, timeoutMs: number, maxBytes: number): Promise<unknown> {
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+    try {
+      const doFetch = this.opts.fetch ?? fetch;
+      let res: Response;
+      try {
+        res = await doFetch(url, {
+          method: 'GET',
+          headers: { [API_KEY_HEADER]: key, Accept: 'application/json' },
+          redirect: 'manual',
+          signal: controller.signal,
+          cache: 'no-store',
+        });
+      } catch {
+        // The fetch error can embed the host or a cause chain; only the class of failure is kept.
+        throw new RollekatalogError(timedOut ? 'timeout' : 'network');
+      }
+      if (res.status < 200 || res.status >= 300) {
+        void res.body?.cancel().catch(() => {});
+        throw statusToError(res.status);
+      }
+      let text: string;
+      try {
+        text = await readBody(res, maxBytes);
+      } catch (err) {
+        if (err instanceof RollekatalogError) throw err;
+        throw new RollekatalogError(timedOut ? 'timeout' : 'network', res.status);
+      }
+      try {
+        return JSON.parse(text) as unknown;
+      } catch {
+        throw new RollekatalogError('invalid_response', res.status);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async request(spec: RequestSpec): Promise<unknown> {
+    const base = this.baseUrl();
+    const key = this.key(spec.key);
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(spec.query ?? {})) if (v) qs.set(k, v);
+    const query = qs.toString();
+    const url = `${base}${spec.path}${query ? `?${query}` : ''}`;
+    const timeoutMs = spec.timeoutMs ?? this.opts.timeoutMs ?? configuredTimeoutMs();
+    const maxBytes = spec.maxBytes ?? this.opts.maxBytes ?? maxResponseBytes();
+    const retries = Math.min(Math.max(this.opts.retries ?? MAX_RETRIES, 0), spec.maxRetries ?? MAX_RETRIES);
+    const backoff = this.opts.backoffMs ?? BASE_BACKOFF_MS;
+    const sleep = this.opts.sleep ?? realSleep;
+
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.attempt(url, key, timeoutMs, maxBytes);
+      } catch (err) {
+        const retryable = err instanceof RollekatalogError && RETRYABLE.has(err.code);
+        if (!retryable || attempt >= retries) throw err;
+        await sleep(backoff * 2 ** attempt);
+      }
+    }
+  }
+
+  /** ORG key. Heavy, synchronized on the Rollekatalog side: call it only from the sync. */
+  async getOrganisation(): Promise<RkOrganisation> {
+    return parseOrThrow(organisationSchema, await this.request({ path: '/api/organisation/v3', key: 'org' }));
+  }
+
+  /** ORG key (READ_ACCESS is refused). */
+  async getManagers(): Promise<RkManager[]> {
+    return parseOrThrow(managersSchema, await this.request({ path: '/api/v2/manager', key: 'org' }));
+  }
+
+  /** READ key. Effective assignments with resolved constraint values for our IT system. */
+  async getRoleAssignments(): Promise<RkUserAssignments[]> {
+    const data = await this.request({
+      path: `/api/read/itsystem/roleAssignmentsWithContraints/${encodeURIComponent(this.system())}`,
+      query: { domain: this.domain() },
+      key: 'read',
+    });
+    return parseOrThrow(roleAssignmentsSchema, data);
+  }
+
+  /**
+   * READ key. Login-time check only: EVERY successful call writes an audit row in
+   * Rollekatalog. 404 (empty body) = unknown user or system: RollekatalogError('not_found').
+   */
+  async getRolesAsList(userId: string, opts: { login?: boolean } = {}): Promise<RkRolesAsList> {
+    const data = await this.request({
+      path: `/api/user/${encodeURIComponent(userId)}/rolesAsList`,
+      query: { system: this.system(), domain: this.domain() },
+      key: 'read',
+      timeoutMs: opts.login ? Math.min(this.opts.timeoutMs ?? loginRefreshTimeoutMs(), loginRefreshTimeoutMs()) : undefined,
+      maxRetries: opts.login ? 0 : undefined,
+      maxBytes: Math.min(this.opts.maxBytes ?? ROLES_AS_LIST_MAX_BYTES, ROLES_AS_LIST_MAX_BYTES),
+    });
+    return parseOrThrow(rolesAsListSchema, data);
+  }
+
+  /** READ key. */
+  async getConstraints(): Promise<RkConstraintType[]> {
+    return parseOrThrow(constraintTypesSchema, await this.request({ path: '/api/v2/constraint', key: 'read' }));
+  }
+}
+
+/** A client that reads URL, keys and limits from the environment at call time. */
+export function createRollekatalogClient(opts: ClientOptions = {}): RollekatalogClient {
+  return new RollekatalogClient(opts);
+}
+
+export const getOrganisation = (opts?: ClientOptions) => createRollekatalogClient(opts).getOrganisation();
+export const getManagers = (opts?: ClientOptions) => createRollekatalogClient(opts).getManagers();
+export const getRoleAssignments = (opts?: ClientOptions) => createRollekatalogClient(opts).getRoleAssignments();
+export const getRolesAsList = (userId: string, opts?: ClientOptions & { login?: boolean }) =>
+  createRollekatalogClient(opts).getRolesAsList(userId, { login: opts?.login });
+export const getConstraints = (opts?: ClientOptions) => createRollekatalogClient(opts).getConstraints();

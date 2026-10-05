@@ -1,0 +1,46 @@
+{
+  "itSystem": {
+    "name": "Referat (tale til tekst)",
+    "systemtype": "SAML",
+    "defaultIdentifier": "os2taletiltekst"
+  },
+  "orgUnitConstraintEntityId": "http://digital-identity.dk/constraints/orgunit/1",
+  "systemRoles": [
+    {
+      "identifier": "tt-bruger",
+      "name": "Bruger",
+      "description": "Kan bruge løsningen og de skabeloner, der er stillet til rådighed.",
+      "weight": 1,
+      "roleType": "FUNCTION_ROLE",
+      "supportsOrgUnitConstraint": false,
+      "constraintMandatory": false
+    },
+    {
+      "identifier": "tt-skabelonansvarlig",
+      "name": "Skabelonansvarlig",
+      "description": "Kan oprette og vedligeholde skabeloner for sin enhed og dens underenheder.",
+      "weight": 1,
+      "roleType": "FUNCTION_ROLE",
+      "supportsOrgUnitConstraint": true,
+      "constraintMandatory": false
+    },
+    {
+      "identifier": "tt-logleser",
+      "name": "Logleser",
+      "description": "Kan læse revisionsloggen for sin enhed og dens underenheder.",
+      "weight": 1,
+      "roleType": "FUNCTION_ROLE",
+      "supportsOrgUnitConstraint": true,
+      "constraintMandatory": false
+    },
+    {
+      "identifier": "tt-administrator",
+      "name": "Administrator",
+      "description": "Fuld administration af løsningen, herunder adgangsstyring og synkronisering. Kan ikke afgrænses til en enhed.",
+      "weight": 1,
+      "roleType": "FUNCTION_ROLE",
+      "supportsOrgUnitConstraint": false,
+      "constraintMandatory": false
+    }
+  ]
+}

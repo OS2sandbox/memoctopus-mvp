@@ -54,8 +54,12 @@
           "functionUuid": "f00d0000-0000-4000-8000-000000000001"
         }
       ],
-      "klePerforming": ["27.45.00"],
-      "kleInterest": ["27.48.00"]
+      "klePerforming": [
+        "27.45.00"
+      ],
+      "kleInterest": [
+        "27.48.00"
+      ]
     },
     {
       "extUuid": "9d3c0000-0000-4000-8000-000000000003",
@@ -154,6 +158,81 @@
       "functions": [],
       "klePerforming": [],
       "kleInterest": []
+    },
+    {
+      "extUuid": "9d3c0000-0000-4000-8000-000000000007",
+      "uuid": "7e5e0000-0000-4000-8000-000000000007",
+      "userId": "ida.l",
+      "name": "Ida Logsen",
+      "email": "ida.l@example.dk",
+      "phone": "00000007",
+      "cpr": "0000000000",
+      "nemloginUuid": null,
+      "doNotInherit": false,
+      "disabled": false,
+      "positions": [
+        {
+          "name": "Digital supporter",
+          "orgUnitUuid": "5a1b0000-0000-4000-8000-000000000005",
+          "titleUuid": "c0de0000-0000-4000-8000-000000000006",
+          "doNotInherit": false
+        }
+      ],
+      "functions": [],
+      "klePerforming": [],
+      "kleInterest": []
+    },
+    {
+      "extUuid": "9d3c0000-0000-4000-8000-000000000008",
+      "uuid": "7e5e0000-0000-4000-8000-000000000008",
+      "userId": "ole.k",
+      "name": "Ole Konsulentsen",
+      "email": "ole.k@example.dk",
+      "phone": "00000008",
+      "cpr": "0000000000",
+      "nemloginUuid": null,
+      "doNotInherit": false,
+      "disabled": false,
+      "positions": [
+        {
+          "name": "Konsulent",
+          "orgUnitUuid": "5a1b0000-0000-4000-8000-000000000002",
+          "titleUuid": "c0de0000-0000-4000-8000-000000000004",
+          "doNotInherit": false
+        }
+      ],
+      "functions": [],
+      "klePerforming": [],
+      "kleInterest": []
+    },
+    {
+      "extUuid": "9d3c0000-0000-4000-8000-000000000009",
+      "uuid": "7e5e0000-0000-4000-8000-000000000009",
+      "userId": "rune.a",
+      "name": "Rune Adminsen",
+      "email": "rune.a@example.dk",
+      "phone": "00000009",
+      "cpr": "0000000000",
+      "nemloginUuid": null,
+      "doNotInherit": false,
+      "disabled": false,
+      "positions": [
+        {
+          "name": "IT-chef",
+          "orgUnitUuid": "5a1b0000-0000-4000-8000-000000000004",
+          "titleUuid": "c0de0000-0000-4000-8000-000000000002",
+          "doNotInherit": false
+        },
+        {
+          "name": "Projektleder",
+          "orgUnitUuid": "5a1b0000-0000-4000-8000-000000000003",
+          "titleUuid": "c0de0000-0000-4000-8000-000000000003",
+          "doNotInherit": false
+        }
+      ],
+      "functions": [],
+      "klePerforming": [],
+      "kleInterest": []
     }
   ],
   "orgUnits": [
@@ -169,7 +248,9 @@
         "uuid": "7e5e0000-0000-4000-8000-000000000001",
         "userId": "mette.e"
       },
-      "titleIdentifiers": ["c0de0000-0000-4000-8000-000000000001"]
+      "titleIdentifiers": [
+        "c0de0000-0000-4000-8000-000000000001"
+      ]
     },
     {
       "uuid": "5a1b0000-0000-4000-8000-000000000002",
@@ -177,7 +258,9 @@
       "parentOrgUnitUuid": "5a1b0000-0000-4000-8000-000000000001",
       "inheritKle": true,
       "level": "LEVEL_2",
-      "klePerforming": ["27.45.00"],
+      "klePerforming": [
+        "27.45.00"
+      ],
       "kleInterest": [],
       "manager": {
         "uuid": "7e5e0000-0000-4000-8000-000000000002",
@@ -200,6 +283,22 @@
       "titleIdentifiers": [
         "c0de0000-0000-4000-8000-000000000003",
         "c0de0000-0000-4000-8000-000000000004"
+      ]
+    },
+    {
+      "uuid": "5a1b0000-0000-4000-8000-000000000005",
+      "name": "Digital Support",
+      "parentOrgUnitUuid": "5a1b0000-0000-4000-8000-000000000003",
+      "inheritKle": false,
+      "level": "LEVEL_4",
+      "klePerforming": [],
+      "kleInterest": [],
+      "manager": {
+        "uuid": "7e5e0000-0000-4000-8000-000000000099",
+        "userId": "ghost.m"
+      },
+      "titleIdentifiers": [
+        "c0de0000-0000-4000-8000-000000000006"
       ]
     },
     {
