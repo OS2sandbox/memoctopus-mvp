@@ -181,3 +181,34 @@ describe('OrganisationAdmin — create, edit, delete', () => {
     await waitFor(() => expect(calls(mock, 'GET', '/api/admin/access/org-units').length).toBeGreaterThan(1));
   });
 });
+
+describe('OrganisationAdmin — Rollekatalog data and last sync', () => {
+  it('labels the data as coming from Rollekatalog with the last sync time in rollekatalog mode', async () => {
+    setup(ROLLEKATALOG_ME, {
+      'GET /api/admin/access/sync': () =>
+        json({
+          run: { id: 'r1', startedAt: '2026-10-05T10:00:00.000Z', finishedAt: '2026-10-05T10:00:03.000Z', status: 'success', counts: null, errorCode: null },
+          source: 'rollekatalog',
+          configIssue: null,
+        }),
+    });
+    renderWithToasts(<OrganisationAdmin />);
+    expect(await screen.findByText(/Data hentes fra Rollekatalog\. Sidst synkroniseret .*2026/)).toBeInTheDocument();
+  });
+
+  it('does not ask for the run in local mode', async () => {
+    const mock = setup();
+    renderWithToasts(<OrganisationAdmin />);
+    await screen.findByText('Kommune');
+    expect(screen.queryByText(/Data hentes fra Rollekatalog/)).toBeNull();
+    expect(calls(mock, 'GET', '/api/admin/access/sync')).toHaveLength(0);
+  });
+
+  it('a directory reader without access.manage or sync.run only sees the source label (no audited 403)', async () => {
+    const mock = setup({ ...READER_ME, source: 'rollekatalog', readOnly: true });
+    renderWithToasts(<OrganisationAdmin />);
+    await screen.findByText('Kommune');
+    expect(screen.getByText('Data hentes fra Rollekatalog.')).toBeInTheDocument();
+    expect(calls(mock, 'GET', '/api/admin/access/sync')).toHaveLength(0);
+  });
+});

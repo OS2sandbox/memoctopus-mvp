@@ -10,6 +10,7 @@ import { useMe } from '@/lib/hooks/use-me';
 import { apiRequest } from './api';
 import { AdminPage, ReadOnlyBanner } from './AdminPage';
 import { describeCapabilityScope } from './scope-text';
+import { SyncStatus } from './SyncStatus';
 
 interface UnitName {
   uuid: string;
@@ -108,6 +109,8 @@ export function AdminOverview() {
           </TableBody>
         </Table>
       </section>
+
+      <SyncStatus me={me} />
     </AdminPage>
   );
 }

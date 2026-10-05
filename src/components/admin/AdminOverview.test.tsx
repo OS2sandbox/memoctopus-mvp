@@ -106,4 +106,48 @@ describe('AdminOverview', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Kunne ikke hente dine rettigheder.');
     expect(screen.getByRole('button', { name: 'Prøv igen' })).toBeInTheDocument();
   });
+
+  describe('sync status panel', () => {
+    const SYNC_RUN = {
+      run: {
+        id: 'r1',
+        startedAt: '2026-10-05T10:00:00.000Z',
+        finishedAt: '2026-10-05T10:00:03.000Z',
+        status: 'success',
+        counts: { usersUpserted: 7 },
+        errorCode: null,
+      },
+      source: 'rollekatalog',
+      configIssue: null,
+    };
+
+    it('is shown to a sync.run holder in rollekatalog mode, with the last run and the buttons', async () => {
+      routes['/api/me'] = () => json(me({ source: 'rollekatalog', readOnly: true, capabilities: ['template.use', 'sync.run'] }));
+      routes['/api/admin/access/sync'] = () => json(SYNC_RUN);
+      render(<AdminOverview />);
+      expect(await screen.findByRole('heading', { name: 'Synkronisering med Rollekatalog' })).toBeInTheDocument();
+      expect(await screen.findByText('Gennemført')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Synkroniser nu' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Test forbindelse' })).toBeInTheDocument();
+    });
+
+    it('in local mode a sync.run holder gets only Test forbindelse, and no sync data is fetched', async () => {
+      routes['/api/me'] = () => json(me({ capabilities: ['template.use', 'sync.run'] }));
+      render(<AdminOverview />);
+      await screen.findByText('Anne Admin');
+      expect(screen.queryByRole('heading', { name: 'Synkronisering med Rollekatalog' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Test forbindelse' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Synkroniser nu' })).toBeNull();
+      expect(fetchMock.mock.calls.map((c) => c[0])).not.toContain('/api/admin/access/sync');
+    });
+
+    it('is hidden for a viewer without sync.run in rollekatalog mode', async () => {
+      routes['/api/me'] = () => json(me({ source: 'rollekatalog', readOnly: true, capabilities: ['template.use', 'access.manage'] }));
+      routes['/api/admin/access/org-units'] = () => json({ orgUnits: [] });
+      render(<AdminOverview />);
+      await screen.findByText('Anne Admin');
+      expect(screen.queryByRole('button', { name: 'Synkroniser nu' })).toBeNull();
+      expect(fetchMock.mock.calls.map((c) => c[0])).not.toContain('/api/admin/access/sync');
+    });
+  });
 });

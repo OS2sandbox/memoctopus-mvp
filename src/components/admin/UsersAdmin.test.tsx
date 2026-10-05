@@ -222,3 +222,32 @@ describe('UsersAdmin — revoke', () => {
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('Skrivebeskyttet');
   });
 });
+
+describe('UsersAdmin — Rollekatalog data and last sync', () => {
+  const RUN = {
+    run: { id: 'r1', startedAt: '2026-10-05T10:00:00.000Z', finishedAt: '2026-10-05T10:00:03.000Z', status: 'success', counts: null, errorCode: null },
+    source: 'rollekatalog',
+    configIssue: null,
+  };
+
+  it('labels the data as coming from Rollekatalog and shows the last sync time in rollekatalog mode', async () => {
+    setup(ROLLEKATALOG_ME, { 'GET /api/admin/access/sync': () => json(RUN) });
+    renderWithToasts(<UsersAdmin />);
+    expect(await screen.findByText(/Data hentes fra Rollekatalog\. Sidst synkroniseret .*2026/)).toBeInTheDocument();
+  });
+
+  it('shows no sync line in local mode and does not ask for the run', async () => {
+    const mock = setup();
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.queryByText(/Data hentes fra Rollekatalog/)).toBeNull();
+    expect(calls(mock, 'GET', '/api/admin/access/sync')).toHaveLength(0);
+  });
+
+  it('still works (without the time) when the run cannot be read', async () => {
+    setup(ROLLEKATALOG_ME, { 'GET /api/admin/access/sync': () => json({ error: 'x' }, 500) });
+    renderWithToasts(<UsersAdmin />);
+    expect(await screen.findByText('Bo Bruger')).toBeInTheDocument();
+    expect(screen.getByText('Data hentes fra Rollekatalog.')).toBeInTheDocument();
+  });
+});

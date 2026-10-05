@@ -18,6 +18,7 @@ import { apiRequest } from './api';
 import { AdminPage, ReadOnlyBanner } from './AdminPage';
 import { RoleGrantDialog } from './RoleGrantDialog';
 import { describeAssignmentScope } from './scope-text';
+import { LastSyncLine } from './SyncStatus';
 import type { TreeUnit } from './org-tree';
 
 // Mirrors AssignmentView / AppUserView from the access service (JSON, so dates are strings).
@@ -118,6 +119,7 @@ export function UsersAdmin() {
   return (
     <AdminPage title="Brugere og roller" description="Brugere i løsningen og de roller, de er tildelt.">
       {me?.readOnly && <ReadOnlyBanner />}
+      <LastSyncLine me={me} />
       {me && !me.readOnly && denial && <p className="text-[13px] text-[var(--muted)]">{denial}</p>}
       <ErrorBanner message={meError} />
       <ErrorBanner message={loadError} onRetry={() => load(appliedQ)} />

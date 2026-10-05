@@ -16,6 +16,7 @@ import { AdminPage, ReadOnlyBanner } from './AdminPage';
 import { flattenOrgTree } from './org-tree';
 import { OrgUnitFormDialog } from './OrgUnitFormDialog';
 import { OrgUnitMembersDialog } from './OrgUnitMembersDialog';
+import { LastSyncLine } from './SyncStatus';
 
 interface OrgUnit {
   uuid: string;
@@ -75,6 +76,7 @@ export function OrganisationAdmin() {
   return (
     <AdminPage title="Organisation" description="Organisationsenheder og deres medlemmer.">
       {me?.readOnly && <ReadOnlyBanner />}
+      <LastSyncLine me={me} />
       {me && !me.readOnly && denial && (
         <p className="text-[13px] text-[var(--muted)]">Kun visning. {denial}</p>
       )}
