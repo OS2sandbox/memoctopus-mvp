@@ -10,6 +10,8 @@ import {
   primaryKey,
   unique,
   index,
+  uniqueIndex,
+  bigserial,
   check,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
@@ -236,6 +238,52 @@ export const syncRuns = pgTable(
     errorCode: text('error_code'),
   },
   (t) => [check('sync_runs_status_check', sql`${t.status} in ('running', 'success', 'failed')`)],
+);
+
+// ─── Audit log (public schema, append-only) ────────────────────────────────
+// Activity METADATA only: opaque entity ids and short codes, never content.
+// actor_user_id and actor_org_unit_uuid deliberately have NO foreign key so rows
+// survive user and org-unit deletion. The immutability triggers are hand-appended
+// to drizzle/0002_audit_events.sql (drizzle-kit cannot express them).
+
+export const auditSourceValues = ['server', 'client', 'system'] as const;
+export const auditOutcomeValues = ['success', 'denied', 'error'] as const;
+
+export const auditEvents = pgTable(
+  'audit_events',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull().defaultNow(),
+    source: text('source').notNull(),
+    eventType: text('event_type').notNull(),
+    outcome: text('outcome').notNull(),
+    actorUserId: text('actor_user_id'),
+    actorName: text('actor_name'),
+    actorOrgUnitUuid: uuid('actor_org_unit_uuid'),
+    entityType: text('entity_type'),
+    entityId: text('entity_id'),
+    secondaryEntityType: text('secondary_entity_type'),
+    secondaryEntityId: text('secondary_entity_id'),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    requestId: text('request_id'),
+    details: jsonb('details').notNull().default({}),
+    clientEventId: uuid('client_event_id'),
+    clientOccurredAt: timestamp('client_occurred_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('audit_events_occurred_at_idx').on(t.occurredAt),
+    index('audit_events_actor_idx').on(t.actorUserId, t.id),
+    index('audit_events_event_type_idx').on(t.eventType, t.id),
+    index('audit_events_entity_idx').on(t.entityType, t.entityId),
+    index('audit_events_org_unit_idx').on(t.actorOrgUnitUuid, t.id),
+    // Idempotent client delivery: a retried batch cannot insert the same event twice.
+    uniqueIndex('audit_events_client_event_unique')
+      .on(t.actorUserId, t.clientEventId)
+      .where(sql`${t.clientEventId} is not null`),
+    check('audit_events_source_check', sql`${t.source} in ('server', 'client', 'system')`),
+    check('audit_events_outcome_check', sql`${t.outcome} in ('success', 'denied', 'error')`),
+  ],
 );
 
 // ─── Per-user schema helpers ────────────────────────────────────────────────

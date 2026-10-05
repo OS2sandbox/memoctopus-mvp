@@ -15,6 +15,13 @@
       "when": 1791202473377,
       "tag": "0001_central_access",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791205659820,
+      "tag": "0002_audit_events",
+      "breakpoints": true
     }
   ]
 }
