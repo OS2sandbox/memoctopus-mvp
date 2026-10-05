@@ -116,6 +116,14 @@ services:
       - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID:-}
       - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET:-}
       - AUTHENTIK_DISCOVERY_URL=${AUTHENTIK_DISCOVERY_URL:-}
+      # Central access control. Read at runtime (no rebuild). Defaults keep
+      # today's behaviour: local roles, everyone gets the baseline role.
+      - ACCESS_SOURCE=${ACCESS_SOURCE:-local}
+      - REQUIRE_ROLE_TO_LOGIN=${REQUIRE_ROLE_TO_LOGIN:-false}
+      - BOOTSTRAP_ADMIN_EMAILS=${BOOTSTRAP_ADMIN_EMAILS:-}
+      - DIRECTORY_MATCH=${DIRECTORY_MATCH:-userid-claim}
+      - DIRECTORY_USERID_CLAIM=${DIRECTORY_USERID_CLAIM:-preferred_username}
+      - AUTH_IP_HEADERS=${AUTH_IP_HEADERS:-}
       # Skabelon sharing. Read at runtime (no rebuild). Code sharing is on unless
       # "false"; link sharing is opt-in and only on when "true".
       - SKABELON_SHARE_CODE=${SKABELON_SHARE_CODE:-true}

@@ -58,6 +58,17 @@ Which login methods exist is decided in one place — `src/lib/auth/providers.ts
 
 Auth config is deliberately **runtime-only**, never `NEXT_PUBLIC_*`: an operator changes `.env` and restarts, with no image rebuild. That is why `(marketing)/page.tsx` sets `export const dynamic = 'force-dynamic'` — without it Next prerenders the page and freezes the provider list into the build-time RSC payload (`src/app/(marketing)/page.test.tsx` guards this).
 
+**Central access control (Phase 1)** — roles and org units live in the **shared `public` schema** and are accessed with **Drizzle** (`src/lib/db/schema.ts`: `directory_users`, `org_units`, `org_unit_members`, `org_unit_substitutes`, `role_assignments`, `external_identities`, `sync_runs`), not per-user raw SQL. Any raw SQL against them must be schema-qualified (`public.table`). Overview for implementers: `docs/central-access/README.md`.
+
+- **Principal / capabilities**: `resolvePrincipal(userId)` (`src/lib/authz/principal.ts`) reads the tables live on every call (no cache, nothing in the cookie) and feeds the pure `buildPrincipalFromAssignments` in `capabilities.ts`. That file holds the only role-to-capability matrix (`ROLE_DEFINITIONS`); four roles (`tt-bruger`, `tt-skabelonansvarlig`, `tt-logleser`, `tt-administrator`) and seven capabilities, three of them org-unit scoped. `permissions.ts` has pure predicates, `scope.ts` the cycle-safe, depth-capped org-tree queries.
+- **Routes**: wrap with `withAuthz(label, capability, handler, { requireLocalSource })` from `src/lib/authz/guard.ts` instead of repeating the session check. Order is 401, disabled 403, missing capability 403, then 409 for local-provider writes while `ACCESS_SOURCE=rollekatalog`. A resource outside the caller's scope answers 404, not 403 (`notFoundOrForbidden`).
+- **Source**: `ACCESS_SOURCE=local` (default) lets an administrator edit roles in the app; in `rollekatalog` mode the local write endpoints answer 409 and `resolvePrincipal` ignores leftover `source='local'` assignments (they could not be revoked). All settings are read at call time in `src/lib/authz/config.ts`.
+- **Baseline**: unless `REQUIRE_ROLE_TO_LOGIN=true`, every non-disabled user implicitly holds `tt-bruger`, so existing users keep working with no assignment.
+- **Identity link**: in local mode a role is tied to an app user **only** through `directory_users.app_user_id`, never by email (an email/password sign-up can claim any address). `matchDirectoryUser` (claim/email matching) runs only in rollekatalog mode and never for `provider_id = 'credential'`.
+- **Bootstrap admin**: `BOOTSTRAP_ADMIN_EMAILS` grants `tt-administrator` once, in local mode, while no active administrator exists, and only for an SSO login that proves the address (Microsoft: single-tenant `MICROSOFT_TENANT_ID` + matching `tid`; other OIDC: `email_verified === true`). It runs from the `session.create.after` hook (`login-hook.ts`), which never throws.
+- **Fail closed**: disabled directory users get 403 from `withAuthz` and "Ingen adgang" from the `(app)` layout (the older `/api` routes do not consult the principal yet); a NULL scope on `tt-skabelonansvarlig` covers no unit (only `tt-logleser`/`tt-administrator` may be global); `access.manage`, `sync.run` and `audit.export` only take effect from a global assignment, and `tt-administrator` cannot be scoped to a unit; unknown role keys, expired or future assignments grant nothing; org-tree walks cannot loop on bad data.
+- **Audit seam**: admin writes and authz denials already call `recordAdminAction` / `recordAuthzDenied` (`src/lib/audit/seam.ts`). They are no-ops until Phase 2 adds the audit table; events carry ids and codes only.
+
 **AI pipeline** (after a meeting is recorded):
 1. `src/lib/ai/transcription.ts` — STT via the hviske (`syvai/hviske-ensemble`) server's OpenAI-compatible API. Used for both the per-utterance live path (`/api/meetings/[id]/utterance`) and the batch transcribe pass. Configured via `HVISKE_URL` / `HVISKE_API_KEY`. Speaker diarization (`src/lib/ai/diarization.ts`) is now co-hosted on the same server at `POST /diarize`; hviske still returns plain text only, so segment timestamps are VAD-estimated and the diarization turns are merged on by time-overlap (`src/lib/audio/merge-speakers.ts`).
 2. `src/lib/ai/pii.ts` — PII detection and replacement using OpenAI `gpt-4o`.
@@ -102,6 +113,11 @@ Bot-service authenticates all requests from the Next.js app via `Authorization: 
 | `MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT_ID` | Entra ID; enables itself when the id + secret are set |
 | `OIDC_CLIENT_ID` / `_SECRET` / `_DISCOVERY_URL` | Generic OIDC provider (Keycloak, Authentik, …) |
 | `OIDC_PROVIDER_ID` / `_NAME` | Callback path segment + account key / button label |
+| `ACCESS_SOURCE` | `local` (default) or `rollekatalog`: who owns role assignments |
+| `REQUIRE_ROLE_TO_LOGIN` | `true` shows "Ingen adgang" instead of the `(app)` pages to users without a role (API routes outside `/api/admin` and `/api/me` are not gated yet); default false gives everyone baseline `tt-bruger` |
+| `BOOTSTRAP_ADMIN_EMAILS` | Comma list; first SSO login with such an address becomes `tt-administrator` (local mode, none exists yet) |
+| `DIRECTORY_MATCH` / `DIRECTORY_USERID_CLAIM` | Rollekatalog mode: `userid-claim` (default) / `extuuid-claim` / `email`, and the ID-token claim to read (default `preferred_username`) |
+| `AUTH_IP_HEADERS` | Optional comma list of headers better-auth reads the client IP from (read at startup) |
 
 ## Testing conventions
 
@@ -109,3 +125,5 @@ Bot-service authenticates all requests from the Next.js app via `Authorization: 
 - Component tests (`.test.tsx` in `src/components/`) run in `jsdom`; everything else runs in `node`.
 - Test helpers: `src/test/helpers.ts` exports `FAKE_SESSION` and `makeJsonReq()`.
 - API route tests mock `@/lib/db/user-schema` and `@/lib/auth` to avoid real DB/auth dependencies.
+- `*.pg.test.ts` need a real PostgreSQL 15+ and are skipped unless `TEST_DATABASE_URL` is set. Use `describe.skipIf(!hasPg)` and `withFreshSchema()` from `src/test/pg.ts`, which applies the migrations into a throwaway schema and drops it afterwards.
+- Authz tests build principals with `makePrincipal()` / `FAKE_PRINCIPAL_ADMIN` from `src/test/helpers.ts`; the role matrix has a tripwire test in `src/lib/authz/capabilities.test.ts`.
