@@ -116,6 +116,10 @@ services:
       - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID:-}
       - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET:-}
       - AUTHENTIK_DISCOVERY_URL=${AUTHENTIK_DISCOVERY_URL:-}
+      # Skabelon sharing. Read at runtime (no rebuild). Code sharing is on unless
+      # "false"; link sharing is opt-in and only on when "true".
+      - SKABELON_SHARE_CODE=${SKABELON_SHARE_CODE:-true}
+      - SKABELON_SHARE_LINK=${SKABELON_SHARE_LINK:-false}
     volumes:
       - audio-storage:/audio-storage
     networks:
