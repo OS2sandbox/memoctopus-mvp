@@ -3,6 +3,7 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { nextCookies } from 'better-auth/next-js';
 import { genericOAuth } from 'better-auth/plugins';
 import { db } from '@/lib/db';
+import { runLoginHooks } from '@/lib/authz/login-hook';
 import { users, sessions, accounts, verifications } from '@/lib/db/schema';
 import {
   emailPasswordEnabled,
@@ -10,11 +11,13 @@ import {
   oidcConfig,
   warnDeprecatedAuthEnv,
 } from './providers';
+import { authIpHeaders } from './ip-headers';
 
 // Resolved in ./providers so the sign-in page renders exactly what is
 // registered here.
 const microsoft = microsoftConfig();
 const oidc = oidcConfig();
+const ipAddressHeaders = authIpHeaders();
 
 warnDeprecatedAuthEnv();
 
@@ -54,6 +57,19 @@ export const auth = betterAuth({
   }),
   emailAndPassword: {
     enabled: emailPasswordEnabled(),
+  },
+  ...(ipAddressHeaders ? { advanced: { ipAddress: { ipAddressHeaders } } } : {}),
+  // Identity capture / first-admin bootstrap / directory link. Fires after the
+  // session row is committed; runLoginHooks never throws, so it cannot block a
+  // login. No session.cookieCache: roles are resolved live per request.
+  databaseHooks: {
+    session: {
+      create: {
+        after: async (session) => {
+          await runLoginHooks(session.userId);
+        },
+      },
+    },
   },
   socialProviders: microsoft ? { microsoft } : {},
   // No `account.accountLinking` override on purpose. Adding providers to
