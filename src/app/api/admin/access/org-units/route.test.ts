@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
 vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers()) }));
 vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
@@ -11,7 +12,7 @@ import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { createOrgUnit, listOrgUnits } from '@/lib/authz/access-admin';
 import { orgUnitsInScope } from '@/lib/authz/scope';
-import { ConflictError, NotFoundError } from '@/lib/authz/access-errors';
+import { ConflictError, NotFoundError, ReadOnlyModeError } from '@/lib/authz/access-errors';
 import { FAKE_PRINCIPAL_ADMIN, FAKE_SESSION, makeJsonReq, NO_PARAMS, makePrincipal } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
@@ -97,12 +98,11 @@ describe('POST /api/admin/access/org-units (access.manage)', () => {
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
-  it('409 in rollekatalog mode', async () => {
-    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+  it('409 when the service refuses in rollekatalog mode', async () => {
+    mockCreate.mockRejectedValue(new ReadOnlyModeError());
     const res = await post({ name: 'x' });
     expect(res.status).toBe(409);
     expect((await res.json()).error).toMatch(/Rollekatalog/);
-    expect(mockCreate).not.toHaveBeenCalled();
   });
 
   it('201 with whitelisted fields; name is passed through for the service to trim', async () => {

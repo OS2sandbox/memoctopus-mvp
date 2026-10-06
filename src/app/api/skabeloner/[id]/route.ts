@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { getSkabelon, updateSkabelon, deleteSkabelon } from '@/lib/skabeloner/server';
 import { withHandler } from '@/lib/api-handler';
 import { recordServerEvent } from '@/lib/audit/record';
 import type { Skabelon } from '@/types';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -24,8 +23,9 @@ function changedFields(prev: Skabelon, next: Skabelon) {
 }
 
 export const GET = withHandler('skabeloner/[id] GET', async (_req: NextRequest, { params }: Ctx) => {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const { id } = await params;
   const skabelon = await getSkabelon(session.user.id, id);
@@ -34,8 +34,9 @@ export const GET = withHandler('skabeloner/[id] GET', async (_req: NextRequest, 
 });
 
 export const PUT = withHandler('skabeloner/[id] PUT', async (req: NextRequest, { params }: Ctx) => {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
@@ -55,18 +56,22 @@ export const PUT = withHandler('skabeloner/[id] PUT', async (req: NextRequest, {
     includeDato: body.includeDato,
   });
   if (!skabelon) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
-  await recordServerEvent(req, {
-    type: 'template.update',
-    actorUserId: session.user.id,
-    entityId: skabelon.id,
-    details: { changedFields: changedFields(prev, skabelon) },
-  });
+  const changed = changedFields(prev, skabelon);
+  if (changed.length > 0) {
+    await recordServerEvent(req, {
+      type: 'template.update',
+      actorUserId: session.user.id,
+      entityId: skabelon.id,
+      details: { changedFields: changed },
+    });
+  }
   return NextResponse.json({ skabelon });
 });
 
 export const DELETE = withHandler('skabeloner/[id] DELETE', async (req: NextRequest, { params }: Ctx) => {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const { id } = await params;
   const ok = await deleteSkabelon(session.user.id, id);

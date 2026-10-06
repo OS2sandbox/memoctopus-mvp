@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
 vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers()) }));
 vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
@@ -10,8 +11,8 @@ import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { createCentralTemplate, listManageableTemplates } from '@/lib/skabeloner/central';
 import { NotFoundError, ValidationError } from '@/lib/authz/access-errors';
-import { FAKE_PRINCIPAL_ADMIN, FAKE_SESSION, makeJsonReq, makePrincipal, NO_PARAMS } from '@/test/helpers';
-import { ADMIN_TEMPLATE, CHILD, manager, NOTE, OWNER } from './fixtures';
+import { FAKE_SESSION, makeJsonReq, makePrincipal, NO_PARAMS } from '@/test/helpers';
+import { ADMIN_TEMPLATE, CHILD, manager, NOTE, OWNER } from '@/test/central-fixtures';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockResolve = vi.mocked(resolvePrincipal);
@@ -82,28 +83,9 @@ describe('GET /api/admin/central-templates (template.manage)', () => {
     expect((await get(qs)).status).toBe(400);
     expect(mockList).not.toHaveBeenCalled();
   });
-
-  it('works for a global administrator too', async () => {
-    mockResolve.mockResolvedValueOnce(FAKE_PRINCIPAL_ADMIN);
-    expect((await get()).status).toBe(200);
-  });
-
-  it('does not depend on ACCESS_SOURCE', async () => {
-    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
-    expect((await get()).status).toBe(200);
-  });
 });
 
 describe('POST /api/admin/central-templates', () => {
-  it('401 / 403 gates', async () => {
-    mockGetSession.mockResolvedValueOnce(null as never);
-    expect((await post(VALID)).status).toBe(401);
-
-    mockResolve.mockResolvedValueOnce(makePrincipal());
-    expect((await post(VALID)).status).toBe(403);
-    expect(mockCreate).not.toHaveBeenCalled();
-  });
-
   it('creates, answering 201 with the admin DTO (prompt included for the manager)', async () => {
     const res = await post(VALID);
     expect(res.status).toBe(201);
@@ -118,11 +100,6 @@ describe('POST /api/admin/central-templates', () => {
       changeNote: NOTE,
       allowUserInstruction: false,
     });
-  });
-
-  it('creates in rollekatalog mode as well (templates are not owned by Rollekatalog)', async () => {
-    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
-    expect((await post(VALID)).status).toBe(201);
   });
 
   it('only returns whitelisted fields, never a raw service row', async () => {

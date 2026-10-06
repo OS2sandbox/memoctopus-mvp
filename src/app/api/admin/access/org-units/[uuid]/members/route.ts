@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withAuthz } from '@/lib/authz/guard';
 import { listOrgUnitMembers, setOrgUnitMembers } from '@/lib/authz/access-admin';
-import { parseJsonBody, parseWith, readOnlyResponse, respond } from '@/lib/authz/access-http';
+import { parseJsonBody, parseWith, respond } from '@/lib/authz/access-http';
 import { appUserIdSchema, uuidSchema } from '@/lib/authz/access-schemas';
 
 const paramsSchema = z.object({ uuid: uuidSchema }).strict();
@@ -25,8 +25,6 @@ export const PUT = withAuthz<P>(
   'admin/access/org-units/[uuid]/members PUT',
   'access.manage',
   async (req, { session, params }) => {
-    const readOnly = readOnlyResponse();
-    if (readOnly) return readOnly;
     const p = parseWith(paramsSchema, params);
     if (!p.ok) return p.response;
     const body = await parseJsonBody(req, bodySchema);

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('@/lib/db', () => ({ pool: { query: vi.fn() }, db: {} }));
-vi.mock('@/lib/rollekatalog/sync', () => ({ runSync: vi.fn(), getLatestSyncRun: vi.fn() }));
+vi.mock('@/lib/rollekatalog/sync', () => ({ runSync: vi.fn() }));
 
 import { NextRequest } from 'next/server';
 import { POST } from './route';
@@ -22,6 +22,10 @@ const result = (over: Partial<SyncResult>): SyncResult => ({ status: 'success', 
 
 beforeEach(() => {
   vi.stubEnv('INTERNAL_CRON_SECRET', SECRET);
+  vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+  vi.stubEnv('ROLLEKATALOG_URL', 'https://rk.example.dk');
+  vi.stubEnv('ROLLEKATALOG_READ_API_KEY', 'read-key');
+  vi.stubEnv('ROLLEKATALOG_ORG_API_KEY', 'org-key');
   mockRun.mockReset().mockResolvedValue(result({}));
 });
 afterEach(() => vi.unstubAllEnvs());
@@ -42,6 +46,32 @@ describe('POST /api/internal/rollekatalog/sync', () => {
     expect(res.status).toBe(401);
     expect(await res.text()).not.toContain(SECRET);
     expect(mockRun).not.toHaveBeenCalled();
+  });
+
+  it('409 not_rollekatalog_mode in local mode, and nothing runs', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'local');
+    const res = await POST(post());
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'not_rollekatalog_mode', code: 'not_rollekatalog_mode' });
+    expect(mockRun).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['no URL', 'ROLLEKATALOG_URL', '', 'not_configured'],
+    ['a missing read key', 'ROLLEKATALOG_READ_API_KEY', '', 'not_configured'],
+    ['a missing org key', 'ROLLEKATALOG_ORG_API_KEY', '', 'not_configured'],
+    ['an insecure URL', 'ROLLEKATALOG_URL', 'http://rk.example.dk', 'insecure_url'],
+  ])('409 not_configured with %s, and nothing runs', async (_l, name, value, code) => {
+    vi.stubEnv(name, value);
+    const res = await POST(post());
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'not_configured', code });
+    expect(mockRun).not.toHaveBeenCalled();
+  });
+
+  it('the guards come after the secret check', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'local');
+    expect((await POST(post('nope'))).status).toBe(401);
   });
 
   it('runs a cron sync and returns exactly status, counts and errorCode', async () => {

@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { getDiarizationProvider } from '@/lib/ai/diarization';
 import { withHandler } from '@/lib/api-handler';
 import { safeLogError } from '@/lib/audit/safe-log';
 import { asEntityUuid, elapsedMs, emitAudit, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 interface Params {
   params: Promise<{ id: string }>;
@@ -18,8 +17,9 @@ interface Params {
 // speaker identity is global, so this is a single request, not per-utterance.
 async function postHandler(req: NextRequest, { params }: Params) {
   const { id } = await params;
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const formData = await req.formData();
   const audioFile = formData.get('audio') as File | null;

@@ -44,19 +44,40 @@ describe('POST /api/internal/audit/prune', () => {
     expect(mockPrune).not.toHaveBeenCalled();
   });
 
-  it('is a no-op when AUDIT_RETENTION_DAYS is unset (keep forever)', async () => {
+  it('prunes with the 365-day default when AUDIT_RETENTION_DAYS is unset or empty', async () => {
     vi.stubEnv('AUDIT_RETENTION_DAYS', '');
     const res = await POST(post());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ pruned: 0, disabled: true });
+    expect(await res.json()).toEqual({ pruned: 7, retentionDays: 365 });
+    expect(mockPrune).toHaveBeenCalledWith({ olderThanDays: 365 });
+  });
+
+  it('still needs the cron secret with the default retention', async () => {
+    vi.stubEnv('AUDIT_RETENTION_DAYS', '');
+    expect((await POST(post('nope'))).status).toBe(401);
+    expect((await POST(post(null))).status).toBe(401);
     expect(mockPrune).not.toHaveBeenCalled();
   });
 
-  it.each(['abc', '0', '-5', '1.5'])('is a no-op for an invalid AUDIT_RETENTION_DAYS (%s): invalid means keep', async (v) => {
-    vi.stubEnv('AUDIT_RETENTION_DAYS', v);
-    expect(await (await POST(post())).json()).toEqual({ pruned: 0, disabled: true });
-    expect(mockPrune).not.toHaveBeenCalled();
-  });
+  it.each(['0', 'off', 'false', 'never', 'forever', 'NEVER'])(
+    'is a no-op for the explicit opt-out (%s): keep forever',
+    async (v) => {
+      vi.stubEnv('AUDIT_RETENTION_DAYS', v);
+      const res = await POST(post());
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ pruned: 0, disabled: true });
+      expect(mockPrune).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['abc', '-5', '1.5', 'nej'])(
+    'an invalid AUDIT_RETENTION_DAYS (%s) falls back to the 365-day default and prunes',
+    async (v) => {
+      vi.stubEnv('AUDIT_RETENTION_DAYS', v);
+      expect(await (await POST(post())).json()).toEqual({ pruned: 7, retentionDays: 365 });
+      expect(mockPrune).toHaveBeenCalledWith({ olderThanDays: 365 });
+    },
+  );
 
   it('prunes with the configured retention and reports the count', async () => {
     const res = await POST(post());

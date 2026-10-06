@@ -4,7 +4,8 @@ import { hasCapability, requireCapability, withAuthz } from '@/lib/authz/guard';
 import { accessSource } from '@/lib/authz/config';
 import { parseWith } from '@/lib/authz/access-http';
 import { rollekatalogConfigIssue } from '@/lib/rollekatalog/config';
-import { getLatestSyncRun, runSync } from '@/lib/rollekatalog/sync';
+import { runSync } from '@/lib/rollekatalog/sync';
+import { getLatestSyncRun } from '@/lib/rollekatalog/sync-run';
 import { syncResultResponse } from '@/lib/rollekatalog/sync-http';
 
 const bodySchema = z.object({ force: z.boolean().optional() }).strict();

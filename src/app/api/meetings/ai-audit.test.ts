@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockRecord = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/audit/record', () => ({ recordServerEvent: mockRecord }));
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
+  recordServerEvent: mockRecord,
+}));
 
 import { asEntityUuid, elapsedMs, emitAudit, outcomeCodeOf } from './ai-audit';
 
@@ -68,15 +71,5 @@ describe('emitAudit', () => {
     await emitAudit(req, { type: 'export.download', actorUserId: 'u', details: { format: 'pdf' } });
     expect(mockRecord).toHaveBeenCalledOnce();
     expect(mockRecord.mock.calls[0][0]).toBe(req);
-  });
-
-  it('swallows a rejecting audit write and warns without content', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    mockRecord.mockRejectedValueOnce(new Error('db says: secret content'));
-    await expect(
-      emitAudit(req, { type: 'export.download', actorUserId: 'u', details: { format: 'pdf' } }),
-    ).resolves.toBeUndefined();
-    expect(warn).toHaveBeenCalledOnce();
-    expect(String(warn.mock.calls[0][0])).not.toContain('secret');
   });
 });

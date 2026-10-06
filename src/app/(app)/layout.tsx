@@ -4,9 +4,12 @@ import { TopBar } from '@/components/layout/TopBar';
 import { ReviewAudioProvider } from '@/lib/review-audio-context';
 import { StorageScope } from '@/components/providers/StorageScope';
 import { NoAccess } from '@/components/layout/NoAccess';
+import { AccessUnavailable } from '@/components/layout/AccessUnavailable';
+import { safeLogError } from '@/lib/audit/safe-log';
+import type { Principal } from '@/lib/authz/types';
 import { auth } from '@/lib/auth';
 import { loginRefusal } from '@/lib/authz/guard';
-import { recordAuthzDenied } from '@/lib/audit/seam';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 import { resolvePrincipal } from '@/lib/authz/principal';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -19,9 +22,17 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!session) redirect('/');
 
   // Disabled directory users and (with REQUIRE_ROLE_TO_LOGIN=true) users without
-  // a role get no app shell. This gates the pages only: the older /api routes do
-  // not consult the principal yet and migrate to withAuthz gradually.
-  const principal = await resolvePrincipal(session.user.id);
+  // a role get no app shell. The /api routes apply the same refusal through
+  // requireAppAccess, so a client navigation cannot get around this gate.
+  // Fail closed: if the principal cannot be resolved, render a retry screen
+  // instead of the app shell (and instead of the global error page).
+  let principal: Principal;
+  try {
+    principal = await resolvePrincipal(session.user.id);
+  } catch (err) {
+    safeLogError('app-layout principal', err);
+    return <AccessUnavailable />;
+  }
   const refusal = loginRefusal(principal);
   if (refusal) {
     recordAuthzDenied({ actorUserId: principal.userId, required: 'login', reason: refusal });

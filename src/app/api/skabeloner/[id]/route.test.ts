@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// The access gate (requireAppAccess) resolves the live principal; a plain
+// tt-bruger unless a test says otherwise.
+vi.mock('@/lib/authz/principal', async () => ({
+  resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
+}));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
+
 vi.mock('next/headers', () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
@@ -143,10 +150,11 @@ describe('PUT /api/skabeloner/[id]', () => {
     expect(JSON.stringify(event)).not.toMatch(/Fortrolig|Testskabelon/);
   });
 
-  it('emits an empty changedFields list when nothing changed', async () => {
+  it('emits nothing when no tracked field changed, but still returns the skabelon', async () => {
     mockUpdateSkabelon.mockResolvedValueOnce({ ...SAMPLE_SKABELON } as never);
-    await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Testskabelon' }), CTX);
-    expect(mockRecord.mock.calls[0][1].details).toEqual({ changedFields: [] });
+    const res = await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Testskabelon' }), CTX);
+    expect(res.status).toBe(200);
+    expect(mockRecord).not.toHaveBeenCalled();
   });
 
   it('still returns 200 when the audit write is dropped', async () => {

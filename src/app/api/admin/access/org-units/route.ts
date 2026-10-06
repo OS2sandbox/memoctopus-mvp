@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withAuthz, hasCapability, requireCapability } from '@/lib/authz/guard';
 import { createOrgUnit, listOrgUnits } from '@/lib/authz/access-admin';
-import { parseJsonBody, readOnlyResponse, respond } from '@/lib/authz/access-http';
+import { parseJsonBody, respond } from '@/lib/authz/access-http';
 import { orgUnitNameSchema, uuidSchema } from '@/lib/authz/access-schemas';
 import { orgUnitsInScope } from '@/lib/authz/scope';
 
@@ -22,8 +22,6 @@ export const GET = withAuthz('admin/access/org-units GET', null, async (_req, { 
 });
 
 export const POST = withAuthz('admin/access/org-units POST', 'access.manage', async (req, { session }) => {
-  const readOnly = readOnlyResponse();
-  if (readOnly) return readOnly;
   const body = await parseJsonBody(req, bodySchema);
   if (!body.ok) return body.response;
 

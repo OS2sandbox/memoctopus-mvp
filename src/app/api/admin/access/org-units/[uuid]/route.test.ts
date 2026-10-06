@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
 vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers()) }));
 vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
@@ -9,7 +10,7 @@ import { PATCH, DELETE } from './route';
 import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { deleteOrgUnit, updateOrgUnit } from '@/lib/authz/access-admin';
-import { ConflictError, NotFoundError } from '@/lib/authz/access-errors';
+import { ConflictError, NotFoundError, ReadOnlyModeError } from '@/lib/authz/access-errors';
 import { FAKE_PRINCIPAL_ADMIN, FAKE_SESSION, makeJsonReq, makePrincipal } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
@@ -42,9 +43,8 @@ describe('PATCH /api/admin/access/org-units/[uuid] (access.manage)', () => {
     mockResolve.mockResolvedValueOnce(makePrincipal());
     expect((await patch({ name: 'x' })).status).toBe(403);
 
-    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+    mockUpdate.mockRejectedValueOnce(new ReadOnlyModeError());
     expect((await patch({ name: 'x' })).status).toBe(409);
-    expect(mockUpdate).not.toHaveBeenCalled();
   });
 
   it('updates name and parent', async () => {
@@ -95,9 +95,8 @@ describe('DELETE /api/admin/access/org-units/[uuid] (access.manage)', () => {
     mockResolve.mockResolvedValueOnce(makePrincipal());
     expect((await del()).status).toBe(403);
 
-    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+    mockDelete.mockRejectedValueOnce(new ReadOnlyModeError());
     expect((await del()).status).toBe(409);
-    expect(mockDelete).not.toHaveBeenCalled();
   });
 
   it('deletes', async () => {

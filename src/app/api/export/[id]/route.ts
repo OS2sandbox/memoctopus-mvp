@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { MinutesContent } from '@/types';
 import { minutesToBody } from '@/lib/minutes-format';
 import { withHandler } from '@/lib/api-handler';
 import { asEntityUuid, emitAudit } from '@/app/api/meetings/ai-audit';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 async function postHandler(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const body = await req.json() as { title?: string; content?: MinutesContent; format?: string };
   const { title = 'Referat', content, format = 'pdf' } = body;

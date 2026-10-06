@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { prepareVadBatches, transcribeVadBatches, transcribeEnsemble, isEnsembleDiarization } from '@/lib/audio/vad-batch-server';
 import type { TranscriptSegment } from '@/types';
 import { withHandler } from '@/lib/api-handler';
 import { safeLogError } from '@/lib/audit/safe-log';
 import { asEntityUuid, elapsedMs, emitAudit, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 interface Params {
   params: Promise<{ id: string }>;
@@ -32,8 +31,9 @@ export type TranscribeBatchesEvent =
 // IndexedDB, same as the per-utterance path.
 async function postHandler(req: NextRequest, { params }: Params) {
   const { id } = await params;
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const formData = await req.formData();
   const audioFile = formData.get('audio') as File | null;

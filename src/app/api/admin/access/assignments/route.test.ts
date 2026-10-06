@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
 vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers()) }));
 vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
@@ -9,7 +10,7 @@ import { POST } from './route';
 import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { grantRole } from '@/lib/authz/access-admin';
-import { ConflictError, NotFoundError, ValidationError } from '@/lib/authz/access-errors';
+import { ConflictError, NotFoundError, ReadOnlyModeError, ValidationError } from '@/lib/authz/access-errors';
 import { FAKE_PRINCIPAL_ADMIN, FAKE_SESSION, makeJsonReq, NO_PARAMS, makePrincipal } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
@@ -49,11 +50,19 @@ describe('POST /api/admin/access/assignments (access.manage)', () => {
     expect(mockGrant).not.toHaveBeenCalled();
   });
 
-  it('409 with the Rollekatalog message in rollekatalog mode, before validating the body', async () => {
-    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
-    const res = await post({ bogus: true });
+  it('409 with the Rollekatalog message when the service refuses in rollekatalog mode', async () => {
+    mockGrant.mockRejectedValue(new ReadOnlyModeError());
+    const res = await post({ appUserId: 'u', roleKey: 'tt-bruger' });
     expect(res.status).toBe(409);
-    expect((await res.json()).error).toBe('Skrivebeskyttet: roller og organisation styres af Rollekatalog');
+    expect(await res.json()).toEqual({
+      error: 'Skrivebeskyttet: roller og organisation styres af Rollekatalog',
+      code: 'read_only',
+    });
+  });
+
+  it('400 for an invalid body, ahead of the service-side mode gate', async () => {
+    mockGrant.mockRejectedValue(new ReadOnlyModeError());
+    expect((await post({ bogus: true })).status).toBe(400);
     expect(mockGrant).not.toHaveBeenCalled();
   });
 

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withAuthz } from '@/lib/authz/guard';
 import { deleteOrgUnit, updateOrgUnit } from '@/lib/authz/access-admin';
-import { parseJsonBody, parseWith, readOnlyResponse, respond } from '@/lib/authz/access-http';
+import { parseJsonBody, parseWith, respond } from '@/lib/authz/access-http';
 import { orgUnitNameSchema, uuidSchema } from '@/lib/authz/access-schemas';
 
 const paramsSchema = z.object({ uuid: uuidSchema }).strict();
@@ -17,8 +17,6 @@ export const PATCH = withAuthz<P>(
   'admin/access/org-units/[uuid] PATCH',
   'access.manage',
   async (req, { session, params }) => {
-    const readOnly = readOnlyResponse();
-    if (readOnly) return readOnly;
     const p = parseWith(paramsSchema, params);
     if (!p.ok) return p.response;
     const body = await parseJsonBody(req, patchSchema);
@@ -35,8 +33,6 @@ export const DELETE = withAuthz<P>(
   'admin/access/org-units/[uuid] DELETE',
   'access.manage',
   async (_req, { session, params }) => {
-    const readOnly = readOnlyResponse();
-    if (readOnly) return readOnly;
     const p = parseWith(paramsSchema, params);
     if (!p.ok) return p.response;
 

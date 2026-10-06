@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
 vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers()) }));
 vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
@@ -15,12 +16,17 @@ import { POST } from './route';
 import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { recordServerEvent } from '@/lib/audit/record';
+import { pool } from '@/lib/db';
+import { THROTTLE_WINDOW_MS } from '@/lib/audit/client-ingest';
 import { __resetClientEventBudgets, RATE_LIMIT_EVENTS } from '@/lib/audit/client-ingest';
 import { makeJsonReq, makePrincipal, NO_PARAMS } from '@/test/helpers';
 
 const mockSession = vi.mocked(auth.api.getSession);
 const mockResolve = vi.mocked(resolvePrincipal);
 const mockRecord = vi.mocked(recordServerEvent);
+const mockCount = vi.mocked(pool.query) as unknown as ReturnType<typeof vi.fn>;
+/** What the 24 h count query returns: how many client events the user already has. */
+const alreadyStored = (n: number) => mockCount.mockResolvedValue({ rows: [{ n: String(n) }], rowCount: 1 });
 
 const SESSION = { user: { id: 'user-123', name: 'Anna' }, session: { id: 's1' } };
 const MEETING = '11111111-2222-4333-8444-555555555555';
@@ -41,8 +47,13 @@ beforeEach(() => {
   mockSession.mockReset().mockResolvedValue(SESSION as never);
   mockResolve.mockReset().mockResolvedValue(makePrincipal());
   mockRecord.mockReset().mockResolvedValue({ status: 'stored' });
+  mockCount.mockReset();
+  alreadyStored(0);
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+});
 
 describe('POST /api/audit/client-events', () => {
   it('401 without a session and records nothing', async () => {
@@ -199,5 +210,179 @@ describe('POST /api/audit/client-events', () => {
     mockSession.mockResolvedValue({ user: { id: 'user-999' }, session: { id: 's2' } } as never);
     mockResolve.mockResolvedValue(makePrincipal({ userId: 'user-999' }));
     expect((await send({ events: batch(1, 9999) })).status).toBe(200);
+  });
+
+  describe('daily cap', () => {
+    const ids = (n: number, off = 0) =>
+      Array.from({ length: n }, (_, i) => `aaaaaaaa-bbbb-4ccc-8ddd-${String(off + i).padStart(12, '0')}`);
+    const batch = (n: number, off = 0) => ids(n, off).map((clientEventId) => ev({ clientEventId }));
+
+    it('counts only this user, source client, last 24 h, single query, bounded by the cap', async () => {
+      await send({ events: [ev()] });
+      expect(mockCount).toHaveBeenCalledTimes(1);
+      const [sql, params] = mockCount.mock.calls[0] as [string, unknown[]];
+      const flat = sql.replace(/\s+/g, ' ');
+      expect(flat).toContain('FROM public.audit_events');
+      expect(flat).toContain('actor_user_id = $1');
+      expect(flat).toContain("source = 'client'");
+      expect(flat).toContain("interval '24 hours'");
+      expect(params).toEqual(['user-123', 2000]);
+    });
+
+    it('stores everything below the cap and omits `capped`', async () => {
+      alreadyStored(1990);
+      const res = await send({ events: batch(5) });
+      expect(await res.json()).toEqual({ accepted: 5 });
+    });
+
+    it('boundary: exactly filling the cap is fully accepted, not capped', async () => {
+      alreadyStored(1995);
+      const res = await send({ events: batch(5) });
+      expect(await res.json()).toEqual({ accepted: 5 });
+      expect(mockRecord).toHaveBeenCalledTimes(5);
+    });
+
+    it('boundary: at the cap nothing is stored, but 200 {accepted:0, capped:true}', async () => {
+      alreadyStored(2000);
+      const res = await send({ events: batch(3) });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ accepted: 0, capped: true });
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
+
+    it('a batch crossing the cap stores the first events in order, drops the rest, capped:true', async () => {
+      alreadyStored(1998);
+      const list = batch(5);
+      const res = await send({ events: list });
+      expect(await res.json()).toEqual({ accepted: 2, capped: true });
+      expect(mockRecord).toHaveBeenCalledTimes(2);
+      const stored = mockRecord.mock.calls.map((c) => (c[1] as unknown as { clientEventId: string }).clientEventId);
+      expect(stored).toEqual(ids(5).slice(0, 2));
+    });
+
+    it('honours AUDIT_CLIENT_EVENTS_DAILY_CAP and passes it as the scan limit', async () => {
+      vi.stubEnv('AUDIT_CLIENT_EVENTS_DAILY_CAP', '10');
+      alreadyStored(8);
+      const res = await send({ events: batch(4) });
+      expect(await res.json()).toEqual({ accepted: 2, capped: true });
+      expect((mockCount.mock.calls[0] as [string, unknown[]])[1]).toEqual(['user-123', 10]);
+    });
+
+    it('an invalid or zero cap setting falls back to 2000', async () => {
+      for (const v of ['0', 'abc', '-3']) {
+        vi.stubEnv('AUDIT_CLIENT_EVENTS_DAILY_CAP', v);
+        mockCount.mockClear();
+        alreadyStored(0);
+        await send({ events: [ev()] });
+        expect((mockCount.mock.calls[0] as [string, unknown[]])[1]).toEqual(['user-123', 2000]);
+      }
+    });
+
+    it('fails closed: a failing count query is a 503 and nothing is stored', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mockCount.mockRejectedValue(new Error('connection to 10.1.2.3 refused'));
+      const res = await send({ events: [ev()] });
+      expect(res.status).toBe(503);
+      expect(JSON.stringify(await res.json())).not.toContain('10.1.2.3');
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
+
+    it('fails closed on an unreadable count (no rows)', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mockCount.mockResolvedValue({ rows: [], rowCount: 0 });
+      expect((await send({ events: [ev()] })).status).toBe(503);
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
+
+    it('does not echo input in the capped response', async () => {
+      alreadyStored(2000);
+      const res = await send({ events: [ev()] });
+      const text = JSON.stringify(await res.json());
+      expect(text).not.toContain(MEETING);
+      expect(text).not.toContain(EVENT_ID);
+    });
+  });
+
+  describe('per-type throttle', () => {
+    const RENAME = (n: number, meeting = MEETING) =>
+      ev({
+        type: 'meeting.rename',
+        entityId: meeting,
+        clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(n).padStart(12, '0')}`,
+      });
+
+    it('stores the first rename and drops (but acknowledges) a repeat within 60 s', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-05T12:00:00Z'));
+      expect(await (await send({ events: [RENAME(1)] })).json()).toEqual({ accepted: 1 });
+      vi.setSystemTime(new Date('2026-10-05T12:00:59Z'));
+      const res = await send({ events: [RENAME(2)] });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ accepted: 0 });
+      expect(mockRecord).toHaveBeenCalledTimes(1);
+    });
+
+    it('stores again once the 60 s window has passed', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-05T12:00:00Z'));
+      await send({ events: [RENAME(1)] });
+      vi.setSystemTime(new Date(Date.parse('2026-10-05T12:00:00Z') + THROTTLE_WINDOW_MS));
+      expect(await (await send({ events: [RENAME(2)] })).json()).toEqual({ accepted: 1 });
+      expect(mockRecord).toHaveBeenCalledTimes(2);
+    });
+
+    it('collapses duplicates inside one batch to the first', async () => {
+      const res = await send({ events: [RENAME(1), RENAME(2), RENAME(3)] });
+      expect(await res.json()).toEqual({ accepted: 1 });
+      expect(mockRecord).toHaveBeenCalledTimes(1);
+    });
+
+    it('is keyed on (actor, meeting, type): other meeting, other type, other user are not throttled', async () => {
+      await send({ events: [RENAME(1)] });
+      const other = '99999999-2222-4333-8444-555555555555';
+      expect(await (await send({ events: [RENAME(2, other)] })).json()).toEqual({ accepted: 1 });
+      const part = ev({ type: 'meeting.participants_edit', details: { participantCount: 2 }, clientEventId: 'aaaaaaaa-bbbb-4ccc-8ddd-000000000007' });
+      expect(await (await send({ events: [part] })).json()).toEqual({ accepted: 1 });
+      mockSession.mockResolvedValue({ user: { id: 'user-999' }, session: { id: 's2' } } as never);
+      mockResolve.mockResolvedValue(makePrincipal({ userId: 'user-999' }));
+      expect(await (await send({ events: [RENAME(3)] })).json()).toEqual({ accepted: 1 });
+    });
+
+    it.each([
+      ['meeting.rename', {}],
+      ['meeting.participants_edit', { participantCount: 3 }],
+      ['meeting.minutes_save', {}],
+      ['meeting.transcript_edit', { segmentCount: 4 }],
+    ])('%s is throttled', async (type, details) => {
+      const e = (n: number) =>
+        ev({ type, details, clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(n).padStart(12, '0')}` });
+      expect(await (await send({ events: [e(1)] })).json()).toEqual({ accepted: 1 });
+      expect(await (await send({ events: [e(2)] })).json()).toEqual({ accepted: 0 });
+    });
+
+    it('other types (status_change, delete, create ...) are never throttled', async () => {
+      const del = (n: number) => ev({ clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(n).padStart(12, '0')}` });
+      expect(await (await send({ events: [del(1)] })).json()).toEqual({ accepted: 1 });
+      expect(await (await send({ events: [del(2)] })).json()).toEqual({ accepted: 1 });
+    });
+
+    it('a failed store does not start the window, so the retry is stored', async () => {
+      mockRecord.mockResolvedValueOnce({ status: 'dropped', code: 'db_error' });
+      expect((await send({ events: [RENAME(1)] })).status).toBe(503);
+      expect(await (await send({ events: [RENAME(1)] })).json()).toEqual({ accepted: 1 });
+    });
+
+    it('throttled events do not use the daily cap (no count query when nothing is left to store)', async () => {
+      await send({ events: [RENAME(1)] });
+      mockCount.mockClear();
+      await send({ events: [RENAME(2)] });
+      expect(mockCount).not.toHaveBeenCalled();
+    });
+
+    it('a throttled event is not reported as capped', async () => {
+      alreadyStored(2000);
+      // First one is capped (dropped), nothing was stored so nothing is throttled either.
+      expect(await (await send({ events: [RENAME(1)] })).json()).toEqual({ accepted: 0, capped: true });
+    });
   });
 });

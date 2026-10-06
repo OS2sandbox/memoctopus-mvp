@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { withHandler } from '@/lib/api-handler';
 import { recordServerEvent } from '@/lib/audit/record';
-import { meetingEntity } from '../../_audit';
+import { asEntityUuid } from '@/app/api/meetings/ai-audit';
 import { readPendingTranscript, deletePendingTranscript, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 // Client collects the server-side transcription of a Teams-bot recording
 // (kicked off by /api/bot/audio-upload the moment the bot uploaded the audio).
@@ -18,8 +17,9 @@ export const GET = withHandler('bot/transcript', async (
   req: NextRequest,
   { params }: { params: Promise<{ meetingId: string }> },
 ) => {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const { meetingId } = await params;
 
@@ -38,16 +38,16 @@ export const GET = withHandler('bot/transcript', async (
   }
 
   await deletePendingTranscript(meetingId);
-  const entity = meetingEntity(meetingId);
+  const entityId = asEntityUuid(meetingId);
   if (transcript.status === 'failed') {
-    await recordServerEvent(req, { type: 'bot.transcript_collect', outcome: 'error', actorUserId: session.user.id, ...entity });
+    await recordServerEvent(req, { type: 'bot.transcript_collect', outcome: 'error', actorUserId: session.user.id, entityId });
     return NextResponse.json({ status: 'failed' });
   }
   const segments = transcript.segments ?? [];
   await recordServerEvent(req, {
     type: 'bot.transcript_collect',
     actorUserId: session.user.id,
-    ...entity,
+    entityId,
     details: { segmentCount: segments.length },
   });
   return NextResponse.json({

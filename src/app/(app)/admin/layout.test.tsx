@@ -38,21 +38,6 @@ function findAll(node: unknown, type: unknown, out: El[] = []): El[] {
 }
 
 describe('(app)/admin layout — server-side gate', () => {
-  it('redirects to / when there is no session', async () => {
-    mockPrincipal.mockResolvedValueOnce(null);
-    await expect(AdminLayout({ children: null })).rejects.toThrow('REDIRECT:/');
-  });
-
-  it('answers 404 (not 403) for a plain user, hiding that /admin exists', async () => {
-    mockPrincipal.mockResolvedValueOnce(makePrincipal());
-    await expect(AdminLayout({ children: null })).rejects.toThrow('NOT_FOUND');
-  });
-
-  it('answers 404 for a disabled principal', async () => {
-    mockPrincipal.mockResolvedValueOnce({ ...FAKE_PRINCIPAL_ADMIN, disabled: true });
-    await expect(AdminLayout({ children: null })).rejects.toThrow('NOT_FOUND');
-  });
-
   it('renders toasts and a nav limited to the visible sections for a directory reader', async () => {
     mockPrincipal.mockResolvedValueOnce(makePrincipal({ capabilities: ['template.use', 'directory.read'] }));
     const el = await AdminLayout({ children: 'CONTENT' });

@@ -37,9 +37,8 @@ export const GET = withAuthz('admin/audit/export GET', 'audit.export', async (re
     return NextResponse.json({ error: 'Eksporten kunne ikke logges og er derfor afvist' }, { status: 500 });
   }
 
-  const exported = scope.all ? rows : rows.map((r) => ({ ...r, ipAddress: null, userAgent: null }));
   const day = new Date().toISOString().slice(0, 10);
-  return new Response(auditRowsToCsv(exported), {
+  return new Response(auditRowsToCsv(rows), {
     status: 200,
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',

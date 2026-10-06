@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// The access gate (requireAppAccess) resolves the live principal; a plain
+// tt-bruger unless a test says otherwise.
+vi.mock('@/lib/authz/principal', async () => ({
+  resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
+}));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
+
 vi.mock('next/headers', () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
@@ -221,7 +228,7 @@ describe('audit: transcription.request (batch)', () => {
   it('still streams the full result when the audit write rejects', async () => {
     mockPrepare.mockResolvedValueOnce([]);
     mockTranscribe.mockResolvedValueOnce({ segments: [], totalBatches: 0, totalSpeechSeconds: 0, failedSeconds: 0 });
-    mockRecord.mockRejectedValueOnce(new Error('db down'));
+    mockRecord.mockResolvedValueOnce({ status: 'dropped', code: 'db_error' });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const stream = await readEvents(await POST(makeAudioRequest(5_000), UUID_PARAMS));
     expect(stream.at(-1)).toMatchObject({ type: 'done' });

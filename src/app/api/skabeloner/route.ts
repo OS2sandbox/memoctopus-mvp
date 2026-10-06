@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { listSkabeloner, createSkabelon } from '@/lib/skabeloner/server';
 import { withHandler } from '@/lib/api-handler';
 import { recordServerEvent } from '@/lib/audit/record';
 import { safeLogError } from '@/lib/audit/safe-log';
 import { listCentralForUser } from '@/lib/skabeloner/resolve';
 import type { CentralSkabelonSummary } from '@/lib/skabeloner/central-types';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 async function getHandler(): Promise<NextResponse> {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const skabeloner = await listSkabeloner(session.user.id);
   // The central list is an addition: if it cannot be resolved the user keeps their personal templates.
@@ -24,8 +24,9 @@ async function getHandler(): Promise<NextResponse> {
 }
 
 async function postHandler(req: NextRequest): Promise<NextResponse> {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const body = await req.json().catch(() => ({}));
   const name = typeof body.name === 'string' ? body.name.trim() : '';

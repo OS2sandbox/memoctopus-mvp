@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { getBotServiceConfig, botFetch } from '@/lib/bot-service';
 import { withHandler } from '@/lib/api-handler';
 import { safeLogError } from '@/lib/audit/safe-log';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 // Polls the live bot-service session status. Stateless: the client supplies the
 // sessionId (stored in its IndexedDB meeting record) as a query param. No DB.
@@ -14,8 +13,9 @@ export const GET = withHandler('bot/status', async (
   req: NextRequest,
   { params }: { params: Promise<{ meetingId: string }> },
 ) => {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   await params; // meetingId is part of the path but the lookup is by sessionId
   const sessionId = req.nextUrl.searchParams.get('sessionId');

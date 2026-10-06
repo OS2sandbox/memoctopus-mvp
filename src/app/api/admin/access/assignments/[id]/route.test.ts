@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
 vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers()) }));
 vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
@@ -9,7 +10,7 @@ import { DELETE } from './route';
 import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { revokeAssignment } from '@/lib/authz/access-admin';
-import { ConflictError, NotFoundError } from '@/lib/authz/access-errors';
+import { ConflictError, NotFoundError, ReadOnlyModeError } from '@/lib/authz/access-errors';
 import { FAKE_PRINCIPAL_ADMIN, FAKE_SESSION, makeJsonReq, makePrincipal } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
@@ -39,11 +40,11 @@ describe('DELETE /api/admin/access/assignments/[id] (access.manage)', () => {
     expect(mockRevoke).not.toHaveBeenCalled();
   });
 
-  it('409 in rollekatalog mode', async () => {
-    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+  it('409 when the service refuses in rollekatalog mode', async () => {
+    mockRevoke.mockRejectedValue(new ReadOnlyModeError());
     const res = await del();
     expect(res.status).toBe(409);
-    expect(mockRevoke).not.toHaveBeenCalled();
+    expect((await res.json()).code).toBe('read_only');
   });
 
   it('400 for a malformed id', async () => {

@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { getBotServiceConfig, botFetch } from '@/lib/bot-service';
 import { assertBotMeetingOwner } from '@/lib/bot-pending-audio';
 import { withHandler } from '@/lib/api-handler';
 import { recordServerEvent } from '@/lib/audit/record';
 import { safeLogError } from '@/lib/audit/safe-log';
-import { meetingEntity } from '../../_audit';
+import { asEntityUuid } from '@/app/api/meetings/ai-audit';
 import { z } from 'zod';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 const bodySchema = z.object({
   action: z.enum(['pause', 'resume', 'stop', 'abort']),
@@ -29,8 +28,9 @@ export const POST = withHandler(
     req: NextRequest,
     { params }: { params: Promise<{ meetingId: string }> },
   ) => {
-    const session = await auth.api.getSession({ headers: await headers() });
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const access = await requireAppAccess();
+    if (access instanceof NextResponse) return access;
+    const { session } = access;
 
     const { meetingId } = await params;
 
@@ -56,7 +56,7 @@ export const POST = withHandler(
         type: EVENT_FOR_ACTION[action],
         outcome,
         actorUserId: session.user.id,
-        ...meetingEntity(meetingId),
+        entityId: asEntityUuid(meetingId),
       });
 
     const bot = getBotServiceConfig();

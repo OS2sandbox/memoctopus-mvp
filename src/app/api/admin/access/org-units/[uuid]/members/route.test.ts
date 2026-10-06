@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
 vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers()) }));
 vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
@@ -9,7 +10,7 @@ import { GET, PUT } from './route';
 import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { listOrgUnitMembers, setOrgUnitMembers } from '@/lib/authz/access-admin';
-import { ConflictError, NotFoundError } from '@/lib/authz/access-errors';
+import { ConflictError, NotFoundError, ReadOnlyModeError } from '@/lib/authz/access-errors';
 import { FAKE_PRINCIPAL_ADMIN, FAKE_SESSION, makeJsonReq, makePrincipal } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
@@ -61,9 +62,8 @@ describe('PUT /api/admin/access/org-units/[uuid]/members (access.manage)', () =>
     expect((await put({ appUserIds: [] })).status).toBe(401);
     mockResolve.mockResolvedValueOnce(makePrincipal());
     expect((await put({ appUserIds: [] })).status).toBe(403);
-    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+    mockSet.mockRejectedValueOnce(new ReadOnlyModeError());
     expect((await put({ appUserIds: [] })).status).toBe(409);
-    expect(mockSet).not.toHaveBeenCalled();
   });
 
   it('replaces the membership', async () => {

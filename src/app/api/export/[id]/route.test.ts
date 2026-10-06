@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// The access gate (requireAppAccess) resolves the live principal; a plain
+// tt-bruger unless a test says otherwise.
+vi.mock('@/lib/authz/principal', async () => ({
+  resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
+}));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
+
 vi.mock('next/headers', () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
@@ -17,7 +24,9 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 import { POST } from './route';
 import { expectValidMetadataOnly, leakyError } from '@/app/api/meetings/ai-audit.test-utils';
 import { auth } from '@/lib/auth';
-import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
+import { FAKE_SESSION, makeJsonReq, makePrincipal } from '@/test/helpers';
+import { resolvePrincipal } from '@/lib/authz/principal';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 
@@ -219,7 +228,7 @@ describe('audit: export.download', () => {
   });
 
   it('still delivers the export when the audit write rejects', async () => {
-    mockRecord.mockRejectedValueOnce(new Error('db down'));
+    mockRecord.mockResolvedValueOnce({ status: 'dropped', code: 'db_error' });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const res = await POST(makeJsonReq(BASE_URL, 'POST', { content: SECRET, format: 'md' }), UUID_PARAMS);
     expect(res.status).toBe(200);
@@ -244,5 +253,27 @@ describe('audit: export.download', () => {
       spy.mockRestore();
       vi.doUnmock('docx');
     }
+  });
+});
+
+describe('POST /api/export/[id] — access gate', () => {
+  beforeEach(() => {
+    mockGetSession.mockReset().mockResolvedValue(FAKE_SESSION as never);
+    mockRecord.mockReset();
+  });
+
+  it('answers 403 for a disabled user and returns no document', async () => {
+    vi.mocked(resolvePrincipal).mockResolvedValueOnce(makePrincipal({ disabled: true, roles: [], capabilities: [] }));
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { content, format: 'md' }), PARAMS);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'Forbidden' });
+    expect(res.headers.get('content-disposition')).toBeNull();
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('refuses before validating the body, so a disabled user learns nothing', async () => {
+    vi.mocked(resolvePrincipal).mockResolvedValueOnce(makePrincipal({ disabled: true, roles: [], capabilities: [] }));
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { format: 'xls' }), PARAMS);
+    expect(res.status).toBe(403);
   });
 });

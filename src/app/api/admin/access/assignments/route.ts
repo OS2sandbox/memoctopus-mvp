@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withAuthz } from '@/lib/authz/guard';
 import { grantRole } from '@/lib/authz/access-admin';
-import { parseJsonBody, readOnlyResponse, respond } from '@/lib/authz/access-http';
+import { parseJsonBody, respond } from '@/lib/authz/access-http';
 import { appUserIdSchema, isoDateSchema, roleKeySchema, uuidSchema } from '@/lib/authz/access-schemas';
 
 const bodySchema = z
@@ -17,8 +17,6 @@ const bodySchema = z
   .strict();
 
 export const POST = withAuthz('admin/access/assignments POST', 'access.manage', async (req, { session }) => {
-  const readOnly = readOnlyResponse();
-  if (readOnly) return readOnly;
   const body = await parseJsonBody(req, bodySchema);
   if (!body.ok) return body.response;
 

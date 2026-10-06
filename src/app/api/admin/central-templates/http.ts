@@ -16,24 +16,18 @@ import type {
   CentralTemplateVersion,
 } from '@/lib/skabeloner/central-types';
 
-export const idParamsSchema = z.object({ id: z.string().uuid() }).strict();
+const idParamsSchema = z.object({ id: z.string().uuid() }).strict();
 
-export const NO_STORE = { 'Cache-Control': 'no-store' } as const;
+const NO_STORE = { 'Cache-Control': 'no-store' } as const;
 
 export function json(body: unknown, status = 200): NextResponse {
   return NextResponse.json(body, { status, headers: NO_STORE });
 }
 
-// Only issues carrying messages we wrote ourselves (Danish, static) are forwarded.
-// Zod's own messages are English and can echo input (unrecognized keys), so for
-// everything else the client gets path + code only.
-const OWN_MESSAGE_CODES = new Set(['too_small', 'too_big', 'custom']);
+// Only issues on our own fields with Danish, static messages are forwarded. Zod's own
+// messages are English and can echo input (unrecognized keys), so for everything else
+// the client gets path + code only (see parseBody).
 const OWN_MESSAGE_FIELDS = new Set(['name', 'description', 'prompt', 'changeNote', 'targets']);
-
-function hasOwnMessage(field: string, code: string): boolean {
-  if (field === 'changeNote') return code !== 'unrecognized_keys'; // required/invalid_type messages are set in the schema
-  return OWN_MESSAGE_FIELDS.has(field) && OWN_MESSAGE_CODES.has(code);
-}
 
 type Parsed<S extends ZodTypeAny> = { ok: true; data: z.output<S> } | { ok: false; response: NextResponse };
 

@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// The access gate (requireAppAccess) resolves the live principal; a plain
+// tt-bruger unless a test says otherwise.
+vi.mock('@/lib/authz/principal', async () => ({
+  resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
+}));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
+
 vi.mock('next/headers', () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
@@ -27,7 +34,9 @@ import { POST } from './route';
 import { liveTranscriptionCoalescer } from './coalesce';
 import { expectValidMetadataOnly, leakyError } from '@/app/api/meetings/ai-audit.test-utils';
 import { auth } from '@/lib/auth';
-import { FAKE_SESSION } from '@/test/helpers';
+import { FAKE_SESSION, makePrincipal } from '@/test/helpers';
+import { resolvePrincipal } from '@/lib/authz/principal';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 
@@ -242,10 +251,26 @@ describe('audit: transcription.request (live, coalesced)', () => {
     expect(events()).toHaveLength(1);
   });
 
-  it('omits the entity for a non-UUID id', async () => {
+  it('emits nothing for a non-UUID id, however often it is sent', async () => {
     await POST(makeAudioRequest(5_000), PARAMS);
-    expect(events()[0].entityId).toBeUndefined();
-    expectValidMetadataOnly(events()[0], ['meet-1']);
+    await POST(makeAudioRequest(5_000), paramsFor('x'.repeat(5_000)));
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('coalesces case variants of the same meeting id into one event', async () => {
+    await POST(makeAudioRequest(5_000), paramsFor(MEETING));
+    await POST(makeAudioRequest(5_000), paramsFor(MEETING.toUpperCase()));
+    expect(events()).toHaveLength(1);
+  });
+
+  it('keeps a later failure apart from an earlier success for the same meeting', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await POST(makeAudioRequest(5_000), paramsFor(MEETING));
+    mockTranscribeRaw.mockRejectedValueOnce(new Error('network error'));
+    await POST(makeAudioRequest(5_000), paramsFor(MEETING));
+    await POST(makeAudioRequest(5_000), paramsFor(MEETING));
+    expect(events().map((e) => e.outcome)).toEqual(['success', 'error']);
+    spy.mockRestore();
   });
 
   it('records outcome error with a code, never the message, and keeps the 502', async () => {
@@ -261,7 +286,7 @@ describe('audit: transcription.request (live, coalesced)', () => {
   });
 
   it('still answers 200 with the text when the audit write rejects', async () => {
-    mockRecord.mockRejectedValueOnce(new Error('db down'));
+    mockRecord.mockResolvedValueOnce({ status: 'dropped', code: 'db_error' });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const res = await POST(makeAudioRequest(5_000), paramsFor(MEETING));
     expect(res.status).toBe(200);
@@ -275,5 +300,25 @@ describe('audit: transcription.request (live, coalesced)', () => {
     await POST(makeRequestWithoutAudio(), paramsFor(MEETING));
     await POST(makeAudioRequest(1_999), paramsFor(MEETING));
     expect(mockRecord).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/meetings/[id]/utterance — access gate', () => {
+  it('answers 403 for a disabled user and never calls the STT provider', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    vi.mocked(resolvePrincipal).mockResolvedValueOnce(makePrincipal({ disabled: true, roles: [], capabilities: [] }));
+    const res = await POST(makeAudioRequest(5_000), PARAMS);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'Forbidden' });
+    expect(recordAuthzDenied).toHaveBeenCalledWith(expect.objectContaining({ required: 'login', reason: 'disabled' }));
+    expect(mockTranscribeRaw).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('refuses before validating the body', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    vi.mocked(resolvePrincipal).mockResolvedValueOnce(makePrincipal({ disabled: true, roles: [], capabilities: [] }));
+    const res = await POST(makeRequestWithoutAudio(), PARAMS);
+    expect(res.status).toBe(403);
   });
 });

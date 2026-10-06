@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { analyzeClarifications } from '@/lib/ai/clarifications';
 import { withHandler } from '@/lib/api-handler';
 import { safeLogError } from '@/lib/audit/safe-log';
 import { asEntityUuid, elapsedMs, emitAudit, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
 import { clarificationCoalescer, clarificationKey } from './coalesce';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 interface Params {
   params: Promise<{ id: string }>;
@@ -15,8 +14,9 @@ interface Params {
 // of things worth clarifying. Called periodically by the recording screen.
 async function postHandler(req: NextRequest, { params }: Params) {
   const { id } = await params;
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const { transcript } = await req.json() as { transcript?: string };
   if (!transcript?.trim()) return NextResponse.json({ clarifications: [] });

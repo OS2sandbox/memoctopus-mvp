@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// The access gate (requireAppAccess) resolves the live principal; a plain
+// tt-bruger unless a test says otherwise.
+vi.mock('@/lib/authz/principal', async () => ({
+  resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
+}));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
+
 vi.mock('next/headers', () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
@@ -13,7 +20,8 @@ vi.mock('@/lib/bot-service', async (importOriginal) => {
   return { ...actual, getBotServiceConfig: vi.fn() };
 });
 
-vi.mock('@/lib/audit/record', () => ({
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
   recordServerEvent: vi.fn().mockResolvedValue({ status: 'stored' }),
 }));
 
@@ -25,7 +33,9 @@ import { POST } from './route';
 import { auth } from '@/lib/auth';
 import { getBotServiceConfig } from '@/lib/bot-service';
 import { recordServerEvent } from '@/lib/audit/record';
-import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
+import { FAKE_SESSION, makeJsonReq, makePrincipal } from '@/test/helpers';
+import { resolvePrincipal } from '@/lib/authz/principal';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 
 const mockRecord = vi.mocked(recordServerEvent);
 
@@ -122,7 +132,7 @@ describe('audit: bot.session_start', () => {
     mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ sessionId: 'sess-1' }), { status: 200 }));
     await POST(makeJsonReq(URL, 'POST', { meetingId: 'm1', meetingUrl: MEETING_URL }));
     const [, event] = mockRecord.mock.calls[0];
-    expect(event).not.toHaveProperty('entityId');
+    expect(event.entityId).toBeUndefined();
   });
 
   it('records outcome error (still once) when the bot service fails', async () => {
@@ -136,6 +146,20 @@ describe('audit: bot.session_start', () => {
   it('does not record anything for an unauthenticated request', async () => {
     mockGetSession.mockResolvedValueOnce(null as never);
     await POST(makeJsonReq(URL, 'POST', { meetingId: MEETING, meetingUrl: MEETING_URL }));
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/bot/sessions — access gate', () => {
+  it('answers 403 for a disabled user and never reaches the bot service', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    vi.mocked(resolvePrincipal).mockResolvedValueOnce(makePrincipal({ disabled: true, roles: [], capabilities: [] }));
+    const res = await POST(makeJsonReq(URL, 'POST', { meetingId: 'm1', meetingUrl: MEETING_URL }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'Forbidden' });
+    expect(recordAuthzDenied).toHaveBeenCalledWith(expect.objectContaining({ required: 'login', reason: 'disabled' }));
+    expect(mockGetBotConfig).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
     expect(mockRecord).not.toHaveBeenCalled();
   });
 });

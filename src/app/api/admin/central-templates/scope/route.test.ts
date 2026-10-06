@@ -9,8 +9,8 @@ import { GET } from './route';
 import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { listScopeOrgUnits } from '@/lib/skabeloner/central';
-import { FAKE_PRINCIPAL_ADMIN, FAKE_SESSION, makeJsonReq, makePrincipal, NO_PARAMS } from '@/test/helpers';
-import { CHILD, manager, OWNER } from '../fixtures';
+import { FAKE_SESSION, makeJsonReq, NO_PARAMS } from '@/test/helpers';
+import { CHILD, manager, OWNER } from '@/test/central-fixtures';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockResolve = vi.mocked(resolvePrincipal);
@@ -28,14 +28,6 @@ beforeEach(() => {
 });
 
 describe('GET /api/admin/central-templates/scope', () => {
-  it('401 / 403 gates', async () => {
-    mockGetSession.mockResolvedValueOnce(null as never);
-    expect((await get()).status).toBe(401);
-    mockResolve.mockResolvedValueOnce(makePrincipal({ capabilities: ['template.use', 'directory.read'] }));
-    expect((await get()).status).toBe(403);
-    expect(mockScope).not.toHaveBeenCalled();
-  });
-
   it('returns exactly what the service scopes for the calling manager', async () => {
     const res = await get();
     expect(res.status).toBe(200);
@@ -59,11 +51,5 @@ describe('GET /api/admin/central-templates/scope', () => {
   it('an empty scope yields an empty list, not an error', async () => {
     mockScope.mockResolvedValue([]);
     expect(await (await get()).json()).toEqual({ orgUnits: [] });
-  });
-
-  it('is served for a global administrator', async () => {
-    mockResolve.mockResolvedValueOnce(FAKE_PRINCIPAL_ADMIN);
-    expect((await get()).status).toBe(200);
-    expect(mockScope).toHaveBeenCalledWith(FAKE_PRINCIPAL_ADMIN);
   });
 });

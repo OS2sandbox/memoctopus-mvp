@@ -1,14 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
 vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers()) }));
 vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
-vi.mock('@/lib/rollekatalog/sync', () => ({ runSync: vi.fn(), getLatestSyncRun: vi.fn() }));
+vi.mock('@/lib/rollekatalog/sync', () => ({ runSync: vi.fn() }));
+vi.mock('@/lib/rollekatalog/sync-run', () => ({ getLatestSyncRun: vi.fn() }));
 
 import { GET, POST } from './route';
 import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
-import { getLatestSyncRun, runSync } from '@/lib/rollekatalog/sync';
+import { runSync } from '@/lib/rollekatalog/sync';
+import { getLatestSyncRun } from '@/lib/rollekatalog/sync-run';
 import { emptySyncCounts, type SyncResult } from '@/lib/rollekatalog/types';
 import { FAKE_PRINCIPAL_ADMIN, FAKE_SESSION, NO_PARAMS, makeJsonReq, makePrincipal } from '@/test/helpers';
 import { NextRequest } from 'next/server';

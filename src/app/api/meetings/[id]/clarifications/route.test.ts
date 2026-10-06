@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// The access gate (requireAppAccess) resolves the live principal; a plain
+// tt-bruger unless a test says otherwise.
+vi.mock('@/lib/authz/principal', async () => ({
+  resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
+}));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
+
 const mockAnalyzeClarifications = vi.hoisted(() => vi.fn());
 
 vi.mock('next/headers', () => ({
@@ -181,7 +188,7 @@ describe('audit: clarifications.request', () => {
 
   it('still answers when the audit write rejects', async () => {
     mockAnalyzeClarifications.mockResolvedValueOnce(sampleClarifications);
-    mockRecord.mockRejectedValueOnce(new Error('db down'));
+    mockRecord.mockResolvedValueOnce({ status: 'dropped', code: 'db_error' });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const res = await POST(makeJsonReq(BASE_URL, 'POST', { transcript: 'tekst' }), UUID_PARAMS);
     expect(res.status).toBe(200);

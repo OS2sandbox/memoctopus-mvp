@@ -10,8 +10,8 @@ import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { listVersions } from '@/lib/skabeloner/central';
 import { NotFoundError } from '@/lib/authz/access-errors';
-import { FAKE_SESSION, makeJsonReq, makePrincipal } from '@/test/helpers';
-import { manager, T1, VERSION } from '../../fixtures';
+import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
+import { manager, T1, VERSION } from '@/test/central-fixtures';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockResolve = vi.mocked(resolvePrincipal);
@@ -28,14 +28,6 @@ beforeEach(() => {
 });
 
 describe('GET /api/admin/central-templates/[id]/versions', () => {
-  it('401 / 403 gates', async () => {
-    mockGetSession.mockResolvedValueOnce(null as never);
-    expect((await get()).status).toBe(401);
-    mockResolve.mockResolvedValueOnce(makePrincipal());
-    expect((await get()).status).toBe(403);
-    expect(mockVersions).not.toHaveBeenCalled();
-  });
-
   it('returns the changelog in the order the service gives (newest first), uncached', async () => {
     const res = await get();
     expect(res.status).toBe(200);

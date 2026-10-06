@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { readPendingMeta, readPendingAudio, deletePendingAudio, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
 import { withHandler } from '@/lib/api-handler';
 import { recordServerEvent } from '@/lib/audit/record';
-import { meetingEntity } from '../../_audit';
+import { asEntityUuid } from '@/app/api/meetings/ai-audit';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 // Client pulls down a finished Teams-bot recording so it can be saved into IndexedDB
 // and transcribed client-side. The bot stashes audio here via /api/bot/audio-upload.
@@ -23,8 +22,9 @@ export const GET = withHandler(
     req: NextRequest,
     { params }: { params: Promise<{ meetingId: string }> },
   ) => {
-    const session = await auth.api.getSession({ headers: await headers() });
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const access = await requireAppAccess();
+    if (access instanceof NextResponse) return access;
+    const { session } = access;
 
     const { meetingId } = await params;
 
@@ -52,7 +52,7 @@ export const GET = withHandler(
     await recordServerEvent(req, {
       type: 'bot.audio_collect',
       actorUserId: session.user.id,
-      ...meetingEntity(meetingId),
+      entityId: asEntityUuid(meetingId),
       details: { bytes: buffer.byteLength },
     });
 

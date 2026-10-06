@@ -63,11 +63,15 @@ describe('createCoalescer', () => {
 
 describe('liveTranscriptionKey', () => {
   it('separates actor and meeting so different pairs never collide', () => {
-    expect(liveTranscriptionKey('a:b', 'c')).not.toBe(liveTranscriptionKey('a', 'b:c'));
-    expect(liveTranscriptionKey('u', 'm1')).not.toBe(liveTranscriptionKey('u', 'm2'));
+    expect(liveTranscriptionKey('a:b', 'c', 'success')).not.toBe(liveTranscriptionKey('a', 'b:c', 'success'));
+    expect(liveTranscriptionKey('u', 'm1', 'success')).not.toBe(liveTranscriptionKey('u', 'm2', 'success'));
+  });
+
+  it('keys success and error apart', () => {
+    expect(liveTranscriptionKey('u', 'm1', 'success')).not.toBe(liveTranscriptionKey('u', 'm1', 'error'));
   });
 
   it('bounds the key length for an attacker-sized meeting id', () => {
-    expect(liveTranscriptionKey('u', 'x'.repeat(10_000)).length).toBeLessThan(100);
+    expect(liveTranscriptionKey('u', 'x'.repeat(10_000), 'success').length).toBeLessThan(100);
   });
 });

@@ -40,7 +40,7 @@ const row = (over: Partial<AuditEventRow> = {}): AuditEventRow => ({
   ipAddress: null,
   userAgent: null,
   requestId: 'r1',
-  details: { method: 'sso', provider: 'entra' },
+  details: { method: 'oidc', provider: 'entra' },
   clientOccurredAt: null,
   ...over,
 });
@@ -130,7 +130,7 @@ describe('GET /api/audit/feed', () => {
     const body = await res.json();
     expect(body.next).toBe(12);
     expect(body.records).toHaveLength(1);
-    expect(body.records[0]).toMatchObject({ id: 12, eventType: 'auth.login', requestId: 'r1', details: { method: 'sso', provider: 'entra' } });
+    expect(body.records[0]).toMatchObject({ id: 12, eventType: 'auth.login', requestId: 'r1', details: { method: 'oidc', provider: 'entra' } });
   });
 
   it('passes offset and size through', async () => {

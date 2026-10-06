@@ -1,6 +1,6 @@
 // Best-effort "at most once per window per key" gate, used so the per-utterance
 // transcription path (one request every few seconds during a meeting) produces
-// one audit event per actor+meeting+mode per hour instead of a flood.
+// one audit event per actor+meeting+mode+outcome per hour instead of a flood.
 //
 // In-memory and per process: with several app instances each keeps its own map,
 // so the true rate is at most one event per instance per window; a restart also
@@ -51,6 +51,6 @@ const HOUR_MS = 60 * 60 * 1000;
 /** One live-transcription event per actor+meeting per hour, at most 10 000 tracked keys. */
 export const liveTranscriptionCoalescer = createCoalescer({ windowMs: HOUR_MS, maxEntries: 10_000 });
 
-/** Key parts are joined with a NUL so no actor/meeting pair can collide with another. */
-export const liveTranscriptionKey = (actorUserId: string, meetingId: string): string =>
-  `${actorUserId}\u0000${meetingId.slice(0, 64)}\u0000live`;
+/** Key parts are joined with a NUL so no actor/meeting pair can collide with another. Outcomes are keyed apart so a first success does not hide a later failure. */
+export const liveTranscriptionKey = (actorUserId: string, meetingId: string, outcome: 'success' | 'error'): string =>
+  `${actorUserId}\u0000${meetingId.slice(0, 64)}\u0000live\u0000${outcome}`;

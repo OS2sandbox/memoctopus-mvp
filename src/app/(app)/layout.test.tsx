@@ -18,9 +18,10 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
-vi.mock('@/lib/audit/seam', () => ({ recordAuthzDenied: vi.fn() }));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
 vi.mock('@/lib/db', () => ({ db: {}, pool: {} }));
 vi.mock('@/components/layout/NoAccess', () => ({ NoAccess: () => null }));
+vi.mock('@/components/layout/AccessUnavailable', () => ({ AccessUnavailable: () => null }));
 
 // The layout renders client components; stub them out — this test only cares
 // about the auth decision, not the rendered tree.
@@ -33,8 +34,9 @@ import AppLayout from './layout';
 import { auth } from '@/lib/auth';
 import { redirect } from 'next/navigation';
 import { resolvePrincipal } from '@/lib/authz/principal';
-import { recordAuthzDenied } from '@/lib/audit/seam';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 import { NoAccess } from '@/components/layout/NoAccess';
+import { AccessUnavailable } from '@/components/layout/AccessUnavailable';
 import { makePrincipal } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
@@ -108,5 +110,31 @@ describe('(app) layout — principal gate', () => {
     mockResolve.mockResolvedValue(makePrincipal({ roles: ['tt-logleser'] }));
     const el = (await AppLayout({ children: 'CONTENT' })) as El;
     expect(el.type).not.toBe(NoAccess);
+  });
+});
+
+describe('(app) layout — access check failure (fail closed)', () => {
+  it('renders AccessUnavailable, not the app shell, when the principal lookup throws', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    signedIn();
+    mockResolve.mockRejectedValue(Object.assign(new Error('SECRET db host'), { code: 'ECONNREFUSED' }));
+    const el = (await AppLayout({ children: 'CONTENT' })) as El;
+    expect(el.type).toBe(AccessUnavailable);
+    expect(JSON.stringify(el)).not.toContain('CONTENT');
+    expect(recordAuthzDenied).not.toHaveBeenCalled();
+    const logged = spy.mock.calls.flat().join(' ');
+    expect(logged).toContain('code=ECONNREFUSED');
+    expect(logged).not.toContain('SECRET');
+    spy.mockRestore();
+  });
+
+  it('does not render the shell when the session lookup itself succeeded but resolve fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    signedIn();
+    mockResolve.mockRejectedValue(new Error('boom'));
+    const el = (await AppLayout({ children: 'CONTENT' })) as El;
+    expect(el.type).not.toBe(NoAccess);
+    expect(el.type).toBe(AccessUnavailable);
+    vi.restoreAllMocks();
   });
 });

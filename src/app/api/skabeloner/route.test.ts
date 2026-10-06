@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// The access gate (requireAppAccess) resolves the live principal; a plain
+// tt-bruger unless a test says otherwise.
+vi.mock('@/lib/authz/principal', async () => ({
+  resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
+}));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
+
 vi.mock('next/headers', () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
@@ -22,7 +29,9 @@ vi.mock('@/lib/skabeloner/resolve', () => ({ listCentralForUser: mockListCentral
 import { GET, POST } from './route';
 import { auth } from '@/lib/auth';
 import { listSkabeloner, createSkabelon } from '@/lib/skabeloner/server';
-import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
+import { FAKE_SESSION, makeJsonReq, makePrincipal } from '@/test/helpers';
+import { resolvePrincipal } from '@/lib/authz/principal';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockList = vi.mocked(listSkabeloner);
@@ -191,5 +200,33 @@ describe('POST /api/skabeloner', () => {
     mockRecord.mockResolvedValue({ status: 'dropped', code: 'db_error' });
     const res = await POST(makeJsonReq(BASE_URL, 'POST', { name: 'Test' }));
     expect(res.status).toBe(201);
+  });
+});
+
+describe('/api/skabeloner — access gate', () => {
+  beforeEach(() => {
+    mockGetSession.mockReset().mockResolvedValue(FAKE_SESSION as never);
+    mockList.mockReset();
+    mockCreate.mockReset();
+    mockListCentral.mockReset();
+    mockRecord.mockReset();
+  });
+
+  it('GET answers 403 for a disabled user and reads no templates', async () => {
+    vi.mocked(resolvePrincipal).mockResolvedValueOnce(makePrincipal({ disabled: true, roles: [], capabilities: [] }));
+    const res = await GET();
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'Forbidden' });
+    expect(recordAuthzDenied).toHaveBeenCalledWith(expect.objectContaining({ required: 'login', reason: 'disabled' }));
+    expect(mockList).not.toHaveBeenCalled();
+    expect(mockListCentral).not.toHaveBeenCalled();
+  });
+
+  it('POST answers 403 for a disabled user and creates nothing', async () => {
+    vi.mocked(resolvePrincipal).mockResolvedValueOnce(makePrincipal({ disabled: true, roles: [], capabilities: [] }));
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { name: 'X', prompt: 'p' }));
+    expect(res.status).toBe(403);
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
   });
 });

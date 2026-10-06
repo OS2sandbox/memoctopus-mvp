@@ -1,4 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// The access gate (requireAppAccess) resolves the live principal; a plain
+// tt-bruger unless a test says otherwise.
+vi.mock('@/lib/authz/principal', async () => ({
+  resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
+}));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
 import { NextRequest } from 'next/server';
 
 // The transcribe route is stateless: it transcribes the uploaded audio, runs PII
@@ -37,7 +44,9 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 import { POST } from './route';
 import { expectValidMetadataOnly, leakyError } from '@/app/api/meetings/ai-audit.test-utils';
 import { auth } from '@/lib/auth';
-import { FAKE_SESSION } from '@/test/helpers';
+import { FAKE_SESSION, makePrincipal } from '@/test/helpers';
+import { resolvePrincipal } from '@/lib/authz/principal';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 
@@ -199,7 +208,7 @@ describe('audit: transcription.request (upload) and chapters.request', () => {
   });
 
   it('still answers 200 with the transcript when the audit write rejects', async () => {
-    mockRecord.mockRejectedValue(new Error('db down'));
+    mockRecord.mockResolvedValue({ status: 'dropped', code: 'db_error' });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const res = await POST(makeFormRequest(MEETING));
     expect(res.status).toBe(200);
@@ -222,5 +231,27 @@ describe('audit: transcription.request (upload) and chapters.request', () => {
     expect(res.headers.get('x-request-id')).toBeTruthy();
     expect(JSON.stringify(spy.mock.calls)).not.toContain('Hej verden');
     spy.mockRestore();
+  });
+});
+
+describe('POST /api/transcribe — access gate', () => {
+  beforeEach(() => {
+    mockGetSession.mockReset().mockResolvedValue(FAKE_SESSION as never);
+    mockTranscribe.mockReset();
+    mockDetectPii.mockReset();
+    mockGroupChapters.mockReset();
+    mockRecord.mockReset();
+  });
+
+  it('answers 403 for a disabled user and never transcribes', async () => {
+    vi.mocked(resolvePrincipal).mockResolvedValueOnce(makePrincipal({ disabled: true, roles: [], capabilities: [] }));
+    const res = await POST(makeFormRequest('meet-1'));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'Forbidden' });
+    expect(recordAuthzDenied).toHaveBeenCalledWith(expect.objectContaining({ required: 'login', reason: 'disabled' }));
+    expect(mockTranscribe).not.toHaveBeenCalled();
+    expect(mockDetectPii).not.toHaveBeenCalled();
+    expect(mockGroupChapters).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
   });
 });

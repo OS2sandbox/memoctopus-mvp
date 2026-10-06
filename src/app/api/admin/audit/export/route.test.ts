@@ -5,6 +5,7 @@ vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
 vi.mock('@/lib/db', () => ({ pool: { query: vi.fn() }, db: {} }));
 vi.mock('@/lib/audit/record', () => ({ recordServerEvent: vi.fn() }));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
 vi.mock('@/lib/audit/query', async (orig) => ({
   ...(await orig<typeof import('@/lib/audit/query')>()),
   auditScopeFor: vi.fn(),
@@ -131,11 +132,9 @@ describe('GET /api/admin/audit/export (audit.export)', () => {
     });
   });
 
-  it('blanks ip and user agent when the caller is not a global reader', async () => {
+  it('limits the rows to the caller\'s audit.read scope', async () => {
     mockScope.mockResolvedValue({ all: false, orgUnitUuids: ['aaaa0000-0000-4000-8000-00000000000a'] });
-    const text = await (await GET(req(), NO_PARAMS)).text();
-    expect(text).not.toContain('10.0.0.1');
-    expect(text).not.toContain('UA/1.0');
+    await GET(req(), NO_PARAMS);
     expect(mockCollect).toHaveBeenCalledWith(expect.objectContaining({ scope: { all: false, orgUnitUuids: ['aaaa0000-0000-4000-8000-00000000000a'] } }));
   });
 

@@ -2,11 +2,9 @@
 // the audit write (or a bad id) affect the user's request. Metadata only: the
 // helpers here never see transcript text, titles or error messages.
 import type { AuditEventOf, EventType } from '@/lib/audit/events';
-import { recordServerEvent } from '@/lib/audit/record';
+import { recordServerEvent, UUID_RE } from '@/lib/audit/record';
 import type { HeaderSource } from '@/lib/audit/request-context';
 import { describeError } from '@/lib/audit/safe-log';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Route params and form fields are client-supplied and never verified against a
@@ -32,11 +30,7 @@ export function outcomeCodeOf(err: unknown): string {
   return fromName || 'error';
 }
 
-/** recordServerEvent never throws by contract; the catch is a second line of defence. */
-export async function emitAudit<T extends EventType>(req: HeaderSource, event: AuditEventOf<T>): Promise<void> {
-  try {
-    await recordServerEvent(req, event);
-  } catch {
-    console.warn(`[audit] event dropped type=${event.type} code=emit_failed`);
-  }
+/** The AI/export routes' name for recordServerEvent, which is best-effort and never throws. */
+export function emitAudit<T extends EventType>(req: HeaderSource, event: AuditEventOf<T>): ReturnType<typeof recordServerEvent> {
+  return recordServerEvent(req, event);
 }

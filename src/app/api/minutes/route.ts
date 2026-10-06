@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { generateReferatBody, SkabelonSpec } from '@/lib/ai/minutes';
 import { getSkabelon, getDefaultSkabelon } from '@/lib/skabeloner/server';
 import { resolveCentralTemplate, type ResolvedCentralTemplate } from '@/lib/skabeloner/resolve';
@@ -9,12 +7,15 @@ import { TranscriptChapter } from '@/lib/ai/chapters';
 import { TranscriptSegment, Skabelon } from '@/types';
 import { withHandler } from '@/lib/api-handler';
 import { asEntityUuid, elapsedMs, emitAudit, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
+import { sanitizeChapters, sanitizeParticipants, redactPromptEchoDeep } from '@/lib/ai/prompt-echo';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 export const maxDuration = 120;
 
 async function postHandler(req: NextRequest) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const body = await req.json();
   const {
@@ -89,12 +90,13 @@ async function postHandler(req: NextRequest) {
   // Toggle overrides from the gennemgang UI win over the Skabelon defaults;
   // when neither is set we fall back to the Skabelon's own flags.
   const base = central ?? skabelon;
-  // A locked template ignores the client's flags unless it allows overrides.
-  const pick = (override: boolean | undefined, stored: boolean | undefined): boolean => {
-    if (central && !central.allowToggleOverrides) return stored ?? false;
-    if (central && typeof override !== 'boolean') return stored ?? false;
-    return override ?? stored ?? false;
-  };
+  // A locked template takes the client's flag only when it allows overrides.
+  const pick = (override: boolean | undefined, stored: boolean | undefined): boolean =>
+    central
+      ? central.allowToggleOverrides && typeof override === 'boolean'
+        ? override
+        : (stored ?? false)
+      : (override ?? stored ?? false);
   const spec: SkabelonSpec = {
     prompt: base?.prompt ?? '',
     includeDeltagere: pick(includeDeltagere, base?.includeDeltagere),
@@ -107,7 +109,7 @@ async function postHandler(req: NextRequest) {
   const templateId = central?.id ?? skabelon?.id ?? null;
   const templateRef: TemplateRef = central
     ? { source: 'central', id: central.id, version: central.version }
-    : { source: skabelon ? 'personal' : 'none', id: skabelon?.id ?? null, version: null };
+    : { source: templateSource === 'none' ? 'none' : 'personal', id: skabelon?.id ?? null, version: null };
 
   // Metadata only: ids, counts and a duration. The meeting id is client-supplied
   // and unverified, so it is used only when it is a well-formed UUID.
@@ -128,15 +130,36 @@ async function postHandler(req: NextRequest) {
       },
     });
 
+  // Locked templates (best effort, see src/lib/ai/prompt-echo.ts): client strings
+  // that reach the instruction are flattened, the prompt goes in the system message
+  // (via `confidential`), and the output is scrubbed for verbatim prompt echoes.
+  const safeParticipants = central ? sanitizeParticipants(participants) : participants;
+  const safeChapters = central ? sanitizeChapters(chapters) : chapters;
+
   const t0 = Date.now();
   let content;
   try {
-    content = await generateReferatBody(segments, spec, participants, chapters, effectiveCustomPrompt);
+    content = await generateReferatBody(
+      segments,
+      spec,
+      safeParticipants,
+      safeChapters,
+      effectiveCustomPrompt,
+      central ? { confidential: true } : undefined,
+    );
   } catch (err) {
     await audit('error', t0, outcomeCodeOf(err));
     throw err;
   }
-  await audit('success', t0);
+
+  let echoed = false;
+  if (central) {
+    // Nothing about the matched text is logged or returned: only the flag.
+    const scrubbed = redactPromptEchoDeep(content, central.prompt);
+    content = scrubbed.value;
+    echoed = scrubbed.redacted;
+  }
+  await audit('success', t0, echoed ? 'prompt_echo' : undefined);
 
   return NextResponse.json({ content, skabelonId: templateId, templateRef });
 }
