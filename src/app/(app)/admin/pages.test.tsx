@@ -4,11 +4,13 @@ vi.mock('@/lib/authz/page-gate', () => ({ requireAdminSection: vi.fn() }));
 vi.mock('@/components/admin/AdminOverview', () => ({ AdminOverview: () => null }));
 vi.mock('@/components/admin/UsersAdmin', () => ({ UsersAdmin: () => null }));
 vi.mock('@/components/admin/OrganisationAdmin', () => ({ OrganisationAdmin: () => null }));
+vi.mock('@/components/admin/CentralTemplatesAdmin', () => ({ CentralTemplatesAdmin: () => null }));
 
 import { requireAdminSection } from '@/lib/authz/page-gate';
 import AdminPage from './page';
 import BrugerePage from './brugere/page';
 import OrganisationPage from './organisation/page';
+import SkabelonerPage from './skabeloner/page';
 
 const gate = vi.mocked(requireAdminSection);
 
@@ -23,6 +25,7 @@ describe('admin pages gate their own section', () => {
     ['overview', AdminPage],
     ['users', BrugerePage],
     ['organisation', OrganisationPage],
+    ['templates', SkabelonerPage],
   ] as const)('%s', async (key, Page) => {
     await Page();
     expect(gate).toHaveBeenCalledWith(key);

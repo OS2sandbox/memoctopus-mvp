@@ -72,6 +72,7 @@ describe('(app)/admin layout — server-side gate', () => {
       'overview',
       'users',
       'organisation',
+      'templates',
       'log',
     ]);
   });

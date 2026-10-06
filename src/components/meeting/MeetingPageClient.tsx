@@ -316,6 +316,7 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
           version={minutes.version}
           activeVersionId={minutes.activeVersionId}
           versions={minutes.versions}
+          templateRef={minutes.templateRef}
           onSaved={loadData}
         />
       )}

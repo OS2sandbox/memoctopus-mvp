@@ -1057,4 +1057,363 @@ describe('TranscriptReview', () => {
       });
     });
   });
+  // ── Central (locked) templates ─────────────────────────────────────────────
+
+  describe('central templates', () => {
+    const CENTRAL = {
+      id: 'cen-1',
+      source: 'central' as const,
+      name: 'Bestyrelsesmøde',
+      description: 'Fast format',
+      includeDeltagere: true,
+      includeBeslutningspunkter: false,
+      includeDagsorden: true,
+      includeDato: false,
+      locked: true as const,
+      version: 3,
+      allowUserInstruction: false,
+      allowToggleOverrides: false,
+    };
+    const PERSONAL = {
+      id: 'per-1',
+      name: 'Min skabelon',
+      description: '',
+      prompt: 'Personlig prompt',
+      includeDeltagere: false,
+      includeBeslutningspunkter: true,
+      includeDagsorden: false,
+      includeDato: false,
+      isDefault: true,
+      createdAt: '',
+      updatedAt: '',
+    };
+
+    interface MinutesReply { ok: boolean; status?: number; body: unknown }
+
+    function mockFetch(opts: {
+      personal?: unknown[];
+      central?: unknown[];
+      refreshed?: unknown[];
+      minutes?: MinutesReply;
+    }) {
+      let listCalls = 0;
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url === '/api/skabeloner') {
+          listCalls += 1;
+          const central = listCalls > 1 && opts.refreshed ? opts.refreshed : (opts.central ?? []);
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ skabeloner: opts.personal ?? [], centralSkabeloner: central }),
+          });
+        }
+        if (typeof url === 'string' && url.includes('/chapters')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ chapters: [] }) });
+        }
+        if (url === '/api/minutes') {
+          const m = opts.minutes ?? { ok: true, body: { content: { body: '# Referat' }, skabelonId: null } };
+          return Promise.resolve({ ok: m.ok, status: m.status ?? (m.ok ? 200 : 500), json: () => Promise.resolve(m.body) });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+      });
+      global.fetch = fetchMock;
+      return fetchMock;
+    }
+
+    async function pickCentral(user: ReturnType<typeof userEvent.setup>, name = 'Bestyrelsesmøde') {
+      await user.click(screen.getByRole('button', { expanded: false, name: /Ingen skabelon|Min skabelon/ }));
+      await user.click(await screen.findByRole('option', { name: new RegExp(name) }));
+    }
+
+    function minutesBody(fetchMock: ReturnType<typeof vi.fn>) {
+      const call = fetchMock.mock.calls.find((c) => c[0] === '/api/minutes')!;
+      return JSON.parse(call[1].body as string) as Record<string, unknown>;
+    }
+
+    async function generate(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(screen.getByText('generér referat →'));
+    }
+
+    function stubLocation() {
+      const original = window.location;
+      Object.defineProperty(window, 'location', { value: { href: '' }, writable: true, configurable: true });
+      return () => Object.defineProperty(window, 'location', { value: original, configurable: true });
+    }
+
+    beforeEach(async () => {
+      const { getMeeting } = await import('@/lib/storage');
+      vi.mocked(getMeeting).mockResolvedValue({
+        id: 'meeting-abc', title: 'Test møde', status: 'review', createdAt: new Date().toISOString(),
+      } as never);
+    });
+
+    it('groups central templates under "Centrale skabeloner" with a lock and version', async () => {
+      mockFetch({ central: [CENTRAL] });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await user.click(screen.getByRole('button', { name: /Ingen skabelon/ }));
+
+      expect(await screen.findByText('Centrale skabeloner')).toBeInTheDocument();
+      const option = screen.getByRole('option', { name: /Bestyrelsesmøde/ });
+      expect(option).toHaveTextContent('v3');
+      expect(option.querySelector('[aria-label="låst"]')).not.toBeNull();
+    });
+
+    it('seeds the toggles from the flags and disables them when overrides are not allowed', async () => {
+      mockFetch({ central: [CENTRAL] });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/skabeloner'));
+      await pickCentral(user);
+
+      for (const label of ['Deltagere', 'Beslutningspunkter', 'Dagsorden', 'Dato']) {
+        const btn = screen.getByRole('button', { name: new RegExp(`^${label}`) });
+        expect(btn).toBeDisabled();
+        expect(btn).toHaveAttribute('title', 'Låst af din organisation');
+      }
+      // Seeded flags: deltagere + dagsorden on (their × marker is hidden while locked).
+      const pressed = (l: string) => screen.getByRole('button', { name: new RegExp(`^${l}`) }).getAttribute('aria-pressed');
+      expect([pressed('Deltagere'), pressed('Beslutningspunkter'), pressed('Dagsorden'), pressed('Dato')])
+        .toEqual(['true', 'false', 'true', 'false']);
+      expect(screen.queryAllByText('×')).toHaveLength(0);
+      expect(screen.getByText('Låst af din organisation')).toBeInTheDocument();
+    });
+
+    it('keeps toggles enabled (and seeded) when allowToggleOverrides is set', async () => {
+      mockFetch({ central: [{ ...CENTRAL, allowToggleOverrides: true }] });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/skabeloner'));
+      await pickCentral(user);
+
+      const dato = screen.getByRole('button', { name: /^Dato/ });
+      expect(dato).toBeEnabled();
+      expect(screen.queryByText('Låst af din organisation')).not.toBeInTheDocument();
+      // Seeded deltagere + dagsorden show the × marker; toggling Dato adds a third.
+      expect(screen.getAllByText('×')).toHaveLength(2);
+      await user.click(dato);
+      expect(screen.getAllByText('×')).toHaveLength(3);
+    });
+
+    it('hides the instruction box unless allowUserInstruction', async () => {
+      mockFetch({ central: [CENTRAL, { ...CENTRAL, id: 'cen-2', name: 'Åbent møde', allowUserInstruction: true }] });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/skabeloner'));
+      expect(screen.getByPlaceholderText('Tilføj instruktioner…')).toBeInTheDocument();
+
+      await pickCentral(user);
+      expect(screen.queryByPlaceholderText(/Tilføj instruktioner/)).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /Bestyrelsesmøde/ }));
+      await user.click(await screen.findByRole('option', { name: /Åbent møde/ }));
+      expect(screen.getByPlaceholderText('Tilføj instruktioner til den låste skabelon…')).toBeInTheDocument();
+    });
+
+    it('sends skabelonSource=central, the raw id, the central flags and no customPrompt when locked', async () => {
+      const restore = stubLocation();
+      const fetchMock = mockFetch({ central: [CENTRAL] });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/skabeloner'));
+      // Typed before choosing the central template: must not leak into the request.
+      await user.type(screen.getByPlaceholderText('Tilføj instruktioner…'), 'min egen tekst');
+      await pickCentral(user);
+      await generate(user);
+
+      await waitFor(() => expect(fetchMock.mock.calls.some((c) => c[0] === '/api/minutes')).toBe(true));
+      const body = minutesBody(fetchMock);
+      expect(body.skabelonSource).toBe('central');
+      expect(body.skabelonId).toBe('cen-1');
+      expect(body).not.toHaveProperty('customPrompt');
+      expect(body).toMatchObject({
+        includeDeltagere: true,
+        includeBeslutningspunkter: false,
+        includeDagsorden: true,
+        includeDato: false,
+      });
+      restore();
+    });
+
+    it('sends customPrompt and toggled categories when the template allows it', async () => {
+      const restore = stubLocation();
+      const fetchMock = mockFetch({
+        central: [{ ...CENTRAL, allowUserInstruction: true, allowToggleOverrides: true }],
+      });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/skabeloner'));
+      await pickCentral(user);
+      await user.type(screen.getByPlaceholderText('Tilføj instruktioner til den låste skabelon…'), 'vær kortfattet');
+      await user.click(screen.getByRole('button', { name: /^Dato/ }));
+      await generate(user);
+
+      await waitFor(() => expect(fetchMock.mock.calls.some((c) => c[0] === '/api/minutes')).toBe(true));
+      const body = minutesBody(fetchMock);
+      expect(body.skabelonSource).toBe('central');
+      expect(body.customPrompt).toBe('vær kortfattet');
+      expect(body.includeDato).toBe(true);
+      restore();
+    });
+
+    it('sends skabelonSource=personal for personal and for "Ingen skabelon"', async () => {
+      const restore = stubLocation();
+      const fetchMock = mockFetch({ personal: [PERSONAL], central: [CENTRAL] });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Min skabelon/ })).toBeInTheDocument());
+      await generate(user);
+      await waitFor(() => expect(fetchMock.mock.calls.some((c) => c[0] === '/api/minutes')).toBe(true));
+      expect(minutesBody(fetchMock)).toMatchObject({ skabelonSource: 'personal', skabelonId: 'per-1' });
+      restore();
+    });
+
+    it('never renders prompt text and hides "Gem som skabelon" for a central template', async () => {
+      // A prompt must not appear even if a (buggy) server sent one.
+      mockFetch({ central: [{ ...CENTRAL, prompt: 'HEMMELIG CENTRAL PROMPT' }] });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/skabeloner'));
+      expect(screen.getByText('Gem som skabelon →')).toBeInTheDocument();
+      await pickCentral(user);
+
+      expect(screen.queryByText('Gem som skabelon →')).not.toBeInTheDocument();
+      expect(document.body.textContent).not.toContain('HEMMELIG CENTRAL PROMPT');
+    });
+
+    it('closes an open save form when a central template is picked', async () => {
+      mockFetch({ central: [CENTRAL] });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/skabeloner'));
+      await user.click(screen.getByText('Gem som skabelon →'));
+      expect(screen.getByText('Gem skabelon')).toBeInTheDocument();
+      await pickCentral(user);
+      expect(screen.queryByText('Gem skabelon')).not.toBeInTheDocument();
+    });
+
+    it('restores personal behaviour when switching away from a central template', async () => {
+      mockFetch({ personal: [PERSONAL], central: [CENTRAL] });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Min skabelon/ })).toBeInTheDocument());
+      await pickCentral(user);
+      expect(screen.getByRole('button', { name: /^Deltagere/ })).toBeDisabled();
+
+      await user.click(screen.getByRole('button', { name: /Bestyrelsesmøde/ }));
+      await user.click(await screen.findByRole('option', { name: /Min skabelon/ }));
+
+      expect(screen.getByRole('button', { name: /^Deltagere/ })).toBeEnabled();
+      expect(screen.getByPlaceholderText('Tilføj instruktioner…')).toBeInTheDocument();
+      expect(screen.getByText('Gem som skabelon →')).toBeInTheDocument();
+      // Personal template flags re-seeded: only Beslutningspunkter is on.
+      expect(screen.getAllByText('×')).toHaveLength(1);
+    });
+
+    it('shows the Danish unavailable message on 404 and refreshes the list', async () => {
+      const fetchMock = mockFetch({
+        central: [CENTRAL],
+        refreshed: [],
+        minutes: { ok: false, status: 404, body: { error: 'Skabelonen er ikke tilgængelig' } },
+      });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/skabeloner'));
+      await pickCentral(user);
+      await generate(user);
+
+      expect(
+        await screen.findByText('Skabelonen er ikke længere tilgængelig. Vælg en anden skabelon.'),
+      ).toBeInTheDocument();
+      await waitFor(() => {
+        expect(fetchMock.mock.calls.filter((c) => c[0] === '/api/skabeloner')).toHaveLength(2);
+      });
+      // The gone template is no longer selected nor offered.
+      await waitFor(() => expect(screen.getByRole('button', { name: /Ingen skabelon/ })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Ingen skabelon/ }));
+      expect(screen.queryByRole('option', { name: /Bestyrelsesmøde/ })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Deltagere/ })).toBeEnabled();
+      const { appendMinutesVersion } = await import('@/lib/storage');
+      expect(appendMinutesVersion).not.toHaveBeenCalled();
+    });
+
+    it('does not use the central message for a 404 on a personal template', async () => {
+      mockFetch({
+        personal: [PERSONAL],
+        minutes: { ok: false, status: 404, body: { error: 'Skabelon ikke fundet' } },
+      });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Min skabelon/ })).toBeInTheDocument());
+      await generate(user);
+      expect(await screen.findByText('Skabelon ikke fundet')).toBeInTheDocument();
+    });
+
+    it('stores templateRef (with the picker name) alongside the generated minutes', async () => {
+      const restore = stubLocation();
+      mockFetch({
+        central: [CENTRAL],
+        minutes: {
+          ok: true,
+          body: {
+            content: { body: '# Referat' },
+            skabelonId: 'cen-1',
+            templateRef: { source: 'central', id: 'cen-1', version: 3 },
+          },
+        },
+      });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/skabeloner'));
+      await pickCentral(user);
+      await generate(user);
+
+      const { appendMinutesVersion } = await import('@/lib/storage');
+      await waitFor(() => expect(appendMinutesVersion).toHaveBeenCalled());
+      expect(appendMinutesVersion).toHaveBeenCalledWith(
+        'meeting-abc',
+        expect.anything(),
+        'cen-1',
+        { source: 'central', id: 'cen-1', version: 3, name: 'Bestyrelsesmøde' },
+      );
+      restore();
+    });
+
+    it('stores a personal templateRef without a name and tolerates a missing templateRef', async () => {
+      const restore = stubLocation();
+      mockFetch({
+        personal: [PERSONAL],
+        minutes: {
+          ok: true,
+          body: {
+            content: { body: '# Referat' },
+            skabelonId: 'per-1',
+            templateRef: { source: 'personal', id: 'per-1', version: null },
+          },
+        },
+      });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Min skabelon/ })).toBeInTheDocument());
+      await generate(user);
+      const { appendMinutesVersion } = await import('@/lib/storage');
+      await waitFor(() => expect(appendMinutesVersion).toHaveBeenCalled());
+      expect(appendMinutesVersion).toHaveBeenLastCalledWith('meeting-abc', expect.anything(), 'per-1', {
+        source: 'personal', id: 'per-1', version: null,
+      });
+      restore();
+    });
+
+    it('works against an older server that returns no centralSkabeloner', async () => {
+      global.fetch = vi.fn().mockImplementation((url: string) =>
+        Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(url === '/api/skabeloner' ? { skabeloner: [PERSONAL] } : { chapters: [] }),
+        }),
+      );
+      setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Min skabelon/ })).toBeInTheDocument());
+      await userEvent.setup({ delay: null }).click(screen.getByRole('button', { name: /Min skabelon/ }));
+      expect(screen.queryByText('Centrale skabeloner')).not.toBeInTheDocument();
+    });
+  });
 });

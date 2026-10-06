@@ -10,7 +10,7 @@ import { onTranscriptUpdated } from '@/lib/transcript-events';
 import { isDiarizationInFlight, ensureDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import { getStorageUserId } from '@/lib/storage/scope';
 import { isDefaultSpeakerLabel, nextAvailableSpeakerLabel } from '@/lib/audio/speaker-labels';
-import type { MinutesContent, Skabelon } from '@/types';
+import type { MinutesContent, Skabelon, CentralSkabelonSummary, MinutesTemplateRef } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { formatDate } from '@/lib/utils';
 import { SaveStatus, type SaveState } from '@/components/layout/SaveStatus';
@@ -60,7 +60,9 @@ function applySelectedPiiReplacements(
 
 // The category toggles seeded from a Skabelon's include* flags. No skabelon
 // (undefined) is a blank template with every category off.
-function skabelonToCats(s?: Skabelon | null) {
+function skabelonToCats(
+  s?: Pick<Skabelon, 'includeDeltagere' | 'includeBeslutningspunkter' | 'includeDagsorden' | 'includeDato'> | null,
+) {
   return {
     deltagere: s?.includeDeltagere ?? false,
     beslutningspunkter: s?.includeBeslutningspunkter ?? false,
@@ -69,15 +71,36 @@ function skabelonToCats(s?: Skabelon | null) {
   };
 }
 
+// Picker values: '' = Ingen skabelon, a bare uuid = personal template, and
+// 'central:<id>' = a locked central template. The prefix keeps the two id
+// spaces apart without changing the personal values the rest of the screen uses.
+const CENTRAL_PREFIX = 'central:';
+const centralValue = (id: string) => CENTRAL_PREFIX + id;
+const centralIdOf = (value: string) => (value.startsWith(CENTRAL_PREFIX) ? value.slice(CENTRAL_PREFIX.length) : null);
+
+const LOCKED_MESSAGE = 'Låst af din organisation';
+const CENTRAL_UNAVAILABLE_MESSAGE = 'Skabelonen er ikke længere tilgængelig. Vælg en anden skabelon.';
+
+function LockIcon({ size = 11 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="låst" style={{ flexShrink: 0 }}>
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
+  );
+}
+
 // Styled skabelon picker — a native <select> can't be themed or show the
 // favorite heart, so this mirrors the app's surface/line/accent tokens, marks
 // the current choice, and flags the user's default with a small blue heart.
 function SkabelonSelect({
   skabeloner,
+  centralSkabeloner,
   value,
   onChange,
 }: {
   skabeloner: Skabelon[];
+  centralSkabeloner: CentralSkabelonSummary[];
   value: string;
   onChange: (id: string) => void;
 }) {
@@ -98,7 +121,9 @@ function SkabelonSelect({
     };
   }, [open]);
 
-  const selectedName = skabeloner.find((s) => s.id === value)?.name ?? 'Ingen skabelon';
+  const centralId = centralIdOf(value);
+  const selectedCentralName = centralId ? centralSkabeloner.find((c) => c.id === centralId)?.name : undefined;
+  const selectedName = selectedCentralName ?? skabeloner.find((s) => s.id === value)?.name ?? 'Ingen skabelon';
   const options = [{ id: '', name: 'Ingen skabelon', isDefault: false }, ...skabeloner];
 
   return (
@@ -116,7 +141,10 @@ function SkabelonSelect({
           fontSize: 13, cursor: 'pointer', textAlign: 'left', transition: 'border-color 120ms',
         }}
       >
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedName}</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          {selectedCentralName && <LockIcon />}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedName}</span>
+        </span>
         <svg width="10" height="10" viewBox="0 0 10 10" style={{ flexShrink: 0, color: 'var(--muted)', transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : undefined }}>
           <path d="M1 3l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -165,6 +193,50 @@ function SkabelonSelect({
               </button>
             );
           })}
+
+          {centralSkabeloner.length > 0 && (
+            <div role="group" aria-label="Centrale skabeloner">
+              <div style={{
+                padding: '8px 9px 4px', marginTop: 4, borderTop: '1px solid var(--line)',
+                fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', letterSpacing: 0.4,
+              }}>
+                Centrale skabeloner
+              </div>
+              {centralSkabeloner.map((c) => {
+                const v = centralValue(c.id);
+                const isSel = v === value;
+                return (
+                  <button
+                    key={v}
+                    type="button"
+                    role="option"
+                    aria-selected={isSel}
+                    onClick={() => { onChange(v); setOpen(false); }}
+                    style={{
+                      width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '7px 9px', borderRadius: 'calc(var(--radius) - 2px)',
+                      border: 'none', cursor: 'pointer', textAlign: 'left', fontSize: 13,
+                      background: isSel ? 'var(--accent-wash)' : 'transparent',
+                      color: isSel ? 'var(--accent)' : 'var(--ink)',
+                    }}
+                    onMouseEnter={(e) => { if (!isSel) e.currentTarget.style.background = 'var(--bg-2)'; }}
+                    onMouseLeave={(e) => { if (!isSel) e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    <span style={{ width: 14, flexShrink: 0, display: 'inline-flex', justifyContent: 'center', color: 'var(--accent)' }}>
+                      {isSel && (
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                      )}
+                    </span>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, color: 'var(--muted)', fontFamily: 'var(--mono)', fontSize: 10.5 }}>
+                      <LockIcon size={10} />
+                      v{c.version}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -281,6 +353,9 @@ export function TranscriptReview({
   // injections (Deltagere / Beslutningspunkter / Dagsorden), seeded from the
   // selected Skabelon but overridable here in gennemgang.
   const [skabeloner, setSkabeloner] = useState<Skabelon[]>([]);
+  // Locked templates delegated by the organisation. The summary never carries a
+  // prompt: the server applies it, the client only needs the flags and the rules.
+  const [centralSkabeloner, setCentralSkabeloner] = useState<CentralSkabelonSummary[]>([]);
   const [selectedSkabelonId, setSelectedSkabelonId] = useState<string>('');
   // The skabelon list loads async (and can arrive late while transcription
   // saturates the connection pool). Once the user picks a skabelon themselves,
@@ -303,7 +378,15 @@ export function TranscriptReview({
   // skabelon); this becomes the box's placeholder to explain where it went.
   const [savedHint, setSavedHint] = useState<string | null>(null);
 
-  const selectedSkabelon = skabeloner.find((s) => s.id === selectedSkabelonId) ?? null;
+  const selectedCentralId = centralIdOf(selectedSkabelonId);
+  const selectedCentral = selectedCentralId
+    ? centralSkabeloner.find((c) => c.id === selectedCentralId) ?? null
+    : null;
+  // Personal-only machinery (save-as-template, effective prompt) never sees a
+  // central selection.
+  const selectedSkabelon = selectedCentralId ? null : skabeloner.find((s) => s.id === selectedSkabelonId) ?? null;
+  const togglesLocked = !!selectedCentral && !selectedCentral.allowToggleOverrides;
+  const instructionAllowed = !selectedCentral || selectedCentral.allowUserInstruction;
   // The actual step to render: 'update' is only valid while a skabelon is
   // selected, so deselecting it mid-form falls back to 'new'.
   const templateStep = selectedSkabelon ? templateMode : 'new';
@@ -386,14 +469,19 @@ export function TranscriptReview({
     }
   }
 
+  async function fetchSkabeloner(): Promise<{ personal: Skabelon[]; central: CentralSkabelonSummary[] }> {
+    const r = await fetch('/api/skabeloner');
+    const data = (r.ok ? await r.json() : {}) as { skabeloner?: Skabelon[]; centralSkabeloner?: CentralSkabelonSummary[] };
+    return { personal: data.skabeloner ?? [], central: data.centralSkabeloner ?? [] };
+  }
+
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/skabeloner')
-      .then((r) => (r.ok ? r.json() : { skabeloner: [] }))
-      .then((data: { skabeloner: Skabelon[] }) => {
+    fetchSkabeloner()
+      .then(({ personal: list, central }) => {
         if (cancelled) return;
-        const list = data.skabeloner ?? [];
         setSkabeloner(list);
+        setCentralSkabeloner(central);
         const def = list.find((s) => s.isDefault) ?? list[0];
         if (def && !skabelonTouchedRef.current) {
           setSelectedSkabelonId(def.id);
@@ -408,9 +496,33 @@ export function TranscriptReview({
     skabelonTouchedRef.current = true;
     setSelectedSkabelonId(id);
     setSavedHint(null);
+    const centralId = centralIdOf(id);
+    if (centralId) {
+      // Seed from the delegated flags; the form for saving a personal template
+      // has no meaning for a prompt this client never holds.
+      closeTemplateForm();
+      setCats(skabelonToCats(centralSkabeloner.find((c) => c.id === centralId)));
+      return;
+    }
     const s = skabeloner.find((x) => x.id === id);
     // "Ingen skabelon" (empty id) is a blank template: clear every category.
     setCats(skabelonToCats(s));
+  }
+
+  // A central template can be archived or un-delegated while the review screen
+  // is open. Refresh the list and drop a selection that no longer resolves.
+  async function refreshAfterCentralGone() {
+    try {
+      const { personal, central } = await fetchSkabeloner();
+      setSkabeloner(personal);
+      setCentralSkabeloner(central);
+      if (selectedCentralId && !central.some((c) => c.id === selectedCentralId)) {
+        setSelectedSkabelonId('');
+        setCats(skabelonToCats());
+      }
+    } catch (err) {
+      console.error('[transcript] skabeloner refresh failed:', err);
+    }
   }
 
   // PII checklist: all items checked by default
@@ -854,6 +966,11 @@ export function TranscriptReview({
     setError(null);
     try {
       const processedSegments = displaySegments;
+      // Locked categories are the delegated flags, not whatever the toggles hold.
+      const sentCats = selectedCentral && togglesLocked ? skabelonToCats(selectedCentral) : cats;
+      // The free-text box is hidden for a central template that forbids it; never
+      // send text the user could not see.
+      const sentCustomPrompt = instructionAllowed ? customText.trim() || undefined : undefined;
       // The recording date — used when the "Dato" category is enabled. Prefer the
       // audio's own date (recordedAt); fall back to createdAt for legacy meetings.
       const meeting = await getMeeting(meetingId);
@@ -872,13 +989,14 @@ export function TranscriptReview({
             participants: editableParticipants.filter(Boolean),
             // Send the literal selection — '' ("Ingen skabelon") must reach the
             // server as an explicit "no skabelon", not collapse to the default.
-            skabelonId: selectedSkabelonId,
-            includeDeltagere: cats.deltagere,
-            includeBeslutningspunkter: cats.beslutningspunkter,
-            includeDagsorden: cats.dagsorden,
-            includeDato: cats.dato,
+            skabelonId: selectedCentralId ?? selectedSkabelonId,
+            skabelonSource: selectedCentralId ? 'central' : 'personal',
+            includeDeltagere: sentCats.deltagere,
+            includeBeslutningspunkter: sentCats.beslutningspunkter,
+            includeDagsorden: sentCats.dagsorden,
+            includeDato: sentCats.dato,
             meetingDate: meetingDate ?? undefined,
-            customPrompt: customText.trim() || undefined,
+            customPrompt: sentCustomPrompt,
           }),
           signal: abort.signal,
         });
@@ -886,20 +1004,37 @@ export function TranscriptReview({
         clearTimeout(timeout);
       }
       if (!res.ok) {
+        if (res.status === 404 && selectedCentralId) {
+          void refreshAfterCentralGone();
+          throw new Error(CENTRAL_UNAVAILABLE_MESSAGE);
+        }
         const data = await res.json();
         throw new Error(data.error ?? 'Kunne ikke generere referat');
       }
-      const data = await res.json() as { content: MinutesContent; skabelonId?: string | null };
+      const data = await res.json() as {
+        content: MinutesContent;
+        skabelonId?: string | null;
+        templateRef?: MinutesTemplateRef | null;
+      };
       // Build the editable document header: the title always, the date only when
       // the "Dato" tag is on (otherwise it would appear both here and in the body).
       const content: MinutesContent = {
         ...data.content,
         header: {
           title: meeting?.title ?? 'Referat',
-          date: cats.dato && meetingDate ? formatDate(meetingDate) : null,
+          date: sentCats.dato && meetingDate ? formatDate(meetingDate) : null,
         },
       };
-      await appendMinutesVersion(meetingId, content, data.skabelonId ?? null);
+      // Provenance from the server's answer; the name is a picker-side snapshot.
+      const templateRef: MinutesTemplateRef | undefined = data.templateRef
+        ? {
+            source: data.templateRef.source,
+            id: data.templateRef.id,
+            version: data.templateRef.version,
+            ...(data.templateRef.source === 'central' && selectedCentral ? { name: selectedCentral.name } : {}),
+          }
+        : undefined;
+      await appendMinutesVersion(meetingId, content, data.skabelonId ?? null, templateRef);
       await deleteAudio(meetingId);
       await updateMeeting(meetingId, { status: 'minutes', audioDeleted: true });
       onDataChange?.();
@@ -1407,9 +1542,18 @@ export function TranscriptReview({
             {/* Skabelon selector */}
             <SkabelonSelect
               skabeloner={skabeloner}
+              centralSkabeloner={centralSkabeloner}
               value={selectedSkabelonId}
               onChange={selectSkabelon}
             />
+
+            {selectedCentral && (
+              <div style={{ margin: '-6px 0 12px', fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', lineHeight: 1.5 }}>
+                {selectedCentral.allowUserInstruction
+                  ? 'Prompten er låst af din organisation. Du kan tilføje egne instruktioner nedenfor.'
+                  : 'Prompten er låst af din organisation og kan ikke ændres eller udvides.'}
+              </div>
+            )}
 
             {/* Optional category injections */}
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 8 }}>kategorier</div>
@@ -1424,6 +1568,9 @@ export function TranscriptReview({
                 return (
                   <button
                     key={key}
+                    disabled={togglesLocked}
+                    aria-pressed={active}
+                    title={togglesLocked ? LOCKED_MESSAGE : undefined}
                     onClick={() => {
                       // Mark as touched so a late-arriving default skabelon fetch
                       // doesn't overwrite the user's manual category choices.
@@ -1437,19 +1584,28 @@ export function TranscriptReview({
                       background: active ? 'var(--accent-wash)' : 'transparent',
                       fontFamily: 'var(--mono)', fontSize: 11.5,
                       color: active ? 'var(--accent)' : 'var(--ink-2)',
-                      cursor: 'pointer',
+                      cursor: togglesLocked ? 'not-allowed' : 'pointer',
+                      opacity: togglesLocked ? 0.7 : 1,
                       display: 'flex', alignItems: 'center', gap: 5,
                       transition: 'border-color 120ms, color 120ms',
                     }}
                   >
                     {label}
-                    {active && <span style={{ fontSize: 13, lineHeight: 1, opacity: 0.7 }}>×</span>}
+                    {active && !togglesLocked && <span style={{ fontSize: 13, lineHeight: 1, opacity: 0.7 }}>×</span>}
                   </button>
                 );
               })}
             </div>
 
-            {/* Extra ad-hoc instructions */}
+            {togglesLocked && (
+              <div style={{ margin: '-6px 0 12px', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)' }}>
+                <LockIcon size={10} />
+                {LOCKED_MESSAGE}
+              </div>
+            )}
+
+            {/* Extra ad-hoc instructions — hidden when a central template forbids them */}
+            {instructionAllowed && (
             <div style={{
               border: '1px solid var(--line-2)',
               borderRadius: 'var(--radius)',
@@ -1458,7 +1614,7 @@ export function TranscriptReview({
               <textarea
                 value={customText}
                 onChange={(e) => { setCustomText(e.target.value); if (savedHint) setSavedHint(null); }}
-                placeholder={savedHint ?? 'Tilføj instruktioner…'}
+                placeholder={selectedCentral ? 'Tilføj instruktioner til den låste skabelon…' : savedHint ?? 'Tilføj instruktioner…'}
                 rows={2}
                 style={{
                   width: '100%', minHeight: 60,
@@ -1471,8 +1627,11 @@ export function TranscriptReview({
                 }}
               />
             </div>
+            )}
 
-            {/* Gem prompt som skabelon — one cycleable step (opdater / ny) */}
+            {/* Gem prompt som skabelon — one cycleable step (opdater / ny). Not
+                offered for a central template: the client never holds its prompt. */}
+            {!selectedCentral && (
             <div style={{ marginTop: 10 }}>
               {!savingTemplate ? (
                 <button
@@ -1599,6 +1758,7 @@ export function TranscriptReview({
                 </div>
               )}
             </div>
+            )}
           </div>
 
           {/* Compliance */}
