@@ -72,12 +72,19 @@ export async function matchDirectoryUser(
   // Email/password "identities" are self-asserted; only trusted SSO may link.
   if (!identity.providerId || identity.providerId === 'credential') return { status: 'refused' };
 
-  // strip-upn-domain throws the tenant boundary away (alice@evil.example -> alice), so a
-  // Microsoft login may only be matched that way when it provably comes from our one tenant.
-  if (directoryUserIdTransform() === 'strip-upn-domain' && identity.providerId === 'microsoft') {
+  // Microsoft documents preferred_username/upn/email as mutable and unfit for authorization,
+  // and with the multi-tenant authority any Entra tenant (guests included) can sign in. So a
+  // Microsoft login may link to a directory row only when it provably comes from our ONE
+  // pinned tenant. All match modes and transforms; generic OIDC is the operator's own IdP.
+  if (identity.providerId === 'microsoft') {
     const tenant = singleTenantId();
     const tid = (identity.claims as Record<string, unknown>).tid;
-    if (tenant === null || typeof tid !== 'string' || tid.trim().toLowerCase() !== tenant) return { status: 'refused' };
+    if (tenant === null) {
+      warnTenantNotPinnedOnce();
+      return { status: 'refused' };
+    }
+    // A foreign-tenant or tid-less login is simply not ours: refuse quietly.
+    if (typeof tid !== 'string' || tid.trim().toLowerCase() !== tenant) return { status: 'refused' };
   }
 
   const lookup = lookupFor(identity, mode);
@@ -153,6 +160,16 @@ function linkRow(tx: SqlQueryable, directoryUuid: string, userId: string) {
       WHERE uuid = $2 AND (app_user_id IS NULL OR app_user_id = $1)
       RETURNING uuid`,
     [userId, directoryUuid],
+  );
+}
+
+let tenantWarned = false;
+/** One content-free line per process, so operators see why nobody links. Reason code only. */
+function warnTenantNotPinnedOnce() {
+  if (tenantWarned) return;
+  tenantWarned = true;
+  console.warn(
+    '[authz] directory link refused (code microsoft_tenant_not_pinned): set MICROSOFT_TENANT_ID to your single tenant id',
   );
 }
 

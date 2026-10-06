@@ -81,44 +81,6 @@ describe('userid-claim', () => {
     expect(select.sql).toContain('lower(ext_user_id) = lower($1)');
   });
 
-  describe('strip-upn-domain on Microsoft logins needs a proven single tenant', () => {
-    const TID = '99999999-8888-4777-8666-555555555555';
-    const ms = (tid?: string) =>
-      identity({ providerId: 'microsoft', claims: { sub: 's', preferred_username: 'alice@evil.onmicrosoft.com', ...(tid ? { tid } : {}) } });
-    beforeEach(() => vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'strip-upn-domain'));
-
-    it('refuses with the default multi-tenant authority (common) and runs no SQL', async () => {
-      for (const t of ['', 'common', 'organizations', 'consumers']) {
-        vi.stubEnv('MICROSOFT_TENANT_ID', t);
-        const { runner, calls } = db([D1]);
-        expect((await matchDirectoryUser(ms(TID), 'userid-claim', runner)).status).toBe('refused');
-        expect(calls).toHaveLength(0);
-      }
-    });
-
-    it('refuses a tid from another tenant or a missing tid', async () => {
-      vi.stubEnv('MICROSOFT_TENANT_ID', TID);
-      for (const tid of ['00000000-0000-4000-8000-000000000000', undefined]) {
-        const { runner, calls } = db([D1]);
-        expect((await matchDirectoryUser(ms(tid), 'userid-claim', runner)).status).toBe('refused');
-        expect(calls).toHaveLength(0);
-      }
-    });
-
-    it('matches when tid equals the configured single tenant (case-insensitive)', async () => {
-      vi.stubEnv('MICROSOFT_TENANT_ID', TID.toUpperCase());
-      const { runner, calls } = db([D1]);
-      expect((await matchDirectoryUser(ms(TID), 'userid-claim', runner)).status).toBe('linked');
-      expect(calls.find((c) => c.sql.includes('FOR UPDATE'))!.params).toEqual(['alice']);
-    });
-
-    it('does not restrict generic OIDC logins', async () => {
-      vi.stubEnv('DIRECTORY_USERID_CLAIM', 'upn');
-      const { runner } = db([D1]);
-      expect((await matchDirectoryUser(identity({ claims: { sub: 's', upn: 'a@k.dk' } }), 'userid-claim', runner)).status).toBe('linked');
-    });
-  });
-
   it('leaves the claim untouched without the transform (a UPN then simply does not match)', async () => {
     vi.stubEnv('DIRECTORY_USERID_CLAIM', 'upn');
     const { runner, calls } = db([]);
@@ -187,6 +149,129 @@ describe('email', () => {
     const res = await matchDirectoryUser(identity({ claims: { sub: 's', email: 'a@example.dk', ...v } }), 'email', runner);
     expect(res.status).toBe('refused');
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('Microsoft logins need a pinned single tenant and a matching tid (all modes, all transforms)', () => {
+  const TID = '99999999-8888-4777-8666-555555555555';
+  const OTHER = '00000000-0000-4000-8000-000000000000';
+  const claimsFor = (mode: 'userid-claim' | 'extuuid-claim' | 'email', tid?: string) => ({
+    sub: 's',
+    preferred_username: mode === 'extuuid-claim' ? EXT_UUID : 'ABC123',
+    email: 'a@example.dk',
+    email_verified: true,
+    ...(tid !== undefined ? { tid } : {}),
+  });
+  const ms = (mode: 'userid-claim' | 'extuuid-claim' | 'email', tid?: string) =>
+    identity({ providerId: 'microsoft', claims: claimsFor(mode, tid) });
+
+  const tenants: Array<[string, string, boolean]> = [
+    ['unset', '', false],
+    ['blank', '   ', false],
+    ['common', 'common', false],
+    ['organizations', 'ORGANIZATIONS', false],
+    ['consumers', 'consumers', false],
+    ['pinned', TID, true],
+    ['pinned (upper case)', TID.toUpperCase(), true],
+  ];
+  const tids: Array<[string, string | undefined, boolean]> = [
+    ['missing', undefined, false],
+    ['different', OTHER, false],
+    ['matching', TID, true],
+    ['matching (upper case)', TID.toUpperCase(), true],
+  ];
+
+  for (const mode of ['userid-claim', 'extuuid-claim', 'email'] as const) {
+    for (const transform of ['', 'none', 'strip-upn-domain']) {
+      describe(`${mode} / transform "${transform || 'unset'}"`, () => {
+        for (const [tName, tenant, tenantOk] of tenants) {
+          for (const [idName, tid, tidOk] of tids) {
+            const links = tenantOk && tidOk;
+            it(`tenant ${tName} x tid ${idName} => ${links ? 'links' : 'refused, no SQL'}`, async () => {
+              vi.stubEnv('MICROSOFT_TENANT_ID', tenant);
+              vi.stubEnv('DIRECTORY_USERID_TRANSFORM', transform);
+              const { runner, calls } = db([D1]);
+              const res = await matchDirectoryUser(ms(mode, tid), mode, runner);
+              if (links) {
+                expect(res.status).toBe('linked');
+              } else {
+                expect(res).toEqual({ status: 'refused' });
+                expect(calls).toHaveLength(0);
+              }
+            });
+          }
+        }
+      });
+    }
+  }
+
+  it('strip-upn-domain still strips the domain once the tenant is proven', async () => {
+    vi.stubEnv('MICROSOFT_TENANT_ID', TID);
+    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'strip-upn-domain');
+    const { runner, calls } = db([D1]);
+    const id = identity({ providerId: 'microsoft', claims: { sub: 's', preferred_username: 'alice@kommune.dk', tid: TID } });
+    expect((await matchDirectoryUser(id, 'userid-claim', runner)).status).toBe('linked');
+    expect(calls.find((c) => c.sql.includes('FOR UPDATE'))!.params).toEqual(['alice']);
+  });
+
+  it('does not restrict generic OIDC logins (any tenant setting, any tid)', async () => {
+    for (const mode of ['userid-claim', 'extuuid-claim', 'email'] as const) {
+      vi.stubEnv('MICROSOFT_TENANT_ID', '');
+      const { runner } = db([D1]);
+      const id = identity({ providerId: 'oidc', claims: claimsFor(mode, OTHER) });
+      expect((await matchDirectoryUser(id, mode, runner)).status).toBe('linked');
+    }
+  });
+
+  it('still refuses the credential provider, whatever the tenant', async () => {
+    vi.stubEnv('MICROSOFT_TENANT_ID', TID);
+    const { runner, calls } = db([D1]);
+    const id = identity({ providerId: 'credential', claims: claimsFor('userid-claim', TID) });
+    expect((await matchDirectoryUser(id, 'userid-claim', runner)).status).toBe('refused');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('keeps ambiguity => ambiguous for a proven tenant', async () => {
+    vi.stubEnv('MICROSOFT_TENANT_ID', TID);
+    const { runner } = db([D1, { uuid: 'd2', app_user_id: null }]);
+    expect((await matchDirectoryUser(ms('userid-claim', TID), 'userid-claim', runner)).status).toBe('ambiguous');
+  });
+
+  it('warns ONCE per process when the tenant is not pinned, with a reason code and no claim values', async () => {
+    vi.resetModules();
+    vi.doMock('@/lib/db', () => ({ pool: {} }));
+    vi.doMock('@/lib/audit/record', () => ({ recordEvent: async () => {} }));
+    const fresh = await import('./directory-match');
+    vi.stubEnv('MICROSOFT_TENANT_ID', 'common');
+    const warn = console.warn as unknown as ReturnType<typeof vi.fn>;
+    warn.mockClear();
+    const id = identity({ providerId: 'microsoft', userId: 'user-secret-id', claims: { sub: 'sub-secret', preferred_username: 'ABC123@secret.example', tid: TID } });
+    for (let i = 0; i < 3; i++) {
+      expect((await fresh.matchDirectoryUser(id, 'userid-claim', db([D1]).runner)).status).toBe('refused');
+    }
+    expect(warn).toHaveBeenCalledOnce();
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).toContain('microsoft_tenant_not_pinned');
+    for (const secret of ['user-secret-id', 'sub-secret', 'ABC123', 'secret.example', TID]) expect(logged).not.toContain(secret);
+    vi.doUnmock('@/lib/db');
+    vi.doUnmock('@/lib/audit/record');
+  });
+
+  it('does not warn in local mode or for a pinned-tenant mismatch', async () => {
+    vi.resetModules();
+    vi.doMock('@/lib/db', () => ({ pool: {} }));
+    vi.doMock('@/lib/audit/record', () => ({ recordEvent: async () => {} }));
+    const fresh = await import('./directory-match');
+    const warn = console.warn as unknown as ReturnType<typeof vi.fn>;
+    warn.mockClear();
+    vi.stubEnv('ACCESS_SOURCE', 'local');
+    await fresh.matchDirectoryUser(ms('userid-claim', TID), 'userid-claim', db([D1]).runner);
+    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+    vi.stubEnv('MICROSOFT_TENANT_ID', TID);
+    await fresh.matchDirectoryUser(ms('userid-claim', OTHER), 'userid-claim', db([D1]).runner);
+    expect(warn).not.toHaveBeenCalled();
+    vi.doUnmock('@/lib/db');
+    vi.doUnmock('@/lib/audit/record');
   });
 });
 

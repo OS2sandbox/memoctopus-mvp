@@ -23,6 +23,7 @@ beforeEach(() => {
   vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
   vi.stubEnv('DIRECTORY_USERID_CLAIM', '');
   vi.stubEnv('DIRECTORY_USERID_TRANSFORM', '');
+  vi.stubEnv('MICROSOFT_TENANT_ID', '');
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -216,4 +217,42 @@ describe.skipIf(!hasPg)('mode-switch relink (real Postgres)', () => {
       expect((await c.query("SELECT 1 FROM directory_users WHERE source = 'local' AND app_user_id = $1", [loser])).rowCount).toBe(1);
       await close();
     }));
+
+  describe('Microsoft tenant pinning (end to end)', () => {
+    const TID = '99999999-8888-4777-8666-555555555555';
+    const ms = (userId: string, tid?: string) => ({
+      ...identity(userId),
+      providerId: 'microsoft',
+      claims: { sub: `s-${userId}`, preferred_username: 'ABC123', ...(tid ? { tid } : {}) },
+    });
+
+    it('refuses an unpinned tenant (common) and a foreign tid: no row is linked, nothing audited', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = schemaRunner(c, schema);
+        await addUser(c, 'u1');
+        await c.query("INSERT INTO directory_users (name, ext_user_id, source) VALUES ('Rk', 'abc123', 'rollekatalog')");
+
+        vi.stubEnv('MICROSOFT_TENANT_ID', 'common');
+        expect((await matchDirectoryUser(ms('u1', TID), 'userid-claim', runner)).status).toBe('refused');
+        vi.stubEnv('MICROSOFT_TENANT_ID', TID);
+        expect((await matchDirectoryUser(ms('u1', '00000000-0000-4000-8000-000000000000'), 'userid-claim', runner)).status).toBe('refused');
+        expect((await matchDirectoryUser(ms('u1'), 'userid-claim', runner)).status).toBe('refused');
+
+        expect(await links(c)).toEqual([{ source: 'rollekatalog', app_user_id: null }]);
+        expect((await c.query("SELECT 1 FROM audit_events WHERE event_type = 'access.user_link'")).rowCount).toBe(0);
+        await close();
+      }));
+
+    it('links with the pinned tenant and a matching tid', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = schemaRunner(c, schema);
+        await addUser(c, 'u1');
+        await c.query("INSERT INTO directory_users (name, ext_user_id, source) VALUES ('Rk', 'abc123', 'rollekatalog')");
+        vi.stubEnv('MICROSOFT_TENANT_ID', TID);
+        expect((await matchDirectoryUser(ms('u1', TID.toUpperCase()), 'userid-claim', runner)).status).toBe('linked');
+        expect(await links(c)).toEqual([{ source: 'rollekatalog', app_user_id: 'u1' }]);
+        expect((await c.query("SELECT 1 FROM audit_events WHERE event_type = 'access.user_link'")).rowCount).toBe(1);
+        await close();
+      }));
+  });
 });
