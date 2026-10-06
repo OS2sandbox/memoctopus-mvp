@@ -3,7 +3,7 @@
 import { hasAnyCapability } from './permissions';
 import type { Capability, Principal } from './types';
 
-export type AdminSectionKey = 'overview' | 'users' | 'organisation' | 'log';
+export type AdminSectionKey = 'overview' | 'users' | 'organisation' | 'templates' | 'log';
 
 export interface AdminSection {
   key: AdminSectionKey;
@@ -45,6 +45,14 @@ export const sectionByKey: Record<AdminSectionKey, AdminSection> = {
     requiredCapability: ['directory.read'],
     readOnlyInRollekatalogMode: true,
   },
+  templates: {
+    key: 'templates',
+    href: '/admin/skabeloner',
+    label: 'Centrale skabeloner',
+    requiredCapability: ['template.manage'],
+    // Templates are owned by this app in both modes; only the org tree they point at comes from Rollekatalog.
+    readOnlyInRollekatalogMode: false,
+  },
   log: {
     key: 'log',
     href: '/admin/log',
@@ -59,6 +67,7 @@ export const ADMIN_SECTIONS: readonly AdminSection[] = [
   sectionByKey.overview,
   sectionByKey.users,
   sectionByKey.organisation,
+  sectionByKey.templates,
   sectionByKey.log,
 ];
 

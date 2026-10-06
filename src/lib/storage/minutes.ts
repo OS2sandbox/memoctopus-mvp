@@ -1,5 +1,5 @@
 import { getDB, StoredMinutes, StoredMinutesVersion } from './db';
-import type { MinutesContent } from '@/types';
+import type { MinutesContent, MinutesTemplateRef } from '@/types';
 import { reportAuditEvent } from '@/lib/audit/client';
 
 function newId(): string {
@@ -22,6 +22,7 @@ interface LegacyMinutes {
   id: string;
   meetingId: string;
   templateId: string | null;
+  templateRef?: MinutesTemplateRef;
   content: MinutesContent;
   version: number;
   createdAt: string;
@@ -76,6 +77,8 @@ function ensureVersioned(row: LegacyMinutes): StoredMinutes {
     id: row.id,
     meetingId: row.meetingId,
     templateId: row.templateId,
+    // The legacy rebuild must not drop provenance (absent on pre-central rows).
+    ...(row.templateRef ? { templateRef: row.templateRef } : {}),
     content: active.content,
     version: active.label,
     createdAt: row.createdAt ?? now,
@@ -206,6 +209,7 @@ export async function appendMinutesVersion(
   meetingId: string,
   content: MinutesContent,
   templateId?: string | null,
+  templateRef?: MinutesTemplateRef,
 ): Promise<StoredMinutes> {
   const db = await getDB();
   const existing = await readRow(meetingId);
@@ -217,6 +221,7 @@ export async function appendMinutesVersion(
       id: newId(),
       meetingId,
       templateId: templateId ?? null,
+      ...(templateRef ? { templateRef } : {}),
       content,
       version: 1,
       createdAt: now,
@@ -237,6 +242,8 @@ export async function appendMinutesVersion(
   const minutes = withActiveMirror({
     ...existing,
     templateId: templateId !== undefined ? templateId : existing.templateId,
+    // A regeneration replaces the provenance; omitting it keeps the previous one.
+    ...(templateRef ? { templateRef } : {}),
     activeVersionId: fresh.id,
     versions,
   });

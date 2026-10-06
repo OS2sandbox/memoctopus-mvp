@@ -25,11 +25,12 @@ const keysFor = (role: RoleKey, disabled = false) =>
   visibleSections(principalFor(role, disabled)).map((s) => s.key);
 
 describe('admin sections table', () => {
-  it('has exactly the four sections with their hrefs and labels', () => {
+  it('has exactly the five sections with their hrefs and labels', () => {
     expect(ADMIN_SECTIONS.map((s) => [s.key, s.href, s.label])).toEqual([
       ['overview', '/admin', 'Overblik'],
       ['users', '/admin/brugere', 'Brugere og roller'],
       ['organisation', '/admin/organisation', 'Organisation'],
+      ['templates', '/admin/skabeloner', 'Centrale skabeloner'],
       ['log', '/admin/log', 'Log'],
     ]);
   });
@@ -61,6 +62,11 @@ describe('admin sections table', () => {
     expect(canAccessSection(makePrincipal({ capabilities: ['template.use', 'audit.read'] }), 'log')).toBe(true);
   });
 
+  it('the templates section is any-of template.manage and stays writable in rollekatalog mode', () => {
+    expect(sectionByKey.templates.requiredCapability).toEqual(['template.manage']);
+    expect(sectionByKey.templates.readOnlyInRollekatalogMode).toBe(false);
+  });
+
   it('flags users and organisation read-only in rollekatalog mode', () => {
     expect(sectionByKey.overview.readOnlyInRollekatalogMode).toBe(false);
     expect(sectionByKey.users.readOnlyInRollekatalogMode).toBe(true);
@@ -71,9 +77,9 @@ describe('admin sections table', () => {
 describe('visibleSections per role (snapshot)', () => {
   it.each<[RoleKey, AdminSectionKey[]]>([
     ['tt-bruger', []],
-    ['tt-skabelonansvarlig', ['overview', 'organisation']],
+    ['tt-skabelonansvarlig', ['overview', 'organisation', 'templates']],
     ['tt-logleser', ['overview', 'organisation', 'log']],
-    ['tt-administrator', ['overview', 'users', 'organisation', 'log']],
+    ['tt-administrator', ['overview', 'users', 'organisation', 'templates', 'log']],
   ])('%s sees %j', (role, expected) => {
     expect(keysFor(role)).toEqual(expected);
   });
@@ -101,6 +107,6 @@ describe('visibleSections per role (snapshot)', () => {
   });
 
   it('the hand-built admin fixture sees everything', () => {
-    expect(visibleSections(FAKE_PRINCIPAL_ADMIN)).toHaveLength(4);
+    expect(visibleSections(FAKE_PRINCIPAL_ADMIN)).toHaveLength(5);
   });
 });

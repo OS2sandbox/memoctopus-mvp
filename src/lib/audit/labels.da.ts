@@ -28,6 +28,11 @@ export const eventTypeLabels: Record<EventType, string> = {
   'template.set_default': 'Standardskabelon valgt',
   'template.share': 'Skabelon delt',
   'template.import': 'Skabelon importeret',
+  'central_template.create': 'Central skabelon oprettet',
+  'central_template.update': 'Central skabelon ændret',
+  'central_template.retarget': 'Modtagere af central skabelon ændret',
+  'central_template.archive': 'Central skabelon arkiveret',
+  'central_template.restore': 'Central skabelon genoprettet',
   // AI og eksport
   'minutes.generate': 'Referat genereret',
   'transcription.request': 'Transskription anmodet',

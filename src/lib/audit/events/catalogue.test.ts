@@ -15,6 +15,7 @@ import { aiEvents } from './ai';
 import { auditEvents } from './audit';
 import { authEvents } from './auth';
 import { botEvents } from './bot';
+import { centralTemplateEvents } from './central-template';
 import { directoryEvents } from './directory';
 import { meetingEvents } from './meeting';
 import { templateEvents } from './template';
@@ -119,6 +120,7 @@ describe('catalogue structure', () => {
         'access.user_update', 'access.user_delete', 'access.user_link', 'authz.denied',
         'auth.login', 'auth.logout', 'auth.login_failed',
         'template.create', 'template.update', 'template.delete', 'template.set_default', 'template.share', 'template.import',
+        'central_template.create', 'central_template.update', 'central_template.retarget', 'central_template.archive', 'central_template.restore',
         'minutes.generate', 'transcription.request', 'diarization.request', 'chapters.request', 'clarifications.request', 'export.download',
         'bot.session_start', 'bot.session_pause', 'bot.session_resume', 'bot.session_stop', 'bot.session_abort',
         'bot.audio_collect', 'bot.transcript_collect', 'bot.joined', 'bot.ended', 'bot.error',
@@ -131,7 +133,7 @@ describe('catalogue structure', () => {
   });
 
   it('has no event type defined in two domain files (a spread would silently override)', () => {
-    const files = [accessEvents, authEvents, templateEvents, aiEvents, botEvents, meetingEvents, auditEvents, directoryEvents];
+    const files = [accessEvents, authEvents, templateEvents, centralTemplateEvents, aiEvents, botEvents, meetingEvents, auditEvents, directoryEvents];
     const all = files.flatMap((f) => Object.keys(f));
     expect(new Set(all).size).toBe(all.length);
     expect(all.length).toBe(EVENT_TYPES.length);
@@ -142,6 +144,7 @@ describe('catalogue structure', () => {
     expect([...prefixes(accessEvents)].sort()).toEqual(['access', 'authz']);
     expect([...prefixes(authEvents)]).toEqual(['auth']);
     expect([...prefixes(templateEvents)]).toEqual(['template']);
+    expect([...prefixes(centralTemplateEvents)]).toEqual(['central_template']);
     expect([...prefixes(aiEvents)].sort()).toEqual(['chapters', 'clarifications', 'diarization', 'export', 'minutes', 'transcription']);
     expect([...prefixes(botEvents)]).toEqual(['bot']);
     expect([...prefixes(meetingEvents)]).toEqual(['meeting']);
@@ -246,6 +249,57 @@ describe('details schemas can only express codes, enums, numbers, booleans and u
       const strings = Object.values(res.value.details).flat().filter((v): v is string => typeof v === 'string');
       for (const s of strings) expect(CODE_RE.test(s), `${type}: ${s}`).toBe(true);
     }
+  });
+});
+
+describe('central template events (Phase 4)', () => {
+  const event = (type: EventType, details: unknown, extra: Record<string, unknown> = {}) =>
+    ({ type, actorUserId: 'user-1', entityId: UUID_A, secondaryEntityId: UUID_B, details, ...extra }) as unknown as AuditEventInput;
+
+  it('accept the details the service writes, with the owning org unit as secondary entity', () => {
+    const cases: Array<[EventType, Record<string, unknown>]> = [
+      ['central_template.create', { version: 1, targetCount: 3 }],
+      ['central_template.update', { version: 2, changedFields: ['prompt', 'allowUserInstruction', 'targets'] }],
+      ['central_template.retarget', { version: 3, targetCount: 0 }],
+      ['central_template.archive', { version: 4 }],
+      ['central_template.restore', { version: 5 }],
+    ];
+    for (const [type, details] of cases) {
+      const res = validateEvent(event(type, details));
+      expect(res, type).toMatchObject({ ok: true });
+      if (res.ok) {
+        expect(res.value.entityType).toBe('central_template');
+        expect(res.value.secondaryEntityType).toBe('org_unit');
+      }
+    }
+  });
+
+  it('records field NAMES only: a value or an unknown field is rejected', () => {
+    expect(validateEvent(event('central_template.update', { version: 2, changedFields: ['Ny prompt til alle'] })).ok).toBe(false);
+    expect(validateEvent(event('central_template.update', { version: 2, changedFields: ['changeNote'] })).ok).toBe(false);
+    expect(validateEvent(event('central_template.update', { version: 2, changedFields: ['prompt'], changeNote: 'Rettet' })).ok).toBe(false);
+    expect(validateEvent(event('central_template.create', { version: 1, targetCount: 1, name: 'Referat' })).ok).toBe(false);
+  });
+
+  it('requires a version of at least 1 and an entity id', () => {
+    expect(validateEvent(event('central_template.archive', { version: 0 })).ok).toBe(false);
+    expect(validateEvent({ type: 'central_template.archive', details: { version: 1 } } as unknown as AuditEventInput)).toEqual({
+      ok: false,
+      code: 'entity_id_required',
+    });
+  });
+
+  it('minutes.generate accepts templateSource central with a templateVersion and the central template as secondary entity', () => {
+    const base = { type: 'minutes.generate', actorUserId: 'user-1', secondaryEntityId: UUID_B } as const;
+    const details = { templateSource: 'central', templateVersion: 7, durationMs: 10, segmentCount: 2 };
+    const central = validateEvent({ ...base, secondaryEntityType: 'central_template', details } as unknown as AuditEventInput);
+    expect(central).toMatchObject({ ok: true });
+    if (central.ok) expect(central.value.secondaryEntityType).toBe('central_template');
+    // A caller that names no type still gets the personal 'template' (existing call sites).
+    const personal = validateEvent({ ...base, details: { ...details, templateSource: 'personal', templateVersion: undefined } } as unknown as AuditEventInput);
+    expect(personal).toMatchObject({ ok: true });
+    if (personal.ok) expect(personal.value.secondaryEntityType).toBe('template');
+    expect(validateEvent({ ...base, details: { ...details, templateVersion: 0 } } as unknown as AuditEventInput).ok).toBe(false);
   });
 });
 

@@ -196,6 +196,14 @@ describe('id validation', () => {
     });
     const ok = validateEvent({ ...base, secondaryEntityId: DIR } as never);
     expect(ok.ok && [ok.value.secondaryEntityType, ok.value.secondaryEntityId]).toEqual(['directory_user', DIR]);
+    // With several allowed types an omitted type means the first one.
+    const multi = validateEvent({
+      type: 'minutes.generate',
+      actorUserId: 'u',
+      secondaryEntityId: DIR,
+      details: { templateSource: 'personal', durationMs: 1, segmentCount: 1 },
+    } as never);
+    expect(multi.ok && multi.value.secondaryEntityType).toBe('template');
     // An event without a secondary entity refuses one.
     expect(validateEvent({ ...exportEvent(), secondaryEntityId: DIR } as never)).toEqual({ ok: false, code: 'secondary_not_allowed' });
   });

@@ -158,7 +158,8 @@ export function validateEvent(input: AuditEventInput): ValidationResult {
     if (raw.secondaryEntityId === undefined) return { ok: false, code: 'invalid_secondary_entity_id' };
     secondaryEntityId = asUuid(raw.secondaryEntityId);
     if (!secondaryEntityId) return { ok: false, code: 'invalid_secondary_entity_id' };
-    const t = raw.secondaryEntityType ?? (allowed.length === 1 ? allowed[0] : undefined);
+    // Omitted type: the first allowed one (so adding a second type never breaks existing callers).
+    const t = raw.secondaryEntityType ?? allowed[0];
     if (!t || !allowed.includes(t)) return { ok: false, code: 'invalid_secondary_entity_type' };
     secondaryEntityType = t;
   }

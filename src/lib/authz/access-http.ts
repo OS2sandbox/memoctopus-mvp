@@ -2,7 +2,15 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import type { ZodTypeAny, z } from 'zod';
 import { accessSource } from './config';
-import { AccessError, ConflictError, NotFoundError, READ_ONLY_MESSAGE, ReadOnlyModeError, ValidationError } from './access-errors';
+import {
+  AccessError,
+  ConflictError,
+  NotFoundError,
+  READ_ONLY_MESSAGE,
+  ReadOnlyModeError,
+  ValidationError,
+  VersionConflictError,
+} from './access-errors';
 
 const STATUS: Array<[new (...args: never[]) => AccessError, number]> = [
   [NotFoundError, 404],
@@ -15,7 +23,9 @@ const STATUS: Array<[new (...args: never[]) => AccessError, number]> = [
 export function toErrorResponse(err: unknown): NextResponse {
   if (err instanceof AccessError) {
     const status = STATUS.find(([cls]) => err instanceof cls)?.[1] ?? 400;
-    return NextResponse.json({ error: err.message, code: err.code }, { status });
+    // The client needs the current version to reload and retry; nothing else extra is exposed.
+    const extra = err instanceof VersionConflictError ? { currentVersion: err.currentVersion } : {};
+    return NextResponse.json({ error: err.message, code: err.code, ...extra }, { status });
   }
   throw err;
 }

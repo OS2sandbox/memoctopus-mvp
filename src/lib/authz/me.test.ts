@@ -46,9 +46,9 @@ describe('visibleSectionsForMe', () => {
     expect(visibleSectionsForMe(me).map((s) => s.key)).toEqual(['overview', 'users', 'organisation']);
   });
 
-  it('shows the overview to a template manager', () => {
+  it('shows the overview and the templates section to a template manager', () => {
     const me = { ...base, capabilities: ['template.use', 'template.manage'] as MeResponse['capabilities'] };
-    expect(visibleSectionsForMe(me).map((s) => s.key)).toEqual(['overview']);
+    expect(visibleSectionsForMe(me).map((s) => s.key)).toEqual(['overview', 'templates']);
   });
 });
 

@@ -14,10 +14,13 @@ const meetingRef = {
 export const aiEvents = {
   'minutes.generate': defineEvent({
     ...meetingRef,
-    secondaryEntityTypes: ['template'],
+    // The first type is the default when a caller names none (personal templates).
+    secondaryEntityTypes: ['template', 'central_template'],
     details: z
       .object({
-        templateSource: z.enum(['personal', 'default', 'none']),
+        templateSource: z.enum(['personal', 'default', 'none', 'central']),
+        // Which version of a central template produced the minutes; absent for other sources.
+        templateVersion: count().min(1).optional(),
         durationMs: amount(),
         segmentCount: count(),
         outcomeCode: outcomeCode(),

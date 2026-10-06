@@ -25,6 +25,15 @@ export class ConflictError extends AccessError {
   }
 }
 
+/** Optimistic-concurrency miss: someone else changed the row first. Carries the version that is current now. */
+export class VersionConflictError extends ConflictError {
+  readonly currentVersion: number;
+  constructor(currentVersion: number, message = 'Skabelonen er ændret af en anden. Hent den igen og prøv igen.') {
+    super(message, 'version_conflict');
+    this.currentVersion = currentVersion;
+  }
+}
+
 export class ValidationError extends AccessError {
   constructor(message: string, code = 'invalid') {
     super(code, message);

@@ -13,8 +13,8 @@ const statements = sql.split('--> statement-breakpoint').map((s) => s.trim()).fi
 
 describe('migration 0002_audit_events', () => {
   it('is journaled after 0000 and 0001, in order', () => {
-    expect(journal.entries.map((e) => e.tag)).toEqual(['0000_past_shooting_star', '0001_central_access', '0002_audit_events']);
-    expect(journal.entries.map((e) => e.idx)).toEqual([0, 1, 2]);
+    expect(journal.entries.map((e) => e.tag).slice(0, 3)).toEqual(['0000_past_shooting_star', '0001_central_access', '0002_audit_events']);
+    expect(journal.entries.map((e) => e.idx).slice(0, 3)).toEqual([0, 1, 2]);
   });
 
   it('has a snapshot', () => {

@@ -470,14 +470,25 @@ describe('org units', () => {
   });
 
   describe('deleteOrgUnit', () => {
-    const run = (over: { source?: string; children?: boolean; assigned?: boolean; exists?: boolean }) =>
+    const run = (over: { source?: string; children?: boolean; assigned?: boolean; exists?: boolean; owns?: boolean }) =>
       makeFakeRunner(
         respondBy([
           ['SELECT source FROM public.org_units', over.exists === false ? [] : [{ source: over.source ?? 'local' }]],
           ['WHERE parent_uuid', over.children ? [{ x: 1 }] : []],
           ['WHERE scope_org_unit_uuid', over.assigned ? [{ x: 1 }] : []],
+          ['FROM public.central_templates', over.owns ? [{ x: 1 }] : []],
         ]),
       );
+
+    it('409 with a Danish message while it owns central templates (the RESTRICT FK), without deleting', async () => {
+      const { runner, calls } = run({ owns: true });
+      await expect(deleteOrgUnit(U1, 'a', runner)).rejects.toMatchObject({
+        code: 'has_central_templates',
+        message: expect.stringContaining('centrale skabeloner'),
+      });
+      expect(calls.some((c) => c.sql.startsWith('DELETE'))).toBe(false);
+      expect(recordAdminAction).not.toHaveBeenCalled();
+    });
 
     it('deletes a leaf without assignments and audits it', async () => {
       const { runner, calls } = run({});

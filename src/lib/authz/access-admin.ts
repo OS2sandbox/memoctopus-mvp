@@ -83,7 +83,8 @@ async function inTx<T>(runner: SqlRunner, fn: (tx: SqlQueryable) => Promise<T>):
   } catch (err) {
     // A concurrent change tripped an FK / unique / check constraint after our own checks passed.
     const code = (err as { code?: unknown } | null)?.code;
-    if (code === '23503' || code === '23505') {
+    // 23001 = ON DELETE RESTRICT (an org unit that still owns central templates or has children).
+    if (code === '23001' || code === '23503' || code === '23505') {
       throw new ConflictError('Ændringen kolliderede med en samtidig ændring. Prøv igen.', 'concurrent_change');
     }
     if (code === '23514') throw new ValidationError('Ugyldige værdier', 'invalid');
@@ -581,6 +582,18 @@ export async function deleteOrgUnit(
     );
     if (assigned.rows.length > 0) {
       throw new ConflictError('Enheden har rolletildelinger. Fjern dem først.', 'has_role_assignments');
+    }
+
+    // The owner FK is RESTRICT (archived templates keep their history), so say why instead of surfacing a raw FK error.
+    const owns = await tx.query(
+      'SELECT 1 FROM public.central_templates WHERE owner_org_unit_uuid = $1::uuid LIMIT 1',
+      [id],
+    );
+    if (owns.rows.length > 0) {
+      throw new ConflictError(
+        'Enheden ejer centrale skabeloner og kan ikke slettes. Skabeloner kan arkiveres, men ikke slettes.',
+        'has_central_templates',
+      );
     }
 
     await tx.query('DELETE FROM public.org_units WHERE uuid = $1::uuid', [id]);
