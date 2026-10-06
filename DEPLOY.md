@@ -170,6 +170,22 @@ deprecation warning; on that path the provider id stays `authentik`, so your
 registered redirect URI and existing accounts are unaffected. To migrate, copy the
 three values to their `OIDC_*` names and set `OIDC_PROVIDER_ID=authentik`.
 
+## Central access, audit log and Rollekatalog
+
+- **PostgreSQL 15 or newer** (the migrations use `NULLS NOT DISTINCT`); the compose file runs `postgres:16-alpine`. Migrations `0001` to `0003` run in the `migrate` service like the others.
+- **Set first** (all in `.env.example`; runtime only, restart without rebuild): `ACCESS_SOURCE` (`local` by default; a typo makes access control answer 503), `BOOTSTRAP_ADMIN_EMAILS`, `INTERNAL_CRON_SECRET`, and `AUDIT_RETENTION_DAYS` (default 365 days; `forever` keeps the log, see `docs/central-access/audit.md`). Rollekatalog variables are only needed for `ACCESS_SOURCE=rollekatalog`.
+- **First administrator.** In local mode, list your address in `BOOTSTRAP_ADMIN_EMAILS` and sign in through SSO (Microsoft needs a single-tenant `MICROSOFT_TENANT_ID`; OIDC needs `email_verified`). It grants `tt-administrator` once; the flag `bootstrap_admin_done` in `public.system_flags` then disables it. Recovery after a lock-out: `DELETE FROM system_flags WHERE key = 'bootstrap_admin_done';` and sign in again, or insert a `role_assignments` row by SQL.
+- **Scheduling.** Nothing in the app runs timers. Call the routes from a host or cluster cron with `X-Cron-Secret`; both answer 404 until `INTERNAL_CRON_SECRET` is set, and the sync answers 409 unless `ACCESS_SOURCE=rollekatalog` and the integration is configured:
+
+  ```
+  15 3 * * *    curl -fsS -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/audit/prune -o /dev/null
+  */15 * * * *  curl -fsS -m 600 -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/rollekatalog/sync -o /dev/null
+  ```
+
+  (`8080` is the default `APP_PORT`.) Keep the sync interval well below `ROLE_STALE_MAX_SECONDS` (24 h by default).
+- **Proxy.** The client IP in the audit log and for login throttling comes from `X-Forwarded-For` (`AUTH_IP_HEADERS`). The proxy must overwrite it; the shipped `nginx/nginx.conf` sets it to `$remote_addr`. Any other proxy in front must do the same.
+- **Docs.** `docs/central-access/README.md` (overview), `rollekatalog.md` (operator guide), `audit.md` (log, feed, retention), `templates.md` (central templates).
+
 ## Day-2 operations
 
 > These `docker compose` commands need docker-group membership (the bootstrap

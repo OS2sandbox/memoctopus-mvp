@@ -1,245 +1,184 @@
 # Rollekatalog integration: operator guide
 
-Audience: the person who connects the app to a municipality's OS2rollekatalog and keeps it running. Engineers: see `README.md` (architecture), `audit.md` and the "Rollekatalog mode (Phase 3)" section of `CLAUDE.md`.
+For the person who connects the app to a municipality's OS2rollekatalog and keeps it running. Architecture: `README.md`. Audit: `audit.md`.
 
-> **Validated against synthetic fixtures only.** The integration was built from the OS2rollekatalog source (release 2026r4) and tested against synthetic fixtures and an in-process mock server. It has **never talked to a live Rollekatalog**. HTTP statuses for wrong or insufficient keys (401/403), the redirect behaviour, the real size of `organisation/v3` and the exact menu names in the Rollekatalog UI are modelled or inferred, not observed. **Run "Test forbindelse" against the real instance, and do a first sync with a small, known set of users, before go-live.** The optional compose service `rollekatalog-sync` was also never started (no Docker available when it was written).
+> **Never run against a live Rollekatalog.** The integration was built from the OS2rollekatalog source (release 2026r4) and tested against synthetic fixtures and an in-process mock server. HTTP statuses for wrong keys, the real size of `organisation/v3` and the menu names in the Rollekatalog UI are modelled, not observed. Do the first sync with a small, known set of users and check the result before you rely on it (section 2).
 
 ## 1. What it does
 
-With `ACCESS_SOURCE=rollekatalog`, Rollekatalog decides who holds which role, and in which part of the organisation. The app keeps a **read-only mirror** of that in its own tables (`directory_users`, `org_units`, `org_unit_members`, `org_unit_substitutes`, `role_assignments`, `sync_runs`; rows from this integration have `source='rollekatalog'`). Permission checks read only the mirror, never Rollekatalog, so a Rollekatalog outage does not stop users from working.
+With `ACCESS_SOURCE=rollekatalog`, Rollekatalog decides who holds which role and for which part of the organisation. The app keeps a **read-only mirror** in its own tables (`directory_users`, `org_units`, `org_unit_members`, `role_assignments`, `sync_runs`; rows from this integration have `source='rollekatalog'`). Permission checks read only the mirror, never Rollekatalog, so a Rollekatalog outage does not stop users from working.
 
 ```
-Rollekatalog ──(GET, ApiKey)──> sync ──one transaction──> mirror tables ──> resolvePrincipal() ──> capabilities
-      └──(GET rolesAsList, at login, max 3 s)──> may only REVOKE / DISABLE
+Rollekatalog --(GET, ApiKey)--> sync --one transaction--> mirror tables --> resolvePrincipal() --> capabilities
 ```
 
-**The app never writes to Rollekatalog.** It only issues GET requests. The one script that creates something there, `scripts/rollekatalog-register.mjs`, is run by you, once, from a shell, with a temporary key that the app never sees.
+**The app never writes to Rollekatalog.** It sends only GET requests, and only these two:
 
-### What is fetched, and with which key
+| Endpoint | Key (client role) | Used for |
+|---|---|---|
+| `GET /api/organisation/v3` | `ROLLEKATALOG_ORG_API_KEY` (`ORGANISATION`) | users, org units, positions. Heavy, and synchronized on the Rollekatalog side: do not poll it more often than the sync |
+| `GET /api/read/itsystem/roleAssignmentsWithContraints/{system}` | `ROLLEKATALOG_READ_API_KEY` (`READ_ACCESS`) | effective role assignments with resolved org-unit constraint values |
 
-| Endpoint | Key (client role) | Used for | When |
-|---|---|---|---|
-| `GET /api/organisation/v3` | ORG (`ORGANISATION`) | users, org units, positions, unit managers | every sync (Rollekatalog serves it synchronized and it is heavy: do not poll it more often than the sync) |
-| `GET /api/v2/manager` | ORG | manager substitutes (stedfortrædere) | every sync (a 404 is read as "no managers in the system") |
-| `GET /api/read/itsystem/roleAssignmentsWithContraints/{system}` | READ (`READ_ACCESS`) | effective role assignments with resolved org-unit constraint values | every sync |
-| `GET /api/user/{userid}/rolesAsList?system=` | READ | per-user check at login | every login (each call writes an audit row **in Rollekatalog**) |
-| `GET /api/v2/constraint` | READ | only in "Test forbindelse" | on demand |
-
-Why two keys: an `ORGANISATION` client does **not** imply `READ_ACCESS` in Rollekatalog (and vice versa), so the organisation endpoints and the assignment endpoints need separate API clients. A sync needs both; the login check needs only the READ key. Never request `ROLE_MANAGEMENT` or `ADMINISTRATOR` for these clients: they can assign roles, and the app does not need that.
-
-The `ApiKey` header is the only authentication. All requests go to the URL in `ROLLEKATALOG_URL`, which must be `https://` (see section 9).
+An `ORGANISATION` client does not imply `READ_ACCESS` (and vice versa), so a sync needs both keys. Never request `ROLE_MANAGEMENT` or `ADMINISTRATOR` for these clients: they can assign roles, and the app does not need that.
 
 ## 2. Setup checklist
 
-Menu names in Rollekatalog differ by version and language; the Danish terms below are the usual ones. Confirm them in your installation.
+Menu names differ by version and language; confirm them in your installation.
 
-1. **Register the IT system and the four system roles** (once, from a shell, not on the app server's `.env`):
-   1. In Rollekatalog, create a temporary API client with client role `ITSYSTEM`. Note its key.
-   2. Dry-run (prints the plan, changes nothing; it still needs the key to read what exists):
-      ```bash
-      ROLLEKATALOG_URL=https://rollekatalog.example.dk \
-      ROLLEKATALOG_ITSYSTEM_API_KEY=<temporary key> \
-      node scripts/rollekatalog-register.mjs
-      ```
-   3. If the plan is right, run it again with `--apply`. It matches by identifier, creates only what is missing, and reports differences in name, description, weight or constraint as **drift** without overwriting them. Exit codes: 0 ok, 1 failure, 2 usage or configuration. Optional: `ROLLEKATALOG_ITSYSTEM_ID` (default `os2taletiltekst`), `ROLLEKATALOG_ITSYSTEM_NAME`, `ROLLEKATALOG_TIMEOUT_MS`.
-   4. Delete the temporary `ITSYSTEM` client. The key is never part of the app's configuration.
+1. **Create the IT system and its four system roles by hand in Rollekatalog.** The app never creates them. IT system identifier: `os2taletiltekst` (or another one, then set `ROLLEKATALOG_ITSYSTEM_ID`). System role identifiers must match exactly (`ROLE_KEYS` in `src/lib/authz/types.ts`); anything else is counted as `assignmentsIgnoredRole` and ignored:
 
-   The script creates the IT system with `canEditThroughApi` and `apiManagedRoleAssignments` off, so the app cannot assign roles through the API. The system roles (definitions in `src/lib/rollekatalog/system-roles.json`) are:
-
-   | Identifier | Name | Org-unit constraint |
+   | Identifier | Name | Org-unit data constraint |
    |---|---|---|
    | `tt-bruger` | Bruger | no |
-   | `tt-skabelonansvarlig` | Skabelonansvarlig | yes (optional) |
-   | `tt-logleser` | Logleser | yes (optional) |
-   | `tt-administrator` | Administrator | no (cannot be scoped to a unit) |
+   | `tt-skabelonansvarlig` | Skabelonansvarlig | yes (needed: without a unit the role grants nothing, section 4) |
+   | `tt-logleser` | Logleser | yes (needed unless listed in `ROLLEKATALOG_GLOBAL_ROLES`) |
+   | `tt-administrator` | Administrator | no (cannot be scoped to a unit; constraint values are ignored) |
 
-   All four have weight 1 on purpose: Rollekatalog's `rolesAsList` only returns system roles of the highest weight in an IT system, and these roles are not a ladder. The constraint is "not mandatory" so that it is not forced in the Rollekatalog UI, but under the default strategy an assignment **without** a unit grants no elevated access (section 4).
-2. **Build the access in Rollekatalog**: create a *jobfunktionsrolle* (UserRole) from each system role, optionally group them in *rollebuketter* (RoleGroups), and assign them to persons, titles or org units. For `tt-skabelonansvarlig` and `tt-logleser`, choose the org unit as the data constraint (*dataafgrænsning*, type "Enhed"); the app treats it as the root of that person's scope. Assign `tt-bruger` too if you will use `REQUIRE_ROLE_TO_LOGIN=true`.
-3. **Create the two API clients** the app uses: one with client role `READ_ACCESS` and one with `ORGANISATION`. Keep the two keys apart; do not use an `ADMINISTRATOR` client.
-4. **Set the environment** (`.env`, see section 8 for every variable), at minimum:
+   For a role that takes a constraint, use the organisation-unit constraint type (internal `http://digital-identity.dk/constraints/orgunit/1`, "Enhed", or KOMBIT `.../orgenhed/1`). Other constraint types, KLE for instance, are never used as scope.
+2. **Build the access.** Create a *jobfunktionsrolle* (UserRole) from each system role, optionally group them in *rollebuketter* (RoleGroups), and assign them to persons, titles or org units. Choose the org unit as the data constraint (*dataafgrænsning*) for `tt-skabelonansvarlig` and `tt-logleser`. Assign `tt-bruger` too if you will use `REQUIRE_ROLE_TO_LOGIN=true`.
+3. **Create two API clients**: one with client role `READ_ACCESS`, one with `ORGANISATION`. Keep the keys apart.
+4. **Set the environment** (`.env.example` lists every variable): `ROLLEKATALOG_URL` (https), `ROLLEKATALOG_READ_API_KEY`, `ROLLEKATALOG_ORG_API_KEY`, `ROLLEKATALOG_ITSYSTEM_ID`, `INTERNAL_CRON_SECRET`. Restart (`docker compose up -d app`); no rebuild.
+5. **Choose how logins are matched** (section 3) and make sure at least one person who can log in via SSO holds `tt-administrator` in Rollekatalog and matches a Rollekatalog user. In rollekatalog mode there is no bootstrap administrator and local assignments are ignored.
+6. **Run the first sync.** A dry run in local mode is not possible: the admin button "Synkroniser nu" and the cron route answer 409 unless `ACCESS_SOURCE=rollekatalog`, and a 409 from the cron route writes no `sync_runs` row. So set `ACCESS_SOURCE=rollekatalog` (keep `REQUIRE_ROLE_TO_LOGIN=false` meanwhile), restart, and trigger the first sync through the cron route, because the mirror is empty and nobody is an administrator yet:
+
+   ```bash
+   curl -s -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/rollekatalog/sync
+   # {"status":"success","counts":{...},"errorCode":null}
    ```
-   ROLLEKATALOG_URL=https://rollekatalog.example.dk
-   ROLLEKATALOG_READ_API_KEY=...
-   ROLLEKATALOG_ORG_API_KEY=...
-   ROLLEKATALOG_ITSYSTEM_ID=os2taletiltekst
-   ```
-   Keep `ACCESS_SOURCE=local` for now. Restart the app (`docker compose up -d app`); no rebuild is needed.
-5. **Run "Test forbindelse"** (admin overview, or `POST /api/admin/access/rollekatalog/check`; needs `sync.run`, i.e. a global `tt-administrator`). It calls each endpoint once and shows per endpoint: ok, HTTP status, whether the body matched our schema, counts and an error code, and **no personal data and no keys**. Every row must be green before you continue. The `rolesAsList` row uses your own Rollekatalog user and is skipped when your login is not linked to a Rollekatalog user yet (it also leaves one audit row for you in Rollekatalog). The check calls the heavy `organisation/v3` endpoint once per click: do not click repeatedly.
-6. **Run the first sync** while still in local mode, so you can inspect the result before anyone depends on it: `POST /api/internal/rollekatalog/sync` with `X-Cron-Secret: $INTERNAL_CRON_SECRET` (set `INTERNAL_CRON_SECRET` first; the route answers 404 until it is set). The admin button "Synkroniser nu" answers 409 until `ACCESS_SOURCE=rollekatalog`. Check the counts and the "Seneste synkronisering" line, and compare the users and organisation in `/admin` with Rollekatalog.
-7. **Choose how logins are matched** (`DIRECTORY_MATCH`, `DIRECTORY_USERID_CLAIM`, `DIRECTORY_USERID_TRANSFORM`, see section 3).
-8. **Make sure an administrator will exist**, then switch (section 7): at least one person who can log in via SSO must hold `tt-administrator` in Rollekatalog, and must match a Rollekatalog user. In rollekatalog mode there is no bootstrap administrator and local assignments are ignored.
-9. **Schedule the sync** (section 6).
+
+   On failure the body carries the `errorCode` (section 10), and the same code is in `sync_runs.error_code` and the "Seneste synkronisering" panel on the admin overview. Fix it and call again; to back out, set `ACCESS_SOURCE=local` and restart. After a good run, log in as the administrator, compare users and organisation in `/admin` with Rollekatalog, and check the counts.
+7. **Schedule the sync** (section 6).
 
 ## 3. Matching a login to a Rollekatalog user
 
-A login is linked to a Rollekatalog user automatically, from claims in the SSO ID token that better-auth stored (`external_identities`). Only trusted SSO providers are matched, never `credential` (email/password) accounts, and zero or several candidates never link.
+A login is linked automatically from claims in the SSO ID token that better-auth stored (`external_identities`). Only trusted SSO providers are matched, never `credential` (email/password) accounts; zero or several candidates never link.
 
 | `DIRECTORY_MATCH` | Compares | Notes |
 |---|---|---|
-| `userid-claim` (default) | the claim named by `DIRECTORY_USERID_CLAIM` (default `preferred_username`) against `ext_user_id` (Rollekatalog `userId`), case-insensitively | usual choice |
-| `extuuid-claim` | the same claim against `ext_uuid` (Rollekatalog `extUuid`); must be a uuid | only if the IdP really carries that uuid, see below |
-| `email` | the `email` claim against the mirrored email | only with `email_verified === true`; many IdPs do not guarantee that |
+| `userid-claim` (default) | the claim named by `DIRECTORY_USERID_CLAIM` (default `preferred_username`) with `ext_user_id` (Rollekatalog `userId`), case-insensitively | usual choice |
+| `extuuid-claim` | the same claim with `ext_uuid` (Rollekatalog `extUuid`); must be a uuid | only if the IdP really carries that uuid |
+| `email` | the `email` claim with the mirrored email | only with `email_verified === true`; many IdPs do not guarantee that |
 
-**Entra ID vs Rollekatalog identifiers.** With Microsoft Entra ID the claims are Entra's:
-- `preferred_username` (and `upn`) is the user principal name, typically `abc123@kommune.dk`. Rollekatalog's `userId` is usually the plain user name `abc123` without a domain. They do not match as they are.
-- `oid` is the user's object id **in Entra ID**. Rollekatalog's `extUuid` is the identifier that the municipality's own identity source (for example the AD sync) delivered to Rollekatalog. The two are generally **different values**, even for the same person. Do not choose `extuuid-claim` with `DIRECTORY_USERID_CLAIM=oid` unless you have compared both values for a few known users.
-- `DIRECTORY_USERID_TRANSFORM=strip-upn-domain` removes everything from the first `@` in the claim before it is compared (so `abc123@kommune.dk` becomes `abc123`). It applies to `userid-claim` only. Default `none`. Because it discards the tenant part of the UPN, a **Microsoft** login is only matched with it when `MICROSOFT_TENANT_ID` names one tenant (not `common`, `organizations` or `consumers`) and the login's `tid` claim equals it; otherwise the login is refused (no link). Disabled Rollekatalog rows are never link targets, so a reused userId does not make the new person ambiguous.
+Disabled Rollekatalog rows are never link targets, so a reused userId does not make a new person ambiguous. A person deleted and re-created in Rollekatalog (new uuid, same userId) is re-linked at the next login from the old, now disabled row to the new one. A row linked to a different app user is never taken over (logged as `conflict`).
 
-For Microsoft also use a single-tenant `MICROSOFT_TENANT_ID`; with the default tenant `common`, anyone with any Microsoft account can sign in, and you should not match on claims from such logins.
+**Entra ID.** `preferred_username` and `upn` are the user principal name, typically `abc123@kommune.dk`, while Rollekatalog's `userId` is usually the plain `abc123`. `oid` is Entra's object id; Rollekatalog's `extUuid` comes from the municipality's own identity source, so the two are generally different values: do not choose `extuuid-claim` with `oid` before you have compared both for a few known users. `DIRECTORY_USERID_TRANSFORM=strip-upn-domain` removes everything from the first `@` before comparing (`userid-claim` only; default `none`). It throws the tenant part away, so a Microsoft login is matched with it only when `MICROSOFT_TENANT_ID` names one tenant (not `common`, `organizations`, `consumers`) and the login's `tid` equals it; otherwise it is refused. With the default tenant `common` anyone with any Microsoft account can sign in, so do not match on claims from such logins.
 
-Verify with a known user before go-live: log in, then check in `/admin` (Brugere og roller) that the person is linked to the right Rollekatalog user. If the userId in Rollekatalog differs structurally from the claim (for example a number), `userid-claim` cannot match; use the claim that does carry it (`DIRECTORY_USERID_CLAIM`).
-
-**Switching modes.** An app user who was linked to a `source='local'` directory row is moved to the matching Rollekatalog row at the next login, in one transaction (the link is unique per app user). A link that belongs to a different app user is never taken over (logged as a conflict, nothing changes). The released local row stays in the database.
+Verify with a known user before go-live: log in, then check in `/admin` (Brugere og roller) that the person is linked to the right Rollekatalog user.
 
 ## 4. Scope: who may manage what
 
-Rollekatalog gives each assignment an optional constraint (*dataafgrænsning*). The app reads **org-unit constraints** only (type `http://digital-identity.dk/constraints/orgunit/1` or KOMBIT `http://sts.kombit.dk/constraints/orgenhed/1`; the values are org-unit uuids). KLE and other constraint types are never used as a scope and never stored.
+Rollekatalog gives each assignment an optional constraint. **The scope of `tt-skabelonansvarlig` and `tt-logleser` is the org-unit constraint and nothing else**: the units named in the constraint of the assignment. There are no manager- or substitute-based strategies.
 
-`ROLLEKATALOG_SCOPE_STRATEGY`:
-
-| Value | Scope of `tt-skabelonansvarlig` / `tt-logleser` |
-|---|---|
-| `constraint` (default) | the org units in the assignment's constraint |
-| `constraint-or-manager` | the constraint, and if there is none, the units the person manages or substitutes for |
-| `manager` | only the units the person manages or substitutes for (needs the ORG key, which every sync uses anyway) |
-
-- **Descendants.** By default a scope unit also covers all its sub-units (`ROLLEKATALOG_SCOPE_DESCENDANTS=true`). With `false`, only that unit.
+- **Descendants.** A scope unit also covers its sub-units by default (`ROLLEKATALOG_SCOPE_DESCENDANTS=true`); `false` means only that unit.
 - **Unknown units are ignored.** Rollekatalog's organisation export leaves out inactive and excluded units. If all named units are unknown, the assignment gets no scope and is **not** widened to global.
-- **Duplicates are unioned.** Several assignments of the same role to the same person give the union of their scopes. An unscoped duplicate never widens a scoped role.
-- `tt-bruger` needs no scope. `tt-administrator` can never be scoped: constraint values on it are ignored.
+- **Duplicates are unioned.** Several assignments of one role to one person give the union of their units; an unconstrained duplicate never widens a scoped role.
+- `tt-bruger` needs no scope. `tt-administrator` can never be scoped.
 
-### `ROLLEKATALOG_GLOBAL_ROLES` and why it exists
+**`ROLLEKATALOG_GLOBAL_ROLES` and why it exists.** Rollekatalog **silently drops a constraint that resolves to empty** (for example a deleted unit): the assignment then looks unconstrained, which a naive reading would turn into "all units". The app never reads "no scope" as "everywhere". When an assignment has no usable org-unit scope, a role listed in `ROLLEKATALOG_GLOBAL_ROLES` becomes **global** (default: `tt-administrator` only); every other role gets **no row** (fail closed) and the sync counts it as `assignmentsWithoutScope` ("Roller uden område (ikke tildelt)"). For organisation-wide log readers add `tt-logleser` (`ROLLEKATALOG_GLOBAL_ROLES=tt-administrator,tt-logleser`). `none` allows no role, which also makes `tt-administrator` fail closed; a non-empty value without a valid role falls back to the default.
 
-Rollekatalog **silently drops a constraint that resolves to empty** (for example a deleted unit): the assignment then looks as if it had no constraint at all, which in a naive implementation would mean "all units". The app therefore never reads "no scope" as "everywhere". When an assignment carries no usable org-unit scope:
+## 5. Staleness, removal and guards
 
-- a role listed in `ROLLEKATALOG_GLOBAL_ROLES` becomes **global** (organisation-wide). Default: `tt-administrator` only;
-- every other role gets **no row at all** (fail closed) and the sync counts it under "Roller uden område (ikke tildelt)" (`assignmentsWithoutScope`).
+- **Staleness.** Every successful sync refreshes `synced_at` on all mirrored assignments. An assignment older than `ROLE_STALE_MAX_SECONDS` (default 86400, 24 h) is ignored: elevated capabilities vanish, the baseline `tt-bruger` stays (unless `REQUIRE_ROLE_TO_LOGIN=true`). If syncs fail for longer than that, administrators lose access, so alert on failed runs and keep the interval well below the limit. Staleness affects roles only; membership and the `disabled` flag keep their last known value.
+- **Removal means disabled and signed out.** A user missing from Rollekatalog's answer, or `disabled` there, becomes `disabled=true` in the mirror (the two cases are not told apart): no roles, no baseline, 403 from the APIs and "Ingen adgang" in the app. Rollekatalog does not blank the roles of a disabled user, so the app relies on this flag. **In the same transaction the sync deletes the better-auth sessions of every disabled linked user**, so existing cookies die at once (counter "Sessioner afsluttet", `sessionsRevoked`). The person is re-enabled by a later sync that lists them as active, and then logs in again. Org units are never deleted (a unit that disappears keeps its row, loses its members and assignments); assignments and memberships follow the answer exactly.
+- **Mode symmetry.** In local mode `source='rollekatalog'` assignments are ignored, in rollekatalog mode `source='local'` ones are (and rows of an unknown source in both).
 
-So a `tt-skabelonansvarlig` assigned without a unit grants nothing. If you want organisation-wide log readers, add `tt-logleser` to the list (`ROLLEKATALOG_GLOBAL_ROLES=tt-administrator,tt-logleser`); `none` allows no role at all, which would also make `tt-administrator` fail closed. A non-empty value that contains no valid role falls back to the default. The exception from the previous section holds: units that were named but are unknown never become global.
-
-## 5. Staleness, removal and fail-closed behaviour
-
-- **Staleness.** Every successful sync refreshes `synced_at` on all mirrored assignments, even when nothing changed. A `source='rollekatalog'` assignment older than `ROLE_STALE_MAX_SECONDS` (default 86400 = 24 h) is ignored when the app resolves a user: elevated capabilities vanish, the implicit baseline `tt-bruger` stays (unless `REQUIRE_ROLE_TO_LOGIN=true`, where the user then gets "Ingen adgang"). If syncs keep failing for longer than this, administrators lose their access, so alert on failed runs (section 6) and keep the interval well below the limit. A row exactly at the limit still counts. Staleness affects roles only; the `disabled` flag keeps its last known value.
-- **Removal means disabled.** A user who is **missing from Rollekatalog's answer**, or who is `disabled` there, becomes `disabled=true` in the mirror: no roles, no baseline, `403` from the admin API and "Ingen adgang" in the app. The two cases are not told apart. The link and the row stay, so the person is re-enabled by the next sync when Rollekatalog lists them as active again. Org units are **never deleted** by the sync (a unit that disappears keeps its row, but loses its assignments and members). Role assignments, memberships and substitutes are deleted exactly as Rollekatalog no longer lists them.
-- **Login refresh.** In rollekatalog mode each login asks `rolesAsList` (at most 3 s, no retry) about that one user. It can only take access **away**: `disabled: true` or a 404 disables the user (a 404 also appears for a wrong `ROLLEKATALOG_ITSYSTEM_ID` or `ROLLEKATALOG_DOMAIN`, see section 10), and a role that is no longer listed is deleted for that user. It never grants; new grants wait for the next sync, because `rolesAsList` carries no scope. Any error (timeout, 5xx, network, key rejected) changes nothing and never blocks the login. `rolesAsList` identifies roles by system-role identifier; if you use weights above 1, it may show fewer roles than the bulk call and revoke a lower-weight role until the next sync restores it (keep weight 1).
-- **Mirror rows of the other source.** In local mode `source='rollekatalog'` assignments are ignored, and in rollekatalog mode `source='local'` assignments are ignored, because the other side could not edit or revoke them.
-
-### Safety guards and the force button
-
-A sync fetches everything first and applies it in **one transaction**: any failure rolls back and the mirror stays as it was. In addition:
+A sync fetches everything first and applies it in **one transaction**: a failure rolls back and the mirror stays as it was.
 
 | Guard | Condition | Result |
 |---|---|---|
-| Single run | another sync holds the Postgres advisory lock | `already_running` (HTTP 409), no new run row |
-| Empty response | Rollekatalog returns zero users or zero org units | aborted with `empty_response`, nothing changed |
-| Removal threshold | the run would disable more than `ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT` (default 30) percent of the currently enabled mirrored users, or delete more than that share of mirrored assignments | aborted with `removal_threshold`, nothing changed. The first sync into an empty mirror has no threshold |
+| Single run | another sync holds the Postgres advisory lock | `already_running` (HTTP 409), no new `sync_runs` row, audited as denied |
+| Empty response | zero users or zero org units | `empty_response`, nothing changed, cannot be forced |
+| Removal threshold | the run would disable more than `ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT` (default 30) percent of the enabled mirrored users, or delete more than that share of mirrored assignments | `removal_threshold`, nothing changed. The first sync into an empty mirror has no threshold |
 
-The admin button "Synkroniser nu" can be sent with **"Gennemtving"** (`{"force": true}`) to bypass the removal threshold after you have checked in Rollekatalog that the removal is intended (for example a reorganisation). Only a holder of `sync.run` can do this. The cron route never forces. `empty_response` and the other errors cannot be forced. The would-be numbers are written to the server log only (as `users=removed/base assignments=removed/base`), not to the UI.
-
-Every run, successful or not, leaves a row in `sync_runs` (status `success` or `failed`, counts, error code) and one `directory.sync` event in the audit log (counts and codes only; source `system` for the scheduler, the administrator for the button). A run that was left as `running` by a crashed process is closed as `failed` with code `abandoned` by the next run.
+"Synkroniser nu" can be sent with **"Gennemtving"** (`{"force": true}`) to bypass the removal threshold after you have checked in Rollekatalog that the removal is intended (a reorganisation, say). Only a holder of `sync.run` can; the cron route never forces. The would-be numbers are written to the server log only. Every run leaves a `sync_runs` row (`success` or `failed`, counts, error code) and one `directory.sync` audit event (with `forced`); a run left as `running` by a crashed process is closed as `failed` / `abandoned` by the next run.
 
 ## 6. Scheduling
 
-The app has **no in-process timers** (they would run once per replica). Something external calls the cron route:
-
-```
-POST /api/internal/rollekatalog/sync
-X-Cron-Secret: <INTERNAL_CRON_SECRET>
-```
-
-It answers 404 while `INTERNAL_CRON_SECRET` is unset and 401 on a wrong secret. Responses: `200` success, `409` already running, `502` aborted or the upstream/configuration failed, `500` unexpected; the body is only `{status, counts, errorCode}`. The route does not check `ACCESS_SOURCE`, so it can pre-populate the mirror before the switch.
-
-**Option A: the compose service.** `docker-compose.yml` has an optional service `rollekatalog-sync` that runs a curl loop on the internal network (`http://app:3000`, the container's own port):
-
-```bash
-# .env: INTERNAL_CRON_SECRET=<openssl rand -hex 24>, ROLLEKATALOG_SYNC_INTERVAL_SECONDS=900
-docker compose --profile rollekatalog up -d
-docker compose logs -f rollekatalog-sync     # one line per run: "rollekatalog sync: http=200"
-```
-
-The interval defaults to 900 s and is at least 60 s (smaller values are replaced by 900). The service logs the HTTP status only. Unverified (no Docker was available when it was written): run `docker compose --profile rollekatalog config` and watch the first runs.
-
-**Option B: a host cron or any scheduler**, for example every 15 minutes (use the app's public URL or an internal address):
+The app has no in-process timers (they would run once per replica). Call the route from a host or cluster cron:
 
 ```
 */15 * * * * curl -fsS -m 600 -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" https://app.example.dk/api/internal/rollekatalog/sync -o /dev/null
 ```
 
-Choose an interval comfortably below `ROLE_STALE_MAX_SECONDS`. Every sync calls `organisation/v3`, which Rollekatalog synchronizes: do not go below a few minutes. Monitor the result: `GET /api/admin/access/sync` returns the latest run, the admin overview shows it, and the audit log has the `directory.sync` events (the viewer filters by type).
+It answers 404 while `INTERNAL_CRON_SECRET` is unset and 401 on a wrong secret. **409** `not_rollekatalog_mode` or `not_configured` (URL or a key missing or unusable) when `ACCESS_SOURCE` is not `rollekatalog` or the integration is unconfigured; nothing is written then. Otherwise `200` success, `409` already running, `502` aborted or upstream failure, `500` unexpected, with the body `{status, counts, errorCode}`. Choose an interval comfortably below `ROLE_STALE_MAX_SECONDS` and no shorter than a few minutes. Monitor with `GET /api/admin/access/sync` (latest run), the admin overview, or the `directory.sync` events.
 
 ## 7. Switching modes
 
-**local to rollekatalog**
-1. Complete the checklist up to and including a first sync, and verify the matching with your own login.
-2. Make sure at least one person with a global `tt-administrator` in Rollekatalog can log in and is linked to their Rollekatalog user.
-3. Set `ACCESS_SOURCE=rollekatalog` and restart the app. From now on the local role/org editing endpoints answer 409, local role assignments are ignored, and users with a link to a local row are moved to their Rollekatalog row at their next login.
+**local to rollekatalog.** Complete the checklist, including a first sync and a login of the administrator. From then on local role and org-unit writes answer 409, local assignments are ignored, and a user linked to a local row is moved to the matching Rollekatalog row at the next login.
 
-**rollekatalog to local** (also the way out of a lock-out): set `ACCESS_SOURCE=local` and restart. Local assignments apply again and `source='rollekatalog'` assignments are ignored. Caveats: a user who was moved to a Rollekatalog row has no local link until an administrator links them again, and a Rollekatalog-sourced directory row that is still linked keeps its `disabled` flag. In local mode `BOOTSTRAP_ADMIN_EMAILS` can grant a first administrator again if none exists.
+**rollekatalog to local** (also the way out of a lock-out): set `ACCESS_SOURCE=local` and restart. Local assignments apply again and `source='rollekatalog'` assignments are ignored. A user who was moved to a Rollekatalog row has no local link until an administrator links them again, and a linked Rollekatalog row keeps its `disabled` flag. `BOOTSTRAP_ADMIN_EMAILS` is one-shot: if it was already used, recover with `DELETE FROM system_flags WHERE key = 'bootstrap_admin_done';` (`README.md`).
+
+**A typo is not local.** `ACCESS_SOURCE` must be `local` or `rollekatalog` (or empty, meaning `local`). Any other value makes access control answer 503 "Adgangskontrol er midlertidigt utilgængelig" and the pages show the retry screen until it is fixed.
 
 ## 8. Environment variables
 
-All are read at call time (restart, no rebuild); an invalid value falls back to the default instead of failing. `.env.example` and `.env.deploy.example` carry the same list.
+Read at call time (restart, no rebuild); an invalid value falls back to the default (except `ACCESS_SOURCE`). Defaults and comments are in `.env.example`.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ROLLEKATALOG_URL` | unset | Base URL. Unset or unusable means "not configured". Credentials in the URL are refused; query and fragment are dropped |
+| `ROLLEKATALOG_URL` | unset | Base URL, `https://` (see section 9). Unset or unusable: not configured. Credentials in the URL are refused |
 | `ROLLEKATALOG_READ_API_KEY` | unset | Key of the `READ_ACCESS` client |
 | `ROLLEKATALOG_ORG_API_KEY` | unset | Key of the `ORGANISATION` client |
 | `ROLLEKATALOG_ITSYSTEM_ID` | `os2taletiltekst` | IT system identifier (letters, digits, `_`, `-`) |
 | `ROLLEKATALOG_DOMAIN` | unset | Rollekatalog domain; unset means its primary domain |
-| `ROLLEKATALOG_TIMEOUT_MS` | `10000` | Per request (100 to 120000). The login check uses at most 3000 |
-| `ROLLEKATALOG_MAX_RESPONSE_BYTES` | 64 MiB | Cap for the bulk responses (the single-user call has a fixed 1 MiB cap). Larger gives `too_large`. The default is a guess |
+| `ROLLEKATALOG_TIMEOUT_MS` | `10000` | per request, 100 to 120000 |
+| `ROLLEKATALOG_MAX_RESPONSE_BYTES` | 64 MiB | cap for a response; larger gives `too_large`. The default is a guess |
 | `ROLLEKATALOG_ALLOW_HTTP` | `false` | `true` allows `http://` for a non-local host |
-| `ROLLEKATALOG_SCOPE_STRATEGY` | `constraint` | see section 4 |
-| `ROLLEKATALOG_SCOPE_DESCENDANTS` | `true` | see section 4 |
-| `ROLLEKATALOG_GLOBAL_ROLES` | `tt-administrator` | see section 4 |
+| `ROLLEKATALOG_SCOPE_DESCENDANTS` | `true` | section 4 |
+| `ROLLEKATALOG_GLOBAL_ROLES` | `tt-administrator` | section 4 |
 | `ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT` | `30` | 0 to 100 |
-| `ROLE_STALE_MAX_SECONDS` | `86400` | see section 5 |
-| `DIRECTORY_USERID_TRANSFORM` | `none` | `none` or `strip-upn-domain`, see section 3 |
-| `INTERNAL_CRON_SECRET` | unset | secret for the cron route (shared with the audit prune route) |
-| `ROLLEKATALOG_SYNC_INTERVAL_SECONDS` | `900` | read by docker compose only |
+| `ROLE_STALE_MAX_SECONDS` | `86400` | section 5 |
+| `DIRECTORY_USERID_TRANSFORM` | `none` | `none` or `strip-upn-domain` |
+| `INTERNAL_CRON_SECRET` | unset | secret of the cron routes (shared with the audit prune route) |
 
-Already existing and relevant: `ACCESS_SOURCE`, `REQUIRE_ROLE_TO_LOGIN`, `DIRECTORY_MATCH`, `DIRECTORY_USERID_CLAIM`.
+Related: `ACCESS_SOURCE`, `REQUIRE_ROLE_TO_LOGIN`, `DIRECTORY_MATCH`, `DIRECTORY_USERID_CLAIM`, `MICROSOFT_TENANT_ID`.
 
 ## 9. Secrets and the URL
 
-- The two API keys are secrets: keep them in `.env` or your secret store, never in the repository. They are never logged, never part of an error message, an audit event or any route response. The register script's `ITSYSTEM` key is **not** part of the app's configuration.
-- The URL must be `https://`, except for `localhost`, `127.0.0.1` and `::1`, so that a key does not travel in cleartext by accident. Over a trusted private network you can opt out with `ROLLEKATALOG_ALLOW_HTTP=true`. An insecure or malformed URL makes the integration "not configured" (`insecure_url` or `not_configured`).
-- Redirects are **not followed** (the `ApiKey` header would be sent to the redirect target); a 3xx answer is reported as `invalid_response`. Point `ROLLEKATALOG_URL` at the final address.
-- Only GET requests are made, with at most 2 retries (3 attempts) and a backoff on timeout, 5xx, 429 and network errors, and never on 401, 403 or 404. The login check never retries.
+- The two API keys are secrets: keep them in `.env` or your secret store. They are never logged and never part of an error, an audit event or a route response.
+- The URL must be `https://`, except for `localhost`, `127.0.0.1` and `::1`. On a trusted private network you can opt out with `ROLLEKATALOG_ALLOW_HTTP=true`. An insecure or malformed URL makes the integration "not configured" (`insecure_url`, `not_configured`).
+- Redirects are **not followed** (the `ApiKey` header would be sent to the target); a 3xx is `invalid_response`. Point the URL at the final address.
+- GET only, at most 2 retries with back-off on timeout, 5xx, 429 and network errors; never on 401, 403 or 404.
 
 ## 10. Troubleshooting by error code
 
-The codes appear in "Test forbindelse", in the response of the sync routes, in `sync_runs.error_code` and in the `directory.sync` audit event.
+The codes appear in the sync responses, `sync_runs.error_code`, the admin panel and the `directory.sync` event.
 
-| Code | Meaning | What to check |
+| Code | Meaning | Check |
 |---|---|---|
-| `not_configured` | URL or one of the two keys is missing or malformed (a sync needs both keys) | `ROLLEKATALOG_URL`, `ROLLEKATALOG_READ_API_KEY`, `ROLLEKATALOG_ORG_API_KEY`; restart after a change |
+| `not_configured` | URL or one of the two keys missing or malformed | `ROLLEKATALOG_URL`, both keys; restart after a change |
 | `insecure_url` | `http://` to a non-local host | use https, or `ROLLEKATALOG_ALLOW_HTTP=true` on a trusted network |
-| `unauthorized` | Rollekatalog refused the key (401) | the key, and that it is sent for the right client (READ for read endpoints, ORG for organisation and manager). Statuses are modelled from source, not observed |
-| `forbidden` | the key is valid but the client role is wrong (403) | READ key must be `READ_ACCESS`, ORG key `ORGANISATION`; an `ORGANISATION` client cannot read assignments |
-| `not_found` | 404. For `rolesAsList`: unknown user, **or** unknown IT system or domain (empty body in both cases). A 404 from `v2/manager` is not an error (no managers) | `ROLLEKATALOG_ITSYSTEM_ID` (is the system registered? run the register script in dry-run) and `ROLLEKATALOG_DOMAIN`. A wrong id or domain makes the login refresh **disable each user at their next login** until it is corrected and the next sync re-enables them. Check with "Test forbindelse" before switching to rollekatalog mode |
-| `timeout` | no answer within `ROLLEKATALOG_TIMEOUT_MS` | `organisation/v3` can be slow on a large installation: raise the timeout; check the network path |
-| `network` | connection failed (DNS, TLS, refused) | firewall, DNS, certificate chain of the Rollekatalog host |
-| `server_error` | 5xx or 429 after the retries | Rollekatalog's own log and load; try again later |
-| `invalid_response` | the answer did not match our whitelist schema, was not JSON, or was a redirect or other unexpected status | version mismatch or a wrong URL (a login page instead of the API). "Test forbindelse" shows which endpoint |
-| `too_large` | response above `ROLLEKATALOG_MAX_RESPONSE_BYTES` | raise the cap if the size is legitimate |
-| `empty_response` | zero users or zero org units | Rollekatalog may be mid-import or the domain is wrong. Nothing was changed. Do not force: this cannot be forced |
-| `removal_threshold` | too many users or assignments would be removed | verify in Rollekatalog that the removal is intended, then use "Gennemtving" on the admin button |
-| `already_running` | another sync is running | wait; no action needed |
-| `db_error` | the database transaction failed and was rolled back | app log (content-free); database availability and migrations |
-| `abandoned` | a run was left as `running` by a crashed process | informational; the next run closes it |
+| `unauthorized` | key refused (401) | the key, and that READ is used for assignments and ORG for organisation |
+| `forbidden` | key valid, client role wrong (403) | READ key must be `READ_ACCESS`, ORG key `ORGANISATION` |
+| `not_found` | 404 | `ROLLEKATALOG_ITSYSTEM_ID` (does the IT system exist?), `ROLLEKATALOG_DOMAIN`, the URL path |
+| `timeout` | no answer within `ROLLEKATALOG_TIMEOUT_MS` | `organisation/v3` can be slow on a large installation: raise the timeout |
+| `network` | connection failed (DNS, TLS, refused) | firewall, DNS, certificate chain |
+| `server_error` | 5xx or 429 after the retries | Rollekatalog's own log and load |
+| `invalid_response` | not JSON, did not match the whitelist schema, a redirect or another unexpected status | version mismatch, or a login page instead of the API (wrong URL) |
+| `too_large` | above `ROLLEKATALOG_MAX_RESPONSE_BYTES` | raise the cap if the size is legitimate |
+| `empty_response` | zero users or zero org units | Rollekatalog may be mid-import or the domain is wrong; nothing changed |
+| `removal_threshold` | too many users or assignments would go | verify in Rollekatalog, then "Gennemtving" |
+| `already_running` | another sync runs | wait |
+| `db_error` | the transaction failed and was rolled back | app log (content-free), database, migrations |
+| `abandoned` | run left as `running` by a crashed process | informational |
 | `unexpected` | anything else | app log |
 
 Symptoms:
-- **A user has no elevated role although Rollekatalog shows one.** Check the sync counts for `assignmentsWithoutScope` (the assignment named no org unit, or the strategy found none, and the role is not in `ROLLEKATALOG_GLOBAL_ROLES`), `assignmentsIgnoredRole` (not one of our four identifiers), `assignmentsSkippedUnknownUser` (the person is not in the organisation answer), and whether the last successful sync is older than `ROLE_STALE_MAX_SECONDS`.
-- **A user is not linked.** `DIRECTORY_MATCH`, the claim and `DIRECTORY_USERID_TRANSFORM` (section 3); the person must exist in the mirror (run a sync first); a `conflict` is logged when the Rollekatalog row already belongs to a different app user.
-- **Everybody lost access.** Look at the last sync run: failing syncs for longer than `ROLE_STALE_MAX_SECONDS`, or a wrong `ROLLEKATALOG_ITSYSTEM_ID` (login refresh). Temporary way out: `ACCESS_SOURCE=local` (section 7).
+- **A user has no elevated role although Rollekatalog shows one.** In the last run's counts look at `assignmentsWithoutScope` (no known org unit in the constraint, role not in `ROLLEKATALOG_GLOBAL_ROLES`), `assignmentsIgnoredRole` (identifier is not one of our four) and `assignmentsSkippedUnknownUser` (the entry matches no user in the organisation answer: assignments are matched on `extUuid`, or on `userId` only when the entry has no `extUuid` and the userId is unique). Also check that the last successful sync is younger than `ROLE_STALE_MAX_SECONDS`.
+- **A user is not linked.** `DIRECTORY_MATCH`, the claim and `DIRECTORY_USERID_TRANSFORM` (section 3); the person must exist in the mirror (sync first).
+- **Everybody lost access.** Look at the last sync run (failing for longer than `ROLE_STALE_MAX_SECONDS`?). Temporary way out: `ACCESS_SOURCE=local` (section 7).
 
 ## 11. Privacy
 
-- Rollekatalog's `organisation/v3` returns, per user, a **CPR number and a NemLog-in uuid**, plus phone numbers and KLE lists. The app's response schemas are whitelists: these fields are stripped when the answer is parsed and never enter our types, the database, logs or audit events. A test proves that no key matching `/cpr|nemlogin/i` survives the mapping. The response still passes through the app's memory over TLS (Rollekatalog offers no way to leave the fields out); limit that by giving the ORG client no more rights than `ORGANISATION` and by keeping the connection inside your network if you can.
-- "Test forbindelse" reports only a boolean `cprFieldPresentInResponse` (the field names were seen, the values are not kept).
-- Stored per user: Rollekatalog uuid, `extUuid`, `userId`, name, email, the disabled flag, unit memberships (no job titles) and role assignments. Per org unit: uuid, name, parent and manager. No CPR, NemLog-in id, phone, KLE or title data.
-- The audit event `directory.sync` carries counts and short codes only.
-- Every `rolesAsList` call (one per login) creates an audit row in Rollekatalog: its audit log will show one read per login by the API client.
+- `organisation/v3` returns, per user, a **CPR number and a NemLog-in uuid**, plus phone numbers and KLE lists. The response schemas are whitelists: these fields are stripped when the answer is parsed and never enter our types, the database, logs or audit events (a test scans the parsed result for `/cpr|nemlogin|phone|kle/i`). The raw response does pass through the app's memory over TLS; Rollekatalog offers no way to leave the fields out, so keep the connection inside your network if you can.
+- Stored per user: Rollekatalog uuid, `extUuid`, `userId`, name, email, the disabled flag, unit memberships (no job titles) and role assignments. Per org unit: uuid, name and parent (no manager). No CPR, NemLog-in id, phone, KLE or title data.
+- `directory.sync` events carry counts and short codes only.
+
+## Assumptions taken from the Rollekatalog source, release 2026r4, not verified against a live instance
+
+- **`GET /api/organisation/v3`** needs client role `ORGANISATION` and is `synchronized`. It lists active, non-excluded org units and users that are not deleted and have at least one position; **disabled users are included** with `disabled: true`. The user DTO also holds `cpr`, `nemloginUuid`, `email`, `phone` and KLE lists; org units hold `manager` and `titleIdentifiers`. Our schemas keep only uuid, `extUuid`, `userId`, name, email, `disabled` and positions, and org-unit uuid, name and parent.
+- **`GET /api/read/itsystem/roleAssignmentsWithContraints/{system}`** needs `READ_ACCESS`. Shape: `[{extUuid, userId, assignments: [{roleIdentifier, roleName, roleConstraintValues: [{constraintType, constraintValues: string[]}]}]}]`. `constraintType` is the constraint type's `entityId` URL, not its name or uuid. The org-unit constraints are `http://digital-identity.dk/constraints/orgunit/1` (internal) and `http://sts.kombit.dk/constraints/orgenhed/1` (KOMBIT); their values are org-unit uuids. KLE is `http://sts.kombit.dk/constraints/KLE/1`.
+- The answer is **effective**: direct and role-group assignments, assignments on org units (inherited down unless `doNotInherit`), title-conditioned ones and negative exceptions, read from the materialised `current_assignment` table; deleted users and ended assignments are excluded, disabled users are not. It is filtered to one domain (default the primary one; the `domain` query parameter). The same `roleIdentifier` can repeat per user with different constraints.
+- **Empty constraints are silently dropped:** a constraint whose resolved value is empty is left out, so such a role looks unconstrained. This is why "no scope" is never read as "everywhere".
+- Authentication is the header `ApiKey: <key>` (not `Authorization`). A `READ_ACCESS` client carries only that authority and an `ORGANISATION` client only its own; `ADMINISTRATOR` carries all. A missing or invalid key is 401, a missing role 403 (Spring defaults, not observed).
+- The OpenAPI document (`/v3/api-docs`) sits behind SAML login and is not readable with an ApiKey, so response shapes come from the DTO sources of the pinned release (the fixtures in `src/lib/rollekatalog/__fixtures__/`). Shape drift in a newer release is a maintenance risk.

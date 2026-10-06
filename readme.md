@@ -17,3 +17,8 @@ chapter, topic, minutes generation, and PII detection.
 - `npm run build` / `npm start` — production build and serve
 - `npm test` — run the Vitest suite
 - `npm run db:generate` / `db:migrate` / `db:studio` — Drizzle migrations
+
+## More
+
+- Deployment: `DEPLOY.md`.
+- Roles, org units, the audit log and central templates: `docs/central-access/README.md`.
