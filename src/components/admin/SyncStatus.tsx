@@ -21,19 +21,28 @@ export interface SyncRunView {
   errorCode: string | null;
 }
 
-interface SyncResponse {
+export interface SyncResponse {
   run: SyncRunView | null;
   configIssue: string | null;
+  /** The Rollekatalog IT system the roles are assigned under; null outside Rollekatalog mode. */
+  itSystem?: string | null;
 }
 
 const formatSyncTime = (iso: string | null) => formatDateTime(iso, { dateStyle: 'medium', timeStyle: 'short' }, '–');
 
 // Advisory: the routes re-check sync.run / access.manage on every request.
-const canSeeSyncRun = (me: MeResponse) =>
+export const canSeeSyncRun = (me: MeResponse) =>
   me.readOnly && (me.capabilities.includes('sync.run') || me.capabilities.includes('access.manage'));
 
+export interface SyncRunState {
+  data: SyncResponse | null;
+  loading: boolean;
+  error: string | null;
+  reload: () => Promise<void>;
+}
+
 /** The latest sync run, only fetched when the viewer may read it (a denied read would be audited). */
-function useSyncRun(enabled: boolean) {
+export function useSyncRun(enabled: boolean): SyncRunState {
   const [state, setState] = useState<{ data: SyncResponse | null; loading: boolean; error: string | null }>({
     data: null,
     loading: enabled,
@@ -46,13 +55,16 @@ function useSyncRun(enabled: boolean) {
   useEffect(() => {
     if (enabled) void reload();
   }, [enabled, reload]);
-  return { ...state, reload };
+  // Loading until the first answer lands, so a page that enables the hook late (after /api/me) never flashes "no run yet".
+  return { ...state, loading: enabled && state.data === null && state.error === null, reload };
 }
 
 /** One line for the read-only user and organisation pages: where the data comes from and how fresh it is. */
-export function LastSyncLine({ me }: { me: MeResponse | null }) {
+export function LastSyncLine({ me, sync }: { me: MeResponse | null; sync?: SyncRunState }) {
   const showTime = !!me && canSeeSyncRun(me);
-  const { data, loading } = useSyncRun(showTime);
+  // A page that already holds the run passes it in, so the route is read once per page.
+  const own = useSyncRun(showTime && !sync);
+  const { data, loading } = sync ?? own;
   if (!me || !me.readOnly) return null;
 
   let freshness: string | null = null;
@@ -72,8 +84,9 @@ export function LastSyncLine({ me }: { me: MeResponse | null }) {
   );
 }
 
-function SyncPanel() {
-  const { data, loading, error, reload } = useSyncRun(true);
+function SyncPanel({ sync }: { sync?: SyncRunState }) {
+  const own = useSyncRun(!sync);
+  const { data, loading, error, reload } = sync ?? own;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [force, setForce] = useState(false);
   const [sawThreshold, setSawThreshold] = useState(false);
@@ -211,7 +224,7 @@ function SyncPanel() {
  * Sync status and "Synkroniser nu" for a viewer with sync.run, only while Rollekatalog
  * owns the data (in local mode there is nothing to sync). The server enforces both on every call.
  */
-export function SyncStatus({ me }: { me: MeResponse }) {
+export function SyncStatus({ me, sync }: { me: MeResponse; sync?: SyncRunState }) {
   if (!me.readOnly || !me.capabilities.includes('sync.run')) return null;
-  return <SyncPanel />;
+  return <SyncPanel sync={sync} />;
 }

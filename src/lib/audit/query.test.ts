@@ -11,9 +11,11 @@ import {
   collectAuditEvents,
   getFeedHead,
   getFeedPage,
+  likeContains,
   listAuditEvents,
   type AuditQueryEnv,
 } from './query';
+import { EVENT_TYPES } from './events';
 
 const UNIT_A = 'aaaa0000-0000-4000-8000-00000000000a';
 const UNIT_B = 'bbbb0000-0000-4000-8000-00000000000b';
@@ -52,7 +54,7 @@ describe('listAuditEvents scope', () => {
   it('a global reader gets no org unit condition', async () => {
     const f = fakeEnv();
     await listAuditEvents({ scope: { all: true } }, f.env);
-    expect(f.sql()).not.toContain('WHERE');
+    expect(f.sql()).not.toContain('actor_org_unit_uuid = ANY');
   });
 
   it('a scoped reader is limited to the covered units (NULL units never match)', async () => {
@@ -124,6 +126,7 @@ describe('listAuditEvents filters and paging', () => {
           source: 'client',
           from,
           to,
+          q: 'Mette_%',
         },
       },
       f.env,
@@ -141,8 +144,10 @@ describe('listAuditEvents filters and paging', () => {
       'source = $6',
       'occurred_at >= $7',
       'occurred_at <= $8',
+      '(actor_name ILIKE $9 OR actor_user_id = $10)',
+      'event_type = ANY($11::text[])',
       'ORDER BY id DESC',
-      'LIMIT $9',
+      'LIMIT $12',
     ]) {
       expect(sql).toContain(part);
     }
@@ -155,8 +160,64 @@ describe('listAuditEvents filters and paging', () => {
       'client',
       from,
       to,
+      '%Mette\\_\\%%',
+      'Mette_%',
+      EVENT_TYPES,
       51,
     ]);
+  });
+
+  describe('name search (q)', () => {
+    it('escapes backslash, % and _ so they match themselves', () => {
+      expect(likeContains('50%_off\\')).toBe('%50\\%\\_off\\\\%');
+      expect(likeContains('Anne')).toBe('%Anne%');
+    });
+
+    it('is bound as parameters: an ILIKE on the name snapshot OR an exact user id', async () => {
+      const f = fakeEnv();
+      await listAuditEvents({ scope: { all: true }, filters: { q: "Anne' OR '1'='1" } }, f.env);
+      expect(f.sql()).not.toContain("'1'='1");
+      expect(f.sql()).toContain('(actor_name ILIKE $1 OR actor_user_id = $2)');
+      expect(f.params().slice(0, 2)).toEqual(["%Anne' OR '1'='1%", "Anne' OR '1'='1"]);
+    });
+
+    it('never widens scope: the unit condition stays and comes first', async () => {
+      const f = fakeEnv();
+      await listAuditEvents({ scope: { all: false, orgUnitUuids: [UNIT_A] }, filters: { q: 'Anne' } }, f.env);
+      expect(f.sql()).toContain('actor_org_unit_uuid = ANY($1::uuid[])');
+      expect(f.sql()).toMatch(/WHERE actor_org_unit_uuid = ANY\(\$1::uuid\[\]\) AND \(actor_name ILIKE \$2 OR actor_user_id = \$3\)/);
+      expect(f.params().slice(0, 3)).toEqual([[UNIT_A], '%Anne%', 'Anne']);
+    });
+
+    it('a scoped reader with no units still sees nothing, with or without q', async () => {
+      const f = fakeEnv();
+      expect((await listAuditEvents({ scope: { all: false, orgUnitUuids: [] }, filters: { q: 'Anne' } }, f.env)).rows).toEqual([]);
+      expect(f.query).not.toHaveBeenCalled();
+    });
+
+    it('is also applied by the export collector', async () => {
+      const f = fakeEnv([[dbRow(1)]]);
+      await collectAuditEvents({ scope: { all: true }, filters: { q: 'Anne' }, maxRows: 10 }, f.env);
+      expect(f.sql()).toContain('actor_name ILIKE');
+    });
+  });
+
+  describe('catalogue restriction', () => {
+    it('lists and exports only current catalogue types, so removed types never show up', async () => {
+      const f = fakeEnv();
+      await listAuditEvents({ scope: { all: true } }, f.env);
+      expect(f.sql()).toContain('event_type = ANY($1::text[])');
+      expect(f.params()[0]).toEqual(EVENT_TYPES);
+      const g = fakeEnv([[]]);
+      await collectAuditEvents({ scope: { all: true }, maxRows: 10 }, g.env);
+      expect(g.sql()).toContain('event_type = ANY($1::text[])');
+    });
+
+    it('the feed keeps returning every type', async () => {
+      const f = fakeEnv();
+      await getFeedPage({ offset: 0, size: 10, delaySeconds: 0 }, f.env);
+      expect(f.sql()).not.toContain('event_type = ANY');
+    });
   });
 
   it('lists an explicit column set, not SELECT *', async () => {

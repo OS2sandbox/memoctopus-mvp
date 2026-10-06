@@ -213,7 +213,19 @@ describe('GET /api/admin/access/sync', () => {
       },
       source: 'rollekatalog',
       configIssue: 'not_configured',
+      itSystem: 'os2taletiltekst',
     });
+  });
+
+  it('names the configured IT system, and only the identifier (no keys or URL)', async () => {
+    vi.stubEnv('ROLLEKATALOG_ITSYSTEM_ID', 'mit-system');
+    vi.stubEnv('ROLLEKATALOG_READ_API_KEY', 'secret-read-key');
+    vi.stubEnv('ROLLEKATALOG_ORG_API_KEY', 'secret-org-key');
+    vi.stubEnv('ROLLEKATALOG_URL', 'https://rk.example.dk');
+    const body = await (await GET(get(), NO_PARAMS)).json();
+    expect(body.itSystem).toBe('mit-system');
+    expect(JSON.stringify(body)).not.toMatch(/secret-|rk\.example/);
+    for (const k of ['ROLLEKATALOG_ITSYSTEM_ID', 'ROLLEKATALOG_READ_API_KEY', 'ROLLEKATALOG_ORG_API_KEY']) vi.stubEnv(k, '');
   });
 
   it('run is null before the first sync', async () => {
@@ -224,6 +236,8 @@ describe('GET /api/admin/access/sync', () => {
     vi.stubEnv('ACCESS_SOURCE', 'local');
     const res = await GET(get(), NO_PARAMS);
     expect(res.status).toBe(200);
-    expect((await res.json()).source).toBe('local');
+    const body = await res.json();
+    expect(body.source).toBe('local');
+    expect(body.itSystem).toBeNull();
   });
 });

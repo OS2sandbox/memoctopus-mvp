@@ -19,7 +19,7 @@ const mockList = vi.mocked(listOrgUnitMembers);
 const mockSet = vi.mocked(setOrgUnitMembers);
 
 const U1 = '11111111-1111-4111-8111-111111111111';
-const MEMBERS = [{ directoryUserUuid: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', appUserId: 'a1', name: 'Anna' }];
+const MEMBERS = [{ directoryUserUuid: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', appUserId: 'a1', name: 'Anna', email: 'anna@example.dk' }];
 const ctx = (uuid: string) => ({ params: Promise.resolve({ uuid }) });
 const url = (uuid: string) => `http://localhost/api/admin/access/org-units/${uuid}/members`;
 const put = (body?: unknown, uuid = U1) => PUT(makeJsonReq(url(uuid), 'PUT', body), ctx(uuid));

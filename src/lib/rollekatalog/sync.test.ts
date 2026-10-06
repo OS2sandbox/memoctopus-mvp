@@ -7,8 +7,7 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 }));
 
 import type { ClientLike, SqlResult } from '@/lib/authz/pg-runner';
-import { recordEvent, validateEvent } from '@/lib/audit/record';
-import type { AuditEventInput } from '@/lib/audit/events';
+import { recordEvent } from '@/lib/audit/record';
 import { createRollekatalogClient } from './client';
 import { mapToMirror, type MapperConfig, type MapperInput, type MirrorSet } from './mapper';
 import { fixtureData, startMockRollekatalog, type MockRollekatalog } from './mock-server';
@@ -421,7 +420,6 @@ describe('runSync flow', () => {
   });
 
   describe('invalid rows', () => {
-    const lastEvent = () => vi.mocked(recordEvent).mock.calls.at(-1)![0] as unknown as AuditEventInput & { details: Record<string, unknown> };
     const goodUser = (n: number, extra: Record<string, unknown> = {}) => ({
       uuid: `7e5e0000-0000-4000-8000-${String(900 + n).padStart(12, '0')}`,
       extUuid: null,
@@ -433,7 +431,7 @@ describe('runSync flow', () => {
       ...extra,
     });
 
-    it('one bad user id and one bad unit id: the run succeeds, the rest is mirrored, the counts flow to the run row and the audit event', async () => {
+    it('one bad user id and one bad unit id: the run succeeds, the rest is mirrored, the counts flow to the run row', async () => {
       const base = fixtureData();
       mock.setData({
         users: [...base.users, goodUser(1, { uuid: 'LEGACY-USER' })],
@@ -468,10 +466,6 @@ describe('runSync flow', () => {
       // sync_runs.counts (jsonb) carries the new keys; nothing but counts.
       expect(JSON.parse(String(finishParams?.[3]))).toMatchObject({ usersSkippedInvalid: 1, orgUnitsSkippedInvalid: 1 });
       expect(JSON.stringify(finishParams)).not.toMatch(/LEGACY|Gammel/);
-      const ev = lastEvent();
-      expect(ev.details).toMatchObject({ usersSkippedInvalid: 1, orgUnitsSkippedInvalid: 1, assignmentRowsSkippedInvalid: 0 });
-      expect(validateEvent(ev).ok).toBe(true);
-      expect(JSON.stringify(ev)).not.toMatch(/LEGACY|Gammel/);
     });
 
     it('bad role assignment rows are counted too', async () => {
@@ -495,7 +489,6 @@ describe('runSync flow', () => {
       expect(mock.requests.map((q) => q.path)).toEqual(['/api/organisation/v3']);
       const finish = f.log.find((l) => l.sql.includes('SET status = $2'));
       expect(finish).toBeDefined();
-      expect(lastEvent()).toMatchObject({ outcome: 'error', details: { errorCode: 'invalid_response' } });
     });
 
     it('more bad assignment rows than the allowance aborts before any transaction', async () => {
@@ -557,7 +550,7 @@ describe('runSync flow', () => {
     expect(sqls[del]).toBe(
       'DELETE FROM "public".sessions WHERE user_id IN ( SELECT app_user_id FROM "public".directory_users WHERE source = \'rollekatalog\' AND disabled = true AND app_user_id IS NOT NULL )',
     );
-    // The count lands in the run row and the audit event (counts only).
+    // The count lands in the run row (counts only).
     const finish = f.log.find((l) => l.sql.includes('SET status = $2'));
     expect(finish).toBeDefined();
   });
@@ -638,53 +631,13 @@ describe('runSync flow', () => {
 });
 
 describe('runSync audit', () => {
-  const lastEvent = () => vi.mocked(recordEvent).mock.calls.at(-1)![0] as unknown as AuditEventInput & {
-    details: Record<string, unknown>;
-  };
-
-  it('a cron run is a system event without an actor, and the event is valid for the closed catalogue', async () => {
-    const r = await runSync({ trigger: 'cron' }, deps(fakeEnv(baseScript()).env));
-    expect(recordEvent).toHaveBeenCalledTimes(1);
-    const ev = lastEvent();
-    expect(ev).toMatchObject({ type: 'directory.sync', source: 'system', outcome: 'success', entityType: 'sync_run', entityId: r.runId });
-    expect((ev as { actorUserId?: string }).actorUserId).toBeUndefined();
-    expect(validateEvent(ev).ok).toBe(true);
-  });
-
-  it('a manual run is a server event naming the admin; details are counts and codes only', async () => {
+  it('writes nothing to the audit log: the sync is housekeeping, its status lives in sync_runs', async () => {
+    await runSync({ trigger: 'cron' }, deps(fakeEnv(baseScript()).env));
     await runSync({ trigger: 'manual', actorUserId: 'admin-1' }, deps(fakeEnv(baseScript()).env));
-    const ev = lastEvent();
-    expect(ev).toMatchObject({ type: 'directory.sync', source: 'server', actorUserId: 'admin-1', entityId: RUN_ID });
-    expect(validateEvent(ev).ok).toBe(true);
-    expect(Object.keys(ev.details).sort()).toEqual(
-      [
-        'trigger', 'status', 'forced', 'usersUpserted', 'usersDisabled', 'sessionsRevoked', 'orgUnitsUpserted', 'orgUnitsOrphaned', 'orgUnitCyclesBroken',
-        'assignmentsUpserted', 'assignmentsRemoved', 'assignmentsIgnoredRole', 'assignmentsSkippedUnknownUser', 'assignmentsWithoutScope',
-        'usersSkippedInvalid', 'orgUnitsSkippedInvalid', 'assignmentRowsSkippedInvalid', 'membershipsSkippedInvalid',
-      ].sort(),
-    );
-    expect(JSON.stringify(ev)).not.toMatch(/mette|jens|example\.dk|cpr/i);
-  });
-
-  it('failures carry the short code and an error outcome', async () => {
     mock.setData({ users: [] });
     await runSync({ trigger: 'cron' }, deps(fakeEnv(baseScript()).env));
-    const ev = lastEvent();
-    expect(ev).toMatchObject({ outcome: 'error', details: { status: 'aborted', errorCode: 'empty_response' } });
-    expect(validateEvent(ev).ok).toBe(true);
-  });
-
-  it('already_running is audited without an entity', async () => {
-    const f = fakeEnv(baseScript((s) => (s.includes('pg_try_advisory_lock') ? ok({ ok: false }) : undefined)));
-    await runSync({ trigger: 'cron' }, deps(f.env));
-    const ev = lastEvent();
-    expect(ev).toMatchObject({ outcome: 'denied', details: { status: 'already_running', errorCode: 'already_running' } });
-    expect((ev as { entityId?: string }).entityId).toBeUndefined();
-    expect(validateEvent(ev).ok).toBe(true);
-  });
-
-  it('an audit failure never changes the result', async () => {
-    const result = await runSync({ trigger: 'cron' }, deps(fakeEnv(baseScript()).env, { audit: async () => { throw new Error('audit down'); } }));
-    expect(result.status).toBe('success');
+    const locked = fakeEnv(baseScript((q) => (q.includes('pg_try_advisory_lock') ? ok({ ok: false }) : undefined)));
+    await runSync({ trigger: 'cron' }, deps(locked.env));
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 });

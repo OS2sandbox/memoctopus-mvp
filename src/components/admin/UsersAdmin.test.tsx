@@ -165,11 +165,11 @@ describe('UsersAdmin — write controls by mode and role', () => {
     expect(screen.getByRole('button', { name: 'Tildel rolle til Dan Deaktiv' })).toBeDisabled();
   });
 
-  it('hides every write control and shows the banner in rollekatalog mode', async () => {
+  it('hides every write control and explains where roles are assigned in rollekatalog mode', async () => {
     setup(ROLLEKATALOG_ME);
     renderWithToasts(<UsersAdmin />);
     await screen.findByText('Bo Bruger');
-    expect(screen.getByRole('status')).toHaveTextContent('Skrivebeskyttet');
+    expect(screen.getByRole('region', { name: 'Roller tildeles i Rollekatalog' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Tildel rolle/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Fjern/ })).toBeNull();
     expect(screen.queryByRole('columnheader', { name: 'Handlinger' })).toBeNull();
@@ -282,5 +282,79 @@ describe('UsersAdmin — Rollekatalog data and last sync', () => {
     renderWithToasts(<UsersAdmin />);
     expect(await screen.findByText('Bo Bruger')).toBeInTheDocument();
     expect(screen.getByText('Data hentes fra Rollekatalog.')).toBeInTheDocument();
+  });
+});
+
+describe('UsersAdmin — roles are assigned in Rollekatalog (explanation card)', () => {
+  const RUN = {
+    run: { id: 'r1', startedAt: '2026-10-05T10:00:00.000Z', finishedAt: '2026-10-05T10:00:03.000Z', status: 'success', counts: null, errorCode: null },
+    source: 'rollekatalog',
+    configIssue: null,
+    itSystem: 'os2taletiltekst',
+  };
+
+  it('names the IT system, lists the four roles with identifier and meaning, and says when changes appear', async () => {
+    setup(ROLLEKATALOG_ME, { 'GET /api/admin/access/sync': () => json(RUN) });
+    renderWithToasts(<UsersAdmin />);
+    const card = await screen.findByRole('region', { name: 'Roller tildeles i Rollekatalog' });
+    expect(await within(card).findByText('os2taletiltekst')).toBeInTheDocument();
+    const items = within(within(card).getByRole('list', { name: 'Roller' })).getAllByRole('listitem');
+    expect(items.map((li) => li.querySelector('code')?.textContent)).toEqual([
+      'tt-bruger',
+      'tt-skabelonansvarlig',
+      'tt-logleser',
+      'tt-administrator',
+    ]);
+    expect(items[0]).toHaveTextContent('Bruger');
+    expect(items[0]).toHaveTextContent('Kan bruge løsningen og de skabeloner, der er stillet til rådighed.');
+    expect(items[3]).toHaveTextContent('Administrator');
+    expect(items[3]).toHaveTextContent('Har alle rettigheder');
+    expect(card).toHaveTextContent('Ændringer vises her efter næste synkronisering');
+    // The existing "last synchronised" line stays.
+    expect(await screen.findByText(/Data hentes fra Rollekatalog\. Sidst synkroniseret .*2026/)).toBeInTheDocument();
+  });
+
+  it('still explains without the IT system when the run cannot be read', async () => {
+    setup(ROLLEKATALOG_ME, { 'GET /api/admin/access/sync': () => json({ error: 'x' }, 500) });
+    renderWithToasts(<UsersAdmin />);
+    const card = await screen.findByRole('region', { name: 'Roller tildeles i Rollekatalog' });
+    expect(card).toHaveTextContent('Tildel dem i Rollekatalog under løsningens it-system.');
+    expect(card.querySelector('code.font-mono')?.textContent).toBe('tt-bruger');
+  });
+
+  it('is not shown in local mode, where roles are edited here', async () => {
+    setup();
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.queryByRole('region', { name: 'Roller tildeles i Rollekatalog' })).toBeNull();
+    expect(screen.queryByText('Roller kan ikke ændres her.')).toBeNull();
+  });
+
+  it('reads the sync route once for card, line and panel together', async () => {
+    const mock = setup(ROLLEKATALOG_ME, { 'GET /api/admin/access/sync': () => json(RUN) });
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText(/Sidst synkroniseret/);
+    await screen.findByRole('button', { name: 'Synkroniser nu' });
+    expect(calls(mock, 'GET', '/api/admin/access/sync')).toHaveLength(1);
+  });
+
+  it('keeps the manual "Synkroniser nu" button for a sync.run holder on this page, and hides it from local mode', async () => {
+    setup(ROLLEKATALOG_ME, { 'GET /api/admin/access/sync': () => json(RUN) });
+    const { unmount } = renderWithToasts(<UsersAdmin />);
+    expect(await screen.findByRole('button', { name: 'Synkroniser nu' })).toBeEnabled();
+    unmount();
+    setup(ADMIN_ME);
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.queryByRole('button', { name: 'Synkroniser nu' })).toBeNull();
+  });
+
+  it('does not offer the sync button to an access manager without sync.run', async () => {
+    setup({ ...ROLLEKATALOG_ME, capabilities: ROLLEKATALOG_ME.capabilities.filter((c) => c !== 'sync.run') }, {
+      'GET /api/admin/access/sync': () => json(RUN),
+    });
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText(/Sidst synkroniseret/);
+    expect(screen.queryByRole('button', { name: 'Synkroniser nu' })).toBeNull();
   });
 });

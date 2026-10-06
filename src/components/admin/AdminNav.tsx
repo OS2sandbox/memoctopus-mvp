@@ -15,7 +15,7 @@ export function AdminNav({ sections }: { sections: AdminNavItem[] }) {
   return (
     <nav aria-label="Administration" className="flex gap-6 border-b border-[var(--line)]">
       {sections.map((s) => {
-        const active = s.href === '/admin' ? pathname === '/admin' : pathname.startsWith(s.href);
+        const active = pathname.startsWith(s.href);
         return (
           <Link
             key={s.key}

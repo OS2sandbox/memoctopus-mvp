@@ -1,6 +1,7 @@
-// Shared by the AI/export routes: emits their audit events without ever letting
-// the audit write (or a bad id) affect the user's request. Metadata only: the
-// helpers here never see transcript text, titles or error messages.
+// Shared by the minutes and export routes (the only AI/export routes that are audited):
+// emits their audit events without ever letting the audit write (or a bad id) affect
+// the user's request. Metadata only: the helpers here never see transcript text,
+// titles or error messages.
 import type { AuditEventOf, EventType } from '@/lib/audit/events';
 import { recordServerEvent, UUID_RE } from '@/lib/audit/record';
 import type { HeaderSource } from '@/lib/audit/request-context';
@@ -39,11 +40,10 @@ export function outcomeCodeOf(err: unknown): 'timeout' | 'network' | 'unknown' |
 }
 
 /**
- * The AI/export routes' name for recordServerEvent, which is best-effort and never throws.
- * Per-actor volume guard on top of the routes' own coalescers: the per-user fixed window of
- * the client-event ingest (300 events a minute, per process), in a bucket of its own so
- * server-emitted events cannot use up the browser's budget. Beyond it the event is dropped,
- * never the request. Needed because a coalescer keys on the meeting id, which the client chooses.
+ * The minutes/export routes' name for recordServerEvent, which is best-effort and never throws.
+ * Per-actor volume guard: the per-user fixed window of the client-event ingest (300 events a
+ * minute, per process), in a bucket of its own so server-emitted events cannot use up the
+ * browser's budget. Beyond it the event is dropped, never the request.
  */
 export function emitAudit<T extends EventType>(req: HeaderSource, event: AuditEventOf<T>): ReturnType<typeof recordServerEvent> {
   if (event.actorUserId && takeClientEventBudget(`server-ai:${event.actorUserId}`, 1) !== null) {

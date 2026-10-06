@@ -24,9 +24,8 @@ const keysFor = (role: RoleKey, disabled = false) =>
   visibleSections(principalFor(role, disabled)).map((s) => s.key);
 
 describe('admin sections table', () => {
-  it('has exactly the five sections with their hrefs and labels', () => {
+  it('has exactly the four sections with their hrefs and labels', () => {
     expect(ADMIN_SECTIONS.map((s) => [s.key, s.href, s.label])).toEqual([
-      ['overview', '/admin', 'Overblik'],
       ['users', '/admin/brugere', 'Brugere og roller'],
       ['organisation', '/admin/organisation', 'Organisation'],
       ['templates', '/admin/skabeloner', 'Centrale skabeloner'],
@@ -34,13 +33,18 @@ describe('admin sections table', () => {
     ]);
   });
 
-  it('keeps plain template.use out of the overview requirement', () => {
-    expect(ADMIN_SECTIONS.find((x) => x.key === 'overview')?.requiredCapability).not.toContain('template.use');
+  it('keeps plain template.use out of every section requirement', () => {
+    for (const s of ADMIN_SECTIONS) expect(s.requiredCapability).not.toContain('template.use');
   });
 
-  it('audit.export alone opens the overview but not the log', () => {
+  it('has no separate overview section (/admin only redirects)', () => {
+    expect(ADMIN_SECTIONS.some((s) => s.href === '/admin')).toBe(false);
+  });
+
+  it('audit.export alone opens no section, and audit.read opens the log', () => {
     const p = makePrincipal({ capabilities: ['template.use', 'audit.export'] });
     expect(canAccessSection(p, 'log')).toBe(false);
+    expect(visibleSections(p)).toEqual([]);
     expect(canAccessSection(makePrincipal({ capabilities: ['template.use', 'audit.read'] }), 'log')).toBe(true);
   });
 });
@@ -48,24 +52,26 @@ describe('admin sections table', () => {
 describe('visibleSections per role (snapshot)', () => {
   it.each<[RoleKey, AdminSectionKey[]]>([
     ['tt-bruger', []],
-    ['tt-skabelonansvarlig', ['overview', 'organisation', 'templates']],
-    ['tt-logleser', ['overview', 'organisation', 'log']],
-    ['tt-administrator', ['overview', 'users', 'organisation', 'templates', 'log']],
+    ['tt-skabelonansvarlig', ['organisation', 'templates']],
+    ['tt-logleser', ['organisation', 'log']],
+    ['tt-administrator', ['users', 'organisation', 'templates', 'log']],
   ])('%s sees %j', (role, expected) => {
     expect(keysFor(role)).toEqual(expected);
   });
 
   it('shows nothing to a disabled administrator', () => {
     expect(keysFor('tt-administrator', true)).toEqual([]);
-    expect(canAccessSection(principalFor('tt-administrator', true), 'overview')).toBe(false);
+    expect(canAccessSection(principalFor('tt-administrator', true), 'users')).toBe(false);
   });
 
-  it('is any-of: a single admin capability opens the overview only', () => {
-    const p = makePrincipal({ capabilities: ['template.use', 'audit.export'] });
-    expect(visibleSections(p).map((s) => s.key)).toEqual(['overview']);
+  it('is any-of: a single admin capability opens exactly its own section', () => {
+    expect(visibleSections(makePrincipal({ capabilities: ['template.use', 'template.manage'] })).map((s) => s.key)).toEqual([
+      'templates',
+    ]);
+    expect(visibleSections(makePrincipal({ capabilities: ['template.use', 'audit.read'] })).map((s) => s.key)).toEqual(['log']);
   });
 
   it('the hand-built admin fixture sees everything', () => {
-    expect(visibleSections(FAKE_PRINCIPAL_ADMIN)).toHaveLength(5);
+    expect(visibleSections(FAKE_PRINCIPAL_ADMIN)).toHaveLength(4);
   });
 });

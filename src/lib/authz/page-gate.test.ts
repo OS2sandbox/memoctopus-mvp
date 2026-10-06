@@ -43,7 +43,7 @@ describe('requireAnyAdminSection', () => {
   it('returns the visible sections for a directory reader', async () => {
     mockPrincipal.mockResolvedValue(dirReader);
     const { sections } = await requireAnyAdminSection();
-    expect(sections.map((s) => s.key)).toEqual(['overview', 'organisation']);
+    expect(sections.map((s) => s.key)).toEqual(['organisation']);
   });
 });
 

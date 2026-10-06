@@ -60,6 +60,8 @@ interface OrgUnitMemberView {
   directoryUserUuid: string;
   appUserId: string | null;
   name: string;
+  /** From the directory mirror; absent for a person Rollekatalog has no e-mail for. */
+  email: string | null;
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -605,15 +607,15 @@ export async function listOrgUnitMembers(
 }
 
 async function membersOf(q: SqlQueryable, unitUuid: string): Promise<OrgUnitMemberView[]> {
-  const { rows } = await q.query<{ uuid: string; app_user_id: string | null; name: string }>(
-    `SELECT du.uuid, du.app_user_id, du.name
+  const { rows } = await q.query<{ uuid: string; app_user_id: string | null; name: string; email: string | null }>(
+    `SELECT du.uuid, du.app_user_id, du.name, du.email
        FROM public.org_unit_members m
        JOIN public.directory_users du ON du.uuid = m.directory_user_uuid
       WHERE m.org_unit_uuid = $1::uuid
       ORDER BY lower(du.name), du.uuid`,
     [unitUuid],
   );
-  return rows.map((r) => ({ directoryUserUuid: r.uuid, appUserId: r.app_user_id, name: r.name }));
+  return rows.map((r) => ({ directoryUserUuid: r.uuid, appUserId: r.app_user_id, name: r.name, email: r.email }));
 }
 
 /** Replaces the membership of a local unit with exactly these app users. */

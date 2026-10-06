@@ -9,6 +9,7 @@
 import { orgUnitsInScope, type ScopeEnv } from '@/lib/authz/scope';
 import type { Principal } from '@/lib/authz/types';
 import { pool } from '@/lib/db';
+import { EVENT_TYPES } from './events';
 import type { EventOutcome, EventSource } from './events/types';
 import { TABLE_RE, UUID_RE } from './record';
 
@@ -47,6 +48,11 @@ export async function auditScopeFor(principal: Principal, env?: ScopeEnv): Promi
 export interface AuditFilters {
   eventTypes?: string[];
   actorUserId?: string;
+  /**
+   * Name search: a case-insensitive substring of the actor's name snapshot (actor_name, as written
+   * when the event happened), or an exact actor_user_id. It only narrows; it never widens scope.
+   */
+  q?: string;
   /** Matches the primary or the secondary entity. */
   entityId?: string;
   outcome?: EventOutcome;
@@ -130,6 +136,11 @@ function clampLimit(limit: number | undefined, max: number): number {
   return Math.min(limit, max);
 }
 
+/** LIKE pattern for a literal substring: backslash, % and _ are escaped so they match themselves. */
+export function likeContains(text: string): string {
+  return `%${text.replace(/[\\%_]/g, '\\$&')}%`;
+}
+
 /** The WHERE conditions (and their parameters) shared by the viewer and the export. */
 function buildWhere(
   filters: AuditFilters,
@@ -162,6 +173,13 @@ function buildWhere(
   if (filters.source !== undefined) add((p) => `source = ${p}`, filters.source);
   if (filters.from) add((p) => `occurred_at >= ${p}`, filters.from);
   if (filters.to) add((p) => `occurred_at <= ${p}`, filters.to);
+  if (filters.q !== undefined) {
+    params.push(likeContains(filters.q), filters.q);
+    where.push(`(actor_name ILIKE $${params.length - 1} OR actor_user_id = $${params.length})`);
+  }
+  // The viewer and the export only show the current catalogue; rows of types that were removed
+  // from it stay in the table (and in the SIEM feed, which does not use this) but are not listed.
+  add((p) => `event_type = ANY(${p}::text[])`, EVENT_TYPES);
   return where;
 }
 

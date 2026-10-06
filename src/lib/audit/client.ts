@@ -32,21 +32,19 @@ const FLUSH_INTERVAL_MS = 30_000;
 const MAX_ROUNDS_PER_FLUSH = 20;
 
 /**
- * Edit-like events are coalesced to ONE event per meeting+type per window, so
- * autosave does not flood the log. The event is held in memory and sent when the
- * window ends, carrying the LAST details of the window (the final participant
- * count / segment count is the informative one) and the time of the last edit.
- * The held event is written to the outbox early when the tab is hidden or closed;
- * a crash inside the window loses at most that one coalesced event.
+ * Chatty event types are coalesced to ONE event per meeting+type per window. The event
+ * is held in memory and sent when the window ends, carrying the LAST details of the
+ * window and the time of the last occurrence. The held event is written to the outbox
+ * early when the tab is hidden or closed; a crash inside the window loses at most that
+ * one coalesced event.
+ *
+ * Empty today: the only events reported now (create, delete, redact, audio delete) are
+ * one-off lifecycle moments, and the edit-like ones (rename, participants, transcript,
+ * minutes saves) are not reported at all. The mechanism stays so a chatty type can be
+ * added by listing it here (the server-side counterpart is THROTTLED_TYPES).
  */
 export const COALESCE_WINDOW_MS = 30_000;
-const COALESCED: ReadonlySet<ClientEventType> = new Set([
-  'meeting.minutes_save',
-  'meeting.transcript_edit',
-  'meeting.participants_edit',
-  // MinutesEditor autosaves the title 1.5 s after the last keystroke, so typing with pauses renames repeatedly.
-  'meeting.rename',
-]);
+export const COALESCED: Set<ClientEventType> = new Set();
 
 /**
  * One user action can reach several storage functions (the redact flow calls
@@ -253,7 +251,7 @@ export function startAuditReporting(userId: string): void {
 /**
  * Report a meeting event. `entityId` is the meeting's opaque uuid.
  *
- *   reportAuditEvent('meeting.participants_edit', meetingId, { participantCount: 3 });
+ *   reportAuditEvent('meeting.create', meetingId, { origin: 'live' });
  */
 export function reportAuditEvent<T extends ClientEventType>(
   type: T,

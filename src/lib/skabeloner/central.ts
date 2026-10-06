@@ -238,7 +238,7 @@ async function assertTargetsInOwnerSubtree(
   for (const t of targets) {
     if (!subtree.has(t.orgUnitUuid.toLowerCase())) {
       throw new ValidationError(
-        'En modtager findes ikke eller ligger uden for skabelonens organisationsenhed',
+        'En valgt enhed findes ikke eller ligger uden for skabelonens ejerenhed',
         'target_outside_owner',
       );
     }

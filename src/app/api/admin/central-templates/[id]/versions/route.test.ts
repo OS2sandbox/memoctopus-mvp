@@ -9,7 +9,6 @@ vi.mock('@/lib/audit/record', () => ({ recordServerEvent: vi.fn() }));
 
 import { GET } from './route';
 import { recordServerEvent } from '@/lib/audit/record';
-import { promptReadCoalescer } from '../../audit-read';
 import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { listVersions } from '@/lib/skabeloner/central';
@@ -27,7 +26,6 @@ const get = (id = T1) =>
   GET(makeJsonReq(`http://localhost/api/admin/central-templates/${id}/versions`, 'GET'), ctx(id));
 
 beforeEach(() => {
-  promptReadCoalescer.clear();
   mockAudit.mockReset().mockResolvedValue({ status: 'stored' } as never);
   mockGetSession.mockReset().mockResolvedValue(FAKE_SESSION as never);
   mockResolve.mockReset().mockResolvedValue(manager);
@@ -61,40 +59,12 @@ describe('GET /api/admin/central-templates/[id]/versions', () => {
     expect(mockVersions).not.toHaveBeenCalled();
   });
 
-  describe('prompt read audit (central_template.read)', () => {
-    it('records the same coalesced read event as the detail, with the newest version and no prompt text', async () => {
-      await get();
-      await get();
-      expect(mockAudit).toHaveBeenCalledTimes(1);
-      expect(mockAudit.mock.calls[0][1]).toEqual({
-        type: 'central_template.read',
-        actorUserId: manager.userId,
-        entityId: T1,
-        details: { version: 3 },
-      });
-      expect(JSON.stringify(mockAudit.mock.calls)).not.toContain('HEMMELIG PROMPT');
-    });
-
-    it('shares the slot with the detail endpoint (one event per actor and template)', async () => {
-      const { auditPromptRead } = await import('../../audit-read');
-      await auditPromptRead(makeJsonReq('http://localhost/x', 'GET'), manager.userId, { id: T1, version: 3 });
-      await get();
-      expect(mockAudit).toHaveBeenCalledTimes(1);
-    });
-
-    it('emits nothing for a 404 or 403', async () => {
-      mockVersions.mockRejectedValue(new NotFoundError());
-      expect((await get()).status).toBe(404);
-      mockResolve.mockResolvedValue({ ...manager, capabilities: ['template.use'] });
-      expect((await get()).status).toBe(403);
-      expect(mockAudit).not.toHaveBeenCalled();
-    });
-
-    it('an audit failure never breaks the response', async () => {
-      mockAudit.mockRejectedValue(new Error('audit down'));
-      const res = await get();
-      expect(res.status).toBe(200);
-      expect((await res.json()).versions).toHaveLength(2);
-    });
+  it('writes no audit event for a read (success, 403 or 404)', async () => {
+    expect((await get()).status).toBe(200);
+    mockVersions.mockRejectedValue(new NotFoundError());
+    expect((await get()).status).toBe(404);
+    mockResolve.mockResolvedValue({ ...manager, capabilities: ['template.use'] });
+    expect((await get()).status).toBe(403);
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });

@@ -14,7 +14,7 @@ interface Props {
 }
 
 /**
- * Recipient picker. The server only accepts targets inside the owner unit's
+ * Availability picker ("who has the template at their disposal"). The server only accepts targets inside the owner unit's
  * subtree (no sideways or upward delegation), so nothing else is offered here.
  */
 export function OrgUnitTargetPicker({ units, ownerUuid, value, onChange, disabled }: Props) {
@@ -39,9 +39,10 @@ export function OrgUnitTargetPicker({ units, ownerUuid, value, onChange, disable
 
   return (
     <fieldset className="flex flex-col gap-2" disabled={disabled}>
-      <legend className="text-sm font-medium text-[var(--ink)]">Modtagere</legend>
+      <legend className="text-sm font-medium text-[var(--ink)]">Hvem skal have skabelonen til rådighed?</legend>
       <p className="text-[13px] text-[var(--muted)]">
-        Medlemmer af de valgte enheder får skabelonen. Du kan kun vælge ejerenheden og enheder under den.
+        Vælg de enheder, hvis medarbejdere kan bruge skabelonen. Underenheder kan vælges med. Du kan kun vælge
+        ejerenheden og enheder under den.
       </p>
 
       {!ownerUuid ? (
@@ -66,7 +67,7 @@ export function OrgUnitTargetPicker({ units, ownerUuid, value, onChange, disable
                     type="checkbox"
                     checked={checked}
                     onChange={(e) => toggle(unit.uuid, e.target.checked)}
-                    aria-label={`Modtager: ${unit.name}`}
+                    aria-label={`Til rådighed for: ${unit.name}`}
                   />
                   {unit.name}
                 </label>
@@ -88,7 +89,7 @@ export function OrgUnitTargetPicker({ units, ownerUuid, value, onChange, disable
       )}
 
       {orphans.length > 0 && (
-        <ul className="flex flex-col gap-1" aria-label="Øvrige modtagere">
+        <ul className="flex flex-col gap-1" aria-label="Øvrige enheder">
           {orphans.map((t) => (
             <li key={t.orgUnitUuid} className="flex items-center gap-3 text-[13px] text-[var(--ink-2)]">
               <span>Enhed uden for den valgte ejer</span>
@@ -106,7 +107,7 @@ export function OrgUnitTargetPicker({ units, ownerUuid, value, onChange, disable
 
       {ownerUuid && value.length === 0 && (
         <p role="status" className="text-[13px]" style={{ color: 'var(--warn)' }}>
-          Ingen modtagere. Skabelonen er ikke tilgængelig for nogen, før du vælger mindst én enhed.
+          Skabelonen er ikke til rådighed for nogen, før du vælger mindst én enhed.
         </p>
       )}
     </fieldset>

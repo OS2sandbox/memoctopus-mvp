@@ -23,9 +23,9 @@
 //     mirrored assignments removed, and (separately, because tt-bruger rows dominate the
 //     total) ELEVATED assignments (every role but tt-bruger) removed.
 //
-// Every run leaves a sync_runs row and a content-free directory.sync audit event.
+// Every run leaves a sync_runs row (the status panel reads it). The sync is NOT in the
+// audit log: that records what people did, not scheduled housekeeping.
 // Failures surface as short codes, never as messages (they could echo data).
-import { recordEvent } from '@/lib/audit/record';
 import { createRunner, errorLabel, type SqlQueryable } from '@/lib/authz/pg-runner';
 import { createRollekatalogClient, type RollekatalogClient } from './client';
 import {
@@ -578,28 +578,6 @@ async function tryLock(env: SyncEnv): Promise<Lock | null> {
   };
 }
 
-// ─── Audit ─────────────────────────────────────────────────────────────────
-
-async function defaultAudit(opts: RunSyncOptions, result: SyncResult): Promise<void> {
-  const c = result.counts;
-  await recordEvent({
-    type: 'directory.sync',
-    source: opts.trigger === 'cron' ? 'system' : 'server',
-    // Losing the advisory lock is not a failure: the other run does the work.
-    outcome: result.status === 'success' ? 'success' : result.status === 'already_running' ? 'denied' : 'error',
-    ...(opts.actorUserId ? { actorUserId: opts.actorUserId } : {}),
-    entityType: 'sync_run',
-    ...(result.runId ? { entityId: result.runId } : {}),
-    details: {
-      trigger: opts.trigger,
-      status: result.status,
-      forced: opts.force === true,
-      ...c,
-      ...(result.errorCode ? { errorCode: result.errorCode } : {}),
-    },
-  });
-}
-
 // ─── Entry point ───────────────────────────────────────────────────────────
 
 export interface SyncDeps {
@@ -608,8 +586,6 @@ export interface SyncDeps {
   /** Test seam: the Rollekatalog client. Production reads URL, keys and limits from the environment. */
   client?: SyncClient;
   now?: () => Date;
-  /** Test seam: the audit writer. Production records directory.sync best-effort. */
-  audit?: (opts: RunSyncOptions, result: SyncResult) => Promise<void>;
 }
 
 function classify(err: unknown): { status: 'aborted' | 'error'; code: string } {
@@ -626,15 +602,6 @@ function classify(err: unknown): { status: 'aborted' | 'error'; code: string } {
 export async function runSync(opts: RunSyncOptions, deps: SyncDeps = {}): Promise<SyncResult> {
   const env = deps.env ?? defaultSyncEnv();
   const now = deps.now ?? (() => new Date());
-  const audit = deps.audit ?? defaultAudit;
-  const finish = async (result: SyncResult): Promise<SyncResult> => {
-    try {
-      await audit(opts, result);
-    } catch {
-      // The audit write is best-effort (recordEvent already reports a content-free warning).
-    }
-    return result;
-  };
 
   let lock: Lock | null = null;
   let runId: string | null = null;
@@ -642,12 +609,12 @@ export async function runSync(opts: RunSyncOptions, deps: SyncDeps = {}): Promis
     const issue = rollekatalogConfigIssue();
     if (issue) {
       runId = await recordFailedRun(env, issue, now()).catch(() => null);
-      return await finish({ status: 'error', runId, counts: emptySyncCounts(), errorCode: issue });
+      return { status: 'error', runId, counts: emptySyncCounts(), errorCode: issue };
     }
 
     lock = await tryLock(env);
     if (!lock) {
-      return await finish({ status: 'already_running', runId: null, counts: emptySyncCounts(), errorCode: 'already_running' });
+      return { status: 'already_running', runId: null, counts: emptySyncCounts(), errorCode: 'already_running' };
     }
 
     await abandonStaleRuns(env, now());
@@ -667,12 +634,12 @@ export async function runSync(opts: RunSyncOptions, deps: SyncDeps = {}): Promis
 
     // The data is committed: a failure to close the row must not turn the run into an error.
     await finishRun(env, runId, 'success', counts, null, now()).catch(() => {});
-    return await finish({ status: 'success', runId, counts, errorCode: null });
+    return { status: 'success', runId, counts, errorCode: null };
   } catch (err) {
     const { status, code } = classify(err);
     console.warn(`[rollekatalog] sync ${status} code=${code}`);
     if (runId) await finishRun(env, runId, 'failed', emptySyncCounts(), code, now()).catch(() => {});
-    return await finish({ status, runId, counts: emptySyncCounts(), errorCode: code });
+    return { status, runId, counts: emptySyncCounts(), errorCode: code };
   } finally {
     if (lock) await lock.release().catch(() => {});
   }

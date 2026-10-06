@@ -48,7 +48,7 @@ Menu names differ by version and language; confirm them in your installation.
    # {"status":"success","counts":{...},"errorCode":null}
    ```
 
-   On failure the body carries the `errorCode` (section 10), and the same code is in `sync_runs.error_code` and the "Seneste synkronisering" panel on the admin overview. Fix it and call again; to back out, set `ACCESS_SOURCE=local` and restart. After a good run, log in as the administrator, compare users and organisation in `/admin` with Rollekatalog, and check the counts.
+   On failure the body carries the `errorCode` (section 10), and the same code is in `sync_runs.error_code` and the "Seneste synkronisering" panel on Administration → Brugere og roller. Fix it and call again; to back out, set `ACCESS_SOURCE=local` and restart. After a good run, log in as the administrator, compare users and organisation in `/admin` with Rollekatalog, and check the counts.
 7. **Schedule the sync** (section 6).
 
 ## 3. Matching a login to a Rollekatalog user
@@ -66,6 +66,8 @@ Disabled Rollekatalog rows are never link targets, so a reused userId does not m
 **Entra ID.** `preferred_username` and `upn` are the user principal name, typically `abc123@kommune.dk`, while Rollekatalog's `userId` is usually the plain `abc123`. `oid` is Entra's object id; Rollekatalog's `extUuid` comes from the municipality's own identity source, so the two are generally different values: do not choose `extuuid-claim` with `oid` before you have compared both for a few known users. `DIRECTORY_USERID_TRANSFORM=strip-upn-domain` (`userid-claim` only; default `none`) turns `abc123@kommune.dk` into `abc123` before comparing, but **only when the claim is exactly `<name>@<DIRECTORY_USERID_DOMAIN>`**: one `@`, the domain equal (case-insensitive) to `DIRECTORY_USERID_DOMAIN` (set it to your UPN domain, for example `kommune.dk`), and no `#EXT#` guest marker. Any other claim (a guest or self-edited `abc123@evil.example`, `a@b@kommune.dk`, a name without a domain) is **no match**, because stripping the domain unchecked would let such a user take over the Rollekatalog identity `abc123`. With `strip-upn-domain` and a blank `DIRECTORY_USERID_DOMAIN` nobody matches; the app then logs one content-free line (`userid_domain_missing`) per process on the first affected login. The tenant part is thrown away, which is only safe together with the tenant rule below.
 
 **Microsoft logins never link unless `MICROSOFT_TENANT_ID` names ONE tenant (not `common`, `organizations`, `consumers`) and the login's `tid` equals it.** This holds for every `DIRECTORY_MATCH` mode and every `DIRECTORY_USERID_TRANSFORM`: `preferred_username`, `upn` and `email` are mutable and, with the multi-tenant authority, any Entra tenant (guests included) can present a value equal to a Rollekatalog userId. Fix: set `MICROSOFT_TENANT_ID` to your tenant id. The first refusal for this reason logs one content-free line (`microsoft_tenant_not_pinned`) per process. Generic OIDC providers (`OIDC_*`) are not restricted this way: you control that IdP, so make sure it only authenticates your own users.
+
+**Where administrators see this in the app.** Administration → Brugere og roller (needs `access.manage`) explains that roles are assigned in Rollekatalog under the IT system `ROLLEKATALOG_ITSYSTEM_ID`, lists the four role identifiers (`tt-bruger`, `tt-skabelonansvarlig`, `tt-logleser`, `tt-administrator`), shows the last sync time and, for `sync.run`, the sync panel with "Synkroniser nu". There is no separate overview page.
 
 Verify with a known user before go-live: log in, then check in `/admin` (Brugere og roller) that the person is linked to the right Rollekatalog user.
 
@@ -94,7 +96,7 @@ A sync fetches everything first and applies it in **one transaction**: a failure
 
 | Guard | Condition | Result |
 |---|---|---|
-| Single run | another sync holds the Postgres advisory lock | `already_running` (HTTP 409), no new `sync_runs` row, audited as denied |
+| Single run | another sync holds the Postgres advisory lock | `already_running` (HTTP 409), no new `sync_runs` row |
 | Empty response | zero users or zero org units | `empty_response`, nothing changed, cannot be forced |
 | Invalid rows | more than `max(3, 5 %)` of the rows of one array fail validation (see below) | `invalid_response`, nothing changed, cannot be forced |
 | Removal threshold | the run would disable more than `ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT` (default 30) percent of the enabled mirrored users, or delete more than that share of mirrored assignments, or delete more than that share of the **elevated** assignments (every role except the baseline `tt-bruger`) | `removal_threshold`, nothing changed. The first sync into an empty mirror has no threshold |
@@ -106,10 +108,10 @@ The elevated check exists because one `tt-bruger` row per user dominates the ove
 - **Allowance.** Per array (users, units, assignment rows, assignment entries) at most `max(3, 5 % of its rows, rounded down)` bad rows are accepted: 3 of 10 pass and 4 abort; of 1,000 rows 50 pass and 51 abort. Above that the run fails with `invalid_response` **before anything is written**, so a structurally corrupt export still fails loudly. The constants are `INVALID_ROWS_MIN_ALLOWANCE` and `INVALID_ROWS_MAX_PERCENT` in `src/lib/rollekatalog/schemas.ts`.
 - **A skipped user is simply absent from the answer.** It is treated like any user missing from Rollekatalog: if it was mirrored before it is **disabled** (and signed out), subject to the removal threshold above. Role assignments of a skipped user count as `assignmentsSkippedUnknownUser`. A skipped unit is not stored: its child units become roots (`parent_uuid` NULL, fail closed) and its members lose that membership.
 - **Positions.** A position with a malformed shape (not an object, wrong field types) is dropped and counted as `membershipsSkippedInvalid`; the user is kept. A position that points to a unit id that is not a uuid is dropped quietly, because that unit is itself a skipped unit and already counted.
-- **Status panel.** The run shows "Brugere sprunget over (ugyldig række)" (`usersSkippedInvalid`), "Enheder sprunget over (ugyldig række)" (`orgUnitsSkippedInvalid`), "Rolle-rækker sprunget over (ugyldig række)" (`assignmentRowsSkippedInvalid`, dropped rows plus dropped entries) and "Stillinger sprunget over (ugyldig række)" (`membershipsSkippedInvalid`). Anything above 0 means Rollekatalog holds rows the app cannot read: fix them there. The same counters are in the `directory.sync` audit event.
+- **Status panel.** The run shows "Brugere sprunget over (ugyldig række)" (`usersSkippedInvalid`), "Enheder sprunget over (ugyldig række)" (`orgUnitsSkippedInvalid`), "Rolle-rækker sprunget over (ugyldig række)" (`assignmentRowsSkippedInvalid`, dropped rows plus dropped entries) and "Stillinger sprunget over (ugyldig række)" (`membershipsSkippedInvalid`). Anything above 0 means Rollekatalog holds rows the app cannot read: fix them there.
 - **When the abort happens** (`invalid_response` and the message about too many invalid rows): the run records no counts and the log holds no row content. In Rollekatalog look for users and org units whose uuid is not a 36-character uuid (typically legacy or hand-imported rows, or a broken import that wrote another field into the id) and correct or remove them. If the export as a whole looks wrong (a new Rollekatalog version, a proxy page), check the URL and version as for any `invalid_response`. The abort clears itself on the next run once the rows are fixed.
 
-"Synkroniser nu" can be sent with **"Gennemtving"** (`{"force": true}`) to bypass the removal threshold after you have checked in Rollekatalog that the removal is intended (a reorganisation, say). Only a holder of `sync.run` can; the cron route never forces. The would-be numbers are written to the server log only. Every run leaves a `sync_runs` row (`success` or `failed`, counts, error code) and one `directory.sync` audit event (with `forced`); a run left as `running` by a crashed process is closed as `failed` / `abandoned` by the next run.
+"Synkroniser nu" can be sent with **"Gennemtving"** (`{"force": true}`) to bypass the removal threshold after you have checked in Rollekatalog that the removal is intended (a reorganisation, say). Only a holder of `sync.run` can; the cron route never forces. The would-be numbers are written to the server log only. Every run leaves a `sync_runs` row (`success` or `failed`, counts, error code) and no audit event (the audit log records what people did, not sync status); a run left as `running` by a crashed process is closed as `failed` / `abandoned` by the next run.
 
 ## 6. Scheduling
 
@@ -121,7 +123,7 @@ The app has no in-process timers (they would run once per replica). Call the rou
 
 It answers 404 while `INTERNAL_CRON_SECRET` is unset and 401 on a wrong secret. **409** `not_rollekatalog_mode` or `not_configured` (URL or a key missing or unusable) when `ACCESS_SOURCE` is not `rollekatalog` or the integration is unconfigured; nothing is written then. Otherwise `200` success, `409` already running, `502` aborted or upstream failure, `500` unexpected, with the body `{status, counts, errorCode}`. Choose an interval comfortably below `ROLE_STALE_MAX_SECONDS` and no shorter than a few minutes. **Give the cron caller a long client timeout** (the example uses `-m 600`): a sync on a big installation can run for minutes, and a caller that hangs up early only sees an error while the sync carries on.
 
-**Reverse proxy timeouts.** The admin button "Synkroniser nu" waits for the sync to finish. nginx and most proxies cut a request after 60 s by default (`proxy_read_timeout`), so on a slow instance the button shows a 504 even though the sync **continues and completes** on the server. Look at the latest run (the "Seneste synkronisering" panel, `GET /api/admin/access/sync`) instead of pressing again, or raise `proxy_read_timeout` for that route. Monitor with `GET /api/admin/access/sync` (latest run), the admin overview, or the `directory.sync` events.
+**Reverse proxy timeouts.** The admin button "Synkroniser nu" waits for the sync to finish. nginx and most proxies cut a request after 60 s by default (`proxy_read_timeout`), so on a slow instance the button shows a 504 even though the sync **continues and completes** on the server. Look at the latest run (the "Seneste synkronisering" panel, `GET /api/admin/access/sync`) instead of pressing again, or raise `proxy_read_timeout` for that route. Monitor with `GET /api/admin/access/sync` (latest run), or the Brugere og roller page.
 
 ## 7. Switching modes
 
@@ -164,7 +166,7 @@ Related: `ACCESS_SOURCE`, `REQUIRE_ROLE_TO_LOGIN`, `DIRECTORY_MATCH`, `DIRECTORY
 
 ## 10. Troubleshooting by error code
 
-The codes appear in the sync responses, `sync_runs.error_code`, the admin panel and the `directory.sync` event.
+The codes appear in the sync responses, `sync_runs.error_code`, and the admin panel.
 
 | Code | Meaning | Check |
 |---|---|---|
@@ -194,7 +196,7 @@ Symptoms:
 
 - `organisation/v3` returns, per user, a **CPR number and a NemLog-in uuid**, plus phone numbers and KLE lists. The response schemas are whitelists: these fields are stripped when the answer is parsed and never enter our types, the database, logs or audit events (a test scans the parsed result for `/cpr|nemlogin|phone|kle/i`). The raw response does pass through the app's memory over TLS; Rollekatalog offers no way to leave the fields out, so keep the connection inside your network if you can.
 - Stored per user: Rollekatalog uuid, `extUuid`, `userId`, name, email, the disabled flag, unit memberships (no job titles) and role assignments. Per org unit: uuid, name and parent (no manager). No CPR, NemLog-in id, phone, KLE or title data.
-- `directory.sync` events carry counts and short codes only.
+- The sync writes no audit event; `sync_runs` carries counts and short codes only.
 
 ## Assumptions taken from the Rollekatalog source, release 2026r4, not verified against a live instance
 

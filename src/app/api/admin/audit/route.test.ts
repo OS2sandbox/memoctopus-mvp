@@ -164,6 +164,31 @@ describe('GET /api/admin/audit (audit.read)', () => {
     });
   });
 
+  it('passes a trimmed name search as q, together with the scope', async () => {
+    mockResolve.mockResolvedValue(LOG_READER);
+    mockScope.mockResolvedValue({ all: false, orgUnitUuids: [UNIT] });
+    await GET(req(`?q=${encodeURIComponent('  Mette %_ Æ  ')}&actorUserId=u9`), NO_PARAMS);
+    const call = mockList.mock.calls[0][0];
+    expect(call.filters).toMatchObject({ q: 'Mette %_ Æ', actorUserId: 'u9' });
+    expect(call.scope).toEqual({ all: false, orgUnitUuids: [UNIT] });
+  });
+
+  it.each([
+    '?q=',
+    '?q=%20%20',
+    `?q=${'x'.repeat(101)}`,
+    '?q=a%00b',
+    '?q=a%0Ab',
+    '?q=a&q=b',
+  ])('400 for %s', async (qs) => {
+    expect((await GET(req(qs), NO_PARAMS)).status).toBe(400);
+    expect(mockList).not.toHaveBeenCalled();
+  });
+
+  it('accepts a 100 character name search', async () => {
+    expect((await GET(req(`?q=${'x'.repeat(100)}`), NO_PARAMS)).status).toBe(200);
+  });
+
   it.each([
     '?limit=0',
     '?limit=101',

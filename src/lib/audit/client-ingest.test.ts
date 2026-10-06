@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeRunner } from '@/test/fake-runner';
 import {
   clampClientTime,
@@ -40,13 +40,7 @@ describe('clientEventsBody', () => {
         'meeting.audio_delete',
         'meeting.create',
         'meeting.delete',
-        'meeting.minutes_save',
-        'meeting.minutes_version',
-        'meeting.participants_edit',
         'meeting.redact',
-        'meeting.rename',
-        'meeting.status_change',
-        'meeting.transcript_edit',
       ].sort(),
     );
   });
@@ -101,58 +95,67 @@ describe('client event throttle', () => {
   const M = '11111111-2222-4333-8444-555555555555';
   const T0 = 1_000_000;
 
-  it('covers exactly the four chatty types', () => {
-    expect([...THROTTLED_TYPES].sort()).toEqual(
-      ['meeting.minutes_save', 'meeting.participants_edit', 'meeting.rename', 'meeting.transcript_edit'],
-    );
-  });
-
-  it('is not throttled until something was stored, then for 60 s, then free again', () => {
+  // No reported type is chatty any more, so the set is empty by default; the mechanism
+  // is exercised by listing meeting.create for the duration of these tests.
+  it('is empty by default: nothing is throttled until a chatty type is listed', () => {
+    expect(THROTTLED_TYPES.size).toBe(0);
     __resetClientEventBudgets();
-    expect(isClientEventThrottled('u', M, 'meeting.rename', T0)).toBe(false);
-    markClientEventStored('u', M, 'meeting.rename', T0);
-    expect(isClientEventThrottled('u', M, 'meeting.rename', T0 + 1)).toBe(true);
-    expect(isClientEventThrottled('u', M, 'meeting.rename', T0 + THROTTLE_WINDOW_MS - 1)).toBe(true);
-    expect(isClientEventThrottled('u', M, 'meeting.rename', T0 + THROTTLE_WINDOW_MS)).toBe(false);
-  });
-
-  it('is keyed on actor, meeting and type', () => {
-    __resetClientEventBudgets();
-    markClientEventStored('u', M, 'meeting.rename', T0);
-    expect(isClientEventThrottled('v', M, 'meeting.rename', T0)).toBe(false);
-    expect(isClientEventThrottled('u', 'other', 'meeting.rename', T0)).toBe(false);
-    expect(isClientEventThrottled('u', M, 'meeting.minutes_save', T0)).toBe(false);
-  });
-
-  it('never tracks or throttles other types', () => {
-    __resetClientEventBudgets();
-    markClientEventStored('u', M, 'meeting.delete', T0);
+    markClientEventStored('u', M, 'meeting.create', T0);
+    expect(isClientEventThrottled('u', M, 'meeting.create', T0 + 1)).toBe(false);
     expect(__throttleSize()).toBe(0);
-    expect(isClientEventThrottled('u', M, 'meeting.delete', T0)).toBe(false);
   });
 
-  it('is bounded: expired entries are evicted first when the map overflows', () => {
-    __resetClientEventBudgets();
-    for (let i = 0; i < THROTTLE_MAX_ENTRIES; i++) markClientEventStored(`old${i}`, M, 'meeting.rename', T0);
-    expect(__throttleSize()).toBe(THROTTLE_MAX_ENTRIES);
-    markClientEventStored('fresh', M, 'meeting.rename', T0 + THROTTLE_WINDOW_MS + 1);
-    expect(__throttleSize()).toBe(1);
-    expect(isClientEventThrottled('fresh', M, 'meeting.rename', T0 + THROTTLE_WINDOW_MS + 2)).toBe(true);
-  });
+  describe('with meeting.create listed', () => {
+    beforeEach(() => void THROTTLED_TYPES.add('meeting.create'));
+    afterEach(() => void THROTTLED_TYPES.delete('meeting.create'));
 
-  it('is bounded even when every entry is live: the oldest are dropped', () => {
-    __resetClientEventBudgets();
-    for (let i = 0; i < THROTTLE_MAX_ENTRIES + 10; i++) markClientEventStored(`u${i}`, M, 'meeting.rename', T0 + i);
-    expect(__throttleSize()).toBe(THROTTLE_MAX_ENTRIES);
-    const now = T0 + THROTTLE_MAX_ENTRIES + 10;
-    expect(isClientEventThrottled('u0', M, 'meeting.rename', now)).toBe(false);
-    expect(isClientEventThrottled(`u${THROTTLE_MAX_ENTRIES + 9}`, M, 'meeting.rename', now)).toBe(true);
-  });
+    it('is not throttled until something was stored, then for 60 s, then free again', () => {
+      __resetClientEventBudgets();
+      expect(isClientEventThrottled('u', M, 'meeting.create', T0)).toBe(false);
+      markClientEventStored('u', M, 'meeting.create', T0);
+      expect(isClientEventThrottled('u', M, 'meeting.create', T0 + 1)).toBe(true);
+      expect(isClientEventThrottled('u', M, 'meeting.create', T0 + THROTTLE_WINDOW_MS - 1)).toBe(true);
+      expect(isClientEventThrottled('u', M, 'meeting.create', T0 + THROTTLE_WINDOW_MS)).toBe(false);
+    });
 
-  it('re-marking refreshes the window and the entry age', () => {
-    __resetClientEventBudgets();
-    markClientEventStored('u', M, 'meeting.rename', T0);
-    markClientEventStored('u', M, 'meeting.rename', T0 + 50_000);
-    expect(isClientEventThrottled('u', M, 'meeting.rename', T0 + 100_000)).toBe(true);
+    it('is keyed on actor, meeting and type', () => {
+      __resetClientEventBudgets();
+      markClientEventStored('u', M, 'meeting.create', T0);
+      expect(isClientEventThrottled('v', M, 'meeting.create', T0)).toBe(false);
+      expect(isClientEventThrottled('u', 'other', 'meeting.create', T0)).toBe(false);
+      expect(isClientEventThrottled('u', M, 'meeting.redact', T0)).toBe(false);
+    });
+
+    it('never tracks or throttles other types', () => {
+      __resetClientEventBudgets();
+      markClientEventStored('u', M, 'meeting.delete', T0);
+      expect(__throttleSize()).toBe(0);
+      expect(isClientEventThrottled('u', M, 'meeting.delete', T0)).toBe(false);
+    });
+
+    it('is bounded: expired entries are evicted first when the map overflows', () => {
+      __resetClientEventBudgets();
+      for (let i = 0; i < THROTTLE_MAX_ENTRIES; i++) markClientEventStored(`old${i}`, M, 'meeting.create', T0);
+      expect(__throttleSize()).toBe(THROTTLE_MAX_ENTRIES);
+      markClientEventStored('fresh', M, 'meeting.create', T0 + THROTTLE_WINDOW_MS + 1);
+      expect(__throttleSize()).toBe(1);
+      expect(isClientEventThrottled('fresh', M, 'meeting.create', T0 + THROTTLE_WINDOW_MS + 2)).toBe(true);
+    });
+
+    it('is bounded even when every entry is live: the oldest are dropped', () => {
+      __resetClientEventBudgets();
+      for (let i = 0; i < THROTTLE_MAX_ENTRIES + 10; i++) markClientEventStored(`u${i}`, M, 'meeting.create', T0 + i);
+      expect(__throttleSize()).toBe(THROTTLE_MAX_ENTRIES);
+      const now = T0 + THROTTLE_MAX_ENTRIES + 10;
+      expect(isClientEventThrottled('u0', M, 'meeting.create', now)).toBe(false);
+      expect(isClientEventThrottled(`u${THROTTLE_MAX_ENTRIES + 9}`, M, 'meeting.create', now)).toBe(true);
+    });
+
+    it('re-marking refreshes the window and the entry age', () => {
+      __resetClientEventBudgets();
+      markClientEventStored('u', M, 'meeting.create', T0);
+      markClientEventStored('u', M, 'meeting.create', T0 + 50_000);
+      expect(isClientEventThrottled('u', M, 'meeting.create', T0 + 100_000)).toBe(true);
+    });
   });
 });

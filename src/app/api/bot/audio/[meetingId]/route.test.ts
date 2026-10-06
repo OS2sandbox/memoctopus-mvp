@@ -132,31 +132,18 @@ describe('GET /api/bot/audio/[meetingId]', () => {
   });
 });
 
-describe('audit: bot.audio_collect', () => {
+describe('audit', () => {
   const MEETING = '11111111-1111-4111-8111-111111111111';
   const META = {
     mimeType: 'audio/webm', participants: ['Anna', 'Bo'], durationSeconds: 120,
     hasRecording: true, createdAt: Date.now(),
   };
 
-  it('emits one bot.audio_collect with byte count only when a recording is handed over', async () => {
+  it('writes no audit event when a recording is handed over, or for pending, no-recording and non-owner responses', async () => {
     mockReadMeta.mockResolvedValue(META);
     mockReadAudio.mockResolvedValue(Buffer.from('fake-audio'));
     const res = await GET(makeRequest(MEETING), makeParams(MEETING));
     expect(res.status).toBe(200);
-    expect(mockRecord).toHaveBeenCalledTimes(1);
-    const [, event] = mockRecord.mock.calls[0];
-    expect(event).toEqual({
-      type: 'bot.audio_collect',
-      actorUserId: 'u1',
-      entityId: MEETING,
-      details: { bytes: 'fake-audio'.length },
-    });
-    // Participant names from the stash must never reach the event.
-    expect(JSON.stringify(event)).not.toContain('Anna');
-  });
-
-  it('emits nothing for pending, no-recording or non-owner responses', async () => {
     mockReadMeta.mockResolvedValueOnce(null);
     await GET(makeRequest(MEETING), makeParams(MEETING));
     mockReadMeta.mockResolvedValueOnce({ ...META, hasRecording: false });

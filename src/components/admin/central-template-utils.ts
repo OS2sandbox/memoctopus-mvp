@@ -14,7 +14,7 @@ import { selfAndDescendants, type TreeUnit } from './org-tree';
 export const changeTypeLabels: Record<CentralChangeType, string> = {
   create: 'Oprettet',
   update: 'Ændret',
-  retarget: 'Modtagere ændret',
+  retarget: 'Tilgængelighed ændret',
   archive: 'Arkiveret',
   restore: 'Gendannet',
 };

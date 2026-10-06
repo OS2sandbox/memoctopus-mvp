@@ -26,16 +26,15 @@ interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   unit: { uuid: string; name: string } | null;
-  /** Advisory: false shows the members without any way to change them. */
-  editable: boolean;
   onSaved: () => void;
 }
 
-export function OrgUnitMembersDialog({ open, onOpenChange, unit, editable, onSaved }: Props) {
+/** Edits who belongs to a LOCAL unit. Viewing members is OrgUnitMembersList (read-only, any unit). */
+export function OrgUnitMembersDialog({ open, onOpenChange, unit, onSaved }: Props) {
   return (
     <Dialog open={open && unit !== null} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[85vh] overflow-y-auto">
-        {unit && <Body unit={unit} editable={editable} onClose={() => onOpenChange(false)} onSaved={onSaved} />}
+        {unit && <Body unit={unit} onClose={() => onOpenChange(false)} onSaved={onSaved} />}
       </DialogContent>
     </Dialog>
   );
@@ -43,12 +42,10 @@ export function OrgUnitMembersDialog({ open, onOpenChange, unit, editable, onSav
 
 function Body({
   unit,
-  editable,
   onClose,
   onSaved,
 }: {
   unit: { uuid: string; name: string };
-  editable: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -81,7 +78,7 @@ function Body({
   const query = filter.trim();
   const membersLoaded = members !== null;
   useEffect(() => {
-    if (!editable || !membersLoaded) return;
+    if (!membersLoaded) return;
     let cancelled = false;
     const timer = setTimeout(async () => {
       const qs = query ? `&q=${encodeURIComponent(query)}` : '';
@@ -96,7 +93,7 @@ function Body({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [editable, membersLoaded, query]);
+  }, [membersLoaded, query]);
 
   const unlinked = members?.filter((m) => m.appUserId === null) ?? [];
 
@@ -128,9 +125,7 @@ function Body({
     <div className="flex flex-col gap-4">
       <DialogHeader>
         <DialogTitle>Medlemmer</DialogTitle>
-        <DialogDescription>
-          {editable ? `Vælg hvem der er medlem af ${unit.name}.` : `Medlemmer af ${unit.name}.`}
-        </DialogDescription>
+        <DialogDescription>Vælg hvem der er medlem af {unit.name}.</DialogDescription>
       </DialogHeader>
 
       <ErrorBanner message={loadError} />
@@ -138,19 +133,7 @@ function Body({
 
       {members === null && !loadError && <p role="status" className="text-sm text-[var(--muted)]">Indlæser …</p>}
 
-      {members !== null && !editable && (
-        members.length === 0 ? (
-          <p className="text-sm text-[var(--muted)]">Ingen medlemmer</p>
-        ) : (
-          <ul className="flex flex-col gap-1 text-sm">
-            {members.map((m) => (
-              <li key={m.directoryUserUuid}>{m.name}</li>
-            ))}
-          </ul>
-        )
-      )}
-
-      {members !== null && editable && (
+      {members !== null && (
         <>
           <Input aria-label="Filtrer brugere" placeholder="Filtrer på navn eller e-mail" maxLength={100} value={filter} onChange={(e) => setFilter(e.target.value)} />
           <ul className="flex max-h-64 flex-col gap-1 overflow-y-auto" aria-label="Brugere">
@@ -189,13 +172,11 @@ function Body({
 
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
-          {editable ? 'Annuller' : 'Luk'}
+          Annuller
         </Button>
-        {editable && (
-          <Button type="button" onClick={save} disabled={saving || members === null}>
-            {saving ? 'Gemmer …' : 'Gem medlemmer'}
-          </Button>
-        )}
+        <Button type="button" onClick={save} disabled={saving || members === null}>
+          {saving ? 'Gemmer …' : 'Gem medlemmer'}
+        </Button>
       </DialogFooter>
     </div>
   );

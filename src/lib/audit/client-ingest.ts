@@ -106,15 +106,12 @@ export async function remainingClientEventsToday(userId: string, runner?: SqlQue
   return Math.max(0, cap - used);
 }
 
-// Per-(user, meeting, type) throttle for the chatty types: a rename or a minutes save
-// fires on every edit, but one stored row per minute says all the log needs to say.
-// In memory and best effort like the budget above (per instance, lost on restart).
-export const THROTTLED_TYPES: ReadonlySet<string> = new Set([
-  'meeting.rename',
-  'meeting.participants_edit',
-  'meeting.minutes_save',
-  'meeting.transcript_edit',
-]);
+// Per-(user, meeting, type) throttle for chatty types: one stored row per minute says
+// all the log needs to say. Empty today (create, delete, redact and audio delete are
+// one-off lifecycle moments); the mechanism stays so a chatty type can be added by
+// listing it here (the browser-side counterpart is COALESCED). In memory and best
+// effort like the budget above (per instance, lost on restart).
+export const THROTTLED_TYPES: Set<string> = new Set();
 export const THROTTLE_WINDOW_MS = 60_000;
 export const THROTTLE_MAX_ENTRIES = 5000;
 const lastStored = new Map<string, number>();

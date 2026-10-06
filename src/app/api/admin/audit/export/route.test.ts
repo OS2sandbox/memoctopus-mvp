@@ -133,13 +133,19 @@ describe('GET /api/admin/audit/export (audit.export)', () => {
     });
   });
 
+  it('exports with the name search, never recording the searched name in the event', async () => {
+    await GET(req('?q=Mette%20%25'), NO_PARAMS);
+    expect(mockCollect.mock.calls[0][0].filters).toMatchObject({ q: 'Mette %' });
+    expect(JSON.stringify(mockRecord.mock.calls[0][1])).not.toContain('Mette');
+  });
+
   it('limits the rows to the caller\'s audit.read scope', async () => {
     mockScope.mockResolvedValue({ all: false, orgUnitUuids: ['aaaa0000-0000-4000-8000-00000000000a'] });
     await GET(req(), NO_PARAMS);
     expect(mockCollect).toHaveBeenCalledWith(expect.objectContaining({ scope: { all: false, orgUnitUuids: ['aaaa0000-0000-4000-8000-00000000000a'] } }));
   });
 
-  it.each(['?cursor=5', '?limit=10', '?outcome=bogus', '?eventType=nope', '?foo=1'])('400 for %s', async (qs) => {
+  it.each(['?cursor=5', '?limit=10', '?q=', `?q=${'x'.repeat(101)}`, '?q=a%00b', '?outcome=bogus', '?eventType=nope', '?foo=1'])('400 for %s', async (qs) => {
     expect((await GET(req(qs), NO_PARAMS)).status).toBe(400);
     expect(mockCollect).not.toHaveBeenCalled();
     expect(mockRecord).not.toHaveBeenCalled();

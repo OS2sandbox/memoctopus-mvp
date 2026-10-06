@@ -39,7 +39,7 @@ const VERSIONS = [
   v({
     version: 3,
     changeType: 'retarget',
-    changeNote: 'Tilføjede ældreplejen som modtager',
+    changeNote: 'Gav ældreplejen adgang til skabelonen',
     changedByName: null,
     content: content({ prompt: 'Linje A\nLinje C', includeDato: true }),
     targets: [
@@ -75,8 +75,8 @@ describe('TemplateVersionHistory', () => {
       'Version 2',
       'Version 1',
     ]);
-    expect(within(items[0]).getByText('Modtagere ændret')).toBeInTheDocument();
-    expect(within(items[0]).getByText('Tilføjede ældreplejen som modtager')).toBeInTheDocument();
+    expect(within(items[0]).getByText('Tilgængelighed ændret')).toBeInTheDocument();
+    expect(within(items[0]).getByText('Gav ældreplejen adgang til skabelonen')).toBeInTheDocument();
     expect(within(items[0]).getByText(/Ukendt ·/)).toBeInTheDocument();
     expect(within(items[1]).getByText('Ændret')).toBeInTheDocument();
     expect(within(items[1]).getByText(/Anne Admin ·/)).toBeInTheDocument();
@@ -107,14 +107,55 @@ describe('TemplateVersionHistory', () => {
   it('lists target changes for a retarget', async () => {
     setup();
     const other = await screen.findByRole('list', { name: 'Øvrige ændringer' });
-    expect(other).toHaveTextContent('Modtager tilføjet: Ældre');
+    expect(other).toHaveTextContent('Gjort tilgængelig for: Ældre');
+    expect(other).not.toHaveTextContent('inkl. underenheder: Ældre');
+    expect(other).not.toHaveTextContent(/modtager/i);
   });
 
-  it('shows the first version as all additions', async () => {
+  it('words availability changes: added (with subunits), removed and changed', async () => {
+    const before = v({ version: 1, targets: [{ orgUnitUuid: UNIT, includeDescendants: true }] });
+    const after = v({
+      version: 2,
+      changeType: 'retarget',
+      changeNote: 'Flyttede adgangen',
+      targets: [{ orgUnitUuid: UNIT2, includeDescendants: true }],
+    });
+    setup([after, before]);
+    const other = await screen.findByRole('list', { name: 'Øvrige ændringer' });
+    expect(other).toHaveTextContent('Gjort tilgængelig for: Ældre (inkl. underenheder)');
+    expect(other).toHaveTextContent('Ikke længere tilgængelig for: Børn');
+  });
+
+  it('words a changed subunit setting', async () => {
+    const wide = v({ version: 1, targets: [{ orgUnitUuid: UNIT2, includeDescendants: true }] });
+    const narrow = v({ version: 2, changeType: 'retarget', changeNote: 'Kun enheden selv', targets: [{ orgUnitUuid: UNIT2, includeDescendants: false }] });
+    setup([narrow, wide]);
+    expect(await screen.findByRole('list', { name: 'Øvrige ændringer' })).toHaveTextContent('Tilgængelig for Ældre: kun enheden selv');
+  });
+
+  it('shows the change note first and prominently, then the changes', async () => {
+    setup();
+    const section = await screen.findByRole('region', { name: 'Version 3' });
+    const text = section.textContent ?? '';
+    expect(within(section).getByText('Ændringsbeskrivelse')).toBeInTheDocument();
+    expect(within(section).getByText('Gav ældreplejen adgang til skabelonen')).toBeInTheDocument();
+    expect(within(section).getByRole('heading', { name: 'Ændringer' })).toBeInTheDocument();
+    expect(text.indexOf('Gav ældreplejen adgang til skabelonen')).toBeLessThan(text.indexOf('Ændringer'));
+    expect(text.indexOf('Ændringer')).toBeLessThan(text.indexOf('Prompten er uændret.'));
+    expect(text.indexOf('Prompten er uændret.')).toBeLessThan(text.indexOf('Gjort tilgængelig for'));
+  });
+
+  it('shows the first version as all additions, with its note and initial availability', async () => {
     setup();
     await screen.findByRole('list', { name: 'Versioner' });
     await userEvent.click(screen.getByRole('button', { name: /Version 1/ }));
     expect(screen.getByRole('heading', { name: /første version/ })).toBeInTheDocument();
+    const section = screen.getByRole('region', { name: 'Version 1' });
+    expect(within(section).getByText('Første udgave af skabelonen', { selector: 'p' })).toBeInTheDocument();
+    expect(within(section).getByText('Prompt (første version, alt er nyt)')).toBeInTheDocument();
+    expect(within(section).getByRole('list', { name: 'Øvrige ændringer' })).toHaveTextContent(
+      'Gjort tilgængelig for: Børn (inkl. underenheder)',
+    );
     const diff = screen.getByRole('group', { name: 'Forskel i prompt' });
     expect([...diff.querySelectorAll('[data-diff]')].every((n) => n.getAttribute('data-diff') === 'insert')).toBe(true);
   });

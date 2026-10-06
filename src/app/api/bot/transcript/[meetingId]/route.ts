@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withHandler } from '@/lib/api-handler';
-import { recordServerEvent } from '@/lib/audit/record';
-import { asEntityUuid } from '@/app/api/meetings/ai-audit';
 import { readPendingTranscript, deletePendingTranscript, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
 import { requireAppAccess } from '@/lib/authz/app-access';
 
@@ -14,7 +12,7 @@ import { requireAppAccess } from '@/lib/authz/app-access';
 //   { status: 'failed' }              → server-side run failed — client fallback
 //   { status: 'ready', segments, diarized } → done; the stash is deleted on hand-off
 export const GET = withHandler('bot/transcript', async (
-  req: NextRequest,
+  _req: NextRequest,
   { params }: { params: Promise<{ meetingId: string }> },
 ) => {
   const access = await requireAppAccess();
@@ -38,21 +36,10 @@ export const GET = withHandler('bot/transcript', async (
   }
 
   await deletePendingTranscript(meetingId);
-  const entityId = asEntityUuid(meetingId);
-  if (transcript.status === 'failed') {
-    await recordServerEvent(req, { type: 'bot.transcript_collect', outcome: 'error', actorUserId: session.user.id, entityId });
-    return NextResponse.json({ status: 'failed' });
-  }
-  const segments = transcript.segments ?? [];
-  await recordServerEvent(req, {
-    type: 'bot.transcript_collect',
-    actorUserId: session.user.id,
-    entityId,
-    details: { segmentCount: segments.length },
-  });
+  if (transcript.status === 'failed') return NextResponse.json({ status: 'failed' });
   return NextResponse.json({
     status: 'ready',
-    segments,
+    segments: transcript.segments ?? [],
     diarized: transcript.diarized ?? false,
   });
 });

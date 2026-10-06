@@ -28,7 +28,6 @@ export const templateEvents = {
     details: z.object({ changedFields: z.array(z.enum(TEMPLATE_FIELDS)).max(TEMPLATE_FIELDS.length) }).strict(),
   }),
   'template.delete': defineEvent({ ...base, details: z.object({}).strict() }),
-  'template.set_default': defineEvent({ ...base, details: z.object({}).strict() }),
   'template.share': defineEvent({
     ...base,
     details: z.object({ kind: z.enum(SHARE_KINDS) }).strict(),

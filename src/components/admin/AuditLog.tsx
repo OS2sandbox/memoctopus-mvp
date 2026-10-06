@@ -1,15 +1,16 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableEmptyRow, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { CATEGORIES, eventTypesOfCategory, isCategoryKey, type CategoryKey } from '@/lib/audit/categories';
 import { AUDIT_EXPORT_MAX_ROWS, AUDIT_TRUNCATED_HEADER, auditExportFilename } from '@/lib/audit/csv';
-import { eventTypeLabel, eventTypeLabels, outcomeLabels, sourceBadgeLabels, sourceLabels } from '@/lib/audit/labels.da';
+import { eventTypeLabel, outcomeLabels, sourceBadgeLabels, sourceLabels } from '@/lib/audit/labels.da';
+import { summariseEvent } from '@/lib/audit/summary.da';
 import { useMe } from '@/lib/hooks/use-me';
 import { apiRequest } from './api';
 import { AdminPage } from './AdminPage';
@@ -36,40 +37,70 @@ interface AuditEventView {
   templateName?: string | null;
 }
 
+type Period = 'today' | '7d' | '30d' | 'all';
+
+const PERIOD_OPTIONS: ReadonlyArray<{ value: Period; label: string }> = [
+  { value: 'today', label: 'I dag' },
+  { value: '7d', label: 'Seneste 7 dage' },
+  { value: '30d', label: 'Seneste 30 dage' },
+  { value: 'all', label: 'Alle' },
+];
+
+/** What is applied to the list: every change here refetches, so nothing is filtered "in hiding". */
 interface Filters {
-  eventType: string;
+  q: string;
+  category: CategoryKey | '';
+  period: Period;
   outcome: string;
   source: string;
+  entityId: string;
+  /** Local days (yyyy-mm-dd). Either one set replaces the period. */
   from: string;
   to: string;
-  actorUserId: string;
-  entityId: string;
 }
 
-const EMPTY: Filters = { eventType: '', outcome: '', source: '', from: '', to: '', actorUserId: '', entityId: '' };
+const DEFAULT_FILTERS: Filters = { q: '', category: '', period: '7d', outcome: '', source: '', entityId: '', from: '', to: '' };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PAGE_SIZE = 50;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-const EVENT_OPTIONS = Object.keys(eventTypeLabels)
-  .map((value) => ({ value, label: eventTypeLabel(value) }))
-  .sort((a, b) => a.label.localeCompare(b.label, 'da'));
+/** Start of the period as an instant, or undefined for "all". */
+function periodStart(period: Period, now: Date): Date | undefined {
+  switch (period) {
+    case 'today':
+      return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    case '7d':
+      return new Date(now.getTime() - 7 * DAY_MS);
+    case '30d':
+      return new Date(now.getTime() - 30 * DAY_MS);
+    default:
+      return undefined;
+  }
+}
 
-/** Filters as a query string; dates are the user's local days, sent as instants. */
-function filterQuery(f: Filters): URLSearchParams {
+/** Filters as a query string; dates are the user's local days, sent as instants. Custom dates override the period. */
+function filterQuery(f: Filters, now: Date = new Date()): URLSearchParams {
   const p = new URLSearchParams();
-  if (f.eventType) p.append('eventType', f.eventType);
+  if (f.q) p.set('q', f.q);
+  if (f.category) for (const t of eventTypesOfCategory(f.category)) p.append('eventType', t);
   if (f.outcome) p.set('outcome', f.outcome);
   if (f.source) p.set('source', f.source);
-  if (f.from) p.set('from', new Date(`${f.from}T00:00:00`).toISOString());
-  if (f.to) p.set('to', new Date(`${f.to}T23:59:59.999`).toISOString());
-  if (f.actorUserId) p.set('actorUserId', f.actorUserId);
   if (f.entityId) p.set('entityId', f.entityId.toLowerCase());
+  if (f.from || f.to) {
+    if (f.from) p.set('from', new Date(`${f.from}T00:00:00`).toISOString());
+    if (f.to) p.set('to', new Date(`${f.to}T23:59:59.999`).toISOString());
+  } else {
+    const start = periodStart(f.period, now);
+    if (start) p.set('from', start.toISOString());
+  }
   return p;
 }
 
-const formatTime = (iso: string) => formatDateTime(iso, { dateStyle: 'short', timeStyle: 'medium' });
+const isDefault = (f: Filters) => JSON.stringify(f) === JSON.stringify(DEFAULT_FILTERS);
 
-/** One "key: value" line per detail, so long keys wrap inside the column instead of widening the table. */
+const formatTime = (iso: string) => formatDateTime(iso, { dateStyle: 'medium', timeStyle: 'short' });
+
+/** One "key: value" line per detail, so long keys wrap instead of widening the page. */
 function detailLines(details: Record<string, unknown>): string[] {
   return Object.entries(details).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : String(v)}`);
 }
@@ -105,10 +136,78 @@ function exportFilename(res: Response, truncated: boolean): string {
 
 const outcomeVariant = { success: 'success', denied: 'warning', error: 'destructive' } as const;
 
+function TechnicalDetails({ e }: { e: AuditEventView }) {
+  const lines = detailLines(e.details);
+  const rows: Array<[string, string | null | undefined]> = [
+    ['Hændelse', `${eventTypeLabel(e.eventType)} (${e.eventType})`],
+    ['Resultat', outcomeLabels[e.outcome] ?? e.outcome],
+    ['Kilde', sourceLabels[e.source] ?? e.source],
+    ['Bruger-id', e.actorUserId],
+    ['Objekt', e.entityId ? `${e.entityType ?? ''} ${e.entityId}`.trim() : null],
+    ['Andet objekt', e.secondaryEntityId ? `${e.secondaryEntityType ?? ''} ${e.secondaryEntityId}`.trim() : null],
+    ['Anmodnings-id', e.requestId],
+    ['IP-adresse', e.ipAddress],
+  ];
+  return (
+    <details className="mt-2 text-[13px]">
+      <summary className="cursor-pointer select-none text-[var(--muted)] hover:text-[var(--ink-2)]">Tekniske detaljer</summary>
+      <dl className="mt-2 grid grid-cols-[7rem_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-sm bg-[var(--surface-2)] px-3 py-2">
+        {rows.map(([label, value]) =>
+          value ? (
+            <div key={label} className="contents">
+              <dt className="text-[var(--muted)]">{label}</dt>
+              <dd className="m-0 font-mono text-[12px] text-[var(--ink-2)] [overflow-wrap:anywhere]">{value}</dd>
+            </div>
+          ) : null,
+        )}
+        {lines.length > 0 && (
+          <div className="contents">
+            <dt className="text-[var(--muted)]">Detaljer</dt>
+            <dd className="m-0 font-mono text-[12px] text-[var(--ink-2)] [overflow-wrap:anywhere]">
+              {lines.map((line) => (
+                <div key={line}>{line}</div>
+              ))}
+            </dd>
+          </div>
+        )}
+      </dl>
+    </details>
+  );
+}
+
+function EventRow({ e }: { e: AuditEventView }) {
+  const version = typeof e.details.version === 'number' ? e.details.version : null;
+  return (
+    <li className="flex flex-col gap-1 border-b border-[var(--line)] px-1 py-3.5 last:border-b-0 sm:flex-row sm:gap-4">
+      <time dateTime={e.occurredAt} className="shrink-0 text-[13px] text-[var(--muted)] sm:w-40 sm:pt-0.5">
+        {formatTime(e.occurredAt)}
+      </time>
+      <div className="min-w-0 flex-1">
+        <p className="m-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-[15px] font-medium leading-snug text-[var(--ink)]">
+          <span className="[overflow-wrap:anywhere]">{summariseEvent(e)}</span>
+          {e.outcome !== 'success' && <Badge variant={outcomeVariant[e.outcome] ?? 'outline'}>{outcomeLabels[e.outcome] ?? e.outcome}</Badge>}
+          {e.source === 'client' && <Badge variant="secondary">{sourceBadgeLabels.client}</Badge>}
+        </p>
+        {e.changeNote && (
+          <div className="mt-2.5 rounded-sm border-l-4 border-[var(--accent)] bg-[var(--accent-wash)] px-4 py-3.5">
+            <div className="text-[12px] font-semibold uppercase tracking-wide text-[var(--ink-2)]">
+              Ændringsbeskrivelse
+              {version !== null && <span className="font-normal normal-case"> · version {version}</span>}
+            </div>
+            <p className="m-0 mt-1.5 whitespace-pre-wrap break-words text-[16px] leading-relaxed text-[var(--ink)]">{e.changeNote}</p>
+          </div>
+        )}
+        <TechnicalDetails e={e} />
+      </div>
+    </li>
+  );
+}
+
 export function AuditLog() {
   const { data: me, loading: meLoading, error: meError } = useMe();
-  const [draft, setDraft] = useState<Filters>(EMPTY);
-  const [applied, setApplied] = useState<Filters>(EMPTY);
+  // Text the user is typing; committed together with the next filter change or on Enter.
+  const [draft, setDraft] = useState({ q: '', entityId: '', from: '', to: '' });
+  const [applied, setApplied] = useState<Filters>(DEFAULT_FILTERS);
   const [filterError, setFilterError] = useState<string | null>(null);
   const [events, setEvents] = useState<AuditEventView[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -150,7 +249,6 @@ export function AuditLog() {
 
   const canExport = !!me && me.capabilities.includes('audit.export');
   const isGlobalReader = !!me && me.scopes['audit.read']?.global === true;
-  const showNetwork = events.some((e) => e.ipAddress);
 
   async function runExport() {
     if (exportInFlight.current) return;
@@ -189,31 +287,37 @@ export function AuditLog() {
     }
   }
 
-  function applyFilters(e: React.FormEvent) {
-    e.preventDefault();
-    const entityId = draft.entityId.trim();
-    if (entityId && !UUID_RE.test(entityId)) {
+  /** Apply the typed text plus `patch`. Invalid input is reported and nothing is applied. */
+  function commit(patch: Partial<Filters> = {}) {
+    const next: Filters = {
+      ...applied,
+      q: draft.q.trim(),
+      entityId: draft.entityId.trim(),
+      from: draft.from,
+      to: draft.to,
+      ...patch,
+    };
+    if (next.entityId && !UUID_RE.test(next.entityId)) {
       setFilterError('Objekt-id skal være et gyldigt id (UUID).');
       return;
     }
-    if (draft.from && draft.to && draft.from > draft.to) {
+    if (next.from && next.to && next.from > next.to) {
       setFilterError('Fra-datoen må ikke ligge efter til-datoen.');
       return;
     }
     setFilterError(null);
-    setApplied({ ...draft, actorUserId: draft.actorUserId.trim(), entityId });
+    setApplied(next);
   }
 
   function reset() {
-    setDraft(EMPTY);
+    setDraft({ q: '', entityId: '', from: '', to: '' });
     setFilterError(null);
-    setApplied(EMPTY);
+    setApplied(DEFAULT_FILTERS);
   }
 
-  const set = (key: keyof Filters) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
-    setDraft((d) => ({ ...d, [key]: e.target.value }));
-
-  const columns = showNetwork ? 7 : 6;
+  const customRange = !!(applied.from || applied.to);
+  const advancedCount = [applied.outcome, applied.source, applied.entityId, customRange ? 'x' : ''].filter(Boolean).length;
+  const filtered = !isDefault(applied);
 
   return (
     <AdminPage title="Log" description="Aktivitet i løsningen. Loggen viser kun, hvad der er sket, aldrig indholdet af møder, referater eller skabeloner.">
@@ -224,68 +328,136 @@ export function AuditLog() {
         </p>
       )}
 
-      <form role="search" aria-label="Filtrér loggen" onSubmit={applyFilters} className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Select label="Hændelse" value={draft.eventType} onChange={set('eventType')}>
-          <option value="">Alle hændelser</option>
-          {EVENT_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </Select>
-        <Select label="Resultat" value={draft.outcome} onChange={set('outcome')}>
-          <option value="">Alle</option>
-          {Object.entries(outcomeLabels).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </Select>
-        <Select label="Kilde" value={draft.source} onChange={set('source')}>
-          <option value="">Alle</option>
-          {Object.entries(sourceLabels).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </Select>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="audit-actor">
-            Bruger-id
-          </Label>
-          <Input id="audit-actor" value={draft.actorUserId} onChange={set('actorUserId')} autoComplete="off" />
+      <form
+        role="search"
+        aria-label="Filtrér loggen"
+        onSubmit={(e) => {
+          e.preventDefault();
+          commit();
+        }}
+        className="flex flex-col gap-3"
+      >
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_12rem_12rem]">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="audit-search">Søg efter bruger</Label>
+            <div className="flex gap-2">
+              <Input
+                id="audit-search"
+                type="search"
+                value={draft.q}
+                maxLength={100}
+                onChange={(e) => setDraft((d) => ({ ...d, q: e.target.value }))}
+                autoComplete="off"
+                placeholder="Navn på bruger"
+              />
+              <Button type="submit" variant="outline">
+                Søg
+              </Button>
+            </div>
+          </div>
+          <Select
+            label="Kategori"
+            value={applied.category}
+            onChange={(e) => commit({ category: isCategoryKey(e.target.value) ? e.target.value : '' })}
+          >
+            <option value="">Alle hændelser</option>
+            {CATEGORIES.map((c) => (
+              <option key={c.key} value={c.key}>
+                {c.label}
+              </option>
+            ))}
+          </Select>
+          <Select
+            label="Periode"
+            value={customRange ? 'custom' : applied.period}
+            onChange={(e) => {
+              const period = PERIOD_OPTIONS.find((o) => o.value === e.target.value)?.value;
+              if (!period) return; // the "custom" entry only reflects the dates below
+              setDraft((d) => ({ ...d, from: '', to: '' }));
+              commit({ period, from: '', to: '' });
+            }}
+          >
+            {customRange && <option value="custom">Valgt datointerval</option>}
+            {PERIOD_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </Select>
         </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="audit-entity">
-            Objekt-id
-          </Label>
-          <Input id="audit-entity" value={draft.entityId} onChange={set('entityId')} autoComplete="off" placeholder="UUID" />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="audit-from">
-            Fra dato
-          </Label>
-          <Input id="audit-from" type="date" value={draft.from} onChange={set('from')} />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor="audit-to">
-            Til dato
-          </Label>
-          <Input id="audit-to" type="date" value={draft.to} onChange={set('to')} />
-        </div>
-        <div className="flex items-end gap-2">
-          <Button type="submit">Filtrér</Button>
-          <Button type="button" variant="outline" onClick={reset}>
-            Nulstil
-          </Button>
-        </div>
+
+        <details className="text-sm">
+          <summary className="cursor-pointer select-none text-[var(--ink-2)]">
+            Flere filtre{advancedCount > 0 ? ` (${advancedCount} valgt)` : ''}
+          </summary>
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <Select label="Resultat" value={applied.outcome} onChange={(e) => commit({ outcome: e.target.value })}>
+              <option value="">Alle</option>
+              {Object.entries(outcomeLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </Select>
+            <Select label="Kilde" value={applied.source} onChange={(e) => commit({ source: e.target.value })}>
+              <option value="">Alle</option>
+              {Object.entries(sourceLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </Select>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="audit-entity">Objekt-id</Label>
+              <Input
+                id="audit-entity"
+                value={draft.entityId}
+                onChange={(e) => setDraft((d) => ({ ...d, entityId: e.target.value }))}
+                autoComplete="off"
+                placeholder="UUID (tryk Enter)"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="audit-from">Fra dato</Label>
+              <Input
+                id="audit-from"
+                type="date"
+                value={draft.from}
+                onChange={(e) => {
+                  setDraft((d) => ({ ...d, from: e.target.value }));
+                  commit({ from: e.target.value });
+                }}
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="audit-to">Til dato</Label>
+              <Input
+                id="audit-to"
+                type="date"
+                value={draft.to}
+                onChange={(e) => {
+                  setDraft((d) => ({ ...d, to: e.target.value }));
+                  commit({ to: e.target.value });
+                }}
+              />
+            </div>
+            <p className="self-end text-[13px] text-[var(--muted)]">Et valgt datointerval erstatter perioden ovenfor.</p>
+          </div>
+        </details>
       </form>
       <ErrorBanner message={filterError} />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="max-w-prose text-[13px] text-[var(--muted)]">
-          Hændelser markeret »selvrapporteret« er indberettet af brugerens egen browser. De kan ikke bekræftes af serveren.
-        </p>
+        <div className="flex items-center gap-3">
+          <p className="max-w-prose text-[13px] text-[var(--muted)]">
+            Hændelser markeret »selvrapporteret« er indberettet af brugerens egen browser. De kan ikke bekræftes af serveren.
+          </p>
+          {filtered && (
+            <Button type="button" variant="link" size="sm" onClick={reset}>
+              Nulstil
+            </Button>
+          )}
+        </div>
         {canExport && (
           <Button type="button" variant="outline" size="sm" disabled={exporting} onClick={runExport}>
             {exporting ? 'Eksporterer …' : 'Eksportér som CSV'}
@@ -307,90 +479,31 @@ export function AuditLog() {
         </div>
       )}
 
-      <ErrorBanner message={loadError} onRetry={() => {
+      <ErrorBanner
+        message={loadError}
+        onRetry={() => {
           setLoading(true);
           fetchPage(applied, null);
-        }} />
+        }}
+      />
 
       {loading || meLoading ? (
-        <p className="text-sm text-[var(--muted)]">Indlæser …</p>
+        <p role="status" className="text-sm text-[var(--muted)]">
+          Indlæser …
+        </p>
+      ) : events.length === 0 ? (
+        !loadError && (
+          <div className="rounded-[var(--radius)] border border-[var(--line)] px-4 py-8 text-center">
+            <p className="m-0 text-sm text-[var(--ink)]">Ingen hændelser fundet</p>
+            {filtered && <p className="m-0 mt-1 text-[13px] text-[var(--muted)]">Prøv et andet navn, en anden kategori eller en længere periode.</p>}
+          </div>
+        )
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Tidspunkt</TableHead>
-              <TableHead>Hændelse</TableHead>
-              <TableHead>Resultat</TableHead>
-              <TableHead>Bruger</TableHead>
-              <TableHead>Objekt</TableHead>
-              <TableHead>Kilde</TableHead>
-              {showNetwork && <TableHead>IP-adresse</TableHead>}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {events.length === 0 && !loadError ? (
-              <TableEmptyRow colSpan={columns}>Ingen hændelser fundet</TableEmptyRow>
-            ) : (
-              events.map((e) => (
-                <Fragment key={e.id}>
-                <TableRow className={e.changeNote ? 'border-b-0' : undefined}>
-                  <TableCell className="whitespace-nowrap align-top text-[13px]">{formatTime(e.occurredAt)}</TableCell>
-                  <TableCell className="align-top">
-                    <div className="font-medium text-[var(--ink)]">{eventTypeLabel(e.eventType)}</div>
-                    <div className="font-mono text-[11px] text-[var(--muted)]">{e.eventType}</div>
-                    {e.templateName && <div className="mt-1 text-[13px] text-[var(--ink-2)]">Skabelon: {e.templateName}</div>}
-                    <div className="mt-2 min-w-[14rem] max-w-[22rem] font-mono text-[11px] text-[var(--ink-2)] [overflow-wrap:anywhere]">
-                      {detailLines(e.details).map((line) => (
-                        <div key={line}>{line}</div>
-                      ))}
-                    </div>
-                  </TableCell>
-                  <TableCell className="align-top">
-                    <Badge variant={outcomeVariant[e.outcome] ?? 'outline'}>{outcomeLabels[e.outcome] ?? e.outcome}</Badge>
-                  </TableCell>
-                  <TableCell className="align-top">
-                    {e.actorUserId ? (
-                      <>
-                        <div>{e.actorName ?? 'Ukendt navn'}</div>
-                        <div className="font-mono text-[11px] text-[var(--muted)]">{e.actorUserId}</div>
-                      </>
-                    ) : (
-                      <span className="text-[var(--muted)]">Ingen bruger</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="align-top">
-                    {e.entityId ? (
-                      <>
-                        <div className="text-[13px]">{e.entityType}</div>
-                        <div className="font-mono text-[11px] text-[var(--muted)]">{e.entityId}</div>
-                      </>
-                    ) : (
-                      <span className="text-[var(--muted)]">–</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="align-top">
-                    <Badge variant={e.source === 'client' ? 'warning' : 'secondary'}>{sourceBadgeLabels[e.source] ?? e.source}</Badge>
-                  </TableCell>
-                  {showNetwork && <TableCell className="whitespace-nowrap align-top font-mono text-[11px]">{e.ipAddress ?? ''}</TableCell>}
-                </TableRow>
-                {e.changeNote && (
-                  <TableRow>
-                    <TableCell colSpan={columns} className="pt-0">
-                      <div className="rounded-sm border-l-4 border-[var(--accent)] bg-[var(--accent-wash)] px-4 py-3">
-                        <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--ink-2)]">
-                          Ændringsbeskrivelse
-                          {typeof e.details.version === 'number' && <span className="font-normal normal-case"> · version {e.details.version}</span>}
-                        </div>
-                        <p className="mt-1 whitespace-pre-wrap break-words text-[15px] leading-relaxed text-[var(--ink)]">{e.changeNote}</p>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                )}
-                </Fragment>
-              ))
-            )}
-          </TableBody>
-        </Table>
+        <ol aria-label="Hændelser" className="m-0 list-none rounded-[var(--radius)] border border-[var(--line)] p-0 px-3">
+          {events.map((e) => (
+            <EventRow key={e.id} e={e} />
+          ))}
+        </ol>
       )}
 
       {nextCursor && !loading && (

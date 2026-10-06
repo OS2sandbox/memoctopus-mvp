@@ -18,7 +18,7 @@ import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { recordServerEvent } from '@/lib/audit/record';
 import { pool } from '@/lib/db';
-import { THROTTLE_WINDOW_MS } from '@/lib/audit/client-ingest';
+import { THROTTLE_WINDOW_MS, THROTTLED_TYPES } from '@/lib/audit/client-ingest';
 import { __resetClientEventBudgets, RATE_LIMIT_EVENTS } from '@/lib/audit/client-ingest';
 import { makeJsonReq, makePrincipal, NO_PARAMS } from '@/test/helpers';
 
@@ -70,18 +70,18 @@ describe('POST /api/audit/client-events', () => {
   });
 
   it('records one client event with actor from the session and answers {accepted} only', async () => {
-    const res = await send({ events: [ev({ type: 'meeting.status_change', details: { fromStatus: 'review', toStatus: 'minutes' } })] });
+    const res = await send({ events: [ev({ type: 'meeting.create', details: { origin: 'live' } })] });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ accepted: 1 });
     expect(mockRecord).toHaveBeenCalledTimes(1);
     const input = mockRecord.mock.calls[0][1] as unknown as Record<string, unknown>;
     expect(input).toMatchObject({
-      type: 'meeting.status_change',
+      type: 'meeting.create',
       source: 'client',
       actorUserId: 'user-123',
       entityId: MEETING,
       clientEventId: EVENT_ID,
-      details: { fromStatus: 'review', toStatus: 'minutes' },
+      details: { origin: 'live' },
     });
     expect(input.clientOccurredAt).toBeInstanceOf(Date);
     // ip / user agent / request id are read from the request itself by recordServerEvent.
@@ -104,10 +104,22 @@ describe('POST /api/audit/client-events', () => {
     expect(mockRecord).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['meeting.status_change', { fromStatus: 'review', toStatus: 'minutes' }],
+    ['meeting.rename', {}],
+    ['meeting.participants_edit', { participantCount: 3 }],
+    ['meeting.transcript_edit', { segmentCount: 4 }],
+    ['meeting.minutes_save', {}],
+    ['meeting.minutes_version', { versionNumber: 2, action: 'snapshot' }],
+  ])('%s is no longer reported: refused with 400 and nothing recorded', async (type, details) => {
+    expect((await send({ events: [ev({ type, details })] })).status).toBe(400);
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
   it('rejects details with extra keys or free text and a non-uuid entity id', async () => {
     const bad = [
-      ev({ type: 'meeting.rename', details: { title: 'Sag om Jensens barn' } }),
-      ev({ type: 'meeting.status_change', details: { fromStatus: 'Vi taler om sagen', toStatus: 'minutes' } }),
+      ev({ type: 'meeting.delete', details: { title: 'Sag om Jensens barn' } }),
+      ev({ type: 'meeting.create', details: { origin: 'Vi taler om sagen' } }),
       ev({ type: 'meeting.create', details: { origin: 'live', title: 'x' } }),
       ev({ entityId: 'not-a-uuid' }),
       ev({ clientEventId: 'nope' }),
@@ -337,85 +349,81 @@ describe('POST /api/audit/client-events', () => {
   });
 
   describe('per-type throttle', () => {
-    const RENAME = (n: number, meeting = MEETING) =>
+    // The throttle exists for chatty types; none of the reported ones is chatty any more,
+    // so THROTTLED_TYPES is empty. The mechanism is exercised by listing meeting.create.
+    const CREATE = (n: number, meeting = MEETING) =>
       ev({
-        type: 'meeting.rename',
+        type: 'meeting.create',
+        details: { origin: 'live' },
         entityId: meeting,
         clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(n).padStart(12, '0')}`,
       });
 
-    it('stores the first rename and drops (but acknowledges) a repeat within 60 s', async () => {
-      vi.useFakeTimers({ toFake: ['Date'] });
-      vi.setSystemTime(new Date('2026-10-05T12:00:00Z'));
-      expect(await (await send({ events: [RENAME(1)] })).json()).toEqual({ accepted: 1 });
-      vi.setSystemTime(new Date('2026-10-05T12:00:59Z'));
-      const res = await send({ events: [RENAME(2)] });
-      expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ accepted: 0 });
-      expect(mockRecord).toHaveBeenCalledTimes(1);
-    });
-
-    it('stores again once the 60 s window has passed', async () => {
-      vi.useFakeTimers({ toFake: ['Date'] });
-      vi.setSystemTime(new Date('2026-10-05T12:00:00Z'));
-      await send({ events: [RENAME(1)] });
-      vi.setSystemTime(new Date(Date.parse('2026-10-05T12:00:00Z') + THROTTLE_WINDOW_MS));
-      expect(await (await send({ events: [RENAME(2)] })).json()).toEqual({ accepted: 1 });
+    it('throttles nothing by default: a repeat of the same type for the same meeting is stored', async () => {
+      expect(await (await send({ events: [CREATE(1)] })).json()).toEqual({ accepted: 1 });
+      expect(await (await send({ events: [CREATE(2)] })).json()).toEqual({ accepted: 1 });
       expect(mockRecord).toHaveBeenCalledTimes(2);
     });
 
-    it('collapses duplicates inside one batch to the first', async () => {
-      const res = await send({ events: [RENAME(1), RENAME(2), RENAME(3)] });
-      expect(await res.json()).toEqual({ accepted: 1 });
-      expect(mockRecord).toHaveBeenCalledTimes(1);
-    });
+    describe('with meeting.create listed as throttled', () => {
+      beforeEach(() => void THROTTLED_TYPES.add('meeting.create'));
+      afterEach(() => void THROTTLED_TYPES.delete('meeting.create'));
 
-    it('is keyed on (actor, meeting, type): other meeting, other type, other user are not throttled', async () => {
-      await send({ events: [RENAME(1)] });
-      const other = '99999999-2222-4333-8444-555555555555';
-      expect(await (await send({ events: [RENAME(2, other)] })).json()).toEqual({ accepted: 1 });
-      const part = ev({ type: 'meeting.participants_edit', details: { participantCount: 2 }, clientEventId: 'aaaaaaaa-bbbb-4ccc-8ddd-000000000007' });
-      expect(await (await send({ events: [part] })).json()).toEqual({ accepted: 1 });
-      mockSession.mockResolvedValue({ user: { id: 'user-999' }, session: { id: 's2' } } as never);
-      mockResolve.mockResolvedValue(makePrincipal({ userId: 'user-999' }));
-      expect(await (await send({ events: [RENAME(3)] })).json()).toEqual({ accepted: 1 });
-    });
+      it('stores the first event and drops (but acknowledges) a repeat within 60 s', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-10-05T12:00:00Z'));
+        expect(await (await send({ events: [CREATE(1)] })).json()).toEqual({ accepted: 1 });
+        vi.setSystemTime(new Date('2026-10-05T12:00:59Z'));
+        const res = await send({ events: [CREATE(2)] });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({ accepted: 0 });
+        expect(mockRecord).toHaveBeenCalledTimes(1);
+      });
 
-    it.each([
-      ['meeting.rename', {}],
-      ['meeting.participants_edit', { participantCount: 3 }],
-      ['meeting.minutes_save', {}],
-      ['meeting.transcript_edit', { segmentCount: 4 }],
-    ])('%s is throttled', async (type, details) => {
-      const e = (n: number) =>
-        ev({ type, details, clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(n).padStart(12, '0')}` });
-      expect(await (await send({ events: [e(1)] })).json()).toEqual({ accepted: 1 });
-      expect(await (await send({ events: [e(2)] })).json()).toEqual({ accepted: 0 });
-    });
+      it('stores again once the 60 s window has passed', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-10-05T12:00:00Z'));
+        await send({ events: [CREATE(1)] });
+        vi.setSystemTime(new Date(Date.parse('2026-10-05T12:00:00Z') + THROTTLE_WINDOW_MS));
+        expect(await (await send({ events: [CREATE(2)] })).json()).toEqual({ accepted: 1 });
+        expect(mockRecord).toHaveBeenCalledTimes(2);
+      });
 
-    it('other types (status_change, delete, create ...) are never throttled', async () => {
-      const del = (n: number) => ev({ clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(n).padStart(12, '0')}` });
-      expect(await (await send({ events: [del(1)] })).json()).toEqual({ accepted: 1 });
-      expect(await (await send({ events: [del(2)] })).json()).toEqual({ accepted: 1 });
-    });
+      it('collapses duplicates inside one batch to the first', async () => {
+        const res = await send({ events: [CREATE(1), CREATE(2), CREATE(3)] });
+        expect(await res.json()).toEqual({ accepted: 1 });
+        expect(mockRecord).toHaveBeenCalledTimes(1);
+      });
 
-    it('a failed store does not start the window, so the retry is stored', async () => {
-      mockRecord.mockResolvedValueOnce({ status: 'dropped', code: 'db_error' });
-      expect((await send({ events: [RENAME(1)] })).status).toBe(503);
-      expect(await (await send({ events: [RENAME(1)] })).json()).toEqual({ accepted: 1 });
-    });
+      it('is keyed on (actor, meeting, type): other meeting, other type, other user are not throttled', async () => {
+        await send({ events: [CREATE(1)] });
+        const other = '99999999-2222-4333-8444-555555555555';
+        expect(await (await send({ events: [CREATE(2, other)] })).json()).toEqual({ accepted: 1 });
+        const del = ev({ clientEventId: 'aaaaaaaa-bbbb-4ccc-8ddd-000000000007' });
+        expect(await (await send({ events: [del] })).json()).toEqual({ accepted: 1 });
+        mockSession.mockResolvedValue({ user: { id: 'user-999' }, session: { id: 's2' } } as never);
+        mockResolve.mockResolvedValue(makePrincipal({ userId: 'user-999' }));
+        expect(await (await send({ events: [CREATE(3)] })).json()).toEqual({ accepted: 1 });
+      });
 
-    it('throttled events do not use the daily cap (no count query when nothing is left to store)', async () => {
-      await send({ events: [RENAME(1)] });
-      mockCount.mockClear();
-      await send({ events: [RENAME(2)] });
-      expect(mockCount).not.toHaveBeenCalled();
-    });
+      it('a failed store does not start the window, so the retry is stored', async () => {
+        mockRecord.mockResolvedValueOnce({ status: 'dropped', code: 'db_error' });
+        expect((await send({ events: [CREATE(1)] })).status).toBe(503);
+        expect(await (await send({ events: [CREATE(1)] })).json()).toEqual({ accepted: 1 });
+      });
 
-    it('a throttled event is not reported as capped', async () => {
-      alreadyStored(2000);
-      // First one is capped (dropped), nothing was stored so nothing is throttled either.
-      expect(await (await send({ events: [RENAME(1)] })).json()).toEqual({ accepted: 0, capped: true });
+      it('throttled events do not use the daily cap (no count query when nothing is left to store)', async () => {
+        await send({ events: [CREATE(1)] });
+        mockCount.mockClear();
+        await send({ events: [CREATE(2)] });
+        expect(mockCount).not.toHaveBeenCalled();
+      });
+
+      it('a throttled event is not reported as capped', async () => {
+        alreadyStored(2000);
+        // First one is capped (dropped), nothing was stored so nothing is throttled either.
+        expect(await (await send({ events: [CREATE(1)] })).json()).toEqual({ accepted: 0, capped: true });
+      });
     });
   });
 });

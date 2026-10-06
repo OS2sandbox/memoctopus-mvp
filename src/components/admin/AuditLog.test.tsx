@@ -45,25 +45,50 @@ function setup(me = ADMIN_ME, list: Parameters<typeof installFetch>[0]['GET /x']
 const auditCalls = (m: ReturnType<typeof vi.fn>) => calls(m, 'GET', '/api/admin/audit');
 const lastParams = (m: ReturnType<typeof vi.fn>) => new URL(`http://x${auditCalls(m).at(-1)![0]}`).searchParams;
 
+const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+
 describe('AuditLog', () => {
-  it('shows events with Danish labels, outcome, actor, object and details', async () => {
+  it('shows one sentence per event with the time, not a table', async () => {
     setup();
     render(<AuditLog />);
-    const row = (await screen.findByText('Anne Admin')).closest('tr')!;
-    expect(within(row).getByText('Eksport hentet')).toBeInTheDocument();
-    expect(within(row).getByText('Gennemført')).toBeInTheDocument();
-    expect(within(row).getByText(ENTITY)).toBeInTheDocument();
-    expect(within(row).getByText('format: pdf')).toBeInTheDocument();
-    expect(within(row).getByText('server')).toBeInTheDocument();
+    const row = (await screen.findByText('Anne Admin hentede en eksport (pdf)')).closest('li')!;
+    expect(row.querySelector('time')).toHaveAttribute('datetime', '2026-10-05T09:30:00.000Z');
+    expect(screen.queryByRole('table')).toBeNull();
+    expect(screen.queryByRole('columnheader')).toBeNull();
+    // Success has no badge; raw codes and ids are not in the visible row text.
+    expect(within(row.querySelector('p')!).queryByText('Gennemført')).toBeNull();
+    expect(within(row.querySelector('p')!).queryByText('selvrapporteret')).toBeNull();
+    expect(within(row.querySelector('p')!).queryByText(/export\.download|meeting/)).toBeNull();
   });
 
-  it('shows the change note of a central template change prominently, under the event', async () => {
+  it('keeps the technical information in a collapsed Tekniske detaljer block', async () => {
+    setup(ADMIN_ME, () => json({ events: [ev({ ipAddress: '10.0.0.7' })], nextCursor: null }));
+    render(<AuditLog />);
+    const row = (await screen.findByText('Anne Admin hentede en eksport (pdf)')).closest('li')!;
+    const details = row.querySelector('details')!;
+    expect(details).not.toHaveAttribute('open');
+    expect(within(details).getByText('Tekniske detaljer').tagName).toBe('SUMMARY');
+    await userEvent.click(within(details).getByText('Tekniske detaljer'));
+    expect(details).toHaveAttribute('open');
+    for (const text of ['Eksport hentet (export.download)', `meeting ${ENTITY}`, 'user-1', 'req-1', '10.0.0.7', 'format: pdf']) {
+      expect(within(details).getByText(text)).toBeInTheDocument();
+    }
+  });
+
+  it('omits the IP line when the API returned none (scoped reader)', async () => {
+    setup();
+    render(<AuditLog />);
+    const row = (await screen.findByText('Anne Admin hentede en eksport (pdf)')).closest('li')!;
+    expect(within(row).queryByText('IP-adresse')).toBeNull();
+  });
+
+  it('shows the change note of a central template change prominently, under the sentence', async () => {
     const NOTE = 'Tonen er gjort mere formel efter ønske fra afdelingen.\nBrug "mødet besluttede".';
     setup(ADMIN_ME, () =>
       json({
         events: [
           ev({ id: '12', eventType: 'central_template.update', entityType: 'central_template', details: { version: 3, changedFields: ['prompt'] }, changeNote: NOTE, templateName: 'Standardreferat' }),
-          ev({ id: '11', eventType: 'central_template.read', entityType: 'central_template', details: { version: 3 } }),
+          ev({ id: '11', eventType: 'central_template.archive', entityType: 'central_template', details: { version: 2 }, templateName: 'Standardreferat' }),
         ],
         nextCursor: null,
       }),
@@ -75,37 +100,59 @@ describe('AuditLog', () => {
     // Whitespace and line breaks of the note are kept (pre-wrap) and the full text is shown.
     expect(block.querySelector('p')!.textContent).toBe(NOTE);
     expect(block.querySelector('p')!.className).toContain('whitespace-pre-wrap');
-    expect(screen.getByText('Skabelon: Standardreferat')).toBeInTheDocument();
-    // Only the change event gets a note block; the read event does not.
+    expect(block.className).toContain('bg-[var(--accent-wash)]');
+    // The sentence names the template and version, and comes before the note in the same row.
+    const row = block.closest('li')!;
+    const sentence = within(row).getByText('Anne Admin ændrede den centrale skabelon »Standardreferat« (version 3)');
+    expect(sentence.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Only the event that has a note gets a note block.
     expect(screen.getAllByText(/Ændringsbeskrivelse/)).toHaveLength(1);
+    expect(screen.getByText('Anne Admin arkiverede den centrale skabelon »Standardreferat« (version 2)')).toBeInTheDocument();
+  });
+
+  it('shows an outcome badge only for denied and failed events', async () => {
+    setup(ADMIN_ME, () =>
+      json({
+        events: [
+          ev({ id: '3', eventType: 'authz.denied', outcome: 'denied', details: { required: 'audit.read', reason: 'missing_capability' } }),
+          ev({ id: '2', eventType: 'auth.login_failed', outcome: 'error', actorUserId: null, actorName: null, details: { reason: 'invalid_credentials' } }),
+          ev({ id: '1' }),
+        ],
+        nextCursor: null,
+      }),
+    );
+    render(<AuditLog />);
+    const denied = (await screen.findByText(/fik adgang nægtet til »Læse loggen«/)).closest('li')!;
+    expect(within(denied.querySelector('p')!).getByText('Nægtet')).toBeInTheDocument();
+    const failed = screen.getByText(/Mislykket login-forsøg/).closest('li')!;
+    expect(within(failed.querySelector('p')!).getByText('Fejlet')).toBeInTheDocument();
+    const ok = screen.getByText('Anne Admin hentede en eksport (pdf)').closest('li')!;
+    const okLine = ok.querySelector('p')!;
+    expect(within(okLine).queryByText('Gennemført')).toBeNull();
+    expect(within(okLine).queryByText('Nægtet')).toBeNull();
+    expect(within(okLine).queryByText('Fejlet')).toBeNull();
   });
 
   it('marks client events as selvrapporteret', async () => {
-    setup(ADMIN_ME, () => json({ events: [ev({ source: 'client', eventType: 'meeting.delete' })], nextCursor: null }));
+    setup(ADMIN_ME, () => json({ events: [ev({ source: 'client', eventType: 'meeting.delete', details: {} })], nextCursor: null }));
     render(<AuditLog />);
-    // The label also exists as a filter option, so find the row through the actor.
-    const row = (await screen.findByText('Anne Admin')).closest('tr')!;
-    expect(within(row).getByText('Møde slettet')).toBeInTheDocument();
+    const row = (await screen.findByText('Anne Admin slettede et møde')).closest('li')!;
     expect(within(row).getByText('selvrapporteret')).toBeInTheDocument();
-  });
-
-  it('shows the IP column only when the API returned addresses', async () => {
-    setup(ADMIN_ME, () => json({ events: [ev({ ipAddress: '10.0.0.7' })], nextCursor: null }));
-    const { unmount } = render(<AuditLog />);
-    expect(await screen.findByText('10.0.0.7')).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'IP-adresse' })).toBeInTheDocument();
-    unmount();
-
-    setup();
-    render(<AuditLog />);
-    await screen.findByText('Anne Admin');
-    expect(screen.queryByRole('columnheader', { name: 'IP-adresse' })).toBeNull();
   });
 
   it('shows an empty state', async () => {
     setup(ADMIN_ME, () => json({ events: [], nextCursor: null }));
     render(<AuditLog />);
     expect(await screen.findByText('Ingen hændelser fundet')).toBeInTheDocument();
+  });
+
+  it('announces loading with role=status', async () => {
+    let release: (r: Response) => void = () => {};
+    setup(ADMIN_ME, () => new Promise<Response>((r) => (release = r)));
+    render(<AuditLog />);
+    expect(await screen.findByRole('status', { name: '' })).toHaveTextContent('Indlæser');
+    release(new Response(JSON.stringify({ events: [], nextCursor: null }), { status: 200 }));
+    await screen.findByText('Ingen hændelser fundet');
   });
 
   it('shows an error banner with retry when loading fails', async () => {
@@ -115,7 +162,7 @@ describe('AuditLog', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Noget gik galt');
     fail = false;
     await userEvent.click(screen.getByRole('button', { name: 'Prøv igen' }));
-    expect(await screen.findByText('Anne Admin')).toBeInTheDocument();
+    expect(await screen.findByText('Anne Admin hentede en eksport (pdf)')).toBeInTheDocument();
     expect(auditCalls(m)).toHaveLength(2);
   });
 
@@ -126,56 +173,162 @@ describe('AuditLog', () => {
         : json({ events: [ev()], nextCursor: '10' }),
     );
     render(<AuditLog />);
-    await screen.findByText('Anne Admin');
+    await screen.findByText('Anne Admin hentede en eksport (pdf)');
     await userEvent.click(screen.getByRole('button', { name: 'Indlæs flere' }));
-    expect(await screen.findByText('Bo Bruger')).toBeInTheDocument();
-    expect(screen.getByText('Anne Admin')).toBeInTheDocument();
+    expect(await screen.findByText('Bo Bruger hentede en eksport (pdf)')).toBeInTheDocument();
+    expect(screen.getByText('Anne Admin hentede en eksport (pdf)')).toBeInTheDocument();
     expect(lastParams(m).get('cursor')).toBe('10');
     expect(screen.queryByRole('button', { name: 'Indlæs flere' })).toBeNull();
   });
 
-  it('sends the chosen filters to the API', async () => {
-    const m = setup();
-    render(<AuditLog />);
-    await screen.findByText('Anne Admin');
-    await userEvent.selectOptions(screen.getByLabelText('Hændelse'), 'meeting.delete');
-    await userEvent.selectOptions(screen.getByLabelText('Resultat'), 'denied');
-    await userEvent.selectOptions(screen.getByLabelText('Kilde'), 'client');
-    await userEvent.type(screen.getByLabelText('Bruger-id'), 'user-9');
-    await userEvent.type(screen.getByLabelText('Objekt-id'), ENTITY.toUpperCase());
-    await userEvent.type(screen.getByLabelText('Fra dato'), '2026-10-01');
-    await userEvent.type(screen.getByLabelText('Til dato'), '2026-10-05');
-    await userEvent.click(screen.getByRole('button', { name: 'Filtrér' }));
-    await waitFor(() => expect(auditCalls(m)).toHaveLength(2));
-    const p = lastParams(m);
-    expect(p.getAll('eventType')).toEqual(['meeting.delete']);
-    expect(p.get('outcome')).toBe('denied');
-    expect(p.get('source')).toBe('client');
-    expect(p.get('actorUserId')).toBe('user-9');
-    expect(p.get('entityId')).toBe(ENTITY);
-    expect(new Date(p.get('from')!).getTime()).toBe(new Date('2026-10-01T00:00:00').getTime());
-    expect(new Date(p.get('to')!).getTime()).toBe(new Date('2026-10-05T23:59:59.999').getTime());
-  });
+  describe('filters', () => {
+    const loaded = async (m = setup()) => {
+      render(<AuditLog />);
+      await screen.findByText('Anne Admin hentede en eksport (pdf)');
+      return m;
+    };
 
-  it('rejects a malformed object id without calling the API', async () => {
-    const m = setup();
-    render(<AuditLog />);
-    await screen.findByText('Anne Admin');
-    await userEvent.type(screen.getByLabelText('Objekt-id'), 'not-a-uuid');
-    await userEvent.click(screen.getByRole('button', { name: 'Filtrér' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('gyldigt id');
-    expect(auditCalls(m)).toHaveLength(1);
-  });
+    it('starts with the last 7 days and no other filter', async () => {
+      const m = await loaded();
+      const p = lastParams(m);
+      expect(Math.abs(Date.now() - SEVEN_DAYS - new Date(p.get('from')!).getTime())).toBeLessThan(60_000);
+      expect([...p.keys()].sort()).toEqual(['from', 'limit']);
+      expect(screen.getByLabelText('Periode')).toHaveValue('7d');
+      expect(screen.getByLabelText('Kategori')).toHaveValue('');
+      expect(screen.getByRole('searchbox', { name: 'Søg efter bruger' })).toHaveAttribute('placeholder', 'Navn på bruger');
+      expect(screen.queryByRole('button', { name: 'Nulstil' })).toBeNull();
+    });
 
-  it('rejects a reversed date range without calling the API', async () => {
-    const m = setup();
-    render(<AuditLog />);
-    await screen.findByText('Anne Admin');
-    await userEvent.type(screen.getByLabelText('Fra dato'), '2026-10-05');
-    await userEvent.type(screen.getByLabelText('Til dato'), '2026-10-01');
-    await userEvent.click(screen.getByRole('button', { name: 'Filtrér' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Fra-datoen');
-    expect(auditCalls(m)).toHaveLength(1);
+    it('searches by user name with q on Enter', async () => {
+      const m = await loaded();
+      await userEvent.type(screen.getByLabelText('Søg efter bruger'), '  Mette  {Enter}');
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(2));
+      expect(lastParams(m).get('q')).toBe('Mette');
+      expect(lastParams(m).has('actorUserId')).toBe(false);
+    });
+
+    it('searches with the Søg button, and an empty search sends no q', async () => {
+      const m = await loaded();
+      await userEvent.type(screen.getByLabelText('Søg efter bruger'), 'Bo');
+      await userEvent.click(screen.getByRole('button', { name: 'Søg' }));
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(2));
+      expect(lastParams(m).get('q')).toBe('Bo');
+      await userEvent.clear(screen.getByLabelText('Søg efter bruger'));
+      await userEvent.type(screen.getByLabelText('Søg efter bruger'), '   {Enter}');
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(3));
+      expect(lastParams(m).has('q')).toBe(false);
+    });
+
+    it('a category sends the event types of that category on change', async () => {
+      const m = await loaded();
+      await userEvent.selectOptions(screen.getByLabelText('Kategori'), 'Login og adgang');
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(2));
+      expect(lastParams(m).getAll('eventType').sort()).toEqual(['auth.login', 'auth.login_failed', 'auth.logout', 'authz.denied']);
+      await userEvent.selectOptions(screen.getByLabelText('Kategori'), 'Alle hændelser');
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(3));
+      expect(lastParams(m).has('eventType')).toBe(false);
+    });
+
+    it('offers the five categories', async () => {
+      await loaded();
+      const options = within(screen.getByLabelText('Kategori')).getAllByRole('option').map((o) => o.textContent);
+      expect(options).toEqual(['Alle hændelser', 'Login og adgang', 'Skabeloner', 'Møder og optagelser', 'Brugere og roller', 'Loggen']);
+    });
+
+    it('offers the periods and applies them on change', async () => {
+      const m = await loaded();
+      const options = within(screen.getByLabelText('Periode')).getAllByRole('option').map((o) => o.textContent);
+      expect(options).toEqual(['I dag', 'Seneste 7 dage', 'Seneste 30 dage', 'Alle']);
+      await userEvent.selectOptions(screen.getByLabelText('Periode'), 'I dag');
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(2));
+      const start = new Date();
+      start.setHours(0, 0, 0, 0);
+      expect(new Date(lastParams(m).get('from')!).getTime()).toBe(start.getTime());
+      await userEvent.selectOptions(screen.getByLabelText('Periode'), 'Alle');
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(3));
+      expect(lastParams(m).has('from')).toBe(false);
+      await userEvent.selectOptions(screen.getByLabelText('Periode'), 'Seneste 30 dage');
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(4));
+      expect(Math.abs(Date.now() - 30 * 24 * 3600_000 - new Date(lastParams(m).get('from')!).getTime())).toBeLessThan(60_000);
+    });
+
+    it('keeps resultat, kilde, objekt-id and dates under Flere filtre', async () => {
+      const m = await loaded();
+      const disclosure = screen.getByText(/Flere filtre/).closest('details')!;
+      expect(disclosure).not.toHaveAttribute('open');
+      await userEvent.click(screen.getByText(/Flere filtre/));
+      expect(disclosure).toHaveAttribute('open');
+      await userEvent.selectOptions(screen.getByLabelText('Resultat'), 'Nægtet');
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(2));
+      expect(lastParams(m).get('outcome')).toBe('denied');
+      await userEvent.selectOptions(screen.getByLabelText('Kilde'), 'Selvrapporteret af klienten');
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(3));
+      expect(lastParams(m).get('source')).toBe('client');
+      await userEvent.type(screen.getByLabelText('Objekt-id'), `${ENTITY.toUpperCase()}{Enter}`);
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(4));
+      expect(lastParams(m).get('entityId')).toBe(ENTITY);
+      expect(lastParams(m).get('outcome')).toBe('denied');
+      expect(screen.getByText(/Flere filtre \(3 valgt\)/)).toBeInTheDocument();
+    });
+
+    it('custom dates override the period', async () => {
+      const m = await loaded();
+      await userEvent.click(screen.getByText(/Flere filtre/));
+      await userEvent.type(screen.getByLabelText('Fra dato'), '2026-10-01');
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(2));
+      await userEvent.type(screen.getByLabelText('Til dato'), '2026-10-05');
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(3));
+      const p = lastParams(m);
+      expect(new Date(p.get('from')!).getTime()).toBe(new Date('2026-10-01T00:00:00').getTime());
+      expect(new Date(p.get('to')!).getTime()).toBe(new Date('2026-10-05T23:59:59.999').getTime());
+      expect(screen.getByLabelText('Periode')).toHaveValue('custom');
+      // Picking a period again replaces the custom dates.
+      await userEvent.selectOptions(screen.getByLabelText('Periode'), 'Seneste 30 dage');
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(4));
+      expect(lastParams(m).has('to')).toBe(false);
+      expect(screen.getByLabelText('Fra dato')).toHaveValue('');
+      expect(screen.getByLabelText('Periode')).toHaveValue('30d');
+    });
+
+    it('rejects a malformed object id without calling the API', async () => {
+      const m = await loaded();
+      await userEvent.click(screen.getByText(/Flere filtre/));
+      await userEvent.type(screen.getByLabelText('Objekt-id'), 'not-a-uuid{Enter}');
+      expect(await screen.findByRole('alert')).toHaveTextContent('gyldigt id');
+      expect(auditCalls(m)).toHaveLength(1);
+    });
+
+    it('rejects a reversed date range without calling the API', async () => {
+      const m = await loaded();
+      await userEvent.click(screen.getByText(/Flere filtre/));
+      await userEvent.type(screen.getByLabelText('Fra dato'), '2026-10-05');
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(2));
+      await userEvent.type(screen.getByLabelText('Til dato'), '2026-10-01');
+      expect(await screen.findByRole('alert')).toHaveTextContent('Fra-datoen');
+      expect(auditCalls(m)).toHaveLength(2);
+    });
+
+    it('Nulstil clears everything back to the defaults', async () => {
+      const m = await loaded();
+      await userEvent.type(screen.getByLabelText('Søg efter bruger'), 'Mette{Enter}');
+      await userEvent.selectOptions(screen.getByLabelText('Kategori'), 'Skabeloner');
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(3));
+      await userEvent.click(screen.getByRole('button', { name: 'Nulstil' }));
+      await waitFor(() => expect(auditCalls(m)).toHaveLength(4));
+      expect([...lastParams(m).keys()].sort()).toEqual(['from', 'limit']);
+      expect(screen.getByLabelText('Søg efter bruger')).toHaveValue('');
+      expect(screen.getByLabelText('Kategori')).toHaveValue('');
+      expect(screen.queryByRole('button', { name: 'Nulstil' })).toBeNull();
+    });
+
+    it('a filtered empty result suggests widening the search', async () => {
+      setup(ADMIN_ME, () => json({ events: [], nextCursor: null }));
+      render(<AuditLog />);
+      await screen.findByText('Ingen hændelser fundet');
+      expect(screen.queryByText(/Prøv et andet navn/)).toBeNull();
+      await userEvent.type(screen.getByLabelText('Søg efter bruger'), 'Nobody{Enter}');
+      expect(await screen.findByText(/Prøv et andet navn/)).toBeInTheDocument();
+    });
   });
 
   it('offers CSV export only with audit.export', async () => {
@@ -186,7 +339,7 @@ describe('AuditLog', () => {
 
     setup(LOG_READER_ME);
     render(<AuditLog />);
-    await screen.findByText('Anne Admin');
+    await screen.findByText('Anne Admin hentede en eksport (pdf)');
     expect(screen.queryByRole('button', { name: 'Eksportér som CSV' })).toBeNull();
   });
 
@@ -320,15 +473,19 @@ describe('AuditLog', () => {
     it('exports with the applied filters', async () => {
       const m = setupExport(() => csvResponse());
       render(<AuditLog />);
-      await screen.findByText('Anne Admin');
-      await userEvent.selectOptions(screen.getByLabelText('Resultat'), 'denied');
+      await screen.findByText('Anne Admin hentede en eksport (pdf)');
+      await userEvent.click(screen.getByText(/Flere filtre/));
+      await userEvent.selectOptions(screen.getByLabelText('Resultat'), 'Nægtet');
       await userEvent.type(screen.getByLabelText('Fra dato'), '2026-10-01');
-      await userEvent.click(screen.getByRole('button', { name: 'Filtrér' }));
-      await waitFor(() => expect(auditCalls(m)).toHaveLength(2));
+      await userEvent.type(screen.getByLabelText('Søg efter bruger'), 'Mette{Enter}');
+      await userEvent.selectOptions(screen.getByLabelText('Kategori'), 'Møder og optagelser');
+      await waitFor(() => expect(lastParams(m).getAll('eventType').length).toBeGreaterThan(0));
       await clickExport();
       await waitFor(() => expect(exportCalls(m)).toHaveLength(1));
       const p = new URL(`http://x${exportCalls(m)[0][0]}`).searchParams;
       expect(p.get('outcome')).toBe('denied');
+      expect(p.get('q')).toBe('Mette');
+      expect(p.getAll('eventType')).toContain('meeting.delete');
       expect(new Date(p.get('from')!).getTime()).toBe(new Date('2026-10-01T00:00:00').getTime());
       expect(p.has('limit')).toBe(false);
     });
@@ -343,7 +500,7 @@ describe('AuditLog', () => {
   it('does not show that notice to a global reader', async () => {
     setup();
     render(<AuditLog />);
-    await screen.findByText('Anne Admin');
+    await screen.findByText('Anne Admin hentede en eksport (pdf)');
     expect(screen.queryByText(/kun hændelser fra de enheder/)).toBeNull();
   });
 
@@ -362,12 +519,11 @@ describe('AuditLog', () => {
       return json({ events: [ev({ id: '2', actorName: 'Ny Filter' })], nextCursor: null });
     });
     render(<AuditLog />);
-    await userEvent.selectOptions(await screen.findByLabelText('Resultat'), 'error');
-    await userEvent.click(screen.getByRole('button', { name: 'Filtrér' }));
-    await screen.findByText('Ny Filter');
+    await userEvent.selectOptions(await screen.findByLabelText('Kategori'), 'Skabeloner');
+    await screen.findByText('Ny Filter hentede en eksport (pdf)');
     releaseFirst(new Response(JSON.stringify({ events: [ev({ actorName: 'Gammel' })], nextCursor: null }), { status: 200 }));
     await new Promise((r) => setTimeout(r, 20));
     expect(screen.queryByText('Gammel')).toBeNull();
-    expect(screen.getByText('Ny Filter')).toBeInTheDocument();
+    expect(screen.getByText('Ny Filter hentede en eksport (pdf)')).toBeInTheDocument();
   });
 });

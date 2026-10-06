@@ -108,7 +108,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
         audioSizeBytes: blob.size,
         audioDurationSeconds: Number.isFinite(duration) ? duration : null,
         ...(parts.length > 0 ? { participants: parts } : {}),
-      }, { automatic: true });
+      });
       router.push(`/meeting/${meetingId}/review`);
       return;
     }
@@ -149,7 +149,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
       if (newParticipantsJson !== participantsRef.current) {
         participantsRef.current = newParticipantsJson;
         setParticipants(data.participants ?? []);
-        updateMeeting(meetingId, { participants: data.participants ?? [] }, { automatic: true }).catch(() => {});
+        updateMeeting(meetingId, { participants: data.participants ?? [] }).catch(() => {});
       }
 
       // Sync timer start reference from server on every recording poll so the

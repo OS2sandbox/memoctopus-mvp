@@ -27,34 +27,26 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-function setup(editable: boolean, extra: Parameters<typeof installFetch>[0] = {}) {
+function setup(extra: Parameters<typeof installFetch>[0] = {}) {
   const mock = installFetch({
     [`GET /api/admin/access/org-units/${UNIT.uuid}/members`]: () => json(MEMBERS),
     'GET /api/admin/access/users': () => json(USERS),
     ...extra,
   });
-  renderWithToasts(<OrgUnitMembersDialog open onOpenChange={onOpenChange} unit={UNIT} editable={editable} onSaved={onSaved} />);
+  renderWithToasts(<OrgUnitMembersDialog open onOpenChange={onOpenChange} unit={UNIT} onSaved={onSaved} />);
   return mock;
 }
 
 describe('OrgUnitMembersDialog', () => {
-  it('lists members read-only without loading users or offering save', async () => {
-    const mock = setup(false);
-    expect(await screen.findByText('Synk Person')).toBeInTheDocument();
-    expect(screen.queryByRole('checkbox')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Gem medlemmer' })).toBeNull();
-    expect(calls(mock, 'GET', '/api/admin/access/users')).toHaveLength(0);
-  });
-
   it('pre-selects current members and warns about unlinked ones that will be dropped', async () => {
-    setup(true);
+    setup();
     expect(await screen.findByLabelText(/Bo Bruger/)).toBeChecked();
     expect(screen.getByLabelText(/Carla Ny/)).not.toBeChecked();
     expect(screen.getByRole('note')).toHaveTextContent('1 medlem er ikke knyttet til en bruger og fjernes');
   });
 
   it('filters on the server with q (so users beyond the first page can be found)', async () => {
-    const mock = setup(true, {
+    const mock = setup({
       'GET /api/admin/access/users': (url) =>
         json(url.includes('q=carla') ? { users: [USERS.users[1]] } : USERS),
     });
@@ -66,18 +58,18 @@ describe('OrgUnitMembersDialog', () => {
   });
 
   it('tells the admin when the user list was cut off', async () => {
-    setup(true, { 'GET /api/admin/access/users': () => json({ ...USERS, truncated: true }) });
+    setup({ 'GET /api/admin/access/users': () => json({ ...USERS, truncated: true }) });
     expect(await screen.findByText('Viser de første 2. Brug søgefeltet for at finde flere.')).toBeInTheDocument();
   });
 
   it('shows no cut-off notice when every user was returned', async () => {
-    setup(true);
+    setup();
     await screen.findByLabelText(/Bo Bruger/);
     expect(screen.queryByText(/Viser de første/)).toBeNull();
   });
 
   it('does not send a request per keystroke', async () => {
-    const mock = setup(true);
+    const mock = setup();
     await screen.findByLabelText(/Bo Bruger/);
     const before = calls(mock, 'GET', '/api/admin/access/users').length;
     await userEvent.type(screen.getByLabelText('Filtrer brugere'), 'carla');
@@ -85,7 +77,7 @@ describe('OrgUnitMembersDialog', () => {
   });
 
   it('puts the whole selection in one PUT, even members hidden by the filter', async () => {
-    const mock = setup(true, {
+    const mock = setup({
       'GET /api/admin/access/users': (url) =>
         json(url.includes('q=carla') ? { users: [USERS.users[1]] } : USERS),
       [`PUT /api/admin/access/org-units/${UNIT.uuid}/members`]: () => json({ members: [] }),
@@ -102,7 +94,7 @@ describe('OrgUnitMembersDialog', () => {
   });
 
   it('shows the server message when saving fails', async () => {
-    setup(true, {
+    setup({
       [`PUT /api/admin/access/org-units/${UNIT.uuid}/members`]: () =>
         json({ error: 'Enheden styres af Rollekatalog og kan ikke ændres her', code: 'not_local' }, 409),
     });
@@ -114,7 +106,7 @@ describe('OrgUnitMembersDialog', () => {
 
   it('shows a load error', async () => {
     installFetch({ [`GET /api/admin/access/org-units/${UNIT.uuid}/members`]: () => json({ error: 'x' }, 404) });
-    renderWithToasts(<OrgUnitMembersDialog open onOpenChange={onOpenChange} unit={UNIT} editable onSaved={onSaved} />);
+    renderWithToasts(<OrgUnitMembersDialog open onOpenChange={onOpenChange} unit={UNIT} onSaved={onSaved} />);
     const alert = await screen.findByRole('alert');
     expect(within(alert).getByText('Ikke fundet.')).toBeInTheDocument();
   });

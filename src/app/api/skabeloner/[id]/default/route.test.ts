@@ -56,7 +56,6 @@ describe('POST /api/skabeloner/[id]/default', () => {
     mockSetDefaultSkabelon.mockReset();
     mockSetDefaultSkabelon.mockResolvedValue(sampleSkabelon);
     mockRecord.mockReset();
-    mockRecord.mockResolvedValue({ status: 'stored' });
   });
 
   it('returns 401 when not authenticated', async () => {
@@ -89,23 +88,8 @@ describe('POST /api/skabeloner/[id]/default', () => {
     expect(typeof body.error).toBe('string');
   });
 
-  it('emits template.set_default once with the id only', async () => {
-    await POST(makeReq() as never, { params: Promise.resolve({ id: SK_ID }) });
-    expect(mockRecord).toHaveBeenCalledTimes(1);
-    const [, event] = mockRecord.mock.calls[0];
-    expect(event).toEqual({ type: 'template.set_default', actorUserId: 'user-123', entityId: SK_ID });
-    expect(JSON.stringify(event)).not.toContain('Bestyrelsesmøde');
-  });
-
-  it('does not emit when the skabelon is not found', async () => {
-    mockSetDefaultSkabelon.mockResolvedValueOnce(null);
+  it('writes no audit event: choosing a default is a preference, not an audited action', async () => {
     await POST(makeReq() as never, { params: Promise.resolve({ id: SK_ID }) });
     expect(mockRecord).not.toHaveBeenCalled();
-  });
-
-  it('still returns 200 when the audit write is dropped', async () => {
-    mockRecord.mockResolvedValue({ status: 'dropped', code: 'db_error' });
-    const res = await POST(makeReq() as never, { params: Promise.resolve({ id: SK_ID }) });
-    expect(res.status).toBe(200);
   });
 });

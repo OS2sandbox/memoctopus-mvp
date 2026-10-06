@@ -1,5 +1,7 @@
-// AI/STT pipeline calls: counts, sizes and durations only. Never the text that
-// went in or came out, and never an error message (use outcomeCode).
+// minutes.generate and export.download: what a person asked for. Pipeline steps
+// (transcription, diarization, chapters, clarifications) are NOT audited. Counts,
+// sizes and durations only; never the text that went in or came out, and never an
+// error message (use outcomeCode).
 import { z } from 'zod';
 import { amount, code, count, defineEvent } from './types';
 
@@ -23,49 +25,6 @@ export const aiEvents = {
         templateVersion: count().min(1).optional(),
         durationMs: amount(),
         segmentCount: count(),
-        outcomeCode: outcomeCode(),
-      })
-      .strict(),
-  }),
-  'transcription.request': defineEvent({
-    ...meetingRef,
-    details: z
-      .object({
-        mode: z.enum(['live', 'batch', 'upload']),
-        audioSeconds: amount().optional(),
-        bytes: count().optional(),
-        durationMs: amount(),
-        outcomeCode: outcomeCode(),
-      })
-      .strict(),
-  }),
-  'diarization.request': defineEvent({
-    ...meetingRef,
-    details: z
-      .object({
-        speakerCount: count().optional(),
-        durationMs: amount(),
-        outcomeCode: outcomeCode(),
-      })
-      .strict(),
-  }),
-  'chapters.request': defineEvent({
-    ...meetingRef,
-    details: z
-      .object({
-        segmentCount: count().optional(),
-        chapterCount: count().optional(),
-        durationMs: amount(),
-        outcomeCode: outcomeCode(),
-      })
-      .strict(),
-  }),
-  'clarifications.request': defineEvent({
-    ...meetingRef,
-    details: z
-      .object({
-        questionCount: count().optional(),
-        durationMs: amount(),
         outcomeCode: outcomeCode(),
       })
       .strict(),

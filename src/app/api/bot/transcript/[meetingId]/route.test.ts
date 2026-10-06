@@ -106,35 +106,16 @@ describe('GET /api/bot/transcript/[meetingId]', () => {
   });
 });
 
-describe('audit: bot.transcript_collect', () => {
+describe('audit', () => {
   const MEETING = '11111111-1111-4111-8111-111111111111';
   const params = { params: Promise.resolve({ meetingId: MEETING }) };
 
-  it('emits one bot.transcript_collect with the segment count and no transcript text', async () => {
-    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+  it('writes no audit event for a hand-over, a failed run, none, processing or a non-owner', async () => {
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
     mockRead.mockResolvedValueOnce({ status: 'ready', segments: SEGMENTS, diarized: true, createdAt: 1 });
     await GET(REQ, params);
-    expect(mockRecord).toHaveBeenCalledTimes(1);
-    const [, event] = mockRecord.mock.calls[0];
-    expect(event).toEqual({
-      type: 'bot.transcript_collect',
-      actorUserId: FAKE_SESSION.user.id,
-      entityId: MEETING,
-      details: { segmentCount: 1 },
-    });
-    expect(JSON.stringify(event)).not.toContain('hej');
-  });
-
-  it('records outcome error when the server-side run failed', async () => {
-    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockRead.mockResolvedValueOnce({ status: 'failed', createdAt: 1 });
     await GET(REQ, params);
-    expect(mockRecord).toHaveBeenCalledTimes(1);
-    expect(mockRecord.mock.calls[0][1]).toMatchObject({ type: 'bot.transcript_collect', outcome: 'error' });
-  });
-
-  it('emits nothing for none, processing or non-owner', async () => {
-    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
     mockRead.mockResolvedValueOnce(null);
     await GET(REQ, params);
     mockRead.mockResolvedValueOnce({ status: 'processing', createdAt: 1 });

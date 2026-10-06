@@ -47,9 +47,20 @@ describe('(app)/admin layout — server-side gate', () => {
     expect((el as unknown as El).type).toBe(ToastProvider);
     const [nav] = findAll(el, AdminNav);
     expect((nav.props as unknown as { sections: Array<{ key: string }> }).sections.map((s) => s.key)).toEqual([
-      'overview',
       'organisation',
     ]);
+  });
+
+  it.each([
+    ['a template manager only', ['template.use', 'template.manage'], ['templates']],
+    ['a log reader only', ['template.use', 'audit.read'], ['log']],
+    ['a template manager who may also read the directory', ['template.use', 'template.manage', 'directory.read'], ['organisation', 'templates']],
+    ['a log reader who may also read the directory', ['template.use', 'audit.read', 'directory.read'], ['organisation', 'log']],
+  ] as const)('limits the nav to %s', async (_label, capabilities, expected) => {
+    mockPrincipal.mockResolvedValueOnce(makePrincipal({ capabilities: [...capabilities] }));
+    const el = await AdminLayout({ children: null });
+    const [nav] = findAll(el, AdminNav);
+    expect((nav.props as unknown as { sections: Array<{ key: string }> }).sections.map((s) => s.key)).toEqual(expected);
   });
 
   it('gives an administrator every section', async () => {
@@ -57,7 +68,6 @@ describe('(app)/admin layout — server-side gate', () => {
     const el = await AdminLayout({ children: null });
     const [nav] = findAll(el, AdminNav);
     expect((nav.props as unknown as { sections: Array<{ key: string }> }).sections.map((s) => s.key)).toEqual([
-      'overview',
       'users',
       'organisation',
       'templates',

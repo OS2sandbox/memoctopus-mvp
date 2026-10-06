@@ -137,7 +137,6 @@ export class TeamsMeetingBot {
       await this._joinMeeting();
       console.log(`[timing] in meeting (capture starting) +${this.sinceStart()}ms`);
       this.status = 'recording';
-      this.lifecycle.joined();
       this._startElapsedTimer();
       this._startParticipantPolling();
     } catch (err: unknown) {

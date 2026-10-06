@@ -29,7 +29,6 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 }));
 
 import { POST } from './route';
-import { expectValidMetadataOnly, leakyError } from '@/app/api/meetings/ai-audit.test-utils';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION } from '@/test/helpers';
 
@@ -134,77 +133,20 @@ describe('POST /api/meetings/[id]/diarize', () => {
   });
 });
 
-describe('audit: diarization.request', () => {
-  const MEETING = '11111111-2222-4333-8444-555555555555';
-  const UUID_PARAMS = { params: Promise.resolve({ id: MEETING }) };
-  const events = () => mockRecord.mock.calls.map((c) => c[1]);
-  beforeEach(() => {
+describe('audit', () => {
+  it('writes no audit event: pipeline steps are not audited (success, failure or rejected input)', async () => {
     mockRecord.mockReset();
-    mockRecord.mockResolvedValue({ status: 'stored' });
-  });
-
-  beforeEach(() => {
     mockGetSession.mockReset();
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
     mockDiarize.mockReset();
-  });
-
-  it('emits one event with the speaker count and duration only', async () => {
-    mockDiarize.mockResolvedValueOnce([
-      { speaker: 'SPEAKER_00', start: 0, end: 2 },
-      { speaker: 'SPEAKER_01', start: 2, end: 4 },
-      { speaker: 'SPEAKER_00', start: 4, end: 6 },
-    ]);
-    const res = await POST(makeAudioRequest(5_000), UUID_PARAMS);
-    expect(res.status).toBe(200);
-
-    expect(events()).toHaveLength(1);
-    const e = events()[0];
-    expect(e).toMatchObject({
-      type: 'diarization.request',
-      actorUserId: 'user-123',
-      entityId: MEETING,
-      details: { speakerCount: 2 },
-    });
-    expect(typeof e.details.durationMs).toBe('number');
-    expectValidMetadataOnly(e, ['SPEAKER_00', 'recording.wav']);
-  });
-
-  it('omits the entity for a non-UUID id', async () => {
-    mockDiarize.mockResolvedValueOnce([]);
-    await POST(makeAudioRequest(5_000), PARAMS);
-    expect(events()[0].entityId).toBeUndefined();
-    expectValidMetadataOnly(events()[0], ['meet-1']);
-  });
-
-  it('records outcome error with a code, never the message, and keeps the empty-turns fallback', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    mockDiarize.mockRejectedValueOnce(leakyError('speaker names: Alice', { code: 'ECONNRESET' }));
-    const res = await POST(makeAudioRequest(5_000), UUID_PARAMS);
-
-    expect(res.status).toBe(200);
-    expect((await res.json()).turns).toEqual([]);
-    expect(events()[0]).toMatchObject({ outcome: 'error', details: { outcomeCode: 'network' } });
-    expectValidMetadataOnly(events()[0], ['Alice']);
-    expect(JSON.stringify(spy.mock.calls)).not.toContain('Alice');
-    spy.mockRestore();
-  });
-
-  it('still answers when the audit write rejects', async () => {
     mockDiarize.mockResolvedValueOnce([{ speaker: 'SPEAKER_00', start: 0, end: 2 }]);
-    mockRecord.mockResolvedValueOnce({ status: 'dropped', code: 'db_error' });
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const res = await POST(makeAudioRequest(5_000), UUID_PARAMS);
-    expect(res.status).toBe(200);
-    expect((await res.json()).turns).toHaveLength(1);
-    warn.mockRestore();
-  });
-
-  it('emits nothing for 401, missing audio or a too-short clip', async () => {
-    mockGetSession.mockResolvedValueOnce(null as never);
-    await POST(makeAudioRequest(5_000), UUID_PARAMS);
-    await POST(makeRequestWithoutAudio(), UUID_PARAMS);
-    await POST(makeAudioRequest(1_000), UUID_PARAMS);
+    await POST(makeAudioRequest(5_000), PARAMS);
+    mockDiarize.mockRejectedValueOnce(new Error('down'));
+    await POST(makeAudioRequest(5_000), PARAMS);
+    await POST(makeRequestWithoutAudio(), PARAMS);
+    await POST(makeAudioRequest(1_000), PARAMS);
+    spy.mockRestore();
     expect(mockRecord).not.toHaveBeenCalled();
   });
 });

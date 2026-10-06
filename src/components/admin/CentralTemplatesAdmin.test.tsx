@@ -76,7 +76,7 @@ function setup(me = ADMIN_ME, extra: Parameters<typeof installFetch>[0] = {}) {
 }
 
 describe('CentralTemplatesAdmin — list', () => {
-  it('shows name, owner unit, status, version, recipient count and update time', async () => {
+  it('shows name, owner unit, status, version, availability count and update time', async () => {
     setup();
     renderWithToasts(<CentralTemplatesAdmin />);
     const row = (await screen.findByText('Bestyrelse')).closest('tr')!;
@@ -84,7 +84,9 @@ describe('CentralTemplatesAdmin — list', () => {
     expect(within(row).getByText('Kommune')).toBeInTheDocument();
     expect(within(row).getByText('Aktiv')).toBeInTheDocument();
     expect(within(row).getByText('3')).toBeInTheDocument();
-    expect(within(row).getByText('2')).toBeInTheDocument();
+    expect(within(row).getByText('2 enheder')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Til rådighed for' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Modtagere' })).toBeNull();
     expect(within(row).getByText(formatTime('2026-10-02T10:00:00.000Z'))).toBeInTheDocument();
   });
 
@@ -109,11 +111,11 @@ describe('CentralTemplatesAdmin — list', () => {
     expect(within(row).getAllByText('Ukendt')).toHaveLength(2);
   });
 
-  it('flags a template without recipients', async () => {
+  it('flags a template that is available to nobody', async () => {
     setup();
     renderWithToasts(<CentralTemplatesAdmin />);
     const row = (await screen.findByText('Tom skabelon')).closest('tr')!;
-    expect(within(row).getByText('Ingen modtagere')).toBeInTheDocument();
+    expect(within(row).getByText('Ikke til rådighed for nogen')).toBeInTheDocument();
     expect(within(row).getByText('Børn')).toBeInTheDocument();
   });
 
@@ -300,7 +302,7 @@ describe('CentralTemplatesAdmin — history', () => {
     renderWithToasts(<CentralTemplatesAdmin />);
     await userEvent.click(await screen.findByRole('button', { name: 'Historik for Bestyrelse' }));
     const dialog = await screen.findByRole('dialog', { name: 'Ændringshistorik' });
-    expect(await within(dialog).findByText('Første udgave af skabelonen')).toBeInTheDocument();
+    expect(await within(dialog).findAllByText('Første udgave af skabelonen')).toHaveLength(2); // list row and detail
     expect(calls(mock, 'GET', `/api/admin/central-templates/${A}/versions`)).toHaveLength(1);
   });
 });

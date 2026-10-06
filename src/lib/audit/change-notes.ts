@@ -12,7 +12,7 @@ import { pool } from '@/lib/db';
 import { UUID_RE } from './record';
 import type { AuditEventRow } from './query';
 
-/** The five write events; `central_template.read` has no change of its own. */
+/** The five write events of a central template; each carries the version whose note is shown. */
 const CHANGE_EVENTS = new Set([
   'central_template.create',
   'central_template.update',

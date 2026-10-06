@@ -1,10 +1,10 @@
-// Best-effort lifecycle reports (joined / ended / error) to the Next app, so the
-// app's audit log can show bot activity. Hard rules: the report carries only the
+// Best-effort lifecycle reports (ended / error) to the Next app, so the app's audit
+// log can show how a bot session finished. Joining is not reported (not audited). Hard rules: the report carries only the
 // user id, the meeting id and a short code (never the meeting URL, a title or a
 // participant name), it can never throw, and it never delays or fails a session:
 // short timeout, no retries, failures are logged by status/name only.
 
-export type LifecycleEvent = 'joined' | 'ended' | 'error';
+export type LifecycleEvent = 'ended' | 'error';
 
 export interface LifecycleReporterOptions {
   /** Full URL of POST /api/bot/lifecycle. Reporting is a no-op without it. */
@@ -17,7 +17,6 @@ export interface LifecycleReporterOptions {
 }
 
 export interface LifecycleReporter {
-  joined(): void;
   /** At most one terminal report (ended or error) is sent per session. */
   ended(code?: string): void;
   error(code: string): void;
@@ -50,17 +49,11 @@ async function send(opts: LifecycleReporterOptions, event: LifecycleEvent, code?
 
 export function createLifecycleReporter(opts: LifecycleReporterOptions): LifecycleReporter {
   let terminalSent = false;
-  let joinedSent = false;
   // Fire and forget: `send` never rejects, and callers must not wait on the Next app.
   const fire = (event: LifecycleEvent, code?: string) => {
     void send(opts, event, code);
   };
   return {
-    joined() {
-      if (joinedSent || terminalSent) return;
-      joinedSent = true;
-      fire('joined');
-    },
     ended(code) {
       if (terminalSent) return;
       terminalSent = true;

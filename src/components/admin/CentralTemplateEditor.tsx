@@ -318,7 +318,7 @@ function EditorForm({
                   <li key={f}>{contentFieldLabels[f]} er forskellig fra den gemte version</li>
                 ))}
               {latestTargets && !targetsEqual(latest.targets, targets) && (
-                <li>Modtagerne er forskellige fra den gemte version</li>
+                <li>Hvem der har skabelonen til rådighed er forskelligt fra den gemte version</li>
               )}
             </ul>
           )}
@@ -339,7 +339,7 @@ function EditorForm({
           label="Ejerenhed"
           value={owner}
           onChange={(e) => changeOwner(e.target.value)}
-          hint="Skabelonen kan administreres af alle, der er skabelonansvarlige for denne enhed. Modtagerne skal ligge under den."
+          hint="Skabelonen kan administreres af alle, der er skabelonansvarlige for denne enhed. De enheder, der får skabelonen til rådighed, skal ligge under den."
         >
           <option value="">Vælg enhed …</option>
           {ownerOptions.map(({ unit, depth }) => (
@@ -369,7 +369,7 @@ function EditorForm({
           value={content.description}
           maxLength={CENTRAL_LIMITS.description}
           onChange={(e) => set('description', e.target.value)}
-          placeholder="Kort beskrivelse, som modtagerne ser"
+          placeholder="Kort beskrivelse, som brugerne ser"
         />
       </div>
 
@@ -386,7 +386,7 @@ function EditorForm({
           aria-describedby="ct-prompt-help"
         />
         <p id="ct-prompt-help" className="text-[13px] text-[var(--muted)]">
-          Modtagerne kan bruge skabelonen, men de kan ikke se eller ændre prompten.
+          Brugerne kan bruge skabelonen, men de kan ikke se eller ændre prompten.
         </p>
       </div>
 
@@ -482,8 +482,10 @@ function OtherChangesPreview({
   const t = diffTargets(base.targets, targets);
   const lines = [
     ...fields.map((f) => `${contentFieldLabels[f]} ændres`),
-    ...t.added.map((x) => `Modtager tilføjes: ${unitName(x.orgUnitUuid)}`),
-    ...t.removed.map((x) => `Modtager fjernes: ${unitName(x.orgUnitUuid)}`),
+    ...t.added.map(
+      (x) => `Gøres tilgængelig for: ${unitName(x.orgUnitUuid)}${x.includeDescendants ? ' (inkl. underenheder)' : ''}`,
+    ),
+    ...t.removed.map((x) => `Ikke længere tilgængelig for: ${unitName(x.orgUnitUuid)}`),
     ...t.changed.map((x) => `Underenheder ændres for: ${unitName(x.orgUnitUuid)}`),
   ];
   if (lines.length === 0) return null;

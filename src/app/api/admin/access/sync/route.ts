@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { hasCapability, requireCapability, withAuthz } from '@/lib/authz/guard';
 import { accessSource } from '@/lib/authz/config';
 import { parseWith } from '@/lib/authz/access-http';
-import { rollekatalogConfigIssue } from '@/lib/rollekatalog/config';
+import { itSystemId, rollekatalogConfigIssue } from '@/lib/rollekatalog/config';
 import { runSync } from '@/lib/rollekatalog/sync';
 import { getLatestSyncRun } from '@/lib/rollekatalog/sync-run';
 import { syncResultResponse } from '@/lib/rollekatalog/sync-http';
@@ -31,8 +31,11 @@ export const GET = withAuthz('admin/access/sync GET', null, async (_req, { princ
     if (denied) return denied;
   }
   const run = await getLatestSyncRun();
+  const source = accessSource();
   return NextResponse.json(
-    { run, source: accessSource(), configIssue: rollekatalogConfigIssue() },
+    // itSystem is the identifier of the IT system the roles live under in Rollekatalog (shown to
+    // administrators so they know where to assign roles). Not a secret; null outside Rollekatalog mode.
+    { run, source, configIssue: rollekatalogConfigIssue(), itSystem: source === 'rollekatalog' ? itSystemId() : null },
     { headers: { 'Cache-Control': 'no-store' } },
   );
 });

@@ -23,22 +23,24 @@ This is enforced in code, not by convention (next section).
 
 ## Event catalogue
 
-The closed list is `src/lib/audit/events/*.ts`, aggregated in `events/index.ts`; each entry declares its allowed sources, entity type and a `.strict()` zod schema for `details`. Anything not in it is rejected. That code is the authoritative list; Danish labels for the viewer are in `src/lib/audit/labels.da.ts`. Families:
+The log is **user-focused: it records what a person did that matters for accountability, and nothing else.** No reads (opening a page, a template or its prompt), no pipeline steps (transcription, diarization, chapters, clarifications, collecting a recording from the bot), no preference changes (choosing a default template), no sync status (the Rollekatalog sync records its result in `sync_runs`, which the admin panels read) and no edits of a meeting's content in the browser. When in doubt, a new event does not belong here.
 
-| Family | Source | What it carries |
+The closed list is `src/lib/audit/events/*.ts`, aggregated in `events/index.ts`; each entry declares its allowed sources, entity type and a `.strict()` zod schema for `details`. Anything not in it is rejected. That code is the authoritative list (a guard test in `events/catalogue.test.ts` pins it to exactly the set below); Danish labels for the viewer are in `src/lib/audit/labels.da.ts`. The complete catalogue:
+
+| Event types | Source | What it carries |
 |---|---|---|
 | `auth.login`, `auth.logout`, `auth.login_failed` | server | method (`password`, `oidc`, `microsoft`, `unknown`) and configured provider id. `login_failed` has no actor, a reason code and an optional `emailHmac` (first 16 hex characters of an HMAC-SHA256 of the lower-cased address, keyed with `BETTER_AUTH_SECRET`; omitted without a secret). Failed logins are recorded only on the server, from better-auth hooks, throttled to 20 per minute per IP |
 | `authz.denied` | server | the capability or guard that refused (`required`) and a reason code; the entity only when it is a usable uuid reference. Denial rows carry no IP, user agent or request id and are written in the background |
-| `access.*` | server | role assign/revoke (role key, scope unit), org-unit create/update/delete, member add/remove, directory-user create and link. Written on the same transaction as the change |
-| `template.*` | server | personal templates: id and changed field names. Only the link flow of share/import is logged |
-| `central_template.*` | server | create, update, retarget, archive, restore: template id, owner unit, new `version`, `targetCount` or `changedFields` (names only). Same transaction as the change and the version row. `read`: a manager was shown a prompt (template detail or changelog); `{ version }` only, no text, at most one per manager and template per 10 minutes, best-effort (in memory, per instance) and never fails the read |
-| `minutes.generate`, `transcription.request`, `diarization.request`, `chapters.request`, `clarifications.request`, `export.download` | server | meeting id when the client sends a uuid, counts, durations, byte sizes and an `outcomeCode`. `minutes.generate` also carries `templateSource` (`personal`, `default`, `none`, `central`), the template as secondary entity and, for central templates, `templateVersion`; on a successful run `outcomeCode: 'prompt_echo'` means part of the output matched the locked prompt and was replaced (see `templates.md`) |
-| `bot.*` | server, system | session start/pause/resume/stop/abort and audio/transcript collection come from the Next.js proxy routes; `bot.joined`, `bot.ended` and `bot.error` come from the bot-service through `POST /api/bot/lifecycle` (source `system`) |
-| `meeting.*` | client | create (with `origin`), status change, rename, participants edit, delete, redact, audio delete, transcript edit, minutes save/version. **Self-reported**, see below |
+| `template.create`, `template.update`, `template.delete`, `template.share`, `template.import` | server | personal templates: id and changed field names. Only the link flow of share/import is logged |
+| `central_template.create`, `.update`, `.retarget`, `.archive`, `.restore` | server | template id, owner unit, new `version`, `targetCount` or `changedFields` (names only). Same transaction as the change and the version row. Reading a template or its prompt is **not** logged |
+| `minutes.generate`, `export.download` | server | meeting id when the client sends a uuid, durations, counts, byte sizes and an `outcomeCode`. `minutes.generate` also carries `templateSource` (`personal`, `default`, `none`, `central`), the template as secondary entity and, for central templates, `templateVersion`; on a successful run `outcomeCode: 'prompt_echo'` means part of the output matched the locked prompt and was replaced (see `templates.md`) |
+| `bot.session_start`, `bot.session_stop`, `bot.session_abort` | server | the user started, stopped or aborted a Teams bot session (Next.js proxy routes). Pause and resume are not logged |
+| `bot.ended`, `bot.error` | system | how the session finished, from the bot-service through `POST /api/bot/lifecycle` (source `system`; the route accepts only `ended` and `error`, anything else is a 400). Joining is not reported |
+| `meeting.create` (with `origin`), `meeting.delete`, `meeting.redact`, `meeting.audio_delete` | client | the four lifecycle moments of a meeting. **Self-reported**, see below. Renames, status changes, participant, transcript and minutes edits are not reported |
+| `access.role_assign`, `.role_revoke`, `.org_unit_create`, `.org_unit_update`, `.org_unit_delete`, `.member_add`, `.member_remove`, `.user_create`, `.user_link` | server | role assign/revoke (role key, scope unit), org-unit create/update/delete, member add/remove, directory-user create and link. Written on the same transaction as the change |
 | `audit.export`, `audit.prune` | server, system | row count and format of a CSV export (recorded before the file is returned; if it cannot be written the export is refused); rows deleted by the pruner |
-| `directory.sync` | system, server | one per Rollekatalog sync run: trigger (`cron`/`manual`), status, `forced`, error code and the counters of the run (users, sessions revoked, org units, assignments) |
 
-Entity ids must be UUIDs. `POST /api/audit/client-events` reads its body with a byte counter and answers 413 as soon as 32 KB is exceeded (also for chunked bodies without a Content-Length). `transcription.request` has the modes `live` (coalesced), `batch` and `upload`.
+Entity ids must be UUIDs. `POST /api/audit/client-events` reads its body with a byte counter and answers 413 as soon as 32 KB is exceeded (also for chunked bodies without a Content-Length).
 
 ## How the no-content rule is enforced
 
@@ -126,18 +128,16 @@ This guards against **bugs and casual misuse**. It does **not** stop the table o
 
 ## Client-reported events
 
-Meetings live only in the browser (IndexedDB), so the server cannot see a rename, a redaction or a delete. The `meeting.*` events are **reported by the client** and stored with `source = client`.
+Meetings live only in the browser (IndexedDB), so the server cannot see a redaction or a delete. The `meeting.*` events are **reported by the client** and stored with `source = client`.
 
 - **Trust level: self-reported.** Actor, time, IP and user agent come from the server session and request, never from the payload (the body schema is strict). But *that the action happened* is only the user's word: a user can forge, omit or replay such events for their own meetings, suppress them by clearing site data or blocking the endpoint, and an event queued under one login can be delivered under another login in the same browser. Do not use them as proof that a deletion or redaction took place.
 - **Delivery.** `POST /api/audit/client-events` (session required, disabled users refused; only `meeting.*` types). A durable per-user IndexedDB outbox (1000 events, 7-day TTL, back-off) survives flaky networks; each event carries a `clientEventId`, so redelivery is idempotent. A queue is delivered only while its own user is signed in. At most 50 events and 32 KB per request; one invalid event refuses the whole batch with 400. `clientOccurredAt` is kept only within the last 7 days and at most 5 minutes ahead, else replaced by server time.
-- **Server limits.** 300 events per user per 60 s (429 with `Retry-After`); for `meeting.rename`, `participants_edit`, `minutes_save` and `transcript_edit` one stored event per user, meeting and type per 60 s (the rest are acknowledged, not stored); a daily cap of `AUDIT_CLIENT_EVENTS_DAILY_CAP` stored client events per user per rolling 24 h (default 2000; beyond it events are acknowledged but dropped). The answer is `{"accepted": n}` or `{"accepted": n, "capped": true}`. If the cap check or a write fails the route answers 503 and the client keeps the batch.
-- **Client side.** Edit events are coalesced to one per user, meeting and type per 30 s; `meeting.audio_delete` is deduplicated for 60 s. Writes by the Teams bot's roster poll are not reported as `participants_edit`.
+- **Server limits.** 300 events per user per 60 s (429 with `Retry-After`); a per-type throttle (one stored event per user, meeting and type per 60 s, the rest acknowledged and not stored; `THROTTLED_TYPES` in `client-ingest.ts`) exists but is empty today, because none of the four reported types is chatty; a daily cap of `AUDIT_CLIENT_EVENTS_DAILY_CAP` stored client events per user per rolling 24 h (default 2000; beyond it events are acknowledged but dropped). The answer is `{"accepted": n}` or `{"accepted": n, "capped": true}`. If the cap check or a write fails the route answers 503 and the client keeps the batch.
+- **Client side.** `meeting.audio_delete` is deduplicated for 60 s (one user action can reach two storage functions). The browser can also coalesce a chatty type to one event per user, meeting and type per 30 s (`COALESCED` in `client.ts`); that set is empty today.
 
 ## Volume discipline
 
-- **Live transcription**: at most one `transcription.request` per actor, meeting and outcome per hour (in-memory, `utterance/coalesce.ts`). It is a sample of activity, not a count. A meeting id that is not a UUID is still audited, without an entity, and keyed on the actor alone.
-- **Live clarifications**: at most one `clarifications.request` per actor and meeting per hour for `success` and one for `error` (`clarifications/coalesce.ts`); the id is lower-cased, and a non-UUID id is keyed on the actor alone.
-- **Per-actor ceiling for server-emitted AI/export events** (`emitAudit` in `src/app/api/meetings/ai-audit.ts`): at most 300 events a minute per actor and process, in a bucket separate from the client-event limit. The coalescers key on a meeting id the client chooses, so without this a client could mint fresh keys; beyond the ceiling the event is dropped, never the request.
+- **Per-actor ceiling for server-emitted events** (`emitAudit` in `src/app/api/meetings/ai-audit.ts`, used by `minutes.generate` and `export.download`): at most 300 events a minute per actor and process, in a bucket separate from the client-event limit. Beyond the ceiling the event is dropped, never the request.
 - **Failure codes of AI/STT calls** are a closed set: `http_<status>`, `timeout`, `network` or `unknown`. An upstream error's own `code` or class name is never forwarded.
 - No per-segment or per-keystroke events exist.
 
@@ -172,19 +172,36 @@ It holds no meeting content. Rows survive deletion of the user and cannot be upd
 
 ## Known limitations
 
-- **Reading the audit log is not itself audited.** Opening the viewer or calling `GET /api/admin/audit` and the feed writes no event; only a CSV export (`audit.export`) and a manager's read of a central template prompt (`central_template.read`) are recorded.
+- **Reading the audit log is not itself audited.** Opening the viewer or calling `GET /api/admin/audit` and the feed writes no event; only a CSV export (`audit.export`) is recorded. The same goes for reading a central template and its prompt: nothing is written.
 - **Failed feed and cron key attempts are neither throttled nor logged.** A wrong `X-Audit-Key` (feed) or `X-Cron-Secret` (prune, sync) gets a 401 with no counter, no rate limit and no audit event or log line. Use a long random secret (the feed stores only its hash), and rate-limit or alert on 401s on those paths at the proxy.
-- **Per-instance, in-memory state**: the coalescers, the failed-login throttle, the client-event rate limit and the per-type throttle are per process; several app instances multiply the limits and a restart resets them.
+- **Per-instance, in-memory state**: the failed-login throttle, the client-event rate limit and the per-type throttle are per process; several app instances multiply the limits and a restart resets them.
 - **Share-code export is not logged.** The stateless template share code is built and read in the browser; only the link flow produces events.
-- **Client events are best-effort.** A crash inside a 30-second coalescing window loses that coalesced event; events left by a user who does not sign in again on that browser stay in the local outbox until the 7-day TTL.
+- **Client events are best-effort.** Events left by a user who does not sign in again on that browser stay in the local outbox until the 7-day TTL.
 - **A 429 from better-auth's own rate limiter may not reach the failed-login hook** (unverified).
 - **Latency.** `auth.login` is written inside the session-create hook; a hung audit write delays a login by at most 2 seconds.
 - **Error text on one stream.** The batch transcription stream still sends an error message to the client in its NDJSON `error` event (not to the log or the audit table).
 - **Feed gap** for transactions open longer than the delay (above).
 
+## Using the log
+
+`/admin/log` is built for reading, not for querying. Each event is one line: the time, one Danish sentence ("Mette Eksempelsen oprettede den centrale skabelon »Test af prompt«", "Mette Eksempelsen hentede en eksport (pdf)", "Mislykket login-forsøg"), and a badge only when something is off: "Nægtet" or "Fejlet" for a non-success outcome, "selvrapporteret" for a client-reported event. The sentences come from `src/lib/audit/summary.da.ts`, a pure, exhaustive function over the event catalogue: it uses the actor's name, the event type, the outcome and a few whitelisted detail fields (version, format, counts, enum codes) and never repeats free text.
+
+Everything else is under a collapsed "Tekniske detaljer" on the row: event code, object ids, user id, request id, source, IP address (global readers only) and the raw `details` lines.
+
+At the top:
+
+- **Søg efter bruger** (placeholder "Navn på bruger"): applies on Enter or "Søg" and sends `q` to `GET /api/admin/audit` and the export. It matches a case-insensitive substring of the **name snapshot** stored on the event (`actor_name`, written when the event happened) or an exact user id. Because it is a snapshot, a user who has been renamed is found under the name they had at the time, and an event whose actor had no name is only found by id. `%`, `_` and `\` in the search text match themselves. The search only narrows the result: a scoped reader still sees only the rows of their own units, whatever they search for. `q` is 1 to 100 characters, trimmed, without control characters; the searched text is not written to the audit log (the `audit.export` event carries only the row count).
+- **Kategori**: "Alle hændelser", or one of "Login og adgang" (`auth.*`, `authz.denied`), "Skabeloner" (`template.*`, `central_template.*`), "Møder og optagelser" (`meeting.*`, `bot.*`, `minutes.generate`, `export.download`), "Brugere og roller" (`access.*`) and "Loggen" (`audit.*`). The mapping is `src/lib/audit/categories.ts`, an exhaustive `Record<EventType, CategoryKey>`; the viewer sends the category's event types as repeated `eventType` parameters.
+- **Periode**: "I dag", "Seneste 7 dage" (the default), "Seneste 30 dage" or "Alle".
+- **Flere filtre**: result, source, object id (UUID) and a from/to date. A custom date range replaces the period (the period box then reads "Valgt datointerval"; choosing a period again clears the dates).
+
+Filters apply as soon as they change (Enter for the typed fields), "Nulstil" returns to the defaults, and "Eksportér som CSV" exports with the filters currently applied.
+
+Only events of the **current catalogue** are shown, in the viewer and in the CSV. Rows of event types that have since been removed from the catalogue stay in the table (and in the SIEM feed, which returns everything) but are not listed.
+
 ## Change notes in the viewer
 
-Every change to a central template carries a mandatory change note, and the notes are the point of the changelog, so the log viewer shows them: under each `central_template.create/update/retarget/archive/restore` event there is a highlighted block "Ændringsbeskrivelse" with the full note (line breaks kept), and the template's name is shown in the event cell. The prompt itself is never shown.
+Every change to a central template carries a mandatory change note, and the notes are the point of the changelog, so the log viewer makes them the dominant part of the row: under the sentence of each `central_template.create/update/retarget/archive/restore` event there is a highlighted block "Ændringsbeskrivelse" (with the version) holding the full note, line breaks kept. The sentence names the template ("… ændrede den centrale skabelon »X« (version 3)"). The prompt itself is never shown.
 
 The note is **not stored in `audit_events`**. `/api/admin/audit` looks it up at read time in `central_template_versions`, by the template id and version the event already carries (`src/lib/audit/change-notes.ts`, one query per page). Consequences:
 

@@ -33,22 +33,22 @@ describe('visibleSectionsForMe', () => {
     expect(visibleSectionsForMe(base)).toEqual([]);
   });
 
-  it('shows overview and organisation to a directory reader only', () => {
+  it('shows only organisation to a directory reader', () => {
     const me = { ...base, capabilities: ['template.use', 'directory.read'] as MeResponse['capabilities'] };
-    expect(visibleSectionsForMe(me).map((s) => s.key)).toEqual(['overview', 'organisation']);
+    expect(visibleSectionsForMe(me).map((s) => s.key)).toEqual(['organisation']);
   });
 
-  it('shows overview, users and organisation to an access manager', () => {
+  it('shows users and organisation to an access manager', () => {
     const me = {
       ...base,
       capabilities: ['template.use', 'access.manage', 'directory.read'] as MeResponse['capabilities'],
     };
-    expect(visibleSectionsForMe(me).map((s) => s.key)).toEqual(['overview', 'users', 'organisation']);
+    expect(visibleSectionsForMe(me).map((s) => s.key)).toEqual(['users', 'organisation']);
   });
 
-  it('shows the overview and the templates section to a template manager', () => {
+  it('shows only the templates section to a template manager', () => {
     const me = { ...base, capabilities: ['template.use', 'template.manage'] as MeResponse['capabilities'] };
-    expect(visibleSectionsForMe(me).map((s) => s.key)).toEqual(['overview', 'templates']);
+    expect(visibleSectionsForMe(me).map((s) => s.key)).toEqual(['templates']);
   });
 });
 

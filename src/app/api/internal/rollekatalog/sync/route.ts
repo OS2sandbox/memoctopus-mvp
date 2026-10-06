@@ -8,9 +8,9 @@ import { syncResultResponse } from '@/lib/rollekatalog/sync-http';
 
 // Called by the operator's scheduler with INTERNAL_CRON_SECRET (the app has no
 // in-process timers: they break with several replicas). The sync records its own
-// sync_runs row and the directory.sync audit event. Never forced: only the admin
+// sync_runs row (no audit event). Never forced: only the admin
 // button may bypass the removal threshold. A scheduler that outlives its setup
-// (local mode, or no URL/keys) gets 409 and leaves no sync_runs row or audit event.
+// (local mode, or no URL/keys) gets 409 and leaves no sync_runs row.
 export const POST = withHandler('internal/rollekatalog/sync POST', async (req: NextRequest) => {
   const denied = cronGuard(req);
   if (denied) return denied;

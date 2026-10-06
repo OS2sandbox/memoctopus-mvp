@@ -135,6 +135,66 @@ describe.skipIf(!hasPg)('audit query (real Postgres)', () => {
       }));
   });
 
+  describe('name search and catalogue', () => {
+    it('q matches the name snapshot case-insensitively, or an exact user id; % _ and backslash are literal', () =>
+      withFreshSchema(async (c, schema) => {
+        const env = queryEnv(c, schema);
+        const mette = await add(c, { actor_user_id: 'u-mette', actor_name: 'Mette Eksempelsen' });
+        const metteB = await add(c, { actor_user_id: 'u-mette2', actor_name: 'Hr. METTE Hansen' });
+        const percent = await add(c, { actor_user_id: 'u-pct', actor_name: '100% Bruger' });
+        const under = await add(c, { actor_user_id: 'u-under', actor_name: 'A_B' });
+        const plain = await add(c, { actor_user_id: 'u-plain', actor_name: 'AxB' });
+        const slash = await add(c, { actor_user_id: 'u-slash', actor_name: 'Back\\slash' });
+        const noName = await add(c, { actor_user_id: 'u-noname', actor_name: null });
+        const ids = async (q: string) =>
+          (await listAuditEvents({ scope: { all: true }, filters: { q } }, env)).rows.map((r) => Number(r.id)).sort((a, b) => a - b);
+
+        expect(await ids('mette')).toEqual([mette, metteB]);
+        expect(await ids('Eksempelsen')).toEqual([mette]);
+        expect(await ids('u-noname')).toEqual([noName]); // exact id
+        expect(await ids('u-nonam')).toEqual([]); // ids are not matched as substrings
+        expect(await ids('%')).toEqual([percent]); // not "everything"
+        expect(await ids('_')).toEqual([under]); // not "any character"
+        expect(await ids('A_B')).toEqual([under]);
+        expect(await ids('\\')).toEqual([slash]);
+        expect(plain).toBeGreaterThan(0);
+        expect(await ids("x' OR '1'='1")).toEqual([]);
+      }));
+
+    it('q never widens scope, and combines with other filters', () =>
+      withFreshSchema(async (c, schema) => {
+        const env = queryEnv(c, schema);
+        const a = await unit(c, 'A');
+        const b = await unit(c, 'B');
+        const inA = await add(c, { actor_org_unit_uuid: a, actor_name: 'Mette A' });
+        await add(c, { actor_org_unit_uuid: b, actor_name: 'Mette B' });
+        await add(c, { actor_org_unit_uuid: null, actor_name: 'Mette Null' });
+        const deniedA = await add(c, { actor_org_unit_uuid: a, actor_name: 'Mette A', event_type: 'authz.denied', outcome: 'denied' });
+        const scope = await auditScopeFor(logReader([{ orgUnitUuid: a, includeDescendants: true }]), scopeEnv(c, schema));
+
+        const scoped = await listAuditEvents({ scope, filters: { q: 'mette' } }, env);
+        expect(scoped.rows.map((r) => Number(r.id)).sort((x, y) => x - y)).toEqual([inA, deniedA]);
+        const both = await listAuditEvents({ scope, filters: { q: 'mette', outcome: 'denied' } }, env);
+        expect(both.rows.map((r) => Number(r.id))).toEqual([deniedA]);
+        const all = await collectAuditEvents({ scope: { all: true }, filters: { q: 'mette' }, maxRows: 100 }, env);
+        expect(all.rows).toHaveLength(4);
+      }));
+
+    it('the viewer and the export hide types outside the catalogue; the feed still returns them', () =>
+      withFreshSchema(async (c, schema) => {
+        const env = queryEnv(c, schema);
+        const known = await add(c, { event_type: 'auth.login' });
+        // A type removed from the catalogue in a later release: its old rows stay in the table.
+        const removed = await add(c, { event_type: 'directory.sync' });
+        const listed = await listAuditEvents({ scope: { all: true } }, env);
+        expect(listed.rows.map((r) => Number(r.id))).toEqual([known]);
+        const exported = await collectAuditEvents({ scope: { all: true }, maxRows: 10 }, env);
+        expect(exported.rows.map((r) => Number(r.id))).toEqual([known]);
+        const feed = await getFeedPage({ offset: 0, size: 10, delaySeconds: 0 }, env);
+        expect(feed.rows.map((r) => Number(r.id))).toEqual([known, removed]);
+      }));
+  });
+
   describe('scoped visibility', () => {
     it('a scoped reader sees descendants of their unit, never NULL-unit events, siblings or the parent', () =>
       withFreshSchema(async (c, schema) => {

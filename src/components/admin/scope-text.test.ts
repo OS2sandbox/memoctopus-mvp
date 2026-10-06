@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { describeAssignmentScope, describeCapabilityScope } from './scope-text';
+import { describeAssignmentScope } from './scope-text';
 
 describe('describeAssignmentScope', () => {
   it('describes a global assignment', () => {
@@ -24,33 +24,5 @@ describe('describeAssignmentScope', () => {
     const text = describeAssignmentScope({ scopeOrgUnitUuid: 'secret-uuid', scopeOrgUnitName: null, includeDescendants: true });
     expect(text).toContain('Ukendt enhed');
     expect(text).not.toContain('secret-uuid');
-  });
-});
-
-describe('describeCapabilityScope', () => {
-  const names = new Map([['u1', 'Børn']]);
-
-  it('fails closed to "no units" without a scope', () => {
-    expect(describeCapabilityScope(undefined, names)).toBe('Ingen enheder');
-    expect(describeCapabilityScope({ global: false, roots: [] }, names)).toBe('Ingen enheder');
-  });
-
-  it('describes global scope', () => {
-    expect(describeCapabilityScope({ global: true, roots: [] }, names)).toBe('Hele organisationen');
-  });
-
-  it('lists roots with their names and descendant flag', () => {
-    expect(
-      describeCapabilityScope(
-        {
-          global: false,
-          roots: [
-            { orgUnitUuid: 'u1', includeDescendants: true },
-            { orgUnitUuid: 'u2', includeDescendants: false },
-          ],
-        },
-        names,
-      ),
-    ).toBe('Børn (inkl. underenheder); Ukendt enhed (kun enheden)');
   });
 });

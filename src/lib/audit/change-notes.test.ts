@@ -45,7 +45,7 @@ describe('changeNotesFor', () => {
     expect(notes.get('11')).toEqual({ changeNote: 'Første version.', templateName: null });
   });
 
-  it('does not query for rows without a change: read events, other types, bad ids or versions', async () => {
+  it('does not query for rows without a change: legacy rows of removed types (central_template.read), other types, bad ids or versions', async () => {
     const query = vi.fn();
     const notes = await changeNotesFor(
       [

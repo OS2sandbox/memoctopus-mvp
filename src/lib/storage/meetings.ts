@@ -53,52 +53,31 @@ export async function createMeeting(data: {
   return meeting;
 }
 
-// Rows written by older versions may lack the array; treat that as empty.
-const sameStrings = (a: string[] | undefined, b: string[] | undefined) => {
-  const x = a ?? [];
-  const y = b ?? [];
-  return x.length === y.length && x.every((v, i) => v === y[i]);
-};
-
 export async function updateMeeting(
   id: string,
   patch: Partial<Omit<StoredMeeting, 'id' | 'createdAt'>>,
-  // Machine writes (the Teams bot's roster poll) pass `automatic: true`: a roster
-  // that changed because people joined or left is not a user edit, so it is not
-  // reported as one. Same convention as saveTranscriptChapters.
-  opts: { automatic?: boolean } = {},
 ): Promise<void> {
   const db = await getDB();
   const existing = await db.get('meetings', id);
   if (!existing) return;
   await db.put('meetings', { ...existing, ...patch, updatedAt: new Date().toISOString() });
   try {
-    reportMeetingChanges(existing, patch, opts.automatic === true);
+    reportMeetingChanges(existing, patch);
   } catch {
     // Reporting is best effort and must never turn a successful write into an error.
   }
 }
 
 // Audit reporting is derived from what actually changed against the stored row, so
-// a write that repeats the current value (the participants effect re-saving on
-// mount, a redundant rename) reports nothing. Only ids, status codes and counts
-// leave here: never the title or the participant names.
+// a write that repeats the current value reports nothing. Only two transitions are
+// reported here (redaction and audio deletion); status changes, renames and
+// participant edits are not audited. Only the opaque meeting id leaves here.
 function reportMeetingChanges(
   existing: StoredMeeting,
   patch: Partial<Omit<StoredMeeting, 'id' | 'createdAt'>>,
-  automatic: boolean,
 ): void {
   const id = existing.id;
-  if (patch.status !== undefined && patch.status !== existing.status) {
-    reportAuditEvent('meeting.status_change', id, { fromStatus: existing.status, toStatus: patch.status });
-    if (patch.status === 'redacted') reportAuditEvent('meeting.redact', id);
-  }
-  if (patch.title !== undefined && patch.title !== existing.title) {
-    reportAuditEvent('meeting.rename', id);
-  }
-  if (!automatic && patch.participants !== undefined && !sameStrings(patch.participants, existing.participants)) {
-    reportAuditEvent('meeting.participants_edit', id, { participantCount: (patch.participants ?? []).length });
-  }
+  if (patch.status === 'redacted' && existing.status !== 'redacted') reportAuditEvent('meeting.redact', id);
   if (patch.audioDeleted === true && !existing.audioDeleted) {
     reportAuditEvent('meeting.audio_delete', id);
   }

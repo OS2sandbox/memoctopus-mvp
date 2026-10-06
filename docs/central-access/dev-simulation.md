@@ -73,7 +73,7 @@ Email/password sign-up stays enabled on purpose: sign up with `anne.p@example.dk
 
 Use two browsers (or one normal and one private window) so you can be a manager and a recipient at the same time.
 
-1. **Delegation.** Log in as `anne.p` → Administration → Skabeloner → create a template. Owner *Team Selvbetjening*, recipients *Team Selvbetjening* including sub-units, write a prompt containing a recognisable word. The save button stays disabled until the change note has 10 real characters (spaces and invisible characters do not count).
+1. **Delegation.** Log in as `anne.p` → Administration → Skabeloner → create a template. Owner *Team Selvbetjening*, "Hvem skal have skabelonen til rådighed?" → *Team Selvbetjening* including sub-units, write a prompt containing a recognisable word. The save button stays disabled until the change note has 10 real characters (spaces and invisible characters do not count).
 2. **The lock.** In the control panel add `bruger.b` and press *Synkronisér appen nu*. Log in as `bruger.b`: the template is listed as locked ("Central"), the prompt is not shown anywhere, and its fields cannot be edited. In the control panel, *Vis hvad appen sendte* shows, after generating minutes, that the system message contains the stored prompt.
 3. **Cannot be overridden.** Calling the API directly with a custom instruction is ignored:
    ```bash

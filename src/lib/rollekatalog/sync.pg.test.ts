@@ -65,14 +65,12 @@ interface Harness {
   c: Client;
   schema: string;
   env: SyncEnv;
-  audit: ReturnType<typeof vi.fn>;
   clock: { t: number };
   run: (opts?: Partial<RunSyncOptions>, deps?: Partial<SyncDeps>) => Promise<SyncResult>;
 }
 
 function harness(c: Client, schema: string): Harness {
   const env = schemaEnv(schema);
-  const audit = vi.fn(async () => {});
   const clock = { t: Date.parse('2026-10-05T10:00:00Z') };
   // Each run starts a second later, so "latest run" is unambiguous; within a run the clock is fixed.
   const run: Harness['run'] = (opts = {}, deps = {}) => {
@@ -81,7 +79,6 @@ function harness(c: Client, schema: string): Harness {
       { trigger: 'cron', ...opts },
       {
         env,
-        audit,
         now: () => new Date(clock.t),
         // No real waiting between retries.
         client: createRollekatalogClient({ backoffMs: 1, sleep: async () => {} }),
@@ -89,7 +86,7 @@ function harness(c: Client, schema: string): Harness {
       },
     );
   };
-  return { c, schema, env, audit, clock, run };
+  return { c, schema, env, clock, run };
 }
 
 const withHarness = (fn: (h: Harness) => Promise<void>) => withFreshSchema(async (c, schema) => fn(harness(c, schema)));
@@ -198,13 +195,10 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
       expect(await roleRows(h.c, U(7))).toEqual([]); // ida: logleser without scope is not global
       expect(await roleRows(h.c, U(9))).toEqual([{ role_key: 'tt-administrator', scope_org_unit_uuid: null, include_descendants: true }]);
 
-      // The run is recorded, counts only, and the audit event carries the same result.
+      // The run is recorded, counts only.
       const latest = await getLatestSyncRun(h.env);
       expect(latest).toMatchObject({ id: r.runId, status: 'success', errorCode: null, counts: r.counts });
       expect(latest?.finishedAt).toBeInstanceOf(Date);
-      expect(h.audit).toHaveBeenCalledTimes(1);
-      expect(h.audit.mock.calls[0][0]).toMatchObject({ trigger: 'cron' });
-      expect(h.audit.mock.calls[0][1]).toMatchObject({ status: 'success', runId: r.runId });
     }));
 
   describe('invalid rows', () => {
@@ -369,9 +363,8 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         // The app account itself and the link are untouched; only the sessions go.
         expect(await count(h.c, 'users', "id = 'app-rune'")).toBe(1);
         expect((await rows(h.c, 'SELECT app_user_id FROM directory_users WHERE uuid = $1', [U(9)]))[0].app_user_id).toBe('app-rune');
-        // The count is stored in the run row and handed to the audit writer; counts only.
+        // The count is stored in the run row; counts only.
         expect((await getLatestSyncRun(h.env))?.counts?.sessionsRevoked).toBe(2);
-        expect(h.audit.mock.calls.at(-1)?.[1].counts.sessionsRevoked).toBe(2);
       }));
 
     it('a user disabled in Rollekatalog (disabled flag, not removed) loses their sessions too', () =>
@@ -573,7 +566,6 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         const latest = await getLatestSyncRun(h.env);
         expect(latest).toMatchObject({ status: 'failed', errorCode: 'db_error' });
         expect(JSON.stringify(latest)).not.toContain('boom'); // the error message never reaches the row
-        expect(h.audit.mock.calls[0][1]).toMatchObject({ status: 'error', errorCode: 'db_error' });
 
         // The lock was released: the next run goes through once the fault is gone.
         await h.c.query(`DROP TRIGGER boom ON "${h.schema}".role_assignments`);
@@ -612,7 +604,6 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         expect(await count(h.c, 'sync_runs')).toBe(0);
         expect(await count(h.c, 'directory_users')).toBe(0);
         expect(mock.requests).toHaveLength(0); // not even a fetch
-        expect(h.audit.mock.calls[0][1]).toMatchObject({ status: 'already_running' });
 
         await holder.query('SELECT pg_advisory_unlock_all()');
         expect((await h.run()).status).toBe('success');
@@ -692,7 +683,6 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         expect(forced.status).toBe('success');
         expect(forced.counts.usersDisabled).toBe(6); // sofie.s was already disabled
         expect(await count(h.c, 'directory_users', 'disabled = false')).toBe(2);
-        expect(h.audit.mock.calls.at(-1)?.[0]).toMatchObject({ trigger: 'manual', force: true, actorUserId: 'admin-1' });
       }));
 
     it('removal threshold on role assignments (users unchanged) aborts, and force applies it', () =>

@@ -35,7 +35,6 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 }));
 
 import { POST } from './route';
-import { expectValidMetadataOnly, leakyError } from '@/app/api/meetings/ai-audit.test-utils';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION } from '@/test/helpers';
 
@@ -152,94 +151,27 @@ describe('POST /api/meetings/[id]/transcribe-batches', () => {
   });
 });
 
-describe('audit: transcription.request (batch)', () => {
-  const MEETING = '11111111-2222-4333-8444-555555555555';
-  const UUID_PARAMS = { params: Promise.resolve({ id: MEETING }) };
-  const events = () => mockRecord.mock.calls.map((c) => c[1]);
-  beforeEach(() => {
+describe('audit', () => {
+  it('writes no audit event: batch transcription is a pipeline step (VAD, ensemble, failure or rejected input)', async () => {
     mockRecord.mockReset();
-    mockRecord.mockResolvedValue({ status: 'stored' });
-  });
-
-  beforeEach(() => {
     mockGetSession.mockReset();
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
-  });
-
-  it('emits one event with mode batch, bytes and duration (VAD path)', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     mockPrepare.mockResolvedValueOnce([FAKE_BATCH]);
     mockTranscribe.mockResolvedValueOnce({
       segments: [{ speaker: 'Taler 1', start: 0, end: 5, text: 'hemmelig tekst' }],
       totalBatches: 1, totalSpeechSeconds: 27, failedSeconds: 0,
     });
-    const res = await POST(makeAudioRequest(5_000), UUID_PARAMS);
-    await readEvents(res);
-
-    expect(events()).toHaveLength(1);
-    const e = events()[0];
-    expect(e).toMatchObject({
-      type: 'transcription.request',
-      actorUserId: 'user-123',
-      entityId: MEETING,
-      details: { mode: 'batch', bytes: 5_000 },
-    });
-    expect(typeof e.details.durationMs).toBe('number');
-    expect(e.outcome ?? 'success').toBe('success');
-    expectValidMetadataOnly(e, ['hemmelig', 'recording.webm']);
-  });
-
-  it('emits one event on the ensemble path too', async () => {
+    await readEvents(await POST(makeAudioRequest(5_000), PARAMS));
     mockIsEnsemble.mockReturnValue(true);
     mockEnsemble.mockResolvedValueOnce([{ speaker: 'Taler 1', start: 0, end: 3, text: 'hemmelig' }]);
-    await readEvents(await POST(makeAudioRequest(5_000), UUID_PARAMS));
-    expect(events()).toHaveLength(1);
-    expect(events()[0].details).toMatchObject({ mode: 'batch', bytes: 5_000 });
-    expectValidMetadataOnly(events()[0], ['hemmelig']);
-  });
-
-  it('has recorded the event by the time the stream has ended', async () => {
-    mockPrepare.mockResolvedValueOnce([]);
-    mockTranscribe.mockResolvedValueOnce({ segments: [], totalBatches: 0, totalSpeechSeconds: 0, failedSeconds: 0 });
-    await readEvents(await POST(makeAudioRequest(5_000), UUID_PARAMS));
-    expect(mockRecord).toHaveBeenCalledOnce();
-  });
-
-  it('omits the entity for a non-UUID id', async () => {
-    mockPrepare.mockResolvedValueOnce([]);
-    mockTranscribe.mockResolvedValueOnce({ segments: [], totalBatches: 0, totalSpeechSeconds: 0, failedSeconds: 0 });
     await readEvents(await POST(makeAudioRequest(5_000), PARAMS));
-    expect(events()[0].entityId).toBeUndefined();
-    expectValidMetadataOnly(events()[0], ['meet-1']);
-  });
-
-  it('records outcome error with a code, never the message, in the audit log and the server log', async () => {
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    mockPrepare.mockRejectedValueOnce(leakyError('ffmpeg: Alice talking', { code: 'EPIPE' }));
-    const stream = await readEvents(await POST(makeAudioRequest(5_000), UUID_PARAMS));
-
-    expect(stream.at(-1)).toMatchObject({ type: 'error' }); // response contract unchanged
-    expect(events()).toHaveLength(1);
-    expect(events()[0]).toMatchObject({ outcome: 'error', details: { mode: 'batch', outcomeCode: 'network' } });
-    expectValidMetadataOnly(events()[0], ['Alice', 'ffmpeg']);
-    expect(JSON.stringify(spy.mock.calls)).not.toContain('Alice');
+    mockIsEnsemble.mockReturnValue(false);
+    mockPrepare.mockRejectedValueOnce(new Error('ffmpeg failed'));
+    expect((await readEvents(await POST(makeAudioRequest(5_000), PARAMS))).at(-1)).toMatchObject({ type: 'error' });
+    await POST(new NextRequest(BASE_URL, { method: 'POST', body: new FormData() }), PARAMS);
+    await POST(makeAudioRequest(1_999), PARAMS);
     spy.mockRestore();
-  });
-
-  it('still streams the full result when the audit write rejects', async () => {
-    mockPrepare.mockResolvedValueOnce([]);
-    mockTranscribe.mockResolvedValueOnce({ segments: [], totalBatches: 0, totalSpeechSeconds: 0, failedSeconds: 0 });
-    mockRecord.mockResolvedValueOnce({ status: 'dropped', code: 'db_error' });
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const stream = await readEvents(await POST(makeAudioRequest(5_000), UUID_PARAMS));
-    expect(stream.at(-1)).toMatchObject({ type: 'done' });
-    warn.mockRestore();
-  });
-
-  it('emits nothing for 401, missing audio or a too-short clip', async () => {
-    mockGetSession.mockResolvedValueOnce(null as never);
-    await POST(makeAudioRequest(5_000), UUID_PARAMS);
-    await POST(new NextRequest(BASE_URL, { method: 'POST', body: new FormData() }), UUID_PARAMS);
-    await POST(makeAudioRequest(1_999), UUID_PARAMS);
     expect(mockRecord).not.toHaveBeenCalled();
   });
 });

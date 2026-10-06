@@ -28,11 +28,11 @@ function setup(ownerUuid: string, value: CentralTarget[] = []) {
 describe('OrgUnitTargetPicker', () => {
   it('offers only the owner and the units below it, never siblings or parents', () => {
     setup(CHILD);
-    expect(screen.getByLabelText('Modtager: Børn')).toBeInTheDocument();
-    expect(screen.getByLabelText('Modtager: Vuggestue')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Modtager: Kommune')).toBeNull();
-    expect(screen.queryByLabelText('Modtager: Ældre')).toBeNull();
-    expect(screen.queryByLabelText('Modtager: Andet')).toBeNull();
+    expect(screen.getByLabelText('Til rådighed for: Børn')).toBeInTheDocument();
+    expect(screen.getByLabelText('Til rådighed for: Vuggestue')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Til rådighed for: Kommune')).toBeNull();
+    expect(screen.queryByLabelText('Til rådighed for: Ældre')).toBeNull();
+    expect(screen.queryByLabelText('Til rådighed for: Andet')).toBeNull();
   });
 
   it('indents the tree by depth', () => {
@@ -49,7 +49,7 @@ describe('OrgUnitTargetPicker', () => {
 
   it('adds a target with descendants included by default', async () => {
     const onChange = setup(ROOT);
-    await userEvent.click(screen.getByLabelText('Modtager: Børn'));
+    await userEvent.click(screen.getByLabelText('Til rådighed for: Børn'));
     expect(onChange).toHaveBeenCalledWith([{ orgUnitUuid: CHILD, includeDescendants: true }]);
   });
 
@@ -58,13 +58,13 @@ describe('OrgUnitTargetPicker', () => {
     expect(screen.queryByLabelText('Inkl. underenheder: Ældre')).toBeNull();
     await userEvent.click(screen.getByLabelText('Inkl. underenheder: Børn'));
     expect(onChange).toHaveBeenLastCalledWith([{ orgUnitUuid: CHILD, includeDescendants: false }]);
-    await userEvent.click(screen.getByLabelText('Modtager: Børn'));
+    await userEvent.click(screen.getByLabelText('Til rådighed for: Børn'));
     expect(onChange).toHaveBeenLastCalledWith([]);
   });
 
-  it('warns "Ingen modtagere" with zero targets and not otherwise', () => {
+  it('warns that nobody has the template with zero targets and not otherwise', () => {
     const { unmount } = render(<OrgUnitTargetPicker units={UNITS} ownerUuid={ROOT} value={[]} onChange={() => {}} />);
-    expect(screen.getByRole('status')).toHaveTextContent('Ingen modtagere');
+    expect(screen.getByRole('status')).toHaveTextContent('Skabelonen er ikke til rådighed for nogen');
     unmount();
     render(
       <OrgUnitTargetPicker
@@ -85,6 +85,14 @@ describe('OrgUnitTargetPicker', () => {
 
   it('is a labelled group', () => {
     setup(ROOT);
-    expect(screen.getByRole('group', { name: 'Modtagere' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Hvem skal have skabelonen til rådighed?' })).toBeInTheDocument();
+  });
+
+  it('explains the choice in terms of who may use the template, without the word recipient', () => {
+    const { container } = render(<OrgUnitTargetPicker units={UNITS} ownerUuid={ROOT} value={[]} onChange={() => {}} />);
+    expect(container).toHaveTextContent(
+      'Vælg de enheder, hvis medarbejdere kan bruge skabelonen. Underenheder kan vælges med.',
+    );
+    expect(container.textContent ?? '').not.toMatch(/modtag/i);
   });
 });

@@ -16,6 +16,15 @@ export const filterShape = {
     // eslint-disable-next-line no-control-regex
     .regex(/^[^\s\u0000-\u001f]+$/)
     .optional(),
+  // Free-text name search: matches the actor's NAME SNAPSHOT (or an exact user id).
+  q: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    // eslint-disable-next-line no-control-regex
+    .regex(/^[^\u0000-\u001f\u007f]+$/, 'no control characters')
+    .optional(),
   entityId: z.string().uuid().optional(),
   outcome: z.enum(EVENT_OUTCOMES).optional(),
   source: z.enum(EVENT_SOURCES).optional(),
@@ -39,6 +48,7 @@ export function searchParamsToObject(params: URLSearchParams): Record<string, st
 export function toFilters(q: {
   eventType?: string[];
   actorUserId?: string;
+  q?: string;
   entityId?: string;
   outcome?: AuditFilters['outcome'];
   source?: AuditFilters['source'];
@@ -48,6 +58,7 @@ export function toFilters(q: {
   return {
     eventTypes: q.eventType,
     actorUserId: q.actorUserId,
+    q: q.q,
     entityId: q.entityId,
     outcome: q.outcome,
     source: q.source,

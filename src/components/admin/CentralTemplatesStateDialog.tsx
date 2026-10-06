@@ -32,14 +32,14 @@ const COPY = {
   archive: {
     title: 'Arkivér skabelon',
     description:
-      'En arkiveret skabelon forsvinder for modtagerne og kan ikke bruges til nye referater. Du kan gendanne den senere.',
+      'En arkiveret skabelon er ikke længere til rådighed for brugerne og kan ikke bruges til nye referater. Du kan gendanne den senere.',
     confirm: 'Arkivér',
     busy: 'Arkiverer …',
     toast: 'Skabelonen er arkiveret',
   },
   restore: {
     title: 'Gendan skabelon',
-    description: 'Skabelonen bliver igen tilgængelig for sine modtagere.',
+    description: 'Skabelonen bliver igen til rådighed for de valgte enheder.',
     confirm: 'Gendan',
     busy: 'Gendanner …',
     toast: 'Skabelonen er gendannet',

@@ -83,20 +83,23 @@ function OtherChanges({
   const lines: string[] = [
     ...fields.map((f) => `${contentFieldLabels[f]} ændret`),
     ...targets.added.map(
-      (t) => `Modtager tilføjet: ${unitName(t.orgUnitUuid)}${t.includeDescendants ? ' (inkl. underenheder)' : ''}`,
+      (t) => `Gjort tilgængelig for: ${unitName(t.orgUnitUuid)}${t.includeDescendants ? ' (inkl. underenheder)' : ''}`,
     ),
-    ...targets.removed.map((t) => `Modtager fjernet: ${unitName(t.orgUnitUuid)}`),
+    ...targets.removed.map((t) => `Ikke længere tilgængelig for: ${unitName(t.orgUnitUuid)}`),
     ...targets.changed.map(
-      (t) => `Modtager ${unitName(t.orgUnitUuid)}: ${t.includeDescendants ? 'inkl. underenheder' : 'kun enheden selv'}`,
+      (t) => `Tilgængelig for ${unitName(t.orgUnitUuid)}: ${t.includeDescendants ? 'inkl. underenheder' : 'kun enheden selv'}`,
     ),
   ];
   if (lines.length === 0) return null;
   return (
-    <ul aria-label="Øvrige ændringer" className="list-disc pl-5 text-[13px] text-[var(--ink-2)]">
-      {lines.map((l) => (
-        <li key={l}>{l}</li>
-      ))}
-    </ul>
+    <div className="flex flex-col gap-1">
+      <p className="text-[13px] font-medium text-[var(--ink)]">Øvrige ændringer</p>
+      <ul aria-label="Øvrige ændringer" className="list-disc pl-5 text-[13px] text-[var(--ink-2)]">
+        {lines.map((l) => (
+          <li key={l}>{l}</li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -178,8 +181,24 @@ export function TemplateVersionHistory({ templateId, unitName }: Props) {
               ? `Version ${current.version} sammenlignet med version ${previous.version}`
               : `Version ${current.version} (første version)`}
           </h3>
-          <PromptDiff before={previous?.content.prompt ?? ''} after={current.content.prompt} />
-          <OtherChanges before={previous} after={current} unitName={unitName} />
+
+          {/* The note comes first: it is the author's own account of why this version exists. */}
+          <div className="rounded-[var(--radius)] border border-[var(--line-strong)] bg-[var(--surface-2)] px-3 py-2.5">
+            <p className="font-mono text-[11px] uppercase tracking-wide text-[var(--muted)]">Ændringsbeskrivelse</p>
+            <p className="mt-0.5 whitespace-pre-wrap break-words text-sm text-[var(--ink)]">{current.changeNote}</p>
+            <p className="mt-1 text-[13px] text-[var(--muted)]">
+              {current.changedByName ?? 'Ukendt'} · {formatTime(current.changedAt)}
+            </p>
+          </div>
+
+          <h4 className="text-sm font-medium text-[var(--ink)]">Ændringer</h4>
+          <div className="flex flex-col gap-3">
+            <p className="text-[13px] font-medium text-[var(--ink)]">
+              {previous ? 'Prompt' : 'Prompt (første version, alt er nyt)'}
+            </p>
+            <PromptDiff before={previous?.content.prompt ?? ''} after={current.content.prompt} />
+            <OtherChanges before={previous} after={current} unitName={unitName} />
+          </div>
         </section>
       )}
     </div>

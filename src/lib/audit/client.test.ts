@@ -61,10 +61,10 @@ afterEach(() => {
 
 describe('reportAuditEvent', () => {
   it('queues an event with an id, type, entity, details and time, then delivers it with keepalive and removes it after a 2xx', async () => {
-    c.reportAuditEvent('meeting.status_change', MEETING, { fromStatus: 'review', toStatus: 'minutes' });
+    c.reportAuditEvent('meeting.create', MEETING, { origin: 'upload' });
     await vi.advanceTimersByTimeAsync(0);
     expect(h.queue).toHaveLength(1);
-    expect(h.queue[0]).toMatchObject({ type: 'meeting.status_change', entityId: MEETING, details: { fromStatus: 'review', toStatus: 'minutes' } });
+    expect(h.queue[0]).toMatchObject({ type: 'meeting.create', entityId: MEETING, details: { origin: 'upload' } });
     expect(h.queue[0].clientEventId).toMatch(/^[0-9a-f-]{36}$/);
     expect(Number.isNaN(Date.parse(h.queue[0].occurredAt))).toBe(false);
 
@@ -167,20 +167,21 @@ describe('reportAuditEvent', () => {
 
   it('never posts one user\'s queue under the next user\'s session: it waits for the owner\'s next login', async () => {
     const scope = await import('@/lib/storage/scope');
-    c.reportAuditEvent('meeting.minutes_save', MEETING);
+    c.COALESCED.add('meeting.create');
+    c.reportAuditEvent('meeting.create', MEETING, { origin: 'live' });
     c.reportAuditEvent('meeting.delete', OTHER);
     // user-1 signs out and user-2 signs in while the coalesced event is still held.
     scope.setStorageUserId('user-2');
     await vi.advanceTimersByTimeAsync(c.COALESCE_WINDOW_MS + 5000);
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(h.queue.map((e) => e.type).sort()).toEqual(['meeting.delete', 'meeting.minutes_save']);
+    expect(h.queue.map((e) => e.type).sort()).toEqual(['meeting.create', 'meeting.delete']);
     await c.flush('user-1');
     expect(fetchMock).not.toHaveBeenCalled();
 
     scope.setStorageUserId('user-1');
     c.startAuditReporting('user-1');
     await vi.advanceTimersByTimeAsync(1500);
-    expect(sentBodies().flat().map((e) => e.type).sort()).toEqual(['meeting.delete', 'meeting.minutes_save']);
+    expect(sentBodies().flat().map((e) => e.type).sort()).toEqual(['meeting.create', 'meeting.delete']);
     expect(h.queue).toHaveLength(0);
   });
 
@@ -218,62 +219,60 @@ describe('reportAuditEvent', () => {
   });
 
   describe('coalescing', () => {
+    // No reported type is chatty any more, so the set is empty; the mechanism is
+    // exercised by listing one type (the module is reloaded for every test).
+    beforeEach(() => {
+      c.COALESCED.add('meeting.create');
+    });
+
+    it('is empty by default: the reported types are one-off lifecycle moments', async () => {
+      await load();
+      expect(c.COALESCED.size).toBe(0);
+    });
+
     it('sends one event per meeting+type per 30 s window carrying the last details', async () => {
-      c.reportAuditEvent('meeting.participants_edit', MEETING, { participantCount: 1 });
+      c.reportAuditEvent('meeting.create', MEETING, { origin: 'live' });
       await vi.advanceTimersByTimeAsync(10_000);
-      c.reportAuditEvent('meeting.participants_edit', MEETING, { participantCount: 2 });
-      c.reportAuditEvent('meeting.participants_edit', MEETING, { participantCount: 5 });
+      c.reportAuditEvent('meeting.create', MEETING, { origin: 'upload' });
+      c.reportAuditEvent('meeting.create', MEETING, { origin: 'bot' });
       expect(h.queue).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(20_000);
       expect(h.queue).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(1500);
       expect(sentBodies().flat()).toHaveLength(1);
-      expect(sentBodies().flat()[0]).toMatchObject({ type: 'meeting.participants_edit', details: { participantCount: 5 } });
+      expect(sentBodies().flat()[0]).toMatchObject({ type: 'meeting.create', details: { origin: 'bot' } });
     });
 
-    it('coalesces minutes_save and transcript_edit independently per meeting', async () => {
+    it('coalesces independently per meeting', async () => {
       for (let i = 0; i < 5; i++) {
-        c.reportAuditEvent('meeting.minutes_save', MEETING);
-        c.reportAuditEvent('meeting.minutes_save', OTHER);
-        c.reportAuditEvent('meeting.transcript_edit', MEETING, { segmentCount: i });
+        c.reportAuditEvent('meeting.create', MEETING, { origin: 'live' });
+        c.reportAuditEvent('meeting.create', OTHER, { origin: 'bot' });
       }
       await vi.advanceTimersByTimeAsync(31_000 + 1500);
       const sent = sentBodies().flat();
-      expect(sent).toHaveLength(3);
-      expect(sent.find((e) => e.type === 'meeting.transcript_edit')?.details).toEqual({ segmentCount: 4 });
-    });
-
-    it('coalesces renames: typing a title with pauses sends one rename per meeting per window', async () => {
-      for (let i = 0; i < 4; i++) {
-        c.reportAuditEvent('meeting.rename', MEETING);
-        await vi.advanceTimersByTimeAsync(2_000);
-      }
-      c.reportAuditEvent('meeting.rename', OTHER);
-      await vi.advanceTimersByTimeAsync(31_000 + 1500);
-      const sent = sentBodies().flat();
-      expect(sent.map((e) => [e.type, e.entityId]).sort()).toEqual([['meeting.rename', MEETING], ['meeting.rename', OTHER]].sort());
+      expect(sent.map((e) => [e.entityId, e.details.origin]).sort()).toEqual([[MEETING, 'live'], [OTHER, 'bot']].sort());
     });
 
     it('starts a new window after the previous one ended', async () => {
-      c.reportAuditEvent('meeting.minutes_save', MEETING);
+      c.reportAuditEvent('meeting.create', MEETING, { origin: 'live' });
       await vi.advanceTimersByTimeAsync(31_000);
-      c.reportAuditEvent('meeting.minutes_save', MEETING);
+      c.reportAuditEvent('meeting.create', MEETING, { origin: 'live' });
       await vi.advanceTimersByTimeAsync(31_000 + 1500);
       expect(sentBodies().flat()).toHaveLength(2);
     });
 
     it('writes held events out immediately when the page is hidden or closed', async () => {
-      c.reportAuditEvent('meeting.participants_edit', MEETING, { participantCount: 3 });
+      c.reportAuditEvent('meeting.create', MEETING, { origin: 'bot' });
       window.dispatchEvent(new Event('pagehide'));
       await vi.advanceTimersByTimeAsync(0);
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(sentBodies()[0][0].details).toEqual({ participantCount: 3 });
+      expect(sentBodies()[0][0].details).toEqual({ origin: 'bot' });
       // Nothing left to send when the window would have ended.
       await vi.advanceTimersByTimeAsync(40_000);
       expect(sentBodies().flat()).toHaveLength(1);
     });
 
-    it('never coalesces state changes: every delete is its own event', async () => {
+    it('never coalesces types that are not listed: every delete is its own event', async () => {
       c.reportAuditEvent('meeting.delete', MEETING);
       c.reportAuditEvent('meeting.delete', OTHER);
       await vi.advanceTimersByTimeAsync(1500);

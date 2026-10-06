@@ -111,7 +111,6 @@ async function withWorld(fn: (w: World) => Promise<void>) {
           { trigger: 'cron', ...opts },
           {
             env,
-            audit: async () => {},
             now: () => new Date(base + ++tick), // strictly later each call, but all "now"
             client: createRollekatalogClient({ backoffMs: 1, sleep: async () => {} }),
           },

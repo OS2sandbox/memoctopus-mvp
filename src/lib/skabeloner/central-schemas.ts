@@ -67,7 +67,7 @@ export function dedupeTargets<T extends { orgUnitUuid: string }>(targets: readon
 
 export const centralTargetsSchema = z
   .array(centralTargetSchema)
-  .max(CENTRAL_LIMITS.targets, `Højst ${CENTRAL_LIMITS.targets} modtagere`)
+  .max(CENTRAL_LIMITS.targets, `Højst ${CENTRAL_LIMITS.targets} enheder`)
   .transform((targets) => dedupeTargets(targets));
 
 // NUL and lone surrogates are checked on the raw value, then invisible characters are

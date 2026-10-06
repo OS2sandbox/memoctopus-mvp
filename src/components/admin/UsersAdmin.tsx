@@ -13,10 +13,11 @@ import { isRoleKey } from '@/lib/authz/capabilities';
 import { useMe } from '@/lib/hooks/use-me';
 import type { AccessSource } from '@/lib/authz/config';
 import { apiRequest } from './api';
-import { AdminPage, ReadOnlyBanner } from './AdminPage';
+import { AdminPage } from './AdminPage';
 import { RoleGrantDialog } from './RoleGrantDialog';
 import { describeAssignmentScope } from './scope-text';
-import { LastSyncLine } from './SyncStatus';
+import { RoleSourceCard } from './RoleSourceCard';
+import { LastSyncLine, SyncStatus, canSeeSyncRun, useSyncRun } from './SyncStatus';
 import type { TreeUnit } from './org-tree';
 
 // Mirrors AssignmentView / AppUserView from the access service (JSON, so dates are strings).
@@ -54,6 +55,8 @@ function inactiveReason(a: Assignment, now = Date.now()): string {
 export function UsersAdmin() {
   const { data: me, loading: meLoading, error: meError } = useMe();
   const { toast } = useToast();
+  // One read of the latest sync run serves the explanation card, the "last synchronised" line and the sync panel.
+  const sync = useSyncRun(!!me && canSeeSyncRun(me));
   const [users, setUsers] = useState<AppUser[]>([]);
   const [orgUnits, setOrgUnits] = useState<TreeUnit[]>([]);
   const [orgUnitsError, setOrgUnitsError] = useState<string | null>(null);
@@ -123,8 +126,8 @@ export function UsersAdmin() {
 
   return (
     <AdminPage title="Brugere og roller" description="Brugere i løsningen og de roller, de er tildelt.">
-      {me?.readOnly && <ReadOnlyBanner />}
-      <LastSyncLine me={me} />
+      {me?.readOnly && <RoleSourceCard itSystem={sync.data?.itSystem} />}
+      <LastSyncLine me={me} sync={sync} />
       <ErrorBanner message={meError} />
       <ErrorBanner message={loadError} onRetry={() => load(appliedQ)} />
 
@@ -227,6 +230,8 @@ export function UsersAdmin() {
           Viser de første {users.length}. Brug søgefeltet for at finde flere.
         </p>
       )}
+
+      {me && <SyncStatus me={me} sync={sync} />}
 
       {canWrite && (
         <RoleGrantDialog

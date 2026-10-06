@@ -1,6 +1,5 @@
 import { getDB, StoredMinutes, StoredMinutesVersion } from './db';
 import type { MinutesContent, MinutesTemplateRef } from '@/types';
-import { reportAuditEvent } from '@/lib/audit/client';
 
 function newId(): string {
   return crypto.randomUUID();
@@ -137,7 +136,6 @@ export async function saveMinutes(
       versions: [v],
     };
     await db.put('minutes', minutes);
-    reportAuditEvent('meeting.minutes_save', meetingId);
     return minutes;
   }
 
@@ -150,11 +148,6 @@ export async function saveMinutes(
     versions,
   });
   await db.put('minutes', minutes);
-  // An autosave that rewrites identical content is not an edit.
-  const before = existing.versions.find((v) => v.id === existing.activeVersionId);
-  if (!before || JSON.stringify(before.content) !== JSON.stringify(content)) {
-    reportAuditEvent('meeting.minutes_save', meetingId);
-  }
   return minutes;
 }
 
@@ -197,7 +190,6 @@ export async function snapshotMinutes(
 
   const minutes = withActiveMirror({ ...existing, activeVersionId: snapshot.id, versions });
   await db.put('minutes', minutes);
-  reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: snapshot.label, action: 'snapshot' });
   return minutes;
 }
 
@@ -229,7 +221,6 @@ export async function appendMinutesVersion(
       versions: [v],
     };
     await db.put('minutes', minutes);
-    reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: 1, action: 'generate' });
     return minutes;
   }
 
@@ -248,7 +239,6 @@ export async function appendMinutesVersion(
     versions,
   });
   await db.put('minutes', minutes);
-  reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: fresh.label, action: 'generate' });
   return minutes;
 }
 
@@ -266,9 +256,5 @@ export async function setActiveMinutesVersion(
 
   const minutes = withActiveMirror({ ...existing, activeVersionId: versionId });
   await db.put('minutes', minutes);
-  if (existing.activeVersionId !== versionId) {
-    const target = existing.versions.find((v) => v.id === versionId);
-    if (target) reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: target.label, action: 'activate' });
-  }
   return minutes;
 }

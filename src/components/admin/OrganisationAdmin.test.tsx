@@ -28,15 +28,15 @@ function setup(me = ADMIN_ME, extra: Parameters<typeof installFetch>[0] = {}) {
 }
 
 describe('OrganisationAdmin — tree', () => {
-  it('renders units depth-first with indentation and source badges', async () => {
+  it('renders units depth-first with indentation and no source column', async () => {
     setup();
     renderWithToasts(<OrganisationAdmin />);
     await screen.findByText('Kommune');
     const names = screen.getAllByText(/^(Kommune|Børn|Synkroniseret)$/);
     expect(names.map((n) => n.textContent)).toEqual(['Kommune', 'Børn', 'Synkroniseret']);
     expect(names.map((n) => n.getAttribute('data-depth'))).toEqual(['0', '1', '1']);
-    expect(screen.getAllByText('Lokal')).toHaveLength(2);
-    expect(screen.getByText('Rollekatalog')).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Kilde' })).toBeNull();
+    expect(screen.queryByText('Lokal')).toBeNull();
   });
 
   it('announces loading, names the table and conveys depth to screen readers', async () => {
@@ -80,11 +80,12 @@ describe('OrganisationAdmin — per role and mode', () => {
     await screen.findByText('Synkroniseret');
     expect(screen.queryByRole('button', { name: 'Rediger Synkroniseret' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Slet Synkroniseret' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Vis medlemmer i Synkroniseret' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Rediger medlemmer i Synkroniseret' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Vis medlemmer af Synkroniseret' })).toBeInTheDocument();
     expect(screen.getByText('Styres af Rollekatalog')).toBeInTheDocument();
   });
 
-  it('is read-only in rollekatalog mode: banner, no create/edit/delete, members only viewable', async () => {
+  it('is read-only in rollekatalog mode: banner, no create/edit/delete/actions column, members only viewable', async () => {
     setup(ROLLEKATALOG_ME);
     renderWithToasts(<OrganisationAdmin />);
     await screen.findByText('Kommune');
@@ -92,16 +93,126 @@ describe('OrganisationAdmin — per role and mode', () => {
     expect(screen.queryByRole('button', { name: 'Opret enhed' })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Rediger / })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Slet / })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Vis medlemmer i Børn' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Handlinger' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Rediger medlemmer/ })).toBeNull();
+    expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Enhed', 'Medlemmer']);
+    expect(screen.getByRole('button', { name: 'Vis medlemmer af Børn' })).toBeInTheDocument();
   });
 
   it('is view-only for a directory reader without access.manage, with the reason', async () => {
-    setup(READER_ME);
+    const mock = setup(READER_ME);
     renderWithToasts(<OrganisationAdmin />);
     await screen.findByText('Kommune');
     expect(screen.getByText(/Kun visning\. Du har ikke rettigheden »Administrere brugere og roller«/)).toBeInTheDocument();
     expect(screen.queryByRole('button')).toBeNull();
     expect(screen.queryByRole('columnheader', { name: 'Handlinger' })).toBeNull();
+    // The members endpoint needs access.manage, so a reader gets the count only and no expander.
+    expect(calls(mock, 'GET', '/api/admin/access/org-units/')).toHaveLength(0);
+  });
+});
+
+describe('OrganisationAdmin — member panel', () => {
+  const MEMBERS_URL = (uuid: string) => `GET /api/admin/access/org-units/${uuid}/members`;
+  const MEMBERS = {
+    members: [
+      { directoryUserUuid: 'd1', appUserId: null, name: 'Bo Bruger', email: 'bo@example.dk' },
+      { directoryUserUuid: 'd2', appUserId: null, name: 'Carla Ny', email: null },
+    ],
+  };
+
+  it('expands lazily under the row, once, with name and e-mail, and collapses again', async () => {
+    const mock = setup(ROLLEKATALOG_ME, { [MEMBERS_URL(SYNCED)]: () => json(MEMBERS) });
+    renderWithToasts(<OrganisationAdmin />);
+    await screen.findByText('Synkroniseret');
+    expect(calls(mock, 'GET', `/api/admin/access/org-units/${SYNCED}/members`)).toHaveLength(0);
+
+    const toggle = screen.getByRole('button', { name: 'Vis medlemmer af Synkroniseret' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveAttribute('aria-controls', `unit-members-${SYNCED}`);
+    await userEvent.click(toggle);
+
+    const list = await screen.findByRole('list', { name: 'Medlemmer af Synkroniseret' });
+    expect(within(list).getByText('Bo Bruger')).toBeInTheDocument();
+    expect(within(list).getByText('bo@example.dk')).toBeInTheDocument();
+    expect(within(list).getByText('Carla Ny')).toBeInTheDocument();
+    const open = screen.getByRole('button', { name: 'Skjul medlemmer af Synkroniseret' });
+    expect(open).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById(`unit-members-${SYNCED}`)).toBe(list.parentElement);
+    // The panel row sits directly under the unit's row.
+    const unitRow = screen.getByText('Synkroniseret').closest('tr')!;
+    expect(unitRow.nextElementSibling).toContainElement(list);
+
+    await userEvent.click(open);
+    expect(screen.queryByRole('list', { name: 'Medlemmer af Synkroniseret' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Vis medlemmer af Synkroniseret' })).toHaveAttribute('aria-expanded', 'false');
+    // Re-opening does not fetch again.
+    await userEvent.click(screen.getByRole('button', { name: 'Vis medlemmer af Synkroniseret' }));
+    expect(await screen.findByRole('list', { name: 'Medlemmer af Synkroniseret' })).toBeInTheDocument();
+    expect(calls(mock, 'GET', `/api/admin/access/org-units/${SYNCED}/members`)).toHaveLength(1);
+  });
+
+  it('shows a loading state, an empty state and an error with retry', async () => {
+    let attempt = 0;
+    let release: (r: Response) => void = () => {};
+    setup(ROLLEKATALOG_ME, {
+      [MEMBERS_URL(SYNCED)]: () => new Promise<Response>((res) => (release = res)),
+      [MEMBERS_URL(CHILD)]: () => json({ members: [] }),
+      [MEMBERS_URL(ROOT)]: () => (++attempt === 1 ? json({ error: 'x' }, 500) : json(MEMBERS)),
+    });
+    renderWithToasts(<OrganisationAdmin />);
+    await screen.findByText('Kommune');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Vis medlemmer af Synkroniseret' }));
+    expect(await screen.findByText('Indlæser medlemmer …')).toBeInTheDocument();
+    release(new Response(JSON.stringify(MEMBERS), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    expect(await screen.findByText('Bo Bruger')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Vis medlemmer af Børn' }));
+    expect(await screen.findByText('Ingen medlemmer')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Vis medlemmer af Kommune' }));
+    const alert = await screen.findByRole('alert');
+    await userEvent.click(within(alert).getByRole('button', { name: 'Prøv igen' }));
+    expect(await screen.findByRole('list', { name: 'Medlemmer af Kommune' })).toBeInTheDocument();
+  });
+
+  it('says so when the API reports that the list was cut', async () => {
+    setup(ROLLEKATALOG_ME, { [MEMBERS_URL(SYNCED)]: () => json({ ...MEMBERS, truncated: true }) });
+    renderWithToasts(<OrganisationAdmin />);
+    await screen.findByText('Synkroniseret');
+    await userEvent.click(screen.getByRole('button', { name: 'Vis medlemmer af Synkroniseret' }));
+    expect(await screen.findByRole('note')).toHaveTextContent('Viser de første 2 medlemmer. Listen er afkortet.');
+  });
+
+  it('keeps the member count column and the depth text, and the chevron is not part of the unit name', async () => {
+    setup(ROLLEKATALOG_ME);
+    renderWithToasts(<OrganisationAdmin />);
+    await screen.findByText('Kommune');
+    const row = screen.getByText('Børn').closest('tr')!;
+    expect(row).toHaveTextContent('Niveau 2: Børn');
+    expect(within(row).getAllByRole('cell')[1]).toHaveTextContent('2');
+    expect(within(row).getAllByRole('cell')).toHaveLength(2);
+  });
+
+  it('also expands in local mode, next to the edit actions, and members can still be edited there', async () => {
+    const mock = setup(ADMIN_ME, {
+      [MEMBERS_URL(CHILD)]: () => json(MEMBERS),
+      'GET /api/admin/access/users': () => json({ users: [{ id: 'u-1', name: 'Bo Bruger', email: 'bo@example.dk' }] }),
+      [`PUT /api/admin/access/org-units/${CHILD}/members`]: () => json({ members: [] }),
+    });
+    renderWithToasts(<OrganisationAdmin />);
+    await screen.findByText('Kommune');
+    expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Enhed', 'Medlemmer', 'Handlinger']);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Vis medlemmer af Børn' }));
+    expect(await screen.findByRole('list', { name: 'Medlemmer af Børn' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Rediger medlemmer i Børn' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(await within(dialog).findByRole('button', { name: 'Gem medlemmer' }));
+    await waitFor(() => expect(calls(mock, 'PUT', `/api/admin/access/org-units/${CHILD}/members`)).toHaveLength(1));
+    // The open panel is reloaded with the new membership.
+    await waitFor(() => expect(calls(mock, 'GET', `/api/admin/access/org-units/${CHILD}/members`).length).toBeGreaterThan(2));
   });
 });
 

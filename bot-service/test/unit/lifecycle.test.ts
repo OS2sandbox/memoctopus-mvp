@@ -48,24 +48,22 @@ describe('lifecycle reporter', () => {
     expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).not.toHaveProperty('code');
   });
 
-  it('sends joined once and at most one terminal event per session', async () => {
+  it('sends at most one terminal event per session, and has no joined report', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response('{}'));
     const r = make(fetchImpl as unknown as typeof fetch);
-    r.joined();
-    r.joined();
+    expect(r).not.toHaveProperty('joined');
     r.error('start_failed');
     r.ended('stopped');
     r.error('again');
-    r.joined();
     await flush();
     const events = fetchImpl.mock.calls.map((c) => JSON.parse(c[1].body).event);
-    expect(events).toEqual(['joined', 'error']);
+    expect(events).toEqual(['error']);
   });
 
   it('never throws and never rejects when the Next app is unreachable, logging the error name only', async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED http://next.test/secret-path'));
     const r = make(fetchImpl as unknown as typeof fetch);
-    expect(() => r.joined()).not.toThrow();
+    expect(() => r.ended('stopped')).not.toThrow();
     await flush();
     const logged = warn.mock.calls.flat().join(' ');
     expect(logged).toContain('name=Error');
@@ -83,7 +81,7 @@ describe('lifecycle reporter', () => {
 
   it('logs a non-2xx status without retrying', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response('no', { status: 500 }));
-    make(fetchImpl as unknown as typeof fetch).joined();
+    make(fetchImpl as unknown as typeof fetch).ended('stopped');
     await flush();
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls.flat().join(' ')).toContain('status=500');
@@ -91,7 +89,7 @@ describe('lifecycle reporter', () => {
 
   it('is a no-op without a url', async () => {
     const fetchImpl = vi.fn();
-    make(fetchImpl as unknown as typeof fetch, { url: undefined }).joined();
+    make(fetchImpl as unknown as typeof fetch, { url: undefined }).ended('stopped');
     await flush();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -101,7 +99,7 @@ describe('lifecycle reporter', () => {
       (_u: string, init: RequestInit) =>
         new Promise((_res, rej) => init.signal!.addEventListener('abort', () => rej(new DOMException('t', 'TimeoutError')))),
     );
-    make(fetchImpl as unknown as typeof fetch, { timeoutMs: 20 }).joined();
+    make(fetchImpl as unknown as typeof fetch, { timeoutMs: 20 }).ended('stopped');
     await new Promise((r) => setTimeout(r, 80));
     expect(warn.mock.calls.flat().join(' ')).toContain('name=TimeoutError');
   });

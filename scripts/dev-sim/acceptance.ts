@@ -236,8 +236,12 @@ async function main() {
   const adminLog = await mette.get('/api/admin/audit?limit=100');
   want('administrator reads the whole log', adminLog, 200);
   const types = new Set((adminLog.json?.events ?? []).map((e: any) => e.eventType));
-  for (const t of ['auth.login', 'central_template.create', 'central_template.update', 'central_template.archive', 'minutes.generate', 'directory.sync', 'authz.denied']) {
+  for (const t of ['auth.login', 'central_template.create', 'central_template.update', 'central_template.archive', 'minutes.generate', 'authz.denied']) {
     check(`log contains ${t}`, types.has(t), `have: ${[...types].join(', ')}`);
+  }
+  // The log holds what people did: no reads, pipeline steps or sync status.
+  for (const t of ['directory.sync', 'central_template.read', 'transcription.request', 'chapters.request']) {
+    check(`log does not contain ${t}`, !types.has(t), `have: ${[...types].join(', ')}`);
   }
   const larsLog = await lars.get('/api/admin/audit?limit=100');
   want('scoped log reader (lars.f) can read', larsLog, 200);
@@ -266,7 +270,7 @@ async function main() {
   ] as const) {
     check(`audit rows and CSV export never contain ${label}`, !haystack.includes(needle));
   }
-  check('audit rows exist for this run', dump.length > 20, `${dump.length} rows`);
+  check('audit rows exist for this run', dump.length > 10, `${dump.length} rows`);
 
   const feedNoKey = await fetch(`${SIM.appUrl}/api/audit/feed/head`);
   check('feed without key is refused', [401, 403, 404].includes(feedNoKey.status), `status ${feedNoKey.status}`);

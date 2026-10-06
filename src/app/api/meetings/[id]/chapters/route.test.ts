@@ -28,7 +28,6 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 }));
 
 import { POST } from './route';
-import { expectValidMetadataOnly, leakyError } from '@/app/api/meetings/ai-audit.test-utils';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
 
@@ -104,72 +103,19 @@ describe('POST /api/meetings/[id]/chapters', () => {
   });
 });
 
-describe('audit: chapters.request', () => {
-  const MEETING = '11111111-2222-4333-8444-555555555555';
-  const UUID_PARAMS = { params: Promise.resolve({ id: MEETING }) };
-  const events = () => mockRecord.mock.calls.map((c) => c[1]);
-  beforeEach(() => {
+describe('audit', () => {
+  it('writes no audit event: pipeline steps are not audited (success, failure or no segments)', async () => {
     mockRecord.mockReset();
-    mockRecord.mockResolvedValue({ status: 'stored' });
-  });
-
-  beforeEach(() => {
     mockGroupIntoChapters.mockReset();
     mockGetSession.mockReset();
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
-  });
-
-  it('emits one event with counts and duration only', async () => {
-    mockGroupIntoChapters.mockResolvedValueOnce(sampleChapters);
-    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }), UUID_PARAMS);
-    expect(res.status).toBe(200);
-
-    expect(events()).toHaveLength(1);
-    const e = events()[0];
-    expect(e).toMatchObject({
-      type: 'chapters.request',
-      actorUserId: 'user-123',
-      entityId: MEETING,
-      details: { segmentCount: 2, chapterCount: 2 },
-    });
-    expect(typeof e.details.durationMs).toBe('number');
-    expectValidMetadataOnly(e, ['Indledning', 'Diskussion', 'Punkt et']);
-  });
-
-  it('omits the entity for a non-UUID id', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     mockGroupIntoChapters.mockResolvedValueOnce(sampleChapters);
     await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }), PARAMS);
-    expect(events()[0].entityId).toBeUndefined();
-    expectValidMetadataOnly(events()[0], ['meet-1']);
-  });
-
-  it('records outcome error with a code and keeps the empty fallback response', async () => {
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    mockGroupIntoChapters.mockRejectedValueOnce(leakyError('Punkt et', { code: 'ETIMEDOUT' }));
-    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }), UUID_PARAMS);
-
-    expect(res.status).toBe(200);
-    expect((await res.json()).chapters).toEqual([]);
-    expect(events()[0]).toMatchObject({ outcome: 'error', details: { outcomeCode: 'timeout' } });
-    expectValidMetadataOnly(events()[0], ['Punkt et']);
-    expect(JSON.stringify(spy.mock.calls)).not.toContain('Punkt et');
+    mockGroupIntoChapters.mockRejectedValueOnce(new Error('down'));
+    await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }), PARAMS);
+    await POST(makeJsonReq(BASE_URL, 'POST', { segments: [] }), PARAMS);
     spy.mockRestore();
-  });
-
-  it('still answers when the audit write rejects', async () => {
-    mockGroupIntoChapters.mockResolvedValueOnce(sampleChapters);
-    mockRecord.mockResolvedValueOnce({ status: 'dropped', code: 'db_error' });
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }), UUID_PARAMS);
-    expect(res.status).toBe(200);
-    expect((await res.json()).chapters).toHaveLength(2);
-    warn.mockRestore();
-  });
-
-  it('emits nothing for 401 or when there are no segments', async () => {
-    mockGetSession.mockResolvedValueOnce(null as never);
-    await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }), UUID_PARAMS);
-    await POST(makeJsonReq(BASE_URL, 'POST', { segments: [] }), UUID_PARAMS);
     expect(mockRecord).not.toHaveBeenCalled();
   });
 });

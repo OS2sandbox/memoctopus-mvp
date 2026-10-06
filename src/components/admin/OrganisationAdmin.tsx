@@ -1,13 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Badge } from '@/components/ui/badge';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Table, TableBody, TableCell, TableEmptyRow, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/components/ui/toast';
-import { sourceLabels } from '@/lib/authz/labels.da';
 import { meToPrincipal } from '@/lib/authz/me';
 import { explainDenial } from '@/lib/authz/permissions';
 import { useMe } from '@/lib/hooks/use-me';
@@ -16,6 +14,7 @@ import { AdminPage, ReadOnlyBanner } from './AdminPage';
 import { flattenOrgTree } from './org-tree';
 import { OrgUnitFormDialog } from './OrgUnitFormDialog';
 import { OrgUnitMembersDialog } from './OrgUnitMembersDialog';
+import { OrgUnitMembersList } from './OrgUnitMembersList';
 import { LastSyncLine } from './SyncStatus';
 
 interface OrgUnit {
@@ -35,7 +34,12 @@ export function OrganisationAdmin() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>({ open: false });
+  // The unit whose members are being edited (local mode, local units only).
   const [members, setMembers] = useState<OrgUnit | null>(null);
+  // Units with an open member panel; `opened` keeps a panel mounted (hidden) after the first expand so it loads once.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [opened, setOpened] = useState<Set<string>>(new Set());
+  const [membersRev, setMembersRev] = useState(0);
   const [remove, setRemove] = useState<OrgUnit | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
@@ -65,6 +69,25 @@ export function OrganisationAdmin() {
   const denial = principal ? explainDenial(principal, 'access.manage') : null;
   const isManager = denial === null && !!me;
   const canWrite = isManager && !me!.readOnly;
+  // Unit | Members, plus an actions column only where there are actions (local mode).
+  const columns = canWrite ? 3 : 2;
+
+  function toggleUnit(uuid: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(uuid)) next.delete(uuid);
+      else next.add(uuid);
+      return next;
+    });
+    setOpened((prev) => (prev.has(uuid) ? prev : new Set(prev).add(uuid)));
+  }
+
+  // Members were edited: forget every closed panel and reload the open ones with the new data.
+  function membersSaved() {
+    setOpened(new Set(expanded));
+    setMembersRev((n) => n + 1);
+    void load();
+  }
 
   async function confirmRemove() {
     if (!remove) return;
@@ -105,47 +128,66 @@ export function OrganisationAdmin() {
             <TableRow>
               <TableHead>Enhed</TableHead>
               <TableHead>Medlemmer</TableHead>
-              <TableHead>Kilde</TableHead>
-              {isManager && <TableHead>Handlinger</TableHead>}
+              {canWrite && <TableHead>Handlinger</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
             {rows.length === 0 && !loadError ? (
-              <TableEmptyRow colSpan={isManager ? 4 : 3}>Ingen organisationsenheder</TableEmptyRow>
+              <TableEmptyRow colSpan={columns}>Ingen organisationsenheder</TableEmptyRow>
             ) : (
               rows.map(({ unit, depth }) => {
                 const editable = canWrite && unit.source === 'local';
+                const isOpen = expanded.has(unit.uuid);
+                const panelId = `unit-members-${unit.uuid}`;
                 return (
-                  <TableRow key={unit.uuid}>
-                    <TableCell>
-                      {/* Indentation is visual only; screen readers get the level as text. */}
-                      {depth > 0 && <span className="sr-only">{`Niveau ${depth + 1}: `}</span>}
-                      <span style={{ paddingLeft: depth * 20 }} data-depth={depth}>
-                        {unit.name}
-                      </span>
-                    </TableCell>
-                    <TableCell>{unit.memberCount}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">
-                        {unit.source === 'local' || unit.source === 'rollekatalog'
-                          ? sourceLabels[unit.source]
-                          : unit.source}
-                      </Badge>
-                    </TableCell>
-                    {isManager && (
+                  <Fragment key={unit.uuid}>
+                    <TableRow>
                       <TableCell>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            aria-label={`${editable ? 'Rediger medlemmer' : 'Vis medlemmer'} i ${unit.name}`}
-                            onClick={() => setMembers(unit)}
-                          >
-                            Medlemmer
-                          </Button>
-                          {editable && (
-                            <>
+                        {/* Indentation is visual only; screen readers get the level as text. */}
+                        {depth > 0 && <span className="sr-only">{`Niveau ${depth + 1}: `}</span>}
+                        <div className="flex items-center gap-1" style={{ paddingLeft: depth * 20 }}>
+                          {isManager && (
+                            <button
+                              type="button"
+                              aria-expanded={isOpen}
+                              aria-controls={panelId}
+                              aria-label={`${isOpen ? 'Skjul' : 'Vis'} medlemmer af ${unit.name}`}
+                              onClick={() => toggleUnit(unit.uuid)}
+                              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--muted)] hover:text-[var(--ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                            >
+                              <svg
+                                aria-hidden
+                                width="12"
+                                height="12"
+                                viewBox="0 0 12 12"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                style={{ transform: isOpen ? 'rotate(90deg)' : undefined, transition: 'transform 120ms' }}
+                              >
+                                <path d="M4 2l4 4-4 4" />
+                              </svg>
+                            </button>
+                          )}
+                          <span data-depth={depth}>{unit.name}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>{unit.memberCount}</TableCell>
+                      {canWrite && (
+                        <TableCell>
+                          {editable ? (
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                aria-label={`Rediger medlemmer i ${unit.name}`}
+                                onClick={() => setMembers(unit)}
+                              >
+                                Medlemmer
+                              </Button>
                               <Button
                                 type="button"
                                 size="sm"
@@ -167,15 +209,28 @@ export function OrganisationAdmin() {
                               >
                                 Slet
                               </Button>
-                            </>
+                            </div>
+                          ) : (
+                            <span className="text-[12px] text-[var(--muted)]">Styres af Rollekatalog</span>
                           )}
-                          {canWrite && !editable && (
-                            <span className="self-center text-[12px] text-[var(--muted)]">Styres af Rollekatalog</span>
-                          )}
-                        </div>
-                      </TableCell>
+                        </TableCell>
+                      )}
+                    </TableRow>
+                    {isManager && opened.has(unit.uuid) && (
+                      <TableRow hidden={!isOpen} className="bg-[var(--surface-2)] hover:bg-[var(--surface-2)]">
+                        <TableCell colSpan={columns} className="pb-3 pt-1">
+                          <div style={{ paddingLeft: depth * 20 + 28 }}>
+                            <OrgUnitMembersList
+                              key={membersRev}
+                              id={panelId}
+                              unitUuid={unit.uuid}
+                              unitName={unit.name}
+                            />
+                          </div>
+                        </TableCell>
+                      </TableRow>
                     )}
-                  </TableRow>
+                  </Fragment>
                 );
               })
             )}
@@ -197,8 +252,7 @@ export function OrganisationAdmin() {
         open={members !== null}
         onOpenChange={(o) => !o && setMembers(null)}
         unit={members}
-        editable={canWrite && members?.source === 'local'}
-        onSaved={load}
+        onSaved={membersSaved}
       />
 
       <Dialog open={remove !== null} onOpenChange={(o) => !o && !removing && setRemove(null)}>

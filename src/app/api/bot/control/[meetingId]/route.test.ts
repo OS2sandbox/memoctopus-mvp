@@ -172,8 +172,6 @@ describe('audit: bot.session_* events', () => {
   const uuidParams = Promise.resolve({ meetingId: MEETING });
 
   it.each([
-    ['pause', 'bot.session_pause'],
-    ['resume', 'bot.session_resume'],
     ['stop', 'bot.session_stop'],
     ['abort', 'bot.session_abort'],
   ] as const)('%s emits exactly one %s with the meeting uuid and no details', async (action, type) => {
@@ -189,14 +187,24 @@ describe('audit: bot.session_* events', () => {
     });
   });
 
-  it('records outcome error when the bot rejects the action', async () => {
+  it.each(['pause', 'resume'] as const)('%s is forwarded but writes no audit event (success or failure)', async (action) => {
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    expect((await POST(req({ action, sessionId: SID }), { params: uuidParams })).status).toBe(200);
+    mockFetch.mockResolvedValueOnce(new Response('x', { status: 503 }));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect((await POST(req({ action, sessionId: SID }), { params: uuidParams })).status).toBe(502);
+    errorSpy.mockRestore();
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('records outcome error when the bot rejects stop', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockFetch.mockResolvedValueOnce(new Response('x', { status: 503 }));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await POST(req({ action: 'pause', sessionId: SID }), { params: uuidParams });
+    await POST(req({ action: 'stop', sessionId: SID }), { params: uuidParams });
     errorSpy.mockRestore();
     expect(mockRecord).toHaveBeenCalledTimes(1);
-    expect(mockRecord.mock.calls[0][1]).toMatchObject({ type: 'bot.session_pause', outcome: 'error' });
+    expect(mockRecord.mock.calls[0][1]).toMatchObject({ type: 'bot.session_stop', outcome: 'error' });
   });
 
   it('emits nothing for a non-owner (404) or an invalid action', async () => {

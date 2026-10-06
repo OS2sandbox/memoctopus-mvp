@@ -95,7 +95,7 @@ describe('CentralTemplateEditor — create', () => {
     await userEvent.selectOptions(screen.getByLabelText('Ejerenhed'), ROOT);
     await userEvent.type(screen.getByLabelText('Navn'), 'Ny skabelon');
     await userEvent.type(screen.getByLabelText('Prompt'), 'Skriv kort');
-    await userEvent.click(screen.getByLabelText('Modtager: Børn'));
+    await userEvent.click(screen.getByLabelText('Til rådighed for: Børn'));
     await userEvent.type(screen.getByLabelText('Ændringsbeskrivelse'), `  ${NOTE}  `);
     await userEvent.click(saveButton('Opret skabelon'));
 
@@ -119,28 +119,28 @@ describe('CentralTemplateEditor — create', () => {
 
   it('warns about zero recipients and keeps both user permissions off by default', () => {
     setup(null);
-    expect(screen.queryByText(/Ingen modtagere/)).toBeNull(); // only once an owner is chosen
+    expect(screen.queryByText(/ikke til rådighed for nogen/)).toBeNull(); // only once an owner is chosen
     expect(screen.getByRole('switch', { name: /egen instruktion/ })).not.toBeChecked();
     expect(screen.getByRole('switch', { name: /slå kategorier til og fra/ })).not.toBeChecked();
     expect(screen.getByText(/Slået fra: prompten bruges uændret/)).toBeInTheDocument();
     expect(screen.getByText(/Slået fra: kategorierne ovenfor er faste/)).toBeInTheDocument();
   });
 
-  it('shows Ingen modtagere once an owner is chosen, and offers only that subtree', async () => {
+  it('warns that nobody has the template once an owner is chosen, and offers only that subtree', async () => {
     setup(null);
     await userEvent.selectOptions(screen.getByLabelText('Ejerenhed'), CHILD);
-    expect(screen.getByRole('status')).toHaveTextContent('Ingen modtagere');
-    expect(screen.getByLabelText('Modtager: Børn')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Modtager: Kommune')).toBeNull();
-    expect(screen.queryByLabelText('Modtager: Andet')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent('Skabelonen er ikke til rådighed for nogen');
+    expect(screen.getByLabelText('Til rådighed for: Børn')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Til rådighed for: Kommune')).toBeNull();
+    expect(screen.queryByLabelText('Til rådighed for: Andet')).toBeNull();
   });
 
   it('drops targets that fall outside the subtree when the owner changes', async () => {
     const { mock } = setup(null, { 'POST /api/admin/central-templates': () => json({ template: TEMPLATE }, 201) });
     await userEvent.selectOptions(screen.getByLabelText('Ejerenhed'), ROOT);
-    await userEvent.click(screen.getByLabelText('Modtager: Børn'));
+    await userEvent.click(screen.getByLabelText('Til rådighed for: Børn'));
     await userEvent.selectOptions(screen.getByLabelText('Ejerenhed'), OTHER);
-    expect(screen.queryByLabelText('Modtager: Børn')).toBeNull();
+    expect(screen.queryByLabelText('Til rådighed for: Børn')).toBeNull();
     await userEvent.type(screen.getByLabelText('Navn'), 'N');
     await userEvent.type(screen.getByLabelText('Prompt'), 'P');
     await userEvent.type(screen.getByLabelText('Ændringsbeskrivelse'), NOTE);
@@ -300,7 +300,7 @@ describe('CentralTemplateEditor — a11y', () => {
     expect(screen.getByLabelText('Navn')).toBeRequired();
     expect(screen.getByLabelText('Prompt')).toBeRequired();
     expect(screen.getByLabelText('Ændringsbeskrivelse')).toBeRequired();
-    expect(screen.getByRole('group', { name: 'Modtagere' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Hvem skal have skabelonen til rådighed?' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Kategorier' })).toBeInTheDocument();
   });
 });

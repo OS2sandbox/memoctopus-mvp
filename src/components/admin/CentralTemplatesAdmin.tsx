@@ -109,7 +109,7 @@ export function CentralTemplatesAdmin() {
               <TableHead>Ejerenhed</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Version</TableHead>
-              <TableHead>Modtagere</TableHead>
+              <TableHead>Til rådighed for</TableHead>
               <TableHead>Oprettet af</TableHead>
               <TableHead>Senest ændret</TableHead>
               <TableHead>Handlinger</TableHead>
@@ -133,7 +133,11 @@ export function CentralTemplatesAdmin() {
                   </TableCell>
                   <TableCell>{t.currentVersion}</TableCell>
                   <TableCell>
-                    {t.targetCount === 0 ? <Badge variant="warning">Ingen modtagere</Badge> : t.targetCount}
+                    {t.targetCount === 0 ? (
+                      <Badge variant="warning">Ikke til rådighed for nogen</Badge>
+                    ) : (
+                      `${t.targetCount} ${t.targetCount === 1 ? 'enhed' : 'enheder'}`
+                    )}
                   </TableCell>
                   <TableCell>{t.createdByName ?? <span className="text-[var(--muted)]">Ukendt</span>}</TableCell>
                   <TableCell>

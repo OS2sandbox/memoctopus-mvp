@@ -14,9 +14,8 @@ const bodySchema = z.object({
   sessionId: z.string().uuid().optional(),
 });
 
+// Only stop and abort are audited; pause and resume are operational and leave no event.
 const EVENT_FOR_ACTION = {
-  pause: 'bot.session_pause',
-  resume: 'bot.session_resume',
   stop: 'bot.session_stop',
   abort: 'bot.session_abort',
 } as const;
@@ -52,13 +51,15 @@ export const POST = withHandler(
     if (!parsed.success) return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
 
     const { action, sessionId } = parsed.data;
-    const audit = (outcome: 'success' | 'error') =>
-      recordServerEvent(req, {
+    const audit = async (outcome: 'success' | 'error') => {
+      if (action !== 'stop' && action !== 'abort') return;
+      await recordServerEvent(req, {
         type: EVENT_FOR_ACTION[action],
         outcome,
         actorUserId: session.user.id,
         entityId: asEntityUuid(meetingId),
       });
+    };
 
     const bot = getBotServiceConfig();
     if (!bot) {

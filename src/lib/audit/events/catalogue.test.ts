@@ -16,7 +16,6 @@ import { auditEvents } from './audit';
 import { authEvents } from './auth';
 import { botEvents } from './bot';
 import { centralTemplateEvents } from './central-template';
-import { directoryEvents } from './directory';
 import { meetingEvents } from './meeting';
 import { templateEvents } from './template';
 import { CODE_RE } from './types';
@@ -112,8 +111,24 @@ function eventFor(type: EventType, details: unknown): AuditEventInput {
 }
 
 describe('catalogue structure', () => {
+  it('is exactly the user-action set: no reads, pipeline steps or sync status', () => {
+    expect([...EVENT_TYPES].sort()).toEqual(
+      [
+        'auth.login', 'auth.logout', 'auth.login_failed', 'authz.denied',
+        'template.create', 'template.update', 'template.delete', 'template.share', 'template.import',
+        'central_template.create', 'central_template.update', 'central_template.retarget', 'central_template.archive', 'central_template.restore',
+        'minutes.generate', 'export.download',
+        'bot.session_start', 'bot.session_stop', 'bot.session_abort', 'bot.ended', 'bot.error',
+        'meeting.create', 'meeting.delete', 'meeting.redact', 'meeting.audio_delete',
+        'access.role_assign', 'access.role_revoke', 'access.org_unit_create', 'access.org_unit_update', 'access.org_unit_delete',
+        'access.member_add', 'access.member_remove', 'access.user_create', 'access.user_link',
+        'audit.export', 'audit.prune',
+      ].sort(),
+    );
+  });
+
   it('has no event type defined in two domain files (a spread would silently override)', () => {
-    const files = [accessEvents, authEvents, templateEvents, centralTemplateEvents, aiEvents, botEvents, meetingEvents, auditEvents, directoryEvents];
+    const files = [accessEvents, authEvents, templateEvents, centralTemplateEvents, aiEvents, botEvents, meetingEvents, auditEvents];
     const all = files.flatMap((f) => Object.keys(f));
     expect(new Set(all).size).toBe(all.length);
     expect(all.length).toBe(EVENT_TYPES.length);
@@ -125,11 +140,10 @@ describe('catalogue structure', () => {
     expect([...prefixes(authEvents)]).toEqual(['auth']);
     expect([...prefixes(templateEvents)]).toEqual(['template']);
     expect([...prefixes(centralTemplateEvents)]).toEqual(['central_template']);
-    expect([...prefixes(aiEvents)].sort()).toEqual(['chapters', 'clarifications', 'diarization', 'export', 'minutes', 'transcription']);
+    expect([...prefixes(aiEvents)].sort()).toEqual(['export', 'minutes']);
     expect([...prefixes(botEvents)]).toEqual(['bot']);
     expect([...prefixes(meetingEvents)]).toEqual(['meeting']);
     expect([...prefixes(auditEvents)]).toEqual(['audit']);
-    expect([...prefixes(directoryEvents)]).toEqual(['directory']);
   });
 
   it('allows the browser to report only meeting.*', () => {
@@ -201,7 +215,7 @@ describe('details schemas can only express codes, enums, numbers, booleans and u
         checked++;
       }
     }
-    expect(checked).toBeGreaterThanOrEqual(30);
+    expect(checked).toBeGreaterThanOrEqual(20);
     expect(tx.query).not.toHaveBeenCalled();
     expect(poolQuery).not.toHaveBeenCalled();
     for (const call of warn.mock.calls) expect(String(call[0])).not.toContain('Jensens');
@@ -242,7 +256,6 @@ describe('central template events (Phase 4)', () => {
       ['central_template.retarget', { version: 3, targetCount: 0 }],
       ['central_template.archive', { version: 4 }],
       ['central_template.restore', { version: 5 }],
-      ['central_template.read', { version: 6 }],
     ];
     for (const [type, details] of cases) {
       const res = validateEvent(event(type, details));
@@ -259,15 +272,6 @@ describe('central template events (Phase 4)', () => {
     expect(validateEvent(event('central_template.update', { version: 2, changedFields: ['changeNote'] })).ok).toBe(false);
     expect(validateEvent(event('central_template.update', { version: 2, changedFields: ['prompt'], changeNote: 'Rettet' })).ok).toBe(false);
     expect(validateEvent(event('central_template.create', { version: 1, targetCount: 1, name: 'Referat' })).ok).toBe(false);
-  });
-
-  it('central_template.read carries the version only: no prompt, name or other field fits in it', () => {
-    expect(validateEvent(event('central_template.read', { version: 2, prompt: 'Hemmelig' })).ok).toBe(false);
-    expect(validateEvent(event('central_template.read', { version: 2, name: 'Referat' })).ok).toBe(false);
-    expect(validateEvent(event('central_template.read', {})).ok).toBe(false);
-    expect(validateEvent(event('central_template.read', { version: 0 })).ok).toBe(false);
-    // Server-only, like the rest of the family.
-    expect(validateEvent(event('central_template.read', { version: 1 }, { source: 'client' })).ok).toBe(false);
   });
 
   it('requires a version of at least 1 and an entity id', () => {
