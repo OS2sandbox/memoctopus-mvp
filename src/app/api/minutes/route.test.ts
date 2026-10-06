@@ -21,6 +21,9 @@ vi.mock('@/lib/skabeloner/server', () => ({
   getDefaultSkabelon: mockGetDefaultSkabelon,
 }));
 
+const mockResolveCentral = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/skabeloner/resolve', () => ({ resolveCentralTemplate: mockResolveCentral }));
+
 const mockRecord = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/audit/record', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/audit/record')>()),
@@ -60,6 +63,7 @@ describe('POST /api/minutes', () => {
     mockGetDefaultSkabelon.mockReset();
     mockGetDefaultSkabelon.mockResolvedValue(defaultSkabelon);
     mockGenerateReferatBody.mockResolvedValue(sampleContent);
+    mockResolveCentral.mockReset();
   });
 
   it('returns 401 when not authenticated', async () => {
@@ -266,5 +270,239 @@ describe('audit: minutes.generate', () => {
     await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
     await POST(makeJsonReq(BASE_URL, 'POST', {}));
     expect(mockRecord).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/minutes templateRef (non-central sources)', () => {
+  const PERSONAL = '33333333-4444-4555-8666-777777777777';
+
+  beforeEach(() => {
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    mockGenerateReferatBody.mockReset();
+    mockGenerateReferatBody.mockResolvedValue(sampleContent);
+    mockGetSkabelon.mockReset();
+    mockGetDefaultSkabelon.mockReset();
+    mockGetDefaultSkabelon.mockResolvedValue({ ...defaultSkabelon, id: PERSONAL });
+    mockResolveCentral.mockReset();
+    mockRecord.mockReset();
+    mockRecord.mockResolvedValue({ status: 'stored' });
+  });
+
+  it('chosen personal template -> personal, no version', async () => {
+    mockGetSkabelon.mockResolvedValueOnce({ ...defaultSkabelon, id: PERSONAL });
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, skabelonId: PERSONAL, skabelonSource: 'personal' }));
+    const body = await res.json();
+    expect(body.templateRef).toEqual({ source: 'personal', id: PERSONAL, version: null });
+    expect(body.skabelonId).toBe(PERSONAL);
+    expect(mockResolveCentral).not.toHaveBeenCalled();
+  });
+
+  it('default template -> personal', async () => {
+    const body = await (await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }))).json();
+    expect(body.templateRef).toEqual({ source: 'personal', id: PERSONAL, version: null });
+  });
+
+  it('"Ingen skabelon" -> none', async () => {
+    const body = await (await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, skabelonId: '' }))).json();
+    expect(body.templateRef).toEqual({ source: 'none', id: null, version: null });
+    expect(body.skabelonId).toBeNull();
+  });
+
+  it('rejects an unknown skabelonSource with 400 before touching any template', async () => {
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, skabelonSource: 'shared' }));
+    expect(res.status).toBe(400);
+    expect(mockGenerateReferatBody).not.toHaveBeenCalled();
+    expect(mockResolveCentral).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('personal flags and customPrompt still pass through unchanged', async () => {
+    mockGetSkabelon.mockResolvedValueOnce({ ...defaultSkabelon, id: PERSONAL });
+    await POST(makeJsonReq(BASE_URL, 'POST', {
+      segments: sampleSegments, skabelonId: PERSONAL, customPrompt: 'kort', includeDagsorden: false,
+    }));
+    const [, spec, , , custom] = mockGenerateReferatBody.mock.calls[0];
+    expect(custom).toBe('kort');
+    expect(spec.includeDagsorden).toBe(false);
+    expect(spec.prompt).toBe('Lav et referat.');
+  });
+});
+
+describe('POST /api/minutes with a central template', () => {
+  const MEETING = '11111111-2222-4333-8444-555555555555';
+  const CENTRAL = '44444444-5555-4666-8777-888888888888';
+  const SECRET = 'HEMMELIG-CENTRAL-PROMPT: skriv altid formelt og nævn sagsnummer.';
+  const CUSTOM = 'EGEN-INSTRUKTION-FRA-BRUGER';
+
+  const central = (over: Record<string, unknown> = {}) => ({
+    id: CENTRAL,
+    version: 4,
+    prompt: SECRET,
+    includeDeltagere: true,
+    includeBeslutningspunkter: false,
+    includeDagsorden: true,
+    includeDato: false,
+    allowUserInstruction: false,
+    allowToggleOverrides: false,
+    ...over,
+  });
+  const send = (extra: Record<string, unknown> = {}) =>
+    POST(makeJsonReq(BASE_URL, 'POST', {
+      segments: sampleSegments, skabelonId: CENTRAL, skabelonSource: 'central', meetingId: MEETING, ...extra,
+    }));
+  const events = () => mockRecord.mock.calls.map((c) => c[1]);
+
+  beforeEach(() => {
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    mockGenerateReferatBody.mockReset();
+    mockGenerateReferatBody.mockResolvedValue(sampleContent);
+    mockGetSkabelon.mockReset();
+    mockGetDefaultSkabelon.mockReset();
+    mockGetDefaultSkabelon.mockResolvedValue(defaultSkabelon);
+    mockResolveCentral.mockReset();
+    mockResolveCentral.mockResolvedValue(central());
+    mockRecord.mockReset();
+    mockRecord.mockResolvedValue({ status: 'stored' });
+  });
+
+  it('resolves for the session user and generates with the STORED prompt and flags', async () => {
+    const res = await send();
+    expect(res.status).toBe(200);
+    expect(mockResolveCentral).toHaveBeenCalledWith('user-123', CENTRAL);
+    const [, spec] = mockGenerateReferatBody.mock.calls[0];
+    expect(spec).toEqual({
+      prompt: SECRET,
+      includeDeltagere: true,
+      includeBeslutningspunkter: false,
+      includeDagsorden: true,
+      includeDato: false,
+    });
+    // No personal lookup at all, not even the default.
+    expect(mockGetSkabelon).not.toHaveBeenCalled();
+    expect(mockGetDefaultSkabelon).not.toHaveBeenCalled();
+  });
+
+  it('answers templateRef with source central, id and version, and keeps content and skabelonId', async () => {
+    const body = await (await send()).json();
+    expect(body.templateRef).toEqual({ source: 'central', id: CENTRAL, version: 4 });
+    expect(body.content).toEqual(sampleContent);
+    expect(body.skabelonId).toBe(CENTRAL);
+  });
+
+  it('never puts the central prompt in the response body or console output', async () => {
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
+    const res = await send({ customPrompt: CUSTOM });
+    expect(JSON.stringify(await res.json())).not.toContain('HEMMELIG');
+    for (const s of spies) expect(JSON.stringify(s.mock.calls)).not.toContain('HEMMELIG');
+    spies.forEach((s) => s.mockRestore());
+  });
+
+  it('ignores the client customPrompt unless the template allows user instructions', async () => {
+    await send({ customPrompt: CUSTOM });
+    const [, spec, , , custom] = mockGenerateReferatBody.mock.calls[0];
+    expect(custom).toBeUndefined();
+    expect(JSON.stringify(mockGenerateReferatBody.mock.calls[0])).not.toContain(CUSTOM);
+    expect(spec.prompt).not.toContain(CUSTOM);
+  });
+
+  it('forwards the customPrompt when allow_user_instruction is on', async () => {
+    mockResolveCentral.mockResolvedValue(central({ allowUserInstruction: true }));
+    await send({ customPrompt: CUSTOM });
+    const [, spec, , , custom] = mockGenerateReferatBody.mock.calls[0];
+    expect(custom).toBe(CUSTOM);
+    expect(spec.prompt).toBe(SECRET); // still the stored prompt
+  });
+
+  it('ignores include* overrides unless the template allows toggle overrides', async () => {
+    await send({ includeDeltagere: false, includeBeslutningspunkter: true, includeDagsorden: false, includeDato: true });
+    expect(mockGenerateReferatBody.mock.calls[0][1]).toMatchObject({
+      includeDeltagere: true,
+      includeBeslutningspunkter: false,
+      includeDagsorden: true,
+      includeDato: false,
+    });
+  });
+
+  it('applies include* overrides when allow_toggle_overrides is on, and falls back to stored values for omitted or non-boolean ones', async () => {
+    mockResolveCentral.mockResolvedValue(central({ allowToggleOverrides: true }));
+    await send({ includeDeltagere: false, includeBeslutningspunkter: true, includeDagsorden: 'ja' });
+    expect(mockGenerateReferatBody.mock.calls[0][1]).toMatchObject({
+      includeDeltagere: false,
+      includeBeslutningspunkter: true,
+      includeDagsorden: true, // non-boolean ignored -> stored
+      includeDato: false, // omitted -> stored
+    });
+  });
+
+  it.each([
+    ['unknown, archived or not a recipient (resolver returns null)', { skabelonId: CENTRAL }],
+    ['a missing skabelonId', { skabelonId: undefined }],
+    ['a non-string skabelonId', { skabelonId: 42 }],
+  ])('answers the same 404 for %s and generates nothing', async (_n, extra) => {
+    mockResolveCentral.mockResolvedValue(null);
+    const res = await send(extra);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'Skabelonen er ikke tilgængelig' });
+    expect(mockGenerateReferatBody).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
+    // A client cannot fall through to a personal/default template instead.
+    expect(mockGetSkabelon).not.toHaveBeenCalled();
+    expect(mockGetDefaultSkabelon).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a resolver outage as "not available": it is a 500', async () => {
+    mockResolveCentral.mockRejectedValue(new Error('db down'));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await send();
+    expect(res.status).toBe(500);
+    expect(mockGenerateReferatBody).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('audits templateSource central, the version and the central uuid as secondary entity, never the prompt', async () => {
+    await send({ customPrompt: CUSTOM, participants: ['Alice'] });
+    expect(events()).toHaveLength(1);
+    const e = events()[0];
+    expect(e).toMatchObject({
+      type: 'minutes.generate',
+      actorUserId: 'user-123',
+      entityId: MEETING,
+      secondaryEntityId: CENTRAL,
+      secondaryEntityType: 'central_template',
+      details: { templateSource: 'central', templateVersion: 4, segmentCount: 1 },
+    });
+    expectValidMetadataOnly(e, ['HEMMELIG', CUSTOM, 'Alice', 'Vi besluttede']);
+  });
+
+  it('audits an error outcome with the version too, and the leaky error message stays out', async () => {
+    mockGenerateReferatBody.mockRejectedValueOnce(leakyError(SECRET, { code: 'rate_limit_exceeded' }));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await send();
+    expect(res.status).toBe(500);
+    expect(JSON.stringify(await res.json())).not.toContain('HEMMELIG');
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('HEMMELIG');
+    const e = events()[0];
+    expect(e).toMatchObject({ outcome: 'error', secondaryEntityType: 'central_template', details: { templateSource: 'central', templateVersion: 4, outcomeCode: 'rate_limit_exceeded' } });
+    expectValidMetadataOnly(e, ['HEMMELIG']);
+    spy.mockRestore();
+  });
+
+  it('still records the event without a meeting entity when the meeting id is not a uuid', async () => {
+    await send({ meetingId: 'Referat om sag 42' });
+    const e = events()[0];
+    expect(e.entityId).toBeUndefined();
+    expect(e.secondaryEntityId).toBe(CENTRAL);
+    expectValidMetadataOnly(e, ['sag 42']);
+  });
+
+  it('personal audit events carry neither a version nor a secondary type', async () => {
+    mockGetSkabelon.mockResolvedValueOnce({ ...defaultSkabelon, id: CENTRAL, isDefault: false });
+    await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, skabelonId: CENTRAL }));
+    const e = events()[0];
+    expect(e.details).not.toHaveProperty('templateVersion');
+    expect(e).not.toHaveProperty('secondaryEntityType');
+    expect(e.details.templateSource).toBe('personal');
   });
 });

@@ -16,6 +16,9 @@ vi.mock('@/lib/skabeloner/server', () => ({
   createSkabelon: vi.fn(),
 }));
 
+const mockListCentral = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/skabeloner/resolve', () => ({ listCentralForUser: mockListCentral }));
+
 import { GET, POST } from './route';
 import { auth } from '@/lib/auth';
 import { listSkabeloner, createSkabelon } from '@/lib/skabeloner/server';
@@ -27,6 +30,7 @@ const mockCreate = vi.mocked(createSkabelon);
 
 const BASE_URL = 'http://localhost/api/skabeloner';
 const SK_ID = '11111111-2222-4333-8444-555555555555';
+const CENTRAL_ID = '99999999-2222-4333-8444-555555555555';
 
 const FAKE_SKABELON = {
   id: SK_ID,
@@ -46,6 +50,8 @@ describe('GET /api/skabeloner', () => {
   beforeEach(() => {
     mockGetSession.mockReset();
     mockList.mockReset();
+    mockListCentral.mockReset();
+    mockListCentral.mockResolvedValue([]);
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
   });
 
@@ -63,6 +69,33 @@ describe('GET /api/skabeloner', () => {
     const json = await res.json();
     expect(json.skabeloner).toHaveLength(1);
     expect(json.skabeloner[0].id).toBe(SK_ID);
+  });
+
+  it('returns the central summaries for the session user next to the personal list', async () => {
+    const central = { id: CENTRAL_ID, source: 'central', name: 'Dialogmøde', locked: true, version: 3 };
+    mockList.mockResolvedValue([FAKE_SKABELON]);
+    mockListCentral.mockResolvedValue([central]);
+    const res = await GET();
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.skabeloner).toEqual([FAKE_SKABELON]);
+    expect(json.centralSkabeloner).toEqual([central]);
+    expect(mockListCentral).toHaveBeenCalledWith('user-123');
+  });
+
+  it('keeps the personal list and answers an empty central list when central resolution fails', async () => {
+    mockList.mockResolvedValue([FAKE_SKABELON]);
+    mockListCentral.mockRejectedValue(Object.assign(new Error('relation x: Hemmelig prompt'), { code: '42P01' }));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await GET();
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.skabeloner).toHaveLength(1);
+    expect(json.centralSkabeloner).toEqual([]);
+    // safeLogError: class name and code only, never the message.
+    expect(spy).toHaveBeenCalled();
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('Hemmelig');
+    spy.mockRestore();
   });
 
   it('returns a parseable JSON 500 when listSkabeloner throws', async () => {

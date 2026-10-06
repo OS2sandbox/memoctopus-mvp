@@ -4,13 +4,23 @@ import { auth } from '@/lib/auth';
 import { listSkabeloner, createSkabelon } from '@/lib/skabeloner/server';
 import { withHandler } from '@/lib/api-handler';
 import { recordServerEvent } from '@/lib/audit/record';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { listCentralForUser } from '@/lib/skabeloner/resolve';
+import type { CentralSkabelonSummary } from '@/lib/skabeloner/central-types';
 
 async function getHandler(): Promise<NextResponse> {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const skabeloner = await listSkabeloner(session.user.id);
-  return NextResponse.json({ skabeloner });
+  // The central list is an addition: if it cannot be resolved the user keeps their personal templates.
+  let centralSkabeloner: CentralSkabelonSummary[] = [];
+  try {
+    centralSkabeloner = await listCentralForUser(session.user.id);
+  } catch (err) {
+    safeLogError('skabeloner/GET central', err);
+  }
+  return NextResponse.json({ skabeloner, centralSkabeloner });
 }
 
 async function postHandler(req: NextRequest): Promise<NextResponse> {
