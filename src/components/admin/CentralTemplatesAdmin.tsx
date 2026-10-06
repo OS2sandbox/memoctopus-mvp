@@ -103,13 +103,14 @@ export function CentralTemplatesAdmin() {
               <TableHead>Status</TableHead>
               <TableHead>Version</TableHead>
               <TableHead>Modtagere</TableHead>
-              <TableHead>Opdateret</TableHead>
+              <TableHead>Oprettet af</TableHead>
+              <TableHead>Senest ændret</TableHead>
               <TableHead>Handlinger</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {templates.length === 0 && !loadError ? (
-              <TableEmptyRow colSpan={7}>Ingen centrale skabeloner</TableEmptyRow>
+              <TableEmptyRow colSpan={8}>Ingen centrale skabeloner</TableEmptyRow>
             ) : (
               templates.map((t) => (
                 <TableRow key={t.id}>
@@ -127,7 +128,11 @@ export function CentralTemplatesAdmin() {
                   <TableCell>
                     {t.targetCount === 0 ? <Badge variant="warning">Ingen modtagere</Badge> : t.targetCount}
                   </TableCell>
-                  <TableCell>{formatTime(t.updatedAt)}</TableCell>
+                  <TableCell>{t.createdByName ?? <span className="text-[var(--muted)]">Ukendt</span>}</TableCell>
+                  <TableCell>
+                    <div>{t.lastEditedByName ?? <span className="text-[var(--muted)]">Ukendt</span>}</div>
+                    <div className="text-[13px] text-[var(--muted)]">{formatTime(t.lastEditedAt)}</div>
+                  </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-2">
                       {canManage && t.status === 'active' && (

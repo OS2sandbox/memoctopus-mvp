@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CentralTemplateEditor } from './CentralTemplateEditor';
+import { formatTime } from './central-template-utils';
 import { calls, installFetch, json, renderWithToasts } from './test-helpers';
 import type { CentralScopeOrgUnit, CentralTemplateAdmin } from '@/lib/skabeloner/central-types';
 
@@ -35,6 +36,8 @@ const TEMPLATE: CentralTemplateAdmin = {
   createdAt: '2026-10-01T10:00:00.000Z',
   updatedAt: '2026-10-02T10:00:00.000Z',
   createdByName: 'Anne Admin',
+  lastEditedByName: 'Bo Beslutter',
+  lastEditedAt: '2026-10-02T11:30:00.000Z',
 };
 
 const NOTE = 'Rettede formuleringen i prompten';
@@ -167,6 +170,17 @@ describe('CentralTemplateEditor — edit', () => {
     expect(screen.queryByLabelText('Ejerenhed')).toBeNull();
     expect(saveButton('Gem ændringer')).toBeDisabled();
     expect(screen.getByText('Ingen ændringer at gemme')).toBeInTheDocument();
+  });
+
+  it('shows who last edited the template and when', () => {
+    setup(TEMPLATE);
+    const line = screen.getByText('Version 3').closest('p')!;
+    expect(line).toHaveTextContent(`Senest ændret af Bo Beslutter, ${formatTime('2026-10-02T11:30:00.000Z')}`);
+  });
+
+  it('says ukendt when the last editor has no name snapshot', () => {
+    setup({ ...TEMPLATE, lastEditedByName: null });
+    expect(screen.getByText('Version 3').closest('p')).toHaveTextContent('Senest ændret af ukendt,');
   });
 
   it('sends baseVersion, the note and only what changed', async () => {

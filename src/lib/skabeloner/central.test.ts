@@ -58,6 +58,8 @@ const row = (over: Record<string, unknown> = {}) => ({
   created_at: new Date('2026-01-01T10:00:00Z'),
   updated_at: new Date('2026-02-01T10:00:00Z'),
   created_by_name: 'Anne Ansvarlig',
+  last_edited_by_name: 'Bo Beslutter',
+  last_edited_at: new Date('2026-02-01T10:00:00Z'),
   ...over,
 });
 
@@ -140,7 +142,7 @@ describe('createCentralTemplate', () => {
       allowToggleOverrides: false,
     });
     expect(JSON.parse(String(versionInsert.params[7]))).toEqual([{ orgUnitUuid: CHILD, includeDescendants: true }]);
-    expect(out).toMatchObject({ id: TPL, currentVersion: 3, createdByName: 'Anne Ansvarlig' });
+    expect(out).toMatchObject({ id: TPL, currentVersion: 3, createdByName: 'Anne Ansvarlig', lastEditedByName: 'Bo Beslutter', lastEditedAt: '2026-02-01T10:00:00.000Z' });
   });
 
   it('audits with ids and counts only, on the same tx and against the configured schema', async () => {
@@ -426,16 +428,27 @@ describe('reads', () => {
   });
 
   it('list: filters on the scoped owner units; a global scope passes NULL; default is active only', async () => {
-    const item = { id: TPL, name: 'A', description: '', owner_org_unit_uuid: OWNER, status: 'active', current_version: 2, target_count: 4, updated_at: new Date('2026-03-01T00:00:00Z') };
+    const item = { id: TPL, name: 'A', description: '', owner_org_unit_uuid: OWNER, status: 'active', current_version: 2, target_count: 4, updated_at: new Date('2026-03-01T00:00:00Z'), created_by_name: 'Anne Ansvarlig', last_edited_by_name: 'Bo Beslutter', last_edited_at: new Date('2026-03-01T00:00:00Z') };
     const scoped = makeFakeRunner(() => [item]);
     const out = await listManageableTemplates(manager, {}, { schema: 'public', runner: scoped.runner });
-    expect(out).toEqual([{ id: TPL, name: 'A', description: '', ownerOrgUnitUuid: OWNER, status: 'active', currentVersion: 2, targetCount: 4, updatedAt: '2026-03-01T00:00:00.000Z' }]);
+    expect(out).toEqual([{ id: TPL, name: 'A', description: '', ownerOrgUnitUuid: OWNER, status: 'active', currentVersion: 2, targetCount: 4, updatedAt: '2026-03-01T00:00:00.000Z', createdByName: 'Anne Ansvarlig', lastEditedByName: 'Bo Beslutter', lastEditedAt: '2026-03-01T00:00:00.000Z' }]);
     expect(scoped.calls[0].params).toEqual(['active', [OWNER, CHILD]]);
 
     scope.orgUnitsInScope.mockResolvedValue({ all: true });
     const global = makeFakeRunner(() => []);
     await listManageableTemplates(manager, { status: 'all' }, { schema: 'public', runner: global.runner });
     expect(global.calls[0].params).toEqual([null, null]);
+  });
+
+  it('list: creator and last editor come from the same single query (joined version rows, no N+1)', async () => {
+    const item = { id: TPL, name: 'A', description: '', owner_org_unit_uuid: OWNER, status: 'active', current_version: 2, target_count: 0, updated_at: new Date('2026-03-01T00:00:00Z'), created_by_name: null, last_edited_by_name: null, last_edited_at: null };
+    const fake = makeFakeRunner(() => [item, { ...item, id: '99999999-9999-4999-8999-999999999999' }]);
+    const out = await listManageableTemplates(manager, {}, { schema: 'public', runner: fake.runner });
+    expect(fake.calls).toHaveLength(1);
+    expect(fake.calls[0].sql).toMatch(/JOIN "public".central_template_versions v1 ON .*v1\.version = 1/);
+    expect(fake.calls[0].sql).toMatch(/JOIN "public".central_template_versions vc ON .*vc\.version = ct\.current_version/);
+    // Missing snapshots stay null; the edit time falls back to updated_at.
+    expect(out[0]).toMatchObject({ createdByName: null, lastEditedByName: null, lastEditedAt: '2026-03-01T00:00:00.000Z' });
   });
 
   it('get: returns the prompt to a manager in scope, 404 otherwise', async () => {

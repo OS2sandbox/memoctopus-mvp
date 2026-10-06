@@ -4,19 +4,24 @@ vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers(
 vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
 vi.mock('@/lib/skabeloner/central', () => ({ getManageableTemplate: vi.fn(), updateCentralTemplate: vi.fn() }));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
+vi.mock('@/lib/audit/record', () => ({ recordServerEvent: vi.fn() }));
 
 import { GET, PUT } from './route';
+import { recordServerEvent } from '@/lib/audit/record';
+import { promptReadCoalescer } from '../audit-read';
 import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { getManageableTemplate, updateCentralTemplate } from '@/lib/skabeloner/central';
 import { NotFoundError, ValidationError, VersionConflictError, ConflictError } from '@/lib/authz/access-errors';
 import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
-import { ADMIN_TEMPLATE, CHILD, manager, NOTE, T1 } from '@/test/central-fixtures';
+import { ADMIN_TEMPLATE, CHILD, manager, NOTE, OWNER, T1 } from '@/test/central-fixtures';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockResolve = vi.mocked(resolvePrincipal);
 const mockGet = vi.mocked(getManageableTemplate);
 const mockUpdate = vi.mocked(updateCentralTemplate);
+const mockAudit = vi.mocked(recordServerEvent);
 
 const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
 const url = (id: string) => `http://localhost/api/admin/central-templates/${id}`;
@@ -26,6 +31,9 @@ const put = (body?: unknown, id = T1) => PUT(makeJsonReq(url(id), 'PUT', body), 
 const BODY = { baseVersion: 3, changeNote: NOTE, prompt: 'Ny prompt' };
 
 beforeEach(() => {
+  vi.useRealTimers();
+  promptReadCoalescer.clear();
+  mockAudit.mockReset().mockResolvedValue({ status: 'stored' } as never);
   vi.stubEnv('ACCESS_SOURCE', 'local');
   mockGetSession.mockReset().mockResolvedValue(FAKE_SESSION as never);
   mockResolve.mockReset().mockResolvedValue(manager);
@@ -45,6 +53,70 @@ describe('GET /api/admin/central-templates/[id]', () => {
   it('404 for an unknown or out-of-scope template (the service hides which)', async () => {
     mockGet.mockRejectedValue(new NotFoundError());
     expect((await get()).status).toBe(404);
+    expect(mockAudit).not.toHaveBeenCalled();
+  });
+
+  describe('prompt read audit (central_template.read)', () => {
+    it('records the read with the version and the owner unit, and no prompt text', async () => {
+      await get();
+      expect(mockAudit).toHaveBeenCalledTimes(1);
+      const event = mockAudit.mock.calls[0][1];
+      expect(event).toEqual({
+        type: 'central_template.read',
+        actorUserId: manager.userId,
+        entityId: T1,
+        secondaryEntityId: OWNER,
+        details: { version: 3 },
+      });
+      expect(JSON.stringify(mockAudit.mock.calls)).not.toContain('HEMMELIG PROMPT');
+    });
+
+    it('is coalesced per actor and template: once for two reads within 10 minutes, again after', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-06T10:00:00Z'));
+      await get();
+      vi.setSystemTime(new Date('2026-10-06T10:09:59Z'));
+      await get();
+      expect(mockAudit).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(new Date('2026-10-06T10:10:01Z'));
+      await get();
+      expect(mockAudit).toHaveBeenCalledTimes(2);
+    });
+
+    it('a different manager or a different template is a different key', async () => {
+      await get();
+      mockResolve.mockResolvedValue({ ...manager, userId: 'other-manager' });
+      await get();
+      const T2 = '99999999-9999-4999-8999-999999999999';
+      mockGet.mockResolvedValue({ ...ADMIN_TEMPLATE, id: T2 });
+      await get(T2);
+      expect(mockAudit).toHaveBeenCalledTimes(3);
+    });
+
+    it('emits nothing for a caller without template.manage (403) or a malformed id (400)', async () => {
+      mockResolve.mockResolvedValue({ ...manager, capabilities: ['template.use'] });
+      expect((await get()).status).toBe(403);
+      mockResolve.mockResolvedValue(manager);
+      expect((await get('nope')).status).toBe(400);
+      expect(mockAudit).not.toHaveBeenCalled();
+    });
+
+    it('an audit failure (rejection or throw) never breaks the response', async () => {
+      mockAudit.mockRejectedValueOnce(new Error('audit down'));
+      const res = await get();
+      expect(res.status).toBe(200);
+      expect((await res.json()).template.prompt).toBe('HEMMELIG PROMPT');
+      promptReadCoalescer.clear();
+      mockAudit.mockImplementationOnce(() => {
+        throw new Error('sync boom');
+      });
+      expect((await get()).status).toBe(200);
+    });
+
+    it('PUT does not emit a read event', async () => {
+      await put(BODY);
+      expect(mockAudit).not.toHaveBeenCalled();
+    });
   });
 
   it('400 for a malformed id without touching the service', async () => {

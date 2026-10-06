@@ -145,6 +145,8 @@ interface TemplateRow {
   created_at: Date | string;
   updated_at: Date | string;
   created_by_name: string | null;
+  last_edited_by_name: string | null;
+  last_edited_at: Date | string | null;
 }
 
 const contentOf = (r: TemplateRow): CentralTemplateContent => ({
@@ -171,6 +173,9 @@ function adminView(r: TemplateRow, targets: CentralTarget[]): CentralTemplateAdm
     updatedAt: iso(r.updated_at),
     // The name as it was when version 1 was written, so it survives a rename or deletion of the user.
     createdByName: r.created_by_name ?? null,
+    lastEditedByName: r.last_edited_by_name ?? null,
+    // The version row of the current version always exists; fall back to updated_at defensively.
+    lastEditedAt: iso(r.last_edited_at ?? r.updated_at),
   };
 }
 
@@ -180,9 +185,11 @@ async function selectRow(env: CentralEnv, q: SqlQueryable, id: string, lock: boo
             ct.include_deltagere, ct.include_beslutningspunkter, ct.include_dagsorden, ct.include_dato,
             ct.allow_user_instruction, ct.allow_toggle_overrides, ct.status, ct.current_version,
             ct.created_at, ct.updated_at,
-            (SELECT v.changed_by_name FROM ${tbl(env, 'central_template_versions')} v
-              WHERE v.template_id = ct.id AND v.version = 1) AS created_by_name
+            v1.changed_by_name AS created_by_name,
+            vc.changed_by_name AS last_edited_by_name, vc.changed_at AS last_edited_at
        FROM ${tbl(env, 'central_templates')} ct
+       LEFT JOIN ${tbl(env, 'central_template_versions')} v1 ON v1.template_id = ct.id AND v1.version = 1
+       LEFT JOIN ${tbl(env, 'central_template_versions')} vc ON vc.template_id = ct.id AND vc.version = ct.current_version
       WHERE ct.id = $1::uuid${lock ? ' FOR UPDATE OF ct' : ''}`,
     [id],
   );
@@ -542,10 +549,17 @@ export async function listManageableTemplates(
     current_version: number;
     target_count: number;
     updated_at: Date | string;
+    created_by_name: string | null;
+    last_edited_by_name: string | null;
+    last_edited_at: Date | string | null;
   }>(
     `SELECT ct.id, ct.name, ct.description, ct.owner_org_unit_uuid, ct.status, ct.current_version, ct.updated_at,
-            (SELECT count(*)::int FROM ${tbl(env, 'central_template_targets')} t WHERE t.template_id = ct.id) AS target_count
+            (SELECT count(*)::int FROM ${tbl(env, 'central_template_targets')} t WHERE t.template_id = ct.id) AS target_count,
+            v1.changed_by_name AS created_by_name,
+            vc.changed_by_name AS last_edited_by_name, vc.changed_at AS last_edited_at
        FROM ${tbl(env, 'central_templates')} ct
+       LEFT JOIN ${tbl(env, 'central_template_versions')} v1 ON v1.template_id = ct.id AND v1.version = 1
+       LEFT JOIN ${tbl(env, 'central_template_versions')} vc ON vc.template_id = ct.id AND vc.version = ct.current_version
       WHERE ($1::text IS NULL OR ct.status = $1)
         AND ($2::uuid[] IS NULL OR ct.owner_org_unit_uuid = ANY($2::uuid[]))
       ORDER BY ct.updated_at DESC, ct.id`,
@@ -560,6 +574,9 @@ export async function listManageableTemplates(
     currentVersion: r.current_version,
     targetCount: r.target_count,
     updatedAt: iso(r.updated_at),
+    createdByName: r.created_by_name ?? null,
+    lastEditedByName: r.last_edited_by_name ?? null,
+    lastEditedAt: iso(r.last_edited_at ?? r.updated_at),
   }));
 }
 

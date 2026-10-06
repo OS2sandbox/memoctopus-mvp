@@ -1,5 +1,6 @@
-// Central (locked) templates, written in the same transaction as the change
-// (central.ts). Ids, counts and FIELD NAMES only: never the name, prompt or
+// Central (locked) templates. create/update/retarget/archive/restore are written
+// in the same transaction as the change (central.ts); `read` is emitted by the
+// manager routes when a prompt is returned (best-effort, coalesced). Ids, counts and FIELD NAMES only: never the name, prompt or
 // change note, which live in central_template_versions (readable by managers in
 // scope) and not in the audit log.
 import { z } from 'zod';
@@ -39,4 +40,7 @@ export const centralTemplateEvents = {
   }),
   'central_template.archive': defineEvent({ ...base, details: z.object({ version: version() }).strict() }),
   'central_template.restore': defineEvent({ ...base, details: z.object({ version: version() }).strict() }),
+  // A manager in scope was shown the prompt (template detail or changelog). The
+  // version is the one current at the time; the prompt text is never part of it.
+  'central_template.read': defineEvent({ ...base, details: z.object({ version: version() }).strict() }),
 } as const;

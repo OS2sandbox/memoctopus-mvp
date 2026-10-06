@@ -1,4 +1,4 @@
-import { createCoalescer } from '../utterance/coalesce';
+import { createCoalescer } from '@/lib/audit/coalesce';
 
 // The recording screen polls clarifications every 25 s, so one meeting would write
 // ~144 events an hour. Same best-effort, per-process volume guard as the live

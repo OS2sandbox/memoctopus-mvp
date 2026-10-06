@@ -218,7 +218,8 @@ function EditorForm({
 
       {editing && base && (
         <p className="text-[13px] text-[var(--muted)]">
-          <Badge variant="outline">Version {base.currentVersion}</Badge> Senest ændret {formatTime(base.updatedAt)}
+          <Badge variant="outline">Version {base.currentVersion}</Badge> Senest ændret af{' '}
+          {base.lastEditedByName ?? 'ukendt'}, {formatTime(base.lastEditedAt)}
         </p>
       )}
 

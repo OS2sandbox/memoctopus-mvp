@@ -72,6 +72,19 @@ describe('listCentralForUser', () => {
     expect(sql).not.toMatch(/ct\.id = \$3/);
   });
 
+  it('never exposes the creator or last editor (manager-side data) even if a row carried them', async () => {
+    const { env, query } = fakeEnv([
+      row({ created_by_name: 'Anne Admin', last_edited_by_name: 'Bo Beslutter', last_edited_at: new Date() }),
+    ]);
+    const out = await listCentralForUser('user-1', env);
+    for (const k of ['createdByName', 'lastEditedByName', 'lastEditedAt', 'createdAt', 'updatedAt', 'ownerOrgUnitUuid']) {
+      expect(out[0]).not.toHaveProperty(k);
+    }
+    expect(JSON.stringify(out)).not.toMatch(/Anne Admin|Bo Beslutter/);
+    // The user-facing query does not even read the changelog.
+    expect(query.mock.calls[0][0]).not.toMatch(/central_template_versions|changed_by/);
+  });
+
   it('never exposes a prompt even if a row somehow carried one', async () => {
     const { env } = fakeEnv([row({ prompt: SECRET })]);
     const out = await listCentralForUser('user-1', env);

@@ -93,6 +93,8 @@ export function adminDto(t: CentralTemplateAdmin): CentralTemplateAdmin {
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
     createdByName: t.createdByName ?? null,
+    lastEditedByName: t.lastEditedByName ?? null,
+    lastEditedAt: t.lastEditedAt,
   };
 }
 
@@ -106,6 +108,9 @@ export function listItemDto(t: CentralTemplateListItem): CentralTemplateListItem
     currentVersion: t.currentVersion,
     targetCount: t.targetCount,
     updatedAt: t.updatedAt,
+    createdByName: t.createdByName ?? null,
+    lastEditedByName: t.lastEditedByName ?? null,
+    lastEditedAt: t.lastEditedAt,
   };
 }
 

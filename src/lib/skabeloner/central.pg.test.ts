@@ -142,6 +142,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
           allowUserInstruction: false,
           allowToggleOverrides: false,
           createdByName: 'Mikkel Manager',
+          lastEditedByName: 'Mikkel Manager',
         });
         expect([...out.targets].map((x) => x.orgUnitUuid).sort()).toEqual([t.a, t.a1].sort());
 
@@ -526,6 +527,28 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         const deep = await createCentralTemplate(globalManager('g'), { ...BASE, ownerOrgUnitUuid: t.a11, changeNote: NOTE }, env);
         expect((await getManageableTemplate(managerOf('a', t.a), deep.id, env)).id).toBe(deep.id);
         expect((await listManageableTemplates(managerOf('a', t.a), {}, env)).map((x) => x.id)).toEqual([deep.id]);
+        await close();
+      }));
+
+    it('shows creator and last editor (an ancestor manager editing a descendant template) in list and detail, with the edit time', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        const t = await tree(c);
+        await user(c, 'owner', 'Olga Ejer');
+        await user(c, 'anc', 'Anders Ancestor');
+        const created = await createCentralTemplate(managerOf('owner', t.a11), { ...BASE, ownerOrgUnitUuid: t.a11, changeNote: NOTE }, env);
+        const [created1] = await listManageableTemplates(managerOf('owner', t.a11), {}, env);
+        expect(created1).toMatchObject({ createdByName: 'Olga Ejer', lastEditedByName: 'Olga Ejer' });
+
+        await updateCentralTemplate(managerOf('anc', t.a), created.id, { baseVersion: 1, changeNote: NOTE, name: 'Nyt navn' }, env);
+        const [item] = await listManageableTemplates(managerOf('anc', t.a), {}, env);
+        expect(item).toMatchObject({ currentVersion: 2, createdByName: 'Olga Ejer', lastEditedByName: 'Anders Ancestor' });
+        const detail = await getManageableTemplate(managerOf('anc', t.a), created.id, env);
+        expect(detail).toMatchObject({ createdByName: 'Olga Ejer', lastEditedByName: 'Anders Ancestor' });
+        const v2 = (await c.query('SELECT changed_at FROM central_template_versions WHERE version = 2')).rows[0];
+        expect(detail.lastEditedAt).toBe(new Date(v2.changed_at).toISOString());
+        expect(item.lastEditedAt).toBe(detail.lastEditedAt);
         await close();
       }));
 

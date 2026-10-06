@@ -11,7 +11,7 @@ Code: `src/lib/skabeloner/central.ts` (manager service), `resolve.ts` (recipient
 ## Who may manage
 
 - A **manager** holds `template.manage`: `tt-skabelonansvarlig` scoped to org units, or `tt-administrator` (global). A `tt-skabelonansvarlig` without a unit manages nothing.
-- A template has exactly one **owner unit** (`owner_org_unit_uuid`, set at creation, never changed). A manager may read, edit, archive and restore it **iff `template.manage` covers the owner unit** (`isOrgUnitWithinScope`); any such manager, not only the creator.
+- A template has exactly one **owner unit** (`owner_org_unit_uuid`, set at creation, never changed). A manager may read, edit, archive and restore it **iff `template.manage` covers the owner unit** (`isOrgUnitWithinScope`); any such manager, not only the creator. That includes a manager whose scope covers an **ancestor** of the owner unit: scope is subtree-based, so a manager higher up the tree can read, edit and archive templates owned by units below. This is the intended rule, and it is made accountable rather than narrowed: the admin list and detail show **who created** the template (the name snapshot of version 1) and **who last edited** it and when (the name snapshot and time of the current version), and prompt reads are audited (below). These names are derived from the changelog and are manager-side only; the user-facing `CentralSkabelonSummary` and its query never carry them.
 - Denials: no capability gives 403; a template outside the caller's scope, an unknown id and an unknown owner unit on create all give 404 (existence is not revealed; the service fails closed even if a route forgot its guard).
 - The admin routes work in both `ACCESS_SOURCE` modes: templates belong to this app, only the org tree comes from Rollekatalog.
 
@@ -96,7 +96,7 @@ There is no hard delete. `archive` and `restore` set `status`, each with a note 
 | `central_template.*` audit events (ids, versions, field names) | holders of `audit.read` within their scope |
 | Change notes | the changelog only, never the audit log |
 
-Reading the prompt or the changelog is not itself audited (only writes are).
+Writes are audited in the same transaction as the change. **Reading a prompt is audited too**: `GET /api/admin/central-templates/[id]` and `GET .../[id]/versions` (which returns every historic prompt, the same data) record `central_template.read` with `{ version }` only (the current version) and the owner unit as secondary entity where the route knows it (the detail does; the changelog route does not look it up). The prompt text is never in the event. The event is **coalesced to at most one per manager and template per 10 minutes** (`src/lib/audit/coalesce.ts`, one in-memory bounded map shared by both routes), so reloading the editor does not flood the log. It is best-effort and per instance: with several app instances the rate is at most one event per instance per window, a restart resets it, and an audit failure never fails the read. The list endpoint returns names and metadata only and does not emit, and a 403 or 404 emits nothing.
 
 ## Routes
 

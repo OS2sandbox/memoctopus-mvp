@@ -29,6 +29,9 @@ const ITEM = {
   currentVersion: 3,
   targetCount: 1,
   updatedAt: '2026-06-02T08:00:00.000Z',
+  createdByName: 'Anne Admin',
+  lastEditedByName: 'Bo Beslutter',
+  lastEditedAt: '2026-06-02T08:00:00.000Z',
 };
 const VALID = {
   ownerOrgUnitUuid: OWNER,

@@ -31,6 +31,7 @@ export const eventTypeLabels: Record<EventType, string> = {
   'central_template.retarget': 'Modtagere af central skabelon ændret',
   'central_template.archive': 'Central skabelon arkiveret',
   'central_template.restore': 'Central skabelon genoprettet',
+  'central_template.read': 'Prompt til central skabelon læst',
   // AI og eksport
   'minutes.generate': 'Referat genereret',
   'transcription.request': 'Transskription anmodet',

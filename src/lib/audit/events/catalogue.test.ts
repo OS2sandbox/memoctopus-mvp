@@ -242,6 +242,7 @@ describe('central template events (Phase 4)', () => {
       ['central_template.retarget', { version: 3, targetCount: 0 }],
       ['central_template.archive', { version: 4 }],
       ['central_template.restore', { version: 5 }],
+      ['central_template.read', { version: 6 }],
     ];
     for (const [type, details] of cases) {
       const res = validateEvent(event(type, details));
@@ -258,6 +259,15 @@ describe('central template events (Phase 4)', () => {
     expect(validateEvent(event('central_template.update', { version: 2, changedFields: ['changeNote'] })).ok).toBe(false);
     expect(validateEvent(event('central_template.update', { version: 2, changedFields: ['prompt'], changeNote: 'Rettet' })).ok).toBe(false);
     expect(validateEvent(event('central_template.create', { version: 1, targetCount: 1, name: 'Referat' })).ok).toBe(false);
+  });
+
+  it('central_template.read carries the version only: no prompt, name or other field fits in it', () => {
+    expect(validateEvent(event('central_template.read', { version: 2, prompt: 'Hemmelig' })).ok).toBe(false);
+    expect(validateEvent(event('central_template.read', { version: 2, name: 'Referat' })).ok).toBe(false);
+    expect(validateEvent(event('central_template.read', {})).ok).toBe(false);
+    expect(validateEvent(event('central_template.read', { version: 0 })).ok).toBe(false);
+    // Server-only, like the rest of the family.
+    expect(validateEvent(event('central_template.read', { version: 1 }, { source: 'client' })).ok).toBe(false);
   });
 
   it('requires a version of at least 1 and an entity id', () => {

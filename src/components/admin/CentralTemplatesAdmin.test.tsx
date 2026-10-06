@@ -21,6 +21,9 @@ const item = (over: Partial<CentralTemplateListItem>): CentralTemplateListItem =
   currentVersion: 3,
   targetCount: 2,
   updatedAt: '2026-10-02T10:00:00.000Z',
+  createdByName: 'Anne Admin',
+  lastEditedByName: 'Bo Beslutter',
+  lastEditedAt: '2026-10-02T10:00:00.000Z',
   ...over,
 });
 
@@ -48,6 +51,8 @@ const DETAIL: CentralTemplateAdmin = {
   createdAt: '2026-10-01T10:00:00.000Z',
   updatedAt: '2026-10-02T10:00:00.000Z',
   createdByName: null,
+  lastEditedByName: null,
+  lastEditedAt: '2026-10-02T10:00:00.000Z',
 };
 
 const SCOPE = {
@@ -81,6 +86,27 @@ describe('CentralTemplatesAdmin — list', () => {
     expect(within(row).getByText('3')).toBeInTheDocument();
     expect(within(row).getByText('2')).toBeInTheDocument();
     expect(within(row).getByText(formatTime('2026-10-02T10:00:00.000Z'))).toBeInTheDocument();
+  });
+
+  it('shows who created and who last edited each template, with the time of the last edit', async () => {
+    setup();
+    renderWithToasts(<CentralTemplatesAdmin />);
+    const row = (await screen.findByText('Bestyrelse')).closest('tr')!;
+    expect(screen.getByRole('columnheader', { name: 'Oprettet af' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Senest ændret' })).toBeInTheDocument();
+    expect(within(row).getByText('Anne Admin')).toBeInTheDocument();
+    expect(within(row).getByText('Bo Beslutter')).toBeInTheDocument();
+    expect(within(row).getByText(formatTime('2026-10-02T10:00:00.000Z'))).toBeInTheDocument();
+  });
+
+  it('says Ukendt when a name snapshot is missing', async () => {
+    setup(ADMIN_ME, {
+      'GET /api/admin/central-templates?status=active': () =>
+        json({ templates: [item({ createdByName: null, lastEditedByName: null })] }),
+    });
+    renderWithToasts(<CentralTemplatesAdmin />);
+    const row = (await screen.findByText('Bestyrelse')).closest('tr')!;
+    expect(within(row).getAllByText('Ukendt')).toHaveLength(2);
   });
 
   it('flags a template without recipients', async () => {

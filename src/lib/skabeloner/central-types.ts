@@ -57,6 +57,9 @@ export interface CentralTemplateAdmin extends CentralTemplateContent {
   createdAt: string;
   updatedAt: string;
   createdByName: string | null;
+  /** Name snapshot (changelog) of whoever wrote the current version, and when. Manager-side only. */
+  lastEditedByName: string | null;
+  lastEditedAt: string;
 }
 
 export interface CentralTemplateListItem {
@@ -68,6 +71,11 @@ export interface CentralTemplateListItem {
   currentVersion: number;
   targetCount: number;
   updatedAt: string;
+  /** Name snapshot of whoever wrote version 1. Manager-side only, never in CentralSkabelonSummary. */
+  createdByName: string | null;
+  /** Name snapshot of whoever wrote the current version, and when. */
+  lastEditedByName: string | null;
+  lastEditedAt: string;
 }
 
 /** One changelog entry. `content` and `targets` are the full snapshot as of that version. */

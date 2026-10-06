@@ -31,6 +31,8 @@ export const ADMIN_TEMPLATE: CentralTemplateAdmin = {
   createdAt: '2026-06-01T08:00:00.000Z',
   updatedAt: '2026-06-02T08:00:00.000Z',
   createdByName: 'Anne Admin',
+  lastEditedByName: 'Bo Beslutter',
+  lastEditedAt: '2026-06-02T08:00:00.000Z',
 };
 
 export const VERSION: CentralTemplateVersion = {
