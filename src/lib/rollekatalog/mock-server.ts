@@ -72,6 +72,8 @@ export interface MockOptions {
   domains?: string[];
   data?: Partial<MockData>;
   faults?: MockFault[];
+  /** Listen port; default 0 = any free port. The dev simulation (scripts/dev-sim) pins one. */
+  port?: number;
 }
 
 export interface MockRollekatalog {
@@ -80,6 +82,8 @@ export interface MockRollekatalog {
   readKey: string;
   orgKey: string;
   close(): Promise<void>;
+  /** The data currently served (live reference; copy before mutating). */
+  getData(): MockData;
   /** Replace parts of the served data. */
   setData(partial: Partial<MockData>): void;
   /** Back to the fixtures. */
@@ -209,7 +213,7 @@ export async function startMockRollekatalog(options: MockOptions = {}): Promise<
     }
   });
 
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(options.port ?? 0, '127.0.0.1', resolve));
   const port = (server.address() as AddressInfo).port;
 
   return {
@@ -222,6 +226,7 @@ export async function startMockRollekatalog(options: MockOptions = {}): Promise<
         server.closeAllConnections?.();
         server.close(() => resolve());
       }),
+    getData: () => data,
     setData(partial) {
       data = { ...data, ...partial };
     },
