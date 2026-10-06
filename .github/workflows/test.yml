@@ -1,0 +1,87 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push to the same PR/branch makes the older run pointless.
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: App (typecheck, unit, Postgres, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        # >= 15 is required: the migrations use NULLS NOT DISTINCT.
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # matches the Dockerfile
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # TEST_DATABASE_URL is unset here, so every *.pg.test.ts skips itself.
+      - name: Unit tests
+        run: npx vitest run
+
+      # Same suite files that skipped above, now against the real Postgres service.
+      # Serial (--no-file-parallelism) for the first version: some tests share
+      # advisory-lock keys and assume a stable search_path, so concurrent files
+      # could interfere. Loosen once the lane has proven stable.
+      - name: Postgres tests
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: npx vitest run --no-file-parallelism .pg.test.ts
+
+      # Dummy values: the build only needs the env to exist, nothing connects.
+      - name: Build
+        env:
+          DATABASE_URL: postgres://u:p@localhost:5432/x
+          BETTER_AUTH_SECRET: ci-dummy-secret-not-used-at-runtime-0123456789
+          BETTER_AUTH_URL: http://localhost:3004
+        run: npm run build
+
+  bot-service:
+    name: Bot service (unit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: bot-service
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: bot-service/package-lock.json
+
+      - run: npm ci
+
+      # Unit only: the Playwright suite needs a browser and is not run in CI.
+      - run: npm run test:unit

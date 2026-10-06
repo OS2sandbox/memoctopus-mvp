@@ -124,9 +124,10 @@ services:
       - DIRECTORY_MATCH=${DIRECTORY_MATCH:-userid-claim}
       - DIRECTORY_USERID_CLAIM=${DIRECTORY_USERID_CLAIM:-preferred_username}
       - AUTH_IP_HEADERS=${AUTH_IP_HEADERS:-}
-      # Rollekatalog (read-only authority; only used with ACCESS_SOURCE=rollekatalog,
-      # the connection test works before that). Runtime config, no rebuild. The API
-      # keys are blank by default; see docs/central-access/rollekatalog.md.
+      # Rollekatalog (read-only authority; only used with ACCESS_SOURCE=rollekatalog).
+      # Runtime config, no rebuild. The API keys are blank by default; see
+      # docs/central-access/rollekatalog.md. The sync is scheduled by a host or cluster
+      # cron that calls POST /api/internal/rollekatalog/sync (DEPLOY.md).
       - ROLLEKATALOG_URL=${ROLLEKATALOG_URL:-}
       - ROLLEKATALOG_READ_API_KEY=${ROLLEKATALOG_READ_API_KEY:-}
       - ROLLEKATALOG_ORG_API_KEY=${ROLLEKATALOG_ORG_API_KEY:-}
@@ -135,7 +136,6 @@ services:
       - ROLLEKATALOG_TIMEOUT_MS=${ROLLEKATALOG_TIMEOUT_MS:-10000}
       - ROLLEKATALOG_MAX_RESPONSE_BYTES=${ROLLEKATALOG_MAX_RESPONSE_BYTES:-}
       - ROLLEKATALOG_ALLOW_HTTP=${ROLLEKATALOG_ALLOW_HTTP:-}
-      - ROLLEKATALOG_SCOPE_STRATEGY=${ROLLEKATALOG_SCOPE_STRATEGY:-constraint}
       - ROLLEKATALOG_SCOPE_DESCENDANTS=${ROLLEKATALOG_SCOPE_DESCENDANTS:-true}
       - ROLLEKATALOG_GLOBAL_ROLES=${ROLLEKATALOG_GLOBAL_ROLES:-tt-administrator}
       - ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT=${ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT:-30}
@@ -146,11 +146,13 @@ services:
       - SKABELON_SHARE_CODE=${SKABELON_SHARE_CODE:-true}
       - SKABELON_SHARE_LINK=${SKABELON_SHARE_LINK:-false}
       # Audit log. Read at runtime (no rebuild). Records activity metadata only, never
-      # content; see docs/central-access/audit.md. Feed and prune stay off (404) until
-      # AUDIT_FEED_API_KEY_HASH / INTERNAL_CRON_SECRET are set.
+      # content; see docs/central-access/audit.md. The feed and the prune/sync cron
+      # routes answer 404 until AUDIT_FEED_API_KEY_HASH / INTERNAL_CRON_SECRET are set.
+      # Retention defaults to 365 days in code; blank keeps that default.
       - AUDIT_STDOUT=${AUDIT_STDOUT:-false}
       - AUDIT_STORE_IP=${AUDIT_STORE_IP:-true}
       - AUDIT_RETENTION_DAYS=${AUDIT_RETENTION_DAYS:-}
+      - AUDIT_CLIENT_EVENTS_DAILY_CAP=${AUDIT_CLIENT_EVENTS_DAILY_CAP:-}
       - AUDIT_FEED_API_KEY_HASH=${AUDIT_FEED_API_KEY_HASH:-}
       - AUDIT_FEED_DELAY_SECONDS=${AUDIT_FEED_DELAY_SECONDS:-10}
       - INTERNAL_CRON_SECRET=${INTERNAL_CRON_SECRET:-}
@@ -208,44 +210,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-    restart: unless-stopped
-
-  # OPTIONAL scheduler for the Rollekatalog sync (off unless the profile is enabled):
-  #     docker compose --profile rollekatalog up -d
-  # Calls POST /api/internal/rollekatalog/sync on the internal network every
-  # ROLLEKATALOG_SYNC_INTERVAL_SECONDS (default 900, minimum 60) with the shared
-  # INTERNAL_CRON_SECRET (header X-Cron-Secret). The app answers 404 until that secret
-  # is set, which shows up as http=404 in this container's log. The route does not look
-  # at ACCESS_SOURCE, so only enable this service when you use (or are preparing)
-  # Rollekatalog mode. No image is built: a public curl image is used. Several app
-  # replicas are safe, the sync takes a Postgres advisory lock.
-  # UNVERIFIED: this service was not started (no Docker available when it was written);
-  # the YAML was only parsed. `docker compose --profile rollekatalog config` checks it.
-  rollekatalog-sync:
-    image: curlimages/curl:8.11.1
-    profiles: ["rollekatalog"]
-    entrypoint: ["/bin/sh", "-c"]
-    # `$$` is compose's escape for a literal `$`. The secret is only passed in the
-    # request header and is never printed.
-    command:
-      - |
-        interval="$${ROLLEKATALOG_SYNC_INTERVAL_SECONDS:-900}"
-        [ "$$interval" -ge 60 ] 2>/dev/null || interval=900
-        while true; do
-          code=$$(curl -s -o /dev/null -m 600 -X POST -w '%{http_code}' \
-            -H "X-Cron-Secret: $$INTERNAL_CRON_SECRET" \
-            http://app:3000/api/internal/rollekatalog/sync) || code=000
-          echo "rollekatalog sync: http=$$code"
-          sleep "$$interval"
-        done
-    environment:
-      - INTERNAL_CRON_SECRET=${INTERNAL_CRON_SECRET:-}
-      - ROLLEKATALOG_SYNC_INTERVAL_SECONDS=${ROLLEKATALOG_SYNC_INTERVAL_SECONDS:-900}
-    networks:
-      - internal
-    depends_on:
-      app:
-        condition: service_healthy
     restart: unless-stopped
 
 networks:
