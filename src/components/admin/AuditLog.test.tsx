@@ -57,6 +57,29 @@ describe('AuditLog', () => {
     expect(within(row).getByText('server')).toBeInTheDocument();
   });
 
+  it('shows the change note of a central template change prominently, under the event', async () => {
+    const NOTE = 'Tonen er gjort mere formel efter ønske fra afdelingen.\nBrug "mødet besluttede".';
+    setup(ADMIN_ME, () =>
+      json({
+        events: [
+          ev({ id: '12', eventType: 'central_template.update', entityType: 'central_template', details: { version: 3, changedFields: ['prompt'] }, changeNote: NOTE, templateName: 'Standardreferat' }),
+          ev({ id: '11', eventType: 'central_template.read', entityType: 'central_template', details: { version: 3 } }),
+        ],
+        nextCursor: null,
+      }),
+    );
+    render(<AuditLog />);
+    const heading = await screen.findByText(/Ændringsbeskrivelse/);
+    expect(heading).toHaveTextContent('version 3');
+    const block = heading.parentElement!;
+    // Whitespace and line breaks of the note are kept (pre-wrap) and the full text is shown.
+    expect(block.querySelector('p')!.textContent).toBe(NOTE);
+    expect(block.querySelector('p')!.className).toContain('whitespace-pre-wrap');
+    expect(screen.getByText('Skabelon: Standardreferat')).toBeInTheDocument();
+    // Only the change event gets a note block; the read event does not.
+    expect(screen.getAllByText(/Ændringsbeskrivelse/)).toHaveLength(1);
+  });
+
   it('marks client events as selvrapporteret', async () => {
     setup(ADMIN_ME, () => json({ events: [ev({ source: 'client', eventType: 'meeting.delete' })], nextCursor: null }));
     render(<AuditLog />);

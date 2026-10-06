@@ -8,7 +8,7 @@ For operators who run the app and engineers who extend it. The audit log is an a
 
 **Never logged** (not in the table, the stdout mirror, the feed, the CSV or the app log):
 
-- transcript, minutes or prompt text, PII-replacement output, change notes of central templates
+- transcript, minutes or prompt text, PII-replacement output, change notes of central templates (the stored rows, the CSV export and the feed hold none; see "Change notes in the viewer")
 - meeting titles, participant names, template names or descriptions
 - file names, meeting URLs (Teams links), share tokens or share codes
 - free text typed by users
@@ -181,3 +181,13 @@ It holds no meeting content. Rows survive deletion of the user and cannot be upd
 - **Latency.** `auth.login` is written inside the session-create hook; a hung audit write delays a login by at most 2 seconds.
 - **Error text on one stream.** The batch transcription stream still sends an error message to the client in its NDJSON `error` event (not to the log or the audit table).
 - **Feed gap** for transactions open longer than the delay (above).
+
+## Change notes in the viewer
+
+Every change to a central template carries a mandatory change note, and the notes are the point of the changelog, so the log viewer shows them: under each `central_template.create/update/retarget/archive/restore` event there is a highlighted block "Ændringsbeskrivelse" with the full note (line breaks kept), and the template's name is shown in the event cell. The prompt itself is never shown.
+
+The note is **not stored in `audit_events`**. `/api/admin/audit` looks it up at read time in `central_template_versions`, by the template id and version the event already carries (`src/lib/audit/change-notes.ts`, one query per page). Consequences:
+
+- Anyone who may read the event (`audit.read`, scoped by the actor's unit) sees its note, even without `template.manage`. The CSV export and the SIEM feed carry no notes.
+- The note and name shown are those of the changelog. They cannot drift from it, and the changelog is append-only.
+- If the lookup fails the log still loads, without notes.

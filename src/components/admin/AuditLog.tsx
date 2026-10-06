@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ErrorBanner } from '@/components/ui/error-banner';
@@ -31,6 +31,9 @@ interface AuditEventView {
   requestId: string | null;
   details: Record<string, unknown>;
   ipAddress?: string | null;
+  /** Central template events only: the documented reason for the change, from the template changelog. */
+  changeNote?: string;
+  templateName?: string | null;
 }
 
 interface Filters {
@@ -66,10 +69,9 @@ function filterQuery(f: Filters): URLSearchParams {
 
 const formatTime = (iso: string) => formatDateTime(iso, { dateStyle: 'short', timeStyle: 'medium' });
 
-function formatDetails(details: Record<string, unknown>): string {
-  return Object.entries(details)
-    .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : String(v)}`)
-    .join(' · ');
+/** One "key: value" line per detail, so long keys wrap inside the column instead of widening the table. */
+function detailLines(details: Record<string, unknown>): string[] {
+  return Object.entries(details).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : String(v)}`);
 }
 
 const EXPORT_FAILED = 'Eksport mislykkedes';
@@ -211,7 +213,7 @@ export function AuditLog() {
   const set = (key: keyof Filters) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setDraft((d) => ({ ...d, [key]: e.target.value }));
 
-  const columns = showNetwork ? 8 : 7;
+  const columns = showNetwork ? 7 : 6;
 
   return (
     <AdminPage title="Log" description="Aktivitet i løsningen. Loggen viser kun, hvad der er sket, aldrig indholdet af møder, referater eller skabeloner.">
@@ -322,7 +324,6 @@ export function AuditLog() {
               <TableHead>Bruger</TableHead>
               <TableHead>Objekt</TableHead>
               <TableHead>Kilde</TableHead>
-              <TableHead>Detaljer</TableHead>
               {showNetwork && <TableHead>IP-adresse</TableHead>}
             </TableRow>
           </TableHeader>
@@ -331,11 +332,18 @@ export function AuditLog() {
               <TableEmptyRow colSpan={columns}>Ingen hændelser fundet</TableEmptyRow>
             ) : (
               events.map((e) => (
-                <TableRow key={e.id}>
+                <Fragment key={e.id}>
+                <TableRow className={e.changeNote ? 'border-b-0' : undefined}>
                   <TableCell className="whitespace-nowrap align-top text-[13px]">{formatTime(e.occurredAt)}</TableCell>
                   <TableCell className="align-top">
                     <div className="font-medium text-[var(--ink)]">{eventTypeLabel(e.eventType)}</div>
                     <div className="font-mono text-[11px] text-[var(--muted)]">{e.eventType}</div>
+                    {e.templateName && <div className="mt-1 text-[13px] text-[var(--ink-2)]">Skabelon: {e.templateName}</div>}
+                    <div className="mt-2 min-w-[14rem] max-w-[22rem] font-mono text-[11px] text-[var(--ink-2)] [overflow-wrap:anywhere]">
+                      {detailLines(e.details).map((line) => (
+                        <div key={line}>{line}</div>
+                      ))}
+                    </div>
                   </TableCell>
                   <TableCell className="align-top">
                     <Badge variant={outcomeVariant[e.outcome] ?? 'outline'}>{outcomeLabels[e.outcome] ?? e.outcome}</Badge>
@@ -363,9 +371,22 @@ export function AuditLog() {
                   <TableCell className="align-top">
                     <Badge variant={e.source === 'client' ? 'warning' : 'secondary'}>{sourceBadgeLabels[e.source] ?? e.source}</Badge>
                   </TableCell>
-                  <TableCell className="align-top font-mono text-[11px] text-[var(--ink-2)]">{formatDetails(e.details)}</TableCell>
-                  {showNetwork && <TableCell className="align-top font-mono text-[11px]">{e.ipAddress ?? ''}</TableCell>}
+                  {showNetwork && <TableCell className="whitespace-nowrap align-top font-mono text-[11px]">{e.ipAddress ?? ''}</TableCell>}
                 </TableRow>
+                {e.changeNote && (
+                  <TableRow>
+                    <TableCell colSpan={columns} className="pt-0">
+                      <div className="rounded-sm border-l-4 border-[var(--accent)] bg-[var(--accent-wash)] px-4 py-3">
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--ink-2)]">
+                          Ændringsbeskrivelse
+                          {typeof e.details.version === 'number' && <span className="font-normal normal-case"> · version {e.details.version}</span>}
+                        </div>
+                        <p className="mt-1 whitespace-pre-wrap break-words text-[15px] leading-relaxed text-[var(--ink)]">{e.changeNote}</p>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+                </Fragment>
               ))
             )}
           </TableBody>

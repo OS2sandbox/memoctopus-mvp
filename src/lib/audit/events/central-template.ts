@@ -1,8 +1,8 @@
 // Central (locked) templates. create/update/retarget/archive/restore are written
 // in the same transaction as the change (central.ts); `read` is emitted by the
 // manager routes when a prompt is returned (best-effort, coalesced). Ids, counts and FIELD NAMES only: never the name, prompt or
-// change note, which live in central_template_versions (readable by managers in
-// scope) and not in the audit log.
+// change note. Those live in central_template_versions; the log viewer shows the change
+// note by looking it up there at read time (change-notes.ts), nothing is copied here.
 import { z } from 'zod';
 import { CENTRAL_CONTENT_FIELDS } from '@/lib/skabeloner/central-types';
 import { count, defineEvent } from './types';

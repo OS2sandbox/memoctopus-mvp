@@ -69,7 +69,7 @@ The personal-template routes (`/api/skabeloner/[id]/**`, share, import) work on 
 
 ## Change notes, versioning and concurrency
 
-- **Every write needs a change note** (create, update, retarget, archive, restore). The server removes invisible, default-ignorable and control characters (newlines and tabs are kept), trims, and requires **at least 10 non-whitespace characters** (counted as code points) and at most 2000 characters; the **normalised** note is what is stored. Message: "Beskriv ændringen (mindst 10 tegn)".
+- **Every write needs a change note** (shown in the audit log viewer under the event, see `audit.md`) (create, update, retarget, archive, restore). The server removes invisible, default-ignorable and control characters (newlines and tabs are kept), trims, and requires **at least 10 non-whitespace characters** (counted as code points) and at most 2000 characters; the **normalised** note is what is stored. Message: "Beskriv ændringen (mindst 10 tegn)".
 - The **template name** needs at least one visible character after the same stripping (at most 120).
 - The same counting function (`src/lib/skabeloner/change-note.ts`, free of zod and server code) is used by the server schema and by the counter in the editor, so the counter shows the number the server enforces. Invisible characters and interior whitespace do not count there either.
 - **Stored text is well-formed and NFC.** Name, description, prompt and change note are rejected with "Teksten indeholder ugyldige tegn (ufuldstændigt Unicode-tegn)" if they contain a lone surrogate (Postgres jsonb would refuse it with SQLSTATE 22P02; the service also maps 22P02 to a validation error as defence in depth), and are stored NFC-normalised. The prompt limit is measured on the NFC text.

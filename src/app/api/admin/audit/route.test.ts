@@ -13,6 +13,7 @@ vi.mock('@/lib/audit/query', async (orig) => ({
 
 import { GET } from './route';
 import { auth } from '@/lib/auth';
+import { pool } from '@/lib/db';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { auditScopeFor, listAuditEvents, type AuditEventRow } from '@/lib/audit/query';
 import { FAKE_PRINCIPAL_ADMIN, FAKE_SESSION, NO_PARAMS, makeJsonReq, makePrincipal } from '@/test/helpers';
@@ -105,6 +106,34 @@ describe('GET /api/admin/audit (audit.read)', () => {
     expect('ipAddress' in event).toBe(false);
     expect('userAgent' in event).toBe(false);
     expect(JSON.stringify(event)).not.toContain('10.0.0.1');
+  });
+
+  it('attaches the change note of a central template event, read from the changelog', async () => {
+    const TEMPLATE = '33333333-3333-4333-8333-333333333333';
+    mockList.mockResolvedValue({
+      rows: [
+        row({ id: '8', eventType: 'central_template.update', entityType: 'central_template', entityId: TEMPLATE, details: { version: 3, changedFields: ['prompt'] } }),
+        row({ id: '7' }),
+      ],
+      nextCursor: null,
+    });
+    vi.mocked(pool.query).mockResolvedValueOnce({
+      rows: [{ template_id: TEMPLATE, version: 3, change_note: 'Tonen er gjort mere formel efter ønske fra afdelingen.', template_name: 'Referat' }],
+    } as never);
+    const events = (await (await GET(req(), NO_PARAMS)).json()).events;
+    expect(events[0]).toMatchObject({ id: '8', changeNote: 'Tonen er gjort mere formel efter ønske fra afdelingen.', templateName: 'Referat' });
+    expect('changeNote' in events[1]).toBe(false);
+  });
+
+  it('still returns the log when the changelog lookup fails', async () => {
+    mockList.mockResolvedValue({
+      rows: [row({ id: '8', eventType: 'central_template.create', entityId: ENTITY, details: { version: 1, targetCount: 1 } })],
+      nextCursor: null,
+    });
+    vi.mocked(pool.query).mockRejectedValueOnce(new Error('boom'));
+    const res = await GET(req(), NO_PARAMS);
+    expect(res.status).toBe(200);
+    expect('changeNote' in (await res.json()).events[0]).toBe(false);
   });
 
   it('returns only whitelisted fields (a new column does not leak by accident)', async () => {

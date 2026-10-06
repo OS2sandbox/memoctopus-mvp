@@ -250,7 +250,13 @@ async function main() {
   check('administrator can export CSV', csv.status === 200 && /text\/csv/.test(csv.headers.get('content-type') ?? ''), brief(csv));
 
   const dump = (await db.query('select * from public.audit_events')).rows;
-  const haystack = JSON.stringify(dump) + csv.text + adminLog.text;
+  // The viewer shows the change note by reading the changelog; the stored rows, the CSV and the feed must not hold it.
+  const noteInViewer = (adminLog.json?.events ?? []).find((e: any) => e.eventType === 'central_template.update' && e.changeNote?.includes('Præciserer tonen'));
+  check('the log viewer shows the change note of the update, with the template name', !!noteInViewer && noteInViewer.templateName === name, JSON.stringify(adminLog.json?.events?.slice(0, 3)));
+  const createNote = (adminLog.json?.events ?? []).find((e: any) => e.eventType === 'central_template.create' && e.changeNote === NOTE);
+  check('…and the note of the create', !!createNote);
+  check('a scoped log reader sees no change notes for events outside their scope', !(larsLog.json?.events ?? []).some((e: any) => e.changeNote));
+  const haystack = JSON.stringify(dump) + csv.text;
   for (const [label, needle] of [
     ['the prompt text', SECRET],
     ['the client instruction', CLIENT_INSTRUCTION],
@@ -258,7 +264,7 @@ async function main() {
     ['the template name', name],
     ['transcript text', 'Vi drøftede budgettet'],
   ] as const) {
-    check(`audit rows, export and API never contain ${label}`, !haystack.includes(needle));
+    check(`audit rows and CSV export never contain ${label}`, !haystack.includes(needle));
   }
   check('audit rows exist for this run', dump.length > 20, `${dump.length} rows`);
 
