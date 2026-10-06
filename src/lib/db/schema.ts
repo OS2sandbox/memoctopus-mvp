@@ -92,7 +92,6 @@ export const sharedSkabeloner = pgTable('shared_skabeloner', {
 // 'rollekatalog' sync). Permission code reads only these tables.
 // Requires PostgreSQL 15+ (UNIQUE ... NULLS NOT DISTINCT on role_assignments).
 
-export const accessSourceValues = ['local', 'rollekatalog'] as const;
 const sourceIn = (col: string) => sql.raw(`"${col}" in ('local', 'rollekatalog')`);
 
 export const directoryUsers = pgTable(
@@ -124,9 +123,6 @@ export const orgUnits = pgTable(
     parentUuid: uuid('parent_uuid').references((): AnyPgColumn => orgUnits.uuid, {
       onDelete: 'restrict',
     }),
-    managerUuid: uuid('manager_uuid').references(() => directoryUsers.uuid, {
-      onDelete: 'set null',
-    }),
     source: text('source').notNull(),
     syncedAt: timestamp('synced_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -150,23 +146,12 @@ export const orgUnitMembers = pgTable(
     isPrimary: boolean('is_primary').notNull().default(false),
     title: text('title'),
   },
-  (t) => [primaryKey({ columns: [t.directoryUserUuid, t.orgUnitUuid] })],
-);
-
-export const orgUnitSubstitutes = pgTable(
-  'org_unit_substitutes',
-  {
-    managerUuid: uuid('manager_uuid')
-      .notNull()
-      .references(() => directoryUsers.uuid, { onDelete: 'cascade' }),
-    substituteUuid: uuid('substitute_uuid')
-      .notNull()
-      .references(() => directoryUsers.uuid, { onDelete: 'cascade' }),
-    orgUnitUuid: uuid('org_unit_uuid')
-      .notNull()
-      .references(() => orgUnits.uuid, { onDelete: 'cascade' }),
-  },
-  (t) => [primaryKey({ columns: [t.managerUuid, t.substituteUuid, t.orgUnitUuid] })],
+  (t) => [
+    primaryKey({ columns: [t.directoryUserUuid, t.orgUnitUuid] }),
+    // The primary key leads with directory_user_uuid; this serves member counts and the
+    // ON DELETE CASCADE scan from org_units.
+    index('org_unit_members_org_unit_idx').on(t.orgUnitUuid),
+  ],
 );
 
 export const roleAssignments = pgTable(
@@ -195,7 +180,9 @@ export const roleAssignments = pgTable(
     unique('role_assignments_user_role_scope_source_unique')
       .on(t.directoryUserUuid, t.roleKey, t.scopeOrgUnitUuid, t.source)
       .nullsNotDistinct(),
-    index('role_assignments_directory_user_idx').on(t.directoryUserUuid),
+    // The unique constraint above already leads with directory_user_uuid (user lookups).
+    // This one covers scope lookups and the ON DELETE CASCADE scan from org_units.
+    index('role_assignments_scope_idx').on(t.scopeOrgUnitUuid),
     check('role_assignments_source_check', sourceIn('source')),
     check(
       'role_assignments_dates_check',
@@ -225,8 +212,6 @@ export const externalIdentities = pgTable(
   ],
 );
 
-export const syncRunStatusValues = ['running', 'success', 'failed'] as const;
-
 export const syncRuns = pgTable(
   'sync_runs',
   {
@@ -240,14 +225,25 @@ export const syncRuns = pgTable(
   (t) => [check('sync_runs_status_check', sql`${t.status} in ('running', 'success', 'failed')`)],
 );
 
+/**
+ * One-shot system flags (public schema). Today only 'bootstrap_admin_done': set
+ * in the same transaction as the first-administrator grant (src/lib/authz/bootstrap.ts),
+ * so BOOTSTRAP_ADMIN_EMAILS can create an administrator exactly once and does not
+ * re-arm every time the last admin is removed. Recovery for an operator who locked
+ * everyone out: `DELETE FROM system_flags WHERE key = 'bootstrap_admin_done';`
+ * (or insert a role_assignments row by SQL).
+ */
+export const systemFlags = pgTable('system_flags', {
+  key: text('key').primaryKey(),
+  value: jsonb('value').notNull().default({}),
+  setAt: timestamp('set_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 // ─── Audit log (public schema, append-only) ────────────────────────────────
 // Activity METADATA only: opaque entity ids and short codes, never content.
 // actor_user_id and actor_org_unit_uuid deliberately have NO foreign key so rows
 // survive user and org-unit deletion. The immutability triggers are hand-appended
 // to drizzle/0002_audit_events.sql (drizzle-kit cannot express them).
-
-export const auditSourceValues = ['server', 'client', 'system'] as const;
-export const auditOutcomeValues = ['success', 'denied', 'error'] as const;
 
 export const auditEvents = pgTable(
   'audit_events',
@@ -275,7 +271,14 @@ export const auditEvents = pgTable(
     index('audit_events_occurred_at_idx').on(t.occurredAt),
     index('audit_events_actor_idx').on(t.actorUserId, t.id),
     index('audit_events_event_type_idx').on(t.eventType, t.id),
-    index('audit_events_entity_idx').on(t.entityType, t.entityId),
+    // The viewer filters `(entity_id = $n OR secondary_entity_id = $n)`; one partial index per
+    // column lets the planner use a BitmapOr over both.
+    index('audit_events_entity_id_idx')
+      .on(t.entityId)
+      .where(sql`${t.entityId} is not null`),
+    index('audit_events_secondary_entity_id_idx')
+      .on(t.secondaryEntityId)
+      .where(sql`${t.secondaryEntityId} is not null`),
     index('audit_events_org_unit_idx').on(t.actorOrgUnitUuid, t.id),
     // Idempotent client delivery: a retried batch cannot insert the same event twice.
     uniqueIndex('audit_events_client_event_unique')
@@ -293,8 +296,15 @@ export const auditEvents = pgTable(
 // drizzle/0003_central_templates.sql, drizzle-kit cannot express it). The
 // *_user_id columns have NO foreign key so history survives user deletion.
 
-export const centralTemplateStatusValues = ['active', 'archived'] as const;
-export const centralTemplateChangeTypeValues = ['create', 'update', 'retarget', 'archive', 'restore'] as const;
+// Postgres ARE bracket expression, as a SQL string literal (standard_conforming_strings is on),
+// of the characters that do not count towards the name / change-note minimum: whitespace and
+// invisible characters. Hand-kept mirror of the app rule in skabeloner/central-schemas.ts
+// (\p{Default_Ignorable_Code_Point}, Cc/Cf, Unicode White_Space, the blank letters U+115F, U+1160,
+// U+2800, U+3164, U+FFA0). Explicit \u / \U escapes keep it independent of the database locale.
+// The app stays the primary gate. The same literal is written out in
+// drizzle/0003_central_templates.sql; keep the two in sync.
+const MEANINGLESS_CHARS_CLASS =
+  String.raw`'[[:space:]\u0085\u00A0\u00AD\u034F\u115F\u1160\u1680\u17B4\u17B5\u180B-\u180F\u2000-\u200F\u2028-\u202F\u205F-\u206F\u2800\u3000\u3164\uFE00-\uFE0F\uFEFF\uFFA0\U000E0000-\U000E0FFF]'`;
 
 export const centralTemplates = pgTable(
   'central_templates',
@@ -315,14 +325,16 @@ export const centralTemplates = pgTable(
     allowToggleOverrides: boolean('allow_toggle_overrides').notNull().default(false),
     status: text('status').notNull().default('active'),
     currentVersion: integer('current_version').notNull().default(1),
-    createdByUserId: text('created_by_user_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index('central_templates_owner_idx').on(t.ownerOrgUnitUuid),
     check('central_templates_status_check', sql`${t.status} in ('active', 'archived')`),
-    check('central_templates_name_check', sql`btrim(${t.name}) <> '' and char_length(${t.name}) <= 120`),
+    check(
+      'central_templates_name_check',
+      sql`char_length(regexp_replace(${t.name}, ${sql.raw(MEANINGLESS_CHARS_CLASS)}, '', 'g')) >= 1 and char_length(${t.name}) <= 120`,
+    ),
     check('central_templates_description_check', sql`char_length(${t.description}) <= 1000`),
     check('central_templates_prompt_check', sql`btrim(${t.prompt}) <> '' and char_length(${t.prompt}) <= 20000`),
     check('central_templates_version_check', sql`${t.currentVersion} >= 1`),
@@ -356,7 +368,7 @@ export const centralTemplateVersions = pgTable(
     ),
     check(
       'central_template_versions_change_note_check',
-      sql`char_length(btrim(${t.changeNote})) >= 10 and char_length(${t.changeNote}) <= 2000`,
+      sql`char_length(regexp_replace(${t.changeNote}, ${sql.raw(MEANINGLESS_CHARS_CLASS)}, '', 'g')) >= 10 and char_length(${t.changeNote}) <= 2000`,
     ),
   ],
 );

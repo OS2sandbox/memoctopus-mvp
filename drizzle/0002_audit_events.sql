@@ -24,7 +24,8 @@ CREATE TABLE "audit_events" (
 CREATE INDEX "audit_events_occurred_at_idx" ON "audit_events" USING btree ("occurred_at");--> statement-breakpoint
 CREATE INDEX "audit_events_actor_idx" ON "audit_events" USING btree ("actor_user_id","id");--> statement-breakpoint
 CREATE INDEX "audit_events_event_type_idx" ON "audit_events" USING btree ("event_type","id");--> statement-breakpoint
-CREATE INDEX "audit_events_entity_idx" ON "audit_events" USING btree ("entity_type","entity_id");--> statement-breakpoint
+CREATE INDEX "audit_events_entity_id_idx" ON "audit_events" USING btree ("entity_id") WHERE "audit_events"."entity_id" is not null;--> statement-breakpoint
+CREATE INDEX "audit_events_secondary_entity_id_idx" ON "audit_events" USING btree ("secondary_entity_id") WHERE "audit_events"."secondary_entity_id" is not null;--> statement-breakpoint
 CREATE INDEX "audit_events_org_unit_idx" ON "audit_events" USING btree ("actor_org_unit_uuid","id");--> statement-breakpoint
 CREATE UNIQUE INDEX "audit_events_client_event_unique" ON "audit_events" USING btree ("actor_user_id","client_event_id") WHERE "audit_events"."client_event_id" is not null;
 --> statement-breakpoint

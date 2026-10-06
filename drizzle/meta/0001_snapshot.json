@@ -356,7 +356,23 @@
           "notNull": false
         }
       },
-      "indexes": {},
+      "indexes": {
+        "org_unit_members_org_unit_idx": {
+          "name": "org_unit_members_org_unit_idx",
+          "columns": [
+            {
+              "expression": "org_unit_uuid",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "org_unit_members_directory_user_uuid_directory_users_uuid_fk": {
           "name": "org_unit_members_directory_user_uuid_directory_users_uuid_fk",
@@ -399,86 +415,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.org_unit_substitutes": {
-      "name": "org_unit_substitutes",
-      "schema": "",
-      "columns": {
-        "manager_uuid": {
-          "name": "manager_uuid",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "substitute_uuid": {
-          "name": "substitute_uuid",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "org_unit_uuid": {
-          "name": "org_unit_uuid",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "org_unit_substitutes_manager_uuid_directory_users_uuid_fk": {
-          "name": "org_unit_substitutes_manager_uuid_directory_users_uuid_fk",
-          "tableFrom": "org_unit_substitutes",
-          "tableTo": "directory_users",
-          "columnsFrom": [
-            "manager_uuid"
-          ],
-          "columnsTo": [
-            "uuid"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "org_unit_substitutes_substitute_uuid_directory_users_uuid_fk": {
-          "name": "org_unit_substitutes_substitute_uuid_directory_users_uuid_fk",
-          "tableFrom": "org_unit_substitutes",
-          "tableTo": "directory_users",
-          "columnsFrom": [
-            "substitute_uuid"
-          ],
-          "columnsTo": [
-            "uuid"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "org_unit_substitutes_org_unit_uuid_org_units_uuid_fk": {
-          "name": "org_unit_substitutes_org_unit_uuid_org_units_uuid_fk",
-          "tableFrom": "org_unit_substitutes",
-          "tableTo": "org_units",
-          "columnsFrom": [
-            "org_unit_uuid"
-          ],
-          "columnsTo": [
-            "uuid"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "org_unit_substitutes_manager_uuid_substitute_uuid_org_unit_uuid_pk": {
-          "name": "org_unit_substitutes_manager_uuid_substitute_uuid_org_unit_uuid_pk",
-          "columns": [
-            "manager_uuid",
-            "substitute_uuid",
-            "org_unit_uuid"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.org_units": {
       "name": "org_units",
       "schema": "",
@@ -498,12 +434,6 @@
         },
         "parent_uuid": {
           "name": "parent_uuid",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "manager_uuid": {
-          "name": "manager_uuid",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
@@ -564,19 +494,6 @@
             "uuid"
           ],
           "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "org_units_manager_uuid_directory_users_uuid_fk": {
-          "name": "org_units_manager_uuid_directory_users_uuid_fk",
-          "tableFrom": "org_units",
-          "tableTo": "directory_users",
-          "columnsFrom": [
-            "manager_uuid"
-          ],
-          "columnsTo": [
-            "uuid"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -666,11 +583,11 @@
         }
       },
       "indexes": {
-        "role_assignments_directory_user_idx": {
-          "name": "role_assignments_directory_user_idx",
+        "role_assignments_scope_idx": {
+          "name": "role_assignments_scope_idx",
           "columns": [
             {
-              "expression": "directory_user_uuid",
+              "expression": "scope_org_unit_uuid",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -969,6 +886,39 @@
           "value": "\"sync_runs\".\"status\" in ('running', 'success', 'failed')"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.system_flags": {
+      "name": "system_flags",
+      "schema": "",
+      "columns": {
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "value": {
+          "name": "value",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "set_at": {
+          "name": "set_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.users": {

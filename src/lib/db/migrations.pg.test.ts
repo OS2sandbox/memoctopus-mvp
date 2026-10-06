@@ -58,12 +58,46 @@ describe.skipIf(!hasPg)('central access migration (real Postgres)', () => {
           'directory_users',
           'org_units',
           'org_unit_members',
-          'org_unit_substitutes',
           'role_assignments',
           'external_identities',
           'sync_runs',
+          'system_flags',
         ]),
       );
+    }));
+
+  it('system_flags: key is the primary key, value defaults to {}, set_at to now()', () =>
+    withFreshSchema(async (c) => {
+      await c.query(`INSERT INTO system_flags (key) VALUES ('k')`);
+      const r = await c.query(`SELECT value, set_at FROM system_flags WHERE key = 'k'`);
+      expect(r.rows[0].value).toEqual({});
+      expect(r.rows[0].set_at).toBeInstanceOf(Date);
+      expect(await sqlState(c.query(`INSERT INTO system_flags (key) VALUES ('k')`))).toBe(UNIQUE_VIOLATION);
+      await c.query(`INSERT INTO system_flags (key) VALUES ('k') ON CONFLICT (key) DO NOTHING`);
+    }));
+
+  it('has dropped the unused objects and carries the FK-column indexes', () =>
+    withFreshSchema(async (c, schema) => {
+      const tables = (
+        await c.query(`SELECT table_name FROM information_schema.tables WHERE table_schema = $1`, [schema])
+      ).rows.map((x) => x.table_name);
+      expect(tables).not.toContain('org_unit_substitutes');
+      const cols = (
+        await c.query(
+          `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'org_units'`,
+          [schema],
+        )
+      ).rows.map((x) => x.column_name);
+      expect(cols).not.toContain('manager_uuid');
+      const idx = (
+        await c.query(`SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1`, [schema])
+      ).rows;
+      const names = idx.map((x) => x.indexname);
+      // Redundant: the UNIQUE NULLS NOT DISTINCT constraint already leads with directory_user_uuid.
+      expect(names).not.toContain('role_assignments_directory_user_idx');
+      const def = (n: string) => idx.find((x) => x.indexname === n)?.indexdef ?? '';
+      expect(def('org_unit_members_org_unit_idx')).toContain('(org_unit_uuid)');
+      expect(def('role_assignments_scope_idx')).toContain('(scope_org_unit_uuid)');
     }));
 
   it('rejects a duplicate GLOBAL role assignment (NULLS NOT DISTINCT)', () =>

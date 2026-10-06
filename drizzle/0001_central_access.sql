@@ -34,18 +34,10 @@ CREATE TABLE "org_unit_members" (
 	CONSTRAINT "org_unit_members_directory_user_uuid_org_unit_uuid_pk" PRIMARY KEY("directory_user_uuid","org_unit_uuid")
 );
 --> statement-breakpoint
-CREATE TABLE "org_unit_substitutes" (
-	"manager_uuid" uuid NOT NULL,
-	"substitute_uuid" uuid NOT NULL,
-	"org_unit_uuid" uuid NOT NULL,
-	CONSTRAINT "org_unit_substitutes_manager_uuid_substitute_uuid_org_unit_uuid_pk" PRIMARY KEY("manager_uuid","substitute_uuid","org_unit_uuid")
-);
---> statement-breakpoint
 CREATE TABLE "org_units" (
 	"uuid" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"name" text NOT NULL,
 	"parent_uuid" uuid,
-	"manager_uuid" uuid,
 	"source" text NOT NULL,
 	"synced_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -80,17 +72,20 @@ CREATE TABLE "sync_runs" (
 	CONSTRAINT "sync_runs_status_check" CHECK ("sync_runs"."status" in ('running', 'success', 'failed'))
 );
 --> statement-breakpoint
+CREATE TABLE "system_flags" (
+	"key" text PRIMARY KEY NOT NULL,
+	"value" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"set_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 ALTER TABLE "directory_users" ADD CONSTRAINT "directory_users_app_user_id_users_id_fk" FOREIGN KEY ("app_user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "external_identities" ADD CONSTRAINT "external_identities_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "org_unit_members" ADD CONSTRAINT "org_unit_members_directory_user_uuid_directory_users_uuid_fk" FOREIGN KEY ("directory_user_uuid") REFERENCES "public"."directory_users"("uuid") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "org_unit_members" ADD CONSTRAINT "org_unit_members_org_unit_uuid_org_units_uuid_fk" FOREIGN KEY ("org_unit_uuid") REFERENCES "public"."org_units"("uuid") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "org_unit_substitutes" ADD CONSTRAINT "org_unit_substitutes_manager_uuid_directory_users_uuid_fk" FOREIGN KEY ("manager_uuid") REFERENCES "public"."directory_users"("uuid") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "org_unit_substitutes" ADD CONSTRAINT "org_unit_substitutes_substitute_uuid_directory_users_uuid_fk" FOREIGN KEY ("substitute_uuid") REFERENCES "public"."directory_users"("uuid") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "org_unit_substitutes" ADD CONSTRAINT "org_unit_substitutes_org_unit_uuid_org_units_uuid_fk" FOREIGN KEY ("org_unit_uuid") REFERENCES "public"."org_units"("uuid") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "org_units" ADD CONSTRAINT "org_units_parent_uuid_org_units_uuid_fk" FOREIGN KEY ("parent_uuid") REFERENCES "public"."org_units"("uuid") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "org_units" ADD CONSTRAINT "org_units_manager_uuid_directory_users_uuid_fk" FOREIGN KEY ("manager_uuid") REFERENCES "public"."directory_users"("uuid") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "role_assignments" ADD CONSTRAINT "role_assignments_directory_user_uuid_directory_users_uuid_fk" FOREIGN KEY ("directory_user_uuid") REFERENCES "public"."directory_users"("uuid") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "role_assignments" ADD CONSTRAINT "role_assignments_scope_org_unit_uuid_org_units_uuid_fk" FOREIGN KEY ("scope_org_unit_uuid") REFERENCES "public"."org_units"("uuid") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "external_identities_user_id_idx" ON "external_identities" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "org_unit_members_org_unit_idx" ON "org_unit_members" USING btree ("org_unit_uuid");--> statement-breakpoint
 CREATE INDEX "org_units_parent_uuid_idx" ON "org_units" USING btree ("parent_uuid");--> statement-breakpoint
-CREATE INDEX "role_assignments_directory_user_idx" ON "role_assignments" USING btree ("directory_user_uuid");
+CREATE INDEX "role_assignments_scope_idx" ON "role_assignments" USING btree ("scope_org_unit_uuid");
