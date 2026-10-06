@@ -8,7 +8,7 @@ import type { Principal, RoleAssignmentRow } from './types';
 
 export type AssignmentSourceRow = RoleAssignmentRow & { source: string; syncedAt?: Date | null };
 
-export interface StaleOptions {
+interface StaleOptions {
   now: Date;
   mode: AccessSource;
   maxAgeSeconds: number;
@@ -28,12 +28,11 @@ export interface StaleOptions {
  *   Exactly at the limit still counts.
  */
 export function dropStaleAssignments(rows: AssignmentSourceRow[], opts: StaleOptions): AssignmentSourceRow[] {
-  if (opts.mode === 'local') return rows.filter((r) => r.source !== 'rollekatalog');
+  // Fail closed: a source other than the two the DB CHECK allows counts as nothing.
+  if (opts.mode === 'local') return rows.filter((r) => r.source === 'local');
   const limitMs = opts.maxAgeSeconds * 1000;
   return rows.filter((r) => {
-    if (r.source === 'local') return false;
-    if (r.source !== 'rollekatalog') return true;
-    if (!r.syncedAt) return false;
+    if (r.source !== 'rollekatalog' || !r.syncedAt) return false;
     // Negated <= so that an invalid date (NaN) counts as stale.
     return opts.now.getTime() - r.syncedAt.getTime() <= limitMs;
   });

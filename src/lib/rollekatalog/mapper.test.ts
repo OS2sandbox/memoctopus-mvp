@@ -2,19 +2,18 @@ import { describe, expect, it } from 'vitest';
 import type { RoleKey } from '@/lib/authz/types';
 import { mapToMirror, type MapperConfig, type MapperInput, type MirrorSet } from './mapper';
 import { fixtureData } from './mock-server';
-import { managersSchema, organisationSchema, roleAssignmentsSchema } from './schemas';
+import { organisationSchema, roleAssignmentsSchema } from './schemas';
 
 const U = (n: number) => `7e5e0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const O = (n: number) => `5a1b0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const E = (n: number) => `9d3c0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
-const DEFAULTS: MapperConfig = { strategy: 'constraint', includeDescendants: true, globalRoles: ['tt-administrator'] };
+const DEFAULTS: MapperConfig = { includeDescendants: true, globalRoles: ['tt-administrator'] };
 
 function fixtureInput(): MapperInput {
   const d = fixtureData();
   return {
     organisation: organisationSchema.parse({ users: d.users, orgUnits: d.orgUnits }),
-    managers: managersSchema.parse(d.managers),
     assignments: roleAssignmentsSchema.parse(d.roleAssignments),
   };
 }
@@ -23,12 +22,10 @@ function fixtureInput(): MapperInput {
 function input(over: {
   users?: unknown[];
   orgUnits?: unknown[];
-  managers?: unknown[];
   assignments?: unknown[];
 }): MapperInput {
   return {
     organisation: organisationSchema.parse({ users: over.users ?? [], orgUnits: over.orgUnits ?? [] }),
-    managers: managersSchema.parse(over.managers ?? []),
     assignments: roleAssignmentsSchema.parse(over.assignments ?? []),
   };
 }
@@ -67,7 +64,7 @@ const rolesOf = (set: MirrorSet, userUuid: string) =>
     .map((a) => `${a.roleKey}@${a.scopeOrgUnitUuid ?? 'null'}`)
     .sort();
 
-describe('mapToMirror with the fixtures (default strategy)', () => {
+describe('mapToMirror with the fixtures', () => {
   const set = mapToMirror(fixtureInput(), DEFAULTS);
 
   it('maps every user, keyed on the Rollekatalog uuid, with ext ids and the disabled flag', () => {
@@ -86,10 +83,8 @@ describe('mapToMirror with the fixtures (default strategy)', () => {
     expect(set.stats.orgUnitCyclesBroken).toBe(0);
   });
 
-  it('keeps a manager only when that user is in the mirror (ghost.m has no position)', () => {
-    expect(set.orgUnits.find((u) => u.uuid === O(1))?.managerUuid).toBe(U(1));
-    expect(set.orgUnits.find((u) => u.uuid === O(3))?.managerUuid).toBeNull(); // manager: null in the fixture
-    expect(set.orgUnits.find((u) => u.uuid === O(5))?.managerUuid).toBeNull(); // ghost.m is not in users[]
+  it('does not carry the fixture\'s org-unit managers into the mirror', () => {
+    expect(set.orgUnits.every((u) => !('managerUuid' in u))).toBe(true);
   });
 
   it('builds members from positions (12 distinct user/unit pairs)', () => {
@@ -98,10 +93,6 @@ describe('mapToMirror with the fixtures (default strategy)', () => {
     expect(new Set(pairs).size).toBe(12);
     expect(pairs).toContain(`${U(2)}|${O(2)}`);
     expect(pairs).toContain(`${U(2)}|${O(3)}`);
-  });
-
-  it('builds substitutes from the manager API and skips one whose manager is not in the mirror', () => {
-    expect(set.substitutes).toEqual([{ managerUuid: U(2), substituteUuid: U(3), orgUnitUuid: O(2) }]);
   });
 
   it('maps role assignments per the fixture cases', () => {
@@ -139,25 +130,7 @@ describe('mapToMirror with the fixtures (default strategy)', () => {
   });
 });
 
-describe('mapToMirror: other strategies on the fixtures', () => {
-  it('constraint-or-manager scopes ida (substitute of Digital Support) and ole (no manager role: still none)', () => {
-    const set = mapToMirror(fixtureInput(), { ...DEFAULTS, strategy: 'constraint-or-manager' });
-    expect(rolesOf(set, U(7))).toEqual([`tt-logleser@${O(5)}`]);
-    expect(rolesOf(set, U(8))).toEqual([]);
-    expect(rolesOf(set, U(2))).toEqual([`tt-skabelonansvarlig@${O(2)}`]); // constraint still wins
-  });
-
-  it('manager scopes only by managed units and ignores constraints', () => {
-    const set = mapToMirror(fixtureInput(), { ...DEFAULTS, strategy: 'manager' });
-    // jens manages Borgerservice (v3 manager), anne is substitute for it, lars manages Økonomi.
-    expect(rolesOf(set, U(2))).toEqual([`tt-skabelonansvarlig@${O(2)}`]);
-    expect(rolesOf(set, U(3))).toEqual(['tt-bruger@null', `tt-skabelonansvarlig@${O(2)}`]);
-    expect(rolesOf(set, U(4))).toEqual(['tt-bruger@null', `tt-logleser@${O(4)}`]);
-    expect(rolesOf(set, U(6))).toEqual([]); // peter manages nothing
-    expect(rolesOf(set, U(7))).toEqual([`tt-logleser@${O(5)}`]); // substitute of a manager that is not in the mirror
-    expect(rolesOf(set, U(1))).toEqual(['tt-administrator@null']);
-  });
-
+describe('mapToMirror: GLOBAL_ROLES on the fixtures', () => {
   it('GLOBAL_ROLES can make an unscoped logleser global', () => {
     const set = mapToMirror(fixtureInput(), { ...DEFAULTS, globalRoles: ['tt-administrator', 'tt-logleser'] });
     expect(rolesOf(set, U(7))).toEqual(['tt-logleser@null']);
@@ -236,7 +209,7 @@ describe('mapToMirror: org tree edge cases', () => {
   });
 });
 
-describe('mapToMirror: users, members and substitutes edge cases', () => {
+describe('mapToMirror: users and members edge cases', () => {
   it('only the first user with a given ext_uuid keeps it (the column is UNIQUE) and a duplicate uuid is dropped', () => {
     const set = mapToMirror(
       input({
@@ -262,25 +235,6 @@ describe('mapToMirror: users, members and substitutes edge cases', () => {
       DEFAULTS,
     );
     expect(set.members).toEqual([{ directoryUserUuid: U(1), orgUnitUuid: O(1) }]);
-  });
-
-  it('substitute rows need manager, substitute and unit; the substitute falls back to the containing manager', () => {
-    const sub = (n: number, unitN: number, mgr?: number) => ({
-      uuid: U(n),
-      orgUnitUuid: O(unitN),
-      ...(mgr ? { managerUuid: U(mgr) } : {}),
-    });
-    const set = mapToMirror(
-      input({
-        users: [user(1), user(2), user(3)],
-        orgUnits: [unit(1, null)],
-        managers: [
-          { uuid: U(1), managerSubstitutes: [sub(2, 1), sub(2, 1), sub(3, 77), sub(98, 1), sub(3, 1, 99)] },
-        ],
-      }),
-      DEFAULTS,
-    );
-    expect(set.substitutes).toEqual([{ managerUuid: U(1), substituteUuid: U(2), orgUnitUuid: O(1) }]);
   });
 });
 
@@ -394,9 +348,9 @@ describe('privacy: nothing personal beyond the whitelist survives mapping', () =
     expect(out).not.toContain('Kommunaldirektør'); // job titles are not stored
     expect([...new Set(keys)].sort()).toEqual(
       [
-        'assignments', 'directoryUserUuid', 'disabled', 'email', 'extUserId', 'extUuid', 'includeDescendants', 'managerUuid',
+        'assignments', 'directoryUserUuid', 'disabled', 'email', 'extUserId', 'extUuid', 'includeDescendants',
         'members', 'name', 'orgUnitCyclesBroken', 'orgUnitUuid', 'orgUnits', 'orgUnitsOrphaned', 'parentUuid', 'roleKey',
-        'scopeOrgUnitUuid', 'stats', 'substituteUuid', 'substitutes', 'assignmentsIgnoredRole',
+        'scopeOrgUnitUuid', 'stats', 'assignmentsIgnoredRole',
         'assignmentsSkippedUnknownUser', 'assignmentsWithoutScope', 'users', 'uuid',
       ].sort(),
     );

@@ -28,6 +28,14 @@ export function withHandler<TArgs extends unknown[]>(
       const source = asHeaderSource(args[0]);
       const requestId = source ? requestIdOf(source) : randomUUID();
       safeLogError(label, err, requestId);
+      // An invalid security setting: fail closed with a clear 503 (the log line carries only "ConfigError").
+      // Matched by name (ConfigError, src/lib/authz/config.ts) so this module needs no authz import.
+      if (err instanceof Error && err.name === 'ConfigError') {
+        return NextResponse.json(
+          { error: 'Adgangskontrol er midlertidigt utilgængelig', code: 'config_invalid' },
+          { status: 503, headers: { 'x-request-id': requestId } },
+        );
+      }
       return NextResponse.json(
         { error: 'Internal server error' },
         { status: 500, headers: { 'x-request-id': requestId } },

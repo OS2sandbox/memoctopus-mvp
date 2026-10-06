@@ -16,8 +16,8 @@ const NOTE = 'Første version til hele afdelingen';
 const validCreate = { ownerOrgUnitUuid: UNIT_A, name: 'Dialogmøde', prompt: 'Skriv kort.', changeNote: NOTE };
 
 describe('changeNoteSchema', () => {
-  it('trims, then requires at least 10 characters, with the Danish message', () => {
-    expect(changeNoteSchema.parse('   ti tegn !!   ')).toBe('ti tegn !!');
+  it('trims, then requires at least 10 non-space characters, with the Danish message', () => {
+    expect(changeNoteSchema.parse('   ti tegn!!!!   ')).toBe('ti tegn!!!!');
     for (const bad of ['', '         ', '123456789', '  123456789  ', '\n\t\n\t\n\t\n\t\n\t']) {
       const r = changeNoteSchema.safeParse(bad);
       expect(r.success, JSON.stringify(bad)).toBe(false);
@@ -53,8 +53,48 @@ describe('changeNoteSchema', () => {
   });
 
   it('counts only visible characters: invisible padding cannot top up a short note', () => {
-    expect(changeNoteSchema.safeParse('kort' + '\u200b'.repeat(20)).success).toBe(false);
-    expect(changeNoteSchema.safeParse('\u200b123456789\u200b\u00ad').success).toBe(false);
+    expect(changeNoteSchema.safeParse('kort' + '\u{200b}'.repeat(20)).success).toBe(false);
+    expect(changeNoteSchema.safeParse('\u{200b}123456789\u{200b}\u{ad}').success).toBe(false);
+  });
+
+  it('rejects invisible Default_Ignorable code points that are neither Cc nor Cf', () => {
+    const invisible: Record<string, string> = {
+      combiningGraphemeJoiner: '\u{34f}',
+      variationSelector16: '\u{fe0f}',
+      khmerInherentVowel: '\u{17b5}',
+      mongolianVariationSelector: '\u{180b}',
+      variationSelectorSupplement: '\u{e0100}',
+      tagCharacter: '\u{e0041}',
+    };
+    for (const [name, ch] of Object.entries(invisible)) {
+      const r = changeNoteSchema.safeParse(ch.repeat(10));
+      expect(r.success, name).toBe(false);
+      if (!r.success) expect(r.error.issues[0].message, name).toBe(CHANGE_NOTE_MESSAGE);
+    }
+  });
+
+  it('does not count interior whitespace towards the minimum', () => {
+    const padded: Record<string, string> = {
+      nbsp: 'a' + '\u{a0}'.repeat(9) + 'b',
+      emSpace: 'a' + '\u{2003}'.repeat(9) + 'b',
+      newlines: 'a' + '\n'.repeat(9) + 'b',
+      spaces: 'a' + ' '.repeat(9) + 'b',
+      tabs: 'a' + '\t'.repeat(9) + 'b',
+      crlf: 'a' + '\r\n'.repeat(5) + 'b',
+    };
+    for (const [name, v] of Object.entries(padded)) {
+      const r = changeNoteSchema.safeParse(v);
+      expect(r.success, name).toBe(false);
+      if (!r.success) expect(r.error.issues[0].message, name).toBe(CHANGE_NOTE_MESSAGE);
+    }
+  });
+
+  it('accepts real notes: exactly ten non-space characters, multi-line, emoji', () => {
+    expect(changeNoteSchema.safeParse('Rettet tone i afsnit 2').success).toBe(true);
+    expect(changeNoteSchema.parse('Ret tekst nu')).toBe('Ret tekst nu');
+    expect(changeNoteSchema.safeParse('Ret tekst n').success).toBe(false);
+    expect(changeNoteSchema.parse('Rettet tone\nog\nlayout i afsnit')).toBe('Rettet tone\nog\nlayout i afsnit');
+    expect(changeNoteSchema.safeParse('\u{1f600}'.repeat(10)).success).toBe(true);
   });
 
   it('stores the normalised note (invisible characters removed, line breaks kept)', () => {
@@ -124,6 +164,10 @@ describe('createCentralTemplateSchema', () => {
     expect(createCentralTemplateSchema.safeParse({ ...validCreate, status: 'archived' }).success).toBe(false);
     expect(createCentralTemplateSchema.safeParse({ ...validCreate, currentVersion: 9 }).success).toBe(false);
     expect(createCentralTemplateSchema.safeParse({ ...validCreate, name: '   ' }).success).toBe(false);
+    for (const ch of ['\u200b', '\u034f', '\ufe0f', '\u3164', '\u00a0', '\u2003', '\u{e0100}']) {
+      expect(createCentralTemplateSchema.safeParse({ ...validCreate, name: ch.repeat(5) }).success, ch).toBe(false);
+    }
+    expect(createCentralTemplateSchema.parse({ ...validCreate, name: ' \u200bDialog\u034fmøde ' }).name).toBe('Dialogmøde');
     expect(createCentralTemplateSchema.safeParse({ ...validCreate, name: 'a'.repeat(121) }).success).toBe(false);
     expect(createCentralTemplateSchema.safeParse({ ...validCreate, name: 'a'.repeat(120) }).success).toBe(true);
     expect(createCentralTemplateSchema.safeParse({ ...validCreate, description: 'a'.repeat(1001) }).success).toBe(false);

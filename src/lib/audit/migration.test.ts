@@ -30,9 +30,15 @@ describe('migration 0002_audit_events', () => {
     expect(sql).toContain(`CHECK ("audit_events"."source" in ('server', 'client', 'system'))`);
     expect(sql).toContain(`CHECK ("audit_events"."outcome" in ('success', 'denied', 'error'))`);
     expect(sql).toMatch(/CREATE UNIQUE INDEX "audit_events_client_event_unique".*\("actor_user_id","client_event_id"\) WHERE "audit_events"\."client_event_id" is not null/);
-    for (const idx of ['occurred_at', 'actor', 'event_type', 'entity', 'org_unit']) {
+    for (const idx of ['occurred_at', 'actor', 'event_type', 'entity_id', 'secondary_entity_id', 'org_unit']) {
       expect(sql).toContain(`"audit_events_${idx}_idx"`);
     }
+  });
+
+  it('indexes the two entity columns separately (partial), for the viewer\'s entity_id OR secondary_entity_id filter', () => {
+    expect(sql).not.toContain('"audit_events_entity_idx"');
+    expect(sql).toMatch(/CREATE INDEX "audit_events_entity_id_idx" ON "audit_events" USING btree \("entity_id"\) WHERE "audit_events"\."entity_id" is not null/);
+    expect(sql).toMatch(/CREATE INDEX "audit_events_secondary_entity_id_idx" ON "audit_events" USING btree \("secondary_entity_id"\) WHERE "audit_events"\."secondary_entity_id" is not null/);
   });
 
   it('hand-appends the guard function and both triggers as separate statements', () => {

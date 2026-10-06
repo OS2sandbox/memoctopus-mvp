@@ -9,9 +9,29 @@ function clean(name: string): string {
   return (process.env[name] ?? '').trim();
 }
 
-/** Unknown or empty values fall back to 'local' (no throw: a typo must not take the app down). */
+/**
+ * An unusable security setting. Thrown instead of silently picking a default so a
+ * typo can never flip the security model. The message never echoes the value.
+ * Route wrappers answer 503; the (app) layout shows the retry screen.
+ */
+export class ConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConfigError';
+  }
+}
+
+/**
+ * Unset or blank => 'local' (the default). 'local' / 'rollekatalog' (trimmed,
+ * case-insensitive) as written. Anything else THROWS ConfigError: 'local' is the
+ * permissive mode (bootstrap admin, writable local admin API, Rollekatalog roles
+ * ignored), so a typo such as "rolekatalog" must fail closed, never fall back to it.
+ */
 export function accessSource(): AccessSource {
-  return clean('ACCESS_SOURCE').toLowerCase() === 'rollekatalog' ? 'rollekatalog' : 'local';
+  const v = clean('ACCESS_SOURCE').toLowerCase();
+  if (v === '' || v === 'local') return 'local';
+  if (v === 'rollekatalog') return 'rollekatalog';
+  throw new ConfigError('ACCESS_SOURCE must be "local" or "rollekatalog"');
 }
 
 export function requireRoleToLogin(): boolean {
@@ -46,8 +66,3 @@ export function singleTenantId(): string | null {
   const tenant = clean('MICROSOFT_TENANT_ID').toLowerCase();
   return tenant && !MULTI_TENANT_ALIASES.has(tenant) ? tenant : null;
 }
-
-// DIRECTORY_USERID_TRANSFORM lives with the other Rollekatalog settings (read at
-// call time, invalid value => 'none'); re-exported so the identity-matching code
-// finds every login-matching setting in one module.
-export { directoryUserIdTransform, transformUserId, type UserIdTransform } from '@/lib/rollekatalog/config';

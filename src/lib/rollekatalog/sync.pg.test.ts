@@ -4,14 +4,15 @@
 // actions, rollback or lock contention, which is what these tests are for.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from 'pg';
-import { hasPg, withFreshSchema } from '@/test/pg';
+import { addUser, hasPg, withFreshSchema } from '@/test/pg';
 import type { ClientLike, SqlResult } from '@/lib/authz/pg-runner';
 
 vi.mock('@/lib/db', () => ({ pool: {}, db: {} }));
 
 import { createRollekatalogClient } from './client';
 import { fixtureData, startMockRollekatalog, type MockRollekatalog } from './mock-server';
-import { getLatestSyncRun, runSync, type SyncDeps } from './sync';
+import { runSync, type SyncDeps } from './sync';
+import { getLatestSyncRun } from './sync-run';
 import type { SyncEnv } from './sync-run';
 import type { RunSyncOptions, SyncCounts, SyncResult } from './types';
 
@@ -101,14 +102,33 @@ const count = async (c: Client, table: string, where = 'true') =>
 async function snapshot(c: Client) {
   return {
     users: await rows(c, `SELECT uuid, ext_uuid, ext_user_id, name, email, disabled, app_user_id, source FROM directory_users ORDER BY uuid`),
-    units: await rows(c, `SELECT uuid, name, parent_uuid, manager_uuid, source FROM org_units ORDER BY uuid`),
+    units: await rows(c, `SELECT uuid, name, parent_uuid, source FROM org_units ORDER BY uuid`),
     members: await rows(c, `SELECT directory_user_uuid, org_unit_uuid, is_primary, title FROM org_unit_members ORDER BY 1, 2`),
-    subs: await rows(c, `SELECT manager_uuid, substitute_uuid, org_unit_uuid FROM org_unit_substitutes ORDER BY 1, 2, 3`),
     assignments: await rows(
       c,
       `SELECT id, directory_user_uuid, role_key, scope_org_unit_uuid, include_descendants, source FROM role_assignments ORDER BY directory_user_uuid, role_key, scope_org_unit_uuid`,
     ),
   };
+}
+
+/** better-auth session rows for an app user (real sessions table of the throwaway schema). */
+async function addSessions(c: Client, userId: string, n = 2) {
+  for (let i = 0; i < n; i++) {
+    await c.query(
+      `INSERT INTO sessions (id, expires_at, token, user_id) VALUES ($1, now() + interval '7 days', $2, $3)`,
+      [`${userId}-s${i}`, `${userId}-tok${i}`, userId],
+    );
+  }
+}
+const sessionCount = (c: Client, userId: string) => count(c, 'sessions', `user_id = '${userId}'`);
+
+/** Sync once, then link app users to directory rows (login matching's job) and give each two sessions. */
+async function linkWithSessions(h: { c: Client }, links: Array<[appUser: string, directoryUuid: string]>) {
+  for (const [appUser, dir] of links) {
+    await addUser(h.c, appUser);
+    await h.c.query('UPDATE directory_users SET app_user_id = $1 WHERE uuid = $2', [appUser, dir]);
+    await addSessions(h.c, appUser);
+  }
 }
 
 const roleRows = (c: Client, userUuid: string) =>
@@ -117,6 +137,7 @@ const roleRows = (c: Client, userUuid: string) =>
 const ZERO: SyncCounts = {
   usersUpserted: 0,
   usersDisabled: 0,
+  sessionsRevoked: 0,
   orgUnitsUpserted: 0,
   orgUnitsOrphaned: 0,
   orgUnitCyclesBroken: 0,
@@ -135,6 +156,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
       expect(r.counts).toEqual({
         usersUpserted: 9,
         usersDisabled: 0,
+        sessionsRevoked: 0,
         orgUnitsUpserted: 5,
         orgUnitsOrphaned: 0,
         orgUnitCyclesBroken: 0,
@@ -148,19 +170,17 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
       expect(await count(h.c, 'directory_users', "source = 'rollekatalog'")).toBe(9);
       expect(await count(h.c, 'org_units', "source = 'rollekatalog'")).toBe(5);
       expect(await count(h.c, 'org_unit_members')).toBe(12);
-      expect(await count(h.c, 'org_unit_substitutes')).toBe(1);
       expect(await count(h.c, 'role_assignments', "source = 'rollekatalog'")).toBe(10);
 
       const sofie = (await rows(h.c, `SELECT * FROM directory_users WHERE ext_user_id = 'sofie.s'`))[0];
       expect(sofie).toMatchObject({ uuid: U(5), ext_uuid: E(5), disabled: true, source: 'rollekatalog', app_user_id: null });
       expect(sofie.synced_at).toBeInstanceOf(Date);
 
-      const units = await rows(h.c, 'SELECT uuid, parent_uuid, manager_uuid FROM org_units');
+      const units = await rows(h.c, 'SELECT uuid, parent_uuid FROM org_units');
       const byUuid = Object.fromEntries(units.map((u) => [u.uuid, u]));
       expect(byUuid[O(5)].parent_uuid).toBe(O(3));
       expect(byUuid[O(3)].parent_uuid).toBe(O(2));
       expect(byUuid[O(1)].parent_uuid).toBeNull();
-      expect(byUuid[O(5)].manager_uuid).toBeNull(); // ghost manager is not in the mirror
 
       expect(await roleRows(h.c, U(3))).toEqual([
         { role_key: 'tt-bruger', scope_org_unit_uuid: null, include_descendants: true },
@@ -227,6 +247,131 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
       expect((await rows(h.c, 'SELECT disabled FROM directory_users WHERE uuid = $1', [U(9)]))[0].disabled).toBe(false);
       expect((await roleRows(h.c, U(9))).length).toBe(1);
     }));
+
+  describe('session revocation of disabled linked users', () => {
+    const dropRune = () => {
+      const d = fixtureData();
+      mock.setData({
+        users: d.users.filter((u) => u.userId !== 'rune.a'),
+        roleAssignments: (d.roleAssignments as Array<{ userId: string }>).filter((a) => a.userId !== 'rune.a'),
+      });
+    };
+
+    it('a user disabled by the sync loses their sessions; another enabled user keeps theirs', () =>
+      withHarness(async (h) => {
+        await h.run();
+        await linkWithSessions(h, [['app-rune', U(9)], ['app-anne', U(3)]]);
+        dropRune();
+        const r = await h.run();
+        expect(r).toMatchObject({ status: 'success' });
+        expect(r.counts.usersDisabled).toBe(1);
+        expect(r.counts.sessionsRevoked).toBe(2);
+        expect(await sessionCount(h.c, 'app-rune')).toBe(0);
+        expect(await sessionCount(h.c, 'app-anne')).toBe(2);
+        // The app account itself and the link are untouched; only the sessions go.
+        expect(await count(h.c, 'users', "id = 'app-rune'")).toBe(1);
+        expect((await rows(h.c, 'SELECT app_user_id FROM directory_users WHERE uuid = $1', [U(9)]))[0].app_user_id).toBe('app-rune');
+        // The count is stored in the run row and handed to the audit writer; counts only.
+        expect((await getLatestSyncRun(h.env))?.counts?.sessionsRevoked).toBe(2);
+        expect(h.audit.mock.calls.at(-1)?.[1].counts.sessionsRevoked).toBe(2);
+      }));
+
+    it('a user disabled in Rollekatalog (disabled flag, not removed) loses their sessions too', () =>
+      withHarness(async (h) => {
+        await h.run();
+        await linkWithSessions(h, [['app-ida', U(7)]]);
+        const d = fixtureData();
+        mock.setData({ users: d.users.map((u) => (u.userId === 'ida.l' ? { ...u, disabled: true } : u)) });
+        const r = await h.run();
+        expect(r.counts).toMatchObject({ usersDisabled: 1, sessionsRevoked: 2 });
+        expect(await sessionCount(h.c, 'app-ida')).toBe(0);
+      }));
+
+    it('is idempotent and re-applied every run: a session created for an already disabled user dies on the next run', () =>
+      withHarness(async (h) => {
+        await h.run();
+        await linkWithSessions(h, [['app-sofie', U(5)]]); // sofie.s is disabled upstream from the start
+        const second = await h.run(); // nothing changes in the mirror, yet the sessions go
+        expect(second.counts).toMatchObject({ usersDisabled: 0, usersUpserted: 0, sessionsRevoked: 2 });
+        expect(await sessionCount(h.c, 'app-sofie')).toBe(0);
+        await addSessions(h.c, 'app-sofie', 1); // somehow logged in again
+        expect((await h.run()).counts.sessionsRevoked).toBe(1);
+        expect((await h.run()).counts.sessionsRevoked).toBe(0);
+        expect(await sessionCount(h.c, 'app-sofie')).toBe(0);
+      }));
+
+    it('a disabled directory row without an app account deletes nothing', () =>
+      withHarness(async (h) => {
+        await h.run();
+        await addUser(h.c, 'app-bystander');
+        await addSessions(h.c, 'app-bystander');
+        // sofie.s is disabled and unlinked (app_user_id NULL); nothing may match a NULL.
+        const r = await h.run();
+        expect(r.counts.sessionsRevoked).toBe(0);
+        expect(await count(h.c, 'sessions')).toBe(2);
+      }));
+
+    it('a disabled source=local directory row is never touched, linked or not', () =>
+      withHarness(async (h) => {
+        await addUser(h.c, 'app-local');
+        await addSessions(h.c, 'app-local');
+        await h.c.query(`INSERT INTO directory_users (name, source, disabled, app_user_id) VALUES ('Lokal', 'local', true, 'app-local')`);
+        const r = await h.run();
+        expect(r.status).toBe('success');
+        expect(r.counts.sessionsRevoked).toBe(0);
+        expect(await sessionCount(h.c, 'app-local')).toBe(2);
+        expect((await h.run()).counts.sessionsRevoked).toBe(0);
+        expect(await sessionCount(h.c, 'app-local')).toBe(2);
+      }));
+
+    it('an aborted run (empty_response, removal_threshold) revokes nothing, even for an already disabled linked user', () =>
+      withHarness(async (h) => {
+        await h.run();
+        await linkWithSessions(h, [['app-sofie', U(5)], ['app-rune', U(9)]]);
+
+        mock.setData({ users: [] });
+        expect(await h.run()).toMatchObject({ status: 'aborted', errorCode: 'empty_response' });
+        expect(await count(h.c, 'sessions')).toBe(4);
+
+        mock.resetData();
+        const d = fixtureData();
+        const keep = new Set(['mette.e', 'jens.t']);
+        mock.setData({
+          users: d.users.filter((u) => keep.has(u.userId)),
+          roleAssignments: (d.roleAssignments as Array<{ userId: string }>).filter((a) => keep.has(a.userId)),
+        });
+        const aborted = await h.run();
+        expect(aborted).toMatchObject({ status: 'aborted', errorCode: 'removal_threshold' });
+        expect(aborted.counts.sessionsRevoked).toBe(0);
+        expect(await count(h.c, 'sessions')).toBe(4);
+
+        // Forced, it applies: sofie (already disabled) and rune (now disabled) lose theirs.
+        const forced = await h.run({ force: true });
+        expect(forced.counts.sessionsRevoked).toBe(4);
+        expect(await count(h.c, 'sessions')).toBe(0);
+      }));
+
+    it('a failure later in the transaction rolls the session delete back with everything else', () =>
+      withHarness(async (h) => {
+        await h.run();
+        await linkWithSessions(h, [['app-rune', U(9)]]);
+        const before = await snapshot(h.c);
+        // A deferred constraint trigger fires at COMMIT, after the session delete (the last statement) has run.
+        await h.c.query(`CREATE FUNCTION "${h.schema}".boom() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'boom'; END $$`);
+        await h.c.query(
+          `CREATE CONSTRAINT TRIGGER boom AFTER DELETE ON "${h.schema}".sessions DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION "${h.schema}".boom()`,
+        );
+        dropRune();
+        const r = await h.run();
+        expect(r).toMatchObject({ status: 'error', errorCode: 'db_error' });
+        expect(r.counts.sessionsRevoked).toBe(0);
+        expect(await sessionCount(h.c, 'app-rune')).toBe(2);
+        expect(await snapshot(h.c)).toEqual(before);
+
+        await h.c.query(`DROP TRIGGER boom ON "${h.schema}".sessions`);
+        expect((await h.run()).counts.sessionsRevoked).toBe(2);
+      }));
+  });
 
   it('a user disabled in Rollekatalog is disabled in the mirror and counted once', () =>
     withHarness(async (h) => {
@@ -604,14 +749,6 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         expect(await roleRows(h.c, U(2))).toEqual([{ role_key: 'tt-skabelonansvarlig', scope_org_unit_uuid: O(4), include_descendants: true }]);
       }));
 
-    it('ROLLEKATALOG_SCOPE_STRATEGY=manager derives scope from managed units', () =>
-      withHarness(async (h) => {
-        vi.stubEnv('ROLLEKATALOG_SCOPE_STRATEGY', 'manager');
-        await h.run();
-        expect(await roleRows(h.c, U(7))).toEqual([{ role_key: 'tt-logleser', scope_org_unit_uuid: O(5), include_descendants: true }]);
-        expect(await roleRows(h.c, U(6))).toEqual([]);
-      }));
-
     it('ROLLEKATALOG_GLOBAL_ROLES can make an unscoped logleser global', () =>
       withHarness(async (h) => {
         vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'tt-administrator,tt-logleser');
@@ -620,19 +757,16 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
       }));
   });
 
-  describe('members and substitutes', () => {
-    it('follows changes in both directions and answers a 404 from the manager API as "no managers"', () =>
+  describe('members', () => {
+    it('follows changes in both directions', () =>
       withHarness(async (h) => {
         await h.run();
-        expect(await count(h.c, 'org_unit_substitutes')).toBe(1);
         const d = fixtureData();
         mock.setData({
           users: d.users.map((u) => (u.userId === 'jens.t' ? { ...u, positions: [u.positions[0]] } : u)),
         });
-        mock.setFaults([{ match: '/api/v2/manager', status: 404 }]);
         const r = await h.run();
         expect(r.status).toBe('success');
-        expect(await count(h.c, 'org_unit_substitutes')).toBe(0);
         expect(await count(h.c, 'org_unit_members', `directory_user_uuid = '${U(2)}'`)).toBe(1);
         expect(await count(h.c, 'org_unit_members')).toBe(11);
         // is_primary stays false and title NULL: Rollekatalog has no primary flag and the title is not whitelisted.
@@ -664,7 +798,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         for (const [fault, code] of [
           [{ match: '/api/organisation/v3', status: 503 }, 'server_error'],
           [{ match: '/api/read/', status: 403 }, 'forbidden'],
-          [{ match: '/api/v2/manager', status: 401 }, 'unauthorized'],
+          [{ match: '/api/organisation/v3', status: 401 }, 'unauthorized'],
           [{ match: '/api/organisation/v3', invalidJson: true }, 'invalid_response'],
           [{ match: '/api/organisation/v3', oversize: { bytes: 2 * 1024 * 1024 } }, 'too_large'],
         ] as const) {
@@ -678,12 +812,11 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         }
       }));
 
-    it('only the ORG key reaches organisation/manager and only the READ key reaches the assignments', () =>
+    it('only the ORG key reaches organisation and only the READ key reaches the assignments', () =>
       withHarness(async (h) => {
         await h.run();
         expect(mock.requests.map((q) => `${q.path}:${q.keyRole}`)).toEqual([
           '/api/organisation/v3:org',
-          '/api/v2/manager:org',
           '/api/read/itsystem/roleAssignmentsWithContraints/os2taletiltekst:read',
         ]);
         expect(mock.requests.every((q) => q.status === 200)).toBe(true);

@@ -12,7 +12,7 @@ import type { AuditEventInput } from '@/lib/audit/events';
 import { createRollekatalogClient } from './client';
 import { mapToMirror, type MapperConfig, type MapperInput, type MirrorSet } from './mapper';
 import { fixtureData, startMockRollekatalog, type MockRollekatalog } from './mock-server';
-import { managersSchema, organisationSchema, roleAssignmentsSchema } from './schemas';
+import { organisationSchema, roleAssignmentsSchema } from './schemas';
 import {
   exceedsRemovalThreshold,
   planMirror,
@@ -26,19 +26,18 @@ const U = (n: number) => `7e5e0000-0000-4000-8000-${String(n).padStart(12, '0')}
 const O = (n: number) => `5a1b0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const E = (n: number) => `9d3c0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
-const DEFAULTS: MapperConfig = { strategy: 'constraint', includeDescendants: true, globalRoles: ['tt-administrator'] };
+const DEFAULTS: MapperConfig = { includeDescendants: true, globalRoles: ['tt-administrator'] };
 
 function fixtureMirror(): MirrorSet {
   const d = fixtureData();
   const input: MapperInput = {
     organisation: organisationSchema.parse({ users: d.users, orgUnits: d.orgUnits }),
-    managers: managersSchema.parse(d.managers),
     assignments: roleAssignmentsSchema.parse(d.roleAssignments),
   };
   return mapToMirror(input, DEFAULTS);
 }
 
-const EMPTY: ExistingMirror = { users: [], orgUnits: [], assignments: [], members: [], substitutes: [], extHolders: [] };
+const EMPTY: ExistingMirror = { users: [], orgUnits: [], assignments: [], members: [], extHolders: [] };
 
 /** What the mirror holds after applying `mirror` to nothing: lets a test change one thing and re-plan. */
 function existingFrom(mirror: MirrorSet): ExistingMirror {
@@ -53,7 +52,6 @@ function existingFrom(mirror: MirrorSet): ExistingMirror {
       includeDescendants: a.includeDescendants,
     })),
     members: mirror.members.map((m) => ({ ...m })),
-    substitutes: mirror.substitutes.map((s) => ({ ...s })),
     extHolders: [],
   };
 }
@@ -93,7 +91,6 @@ describe('planMirror', () => {
     expect(plan.users).toEqual({ insert: [], update: [], disable: [], releaseExt: [] });
     expect(plan.orgUnits).toEqual({ insert: [], update: [] });
     expect(plan.members).toEqual({ insert: [], remove: [] });
-    expect(plan.substitutes).toEqual({ insert: [], remove: [] });
     expect(plan.assignments).toEqual({ insert: [], updateIncludeDescendants: [], remove: [] });
     expect(plan.counts).toMatchObject({ usersUpserted: 0, usersDisabled: 0, orgUnitsUpserted: 0, assignmentsUpserted: 0, assignmentsRemoved: 0 });
   });
@@ -130,9 +127,9 @@ describe('planMirror', () => {
     }
   });
 
-  it('org units: a changed name, parent or manager is an update; units missing from the fetch are never planned for deletion', () => {
+  it('org units: a changed name or parent is an update; units missing from the fetch are never planned for deletion', () => {
     const mirror = fixtureMirror();
-    for (const change of [{ name: 'Nyt' }, { parentUuid: O(4) }, { managerUuid: null }] as const) {
+    for (const change of [{ name: 'Nyt' }, { parentUuid: O(4) }] as const) {
       const fetched: MirrorSet = { ...mirror, orgUnits: mirror.orgUnits.map((u) => (u.uuid === O(1) ? { ...u, ...change } : u)) };
       expect(planMirror(existingFrom(mirror), fetched).orgUnits.update.map((u) => u.uuid)).toEqual([O(1)]);
     }
@@ -174,16 +171,15 @@ describe('planMirror', () => {
     expect(plan.assignments.remove).toEqual(['x']);
   });
 
-  it('members and substitutes are diffed in both directions', () => {
+  it('members are diffed in both directions', () => {
     const mirror = fixtureMirror();
     const existing = existingFrom(mirror);
     existing.members.push({ directoryUserUuid: U(1), orgUnitUuid: O(5) }); // stale
-    const fetched: MirrorSet = { ...mirror, members: mirror.members.slice(1), substitutes: [] };
+    const fetched: MirrorSet = { ...mirror, members: mirror.members.slice(1) };
     const plan = planMirror(existing, fetched);
     expect(plan.members.remove).toEqual(expect.arrayContaining([mirror.members[0], { directoryUserUuid: U(1), orgUnitUuid: O(5) }]));
     expect(plan.members.remove).toHaveLength(2);
     expect(plan.members.insert).toHaveLength(0);
-    expect(plan.substitutes.remove).toEqual(mirror.substitutes);
   });
 
   describe('ext_uuid ownership', () => {
@@ -388,10 +384,72 @@ describe('runSync flow', () => {
     expect(f.log.at(-1)).toMatchObject({ conn: lockConn });
     expect(f.log.at(-1)!.sql).toContain('pg_advisory_unlock');
     // Writes only ever name source 'rollekatalog' rows, and no statement sets app_user_id.
-    const writes = f.log.slice(begin, commit).filter((l) => /^(INSERT|UPDATE|DELETE)/.test(l.sql));
+    const writes = f.log
+      .slice(begin, commit)
+      .filter((l) => /^(INSERT|UPDATE|DELETE)/.test(l.sql) && !l.sql.startsWith('DELETE FROM "public".sessions'));
     expect(writes.length).toBeGreaterThan(0);
     expect(writes.some((l) => /app_user_id/.test(l.sql))).toBe(false);
     expect(writes.every((l) => !/source = 'local'/.test(l.sql))).toBe(true);
+  });
+
+  it('revokes sessions of disabled linked rollekatalog users inside the transaction, after the user writes', async () => {
+    const f = fakeEnv(
+      baseScript((s) => (s.startsWith('DELETE FROM "public".sessions') ? { rows: [], rowCount: 3 } : undefined)),
+    );
+    const r = await runSync({ trigger: 'cron' }, deps(f.env));
+    expect(r).toMatchObject({ status: 'success' });
+    expect(r.counts.sessionsRevoked).toBe(3);
+
+    const sqls = f.sqls();
+    const begin = sqls.indexOf('BEGIN');
+    const commit = sqls.indexOf('COMMIT');
+    const del = sqls.findIndex((s) => s.startsWith('DELETE FROM "public".sessions'));
+    expect(del).toBeGreaterThan(begin);
+    expect(del).toBeLessThan(commit);
+    expect(sqls.filter((s) => s.startsWith('DELETE FROM "public".sessions'))).toHaveLength(1);
+    const upsert = sqls.findIndex((s) => s.startsWith('INSERT INTO "public".directory_users'));
+    expect(upsert).toBeGreaterThan(begin);
+    expect(del).toBeGreaterThan(upsert);
+    expect(f.log[del].conn).toBe(f.log[begin].conn);
+    // Exactly the disabled, linked, rollekatalog-sourced users; never a local row.
+    expect(sqls[del]).toBe(
+      'DELETE FROM "public".sessions WHERE user_id IN ( SELECT app_user_id FROM "public".directory_users WHERE source = \'rollekatalog\' AND disabled = true AND app_user_id IS NOT NULL )',
+    );
+    // The count lands in the run row and the audit event (counts only).
+    const finish = f.log.find((l) => l.sql.includes('SET status = $2'));
+    expect(finish).toBeDefined();
+  });
+
+  it('a failure after the session delete still rolls back (the delete is inside the transaction)', async () => {
+    const f = fakeEnv(
+      baseScript((s) =>
+        s.startsWith('DELETE FROM "public".sessions') ? Object.assign(new Error('boom'), { code: '40001' }) : undefined,
+      ),
+    );
+    const r = await runSync({ trigger: 'cron' }, deps(f.env));
+    expect(r).toMatchObject({ status: 'error', errorCode: 'db_error' });
+    expect(r.counts.sessionsRevoked).toBe(0);
+    expect(f.sqls()).toContain('ROLLBACK');
+    expect(f.sqls()).not.toContain('COMMIT');
+  });
+
+  it('an aborted run (removal threshold) issues no session delete', async () => {
+    const f = fakeEnv(
+      baseScript((s) => {
+        // Existing mirror: 20 enabled users the fetch does not contain -> far over the threshold.
+        if (s.includes('FROM "public".directory_users WHERE source = \'rollekatalog\'') && s.includes('ext_user_id')) {
+          return {
+            rows: Array.from({ length: 20 }, (_, i) => ({ uuid: U(1000 + i), ext_uuid: null, ext_user_id: null, name: `x${i}`, email: null, disabled: false })),
+            rowCount: 20,
+          };
+        }
+        return undefined;
+      }),
+    );
+    const r = await runSync({ trigger: 'cron' }, deps(f.env));
+    expect(r).toMatchObject({ status: 'aborted', errorCode: 'removal_threshold' });
+    expect(f.sqls().some((s) => s.startsWith('DELETE FROM "public".sessions'))).toBe(false);
+    expect(f.sqls()).toContain('ROLLBACK');
   });
 
   it('a failing statement rolls back, reports db_error, and never leaks the database message', async () => {
@@ -427,18 +485,6 @@ describe('runSync flow', () => {
     expect(f.released.find((r) => r.conn === lockConn)).toEqual({ conn: lockConn, destroy: true });
   });
 
-  it('a 404 from the manager API means "no managers", not a failed sync', async () => {
-    mock.setFaults([{ match: '/api/v2/manager', status: 404 }]);
-    const r = await runSync({ trigger: 'cron' }, deps(fakeEnv(baseScript()).env));
-    expect(r.status).toBe('success');
-  });
-
-  it('other manager API failures fail the run', async () => {
-    mock.setFaults([{ match: '/api/v2/manager', status: 403 }]);
-    const r = await runSync({ trigger: 'cron' }, deps(fakeEnv(baseScript()).env));
-    expect(r).toMatchObject({ status: 'error', errorCode: 'forbidden' });
-  });
-
   it('sets the scope configuration from the environment at call time', async () => {
     vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'tt-administrator,tt-logleser');
     const f = fakeEnv(baseScript());
@@ -470,7 +516,7 @@ describe('runSync audit', () => {
     expect(validateEvent(ev).ok).toBe(true);
     expect(Object.keys(ev.details).sort()).toEqual(
       [
-        'trigger', 'status', 'usersUpserted', 'usersDisabled', 'orgUnitsUpserted', 'orgUnitsOrphaned', 'orgUnitCyclesBroken',
+        'trigger', 'status', 'forced', 'usersUpserted', 'usersDisabled', 'sessionsRevoked', 'orgUnitsUpserted', 'orgUnitsOrphaned', 'orgUnitCyclesBroken',
         'assignmentsUpserted', 'assignmentsRemoved', 'assignmentsIgnoredRole', 'assignmentsSkippedUnknownUser', 'assignmentsWithoutScope',
       ].sort(),
     );
@@ -489,7 +535,7 @@ describe('runSync audit', () => {
     const f = fakeEnv(baseScript((s) => (s.includes('pg_try_advisory_lock') ? ok({ ok: false }) : undefined)));
     await runSync({ trigger: 'cron' }, deps(f.env));
     const ev = lastEvent();
-    expect(ev).toMatchObject({ details: { status: 'already_running', errorCode: 'already_running' } });
+    expect(ev).toMatchObject({ outcome: 'denied', details: { status: 'already_running', errorCode: 'already_running' } });
     expect((ev as { entityId?: string }).entityId).toBeUndefined();
     expect(validateEvent(ev).ok).toBe(true);
   });

@@ -1,12 +1,15 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeRunner } from '@/test/fake-runner';
 import type { SqlQueryable, SqlResult, SqlRunner } from './pg-runner';
 
 vi.mock('@/lib/db', () => ({ pool: {} }));
-const recordAdminAction = vi.fn(async () => {});
-vi.mock('@/lib/audit/seam', () => ({ recordAdminAction: (...a: unknown[]) => recordAdminAction(...(a as [])) }));
+const recordEvent = vi.fn(async () => {});
+vi.mock('@/lib/audit/record', () => ({ recordEvent: (...a: unknown[]) => recordEvent(...(a as [])) }));
 
-import { identityQualifies, maybeBootstrapAdmin } from './bootstrap';
+import { BOOTSTRAP_FLAG_KEY, identityQualifies, maybeBootstrapAdmin } from './bootstrap';
+import { ConfigError } from './config';
 
 const ALLOW = ['admin@example.dk'];
 const TENANT = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -15,7 +18,7 @@ beforeEach(() => {
   vi.stubEnv('ACCESS_SOURCE', 'local');
   vi.stubEnv('BOOTSTRAP_ADMIN_EMAILS', 'Admin@Example.dk');
   vi.stubEnv('MICROSOFT_TENANT_ID', '');
-  recordAdminAction.mockClear();
+  recordEvent.mockClear();
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -62,14 +65,24 @@ describe('identityQualifies (rule table)', () => {
 });
 
 /** Stateful fake: tracks admin rows and serialises transactions on the advisory lock. */
-function statefulDb(opts: { identities: Record<string, Array<{ provider_id: string; claims: unknown }>>; disabled?: boolean }) {
-  const state = { admins: 0, grants: [] as string[], lockQueue: Promise.resolve() };
+function statefulDb(opts: {
+  identities: Record<string, Array<{ provider_id: string; claims: unknown }>>;
+  disabled?: boolean;
+  flagSet?: boolean;
+}) {
+  const state = { admins: 0, grants: [] as string[], flags: new Set<string>(opts.flagSet ? [BOOTSTRAP_FLAG_KEY] : []), lockQueue: Promise.resolve() };
   const dirUsers = new Map<string, { uuid: string; disabled: boolean }>();
   if (opts.disabled) dirUsers.set('u1', { uuid: 'dir-u1', disabled: true });
 
   const handle = async (sql: string, params: readonly unknown[]): Promise<Array<Record<string, unknown>>> => {
     await Promise.resolve();
     if (sql.includes('FROM public.role_assignments') && sql.includes('LIMIT 1')) return state.admins > 0 ? [{ '?column?': 1 }] : [];
+    if (sql.includes('FROM public.system_flags')) return state.flags.has(params[0] as string) ? [{ '?column?': 1 }] : [];
+    if (sql.includes('INSERT INTO public.system_flags')) {
+      if (state.flags.has(params[0] as string)) return [];
+      state.flags.add(params[0] as string);
+      return [{ key: params[0] }];
+    }
     if (sql.includes('FROM public.external_identities')) return opts.identities[params[0] as string] ?? [];
     if (sql.includes('FROM public.directory_users WHERE app_user_id')) {
       const d = dirUsers.get(params[0] as string);
@@ -184,10 +197,10 @@ describe('maybeBootstrapAdmin', () => {
     const { runner, state } = statefulDb({ identities: { u1: oidcIdentity } });
     expect(await maybeBootstrapAdmin('u1', runner)).toEqual({ granted: true, reason: 'granted' });
     expect(state.grants).toEqual(['dir-u1']);
-    expect(recordAdminAction).toHaveBeenCalledOnce();
-    expect(recordAdminAction.mock.calls[0]).toMatchObject([
-      expect.anything(),
+    expect(recordEvent).toHaveBeenCalledOnce();
+    expect(recordEvent.mock.calls[0]).toMatchObject([
       { type: 'access.role_assign', actorUserId: 'u1', details: { roleKey: 'tt-administrator', bootstrap: true } },
+      { tx: expect.anything() },
     ]);
   });
 
@@ -197,6 +210,7 @@ describe('maybeBootstrapAdmin', () => {
       if (sql.includes('external_identities')) return [{ provider_id: 'oidc', claims: oidcIdentity[0].claims }];
       if (sql.includes('INSERT INTO public.directory_users')) return [{ uuid: 'd1' }];
       if (sql.includes('INSERT INTO public.role_assignments')) return [{ id: 'ra1' }];
+      if (sql.includes('INSERT INTO public.system_flags')) return [{ key: BOOTSTRAP_FLAG_KEY }];
       return [];
     });
     await maybeBootstrapAdmin('u1', runner);
@@ -223,6 +237,7 @@ describe('maybeBootstrapAdmin', () => {
     expect(results.find((r) => !r.granted)!.reason).toBe('admin_exists');
     expect(state.admins).toBe(1);
     expect(state.grants).toHaveLength(1);
+    expect([...state.flags]).toEqual([BOOTSTRAP_FLAG_KEY]);
   });
 
   it('the same user logging in twice concurrently is granted once', async () => {
@@ -230,5 +245,109 @@ describe('maybeBootstrapAdmin', () => {
     const results = await Promise.all([maybeBootstrapAdmin('u1', runner), maybeBootstrapAdmin('u1', runner)]);
     expect(results.filter((r) => r.granted)).toHaveLength(1);
     expect(state.admins).toBe(1);
+  });
+});
+
+describe('maybeBootstrapAdmin: one-shot flag', () => {
+  it('grants nothing while the flag exists, even with no administrator at all', async () => {
+    const { runner, state } = statefulDb({ identities: { u1: oidcIdentity }, flagSet: true });
+    expect(await maybeBootstrapAdmin('u1', runner)).toEqual({ granted: false, reason: 'already_bootstrapped' });
+    expect(state.admins).toBe(0);
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('a second attempt after the first admin was removed does nothing (the flag does not re-arm)', async () => {
+    const { runner, state } = statefulDb({ identities: { u1: oidcIdentity, u2: oidcIdentity } });
+    expect((await maybeBootstrapAdmin('u1', runner)).granted).toBe(true);
+    state.admins = 0; // the last administrator is removed
+    expect(await maybeBootstrapAdmin('u2', runner)).toEqual({ granted: false, reason: 'already_bootstrapped' });
+    expect(state.grants).toEqual(['dir-u1']);
+  });
+
+  it('writes the flag in the same transaction and after taking the same advisory lock as the grant', async () => {
+    const { runner, calls } = makeFakeRunner((sql) => {
+      if (sql.includes('LIMIT 1')) return [];
+      if (sql.includes('external_identities')) return [{ provider_id: 'oidc', claims: oidcIdentity[0].claims }];
+      if (sql.includes('INSERT INTO public.directory_users')) return [{ uuid: 'd1' }];
+      if (sql.includes('INSERT INTO public.role_assignments')) return [{ id: 'ra1' }];
+      if (sql.includes('INSERT INTO public.system_flags')) return [{ key: BOOTSTRAP_FLAG_KEY }];
+      return [];
+    });
+    expect((await maybeBootstrapAdmin('u1', runner)).granted).toBe(true);
+    const sqls = calls.map((c) => c.sql);
+    const lock = sqls.findIndex((s) => s.includes('pg_advisory_xact_lock'));
+    const grant = sqls.findIndex((s) => s.includes('INSERT INTO public.role_assignments'));
+    const flag = sqls.findIndex((s) => s.includes('INSERT INTO public.system_flags'));
+    expect(calls[flag].tx).toBe(true);
+    expect(calls[flag].sql).toMatch(/ON CONFLICT \(key\) DO NOTHING/);
+    expect(calls[flag].params).toEqual([BOOTSTRAP_FLAG_KEY]);
+    expect(lock).toBeLessThan(grant);
+    expect(grant).toBeLessThan(flag);
+    expect(sqls.indexOf('BEGIN')).toBeLessThan(lock);
+    expect(sqls.indexOf('COMMIT')).toBeGreaterThan(flag);
+  });
+
+  it('rolls the grant back when the flag insert fails', async () => {
+    const { runner, calls } = makeFakeRunner((sql) => {
+      if (sql.includes('LIMIT 1')) return [];
+      if (sql.includes('external_identities')) return [{ provider_id: 'oidc', claims: oidcIdentity[0].claims }];
+      if (sql.includes('INSERT INTO public.directory_users')) return [{ uuid: 'd1' }];
+      if (sql.includes('INSERT INTO public.role_assignments')) return [{ id: 'ra1' }];
+      if (sql.includes('INSERT INTO public.system_flags')) throw new Error('boom');
+      return [];
+    });
+    await expect(maybeBootstrapAdmin('u1', runner)).rejects.toThrow('boom');
+    const sqls = calls.map((c) => c.sql);
+    expect(sqls).toContain('ROLLBACK');
+    expect(sqls).not.toContain('COMMIT');
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('rolls the grant back and reports already_bootstrapped when the flag insert hits a conflict', async () => {
+    const { runner, calls } = makeFakeRunner((sql) => {
+      if (sql.includes('LIMIT 1')) return [];
+      if (sql.includes('external_identities')) return [{ provider_id: 'oidc', claims: oidcIdentity[0].claims }];
+      if (sql.includes('INSERT INTO public.directory_users')) return [{ uuid: 'd1' }];
+      if (sql.includes('INSERT INTO public.role_assignments')) return [{ id: 'ra1' }];
+      return []; // flag SELECTs and the ON CONFLICT DO NOTHING insert return no rows
+    });
+    expect(await maybeBootstrapAdmin('u1', runner)).toEqual({ granted: false, reason: 'already_bootstrapped' });
+    expect(calls.map((c) => c.sql)).toContain('ROLLBACK');
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not consume the flag for a disabled directory user', async () => {
+    const { runner, state } = statefulDb({ identities: { u1: oidcIdentity }, disabled: true });
+    expect((await maybeBootstrapAdmin('u1', runner)).reason).toBe('directory_user_disabled');
+    expect(state.flags.size).toBe(0);
+  });
+});
+
+describe('maybeBootstrapAdmin: invalid ACCESS_SOURCE', () => {
+  it.each(['rolekatalog', 'local;', 'ldap'])('throws ConfigError for "%s" and touches nothing (never grants)', async (v) => {
+    vi.stubEnv('ACCESS_SOURCE', v);
+    const { runner, calls } = makeFakeRunner();
+    await expect(maybeBootstrapAdmin('u1', runner)).rejects.toBeInstanceOf(ConfigError);
+    expect(calls).toHaveLength(0);
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('system_flags migration (static)', () => {
+  const root = path.resolve(__dirname, '../../../drizzle');
+  const sql = readFileSync(path.join(root, '0001_central_access.sql'), 'utf8');
+
+  it('is created in migration 0001 with key as primary key, jsonb value and set_at', () => {
+    expect(sql).toMatch(/CREATE TABLE "system_flags" \(\s*"key" text PRIMARY KEY NOT NULL,\s*"value" jsonb DEFAULT '\{\}'::jsonb NOT NULL,\s*"set_at" timestamp with time zone DEFAULT now\(\) NOT NULL\s*\)/);
+  });
+
+  it.each(['0001', '0002', '0003'])('appears in snapshot %s (a table created in 0001 is in all three)', (n) => {
+    const snap = JSON.parse(readFileSync(path.join(root, `meta/${n}_snapshot.json`), 'utf8')) as {
+      tables: Record<string, { columns: Record<string, { primaryKey: boolean; notNull: boolean }> }>;
+    };
+    const t = snap.tables['public.system_flags'];
+    expect(Object.keys(t.columns)).toEqual(['key', 'value', 'set_at']);
+    expect(t.columns.key.primaryKey).toBe(true);
+    expect(t.columns.value.notNull).toBe(true);
   });
 });

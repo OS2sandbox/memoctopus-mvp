@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Client } from 'pg';
+import { createRunner, type ClientLike, type SqlResult, type SqlRunner } from '@/lib/authz/pg-runner';
 
 export const hasPg = !!process.env.TEST_DATABASE_URL;
 
@@ -60,3 +61,28 @@ export async function withFreshSchema<T>(fn: (client: Client, schema: string) =>
     }
   }
 }
+
+/**
+ * SqlRunner over a throwaway schema for code that writes `public.<table>`: that
+ * qualifier is rewritten to `schema`. Every transaction gets its own connection
+ * so row locks really contend; `close()` ends those connections.
+ */
+export function schemaRunner(base: Client, schema: string): { runner: SqlRunner; close: () => Promise<void> } {
+  const rewrite = (sql: string) => sql.replaceAll('public.', `"${schema}".`);
+  const wrap = (c: Client) => ({
+    query: (sql: string, params?: readonly unknown[]) =>
+      c.query(rewrite(sql), params as unknown[] | undefined) as unknown as Promise<SqlResult<never>>,
+  });
+  const extra: Client[] = [];
+  const runner = createRunner(wrap(base), async (): Promise<ClientLike> => {
+    const c = new Client({ connectionString: process.env.TEST_DATABASE_URL });
+    await c.connect();
+    await c.query(`SET search_path TO "${schema}"`);
+    extra.push(c);
+    return { ...wrap(c), release: () => void c.end().catch(() => {}) };
+  });
+  return { runner, close: async () => void (await Promise.allSettled(extra.map((c) => c.end().catch(() => {})))) };
+}
+
+export const addUser = (c: Client, id: string, email = `${id}@example.dk`) =>
+  c.query('INSERT INTO users (id, name, email) VALUES ($1, $1, $2)', [id, email]);

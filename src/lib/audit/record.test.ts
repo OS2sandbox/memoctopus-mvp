@@ -103,6 +103,35 @@ describe('recordEvent: tx variant (throws)', () => {
     const tx = { query: vi.fn(async () => { throw boom; }) };
     await expect(recordEvent(exportEvent(), { tx })).rejects.toBe(boom);
   });
+
+  it('fails closed when a tx option is given but is not a transaction (never a silent pool write)', async () => {
+    await expect(recordEvent(exportEvent(), { tx: undefined })).rejects.toMatchObject({ name: 'AuditWriteError', code: 'invalid_tx' });
+    await expect(recordEvent(exportEvent(), { tx: {} as never })).rejects.toMatchObject({ code: 'invalid_tx' });
+    expect(h.poolQuery).not.toHaveBeenCalled();
+  });
+
+  it('writes the admin events with the secondary type defaulted and free text in details rejected', async () => {
+    const tx = fakeTx();
+    // Omitted secondaryEntityType: the first allowed one (directory_user for a role assignment).
+    await recordEvent(
+      { type: 'access.role_assign', actorUserId: 'u1', entityId: UUID, secondaryEntityId: DIR, details: { roleKey: 'tt-logleser', scopeOrgUnitUuid: UNIT, includeDescendants: true } },
+      { tx },
+    );
+    expect(params(tx)).toMatchObject({
+      event_type: 'access.role_assign',
+      entity_type: 'role_assignment',
+      secondary_entity_type: 'directory_user',
+      secondary_entity_id: DIR,
+      details: JSON.stringify({ roleKey: 'tt-logleser', scopeOrgUnitUuid: UNIT, includeDescendants: true }),
+    });
+    await expect(
+      recordEvent({ type: 'access.user_create', actorUserId: 'u1', entityId: DIR, details: { source: 'Jens Jensen' as never } }, { tx }),
+    ).rejects.toMatchObject({ code: 'invalid_details' });
+    await expect(
+      recordEvent({ type: 'access.role_revoke', actorUserId: 'u1', entityId: 'r1', details: { roleKey: 'tt-logleser' } }, { tx }),
+    ).rejects.toMatchObject({ code: 'invalid_entity_id' });
+    expect(tx.query).toHaveBeenCalledOnce();
+  });
 });
 
 describe('recordEvent: best-effort variant (never throws)', () => {
@@ -405,6 +434,16 @@ describe('request context columns', () => {
     const tx = fakeTx();
     await recordServerEvent({ headers }, exportEvent(), { tx });
     expect(params(tx)).toMatchObject({ ip_address: '198.51.100.7', user_agent: 'UA/1', request_id: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' });
+  });
+
+  it('recordServerEvent never rejects on unusable request headers: the event is stored without request metadata', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const tx = fakeTx();
+    const req = { headers: { get: () => { throw new Error('header boom: secret'); } } };
+    await expect(recordServerEvent(req, exportEvent(), { tx })).resolves.toMatchObject({ status: 'stored' });
+    expect(params(tx)).toMatchObject({ ip_address: null, user_agent: null, request_id: null });
+    expect(String(warn.mock.calls[0][0])).not.toContain('secret');
+    warn.mockRestore();
   });
 });
 

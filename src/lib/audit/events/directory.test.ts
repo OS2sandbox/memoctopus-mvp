@@ -29,6 +29,20 @@ describe('directory.sync', () => {
     expect(validateEvent({ ...base, source: 'server', outcome: 'error', details } as never).ok).toBe(true);
   });
 
+  it('accepts the forced flag of a manual run and rejects a non-boolean', () => {
+    const details = { trigger: 'manual', status: 'success', ...emptySyncCounts() };
+    expect(validateEvent({ ...base, source: 'server', actorUserId: 'admin-1', details: { ...details, forced: true } } as never).ok).toBe(true);
+    expect(validateEvent({ ...base, source: 'server', actorUserId: 'admin-1', details: { ...details, forced: 'yes' } } as never).ok).toBe(false);
+  });
+
+  it('accepts the sessionsRevoked count (and still without it), and rejects it negative or non-numeric', () => {
+    const { sessionsRevoked: _omitted, ...without } = { trigger: 'cron', status: 'success', ...emptySyncCounts() };
+    expect(validateEvent({ ...base, source: 'system', details: { ...without, sessionsRevoked: 3 } } as never).ok).toBe(true);
+    expect(validateEvent({ ...base, source: 'system', details: without } as never).ok).toBe(true);
+    expect(validateEvent({ ...base, source: 'system', details: { ...without, sessionsRevoked: -1 } } as never).ok).toBe(false);
+    expect(validateEvent({ ...base, source: 'system', details: { ...without, sessionsRevoked: 'alle' } } as never).ok).toBe(false);
+  });
+
   it('rejects free text, unknown keys, a client source and negative counts', () => {
     const ok = { trigger: 'cron', status: 'success', ...emptySyncCounts() };
     expect(validateEvent({ ...base, source: 'system', details: { ...ok, errorCode: 'Rollekatalog svarede ikke' } } as never).ok).toBe(false);

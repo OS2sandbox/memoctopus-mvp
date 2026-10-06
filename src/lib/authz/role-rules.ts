@@ -4,7 +4,7 @@
 import { ROLE_DEFINITIONS, SCOPED_CAPABILITIES, roleRequiresGlobalScope } from './capabilities';
 import type { RoleKey } from './types';
 
-export type ScopeRule = 'forbidden' | 'required' | 'optional';
+type ScopeRule = 'forbidden' | 'required' | 'optional';
 
 export function roleScopeRule(role: RoleKey): ScopeRule {
   if (roleRequiresGlobalScope(role)) return 'forbidden';

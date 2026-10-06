@@ -4,9 +4,9 @@
 // The code under test writes public.<table>; here that qualifier is redirected
 // to the throwaway schema so nothing touches real data.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Client } from 'pg';
-import { hasPg, withFreshSchema } from '@/test/pg';
-import { createRunner, type ClientLike, type SqlResult, type SqlRunner } from './pg-runner';
+import type { Client } from 'pg';
+import { addUser, hasPg, schemaRunner, withFreshSchema } from '@/test/pg';
+import type { SqlRunner } from './pg-runner';
 
 vi.mock('@/lib/db', () => ({ pool: {} }));
 
@@ -21,28 +21,6 @@ import {
   setOrgUnitMembers,
   updateOrgUnit,
 } from './access-admin';
-
-/** SqlRunner over the throwaway schema; every transaction gets its own connection so locks really contend. */
-function schemaRunner(base: Client, schema: string): { runner: SqlRunner; close: () => Promise<void> } {
-  const rewrite = (sql: string) => sql.replaceAll('public.', `"${schema}".`);
-  const wrap = (c: Client) => ({
-    query: (sql: string, params?: readonly unknown[]) =>
-      c.query(rewrite(sql), params as unknown[] | undefined) as unknown as Promise<SqlResult<never>>,
-  });
-  const extra: Client[] = [];
-  const runner = createRunner(wrap(base), async (): Promise<ClientLike> => {
-    const c = new Client({ connectionString: process.env.TEST_DATABASE_URL });
-    await c.connect();
-    await c.query(`SET search_path TO "${schema}"`);
-    extra.push(c);
-    return { ...wrap(c), release: () => void c.end().catch(() => {}) };
-  });
-  return { runner, close: async () => void (await Promise.allSettled(extra.map((c) => c.end().catch(() => {})))) };
-}
-
-async function addUser(c: Client, id: string, email = `${id}@example.dk`) {
-  await c.query('INSERT INTO users (id, name, email) VALUES ($1, $1, $2)', [id, email]);
-}
 
 async function activeAdmins(c: Client): Promise<number> {
   const r = await c.query(

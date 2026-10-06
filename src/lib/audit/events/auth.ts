@@ -4,9 +4,8 @@ import { z } from 'zod';
 import { code, defineEvent } from './types';
 
 // 'password' | 'oidc' | 'microsoft' come from the better-auth route that created or
-// rejected the session; 'unknown' when the route is none of those. 'sso' is kept
-// only for senders that cannot tell which IdP (e.g. a browser-reported failure).
-const method = () => z.enum(['password', 'oidc', 'microsoft', 'sso', 'unknown']);
+// rejected the session; 'unknown' when the route is none of those.
+const method = () => z.enum(['password', 'oidc', 'microsoft', 'unknown']);
 
 export const authEvents = {
   'auth.login': defineEvent({
@@ -24,8 +23,7 @@ export const authEvents = {
   // Never carries the attempted email: only emailHmac (first 16 hex chars of an
   // HMAC-SHA256 keyed with BETTER_AUTH_SECRET over the lower-cased address).
   'auth.login_failed': defineEvent({
-    // 'client' too: a browser-side sign-in failure has no session to report from.
-    sources: ['server', 'client'],
+    sources: ['server'],
     entityType: null,
     entityIdRequired: false,
     defaultOutcome: 'error',

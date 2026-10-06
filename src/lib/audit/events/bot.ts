@@ -12,16 +12,10 @@ export const botEvents = {
   'bot.session_start': defineEvent({ ...user, details: z.object({}).strict() }),
   'bot.session_pause': defineEvent({ ...user, details: z.object({}).strict() }),
   'bot.session_resume': defineEvent({ ...user, details: z.object({}).strict() }),
-  'bot.session_stop': defineEvent({ ...user, details: z.object({ durationSeconds: amount().optional() }).strict() }),
-  'bot.session_abort': defineEvent({ ...user, details: z.object({ reason: code().optional() }).strict() }),
-  'bot.audio_collect': defineEvent({
-    ...user,
-    details: z.object({ bytes: count().optional(), durationMs: amount().optional() }).strict(),
-  }),
-  'bot.transcript_collect': defineEvent({
-    ...user,
-    details: z.object({ segmentCount: count().optional(), durationMs: amount().optional() }).strict(),
-  }),
+  'bot.session_stop': defineEvent({ ...user, details: z.object({}).strict() }),
+  'bot.session_abort': defineEvent({ ...user, details: z.object({}).strict() }),
+  'bot.audio_collect': defineEvent({ ...user, details: z.object({ bytes: count().optional() }).strict() }),
+  'bot.transcript_collect': defineEvent({ ...user, details: z.object({ segmentCount: count().optional() }).strict() }),
   'bot.joined': defineEvent({ ...callback, details: z.object({}).strict() }),
   'bot.ended': defineEvent({
     ...callback,

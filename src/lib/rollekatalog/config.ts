@@ -1,28 +1,24 @@
 // Rollekatalog integration settings. Read from process.env at CALL time (same
 // idiom as src/lib/auth/providers.ts) so an operator can change .env and restart
 // without a rebuild. Never NEXT_PUBLIC_*. Nothing here throws: an invalid value
-// falls back to the safe default so a typo cannot take the app down.
+// falls back to the safe default so a typo cannot take the app down. The one
+// exception to "typos fall back" is ACCESS_SOURCE (src/lib/authz/config.ts), which
+// is the mode switch itself and throws ConfigError when invalid; every Rollekatalog
+// entry point (sync routes, directory match, principal) checks it first.
 import { ROLE_KEYS, type RoleKey } from '@/lib/authz/types';
-
-export const SCOPE_STRATEGIES = ['constraint', 'constraint-or-manager', 'manager'] as const;
-export type ScopeStrategy = (typeof SCOPE_STRATEGIES)[number];
 
 export type UserIdTransform = 'none' | 'strip-upn-domain';
 
-export const DEFAULT_ITSYSTEM_ID = 'os2taletiltekst';
-export const DEFAULT_TIMEOUT_MS = 10_000;
-/** The login-time call sits on the sign-in path, so it never waits longer than this. */
-export const LOGIN_REFRESH_MAX_TIMEOUT_MS = 3_000;
-export const DEFAULT_SYNC_MAX_REMOVAL_PERCENT = 30;
-export const DEFAULT_ROLE_STALE_MAX_SECONDS = 86_400;
+const DEFAULT_ITSYSTEM_ID = 'os2taletiltekst';
+const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_SYNC_MAX_REMOVAL_PERCENT = 30;
+const DEFAULT_ROLE_STALE_MAX_SECONDS = 86_400;
 /**
  * Default response size cap for the bulk endpoints (organisation v3 carries every
  * user with positions and KLE lists). 64 MiB covers a very large municipality;
- * ROLLEKATALOG_MAX_RESPONSE_BYTES overrides it. The single-user rolesAsList call
- * uses ROLES_AS_LIST_MAX_BYTES instead, since a legitimate answer is tiny.
+ * ROLLEKATALOG_MAX_RESPONSE_BYTES overrides it.
  */
-export const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
-export const ROLES_AS_LIST_MAX_BYTES = 1024 * 1024;
+const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 
 export type RollekatalogConfigIssue = 'not_configured' | 'insecure_url';
 
@@ -76,12 +72,12 @@ export function rollekatalogUrl(): RollekatalogUrl {
   return validateRollekatalogUrl(clean('ROLLEKATALOG_URL'));
 }
 
-/** API key with client role READ_ACCESS (rolesAsList, read/*, constraint). null when unset. */
+/** API key with client role READ_ACCESS (read/*). null when unset. */
 export function readKey(): string | null {
   return clean('ROLLEKATALOG_READ_API_KEY') || null;
 }
 
-/** API key with client role ORGANISATION (organisation v3, manager). null when unset. */
+/** API key with client role ORGANISATION (organisation v3). null when unset. */
 export function orgKey(): string | null {
   return clean('ROLLEKATALOG_ORG_API_KEY') || null;
 }
@@ -91,11 +87,6 @@ export function rollekatalogConfigIssue(): RollekatalogConfigIssue | null {
   const u = rollekatalogUrl();
   if (u.issue) return u.issue;
   return readKey() && orgKey() ? null : 'not_configured';
-}
-
-/** True when URL + both keys are usable, i.e. a sync can be attempted. */
-export function rollekatalogConfigured(): boolean {
-  return rollekatalogConfigIssue() === null;
 }
 
 export function itSystemId(): string {
@@ -113,17 +104,8 @@ export function timeoutMs(): number {
   return intInRange('ROLLEKATALOG_TIMEOUT_MS', DEFAULT_TIMEOUT_MS, 100, 120_000);
 }
 
-export function loginRefreshTimeoutMs(): number {
-  return Math.min(timeoutMs(), LOGIN_REFRESH_MAX_TIMEOUT_MS);
-}
-
 export function maxResponseBytes(): number {
   return intInRange('ROLLEKATALOG_MAX_RESPONSE_BYTES', DEFAULT_MAX_RESPONSE_BYTES, 1024, 512 * 1024 * 1024);
-}
-
-export function scopeStrategy(): ScopeStrategy {
-  const v = clean('ROLLEKATALOG_SCOPE_STRATEGY').toLowerCase();
-  return (SCOPE_STRATEGIES as readonly string[]).includes(v) ? (v as ScopeStrategy) : 'constraint';
 }
 
 /** A constraint-derived scope root covers its whole subtree (the plan's "OrgUnit subtree"). */

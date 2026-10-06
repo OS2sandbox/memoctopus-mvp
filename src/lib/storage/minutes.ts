@@ -137,7 +137,7 @@ export async function saveMinutes(
       versions: [v],
     };
     await db.put('minutes', minutes);
-    reportAuditEvent('meeting.minutes_save', meetingId, { autosave: true });
+    reportAuditEvent('meeting.minutes_save', meetingId);
     return minutes;
   }
 
@@ -153,7 +153,7 @@ export async function saveMinutes(
   // An autosave that rewrites identical content is not an edit.
   const before = existing.versions.find((v) => v.id === existing.activeVersionId);
   if (!before || JSON.stringify(before.content) !== JSON.stringify(content)) {
-    reportAuditEvent('meeting.minutes_save', meetingId, { autosave: true });
+    reportAuditEvent('meeting.minutes_save', meetingId);
   }
   return minutes;
 }

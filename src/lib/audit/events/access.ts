@@ -1,4 +1,4 @@
-// Phase 1 admin actions (written in the same transaction as the change) and
+// Admin actions on roles, org units and directory users (written in the same transaction as the change) and
 // authorisation denials. Only ids and role keys: never names or emails.
 import { z } from 'zod';
 import { ROLE_KEYS } from '@/lib/authz/types';
@@ -69,18 +69,6 @@ export const accessEvents = {
     entityType: 'directory_user',
     entityIdRequired: true,
     details: z.object({ source: z.enum(['local', 'rollekatalog']).optional() }).strict(),
-  }),
-  'access.user_update': defineEvent({
-    sources: ['server'],
-    entityType: 'directory_user',
-    entityIdRequired: true,
-    details: z.object({ changedFields: z.array(code()).max(32).optional() }).strict(),
-  }),
-  'access.user_delete': defineEvent({
-    sources: ['server'],
-    entityType: 'directory_user',
-    entityIdRequired: true,
-    details: noDetails(),
   }),
   'access.user_link': defineEvent({
     sources: ['server'],

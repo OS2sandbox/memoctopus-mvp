@@ -32,12 +32,10 @@ import {
   addToOutbox,
   backoffMs,
   markFailed,
-  nextDueAt,
   outboxAvailable,
   outboxDbName,
   OUTBOX_MAX_EVENTS,
   OUTBOX_TTL_MS,
-  outboxSize,
   removeFromOutbox,
   takeDue,
   __resetOutbox,
@@ -80,11 +78,11 @@ describe('outbox', () => {
     expect((await takeDue('u', 10, 4000 + backoffMs(1))).map((e) => e.clientEventId)).toEqual(['id-1', 'id-2', 'id-3']);
   });
 
-  it('removes events and reports the size', async () => {
+  it('removes events', async () => {
     await addToOutbox('u', ev(1));
     await addToOutbox('u', ev(2));
     await removeFromOutbox('u', ['id-1']);
-    expect(await outboxSize('u')).toBe(1);
+    expect((await takeDue('u', 10)).map((e) => e.clientEventId)).toEqual(['id-2']);
   });
 
   it('drops events older than 7 days when reading', async () => {
@@ -92,13 +90,12 @@ describe('outbox', () => {
     await addToOutbox('u', ev(2), 1000 + OUTBOX_TTL_MS);
     const due = await takeDue('u', 10, 1000 + OUTBOX_TTL_MS + 1);
     expect(due.map((e) => e.clientEventId)).toEqual(['id-2']);
-    expect(await outboxSize('u')).toBe(1);
   });
 
   it('is bounded: the oldest events are evicted beyond 1000', async () => {
     for (let i = 0; i < OUTBOX_MAX_EVENTS + 5; i++) await addToOutbox('u', ev(i), i);
-    expect(await outboxSize('u')).toBe(OUTBOX_MAX_EVENTS);
     const all = await takeDue('u', 2000, OUTBOX_MAX_EVENTS + 10);
+    expect(all).toHaveLength(OUTBOX_MAX_EVENTS);
     expect(all[0].clientEventId).toBe('id-5');
   });
 
@@ -107,13 +104,12 @@ describe('outbox', () => {
     expect(backoffMs(30)).toBe(15 * 60 * 1000);
   });
 
-  it('counts attempts and reports the earliest due time', async () => {
+  it('counts attempts', async () => {
     await addToOutbox('u', ev(1), 1000);
     await markFailed('u', ['id-1'], 2000);
     await markFailed('u', ['id-1'], 3000);
     const [row] = await takeDue('u', 1, 3000 + backoffMs(2));
     expect(row.attempts).toBe(2);
-    expect(await nextDueAt('u')).toBe(3000 + backoffMs(2));
   });
 
   it('never throws: a blocked IndexedDB just stores nothing', async () => {
@@ -122,7 +118,6 @@ describe('outbox', () => {
     expect(await takeDue('u', 10)).toEqual([]);
     await expect(removeFromOutbox('u', ['x'])).resolves.toBeUndefined();
     await expect(markFailed('u', ['x'])).resolves.toBeUndefined();
-    expect(await outboxSize('u')).toBe(0);
     h.failOpen = false;
     expect(await addToOutbox('u', ev(1))).toBe(true); // a failed open is not cached
   });

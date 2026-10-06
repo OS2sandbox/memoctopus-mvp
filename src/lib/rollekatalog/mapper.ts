@@ -4,9 +4,9 @@
 // parents, cycles, duplicate ids, assignments for unknown users) is resolved here
 // the FAIL-CLOSED way and counted, so sync.ts can apply the result blindly.
 import { ROLE_KEYS, type RoleKey } from '@/lib/authz/types';
-import type { RkManager, RkOrganisation, RkUserAssignments } from './schemas';
+import type { RkOrganisation, RkUserAssignments } from './schemas';
 import { deriveScope } from './scope';
-import type { ScopeConstraint, ScopeStrategy, SyncCounts } from './types';
+import type { ScopeConstraint, SyncCounts } from './types';
 
 export interface MirrorUser {
   uuid: string;
@@ -21,18 +21,11 @@ export interface MirrorOrgUnit {
   uuid: string;
   name: string;
   parentUuid: string | null;
-  managerUuid: string | null;
 }
 
 /** is_primary is always false (Rollekatalog has no such flag) and title NULL (job titles are not whitelisted). */
 export interface MirrorMember {
   directoryUserUuid: string;
-  orgUnitUuid: string;
-}
-
-export interface MirrorSubstitute {
-  managerUuid: string;
-  substituteUuid: string;
   orgUnitUuid: string;
 }
 
@@ -44,7 +37,7 @@ export interface MirrorAssignment {
   includeDescendants: boolean;
 }
 
-export type MapperStats = Pick<
+type MapperStats = Pick<
   SyncCounts,
   | 'orgUnitsOrphaned'
   | 'orgUnitCyclesBroken'
@@ -58,20 +51,17 @@ export interface MirrorSet {
   /** Parents before children, so a chunked insert never references a row that is not there yet. */
   orgUnits: MirrorOrgUnit[];
   members: MirrorMember[];
-  substitutes: MirrorSubstitute[];
   assignments: MirrorAssignment[];
   stats: MapperStats;
 }
 
 export interface MapperConfig {
-  strategy: ScopeStrategy;
   includeDescendants: boolean;
   globalRoles: readonly RoleKey[];
 }
 
 export interface MapperInput {
   organisation: RkOrganisation;
-  managers: RkManager[];
   assignments: RkUserAssignments[];
 }
 
@@ -106,10 +96,7 @@ function mapUsers(org: RkOrganisation): MirrorUser[] {
  * (counted as orphaned); every cycle is broken at its smallest uuid (counted), so
  * the stored tree is always a forest.
  */
-function mapOrgUnits(
-  org: RkOrganisation,
-  userUuids: ReadonlySet<string>,
-): { units: MirrorOrgUnit[]; orphaned: number; cycles: number } {
+function mapOrgUnits(org: RkOrganisation): { units: MirrorOrgUnit[]; orphaned: number; cycles: number } {
   const byUuid = new Map<string, MirrorOrgUnit>();
   let orphaned = 0;
 
@@ -126,7 +113,6 @@ function mapOrgUnits(
       uuid: u.uuid,
       name: u.name,
       parentUuid: parent,
-      managerUuid: u.manager && userUuids.has(u.manager.uuid) ? u.manager.uuid : null,
     });
   }
 
@@ -184,36 +170,6 @@ function mapMembers(org: RkOrganisation, userUuids: ReadonlySet<string>, unitUui
   return [...out.values()];
 }
 
-function mapSubstitutes(
-  managers: RkManager[],
-  userUuids: ReadonlySet<string>,
-  unitUuids: ReadonlySet<string>,
-): MirrorSubstitute[] {
-  const out = new Map<string, MirrorSubstitute>();
-  for (const m of managers) {
-    for (const s of m.managerSubstitutes) {
-      const managerUuid = s.managerUuid ?? m.uuid;
-      // A manager without a position is not in organisation v3, so this can miss: no row then (FK).
-      if (!userUuids.has(managerUuid) || !userUuids.has(s.uuid) || !unitUuids.has(s.orgUnitUuid)) continue;
-      out.set(`${managerUuid}|${s.uuid}|${s.orgUnitUuid}`, {
-        managerUuid,
-        substituteUuid: s.uuid,
-        orgUnitUuid: s.orgUnitUuid,
-      });
-    }
-  }
-  return [...out.values()];
-}
-
-/** Units each user manages (organisation v3 `manager`) or substitutes for (manager API). Scope input only. */
-function managedUnits(org: RkOrganisation, managers: RkManager[]): Map<string, Set<string>> {
-  const out = new Map<string, Set<string>>();
-  const add = (user: string, unit: string) => (out.get(user) ?? out.set(user, new Set()).get(user)!).add(unit);
-  for (const u of org.orgUnits) if (u.manager) add(u.manager.uuid, u.uuid);
-  for (const m of managers) for (const s of m.managerSubstitutes) add(s.uuid, s.orgUnitUuid);
-  return out;
-}
-
 function mapAssignments(
   input: MapperInput,
   config: MapperConfig,
@@ -238,7 +194,6 @@ function mapAssignments(
     return candidates && candidates.length === 1 ? candidates[0] : null;
   };
 
-  const managed = managedUnits(input.organisation, input.managers);
   let ignoredRole = 0;
   let skippedUnknownUser = 0;
   // One group per (user, role): duplicate entries are unioned (never "unconstrained wins": that could widen a scope).
@@ -267,11 +222,9 @@ function mapAssignments(
   let withoutScope = 0;
   for (const g of [...groups.values()].sort((a, b) => cmp(`${a.user}|${a.role}`, `${b.user}|${b.role}`))) {
     const scope = deriveScope({
-      strategy: config.strategy,
       roleKey: g.role,
       constraints: g.constraints,
       knownOrgUnitUuids: unitUuids,
-      managedOrgUnitUuids: [...(managed.get(g.user) ?? [])],
       globalRoles: config.globalRoles,
       includeDescendants: config.includeDescendants,
     });
@@ -296,7 +249,7 @@ function mapAssignments(
 export function mapToMirror(input: MapperInput, config: MapperConfig): MirrorSet {
   const users = mapUsers(input.organisation);
   const userUuids = new Set(users.map((u) => u.uuid));
-  const { units, orphaned, cycles } = mapOrgUnits(input.organisation, userUuids);
+  const { units, orphaned, cycles } = mapOrgUnits(input.organisation);
   const unitUuids = new Set(units.map((u) => u.uuid));
   const assignments = mapAssignments(input, config, users, unitUuids);
 
@@ -304,7 +257,6 @@ export function mapToMirror(input: MapperInput, config: MapperConfig): MirrorSet
     users,
     orgUnits: units,
     members: mapMembers(input.organisation, userUuids, unitUuids),
-    substitutes: mapSubstitutes(input.managers, userUuids, unitUuids),
     assignments: assignments.rows,
     stats: {
       orgUnitsOrphaned: orphaned,

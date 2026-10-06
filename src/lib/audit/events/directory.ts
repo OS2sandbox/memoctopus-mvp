@@ -14,8 +14,10 @@ export const directoryEvents = {
       .object({
         trigger: z.enum(['cron', 'manual']),
         status: z.enum(['success', 'aborted', 'error', 'already_running']),
+        forced: z.boolean().optional(),
         usersUpserted: count(),
         usersDisabled: count(),
+        sessionsRevoked: count().optional(),
         orgUnitsUpserted: count(),
         orgUnitsOrphaned: count(),
         orgUnitCyclesBroken: count().optional(),

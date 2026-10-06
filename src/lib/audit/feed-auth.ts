@@ -20,7 +20,7 @@ export function secretEquals(provided: string, expected: string): boolean {
   return timingSafeEqual(sha256(provided), sha256(expected));
 }
 
-export type KeyCheck = 'ok' | 'disabled' | 'unauthorized';
+type KeyCheck = 'ok' | 'disabled' | 'unauthorized';
 
 /** Does sha256(key) equal the configured hex hash? `disabled` when no hash is configured. */
 export function checkFeedKey(provided: string | null, expectedHashHex: string | null): KeyCheck {

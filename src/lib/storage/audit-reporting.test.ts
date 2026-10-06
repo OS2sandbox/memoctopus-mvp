@@ -68,12 +68,8 @@ describe('meetings', () => {
     expectNoContent();
   });
 
-  it.each([
-    [{ source: 'teams' as const, meetingUrl: 'https://teams.microsoft.com/l/meetup-join/x' }, 'bot'],
-    [{ source: 'local' as const }, 'live'],
-    [{}, 'live'],
-  ])('createMeeting derives a conservative origin when none is given (%j -> %s)', async (extra, origin) => {
-    await createMeeting({ title: 'x', ...extra });
+  it.each(['live', 'upload', 'bot'] as const)('createMeeting passes the origin %s through', async (origin) => {
+    await createMeeting({ title: 'x', origin });
     expect(calls()[0].details).toEqual({ origin });
     expectNoContent();
   });
@@ -247,8 +243,8 @@ describe('minutes', () => {
     await saveMinutes('m1', minutes(SECRET_TEXT));
     await saveMinutes('m1', minutes('anden tekst'));
     expect(calls()).toEqual([
-      { type: 'meeting.minutes_save', entityId: 'm1', details: { autosave: true } },
-      { type: 'meeting.minutes_save', entityId: 'm1', details: { autosave: true } },
+      { type: 'meeting.minutes_save', entityId: 'm1', details: undefined },
+      { type: 'meeting.minutes_save', entityId: 'm1', details: undefined },
     ]);
     expectNoContent();
   });

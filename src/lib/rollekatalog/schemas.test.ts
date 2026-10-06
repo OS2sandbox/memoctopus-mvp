@@ -3,12 +3,9 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { RollekatalogError } from './errors';
 import {
-  constraintTypesSchema,
-  managersSchema,
   organisationSchema,
   parseOrThrow,
   roleAssignmentsSchema,
-  rolesAsListSchema,
 } from './schemas';
 
 const fx = (name: string): unknown => JSON.parse(readFileSync(path.join(__dirname, '__fixtures__', name), 'utf8'));
@@ -63,7 +60,7 @@ describe('organisation v3', () => {
   it('exposes only whitelisted keys on users, positions and units', () => {
     expect(Object.keys(parsed.users[0]).sort()).toEqual(['disabled', 'email', 'extUuid', 'name', 'positions', 'userId', 'uuid']);
     expect(Object.keys(parsed.users[0].positions[0]).sort()).toEqual(['doNotInherit', 'orgUnitUuid', 'titleUuid']);
-    expect(Object.keys(parsed.orgUnits[0]).sort()).toEqual(['manager', 'name', 'parentOrgUnitUuid', 'uuid']);
+    expect(Object.keys(parsed.orgUnits[0]).sort()).toEqual(['name', 'parentOrgUnitUuid', 'uuid']);
   });
 
   it('keeps the disabled flag and multiple positions', () => {
@@ -72,17 +69,14 @@ describe('organisation v3', () => {
     expect(parsed.users.find((u) => u.userId === 'peter.d')?.positions[0].doNotInherit).toBe(true);
   });
 
-  it('models manager as null when absent or null, and keeps a manager that is not in users', () => {
-    const team = parsed.orgUnits.find((o) => o.name === 'Team Selvbetjening');
-    expect(team?.manager).toBeNull();
-    const support = parsed.orgUnits.find((o) => o.name === 'Digital Support');
-    expect(support?.manager?.userId).toBe('ghost.m');
-    expect(parsed.users.some((u) => u.userId === 'ghost.m')).toBe(false);
-    const noKey = parseOrThrow(organisationSchema, {
+  it('strips the manager of an org unit: it is not parsed, so even a malformed one cannot fail the payload', () => {
+    expect(raw.orgUnits.some((o) => (o as { manager?: unknown }).manager)).toBe(true);
+    expect(parsed.orgUnits.some((o) => 'manager' in o)).toBe(false);
+    const out = parseOrThrow(organisationSchema, {
       users: [],
-      orgUnits: [{ uuid: UUID_A, name: 'X' }],
+      orgUnits: [{ uuid: UUID_A, name: 'X', manager: { userId: 'no-uuid' } }],
     });
-    expect(noKey.orgUnits[0]).toEqual({ uuid: UUID_A.toLowerCase(), name: 'X', parentOrgUnitUuid: null, manager: null });
+    expect(out.orgUnits[0]).toEqual({ uuid: UUID_A.toLowerCase(), name: 'X', parentOrgUnitUuid: null });
   });
 
   it('normalises uuids to lower case', () => {
@@ -93,7 +87,7 @@ describe('organisation v3', () => {
     const lc = UUID_A.toLowerCase();
     expect(out.users[0]).toMatchObject({ uuid: lc, extUuid: lc });
     expect(out.users[0].positions[0].orgUnitUuid).toBe(lc);
-    expect(out.orgUnits[0]).toMatchObject({ uuid: lc, parentOrgUnitUuid: lc, manager: { uuid: lc } });
+    expect(out.orgUnits[0]).toMatchObject({ uuid: lc, parentOrgUnitUuid: lc });
   });
 
   it('tolerates null/missing optional user fields (positions null, no email, non-uuid extUuid)', () => {
@@ -121,7 +115,6 @@ describe('organisation v3', () => {
       { users: [{ uuid: 'not-a-uuid', name: 'A', disabled: false }], orgUnits: [] },
       { users: [{ uuid: UUID_A, name: 'A' }], orgUnits: [] }, // disabled missing: never read as enabled
       { users: [], orgUnits: [{ uuid: UUID_A }] }, // name missing
-      { users: [], orgUnits: [{ uuid: UUID_A, name: 'X', manager: { userId: 'x' } }] },
     ];
     for (const b of bad) expect(code(() => parseOrThrow(organisationSchema, b)), JSON.stringify(b)).toBe('invalid_response');
   });
@@ -133,35 +126,6 @@ describe('organisation v3', () => {
       expect(String((e as Error).message)).not.toContain('secret-value');
       expect(JSON.stringify(e)).not.toContain('secret-value');
     }
-  });
-});
-
-describe('managers v2', () => {
-  const parsed = parseOrThrow(managersSchema, fx('managers-v2.json'));
-  it('parses managers and substitutes with the manager uuid', () => {
-    expect(parsed).toHaveLength(4);
-    const jens = parsed.find((m) => m.userId === 'jens.t');
-    expect(jens?.managerSubstitutes).toEqual([
-      {
-        uuid: '7e5e0000-0000-4000-8000-000000000003',
-        userId: 'anne.p',
-        orgUnitUuid: '5a1b0000-0000-4000-8000-000000000002',
-        managerUuid: '7e5e0000-0000-4000-8000-000000000002',
-      },
-    ]);
-  });
-  it('whitelists keys (no org unit name, no manager user id on substitutes)', () => {
-    const sub = parsed.flatMap((m) => m.managerSubstitutes)[0];
-    expect(Object.keys(sub).sort()).toEqual(['managerUuid', 'orgUnitUuid', 'userId', 'uuid']);
-  });
-  it('accepts an empty list and tolerates managerSubstitutes null', () => {
-    expect(parseOrThrow(managersSchema, [])).toEqual([]);
-    expect(parseOrThrow(managersSchema, [{ uuid: UUID_A, managerSubstitutes: null }])[0].managerSubstitutes).toEqual([]);
-  });
-  it('rejects malformed payloads', () => {
-    expect(code(() => parseOrThrow(managersSchema, {}))).toBe('invalid_response');
-    expect(code(() => parseOrThrow(managersSchema, [{ name: 'x' }]))).toBe('invalid_response');
-    expect(code(() => parseOrThrow(managersSchema, [{ uuid: UUID_A, managerSubstitutes: [{ uuid: UUID_A }] }]))).toBe('invalid_response');
   });
 });
 
@@ -193,35 +157,5 @@ describe('roleAssignmentsWithContraints', () => {
     expect(code(() => parseOrThrow(roleAssignmentsSchema, { a: 1 }))).toBe('invalid_response');
     expect(code(() => parseOrThrow(roleAssignmentsSchema, [{ userId: 'x', assignments: [{ roleName: 'n' }] }]))).toBe('invalid_response');
     expect(code(() => parseOrThrow(roleAssignmentsSchema, [{ userId: 'x', assignments: [{ roleIdentifier: 'a', roleConstraintValues: [{ constraintType: 'x', constraintValues: [1] }] }] }]))).toBe('invalid_response');
-  });
-});
-
-describe('rolesAsList', () => {
-  it('parses the fixtures and strips roleMap', () => {
-    const ok = parseOrThrow(rolesAsListSchema, fx('roles-as-list.json'));
-    expect(ok.disabled).toBe(false);
-    expect(ok.systemRoles).toEqual(['tt-bruger', 'tt-skabelonansvarlig']);
-    expect(ok).not.toHaveProperty('roleMap');
-    const off = parseOrThrow(rolesAsListSchema, fx('roles-as-list-disabled.json'));
-    expect(off.disabled).toBe(true);
-    expect(off.systemRoles).toEqual(['tt-bruger']);
-  });
-  it('tolerates missing role lists but never a missing disabled flag', () => {
-    expect(parseOrThrow(rolesAsListSchema, { disabled: false }).systemRoles).toEqual([]);
-    expect(code(() => parseOrThrow(rolesAsListSchema, { systemRoles: ['tt-bruger'] }))).toBe('invalid_response');
-    expect(code(() => parseOrThrow(rolesAsListSchema, { systemRoles: 'tt-bruger', disabled: false }))).toBe('invalid_response');
-  });
-});
-
-describe('constraint types', () => {
-  it('parses the fixture and strips description/regex', () => {
-    const out = parseOrThrow(constraintTypesSchema, fx('constraints-v2.json'));
-    expect(out.map((c) => c.entityId)).toContain('http://digital-identity.dk/constraints/orgunit/1');
-    expect(out[0]).not.toHaveProperty('regex');
-    expect(out[0]).not.toHaveProperty('description');
-  });
-  it('rejects malformed payloads', () => {
-    expect(code(() => parseOrThrow(constraintTypesSchema, [{ id: 'x', entityId: 'y' }]))).toBe('invalid_response');
-    expect(code(() => parseOrThrow(constraintTypesSchema, 'nope'))).toBe('invalid_response');
   });
 });

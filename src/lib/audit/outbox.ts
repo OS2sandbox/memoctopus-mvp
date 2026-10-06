@@ -138,27 +138,6 @@ export async function markFailed(userId: string, ids: string[], now = Date.now()
   }
 }
 
-/** Earliest time a queued event becomes due again, or null when the queue is empty. */
-export async function nextDueAt(userId: string): Promise<number | null> {
-  if (!outboxAvailable()) return null;
-  try {
-    const db = await open(userId);
-    const all = await db.getAllFromIndex('events', 'by-queued');
-    return all.length === 0 ? null : Math.min(...all.map((e) => e.nextAttemptAt));
-  } catch {
-    return null;
-  }
-}
-
-export async function outboxSize(userId: string): Promise<number> {
-  if (!outboxAvailable()) return 0;
-  try {
-    return await (await open(userId)).count('events');
-  } catch {
-    return 0;
-  }
-}
-
 /** Test only: forget cached connections. */
 export function __resetOutbox(): void {
   opened.clear();

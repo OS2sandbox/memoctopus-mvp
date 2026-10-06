@@ -5,7 +5,8 @@
 // Two write modes:
 //   recordEvent(event, { tx })  inserts ON that transaction and THROWS on any
 //                               failure, so an admin change rolls back with its
-//                               audit row (used by recordAdminAction).
+//                               audit row (admin changes: access-admin, bootstrap,
+//                               directory-match).
 //   recordEvent(event)          best-effort: awaited, NEVER throws into the
 //                               request. A failure drops the event and prints a
 //                               content-free warning (event type + error code).
@@ -17,16 +18,15 @@ import { directoryUsers, orgUnitMembers, users } from '@/lib/db/schema';
 import { auditStdout, auditStoreIp } from './config';
 import { eventDef, isEventType, type AuditEventInput, type AuditEventOf, type EventType } from './events';
 import { CODE_RE, EVENT_OUTCOMES, EVENT_SOURCES, type EventOutcome, type EventSource } from './events/types';
-import { requestContext, type HeaderSource, type RequestContext } from './request-context';
+import { cleanUserAgent, requestContext, type HeaderSource, type RequestContext } from './request-context';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ENTITY_TYPE_RE = /^[a-z][a-z0-9_]{0,31}$/;
 const ACTOR_ID_RE = /^[^\s\u0000-\u001f]{1,128}$/;
-const TABLE_RE = /^[A-Za-z0-9_."]{1,128}$/;
+export const TABLE_RE = /^[A-Za-z0-9_."]{1,128}$/;
 
-export const MAX_DETAILS_BYTES = 2048;
-export const MAX_ARRAY_ENTRIES = 32;
-export const MAX_USER_AGENT = 255;
+const MAX_DETAILS_BYTES = 2048;
+const MAX_ARRAY_ENTRIES = 32;
 
 /** Failure of an audit write. Message and `code` are fixed codes, never event content. */
 export class AuditWriteError extends Error {
@@ -36,7 +36,7 @@ export class AuditWriteError extends Error {
   }
 }
 
-export interface ValidatedEvent {
+interface ValidatedEvent {
   type: EventType;
   source: EventSource;
   outcome: EventOutcome;
@@ -208,7 +208,7 @@ export function validateEvent(input: AuditEventInput): ValidationResult {
 
 // ─── Actor snapshot ────────────────────────────────────────────────────────
 
-export interface ActorSnapshot {
+interface ActorSnapshot {
   name: string | null;
   orgUnitUuid: string | null;
 }
@@ -221,7 +221,7 @@ const NO_ACTOR: ActorSnapshot = { name: null, orgUnitUuid: null };
  * limited by unit. Primary = the member row flagged is_primary, else the only
  * unit when there is exactly one, else NULL (then only global readers see it).
  */
-export async function actorSnapshot(userId: string | null): Promise<ActorSnapshot> {
+async function actorSnapshot(userId: string | null): Promise<ActorSnapshot> {
   if (!userId) return NO_ACTOR;
   const found = await db
     .select({ name: users.name, directoryUuid: directoryUsers.uuid })
@@ -256,7 +256,7 @@ export interface RecordOptions {
   table?: string;
 }
 
-export type RecordResult =
+type RecordResult =
   | { status: 'stored' }
   /** A client event redelivered with a known (actor, client_event_id): nothing inserted. */
   | { status: 'duplicate' }
@@ -279,13 +279,6 @@ function errorCode(err: unknown): string {
 function storedIp(ip: string | null | undefined): string | null {
   if (!auditStoreIp() || !ip || !isIP(ip)) return null;
   return ip;
-}
-
-function storedUserAgent(ua: string | null | undefined): string | null {
-  if (!ua) return null;
-  // eslint-disable-next-line no-control-regex
-  const cleaned = ua.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, MAX_USER_AGENT);
-  return cleaned || null;
 }
 
 const INSERT_COLUMNS = [
@@ -337,7 +330,7 @@ async function write(input: AuditEventInput, opts: RecordOptions): Promise<Recor
     secondary_entity_type: e.secondaryEntityType,
     secondary_entity_id: e.secondaryEntityId,
     ip_address: storedIp(ctx.ip),
-    user_agent: storedUserAgent(ctx.userAgent),
+    user_agent: cleanUserAgent(ctx.userAgent),
     request_id: requestId,
     details: JSON.stringify(e.details),
     client_event_id: e.clientEventId,
@@ -384,6 +377,13 @@ async function write(input: AuditEventInput, opts: RecordOptions): Promise<Recor
  */
 export async function recordEvent<T extends EventType>(input: AuditEventOf<T>, opts: RecordOptions = {}): Promise<RecordResult> {
   const event = input as AuditEventInput;
+  // `tx` present but unusable (undefined / not a client) must fail closed: silently
+  // falling back to the best-effort pool write would let an admin change commit without its audit row.
+  if ('tx' in opts && typeof opts.tx?.query !== 'function') {
+    const err = new AuditWriteError('invalid_tx');
+    warnDropped(typeOf(event), err.code);
+    throw err;
+  }
   if (opts.tx) {
     try {
       return await write(event, opts);
@@ -401,11 +401,20 @@ export async function recordEvent<T extends EventType>(input: AuditEventOf<T>, o
   }
 }
 
-/** recordEvent with ip / user agent / request id taken from the request. Best-effort unless `opts.tx` is given. */
-export function recordServerEvent<T extends EventType>(
+/**
+ * recordEvent with ip / user agent / request id taken from the request. Best-effort unless `opts.tx` is given.
+ * Reading the request is guarded too: unusable headers lose the request metadata, never the event or the request.
+ */
+export async function recordServerEvent<T extends EventType>(
   req: HeaderSource,
   input: AuditEventOf<T>,
   opts: Omit<RecordOptions, 'context'> = {},
 ): Promise<RecordResult> {
-  return recordEvent(input, { ...opts, context: requestContext(req) });
+  let context: RequestContext | undefined;
+  try {
+    context = requestContext(req);
+  } catch (err) {
+    console.warn(`[audit] request context unavailable code=${errorCode(err)}`);
+  }
+  return recordEvent(input, { ...opts, ...(context ? { context } : {}) });
 }

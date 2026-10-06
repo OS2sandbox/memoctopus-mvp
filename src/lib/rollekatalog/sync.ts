@@ -6,6 +6,11 @@
 // source='rollekatalog' are ever written or deleted; source='local' rows and the
 // app_user_id link (owned by login matching) are never touched.
 //
+// A linked user (directory_users.app_user_id) that is left DISABLED has their
+// better-auth sessions deleted in the same transaction, so existing cookies die at
+// once. The delete is idempotent and runs every time (it also catches a user who was
+// disabled earlier and got a session anyway); only source='rollekatalog' rows count.
+//
 // Safety nets, all fail-closed:
 //   - a non-blocking advisory lock: a concurrent run answers 'already_running'
 //   - empty-response guard: no users or no org units aborts ('empty_response')
@@ -20,18 +25,16 @@ import { createRollekatalogClient, type RollekatalogClient } from './client';
 import {
   rollekatalogConfigIssue,
   scopeDescendants,
-  scopeStrategy,
   globalRoles,
   syncMaxRemovalPercent,
 } from './config';
-import { errorCodeOf, isRollekatalogError } from './errors';
-import { mapToMirror, type MirrorAssignment, type MirrorOrgUnit, type MirrorSet, type MirrorSubstitute, type MirrorMember, type MirrorUser } from './mapper';
-import type { RkManager, RkOrganisation, RkUserAssignments } from './schemas';
+import { errorCodeOf } from './errors';
+import { mapToMirror, type MirrorAssignment, type MirrorOrgUnit, type MirrorSet, type MirrorMember, type MirrorUser } from './mapper';
+import type { RkOrganisation, RkUserAssignments } from './schemas';
 import {
   abandonStaleRuns,
   defaultSyncEnv,
   finishRun,
-  getLatestSyncRun,
   queryOnce,
   recordFailedRun,
   startRun,
@@ -40,11 +43,9 @@ import {
 } from './sync-run';
 import { emptySyncCounts, type RunSyncOptions, type SyncCounts, type SyncResult } from './types';
 
-export { getLatestSyncRun };
-
 // ─── Planning (pure) ───────────────────────────────────────────────────────
 
-export interface ExistingUser {
+interface ExistingUser {
   uuid: string;
   extUuid: string | null;
   extUserId: string | null;
@@ -52,13 +53,12 @@ export interface ExistingUser {
   email: string | null;
   disabled: boolean;
 }
-export interface ExistingOrgUnit {
+interface ExistingOrgUnit {
   uuid: string;
   name: string;
   parentUuid: string | null;
-  managerUuid: string | null;
 }
-export interface ExistingAssignment {
+interface ExistingAssignment {
   id: string;
   directoryUserUuid: string;
   roleKey: string;
@@ -66,7 +66,7 @@ export interface ExistingAssignment {
   includeDescendants: boolean;
 }
 /** A directory row (any source) that holds the ext_uuid of a user in this fetch. */
-export interface ExtHolder {
+interface ExtHolder {
   uuid: string;
   extUuid: string;
   source: string;
@@ -78,15 +78,13 @@ export interface ExistingMirror {
   orgUnits: ExistingOrgUnit[];
   assignments: ExistingAssignment[];
   members: MirrorMember[];
-  substitutes: MirrorSubstitute[];
   extHolders: ExtHolder[];
 }
 
-export interface MirrorPlan {
+interface MirrorPlan {
   users: { insert: MirrorUser[]; update: MirrorUser[]; disable: string[]; releaseExt: string[] };
   orgUnits: { insert: MirrorOrgUnit[]; update: MirrorOrgUnit[] };
   members: { insert: MirrorMember[]; remove: MirrorMember[] };
-  substitutes: { insert: MirrorSubstitute[]; remove: MirrorSubstitute[] };
   assignments: {
     insert: MirrorAssignment[];
     updateIncludeDescendants: Array<{ id: string; includeDescendants: boolean }>;
@@ -163,17 +161,14 @@ export function planMirror(existing: ExistingMirror, mirror: MirrorSet): MirrorP
   for (const u of mirror.orgUnits) {
     const old = existingUnits.get(u.uuid);
     if (!old) unitInsert.push(u);
-    else if (old.name !== u.name || old.parentUuid !== u.parentUuid || old.managerUuid !== u.managerUuid) unitUpdate.push(u);
+    else if (old.name !== u.name || old.parentUuid !== u.parentUuid) unitUpdate.push(u);
   }
   counts.orgUnitsUpserted = unitInsert.length + unitUpdate.length;
 
-  // ── members and substitutes (derived data: the fetch is the truth) ──
+  // ── members (derived data: the fetch is the truth) ──
   const memberKey = (m: MirrorMember) => pairKey(m.directoryUserUuid, m.orgUnitUuid);
   const newMembers = new Set(mirror.members.map(memberKey));
   const oldMembers = new Set(existing.members.map(memberKey));
-  const subKey = (s: MirrorSubstitute) => pairKey(s.managerUuid, s.substituteUuid, s.orgUnitUuid);
-  const newSubs = new Set(mirror.substitutes.map(subKey));
-  const oldSubs = new Set(existing.substitutes.map(subKey));
 
   // ── role assignments ──
   const aKey = (userUuid: string, role: string, scope: string | null) => pairKey(userUuid, role, scope);
@@ -200,10 +195,6 @@ export function planMirror(existing: ExistingMirror, mirror: MirrorSet): MirrorP
     members: {
       insert: mirror.members.filter((m) => !oldMembers.has(memberKey(m))),
       remove: existing.members.filter((m) => !newMembers.has(memberKey(m))),
-    },
-    substitutes: {
-      insert: mirror.substitutes.filter((s) => !oldSubs.has(subKey(s))),
-      remove: existing.substitutes.filter((s) => !newSubs.has(subKey(s))),
     },
     assignments: { insert: aInsert, updateIncludeDescendants: aUpdate, remove: aRemove },
     counts,
@@ -259,8 +250,8 @@ async function loadExisting(tx: SqlQueryable, env: SyncEnv, fetchedExtUuids: str
     `SELECT uuid::text AS uuid, ext_uuid::text AS ext_uuid, ext_user_id, name, email, disabled
        FROM ${t('directory_users')} WHERE source = 'rollekatalog'`,
   );
-  const units = await tx.query<{ uuid: string; name: string; parent_uuid: string | null; manager_uuid: string | null }>(
-    `SELECT uuid::text AS uuid, name, parent_uuid::text AS parent_uuid, manager_uuid::text AS manager_uuid
+  const units = await tx.query<{ uuid: string; name: string; parent_uuid: string | null }>(
+    `SELECT uuid::text AS uuid, name, parent_uuid::text AS parent_uuid
        FROM ${t('org_units')} WHERE source = 'rollekatalog'`,
   );
   const assignments = await tx.query<{
@@ -274,19 +265,12 @@ async function loadExisting(tx: SqlQueryable, env: SyncEnv, fetchedExtUuids: str
             scope_org_unit_uuid::text AS scope, include_descendants
        FROM ${t('role_assignments')} WHERE source = 'rollekatalog'`,
   );
-  // org_unit_members and org_unit_substitutes have no source column: a row is ours when its users are.
+  // org_unit_members has no source column: a row is ours when its user is.
   const members = await tx.query<{ u: string; o: string }>(
     `SELECT m.directory_user_uuid::text AS u, m.org_unit_uuid::text AS o
        FROM ${t('org_unit_members')} m
        JOIN ${t('directory_users')} d ON d.uuid = m.directory_user_uuid
       WHERE d.source = 'rollekatalog'`,
-  );
-  const subs = await tx.query<{ m: string; su: string; o: string }>(
-    `SELECT s.manager_uuid::text AS m, s.substitute_uuid::text AS su, s.org_unit_uuid::text AS o
-       FROM ${t('org_unit_substitutes')} s
-       JOIN ${t('directory_users')} dm ON dm.uuid = s.manager_uuid
-       JOIN ${t('directory_users')} ds ON ds.uuid = s.substitute_uuid
-      WHERE dm.source = 'rollekatalog' AND ds.source = 'rollekatalog'`,
   );
   const holders = await tx.query<{ uuid: string; ext_uuid: string; source: string }>(
     `SELECT uuid::text AS uuid, ext_uuid::text AS ext_uuid, source
@@ -306,7 +290,6 @@ async function loadExisting(tx: SqlQueryable, env: SyncEnv, fetchedExtUuids: str
       uuid: r.uuid,
       name: r.name,
       parentUuid: r.parent_uuid,
-      managerUuid: r.manager_uuid,
     })),
     assignments: assignments.rows.map((r) => ({
       id: r.id,
@@ -316,12 +299,12 @@ async function loadExisting(tx: SqlQueryable, env: SyncEnv, fetchedExtUuids: str
       includeDescendants: r.include_descendants,
     })),
     members: members.rows.map((r) => ({ directoryUserUuid: r.u, orgUnitUuid: r.o })),
-    substitutes: subs.rows.map((r) => ({ managerUuid: r.m, substituteUuid: r.su, orgUnitUuid: r.o })),
     extHolders: holders.rows.map((r) => ({ uuid: r.uuid, extUuid: r.ext_uuid, source: r.source })),
   };
 }
 
-async function writePlan(tx: SqlQueryable, env: SyncEnv, plan: MirrorPlan, mirror: MirrorSet, now: Date): Promise<void> {
+/** Returns how many sessions were deleted. */
+async function writePlan(tx: SqlQueryable, env: SyncEnv, plan: MirrorPlan, mirror: MirrorSet, now: Date): Promise<number> {
   const t = (name: string) => tbl(env, name);
   const userCols = (rows: MirrorUser[]) => [
     rows.map((u) => u.uuid),
@@ -380,13 +363,12 @@ async function writePlan(tx: SqlQueryable, env: SyncEnv, plan: MirrorPlan, mirro
     rows.map((u) => u.uuid),
     rows.map((u) => u.name),
     rows.map((u) => u.parentUuid),
-    rows.map((u) => u.managerUuid),
   ];
   for (const rows of chunk(plan.orgUnits.insert, ORG_UNIT_CHUNK)) {
     await tx.query(
-      `INSERT INTO ${t('org_units')} (uuid, name, parent_uuid, manager_uuid, source, synced_at)
-       SELECT v.uuid, v.name, v.parent_uuid, v.manager_uuid, 'rollekatalog', $5::timestamptz
-         FROM unnest($1::uuid[], $2::text[], $3::uuid[], $4::uuid[]) AS v(uuid, name, parent_uuid, manager_uuid)
+      `INSERT INTO ${t('org_units')} (uuid, name, parent_uuid, source, synced_at)
+       SELECT v.uuid, v.name, v.parent_uuid, 'rollekatalog', $4::timestamptz
+         FROM unnest($1::uuid[], $2::text[], $3::uuid[]) AS v(uuid, name, parent_uuid)
        ON CONFLICT (uuid) DO NOTHING`,
       [...unitCols(rows), now],
     );
@@ -394,8 +376,8 @@ async function writePlan(tx: SqlQueryable, env: SyncEnv, plan: MirrorPlan, mirro
   for (const rows of chunk(plan.orgUnits.update, ORG_UNIT_CHUNK)) {
     await tx.query(
       `UPDATE ${t('org_units')} o
-          SET name = v.name, parent_uuid = v.parent_uuid, manager_uuid = v.manager_uuid, updated_at = $5::timestamptz
-         FROM unnest($1::uuid[], $2::text[], $3::uuid[], $4::uuid[]) AS v(uuid, name, parent_uuid, manager_uuid)
+          SET name = v.name, parent_uuid = v.parent_uuid, updated_at = $4::timestamptz
+         FROM unnest($1::uuid[], $2::text[], $3::uuid[]) AS v(uuid, name, parent_uuid)
         WHERE o.uuid = v.uuid AND o.source = 'rollekatalog'`,
       [...unitCols(rows), now],
     );
@@ -420,32 +402,6 @@ async function writePlan(tx: SqlQueryable, env: SyncEnv, plan: MirrorPlan, mirro
        SELECT v.u, v.o, false, NULL FROM unnest($1::uuid[], $2::uuid[]) AS v(u, o)
        ON CONFLICT DO NOTHING`,
       [plan.members.insert.map((m) => m.directoryUserUuid), plan.members.insert.map((m) => m.orgUnitUuid)],
-    );
-  }
-
-  // Substitutes.
-  if (plan.substitutes.remove.length > 0) {
-    await tx.query(
-      `DELETE FROM ${t('org_unit_substitutes')} s
-        USING unnest($1::uuid[], $2::uuid[], $3::uuid[]) AS v(m, su, o)
-        WHERE s.manager_uuid = v.m AND s.substitute_uuid = v.su AND s.org_unit_uuid = v.o`,
-      [
-        plan.substitutes.remove.map((s) => s.managerUuid),
-        plan.substitutes.remove.map((s) => s.substituteUuid),
-        plan.substitutes.remove.map((s) => s.orgUnitUuid),
-      ],
-    );
-  }
-  if (plan.substitutes.insert.length > 0) {
-    await tx.query(
-      `INSERT INTO ${t('org_unit_substitutes')} (manager_uuid, substitute_uuid, org_unit_uuid)
-       SELECT v.m, v.su, v.o FROM unnest($1::uuid[], $2::uuid[], $3::uuid[]) AS v(m, su, o)
-       ON CONFLICT DO NOTHING`,
-      [
-        plan.substitutes.insert.map((s) => s.managerUuid),
-        plan.substitutes.insert.map((s) => s.substituteUuid),
-        plan.substitutes.insert.map((s) => s.orgUnitUuid),
-      ],
     );
   }
 
@@ -486,6 +442,16 @@ async function writePlan(tx: SqlQueryable, env: SyncEnv, plan: MirrorPlan, mirro
   // staleness rule (ROLE_STALE_MAX_SECONDS) reads this column, so it must advance on
   // every successful run even when nothing changed.
   await tx.query(`UPDATE ${t('role_assignments')} SET synced_at = $1::timestamptz WHERE source = 'rollekatalog'`, [now]);
+
+  // Last, after the users are final: whoever is linked to an app account and disabled loses every session.
+  const revoked = await tx.query(
+    `DELETE FROM ${t('sessions')}
+      WHERE user_id IN (
+        SELECT app_user_id FROM ${t('directory_users')}
+         WHERE source = 'rollekatalog' AND disabled = true AND app_user_id IS NOT NULL
+      )`,
+  );
+  return revoked.rowCount ?? 0;
 }
 
 interface ApplyOptions {
@@ -515,7 +481,7 @@ async function applyMirror(env: SyncEnv, mirror: MirrorSet, opts: ApplyOptions):
           throw new SyncAbort('removal_threshold');
         }
       }
-      await writePlan(tx, env, plan, mirror, opts.now);
+      plan.counts.sessionsRevoked = await writePlan(tx, env, plan, mirror, opts.now);
       return plan.counts;
     });
   } catch (err) {
@@ -527,11 +493,10 @@ async function applyMirror(env: SyncEnv, mirror: MirrorSet, opts: ApplyOptions):
 
 // ─── Fetching ──────────────────────────────────────────────────────────────
 
-type SyncClient = Pick<RollekatalogClient, 'getOrganisation' | 'getManagers' | 'getRoleAssignments'>;
+type SyncClient = Pick<RollekatalogClient, 'getOrganisation' | 'getRoleAssignments'>;
 
 interface Fetched {
   organisation: RkOrganisation;
-  managers: RkManager[];
   assignments: RkUserAssignments[];
 }
 
@@ -541,15 +506,8 @@ async function fetchAll(client: SyncClient): Promise<Fetched> {
   // Checked before the other calls: an empty answer must never become "everybody left".
   if (organisation.users.length === 0 || organisation.orgUnits.length === 0) throw new SyncAbort('empty_response');
 
-  let managers: RkManager[] = [];
-  try {
-    managers = await client.getManagers();
-  } catch (err) {
-    // 404 means "there are no managers in the system" (ManagerSubstituteApiV2); anything else is a real failure.
-    if (!(isRollekatalogError(err) && err.code === 'not_found')) throw err;
-  }
   const assignments = await client.getRoleAssignments();
-  return { organisation, managers, assignments };
+  return { organisation, assignments };
 }
 
 // ─── Advisory lock ─────────────────────────────────────────────────────────
@@ -599,23 +557,16 @@ async function defaultAudit(opts: RunSyncOptions, result: SyncResult): Promise<v
   await recordEvent({
     type: 'directory.sync',
     source: opts.trigger === 'cron' ? 'system' : 'server',
-    outcome: result.status === 'success' ? 'success' : 'error',
+    // Losing the advisory lock is not a failure: the other run does the work.
+    outcome: result.status === 'success' ? 'success' : result.status === 'already_running' ? 'denied' : 'error',
     ...(opts.actorUserId ? { actorUserId: opts.actorUserId } : {}),
     entityType: 'sync_run',
     ...(result.runId ? { entityId: result.runId } : {}),
     details: {
       trigger: opts.trigger,
       status: result.status,
-      usersUpserted: c.usersUpserted,
-      usersDisabled: c.usersDisabled,
-      orgUnitsUpserted: c.orgUnitsUpserted,
-      orgUnitsOrphaned: c.orgUnitsOrphaned,
-      orgUnitCyclesBroken: c.orgUnitCyclesBroken,
-      assignmentsUpserted: c.assignmentsUpserted,
-      assignmentsRemoved: c.assignmentsRemoved,
-      assignmentsIgnoredRole: c.assignmentsIgnoredRole,
-      assignmentsSkippedUnknownUser: c.assignmentsSkippedUnknownUser,
-      assignmentsWithoutScope: c.assignmentsWithoutScope,
+      forced: opts.force === true,
+      ...c,
       ...(result.errorCode ? { errorCode: result.errorCode } : {}),
     },
   });
@@ -677,7 +628,6 @@ export async function runSync(opts: RunSyncOptions, deps: SyncDeps = {}): Promis
     const client = deps.client ?? createRollekatalogClient();
     const fetched = await fetchAll(client);
     const mirror = mapToMirror(fetched, {
-      strategy: scopeStrategy(),
       includeDescendants: scopeDescendants(),
       globalRoles: globalRoles(),
     });

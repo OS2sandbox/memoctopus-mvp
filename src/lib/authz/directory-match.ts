@@ -2,20 +2,19 @@
 // ROLLEKATALOG MODE ONLY. In local mode links are made explicitly by an admin
 // (directory_users.app_user_id) and must never be inferred from claims: an
 // attacker could password-sign-up with a pre-assigned address.
-import { recordAdminAction } from '@/lib/audit/seam';
+import { recordEvent } from '@/lib/audit/record';
+import { directoryUserIdTransform, transformUserId } from '@/lib/rollekatalog/config';
 import {
   accessSource,
   directoryMatchMode,
   directoryUserIdClaim,
-  directoryUserIdTransform,
   singleTenantId,
-  transformUserId,
   type DirectoryMatchMode,
 } from './config';
 import type { ExternalIdentity } from './identity';
 import { defaultRunner, type SqlQueryable, type SqlRunner } from './pg-runner';
 
-export type MatchStatus =
+type MatchStatus =
   | 'linked'
   | 'already_linked'
   | 'no_match'
@@ -24,7 +23,7 @@ export type MatchStatus =
   | 'refused'
   | 'skipped';
 
-export interface MatchResult {
+interface MatchResult {
   status: MatchStatus;
   directoryUserUuid?: string;
 }
@@ -99,23 +98,28 @@ export async function matchDirectoryUser(
       }
       if (target.app_user_id !== null) return conflict('target_linked_to_other_user');
 
-      // app_user_id is unique, so a user can hold one link only. An existing link
-      // to a source='local' row is a leftover from before the switch to
-      // rollekatalog mode (those rows are ignored there): it is moved to the
-      // Rollekatalog row in this one transaction. A link to anything else
-      // (another Rollekatalog row, or one we cannot classify) is never touched.
-      const own = await tx.query<{ uuid: string; source: string }>(
-        'SELECT uuid, source FROM public.directory_users WHERE app_user_id = $1',
+      // app_user_id is unique, so a user can hold one link only. Two existing
+      // links are stale and are moved to the target in this one transaction:
+      // a source='local' row (a leftover from before the switch to rollekatalog
+      // mode, ignored there) and a DISABLED source='rollekatalog' row (the person
+      // was deleted and re-created in Rollekatalog, so the sync disabled the old
+      // row and added a new one). A link to an enabled row, or to one we cannot
+      // classify, is never touched.
+      const own = await tx.query<{ uuid: string; source: string; disabled: boolean }>(
+        'SELECT uuid, source, disabled FROM public.directory_users WHERE app_user_id = $1',
         [identity.userId],
       );
       const ownRow = own.rows[0];
       if (ownRow) {
-        if (ownRow.source !== 'local') return conflict('user_linked_to_other_entry');
-        // The guard repeats the ownership check on the row lock, so a concurrent
-        // login that already moved this link makes this release a no-op => conflict.
+        const releasable = ownRow.source === 'local' || (ownRow.source === 'rollekatalog' && ownRow.disabled === true);
+        if (!releasable) return conflict('user_linked_to_other_entry');
+        // The guard repeats the ownership and staleness check on the row lock, so a
+        // concurrent login that already moved this link (or a re-enabled row) makes
+        // this release a no-op => conflict.
         const released = await tx.query(
           `UPDATE public.directory_users SET app_user_id = NULL, updated_at = now()
-            WHERE uuid = $1 AND source = 'local' AND app_user_id = $2
+            WHERE uuid = $1 AND app_user_id = $2
+              AND (source = 'local' OR (source = 'rollekatalog' AND disabled = true))
             RETURNING uuid`,
           [ownRow.uuid, identity.userId],
         );
@@ -125,13 +129,13 @@ export async function matchDirectoryUser(
       const updated = await linkRow(tx, target.uuid, identity.userId);
       if (updated.rows.length === 0) return conflict('target_linked_to_other_user');
 
-      await recordAdminAction(tx, {
+      await recordEvent({
         type: 'access.user_link',
         actorUserId: identity.userId,
         entityType: 'directory_user',
         entityId: target.uuid,
         details: { via: mode, automatic: true },
-      });
+      }, { tx });
       return { status: 'linked' as const, directoryUserUuid: target.uuid };
     });
   } catch (err) {

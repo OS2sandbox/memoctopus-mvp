@@ -146,7 +146,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         expect([...out.targets].map((x) => x.orgUnitUuid).sort()).toEqual([t.a, t.a1].sort());
 
         const row = (await c.query('SELECT * FROM central_templates')).rows[0];
-        expect(row.created_by_user_id).toBe('mgr');
+        expect(row).not.toHaveProperty('created_by_user_id');
         expect(row.current_version).toBe(1);
 
         const v = (await c.query('SELECT * FROM central_template_versions')).rows;
@@ -221,6 +221,90 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         await expectSqlState(c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt) VALUES ('${t.a}', 'x', '   ')`), '23514');
         await expectSqlState(c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt, status) VALUES ('${t.a}', 'x', 'p', 'deleted')`), '23514');
       }));
+
+    describe('table CHECKs count only meaningful characters (raw SQL, bypassing the app rule)', () => {
+      const rep = (cp: number, n = 10) => String.fromCodePoint(cp).repeat(n);
+      const padded = (mid: string) => `a${mid.repeat(9)}b`;
+
+      const insertVersion = (c: Client, tpl: string, note: string, version = 1) =>
+        c.query(
+          `INSERT INTO central_template_versions (template_id, version, change_type, change_note, content, targets) VALUES ($1, $3, 'create', $2, '{}', '[]')`,
+          [tpl, note, version],
+        );
+      const newTemplate = async (c: Client) => {
+        const t = await tree(c);
+        const r = await c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt) VALUES ($1, 'x', 'p') RETURNING id`, [t.a]);
+        return { tpl: r.rows[0].id as string };
+      };
+
+      it.each([
+        ['9 NBSP between two letters', padded(String.fromCodePoint(0xa0))],
+        ['9 em spaces between two letters', padded(String.fromCodePoint(0x2003))],
+        ['9 newlines between two letters', padded('\n')],
+        ['10 zero-width spaces', rep(0x200b)],
+        ['10 combining grapheme joiners', rep(0x034f)],
+        ['10 variation selectors (U+FE0F)', rep(0xfe0f)],
+        ['10 Hangul filler U+3164', rep(0x3164)],
+        ['10 braille blanks', rep(0x2800)],
+        ['10 BOM', rep(0xfeff)],
+        ['10 tag characters (U+E0041)', rep(0xe0041)],
+        ['10 soft hyphens', rep(0x00ad)],
+        ['9 meaningful characters padded with whitespace', `   ${'x'.repeat(9)}   `],
+      ])('rejects a change note of %s', (_n, note) =>
+        withFreshSchema(async (c) => {
+          const { tpl } = await newTemplate(c);
+          await expectSqlState(insertVersion(c, tpl, note), '23514');
+        }));
+
+      it('accepts a normal note, ten meaningful characters among invisibles, and ten emoji', () =>
+        withFreshSchema(async (c) => {
+          const { tpl } = await newTemplate(c);
+          await insertVersion(c, tpl, 'Rettet tone i afsnit 2', 1);
+          await insertVersion(c, tpl, `${'a'.repeat(5)}${rep(0x200b, 20)}${'b'.repeat(5)}`, 2);
+          await insertVersion(c, tpl, '😀'.repeat(10), 3);
+          await insertVersion(c, tpl, 'æøåÆØÅ æøå æøå', 4);
+          expect(await count(c, 'central_template_versions')).toBe(4);
+        }));
+
+      it('refuses a note over 2000 characters and accepts exactly 2000', () =>
+        withFreshSchema(async (c) => {
+          const { tpl } = await newTemplate(c);
+          await expectSqlState(insertVersion(c, tpl, 'y'.repeat(2001)), '23514');
+          await insertVersion(c, tpl, 'y'.repeat(2000));
+        }));
+
+      it.each([
+        ['empty', ''],
+        ['spaces', '   '],
+        ['NBSP and em space', `${String.fromCodePoint(0xa0)}${String.fromCodePoint(0x2003)}`],
+        ['zero-width spaces', rep(0x200b, 3)],
+        ['Hangul fillers', rep(0x3164, 2)],
+        ['variation selectors', rep(0xfe0f, 2)],
+      ])('rejects a template name of %s', (_n, name) =>
+        withFreshSchema(async (c) => {
+          const t = await tree(c);
+          await expectSqlState(c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt) VALUES ($1, $2, 'p')`, [t.a, name]), '23514');
+        }));
+
+      it('accepts a one-character name, a Danish name and the 120 character cap, and refuses 121', () =>
+        withFreshSchema(async (c) => {
+          const t = await tree(c);
+          const ins = (name: string) => c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt) VALUES ($1, $2, 'p')`, [t.a, name]);
+          await ins('x');
+          await ins('Møde på Å');
+          await ins('n'.repeat(120));
+          await expectSqlState(ins('n'.repeat(121)), '23514');
+        }));
+
+      it('has no created_by_user_id column on central_templates', () =>
+        withFreshSchema(async (c, schema) => {
+          const r = await c.query(
+            `SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'central_templates' AND column_name = 'created_by_user_id'`,
+            [schema],
+          );
+          expect(r.rowCount).toBe(0);
+        }));
+    });
 
     it('rejects targets outside the owner subtree: sibling, parent, other branch; the owner and descendants are fine', () =>
       withFreshSchema(async (c, schema) => {

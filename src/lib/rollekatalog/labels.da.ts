@@ -1,4 +1,4 @@
-// Danish wording for the Rollekatalog sync and connection check. Pure (no env,
+// Danish wording for the Rollekatalog sync. Pure (no env,
 // no server imports) so client components and routes share one source.
 import type { SyncCounts } from './types';
 
@@ -36,6 +36,7 @@ export const syncStatusLabels: Record<'running' | 'success' | 'failed', string> 
 export const syncCountLabels: Record<keyof SyncCounts, string> = {
   usersUpserted: 'Brugere opdateret',
   usersDisabled: 'Brugere deaktiveret',
+  sessionsRevoked: 'Sessioner afsluttet',
   orgUnitsUpserted: 'Enheder opdateret',
   orgUnitsOrphaned: 'Enheder uden kendt overenhed',
   orgUnitCyclesBroken: 'Kredsløb i organisationen brudt',
@@ -44,24 +45,4 @@ export const syncCountLabels: Record<keyof SyncCounts, string> = {
   assignmentsIgnoredRole: 'Ukendte roller ignoreret',
   assignmentsSkippedUnknownUser: 'Roller for ukendte brugere sprunget over',
   assignmentsWithoutScope: 'Roller uden område (ikke tildelt)',
-};
-
-export const checkEndpointLabels: Record<string, string> = {
-  organisation: 'Organisation (brugere og enheder)',
-  managers: 'Ledere og stedfortrædere',
-  roleAssignments: 'Rolletildelinger',
-  constraints: 'Dataafgrænsninger',
-  rolesAsList: 'Dine roller (login-opslag)',
-};
-
-export const checkCountLabels: Record<string, string> = {
-  usersSeen: 'brugere',
-  orgUnitsSeen: 'enheder',
-  managersSeen: 'ledere',
-  substitutesSeen: 'stedfortrædere',
-  assignmentsSeen: 'tildelinger',
-  ourRolesSeen: 'af vores roller',
-  assignmentsWithOrgUnitConstraint: 'med enhedsafgrænsning',
-  constraintTypesSeen: 'afgrænsningstyper',
-  orgUnitConstraintTypesSeen: 'enhedsafgrænsninger',
 };

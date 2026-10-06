@@ -2,17 +2,19 @@
 // time clamp and the per-user rate limit used by POST /api/audit/client-events.
 // Kept out of route.ts because a Next route file may only export handlers.
 import { z } from 'zod';
-import { CLIENT_EVENT_TYPES, type EventType } from './events';
+import { defaultRunner, type SqlQueryable } from '@/lib/authz/pg-runner';
+import { auditClientEventsDailyCap } from './config';
+import type { EventType } from './events';
+import { meetingEvents } from './events/meeting';
 
-export const MAX_CLIENT_EVENTS_PER_REQUEST = 50;
+const MAX_CLIENT_EVENTS_PER_REQUEST = 50;
 /** About 32 KB: 50 catalogue events are a few KB, so this is generous. */
 export const MAX_CLIENT_BODY_BYTES = 32 * 1024;
 const MAX_PAST_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_FUTURE_MS = 5 * 60 * 1000;
 
-// Only the meeting.* types: a browser may not report anything else through here
-// (auth.login_failed also has source 'client' but belongs to another endpoint).
-const TYPES = CLIENT_EVENT_TYPES.filter((t) => t.startsWith('meeting.')) as [EventType, ...EventType[]];
+// Only the meeting.* types: a browser may not report anything else through here.
+const TYPES = Object.keys(meetingEvents) as [EventType, ...EventType[]];
 
 // STRICT: any other key (an `actor`, `ip`, `userId`, `source` ...) fails parsing.
 // `details` is only shape-checked here; the per-type strict schema runs in
@@ -35,8 +37,6 @@ export const clientEventsBody = z
       .max(MAX_CLIENT_EVENTS_PER_REQUEST),
   })
   .strict();
-
-export type ClientEventsBody = z.infer<typeof clientEventsBody>;
 
 /**
  * The client's clock is not trusted: a time more than 7 days back or 5 minutes
@@ -72,7 +72,87 @@ export function takeClientEventBudget(userId: string, n: number, now = Date.now(
   return null;
 }
 
+/**
+ * How many source='client' events this user already has in the last 24 h, counted up to
+ * `limit` (the query stops scanning at `limit` rows, so a flooded actor stays cheap).
+ * Uses audit_events_actor_idx (actor_user_id, id). THROWS on a database failure: the
+ * route answers 503 and stores nothing (self-reported telemetry is not worth a guess).
+ */
+export async function countRecentClientEvents(
+  userId: string,
+  limit: number,
+  runner: SqlQueryable = defaultRunner(),
+): Promise<number> {
+  const { rows } = await runner.query<{ n: number | string }>(
+    `SELECT count(*) AS n FROM (
+       SELECT 1 FROM public.audit_events
+        WHERE actor_user_id = $1 AND source = 'client' AND occurred_at > now() - interval '24 hours'
+        LIMIT $2
+     ) recent`,
+    [userId, limit],
+  );
+  const n = Number(rows[0]?.n);
+  if (!Number.isFinite(n)) throw new Error('client_event_count_failed');
+  return n;
+}
+
+/**
+ * Room left in the user's daily cap: `cap - used`, never negative. Throws like
+ * countRecentClientEvents.
+ */
+export async function remainingClientEventsToday(userId: string, runner?: SqlQueryable): Promise<number> {
+  const cap = auditClientEventsDailyCap();
+  const used = await countRecentClientEvents(userId, cap, runner);
+  return Math.max(0, cap - used);
+}
+
+// Per-(user, meeting, type) throttle for the chatty types: a rename or a minutes save
+// fires on every edit, but one stored row per minute says all the log needs to say.
+// In memory and best effort like the budget above (per instance, lost on restart).
+export const THROTTLED_TYPES: ReadonlySet<string> = new Set([
+  'meeting.rename',
+  'meeting.participants_edit',
+  'meeting.minutes_save',
+  'meeting.transcript_edit',
+]);
+export const THROTTLE_WINDOW_MS = 60_000;
+export const THROTTLE_MAX_ENTRIES = 5000;
+const lastStored = new Map<string, number>();
+
+const throttleKey = (userId: string, entityId: string, type: string) => `${userId}\u0000${entityId}\u0000${type}`;
+
+/** True when an event of this type for this meeting was stored by this user less than 60 s ago. */
+export function isClientEventThrottled(userId: string, entityId: string, type: string, now = Date.now()): boolean {
+  if (!THROTTLED_TYPES.has(type)) return false;
+  const t = lastStored.get(throttleKey(userId, entityId, type));
+  return t !== undefined && now - t < THROTTLE_WINDOW_MS;
+}
+
+/** Remember that an event was stored now (call after a successful store only). Bounded: expired entries go first, then the oldest. */
+export function markClientEventStored(userId: string, entityId: string, type: string, now = Date.now()): void {
+  if (!THROTTLED_TYPES.has(type)) return;
+  const key = throttleKey(userId, entityId, type);
+  lastStored.delete(key); // re-insert so Map order stays oldest-first
+  lastStored.set(key, now);
+  if (lastStored.size > THROTTLE_MAX_ENTRIES) {
+    for (const [k, t] of lastStored) {
+      if (now - t >= THROTTLE_WINDOW_MS) lastStored.delete(k);
+    }
+    // Still over: every entry is live, drop the oldest until back at the bound.
+    for (const k of lastStored.keys()) {
+      if (lastStored.size <= THROTTLE_MAX_ENTRIES) break;
+      lastStored.delete(k);
+    }
+  }
+}
+
 /** Test only. */
 export function __resetClientEventBudgets(): void {
   windows.clear();
+  lastStored.clear();
+}
+
+/** Test only. */
+export function __throttleSize(): number {
+  return lastStored.size;
 }

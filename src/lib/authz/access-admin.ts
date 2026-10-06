@@ -1,14 +1,14 @@
 // Service layer of the LOCAL access provider: the only code that mutates the
 // central access tables on behalf of an admin. Every mutation runs in one
-// transaction together with its audit-seam call, so Phase 2 can make the audit
-// row commit or roll back with the change.
+// transaction together with its recordEvent(..., { tx }) call, so the audit
+// row commits or rolls back with the change.
 //
 // Raw, public.-qualified SQL through the SqlRunner seam (same as bootstrap.ts),
 // not Drizzle builders: the guard logic below depends on FOR UPDATE / FOR SHARE
 // and advisory locks, and the unit tests fake the runner while the *.pg.test.ts
 // lane runs the same code against a real Postgres.
-import { recordAdminAction } from '@/lib/audit/seam';
-import { USABLE_LOCAL_ADMIN_SQL, activeSql } from './admin-sql';
+import { recordEvent } from '@/lib/audit/record';
+import { ADMIN_LOCK_NAME, ADMIN_ROLE, USABLE_LOCAL_ADMIN_SQL, activeSql } from './admin-sql';
 import { ConflictError, NotFoundError, ReadOnlyModeError, ValidationError } from './access-errors';
 import { isRoleKey } from './capabilities';
 import { roleScopeRule } from './role-rules';
@@ -16,20 +16,14 @@ import { accessSource } from './config';
 import { defaultRunner, type SqlQueryable, type SqlRunner } from './pg-runner';
 import type { RoleKey } from './types';
 
-// Same name as bootstrap.ts on purpose: bootstrap grants and revokes serialise
-// on one lock, so "the last administrator" is decided against one consistent view.
-const ADMIN_LOCK = 'referat:bootstrap-admin';
 // Serialises tree moves: two concurrent "A under B" / "B under A" must not both pass the cycle check.
 const ORG_TREE_LOCK = 'referat:org-tree';
-const ADMIN_ROLE: RoleKey = 'tt-administrator';
 
 const MAX_MEMBERS = 1000;
 const MAX_NAME_LENGTH = 200;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID_RE.test(v);
-
-const ACTIVE_SQL = activeSql;
 
 // ─── Views (the only shapes that leave this module) ────────────────────────
 
@@ -54,7 +48,7 @@ export interface AppUserView {
   roles: AssignmentView[];
 }
 
-export interface OrgUnitView {
+interface OrgUnitView {
   uuid: string;
   name: string;
   parentUuid: string | null;
@@ -62,7 +56,7 @@ export interface OrgUnitView {
   memberCount: number;
 }
 
-export interface OrgUnitMemberView {
+interface OrgUnitMemberView {
   directoryUserUuid: string;
   appUserId: string | null;
   name: string;
@@ -71,7 +65,7 @@ export interface OrgUnitMemberView {
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 /** Defence in depth: the routes check this first, but the service must not rely on its callers. */
-export function assertLocalMode(): void {
+function assertLocalMode(): void {
   if (accessSource() !== 'local') throw new ReadOnlyModeError();
 }
 
@@ -102,7 +96,7 @@ function assertLocalRow(source: unknown, message: string): void {
 
 // ─── Pure validation ───────────────────────────────────────────────────────
 
-export interface GrantShape {
+interface GrantShape {
   roleKey: string;
   scopeOrgUnitUuid: string | null;
   startDate: Date | null;
@@ -140,7 +134,7 @@ export function validateGrantShape(input: GrantShape): RoleKey {
 
 // ─── Users and roles ───────────────────────────────────────────────────────
 
-export interface ListUsersOptions {
+interface ListUsersOptions {
   /** Case-insensitive substring of name or email. */
   q?: string;
   limit?: number;
@@ -169,7 +163,7 @@ export async function listAppUsersWithRoles(
             du.uuid AS directory_user_uuid, du.disabled,
             ra.id AS assignment_id, ra.role_key, ra.scope_org_unit_uuid, ou.name AS scope_name,
             ra.include_descendants, ra.start_date, ra.stop_date, ra.source AS assignment_source,
-            (ra.id IS NOT NULL AND ${ACTIVE_SQL('ra')}) AS active
+            (ra.id IS NOT NULL AND ${activeSql('ra')}) AS active
        FROM page p
        LEFT JOIN public.directory_users du ON du.app_user_id = p.id
        LEFT JOIN public.role_assignments ra ON ra.directory_user_uuid = du.uuid
@@ -193,45 +187,36 @@ export async function listAppUsersWithRoles(
       };
       byId.set(id, user);
     }
-    if (r.assignment_id) {
-      user.roles.push({
-        id: String(r.assignment_id),
-        roleKey: String(r.role_key),
-        scopeOrgUnitUuid: (r.scope_org_unit_uuid as string | null) ?? null,
-        scopeOrgUnitName: (r.scope_name as string | null) ?? null,
-        includeDescendants: r.include_descendants === true,
-        startDate: iso(r.start_date),
-        stopDate: iso(r.stop_date),
-        source: String(r.assignment_source),
-        active: r.active === true,
-      });
-    }
+    if (r.assignment_id) user.roles.push(toAssignmentView(r));
   }
   return [...byId.values()];
 }
 
-async function assignmentView(tx: SqlQueryable, id: string): Promise<AssignmentView> {
-  const { rows } = await tx.query<Record<string, unknown>>(
-    `SELECT ra.id, ra.role_key, ra.scope_org_unit_uuid, ou.name AS scope_name, ra.include_descendants,
-            ra.start_date, ra.stop_date, ra.source, (${ACTIVE_SQL('ra')}) AS active
-       FROM public.role_assignments ra
-       LEFT JOIN public.org_units ou ON ou.uuid = ra.scope_org_unit_uuid
-      WHERE ra.id = $1::uuid`,
-    [id],
-  );
-  const r = rows[0];
-  if (!r) throw new NotFoundError('Rolletildelingen findes ikke');
+function toAssignmentView(r: Record<string, unknown>): AssignmentView {
   return {
-    id: String(r.id),
+    id: String(r.assignment_id),
     roleKey: String(r.role_key),
     scopeOrgUnitUuid: (r.scope_org_unit_uuid as string | null) ?? null,
     scopeOrgUnitName: (r.scope_name as string | null) ?? null,
     includeDescendants: r.include_descendants === true,
     startDate: iso(r.start_date),
     stopDate: iso(r.stop_date),
-    source: String(r.source),
+    source: String(r.assignment_source),
     active: r.active === true,
   };
+}
+
+async function assignmentView(tx: SqlQueryable, id: string): Promise<AssignmentView> {
+  const { rows } = await tx.query<Record<string, unknown>>(
+    `SELECT ra.id AS assignment_id, ra.role_key, ra.scope_org_unit_uuid, ou.name AS scope_name, ra.include_descendants,
+            ra.start_date, ra.stop_date, ra.source AS assignment_source, (${activeSql('ra')}) AS active
+       FROM public.role_assignments ra
+       LEFT JOIN public.org_units ou ON ou.uuid = ra.scope_org_unit_uuid
+      WHERE ra.id = $1::uuid`,
+    [id],
+  );
+  if (!rows[0]) throw new NotFoundError('Rolletildelingen findes ikke');
+  return toAssignmentView(rows[0]);
 }
 
 /**
@@ -255,13 +240,13 @@ async function ensureDirectoryUsers(
     [appUserIds],
   );
   for (const c of created.rows) {
-    await recordAdminAction(tx, {
+    await recordEvent({
       type: 'access.user_create',
       actorUserId,
       entityType: 'directory_user',
       entityId: c.uuid,
       details: { source: 'local' },
-    });
+    }, { tx });
   }
 
   const all = await tx.query<{ uuid: string; app_user_id: string; disabled: boolean }>(
@@ -272,7 +257,7 @@ async function ensureDirectoryUsers(
   return out;
 }
 
-export interface GrantRoleInput {
+interface GrantRoleInput {
   appUserId: string;
   roleKey: string;
   scopeOrgUnitUuid?: string | null;
@@ -318,7 +303,7 @@ export async function grantRole(input: GrantRoleInput, runner: SqlRunner = defau
     const id = inserted.rows[0]?.id;
     if (!id) throw new ConflictError('Rollen er allerede tildelt', 'already_assigned');
 
-    await recordAdminAction(tx, {
+    await recordEvent({
       type: 'access.role_assign',
       actorUserId: input.actorUserId,
       entityType: 'role_assignment',
@@ -326,7 +311,7 @@ export async function grantRole(input: GrantRoleInput, runner: SqlRunner = defau
       secondaryEntityType: 'directory_user',
       secondaryEntityId: dir.uuid,
       details: { roleKey, scopeOrgUnitUuid: scope, includeDescendants },
-    });
+    }, { tx });
     return assignmentView(tx, id);
   });
 }
@@ -344,11 +329,11 @@ export async function revokeAssignment(
     // The lock comes first, so every later statement (fresh READ COMMITTED
     // snapshot) sees the other revoke's committed delete. Without it two admins
     // revoking each other both count "one other admin left" and both succeed.
-    await advisoryLock(tx, ADMIN_LOCK);
+    await advisoryLock(tx, ADMIN_LOCK_NAME);
 
     const found = await tx.query<Record<string, unknown>>(
       `SELECT ra.id, ra.role_key, ra.source, ra.directory_user_uuid, ra.scope_org_unit_uuid,
-              du.app_user_id, (${ACTIVE_SQL('ra')}) AS active
+              du.app_user_id, (${activeSql('ra')}) AS active
          FROM public.role_assignments ra
          JOIN public.directory_users du ON du.uuid = ra.directory_user_uuid
         WHERE ra.id = $1::uuid
@@ -384,15 +369,15 @@ export async function revokeAssignment(
     }
 
     await tx.query('DELETE FROM public.role_assignments WHERE id = $1::uuid', [assignmentId]);
-    await recordAdminAction(tx, {
+    await recordEvent({
       type: 'access.role_revoke',
       actorUserId,
       entityType: 'role_assignment',
       entityId: assignmentId,
       secondaryEntityType: 'directory_user',
       secondaryEntityId: String(row.directory_user_uuid),
-      details: { roleKey: String(row.role_key), scopeOrgUnitUuid: (row.scope_org_unit_uuid as string | null) ?? null },
-    });
+      details: { roleKey: String(row.role_key) as RoleKey, scopeOrgUnitUuid: (row.scope_org_unit_uuid as string | null) ?? null },
+    }, { tx });
   });
 }
 
@@ -462,13 +447,13 @@ export async function createOrgUnit(
       [name, parent],
     );
     const view = orgUnitView(rows[0]);
-    await recordAdminAction(tx, {
+    await recordEvent({
       type: 'access.org_unit_create',
       actorUserId: input.actorUserId,
       entityType: 'org_unit',
       entityId: view.uuid,
       ...(parent ? { secondaryEntityType: 'org_unit' as const, secondaryEntityId: parent } : {}),
-    });
+    }, { tx });
     return view;
   });
 }
@@ -542,14 +527,14 @@ export async function updateOrgUnit(
        RETURNING uuid, name, parent_uuid, source`,
       params,
     );
-    await recordAdminAction(tx, {
+    await recordEvent({
       type: 'access.org_unit_update',
       actorUserId,
       entityType: 'org_unit',
       entityId: id,
       ...(parentChanged && parent ? { secondaryEntityType: 'org_unit' as const, secondaryEntityId: parent } : {}),
       details: { nameChanged, parentChanged },
-    });
+    }, { tx });
     return orgUnitView(updated.rows[0]);
   });
 }
@@ -597,12 +582,12 @@ export async function deleteOrgUnit(
     }
 
     await tx.query('DELETE FROM public.org_units WHERE uuid = $1::uuid', [id]);
-    await recordAdminAction(tx, {
+    await recordEvent({
       type: 'access.org_unit_delete',
       actorUserId,
       entityType: 'org_unit',
       entityId: id,
-    });
+    }, { tx });
   });
 }
 
@@ -690,14 +675,14 @@ export async function setOrgUnitMembers(
       ['access.member_add', toAdd],
     ] as const) {
       for (const directoryUuid of list) {
-        await recordAdminAction(tx, {
+        await recordEvent({
           type,
           actorUserId,
           entityType: 'org_unit_member',
           entityId: unitUuid,
           secondaryEntityType: 'directory_user',
           secondaryEntityId: directoryUuid,
-        });
+        }, { tx });
       }
     }
     return membersOf(tx, unitUuid);

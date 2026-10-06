@@ -37,9 +37,6 @@ export function eventDef(type: EventType): EventDef {
   return EVENT_CATALOGUE[type] as EventDef;
 }
 
-/** Event types a browser may report (source 'client' allowed). */
-export const CLIENT_EVENT_TYPES = EVENT_TYPES.filter((t) => (EVENT_CATALOGUE[t].sources as readonly string[]).includes('client'));
-
 /** What a caller passes as `details` for event type T (schema input, so optional keys stay optional). */
 export type EventDetails<T extends EventType> = z.input<(typeof EVENT_CATALOGUE)[T]['details']>;
 
@@ -47,7 +44,7 @@ type DetailsField<T extends EventType> = Record<string, never> extends EventDeta
   ? { details?: EventDetails<T> }
   : { details: EventDetails<T> };
 
-export interface EventCommon {
+interface EventCommon {
   outcome?: EventOutcome;
   /** Defaults to the first source the catalogue allows for the type. */
   source?: EventSource;

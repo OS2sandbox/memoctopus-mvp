@@ -28,10 +28,8 @@ export async function createMeeting(data: {
   // The audio's own recording date. Defaults to now (correct for live/Teams
   // recordings); upload flows pass the file's date so an old clip keeps its date.
   recordedAt?: string;
-  // How the meeting came about, reported as the meeting.create audit event. Callers
-  // should pass it; when absent a Teams meeting counts as 'bot' and anything else
-  // as 'live' (a plain recording). Uploads MUST say 'upload'.
-  origin?: MeetingOrigin;
+  // How the meeting came about, reported as the meeting.create audit event.
+  origin: MeetingOrigin;
 }): Promise<StoredMeeting> {
   const db = await getDB();
   const now = new Date().toISOString();
@@ -51,9 +49,7 @@ export async function createMeeting(data: {
     botSession: null,
   };
   await db.put('meetings', meeting);
-  reportAuditEvent('meeting.create', meeting.id, {
-    origin: data.origin ?? (meeting.source === 'teams' ? 'bot' : 'live'),
-  });
+  reportAuditEvent('meeting.create', meeting.id, { origin: data.origin });
   return meeting;
 }
 

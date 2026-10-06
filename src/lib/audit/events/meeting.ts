@@ -5,7 +5,7 @@
 import { z } from 'zod';
 import { count, defineEvent } from './types';
 
-export const MEETING_STATUSES = [
+const MEETING_STATUSES = [
   'joining',
   'recording',
   'processing',
@@ -38,7 +38,7 @@ export const meetingEvents = {
   'meeting.redact': defineEvent({ ...base, details: noDetails() }),
   'meeting.audio_delete': defineEvent({ ...base, details: noDetails() }),
   'meeting.transcript_edit': defineEvent({ ...base, details: z.object({ segmentCount: count().optional() }).strict() }),
-  'meeting.minutes_save': defineEvent({ ...base, details: z.object({ autosave: z.boolean().optional() }).strict() }),
+  'meeting.minutes_save': defineEvent({ ...base, details: noDetails() }),
   // `action` tells a new version (snapshot = "Gem version", generate = regenerated
   // referat) from switching the active version; versionNumber is the label of the
   // version concerned, never any of its content.

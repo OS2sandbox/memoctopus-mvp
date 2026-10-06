@@ -38,7 +38,7 @@ describe('visibleSectionsForMe', () => {
     expect(visibleSectionsForMe(me).map((s) => s.key)).toEqual(['overview', 'organisation']);
   });
 
-  it('shows every section to an access manager', () => {
+  it('shows overview, users and organisation to an access manager', () => {
     const me = {
       ...base,
       capabilities: ['template.use', 'access.manage', 'directory.read'] as MeResponse['capabilities'],

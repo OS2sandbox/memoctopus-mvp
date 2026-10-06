@@ -1,11 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { makeFakeRunner } from '@/test/fake-runner';
 import {
   clampClientTime,
   clientEventsBody,
   RATE_LIMIT_EVENTS,
   RATE_LIMIT_WINDOW_MS,
   takeClientEventBudget,
+  countRecentClientEvents,
+  remainingClientEventsToday,
+  isClientEventThrottled,
+  markClientEventStored,
+  THROTTLE_WINDOW_MS,
+  THROTTLE_MAX_ENTRIES,
+  THROTTLED_TYPES,
   __resetClientEventBudgets,
+  __throttleSize,
 } from './client-ingest';
 
 const NOW = new Date('2026-10-05T12:00:00.000Z');
@@ -50,5 +59,100 @@ describe('takeClientEventBudget', () => {
     expect(takeClientEventBudget('u', 1, 2000)).toBe(59);
     expect(takeClientEventBudget('other', 1, 2000)).toBeNull();
     expect(takeClientEventBudget('u', 1, 1000 + RATE_LIMIT_WINDOW_MS)).toBeNull();
+  });
+});
+
+describe('countRecentClientEvents / remainingClientEventsToday', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('runs one schema-qualified bounded query on the actor index columns', async () => {
+    const { runner, calls } = makeFakeRunner(() => [{ n: '12' }]);
+    expect(await countRecentClientEvents('u1', 2000, runner)).toBe(12);
+    expect(calls).toHaveLength(1);
+    const sql = calls[0].sql.replace(/\s+/g, ' ');
+    expect(sql).toContain('public.audit_events');
+    expect(sql).toContain('actor_user_id = $1');
+    expect(sql).toContain("source = 'client'");
+    expect(sql).toContain("interval '24 hours'");
+    expect(sql).toContain('LIMIT $2');
+    expect(calls[0].params).toEqual(['u1', 2000]);
+  });
+
+  it('throws on a failed or unreadable count', async () => {
+    const failing = makeFakeRunner(() => {
+      throw new Error('boom');
+    });
+    await expect(countRecentClientEvents('u', 5, failing.runner)).rejects.toThrow('boom');
+    const empty = makeFakeRunner(() => []);
+    await expect(countRecentClientEvents('u', 5, empty.runner)).rejects.toThrow();
+  });
+
+  it('remaining = cap - used, never negative, default cap 2000', async () => {
+    expect(await remainingClientEventsToday('u', makeFakeRunner(() => [{ n: 0 }]).runner)).toBe(2000);
+    expect(await remainingClientEventsToday('u', makeFakeRunner(() => [{ n: 1999 }]).runner)).toBe(1);
+    expect(await remainingClientEventsToday('u', makeFakeRunner(() => [{ n: 2000 }]).runner)).toBe(0);
+    expect(await remainingClientEventsToday('u', makeFakeRunner(() => [{ n: 2500 }]).runner)).toBe(0);
+    vi.stubEnv('AUDIT_CLIENT_EVENTS_DAILY_CAP', '100');
+    expect(await remainingClientEventsToday('u', makeFakeRunner(() => [{ n: 40 }]).runner)).toBe(60);
+  });
+});
+
+describe('client event throttle', () => {
+  const M = '11111111-2222-4333-8444-555555555555';
+  const T0 = 1_000_000;
+
+  it('covers exactly the four chatty types', () => {
+    expect([...THROTTLED_TYPES].sort()).toEqual(
+      ['meeting.minutes_save', 'meeting.participants_edit', 'meeting.rename', 'meeting.transcript_edit'],
+    );
+  });
+
+  it('is not throttled until something was stored, then for 60 s, then free again', () => {
+    __resetClientEventBudgets();
+    expect(isClientEventThrottled('u', M, 'meeting.rename', T0)).toBe(false);
+    markClientEventStored('u', M, 'meeting.rename', T0);
+    expect(isClientEventThrottled('u', M, 'meeting.rename', T0 + 1)).toBe(true);
+    expect(isClientEventThrottled('u', M, 'meeting.rename', T0 + THROTTLE_WINDOW_MS - 1)).toBe(true);
+    expect(isClientEventThrottled('u', M, 'meeting.rename', T0 + THROTTLE_WINDOW_MS)).toBe(false);
+  });
+
+  it('is keyed on actor, meeting and type', () => {
+    __resetClientEventBudgets();
+    markClientEventStored('u', M, 'meeting.rename', T0);
+    expect(isClientEventThrottled('v', M, 'meeting.rename', T0)).toBe(false);
+    expect(isClientEventThrottled('u', 'other', 'meeting.rename', T0)).toBe(false);
+    expect(isClientEventThrottled('u', M, 'meeting.minutes_save', T0)).toBe(false);
+  });
+
+  it('never tracks or throttles other types', () => {
+    __resetClientEventBudgets();
+    markClientEventStored('u', M, 'meeting.delete', T0);
+    expect(__throttleSize()).toBe(0);
+    expect(isClientEventThrottled('u', M, 'meeting.delete', T0)).toBe(false);
+  });
+
+  it('is bounded: expired entries are evicted first when the map overflows', () => {
+    __resetClientEventBudgets();
+    for (let i = 0; i < THROTTLE_MAX_ENTRIES; i++) markClientEventStored(`old${i}`, M, 'meeting.rename', T0);
+    expect(__throttleSize()).toBe(THROTTLE_MAX_ENTRIES);
+    markClientEventStored('fresh', M, 'meeting.rename', T0 + THROTTLE_WINDOW_MS + 1);
+    expect(__throttleSize()).toBe(1);
+    expect(isClientEventThrottled('fresh', M, 'meeting.rename', T0 + THROTTLE_WINDOW_MS + 2)).toBe(true);
+  });
+
+  it('is bounded even when every entry is live: the oldest are dropped', () => {
+    __resetClientEventBudgets();
+    for (let i = 0; i < THROTTLE_MAX_ENTRIES + 10; i++) markClientEventStored(`u${i}`, M, 'meeting.rename', T0 + i);
+    expect(__throttleSize()).toBe(THROTTLE_MAX_ENTRIES);
+    const now = T0 + THROTTLE_MAX_ENTRIES + 10;
+    expect(isClientEventThrottled('u0', M, 'meeting.rename', now)).toBe(false);
+    expect(isClientEventThrottled(`u${THROTTLE_MAX_ENTRIES + 9}`, M, 'meeting.rename', now)).toBe(true);
+  });
+
+  it('re-marking refreshes the window and the entry age', () => {
+    __resetClientEventBudgets();
+    markClientEventStored('u', M, 'meeting.rename', T0);
+    markClientEventStored('u', M, 'meeting.rename', T0 + 50_000);
+    expect(isClientEventThrottled('u', M, 'meeting.rename', T0 + 100_000)).toBe(true);
   });
 });

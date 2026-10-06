@@ -8,7 +8,7 @@ import {
   type RoleKey,
 } from './types';
 
-export interface RoleDefinition {
+interface RoleDefinition {
   capabilities: Capability[];
   /** May a NULL scope on an assignment of this role mean "everywhere"? */
   globalScopeAllowed: boolean;
@@ -61,7 +61,7 @@ export function isRoleKey(value: string): value is RoleKey {
   return (ROLE_KEYS as readonly string[]).includes(value);
 }
 
-export interface BuildPrincipalInput {
+interface BuildPrincipalInput {
   userId: string;
   directoryUserUuid: string | null;
   disabled: boolean;

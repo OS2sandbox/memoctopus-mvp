@@ -9,14 +9,13 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('./principal', () => ({
   resolvePrincipal: vi.fn(),
 }));
-vi.mock('@/lib/audit/seam', () => ({
+vi.mock('@/lib/audit/authz-denied', () => ({
   recordAuthzDenied: vi.fn(),
-  recordAdminAction: vi.fn(),
 }));
 
 import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
-import { recordAuthzDenied } from '@/lib/audit/seam';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 import { FAKE_PRINCIPAL_ADMIN, FAKE_SESSION, makeJsonReq, NO_PARAMS, makePrincipal } from '@/test/helpers';
 import { resolvePrincipal } from './principal';
 import {
@@ -230,7 +229,29 @@ describe('route handler type', () => {
     const handler = withAuthz('t', null, ok);
     // Type-level only (tsc checks it); never invoked.
     // @ts-expect-error the 2nd argument must be mandatory in the exported type
-    const withoutContext = () => handler(req());
-    expect(typeof withoutContext).toBe('function');
+    void (() => handler(req()));
+  });
+});
+
+describe('invalid ACCESS_SOURCE (ConfigError) never falls open', () => {
+  const configError = () => Object.assign(new Error('ACCESS_SOURCE must be "local" or "rollekatalog"'), { name: 'ConfigError' });
+
+  it('withAuthz answers 503 (Danish) when the principal cannot be resolved because of the config, handler not called', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockResolve.mockRejectedValue(configError());
+    const handler = vi.fn(ok);
+    const res = await withAuthz('t', 'access.manage', handler)(req(), NO_PARAMS);
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ error: 'Adgangskontrol er midlertidigt utilgængelig' });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('requireLocalSource with a mistyped ACCESS_SOURCE answers 503, never the local-mode handler', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.stubEnv('ACCESS_SOURCE', 'rolekatalog');
+    const handler = vi.fn(ok);
+    const res = await withAuthz('t', 'access.manage', handler, { requireLocalSource: true })(req(), NO_PARAMS);
+    expect(res.status).toBe(503);
+    expect(handler).not.toHaveBeenCalled();
   });
 });

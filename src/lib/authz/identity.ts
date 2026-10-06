@@ -15,7 +15,7 @@ export const CLAIM_WHITELIST = [
   'name',
 ] as const;
 
-export type ClaimName = (typeof CLAIM_WHITELIST)[number];
+type ClaimName = (typeof CLAIM_WHITELIST)[number];
 export type IdentityClaims = Partial<Record<Exclude<ClaimName, 'email_verified'>, string>> & {
   email_verified?: boolean;
 };

@@ -1,15 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { diffLines, hasChanges, splitLines, MAX_DIFF_CELLS } from './diff';
+import { diffLines, hasChanges } from './diff';
 
 const compact = (r: ReturnType<typeof diffLines>) =>
   r.lines.map((l) => (l.type === 'equal' ? ' ' : l.type === 'insert' ? '+' : '-') + l.text);
-
-describe('splitLines', () => {
-  it('returns no lines for an empty string and normalises CRLF', () => {
-    expect(splitLines('')).toEqual([]);
-    expect(splitLines('a\r\nb\rc')).toEqual(['a', 'b', 'c']);
-  });
-});
 
 describe('diffLines', () => {
   it('reports identical text as all equal', () => {
@@ -86,8 +79,12 @@ describe('diffLines', () => {
     expect(r.lines.filter((l) => l.type !== 'equal')).toHaveLength(2);
   });
 
+  it('normalises CRLF and CR line endings', () => {
+    expect(compact(diffLines('a\r\nb\rc', 'a\nb\nc'))).toEqual([' a', ' b', ' c']);
+  });
+
   it('honours a custom cell limit', () => {
     expect(diffLines('a\nb\nc', 'x\ny\nz', 4).approximate).toBe(true);
-    expect(diffLines('a\nb\nc', 'x\ny\nz', MAX_DIFF_CELLS).approximate).toBe(false);
+    expect(diffLines('a\nb\nc', 'x\ny\nz', 1_000_000).approximate).toBe(false);
   });
 });

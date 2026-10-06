@@ -5,21 +5,21 @@
 
 export type DiffLineType = 'equal' | 'insert' | 'delete';
 
-export interface DiffLine {
+interface DiffLine {
   type: DiffLineType;
   text: string;
 }
 
-export interface DiffResult {
+interface DiffResult {
   lines: DiffLine[];
   /** True when the input was too large for an exact diff and the middle was replaced wholesale. */
   approximate: boolean;
 }
 
 /** Upper bound on LCS table cells (rows x columns) after trimming common head and tail. */
-export const MAX_DIFF_CELLS = 1_000_000;
+const MAX_DIFF_CELLS = 1_000_000;
 
-export function splitLines(text: string): string[] {
+function splitLines(text: string): string[] {
   if (text === '') return [];
   return text.replace(/\r\n?/g, '\n').split('\n');
 }

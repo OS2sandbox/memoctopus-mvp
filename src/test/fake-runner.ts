@@ -4,7 +4,7 @@
 // text they care about, and the real behaviour lives in the *.pg.test.ts lane.
 import type { SqlQueryable, SqlResult, SqlRunner } from '@/lib/authz/pg-runner';
 
-export interface RecordedQuery {
+interface RecordedQuery {
   sql: string;
   params: readonly unknown[];
   tx: boolean;

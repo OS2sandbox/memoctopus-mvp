@@ -3,9 +3,7 @@
 // never logs anything, and every failure is a RollekatalogError carrying a short
 // code: no URL query, header, key or body can leak through an error.
 import {
-  ROLES_AS_LIST_MAX_BYTES,
   itSystemId as configuredItSystemId,
-  loginRefreshTimeoutMs,
   maxResponseBytes,
   orgKey as configuredOrgKey,
   readKey as configuredReadKey,
@@ -16,16 +14,10 @@ import {
 } from './config';
 import { RollekatalogError } from './errors';
 import {
-  constraintTypesSchema,
-  managersSchema,
   organisationSchema,
   parseOrThrow,
   roleAssignmentsSchema,
-  rolesAsListSchema,
-  type RkConstraintType,
-  type RkManager,
   type RkOrganisation,
-  type RkRolesAsList,
   type RkUserAssignments,
 } from './schemas';
 
@@ -60,11 +52,6 @@ interface RequestSpec {
   path: string;
   query?: Record<string, string | null | undefined>;
   key: KeyKind;
-  /** Per-call overrides of the client options (the login refresh is tighter). */
-  timeoutMs?: number;
-  maxBytes?: number;
-  /** Per-call cap on retries (the login refresh never retries: it sits on the sign-in path). */
-  maxRetries?: number;
 }
 
 const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -185,9 +172,9 @@ export class RollekatalogClient {
     for (const [k, v] of Object.entries(spec.query ?? {})) if (v) qs.set(k, v);
     const query = qs.toString();
     const url = `${base}${spec.path}${query ? `?${query}` : ''}`;
-    const timeoutMs = spec.timeoutMs ?? this.opts.timeoutMs ?? configuredTimeoutMs();
-    const maxBytes = spec.maxBytes ?? this.opts.maxBytes ?? maxResponseBytes();
-    const retries = Math.min(Math.max(this.opts.retries ?? MAX_RETRIES, 0), spec.maxRetries ?? MAX_RETRIES);
+    const timeoutMs = this.opts.timeoutMs ?? configuredTimeoutMs();
+    const maxBytes = this.opts.maxBytes ?? maxResponseBytes();
+    const retries = Math.min(Math.max(this.opts.retries ?? MAX_RETRIES, 0), MAX_RETRIES);
     const backoff = this.opts.backoffMs ?? BASE_BACKOFF_MS;
     const sleep = this.opts.sleep ?? realSleep;
 
@@ -207,11 +194,6 @@ export class RollekatalogClient {
     return parseOrThrow(organisationSchema, await this.request({ path: '/api/organisation/v3', key: 'org' }));
   }
 
-  /** ORG key (READ_ACCESS is refused). */
-  async getManagers(): Promise<RkManager[]> {
-    return parseOrThrow(managersSchema, await this.request({ path: '/api/v2/manager', key: 'org' }));
-  }
-
   /** READ key. Effective assignments with resolved constraint values for our IT system. */
   async getRoleAssignments(): Promise<RkUserAssignments[]> {
     const data = await this.request({
@@ -221,37 +203,9 @@ export class RollekatalogClient {
     });
     return parseOrThrow(roleAssignmentsSchema, data);
   }
-
-  /**
-   * READ key. Login-time check only: EVERY successful call writes an audit row in
-   * Rollekatalog. 404 (empty body) = unknown user or system: RollekatalogError('not_found').
-   */
-  async getRolesAsList(userId: string, opts: { login?: boolean } = {}): Promise<RkRolesAsList> {
-    const data = await this.request({
-      path: `/api/user/${encodeURIComponent(userId)}/rolesAsList`,
-      query: { system: this.system(), domain: this.domain() },
-      key: 'read',
-      timeoutMs: opts.login ? Math.min(this.opts.timeoutMs ?? loginRefreshTimeoutMs(), loginRefreshTimeoutMs()) : undefined,
-      maxRetries: opts.login ? 0 : undefined,
-      maxBytes: Math.min(this.opts.maxBytes ?? ROLES_AS_LIST_MAX_BYTES, ROLES_AS_LIST_MAX_BYTES),
-    });
-    return parseOrThrow(rolesAsListSchema, data);
-  }
-
-  /** READ key. */
-  async getConstraints(): Promise<RkConstraintType[]> {
-    return parseOrThrow(constraintTypesSchema, await this.request({ path: '/api/v2/constraint', key: 'read' }));
-  }
 }
 
 /** A client that reads URL, keys and limits from the environment at call time. */
 export function createRollekatalogClient(opts: ClientOptions = {}): RollekatalogClient {
   return new RollekatalogClient(opts);
 }
-
-export const getOrganisation = (opts?: ClientOptions) => createRollekatalogClient(opts).getOrganisation();
-export const getManagers = (opts?: ClientOptions) => createRollekatalogClient(opts).getManagers();
-export const getRoleAssignments = (opts?: ClientOptions) => createRollekatalogClient(opts).getRoleAssignments();
-export const getRolesAsList = (userId: string, opts?: ClientOptions & { login?: boolean }) =>
-  createRollekatalogClient(opts).getRolesAsList(userId, { login: opts?.login });
-export const getConstraints = (opts?: ClientOptions) => createRollekatalogClient(opts).getConstraints();

@@ -35,17 +35,32 @@ describe('migration 0003_central_templates', () => {
     expect(sql).toMatch(/"central_template_versions_template_id_central_templates_id_fk".*ON DELETE cascade/);
   });
 
-  it('forces a change note of at least 10 characters (after trimming) on every version row', () => {
-    expect(sql).toContain('char_length(btrim("central_template_versions"."change_note")) >= 10');
+  it('forces a change note of at least 10 meaningful characters (whitespace and invisibles stripped) on every version row', () => {
+    expect(sql).toContain('char_length(regexp_replace("central_template_versions"."change_note", \'');
+    expect(sql).toContain(`'g')) >= 10 and char_length("central_template_versions"."change_note") <= 2000`);
+    expect(sql).not.toContain('btrim("central_template_versions"."change_note")');
     expect(sql).toContain('char_length("central_template_versions"."change_note") <= 2000');
     expect(sql).toContain('"change_note" text NOT NULL');
     expect(sql).toContain('CONSTRAINT "central_template_versions_template_version_unique" UNIQUE("template_id","version")');
   });
 
+  it('requires at least one meaningful character in the name, with the same class as the change note', () => {
+    const cls = (s: string) => /regexp_replace\([^,]+, '(\[\[:space:\][^']*\])', ''/.exec(s)?.[1];
+    const note = statements.find((s) => s.includes('"central_template_versions_change_note_check"'));
+    const name = statements.find((s) => s.includes('"central_templates_name_check"'));
+    expect(cls(name ?? '')).toBeDefined();
+    expect(cls(name ?? '')).toBe(cls(note ?? ''));
+    expect(sql).toContain(`'g')) >= 1 and char_length("central_templates"."name") <= 120`);
+    expect(sql).not.toContain('btrim("central_templates"."name")');
+  });
+
+  it('keeps no write-only created_by_user_id column on central_templates', () => {
+    expect(sql).not.toContain('created_by_user_id');
+  });
+
   it('declares the vocabularies and length caps', () => {
     expect(sql).toContain(`"central_templates"."status" in ('active', 'archived')`);
     expect(sql).toContain(`"change_type" in ('create', 'update', 'retarget', 'archive', 'restore')`);
-    expect(sql).toContain('char_length("central_templates"."name") <= 120');
     expect(sql).toContain('char_length("central_templates"."description") <= 1000');
     expect(sql).toContain('char_length("central_templates"."prompt") <= 20000');
   });

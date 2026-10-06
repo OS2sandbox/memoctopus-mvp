@@ -3,13 +3,12 @@
 // set_config('audit.allow_prune', 'on', true) (transaction-local, so it cannot
 // leak to a pooled connection's next use). Batches keep each transaction short.
 import { defaultRunner, type SqlRunner } from '@/lib/authz/pg-runner';
-import { recordEvent } from './record';
+import { recordEvent, TABLE_RE } from './record';
 
-export const DEFAULT_PRUNE_BATCH = 5000;
+const DEFAULT_PRUNE_BATCH = 5000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const TABLE_RE = /^[A-Za-z0-9_."]{1,128}$/;
 
-export interface PruneOptions {
+interface PruneOptions {
   /** Rows strictly older than this many whole days are deleted. Must be >= 1 (0 would wipe the log). */
   olderThanDays: number;
   now?: Date;
@@ -23,7 +22,7 @@ export interface PruneOptions {
 
 /**
  * Deletes audit rows older than the cutoff and returns how many. Records one
- * `audit.prune` system event when something was deleted, so callers (the cron
+ * `audit.prune` system event when something was deleted (also when a later batch fails), so callers (the cron
  * route) must not record it again.
  */
 export async function pruneAuditEvents(opts: PruneOptions): Promise<number> {
@@ -40,26 +39,29 @@ export async function pruneAuditEvents(opts: PruneOptions): Promise<number> {
   const cutoff = new Date((opts.now ?? new Date()).getTime() - olderThanDays * DAY_MS);
 
   let total = 0;
-  for (;;) {
-    const deleted = await runner.transaction(async (tx) => {
-      await tx.query(`SELECT set_config('audit.allow_prune', 'on', true)`);
-      const res = await tx.query(
-        `DELETE FROM ${table}
-          WHERE id IN (SELECT id FROM ${table} WHERE occurred_at < $1 ORDER BY id LIMIT $2)`,
-        [cutoff, batchSize],
-      );
-      return res.rowCount ?? 0;
-    });
-    total += deleted;
-    if (deleted < batchSize) break;
-  }
-
-  if (total > 0 && opts.emitEvent !== false) {
-    await recordEvent({
-      type: 'audit.prune',
-      source: 'system',
-      details: { deletedCount: total, olderThanDays },
-    });
+  try {
+    for (;;) {
+      const deleted = await runner.transaction(async (tx) => {
+        await tx.query(`SELECT set_config('audit.allow_prune', 'on', true)`);
+        const res = await tx.query(
+          `DELETE FROM ${table}
+            WHERE id IN (SELECT id FROM ${table} WHERE occurred_at < $1 ORDER BY id LIMIT $2)`,
+          [cutoff, batchSize],
+        );
+        return res.rowCount ?? 0;
+      });
+      total += deleted;
+      if (deleted < batchSize) break;
+    }
+  } finally {
+    // Earlier batches are already committed: a later failure must still leave the audit row for what is gone.
+    if (total > 0 && opts.emitEvent !== false) {
+      await recordEvent({
+        type: 'audit.prune',
+        source: 'system',
+        details: { deletedCount: total, olderThanDays },
+      });
+    }
   }
   return total;
 }

@@ -56,6 +56,17 @@ describe.skipIf(!hasPg)('audit_events (real Postgres)', () => {
       expect(triggers).toEqual(['audit_events_no_truncate', 'audit_events_no_update_delete']);
     }));
 
+  it('indexes entity_id and secondary_entity_id separately (partial), not as (entity_type, entity_id)', () =>
+    withFreshSchema(async (c, schema) => {
+      const idx = (await c.query(`SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1 AND tablename = 'audit_events'`, [schema])).rows;
+      const names = idx.map((r) => r.indexname);
+      expect(names).not.toContain('audit_events_entity_idx');
+      expect(names).toEqual(expect.arrayContaining(['audit_events_entity_id_idx', 'audit_events_secondary_entity_id_idx']));
+      const def = (n: string) => idx.find((r) => r.indexname === n)?.indexdef ?? '';
+      expect(def('audit_events_entity_id_idx')).toMatch(/\(entity_id\) WHERE \(entity_id IS NOT NULL\)/);
+      expect(def('audit_events_secondary_entity_id_idx')).toMatch(/\(secondary_entity_id\) WHERE \(secondary_entity_id IS NOT NULL\)/);
+    }));
+
   it('has no foreign keys: a row may name an actor that does not exist (and survives user deletion)', () =>
     withFreshSchema(async (c) => {
       const fks = await c.query(`SELECT 1 FROM pg_constraint WHERE conrelid = 'audit_events'::regclass AND contype = 'f'`);

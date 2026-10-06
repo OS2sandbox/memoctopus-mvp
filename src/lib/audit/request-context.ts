@@ -39,13 +39,16 @@ export function clientIp(req: HeaderSource): string | null {
   return null;
 }
 
-export function userAgentOf(req: HeaderSource): string | null {
-  const ua = req.headers.get('user-agent');
+/** Control characters have no business in a log column; capped at 255. */
+export function cleanUserAgent(ua: string | null | undefined): string | null {
   if (!ua) return null;
-  // Control characters have no business in a log column.
   // eslint-disable-next-line no-control-regex
   const cleaned = ua.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, MAX_USER_AGENT);
   return cleaned || null;
+}
+
+export function userAgentOf(req: HeaderSource): string | null {
+  return cleanUserAgent(req.headers.get('user-agent'));
 }
 
 // Only id shapes a proxy or client really generates are honoured (a UUID, or the

@@ -13,8 +13,6 @@ export const eventTypeLabels: Record<EventType, string> = {
   'access.member_add': 'Medlem tilføjet til enhed',
   'access.member_remove': 'Medlem fjernet fra enhed',
   'access.user_create': 'Bruger oprettet',
-  'access.user_update': 'Bruger ændret',
-  'access.user_delete': 'Bruger slettet',
   'access.user_link': 'Bruger koblet til organisationen',
   'authz.denied': 'Adgang nægtet',
   // Login

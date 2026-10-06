@@ -7,7 +7,6 @@ import { asHeaderSource, clientIp, requestIdOf, userAgentOf, type HeaderSource }
 import { CODE_RE } from '@/lib/audit/events/types';
 import { maybeBootstrapAdmin } from './bootstrap';
 import { enabledAuthProviders } from '@/lib/auth/providers';
-import { refreshUserFromRollekatalog } from '@/lib/rollekatalog/login-refresh';
 import { accessSource } from './config';
 import { matchDirectoryUser } from './directory-match';
 import { captureExternalIdentity, type ExternalIdentity } from './identity';
@@ -29,21 +28,21 @@ export async function runLoginHooks(userId: string): Promise<void> {
   }
 
   // Local mode links roles to app users directly; claims are never used there.
-  if (accessSource() !== 'rollekatalog') return;
+  // An invalid ACCESS_SOURCE throws ConfigError: log it and skip the match (this hook never throws).
+  let mode: ReturnType<typeof accessSource>;
+  try {
+    mode = accessSource();
+  } catch (err) {
+    console.error(`[authz] login step failed: access_source (${errorLabel(err)})`);
+    return;
+  }
+  if (mode !== 'rollekatalog') return;
   for (const identity of identities) {
     try {
       await matchDirectoryUser(identity);
     } catch (err) {
       console.error(`[authz] login step failed: match_directory_user (${errorLabel(err)})`);
     }
-  }
-
-  // After matching, so a user linked just now is refreshed too. It can only take
-  // access away (revoke / disable), and never waits longer than its short budget.
-  try {
-    await refreshUserFromRollekatalog(userId);
-  } catch (err) {
-    console.error(`[authz] login step failed: rollekatalog_refresh (${errorLabel(err)})`);
   }
 }
 
@@ -87,7 +86,7 @@ export interface AuthHookContext {
   context?: { returned?: unknown; responseHeaders?: unknown } | null;
 }
 
-export type LoginMethod = 'password' | 'oidc' | 'microsoft' | 'unknown';
+type LoginMethod = 'password' | 'oidc' | 'microsoft' | 'unknown';
 
 // The provider id comes from the URL path of an unauthenticated request, so it is
 // only stored when it names a provider that is actually configured; anything else
@@ -118,7 +117,7 @@ function headersOf(ctx: AuthHookContext | null | undefined): HeaderSource | null
   return asHeaderSource({ headers: ctx?.headers ?? ctx?.request?.headers });
 }
 
-export interface LoginSession {
+interface LoginSession {
   userId: string;
   ipAddress?: string | null;
   userAgent?: string | null;
@@ -202,7 +201,7 @@ export const allowLoginFailureEvent = (ip: string | null): boolean => failureThr
 
 type FailedReason = 'invalid_credentials' | 'oauth_error' | 'account_not_linked' | 'rate_limited' | 'unknown';
 
-export interface AuthFailure {
+interface AuthFailure {
   reason: FailedReason;
   method: LoginMethod;
   provider: string;

@@ -102,6 +102,10 @@ export const auth = betterAuth({
   // victim's address could then link into that victim's account. Here user.id is
   // the per-user PostgreSQL schema key, so that is a data breach. The defaults
   // require both sides to be verified; leave them alone.
+  // Consequences: password sign-ups stay emailVerified=false, so an SSO login for an
+  // existing password account is REFUSED (error=account_not_linked), not merged. For
+  // Microsoft and password sign-ups emailVerified is usually false, so the first-admin
+  // bootstrap (authz/bootstrap.ts) is evaluated per provider, not on emailVerified.
   plugins: [
     ...(oidc
       ? [

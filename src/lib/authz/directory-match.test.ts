@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeRunner } from '@/test/fake-runner';
 
 vi.mock('@/lib/db', () => ({ pool: {} }));
-const recordAdminAction = vi.fn(async () => {});
-vi.mock('@/lib/audit/seam', () => ({ recordAdminAction: (...a: unknown[]) => recordAdminAction(...(a as [])) }));
+const recordEvent = vi.fn(async () => {});
+vi.mock('@/lib/audit/record', () => ({ recordEvent: (...a: unknown[]) => recordEvent(...(a as [])) }));
 
 import { matchDirectoryUser } from './directory-match';
 import type { ExternalIdentity } from './identity';
@@ -32,7 +32,7 @@ beforeEach(() => {
   vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
   vi.stubEnv('DIRECTORY_USERID_CLAIM', '');
   vi.spyOn(console, 'warn').mockImplementation(() => {});
-  recordAdminAction.mockClear();
+  recordEvent.mockClear();
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -60,7 +60,7 @@ describe('userid-claim', () => {
     expect(select.params).toEqual(['ABC123']);
     expect(calls.map((c) => c.sql)[0]).toBe('BEGIN');
     expect(calls.at(-1)!.sql).toBe('COMMIT');
-    expect(recordAdminAction).toHaveBeenCalledOnce();
+    expect(recordEvent).toHaveBeenCalledOnce();
   });
 
   it('uses DIRECTORY_USERID_CLAIM', async () => {
@@ -204,14 +204,14 @@ describe('links', () => {
     const { runner, calls } = db([{ uuid: 'd1', app_user_id: 'u1' }]);
     expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('already_linked');
     expect(calls.some((c) => c.sql.startsWith('UPDATE'))).toBe(false);
-    expect(recordAdminAction).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('never relinks a directory entry that points at a different app user', async () => {
     const { runner, calls } = db([{ uuid: 'd1', app_user_id: 'someone-else' }]);
     expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('conflict');
     expect(calls.some((c) => c.sql.startsWith('UPDATE'))).toBe(false);
-    expect(recordAdminAction).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('does not move a user already linked to another directory entry', async () => {
@@ -224,7 +224,7 @@ describe('links', () => {
     const { runner, calls } = db([D1], [], []);
     expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('conflict');
     expect(calls.find((c) => c.sql.startsWith('UPDATE'))!.sql).toContain('app_user_id IS NULL OR app_user_id = $1');
-    expect(recordAdminAction).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('maps a unique violation to conflict and logs a code only', async () => {
@@ -266,28 +266,28 @@ describe('mode-switch relink (local row -> rollekatalog row)', () => {
     expect(calls[release]!.params).toEqual(['old-local', 'u1']);
     expect(calls[release]!.sql).toContain("source = 'local'");
     expect(calls[link]!.params).toEqual(['u1', 'd1']);
-    expect(recordAdminAction).toHaveBeenCalledOnce();
-    expect(recordAdminAction).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+    expect(recordEvent).toHaveBeenCalledOnce();
+    expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
       type: 'access.user_link',
       actorUserId: 'u1',
       entityType: 'directory_user',
       entityId: 'd1',
       details: { via: 'userid-claim', automatic: true },
-    }));
+    }), { tx: expect.anything() });
   });
 
-  it('does not relink when the existing link is to a rollekatalog row', async () => {
-    const { runner, calls } = db([D1], [{ uuid: 'other-rk', source: 'rollekatalog' }]);
+  it('does not relink when the existing link is to an ENABLED rollekatalog row', async () => {
+    const { runner, calls } = db([D1], [{ uuid: 'other-rk', source: 'rollekatalog', disabled: false }]);
     expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('conflict');
     expect(calls.some((c) => c.sql.startsWith('UPDATE'))).toBe(false);
-    expect(recordAdminAction).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('never steals a target that belongs to a DIFFERENT app user, even when the own link is local', async () => {
     const { runner, calls } = db([{ uuid: 'd1', app_user_id: 'someone-else' }], [OLD_LOCAL]);
     expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('conflict');
     expect(calls.some((c) => c.sql.startsWith('UPDATE'))).toBe(false);
-    expect(recordAdminAction).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('is a conflict (and links nothing) when the release finds the row already moved by a concurrent login', async () => {
@@ -299,7 +299,7 @@ describe('mode-switch relink (local row -> rollekatalog row)', () => {
     });
     expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('conflict');
     expect(calls.some((c) => c.sql.includes('SET app_user_id = $1'))).toBe(false);
-    expect(recordAdminAction).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('rolls everything back (release included) when the link hits the unique index', async () => {
@@ -325,5 +325,70 @@ describe('mode-switch relink (local row -> rollekatalog row)', () => {
     const { runner, calls } = db([D1, { uuid: 'd2', app_user_id: null }], [OLD_LOCAL]);
     expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('ambiguous');
     expect(calls.some((c) => c.sql.startsWith('UPDATE'))).toBe(false);
+  });
+});
+
+describe('person re-created in Rollekatalog (stale link to a disabled rollekatalog row)', () => {
+  const OLD_RK_DISABLED = { uuid: 'old-rk', source: 'rollekatalog', disabled: true };
+
+  it('releases the disabled row and links the new one in ONE transaction, then audits', async () => {
+    const { runner, calls } = db([D1], [OLD_RK_DISABLED]);
+    const res = await matchDirectoryUser(identity(), 'userid-claim', runner);
+    expect(res).toEqual({ status: 'linked', directoryUserUuid: 'd1' });
+
+    const sqls = calls.map((c) => c.sql);
+    expect(sqls[0]).toBe('BEGIN');
+    expect(sqls.at(-1)).toBe('COMMIT');
+    expect(calls.every((c) => c.tx)).toBe(true);
+    const release = calls.findIndex((c) => c.sql.includes('SET app_user_id = NULL'));
+    const link = calls.findIndex((c) => c.sql.includes('SET app_user_id = $1'));
+    expect(release).toBeGreaterThan(-1);
+    expect(link).toBeGreaterThan(release);
+    expect(calls[release]!.params).toEqual(['old-rk', 'u1']);
+    // The release is guarded on the row lock: still ours and still disabled.
+    expect(calls[release]!.sql).toContain('app_user_id = $2');
+    expect(calls[release]!.sql).toContain("source = 'rollekatalog' AND disabled = true");
+    expect(calls[link]!.params).toEqual(['u1', 'd1']);
+    expect(recordEvent).toHaveBeenCalledOnce();
+    expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'access.user_link',
+      entityId: 'd1',
+      details: { via: 'userid-claim', automatic: true },
+    }), { tx: expect.anything() });
+  });
+
+  it('is a conflict when the old row is still enabled (nothing is released)', async () => {
+    const { runner, calls } = db([D1], [{ ...OLD_RK_DISABLED, disabled: false }]);
+    expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('conflict');
+    expect(calls.some((c) => c.sql.startsWith('UPDATE'))).toBe(false);
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('never steals a target linked to a DIFFERENT app user', async () => {
+    const { runner, calls } = db([{ uuid: 'd1', app_user_id: 'someone-else' }], [OLD_RK_DISABLED]);
+    expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('conflict');
+    expect(calls.some((c) => c.sql.startsWith('UPDATE'))).toBe(false);
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('is a conflict when the guarded release finds the row re-enabled or moved meanwhile', async () => {
+    const { runner, calls } = makeFakeRunner((sql) => {
+      if (sql.includes('FOR UPDATE')) return [D1];
+      if (sql.includes('WHERE app_user_id = $1')) return [OLD_RK_DISABLED];
+      if (sql.includes('SET app_user_id = NULL')) return [];
+      return [{ uuid: 'd1' }];
+    });
+    expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('conflict');
+    expect(calls.some((c) => c.sql.includes('SET app_user_id = $1'))).toBe(false);
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('matchDirectoryUser with an invalid ACCESS_SOURCE', () => {
+  it('throws ConfigError and never touches the database', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'rolekatalog');
+    const { runner, calls } = db([D1]);
+    await expect(matchDirectoryUser(identity(), 'userid-claim', runner)).rejects.toMatchObject({ name: 'ConfigError' });
+    expect(calls).toHaveLength(0);
   });
 });

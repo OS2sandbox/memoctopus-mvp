@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { withHandler } from '@/lib/api-handler';
-import { recordAuthzDenied } from '@/lib/audit/seam';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 import { accessSource, requireRoleToLogin } from './config';
+import { hasCapability } from './permissions';
 import { resolvePrincipal } from './principal';
 import type { Capability, Principal } from './types';
 
@@ -32,9 +33,8 @@ type RouteContext<P> = { params: Promise<P> };
 
 const FORBIDDEN = () => NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
-export function hasCapability(principal: Principal, capability: Capability): boolean {
-  return !principal.disabled && principal.capabilities.includes(capability);
-}
+// Re-exported so route handlers keep importing the guard from one place.
+export { hasCapability };
 
 /** null when the principal holds the capability, otherwise a 403 (and a denial event). */
 export function requireCapability(

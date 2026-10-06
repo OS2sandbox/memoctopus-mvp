@@ -2,9 +2,8 @@
 // The code under test writes public.<table>; here that qualifier is redirected to the
 // throwaway schema so nothing touches real data.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Client } from 'pg';
-import { hasPg, withFreshSchema } from '@/test/pg';
-import { createRunner, type ClientLike, type SqlResult, type SqlRunner } from './pg-runner';
+import type { Client } from 'pg';
+import { addUser, hasPg, schemaRunner, withFreshSchema } from '@/test/pg';
 
 vi.mock('@/lib/db', () => ({ pool: {} }));
 
@@ -17,27 +16,6 @@ function jwt(payload: unknown): string {
   return `${enc({ alg: 'none' })}.${enc(payload)}.sig`;
 }
 
-/** SqlRunner over the throwaway schema; each transaction gets its own connection so locks really contend. */
-function schemaRunner(base: Client, schema: string): { runner: SqlRunner; close: () => Promise<void> } {
-  const rewrite = (sql: string) => sql.replaceAll('public.', `"${schema}".`);
-  const wrap = (c: Client) => ({
-    query: (sql: string, params?: readonly unknown[]) =>
-      c.query(rewrite(sql), params as unknown[] | undefined) as unknown as Promise<SqlResult<never>>,
-  });
-  const extra: Client[] = [];
-  const runner = createRunner(wrap(base), async (): Promise<ClientLike> => {
-    const c = new Client({ connectionString: process.env.TEST_DATABASE_URL });
-    await c.connect();
-    await c.query(`SET search_path TO "${schema}"`);
-    extra.push(c);
-    return { ...wrap(c), release: () => void c.end() };
-  });
-  return { runner, close: async () => void (await Promise.allSettled(extra.map((c) => c.end().catch(() => {})))) };
-}
-
-async function addUser(c: Client, id: string, email: string) {
-  await c.query('INSERT INTO users (id, name, email) VALUES ($1, $1, $2)', [id, email]);
-}
 async function addSsoAccount(c: Client, userId: string, providerId: string, claims: object) {
   await c.query(
     'INSERT INTO accounts (id, account_id, provider_id, user_id, id_token) VALUES ($1, $2, $3, $4, $5)',
@@ -95,6 +73,45 @@ describe.skipIf(!hasPg)('identity link and bootstrap (real Postgres)', () => {
       expect(results.filter((r) => r.granted)).toHaveLength(1);
       const admins = await c.query("SELECT 1 FROM role_assignments WHERE role_key = 'tt-administrator'");
       expect(admins.rowCount).toBe(1);
+      const flags = await c.query('SELECT key FROM system_flags');
+      expect(flags.rows).toEqual([{ key: 'bootstrap_admin_done' }]);
+      await close();
+    }));
+
+  it('is one-shot: after the admin is deleted a second bootstrap does nothing, deleting the flag re-arms it', () =>
+    withFreshSchema(async (c, schema) => {
+      const { runner, close } = schemaRunner(c, schema);
+      for (const [id, email] of [['u1', 'a@example.dk'], ['u2', 'b@example.dk']]) {
+        await addUser(c, id, email);
+        await addSsoAccount(c, id, 'oidc', { sub: `s-${id}`, email, email_verified: true });
+        await captureExternalIdentity(id, runner);
+      }
+      expect(await maybeBootstrapAdmin('u1', runner)).toEqual({ granted: true, reason: 'granted' });
+      expect((await c.query("SELECT 1 FROM system_flags WHERE key = 'bootstrap_admin_done'")).rowCount).toBe(1);
+
+      // The last administrator is removed: the allow-list must NOT re-arm.
+      await c.query('DELETE FROM role_assignments');
+      expect(await maybeBootstrapAdmin('u2', runner)).toEqual({ granted: false, reason: 'already_bootstrapped' });
+      expect((await c.query('SELECT 1 FROM role_assignments')).rowCount).toBe(0);
+      expect((await c.query('SELECT 1 FROM system_flags')).rowCount).toBe(1);
+
+      // Operator recovery: delete the flag, the next allow-listed SSO login bootstraps again.
+      await c.query("DELETE FROM system_flags WHERE key = 'bootstrap_admin_done'");
+      expect(await maybeBootstrapAdmin('u2', runner)).toEqual({ granted: true, reason: 'granted' });
+      expect((await c.query("SELECT 1 FROM role_assignments WHERE role_key = 'tt-administrator'")).rowCount).toBe(1);
+      expect((await c.query('SELECT 1 FROM system_flags')).rowCount).toBe(1);
+      await close();
+    }));
+
+  it('a disabled directory user does not consume the flag', () =>
+    withFreshSchema(async (c, schema) => {
+      const { runner, close } = schemaRunner(c, schema);
+      await addUser(c, 'u1', 'a@example.dk');
+      await addSsoAccount(c, 'u1', 'oidc', { sub: 's-u1', email: 'a@example.dk', email_verified: true });
+      await captureExternalIdentity('u1', runner);
+      await c.query("INSERT INTO directory_users (name, source, app_user_id, disabled) VALUES ('X', 'local', 'u1', true)");
+      expect((await maybeBootstrapAdmin('u1', runner)).reason).toBe('directory_user_disabled');
+      expect((await c.query('SELECT 1 FROM system_flags')).rowCount).toBe(0);
       await close();
     }));
 
@@ -129,33 +146,6 @@ describe.skipIf(!hasPg)('identity link and bootstrap (real Postgres)', () => {
         expect((await matchDirectoryUser(identity('u1'), 'userid-claim', runner)).status).toBe('already_linked');
         expect((await matchDirectoryUser(identity('u2'), 'userid-claim', runner)).status).toBe('conflict');
         expect((await c.query('SELECT app_user_id FROM directory_users')).rows).toEqual([{ app_user_id: 'u1' }]);
-        await close();
-      }));
-
-    it('moves a leftover source=local link to the rollekatalog row (mode switch)', () =>
-      withFreshSchema(async (c, schema) => {
-        vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
-        const { runner, close } = schemaRunner(c, schema);
-        await addUser(c, 'u1', 'a@example.dk');
-        await c.query("INSERT INTO directory_users (name, source, app_user_id) VALUES ('Own', 'local', 'u1')");
-        await c.query("INSERT INTO directory_users (name, ext_user_id, source) VALUES ('X', 'abc123', 'rollekatalog')");
-        expect((await matchDirectoryUser(identity('u1'), 'userid-claim', runner)).status).toBe('linked');
-        expect((await c.query('SELECT source, app_user_id FROM directory_users ORDER BY source')).rows).toEqual([
-          { source: 'local', app_user_id: null },
-          { source: 'rollekatalog', app_user_id: 'u1' },
-        ]);
-        await close();
-      }));
-
-    it('refuses to link a user who already holds a link to another ROLLEKATALOG row (unique app_user_id)', () =>
-      withFreshSchema(async (c, schema) => {
-        vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
-        const { runner, close } = schemaRunner(c, schema);
-        await addUser(c, 'u1', 'a@example.dk');
-        await c.query("INSERT INTO directory_users (name, ext_user_id, source, app_user_id) VALUES ('Own', 'other', 'rollekatalog', 'u1')");
-        await c.query("INSERT INTO directory_users (name, ext_user_id, source) VALUES ('X', 'abc123', 'rollekatalog')");
-        expect((await matchDirectoryUser(identity('u1'), 'userid-claim', runner)).status).toBe('conflict');
-        expect((await c.query("SELECT name FROM directory_users WHERE app_user_id = 'u1'")).rows).toEqual([{ name: 'Own' }]);
         await close();
       }));
 

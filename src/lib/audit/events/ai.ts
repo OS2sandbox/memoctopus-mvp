@@ -43,7 +43,6 @@ export const aiEvents = {
     ...meetingRef,
     details: z
       .object({
-        audioSeconds: amount().optional(),
         speakerCount: count().optional(),
         durationMs: amount(),
         outcomeCode: outcomeCode(),
@@ -65,7 +64,6 @@ export const aiEvents = {
     ...meetingRef,
     details: z
       .object({
-        segmentCount: count().optional(),
         questionCount: count().optional(),
         durationMs: amount(),
         outcomeCode: outcomeCode(),

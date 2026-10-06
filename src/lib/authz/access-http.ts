@@ -1,12 +1,10 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import type { ZodTypeAny, z } from 'zod';
-import { accessSource } from './config';
 import {
   AccessError,
   ConflictError,
   NotFoundError,
-  READ_ONLY_MESSAGE,
   ReadOnlyModeError,
   ValidationError,
   VersionConflictError,
@@ -37,13 +35,6 @@ export async function respond(fn: () => Promise<Response>): Promise<Response> {
   } catch (err) {
     return toErrorResponse(err);
   }
-}
-
-/** 409 when roles/organisation are owned by Rollekatalog; call first in every write handler. */
-export function readOnlyResponse(): NextResponse | null {
-  return accessSource() === 'local'
-    ? null
-    : NextResponse.json({ error: READ_ONLY_MESSAGE, code: 'read_only' }, { status: 409 });
 }
 
 type Parsed<S extends ZodTypeAny> = { ok: true; data: z.infer<S> } | { ok: false; response: NextResponse };

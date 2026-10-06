@@ -242,6 +242,29 @@ describe.skipIf(!hasPg)('Rollekatalog sync -> principal -> scope (real Postgres)
       expect(after).toMatchObject({ disabled: true, capabilities: [], roles: [] });
     }));
 
+  it('a leaver loses their sessions in the same sync that disables them, and the principal is disabled', () =>
+    withWorld(async (w) => {
+      await w.sync();
+      const rune = await w.principalOf(U(9));
+      expect(rune.disabled).toBe(false);
+      await w.principalOf(U(3)); // a colleague who stays
+      for (const u of [`app-${U(9)}`, `app-${U(3)}`]) {
+        await w.c.query(`INSERT INTO sessions (id, expires_at, token, user_id) VALUES ($1, now() + interval '7 days', $2, $3)`, [`${u}-s`, `${u}-tok`, u]);
+      }
+
+      const d = fixtureData();
+      mock.setData({
+        users: d.users.filter((u) => u.userId !== 'rune.a'),
+        roleAssignments: (d.roleAssignments as Array<{ userId: string }>).filter((a) => a.userId !== 'rune.a'),
+      });
+      const r = await w.sync();
+      expect(r).toMatchObject({ status: 'success' });
+      expect(r.counts.sessionsRevoked).toBe(1);
+      const left = (await w.c.query('SELECT user_id FROM sessions')).rows.map((s) => s.user_id);
+      expect(left).toEqual([`app-${U(3)}`]);
+      expect(await resolvePrincipal(`app-${U(9)}`)).toMatchObject({ disabled: true, capabilities: [], roles: [] });
+    }));
+
   it('a role revoked upstream is gone after the next sync; a moved constraint moves the scope', () =>
     withWorld(async (w) => {
       await w.sync();
@@ -275,16 +298,6 @@ describe.skipIf(!hasPg)('Rollekatalog sync -> principal -> scope (real Postgres)
       vi.stubEnv('ROLLEKATALOG_SCOPE_DESCENDANTS', 'false');
       await w.sync();
       expect(await w.inScope(await w.principalOf(U(2)), 'template.manage')).toEqual([2]);
-    }));
-
-  it('ROLLEKATALOG_SCOPE_STRATEGY=manager scopes by the units a person manages or substitutes for', () =>
-    withWorld(async (w) => {
-      vi.stubEnv('ROLLEKATALOG_SCOPE_STRATEGY', 'manager');
-      await w.sync();
-      // ida.l is a substitute for the manager of Digital Support (a leaf).
-      expect(await w.inScope(await w.principalOf(U(7)), 'audit.read')).toEqual([5]);
-      // anne.p substitutes for jens.t on Borgerservice: the whole subtree.
-      expect(await w.inScope(await w.principalOf(U(3)), 'template.manage')).toEqual([2, 3, 5]);
     }));
 
   describe('mode and staleness rules, with synced data', () => {

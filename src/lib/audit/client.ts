@@ -17,15 +17,15 @@ import type { EventDetails, EventType } from './events';
 import { addToOutbox, markFailed, outboxAvailable, removeFromOutbox, takeDue, type OutboxEvent } from './outbox';
 import { getStorageUserId } from '@/lib/storage/scope';
 
-export type ClientEventType = Extract<EventType, `meeting.${string}`>;
+type ClientEventType = Extract<EventType, `meeting.${string}`>;
 
 type DetailsArgs<T extends EventType> = Record<string, never> extends EventDetails<T>
   ? [details?: EventDetails<T>]
   : [details: EventDetails<T>];
 
-export const ENDPOINT = '/api/audit/client-events';
+const ENDPOINT = '/api/audit/client-events';
 /** Server limit is 50 events and about 32 KB per request. */
-export const MAX_BATCH = 50;
+const MAX_BATCH = 50;
 const MAX_BODY_BYTES = 28_000;
 const FLUSH_DEBOUNCE_MS = 1_000;
 const FLUSH_INTERVAL_MS = 30_000;
@@ -53,7 +53,7 @@ const COALESCED: ReadonlySet<ClientEventType> = new Set([
  * deleteAudio and then updateMeeting({audioDeleted: true})). Events here are queued
  * at once but a repeat for the same meeting inside the window is swallowed.
  */
-export const DEDUPE_WINDOW_MS: Partial<Record<ClientEventType, number>> = {
+const DEDUPE_WINDOW_MS: Partial<Record<ClientEventType, number>> = {
   'meeting.audio_delete': 60_000,
 };
 

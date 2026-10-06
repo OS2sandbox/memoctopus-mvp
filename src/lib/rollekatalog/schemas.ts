@@ -4,9 +4,8 @@
 // phone and KLE lists, none of which are needed and none of which may survive
 // parsing. Adding a field here is a privacy decision, not a convenience.
 //
-// Shapes are from the OS2rollekatalog 2026r4 source (see
-// docs/central-access/phase0-findings.md); optional and null fields are tolerated
-// where the DTOs can produce them (e.g. `manager: null`, `positions: null`).
+// Shapes are from the OS2rollekatalog 2026r4 source; optional and null fields are tolerated
+// where the DTOs can produce them (e.g. `positions: null`).
 import { z } from 'zod';
 import { RollekatalogError } from './errors';
 
@@ -75,11 +74,6 @@ const orgUnitSchema = z
     uuid: uuidStr,
     name: z.string(),
     parentOrgUnitUuid: lenientUuid,
-    manager: z
-      .object({ uuid: uuidStr, userId: optStr })
-      .strip()
-      .nullish()
-      .transform((m) => m ?? null),
   })
   .strip();
 
@@ -90,38 +84,7 @@ export const organisationSchema = z
   })
   .strip();
 
-export type RkPosition = { orgUnitUuid: string; titleUuid: string | null; doNotInherit: boolean };
-export type RkOrgUser = z.output<typeof orgUserSchema>;
-export type RkOrgUnit = z.output<typeof orgUnitSchema>;
 export type RkOrganisation = z.output<typeof organisationSchema>;
-
-// ─── managers v2 ───────────────────────────────────────────────────────────
-
-const substituteSchema = z
-  .object({
-    uuid: uuidStr,
-    userId: optStr,
-    orgUnitUuid: uuidStr,
-    // The manager this substitute covers for; the sync falls back to the unit's manager when absent.
-    managerUuid: lenientUuid,
-  })
-  .strip();
-
-const managerSchema = z
-  .object({
-    uuid: uuidStr,
-    name: optStr,
-    userId: optStr,
-    managerSubstitutes: z
-      .array(substituteSchema)
-      .nullish()
-      .transform((v) => v ?? []),
-  })
-  .strip();
-
-export const managersSchema = z.array(managerSchema);
-export type RkManager = z.output<typeof managerSchema>;
-export type RkSubstitute = z.output<typeof substituteSchema>;
 
 // ─── role assignments with constraints ─────────────────────────────────────
 
@@ -159,45 +122,7 @@ const userAssignmentsSchema = z
   .strip();
 
 export const roleAssignmentsSchema = z.array(userAssignmentsSchema);
-export type RkConstraintValue = z.output<typeof constraintValueSchema>;
-export type RkAssignment = z.output<typeof assignmentSchema>;
 export type RkUserAssignments = z.output<typeof userAssignmentsSchema>;
-
-// ─── rolesAsList ───────────────────────────────────────────────────────────
-
-const stringList = z
-  .array(z.string())
-  .nullish()
-  .transform((v) => v ?? []);
-
-export const rolesAsListSchema = z
-  .object({
-    // Holds "C=DK,O=<cvr>,CN=<name>,Serial=<extUuid>": contains a name, never log it.
-    nameID: optStr,
-    systemRoles: stringList,
-    userRoles: stringList,
-    dataRoles: stringList,
-    functionRoles: stringList,
-    // Required on purpose: the answer is only trusted if it says whether the user is disabled.
-    disabled: z.boolean(),
-  })
-  .strip();
-export type RkRolesAsList = z.output<typeof rolesAsListSchema>;
-
-// ─── constraint types (GET /api/v2/constraint) ─────────────────────────────
-
-const constraintTypeSchema = z
-  .object({
-    id: z.number().int(),
-    uuid: optStr,
-    entityId: z.string(),
-    name: optStr,
-    uiType: optStr,
-  })
-  .strip();
-
-export const constraintTypesSchema = z.array(constraintTypeSchema);
-export type RkConstraintType = z.output<typeof constraintTypeSchema>;
 
 /** Parses a response body; a mismatch is `invalid_response` and never echoes the data. */
 export function parseOrThrow<S extends z.ZodTypeAny>(schema: S, data: unknown): z.output<S> {

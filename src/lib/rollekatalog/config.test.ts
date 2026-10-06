@@ -3,17 +3,14 @@ import {
   directoryUserIdTransform,
   globalRoles,
   itSystemId,
-  loginRefreshTimeoutMs,
   maxResponseBytes,
   orgKey,
   readKey,
   rollekatalogConfigIssue,
-  rollekatalogConfigured,
   rollekatalogDomain,
   rollekatalogUrl,
   roleStaleMaxSeconds,
   scopeDescendants,
-  scopeStrategy,
   syncMaxRemovalPercent,
   timeoutMs,
   transformUserId,
@@ -57,7 +54,7 @@ describe('rollekatalogUrl', () => {
   });
 });
 
-describe('keys and configured()', () => {
+describe('keys and config issue', () => {
   it('readKey/orgKey are null when unset or blank and trimmed otherwise', () => {
     vi.stubEnv('ROLLEKATALOG_READ_API_KEY', '  ');
     expect(readKey()).toBeNull();
@@ -70,13 +67,10 @@ describe('keys and configured()', () => {
   it('is configured only with a usable URL and both keys', () => {
     vi.stubEnv('ROLLEKATALOG_URL', 'https://rk.example.dk');
     vi.stubEnv('ROLLEKATALOG_READ_API_KEY', 'a');
-    expect(rollekatalogConfigured()).toBe(false);
     expect(rollekatalogConfigIssue()).toBe('not_configured');
     vi.stubEnv('ROLLEKATALOG_ORG_API_KEY', 'b');
-    expect(rollekatalogConfigured()).toBe(true);
     expect(rollekatalogConfigIssue()).toBeNull();
     vi.stubEnv('ROLLEKATALOG_URL', 'http://rk.example.dk');
-    expect(rollekatalogConfigured()).toBe(false);
     expect(rollekatalogConfigIssue()).toBe('insecure_url');
   });
 });
@@ -94,12 +88,10 @@ describe('simple settings', () => {
     vi.stubEnv('ROLLEKATALOG_DOMAIN', ' Administrativt ');
     expect(rollekatalogDomain()).toBe('Administrativt');
   });
-  it('timeouts: default 10s, login capped at 3s, invalid values fall back', () => {
+  it('timeout: default 10s, invalid values fall back', () => {
     expect(timeoutMs()).toBe(10_000);
-    expect(loginRefreshTimeoutMs()).toBe(3_000);
     vi.stubEnv('ROLLEKATALOG_TIMEOUT_MS', '1500');
     expect(timeoutMs()).toBe(1500);
-    expect(loginRefreshTimeoutMs()).toBe(1500);
     for (const bad of ['abc', '-5', '0', '5', '1.5', '999999999']) {
       vi.stubEnv('ROLLEKATALOG_TIMEOUT_MS', bad);
       expect(timeoutMs(), bad).toBe(10_000);
@@ -111,15 +103,6 @@ describe('simple settings', () => {
     expect(maxResponseBytes()).toBe(2048);
     vi.stubEnv('ROLLEKATALOG_MAX_RESPONSE_BYTES', '12');
     expect(maxResponseBytes()).toBe(64 * 1024 * 1024);
-  });
-  it('scope strategy defaults to constraint and falls back on junk', () => {
-    expect(scopeStrategy()).toBe('constraint');
-    vi.stubEnv('ROLLEKATALOG_SCOPE_STRATEGY', ' Manager ');
-    expect(scopeStrategy()).toBe('manager');
-    vi.stubEnv('ROLLEKATALOG_SCOPE_STRATEGY', 'constraint-or-manager');
-    expect(scopeStrategy()).toBe('constraint-or-manager');
-    vi.stubEnv('ROLLEKATALOG_SCOPE_STRATEGY', 'everything');
-    expect(scopeStrategy()).toBe('constraint');
   });
   it('scope descendants defaults to true', () => {
     expect(scopeDescendants()).toBe(true);

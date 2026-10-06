@@ -3,11 +3,9 @@
 // The prompt text is ONLY ever part of the manager-side shapes: the user-facing
 // CentralSkabelonSummary deliberately has no `prompt` field.
 
-export const CENTRAL_STATUSES = ['active', 'archived'] as const;
-export type CentralStatus = (typeof CENTRAL_STATUSES)[number];
+export type CentralStatus = 'active' | 'archived';
 
-export const CENTRAL_CHANGE_TYPES = ['create', 'update', 'retarget', 'archive', 'restore'] as const;
-export type CentralChangeType = (typeof CENTRAL_CHANGE_TYPES)[number];
+export type CentralChangeType = 'create' | 'update' | 'retarget' | 'archive' | 'restore';
 
 /** Field names that may appear in an update's `changedFields` (names only, never values). */
 export const CENTRAL_CONTENT_FIELDS = [

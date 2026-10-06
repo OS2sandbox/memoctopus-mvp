@@ -10,15 +10,14 @@ import { orgUnitsInScope, type ScopeEnv } from '@/lib/authz/scope';
 import type { Principal } from '@/lib/authz/types';
 import { pool } from '@/lib/db';
 import type { EventOutcome, EventSource } from './events/types';
+import { TABLE_RE, UUID_RE } from './record';
 
-export const DEFAULT_PAGE_SIZE = 50;
+const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 100;
 export const MAX_FEED_SIZE = 1000;
 /** Rows per round trip when exporting; the export itself is capped by the caller. */
-export const EXPORT_BATCH = 500;
+const EXPORT_BATCH = 500;
 
-const TABLE_RE = /^[A-Za-z0-9_."]{1,128}$/;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ID_RE = /^\d{1,18}$/;
 const BIGINT_MAX = '9223372036854775807';
 
@@ -37,7 +36,7 @@ function checkedTable(env: AuditQueryEnv): string {
   return env.table;
 }
 
-export type AuditScope = { all: true } | { all: false; orgUnitUuids: string[] };
+type AuditScope = { all: true } | { all: false; orgUnitUuids: string[] };
 
 /** Which actor org units the principal may read audit events for (audit.read). */
 export async function auditScopeFor(principal: Principal, env?: ScopeEnv): Promise<AuditScope> {
@@ -109,7 +108,7 @@ function mapRow(r: Record<string, unknown>): AuditEventRow {
   };
 }
 
-export interface ListOptions {
+interface ListOptions {
   filters?: AuditFilters;
   /** The `nextCursor` of the previous page: rows with a lower id are returned. */
   cursor?: string;
@@ -117,7 +116,7 @@ export interface ListOptions {
   scope: AuditScope;
 }
 
-export interface AuditPage {
+interface AuditPage {
   rows: AuditEventRow[];
   /** Pass as `cursor` for the next page; null when this was the last one. */
   nextCursor: string | null;
@@ -247,7 +246,7 @@ export async function getFeedHead(delaySeconds: number, env: AuditQueryEnv = def
   return head === null || head === undefined ? 0 : Number(head);
 }
 
-export interface FeedOptions {
+interface FeedOptions {
   /** Rows with id > offset are returned. */
   offset: number;
   size: number;

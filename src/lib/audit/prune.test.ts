@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeRunner } from '@/test/fake-runner';
 
 const recordEvent = vi.hoisted(() => vi.fn(async () => ({ status: 'stored' })));
-vi.mock('./record', () => ({ recordEvent }));
+vi.mock('./record', async (orig) => ({ ...(await orig<typeof import('./record')>()), recordEvent }));
 vi.mock('@/lib/db', () => ({ db: {}, pool: { query: vi.fn(), connect: vi.fn() } }));
 
 import { pruneAuditEvents } from './prune';
@@ -81,6 +81,23 @@ describe('pruneAuditEvents', () => {
     }
     await expect(pruneAuditEvents({ olderThanDays: 5, batchSize: 0, runner })).rejects.toThrow(RangeError);
     expect(calls).toHaveLength(0);
+  });
+
+  it('still records the audit.prune event for the batches already deleted when a later batch throws', async () => {
+    let deletes = 0;
+    const runner = {
+      query: vi.fn(),
+      transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+        fn({
+          query: async (sql: string) => {
+            if (sql.includes('DELETE') && ++deletes === 2) throw new Error('boom');
+            return { rows: [], rowCount: sql.includes('DELETE') ? 3 : 1 };
+          },
+        }),
+    };
+    await expect(pruneAuditEvents({ olderThanDays: 7, batchSize: 3, runner: runner as never })).rejects.toThrow('boom');
+    expect(recordEvent).toHaveBeenCalledOnce();
+    expect(recordEvent).toHaveBeenCalledWith({ type: 'audit.prune', source: 'system', details: { deletedCount: 3, olderThanDays: 7 } });
   });
 
   it('rolls back and propagates when the delete fails', async () => {

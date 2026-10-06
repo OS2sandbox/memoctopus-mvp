@@ -158,7 +158,7 @@ describe('reportAuditEvent', () => {
 
   it('never posts one user\'s queue under the next user\'s session: it waits for the owner\'s next login', async () => {
     const scope = await import('@/lib/storage/scope');
-    c.reportAuditEvent('meeting.minutes_save', MEETING, { autosave: true });
+    c.reportAuditEvent('meeting.minutes_save', MEETING);
     c.reportAuditEvent('meeting.delete', OTHER);
     // user-1 signs out and user-2 signs in while the coalesced event is still held.
     scope.setStorageUserId('user-2');
@@ -214,8 +214,8 @@ describe('reportAuditEvent', () => {
 
     it('coalesces minutes_save and transcript_edit independently per meeting', async () => {
       for (let i = 0; i < 5; i++) {
-        c.reportAuditEvent('meeting.minutes_save', MEETING, { autosave: true });
-        c.reportAuditEvent('meeting.minutes_save', OTHER, { autosave: true });
+        c.reportAuditEvent('meeting.minutes_save', MEETING);
+        c.reportAuditEvent('meeting.minutes_save', OTHER);
         c.reportAuditEvent('meeting.transcript_edit', MEETING, { segmentCount: i });
       }
       await vi.advanceTimersByTimeAsync(31_000 + 1500);
@@ -236,9 +236,9 @@ describe('reportAuditEvent', () => {
     });
 
     it('starts a new window after the previous one ended', async () => {
-      c.reportAuditEvent('meeting.minutes_save', MEETING, { autosave: true });
+      c.reportAuditEvent('meeting.minutes_save', MEETING);
       await vi.advanceTimersByTimeAsync(31_000);
-      c.reportAuditEvent('meeting.minutes_save', MEETING, { autosave: true });
+      c.reportAuditEvent('meeting.minutes_save', MEETING);
       await vi.advanceTimersByTimeAsync(31_000 + 1500);
       expect(sentBodies().flat()).toHaveLength(2);
     });

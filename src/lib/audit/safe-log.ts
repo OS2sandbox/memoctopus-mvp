@@ -3,7 +3,7 @@
 // printed: only the error class name, a numeric HTTP status and a short code.
 import { CODE_RE } from './events/types';
 
-export interface SafeErrorInfo {
+interface SafeErrorInfo {
   name: string;
   status?: number;
   code?: string;

@@ -2,7 +2,7 @@
 // writes central_templates, central_template_targets and the changelog
 // central_template_versions.
 //
-// Rules (docs/central-access/README.md, Phase 4):
+// Rules (docs/central-access/templates.md):
 //  - A manager may touch a template iff template.manage covers its OWNER org
 //    unit. Anything outside that scope is NotFound (existence is not revealed);
 //    a principal without the capability gets the same, so the service fails
@@ -327,8 +327,8 @@ export async function createCentralTemplate(
       `INSERT INTO ${tbl(env, 'central_templates')}
          (owner_org_unit_uuid, name, description, prompt,
           include_deltagere, include_beslutningspunkter, include_dagsorden, include_dato,
-          allow_user_instruction, allow_toggle_overrides, status, current_version, created_by_user_id)
-       VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', 1, $11)
+          allow_user_instruction, allow_toggle_overrides, status, current_version)
+       VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', 1)
        RETURNING id`,
       [
         owner,
@@ -341,7 +341,6 @@ export async function createCentralTemplate(
         content.includeDato,
         content.allowUserInstruction,
         content.allowToggleOverrides,
-        principal.userId,
       ],
     );
     const id = inserted.rows[0].id;

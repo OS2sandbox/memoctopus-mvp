@@ -16,15 +16,10 @@ export type EventOutcome = (typeof EVENT_OUTCOMES)[number];
 /** A short machine code such as `rate_limited`. Prefer z.enum when the vocabulary is closed. */
 export const code = () => z.string().regex(CODE_RE);
 
-export const uuid = () => z.string().uuid();
-
 export const count = () => z.number().int().min(0).max(1_000_000_000);
 
 /** Seconds or milliseconds as a plain non-negative number. */
 export const amount = () => z.number().finite().min(0).max(1_000_000_000_000);
-
-/** Field names (never values) as codes, at most 32. */
-export const codeList = () => z.array(code()).max(32);
 
 export interface EventDef<S extends z.ZodTypeAny = z.ZodTypeAny> {
   /** Which sources may emit it. The first one is the default. */

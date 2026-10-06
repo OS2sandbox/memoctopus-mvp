@@ -175,8 +175,9 @@ describe('dropStaleAssignments (pure)', () => {
     );
   });
 
-  it('never applies the staleness limit to anything but rollekatalog rows', () => {
-    expect(rk('rollekatalog', [r('other-source', 'tt-logleser', null)])).toEqual(['tt-logleser']);
+  it('fails closed on an unknown source in either mode', () => {
+    expect(rk('rollekatalog', [r('other-source', 'tt-logleser', NOW)])).toEqual([]);
+    expect(rk('local', [r('other-source', 'tt-logleser', NOW)])).toEqual([]);
   });
 
   it('rollekatalog mode ignores local rows regardless of age', () => {
@@ -276,5 +277,13 @@ describe('resolvePrincipal staleness and mode symmetry', () => {
       row({ roleKey: 'tt-logleser', source: 'rollekatalog', syncedAt: new Date() }),
     ];
     expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger', 'tt-logleser']);
+  });
+});
+
+describe('resolvePrincipal with an invalid ACCESS_SOURCE', () => {
+  it.each(['rolekatalog', 'ldap'])('throws ConfigError for "%s" instead of resolving under local mode', async (v) => {
+    vi.stubEnv('ACCESS_SOURCE', v);
+    rowsRef.rows = [row({ roleKey: 'tt-administrator' })];
+    await expect(resolvePrincipal('u1')).rejects.toMatchObject({ name: 'ConfigError' });
   });
 });

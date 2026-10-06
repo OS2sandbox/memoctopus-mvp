@@ -1,10 +1,5 @@
-// The BINDING contract between the Rollekatalog tracks (client/schemas, scope
-// derivation, sync, login refresh, routes). Types and one pure helper only: no
-// I/O, no imports of server code, so every track and every test can use it.
+// Shared Rollekatalog types and pure helpers: no I/O, no server imports.
 import type { RoleKey } from '@/lib/authz/types';
-import type { ScopeStrategy } from './config';
-
-export type { ScopeStrategy } from './config';
 
 // ─── Sync ──────────────────────────────────────────────────────────────────
 
@@ -13,6 +8,8 @@ export interface SyncCounts {
   usersUpserted: number;
   /** Mirrored users missing from the fetch (and so disabled), plus users disabled in Rollekatalog. */
   usersDisabled: number;
+  /** better-auth sessions deleted because their linked directory user is disabled (a count, never who). */
+  sessionsRevoked: number;
   orgUnitsUpserted: number;
   /** Units stored with parent_uuid NULL because the parent was not in the fetch. */
   orgUnitsOrphaned: number;
@@ -31,6 +28,7 @@ export interface SyncCounts {
 export const SYNC_COUNT_KEYS = [
   'usersUpserted',
   'usersDisabled',
+  'sessionsRevoked',
   'orgUnitsUpserted',
   'orgUnitsOrphaned',
   'orgUnitCyclesBroken',
@@ -42,18 +40,7 @@ export const SYNC_COUNT_KEYS = [
 ] as const satisfies ReadonlyArray<keyof SyncCounts>;
 
 export function emptySyncCounts(): SyncCounts {
-  return {
-    usersUpserted: 0,
-    usersDisabled: 0,
-    orgUnitsUpserted: 0,
-    orgUnitsOrphaned: 0,
-    orgUnitCyclesBroken: 0,
-    assignmentsUpserted: 0,
-    assignmentsRemoved: 0,
-    assignmentsIgnoredRole: 0,
-    assignmentsSkippedUnknownUser: 0,
-    assignmentsWithoutScope: 0,
-  };
+  return Object.fromEntries(SYNC_COUNT_KEYS.map((k) => [k, 0])) as unknown as SyncCounts;
 }
 
 /**
@@ -91,14 +78,9 @@ export interface RunSyncOptions {
   actorUserId?: string | null;
 }
 
-/** Implemented by the sync track in src/lib/rollekatalog/sync.ts. Never throws: failures are a SyncResult. */
-export type RunSync = (opts: RunSyncOptions) => Promise<SyncResult>;
-/** Implemented by the sync track in src/lib/rollekatalog/sync.ts. */
-export type GetLatestSyncRun = () => Promise<SyncRunSummary | null>;
-
 // ─── Scope derivation (pure) ───────────────────────────────────────────────
 
-/** Constraint type entityIds that carry org-unit uuids (verified, phase0-findings Q1). */
+/** Constraint type entityIds that carry org-unit uuids (taken from the OS2rollekatalog 2026r4 source, not seen on a live instance; see docs/central-access/rollekatalog.md). */
 export const ORG_UNIT_CONSTRAINT_TYPES: readonly string[] = [
   'http://digital-identity.dk/constraints/orgunit/1',
   'http://sts.kombit.dk/constraints/orgenhed/1',
@@ -115,14 +97,11 @@ export interface ScopeConstraint {
 }
 
 export interface ScopeInput {
-  strategy: ScopeStrategy;
   roleKey: RoleKey;
   /** All constraint values of the (user, role) assignment(s); duplicate role entries already concatenated. */
   constraints: readonly ScopeConstraint[];
   /** Lower-case uuids of every org unit in the mirror; unknown constraint units are ignored. */
   knownOrgUnitUuids: ReadonlySet<string>;
-  /** Lower-case uuids of the units the user manages or substitutes for. */
-  managedOrgUnitUuids: readonly string[];
   /** ROLLEKATALOG_GLOBAL_ROLES. */
   globalRoles: readonly RoleKey[];
   /** ROLLEKATALOG_SCOPE_DESCENDANTS. */
@@ -137,6 +116,3 @@ export type DerivedScope =
   | { kind: 'none' }
   | { kind: 'global' }
   | { kind: 'scoped'; orgUnitUuids: string[]; includeDescendants: boolean };
-
-/** The signature of the pure derivation, implemented by the scope track. */
-export type DeriveScope = (input: ScopeInput) => DerivedScope;

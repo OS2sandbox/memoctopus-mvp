@@ -11,12 +11,10 @@ export interface AdminSection {
   label: string;
   /** ANY-OF: holding one of these is enough. Never empty. */
   requiredCapability: readonly [Capability, ...Capability[]];
-  /** Becomes a read-only view when ACCESS_SOURCE=rollekatalog. */
-  readOnlyInRollekatalogMode: boolean;
 }
 
-export const sectionByKey: Record<AdminSectionKey, AdminSection> = {
-  overview: {
+export const ADMIN_SECTIONS: readonly AdminSection[] = [
+  {
     key: 'overview',
     href: '/admin',
     label: 'Overblik',
@@ -29,50 +27,18 @@ export const sectionByKey: Record<AdminSectionKey, AdminSection> = {
       'audit.export',
       'sync.run',
     ],
-    readOnlyInRollekatalogMode: false,
   },
-  users: {
-    key: 'users',
-    href: '/admin/brugere',
-    label: 'Brugere og roller',
-    requiredCapability: ['access.manage'],
-    readOnlyInRollekatalogMode: true,
-  },
-  organisation: {
-    key: 'organisation',
-    href: '/admin/organisation',
-    label: 'Organisation',
-    requiredCapability: ['directory.read'],
-    readOnlyInRollekatalogMode: true,
-  },
-  templates: {
-    key: 'templates',
-    href: '/admin/skabeloner',
-    label: 'Centrale skabeloner',
-    requiredCapability: ['template.manage'],
-    // Templates are owned by this app in both modes; only the org tree they point at comes from Rollekatalog.
-    readOnlyInRollekatalogMode: false,
-  },
-  log: {
-    key: 'log',
-    href: '/admin/log',
-    label: 'Log',
-    requiredCapability: ['audit.read'],
-    // The log is never owned by Rollekatalog, so its mode does not change it.
-    readOnlyInRollekatalogMode: false,
-  },
-};
-
-export const ADMIN_SECTIONS: readonly AdminSection[] = [
-  sectionByKey.overview,
-  sectionByKey.users,
-  sectionByKey.organisation,
-  sectionByKey.templates,
-  sectionByKey.log,
+  { key: 'users', href: '/admin/brugere', label: 'Brugere og roller', requiredCapability: ['access.manage'] },
+  { key: 'organisation', href: '/admin/organisation', label: 'Organisation', requiredCapability: ['directory.read'] },
+  { key: 'templates', href: '/admin/skabeloner', label: 'Centrale skabeloner', requiredCapability: ['template.manage'] },
+  { key: 'log', href: '/admin/log', label: 'Log', requiredCapability: ['audit.read'] },
 ];
 
+const sectionByKey = new Map(ADMIN_SECTIONS.map((s) => [s.key, s]));
+
 export function canAccessSection(p: Principal, key: AdminSectionKey): boolean {
-  return hasAnyCapability(p, sectionByKey[key].requiredCapability);
+  const section = sectionByKey.get(key);
+  return section !== undefined && hasAnyCapability(p, section.requiredCapability);
 }
 
 export function visibleSections(p: Principal): AdminSection[] {

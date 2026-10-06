@@ -1,38 +1,15 @@
 // Needs a real Postgres 15+; skipped unless TEST_DATABASE_URL is set (see src/test/pg.ts).
 // Proves the mode-switch relink against the real unique index and row locks.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Client } from 'pg';
-import { hasPg, withFreshSchema } from '@/test/pg';
-import { createRunner, type ClientLike, type SqlResult, type SqlRunner } from './pg-runner';
+import type { Client } from 'pg';
+import { addUser, hasPg, schemaRunner, withFreshSchema } from '@/test/pg';
 
 vi.mock('@/lib/db', () => ({ pool: {}, db: {} }));
-// src/test/setup.ts replaces the audit seam with a no-op. The relink's "audit and link
-// commit or roll back together" guarantee is only provable with the real writer, which
-// inserts on the transaction into the throwaway schema (the actor snapshot is best effort).
-vi.unmock('@/lib/audit/seam');
+// The relink's "audit and link commit or roll back together" guarantee is only provable
+// with the real writer (recordEvent), which inserts on the transaction into the throwaway
+// schema (the actor snapshot is best effort).
 
 import { matchDirectoryUser } from './directory-match';
-
-/** SqlRunner over the throwaway schema; each transaction gets its own connection so locks really contend. */
-function schemaRunner(base: Client, schema: string): { runner: SqlRunner; close: () => Promise<void> } {
-  const rewrite = (sql: string) => sql.replaceAll('public.', `"${schema}".`);
-  const wrap = (c: Client) => ({
-    query: (sql: string, params?: readonly unknown[]) =>
-      c.query(rewrite(sql), params as unknown[] | undefined) as unknown as Promise<SqlResult<never>>,
-  });
-  const extra: Client[] = [];
-  const runner = createRunner(wrap(base), async (): Promise<ClientLike> => {
-    const c = new Client({ connectionString: process.env.TEST_DATABASE_URL });
-    await c.connect();
-    await c.query(`SET search_path TO "${schema}"`);
-    extra.push(c);
-    return { ...wrap(c), release: () => void c.end() };
-  });
-  return { runner, close: async () => void (await Promise.allSettled(extra.map((c) => c.end().catch(() => {})))) };
-}
-
-const addUser = (c: Client, id: string) =>
-  c.query('INSERT INTO users (id, name, email) VALUES ($1, $1, $2)', [id, `${id}@example.dk`]);
 
 const identity = (userId: string, preferred_username = 'ABC123') => ({
   userId,
@@ -114,6 +91,51 @@ describe.skipIf(!hasPg)('mode-switch relink (real Postgres)', () => {
       await c.query("INSERT INTO directory_users (name, ext_user_id, source) VALUES ('New', 'abc123', 'rollekatalog')");
       expect((await matchDirectoryUser(identity('u1'), 'userid-claim', runner)).status).toBe('conflict');
       expect((await c.query("SELECT name FROM directory_users WHERE app_user_id = 'u1'")).rows).toEqual([{ name: 'Old' }]);
+      await close();
+    }));
+
+  it('person deleted and re-created in Rollekatalog (same userId, new uuid): releases the disabled old row and links the new one', () =>
+    withFreshSchema(async (c, schema) => {
+      const { runner, close } = schemaRunner(c, schema);
+      await addUser(c, 'u1');
+      await c.query("INSERT INTO directory_users (name, ext_user_id, source, disabled, app_user_id) VALUES ('Old', 'abc123', 'rollekatalog', true, 'u1')");
+      await c.query("INSERT INTO directory_users (name, ext_user_id, source) VALUES ('New', 'abc123', 'rollekatalog')");
+
+      expect((await matchDirectoryUser(identity('u1'), 'userid-claim', runner)).status).toBe('linked');
+      expect((await c.query('SELECT name, app_user_id FROM directory_users ORDER BY name')).rows).toEqual([
+        { name: 'New', app_user_id: 'u1' },
+        { name: 'Old', app_user_id: null },
+      ]);
+      expect((await c.query("SELECT 1 FROM audit_events WHERE event_type = 'access.user_link'")).rowCount).toBe(1);
+      expect((await matchDirectoryUser(identity('u1'), 'userid-claim', runner)).status).toBe('already_linked');
+      await close();
+    }));
+
+  it('keeps an ENABLED old rollekatalog link: conflict, nothing released', () =>
+    withFreshSchema(async (c, schema) => {
+      const { runner, close } = schemaRunner(c, schema);
+      await addUser(c, 'u1');
+      await c.query("INSERT INTO directory_users (name, ext_user_id, source, app_user_id) VALUES ('Old', 'old.id', 'rollekatalog', 'u1')");
+      await c.query("INSERT INTO directory_users (name, ext_user_id, source) VALUES ('New', 'abc123', 'rollekatalog')");
+
+      expect((await matchDirectoryUser(identity('u1'), 'userid-claim', runner)).status).toBe('conflict');
+      expect((await c.query("SELECT name FROM directory_users WHERE app_user_id = 'u1'")).rows).toEqual([{ name: 'Old' }]);
+      await close();
+    }));
+
+  it('does not steal a link that belongs to a DIFFERENT app user, even when the own old row is disabled', () =>
+    withFreshSchema(async (c, schema) => {
+      const { runner, close } = schemaRunner(c, schema);
+      await addUser(c, 'u1');
+      await addUser(c, 'u2');
+      await c.query("INSERT INTO directory_users (name, ext_user_id, source, disabled, app_user_id) VALUES ('Old', 'gone', 'rollekatalog', true, 'u1')");
+      await c.query("INSERT INTO directory_users (name, ext_user_id, source, app_user_id) VALUES ('New', 'abc123', 'rollekatalog', 'u2')");
+
+      expect((await matchDirectoryUser(identity('u1'), 'userid-claim', runner)).status).toBe('conflict');
+      expect((await c.query('SELECT name, app_user_id FROM directory_users ORDER BY name')).rows).toEqual([
+        { name: 'New', app_user_id: 'u2' },
+        { name: 'Old', app_user_id: 'u1' },
+      ]);
       await close();
     }));
 

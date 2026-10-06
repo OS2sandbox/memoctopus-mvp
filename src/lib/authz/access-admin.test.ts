@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeRunner, type Responder } from '@/test/fake-runner';
 
 vi.mock('@/lib/db', () => ({ pool: {} }));
-const recordAdminAction = vi.fn(async (..._args: unknown[]) => {});
-vi.mock('@/lib/audit/seam', () => ({
-  recordAdminAction: (...a: unknown[]) => recordAdminAction(...a),
+const recordEvent = vi.fn(async (..._args: unknown[]) => {});
+vi.mock('@/lib/audit/record', () => ({
+  recordEvent: (...a: unknown[]) => recordEvent(...a),
 }));
 
 import {
@@ -33,7 +33,7 @@ const ASG = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
 beforeEach(() => {
   vi.stubEnv('ACCESS_SOURCE', 'local');
-  recordAdminAction.mockClear();
+  recordEvent.mockClear();
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -109,21 +109,21 @@ describe('read-only mode', () => {
     const { runner, calls } = makeFakeRunner();
     await expect(call(runner as never)).rejects.toBeInstanceOf(ReadOnlyModeError);
     expect(calls).toHaveLength(0);
-    expect(recordAdminAction).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 });
 
 describe('grantRole', () => {
   const input = { appUserId: 'app-1', roleKey: 'tt-logleser', actorUserId: 'admin-1' };
   const assignmentRow = {
-    id: ASG,
+    assignment_id: ASG,
     role_key: 'tt-logleser',
     scope_org_unit_uuid: null,
     scope_name: null,
     include_descendants: true,
     start_date: null,
     stop_date: null,
-    source: 'local',
+    assignment_source: 'local',
     active: true,
   };
 
@@ -149,8 +149,7 @@ describe('grantRole', () => {
     expect(insert.sql).toContain("'local'");
     expect(insert.params).toEqual([DIR, 'tt-logleser', null, true, null, null, 'admin-1']);
 
-    expect(recordAdminAction).toHaveBeenCalledWith(
-      expect.anything(),
+    expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'access.role_assign',
         actorUserId: 'admin-1',
@@ -158,11 +157,12 @@ describe('grantRole', () => {
         secondaryEntityId: DIR,
         details: { roleKey: 'tt-logleser', scopeOrgUnitUuid: null, includeDescendants: true },
       }),
+      { tx: expect.anything() },
     );
-    // The same tx handle goes to the seam as the one used for the writes.
-    expect(recordAdminAction).toHaveBeenCalledWith(
-      expect.objectContaining({ query: expect.any(Function) }),
+    // The same tx handle goes to recordEvent as the one used for the writes.
+    expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'access.user_create' }),
+      { tx: expect.objectContaining({ query: expect.any(Function) }) },
     );
   });
 
@@ -202,7 +202,7 @@ describe('grantRole', () => {
       ]),
     );
     await expect(grantRole(input, runner)).rejects.toMatchObject({ code: 'already_assigned' });
-    expect(recordAdminAction).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('409 for a disabled directory user', async () => {
@@ -252,7 +252,7 @@ describe('revokeAssignment', () => {
     await expect(revokeAssignment(ASG, 'admin-2', runner)).rejects.toMatchObject({ code: 'last_administrator' });
     expect(calls.some((c) => c.sql.startsWith('DELETE'))).toBe(false);
     expect(calls.at(-1)!.sql).toBe('ROLLBACK');
-    expect(recordAdminAction).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('gives a specific message when the actor revokes their own last admin role', async () => {
@@ -264,9 +264,9 @@ describe('revokeAssignment', () => {
     const { runner, calls } = makeFakeRunner(responder(row(), 1));
     await revokeAssignment(ASG, 'admin-1', runner);
     expect(calls.some((c) => c.sql.startsWith('DELETE FROM public.role_assignments'))).toBe(true);
-    expect(recordAdminAction).toHaveBeenCalledWith(
-      expect.anything(),
+    expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'access.role_revoke', entityId: ASG, secondaryEntityId: DIR }),
+      { tx: expect.anything() },
     );
   });
 
@@ -363,9 +363,9 @@ describe('org units', () => {
       const view = await createOrgUnit({ name: '  A ', parentUuid: U1, actorUserId: 'a' }, runner);
       expect(view).toEqual({ uuid: U2, name: 'A', parentUuid: U1, source: 'local', memberCount: 0 });
       expect(calls.find((c) => c.sql.includes('INSERT INTO public.org_units'))!.params).toEqual(['A', U1]);
-      expect(recordAdminAction).toHaveBeenCalledWith(
-        expect.anything(),
+      expect(recordEvent).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'access.org_unit_create', entityId: U2, secondaryEntityId: U1 }),
+        { tx: expect.anything() },
       );
     });
   });
@@ -394,7 +394,7 @@ describe('org units', () => {
       const { result, calls } = run({ parentUuid: U3 }, U1, unit(U1), true);
       await expect(result).rejects.toMatchObject({ code: 'cycle' });
       expect(calls.some((c) => c.sql.startsWith('UPDATE'))).toBe(false);
-      expect(recordAdminAction).not.toHaveBeenCalled();
+      expect(recordEvent).not.toHaveBeenCalled();
     });
 
     it('walks up from the new parent without a depth cap, so a deep chain cannot hide a cycle', async () => {
@@ -416,9 +416,9 @@ describe('org units', () => {
       const { result, calls } = run({ parentUuid: OUTSIDE }, U3, unit(U3, { parent_uuid: U2 }), false);
       await expect(result).resolves.toMatchObject({ uuid: U3, parentUuid: OUTSIDE });
       expect(calls.find((c) => c.sql.startsWith('UPDATE'))!.sql).toContain('parent_uuid = $2::uuid');
-      expect(recordAdminAction).toHaveBeenCalledWith(
-        expect.anything(),
+      expect(recordEvent).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'access.org_unit_update', details: { nameChanged: false, parentChanged: true } }),
+        { tx: expect.anything() },
       );
     });
 
@@ -447,7 +447,7 @@ describe('org units', () => {
       const { result, calls } = run({ name: 'Enhed' }, U1, unit(U1), false);
       await result;
       expect(calls.some((c) => c.sql.startsWith('UPDATE'))).toBe(false);
-      expect(recordAdminAction).not.toHaveBeenCalled();
+      expect(recordEvent).not.toHaveBeenCalled();
     });
 
     it('404 for a missing unit, 409 for a rollekatalog unit, 400 for an empty patch', async () => {
@@ -487,14 +487,14 @@ describe('org units', () => {
         message: expect.stringContaining('centrale skabeloner'),
       });
       expect(calls.some((c) => c.sql.startsWith('DELETE'))).toBe(false);
-      expect(recordAdminAction).not.toHaveBeenCalled();
+      expect(recordEvent).not.toHaveBeenCalled();
     });
 
     it('deletes a leaf without assignments and audits it', async () => {
       const { runner, calls } = run({});
       await deleteOrgUnit(U1, 'a', runner);
       expect(calls.some((c) => c.sql.startsWith('DELETE FROM public.org_units'))).toBe(true);
-      expect(recordAdminAction).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ type: 'access.org_unit_delete', entityId: U1 }));
+      expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'access.org_unit_delete', entityId: U1 }), { tx: expect.anything() });
     });
 
     it('409 when it has children', async () => {
@@ -543,7 +543,7 @@ describe('org units', () => {
       expect(del.params).toEqual([U1, [D3]]);
       const ins = calls.find((c) => c.sql.startsWith('INSERT INTO public.org_unit_members'))!;
       expect(ins.params).toEqual([U1, [D1]]);
-      const types = recordAdminAction.mock.calls.map((c) => (c[1] as { type: string; secondaryEntityId?: string }));
+      const types = recordEvent.mock.calls.map((c) => (c[0] as { type: string; secondaryEntityId?: string }));
       expect(types).toEqual([
         { type: 'access.member_remove', actorUserId: 'admin', entityType: 'org_unit_member', entityId: U1, secondaryEntityType: 'directory_user', secondaryEntityId: D3 },
         { type: 'access.member_add', actorUserId: 'admin', entityType: 'org_unit_member', entityId: U1, secondaryEntityType: 'directory_user', secondaryEntityId: D1 },

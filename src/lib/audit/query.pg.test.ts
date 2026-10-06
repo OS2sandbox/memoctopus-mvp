@@ -243,10 +243,10 @@ describe.skipIf(!hasPg)('audit query (real Postgres)', () => {
     it('returns ip only where one was stored, and the stored fields intact', () =>
       withFreshSchema(async (c, schema) => {
         const env = queryEnv(c, schema);
-        await add(c, { ip_address: '10.0.0.9', user_agent: 'UA', details: JSON.stringify({ method: 'sso' }) });
+        await add(c, { ip_address: '10.0.0.9', user_agent: 'UA', details: JSON.stringify({ method: 'oidc' }) });
         await add(c, { ip_address: null });
         const { rows } = await getFeedPage({ offset: 0, size: 10, delaySeconds: 10 }, env);
-        expect(rows[0]).toMatchObject({ ipAddress: '10.0.0.9', userAgent: 'UA', details: { method: 'sso' } });
+        expect(rows[0]).toMatchObject({ ipAddress: '10.0.0.9', userAgent: 'UA', details: { method: 'oidc' } });
         expect(rows[1].ipAddress).toBeNull();
       }));
   });

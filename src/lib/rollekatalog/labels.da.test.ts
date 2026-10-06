@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ROLLEKATALOG_ERROR_CODES } from './errors';
-import { checkEndpointLabels, syncCountLabels, syncErrorMessage } from './labels.da';
-import { CHECK_ENDPOINTS } from './check';
+import { syncCountLabels, syncErrorMessage } from './labels.da';
 import { SYNC_COUNT_KEYS } from './types';
 
 describe('labels.da', () => {
@@ -20,8 +19,7 @@ describe('labels.da', () => {
     for (const c of ['nope', '', null, undefined, '__proto__', 'constructor']) expect(syncErrorMessage(c)).toBe(GENERIC);
   });
 
-  it('labels every sync counter and every check endpoint', () => {
+  it('labels every sync counter', () => {
     for (const k of SYNC_COUNT_KEYS) expect(syncCountLabels[k]).toBeTruthy();
-    for (const e of CHECK_ENDPOINTS) expect(checkEndpointLabels[e]).toBeTruthy();
   });
 });

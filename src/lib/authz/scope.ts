@@ -1,4 +1,5 @@
 import { pool } from '@/lib/db';
+import { hasCapability } from './permissions';
 import type { Capability, CapabilityScope, Principal } from './types';
 
 // Org-tree traversal for scoped capabilities. The tree comes from synced or
@@ -74,8 +75,7 @@ export async function orgSubtreeUuids(roots: Root[], env: ScopeEnv = defaultEnv(
 
 /** The scope a principal holds for a capability, or null when it holds nothing (disabled, capability missing, no scope entry). */
 function scopeOf(principal: Principal, capability: Capability): CapabilityScope | null {
-  if (principal.disabled) return null;
-  if (!principal.capabilities.includes(capability)) return null;
+  if (!hasCapability(principal, capability)) return null;
   return principal.scopes[capability] ?? null;
 }
 
@@ -119,7 +119,7 @@ export async function isOrgUnitWithinScope(
   return chain.some((u) => u !== target && descendantRoots.has(u));
 }
 
-export type OrgUnitsInScope = { all: true } | { all: false; uuids: string[] };
+type OrgUnitsInScope = { all: true } | { all: false; uuids: string[] };
 
 /** Every org unit the caller may act on for the capability; `{ all: true }` for a global scope (no enumeration). */
 export async function orgUnitsInScope(

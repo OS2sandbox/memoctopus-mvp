@@ -1,12 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  ConfigError,
   accessSource,
   bootstrapAdminEmails,
   directoryMatchMode,
   directoryUserIdClaim,
-  directoryUserIdTransform,
   requireRoleToLogin,
-  transformUserId,
 } from './config';
 
 afterEach(() => vi.unstubAllEnvs());
@@ -20,9 +19,36 @@ describe('accessSource', () => {
     vi.stubEnv('ACCESS_SOURCE', '  Rollekatalog ');
     expect(accessSource()).toBe('rollekatalog');
   });
-  it('falls back to local for invalid values without throwing', () => {
-    vi.stubEnv('ACCESS_SOURCE', 'ldap');
+  it('defaults to local when unset or blank', () => {
+    vi.stubEnv('ACCESS_SOURCE', '   ');
     expect(accessSource()).toBe('local');
+    vi.unstubAllEnvs();
+    delete process.env.ACCESS_SOURCE;
+    expect(accessSource()).toBe('local');
+  });
+  it('accepts local case-insensitively and trimmed', () => {
+    vi.stubEnv('ACCESS_SOURCE', ' LOCAL ');
+    expect(accessSource()).toBe('local');
+  });
+  it.each(['ldap', 'rolekatalog', 'local;', 'rollekatalog,local', 'true'])(
+    'fails closed on the invalid value "%s": throws ConfigError, never falls back to local',
+    (v) => {
+      vi.stubEnv('ACCESS_SOURCE', v);
+      expect(() => accessSource()).toThrow(ConfigError);
+    },
+  );
+  it('throws the fixed message without echoing the value', () => {
+    vi.stubEnv('ACCESS_SOURCE', 'sekret-typo');
+    let err: unknown;
+    try {
+      accessSource();
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ConfigError);
+    expect((err as Error).name).toBe('ConfigError');
+    expect((err as Error).message).toBe('ACCESS_SOURCE must be "local" or "rollekatalog"');
+    expect((err as Error).message).not.toContain('sekret');
   });
   it('is read at call time', () => {
     vi.stubEnv('ACCESS_SOURCE', 'local');
@@ -85,30 +111,5 @@ describe('directoryUserIdClaim', () => {
   it('uses a trimmed override and keeps its case (claim names are case-sensitive)', () => {
     vi.stubEnv('DIRECTORY_USERID_CLAIM', ' sAMAccountName ');
     expect(directoryUserIdClaim()).toBe('sAMAccountName');
-  });
-});
-
-describe('DIRECTORY_USERID_TRANSFORM', () => {
-  it('defaults to none and ignores unknown values without throwing', () => {
-    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', '');
-    expect(directoryUserIdTransform()).toBe('none');
-    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'lowercase');
-    expect(directoryUserIdTransform()).toBe('none');
-  });
-  it('accepts strip-upn-domain case-insensitively and trimmed, at call time', () => {
-    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', ' Strip-UPN-Domain ');
-    expect(directoryUserIdTransform()).toBe('strip-upn-domain');
-    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'none');
-    expect(directoryUserIdTransform()).toBe('none');
-  });
-  it.each([
-    ['none', 'ABC123@kommune.dk', 'ABC123@kommune.dk'],
-    ['strip-upn-domain', 'ABC123@kommune.dk', 'ABC123'],
-    ['strip-upn-domain', 'ABC123', 'ABC123'],
-    ['strip-upn-domain', 'a@b@c.dk', 'a'],
-    ['strip-upn-domain', '@kommune.dk', '@kommune.dk'],
-  ])('transformUserId with %s: %s -> %s', (mode, input, expected) => {
-    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', mode);
-    expect(transformUserId(input)).toBe(expected);
   });
 });

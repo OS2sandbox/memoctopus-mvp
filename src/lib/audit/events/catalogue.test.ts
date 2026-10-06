@@ -9,7 +9,7 @@ const poolQuery = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/db', () => ({ db: {}, pool: { query: poolQuery, connect: vi.fn() } }));
 
 import { AuditWriteError, recordEvent, validateEvent } from '../record';
-import { CLIENT_EVENT_TYPES, EVENT_CATALOGUE, EVENT_TYPES, type AuditEventInput, type EventType } from './index';
+import { EVENT_CATALOGUE, EVENT_TYPES, type AuditEventInput, type EventType } from './index';
 import { accessEvents } from './access';
 import { aiEvents } from './ai';
 import { auditEvents } from './audit';
@@ -112,26 +112,6 @@ function eventFor(type: EventType, details: unknown): AuditEventInput {
 }
 
 describe('catalogue structure', () => {
-  it('contains exactly the closed set of event types', () => {
-    expect([...EVENT_TYPES].sort()).toEqual(
-      [
-        'access.role_assign', 'access.role_revoke', 'access.org_unit_create', 'access.org_unit_update',
-        'access.org_unit_delete', 'access.member_add', 'access.member_remove', 'access.user_create',
-        'access.user_update', 'access.user_delete', 'access.user_link', 'authz.denied',
-        'auth.login', 'auth.logout', 'auth.login_failed',
-        'template.create', 'template.update', 'template.delete', 'template.set_default', 'template.share', 'template.import',
-        'central_template.create', 'central_template.update', 'central_template.retarget', 'central_template.archive', 'central_template.restore',
-        'minutes.generate', 'transcription.request', 'diarization.request', 'chapters.request', 'clarifications.request', 'export.download',
-        'bot.session_start', 'bot.session_pause', 'bot.session_resume', 'bot.session_stop', 'bot.session_abort',
-        'bot.audio_collect', 'bot.transcript_collect', 'bot.joined', 'bot.ended', 'bot.error',
-        'meeting.create', 'meeting.status_change', 'meeting.rename', 'meeting.participants_edit', 'meeting.delete',
-        'meeting.redact', 'meeting.audio_delete', 'meeting.transcript_edit', 'meeting.minutes_save', 'meeting.minutes_version',
-        'audit.export', 'audit.prune',
-        'directory.sync',
-      ].sort(),
-    );
-  });
-
   it('has no event type defined in two domain files (a spread would silently override)', () => {
     const files = [accessEvents, authEvents, templateEvents, centralTemplateEvents, aiEvents, botEvents, meetingEvents, auditEvents, directoryEvents];
     const all = files.flatMap((f) => Object.keys(f));
@@ -152,10 +132,9 @@ describe('catalogue structure', () => {
     expect([...prefixes(directoryEvents)]).toEqual(['directory']);
   });
 
-  it('allows the browser to report only meeting.* and auth.login_failed', () => {
-    expect([...CLIENT_EVENT_TYPES].sort()).toEqual(
-      [...Object.keys(meetingEvents), 'auth.login_failed'].sort(),
-    );
+  it('allows the browser to report only meeting.*', () => {
+    const clientTypes = EVENT_TYPES.filter((t) => (EVENT_CATALOGUE[t].sources as readonly string[]).includes('client'));
+    expect([...clientTypes].sort()).toEqual(Object.keys(meetingEvents).sort());
   });
 
   it('keeps meeting.* client-only (they are self-reported)', () => {

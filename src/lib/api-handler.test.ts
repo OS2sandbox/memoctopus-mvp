@@ -100,4 +100,17 @@ describe('withHandler', () => {
     })();
     expect(res.headers.get('x-request-id')).toMatch(UUID_RE);
   });
+
+  it('answers a ConfigError (invalid security setting) with a Danish 503, never a plain 500, and logs only the class name', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const err = Object.assign(new Error('ACCESS_SOURCE must be "local" or "rollekatalog"'), { name: 'ConfigError' });
+    const res = await withHandler('cfg', async () => {
+      throw err;
+    })();
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'Adgangskontrol er midlertidigt utilgængelig', code: 'config_invalid' });
+    expect(res.headers.get('x-request-id')).toMatch(UUID_RE);
+    expect(String(spy.mock.calls[0][0])).toMatch(/^\[cfg\] name=ConfigError requestId=/);
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('ACCESS_SOURCE');
+  });
 });
