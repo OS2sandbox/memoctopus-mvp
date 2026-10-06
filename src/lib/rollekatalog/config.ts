@@ -10,7 +10,11 @@ import { ROLE_KEYS, type RoleKey } from '@/lib/authz/types';
 export type UserIdTransform = 'none' | 'strip-upn-domain';
 
 const DEFAULT_ITSYSTEM_ID = 'os2taletiltekst';
-const DEFAULT_TIMEOUT_MS = 10_000;
+/**
+ * Per attempt, body included. Every client call is a bulk call (organisation v3 can
+ * be tens of MB and is synchronized on the Rollekatalog side), so the default is 2 minutes.
+ */
+const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_SYNC_MAX_REMOVAL_PERCENT = 30;
 const DEFAULT_ROLE_STALE_MAX_SECONDS = 86_400;
 /**
@@ -101,7 +105,7 @@ export function rollekatalogDomain(): string | null {
 }
 
 export function timeoutMs(): number {
-  return intInRange('ROLLEKATALOG_TIMEOUT_MS', DEFAULT_TIMEOUT_MS, 100, 120_000);
+  return intInRange('ROLLEKATALOG_TIMEOUT_MS', DEFAULT_TIMEOUT_MS, 1000, 600_000);
 }
 
 export function maxResponseBytes(): number {

@@ -88,13 +88,17 @@ describe('simple settings', () => {
     vi.stubEnv('ROLLEKATALOG_DOMAIN', ' Administrativt ');
     expect(rollekatalogDomain()).toBe('Administrativt');
   });
-  it('timeout: default 10s, invalid values fall back', () => {
-    expect(timeoutMs()).toBe(10_000);
-    vi.stubEnv('ROLLEKATALOG_TIMEOUT_MS', '1500');
-    expect(timeoutMs()).toBe(1500);
-    for (const bad of ['abc', '-5', '0', '5', '1.5', '999999999']) {
+  it('timeout: default 120000 (2 min), valid values pass through', () => {
+    expect(timeoutMs()).toBe(120_000);
+    for (const ok of ['1000', '1500', '30000', '600000']) {
+      vi.stubEnv('ROLLEKATALOG_TIMEOUT_MS', ok);
+      expect(timeoutMs(), ok).toBe(Number(ok));
+    }
+  });
+  it('timeout: out-of-range, non-numeric and blank values fall back to the default', () => {
+    for (const bad of ['999', '600001', '100', '0', '-5', '1.5', 'abc', '10s', '', '   ', '999999999']) {
       vi.stubEnv('ROLLEKATALOG_TIMEOUT_MS', bad);
-      expect(timeoutMs(), bad).toBe(10_000);
+      expect(timeoutMs(), JSON.stringify(bad)).toBe(120_000);
     }
   });
   it('max response bytes defaults to 64 MiB', () => {

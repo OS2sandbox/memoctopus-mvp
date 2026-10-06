@@ -152,10 +152,35 @@ describe('retries', () => {
     await failure(createRollekatalogClient(opts({ retries: 10 })).getRoleAssignments());
     expect(mock.requests).toHaveLength(3);
   });
-  it('retries a timeout', async () => {
-    mock.setFaults([{ match: '/api/read/', delayMs: 400, times: 1 }]);
-    const a = await createRollekatalogClient(opts({ timeoutMs: 100 })).getRoleAssignments();
+  it('retries 429 and then succeeds', async () => {
+    mock.setFaults([{ match: '/api/read/', status: 429, times: 1 }]);
+    const a = await createRollekatalogClient(opts()).getRoleAssignments();
     expect(a).toHaveLength(10);
+    expect(mock.requests.map((r) => r.status)).toEqual([429, 200]);
+  });
+  it('never retries a timeout: exactly one request reaches the server', async () => {
+    mock.setFaults([{ match: '/api/read/', delayMs: 400, times: 1 }]);
+    const sleeps: number[] = [];
+    const err = await failure(
+      createRollekatalogClient(opts({ timeoutMs: 100, sleep: async (ms) => void sleeps.push(ms) })).getRoleAssignments(),
+    );
+    expect(err.code).toBe('timeout');
+    expect(sleeps).toEqual([]);
+    // The faulted request is only recorded when the server answers; wait for it, then
+    // prove no second request arrived behind it.
+    await new Promise((r) => setTimeout(r, 600));
+    expect(mock.requests.length).toBeLessThanOrEqual(1);
+  });
+  it('does not retry a timeout on the organisation endpoint either', async () => {
+    const f = vi.fn(
+      (_url: unknown, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }),
+    );
+    const err = await failure(createRollekatalogClient(opts({ fetch: f as unknown as typeof fetch, timeoutMs: 50 })).getOrganisation());
+    expect(err.code).toBe('timeout');
+    expect(f).toHaveBeenCalledTimes(1);
   });
   it('retries a network failure, then reports network', async () => {
     const f = vi.fn(async () => {
@@ -174,6 +199,21 @@ describe('timeout, size and body handling', () => {
     mock.setFaults([{ match: '/api/read/', delayMs: 500 }]);
     const err = await failure(createRollekatalogClient(opts({ timeoutMs: 100, retries: 0 })).getRoleAssignments());
     expect(err.code).toBe('timeout');
+  });
+  it('aborts a slow body read at the timeout (the deadline covers the body), code timeout, no retry', async () => {
+    const f = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      // Headers arrive at once, then the body stalls until the client aborts.
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('[{"'));
+          init?.signal?.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')));
+        },
+      });
+      return new Response(body, { status: 200 });
+    });
+    const err = await failure(createRollekatalogClient(opts({ fetch: f as unknown as typeof fetch, timeoutMs: 50 })).getRoleAssignments());
+    expect(err.code).toBe('timeout');
+    expect(f).toHaveBeenCalledTimes(1);
   });
   it('rejects an oversized body announced by Content-Length', async () => {
     mock.setFaults([{ match: '/api/read/', oversize: { bytes: 5000 } }]);

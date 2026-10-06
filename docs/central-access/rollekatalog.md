@@ -123,7 +123,7 @@ Read at call time (restart, no rebuild); an invalid value falls back to the defa
 | `ROLLEKATALOG_ORG_API_KEY` | unset | Key of the `ORGANISATION` client |
 | `ROLLEKATALOG_ITSYSTEM_ID` | `os2taletiltekst` | IT system identifier (letters, digits, `_`, `-`) |
 | `ROLLEKATALOG_DOMAIN` | unset | Rollekatalog domain; unset means its primary domain |
-| `ROLLEKATALOG_TIMEOUT_MS` | `10000` | per request, 100 to 120000 |
+| `ROLLEKATALOG_TIMEOUT_MS` | `120000` | per request attempt, response body included; 1000 to 600000. Both calls are bulk downloads, so the default is 2 minutes |
 | `ROLLEKATALOG_MAX_RESPONSE_BYTES` | 64 MiB | cap for a response; larger gives `too_large`. The default is a guess |
 | `ROLLEKATALOG_ALLOW_HTTP` | `false` | `true` allows `http://` for a non-local host |
 | `ROLLEKATALOG_SCOPE_DESCENDANTS` | `true` | section 4 |
@@ -140,7 +140,7 @@ Related: `ACCESS_SOURCE`, `REQUIRE_ROLE_TO_LOGIN`, `DIRECTORY_MATCH`, `DIRECTORY
 - The two API keys are secrets: keep them in `.env` or your secret store. They are never logged and never part of an error, an audit event or a route response.
 - The URL must be `https://`, except for `localhost`, `127.0.0.1` and `::1`. On a trusted private network you can opt out with `ROLLEKATALOG_ALLOW_HTTP=true`. An insecure or malformed URL makes the integration "not configured" (`insecure_url`, `not_configured`).
 - Redirects are **not followed** (the `ApiKey` header would be sent to the target); a 3xx is `invalid_response`. Point the URL at the final address.
-- GET only, at most 2 retries with back-off on timeout, 5xx, 429 and network errors; never on 401, 403 or 404.
+- GET only, at most 2 retries with back-off on 5xx, 429 and network errors; never on a timeout (the Rollekatalog side is usually still working, and a retry would only queue more load behind it), and never on 401, 403 or 404.
 
 ## 10. Troubleshooting by error code
 
@@ -153,7 +153,7 @@ The codes appear in the sync responses, `sync_runs.error_code`, the admin panel 
 | `unauthorized` | key refused (401) | the key, and that READ is used for assignments and ORG for organisation |
 | `forbidden` | key valid, client role wrong (403) | READ key must be `READ_ACCESS`, ORG key `ORGANISATION` |
 | `not_found` | 404 | `ROLLEKATALOG_ITSYSTEM_ID` (does the IT system exist?), `ROLLEKATALOG_DOMAIN`, the URL path |
-| `timeout` | no answer within `ROLLEKATALOG_TIMEOUT_MS` | `organisation/v3` can be slow on a large installation: raise the timeout |
+| `timeout` | the whole response (headers and body) did not arrive within `ROLLEKATALOG_TIMEOUT_MS`; not retried | `organisation/v3` can be slow and large on a big installation: raise the timeout (up to 600000) and check Rollekatalog's load |
 | `network` | connection failed (DNS, TLS, refused) | firewall, DNS, certificate chain |
 | `server_error` | 5xx or 429 after the retries | Rollekatalog's own log and load |
 | `invalid_response` | not JSON, did not match the whitelist schema, a redirect or another unexpected status | version mismatch, or a login page instead of the API (wrong URL) |

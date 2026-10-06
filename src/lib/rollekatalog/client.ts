@@ -22,7 +22,7 @@ import {
 } from './schemas';
 
 export const API_KEY_HEADER = 'ApiKey';
-/** Retries after the first attempt (timeout, 5xx, 429, network only). */
+/** Retries after the first attempt (network, 5xx and 429 only; a timeout is never retried). */
 export const MAX_RETRIES = 2;
 const BASE_BACKOFF_MS = 250;
 
@@ -36,6 +36,7 @@ export interface ClientOptions {
   orgKey?: string | null;
   itSystemId?: string;
   domain?: string | null;
+  /** Deadline for ONE attempt, response body included. Default ROLLEKATALOG_TIMEOUT_MS (2 min). */
   timeoutMs?: number;
   maxBytes?: number;
   /** Retries after the first attempt, at most MAX_RETRIES. */
@@ -67,7 +68,10 @@ function statusToError(status: number): RollekatalogError {
   return new RollekatalogError('invalid_response', status);
 }
 
-const RETRYABLE = new Set(['timeout', 'network', 'server_error']);
+// 'timeout' is deliberately absent: both calls are bulk calls (organisation v3 is a
+// `synchronized` handler on the Rollekatalog side), so when our deadline passes the
+// server is usually still working. A retry would only queue more load behind it.
+const RETRYABLE = new Set(['network', 'server_error']);
 
 async function readBody(res: Response, maxBytes: number): Promise<string> {
   const declared = Number(res.headers.get('content-length'));
@@ -122,6 +126,8 @@ export class RollekatalogClient {
     return this.opts.domain !== undefined ? this.opts.domain : rollekatalogDomain();
   }
 
+  // The timer is armed before fetch and cleared only after the body is read, so the
+  // timeout covers the whole request including a slow body.
   private async attempt(url: string, key: string, timeoutMs: number, maxBytes: number): Promise<unknown> {
     const controller = new AbortController();
     let timedOut = false;
