@@ -1,14 +1,11 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { auditRowsToCsv } from '@/lib/audit/csv';
+import { AUDIT_EXPORT_MAX_ROWS, AUDIT_TRUNCATED_HEADER, auditExportFilename, auditRowsToCsv } from '@/lib/audit/csv';
 import { filterShape, searchParamsToObject, toFilters } from '@/lib/audit/filters';
 import { auditScopeFor, collectAuditEvents } from '@/lib/audit/query';
 import { recordServerEvent } from '@/lib/audit/record';
 import { parseWith } from '@/lib/authz/access-http';
 import { withAuthz } from '@/lib/authz/guard';
-
-/** Hard cap on one export; a larger result is cut off and flagged (X-Audit-Truncated). */
-const EXPORT_MAX_ROWS = 50_000;
 
 const querySchema = z.object(filterShape).strict();
 
@@ -22,7 +19,7 @@ export const GET = withAuthz('admin/audit/export GET', 'audit.export', async (re
   const { rows, truncated } = await collectAuditEvents({
     filters: toFilters(parsed.data),
     scope,
-    maxRows: EXPORT_MAX_ROWS,
+    maxRows: AUDIT_EXPORT_MAX_ROWS,
   });
 
   // The export is recorded BEFORE the file leaves. If that record cannot be
@@ -42,9 +39,9 @@ export const GET = withAuthz('admin/audit/export GET', 'audit.export', async (re
     status: 200,
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename="log-${day}.csv"`,
+      'Content-Disposition': `attachment; filename="${auditExportFilename(day, truncated)}"`,
       'Cache-Control': 'no-store',
-      'X-Audit-Truncated': truncated ? 'true' : 'false',
+      [AUDIT_TRUNCATED_HEADER]: truncated ? 'true' : 'false',
     },
   });
 });

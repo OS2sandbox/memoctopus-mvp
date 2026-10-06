@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CSV_HEADER, auditRowToCsvFields, auditRowsToCsv, csvCell } from './csv';
+import { AUDIT_EXPORT_MAX_ROWS, CSV_HEADER, auditExportFilename, auditRowToCsvFields, auditRowsToCsv, csvCell } from './csv';
 import type { AuditEventRow } from './query';
 
 const row = (over: Partial<AuditEventRow> = {}): AuditEventRow => ({
@@ -91,5 +91,11 @@ describe('auditRowsToCsv', () => {
 
   it('survives an empty result: header only', () => {
     expect(auditRowsToCsv([])).toBe(`\uFEFF${CSV_HEADER.join(',')}\r\n`);
+  });
+
+  it('names a truncated export -afkortet and keeps the cap shared', () => {
+    expect(auditExportFilename('2026-10-06', false)).toBe('log-2026-10-06.csv');
+    expect(auditExportFilename('2026-10-06', true)).toBe('log-2026-10-06-afkortet.csv');
+    expect(AUDIT_EXPORT_MAX_ROWS).toBe(50_000);
   });
 });

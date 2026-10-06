@@ -14,8 +14,7 @@ vi.mock('@/lib/audit/query', async (orig) => ({
 
 import { GET } from './route';
 
-// Not exported from the route: Next.js rejects non-handler route exports at build time.
-const EXPORT_MAX_ROWS = 50_000;
+import { AUDIT_EXPORT_MAX_ROWS as EXPORT_MAX_ROWS } from '@/lib/audit/csv';
 import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { recordServerEvent } from '@/lib/audit/record';
@@ -79,6 +78,7 @@ describe('GET /api/admin/audit/export (audit.export)', () => {
     expect(res.headers.get('content-disposition')).toMatch(/^attachment; filename="log-\d{4}-\d{2}-\d{2}\.csv"$/);
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(res.headers.get('x-audit-truncated')).toBe('false');
+    expect(res.headers.get('content-disposition')).not.toContain('afkortet');
     const bytes = new Uint8Array(await res.clone().arrayBuffer());
     expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]); // UTF-8 BOM, which text() would strip
     const text = await res.text();
@@ -109,6 +109,7 @@ describe('GET /api/admin/audit/export (audit.export)', () => {
     mockCollect.mockResolvedValue({ rows: [row()], truncated: true });
     const res = await GET(req(), NO_PARAMS);
     expect(res.headers.get('x-audit-truncated')).toBe('true');
+    expect(res.headers.get('content-disposition')).toMatch(/^attachment; filename="log-\d{4}-\d{2}-\d{2}-afkortet\.csv"$/);
     expect(mockRecord.mock.calls[0][1]).toMatchObject({ details: { rowCount: 1, format: 'csv', truncated: true } });
     expect(mockCollect).toHaveBeenCalledWith(expect.objectContaining({ maxRows: EXPORT_MAX_ROWS }));
   });

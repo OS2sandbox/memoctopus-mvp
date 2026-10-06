@@ -7,6 +7,24 @@
 import type { AuditEventRow } from './query';
 import { eventTypeLabel, outcomeLabels, sourceLabels } from './labels.da';
 
+/**
+ * Hard cap on one export; a larger result is cut off and flagged. Lives here (not in the
+ * route, which may only export handlers) so the route and the UI warning share one number.
+ * This module is client-safe: it only imports a type and the Danish labels.
+ */
+export const AUDIT_EXPORT_MAX_ROWS = 50_000;
+
+/** Response header the export route sets to 'true' when the file was cut off at the cap. */
+export const AUDIT_TRUNCATED_HEADER = 'X-Audit-Truncated';
+
+/**
+ * Download name of an export. A truncated file carries `-afkortet` before the extension so it
+ * stays recognisable once it has left the platform (the CSV itself has no marker row, to stay parseable).
+ */
+export function auditExportFilename(day: string, truncated: boolean): string {
+  return `log-${day}${truncated ? '-afkortet' : ''}.csv`;
+}
+
 const BOM = '\uFEFF';
 const FORMULA_START = /^[=+\-@\t\r\n]/;
 const NEEDS_QUOTES = /[",\r\n]/;

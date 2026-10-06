@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ErrorBanner } from '@/components/ui/error-banner';
@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableEmptyRow, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { AUDIT_EXPORT_MAX_ROWS, AUDIT_TRUNCATED_HEADER, auditExportFilename } from '@/lib/audit/csv';
 import { eventTypeLabel, eventTypeLabels, outcomeLabels, sourceBadgeLabels, sourceLabels } from '@/lib/audit/labels.da';
 import { useMe } from '@/lib/hooks/use-me';
 import { apiRequest } from './api';
@@ -71,6 +72,35 @@ function formatDetails(details: Record<string, unknown>): string {
     .join(' · ');
 }
 
+const EXPORT_FAILED = 'Eksport mislykkedes';
+// The guard's 401/403 bodies are English; show a fixed Danish text for those (same wording as api.ts).
+const EXPORT_STATUS_MESSAGE: Record<number, string> = {
+  401: 'Din session er udløbet. Log ind igen.',
+  403: 'Du har ikke adgang til denne handling.',
+};
+const EXPORT_TRUNCATED_WARNING = `Eksporten er afkortet til de første ${String(AUDIT_EXPORT_MAX_ROWS).replace(/\B(?=(\d{3})+(?!\d))/g, '.')} rækker. Indsnævr filteret (fx datointerval) og eksportér igen.`;
+
+/** Danish text for a failed export: fixed for 401/403, else the server's `{error}`, else a generic one. */
+async function exportErrorMessage(res: Response): Promise<string> {
+  const fixed = EXPORT_STATUS_MESSAGE[res.status];
+  if (fixed) return fixed;
+  try {
+    const body: unknown = await res.json();
+    const error = typeof body === 'object' && body !== null ? (body as { error?: unknown }).error : undefined;
+    if (typeof error === 'string' && error.trim()) return error;
+  } catch {
+    // Not JSON: fall through to the generic text.
+  }
+  return EXPORT_FAILED;
+}
+
+/** File name from Content-Disposition; falls back to the pre-header name for today. */
+function exportFilename(res: Response, truncated: boolean): string {
+  const match = /filename="?([^";]+)"?/i.exec(res.headers.get('Content-Disposition') ?? '');
+  const name = match?.[1]?.trim().replace(/[\\/]/g, '_');
+  return name || auditExportFilename(new Date().toISOString().slice(0, 10), truncated);
+}
+
 const outcomeVariant = { success: 'success', denied: 'warning', error: 'destructive' } as const;
 
 export function AuditLog() {
@@ -85,6 +115,11 @@ export function AuditLog() {
   const [loadError, setLoadError] = useState<string | null>(null);
   // Only the newest request may write state, so a slow old response cannot overwrite a newer filter.
   const requestSeq = useRef(0);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportTruncated, setExportTruncated] = useState(false);
+  // A ref, not the state: two clicks in the same tick must still send one request.
+  const exportInFlight = useRef(false);
 
   const fetchPage = useCallback(async (filters: Filters, cursor: string | null) => {
     const seq = ++requestSeq.current;
@@ -114,7 +149,43 @@ export function AuditLog() {
   const canExport = !!me && me.capabilities.includes('audit.export');
   const isGlobalReader = !!me && me.scopes['audit.read']?.global === true;
   const showNetwork = events.some((e) => e.ipAddress);
-  const exportHref = useMemo(() => `/api/admin/audit/export?${filterQuery(applied).toString()}`, [applied]);
+
+  async function runExport() {
+    if (exportInFlight.current) return;
+    exportInFlight.current = true;
+    setExporting(true);
+    setExportError(null);
+    setExportTruncated(false);
+    try {
+      const res = await fetch(`/api/admin/audit/export?${filterQuery(applied).toString()}`, { credentials: 'same-origin' });
+      // Never save a non-2xx body: it is an error document, not the log.
+      if (!res.ok) {
+        setExportError(await exportErrorMessage(res));
+        return;
+      }
+      const truncated = res.headers.get(AUDIT_TRUNCATED_HEADER) === 'true';
+      const blob = new Blob([await res.arrayBuffer()], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      try {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = exportFilename(res, truncated);
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } finally {
+        // One task later, so every browser has started the download before the URL dies.
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+      }
+      setExportTruncated(truncated);
+    } catch {
+      setExportError(EXPORT_FAILED);
+    } finally {
+      exportInFlight.current = false;
+      setExporting(false);
+    }
+  }
 
   function applyFilters(e: React.FormEvent) {
     e.preventDefault();
@@ -214,15 +285,25 @@ export function AuditLog() {
           Hændelser markeret »selvrapporteret« er indberettet af brugerens egen browser. De kan ikke bekræftes af serveren.
         </p>
         {canExport && (
-          <a
-            href={exportHref}
-            download
-            className="inline-flex h-9 min-h-[36px] items-center justify-center rounded-[var(--radius)] border border-[var(--line-strong)] px-3 text-xs font-medium text-[var(--ink)] hover:bg-[var(--surface-2)]"
-          >
-            Eksportér som CSV
-          </a>
+          <Button type="button" variant="outline" size="sm" disabled={exporting} onClick={runExport}>
+            {exporting ? 'Eksporterer …' : 'Eksportér som CSV'}
+          </Button>
         )}
       </div>
+
+      <ErrorBanner message={exportError} />
+      {exportTruncated && (
+        <div
+          role="status"
+          className="flex items-start gap-2.5 rounded-[var(--radius)] px-3 py-2.5 text-[13px] leading-snug text-[var(--ink)]"
+          style={{ border: '1px solid color-mix(in oklch, var(--warn) 40%, var(--line))', background: 'color-mix(in oklch, var(--warn) 12%, white)' }}
+        >
+          <span className="flex-1">{EXPORT_TRUNCATED_WARNING}</span>
+          <button type="button" onClick={() => setExportTruncated(false)} className="shrink-0 underline underline-offset-2">
+            Luk
+          </button>
+        </div>
+      )}
 
       <ErrorBanner message={loadError} onRetry={() => {
           setLoading(true);
