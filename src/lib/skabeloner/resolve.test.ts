@@ -62,6 +62,14 @@ describe('listCentralForUser', () => {
     // Cycle safety: UNION (not UNION ALL) plus a depth cap.
     expect(sql).toMatch(/\bUNION\b(?!\s+ALL)/);
     expect(sql).toMatch(/depth < \$2::int/);
+    // Owner-subtree re-check at read time: an upward walk from each candidate target to the owner unit.
+    expect(sql).toMatch(/owner_org_unit_uuid/);
+    expect(sql).toMatch(/walk\(template_id, target_uuid, owner_uuid, cur_uuid, depth\)/);
+    expect(sql).toMatch(/w\.cur_uuid = w\.owner_uuid/);
+    expect(sql).toMatch(/w\.depth < \$2::int/);
+    // The walk starts only from targets the user matches, in the same single statement.
+    expect(sql).toMatch(/cand\(template_id, target_uuid, owner_uuid\)/);
+    expect(sql).not.toMatch(/ct\.id = \$3/);
   });
 
   it('never exposes a prompt even if a row somehow carried one', async () => {
@@ -109,6 +117,9 @@ describe('resolveCentralTemplate', () => {
     const [sql, params] = query.mock.calls[0];
     expect(params).toEqual(['user-1', MAX_ORG_DEPTH, ID]);
     expect(sql).toContain('ct.id = $3::uuid');
+    // The id filter is pushed into the candidate step so only this template's targets are walked.
+    expect(sql).toMatch(/ct\.status = 'active' AND ct\.id = \$3::uuid/);
+    expect(sql).toMatch(/w\.cur_uuid = w\.owner_uuid/);
     expect(sql).toMatch(/d\.disabled = false/);
     expect(sql).toMatch(/ct\.status = 'active'/);
   });

@@ -18,13 +18,13 @@ Code: `src/lib/skabeloner/central.ts` (manager service), `resolve.ts` (recipient
 ## Delegation
 
 - **Targets** are org units with `include_descendants` (default true): the template reaches the members of the target and, when set, of every unit below it.
-- Targets must lie **inside the owner unit's subtree**; anything else is rejected with 400 `target_outside_owner` on every write that changes the targets. This is checked at write time only: a unit later moved out of the subtree (a Rollekatalog sync, say) stays a recipient until a manager retargets, so check templates after a reorganisation.
+- Targets must lie **inside the owner unit's subtree**; anything else is rejected with 400 `target_outside_owner` on every write that changes the targets. The same rule is re-validated on every read: a target counts only while it is the owner unit or a descendant of it right now (a capped upward walk to the owner). If a unit is later moved out of the subtree (a Rollekatalog sync or a local move), it silently stops receiving the template (fail closed, no notice), and moving it back restores delivery. The admin list does not yet flag such drifted targets (known gap), so check templates after a reorganisation.
 - The pickers use `GET /api/admin/central-templates/scope`, which returns only units inside the caller's scope (a parent outside it shows as `parentUuid: null`).
 - Zero targets is allowed (a draft reaching nobody; the UI warns "Ingen modtagere"). There is no default central template.
 
 ## Who receives a template
 
-`resolve.ts` computes it on every request (no cache). A user receives a template iff (1) it is `active`, (2) the user is linked to a **non-disabled** directory user (`directory_users.app_user_id`, `disabled = false`), and (3) that directory user is a member of a target unit, or of a descendant of a target with `include_descendants`. One query walks up from the user's own units (`UNION` plus the 64-level depth cap of `scope.ts`).
+`resolve.ts` computes it on every request (no cache). A user receives a template iff (1) it is `active`, (2) the user is linked to a **non-disabled** directory user (`directory_users.app_user_id`, `disabled = false`), and (3) that directory user is a member of a target unit, or of a descendant of a target with `include_descendants`. One query walks up from the user's own units and then from each matching target up to the template's owner unit (`UNION` plus the 64-level depth cap of `scope.ts`); a target that does not reach the owner is ignored.
 
 Fail closed: no directory row, an unlinked row or a disabled row receives nothing. The resolver checks no roles. **Gate order:** every older `/api` route, `POST /api/minutes` included, first runs `requireAppAccess` (`README.md`), so a disabled user, or with `REQUIRE_ROLE_TO_LOGIN=true` a user without any role, is refused (403) before the recipient check is reached.
 
@@ -107,5 +107,5 @@ Manager routes (`withAuthz(..., 'template.manage')`, strict bodies, `no-store`):
 - Personal templates are still allowed; there is no "central templates only" policy per org unit and no per-template default.
 - Share code, share link and "save as personal template" are not offered for central templates; the share code is client-side and unaudited.
 - Provenance in the browser is partial (latest generation only, lost with the browser data); minutes made before central templates have no `templateRef`.
-- Recipient membership is only as fresh as the last sync, and targets are not re-checked against the owner subtree at read time.
+- Recipient membership is only as fresh as the last sync. Targets that drifted out of the owner subtree stop delivering without any notice, and the admin list does not flag them yet.
 - Prompt confidentiality is best effort (see above).

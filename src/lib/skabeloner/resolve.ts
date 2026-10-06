@@ -12,6 +12,13 @@
 // follows the user's ancestry chain, not the size of the org tree. Bad data
 // (a cycle) terminates; anything deeper than MAX_ORG_DEPTH is not covered.
 //
+// Owner subtree, re-checked at READ time: a (template, target) pair counts only
+// while the target is the template's owner unit or a descendant of it RIGHT NOW
+// (a second capped upward walk from each matching target to the owner). Targets
+// are validated on write, but a re-org or a local move can drift them out of the
+// owner's scope afterwards; such a target silently stops delivering (fail closed),
+// and so does restoring an archived template with stale targets.
+//
 // Prompt confidentiality is structural:
 //  - listCentralForUser returns the prompt-free CentralSkabelonSummary and its
 //    SQL does not even select the prompt column.
@@ -58,8 +65,21 @@ const SUMMARY_COLUMNS = `ct.id, ct.name, ct.description, ct.include_deltagere, c
        ct.include_dagsorden, ct.include_dato, ct.allow_user_instruction, ct.allow_toggle_overrides,
        ct.current_version`;
 
-/** The recipient predicate; `$1` is the app user id, `$2` the depth cap. Prefixed with a WITH clause by the callers. */
-function audienceSql(t: (table: string) => string): { cte: string; where: string } {
+/**
+ * The recipient predicate; `$1` is the app user id, `$2` the depth cap (and `$3` the template id when
+ * `byId`). Prefixed with a WITH clause by the callers.
+ *
+ * Four steps in one statement:
+ *  - mine:  the user's own units (non-disabled linked directory user).
+ *  - chain: those units plus their ancestors (capped upward walk).
+ *  - cand:  (template, target) pairs of ACTIVE templates that match the user by membership. Only these
+ *           are validated below, so the cost follows the user's ancestry, not the size of the target table.
+ *  - walk:  from each candidate target upward through parent_uuid until it reaches the template's owner
+ *           unit. A target counts only if the owner is reached within the cap (target = owner is depth 0),
+ *           so a unit re-organised out of the owner's subtree stops delivering at READ time. Not reaching
+ *           the owner (moved away, cycle, deeper than the cap, unknown) fails closed.
+ */
+function audienceSql(t: (table: string) => string, byId: boolean): { cte: string; where: string } {
   return {
     cte: `WITH RECURSIVE mine(uuid) AS (
          SELECT DISTINCT m.org_unit_uuid
@@ -76,15 +96,26 @@ function audienceSql(t: (table: string) => string): { cte: string; where: string
            FROM ${t('org_units')} p
            JOIN chain c ON p.uuid = c.parent_uuid
           WHERE c.depth < $2::int
+       ),
+       cand(template_id, target_uuid, owner_uuid) AS (
+         SELECT DISTINCT tg.template_id, tg.org_unit_uuid, ct.owner_org_unit_uuid
+           FROM ${t('central_template_targets')} tg
+           JOIN ${t('central_templates')} ct ON ct.id = tg.template_id
+          WHERE ct.status = 'active'${byId ? ' AND ct.id = $3::uuid' : ''}
+            AND (tg.org_unit_uuid IN (SELECT uuid FROM mine)
+                 OR (tg.include_descendants AND tg.org_unit_uuid IN (SELECT uuid FROM chain)))
+       ),
+       walk(template_id, target_uuid, owner_uuid, cur_uuid, depth) AS (
+         SELECT c.template_id, c.target_uuid, c.owner_uuid, c.target_uuid, 0
+           FROM cand c
+         UNION
+         SELECT w.template_id, w.target_uuid, w.owner_uuid, u.parent_uuid, w.depth + 1
+           FROM walk w
+           JOIN ${t('org_units')} u ON u.uuid = w.cur_uuid
+          WHERE w.cur_uuid <> w.owner_uuid AND w.depth < $2::int
        )`,
-    // A target matches the user's own unit exactly, or any ancestor of it when the target includes descendants.
     where: `ct.status = 'active'
-        AND EXISTS (
-          SELECT 1 FROM ${t('central_template_targets')} tg
-           WHERE tg.template_id = ct.id
-             AND (tg.org_unit_uuid IN (SELECT uuid FROM mine)
-                  OR (tg.include_descendants AND tg.org_unit_uuid IN (SELECT uuid FROM chain)))
-        )`,
+        AND ct.id IN (SELECT w.template_id FROM walk w WHERE w.cur_uuid = w.owner_uuid)`,
   };
 }
 
@@ -111,7 +142,7 @@ export async function listCentralForUser(
 ): Promise<CentralSkabelonSummary[]> {
   if (!userId) return [];
   const t = qualified(env);
-  const { cte, where } = audienceSql(t);
+  const { cte, where } = audienceSql(t, false);
   const { rows } = await env.query(
     `${cte}
      SELECT ${SUMMARY_COLUMNS}
@@ -135,7 +166,7 @@ export async function resolveCentralTemplate(
 ): Promise<ResolvedCentralTemplate | null> {
   if (!userId || typeof id !== 'string' || !UUID_RE.test(id)) return null;
   const t = qualified(env);
-  const { cte, where } = audienceSql(t);
+  const { cte, where } = audienceSql(t, true);
   const { rows } = await env.query(
     `${cte}
      SELECT ${SUMMARY_COLUMNS}, ct.prompt
