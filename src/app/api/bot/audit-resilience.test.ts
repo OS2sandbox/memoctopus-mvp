@@ -85,7 +85,7 @@ describe('bot routes when the audit write fails', () => {
   });
 
   it('POST /control still returns ok', async () => {
-    const res = await control(jsonReq(`/api/bot/control/${MEETING}`, { action: 'pause', sessionId: 's1' }), params);
+    const res = await control(jsonReq(`/api/bot/control/${MEETING}`, { action: 'pause', sessionId: '3f2b8c1e-6a4d-4e2f-9b1a-0c5d7e8f9a10' }), params);
     expect(res.status).toBe(200);
     expectContentFreeWarnings();
   });

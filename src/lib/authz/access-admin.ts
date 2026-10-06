@@ -145,10 +145,11 @@ const MAX_USER_LIMIT = 500;
 
 const likePattern = (q: string) => `%${q.replace(/[\\%_]/g, '\\$&')}%`;
 
+/** `truncated` is true when more users matched than `limit`, so the UI can say the list is cut. */
 export async function listAppUsersWithRoles(
   opts: ListUsersOptions = {},
   runner: SqlRunner = defaultRunner(),
-): Promise<AppUserView[]> {
+): Promise<{ users: AppUserView[]; truncated: boolean }> {
   const limit = Math.min(Math.max(Math.trunc(opts.limit ?? DEFAULT_USER_LIMIT), 1), MAX_USER_LIMIT);
   const q = opts.q?.trim();
   // LIMIT must cap users, not joined rows, hence the CTE.
@@ -169,7 +170,8 @@ export async function listAppUsersWithRoles(
        LEFT JOIN public.role_assignments ra ON ra.directory_user_uuid = du.uuid
        LEFT JOIN public.org_units ou ON ou.uuid = ra.scope_org_unit_uuid
       ORDER BY lower(p.name), p.id, ra.role_key, ra.id`,
-    [q ? likePattern(q) : null, limit],
+    // One user more than asked for: its presence is the "there is more" signal.
+    [q ? likePattern(q) : null, limit + 1],
   );
 
   const byId = new Map<string, AppUserView>();
@@ -189,7 +191,8 @@ export async function listAppUsersWithRoles(
     }
     if (r.assignment_id) user.roles.push(toAssignmentView(r));
   }
-  return [...byId.values()];
+  const all = [...byId.values()];
+  return { users: all.slice(0, limit), truncated: all.length > limit };
 }
 
 function toAssignmentView(r: Record<string, unknown>): AssignmentView {
@@ -348,8 +351,8 @@ export async function revokeAssignment(
     if (row.role_key === ADMIN_ROLE && row.active === true && row.scope_org_unit_uuid === null) {
       // Same definition of "usable administrator" as the bootstrap check
       // (admin-sql.ts): that is the set that can still reach this UI after the
-      // revoke. A synced admin may vanish with the next sync, so it does not
-      // make the last local one expendable.
+      // revoke. A synced admin may vanish with the next sync, and a local one
+      // with a stop_date lapses, so neither makes the last permanent one expendable.
       const others = await tx.query<{ n: number }>(
         `SELECT count(*)::int AS n
            FROM public.role_assignments ra

@@ -219,7 +219,7 @@ describe('audit: transcription.request (batch)', () => {
 
     expect(stream.at(-1)).toMatchObject({ type: 'error' }); // response contract unchanged
     expect(events()).toHaveLength(1);
-    expect(events()[0]).toMatchObject({ outcome: 'error', details: { mode: 'batch', outcomeCode: 'EPIPE' } });
+    expect(events()[0]).toMatchObject({ outcome: 'error', details: { mode: 'batch', outcomeCode: 'network' } });
     expectValidMetadataOnly(events()[0], ['Alice', 'ffmpeg']);
     expect(JSON.stringify(spy.mock.calls)).not.toContain('Alice');
     spy.mockRestore();

@@ -53,7 +53,12 @@ export async function createMeeting(data: {
   return meeting;
 }
 
-const sameStrings = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i]);
+// Rows written by older versions may lack the array; treat that as empty.
+const sameStrings = (a: string[] | undefined, b: string[] | undefined) => {
+  const x = a ?? [];
+  const y = b ?? [];
+  return x.length === y.length && x.every((v, i) => v === y[i]);
+};
 
 export async function updateMeeting(
   id: string,
@@ -67,7 +72,11 @@ export async function updateMeeting(
   const existing = await db.get('meetings', id);
   if (!existing) return;
   await db.put('meetings', { ...existing, ...patch, updatedAt: new Date().toISOString() });
-  reportMeetingChanges(existing, patch, opts.automatic === true);
+  try {
+    reportMeetingChanges(existing, patch, opts.automatic === true);
+  } catch {
+    // Reporting is best effort and must never turn a successful write into an error.
+  }
 }
 
 // Audit reporting is derived from what actually changed against the stored row, so
@@ -88,7 +97,7 @@ function reportMeetingChanges(
     reportAuditEvent('meeting.rename', id);
   }
   if (!automatic && patch.participants !== undefined && !sameStrings(patch.participants, existing.participants)) {
-    reportAuditEvent('meeting.participants_edit', id, { participantCount: patch.participants.length });
+    reportAuditEvent('meeting.participants_edit', id, { participantCount: (patch.participants ?? []).length });
   }
   if (patch.audioDeleted === true && !existing.audioDeleted) {
     reportAuditEvent('meeting.audio_delete', id);

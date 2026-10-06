@@ -38,7 +38,7 @@ The closed list is `src/lib/audit/events/*.ts`, aggregated in `events/index.ts`;
 | `audit.export`, `audit.prune` | server, system | row count and format of a CSV export (recorded before the file is returned; if it cannot be written the export is refused); rows deleted by the pruner |
 | `directory.sync` | system, server | one per Rollekatalog sync run: trigger (`cron`/`manual`), status, `forced`, error code and the counters of the run (users, sessions revoked, org units, assignments) |
 
-Entity ids must be UUIDs. `transcription.request` has the modes `live` (coalesced), `batch` and `upload`.
+Entity ids must be UUIDs. `POST /api/audit/client-events` reads its body with a byte counter and answers 413 as soon as 32 KB is exceeded (also for chunked bodies without a Content-Length). `transcription.request` has the modes `live` (coalesced), `batch` and `upload`.
 
 ## How the no-content rule is enforced
 
@@ -79,7 +79,7 @@ await recordEvent({ type: 'template.delete', actorUserId, entityId: templateId }
 | `audit.read` **scoped** to org units | only rows whose `actor_org_unit_uuid` is in scope; NULL-unit rows and rows of deleted units are invisible; no IP or user agent | not allowed |
 | anyone else | 403 | 403 |
 
-Viewing fails closed, and an export never shows more than the viewer (it is limited by the caller's `audit.read` scope and blanks IP and user agent for a non-global reader). CSV: RFC 4180, UTF-8 with BOM, Danish headers, cells starting with `= + - @`, tab or line breaks get a leading `'` (formula injection). Danish-locale Excel may need its import wizard for commas. `X-Audit-Truncated: true` and `truncated: true` in the `audit.export` event mark an export cut off at 50,000 rows. The viewer fetches the export itself (a plain link would save an error body as a CSV): it shows a dismissible warning when the export is truncated or fails, and a truncated file is named `log-<date>-afkortet.csv` so it stays recognisable off-platform (the CSV carries no marker row, so it stays parseable). The viewer pages with a keyset cursor on `id` (50 rows by default, at most 100) and labels `source = client` rows "selvrapporteret".
+Viewing fails closed, and an export never shows more than the viewer: it is limited by the caller's `audit.read` scope. The export does **not** blank the IP address and user agent columns itself. A scoped reader, who would not see them in the viewer, cannot export today (`audit.export` needs a GLOBAL assignment, so the export is always produced for a global reader and the columns are filled). That branch is unreachable; if `audit.export` is ever allowed for a scoped reader, the export code must blank those two columns first. CSV: RFC 4180, UTF-8 with BOM, Danish headers, cells starting with `= + - @`, tab or line breaks get a leading `'` (formula injection). Danish-locale Excel may need its import wizard for commas. `X-Audit-Truncated: true` and `truncated: true` in the `audit.export` event mark an export cut off at 50,000 rows. The viewer fetches the export itself (a plain link would save an error body as a CSV): it shows a dismissible warning when the export is truncated or fails, and a truncated file is named `log-<date>-afkortet.csv` so it stays recognisable off-platform (the CSV carries no marker row, so it stays parseable). The viewer pages with a keyset cursor on `id` (50 rows by default, at most 100) and labels `source = client` rows "selvrapporteret".
 
 ## SIEM feed
 
@@ -135,8 +135,10 @@ Meetings live only in the browser (IndexedDB), so the server cannot see a rename
 
 ## Volume discipline
 
-- **Live transcription**: at most one `transcription.request` per actor, meeting and mode per hour (in-memory, `utterance/coalesce.ts`). It is a sample of activity, not a count.
-- **Live clarifications**: at most one `clarifications.request` per actor and meeting per hour for `success` and one for `error` (`clarifications/coalesce.ts`).
+- **Live transcription**: at most one `transcription.request` per actor, meeting and outcome per hour (in-memory, `utterance/coalesce.ts`). It is a sample of activity, not a count. A meeting id that is not a UUID is still audited, without an entity, and keyed on the actor alone.
+- **Live clarifications**: at most one `clarifications.request` per actor and meeting per hour for `success` and one for `error` (`clarifications/coalesce.ts`); the id is lower-cased, and a non-UUID id is keyed on the actor alone.
+- **Per-actor ceiling for server-emitted AI/export events** (`emitAudit` in `src/app/api/meetings/ai-audit.ts`): at most 300 events a minute per actor and process, in a bucket separate from the client-event limit. The coalescers key on a meeting id the client chooses, so without this a client could mint fresh keys; beyond the ceiling the event is dropped, never the request.
+- **Failure codes of AI/STT calls** are a closed set: `http_<status>`, `timeout`, `network` or `unknown`. An upstream error's own `code` or class name is never forwarded.
 - No per-segment or per-keystroke events exist.
 
 ## Configuration
@@ -170,6 +172,8 @@ It holds no meeting content. Rows survive deletion of the user and cannot be upd
 
 ## Known limitations
 
+- **Reading the audit log is not itself audited.** Opening the viewer or calling `GET /api/admin/audit` and the feed writes no event; only a CSV export (`audit.export`) and a manager's read of a central template prompt (`central_template.read`) are recorded.
+- **Failed feed and cron key attempts are neither throttled nor logged.** A wrong `X-Audit-Key` (feed) or `X-Cron-Secret` (prune, sync) gets a 401 with no counter, no rate limit and no audit event or log line. Use a long random secret (the feed stores only its hash), and rate-limit or alert on 401s on those paths at the proxy.
 - **Per-instance, in-memory state**: the coalescers, the failed-login throttle, the client-event rate limit and the per-type throttle are per process; several app instances multiply the limits and a restart resets them.
 - **Share-code export is not logged.** The stateless template share code is built and read in the browser; only the link flow produces events.
 - **Client events are best-effort.** A crash inside a 30-second coalescing window loses that coalesced event; events left by a user who does not sign in again on that browser stay in the local outbox until the 7-day TTL.

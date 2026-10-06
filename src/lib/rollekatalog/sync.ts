@@ -19,7 +19,9 @@
 //     dropped and counted; a dropped user is simply absent, so it goes through the removal
 //     threshold like any other missing user.
 //   - removal threshold: disabling or deleting too much aborts ('removal_threshold')
-//     unless the admin forces it
+//     unless the admin forces it. Three ratios are checked: enabled users disabled, all
+//     mirrored assignments removed, and (separately, because tt-bruger rows dominate the
+//     total) ELEVATED assignments (every role but tt-bruger) removed.
 //
 // Every run leaves a sync_runs row and a content-free directory.sync audit event.
 // Failures surface as short codes, never as messages (they could echo data).
@@ -99,13 +101,24 @@ interface MirrorPlan {
   removal: {
     users: { removed: number; base: number };
     assignments: { removed: number; base: number };
+    /**
+     * Assignments of every role except the baseline tt-bruger. The total above is dominated by
+     * one tt-bruger row per user, so losing most administrators would hide in it.
+     */
+    elevatedAssignments: { removed: number; base: number };
   };
 }
+
+/** The baseline role every enabled user holds; every other role is "elevated" for the removal guard. */
+const BASELINE_ROLE = 'tt-bruger';
+const isElevated = (roleKey: string): boolean => roleKey !== BASELINE_ROLE;
 
 const pairKey = (...parts: Array<string | null>): string => parts.map((p) => p ?? '\u0000').join('|');
 
 /** removed / base > percent, in integers. An empty base can lose nothing. */
 export function exceedsRemovalThreshold(removed: number, base: number, percent: number): boolean {
+  // Integer form of removed > floor(base * percent / 100) with base >= 1: on a small base
+  // (1-2 elevated rows) any removal beyond the allowance trips, so an admin has to force it.
   return base > 0 && removed * 100 > percent * base;
 }
 
@@ -194,6 +207,7 @@ export function planMirror(existing: ExistingMirror, mirror: MirrorSet): MirrorP
   const aRemove = existing.assignments
     .filter((a) => !newKeys.has(aKey(a.directoryUserUuid, a.roleKey, a.scopeOrgUnitUuid)))
     .map((a) => a.id);
+  const removeIds = new Set(aRemove);
   counts.assignmentsUpserted = aInsert.length + aUpdate.length;
   counts.assignmentsRemoved = aRemove.length;
 
@@ -214,6 +228,11 @@ export function planMirror(existing: ExistingMirror, mirror: MirrorSet): MirrorP
         base: existing.users.filter((u) => !u.disabled).length,
       },
       assignments: { removed: aRemove.length, base: existing.assignments.length },
+      elevatedAssignments: {
+        // Rows skipped as invalid are never in the fetch, so they already count as removals here.
+        removed: existing.assignments.filter((a) => isElevated(a.roleKey) && removeIds.has(a.id)).length,
+        base: existing.assignments.filter((a) => isElevated(a.roleKey)).length,
+      },
     },
   };
 }
@@ -477,14 +496,15 @@ async function applyMirror(env: SyncEnv, mirror: MirrorSet, opts: ApplyOptions):
       const plan = planMirror(existing, mirror);
 
       if (!opts.force) {
-        const { users, assignments } = plan.removal;
+        const { users, assignments, elevatedAssignments: elevated } = plan.removal;
         if (
           exceedsRemovalThreshold(users.removed, users.base, opts.maxRemovalPercent) ||
-          exceedsRemovalThreshold(assignments.removed, assignments.base, opts.maxRemovalPercent)
+          exceedsRemovalThreshold(assignments.removed, assignments.base, opts.maxRemovalPercent) ||
+          exceedsRemovalThreshold(elevated.removed, elevated.base, opts.maxRemovalPercent)
         ) {
           // Numbers only; the admin decides about force from the Rollekatalog side.
           console.warn(
-            `[rollekatalog] sync aborted code=removal_threshold users=${users.removed}/${users.base} assignments=${assignments.removed}/${assignments.base}`,
+            `[rollekatalog] sync aborted code=removal_threshold users=${users.removed}/${users.base} assignments=${assignments.removed}/${assignments.base} elevated=${elevated.removed}/${elevated.base}`,
           );
           throw new SyncAbort('removal_threshold');
         }

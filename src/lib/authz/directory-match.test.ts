@@ -72,6 +72,7 @@ describe('userid-claim', () => {
 
   it('strips the UPN domain before comparing when DIRECTORY_USERID_TRANSFORM=strip-upn-domain', async () => {
     vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'strip-upn-domain');
+    vi.stubEnv('DIRECTORY_USERID_DOMAIN', 'Kommune.DK');
     vi.stubEnv('DIRECTORY_USERID_CLAIM', 'upn');
     const { runner, calls } = db([D1]);
     const res = await matchDirectoryUser(identity({ claims: { sub: 's', upn: 'ABC123@kommune.dk' } }), 'userid-claim', runner);
@@ -88,12 +89,46 @@ describe('userid-claim', () => {
     expect(calls.find((c) => c.sql.includes('FOR UPDATE'))!.params).toEqual(['ABC123@kommune.dk']);
   });
 
-  it('matches a leading-@ value verbatim (nothing to strip), so it cannot collapse to an empty id', async () => {
-    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'strip-upn-domain');
-    const { runner, calls } = db([]);
-    const res = await matchDirectoryUser(identity({ claims: { sub: 's', preferred_username: '@kommune.dk' } }), 'userid-claim', runner);
-    expect(calls.find((c) => c.sql.includes('FOR UPDATE'))!.params).toEqual(['@kommune.dk']);
-    expect(res.status).toBe('no_match');
+  describe('strip-upn-domain only accepts the configured domain', () => {
+    beforeEach(() => {
+      vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'strip-upn-domain');
+      vi.stubEnv('DIRECTORY_USERID_DOMAIN', 'kommune.dk');
+    });
+    const noMatch = async (claim: string) => {
+      const { runner, calls } = db([D1]);
+      const res = await matchDirectoryUser(identity({ claims: { sub: 's', preferred_username: claim } }), 'userid-claim', runner);
+      expect(res.status).toBe('no_match');
+      expect(calls).toHaveLength(0);
+    };
+
+    it('a guest or self-edited name at another domain does not match (no query at all)', () => noMatch('abc123@evil.com'));
+    it('a lookalike suffix or subdomain does not match', async () => {
+      await noMatch('abc123@evilkommune.dk');
+      await noMatch('abc123@kommune.dk.evil.com');
+      await noMatch('abc123@sub.kommune.dk');
+    });
+    it('a guest "#EXT#" UPN does not match', () => noMatch('abc123_kommune.dk#EXT#@kommune.dk'));
+    it('two "@" do not match', () => noMatch('abc123@evil.com@kommune.dk'));
+    it('a leading "@" or a claim without a domain does not match', async () => {
+      await noMatch('@kommune.dk');
+      await noMatch('abc123');
+    });
+    it('an upper-case domain matches and the name is kept', async () => {
+      const { runner, calls } = db([D1]);
+      const res = await matchDirectoryUser(identity({ claims: { sub: 's', preferred_username: 'Abc123@KOMMUNE.DK' } }), 'userid-claim', runner);
+      expect(res.status).toBe('linked');
+      expect(calls.find((c) => c.sql.includes('FOR UPDATE'))!.params).toEqual(['Abc123']);
+    });
+    it('a blank DIRECTORY_USERID_DOMAIN yields no match and warns once with a code only', async () => {
+      vi.stubEnv('DIRECTORY_USERID_DOMAIN', '  ');
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await noMatch('abc123@kommune.dk');
+      await noMatch('abc123@kommune.dk');
+      const lines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('userid_domain_missing'));
+      expect(lines.length).toBeLessThanOrEqual(1);
+      expect(lines.join('')).not.toContain('abc123');
+      warn.mockRestore();
+    });
   });
 
   it('does not apply the transform to extuuid or email matching', async () => {
@@ -155,15 +190,15 @@ describe('email', () => {
 describe('Microsoft logins need a pinned single tenant and a matching tid (all modes, all transforms)', () => {
   const TID = '99999999-8888-4777-8666-555555555555';
   const OTHER = '00000000-0000-4000-8000-000000000000';
-  const claimsFor = (mode: 'userid-claim' | 'extuuid-claim' | 'email', tid?: string) => ({
+  const claimsFor = (mode: 'userid-claim' | 'extuuid-claim' | 'email', tid?: string, upn = false) => ({
     sub: 's',
-    preferred_username: mode === 'extuuid-claim' ? EXT_UUID : 'ABC123',
+    preferred_username: mode === 'extuuid-claim' ? EXT_UUID : upn ? 'ABC123@kommune.dk' : 'ABC123',
     email: 'a@example.dk',
     email_verified: true,
     ...(tid !== undefined ? { tid } : {}),
   });
-  const ms = (mode: 'userid-claim' | 'extuuid-claim' | 'email', tid?: string) =>
-    identity({ providerId: 'microsoft', claims: claimsFor(mode, tid) });
+  const ms = (mode: 'userid-claim' | 'extuuid-claim' | 'email', tid?: string, upn = false) =>
+    identity({ providerId: 'microsoft', claims: claimsFor(mode, tid, upn) });
 
   const tenants: Array<[string, string, boolean]> = [
     ['unset', '', false],
@@ -190,8 +225,9 @@ describe('Microsoft logins need a pinned single tenant and a matching tid (all m
             it(`tenant ${tName} x tid ${idName} => ${links ? 'links' : 'refused, no SQL'}`, async () => {
               vi.stubEnv('MICROSOFT_TENANT_ID', tenant);
               vi.stubEnv('DIRECTORY_USERID_TRANSFORM', transform);
+              vi.stubEnv('DIRECTORY_USERID_DOMAIN', 'kommune.dk');
               const { runner, calls } = db([D1]);
-              const res = await matchDirectoryUser(ms(mode, tid), mode, runner);
+              const res = await matchDirectoryUser(ms(mode, tid, transform === 'strip-upn-domain'), mode, runner);
               if (links) {
                 expect(res.status).toBe('linked');
               } else {
@@ -208,6 +244,7 @@ describe('Microsoft logins need a pinned single tenant and a matching tid (all m
   it('strip-upn-domain still strips the domain once the tenant is proven', async () => {
     vi.stubEnv('MICROSOFT_TENANT_ID', TID);
     vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'strip-upn-domain');
+    vi.stubEnv('DIRECTORY_USERID_DOMAIN', 'kommune.dk');
     const { runner, calls } = db([D1]);
     const id = identity({ providerId: 'microsoft', claims: { sub: 's', preferred_username: 'alice@kommune.dk', tid: TID } });
     expect((await matchDirectoryUser(id, 'userid-claim', runner)).status).toBe('linked');

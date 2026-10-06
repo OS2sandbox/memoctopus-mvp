@@ -25,7 +25,7 @@ CREATE TABLE "central_template_versions" (
 	CONSTRAINT "central_template_versions_template_version_unique" UNIQUE("template_id","version"),
 	CONSTRAINT "central_template_versions_version_check" CHECK ("central_template_versions"."version" >= 1),
 	CONSTRAINT "central_template_versions_change_type_check" CHECK ("central_template_versions"."change_type" in ('create', 'update', 'retarget', 'archive', 'restore')),
-	CONSTRAINT "central_template_versions_change_note_check" CHECK (char_length(regexp_replace("central_template_versions"."change_note", '[[:space:]\u0085\u00A0\u00AD\u034F\u115F\u1160\u1680\u17B4\u17B5\u180B-\u180F\u2000-\u200F\u2028-\u202F\u205F-\u206F\u2800\u3000\u3164\uFE00-\uFE0F\uFEFF\uFFA0\U000E0000-\U000E0FFF]', '', 'g')) >= 10 and char_length("central_template_versions"."change_note") <= 2000)
+	CONSTRAINT "central_template_versions_change_note_check" CHECK (char_length(regexp_replace("central_template_versions"."change_note", '[\u0001-\u0020\u007F-\u00A0\u00AD\u034F\u0600-\u0605\u061C\u06DD\u070F\u0890\u0891\u08E2\u115F\u1160\u1680\u17B4\u17B5\u180B-\u180F\u2000-\u200F\u2028-\u202F\u205F-\u206F\u2800\u3000\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0000-\U000E0FFF]', '', 'g')) >= 10 and char_length("central_template_versions"."change_note") <= 2000)
 );
 --> statement-breakpoint
 CREATE TABLE "central_templates" (
@@ -45,7 +45,7 @@ CREATE TABLE "central_templates" (
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "central_templates_status_check" CHECK ("central_templates"."status" in ('active', 'archived')),
-	CONSTRAINT "central_templates_name_check" CHECK (char_length(regexp_replace("central_templates"."name", '[[:space:]\u0085\u00A0\u00AD\u034F\u115F\u1160\u1680\u17B4\u17B5\u180B-\u180F\u2000-\u200F\u2028-\u202F\u205F-\u206F\u2800\u3000\u3164\uFE00-\uFE0F\uFEFF\uFFA0\U000E0000-\U000E0FFF]', '', 'g')) >= 1 and char_length("central_templates"."name") <= 120),
+	CONSTRAINT "central_templates_name_check" CHECK (char_length(regexp_replace("central_templates"."name", '[\u0001-\u0020\u007F-\u00A0\u00AD\u034F\u0600-\u0605\u061C\u06DD\u070F\u0890\u0891\u08E2\u115F\u1160\u1680\u17B4\u17B5\u180B-\u180F\u2000-\u200F\u2028-\u202F\u205F-\u206F\u2800\u3000\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0000-\U000E0FFF]', '', 'g')) >= 1 and char_length("central_templates"."name") <= 120),
 	CONSTRAINT "central_templates_description_check" CHECK (char_length("central_templates"."description") <= 1000),
 	CONSTRAINT "central_templates_prompt_check" CHECK (btrim("central_templates"."prompt") <> '' and char_length("central_templates"."prompt") <= 20000),
 	CONSTRAINT "central_templates_version_check" CHECK ("central_templates"."current_version" >= 1)

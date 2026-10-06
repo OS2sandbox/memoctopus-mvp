@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   sanitizeForInstruction,
   sanitizeParticipants,
@@ -89,12 +89,103 @@ describe('detectPromptEcho', () => {
     expect(detectPromptEcho('Skriv kort og formelt.', 'Skriv kort og formelt.')).toEqual([]);
     expect(redactPromptEcho('Skriv kort og formelt.', 'Skriv kort og formelt.').redacted).toBe(false);
   });
-  it('is fast on ~50 KB of output and a long prompt', () => {
+  it('does linear work on a 100 KB output and a long prompt (counted, not timed)', () => {
     const longPrompt = Array.from({ length: 400 }, (_, i) => `Regel nummer ${i} gælder for alle referater`).join('. ');
-    const output = 'Mødet drøftede budgettet og planen. '.repeat(1500);
-    const t = Date.now();
-    detectPromptEcho(output, longPrompt);
-    expect(Date.now() - t).toBeLessThan(1500);
+    const output = 'Mødet drøftede budgettet og planen. '.repeat(2900); // ~100 KB
+    expect(output.length).toBeGreaterThan(100_000);
+    const has = vi.spyOn(Set.prototype, 'has');
+    try {
+      expect(detectPromptEcho(output, longPrompt)).toEqual([]);
+      // One window lookup per letter position at most: proportional to the input size.
+      expect(has.mock.calls.length).toBeLessThanOrEqual(output.length);
+      has.mockClear();
+      detectPromptEcho(output + output, longPrompt);
+      expect(has.mock.calls.length).toBeLessThanOrEqual(2 * output.length);
+    } finally {
+      has.mockRestore();
+    }
+  });
+  it('still finds an echo hidden at the end of 100 KB of output', () => {
+    const filler = 'Mødet drøftede budgettet og planen. '.repeat(2900);
+    const spans = detectPromptEcho(`${filler}\n\n${PROMPT}`, PROMPT);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].end).toBe(filler.length + 2 + PROMPT.length - 1); // up to the last letter
+  });
+  it('does not match ordinary text that only shares digits, punctuation or short phrases', () => {
+    expect(detectPromptEcho('Pkt. 1: Skriv. 2: altid! 3: formelt, 4: sagsnummer...', PROMPT)).toEqual([]);
+  });
+});
+
+// The matcher compares a stream of LETTERS ONLY (NFKD, lower-case, everything else dropped),
+// so these trivial transformations of an echoed prompt must all still be found.
+describe('detectPromptEcho: transformed echoes (letters-only stream)', () => {
+  const words = PROMPT.split(' ');
+  const fullwidth = (t: string) =>
+    t.replace(/[A-Za-z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0));
+  const ACCENT_PROMPT =
+    'Skriv altid på dansk, brug «é» i café og «ü» i München, og afslut hvert afsnit med en kort opsummering af beslutninger og ansvarlige.';
+
+  const variants: Array<[string, string]> = [
+    ['digits inserted after every 8th word', words.map((w, i) => (i % 8 === 0 ? `${i + 1}${w}` : w)).join(' ')],
+    ['a digit glued to every word', words.map((w, i) => `${i + 1}${w}`).join(' ')],
+    ['letter-spaced', PROMPT.split('').join(' ')],
+    ['hyphenated letters', PROMPT.split('').join('-')],
+    ['zero-width spaces inside words', PROMPT.split('').join('\u200B')],
+    ['soft hyphens inside words', PROMPT.split('').join('\u00AD')],
+    ['zero-width joiners, BOM and word joiner', PROMPT.split('').join('\u200D\uFEFF\u2060')],
+    ['Hangul fillers (letters that render as nothing)', PROMPT.split('').join('\u3164\uFFA0')],
+    ['fullwidth letters', fullwidth(PROMPT)],
+    ['mathematical bold letters', PROMPT.replace(/[a-z]/g, (c) => String.fromCodePoint(0x1d41a + c.charCodeAt(0) - 97))],
+    ['markdown bold per word', words.map((w) => `**${w}**`).join(' ')],
+    ['markdown bullet per word', words.map((w) => `- ${w}`).join('\n')],
+    ['upper case with line breaks and quote marks', words.map((w) => `> "${w.toUpperCase()}"`).join('\n')],
+  ];
+
+  it.each(variants)('finds the prompt with %s', (_name, transformed) => {
+    expect(transformed).not.toBe(PROMPT);
+    const out = `Før. ${transformed} Efter.`;
+    const spans = detectPromptEcho(out, PROMPT);
+    expect(spans).toHaveLength(1);
+    // The span is inside the original text and covers (nearly) the whole transformed echo.
+    expect(spans[0].start).toBeGreaterThanOrEqual('Før. '.length);
+    expect(spans[0].end).toBeLessThanOrEqual(out.length - ' Efter.'.length);
+    expect(spans[0].end - spans[0].start).toBeGreaterThan(transformed.length * 0.9);
+    const r = redactPromptEcho(out, PROMPT);
+    expect(r.redacted).toBe(true);
+    // Nothing of the prompt survives: only our own text and the placeholder are left (as visible letters).
+    expect(r.text.replace(/[^\p{L}]|\p{Default_Ignorable_Code_Point}/gu, '')).toBe('FørudeladtEfter');
+    expect(r.text.startsWith('Før. ')).toBe(true);
+    expect(r.text.endsWith(' Efter.')).toBe(true);
+  });
+
+  it('catches an NFD prompt echoed as NFC', () => {
+    const prompt = ACCENT_PROMPT.normalize('NFD');
+    const echo = ACCENT_PROMPT.normalize('NFC');
+    expect(echo).not.toBe(prompt);
+    expect(detectPromptEcho(`Intro ${echo} slut`, prompt)).toHaveLength(1);
+  });
+
+  it('catches an NFC prompt echoed as NFD', () => {
+    const prompt = ACCENT_PROMPT.normalize('NFC');
+    const echo = ACCENT_PROMPT.normalize('NFD');
+    expect(echo).not.toBe(prompt);
+    const out = `Intro ${echo} slut`;
+    const r = redactPromptEcho(out, prompt);
+    expect(r.redacted).toBe(true);
+    expect(r.text).toBe('Intro [udeladt]. slut');
+  });
+
+  it('reports offsets into the original text for characters outside the BMP', () => {
+    const prompt = '\u{10428}'.repeat(80); // Deseret small letter
+    const out = `x ${'\u{10400}'.repeat(80)} y`; // Deseret capital letters
+    const spans = detectPromptEcho(out, prompt);
+    expect(spans).toEqual([{ start: 2, end: 2 + 160 }]);
+    expect(redactPromptEcho(out, prompt).text).toBe('x [udeladt] y');
+  });
+
+  it('does not let a normal text with the same words in another order match', () => {
+    const shuffled = [...words].reverse().join(' ');
+    expect(detectPromptEcho(shuffled, PROMPT)).toEqual([]);
   });
 });
 

@@ -201,10 +201,19 @@ function mapAssignments(
   let ignoredRole = 0;
   let skippedUnknownUser = 0;
   // One group per (user, role): duplicate entries are unioned (never "unconstrained wins": that could widen a scope).
-  const groups = new Map<string, { user: string; role: RoleKey; constraints: ScopeConstraint[] }>();
+  const groups = new Map<
+    string,
+    { user: string; role: RoleKey; constraints: ScopeConstraint[]; hasUnrecognisedConstraints: boolean }
+  >();
+  // (user, role) pairs for which ANY entry failed validation. The whole group is dropped: a
+  // dropped scoped entry must never leave an unconstrained sibling that widens to global.
+  const poisoned = new Set<string>();
 
   for (const entry of input.assignments.rows) {
     const user = resolve(entry);
+    if (user) {
+      for (const role of entry.invalidRoles) if (OUR_ROLES.has(role)) poisoned.add(`${user}|${role}`);
+    }
     for (const a of entry.assignments) {
       const identifier = a.roleIdentifier.trim();
       if (!OUR_ROLES.has(identifier)) {
@@ -217,17 +226,22 @@ function mapAssignments(
       }
       const role = identifier as RoleKey;
       const key = `${user}|${role}`;
-      const group = groups.get(key) ?? groups.set(key, { user, role, constraints: [] }).get(key)!;
+      const group =
+        groups.get(key) ?? groups.set(key, { user, role, constraints: [], hasUnrecognisedConstraints: false }).get(key)!;
       group.constraints.push(...a.roleConstraintValues);
+      if (a.hasUnrecognisedConstraints) group.hasUnrecognisedConstraints = true;
     }
   }
 
   const rows: MirrorAssignment[] = [];
   let withoutScope = 0;
   for (const g of [...groups.values()].sort((a, b) => cmp(`${a.user}|${a.role}`, `${b.user}|${b.role}`))) {
+    // Already counted under assignmentRowsSkippedInvalid (the bad entry itself).
+    if (poisoned.has(`${g.user}|${g.role}`)) continue;
     const scope = deriveScope({
       roleKey: g.role,
       constraints: g.constraints,
+      hasUnrecognisedConstraints: g.hasUnrecognisedConstraints,
       knownOrgUnitUuids: unitUuids,
       globalRoles: config.globalRoles,
       includeDescendants: config.includeDescendants,

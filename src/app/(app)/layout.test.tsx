@@ -58,7 +58,7 @@ describe('(app) layout — server-side auth gate', () => {
   it('redirects to / when there is no valid session (forged/expired/absent cookie)', async () => {
     mockGetSession.mockResolvedValueOnce(null as never);
     await expect(AppLayout({ children: null })).rejects.toThrow('REDIRECT:/');
-    expect(mockRedirect).toHaveBeenCalledWith('/');
+    expect(mockRedirect).toHaveBeenCalledWith('/?expired=1');
   });
 
   it('validates the actual token via getSession, not mere cookie presence', async () => {

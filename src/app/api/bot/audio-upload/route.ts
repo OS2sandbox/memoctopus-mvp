@@ -3,6 +3,7 @@ import { storePendingAudio, storePendingTranscript, markNoRecording } from '@/li
 import { processBotRecording } from '@/lib/bot-transcribe';
 import { withHandler } from '@/lib/api-handler';
 import { safeLogError } from '@/lib/audit/safe-log';
+import { secretEquals } from '@/lib/audit/feed-auth';
 
 // Called by the bot service — authenticated with BOT_INTERNAL_SECRET, not a user session.
 //
@@ -13,7 +14,7 @@ import { safeLogError } from '@/lib/audit/safe-log';
 export const POST = withHandler('bot/audio-upload', async (req: NextRequest) => {
   const authHeader = req.headers.get('Authorization');
   const secret = process.env.BOT_INTERNAL_SECRET;
-  if (!secret || authHeader !== `Bearer ${secret}`) {
+  if (!secret || !authHeader || !secretEquals(authHeader, `Bearer ${secret}`)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

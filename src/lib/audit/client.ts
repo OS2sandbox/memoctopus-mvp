@@ -67,7 +67,8 @@ const pending = new Map<string, Pending>();
 const recentlySent = new Map<string, number>();
 const flushing = new Set<string>();
 const rerun = new Set<string>();
-let flushTimer: ReturnType<typeof setTimeout> | null = null;
+// One debounce timer per user: a single shared one would swallow the schedule of a second user.
+const flushTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let installed = false;
 let uninstall: (() => void) | null = null;
 
@@ -96,11 +97,14 @@ function commitAllPending(): Promise<void> {
 }
 
 function scheduleFlush(userId: string): void {
-  if (flushTimer) return;
-  flushTimer = setTimeout(() => {
-    flushTimer = null;
-    void flush(userId);
-  }, FLUSH_DEBOUNCE_MS);
+  if (flushTimers.has(userId)) return;
+  flushTimers.set(
+    userId,
+    setTimeout(() => {
+      flushTimers.delete(userId);
+      void flush(userId);
+    }, FLUSH_DEBOUNCE_MS),
+  );
 }
 
 function install(): void {
@@ -144,7 +148,17 @@ async function post(events: Array<Omit<OutboxEvent, 'queuedAt' | 'attempts' | 'n
     });
     if (res.ok) return 'ok';
     // Not signed in / rate limited / server trouble: keep the events and retry later.
-    if (res.status === 401 || res.status === 403 || res.status === 408 || res.status === 429 || res.status >= 500) {
+    // 404 and 405 mean the endpoint is not there (yet): a rolling deploy, where the new
+    // client reaches an old instance. That says nothing about the events, so they wait.
+    if (
+      res.status === 401 ||
+      res.status === 403 ||
+      res.status === 404 ||
+      res.status === 405 ||
+      res.status === 408 ||
+      res.status === 429 ||
+      res.status >= 500
+    ) {
       return 'transient';
     }
     return 'rejected';
@@ -298,8 +312,8 @@ export function __resetAuditClient(): void {
   recentlySent.clear();
   flushing.clear();
   rerun.clear();
-  if (flushTimer) clearTimeout(flushTimer);
-  flushTimer = null;
+  for (const t of flushTimers.values()) clearTimeout(t);
+  flushTimers.clear();
   uninstall?.();
   uninstall = null;
   installed = false;

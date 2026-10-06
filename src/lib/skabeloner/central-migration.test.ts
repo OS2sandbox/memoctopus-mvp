@@ -45,7 +45,7 @@ describe('migration 0003_central_templates', () => {
   });
 
   it('requires at least one meaningful character in the name, with the same class as the change note', () => {
-    const cls = (s: string) => /regexp_replace\([^,]+, '(\[\[:space:\][^']*\])', ''/.exec(s)?.[1];
+    const cls = (s: string) => /regexp_replace\([^,]+, '(\[[^']*\])', ''/.exec(s)?.[1];
     const note = statements.find((s) => s.includes('"central_template_versions_change_note_check"'));
     const name = statements.find((s) => s.includes('"central_templates_name_check"'));
     expect(cls(name ?? '')).toBeDefined();

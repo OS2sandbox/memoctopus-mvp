@@ -65,6 +65,17 @@ describe('OrgUnitMembersDialog', () => {
     expect(calls(mock, 'GET', '/api/admin/access/users').some(([u]) => String(u).includes('q=carla'))).toBe(true);
   });
 
+  it('tells the admin when the user list was cut off', async () => {
+    setup(true, { 'GET /api/admin/access/users': () => json({ ...USERS, truncated: true }) });
+    expect(await screen.findByText('Viser de første 2. Brug søgefeltet for at finde flere.')).toBeInTheDocument();
+  });
+
+  it('shows no cut-off notice when every user was returned', async () => {
+    setup(true);
+    await screen.findByLabelText(/Bo Bruger/);
+    expect(screen.queryByText(/Viser de første/)).toBeNull();
+  });
+
   it('does not send a request per keystroke', async () => {
     const mock = setup(true);
     await screen.findByLabelText(/Bo Bruger/);

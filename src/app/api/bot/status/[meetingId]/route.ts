@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getBotServiceConfig, botFetch } from '@/lib/bot-service';
 import { withHandler } from '@/lib/api-handler';
 import { safeLogError } from '@/lib/audit/safe-log';
+import { z } from 'zod';
 import { requireAppAccess } from '@/lib/authz/app-access';
 
 // Polls the live bot-service session status. Stateless: the client supplies the
@@ -19,6 +20,10 @@ export const GET = withHandler('bot/status', async (
 
   await params; // meetingId is part of the path but the lookup is by sessionId
   const sessionId = req.nextUrl.searchParams.get('sessionId');
+  // The bot-service issues UUID session ids; anything else never reaches it.
+  if (sessionId && !z.string().uuid().safeParse(sessionId).success) {
+    return NextResponse.json({ error: 'Invalid sessionId' }, { status: 400 });
+  }
 
   const connecting = (botStatus = 'idle') =>
     NextResponse.json({ status: 'forbinder', botStatus, participants: [], elapsed: 0 });
@@ -35,7 +40,7 @@ export const GET = withHandler('bot/status', async (
   // restart mid-poll should report 'forbinder', not 500.
   let res: Response;
   try {
-    res = await botFetch(bot, `/sessions/${sessionId}`);
+    res = await botFetch(bot, `/sessions/${encodeURIComponent(sessionId)}`);
   } catch (err) {
     safeLogError('bot/status unreachable, returning forbinder', err);
     return connecting();

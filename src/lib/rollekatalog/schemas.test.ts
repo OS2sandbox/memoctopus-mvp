@@ -155,6 +155,33 @@ describe('roleAssignmentsWithContraints', () => {
     const out = parseOrThrow(roleAssignmentsSchema, [{ extUuid: null, userId: 'x', assignments: [{ roleIdentifier: 'a', roleConstraintValues: null }] }]);
     expect(out.rows[0].assignments[0].roleConstraintValues).toEqual([]);
   });
+  it('keeps only org-unit constraint types; KLE and other types never enter our types, only a flag', () => {
+    const jens = parsed.find((u) => u.userId === 'jens.t');
+    const entry = jens?.assignments.find((a) => a.roleIdentifier === 'tt-skabelonansvarlig');
+    expect(entry?.roleConstraintValues.every((c) => /orgunit|orgenhed/.test(c.constraintType))).toBe(true);
+    expect(entry?.hasUnrecognisedConstraints).toBe(true);
+    expect(JSON.stringify(parsed)).not.toMatch(/constraints\/KLE|27\.\d\d/);
+  });
+  it('flags an entry with only an unknown-type constraint, drops its values, and ignores blank values', () => {
+    const out = parseOrThrow(roleAssignmentsSchema, [
+      {
+        extUuid: null,
+        userId: 'x',
+        assignments: [
+          { roleIdentifier: 'a', roleConstraintValues: [{ constraintType: 'http://sts.kombit.dk/constraints/KLE/1', constraintValues: ['27.45.00'] }] },
+          { roleIdentifier: 'b', roleConstraintValues: [{ constraintType: 'http://sts.kombit.dk/constraints/KLE/1', constraintValues: ['', ' '] }] },
+          { roleIdentifier: 'c', roleConstraintValues: [{ constraintType: 'http://sts.kombit.dk/constraints/KLE/1', constraintValues: null }] },
+          { roleIdentifier: 'd', roleConstraintValues: [] },
+        ],
+      },
+    ]);
+    const [a, b, c, d] = out.rows[0].assignments;
+    expect(a).toMatchObject({ roleConstraintValues: [], hasUnrecognisedConstraints: true });
+    expect(b).toMatchObject({ roleConstraintValues: [], hasUnrecognisedConstraints: false });
+    expect(c.hasUnrecognisedConstraints).toBe(false);
+    expect(d.hasUnrecognisedConstraints).toBe(false);
+    expect(JSON.stringify(out)).not.toContain('27.45.00');
+  });
   it('accepts an empty list (unknown system answers [])', () => {
     expect(parseOrThrow(roleAssignmentsSchema, [])).toEqual({ rows: [], skipped: 0 });
   });
@@ -319,6 +346,22 @@ describe('roleAssignmentsWithContraints: row-by-row tolerance', () => {
     expect(out.rows).toHaveLength(1);
     expect(out.rows[0].assignments).toHaveLength(1);
     expect(out.skipped).toBe(2);
+  });
+
+  it('records the role of a dropped entry (when readable) so the mapper can drop the whole group', () => {
+    const out = parseOrThrow(roleAssignmentsSchema, [
+      row(1, {
+        assignments: [
+          { roleIdentifier: 'tt-logleser', roleConstraintValues: [] },
+          { roleIdentifier: ' tt-skabelonansvarlig ', roleConstraintValues: 'broken' },
+          { roleIdentifier: 'tt-skabelonansvarlig', roleConstraintValues: [{ constraintType: 'x', constraintValues: [1] }] },
+          { roleIdentifier: 5 }, // role unreadable: nothing to record
+        ],
+      }),
+    ]);
+    expect(out.rows[0].invalidRoles).toEqual(['tt-skabelonansvarlig']);
+    expect(out.rows[0].assignments.map((a) => a.roleIdentifier)).toEqual(['tt-logleser']);
+    expect(out.skipped).toBe(3);
   });
 
   it('boundary: 10 rows tolerate 3 bad, 4 abort', () => {

@@ -96,8 +96,9 @@ async function inTx<T>(env: CentralEnv, fn: (tx: SqlQueryable) => Promise<T>): P
     if (code === '23001' || code === '23503' || code === '23505') {
       throw new ConflictError('Ændringen kolliderede med en samtidig ændring. Prøv igen.', 'concurrent_change');
     }
-    // 22021 / 22P05: U+0000 in a text parameter / jsonb snapshot; the schemas reject it first.
-    if (code === '23514' || code === '22021' || code === '22P05') throw new ValidationError('Ugyldige værdier', 'invalid');
+    // 22021 / 22P05: U+0000 in a text parameter / jsonb snapshot; 22P02: a lone surrogate that
+    // jsonb cannot hold. The schemas reject both first; this is defence in depth.
+    if (code === '23514' || code === '22021' || code === '22P05' || code === '22P02') throw new ValidationError('Ugyldige værdier', 'invalid');
     throw err;
   }
 }

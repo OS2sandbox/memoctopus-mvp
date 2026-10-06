@@ -173,7 +173,7 @@ three values to their `OIDC_*` names and set `OIDC_PROVIDER_ID=authentik`.
 ## Central access, audit log and Rollekatalog
 
 - **PostgreSQL 15 or newer** (the migrations use `NULLS NOT DISTINCT`); the compose file runs `postgres:16-alpine`. Migrations `0001` to `0003` run in the `migrate` service like the others.
-- **Set first** (all in `.env.example`; runtime only, restart without rebuild): `ACCESS_SOURCE` (`local` by default; a typo makes access control answer 503), `BOOTSTRAP_ADMIN_EMAILS`, `INTERNAL_CRON_SECRET`, and `AUDIT_RETENTION_DAYS` (default 365 days; `forever` keeps the log, see `docs/central-access/audit.md`). Rollekatalog variables are only needed for `ACCESS_SOURCE=rollekatalog`.
+- **Set first** (all in `.env.example`; runtime only, restart without rebuild): `ACCESS_SOURCE` (`local` by default; a typo makes access control answer 503), `BOOTSTRAP_ADMIN_EMAILS`, `INTERNAL_CRON_SECRET`, and `AUDIT_RETENTION_DAYS` (default 365 days; `forever` keeps the log, see `docs/central-access/audit.md`). Rollekatalog variables are only needed for `ACCESS_SOURCE=rollekatalog`. If you set `DIRECTORY_USERID_TRANSFORM=strip-upn-domain`, also set `DIRECTORY_USERID_DOMAIN` (your UPN domain, for example `kommune.dk`); without it no login is matched (see `docs/central-access/rollekatalog.md`).
 - **First administrator.** In local mode, list your address in `BOOTSTRAP_ADMIN_EMAILS` and sign in through SSO (Microsoft needs a single-tenant `MICROSOFT_TENANT_ID`; OIDC needs `email_verified`). It grants `tt-administrator` once; the flag `bootstrap_admin_done` in `public.system_flags` then disables it. Recovery after a lock-out: `DELETE FROM system_flags WHERE key = 'bootstrap_admin_done';` and sign in again, or insert a `role_assignments` row by SQL.
 - **Scheduling.** Nothing in the app runs timers. Call the routes from a host or cluster cron with `X-Cron-Secret`; both answer 404 until `INTERNAL_CRON_SECRET` is set, and the sync answers 409 unless `ACCESS_SOURCE=rollekatalog` and the integration is configured:
 
@@ -183,7 +183,17 @@ three values to their `OIDC_*` names and set `OIDC_PROVIDER_ID=authentik`.
   ```
 
   (`8080` is the default `APP_PORT`.) Keep the sync interval well below `ROLE_STALE_MAX_SECONDS` (24 h by default).
-- **Proxy.** The client IP in the audit log and for login throttling comes from `X-Forwarded-For` (`AUTH_IP_HEADERS`). The proxy must overwrite it; the shipped `nginx/nginx.conf` sets it to `$remote_addr`. Any other proxy in front must do the same.
+- **Client IP and the `X-Forwarded-For` header.** The client IP stored in the audit log and used by the failed-login throttle is the **first** entry of `X-Forwarded-For` (`AUTH_IP_HEADERS`, default `x-forwarded-for`). The app trusts it as sent, so whatever sits in front must **overwrite** it with the real peer address; the shipped `nginx/nginx.conf` and `nginx-init.conf` set it to `$remote_addr`, and any other proxy must do the same. But `docker-compose.yml` publishes the app on **all host interfaces** (`${APP_PORT:-8080}:3000`): anyone who can reach that port directly can skip the proxy and send any `X-Forwarded-For`, forging the audit IP and sidestepping the per-IP login throttle. Whenever a proxy is in use, either bind the app to loopback with a compose override (do not edit the default in `docker-compose.yml`):
+
+  ```yaml
+  # docker-compose.override.yml
+  services:
+    app:
+      ports: !override
+        - "127.0.0.1:${APP_PORT:-8080}:3000"
+  ```
+
+  (`!override` needs Docker Compose 2.24 or newer; on older versions list the port in a separate overlay that replaces the `ports` key, or remove the publish and let the proxy reach `app:3000` over the Docker network), or firewall `APP_PORT` so only the proxy can reach it. The cron examples above call `http://localhost:8080` and keep working with the loopback binding, because they run on the host. With no proxy in front at all, the stored IP is simply whatever the client sends.
 - **Docs.** `docs/central-access/README.md` (overview), `rollekatalog.md` (operator guide), `audit.md` (log, feed, retention), `templates.md` (central templates).
 
 ## Day-2 operations

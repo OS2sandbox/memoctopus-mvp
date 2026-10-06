@@ -184,7 +184,7 @@ describe('audit: diarization.request', () => {
 
     expect(res.status).toBe(200);
     expect((await res.json()).turns).toEqual([]);
-    expect(events()[0]).toMatchObject({ outcome: 'error', details: { outcomeCode: 'ECONNRESET' } });
+    expect(events()[0]).toMatchObject({ outcome: 'error', details: { outcomeCode: 'network' } });
     expectValidMetadataOnly(events()[0], ['Alice']);
     expect(JSON.stringify(spy.mock.calls)).not.toContain('Alice');
     spy.mockRestore();

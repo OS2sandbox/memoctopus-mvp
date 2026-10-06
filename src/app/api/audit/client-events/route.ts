@@ -13,6 +13,29 @@ import {
   THROTTLED_TYPES,
 } from '@/lib/audit/client-ingest';
 
+/**
+ * Reads the body with a running byte count and gives up as soon as it passes `max`, so a
+ * chunked body (no Content-Length) or a lying header cannot make the server buffer more
+ * than `max` plus one chunk. null = too large.
+ */
+async function readBodyCapped(req: Request, max: number): Promise<string | null> {
+  if (!req.body) return '';
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 // Receives events the browser reports about its own meetings (meeting.*). They are
 // SELF-REPORTED: this route can only record that the signed-in user's client said
 // so. Actor, IP, user agent and the server time come from the session and request,
@@ -23,10 +46,8 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
   if (Number.isFinite(declared) && declared > MAX_CLIENT_BODY_BYTES) {
     return NextResponse.json({ error: 'Payload too large' }, { status: 413 });
   }
-  const text = await req.text();
-  if (Buffer.byteLength(text, 'utf8') > MAX_CLIENT_BODY_BYTES) {
-    return NextResponse.json({ error: 'Payload too large' }, { status: 413 });
-  }
+  const text = await readBodyCapped(req, MAX_CLIENT_BODY_BYTES);
+  if (text === null) return NextResponse.json({ error: 'Payload too large' }, { status: 413 });
 
   let json: unknown;
   try {

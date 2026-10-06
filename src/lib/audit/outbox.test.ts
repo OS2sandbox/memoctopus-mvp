@@ -5,18 +5,22 @@ const h = vi.hoisted(() => ({
   dbs: new Map<string, Map<string, Record<string, unknown>>>(),
   opened: [] as Array<{ name: string; version: number }>,
   failOpen: false,
+  callbacks: new Map<string, { blocking?: () => void; terminated?: () => void }>(),
+  closed: [] as string[],
 }));
 
 vi.mock('idb', () => ({
-  openDB: vi.fn(async (name: string, version: number, opts?: { upgrade?: (db: unknown) => void }) => {
+  openDB: vi.fn(async (name: string, version: number, opts?: { upgrade?: (db: unknown) => void; blocking?: () => void; terminated?: () => void }) => {
     if (h.failOpen) throw new Error('blocked');
     h.opened.push({ name, version });
+    h.callbacks.set(name, { blocking: opts?.blocking, terminated: opts?.terminated });
     const isNew = !h.dbs.has(name);
     if (isNew) h.dbs.set(name, new Map());
     const rows = h.dbs.get(name)!;
     if (isNew) opts?.upgrade?.({ createObjectStore: () => ({ createIndex: () => {} }) });
     const byQueued = () => [...rows.values()].sort((a, b) => (a.queuedAt as number) - (b.queuedAt as number));
     return {
+      close: () => void h.closed.push(name),
       put: async (_s: string, v: Record<string, unknown>) => void rows.set(v.clientEventId as string, { ...v }),
       get: async (_s: string, k: string) => rows.get(k),
       delete: async (_s: string, k: string) => void rows.delete(k),
@@ -53,6 +57,8 @@ beforeEach(() => {
   h.dbs.clear();
   h.opened.length = 0;
   h.failOpen = false;
+  h.callbacks.clear();
+  h.closed.length = 0;
   __resetOutbox();
   vi.stubGlobal('indexedDB', {});
 });
@@ -76,6 +82,26 @@ describe('outbox', () => {
     await markFailed('u', ['id-1'], 4000);
     expect((await takeDue('u', 10, 4000)).map((e) => e.clientEventId)).toEqual(['id-2', 'id-3']);
     expect((await takeDue('u', 10, 4000 + backoffMs(1))).map((e) => e.clientEventId)).toEqual(['id-1', 'id-2', 'id-3']);
+  });
+
+  it('opens a fresh connection after the browser terminated the cached one', async () => {
+    await addToOutbox('u', ev(1));
+    await addToOutbox('u', ev(2));
+    expect(h.opened).toHaveLength(1); // cached
+    h.callbacks.get(outboxDbName('u'))!.terminated!();
+    await addToOutbox('u', ev(3));
+    expect(h.opened).toHaveLength(2);
+  });
+
+  it('closes and forgets the connection when another tab needs to upgrade or delete the database', async () => {
+    await addToOutbox('u', ev(1));
+    h.callbacks.get(outboxDbName('u'))!.blocking!();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.closed).toEqual([outboxDbName('u')]);
+    await addToOutbox('u', ev(2));
+    expect(h.opened).toHaveLength(2);
+    expect((await takeDue('u', 10)).map((e) => e.clientEventId)).toEqual(['id-1', 'id-2']);
   });
 
   it('removes events', async () => {

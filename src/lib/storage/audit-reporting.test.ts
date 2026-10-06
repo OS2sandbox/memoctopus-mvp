@@ -23,7 +23,12 @@ function fakeDb() {
     put: async (store: string, v: Row) => void s[store].set(keyOf(v), { ...v }),
     delete: async (store: string, k: string) => void s[store].delete(k),
     getAllFromIndex: async (store: string, _i: string, q: string) => byMeeting(store, q),
-    transaction: () => ({ objectStore: storeApi, done: Promise.resolve() }),
+    // `store` is the single-store shorthand deleteAudio uses (audio only).
+    transaction: () => ({
+      objectStore: storeApi,
+      store: { getKey: async (k: string) => (s.audio.has(k) ? k : undefined), delete: storeApi('audio').delete },
+      done: Promise.resolve(),
+    }),
   };
 }
 
@@ -125,6 +130,19 @@ describe('meetings', () => {
       await updateMeeting(id, { participants: [SECRET_NAME, 'Ib Hansen', 'Pia'] });
       expect(calls()).toEqual([{ type: 'meeting.participants_edit', entityId: id, details: { participantCount: 3 } }]);
       expectNoContent();
+    });
+
+    it('a stored row without participants does not break the write, and a throwing reporter never fails it', async () => {
+      delete h.stores.meetings.get(id)!.participants;
+      await expect(updateMeeting(id, { participants: ['Ny'] })).resolves.toBeUndefined();
+      expect(calls()).toEqual([{ type: 'meeting.participants_edit', entityId: id, details: { participantCount: 1 } }]);
+
+      h.report.mockImplementation(() => {
+        throw new Error('reporter down');
+      });
+      await expect(updateMeeting(id, { title: 'Nyt navn' })).resolves.toBeUndefined();
+      expect(h.stores.meetings.get(id)?.title).toBe('Nyt navn');
+      h.report.mockReset();
     });
 
     it('an automatic write (the bot roster) still reports status changes but never participants_edit', async () => {

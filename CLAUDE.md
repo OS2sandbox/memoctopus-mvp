@@ -66,10 +66,14 @@ Invariants (do not break these):
 - **Every route is gated.** Capability routes use `withAuthz(label, capability, handler)` (`guard.ts`); the other `/api` routes call `requireAppAccess()` (`app-access.ts`: 401/503/403); pages go through the `(app)` layout. Only `/api/health`, `/api/auth` and the secret-authenticated routes (bot callbacks, cron, feed) are exempt.
 - **No content in the audit log.** Event types are a closed catalogue (`src/lib/audit/events/*.ts`, strict zod `details`); strings must match `/^[A-Za-z0-9_.:-]{1,64}$/`, entity ids are UUIDs, an invalid event is dropped. Never put titles, names, prompts, transcript text, file names, URLs or raw error messages in an event or a log line (use `safeLogError`). Admin writes call `recordEvent(event, { tx })` on the change's transaction; denials call `recordAuthzDenied`. `meeting.*` events are client-reported and self-reported.
 - **Rollekatalog is read-only and GET-only.** `src/lib/rollekatalog/client.ts` sends `ApiKey` GETs (organisation v3 with the ORG key, `roleAssignmentsWithContraints` with the READ key); the whitelisting zod schemas in `schemas.ts` keep cpr, nemloginUuid, phone and KLE out of our types (adding a field is a privacy decision). Keys never appear in logs, errors or audit details; failures are short codes. Scope is the org-unit constraint only; no usable scope means no row, unless the role is in `ROLLEKATALOG_GLOBAL_ROLES`. The sync runs in one transaction under an advisory lock, with empty-response and removal-threshold guards, disables missing users and deletes their sessions.
+- **Last administrator.** Only local, global, started, permanent (`stop_date IS NULL`) administrator grants of enabled, login-capable users count as "another administrator" (`admin-sql.ts`, used by revoke and bootstrap).
+- **AI/STT failure codes in the audit log are a closed set** (`http_<status>`, `timeout`, `network`, `unknown`); server-emitted `ai` events have a per-actor ceiling in `emitAudit`.
 - **Central prompts never reach non-managers.** `CentralSkabelonSummary` has no `prompt`; only `resolveCentralTemplate` reads it, and `/api/minutes` enforces the lock server-side, puts the prompt in the system message and scrubs verbatim echoes (`src/lib/ai/prompt-echo.ts`). Never log or audit prompts or change notes.
 - **Migrations.** migrations `0001_central_access`, `0002_audit_events` and `0003_central_templates` in `drizzle/` are unreleased and were edited in place; once a release ships them, only add new migrations. The immutability triggers and the CHECKs that mirror the app's name and change-note rules are hand-appended or hand-kept (`schema.ts` and `0003` must stay in sync). Requires PostgreSQL 15+.
 
 File map: `src/lib/authz/` (capabilities, principal, guard, app-access, scope, bootstrap, directory-match, login-hook, access-admin, config), `src/lib/rollekatalog/` (client, schemas, mapper, scope, sync, sync-run, config, mock-server + `__fixtures__`), `src/lib/audit/` (events, record, authz-denied, client-ingest, query, prune, config), `src/lib/skabeloner/` (`central.ts` manager service, `resolve.ts` recipients), routes under `src/app/api/admin/{access,audit,central-templates}`, `api/internal/{audit/prune,rollekatalog/sync}`, `api/audit/{feed,client-events}`, admin UI in `src/components/admin/` and `src/app/(app)/admin/`.
+
+Local simulation without a real Rollekatalog: `scripts/dev-sim/` (mock Rollekatalog, OIDC login, LLM, control panel, `acceptance.ts`), described in `docs/central-access/dev-simulation.md`.
 
 Docs: `docs/central-access/README.md` (architecture), `rollekatalog.md` (operator guide), `audit.md` (log, feed, retention), `templates.md` (central templates). Update the code and the doc together.
 
@@ -117,6 +121,8 @@ Bot-service authenticates all requests from the Next.js app via `Authorization: 
 | `MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT_ID` | Entra ID; enables itself when the id + secret are set |
 | `OIDC_CLIENT_ID` / `_SECRET` / `_DISCOVERY_URL` | Generic OIDC provider (Keycloak, Authentik, …) |
 | `OIDC_PROVIDER_ID` / `_NAME` | Callback path segment + account key / button label |
+
+`DIRECTORY_USERID_TRANSFORM=strip-upn-domain` only accepts `<name>@<DIRECTORY_USERID_DOMAIN>` (exact domain, one `@`, no `#EXT#`); a blank domain means no match.
 
 Central access, Rollekatalog and audit settings (`ACCESS_SOURCE`, `REQUIRE_ROLE_TO_LOGIN`, `BOOTSTRAP_ADMIN_EMAILS`, `DIRECTORY_*`, `ROLLEKATALOG_*`, `ROLE_STALE_MAX_SECONDS`, `AUDIT_*`, `AUTH_IP_HEADERS`, `INTERNAL_CRON_SECRET`): see `.env.example`. All are read at call time (`src/lib/*/config.ts`), so a restart is enough.
 

@@ -80,10 +80,13 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
         await addUser(c, 'u2');
         const unit = await createOrgUnit({ name: 'Borgerservice', actorUserId: 'x' }, runner);
         await grantRole({ appUserId: 'u1', roleKey: 'tt-skabelonansvarlig', scopeOrgUnitUuid: unit.uuid, actorUserId: 'x' }, runner);
-        const users = await listAppUsersWithRoles({}, runner);
+        const { users } = await listAppUsersWithRoles({}, runner);
         expect(users.map((u) => [u.id, u.roles.length])).toEqual([['u1', 1], ['u2', 0]]);
         expect(users[0].roles[0]).toMatchObject({ scopeOrgUnitName: 'Borgerservice', active: true, source: 'local' });
-        expect((await listAppUsersWithRoles({ q: 'U2' }, runner)).map((u) => u.id)).toEqual(['u2']);
+        expect((await listAppUsersWithRoles({ q: 'U2' }, runner)).users.map((u) => u.id)).toEqual(['u2']);
+        const capped = await listAppUsersWithRoles({ limit: 1 }, runner);
+        expect(capped.users.map((u) => u.id)).toEqual(['u1']);
+        expect(capped.truncated).toBe(true);
         await close();
       }));
 
@@ -123,6 +126,25 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
         await c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'tt-administrator', 'rollekatalog')`, [synced.rows[0].uuid]);
 
         await expect(revokeAssignment(g1.id, 'a1', runner)).rejects.toMatchObject({ code: 'last_administrator' });
+        await close();
+      }));
+
+    it('an administrator grant with a stop_date does not make the last permanent administrator expendable', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = schemaRunner(c, schema);
+        await addUser(c, 'a1');
+        await addUser(c, 'a2');
+        const g1 = await grantRole({ appUserId: 'a1', roleKey: 'tt-administrator', actorUserId: 'a1' }, runner);
+        const tomorrow = new Date(Date.now() + 24 * 3600 * 1000);
+        const g2 = await grantRole(
+          { appUserId: 'a2', roleKey: 'tt-administrator', stopDate: tomorrow, actorUserId: 'a1' },
+          runner,
+        );
+        // a1 is the only PERMANENT administrator: self-revoke must be refused.
+        await expect(revokeAssignment(g1.id, 'a1', runner)).rejects.toMatchObject({ code: 'last_administrator' });
+        // Revoking the expiring one is fine (it never counted), the permanent one stays.
+        await revokeAssignment(g2.id, 'a1', runner);
+        expect(await activeAdmins(c)).toBe(1);
         await close();
       }));
 

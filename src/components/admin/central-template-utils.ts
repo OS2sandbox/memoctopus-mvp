@@ -1,5 +1,5 @@
 // Pure helpers shared by the central template admin UI.
-import { CHANGE_NOTE_MESSAGE } from '@/lib/skabeloner/central-schemas';
+import { CHANGE_NOTE_MESSAGE, changeNoteLength, stripInvisible } from '@/lib/skabeloner/change-note';
 import { CENTRAL_LIMITS } from '@/lib/skabeloner/central-types';
 import type {
   CentralChangeType,
@@ -31,15 +31,16 @@ export const contentFieldLabels: Record<CentralContentField, string> = {
   allowToggleOverrides: 'Tillad brugeren at ændre kategorier',
 };
 
-/** Same rule as the server: trimmed, counted in code points. */
-export function noteLength(note: string): number {
-  return [...note.trim()].length;
-}
+/**
+ * The number the server enforces (src/lib/skabeloner/change-note.ts, shared): invisible
+ * characters stripped, whitespace not counted, counted in code points.
+ */
+export const noteLength = changeNoteLength;
 
 export function noteProblem(note: string): string | null {
-  const n = noteLength(note);
-  if (n < CENTRAL_LIMITS.changeNoteMin) return CHANGE_NOTE_MESSAGE;
-  if (n > CENTRAL_LIMITS.changeNoteMax)
+  if (noteLength(note) < CENTRAL_LIMITS.changeNoteMin) return CHANGE_NOTE_MESSAGE;
+  // The server caps the stripped note, measured in UTF-16 units.
+  if (stripInvisible(note).length > CENTRAL_LIMITS.changeNoteMax)
     return `Ændringsbeskrivelsen er for lang (højst ${CENTRAL_LIMITS.changeNoteMax} tegn)`;
   return null;
 }

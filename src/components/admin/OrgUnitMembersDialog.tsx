@@ -20,6 +20,8 @@ interface AppUserOption {
   email: string;
 }
 
+const USER_PAGE = 500;
+
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -53,6 +55,7 @@ function Body({
   const { toast } = useToast();
   const [members, setMembers] = useState<Member[] | null>(null);
   const [users, setUsers] = useState<AppUserOption[]>([]);
+  const [usersTruncated, setUsersTruncated] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState('');
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -82,11 +85,12 @@ function Body({
     let cancelled = false;
     const timer = setTimeout(async () => {
       const qs = query ? `&q=${encodeURIComponent(query)}` : '';
-      const u = await apiRequest<{ users: AppUserOption[] }>(`/api/admin/access/users?limit=500${qs}`);
+      const u = await apiRequest<{ users: AppUserOption[]; truncated?: boolean }>(`/api/admin/access/users?limit=${USER_PAGE}${qs}`);
       if (cancelled) return;
       if (!u.ok) return setLoadError(u.message);
       setLoadError(null);
       setUsers(u.data.users);
+      setUsersTruncated(u.data.truncated === true);
     }, query ? 250 : 0);
     return () => {
       cancelled = true;
@@ -132,7 +136,7 @@ function Body({
       <ErrorBanner message={loadError} />
       <ErrorBanner message={saveError} />
 
-      {members === null && !loadError && <p className="text-sm text-[var(--muted)]">Indlæser …</p>}
+      {members === null && !loadError && <p role="status" className="text-sm text-[var(--muted)]">Indlæser …</p>}
 
       {members !== null && !editable && (
         members.length === 0 ? (
@@ -169,6 +173,11 @@ function Body({
               ))
             )}
           </ul>
+          {usersTruncated && (
+            <p role="note" className="text-[13px] text-[var(--muted)]">
+              Viser de første {users.length}. Brug søgefeltet for at finde flere.
+            </p>
+          )}
           {unlinked.length > 0 && (
             <p role="note" className="text-[13px] text-[var(--warn)]">
               {unlinked.length === 1 ? '1 medlem er' : `${unlinked.length} medlemmer er`} ikke knyttet til en bruger og

@@ -68,23 +68,34 @@ beforeEach(() => {
   mockRecord.mockReset().mockResolvedValue({ status: 'stored' });
 });
 
+const SID = '3f2b8c1e-6a4d-4e2f-9b1a-0c5d7e8f9a10';
+
 describe('POST /api/bot/control/[meetingId]', () => {
+  it.each(['s1', '../../admin', 'abc/stop'])('returns 400 and never calls the bot for a non-UUID sessionId (%s)', async (bad) => {
+    for (const action of ['stop', 'abort'] as const) {
+      mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+      const res = await POST(req({ action, sessionId: bad }), { params });
+      expect(res.status).toBe(400);
+    }
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('returns 401 when not authenticated', async () => {
     mockGetSession.mockResolvedValueOnce(null as never);
-    const res = await POST(req({ action: 'pause', sessionId: 's1' }), { params });
+    const res = await POST(req({ action: 'pause', sessionId: SID }), { params });
     expect(res.status).toBe(401);
   });
 
   it('returns 400 for an invalid action', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    const res = await POST(req({ action: 'nope', sessionId: 's1' }), { params });
+    const res = await POST(req({ action: 'nope', sessionId: SID }), { params });
     expect(res.status).toBe(400);
   });
 
   it('returns 404 and never touches the bot when the meeting belongs to another user', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockAssertOwner.mockResolvedValueOnce(false);
-    const res = await POST(req({ action: 'stop', sessionId: 'userA-session' }), { params });
+    const res = await POST(req({ action: 'stop', sessionId: SID }), { params });
     expect(res.status).toBe(404);
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -97,23 +108,23 @@ describe('POST /api/bot/control/[meetingId]', () => {
 
   it('forwards stop to the bot service', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    const res = await POST(req({ action: 'stop', sessionId: 's1' }), { params });
+    const res = await POST(req({ action: 'stop', sessionId: SID }), { params });
     expect(res.status).toBe(200);
-    expect(mockFetch.mock.calls[0][0]).toBe('http://bot:3001/sessions/s1/stop');
+    expect(mockFetch.mock.calls[0][0]).toBe(`http://bot:3001/sessions/${SID}/stop`);
   });
 
   it('forwards pause to the bot service', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    await POST(req({ action: 'pause', sessionId: 's1' }), { params });
-    expect(mockFetch.mock.calls[0][0]).toBe('http://bot:3001/sessions/s1/pause');
+    await POST(req({ action: 'pause', sessionId: SID }), { params });
+    expect(mockFetch.mock.calls[0][0]).toBe(`http://bot:3001/sessions/${SID}/pause`);
   });
 
   it('aborts by deleting the bot session (idempotent, ok with no session)', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    const res = await POST(req({ action: 'abort', sessionId: 's1' }), { params });
+    const res = await POST(req({ action: 'abort', sessionId: SID }), { params });
     expect(res.status).toBe(200);
     const [url, init] = mockFetch.mock.calls[0];
-    expect(url).toBe('http://bot:3001/sessions/s1');
+    expect(url).toBe(`http://bot:3001/sessions/${SID}`);
     expect((init as RequestInit).method).toBe('DELETE');
   });
 
@@ -121,7 +132,7 @@ describe('POST /api/bot/control/[meetingId]', () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockFetch.mockRejectedValueOnce(new Error('network down'));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const res = await POST(req({ action: 'abort', sessionId: 's1' }), { params });
+    const res = await POST(req({ action: 'abort', sessionId: SID }), { params });
     expect(res.status).toBe(200);
     const line = String(errorSpy.mock.calls[0][0]);
     expect(line).toContain('[bot/control abort DELETE');
@@ -133,7 +144,7 @@ describe('POST /api/bot/control/[meetingId]', () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockFetch.mockRejectedValueOnce(new Error('connection refused'));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const res = await POST(req({ action: 'stop', sessionId: 's1' }), { params });
+    const res = await POST(req({ action: 'stop', sessionId: SID }), { params });
     expect(res.status).toBe(502);
     const [msg] = errorSpy.mock.calls[0];
     expect(msg).toContain('[bot/control');
@@ -146,7 +157,7 @@ describe('POST /api/bot/control/[meetingId]', () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockFetch.mockResolvedValueOnce(new Response('error', { status: 503 }));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const res = await POST(req({ action: 'pause', sessionId: 's1' }), { params });
+    const res = await POST(req({ action: 'pause', sessionId: SID }), { params });
     expect(res.status).toBe(502);
     // Single string arg for non-ok branch (no error object to bind)
     const [msg] = errorSpy.mock.calls[0];
@@ -167,7 +178,7 @@ describe('audit: bot.session_* events', () => {
     ['abort', 'bot.session_abort'],
   ] as const)('%s emits exactly one %s with the meeting uuid and no details', async (action, type) => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    const res = await POST(req({ action, sessionId: 's1' }), { params: uuidParams });
+    const res = await POST(req({ action, sessionId: SID }), { params: uuidParams });
     expect(res.status).toBe(200);
     expect(mockRecord).toHaveBeenCalledTimes(1);
     expect(mockRecord.mock.calls[0][1]).toEqual({
@@ -182,7 +193,7 @@ describe('audit: bot.session_* events', () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockFetch.mockResolvedValueOnce(new Response('x', { status: 503 }));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await POST(req({ action: 'pause', sessionId: 's1' }), { params: uuidParams });
+    await POST(req({ action: 'pause', sessionId: SID }), { params: uuidParams });
     errorSpy.mockRestore();
     expect(mockRecord).toHaveBeenCalledTimes(1);
     expect(mockRecord.mock.calls[0][1]).toMatchObject({ type: 'bot.session_pause', outcome: 'error' });
@@ -191,7 +202,7 @@ describe('audit: bot.session_* events', () => {
   it('emits nothing for a non-owner (404) or an invalid action', async () => {
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
     mockAssertOwner.mockResolvedValueOnce(false);
-    await POST(req({ action: 'stop', sessionId: 's1' }), { params: uuidParams });
+    await POST(req({ action: 'stop', sessionId: SID }), { params: uuidParams });
     await POST(req({ action: 'nope' }), { params: uuidParams });
     expect(mockRecord).not.toHaveBeenCalled();
   });

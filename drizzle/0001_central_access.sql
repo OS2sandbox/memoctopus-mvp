@@ -85,6 +85,8 @@ ALTER TABLE "org_unit_members" ADD CONSTRAINT "org_unit_members_org_unit_uuid_or
 ALTER TABLE "org_units" ADD CONSTRAINT "org_units_parent_uuid_org_units_uuid_fk" FOREIGN KEY ("parent_uuid") REFERENCES "public"."org_units"("uuid") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "role_assignments" ADD CONSTRAINT "role_assignments_directory_user_uuid_directory_users_uuid_fk" FOREIGN KEY ("directory_user_uuid") REFERENCES "public"."directory_users"("uuid") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "role_assignments" ADD CONSTRAINT "role_assignments_scope_org_unit_uuid_org_units_uuid_fk" FOREIGN KEY ("scope_org_unit_uuid") REFERENCES "public"."org_units"("uuid") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "directory_users_ext_user_id_lower_idx" ON "directory_users" USING btree (lower("ext_user_id"));--> statement-breakpoint
+CREATE INDEX "directory_users_email_lower_idx" ON "directory_users" USING btree (lower("email"));--> statement-breakpoint
 CREATE INDEX "external_identities_user_id_idx" ON "external_identities" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "org_unit_members_org_unit_idx" ON "org_unit_members" USING btree ("org_unit_uuid");--> statement-breakpoint
 CREATE INDEX "org_units_parent_uuid_idx" ON "org_units" USING btree ("parent_uuid");--> statement-breakpoint

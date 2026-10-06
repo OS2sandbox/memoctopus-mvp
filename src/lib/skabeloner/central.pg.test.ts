@@ -95,8 +95,11 @@ const BASE = { name: 'Dialogmøde', description: 'Til dialogmøder', prompt: 'Sk
 // Statements that are expected to fail are sent without bind parameters (ids are test-generated uuids,
 // inlined): the simple protocol keeps the connection usable for the next assertion on every Postgres,
 // including the embedded one some developers use for this lane.
-async function expectSqlState(p: Promise<unknown>, state: string) {
-  await expect(p).rejects.toMatchObject({ code: state });
+async function expectSqlState(p: Promise<unknown>, state: string | string[]) {
+  const allowed = Array.isArray(state) ? state : [state];
+  const err = await p.then(() => undefined, (e: unknown) => e as { code?: string });
+  expect(err, 'statement should have failed').toBeDefined();
+  expect(allowed).toContain(err!.code);
 }
 
 beforeEach(() => {
@@ -250,6 +253,12 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         ['10 BOM', rep(0xfeff)],
         ['10 tag characters (U+E0041)', rep(0xe0041)],
         ['10 soft hyphens', rep(0x00ad)],
+        ['10 C0 controls (U+0001)', rep(0x01)],
+        ['10 C1 controls (U+0086)', rep(0x86)],
+        ['10 DEL (U+007F)', rep(0x7f)],
+        ['10 Arabic number signs (U+0600)', rep(0x600)],
+        ['10 interlinear annotation anchors (U+FFF9)', rep(0xfff9)],
+        ['10 musical symbol format characters (U+1D173)', rep(0x1d173)],
         ['9 meaningful characters padded with whitespace', `   ${'x'.repeat(9)}   `],
       ])('rejects a change note of %s', (_n, note) =>
         withFreshSchema(async (c) => {
@@ -281,6 +290,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         ['zero-width spaces', rep(0x200b, 3)],
         ['Hangul fillers', rep(0x3164, 2)],
         ['variation selectors', rep(0xfe0f, 2)],
+        ['U+0001 controls', rep(0x01, 10)],
       ])('rejects a template name of %s', (_n, name) =>
         withFreshSchema(async (c) => {
           const t = await tree(c);
@@ -645,8 +655,8 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
       withFreshSchema(async (c) => {
         const t = await tree(c);
         await c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt, status) VALUES ($1, 'x', 'p', 'archived')`, [t.b1]);
-        // ON DELETE RESTRICT raises restrict_violation (23001), not foreign_key_violation (23503).
-        await expectSqlState(c.query(`DELETE FROM org_units WHERE uuid = '${t.b1}'`), '23001');
+        // ON DELETE RESTRICT: accept restrict_violation (23001) and foreign_key_violation (23503).
+        await expectSqlState(c.query(`DELETE FROM org_units WHERE uuid = '${t.b1}'`), ['23001', '23503']);
         await c.query('DELETE FROM org_units WHERE uuid = $1', [t.a11]);
       }));
 

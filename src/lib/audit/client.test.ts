@@ -95,6 +95,15 @@ describe('reportAuditEvent', () => {
     }
   });
 
+  it.each([404, 405])('keeps and retries events when the endpoint answers %i (rolling deploy), instead of dropping them', async (status) => {
+    fetchMock.mockResolvedValue(respond(status));
+    c.reportAuditEvent('meeting.delete', MEETING);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(h.queue).toHaveLength(1);
+    expect(h.failed).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // no one-by-one isolation round for a missing endpoint
+  });
+
   it('keeps events while signed out (401) instead of discarding them', async () => {
     fetchMock.mockResolvedValue(respond(401));
     c.reportAuditEvent('meeting.delete', MEETING);
@@ -173,6 +182,16 @@ describe('reportAuditEvent', () => {
     await vi.advanceTimersByTimeAsync(1500);
     expect(sentBodies().flat().map((e) => e.type).sort()).toEqual(['meeting.delete', 'meeting.minutes_save']);
     expect(h.queue).toHaveLength(0);
+  });
+
+  it('keeps a debounce per user: scheduling for one user does not swallow another user\'s flush', async () => {
+    const scope = await import('@/lib/storage/scope');
+    h.queue.push({ clientEventId: 'u2-1', owner: 'user-2', type: 'meeting.delete', entityId: MEETING, details: {}, occurredAt: new Date().toISOString() });
+    c.startAuditReporting('user-1'); // schedules user-1
+    scope.setStorageUserId('user-2');
+    c.startAuditReporting('user-2'); // must still schedule user-2
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(sentBodies().flat().map((e) => e.clientEventId)).toEqual(['u2-1']);
   });
 
   it('stops draining mid-flush when the signed-in user changes', async () => {

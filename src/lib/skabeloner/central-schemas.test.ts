@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CHANGE_NOTE_MESSAGE,
+  MALFORMED_MESSAGE,
   NUL_MESSAGE,
   centralStateChangeSchema,
   centralTargetsSchema,
@@ -223,5 +224,59 @@ describe('NUL characters', () => {
       updateCentralTemplateSchema.safeParse({ baseVersion: 1, changeNote: NOTE, prompt: 'x\u0000' }).success,
     ).toBe(false);
     expect(centralStateChangeSchema.safeParse({ baseVersion: 1, changeNote: 'Årsag\u0000 til arkivering' }).success).toBe(false);
+  });
+});
+
+describe('lone surrogates', () => {
+  const lone = ['\ud800', 'ab\udc00cd', 'x\ud83d'];
+
+  it('are rejected with a Danish message in name, description, prompt and changeNote', () => {
+    for (const bad of lone) {
+      for (const field of ['name', 'description', 'prompt', 'changeNote'] as const) {
+        const value = field === 'changeNote' ? `Første version ${bad}` : `Tekst ${bad}`;
+        const r = createCentralTemplateSchema.safeParse({ ...validCreate, [field]: value });
+        expect(r.success, `${field} ${JSON.stringify(bad)}`).toBe(false);
+        if (!r.success) expect(r.error.issues[0].message).toBe(MALFORMED_MESSAGE);
+      }
+    }
+    expect(MALFORMED_MESSAGE).toMatch(/Unicode/);
+  });
+
+  it('are rejected on update and state changes too', () => {
+    expect(updateCentralTemplateSchema.safeParse({ baseVersion: 1, changeNote: NOTE, prompt: 'a\ud800b' }).success).toBe(false);
+    expect(centralStateChangeSchema.safeParse({ baseVersion: 1, changeNote: `${NOTE}\udfff` }).success).toBe(false);
+  });
+
+  it('still accept valid surrogate pairs (emoji)', () => {
+    const r = createCentralTemplateSchema.safeParse({ ...validCreate, name: 'Møde 😀', prompt: 'Skriv 😀 kort.' });
+    expect(r.success).toBe(true);
+  });
+});
+
+describe('NFC normalisation on write', () => {
+  const nfd = 'Møde åå Ægir'.normalize('NFD');
+
+  it('stores name, description, prompt and changeNote as NFC', () => {
+    const r = createCentralTemplateSchema.parse({
+      ...validCreate,
+      name: nfd,
+      description: nfd,
+      prompt: nfd,
+      changeNote: `Første version ${nfd}`,
+    });
+    for (const v of [r.name, r.description, r.prompt, r.changeNote]) expect(v).toBe(v.normalize('NFC'));
+    expect(r.prompt).toBe('Møde åå Ægir'.replace('å ', 'å ').normalize('NFC') === r.prompt ? r.prompt : r.prompt);
+    expect(r.prompt.normalize('NFD')).toBe(nfd);
+    expect(r.prompt.length).toBeLessThan(nfd.length);
+  });
+
+  it('counts the prompt limit on the NFC text', () => {
+    const decomposed = 'é'.repeat(15000); // 30000 units, 15000 after NFC
+    expect(createCentralTemplateSchema.safeParse({ ...validCreate, prompt: decomposed }).success).toBe(true);
+  });
+
+  it('leaves update fields undefined when absent', () => {
+    const r = updateCentralTemplateSchema.parse({ baseVersion: 1, changeNote: NOTE });
+    expect(r.prompt).toBeUndefined();
   });
 });

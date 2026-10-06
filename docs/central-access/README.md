@@ -1,6 +1,6 @@
 # Central access control: architecture overview
 
-For engineers. Operators: start with `rollekatalog.md` (connecting a Rollekatalog), `audit.md` (the audit log) and `templates.md` (central templates). Where this text and the code differ, the code is right.
+For engineers. Operators: start with `rollekatalog.md` (connecting a Rollekatalog), `audit.md` (the audit log) and `templates.md` (central templates); `dev-simulation.md` explains how to test everything locally without a real Rollekatalog. Where this text and the code differ, the code is right.
 
 ## Purpose
 
@@ -30,6 +30,7 @@ Scoped capabilities (limited to org units): `template.manage`, `audit.read`, `di
 - An assignment with an org unit adds a root; `include_descendants` (default true) extends it to the subtree. A unit granted twice keeps the wider grant.
 - A NULL scope sets `global` only for roles with `globalScopeAllowed`. A NULL-scope `tt-skabelonansvarlig` covers no unit. "No scope" is never read as "all units".
 - An assignment is active in `[start_date, stop_date)`. Unknown role keys, expired and future rows grant nothing.
+- **Last-administrator guard** (`admin-sql.ts`, used by revoke and bootstrap). An administrator counts as "another administrator" only with a local, global, started, **permanent** (`stop_date IS NULL`) assignment of an enabled, login-capable person. A grant with a `stop_date` is allowed but never makes the last permanent administrator expendable, so the only administrator cannot hand over to a colleague whose role lapses and then lock the system out.
 - A disabled directory user has no roles and no capabilities, not even the baseline.
 - Baseline: unless `REQUIRE_ROLE_TO_LOGIN=true`, every non-disabled principal implicitly holds `tt-bruger`, also users with no directory row.
 - Org-tree reads (`scope.ts`) are cycle-safe: recursive CTEs use `UNION` and a depth cap `MAX_ORG_DEPTH` (64); deeper counts as not covered. Malformed uuids are "not in scope", not a 500.
@@ -61,7 +62,7 @@ The symmetry is enforced in one pure function (`dropStaleAssignments`): rows of 
 
 - **Local mode** never links by email: an email/password sign-up can claim any address. The link is `directory_users.app_user_id`, set by an admin.
 - **Rollekatalog mode** (`directory-match.ts`, `DIRECTORY_MATCH`): `userid-claim` (default, claim `DIRECTORY_USERID_CLAIM` vs `ext_user_id`), `extuuid-claim`, or `email` (needs `email_verified === true`). Never for `credential` accounts; Microsoft logins only with a single-tenant `MICROSOFT_TENANT_ID` and a matching `tid` (all modes and transforms); zero or several candidates never link; a row linked to another user is a `conflict`. A person re-created in Rollekatalog (new uuid, same userId) is re-linked from the DISABLED old row at the next login. Claims come from the whitelisted snapshot in `external_identities` (decoded from the stored `id_token`), never from the browser. Details in `rollekatalog.md`.
-- **Bootstrap administrator** (`bootstrap.ts`, local mode only): grants a global `tt-administrator` to an SSO identity that proves an address in `BOOTSTRAP_ADMIN_EMAILS` (Microsoft: single-tenant `MICROSOFT_TENANT_ID` and matching `tid`; others: `email_verified === true`), while no active administrator exists. It is one-shot: the flag `bootstrap_admin_done` in `public.system_flags` is written in the same transaction and under the same advisory lock as the grant. Recovery after a lock-out: `DELETE FROM system_flags WHERE key = 'bootstrap_admin_done';`, or insert a `role_assignments` row by SQL. It runs from `databaseHooks.session.create.after` (`login-hook.ts`), which never throws.
+- **Bootstrap administrator** (`bootstrap.ts`, local mode only): grants a global `tt-administrator` to an SSO identity that proves an address in `BOOTSTRAP_ADMIN_EMAILS` (Microsoft: single-tenant `MICROSOFT_TENANT_ID` and matching `tid`; others: `email_verified === true`), while no usable permanent administrator exists (see the last-administrator guard above). It is one-shot: the flag `bootstrap_admin_done` in `public.system_flags` is written in the same transaction and under the same advisory lock as the grant. Recovery after a lock-out: `DELETE FROM system_flags WHERE key = 'bootstrap_admin_done';`, or insert a `role_assignments` row by SQL. It runs from `databaseHooks.session.create.after` (`login-hook.ts`), which never throws.
 
 ## Configuration
 

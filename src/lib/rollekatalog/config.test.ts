@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  directoryConfigIssue,
+  directoryUserIdDomain,
   directoryUserIdTransform,
   globalRoles,
   itSystemId,
@@ -90,13 +92,13 @@ describe('simple settings', () => {
   });
   it('timeout: default 120000 (2 min), valid values pass through', () => {
     expect(timeoutMs()).toBe(120_000);
-    for (const ok of ['1000', '1500', '30000', '600000']) {
+    for (const ok of ['1000', '1500', '30000', '300000']) {
       vi.stubEnv('ROLLEKATALOG_TIMEOUT_MS', ok);
       expect(timeoutMs(), ok).toBe(Number(ok));
     }
   });
   it('timeout: out-of-range, non-numeric and blank values fall back to the default', () => {
-    for (const bad of ['999', '600001', '100', '0', '-5', '1.5', 'abc', '10s', '', '   ', '999999999']) {
+    for (const bad of ['999', '300001', '600000', '600001', '100', '0', '-5', '1.5', 'abc', '10s', '', '   ', '999999999']) {
       vi.stubEnv('ROLLEKATALOG_TIMEOUT_MS', bad);
       expect(timeoutMs(), JSON.stringify(bad)).toBe(120_000);
     }
@@ -143,11 +145,45 @@ describe('DIRECTORY_USERID_TRANSFORM', () => {
     expect(directoryUserIdTransform()).toBe('none');
     expect(transformUserId('anne.p@example.dk')).toBe('anne.p@example.dk');
   });
-  it('strip-upn-domain removes everything from the first @', () => {
+  it('strip-upn-domain needs the configured domain: name@domain only, case-insensitive', () => {
     vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'Strip-UPN-Domain');
+    vi.stubEnv('DIRECTORY_USERID_DOMAIN', 'Example.DK');
     expect(transformUserId('anne.p@example.dk')).toBe('anne.p');
-    expect(transformUserId('anne.p')).toBe('anne.p');
-    expect(transformUserId('@x')).toBe('@x');
+    expect(transformUserId('Anne.P@EXAMPLE.dk')).toBe('Anne.P');
+    expect(transformUserId('  anne.p@example.dk ')).toBe('anne.p');
+  });
+  it('strip-upn-domain tolerates a leading @ in the domain setting', () => {
+    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'strip-upn-domain');
+    vi.stubEnv('DIRECTORY_USERID_DOMAIN', '@example.dk');
+    expect(directoryUserIdDomain()).toBe('example.dk');
+    expect(transformUserId('anne.p@example.dk')).toBe('anne.p');
+  });
+  it('strip-upn-domain gives no match for a foreign domain, #EXT#, two @, no @ or an empty name', () => {
+    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'strip-upn-domain');
+    vi.stubEnv('DIRECTORY_USERID_DOMAIN', 'example.dk');
+    expect(transformUserId('abc123@evil.com')).toBeNull();
+    expect(transformUserId('abc123@example.dk.evil.com')).toBeNull();
+    expect(transformUserId('abc123@sub.example.dk')).toBeNull();
+    expect(transformUserId('abc123_example.dk#EXT#@example.dk')).toBeNull();
+    expect(transformUserId('a@b@example.dk')).toBeNull();
+    expect(transformUserId('anne.p')).toBeNull();
+    expect(transformUserId('@example.dk')).toBeNull();
+    expect(transformUserId('')).toBeNull();
+  });
+  it('strip-upn-domain without a usable domain matches nothing and is reported as a config issue', () => {
+    vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'strip-upn-domain');
+    for (const blank of ['', '   ', '@', 'a@b', 'ex ample.dk']) {
+      vi.stubEnv('DIRECTORY_USERID_DOMAIN', blank);
+      expect(transformUserId('anne.p@example.dk')).toBeNull();
+      expect(directoryConfigIssue()).toBe('userid_domain_missing');
+    }
+    vi.stubEnv('DIRECTORY_USERID_DOMAIN', 'example.dk');
+    expect(directoryConfigIssue()).toBeNull();
+  });
+  it('reports no directory issue when the transform is none, whatever the domain', () => {
+    expect(directoryConfigIssue()).toBeNull();
+    vi.stubEnv('DIRECTORY_USERID_DOMAIN', '');
+    expect(directoryConfigIssue()).toBeNull();
   });
   it('falls back to none on junk', () => {
     vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'lowercase');

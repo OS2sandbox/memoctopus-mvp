@@ -17,6 +17,7 @@
 // payload as invalid_response, before anything is written.
 import { z } from 'zod';
 import { RollekatalogError } from './errors';
+import { isOrgUnitConstraintType, type ScopeConstraint } from './types';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -211,6 +212,11 @@ const constraintValueSchema = z
   })
   .strip();
 
+// Only the org-unit constraint types (the two known entityId URLs) survive parsing. Every
+// other type (KLE etc.) and its values are dropped HERE, so they never enter our types. What
+// we keep of them is one bit: that the assignment carried a non-empty constraint of a type
+// we do not recognise. The scope derivation needs it to fail closed: such an assignment is
+// restricted in a way we cannot read, so it must never be widened to global.
 const assignmentSchema = z
   .object({
     roleIdentifier: z.string(),
@@ -220,10 +226,30 @@ const assignmentSchema = z
       .nullish()
       .transform((v) => v ?? []),
   })
-  .strip();
+  .strip()
+  .transform((a): RkAssignment => {
+    const orgUnitConstraints: ScopeConstraint[] = [];
+    let hasUnrecognisedConstraints = false;
+    for (const c of a.roleConstraintValues) {
+      if (isOrgUnitConstraintType(c.constraintType)) {
+        orgUnitConstraints.push({ constraintType: c.constraintType.trim(), constraintValues: c.constraintValues });
+      } else if (c.constraintValues.some((v) => v.trim() !== '')) {
+        hasUnrecognisedConstraints = true;
+      }
+    }
+    return {
+      roleIdentifier: a.roleIdentifier,
+      roleName: a.roleName,
+      roleConstraintValues: orgUnitConstraints,
+      hasUnrecognisedConstraints,
+    };
+  });
 
-// `assignments` stays raw: each entry is validated on its own, so one broken entry costs
-// that entry only (an entry is only ever dropped, never widened: fail closed).
+// `assignments` stays raw: each entry is validated on its own. An entry that fails is
+// dropped, and the role it named (when readable) is recorded in `invalidRoles`: the mapper
+// then drops the WHOLE (user, role) group, because a dropped scoped entry would otherwise
+// leave a sibling entry that looks unconstrained and could widen to global. Dropping is the
+// only direction an invalid entry may move a grant (fail closed).
 const userAssignmentsRowSchema = z
   .object({
     extUuid: lenientUuid,
@@ -232,16 +258,34 @@ const userAssignmentsRowSchema = z
   })
   .strip();
 
+export interface RkAssignment {
+  roleIdentifier: string;
+  roleName: string | null;
+  /** Org-unit constraints only; KLE and every other type is dropped at parse time. */
+  roleConstraintValues: ScopeConstraint[];
+  /** The entry carried a non-empty constraint of an unrecognised type (the values are not kept). */
+  hasUnrecognisedConstraints: boolean;
+}
+
 export interface RkUserAssignments {
   extUuid: string | null;
   userId: string | null;
-  assignments: Array<z.output<typeof assignmentSchema>>;
+  assignments: RkAssignment[];
+  /** Trimmed roleIdentifiers of entries that failed validation and were dropped (only when readable). */
+  invalidRoles: string[];
 }
 
 export interface RkRoleAssignments {
   rows: RkUserAssignments[];
   /** Dropped rows plus dropped assignment entries inside valid rows. Counts only. */
   skipped: number;
+}
+
+/** The roleIdentifier of an entry that failed its schema, when it is still readable. */
+function readableRole(entry: unknown): string | null {
+  if (typeof entry !== 'object' || entry === null) return null;
+  const id = (entry as Record<string, unknown>).roleIdentifier;
+  return typeof id === 'string' && id.trim() ? id.trim() : null;
 }
 
 export const roleAssignmentsSchema = z.array(z.unknown()).transform((raw, ctx): RkRoleAssignments => {
@@ -255,14 +299,20 @@ export const roleAssignmentsSchema = z.array(z.unknown()).transform((raw, ctx): 
       skippedRows++;
       continue;
     }
-    const assignments: RkUserAssignments['assignments'] = [];
+    const assignments: RkAssignment[] = [];
+    const invalidRoles = new Set<string>();
     for (const entry of parsed.data.assignments ?? []) {
       totalEntries++;
       const a = assignmentSchema.safeParse(entry);
-      if (a.success) assignments.push(a.data);
-      else skippedEntries++;
+      if (a.success) {
+        assignments.push(a.data);
+      } else {
+        skippedEntries++;
+        const role = readableRole(entry);
+        if (role) invalidRoles.add(role);
+      }
     }
-    rows.push({ extUuid: parsed.data.extUuid, userId: parsed.data.userId, assignments });
+    rows.push({ extUuid: parsed.data.extUuid, userId: parsed.data.userId, assignments, invalidRoles: [...invalidRoles].sort() });
   }
   guardInvalidRows(skippedRows, raw.length, ctx);
   guardInvalidRows(skippedEntries, totalEntries, ctx);

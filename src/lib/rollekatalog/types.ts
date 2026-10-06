@@ -112,6 +112,12 @@ export interface ScopeInput {
   roleKey: RoleKey;
   /** All constraint values of the (user, role) assignment(s); duplicate role entries already concatenated. */
   constraints: readonly ScopeConstraint[];
+  /**
+   * The assignment(s) also carried a non-empty constraint of a type we do not recognise
+   * (the schemas drop such types at parse time and keep only this flag). scope.ts also
+   * derives it from any non-org-unit entry in `constraints`.
+   */
+  hasUnrecognisedConstraints?: boolean;
   /** Lower-case uuids of every org unit in the mirror; unknown constraint units are ignored. */
   knownOrgUnitUuids: ReadonlySet<string>;
   /** ROLLEKATALOG_GLOBAL_ROLES. */

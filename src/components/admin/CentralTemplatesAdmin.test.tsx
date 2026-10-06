@@ -136,6 +136,26 @@ describe('CentralTemplatesAdmin — list', () => {
     expect(calls(mock, 'GET', '/api/admin/central-templates?status=archived')).toHaveLength(1);
   });
 
+  it('keeps the newest filter when an older request answers last', async () => {
+    let releaseActive!: () => void;
+    const gate = new Promise<void>((r) => (releaseActive = r));
+    setup(ADMIN_ME, {
+      'GET /api/admin/central-templates?status=active': async () => {
+        await gate;
+        return json({ templates: ACTIVE });
+      },
+    });
+    renderWithToasts(<CentralTemplatesAdmin />);
+    expect(screen.getByRole('status')).toHaveTextContent('Indlæser');
+    await userEvent.selectOptions(screen.getByLabelText('Vis'), 'archived');
+    await screen.findByText('Gammel');
+    expect(screen.getByRole('table', { name: 'Centrale skabeloner' })).toBeInTheDocument();
+    releaseActive();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByText('Gammel')).toBeInTheDocument();
+    expect(screen.queryByText('Bestyrelse')).toBeNull();
+  });
+
   it('shows an empty state and a load error with retry', async () => {
     setup(ADMIN_ME, { 'GET /api/admin/central-templates?status=active': () => json({ templates: [] }) });
     renderWithToasts(<CentralTemplatesAdmin />);

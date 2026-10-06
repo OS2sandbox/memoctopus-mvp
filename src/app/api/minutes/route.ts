@@ -12,6 +12,9 @@ import { requireAppAccess } from '@/lib/authz/app-access';
 
 export const maxDuration = 120;
 
+/** Longest accepted free-text instruction from the user, after trimming. */
+const MAX_CUSTOM_PROMPT_CHARS = 2000;
+
 async function postHandler(req: NextRequest) {
   const access = await requireAppAccess();
   if (access instanceof NextResponse) return access;
@@ -36,7 +39,7 @@ async function postHandler(req: NextRequest) {
     chapters?: TranscriptChapter[];
     skabelonId?: string;
     skabelonSource?: unknown;
-    customPrompt?: string;
+    customPrompt?: unknown;
     includeDeltagere?: boolean;
     includeBeslutningspunkter?: boolean;
     includeDagsorden?: boolean;
@@ -50,6 +53,23 @@ async function postHandler(req: NextRequest) {
 
   if (skabelonSource !== undefined && skabelonSource !== 'personal' && skabelonSource !== 'central') {
     return NextResponse.json({ error: 'Ugyldig skabelonkilde' }, { status: 400 });
+  }
+
+  // The user's own instruction goes into the model's instruction for every template kind, so
+  // it is type-checked and capped before anything else uses it. Absent means none.
+  let userInstruction: string | undefined;
+  if (customPrompt !== undefined) {
+    if (typeof customPrompt !== 'string') {
+      return NextResponse.json({ error: 'Instruktionen skal være tekst' }, { status: 400 });
+    }
+    const trimmed = customPrompt.trim();
+    if (trimmed.length > MAX_CUSTOM_PROMPT_CHARS) {
+      return NextResponse.json(
+        { error: `Instruktionen er for lang (højst ${MAX_CUSTOM_PROMPT_CHARS} tegn)` },
+        { status: 400 },
+      );
+    }
+    userInstruction = trimmed || undefined;
   }
 
   const userId = session.user.id;
@@ -104,7 +124,7 @@ async function postHandler(req: NextRequest) {
     includeDagsorden: pick(includeDagsorden, base?.includeDagsorden),
     includeDato: pick(includeDato, base?.includeDato),
   };
-  const effectiveCustomPrompt = central && !central.allowUserInstruction ? undefined : customPrompt;
+  const effectiveCustomPrompt = central && !central.allowUserInstruction ? undefined : userInstruction;
 
   const templateId = central?.id ?? skabelon?.id ?? null;
   const templateRef: TemplateRef = central

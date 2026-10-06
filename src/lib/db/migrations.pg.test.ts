@@ -14,8 +14,9 @@ async function sqlState(p: Promise<unknown>): Promise<string | undefined> {
 }
 
 const UNIQUE_VIOLATION = '23505';
-// ON DELETE RESTRICT raises restrict_violation (23001), not foreign_key_violation (23503).
-const RESTRICT_VIOLATION = '23001';
+// Which SQLSTATE a RESTRICT FK raises depends on when the check fires (PostgreSQL 16
+// raises foreign_key_violation 23503); accept both so the test asserts the behaviour.
+const RESTRICT_VIOLATIONS = ['23001', '23503'];
 const CHECK_VIOLATION = '23514';
 
 async function insertUser(c: Client, name: string): Promise<string> {
@@ -154,7 +155,7 @@ describe.skipIf(!hasPg)('central access migration (real Postgres)', () => {
     withFreshSchema(async (c) => {
       const parent = await insertOrgUnit(c, 'Forælder');
       const child = await insertOrgUnit(c, 'Barn', parent);
-      expect(await sqlState(c.query(`DELETE FROM org_units WHERE uuid = $1`, [parent]))).toBe(RESTRICT_VIOLATION);
+      expect(RESTRICT_VIOLATIONS).toContain(await sqlState(c.query(`DELETE FROM org_units WHERE uuid = $1`, [parent])));
       await c.query(`DELETE FROM org_units WHERE uuid = $1`, [child]);
       expect(await sqlState(c.query(`DELETE FROM org_units WHERE uuid = $1`, [parent]))).toBeUndefined();
     }));

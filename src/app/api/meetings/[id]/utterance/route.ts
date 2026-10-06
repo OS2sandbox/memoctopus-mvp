@@ -59,15 +59,14 @@ async function postHandler(req: NextRequest, { params }: Params) {
 
   const audioBytes = buffer.length;
   const userId = session.user.id;
-  // The id in the URL is never verified against a meeting, so only a UUID is audited;
-  // it is lower-cased for the key so case variants cannot dodge the coalescing.
+  // The id in the URL is never verified against a meeting, so only a UUID becomes the audit
+  // entity; any other id is still audited, without an entity and keyed on the actor alone.
   const entityId = asEntityUuid(id);
   // One request every few seconds per meeting would flood the log, so at most one
   // event per actor+meeting+outcome per hour is written (best-effort, per process);
   // it marks that live transcription happened, it is not a count of utterances.
   const audit = async (outcome: 'success' | 'error', t0: number, outcomeCode?: string) => {
-    if (!entityId) return;
-    if (!liveTranscriptionCoalescer.shouldEmit(liveTranscriptionKey(userId, entityId.toLowerCase(), outcome))) return;
+    if (!liveTranscriptionCoalescer.shouldEmit(liveTranscriptionKey(userId, entityId, outcome))) return;
     await emitAudit(req, {
       type: 'transcription.request',
       actorUserId: userId,

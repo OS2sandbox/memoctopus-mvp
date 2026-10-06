@@ -1,34 +1,27 @@
 import { z } from 'zod';
 import { CENTRAL_LIMITS } from './central-types';
+import { CHANGE_NOTE_MESSAGE, meaningfulLength, stripInvisible } from './change-note';
 
 // Request bodies for the manager-side central template routes. Every object is
 // strict: unknown keys are rejected, never silently ignored. Messages are
 // Danish; the routes only echo issue paths and codes (access-http.ts), the
 // service layer raises the same messages as ValidationError.
 
-export const CHANGE_NOTE_MESSAGE = 'Beskriv ændringen (mindst 10 tegn)';
+export { CHANGE_NOTE_MESSAGE };
 export const NUL_MESSAGE = 'Teksten må ikke indeholde nul-tegn';
 // Postgres text and jsonb cannot hold U+0000; left to the database it surfaces as a 500.
 const noNul = (v: string) => !v.includes('\u0000');
 
+// A lone surrogate (an unpaired half of a UTF-16 pair) cannot be encoded as UTF-8 JSON and
+// Postgres jsonb rejects it (SQLSTATE 22P02). In u-mode a valid pair is one astral code point,
+// so \p{Cs} only matches a lone half.
+export const MALFORMED_MESSAGE = 'Teksten indeholder ugyldige tegn (ufuldstændigt Unicode-tegn)';
+const wellFormed = (v: string) => !/\p{Cs}/u.test(v);
+
+// Everything stored is NFC, so the same visible text always compares and counts the same.
+const nfc = (v: string) => v.normalize('NFC');
+
 const CHANGE_NOTE_TOO_LONG_MESSAGE = `Ændringsbeskrivelsen er for lang (højst ${CENTRAL_LIMITS.changeNoteMax} tegn)`;
-
-// Invisible characters would let a note of "nothing" satisfy the length rule: every
-// Default_Ignorable code point (zero-width characters, soft hyphen, combining grapheme
-// joiner, variation selectors, tag characters, Hangul fillers, ...), control and format
-// characters, and the blank "letters" that render as empty (Hangul fillers, braille
-// blank). Newlines, carriage returns and tabs are kept: the note is typed in a textarea.
-const INVISIBLE =
-  /(?![\n\r\t])[\p{Default_Ignorable_Code_Point}\p{Cc}\p{Cf}\u115f\u1160\u2800\u3164\uffa0]/gu;
-const stripInvisible = (v: string): string => v.replace(INVISIBLE, '').trim();
-
-// Whitespace (spaces, NBSP, em space, line breaks) is kept in the stored text but never
-// counts towards the minimum: "a" + nine spaces + "b" is not a ten character note.
-const meaningfulLength = (v: string): number => {
-  let n = 0;
-  for (const ch of v) if (!/\p{White_Space}/u.test(ch)) n++;
-  return n;
-};
 
 // NUL is checked on the raw value (stripping it silently would hide it). The raw cap
 // bounds the work of the strip. After stripping and trimming, only non-whitespace code
@@ -41,7 +34,8 @@ export const changeNoteSchema = z
   .string({ required_error: CHANGE_NOTE_MESSAGE, invalid_type_error: CHANGE_NOTE_MESSAGE })
   .max(CENTRAL_LIMITS.changeNoteMax * 4, CHANGE_NOTE_TOO_LONG_MESSAGE)
   .refine(noNul, NUL_MESSAGE)
-  .transform(stripInvisible)
+  .refine(wellFormed, MALFORMED_MESSAGE)
+  .transform((v) => nfc(stripInvisible(v)))
   .pipe(
     z
       .string()
@@ -76,12 +70,14 @@ export const centralTargetsSchema = z
   .max(CENTRAL_LIMITS.targets, `Højst ${CENTRAL_LIMITS.targets} modtagere`)
   .transform((targets) => dedupeTargets(targets));
 
-// NUL is checked on the raw value, then invisible characters are stripped so a name of
-// only invisible characters is empty.
+// NUL and lone surrogates are checked on the raw value, then invisible characters are
+// stripped (so a name of only invisible characters is empty) and the text is made NFC.
 const nameSchema = z
   .string()
+  .max(CENTRAL_LIMITS.name * 4, `Navnet er for langt (højst ${CENTRAL_LIMITS.name} tegn)`)
   .refine(noNul, NUL_MESSAGE)
-  .transform(stripInvisible)
+  .refine(wellFormed, MALFORMED_MESSAGE)
+  .transform((v) => nfc(stripInvisible(v)))
   .pipe(
     z
       .string()
@@ -91,13 +87,27 @@ const nameSchema = z
 const descriptionSchema = z
   .string()
   .max(CENTRAL_LIMITS.description, `Beskrivelsen er for lang (højst ${CENTRAL_LIMITS.description} tegn)`)
-  .refine(noNul, NUL_MESSAGE);
+  .refine(noNul, NUL_MESSAGE)
+  .refine(wellFormed, MALFORMED_MESSAGE)
+  .transform(nfc)
+  .pipe(
+    z
+      .string()
+      .max(CENTRAL_LIMITS.description, `Beskrivelsen er for lang (højst ${CENTRAL_LIMITS.description} tegn)`),
+  );
+// The prompt is trimmed and made NFC; the limit applies to the stored (NFC) text.
 const promptSchema = z
   .string()
-  .trim()
-  .min(1, 'Prompten er påkrævet')
-  .max(CENTRAL_LIMITS.prompt, `Prompten er for lang (højst ${CENTRAL_LIMITS.prompt} tegn)`)
-  .refine(noNul, NUL_MESSAGE);
+  .max(CENTRAL_LIMITS.prompt * 4, `Prompten er for lang (højst ${CENTRAL_LIMITS.prompt} tegn)`)
+  .refine(noNul, NUL_MESSAGE)
+  .refine(wellFormed, MALFORMED_MESSAGE)
+  .transform((v) => nfc(v).trim())
+  .pipe(
+    z
+      .string()
+      .min(1, 'Prompten er påkrævet')
+      .max(CENTRAL_LIMITS.prompt, `Prompten er for lang (højst ${CENTRAL_LIMITS.prompt} tegn)`),
+  );
 
 const contentShape = {
   name: nameSchema,

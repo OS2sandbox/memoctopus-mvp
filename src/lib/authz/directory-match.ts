@@ -3,7 +3,7 @@
 // (directory_users.app_user_id) and must never be inferred from claims: an
 // attacker could password-sign-up with a pre-assigned address.
 import { recordEvent } from '@/lib/audit/record';
-import { directoryUserIdTransform, transformUserId } from '@/lib/rollekatalog/config';
+import { directoryConfigIssue, transformUserId } from '@/lib/rollekatalog/config';
 import {
   accessSource,
   directoryMatchMode,
@@ -48,7 +48,9 @@ function lookupFor(identity: ExternalIdentity, mode: DirectoryMatchMode): Lookup
 
   if (mode === 'userid-claim') {
     // e.g. a UPN claim "abc123@kommune.dk" against Rollekatalog's plain userId "abc123".
+    // The transform yields null (no match) for a foreign domain, a guest or a missing domain setting.
     const raw = clean(claims[directoryUserIdClaim()]);
+    if (raw && directoryConfigIssue()) warnUserIdDomainMissingOnce();
     const value = raw ? clean(transformUserId(raw)) : null;
     return value ? { sql: `${base}lower(ext_user_id) = lower($1) LIMIT 2 FOR UPDATE`, param: value } : null;
   }
@@ -170,6 +172,15 @@ function warnTenantNotPinnedOnce() {
   tenantWarned = true;
   console.warn(
     '[authz] directory link refused (code microsoft_tenant_not_pinned): set MICROSOFT_TENANT_ID to your single tenant id',
+  );
+}
+
+let userIdDomainWarned = false;
+function warnUserIdDomainMissingOnce() {
+  if (userIdDomainWarned) return;
+  userIdDomainWarned = true;
+  console.warn(
+    '[authz] directory link not possible (code userid_domain_missing): DIRECTORY_USERID_TRANSFORM=strip-upn-domain needs DIRECTORY_USERID_DOMAIN',
   );
 }
 

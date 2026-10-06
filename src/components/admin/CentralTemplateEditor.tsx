@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -52,12 +52,68 @@ interface Props {
 }
 
 export function CentralTemplateEditor({ open, onOpenChange, template, units, onSaved }: Props) {
+  // The form reports whether it holds unsaved text and whether a save is in flight. While either
+  // is true the dialog cannot be dismissed by Escape or an outside click, and a dirty form asks
+  // before it is closed by any other route (Annuller): a long prompt and note are not thrown away
+  // silently, and a request in flight is not orphaned.
+  const [guard, setGuard] = useState({ dirty: false, saving: false });
+  const [confirming, setConfirming] = useState(false);
+
+  function requestClose() {
+    if (guard.saving) return;
+    if (guard.dirty) setConfirming(true);
+    else onOpenChange(false);
+  }
+
+  function blockDismiss(ev: Event) {
+    if (!guard.dirty && !guard.saving) return; // nothing to lose: let Radix close it
+    ev.preventDefault();
+    requestClose();
+  }
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto">
-        <EditorForm template={template} units={units} onClose={() => onOpenChange(false)} onSaved={onSaved} />
-      </DialogContent>
-    </Dialog>
+    <>
+      <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : requestClose())}>
+        <DialogContent
+          className="max-h-[92vh] max-w-2xl overflow-y-auto"
+          onEscapeKeyDown={blockDismiss}
+          onInteractOutside={blockDismiss}
+        >
+          <EditorForm
+            template={template}
+            units={units}
+            onClose={() => onOpenChange(false)}
+            onRequestClose={requestClose}
+            onGuardChange={(dirty, saving) => setGuard((g) => (g.dirty === dirty && g.saving === saving ? g : { dirty, saving }))}
+            onSaved={onSaved}
+          />
+        </DialogContent>
+      </Dialog>
+      <Dialog open={open && confirming} onOpenChange={setConfirming}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Kassér ændringer?</DialogTitle>
+            <DialogDescription>
+              Du har ikke gemt dine ændringer. Hvis du lukker nu, mister du den tekst, du har skrevet.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button type="button" variant="outline" onClick={() => setConfirming(false)}>
+              Fortsæt redigering
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setConfirming(false);
+                onOpenChange(false);
+              }}
+            >
+              Kassér og luk
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -99,11 +155,17 @@ function EditorForm({
   template,
   units,
   onClose,
+  onRequestClose,
+  onGuardChange,
   onSaved,
 }: {
   template: CentralTemplateAdmin | null;
   units: CentralScopeOrgUnit[];
+  /** Closes at once (after a successful save). */
   onClose: () => void;
+  /** Closes on the user's request: asks first when there is unsaved text. */
+  onRequestClose: () => void;
+  onGuardChange: (dirty: boolean, saving: boolean) => void;
   onSaved: () => void;
 }) {
   const { toast } = useToast();
@@ -136,6 +198,15 @@ function EditorForm({
   const changedFields = base ? changedContentFields(contentOf(base), content) : [];
   const targetsChanged = base ? !targetsEqual(base.targets, targets) : false;
   const archivedNow = latest?.status === 'archived';
+
+  // Unsaved text: anything typed into a new template, any difference from the loaded version of
+  // an existing one, or a started change note.
+  const dirty =
+    note.trim() !== '' ||
+    (editing
+      ? changedFields.length > 0 || targetsChanged
+      : owner !== '' || targets.length > 0 || changedContentFields(EMPTY, content).length > 0);
+  useEffect(() => onGuardChange(dirty, saving), [dirty, saving, onGuardChange]);
 
   // First blocking reason, shown next to the disabled save button.
   const reason = ((): string | null => {
@@ -380,7 +451,7 @@ function EditorForm({
             {reason}
           </p>
         )}
-        <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
+        <Button type="button" variant="outline" onClick={onRequestClose} disabled={saving}>
           Annuller
         </Button>
         <Button

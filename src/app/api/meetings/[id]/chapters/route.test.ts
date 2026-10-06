@@ -150,7 +150,7 @@ describe('audit: chapters.request', () => {
 
     expect(res.status).toBe(200);
     expect((await res.json()).chapters).toEqual([]);
-    expect(events()[0]).toMatchObject({ outcome: 'error', details: { outcomeCode: 'ETIMEDOUT' } });
+    expect(events()[0]).toMatchObject({ outcome: 'error', details: { outcomeCode: 'timeout' } });
     expectValidMetadataOnly(events()[0], ['Punkt et']);
     expect(JSON.stringify(spy.mock.calls)).not.toContain('Punkt et');
     spy.mockRestore();

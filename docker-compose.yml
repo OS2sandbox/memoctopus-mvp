@@ -62,6 +62,10 @@ services:
       # not here on purpose — it is runtime-only, see `environment` below.
       args:
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:8080}
+    # Published on ALL host interfaces. Behind a reverse proxy, bind it to loopback
+    # ("127.0.0.1:${APP_PORT:-8080}:3000" via an override) or firewall it: the app
+    # trusts the first X-Forwarded-For entry (audit IP, login throttle), so anyone
+    # who can reach this port directly can forge it. See DEPLOY.md.
     ports:
       - "${APP_PORT:-8080}:3000"
     # Lets the container reach services on the Docker host (e.g. an SSH tunnel to a

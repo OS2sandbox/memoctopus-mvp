@@ -15,6 +15,6 @@ const querySchema = z
 export const GET = withAuthz('admin/access/users GET', 'access.manage', async (req) => {
   const parsed = parseWith(querySchema, Object.fromEntries(req.nextUrl.searchParams));
   if (!parsed.ok) return parsed.response;
-  const users = await listAppUsersWithRoles(parsed.data);
-  return NextResponse.json({ users });
+  const { users, truncated } = await listAppUsersWithRoles(parsed.data);
+  return NextResponse.json({ users, truncated });
 });

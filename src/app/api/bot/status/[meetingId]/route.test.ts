@@ -33,6 +33,7 @@ vi.stubGlobal('fetch', mockFetch);
 
 const BOT_CONFIG = { url: 'http://bot:3001', authHeader: 'Bearer test-secret' };
 const params = Promise.resolve({ meetingId: 'm1' });
+const SID = '3f2b8c1e-6a4d-4e2f-9b1a-0c5d7e8f9a10';
 
 function req(query = ''): NextRequest {
   return new NextRequest(`http://localhost/api/bot/status/m1${query}`);
@@ -48,9 +49,19 @@ beforeEach(() => {
 describe('GET /api/bot/status/[meetingId]', () => {
   it('returns 401 when not authenticated', async () => {
     mockGetSession.mockResolvedValueOnce(null as never);
-    const res = await GET(req('?sessionId=s1'), { params });
+    const res = await GET(req(`?sessionId=${SID}`), { params });
     expect(res.status).toBe(401);
   });
+
+  it.each(['s1', '..%2Fadmin', '3f2b8c1e-6a4d-4e2f-9b1a-0c5d7e8f9a10%2F..%2Fx'])(
+    'returns 400 and never calls the bot for a non-UUID sessionId (%s)',
+    async (bad) => {
+      mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+      const res = await GET(req(`?sessionId=${bad}`), { params });
+      expect(res.status).toBe(400);
+      expect(mockFetch).not.toHaveBeenCalled();
+    },
+  );
 
   it('returns connecting state when no sessionId is provided', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
@@ -66,7 +77,7 @@ describe('GET /api/bot/status/[meetingId]', () => {
       JSON.stringify({ status: 'recording', elapsed: 42, participants: ['Anna', '__audio_detected__'] }),
       { status: 200 },
     ));
-    const res = await GET(req('?sessionId=s1'), { params });
+    const res = await GET(req(`?sessionId=${SID}`), { params });
     const data = await res.json();
     expect(data.status).toBe('optager');
     expect(data.botStatus).toBe('recording');
@@ -77,7 +88,7 @@ describe('GET /api/bot/status/[meetingId]', () => {
   it('maps bot ended status to processing', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ status: 'ended' }), { status: 200 }));
-    const res = await GET(req('?sessionId=s1'), { params });
+    const res = await GET(req(`?sessionId=${SID}`), { params });
     const data = await res.json();
     expect(data.status).toBe('processing');
     expect(data.botStatus).toBe('ended');
@@ -88,7 +99,7 @@ describe('GET /api/bot/status/[meetingId]', () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
     const connErr = new Error('ECONNREFUSED');
     mockFetch.mockRejectedValueOnce(connErr);
-    const res = await GET(req('?sessionId=s1'), { params });
+    const res = await GET(req(`?sessionId=${SID}`), { params });
     const data = await res.json();
     expect(res.status).toBe(200);
     expect(data.status).toBe('forbinder');

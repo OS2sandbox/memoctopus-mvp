@@ -26,6 +26,21 @@ describe('AccessUnavailable', () => {
     expect(screen.getByText(/Prøv igen om lidt/)).toBeInTheDocument();
   });
 
+  it('does not repeat the heading as the body, and points to the administrator', () => {
+    render(<AccessUnavailable />);
+    const heading = screen.getByRole('heading').textContent;
+    const body = screen.getByText(/Prøv igen om lidt/).textContent;
+    expect(body).not.toContain(heading);
+    expect(body).toMatch(/kontakt din administrator/);
+  });
+
+  it('is its own <main> standalone, and a plain block inside the app shell (embedded)', () => {
+    const { container, rerender } = render(<AccessUnavailable />);
+    expect(container.querySelector('main')).not.toBeNull();
+    rerender(<AccessUnavailable embedded />);
+    expect(container.querySelector('main')).toBeNull();
+  });
+
   it('reloads the page on "Prøv igen"', async () => {
     render(<AccessUnavailable />);
     await userEvent.click(screen.getByRole('button', { name: 'Prøv igen' }));

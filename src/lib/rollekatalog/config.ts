@@ -15,6 +15,11 @@ const DEFAULT_ITSYSTEM_ID = 'os2taletiltekst';
  * be tens of MB and is synchronized on the Rollekatalog side), so the default is 2 minutes.
  */
 const DEFAULT_TIMEOUT_MS = 120_000;
+/**
+ * Upper bound. undici's default headersTimeout is 300 s: a longer ROLLEKATALOG_TIMEOUT_MS
+ * could never be reached, the wait would end in a (retried) `network` error instead.
+ */
+const MAX_TIMEOUT_MS = 300_000;
 const DEFAULT_SYNC_MAX_REMOVAL_PERCENT = 30;
 const DEFAULT_ROLE_STALE_MAX_SECONDS = 86_400;
 /**
@@ -105,7 +110,7 @@ export function rollekatalogDomain(): string | null {
 }
 
 export function timeoutMs(): number {
-  return intInRange('ROLLEKATALOG_TIMEOUT_MS', DEFAULT_TIMEOUT_MS, 1000, 600_000);
+  return intInRange('ROLLEKATALOG_TIMEOUT_MS', DEFAULT_TIMEOUT_MS, 1000, MAX_TIMEOUT_MS);
 }
 
 export function maxResponseBytes(): number {
@@ -146,9 +151,40 @@ export function directoryUserIdTransform(): UserIdTransform {
   return clean('DIRECTORY_USERID_TRANSFORM').toLowerCase() === 'strip-upn-domain' ? 'strip-upn-domain' : 'none';
 }
 
-/** Applies DIRECTORY_USERID_TRANSFORM to a login identifier (e.g. a UPN) before it is matched against ext_user_id. */
-export function transformUserId(value: string): string {
+/**
+ * DIRECTORY_USERID_DOMAIN: the one UPN domain whose users may be matched when the
+ * transform is strip-upn-domain. Lower-cased; a leading "@" is tolerated. A value
+ * that is blank, contains whitespace or another "@" counts as not set.
+ */
+export function directoryUserIdDomain(): string {
+  const v = clean('DIRECTORY_USERID_DOMAIN').toLowerCase().replace(/^@/, '');
+  return v && !/[\s@]/.test(v) ? v : '';
+}
+
+/**
+ * strip-upn-domain without a usable DIRECTORY_USERID_DOMAIN can never match, so the
+ * mismatch must be visible. Not part of rollekatalogConfigIssue(): that one stops the
+ * sync, and this setting only concerns login matching.
+ */
+export function directoryConfigIssue(): 'userid_domain_missing' | null {
+  return directoryUserIdTransform() === 'strip-upn-domain' && directoryUserIdDomain() === '' ? 'userid_domain_missing' : null;
+}
+
+/**
+ * Applies DIRECTORY_USERID_TRANSFORM to a login identifier (e.g. a UPN) before it is
+ * matched against ext_user_id. With strip-upn-domain the claim must be exactly
+ * `<name>@<DIRECTORY_USERID_DOMAIN>` (domain compared case-insensitively, one "@", no
+ * guest "#EXT#" marker); anything else, and any claim while the domain is not
+ * configured, returns null = no match. Stripping unchecked would let a guest or a
+ * self-edited "abc123@evil.example" take over the identity "abc123".
+ */
+export function transformUserId(value: string): string | null {
   if (directoryUserIdTransform() !== 'strip-upn-domain') return value;
-  const at = value.indexOf('@');
-  return at > 0 ? value.slice(0, at) : value;
+  const domain = directoryUserIdDomain();
+  if (!domain) return null;
+  const v = value.trim();
+  if (v.toUpperCase().includes('#EXT#')) return null;
+  const parts = v.split('@');
+  if (parts.length !== 2 || parts[0] === '' || parts[1].toLowerCase() !== domain) return null;
+  return parts[0];
 }

@@ -42,6 +42,16 @@ describe('middleware', () => {
       expect(res.headers.get('location')).toBe('http://localhost/dashboard');
     });
 
+    it('serves / (and drops the dead cookie) when the app layout sent a stale cookie back with ?expired', () => {
+      // Without this, / -> /dashboard -> / loops forever for a cookie whose session row is gone.
+      const res = middleware(makeReq('/?expired=1', { [SESSION_COOKIE]: TOKEN, [SECURE_SESSION_COOKIE]: TOKEN }));
+      expect(res.status).toBe(200);
+      expect(res.headers.get('location')).toBeNull();
+      const cleared = res.headers.getSetCookie().join('\n');
+      expect(cleared).toContain(`${SESSION_COOKIE}=;`);
+      expect(cleared).toContain(`${SECURE_SESSION_COOKIE}=;`);
+    });
+
     it('redirects to /dashboard when the secure cookie variant is set', () => {
       const res = middleware(makeReq('/', { [SECURE_SESSION_COOKIE]: TOKEN }));
       expect(res.status).toBe(307);

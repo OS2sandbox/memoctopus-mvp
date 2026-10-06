@@ -15,10 +15,15 @@ export const activeSql = (alias: string) =>
 
 /**
  * Expects `public.role_assignments ra JOIN public.directory_users du`. Only
- * local, global, active assignments of an enabled, login-capable person count:
- * a scoped or synced admin row does not give access.manage here.
+ * local, global, started and PERMANENT (stop_date IS NULL) assignments of an
+ * enabled, login-capable person count: a scoped or synced admin row does not
+ * give access.manage here, and a grant that is about to expire does not make
+ * another administrator expendable (otherwise the only admin could grant a
+ * colleague an admin role ending tomorrow, revoke themselves and lock the
+ * system out when it lapses).
  */
 export const USABLE_LOCAL_ADMIN_SQL = `ra.role_key = '${ADMIN_ROLE}' AND ra.source = 'local'
   AND ra.scope_org_unit_uuid IS NULL
-  AND ${activeSql('ra')}
+  AND (ra.start_date IS NULL OR ra.start_date <= now())
+  AND ra.stop_date IS NULL
   AND du.disabled = false AND du.app_user_id IS NOT NULL`;

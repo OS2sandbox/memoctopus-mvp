@@ -112,7 +112,13 @@ export const directoryUsers = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [check('directory_users_source_check', sourceIn('source'))],
+  (t) => [
+    // directory-match.ts compares lower(ext_user_id) and lower(email) (FOR UPDATE) on every
+    // SSO login; plain columns would be seq-scanned and row-locked on a large mirror.
+    index('directory_users_ext_user_id_lower_idx').on(sql`lower(${t.extUserId})`),
+    index('directory_users_email_lower_idx').on(sql`lower(${t.email})`),
+    check('directory_users_source_check', sourceIn('source')),
+  ],
 );
 
 export const orgUnits = pgTable(
@@ -298,13 +304,15 @@ export const auditEvents = pgTable(
 
 // Postgres ARE bracket expression, as a SQL string literal (standard_conforming_strings is on),
 // of the characters that do not count towards the name / change-note minimum: whitespace and
-// invisible characters. Hand-kept mirror of the app rule in skabeloner/central-schemas.ts
-// (\p{Default_Ignorable_Code_Point}, Cc/Cf, Unicode White_Space, the blank letters U+115F, U+1160,
-// U+2800, U+3164, U+FFA0). Explicit \u / \U escapes keep it independent of the database locale.
-// The app stays the primary gate. The same literal is written out in
-// drizzle/0003_central_templates.sql; keep the two in sync.
-const MEANINGLESS_CHARS_CLASS =
-  String.raw`'[[:space:]\u0085\u00A0\u00AD\u034F\u115F\u1160\u1680\u17B4\u17B5\u180B-\u180F\u2000-\u200F\u2028-\u202F\u205F-\u206F\u2800\u3000\u3164\uFE00-\uFE0F\uFEFF\uFFA0\U000E0000-\U000E0FFF]'`;
+// invisible characters. It is the union of the app rule in skabeloner/change-note.ts
+// (\p{Default_Ignorable_Code_Point}, Cc, Cf, the blank letters U+115F, U+1160, U+2800, U+3164,
+// U+FFA0) and Unicode White_Space. Explicit \u / \U escapes and no POSIX class keep it independent
+// of the database locale. GENERATED from those two JS regexes (see change-note.test.ts, which
+// recomputes it and fails on any drift; regenerate after a Unicode data change). The app stays the
+// first gate. The same literal is written out in drizzle/0003_central_templates.sql and its
+// snapshot; keep them in sync. Exported for that test.
+export const MEANINGLESS_CHARS_CLASS =
+  String.raw`'[\u0001-\u0020\u007F-\u00A0\u00AD\u034F\u0600-\u0605\u061C\u06DD\u070F\u0890\u0891\u08E2\u115F\u1160\u1680\u17B4\u17B5\u180B-\u180F\u2000-\u200F\u2028-\u202F\u205F-\u206F\u2800\u3000\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0000-\U000E0FFF]'`;
 
 export const centralTemplates = pgTable(
   'central_templates',

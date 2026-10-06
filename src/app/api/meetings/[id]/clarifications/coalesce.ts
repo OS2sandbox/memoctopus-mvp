@@ -6,5 +6,6 @@ import { createCoalescer } from '@/lib/audit/coalesce';
 // not hide a later failure.
 export const clarificationCoalescer = createCoalescer({ windowMs: 60 * 60 * 1000, maxEntries: 10_000 });
 
-export const clarificationKey = (actorUserId: string, meetingId: string, outcome: 'success' | 'error'): string =>
-  `${actorUserId}\u0000${meetingId.slice(0, 64)}\u0000${outcome}`;
+/** The meeting id is lower-cased; without a (valid) one the key is the actor alone, so garbage ids cannot mint fresh keys. */
+export const clarificationKey = (actorUserId: string, meetingId: string | undefined, outcome: 'success' | 'error'): string =>
+  `${actorUserId}\u0000${(meetingId ?? '').toLowerCase().slice(0, 64)}\u0000${outcome}`;

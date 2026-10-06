@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -35,13 +35,19 @@ export function CentralTemplatesAdmin() {
   const [stateChange, setStateChange] = useState<{ template: CentralTemplateListItem; mode: StateChange } | null>(null);
   const [history, setHistory] = useState<CentralTemplateListItem | null>(null);
 
+  // Only the newest request may write state, so switching the filter quickly cannot
+  // leave the list of the previous filter on screen.
+  const requestSeq = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++requestSeq.current;
     setLoading(true);
     setLoadError(null);
     const [list, scope] = await Promise.all([
       apiRequest<{ templates: CentralTemplateListItem[] }>(`/api/admin/central-templates?status=${filter}`),
       apiRequest<{ orgUnits: CentralScopeOrgUnit[] }>('/api/admin/central-templates/scope'),
     ]);
+    if (seq !== requestSeq.current) return;
     if (list.ok) setTemplates(list.data.templates);
     else setLoadError(list.message);
     if (scope.ok) setUnits(scope.data.orgUnits);
@@ -93,9 +99,10 @@ export function CentralTemplatesAdmin() {
       </div>
 
       {loading || meLoading ? (
-        <p className="text-sm text-[var(--muted)]">Indlæser …</p>
+        <p role="status" className="text-sm text-[var(--muted)]">Indlæser …</p>
       ) : (
         <Table>
+          <caption className="sr-only">Centrale skabeloner</caption>
           <TableHeader>
             <TableRow>
               <TableHead>Skabelon</TableHead>

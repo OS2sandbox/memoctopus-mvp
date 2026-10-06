@@ -82,10 +82,10 @@ export function notFoundOrForbidden(
 }
 
 /**
- * Route-handler wrapper: session (401) -> live principal -> disabled (403) ->
- * capability (403) -> handler. Composed with withHandler so anything thrown,
+ * Route-handler wrapper: session (401) -> live principal -> refused (disabled, or no role
+ * under REQUIRE_ROLE_TO_LOGIN; 403) -> capability (403) -> handler. Composed with withHandler so anything thrown,
  * including from resolvePrincipal, becomes the standard JSON 500.
- * A null capability means "any signed-in, non-disabled user".
+ * A null capability means "any signed-in user who may use the app at all".
  *
  *   export const GET = withAuthz('admin/users/GET', 'directory.read', async (req, { principal, params }) => ...);
  */
@@ -100,8 +100,12 @@ export function withAuthz<P = Record<string, never>>(
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const principal = await resolvePrincipal(session.user.id);
-    if (principal.disabled) {
-      recordAuthzDenied({ actorUserId: principal.userId, required: capability ?? 'login', reason: 'disabled' });
+    // The same refusal as requireAppAccess and the (app) layout: a disabled person, or with
+    // REQUIRE_ROLE_TO_LOGIN=true a person without a role, gets nothing, not even from the
+    // routes that only need "a signed-in user" (a null capability).
+    const refusal = loginRefusal(principal);
+    if (refusal) {
+      recordAuthzDenied({ actorUserId: principal.userId, required: capability ?? 'login', reason: refusal });
       return FORBIDDEN();
     }
     if (capability) {

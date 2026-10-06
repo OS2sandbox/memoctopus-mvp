@@ -41,11 +41,13 @@ describe('readPendingMeta', () => {
 
     expect(result).toBeNull();
     expect(console.error).toHaveBeenCalledOnce();
-    const [label, id, err] = (console.error as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(label).toContain('[bot-pending-audio]');
-    expect(label).toContain('readPendingMeta');
-    expect(id).toBe('meeting-456');
-    expect(err).toBe(eacces);
+    const [line] = (console.error as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(console.error).toHaveBeenCalledWith(expect.any(String));
+    expect(line).toContain('[bot-pending-audio readPendingMeta failed]');
+    expect(line).toContain('code=EACCES');
+    // Name/status/code only: never the message (paths) or the meeting id.
+    expect(line).not.toContain('permission denied');
+    expect(line).not.toContain('meeting-456');
   });
 
   it('returns null AND logs console.error when the file contains invalid JSON (SyntaxError)', async () => {
@@ -55,10 +57,10 @@ describe('readPendingMeta', () => {
 
     expect(result).toBeNull();
     expect(console.error).toHaveBeenCalledOnce();
-    const [label, id, err] = (console.error as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(label).toContain('[bot-pending-audio]');
-    expect(id).toBe('meeting-789');
-    expect(err).toBeInstanceOf(SyntaxError);
+    const [line] = (console.error as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(line).toContain('[bot-pending-audio readPendingMeta failed]');
+    expect(line).toContain('name=SyntaxError');
+    expect(line).not.toContain('meeting-789');
   });
 
   it('returns the parsed meta when the file is valid', async () => {
@@ -111,11 +113,10 @@ describe('readPendingTranscript', () => {
 
     expect(result).toBeNull();
     expect(console.error).toHaveBeenCalledOnce();
-    const [label, id, err] = (console.error as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(label).toContain('[bot-pending-audio]');
-    expect(label).toContain('readPendingTranscript');
-    expect(id).toBe('meeting-456');
-    expect(err).toBe(eacces);
+    const [line] = (console.error as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(line).toContain('[bot-pending-audio readPendingTranscript failed]');
+    expect(line).toContain('code=EACCES');
+    expect(line).not.toContain('meeting-456');
   });
 
   it('returns null AND logs for invalid JSON', async () => {

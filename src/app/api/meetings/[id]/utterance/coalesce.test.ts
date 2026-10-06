@@ -71,6 +71,12 @@ describe('liveTranscriptionKey', () => {
     expect(liveTranscriptionKey('u', 'm1', 'success')).not.toBe(liveTranscriptionKey('u', 'm1', 'error'));
   });
 
+  it('lower-cases the meeting id and keys a missing id on the actor alone', () => {
+    expect(liveTranscriptionKey('u', 'ABC', 'success')).toBe(liveTranscriptionKey('u', 'abc', 'success'));
+    expect(liveTranscriptionKey('u', undefined, 'success')).not.toBe(liveTranscriptionKey('u', 'm1', 'success'));
+    expect(liveTranscriptionKey('u', undefined, 'success')).not.toBe(liveTranscriptionKey('v', undefined, 'success'));
+  });
+
   it('bounds the key length for an attacker-sized meeting id', () => {
     expect(liveTranscriptionKey('u', 'x'.repeat(10_000), 'success').length).toBeLessThan(100);
   });

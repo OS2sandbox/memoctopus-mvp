@@ -54,6 +54,21 @@ function formReq(form: FormData, auth = `Bearer ${SECRET}`): NextRequest {
 }
 
 describe('POST /api/bot/audio-upload', () => {
+  it('returns 401 for a missing, empty, prefix-only or longer Authorization header, and when the secret is unset', async () => {
+    for (const auth of ['', 'Bearer ', `Bearer ${SECRET}x`, `bearer ${SECRET}`, SECRET]) {
+      expect((await POST(jsonReq({ meetingId: 'm1', hasRecording: false }, auth))).status).toBe(401);
+    }
+    const noHeader = new NextRequest('http://localhost/api/bot/audio-upload', {
+      method: 'POST',
+      body: JSON.stringify({ meetingId: 'm1', hasRecording: false }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect((await POST(noHeader)).status).toBe(401);
+    delete process.env.BOT_INTERNAL_SECRET;
+    expect((await POST(jsonReq({ meetingId: 'm1', hasRecording: false }, 'Bearer undefined'))).status).toBe(401);
+    expect(mockMarkNoRecording).not.toHaveBeenCalled();
+  });
+
   it('returns 401 with a bad secret', async () => {
     const res = await POST(jsonReq({ meetingId: 'm1', hasRecording: false }, 'Bearer wrong'));
     expect(res.status).toBe(401);

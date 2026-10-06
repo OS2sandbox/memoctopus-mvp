@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -59,6 +59,9 @@ export function UsersAdmin() {
   const [orgUnitsError, setOrgUnitsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [truncated, setTruncated] = useState(false);
+  // Only the newest request may write state, so a slow old response cannot overwrite a newer search.
+  const requestSeq = useRef(0);
   const [q, setQ] = useState('');
   const [appliedQ, setAppliedQ] = useState('');
   const [grantFor, setGrantFor] = useState<AppUser | null>(null);
@@ -67,12 +70,18 @@ export function UsersAdmin() {
   const [revoking, setRevoking] = useState(false);
 
   const load = useCallback(async (query: string) => {
+    const seq = ++requestSeq.current;
     setLoading(true);
     setLoadError(null);
     const qs = query ? `?q=${encodeURIComponent(query)}` : '';
-    const res = await apiRequest<{ users: AppUser[] }>(`/api/admin/access/users${qs}`);
-    if (res.ok) setUsers(res.data.users);
-    else setLoadError(res.message);
+    const res = await apiRequest<{ users: AppUser[]; truncated?: boolean }>(`/api/admin/access/users${qs}`);
+    if (seq !== requestSeq.current) return;
+    if (res.ok) {
+      setUsers(res.data.users);
+      setTruncated(res.data.truncated === true);
+    } else {
+      setLoadError(res.message);
+    }
     setLoading(false);
   }, []);
 
@@ -134,9 +143,10 @@ export function UsersAdmin() {
       </form>
 
       {loading || meLoading ? (
-        <p className="text-sm text-[var(--muted)]">Indlæser …</p>
+        <p role="status" className="text-sm text-[var(--muted)]">Indlæser …</p>
       ) : (
         <Table>
+          <caption className="sr-only">Brugere og deres roller</caption>
           <TableHeader>
             <TableRow>
               <TableHead>Bruger</TableHead>
@@ -210,6 +220,12 @@ export function UsersAdmin() {
             )}
           </TableBody>
         </Table>
+      )}
+
+      {truncated && !loading && !meLoading && (
+        <p role="note" className="text-[13px] text-[var(--muted)]">
+          Viser de første {users.length}. Brug søgefeltet for at finde flere.
+        </p>
       )}
 
       {canWrite && (

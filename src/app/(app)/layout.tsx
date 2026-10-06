@@ -11,6 +11,7 @@ import { auth } from '@/lib/auth';
 import { loginRefusal } from '@/lib/authz/guard';
 import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 import { resolvePrincipal } from '@/lib/authz/principal';
+import { SESSION_EXPIRED_URL } from '@/lib/authz/page-gate';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   // Authoritative auth gate for EVERY route under (app). The middleware only
@@ -19,7 +20,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Validating the actual token server-side here — before any authenticated UI
   // is sent — closes that bypass and cannot be defeated from the client.
   const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) redirect('/');
+  if (!session) redirect(SESSION_EXPIRED_URL);
 
   // Disabled directory users and (with REQUIRE_ROLE_TO_LOGIN=true) users without
   // a role get no app shell. The /api routes apply the same refusal through

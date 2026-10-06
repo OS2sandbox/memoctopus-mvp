@@ -280,14 +280,16 @@ describe('revokeAssignment', () => {
     expect(lock).toBeLessThan(order.findIndex((s) => s.includes('count(*)')));
   });
 
-  it('counts only local, active, enabled, login-capable administrators', async () => {
+  it('counts only local, started, permanent (no stop_date), enabled, login-capable administrators', async () => {
     const { runner, calls } = makeFakeRunner(responder(row(), 1));
     await revokeAssignment(ASG, 'admin-1', runner);
     const count = calls.find((c) => c.sql.includes('count(*)::int'))!.sql;
     expect(count).toContain("ra.source = 'local'");
     expect(count).toContain('du.disabled = false');
     expect(count).toContain('du.app_user_id IS NOT NULL');
-    expect(count).toContain('stop_date > now()');
+    expect(count).toContain('ra.stop_date IS NULL');
+    expect(count).not.toContain('stop_date > now()');
+    expect(count).toContain('ra.start_date <= now()');
     expect(count).toContain('ra.id <> $1');
   });
 
@@ -580,12 +582,23 @@ describe('listing', () => {
       { id: 'u1', name: 'Anna', email: 'a@x.dk', directory_user_uuid: DIR, disabled: false, assignment_id: U1, role_key: 'tt-bruger', scope_org_unit_uuid: null, scope_name: null, include_descendants: true, start_date: null, stop_date: null, assignment_source: 'local', active: true },
       { id: 'u2', name: 'Bo', email: 'b@x.dk', directory_user_uuid: null, disabled: false, assignment_id: null },
     ]);
-    const users = await listAppUsersWithRoles({ q: '50%_x', limit: 99999 }, runner);
+    const { users, truncated } = await listAppUsersWithRoles({ q: '50%_x', limit: 99999 }, runner);
+    expect(truncated).toBe(false);
     expect(users.map((u) => [u.id, u.roles.length])).toEqual([['u1', 2], ['u2', 0]]);
     expect(users[0].roles[0].stopDate).toBe('2030-01-01T00:00:00.000Z');
-    expect(calls[0].params).toEqual(['%50\\%\\_x%', 500]);
+    // Asks for one row more than the (capped) limit to detect truncation.
+    expect(calls[0].params).toEqual(['%50\\%\\_x%', 501]);
     // whitelisted fields only
     expect(Object.keys(users[0]).sort()).toEqual(['directoryUserUuid', 'disabled', 'email', 'id', 'name', 'roles']);
+  });
+
+  it('listAppUsersWithRoles drops the extra user and flags truncated when more matched than the limit', async () => {
+    const row = (id: string) => ({ id, name: id, email: `${id}@x.dk`, directory_user_uuid: null, disabled: false, assignment_id: null });
+    const { runner, calls } = makeFakeRunner(() => [row('a'), row('b'), row('c')]);
+    const { users, truncated } = await listAppUsersWithRoles({ limit: 2 }, runner);
+    expect(users.map((u) => u.id)).toEqual(['a', 'b']);
+    expect(truncated).toBe(true);
+    expect(calls[0].params).toEqual([null, 3]);
   });
 
   it('listOrgUnits with a uuid restriction hides parents outside it and skips the query when empty', async () => {

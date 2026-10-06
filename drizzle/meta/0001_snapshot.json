@@ -186,7 +186,38 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "directory_users_ext_user_id_lower_idx": {
+          "name": "directory_users_ext_user_id_lower_idx",
+          "columns": [
+            {
+              "expression": "lower(\"ext_user_id\")",
+              "isExpression": true,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "directory_users_email_lower_idx": {
+          "name": "directory_users_email_lower_idx",
+          "columns": [
+            {
+              "expression": "lower(\"email\")",
+              "isExpression": true,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "directory_users_app_user_id_users_id_fk": {
           "name": "directory_users_app_user_id_users_id_fk",

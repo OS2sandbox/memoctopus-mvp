@@ -52,10 +52,24 @@ const opened = new Map<string, Promise<IDBPDatabase<OutboxDB>>>();
 function open(userId: string): Promise<IDBPDatabase<OutboxDB>> {
   let p = opened.get(userId);
   if (!p) {
+    const forget = () => {
+      // Only drop our own entry: a newer connection may already have replaced it.
+      if (opened.get(userId) === p) opened.delete(userId);
+    };
     p = openDB<OutboxDB>(outboxDbName(userId), 1, {
       upgrade(db) {
         const store = db.createObjectStore('events', { keyPath: 'clientEventId' });
         store.createIndex('by-queued', 'queuedAt');
+      },
+      // Another tab wants to upgrade or delete the database: let go of it, and do not
+      // keep handing out a connection that is about to be closed.
+      blocking() {
+        forget();
+        void p?.then((db) => db.close()).catch(() => undefined);
+      },
+      // The browser closed the connection on its own (storage cleared, profile removed).
+      terminated() {
+        forget();
       },
     });
     // A failed open must not be cached forever (private mode, blocked storage).

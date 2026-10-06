@@ -12,11 +12,14 @@ vi.mock('next/navigation', () => ({
 }));
 vi.mock('@/lib/authz/guard', () => ({ getPrincipalForServerComponent: vi.fn() }));
 vi.mock('@/components/admin/AdminNav', () => ({ AdminNav: () => null }));
+vi.mock('@/components/layout/AccessUnavailable', () => ({ AccessUnavailable: () => null }));
+vi.mock('@/lib/audit/safe-log', () => ({ safeLogError: vi.fn() }));
 
 import AdminLayout from './layout';
 import { getPrincipalForServerComponent } from '@/lib/authz/guard';
 import { ToastProvider } from '@/components/ui/toast';
 import { AdminNav } from '@/components/admin/AdminNav';
+import { AccessUnavailable } from '@/components/layout/AccessUnavailable';
 import { FAKE_PRINCIPAL_ADMIN, makePrincipal } from '@/test/helpers';
 
 const mockPrincipal = vi.mocked(getPrincipalForServerComponent);
@@ -69,5 +72,20 @@ describe('(app)/admin layout — server-side gate', () => {
     for (const s of (nav.props as unknown as { sections: object[] }).sections) {
       expect(Object.keys(s).sort()).toEqual(['href', 'key', 'label']);
     }
+  });
+
+  it('shows the fail-closed retry screen (not the generic error page) when the principal lookup fails', async () => {
+    mockPrincipal.mockRejectedValueOnce(new Error('connection refused'));
+    const el = (await AdminLayout({ children: 'CONTENT' })) as unknown as El;
+    expect(el.type).toBe(AccessUnavailable);
+    expect(el.props).toMatchObject({ embedded: true });
+    expect(findAll(el, ToastProvider)).toHaveLength(0);
+  });
+
+  it('still lets redirect and notFound through', async () => {
+    mockPrincipal.mockResolvedValueOnce(null);
+    await expect(AdminLayout({ children: null })).rejects.toThrow('REDIRECT:/?expired=1');
+    mockPrincipal.mockResolvedValueOnce(makePrincipal());
+    await expect(AdminLayout({ children: null })).rejects.toThrow('NOT_FOUND');
   });
 });

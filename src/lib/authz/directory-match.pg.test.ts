@@ -23,6 +23,7 @@ beforeEach(() => {
   vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
   vi.stubEnv('DIRECTORY_USERID_CLAIM', '');
   vi.stubEnv('DIRECTORY_USERID_TRANSFORM', '');
+  vi.stubEnv('DIRECTORY_USERID_DOMAIN', '');
   vi.stubEnv('MICROSOFT_TENANT_ID', '');
 });
 afterEach(() => {
@@ -60,11 +61,21 @@ describe.skipIf(!hasPg)('mode-switch relink (real Postgres)', () => {
   it('matches a UPN claim with DIRECTORY_USERID_TRANSFORM=strip-upn-domain', () =>
     withFreshSchema(async (c, schema) => {
       vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'strip-upn-domain');
+      vi.stubEnv('DIRECTORY_USERID_DOMAIN', 'kommune.dk');
       const { runner, close } = schemaRunner(c, schema);
       await addUser(c, 'u1');
       await c.query("INSERT INTO directory_users (name, ext_user_id, source) VALUES ('Rk', 'abc123', 'rollekatalog')");
+      expect((await matchDirectoryUser(identity('u1', 'ABC123@evil.com'), 'userid-claim', runner)).status).toBe('no_match');
       expect((await matchDirectoryUser(identity('u1', 'ABC123@kommune.dk'), 'userid-claim', runner)).status).toBe('linked');
       await close();
+    }));
+
+  it('has expression indexes for the lower(ext_user_id) / lower(email) lookups', () =>
+    withFreshSchema(async (c) => {
+      const r = await c.query(`SELECT indexdef FROM pg_indexes WHERE tablename = 'directory_users' AND schemaname = current_schema()`);
+      const defs = r.rows.map((x: { indexdef: string }) => x.indexdef).join('\n');
+      expect(defs).toContain('lower(ext_user_id)');
+      expect(defs).toContain('lower(email)');
     }));
 
   it('never steals a rollekatalog row linked to a different app user', () =>

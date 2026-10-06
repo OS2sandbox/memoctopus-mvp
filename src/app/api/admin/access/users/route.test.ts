@@ -21,7 +21,7 @@ beforeEach(() => {
   vi.stubEnv('ACCESS_SOURCE', 'local');
   mockGetSession.mockReset().mockResolvedValue(FAKE_SESSION as never);
   mockResolve.mockReset().mockResolvedValue(FAKE_PRINCIPAL_ADMIN);
-  mockList.mockReset().mockResolvedValue([]);
+  mockList.mockReset().mockResolvedValue({ users: [], truncated: false });
 });
 
 describe('GET /api/admin/access/users (access.manage)', () => {
@@ -40,10 +40,20 @@ describe('GET /api/admin/access/users (access.manage)', () => {
   });
 
   it('returns the users from the service', async () => {
-    mockList.mockResolvedValue([{ id: 'u1', name: 'A', email: 'a@x.dk', directoryUserUuid: null, disabled: false, roles: [] }]);
+    mockList.mockResolvedValue({
+      users: [{ id: 'u1', name: 'A', email: 'a@x.dk', directoryUserUuid: null, disabled: false, roles: [] }],
+      truncated: false,
+    });
     const res = await GET(req(), NO_PARAMS);
     expect(res.status).toBe(200);
-    expect((await res.json()).users).toHaveLength(1);
+    const body = await res.json();
+    expect(body.users).toHaveLength(1);
+    expect(body.truncated).toBe(false);
+  });
+
+  it('reports truncated when the service says the list was cut', async () => {
+    mockList.mockResolvedValue({ users: [], truncated: true });
+    expect((await (await GET(req(), NO_PARAMS)).json()).truncated).toBe(true);
   });
 
   it('is readable in rollekatalog mode (read-only view)', async () => {

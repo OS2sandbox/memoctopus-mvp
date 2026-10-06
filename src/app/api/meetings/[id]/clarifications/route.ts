@@ -26,7 +26,7 @@ async function postHandler(req: NextRequest, { params }: Params) {
   const t0 = Date.now();
   try {
     const clarifications = await analyzeClarifications(transcript);
-    if (clarificationCoalescer.shouldEmit(clarificationKey(session.user.id, id, 'success'))) {
+    if (clarificationCoalescer.shouldEmit(clarificationKey(session.user.id, entityId, 'success'))) {
       await emitAudit(req, {
         type: 'clarifications.request',
         actorUserId: session.user.id,
@@ -38,7 +38,7 @@ async function postHandler(req: NextRequest, { params }: Params) {
   } catch (err) {
     // Fails soft (empty result); the log line carries error name/status/code only.
     safeLogError('clarifications route', err);
-    if (clarificationCoalescer.shouldEmit(clarificationKey(session.user.id, id, 'error'))) {
+    if (clarificationCoalescer.shouldEmit(clarificationKey(session.user.id, entityId, 'error'))) {
       await emitAudit(req, {
         type: 'clarifications.request',
         actorUserId: session.user.id,

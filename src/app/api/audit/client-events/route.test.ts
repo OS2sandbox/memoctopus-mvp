@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { NextRequest } from 'next/server';
 
 vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
 vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers()) }));
@@ -139,6 +140,38 @@ describe('POST /api/audit/client-events', () => {
     const res = await send({ events: [ev()], pad: 'x'.repeat(33 * 1024) });
     expect(res.status).toBe(413);
     expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('413 for a chunked body without Content-Length, and stops reading at the cap', async () => {
+    let pulled = 0;
+    const chunk = new TextEncoder().encode('x'.repeat(8 * 1024));
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        if (pulled > 1000) return controller.close();
+        controller.enqueue(chunk);
+      },
+    });
+    const req = new NextRequest('http://localhost/api/audit/client-events', {
+      method: 'POST',
+      body: stream,
+      duplex: 'half',
+    });
+    expect(req.headers.get('content-length')).toBeNull();
+    const res = await POST(req, NO_PARAMS);
+    expect(res.status).toBe(413);
+    expect(pulled).toBeLessThan(20);
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('413 when Content-Length understates the body', async () => {
+    const big = JSON.stringify({ events: [ev()], pad: 'x'.repeat(40 * 1024) });
+    const req = new NextRequest('http://localhost/api/audit/client-events', {
+      method: 'POST',
+      body: big,
+      headers: { 'content-type': 'application/json', 'content-length': '10' },
+    });
+    expect((await POST(req, NO_PARAMS)).status).toBe(413);
   });
 
   it('accepts 50 events', async () => {

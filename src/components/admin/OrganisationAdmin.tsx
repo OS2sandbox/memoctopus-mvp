@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -40,10 +40,15 @@ export function OrganisationAdmin() {
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
 
+  // Only the newest request may write state, so a slow old response cannot overwrite a newer reload.
+  const requestSeq = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++requestSeq.current;
     setLoading(true);
     setLoadError(null);
     const res = await apiRequest<{ orgUnits: OrgUnit[] }>('/api/admin/access/org-units');
+    if (seq !== requestSeq.current) return;
     if (res.ok) setUnits(res.data.orgUnits);
     else setLoadError(res.message);
     setLoading(false);
@@ -92,9 +97,10 @@ export function OrganisationAdmin() {
       )}
 
       {loading || meLoading ? (
-        <p className="text-sm text-[var(--muted)]">Indlæser …</p>
+        <p role="status" className="text-sm text-[var(--muted)]">Indlæser …</p>
       ) : (
         <Table>
+          <caption className="sr-only">Organisationsenheder</caption>
           <TableHeader>
             <TableRow>
               <TableHead>Enhed</TableHead>
@@ -112,6 +118,8 @@ export function OrganisationAdmin() {
                 return (
                   <TableRow key={unit.uuid}>
                     <TableCell>
+                      {/* Indentation is visual only; screen readers get the level as text. */}
+                      {depth > 0 && <span className="sr-only">{`Niveau ${depth + 1}: `}</span>}
                       <span style={{ paddingLeft: depth * 20 }} data-depth={depth}>
                         {unit.name}
                       </span>

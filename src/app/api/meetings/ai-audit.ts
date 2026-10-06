@@ -4,6 +4,7 @@
 import type { AuditEventOf, EventType } from '@/lib/audit/events';
 import { recordServerEvent, UUID_RE } from '@/lib/audit/record';
 import type { HeaderSource } from '@/lib/audit/request-context';
+import { takeClientEventBudget } from '@/lib/audit/client-ingest';
 import { describeError } from '@/lib/audit/safe-log';
 
 /**
@@ -17,20 +18,36 @@ export function asEntityUuid(value: unknown): string | undefined {
 
 export const elapsedMs = (t0: number): number => Math.max(0, Date.now() - t0);
 
+const TIMEOUT_CODES = new Set(['ETIMEDOUT', 'ESOCKETTIMEDOUT', 'ABORT_ERR', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
+const NETWORK_CODES = new Set([
+  'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ENOTFOUND', 'EAI_AGAIN', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_SOCKET',
+]);
+
 /**
- * A short code describing why an AI/STT call failed. Built only from the error's
- * code, HTTP status or class name (describeError), never its message, because
- * those messages can echo prompt or transcript text.
+ * A short code describing why an AI/STT call failed, from a CLOSED set: `http_<status>`
+ * (numeric 100-599), `timeout`, `network` or `unknown`. It is derived from the error's
+ * numeric status, code and class name only, and never forwards a string the upstream
+ * error carries (an upstream server or a proxy can choose `code` and the message, and
+ * those can echo prompt or transcript text).
  */
-export function outcomeCodeOf(err: unknown): string {
+export function outcomeCodeOf(err: unknown): 'timeout' | 'network' | 'unknown' | `http_${number}` {
   const { name, status, code } = describeError(err);
-  if (code) return code;
   if (status !== undefined) return `http_${status}`;
-  const fromName = name.replace(/[^A-Za-z0-9_.:-]/g, '_').slice(0, 64);
-  return fromName || 'error';
+  if ((code && TIMEOUT_CODES.has(code)) || /Timeout|^AbortError$/.test(name)) return 'timeout';
+  if ((code && NETWORK_CODES.has(code)) || /^APIConnectionError$|^FetchError$/.test(name)) return 'network';
+  return 'unknown';
 }
 
-/** The AI/export routes' name for recordServerEvent, which is best-effort and never throws. */
+/**
+ * The AI/export routes' name for recordServerEvent, which is best-effort and never throws.
+ * Per-actor volume guard on top of the routes' own coalescers: the per-user fixed window of
+ * the client-event ingest (300 events a minute, per process), in a bucket of its own so
+ * server-emitted events cannot use up the browser's budget. Beyond it the event is dropped,
+ * never the request. Needed because a coalescer keys on the meeting id, which the client chooses.
+ */
 export function emitAudit<T extends EventType>(req: HeaderSource, event: AuditEventOf<T>): ReturnType<typeof recordServerEvent> {
+  if (event.actorUserId && takeClientEventBudget(`server-ai:${event.actorUserId}`, 1) !== null) {
+    return Promise.resolve({ status: 'dropped', code: 'actor_rate_limited' });
+  }
   return recordServerEvent(req, event);
 }

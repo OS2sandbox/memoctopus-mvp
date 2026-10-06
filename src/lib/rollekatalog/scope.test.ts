@@ -115,6 +115,50 @@ describe('deriveScope: GLOBAL_ROLES (the fail-closed switch)', () => {
   });
 });
 
+describe('deriveScope: unrecognised constraint types fail closed', () => {
+  const kle: ScopeConstraint = { constraintType: KLE, constraintValues: ['27.45.00'] };
+  const future: ScopeConstraint = { constraintType: 'http://example.test/constraints/future/1', constraintValues: ['x'] };
+
+  it('tt-administrator with only an unknown-type constraint gets no row', () => {
+    expect(deriveScope(input({ roleKey: 'tt-administrator', constraints: [kle] }))).toEqual(NONE);
+    expect(deriveScope(input({ roleKey: 'tt-administrator', constraints: [future] }))).toEqual(NONE);
+    // The schemas hand over only the flag.
+    expect(deriveScope(input({ roleKey: 'tt-administrator', hasUnrecognisedConstraints: true }))).toEqual(NONE);
+  });
+
+  it('tt-logleser listed in GLOBAL_ROLES with an unknown-type constraint gets no row', () => {
+    const globalRoles: RoleKey[] = ['tt-logleser'];
+    expect(deriveScope(input({ roleKey: 'tt-logleser', constraints: [kle], globalRoles }))).toEqual(NONE);
+    expect(deriveScope(input({ roleKey: 'tt-logleser', hasUnrecognisedConstraints: true, globalRoles }))).toEqual(NONE);
+  });
+
+  it('every global-capable role without any constraint at all is global', () => {
+    const globalRoles: RoleKey[] = ['tt-administrator', 'tt-logleser', 'tt-skabelonansvarlig'];
+    for (const roleKey of globalRoles) {
+      expect(deriveScope(input({ roleKey, globalRoles })), roleKey).toEqual(GLOBAL);
+      expect(deriveScope(input({ roleKey, globalRoles, hasUnrecognisedConstraints: false })), roleKey).toEqual(GLOBAL);
+    }
+  });
+
+  it('a blank-valued unknown-type constraint is not a constraint', () => {
+    const blank: ScopeConstraint = { constraintType: KLE, constraintValues: ['', '  '] };
+    expect(deriveScope(input({ roleKey: 'tt-logleser', constraints: [blank], globalRoles: ['tt-logleser'] }))).toEqual(GLOBAL);
+  });
+
+  it('a recognised known org unit still wins over an unknown-type constraint', () => {
+    expect(deriveScope(input({ roleKey: 'tt-logleser', constraints: [kle, ou(A)], globalRoles: ['tt-logleser'] }))).toEqual(
+      scoped([A]),
+    );
+    expect(deriveScope(input({ roleKey: 'tt-logleser', constraints: [ou(A)], hasUnrecognisedConstraints: true }))).toEqual(
+      scoped([A]),
+    );
+  });
+
+  it('tt-administrator with an org-unit constraint stays global (constraints are ignored for it)', () => {
+    expect(deriveScope(input({ roleKey: 'tt-administrator', constraints: [kle, ou(A)] }))).toEqual(GLOBAL);
+  });
+});
+
 describe('deriveScope: tt-administrator is never scoped', () => {
   it('constraints are ignored', () => {
     expect(deriveScope(input({ roleKey: 'tt-administrator', constraints: [ou(A, B)] }))).toEqual(GLOBAL);

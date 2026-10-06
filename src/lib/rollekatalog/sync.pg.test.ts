@@ -708,6 +708,45 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         expect(await count(h.c, 'role_assignments')).toBe(0);
       }));
 
+    it('removal threshold on ELEVATED assignments aborts although the total ratio is within the limit; force applies it', () =>
+      withHarness(async (h) => {
+        await h.run();
+        expect(await count(h.c, 'role_assignments')).toBe(10);
+        expect(await count(h.c, 'role_assignments', `role_key <> 'tt-bruger'`)).toBe(7);
+        const d = fixtureData();
+        // Three users lose every elevated role but keep tt-bruger: 3/10 of all rows (not over 30 %), 3/7 of the elevated ones.
+        const stripped = new Set(['mette.e', 'rune.a', 'jens.t']);
+        mock.setData({
+          roleAssignments: (d.roleAssignments as Array<{ userId: string; assignments: Array<{ roleIdentifier: string }> }>).map((a) =>
+            stripped.has(a.userId) ? { ...a, assignments: a.assignments.filter((x) => x.roleIdentifier === 'tt-bruger') } : a,
+          ),
+        });
+        const aborted = await h.run();
+        expect(aborted).toMatchObject({ status: 'aborted', errorCode: 'removal_threshold' });
+        expect(await count(h.c, 'role_assignments')).toBe(10);
+        const forced = await h.run({ force: true });
+        expect(forced).toMatchObject({ status: 'success' });
+        expect(forced.counts.assignmentsRemoved).toBe(3);
+        expect(await count(h.c, 'role_assignments', `role_key <> 'tt-bruger'`)).toBe(4);
+      }));
+
+    it('an assignment entry that turns invalid counts as an elevated removal (the whole role group is dropped)', () =>
+      withHarness(async (h) => {
+        await h.run();
+        const d = fixtureData();
+        // anne.p holds two tt-skabelonansvarlig rows; a broken entry for that role drops both. With
+        // mette.e and rune.a gone as well, 4 of 7 elevated rows disappear.
+        mock.setData({
+          roleAssignments: (d.roleAssignments as Array<{ userId: string; assignments: unknown[] }>).map((a) => {
+            if (a.userId === 'anne.p') return { ...a, assignments: [...a.assignments, { roleIdentifier: 'tt-skabelonansvarlig', roleConstraintValues: 'broken' }] };
+            if (a.userId === 'mette.e' || a.userId === 'rune.a') return { ...a, assignments: [] };
+            return a;
+          }),
+        });
+        expect(await h.run()).toMatchObject({ status: 'aborted', errorCode: 'removal_threshold' });
+        expect(await count(h.c, 'role_assignments')).toBe(10);
+      }));
+
     it('stays below the threshold: one of nine users and one assignment go through without force', () =>
       withHarness(async (h) => {
         await h.run();

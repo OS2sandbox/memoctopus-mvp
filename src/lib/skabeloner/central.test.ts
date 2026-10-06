@@ -223,12 +223,20 @@ describe('createCentralTemplate', () => {
     await expect(createCentralTemplate(manager, input, env)).rejects.toMatchObject({ code: 'concurrent_change' });
   });
 
-  it('maps a NUL rejected by Postgres (22021 / 22P05) to a ValidationError, not a 500', async () => {
-    for (const code of ['22021', '22P05']) {
+  it('maps a NUL or lone surrogate rejected by Postgres (22021 / 22P05 / 22P02) to a ValidationError, not a 500', async () => {
+    for (const code of ['22021', '22P05', '22P02']) {
       const { env } = setup();
       recordEvent.mockRejectedValueOnce(Object.assign(new Error('nul'), { code }));
       await expect(createCentralTemplate(manager, input, env)).rejects.toBeInstanceOf(ValidationError);
     }
+  });
+
+  it('rejects a lone surrogate as a ValidationError before touching the database', async () => {
+    const { env, calls } = setup();
+    await expect(createCentralTemplate(manager, { ...input, prompt: 'Skriv \ud800 kort.' }, env)).rejects.toBeInstanceOf(
+      ValidationError,
+    );
+    expect(writes(calls)).toEqual([]);
   });
 
   it('rejects an invalid schema name (the seam is a trusted constant, not request input)', async () => {

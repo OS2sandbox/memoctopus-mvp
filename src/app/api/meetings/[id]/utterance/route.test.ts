@@ -251,10 +251,17 @@ describe('audit: transcription.request (live, coalesced)', () => {
     expect(events()).toHaveLength(1);
   });
 
-  it('emits nothing for a non-UUID id, however often it is sent', async () => {
+  it('still audits a non-UUID id, without an entity and coalesced on the actor alone', async () => {
     await POST(makeAudioRequest(5_000), PARAMS);
     await POST(makeAudioRequest(5_000), paramsFor('x'.repeat(5_000)));
-    expect(mockRecord).not.toHaveBeenCalled();
+    await POST(makeAudioRequest(5_000), paramsFor('other-garbage'));
+    expect(events()).toHaveLength(1);
+    expect(events()[0]).toMatchObject({ type: 'transcription.request', actorUserId: 'user-123', details: { mode: 'live' } });
+    expect(events()[0].entityId).toBeUndefined();
+    expectValidMetadataOnly(events()[0], ['meet-1', 'xxxxx']);
+    // A valid meeting is a separate key and still gets its own event.
+    await POST(makeAudioRequest(5_000), paramsFor(MEETING));
+    expect(events()).toHaveLength(2);
   });
 
   it('coalesces case variants of the same meeting id into one event', async () => {

@@ -158,7 +158,7 @@ describe('maybeBootstrapAdmin', () => {
     const sql = calls[0].sql;
     expect(sql).toContain("role_key = 'tt-administrator'");
     expect(sql).toContain('start_date <= now()');
-    expect(sql).toContain('stop_date > now()');
+    expect(sql).toContain('ra.stop_date IS NULL');
   });
 
   it('does not count unusable administrators (same definition as the revoke guard)', async () => {

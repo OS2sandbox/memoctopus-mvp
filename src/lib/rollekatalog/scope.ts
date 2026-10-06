@@ -13,17 +13,22 @@ function unique(values: Iterable<string>): string[] {
 }
 
 /** Org-unit uuids of the org-unit constraints only (KLE and other types are never a scope). */
-function constraintUnits(input: ScopeInput): { all: string[]; known: string[] } {
+function constraintUnits(input: ScopeInput): { all: string[]; known: string[]; unrecognised: boolean } {
   const all: string[] = [];
+  // The schemas already drop other types and only leave the flag; also accept them here.
+  let unrecognised = input.hasUnrecognisedConstraints === true;
   for (const c of input.constraints) {
-    if (!isOrgUnitConstraintType(c.constraintType)) continue;
+    if (!isOrgUnitConstraintType(c.constraintType)) {
+      if (c.constraintValues.some((v) => norm(v) !== '')) unrecognised = true;
+      continue;
+    }
     for (const v of c.constraintValues) {
       const n = norm(v);
       if (n) all.push(n);
     }
   }
   const known = unique(all.filter((u) => input.knownOrgUnitUuids.has(u)));
-  return { all, known };
+  return { all, known, unrecognised };
 }
 
 /**
@@ -39,19 +44,27 @@ function constraintUnits(input: ScopeInput): { all: string[]; known: string[] } 
  *   DID name org units but none of them is known is not widened to global even for
  *   a global role. Its intended scope is a specific unit we cannot see (e.g. an
  *   inactive unit Rollekatalog does not export).
+ * - The same holds for an assignment that carries a non-empty constraint of an
+ *   UNRECOGNISED type (KLE, a future type) and yields no org-unit scope: it is
+ *   restricted in a way we cannot read, so it is `none` even for a global role (and
+ *   for tt-administrator unless an org-unit constraint is present). Only an assignment
+ *   with no constraints at all can become global.
  */
 export function deriveScope(input: ScopeInput): DerivedScope {
   const role: RoleKey = input.roleKey;
   if (role === 'tt-bruger') return { kind: 'global' };
 
   const globalAllowed = input.globalRoles.includes(role);
-  if (role === 'tt-administrator') return globalAllowed ? { kind: 'global' } : { kind: 'none' };
-
   const c = constraintUnits(input);
+  if (role === 'tt-administrator') {
+    if (c.unrecognised && c.all.length === 0) return { kind: 'none' };
+    return globalAllowed ? { kind: 'global' } : { kind: 'none' };
+  }
+
   const units = c.known;
   const namedUnknownUnitsOnly = units.length === 0 && c.all.length > 0;
 
   if (units.length > 0) return { kind: 'scoped', orgUnitUuids: units, includeDescendants: input.includeDescendants };
-  if (namedUnknownUnitsOnly) return { kind: 'none' };
+  if (namedUnknownUnitsOnly || c.unrecognised) return { kind: 'none' };
   return globalAllowed ? { kind: 'global' } : { kind: 'none' };
 }

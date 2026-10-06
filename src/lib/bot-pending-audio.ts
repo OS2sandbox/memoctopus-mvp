@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import type { TranscriptSegment } from '@/types';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 // Transient server-side hand-off for Teams-bot recordings.
 //
@@ -60,7 +61,7 @@ export async function getBotMeetingOwner(meetingId: string): Promise<string | nu
     return userId ?? null;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('[bot-pending-audio] readOwner failed for', meetingId, err);
+      safeLogError('bot-pending-audio readOwner failed', err);
     }
     return null;
   }
@@ -112,7 +113,7 @@ async function sweep(): Promise<void> {
             }
           } catch (err) {
             if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-              console.error('[bot-pending-audio] sweep: skipping malformed/inaccessible entry', f, err);
+              safeLogError('bot-pending-audio sweep: skipping malformed/inaccessible entry', err);
             }
           }
         }),
@@ -154,7 +155,7 @@ export async function readPendingMeta(meetingId: string): Promise<PendingMeta | 
     return JSON.parse(await fs.readFile(metaPath(meetingId), 'utf8')) as PendingMeta;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('[bot-pending-audio] readPendingMeta failed for', meetingId, err);
+      safeLogError('bot-pending-audio readPendingMeta failed', err);
     }
     return null;
   }
@@ -193,7 +194,7 @@ export async function readPendingTranscript(meetingId: string): Promise<PendingT
     return JSON.parse(await fs.readFile(transcriptPath(meetingId), 'utf8')) as PendingTranscript;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('[bot-pending-audio] readPendingTranscript failed for', meetingId, err);
+      safeLogError('bot-pending-audio readPendingTranscript failed', err);
     }
     return null;
   }

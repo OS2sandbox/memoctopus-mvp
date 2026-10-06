@@ -344,6 +344,116 @@ describe('mapToMirror: assignment edge cases', () => {
     expect(set.stats.assignmentsWithoutScope).toBe(1);
   });
 
+  describe('unrecognised constraint types fail closed', () => {
+    const KLE_C = [{ constraintType: 'http://sts.kombit.dk/constraints/KLE/1', constraintValues: ['27.45.00'] }];
+    const entry = (n: number, role: string, constraints: unknown[]) => ({
+      extUuid: E(n),
+      userId: `user${n}`,
+      assignments: [{ roleIdentifier: role, roleName: null, roleConstraintValues: constraints }],
+    });
+
+    it('tt-administrator and a GLOBAL_ROLES tt-logleser with only a KLE constraint get no row and are counted; unconstrained ones are global', () => {
+      const set = mapToMirror(
+        input({
+          ...base,
+          users: [user(1), user(2), user(3)],
+          assignments: [
+            entry(1, 'tt-administrator', KLE_C),
+            entry(2, 'tt-logleser', KLE_C),
+            { extUuid: E(3), userId: 'user3', assignments: [{ roleIdentifier: 'tt-logleser', roleConstraintValues: [] }] },
+          ],
+        }),
+        { ...DEFAULTS, globalRoles: ['tt-administrator', 'tt-logleser'] },
+      );
+      expect(rolesOf(set, U(1))).toEqual([]);
+      expect(rolesOf(set, U(2))).toEqual([]);
+      expect(rolesOf(set, U(3))).toEqual(['tt-logleser@null']);
+      expect(set.stats.assignmentsWithoutScope).toBe(2);
+    });
+
+    it('an unknown-type duplicate entry cannot be widened by an unconstrained sibling', () => {
+      const set = mapToMirror(
+        input({
+          ...base,
+          assignments: [
+            {
+              extUuid: E(1),
+              userId: 'user1',
+              assignments: [
+                { roleIdentifier: 'tt-logleser', roleConstraintValues: KLE_C },
+                { roleIdentifier: 'tt-logleser', roleConstraintValues: [] },
+              ],
+            },
+          ],
+        }),
+        { ...DEFAULTS, globalRoles: ['tt-logleser'] },
+      );
+      expect(rolesOf(set, U(1))).toEqual([]);
+      expect(set.stats.assignmentsWithoutScope).toBe(1);
+    });
+  });
+
+  describe('a dropped invalid entry drops the whole (user, role) group', () => {
+    const scopedEntry = { roleIdentifier: 'tt-logleser', roleConstraintValues: [{ constraintType: OU, constraintValues: [O(1)] }] };
+    const brokenEntry = { roleIdentifier: 'tt-logleser', roleConstraintValues: [{ constraintType: OU, constraintValues: [5] }] };
+    const plain = { roleIdentifier: 'tt-logleser', roleConstraintValues: [] };
+
+    it('a broken scoped entry next to an unconstrained one never leaves a global row (even for a GLOBAL_ROLES role)', () => {
+      const set = mapToMirror(
+        input({ ...base, assignments: [{ extUuid: E(1), userId: 'user1', assignments: [brokenEntry, plain] }] }),
+        { ...DEFAULTS, globalRoles: ['tt-logleser'] },
+      );
+      expect(rolesOf(set, U(1))).toEqual([]);
+      expect(set.stats.assignmentRowsSkippedInvalid).toBe(1);
+    });
+
+    it('also drops a valid scoped sibling, and only for the affected role and user', () => {
+      const set = mapToMirror(
+        input({
+          ...base,
+          assignments: [
+            {
+              extUuid: E(1),
+              userId: 'user1',
+              assignments: [scopedEntry, brokenEntry, { roleIdentifier: 'tt-bruger', roleConstraintValues: [] }],
+            },
+            { extUuid: E(2), userId: 'user2', assignments: [scopedEntry] },
+          ],
+        }),
+        DEFAULTS,
+      );
+      expect(rolesOf(set, U(1))).toEqual(['tt-bruger@null']);
+      expect(rolesOf(set, U(2))).toEqual([`tt-logleser@${O(1)}`]);
+    });
+
+    it('applies across rows that resolve to the same user, and to a group whose only entry was the broken one', () => {
+      const set = mapToMirror(
+        input({
+          ...base,
+          assignments: [
+            { extUuid: E(1), userId: 'user1', assignments: [brokenEntry] },
+            { extUuid: null, userId: 'user1', assignments: [plain] },
+          ],
+        }),
+        { ...DEFAULTS, globalRoles: ['tt-logleser'] },
+      );
+      expect(rolesOf(set, U(1))).toEqual([]);
+    });
+
+    it('an invalid entry for a role that is not ours poisons nothing', () => {
+      const set = mapToMirror(
+        input({
+          ...base,
+          assignments: [
+            { extUuid: E(1), userId: 'user1', assignments: [{ roleIdentifier: 'other-role', roleConstraintValues: 'x' }, scopedEntry] },
+          ],
+        }),
+        DEFAULTS,
+      );
+      expect(rolesOf(set, U(1))).toEqual([`tt-logleser@${O(1)}`]);
+    });
+  });
+
   it('the same user listed twice is merged into one group', () => {
     const set = mapToMirror(
       input({ ...base, assignments: [assignment(1, { id: 'tt-skabelonansvarlig', units: [1] }), assignment(1, { id: 'tt-skabelonansvarlig', units: [2] })] }),

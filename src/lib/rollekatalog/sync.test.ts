@@ -82,7 +82,11 @@ describe('planMirror', () => {
     expect(plan.orgUnits.insert.map((u) => u.uuid)).toEqual([O(1), O(2), O(4), O(3), O(5)]); // parents first
     expect(plan.assignments.insert).toHaveLength(10);
     expect(plan.counts).toMatchObject({ usersUpserted: 9, orgUnitsUpserted: 5, assignmentsUpserted: 10, assignmentsRemoved: 0, usersDisabled: 0 });
-    expect(plan.removal).toEqual({ users: { removed: 0, base: 0 }, assignments: { removed: 0, base: 0 } });
+    expect(plan.removal).toEqual({
+      users: { removed: 0, base: 0 },
+      assignments: { removed: 0, base: 0 },
+      elevatedAssignments: { removed: 0, base: 0 },
+    });
   });
 
   it('carries the invalid-row counts of the mapper into the plan counts', () => {
@@ -168,6 +172,36 @@ describe('planMirror', () => {
     expect(plan.counts).toMatchObject({ assignmentsUpserted: 2, assignmentsRemoved: 1 });
     expect(first).toBeDefined();
     expect(plan.removal.assignments).toEqual({ removed: 1, base: 10 });
+    // `first` is an elevated row (the fixture has 7 elevated rows and 3 tt-bruger rows).
+    expect(plan.removal.elevatedAssignments).toEqual({ removed: first.roleKey === 'tt-bruger' ? 0 : 1, base: 7 });
+  });
+
+  it('elevated removals are counted apart from tt-bruger rows (the baseline dominates the total)', () => {
+    const mirror = fixtureMirror();
+    const existing = existingFrom(mirror);
+    const elevated = mirror.assignments.filter((a) => a.roleKey !== 'tt-bruger');
+    const bruger = mirror.assignments.filter((a) => a.roleKey === 'tt-bruger');
+    expect(elevated).toHaveLength(7);
+    // Three elevated rows vanish: 3/10 overall is exactly the 30 % limit, 3/7 elevated is over it.
+    const fetched: MirrorSet = { ...mirror, assignments: [...bruger, ...elevated.slice(3)] };
+    const plan = planMirror(existing, fetched);
+    expect(plan.removal.assignments).toEqual({ removed: 3, base: 10 });
+    expect(plan.removal.elevatedAssignments).toEqual({ removed: 3, base: 7 });
+    expect(exceedsRemovalThreshold(3, 10, 30)).toBe(false);
+    expect(exceedsRemovalThreshold(3, 7, 30)).toBe(true);
+    // Losing only baseline rows never touches the elevated ratio.
+    const noBruger = planMirror(existing, { ...mirror, assignments: elevated });
+    expect(noBruger.removal.elevatedAssignments).toEqual({ removed: 0, base: 7 });
+  });
+
+  it('small elevated base: one removed row of one or two trips, an empty base never does', () => {
+    expect(exceedsRemovalThreshold(1, 1, 30)).toBe(true);
+    expect(exceedsRemovalThreshold(1, 2, 30)).toBe(true);
+    expect(exceedsRemovalThreshold(0, 2, 30)).toBe(false);
+    expect(exceedsRemovalThreshold(2, 0, 30)).toBe(false);
+    const adminRow = { id: 'x', directoryUserUuid: U(1), roleKey: 'tt-administrator', scopeOrgUnitUuid: null, includeDescendants: true };
+    const plan = planMirror({ ...EMPTY, assignments: [adminRow] }, { ...fixtureMirror(), assignments: [] });
+    expect(plan.removal.elevatedAssignments).toEqual({ removed: 1, base: 1 });
   });
 
   it('a NULL scope and a real scope of the same role are different rows', () => {

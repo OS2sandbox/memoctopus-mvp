@@ -10,7 +10,8 @@ import { requireAppAccess } from '@/lib/authz/app-access';
 
 const bodySchema = z.object({
   action: z.enum(['pause', 'resume', 'stop', 'abort']),
-  sessionId: z.string().optional(),
+  // The bot-service issues UUID session ids; anything else could rewrite the path we call there.
+  sessionId: z.string().uuid().optional(),
 });
 
 const EVENT_FOR_ACTION = {
@@ -67,7 +68,7 @@ export const POST = withHandler(
     // Abort: tear down the session if one exists. Idempotent — ok even with no session.
     if (action === 'abort') {
       if (sessionId) {
-        await botFetch(bot, `/sessions/${sessionId}`, { method: 'DELETE' }).catch((err) => {
+        await botFetch(bot, `/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }).catch((err) => {
           safeLogError('bot/control abort DELETE failed (ignored, idempotent)', err);
         });
       }
@@ -79,9 +80,7 @@ export const POST = withHandler(
       return NextResponse.json({ error: 'No active bot session' }, { status: 400 });
     }
 
-    const botPath = action === 'stop'
-      ? `/sessions/${sessionId}/stop`
-      : `/sessions/${sessionId}/${action}`;
+    const botPath = `/sessions/${encodeURIComponent(sessionId)}/${action}`;
 
     let res: Response;
     try {

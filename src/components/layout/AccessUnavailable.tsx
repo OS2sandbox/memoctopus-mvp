@@ -5,7 +5,9 @@ import { signOut } from '@/lib/auth-client';
 
 // Shown instead of the app shell when the access check itself failed (e.g. the
 // database is unreachable). Fail closed: no TopBar, no children, just a retry.
-export function AccessUnavailable() {
+export function AccessUnavailable({ embedded = false }: { embedded?: boolean } = {}) {
+  // Inside the app shell there is already a <main>; a second one would be invalid.
+  const Root = embedded ? 'div' : 'main';
   const retry = () => window.location.reload();
   const leave = () => {
     signOut()
@@ -13,9 +15,9 @@ export function AccessUnavailable() {
       .finally(() => window.location.assign('/'));
   };
   return (
-    <main className="mx-auto max-w-md px-4 py-24 text-center">
+    <Root className="mx-auto max-w-md px-4 py-24 text-center">
       <h1 className="text-xl font-semibold text-[var(--ink)]">Adgangskontrol er midlertidigt utilgængelig</h1>
-      <p className="mt-3 text-sm text-[var(--muted)]">Adgangskontrol er midlertidigt utilgængelig. Prøv igen om lidt.</p>
+      <p className="mt-3 text-sm text-[var(--muted)]">Vi kunne ikke kontrollere dine rettigheder lige nu. Prøv igen om lidt; kontakt din administrator, hvis det fortsætter.</p>
       <div className="mt-6 flex justify-center gap-3">
         <Button type="button" onClick={retry}>
           Prøv igen
@@ -24,6 +26,6 @@ export function AccessUnavailable() {
           Log ud
         </Button>
       </div>
-    </main>
+    </Root>
   );
 }

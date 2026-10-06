@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { changeNoteSchema } from '@/lib/skabeloner/central-schemas';
 import {
   changedContentFields,
   diffTargets,
@@ -15,6 +16,22 @@ describe('noteProblem', () => {
     expect(noteLength('😀😀😀😀😀')).toBe(5);
     expect(noteProblem('😀😀😀😀😀')).not.toBeNull();
     expect(noteProblem('x'.repeat(2001))).toMatch(/for lang/);
+  });
+});
+
+describe('noteLength matches the server counter', () => {
+  it('does not count interior whitespace or invisible characters', () => {
+    expect(noteLength(`a${' '.repeat(9)}b`)).toBe(2);
+    expect(noteProblem(`a${' '.repeat(9)}b`)).not.toBeNull();
+    expect(noteLength('\u200B'.repeat(10))).toBe(0);
+    expect(noteProblem('\u200B'.repeat(10))).not.toBeNull();
+    expect(noteProblem('abcde\u200Bfghij')).toBeNull();
+  });
+  it('gives the same number as the schema for any input', () => {
+    for (const raw of ['  hej  verden og mere  ', '😀'.repeat(7), 'a\u00A0b\u3164c', 'x\n\ny\tz']) {
+      const parsed = changeNoteSchema.safeParse(raw);
+      expect(noteProblem(raw) === null).toBe(parsed.success);
+    }
   });
 });
 

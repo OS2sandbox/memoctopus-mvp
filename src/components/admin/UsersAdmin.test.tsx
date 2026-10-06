@@ -110,6 +110,47 @@ describe('UsersAdmin — rendering', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Søg' }));
     await waitFor(() => expect(calls(mock, 'GET', '/api/admin/access/users?q=carla')).toHaveLength(1));
   });
+
+  it('says so when the server cut the list, and not otherwise', async () => {
+    setup(ADMIN_ME, { 'GET /api/admin/access/users': () => json({ ...USERS, truncated: true }) });
+    renderWithToasts(<UsersAdmin />);
+    expect(await screen.findByText('Viser de første 3. Brug søgefeltet for at finde flere.')).toBeInTheDocument();
+  });
+
+  it('shows no cut-off notice for a complete list', async () => {
+    setup(ADMIN_ME, { 'GET /api/admin/access/users': () => json({ ...USERS, truncated: false }) });
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.queryByText(/Viser de første/)).toBeNull();
+  });
+
+  it('announces loading as a status and gives the table an accessible name', async () => {
+    setup();
+    renderWithToasts(<UsersAdmin />);
+    expect(screen.getByRole('status')).toHaveTextContent('Indlæser');
+    await screen.findByText('Bo Bruger');
+    expect(screen.getByRole('table', { name: 'Brugere og deres roller' })).toBeInTheDocument();
+  });
+
+  it('ignores a slow response that was overtaken by a newer search', async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((r) => (releaseFirst = r));
+    setup(ADMIN_ME, {
+      'GET /api/admin/access/users': async (url) => {
+        if (url.includes('q=carla')) return json({ users: [USERS.users[1]] });
+        await firstGate; // the initial, unfiltered request is slow
+        return json(USERS);
+      },
+    });
+    renderWithToasts(<UsersAdmin />);
+    await userEvent.type(screen.getByLabelText('Søg i brugere'), 'carla');
+    await userEvent.click(screen.getByRole('button', { name: 'Søg' }));
+    await screen.findByText('Carla Ny');
+    releaseFirst();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText('Bo Bruger')).toBeNull();
+    expect(screen.getByText('Carla Ny')).toBeInTheDocument();
+  });
 });
 
 describe('UsersAdmin — write controls by mode and role', () => {

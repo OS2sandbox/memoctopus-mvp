@@ -65,6 +65,22 @@ describe('withAuthz', () => {
     expect(mockDenied).toHaveBeenCalledWith(expect.objectContaining({ reason: 'disabled', actorUserId: 'user-123' }));
   });
 
+  it('403 for a role-less principal under REQUIRE_ROLE_TO_LOGIN=true, even with a null capability', async () => {
+    vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'true');
+    mockResolve.mockResolvedValue(makePrincipal({ roles: [], capabilities: [] }));
+    const handler = vi.fn(ok);
+    const res = await withAuthz('t', null, handler)(req(), NO_PARAMS);
+    expect(res.status).toBe(403);
+    expect(handler).not.toHaveBeenCalled();
+    expect(mockDenied).toHaveBeenCalledWith(expect.objectContaining({ reason: 'no_role', required: 'login' }));
+  });
+
+  it('a role-less principal still passes a null capability while REQUIRE_ROLE_TO_LOGIN is off', async () => {
+    mockResolve.mockResolvedValue(makePrincipal({ roles: [], capabilities: [] }));
+    const res = await withAuthz('t', null, ok)(req(), NO_PARAMS);
+    expect(res.status).toBe(200);
+  });
+
   it('403 when the capability is missing, records the denial and does not call the handler', async () => {
     mockResolve.mockResolvedValue(makePrincipal());
     const handler = vi.fn(ok);

@@ -66,6 +66,7 @@ export function sanitizeChapters<T extends ChapterLike>(chapters: T[] | undefine
 
 // ─── Output echo detection ────────────────────────────────────────────────────
 
+// All thresholds are measured in LETTERS (see `normalise`), not characters of the raw text.
 export const ECHO_MIN_CHECKED_CHARS = 30;
 export const ECHO_WINDOW_CHARS = 60;
 export const ECHO_SHORT_PROMPT_BELOW = 75;
@@ -78,42 +79,57 @@ export interface EchoSpan {
 }
 
 interface Normalised {
+  /** Letters only, lower-case, NFKD-folded (no digits, spaces, punctuation or marks). */
   text: string;
-  /** For each normalised char: offset of its source char / end offset of it in the original. */
+  /** For each letter: start offset / end offset of its source character in the original. */
   from: number[];
   to: number[];
 }
 
+const LETTER = /\p{L}/u;
+// Invisible code points that are still "letters" by category: Hangul fillers (U+115F, U+1160,
+// U+3164, U+FFA0) and friends. They render as nothing, so they must not break up a word.
+const IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
+
 /**
- * Lower-cases and keeps only letters and digits; every other run (whitespace,
- * markdown and punctuation noise) becomes a single space. Keeps an offset map so
- * matches can be reported in the original text.
+ * Reduces text to a stream of LETTERS ONLY so trivial transformations of an echoed prompt
+ * (digits or punctuation between words, letter-spacing, hyphenated letters, zero-width or
+ * soft-hyphen characters, fullwidth or other compatibility forms, NFC vs NFD, markdown bold
+ * or bullets around every word) all collapse to the same stream. Each character is
+ * NFKD-decomposed, lower-cased, and only letters are kept: digits, punctuation, whitespace,
+ * combining marks (accents decompose to base + mark, the mark is dropped) and
+ * Default_Ignorable / format characters are deleted. An offset map back to the original
+ * text lets a match be redacted in place. Single pass, linear in the input.
  */
 function normalise(input: string): Normalised {
   const chars: string[] = [];
   const from: number[] = [];
   const to: number[] = [];
-  let lastWasSpace = true; // drops leading noise
+  // One entry per UTF-16 unit of `text`, so offsets into the joined string index the maps.
+  const emit = (c: string, start: number, end: number) => {
+    chars.push(c);
+    for (let k = 0; k < c.length; k++) {
+      from.push(start);
+      to.push(end);
+    }
+  };
   let i = 0;
   for (const ch of input) {
     const start = i;
     i += ch.length;
-    const lower = ch.toLowerCase();
-    let any = false;
-    for (const c of lower) {
-      if (/[\p{L}\p{N}]/u.test(c)) {
-        chars.push(c);
-        from.push(start);
-        to.push(i);
-        lastWasSpace = false;
-        any = true;
+    const code = ch.charCodeAt(0);
+    if (code < 128) {
+      // ASCII fast path.
+      if ((code >= 97 && code <= 122) || (code >= 65 && code <= 90)) {
+        emit(ch.toLowerCase(), start, i);
       }
+      continue;
     }
-    if (!any && !lastWasSpace) {
-      chars.push(' ');
-      from.push(start);
-      to.push(i);
-      lastWasSpace = true;
+    for (const d of ch.normalize('NFKD')) {
+      for (const c of d.toLowerCase()) {
+        if (!LETTER.test(c) || IGNORABLE.test(c)) continue;
+        emit(c, start, i);
+      }
     }
   }
   return { text: chars.join(''), from, to };
@@ -135,7 +151,7 @@ export interface PromptEchoMatcher {
 }
 
 export function buildPromptEchoMatcher(prompt: string): PromptEchoMatcher | null {
-  const p = normalise(prompt).text.trim();
+  const p = normalise(prompt).text;
   const w = windowFor(p.length);
   if (w === 0) return null;
   const grams = new Set<string>();
@@ -148,7 +164,7 @@ function detectWith(matcher: PromptEchoMatcher, output: string): EchoSpan[] {
   const w = matcher.windowSize;
   if (n.text.length < w) return [];
 
-  // Merge overlapping / adjacent matching windows into runs (normalised coords).
+  // Merge overlapping / adjacent matching windows into runs (letter-stream coordinates).
   const runs: Array<[number, number]> = [];
   for (let i = 0; i + w <= n.text.length; i++) {
     if (!matcher.grams.has(n.text.slice(i, i + w))) continue;
@@ -157,21 +173,18 @@ function detectWith(matcher: PromptEchoMatcher, output: string): EchoSpan[] {
     else runs.push([i, i + w]);
   }
 
+  // `text` holds letters only, so a run needs no trimming; map it back to the original.
   const spans: EchoSpan[] = [];
-  for (let [s, e] of runs) {
-    while (s < e && n.text[s] === ' ') s++;
-    while (e > s && n.text[e - 1] === ' ') e--;
-    if (e <= s) continue;
-    spans.push({ start: n.from[s], end: n.to[e - 1] });
-  }
+  for (const [s, e] of runs) spans.push({ start: n.from[s], end: n.to[e - 1] });
   return spans;
 }
 
 /**
- * Finds verbatim runs of the prompt in `output` (case, whitespace, markdown and
- * punctuation insensitive): at least 60 normalised chars, or for prompts under
- * 75 chars max(30, floor(0.8 * length)). Prompts under 30 chars are not checked.
- * Returns spans in the original output text; O(n * window) on the output.
+ * Finds verbatim runs of the prompt in `output`, compared as a stream of letters only (case,
+ * accents, digits, whitespace, punctuation, markdown and invisible characters are all
+ * ignored): at least 60 letters, or for prompts under 75 letters max(30, floor(0.8 * length)).
+ * Prompts under 30 letters are not checked. Returns spans in the original output text;
+ * O(n * window) on the output with a constant window of at most 60 letters.
  */
 export function detectPromptEcho(output: string, prompt: string): EchoSpan[] {
   const matcher = buildPromptEchoMatcher(prompt);

@@ -10,6 +10,10 @@ const HOUR_MS = 60 * 60 * 1000;
 /** One live-transcription event per actor+meeting per hour, at most 10 000 tracked keys. */
 export const liveTranscriptionCoalescer = createCoalescer({ windowMs: HOUR_MS, maxEntries: 10_000 });
 
-/** Key parts are joined with a NUL so no actor/meeting pair can collide with another. Outcomes are keyed apart so a first success does not hide a later failure. */
-export const liveTranscriptionKey = (actorUserId: string, meetingId: string, outcome: 'success' | 'error'): string =>
-  `${actorUserId}\u0000${meetingId.slice(0, 64)}\u0000live\u0000${outcome}`;
+/**
+ * Key parts are joined with a NUL so no actor/meeting pair can collide with another. Outcomes are
+ * keyed apart so a first success does not hide a later failure. The meeting id is lower-cased so
+ * case variants cannot dodge the coalescing; without a (valid) meeting id the key is the actor alone.
+ */
+export const liveTranscriptionKey = (actorUserId: string, meetingId: string | undefined, outcome: 'success' | 'error'): string =>
+  `${actorUserId}\u0000${(meetingId ?? '').toLowerCase().slice(0, 64)}\u0000live\u0000${outcome}`;

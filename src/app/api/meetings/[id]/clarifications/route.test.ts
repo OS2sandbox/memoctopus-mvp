@@ -173,6 +173,20 @@ describe('audit: clarifications.request', () => {
     expectValidMetadataOnly(events()[0], ['meet-1']);
   });
 
+  it('keys non-UUID ids on the actor alone and case variants of a UUID together', async () => {
+    mockAnalyzeClarifications.mockResolvedValue([]);
+    const p = (id: string) => ({ params: Promise.resolve({ id }) });
+    const send = (id: string) => POST(makeJsonReq(BASE_URL, 'POST', { transcript: 'tekst' }), p(id));
+    await send('garbage-1');
+    await send('garbage-2');
+    await send('x'.repeat(5_000));
+    expect(events()).toHaveLength(1);
+    expect(events()[0].entityId).toBeUndefined();
+    await send(MEETING);
+    await send(MEETING.toUpperCase());
+    expect(events()).toHaveLength(2);
+  });
+
   it('records outcome error with a code, never the message, and keeps the empty fallback', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     mockAnalyzeClarifications.mockRejectedValueOnce(leakyError('Budget 2024', { status: 500 }));

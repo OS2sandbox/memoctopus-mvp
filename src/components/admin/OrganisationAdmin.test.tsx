@@ -39,6 +39,17 @@ describe('OrganisationAdmin — tree', () => {
     expect(screen.getByText('Rollekatalog')).toBeInTheDocument();
   });
 
+  it('announces loading, names the table and conveys depth to screen readers', async () => {
+    setup();
+    renderWithToasts(<OrganisationAdmin />);
+    expect(screen.getByRole('status')).toHaveTextContent('Indlæser');
+    await screen.findByText('Kommune');
+    expect(screen.getByRole('table', { name: 'Organisationsenheder' })).toBeInTheDocument();
+    const child = screen.getByText('Børn').closest('td')!;
+    expect(child).toHaveTextContent('Niveau 2: Børn');
+    expect(screen.getByText('Kommune').closest('td')!).not.toHaveTextContent('Niveau');
+  });
+
   it('shows an empty state and an error with retry', async () => {
     setup(ADMIN_ME, { 'GET /api/admin/access/org-units': () => json({ orgUnits: [] }) });
     renderWithToasts(<OrganisationAdmin />);

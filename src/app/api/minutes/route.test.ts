@@ -247,7 +247,7 @@ describe('audit: minutes.generate', () => {
     expect(events()).toHaveLength(1);
     const e = events()[0];
     expect(e.outcome).toBe('error');
-    expect(e.details.outcomeCode).toBe('rate_limit_exceeded');
+    expect(e.details.outcomeCode).toBe('http_429');
     expectValidMetadataOnly(e, CONTENT_STRINGS);
   });
 
@@ -493,7 +493,7 @@ describe('POST /api/minutes with a central template', () => {
     expect(JSON.stringify(await res.json())).not.toContain('HEMMELIG');
     expect(JSON.stringify(spy.mock.calls)).not.toContain('HEMMELIG');
     const e = events()[0];
-    expect(e).toMatchObject({ outcome: 'error', secondaryEntityType: 'central_template', details: { templateSource: 'central', templateVersion: 4, outcomeCode: 'rate_limit_exceeded' } });
+    expect(e).toMatchObject({ outcome: 'error', secondaryEntityType: 'central_template', details: { templateSource: 'central', templateVersion: 4, outcomeCode: 'unknown' } });
     expectValidMetadataOnly(e, ['HEMMELIG']);
     spy.mockRestore();
   });
@@ -632,5 +632,65 @@ describe('POST /api/minutes — access gate', () => {
     const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
     expect(res.status).toBe(503);
     expect(mockGenerateReferatBody).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/minutes customPrompt validation (every template kind)', () => {
+  const CENTRAL = '11111111-1111-4111-8111-111111111111';
+  const kinds: Array<[string, Record<string, unknown>]> = [
+    ['default template', {}],
+    ['no template', { skabelonId: '' }],
+    ['personal template', { skabelonId: 'sk-1' }],
+    ['central template', { skabelonId: CENTRAL, skabelonSource: 'central' }],
+  ];
+  const send = (extra: Record<string, unknown>) =>
+    POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, ...extra }));
+
+  beforeEach(() => {
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    mockGenerateReferatBody.mockReset().mockResolvedValue(sampleContent);
+    mockGetSkabelon.mockReset().mockResolvedValue({ ...defaultSkabelon, id: 'sk-1' });
+    mockGetDefaultSkabelon.mockReset().mockResolvedValue(defaultSkabelon);
+    mockResolveCentral.mockReset().mockResolvedValue({
+      id: CENTRAL,
+      version: 1,
+      prompt: 'Fortrolig prompt der ikke må slippe ud.',
+      includeDeltagere: false,
+      includeBeslutningspunkter: false,
+      includeDagsorden: false,
+      includeDato: false,
+      allowUserInstruction: true,
+      allowToggleOverrides: false,
+    });
+  });
+
+  it.each(kinds)('rejects a non-string customPrompt with 400 (%s)', async (_n, extra) => {
+    for (const bad of [42, true, ['a'], { a: 1 }, null]) {
+      const res = await send({ ...extra, customPrompt: bad });
+      expect(res.status, JSON.stringify(bad)).toBe(400);
+      expect((await res.json()).error).toMatch(/Instruktionen/);
+    }
+    expect(mockGenerateReferatBody).not.toHaveBeenCalled();
+  });
+
+  it.each(kinds)('rejects a customPrompt over 2000 characters with 400 (%s)', async (_n, extra) => {
+    const res = await send({ ...extra, customPrompt: 'x'.repeat(2001) });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/for lang/);
+    expect(mockGenerateReferatBody).not.toHaveBeenCalled();
+  });
+
+  it.each(kinds)('trims first: 2000 characters plus padding is accepted and forwarded trimmed (%s)', async (_n, extra) => {
+    const ok = 'y'.repeat(2000);
+    const res = await send({ ...extra, customPrompt: `   ${ok}\n\n ` });
+    expect(res.status).toBe(200);
+    expect(mockGenerateReferatBody.mock.calls[0][4]).toBe(ok);
+  });
+
+  it('treats a blank customPrompt as absent', async () => {
+    const res = await send({ customPrompt: '   ' });
+    expect(res.status).toBe(200);
+    expect(mockGenerateReferatBody.mock.calls[0][4]).toBeUndefined();
   });
 });

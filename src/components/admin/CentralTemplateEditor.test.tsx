@@ -304,3 +304,81 @@ describe('CentralTemplateEditor — a11y', () => {
     expect(screen.getByRole('group', { name: 'Kategorier' })).toBeInTheDocument();
   });
 });
+
+describe('CentralTemplateEditor — closing with unsaved text', () => {
+  const confirmDialog = () => screen.queryByRole('dialog', { name: 'Kassér ændringer?' });
+
+  it('closes at once on Escape and Annuller while nothing has been typed', async () => {
+    const { onOpenChange } = setup(null);
+    await userEvent.keyboard('{Escape}');
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(confirmDialog()).toBeNull();
+  });
+
+  it('closes at once on Annuller for an unchanged existing template', async () => {
+    const { onOpenChange } = setup(TEMPLATE);
+    await userEvent.click(screen.getByRole('button', { name: 'Annuller' }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('asks before Escape discards typed text, keeps the text on "Fortsæt redigering"', async () => {
+    const { onOpenChange } = setup(null);
+    await userEvent.type(screen.getByLabelText('Prompt'), 'En lang prompt jeg ikke vil miste');
+    await userEvent.keyboard('{Escape}');
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(await screen.findByRole('dialog', { name: 'Kassér ændringer?' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Fortsæt redigering' }));
+    expect(confirmDialog()).toBeNull();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Prompt')).toHaveValue('En lang prompt jeg ikke vil miste');
+  });
+
+  it('closes only after "Kassér og luk"', async () => {
+    const { onOpenChange } = setup(null);
+    await userEvent.type(screen.getByLabelText('Navn'), 'X');
+    await userEvent.keyboard('{Escape}');
+    await userEvent.click(await screen.findByRole('button', { name: 'Kassér og luk' }));
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('asks before Annuller discards, and a started change note counts as unsaved', async () => {
+    const { onOpenChange } = setup(TEMPLATE);
+    await userEvent.type(screen.getByLabelText('Ændringsbeskrivelse'), 'halvt skrevet');
+    await userEvent.click(screen.getByRole('button', { name: 'Annuller' }));
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(await screen.findByRole('dialog', { name: 'Kassér ændringer?' })).toBeInTheDocument();
+  });
+
+  it('asks before a click outside the dialog discards a changed existing template', async () => {
+    const { onOpenChange } = setup(TEMPLATE);
+    await userEvent.type(screen.getByLabelText('Prompt'), ' ekstra');
+    const overlay = document.querySelector('.bg-black\\/40') as HTMLElement;
+    expect(overlay).not.toBeNull();
+    await userEvent.setup({ pointerEventsCheck: 0 }).click(overlay);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(await screen.findByRole('dialog', { name: 'Kassér ændringer?' })).toBeInTheDocument();
+  });
+
+  it('cannot be closed by Escape while a save is in flight', async () => {
+    let finish!: () => void;
+    const pending = new Promise<Response>((resolve) => {
+      finish = () =>
+        resolve(new Response(JSON.stringify({ template: TEMPLATE }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    });
+    const { onOpenChange, onSaved } = setup(TEMPLATE, { [`PUT /api/admin/central-templates/${ID}`]: () => pending });
+    await userEvent.type(screen.getByLabelText('Prompt'), ' ekstra');
+    await userEvent.type(screen.getByLabelText('Ændringsbeskrivelse'), NOTE);
+    await userEvent.click(saveButton('Gem ændringer'));
+    expect(await screen.findByRole('button', { name: 'Gemmer …' })).toBeDisabled();
+
+    await userEvent.keyboard('{Escape}');
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(confirmDialog()).toBeNull(); // no prompt either: the request is in flight
+
+    finish();
+    await vi.waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(onOpenChange).toHaveBeenCalledWith(false); // a successful save closes without asking
+  });
+});
