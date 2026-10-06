@@ -146,6 +146,10 @@ const ZERO: SyncCounts = {
   assignmentsIgnoredRole: 1,
   assignmentsSkippedUnknownUser: 1,
   assignmentsWithoutScope: 2,
+  usersSkippedInvalid: 0,
+  orgUnitsSkippedInvalid: 0,
+  assignmentRowsSkippedInvalid: 0,
+  membershipsSkippedInvalid: 0,
 };
 
 describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
@@ -165,6 +169,10 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         assignmentsIgnoredRole: 1,
         assignmentsSkippedUnknownUser: 1,
         assignmentsWithoutScope: 2,
+        usersSkippedInvalid: 0,
+        orgUnitsSkippedInvalid: 0,
+        assignmentRowsSkippedInvalid: 0,
+        membershipsSkippedInvalid: 0,
       });
 
       expect(await count(h.c, 'directory_users', "source = 'rollekatalog'")).toBe(9);
@@ -198,6 +206,96 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
       expect(h.audit.mock.calls[0][0]).toMatchObject({ trigger: 'cron' });
       expect(h.audit.mock.calls[0][1]).toMatchObject({ status: 'success', runId: r.runId });
     }));
+
+  describe('invalid rows', () => {
+    const legacyUser = (id: string, extra: Record<string, unknown> = {}) => ({
+      uuid: id,
+      extUuid: null,
+      userId: `legacy-${id}`,
+      name: 'Legacy',
+      email: null,
+      disabled: false,
+      positions: [{ orgUnitUuid: O(1) }],
+      ...extra,
+    });
+
+    it('one bad unit id and one bad user id: the sync succeeds, the rest is mirrored, children of the bad unit become roots', () =>
+      withHarness(async (h) => {
+        const d = fixtureData();
+        mock.setData({
+          users: [...d.users, legacyUser('LEGACY-USER-1')],
+          orgUnits: [
+            ...d.orgUnits,
+            { uuid: 'LEGACY-UNIT-1', name: 'Gammel enhed', parentOrgUnitUuid: null },
+            { uuid: O(21), name: 'Barn af gammel enhed', parentOrgUnitUuid: 'LEGACY-UNIT-1' },
+          ],
+          roleAssignments: [
+            ...d.roleAssignments,
+            { extUuid: E(99), userId: 'legacy-user', assignments: [{ roleIdentifier: 'tt-logleser', roleConstraintValues: [] }] },
+            'not-a-row',
+          ],
+        });
+        const r = await h.run();
+        expect(r).toMatchObject({ status: 'success', errorCode: null });
+        expect(r.counts).toMatchObject({
+          usersUpserted: 9,
+          orgUnitsUpserted: 6,
+          orgUnitsOrphaned: 0,
+          usersSkippedInvalid: 1,
+          orgUnitsSkippedInvalid: 1,
+          assignmentRowsSkippedInvalid: 1,
+          membershipsSkippedInvalid: 0,
+          assignmentsSkippedUnknownUser: 2, // the fixture's one + the skipped user's
+          assignmentsUpserted: 10,
+        });
+
+        expect(await count(h.c, 'directory_users', "source = 'rollekatalog'")).toBe(9);
+        expect(await count(h.c, 'directory_users', "name = 'Legacy'")).toBe(0);
+        expect(await count(h.c, 'org_units', "source = 'rollekatalog'")).toBe(6);
+        expect(await count(h.c, 'org_units', "name = 'Gammel enhed'")).toBe(0);
+        const child = (await rows(h.c, 'SELECT parent_uuid FROM org_units WHERE uuid = $1', [O(21)]))[0];
+        expect(child.parent_uuid).toBeNull();
+        // The rest is exactly the fixture result.
+        expect(await count(h.c, 'role_assignments', "source = 'rollekatalog'")).toBe(10);
+        expect(await count(h.c, 'org_unit_members')).toBe(12);
+
+        // The counters are persisted in sync_runs.counts and read back; no row content is.
+        const latest = await getLatestSyncRun(h.env);
+        expect(latest?.counts).toMatchObject({ usersSkippedInvalid: 1, orgUnitsSkippedInvalid: 1, assignmentRowsSkippedInvalid: 1 });
+        const raw = (await rows(h.c, 'SELECT counts FROM sync_runs'))[0].counts;
+        expect(JSON.stringify(raw)).not.toMatch(/LEGACY|Gammel/i);
+      }));
+
+    it('a skipped user who was mirrored before is disabled like any absent user; the removal threshold still applies', () =>
+      withHarness(async (h) => {
+        await h.run();
+        // Rune's uuid turns into a legacy id upstream: the row is skipped, so the mirrored Rune is absent.
+        const d = fixtureData();
+        mock.setData({ users: d.users.map((u) => (u.userId === 'rune.a' ? { ...u, uuid: 'LEGACY-RUNE' } : u)) });
+        vi.stubEnv('ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT', '5'); // 1 of 8 enabled users = 12.5 %
+        const blocked = await h.run();
+        expect(blocked).toMatchObject({ status: 'aborted', errorCode: 'removal_threshold' });
+        expect((await rows(h.c, 'SELECT disabled FROM directory_users WHERE uuid = $1', [U(9)]))[0].disabled).toBe(false);
+
+        const forced = await h.run({ trigger: 'manual', force: true });
+        expect(forced).toMatchObject({ status: 'success' });
+        expect(forced.counts).toMatchObject({ usersSkippedInvalid: 1, usersDisabled: 1 });
+        expect((await rows(h.c, 'SELECT disabled FROM directory_users WHERE uuid = $1', [U(9)]))[0].disabled).toBe(true);
+      }));
+
+    it('more bad rows than the allowance fails the run as invalid_response and writes nothing', () =>
+      withHarness(async (h) => {
+        await h.run();
+        const before = await snapshot(h.c);
+        const d = fixtureData();
+        mock.setData({ users: [...d.users, ...['A', 'B', 'C', 'D'].map((x) => legacyUser(`LEGACY-${x}`))] });
+        const r = await h.run();
+        expect(r).toMatchObject({ status: 'error', errorCode: 'invalid_response' });
+        expect(await snapshot(h.c)).toEqual(before);
+        const latest = await getLatestSyncRun(h.env);
+        expect(latest).toMatchObject({ status: 'failed', errorCode: 'invalid_response' });
+      }));
+  });
 
   it('a second identical sync changes nothing and counts no changes', () =>
     withHarness(async (h) => {

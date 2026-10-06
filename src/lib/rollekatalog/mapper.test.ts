@@ -238,6 +238,39 @@ describe('mapToMirror: users and members edge cases', () => {
   });
 });
 
+describe('mapToMirror: invalid rows', () => {
+  const p = (n: number) => ({ orgUnitUuid: O(n), titleUuid: null, doNotInherit: false });
+
+  it('reports the schema skip counts in the stats; a skipped unit turns its children into roots and its members into nothing', () => {
+    const set = mapToMirror(
+      input({
+        users: [user(1, { positions: [p(1), p(2)] }), user(2, { uuid: 'legacy-user', positions: [p(1)] })],
+        orgUnits: [unit(1, null), unit(2, 1), unit(3, 'legacy-unit'), unit(4, 3), unit(5, null, { uuid: 'legacy-unit' })],
+        assignments: [assignment(1, { id: 'tt-logleser' }), 'junk', { userId: 7 }],
+      }),
+      DEFAULTS,
+    );
+    expect(set.stats).toMatchObject({ usersSkippedInvalid: 1, orgUnitsSkippedInvalid: 1, assignmentRowsSkippedInvalid: 2, membershipsSkippedInvalid: 0 });
+    expect(set.users.map((u) => u.uuid)).toEqual([U(1)]);
+    // Unit 3's parent id is not a uuid: it is a root. Unit 4 still hangs under 3.
+    expect(set.orgUnits.find((u) => u.uuid === O(3))?.parentUuid).toBeNull();
+    expect(set.orgUnits.find((u) => u.uuid === O(4))?.parentUuid).toBe(O(3));
+  });
+
+  it('an assignment of a skipped user counts as an unknown user, never as a role', () => {
+    const set = mapToMirror(
+      input({
+        users: [user(1, { uuid: 'legacy-user', extUuid: E(1) }), user(2)],
+        orgUnits: [unit(1, null)],
+        assignments: [assignment(1, { id: 'tt-logleser', units: [1] })],
+      }),
+      DEFAULTS,
+    );
+    expect(set.assignments).toEqual([]);
+    expect(set.stats).toMatchObject({ usersSkippedInvalid: 1, assignmentsSkippedUnknownUser: 1 });
+  });
+});
+
 describe('mapToMirror: assignment edge cases', () => {
   const base = { users: [user(1), user(2)], orgUnits: [unit(1, null), unit(2, 1)] };
 
@@ -352,6 +385,7 @@ describe('privacy: nothing personal beyond the whitelist survives mapping', () =
         'members', 'name', 'orgUnitCyclesBroken', 'orgUnitUuid', 'orgUnits', 'orgUnitsOrphaned', 'parentUuid', 'roleKey',
         'scopeOrgUnitUuid', 'stats', 'assignmentsIgnoredRole',
         'assignmentsSkippedUnknownUser', 'assignmentsWithoutScope', 'users', 'uuid',
+        'usersSkippedInvalid', 'orgUnitsSkippedInvalid', 'assignmentRowsSkippedInvalid', 'membershipsSkippedInvalid',
       ].sort(),
     );
   });

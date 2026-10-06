@@ -43,6 +43,15 @@ describe('directory.sync', () => {
     expect(validateEvent({ ...base, source: 'system', details: { ...without, sessionsRevoked: 'alle' } } as never).ok).toBe(false);
   });
 
+  it('accepts the invalid-row counters (and still without them) and rejects them negative', () => {
+    const ok = { trigger: 'cron', status: 'success', ...emptySyncCounts() };
+    const { usersSkippedInvalid: _u, orgUnitsSkippedInvalid: _o, assignmentRowsSkippedInvalid: _a, membershipsSkippedInvalid: _m, ...old } = ok;
+    expect(validateEvent({ ...base, source: 'system', details: { ...ok, usersSkippedInvalid: 2, orgUnitsSkippedInvalid: 1, assignmentRowsSkippedInvalid: 3, membershipsSkippedInvalid: 4 } } as never).ok).toBe(true);
+    expect(validateEvent({ ...base, source: 'system', details: old } as never).ok).toBe(true);
+    expect(validateEvent({ ...base, source: 'system', details: { ...ok, usersSkippedInvalid: -1 } } as never).ok).toBe(false);
+    expect(validateEvent({ ...base, source: 'system', details: { ...ok, membershipsSkippedInvalid: 'x' } } as never).ok).toBe(false);
+  });
+
   it('rejects free text, unknown keys, a client source and negative counts', () => {
     const ok = { trigger: 'cron', status: 'success', ...emptySyncCounts() };
     expect(validateEvent({ ...base, source: 'system', details: { ...ok, errorCode: 'Rollekatalog svarede ikke' } } as never).ok).toBe(false);

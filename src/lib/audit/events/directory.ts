@@ -26,6 +26,10 @@ export const directoryEvents = {
         assignmentsIgnoredRole: count(),
         assignmentsSkippedUnknownUser: count(),
         assignmentsWithoutScope: count(),
+        usersSkippedInvalid: count().optional(),
+        orgUnitsSkippedInvalid: count().optional(),
+        assignmentRowsSkippedInvalid: count().optional(),
+        membershipsSkippedInvalid: count().optional(),
         errorCode: code().optional(),
       })
       .strict(),

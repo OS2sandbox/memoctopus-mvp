@@ -85,6 +85,17 @@ describe('planMirror', () => {
     expect(plan.removal).toEqual({ users: { removed: 0, base: 0 }, assignments: { removed: 0, base: 0 } });
   });
 
+  it('carries the invalid-row counts of the mapper into the plan counts', () => {
+    const mirror = fixtureMirror();
+    mirror.stats = { ...mirror.stats, usersSkippedInvalid: 2, orgUnitsSkippedInvalid: 1, assignmentRowsSkippedInvalid: 3, membershipsSkippedInvalid: 4 };
+    expect(planMirror(EMPTY, mirror).counts).toMatchObject({
+      usersSkippedInvalid: 2,
+      orgUnitsSkippedInvalid: 1,
+      assignmentRowsSkippedInvalid: 3,
+      membershipsSkippedInvalid: 4,
+    });
+  });
+
   it('an unchanged mirror plans no writes at all and counts no changes', () => {
     const mirror = fixtureMirror();
     const plan = planMirror(existingFrom(mirror), mirror);
@@ -226,6 +237,16 @@ describe('sync-run helpers', () => {
     expect(JSON.stringify(counts)).not.toContain('cpr');
   });
 
+  it('parseCounts reads the invalid-row counters and defaults them to 0 for rows written before they existed', () => {
+    expect(parseCounts({ usersSkippedInvalid: 2, orgUnitsSkippedInvalid: 1, assignmentRowsSkippedInvalid: 3, membershipsSkippedInvalid: 4 })).toMatchObject({
+      usersSkippedInvalid: 2,
+      orgUnitsSkippedInvalid: 1,
+      assignmentRowsSkippedInvalid: 3,
+      membershipsSkippedInvalid: 4,
+    });
+    expect(parseCounts({ usersUpserted: 1 })).toMatchObject({ usersSkippedInvalid: 0, assignmentRowsSkippedInvalid: 0 });
+  });
+
   it('tbl qualifies with the schema and rejects anything that is not a plain identifier', () => {
     const env = (schema: string): SyncEnv => ({ schema, connect: async () => { throw new Error('unused'); } });
     expect(tbl(env('public'), 'org_units')).toBe('"public".org_units');
@@ -363,6 +384,93 @@ describe('runSync flow', () => {
     expect(r).toMatchObject({ status: 'aborted', errorCode: 'empty_response' });
     expect(mock.requests.map((q) => q.path)).toEqual(['/api/organisation/v3']);
     expect(f.sqls().includes('BEGIN')).toBe(false);
+  });
+
+  describe('invalid rows', () => {
+    const lastEvent = () => vi.mocked(recordEvent).mock.calls.at(-1)![0] as unknown as AuditEventInput & { details: Record<string, unknown> };
+    const goodUser = (n: number, extra: Record<string, unknown> = {}) => ({
+      uuid: `7e5e0000-0000-4000-8000-${String(900 + n).padStart(12, '0')}`,
+      extUuid: null,
+      userId: `extra${n}`,
+      name: `Extra ${n}`,
+      email: null,
+      disabled: false,
+      positions: [{ orgUnitUuid: O(1) }],
+      ...extra,
+    });
+
+    it('one bad user id and one bad unit id: the run succeeds, the rest is mirrored, the counts flow to the run row and the audit event', async () => {
+      const base = fixtureData();
+      mock.setData({
+        users: [...base.users, goodUser(1, { uuid: 'LEGACY-USER' })],
+        orgUnits: [...base.orgUnits, { uuid: 'LEGACY-UNIT', name: 'Gammel enhed', parentOrgUnitUuid: null }],
+      });
+      let finishParams: readonly unknown[] | undefined;
+      const f = fakeEnv(baseScript());
+      const wrapped: SyncEnv = {
+        schema: f.env.schema,
+        connect: async () => {
+          const c = await f.env.connect();
+          return {
+            ...c,
+            query: (sql, params) => {
+              if (sql.includes('SET status = $2')) finishParams = params;
+              return c.query(sql, params);
+            },
+          };
+        },
+      };
+      const r = await runSync({ trigger: 'cron' }, deps(wrapped));
+      expect(r).toMatchObject({ status: 'success', errorCode: null });
+      expect(r.counts).toMatchObject({
+        usersUpserted: 9,
+        orgUnitsUpserted: 5,
+        usersSkippedInvalid: 1,
+        orgUnitsSkippedInvalid: 1,
+        assignmentRowsSkippedInvalid: 0,
+        membershipsSkippedInvalid: 0,
+      });
+      expect(f.sqls()).toContain('COMMIT');
+      // sync_runs.counts (jsonb) carries the new keys; nothing but counts.
+      expect(JSON.parse(String(finishParams?.[3]))).toMatchObject({ usersSkippedInvalid: 1, orgUnitsSkippedInvalid: 1 });
+      expect(JSON.stringify(finishParams)).not.toMatch(/LEGACY|Gammel/);
+      const ev = lastEvent();
+      expect(ev.details).toMatchObject({ usersSkippedInvalid: 1, orgUnitsSkippedInvalid: 1, assignmentRowsSkippedInvalid: 0 });
+      expect(validateEvent(ev).ok).toBe(true);
+      expect(JSON.stringify(ev)).not.toMatch(/LEGACY|Gammel/);
+    });
+
+    it('bad role assignment rows are counted too', async () => {
+      const base = fixtureData();
+      mock.setData({ roleAssignments: [...base.roleAssignments, 'junk', { userId: 5 }] });
+      const r = await runSync({ trigger: 'cron' }, deps(fakeEnv(baseScript()).env));
+      expect(r).toMatchObject({ status: 'success' });
+      expect(r.counts).toMatchObject({ assignmentRowsSkippedInvalid: 2, assignmentsUpserted: 10 });
+    });
+
+    it('more bad users than the allowance aborts as invalid_response before any transaction or write', async () => {
+      const base = fixtureData();
+      // 9 fixture users + 4 bad rows: allowance of 13 rows is max(3, 0) = 3.
+      mock.setData({ users: [...base.users, ...[1, 2, 3, 4].map((n) => goodUser(n, { uuid: `legacy-${n}` }))] });
+      const f = fakeEnv(baseScript());
+      const r = await runSync({ trigger: 'cron' }, deps(f.env));
+      expect(r).toMatchObject({ status: 'error', errorCode: 'invalid_response', counts: expect.objectContaining({ usersSkippedInvalid: 0 }) });
+      const sqls = f.sqls();
+      expect(sqls).not.toContain('BEGIN');
+      expect(sqls.some((q) => /^(INSERT INTO "public"\.(directory_users|org_units|role_assignments)|UPDATE|DELETE)/.test(q) && !q.includes('sync_runs'))).toBe(false);
+      expect(mock.requests.map((q) => q.path)).toEqual(['/api/organisation/v3']);
+      const finish = f.log.find((l) => l.sql.includes('SET status = $2'));
+      expect(finish).toBeDefined();
+      expect(lastEvent()).toMatchObject({ outcome: 'error', details: { errorCode: 'invalid_response' } });
+    });
+
+    it('more bad assignment rows than the allowance aborts before any transaction', async () => {
+      mock.setData({ roleAssignments: [...fixtureData().roleAssignments, 'a', 'b', 'c', 'd'] });
+      const f = fakeEnv(baseScript());
+      const r = await runSync({ trigger: 'cron' }, deps(f.env));
+      expect(r).toMatchObject({ status: 'error', errorCode: 'invalid_response' });
+      expect(f.sqls()).not.toContain('BEGIN');
+    });
   });
 
   it('applies in ONE transaction on one connection and commits', async () => {
@@ -518,6 +626,7 @@ describe('runSync audit', () => {
       [
         'trigger', 'status', 'forced', 'usersUpserted', 'usersDisabled', 'sessionsRevoked', 'orgUnitsUpserted', 'orgUnitsOrphaned', 'orgUnitCyclesBroken',
         'assignmentsUpserted', 'assignmentsRemoved', 'assignmentsIgnoredRole', 'assignmentsSkippedUnknownUser', 'assignmentsWithoutScope',
+        'usersSkippedInvalid', 'orgUnitsSkippedInvalid', 'assignmentRowsSkippedInvalid', 'membershipsSkippedInvalid',
       ].sort(),
     );
     expect(JSON.stringify(ev)).not.toMatch(/mette|jens|example\.dk|cpr/i);

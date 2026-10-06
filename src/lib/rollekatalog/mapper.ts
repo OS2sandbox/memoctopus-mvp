@@ -4,7 +4,7 @@
 // parents, cycles, duplicate ids, assignments for unknown users) is resolved here
 // the FAIL-CLOSED way and counted, so sync.ts can apply the result blindly.
 import { ROLE_KEYS, type RoleKey } from '@/lib/authz/types';
-import type { RkOrganisation, RkUserAssignments } from './schemas';
+import type { RkOrganisation, RkRoleAssignments, RkUserAssignments } from './schemas';
 import { deriveScope } from './scope';
 import type { ScopeConstraint, SyncCounts } from './types';
 
@@ -44,6 +44,10 @@ type MapperStats = Pick<
   | 'assignmentsIgnoredRole'
   | 'assignmentsSkippedUnknownUser'
   | 'assignmentsWithoutScope'
+  | 'usersSkippedInvalid'
+  | 'orgUnitsSkippedInvalid'
+  | 'assignmentRowsSkippedInvalid'
+  | 'membershipsSkippedInvalid'
 >;
 
 export interface MirrorSet {
@@ -62,7 +66,7 @@ export interface MapperConfig {
 
 export interface MapperInput {
   organisation: RkOrganisation;
-  assignments: RkUserAssignments[];
+  assignments: RkRoleAssignments;
 }
 
 const OUR_ROLES: ReadonlySet<string> = new Set(ROLE_KEYS);
@@ -199,7 +203,7 @@ function mapAssignments(
   // One group per (user, role): duplicate entries are unioned (never "unconstrained wins": that could widen a scope).
   const groups = new Map<string, { user: string; role: RoleKey; constraints: ScopeConstraint[] }>();
 
-  for (const entry of input.assignments) {
+  for (const entry of input.assignments.rows) {
     const user = resolve(entry);
     for (const a of entry.assignments) {
       const identifier = a.roleIdentifier.trim();
@@ -264,6 +268,10 @@ export function mapToMirror(input: MapperInput, config: MapperConfig): MirrorSet
       assignmentsIgnoredRole: assignments.ignoredRole,
       assignmentsSkippedUnknownUser: assignments.skippedUnknownUser,
       assignmentsWithoutScope: assignments.withoutScope,
+      usersSkippedInvalid: input.organisation.skipped.users,
+      orgUnitsSkippedInvalid: input.organisation.skipped.orgUnits,
+      assignmentRowsSkippedInvalid: input.assignments.skipped,
+      membershipsSkippedInvalid: input.organisation.skipped.positions,
     },
   };
 }

@@ -23,6 +23,14 @@ export interface SyncCounts {
   assignmentsSkippedUnknownUser: number;
   /** Role assignments that yielded no scope and may not be global (fail closed, no row). */
   assignmentsWithoutScope: number;
+  /** User rows dropped because they failed validation (e.g. a uuid that is not a uuid); they are simply absent from the fetch. */
+  usersSkippedInvalid: number;
+  /** Org unit rows dropped because they failed validation; their children become roots. */
+  orgUnitsSkippedInvalid: number;
+  /** Role-assignment rows, and assignment entries inside valid rows, dropped because they failed validation. */
+  assignmentRowsSkippedInvalid: number;
+  /** Position entries of a user dropped for a wrong shape (the user itself is kept). */
+  membershipsSkippedInvalid: number;
 }
 
 export const SYNC_COUNT_KEYS = [
@@ -37,6 +45,10 @@ export const SYNC_COUNT_KEYS = [
   'assignmentsIgnoredRole',
   'assignmentsSkippedUnknownUser',
   'assignmentsWithoutScope',
+  'usersSkippedInvalid',
+  'orgUnitsSkippedInvalid',
+  'assignmentRowsSkippedInvalid',
+  'membershipsSkippedInvalid',
 ] as const satisfies ReadonlyArray<keyof SyncCounts>;
 
 export function emptySyncCounts(): SyncCounts {
@@ -45,7 +57,7 @@ export function emptySyncCounts(): SyncCounts {
 
 /**
  * success = applied; aborted = a safety guard stopped it before any write
- * (empty_response, removal_threshold); error = fetch/apply failed and the mirror is
+ * (empty_response, removal_threshold; too many invalid rows is invalid_response and also aborts before any write); error = fetch/apply failed and the mirror is
  * unchanged; already_running = another run holds the advisory lock (no sync_runs row).
  * In sync_runs.status (CHECK 'running'|'success'|'failed') both 'aborted' and 'error' are stored as 'failed'.
  */

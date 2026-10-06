@@ -18,7 +18,7 @@ import {
   parseOrThrow,
   roleAssignmentsSchema,
   type RkOrganisation,
-  type RkUserAssignments,
+  type RkRoleAssignments,
 } from './schemas';
 
 export const API_KEY_HEADER = 'ApiKey';
@@ -201,7 +201,7 @@ export class RollekatalogClient {
   }
 
   /** READ key. Effective assignments with resolved constraint values for our IT system. */
-  async getRoleAssignments(): Promise<RkUserAssignments[]> {
+  async getRoleAssignments(): Promise<RkRoleAssignments> {
     const data = await this.request({
       path: `/api/read/itsystem/roleAssignmentsWithContraints/${encodeURIComponent(this.system())}`,
       query: { domain: this.domain() },

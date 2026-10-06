@@ -45,7 +45,8 @@ describe('happy paths against the mock', () => {
   });
   it('getRoleAssignments uses the READ key, the IT system and the optional domain', async () => {
     const a = await createRollekatalogClient(opts({ domain: 'Administrativt' })).getRoleAssignments();
-    expect(a).toHaveLength(10);
+    expect(a.rows).toHaveLength(10);
+    expect(a.skipped).toBe(0);
     expect(mock.requests[0]).toMatchObject({
       path: '/api/read/itsystem/roleAssignmentsWithContraints/os2taletiltekst',
       query: 'domain=Administrativt',
@@ -62,7 +63,7 @@ describe('happy paths against the mock', () => {
     vi.stubEnv('ROLLEKATALOG_ORG_API_KEY', mock.orgKey);
     vi.stubEnv('ROLLEKATALOG_ITSYSTEM_ID', 'os2taletiltekst');
     expect((await createRollekatalogClient().getOrganisation()).users.length).toBe(9);
-    expect((await createRollekatalogClient().getRoleAssignments()).length).toBeGreaterThan(0);
+    expect((await createRollekatalogClient().getRoleAssignments()).rows.length).toBeGreaterThan(0);
   });
 });
 
@@ -137,7 +138,8 @@ describe('retries', () => {
     mock.setFaults([{ match: '/api/read/', status: 503, times: 2 }]);
     const sleeps: number[] = [];
     const a = await createRollekatalogClient(opts({ sleep: async (ms) => void sleeps.push(ms), backoffMs: 10 })).getRoleAssignments();
-    expect(a).toHaveLength(10);
+    expect(a.rows).toHaveLength(10);
+    expect(a.skipped).toBe(0);
     expect(mock.requests.map((r) => r.status)).toEqual([503, 503, 200]);
     expect(sleeps).toEqual([10, 20]);
   });
@@ -155,7 +157,8 @@ describe('retries', () => {
   it('retries 429 and then succeeds', async () => {
     mock.setFaults([{ match: '/api/read/', status: 429, times: 1 }]);
     const a = await createRollekatalogClient(opts()).getRoleAssignments();
-    expect(a).toHaveLength(10);
+    expect(a.rows).toHaveLength(10);
+    expect(a.skipped).toBe(0);
     expect(mock.requests.map((r) => r.status)).toEqual([429, 200]);
   });
   it('never retries a timeout: exactly one request reaches the server', async () => {
@@ -233,7 +236,15 @@ describe('timeout, size and body handling', () => {
     expect(mock.requests).toHaveLength(1);
   });
   it('reports a well-formed body of the wrong shape as invalid_response', async () => {
+    mock.setData({ roleAssignments: { not: 'an array' } as unknown as unknown[] });
+    expect((await failure(createRollekatalogClient(opts()).getRoleAssignments())).code).toBe('invalid_response');
+  });
+  it('drops a few malformed rows (counted) but fails when too many are malformed', async () => {
     mock.setData({ roleAssignments: [{ assignments: [{}] }] });
+    const some = await createRollekatalogClient(opts()).getRoleAssignments();
+    expect(some.rows.length).toBe(1);
+    expect(some.skipped).toBe(1);
+    mock.setData({ roleAssignments: Array.from({ length: 4 }, () => 'junk') });
     expect((await failure(createRollekatalogClient(opts()).getRoleAssignments())).code).toBe('invalid_response');
   });
   it('reports an empty 200 body as invalid_response', async () => {
@@ -280,7 +291,7 @@ describe('secrets hygiene', () => {
       ['5xx', { fetch: (async () => new Response('', { status: 502 })) as unknown as typeof fetch }, (c) => c.getOrganisation()],
       ['network', { fetch: (async () => { throw new TypeError(`fetch failed with ApiKey ${SECRET}`); }) as unknown as typeof fetch }, (c) => c.getOrganisation()],
       ['json', { fetch: (async () => new Response(`not json ${SECRET}`, { status: 200 })) as unknown as typeof fetch }, (c) => c.getOrganisation()],
-      ['schema', { fetch: (async () => new Response(JSON.stringify({ users: [{ uuid: SECRET }], orgUnits: [] }), { status: 200 })) as unknown as typeof fetch }, (c) => c.getOrganisation()],
+      ['schema', { fetch: (async () => new Response(JSON.stringify({ users: [{ uuid: SECRET }, { uuid: SECRET }, { uuid: SECRET }, { uuid: SECRET }], orgUnits: [] }), { status: 200 })) as unknown as typeof fetch }, (c) => c.getOrganisation()],
       ['too_large', { maxBytes: 1024, fetch: (async () => new Response('x'.repeat(2048), { status: 200 })) as unknown as typeof fetch }, (c) => c.getOrganisation()],
     ];
     for (const [label, extra, call] of failing) {

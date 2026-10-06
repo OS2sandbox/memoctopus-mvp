@@ -14,6 +14,10 @@
 // Safety nets, all fail-closed:
 //   - a non-blocking advisory lock: a concurrent run answers 'already_running'
 //   - empty-response guard: no users or no org units aborts ('empty_response')
+//   - too many invalid rows: more than max(3, 5 %) bad rows in one array fails the fetch
+//     ('invalid_response', see schemas.ts) before anything is written. Fewer bad rows are
+//     dropped and counted; a dropped user is simply absent, so it goes through the removal
+//     threshold like any other missing user.
 //   - removal threshold: disabling or deleting too much aborts ('removal_threshold')
 //     unless the admin forces it
 //
@@ -30,7 +34,7 @@ import {
 } from './config';
 import { errorCodeOf } from './errors';
 import { mapToMirror, type MirrorAssignment, type MirrorOrgUnit, type MirrorSet, type MirrorMember, type MirrorUser } from './mapper';
-import type { RkOrganisation, RkUserAssignments } from './schemas';
+import type { RkOrganisation, RkRoleAssignments } from './schemas';
 import {
   abandonStaleRuns,
   defaultSyncEnv,
@@ -112,6 +116,10 @@ export function planMirror(existing: ExistingMirror, mirror: MirrorSet): MirrorP
   counts.assignmentsIgnoredRole = mirror.stats.assignmentsIgnoredRole;
   counts.assignmentsSkippedUnknownUser = mirror.stats.assignmentsSkippedUnknownUser;
   counts.assignmentsWithoutScope = mirror.stats.assignmentsWithoutScope;
+  counts.usersSkippedInvalid = mirror.stats.usersSkippedInvalid;
+  counts.orgUnitsSkippedInvalid = mirror.stats.orgUnitsSkippedInvalid;
+  counts.assignmentRowsSkippedInvalid = mirror.stats.assignmentRowsSkippedInvalid;
+  counts.membershipsSkippedInvalid = mirror.stats.membershipsSkippedInvalid;
 
   // ── users ──
   const fetchedUsers = new Set(mirror.users.map((u) => u.uuid));
@@ -497,7 +505,7 @@ type SyncClient = Pick<RollekatalogClient, 'getOrganisation' | 'getRoleAssignmen
 
 interface Fetched {
   organisation: RkOrganisation;
-  assignments: RkUserAssignments[];
+  assignments: RkRoleAssignments;
 }
 
 /** Sequential on purpose: organisation v3 is a heavy, synchronized call on the Rollekatalog side. */

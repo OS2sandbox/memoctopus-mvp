@@ -11,7 +11,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   timeout: 'Rollekatalog svarede ikke i tide.',
   network: 'Kunne ikke få forbindelse til Rollekatalog.',
   server_error: 'Rollekatalog svarede med en serverfejl.',
-  invalid_response: 'Svaret fra Rollekatalog havde et uventet format.',
+  invalid_response:
+    'Svaret fra Rollekatalog havde et uventet format, eller for mange rækker i det var ugyldige. Intet er ændret. Kontrollér brugere og enheder i Rollekatalog (id\'er skal være gyldige uuid\'er).',
   too_large: 'Svaret fra Rollekatalog var for stort.',
   empty_response: 'Rollekatalog returnerede ingen brugere eller enheder. Synkroniseringen er afbrudt, og intet er ændret.',
   removal_threshold:
@@ -45,4 +46,8 @@ export const syncCountLabels: Record<keyof SyncCounts, string> = {
   assignmentsIgnoredRole: 'Ukendte roller ignoreret',
   assignmentsSkippedUnknownUser: 'Roller for ukendte brugere sprunget over',
   assignmentsWithoutScope: 'Roller uden område (ikke tildelt)',
+  usersSkippedInvalid: 'Brugere sprunget over (ugyldig række)',
+  orgUnitsSkippedInvalid: 'Enheder sprunget over (ugyldig række)',
+  assignmentRowsSkippedInvalid: 'Rolle-rækker sprunget over (ugyldig række)',
+  membershipsSkippedInvalid: 'Stillinger sprunget over (ugyldig række)',
 };
