@@ -14,7 +14,7 @@ import { ROLE_KEYS, type RoleKey } from '@/lib/authz/types';
 import { apiRequest } from './api';
 import { flattenOrgTree, indentedLabel, type TreeUnit } from './org-tree';
 
-export interface GrantTarget {
+interface GrantTarget {
   id: string;
   name: string;
 }

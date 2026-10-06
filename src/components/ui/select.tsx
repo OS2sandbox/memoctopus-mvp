@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { cn } from '@/lib/utils';
 
-export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
+interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
   /** Visible label, associated with the select via htmlFor/id. */
   label?: string;
   /** Error message; marks the select invalid and is announced via aria-describedby. */

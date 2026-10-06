@@ -4,7 +4,7 @@ import * as React from 'react';
 import { cva } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 
-export type ToastVariant = 'info' | 'success' | 'error';
+type ToastVariant = 'info' | 'success' | 'error';
 
 export interface ToastOptions {
   message: string;
@@ -42,7 +42,7 @@ const toastVariants = cva(
   },
 );
 
-export interface ToastProviderProps {
+interface ToastProviderProps {
   children?: React.ReactNode;
   dismissLabel?: string;
 }

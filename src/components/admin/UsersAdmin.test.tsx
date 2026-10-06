@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { UsersAdmin } from './UsersAdmin';
-import { ADMIN_ME, READER_ME, ROLLEKATALOG_ME, calls, installFetch, json, renderWithToasts } from './test-helpers';
+import { ADMIN_ME, ROLLEKATALOG_ME, calls, installFetch, json, renderWithToasts } from './test-helpers';
 
 const UNIT = '11111111-1111-4111-8111-111111111111';
 
@@ -132,14 +132,6 @@ describe('UsersAdmin — write controls by mode and role', () => {
     expect(screen.queryByRole('button', { name: /Tildel rolle/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Fjern/ })).toBeNull();
     expect(screen.queryByRole('columnheader', { name: 'Handlinger' })).toBeNull();
-  });
-
-  it('hides write controls and explains why for a viewer without access.manage', async () => {
-    setup(READER_ME);
-    renderWithToasts(<UsersAdmin />);
-    await screen.findByText('Bo Bruger');
-    expect(screen.queryByRole('button', { name: /Tildel rolle/ })).toBeNull();
-    expect(screen.getByText(/Du har ikke rettigheden »Administrere brugere og roller«/)).toBeInTheDocument();
   });
 
   it('shows no write controls while /api/me is still unknown', async () => {

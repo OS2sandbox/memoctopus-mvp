@@ -74,7 +74,7 @@ describe('RoleGrantDialog — scope rules per role', () => {
     setup();
     await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-skabelonansvarlig');
     const options = within(screen.getByLabelText('Organisationsenhed')).getAllByRole('option');
-    expect(options.map((o) => o.textContent)).toEqual(['Vælg enhed', 'Kommune', ' └ Børn']);
+    expect(options.map((o) => o.textContent)).toEqual(['Vælg enhed', 'Kommune', '\u2003└ Børn']);
   });
 
   it('clears the chosen unit when the role changes to one without scope', async () => {

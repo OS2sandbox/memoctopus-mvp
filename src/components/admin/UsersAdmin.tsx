@@ -9,8 +9,6 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableEmptyRow, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/components/ui/toast';
 import { roleLabels, sourceLabels } from '@/lib/authz/labels.da';
-import { meToPrincipal } from '@/lib/authz/me';
-import { explainDenial } from '@/lib/authz/permissions';
 import { isRoleKey } from '@/lib/authz/capabilities';
 import { useMe } from '@/lib/hooks/use-me';
 import type { AccessSource } from '@/lib/authz/config';
@@ -95,11 +93,9 @@ export function UsersAdmin() {
     loadOrgUnits();
   }, [loadOrgUnits]);
 
-  // Advisory only: this hides or disables controls the server would reject
-  // anyway. The server re-checks capability, mode and row ownership on every write.
-  const principal = me ? meToPrincipal(me) : null;
-  const denial = principal ? explainDenial(principal, 'access.manage') : null;
-  const canWrite = !!me && !me.readOnly && denial === null;
+  // Advisory only: the page gate guarantees access.manage, so this only hides controls in
+  // Rollekatalog mode. The server re-checks capability, mode and row ownership on every write.
+  const canWrite = !!me && !me.readOnly;
 
   async function confirmRevoke() {
     if (!revoke) return;
@@ -120,7 +116,6 @@ export function UsersAdmin() {
     <AdminPage title="Brugere og roller" description="Brugere i løsningen og de roller, de er tildelt.">
       {me?.readOnly && <ReadOnlyBanner />}
       <LastSyncLine me={me} />
-      {me && !me.readOnly && denial && <p className="text-[13px] text-[var(--muted)]">{denial}</p>}
       <ErrorBanner message={meError} />
       <ErrorBanner message={loadError} onRetry={() => load(appliedQ)} />
 
@@ -132,7 +127,7 @@ export function UsersAdmin() {
           setAppliedQ(q.trim());
         }}
       >
-        <Input aria-label="Søg i brugere" placeholder="Søg på navn eller e-mail" value={q} onChange={(e) => setQ(e.target.value)} />
+        <Input aria-label="Søg i brugere" placeholder="Søg på navn eller e-mail" maxLength={100} value={q} onChange={(e) => setQ(e.target.value)} />
         <Button type="submit" variant="outline">
           Søg
         </Button>

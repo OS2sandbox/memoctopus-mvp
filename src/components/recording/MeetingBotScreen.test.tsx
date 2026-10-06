@@ -58,7 +58,9 @@ function routeFetch(handlers: {
 }
 
 function audioResponse(participants: string[] = [], duration = 30) {
-  return new Response(new Blob(['audio bytes']), {
+  // Bytes, not `new Blob(...)`: under jsdom the global Blob is jsdom's, which lacks the
+  // .stream() that Node's Response needs, so constructing the Response would throw.
+  return new Response(new TextEncoder().encode('audio bytes'), {
     status: 200,
     headers: {
       'Content-Type': 'audio/webm',
@@ -161,7 +163,8 @@ describe('MeetingBotScreen', () => {
     });
     renderBot();
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/meeting/${MEETING_ID}/review`));
-    expect(mockSaveAudio).toHaveBeenCalledWith(MEETING_ID, expect.any(Blob), 'audio/webm');
+    // res.blob() yields Node's Blob, not jsdom's global one, so match on shape.
+    expect(mockSaveAudio).toHaveBeenCalledWith(MEETING_ID, expect.objectContaining({ size: 11 }), 'audio/webm');
     expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, expect.objectContaining({
       status: 'processing',
       botSession: null,

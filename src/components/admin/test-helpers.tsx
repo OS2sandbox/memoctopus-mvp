@@ -53,5 +53,3 @@ export const calls = (mock: ReturnType<typeof vi.fn>, method: string, prefix: st
   mock.mock.calls.filter(([url, init]) => (init?.method ?? 'GET') === method && String(url).startsWith(prefix));
 
 export const renderWithToasts = (ui: ReactElement) => render(<ToastProvider>{ui}</ToastProvider>);
-
-export const NO_USERS = { users: [] };

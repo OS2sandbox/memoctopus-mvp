@@ -64,6 +64,6 @@ describe('selfAndDescendants', () => {
 describe('indentedLabel', () => {
   it('leaves roots as they are and indents children', () => {
     expect(indentedLabel('Rod', 0)).toBe('Rod');
-    expect(indentedLabel('Barn', 2)).toBe('  └ Barn');
+    expect(indentedLabel('Barn', 2)).toBe('\u2003\u2003└ Barn');
   });
 });

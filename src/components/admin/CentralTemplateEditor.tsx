@@ -24,9 +24,9 @@ import type {
   CentralTemplateAdmin,
   CentralTemplateContent,
 } from '@/lib/skabeloner/central-types';
+import { apiRequest } from './api';
 import { ChangeNoteField } from './CentralTemplatesChangeNote';
 import {
-  centralRequest,
   changedContentFields,
   conflictMessage,
   contentFieldLabels,
@@ -154,7 +154,7 @@ function EditorForm({
     setServerError(null);
     setSaving(true);
     const res = editing
-      ? await centralRequest<{ template: CentralTemplateAdmin }>(`/api/admin/central-templates/${base!.id}`, {
+      ? await apiRequest<{ template: CentralTemplateAdmin }>(`/api/admin/central-templates/${base!.id}`, {
           method: 'PUT',
           json: {
             baseVersion: base!.currentVersion,
@@ -163,7 +163,7 @@ function EditorForm({
             ...(targetsChanged ? { targets } : {}),
           },
         })
-      : await centralRequest<{ template: CentralTemplateAdmin }>('/api/admin/central-templates', {
+      : await apiRequest<{ template: CentralTemplateAdmin }>('/api/admin/central-templates', {
           method: 'POST',
           json: { ownerOrgUnitUuid: owner, ...content, targets, changeNote: note.trim() },
         });
@@ -187,7 +187,7 @@ function EditorForm({
   async function reload() {
     if (!base) return;
     setReloading(true);
-    const res = await centralRequest<{ template: CentralTemplateAdmin }>(`/api/admin/central-templates/${base.id}`);
+    const res = await apiRequest<{ template: CentralTemplateAdmin }>(`/api/admin/central-templates/${base.id}`);
     setReloading(false);
     if (!res.ok) return setServerError(res.message);
     setLatest(res.data.template);

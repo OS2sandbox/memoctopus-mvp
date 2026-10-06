@@ -3,7 +3,11 @@
 // English or generic) is replaced by a fixed Danish message so the UI never
 // shows raw server text it did not expect.
 
-export type ApiResult<T> = { ok: true; data: T } | { ok: false; status: number; message: string };
+// `code` and `currentVersion` let a caller tell typed failures apart (a 409 version conflict, the
+// sync removal threshold) without matching on the Danish message.
+type ApiResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; status: number; message: string; code?: string; currentVersion?: number };
 
 const FALLBACK: Record<number, string> = {
   401: 'Din session er udløbet. Log ind igen.',
@@ -11,10 +15,10 @@ const FALLBACK: Record<number, string> = {
   404: 'Ikke fundet.',
 };
 
-export const NETWORK_ERROR = 'Netværksfejl. Prøv igen.';
+const NETWORK_ERROR = 'Netværksfejl. Prøv igen.';
 const GENERIC_ERROR = 'Noget gik galt. Prøv igen.';
 
-export function messageFromBody(status: number, body: unknown): string {
+function messageFromBody(status: number, body: unknown): string {
   if (typeof body === 'object' && body !== null) {
     const b = body as { error?: unknown; code?: unknown };
     if (typeof b.error === 'string' && typeof b.code === 'string' && b.error.length > 0) return b.error;
@@ -41,6 +45,15 @@ export async function apiRequest<T = unknown>(url: string, init?: RequestInit & 
   } catch {
     // Empty or non-JSON body: handled by the status below.
   }
-  if (!res.ok) return { ok: false, status: res.status, message: messageFromBody(res.status, body) };
+  if (!res.ok) {
+    const b = (typeof body === 'object' && body !== null ? body : {}) as { code?: unknown; currentVersion?: unknown };
+    return {
+      ok: false,
+      status: res.status,
+      message: messageFromBody(res.status, body),
+      ...(typeof b.code === 'string' ? { code: b.code } : {}),
+      ...(typeof b.currentVersion === 'number' ? { currentVersion: b.currentVersion } : {}),
+    };
+  }
   return { ok: true, data: body as T };
 }

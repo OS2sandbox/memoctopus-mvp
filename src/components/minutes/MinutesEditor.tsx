@@ -28,7 +28,7 @@ interface MinutesEditorProps {
 }
 
 // 'Skabelon: Navn (central, v3)'; the name is a snapshot and may be missing.
-export function templateProvenanceText(ref: MinutesTemplateRef): string {
+function templateProvenanceText(ref: MinutesTemplateRef): string {
   const detail = ref.version != null ? `central, v${ref.version}` : 'central';
   return ref.name ? `Skabelon: ${ref.name} (${detail})` : `Skabelon: ${detail}`;
 }

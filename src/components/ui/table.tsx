@@ -69,14 +69,6 @@ const TableCell = React.forwardRef<
 ));
 TableCell.displayName = 'TableCell';
 
-const TableCaption = React.forwardRef<
-  HTMLTableCaptionElement,
-  React.HTMLAttributes<HTMLTableCaptionElement>
->(({ className, ...props }, ref) => (
-  <caption ref={ref} className={cn('mt-3 text-xs text-[var(--muted)]', className)} {...props} />
-));
-TableCaption.displayName = 'TableCaption';
-
 interface TableEmptyRowProps extends React.HTMLAttributes<HTMLTableRowElement> {
   /** Number of columns in the table so the message spans the full width. */
   colSpan: number;
@@ -102,6 +94,5 @@ export {
   TableRow,
   TableHead,
   TableCell,
-  TableCaption,
   TableEmptyRow,
 };

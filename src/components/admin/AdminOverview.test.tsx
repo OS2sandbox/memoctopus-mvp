@@ -121,22 +121,20 @@ describe('AdminOverview', () => {
       configIssue: null,
     };
 
-    it('is shown to a sync.run holder in rollekatalog mode, with the last run and the buttons', async () => {
+    it('is shown to a sync.run holder in rollekatalog mode, with the last run and the sync button', async () => {
       routes['/api/me'] = () => json(me({ source: 'rollekatalog', readOnly: true, capabilities: ['template.use', 'sync.run'] }));
       routes['/api/admin/access/sync'] = () => json(SYNC_RUN);
       render(<AdminOverview />);
       expect(await screen.findByRole('heading', { name: 'Synkronisering med Rollekatalog' })).toBeInTheDocument();
       expect(await screen.findByText('Gennemført')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Synkroniser nu' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Test forbindelse' })).toBeInTheDocument();
     });
 
-    it('in local mode a sync.run holder gets only Test forbindelse, and no sync data is fetched', async () => {
+    it('in local mode a sync.run holder gets no sync panel, and no sync data is fetched', async () => {
       routes['/api/me'] = () => json(me({ capabilities: ['template.use', 'sync.run'] }));
       render(<AdminOverview />);
       await screen.findByText('Anne Admin');
       expect(screen.queryByRole('heading', { name: 'Synkronisering med Rollekatalog' })).toBeNull();
-      expect(screen.getByRole('button', { name: 'Test forbindelse' })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Synkroniser nu' })).toBeNull();
       expect(fetchMock.mock.calls.map((c) => c[0])).not.toContain('/api/admin/access/sync');
     });

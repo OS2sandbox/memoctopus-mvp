@@ -141,16 +141,6 @@ describe('CentralTemplatesAdmin — gating and actions', () => {
     expect(screen.getByRole('button', { name: 'Ny central skabelon' })).toBeInTheDocument();
   });
 
-  it('hides write controls without the capability', async () => {
-    setup({ ...ADMIN_ME, roles: ['tt-bruger'], capabilities: ['template.use'], scopes: {} });
-    renderWithToasts(<CentralTemplatesAdmin />);
-    await screen.findByText('Bestyrelse');
-    expect(screen.queryByRole('button', { name: 'Ny central skabelon' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Rediger Bestyrelse' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Arkivér Bestyrelse' })).toBeNull();
-    expect(screen.getByText(/Kun visning/)).toBeInTheDocument();
-  });
-
   it('offers restore, not edit, for an archived template', async () => {
     setup();
     renderWithToasts(<CentralTemplatesAdmin />);

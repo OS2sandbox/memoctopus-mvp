@@ -13,8 +13,9 @@ import {
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { useToast } from '@/components/ui/toast';
 import type { CentralTemplateListItem } from '@/lib/skabeloner/central-types';
+import { apiRequest } from './api';
 import { ChangeNoteField } from './CentralTemplatesChangeNote';
-import { centralRequest, conflictMessage, noteProblem } from './central-template-utils';
+import { conflictMessage, noteProblem } from './central-template-utils';
 
 export type StateChange = 'archive' | 'restore';
 
@@ -80,7 +81,7 @@ function StateForm({
     if (problem || saving) return;
     setSaving(true);
     setError(null);
-    const res = await centralRequest(`/api/admin/central-templates/${template.id}/${mode}`, {
+    const res = await apiRequest(`/api/admin/central-templates/${template.id}/${mode}`, {
       method: 'POST',
       json: { baseVersion: template.currentVersion, changeNote: note.trim() },
     });

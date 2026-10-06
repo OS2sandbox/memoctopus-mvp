@@ -69,7 +69,7 @@ export function PromptDiff({
 }
 
 /** Compact list of what changed besides the prompt text. */
-export function OtherChanges({
+function OtherChanges({
   before,
   after,
   unitName,
@@ -103,12 +103,10 @@ export function OtherChanges({
 interface Props {
   templateId: string;
   unitName: (uuid: string) => string;
-  /** Bump to refetch (e.g. after a save elsewhere on the page). */
-  refreshKey?: number;
 }
 
 /** Changelog of one central template, newest first, with a diff against the previous version. */
-export function TemplateVersionHistory({ templateId, unitName, refreshKey = 0 }: Props) {
+export function TemplateVersionHistory({ templateId, unitName }: Props) {
   const [versions, setVersions] = useState<CentralTemplateVersion[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -130,7 +128,7 @@ export function TemplateVersionHistory({ templateId, unitName, refreshKey = 0 }:
   }, [templateId]);
   useEffect(() => {
     load();
-  }, [load, refreshKey]);
+  }, [load]);
 
   const index = versions.findIndex((v) => v.version === selected);
   const current = index >= 0 ? versions[index] : null;

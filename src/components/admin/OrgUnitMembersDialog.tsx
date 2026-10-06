@@ -95,7 +95,6 @@ function Body({
   }, [editable, membersLoaded, query]);
 
   const unlinked = members?.filter((m) => m.appUserId === null) ?? [];
-  const shown = users;
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -149,12 +148,12 @@ function Body({
 
       {members !== null && editable && (
         <>
-          <Input aria-label="Filtrer brugere" placeholder="Filtrer på navn eller e-mail" value={filter} onChange={(e) => setFilter(e.target.value)} />
+          <Input aria-label="Filtrer brugere" placeholder="Filtrer på navn eller e-mail" maxLength={100} value={filter} onChange={(e) => setFilter(e.target.value)} />
           <ul className="flex max-h-64 flex-col gap-1 overflow-y-auto" aria-label="Brugere">
-            {shown.length === 0 ? (
+            {users.length === 0 ? (
               <li className="text-sm text-[var(--muted)]">Ingen brugere fundet</li>
             ) : (
-              shown.map((u) => (
+              users.map((u) => (
                 <li key={u.id}>
                   <label className="flex items-center gap-2 text-sm text-[var(--ink)]">
                     <input

@@ -5,19 +5,13 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ErrorBanner } from '@/components/ui/error-banner';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import type { MeResponse } from '@/lib/authz/me';
-import {
-  checkCountLabels,
-  checkEndpointLabels,
-  syncCountLabels,
-  syncErrorMessage,
-  syncStatusLabels,
-} from '@/lib/rollekatalog/labels.da';
+import { syncCountLabels, syncErrorMessage, syncStatusLabels } from '@/lib/rollekatalog/labels.da';
 import { SYNC_COUNT_KEYS, type SyncCounts } from '@/lib/rollekatalog/types';
 import { apiRequest } from './api';
+import { formatDateTime } from './format';
 
-// Mirrors SyncRunSummary / CheckReport (JSON, so dates are strings).
+// Mirrors SyncRunSummary (JSON, so dates are strings).
 export interface SyncRunView {
   id: string;
   startedAt: string;
@@ -32,28 +26,7 @@ interface SyncResponse {
   configIssue: string | null;
 }
 
-interface EndpointCheckView {
-  endpoint: string;
-  ok: boolean;
-  httpStatusCode: number | null;
-  schemaValid: boolean;
-  counts?: Record<string, number>;
-  cprFieldPresentInResponse?: boolean;
-  errorCode?: string;
-  skipped?: boolean;
-}
-
-interface CheckReportView {
-  configured: boolean;
-  configIssue: string | null;
-  endpoints: EndpointCheckView[];
-}
-
-export function formatSyncTime(iso: string | null): string {
-  if (!iso) return '–';
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '–' : d.toLocaleString('da-DK', { dateStyle: 'medium', timeStyle: 'short' });
-}
+const formatSyncTime = (iso: string | null) => formatDateTime(iso, { dateStyle: 'medium', timeStyle: 'short' }, '–');
 
 // Advisory: the routes re-check sync.run / access.manage on every request.
 const canSeeSyncRun = (me: MeResponse) =>
@@ -99,73 +72,14 @@ export function LastSyncLine({ me }: { me: MeResponse | null }) {
   );
 }
 
-function CheckTable({ report }: { report: CheckReportView }) {
-  const strips = report.endpoints.some((e) => e.cprFieldPresentInResponse);
-  return (
-    <div className="flex flex-col gap-2">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Opslag</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Svar</TableHead>
-            <TableHead>Format</TableHead>
-            <TableHead>Resultat</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {report.endpoints.map((e) => (
-            <TableRow key={e.endpoint}>
-              <TableCell>{checkEndpointLabels[e.endpoint] ?? e.endpoint}</TableCell>
-              <TableCell>
-                {e.skipped ? (
-                  <Badge variant="secondary">Sprunget over</Badge>
-                ) : e.ok ? (
-                  <Badge variant="success">OK</Badge>
-                ) : (
-                  <Badge variant="destructive">Fejl</Badge>
-                )}
-              </TableCell>
-              <TableCell className="font-mono text-[12px]">{e.httpStatusCode ?? '–'}</TableCell>
-              <TableCell>{e.skipped ? '–' : e.schemaValid ? 'Genkendt' : 'Ikke genkendt'}</TableCell>
-              <TableCell className="text-[13px]">
-                {e.skipped
-                  ? 'Din bruger er ikke koblet til Rollekatalog.'
-                  : e.ok
-                    ? Object.entries(e.counts ?? {})
-                        .map(([k, v]) => `${v} ${checkCountLabels[k] ?? k}`)
-                        .join(', ')
-                    : syncErrorMessage(e.errorCode)}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-      {strips && (
-        <p role="note" className="text-[13px] text-[var(--muted)]">
-          Rollekatalog sender CPR- eller NemLog-in-felter i svaret. Løsningen kasserer dem ved indlæsning og gemmer dem aldrig.
-        </p>
-      )}
-    </div>
-  );
-}
-
-/**
- * `syncEnabled` is false in local mode: only "Test forbindelse" is offered then, so an
- * operator can verify the configuration BEFORE switching (the sync route answers 409 in
- * local mode and its run history is empty).
- */
-function SyncPanel({ syncEnabled }: { syncEnabled: boolean }) {
-  const { data, loading, error, reload } = useSyncRun(syncEnabled);
+function SyncPanel() {
+  const { data, loading, error, reload } = useSyncRun(true);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [force, setForce] = useState(false);
   const [sawThreshold, setSawThreshold] = useState(false);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [checkError, setCheckError] = useState<string | null>(null);
-  const [report, setReport] = useState<CheckReportView | null>(null);
 
   const run = data?.run ?? null;
   const configIssue = data?.configIssue ?? null;
@@ -187,20 +101,8 @@ function SyncPanel({ syncEnabled }: { syncEnabled: boolean }) {
     }
     setNotice(null);
     setRunError(res.message);
-    setSawThreshold(res.message === syncErrorMessage('removal_threshold'));
+    setSawThreshold(res.code === 'removal_threshold');
     void reload();
-  }
-
-  async function runCheck() {
-    setChecking(true);
-    setCheckError(null);
-    const res = await apiRequest<CheckReportView>('/api/admin/access/rollekatalog/check', { method: 'POST' });
-    setChecking(false);
-    if (res.ok) setReport(res.data);
-    else {
-      setReport(null);
-      setCheckError(res.message);
-    }
   }
 
   function openConfirm() {
@@ -214,18 +116,13 @@ function SyncPanel({ syncEnabled }: { syncEnabled: boolean }) {
   return (
     <section aria-labelledby="sync-heading" className="flex flex-col gap-3">
       <h2 id="sync-heading" className="text-[var(--t-h2)] font-light text-[var(--ink)]">
-        {syncEnabled ? 'Synkronisering med Rollekatalog' : 'Forbindelse til Rollekatalog'}
+        Synkronisering med Rollekatalog
       </h2>
 
-      {!syncEnabled && (
-        <p className="text-[13px] text-[var(--muted)]">
-          Rettigheder styres lokalt. Du kan teste forbindelsen til Rollekatalog, før du skifter til Rollekatalog som kilde.
-        </p>
-      )}
-      {syncEnabled && <ErrorBanner message={error} onRetry={() => void reload()} />}
-      {syncEnabled && configIssue && <p className="text-[13px] text-[var(--muted)]">{syncErrorMessage(configIssue)}</p>}
+      <ErrorBanner message={error} onRetry={() => void reload()} />
+      {configIssue && <p className="text-[13px] text-[var(--muted)]">{syncErrorMessage(configIssue)}</p>}
 
-      {!syncEnabled ? null : loading ? (
+      {loading ? (
         <p className="text-sm text-[var(--muted)]">Indlæser …</p>
       ) : run ? (
         <div className="flex flex-col gap-2">
@@ -258,23 +155,15 @@ function SyncPanel({ syncEnabled }: { syncEnabled: boolean }) {
       )}
 
       <div className="flex flex-wrap gap-2">
-        {syncEnabled && (
-          <Button
-            type="button"
-            onClick={openConfirm}
-            disabled={running || !!configIssue}
-            title={configIssue ? syncErrorMessage(configIssue) : undefined}
-          >
-            Synkroniser nu
-          </Button>
-        )}
-        <Button type="button" variant="outline" onClick={runCheck} disabled={checking}>
-          {checking ? 'Tester …' : 'Test forbindelse'}
+        <Button
+          type="button"
+          onClick={openConfirm}
+          disabled={running || !!configIssue}
+          title={configIssue ? syncErrorMessage(configIssue) : undefined}
+        >
+          Synkroniser nu
         </Button>
       </div>
-
-      <ErrorBanner message={checkError} />
-      {report && <CheckTable report={report} />}
 
       <Dialog open={confirmOpen} onOpenChange={(o) => !o && !running && setConfirmOpen(false)}>
         <DialogContent>
@@ -319,11 +208,10 @@ function SyncPanel({ syncEnabled }: { syncEnabled: boolean }) {
 }
 
 /**
- * Sync status, "Synkroniser nu" and "Test forbindelse" for a viewer with sync.run. The sync
- * parts only while Rollekatalog owns the data; in local mode just "Test forbindelse".
- * The server enforces both on every call.
+ * Sync status and "Synkroniser nu" for a viewer with sync.run, only while Rollekatalog
+ * owns the data (in local mode there is nothing to sync). The server enforces both on every call.
  */
 export function SyncStatus({ me }: { me: MeResponse }) {
-  if (!me.capabilities.includes('sync.run')) return null;
-  return <SyncPanel syncEnabled={me.readOnly} />;
+  if (!me.readOnly || !me.capabilities.includes('sync.run')) return null;
+  return <SyncPanel />;
 }

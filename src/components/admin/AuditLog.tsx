@@ -5,12 +5,14 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableEmptyRow, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { eventTypeLabel, eventTypeLabels, outcomeLabels, sourceBadgeLabels } from '@/lib/audit/labels.da';
+import { eventTypeLabel, eventTypeLabels, outcomeLabels, sourceBadgeLabels, sourceLabels } from '@/lib/audit/labels.da';
 import { useMe } from '@/lib/hooks/use-me';
 import { apiRequest } from './api';
 import { AdminPage } from './AdminPage';
+import { formatDateTime } from './format';
 
 // Mirrors the JSON of GET /api/admin/audit.
 interface AuditEventView {
@@ -61,11 +63,7 @@ function filterQuery(f: Filters): URLSearchParams {
   return p;
 }
 
-const timeFormat = new Intl.DateTimeFormat('da-DK', { dateStyle: 'short', timeStyle: 'medium' });
-const formatTime = (iso: string) => {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : timeFormat.format(d);
-};
+const formatTime = (iso: string) => formatDateTime(iso, { dateStyle: 'short', timeStyle: 'medium' });
 
 function formatDetails(details: Record<string, unknown>): string {
   return Object.entries(details)
@@ -172,32 +170,34 @@ export function AuditLog() {
         </Select>
         <Select label="Kilde" value={draft.source} onChange={set('source')}>
           <option value="">Alle</option>
-          <option value="server">Serveren</option>
-          <option value="client">Selvrapporteret</option>
-          <option value="system">Systemet</option>
+          {Object.entries(sourceLabels).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
         </Select>
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="audit-actor" className="text-sm font-medium text-[var(--ink)]">
+          <Label htmlFor="audit-actor">
             Bruger-id
-          </label>
+          </Label>
           <Input id="audit-actor" value={draft.actorUserId} onChange={set('actorUserId')} autoComplete="off" />
         </div>
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="audit-entity" className="text-sm font-medium text-[var(--ink)]">
+          <Label htmlFor="audit-entity">
             Objekt-id
-          </label>
+          </Label>
           <Input id="audit-entity" value={draft.entityId} onChange={set('entityId')} autoComplete="off" placeholder="UUID" />
         </div>
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="audit-from" className="text-sm font-medium text-[var(--ink)]">
+          <Label htmlFor="audit-from">
             Fra dato
-          </label>
+          </Label>
           <Input id="audit-from" type="date" value={draft.from} onChange={set('from')} />
         </div>
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="audit-to" className="text-sm font-medium text-[var(--ink)]">
+          <Label htmlFor="audit-to">
             Til dato
-          </label>
+          </Label>
           <Input id="audit-to" type="date" value={draft.to} onChange={set('to')} />
         </div>
         <div className="flex items-end gap-2">

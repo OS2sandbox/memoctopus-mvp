@@ -71,6 +71,9 @@ function skabelonToCats(
   };
 }
 
+// The user's own default, or the first one when none is flagged.
+const defaultSkabelonOf = (list: Skabelon[]): Skabelon | undefined => list.find((s) => s.isDefault) ?? list[0];
+
 // Picker values: '' = Ingen skabelon, a bare uuid = personal template, and
 // 'central:<id>' = a locked central template. The prefix keeps the two id
 // spaces apart without changing the personal values the rest of the screen uses.
@@ -482,15 +485,18 @@ export function TranscriptReview({
         if (cancelled) return;
         setSkabeloner(list);
         setCentralSkabeloner(central);
-        const def = list.find((s) => s.isDefault) ?? list[0];
-        if (def && !skabelonTouchedRef.current) {
-          setSelectedSkabelonId(def.id);
-          setCats(skabelonToCats(def));
-        }
+        const def = defaultSkabelonOf(list);
+        if (def && !skabelonTouchedRef.current) seedSkabelon(def);
       })
       .catch((err) => { console.error('[transcript] skabeloner fetch failed:', err); });
     return () => { cancelled = true; };
   }, []);
+
+  // Selection and category toggles always move together; no skabelon means "Ingen skabelon".
+  function seedSkabelon(def?: Skabelon) {
+    setSelectedSkabelonId(def?.id ?? '');
+    setCats(skabelonToCats(def));
+  }
 
   function selectSkabelon(id: string) {
     skabelonTouchedRef.current = true;
@@ -510,15 +516,16 @@ export function TranscriptReview({
   }
 
   // A central template can be archived or un-delegated while the review screen
-  // is open. Refresh the list and drop a selection that no longer resolves.
+  // is open. Refresh the list and replace a selection that no longer resolves with the
+  // personal default, as on first load: an empty selection would make the next
+  // generate silently use no template.
   async function refreshAfterCentralGone() {
     try {
       const { personal, central } = await fetchSkabeloner();
       setSkabeloner(personal);
       setCentralSkabeloner(central);
       if (selectedCentralId && !central.some((c) => c.id === selectedCentralId)) {
-        setSelectedSkabelonId('');
-        setCats(skabelonToCats());
+        seedSkabelon(defaultSkabelonOf(personal));
       }
     } catch (err) {
       console.error('[transcript] skabeloner refresh failed:', err);

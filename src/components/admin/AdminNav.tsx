@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
-export interface AdminNavItem {
+interface AdminNavItem {
   key: string;
   href: string;
   label: string;

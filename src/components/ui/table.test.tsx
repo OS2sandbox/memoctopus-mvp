@@ -4,7 +4,6 @@ import { render, screen } from '@testing-library/react';
 import {
   Table,
   TableBody,
-  TableCaption,
   TableCell,
   TableEmptyRow,
   TableHead,
@@ -16,7 +15,6 @@ describe('Table', () => {
   it('renders semantic table structure with column headers', () => {
     render(
       <Table>
-        <TableCaption>Brugere</TableCaption>
         <TableHeader>
           <TableRow>
             <TableHead>Navn</TableHead>
@@ -35,7 +33,6 @@ describe('Table', () => {
     expect(screen.getAllByRole('columnheader')).toHaveLength(2);
     expect(screen.getByRole('columnheader', { name: 'Navn' })).toHaveAttribute('scope', 'col');
     expect(screen.getByRole('cell', { name: 'Anna' })).toBeInTheDocument();
-    expect(screen.getByText('Brugere').tagName).toBe('CAPTION');
   });
 
   it('lets TableHead override scope for row headers', () => {

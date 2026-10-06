@@ -10,7 +10,6 @@ import { syncErrorMessage } from '@/lib/rollekatalog/labels.da';
 afterEach(() => vi.unstubAllGlobals());
 
 const SYNC = '/api/admin/access/sync';
-const CHECK = '/api/admin/access/rollekatalog/check';
 const counts = { ...emptySyncCounts(), usersUpserted: 12, orgUnitsUpserted: 5, assignmentsRemoved: 2 };
 const run = (over: Partial<SyncRunView> = {}): SyncRunView => ({
   id: 'r1',
@@ -26,15 +25,11 @@ const failure = (status: number, code: string) => () =>
   json({ status: 'aborted', counts: emptySyncCounts(), errorCode: code, error: syncErrorMessage(code), code }, status);
 
 describe('SyncStatus visibility', () => {
-  it('in local mode offers only Test forbindelse (no sync button, no run history) and does not fetch', async () => {
-    const mock = installFetch({ [`POST ${CHECK}`]: () => json({ configured: true, configIssue: null, endpoints: [] }) });
-    render(<SyncStatus me={ADMIN_ME} />);
-    expect(screen.getByRole('heading', { name: 'Forbindelse til Rollekatalog' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Synkroniser nu' })).toBeNull();
+  it('renders nothing in local mode, even for a sync.run holder, and does not fetch', () => {
+    const mock = installFetch({});
+    const { container } = render(<SyncStatus me={ADMIN_ME} />);
+    expect(container).toBeEmptyDOMElement();
     expect(mock).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByRole('button', { name: 'Test forbindelse' }));
-    await waitFor(() => expect(calls(mock, 'POST', CHECK)).toHaveLength(1));
-    expect(calls(mock, 'GET', SYNC)).toHaveLength(0);
   });
 
   it('renders nothing in local mode without sync.run', () => {
@@ -91,12 +86,11 @@ describe('SyncStatus last run', () => {
     expect(screen.getByRole('button', { name: 'Prøv igen' })).toBeInTheDocument();
   });
 
-  it('disables Synkroniser nu when Rollekatalog is not configured, but Test forbindelse stays available', async () => {
+  it('disables Synkroniser nu when Rollekatalog is not configured', async () => {
     installFetch({ [`GET ${SYNC}`]: latest(null, 'not_configured') });
     render(<SyncStatus me={ROLLEKATALOG_ME} />);
     expect(await screen.findByText(/ikke konfigureret/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Synkroniser nu' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Test forbindelse' })).toBeEnabled();
   });
 });
 
@@ -202,68 +196,6 @@ describe('Synkroniser nu', () => {
     mock.mockImplementationOnce(() => Promise.reject(new TypeError('offline')));
     await userEvent.click(await screen.findByRole('button', { name: 'Start synkronisering' }));
     expect(await within(await screen.findByRole('dialog')).findByRole('alert')).toHaveTextContent('Netværksfejl. Prøv igen.');
-  });
-});
-
-describe('Test forbindelse', () => {
-  const report = {
-    configured: true,
-    configIssue: null,
-    endpoints: [
-      { endpoint: 'organisation', ok: true, httpStatusCode: 200, schemaValid: true, counts: { usersSeen: 9, orgUnitsSeen: 5 }, cprFieldPresentInResponse: true },
-      { endpoint: 'managers', ok: false, httpStatusCode: 403, schemaValid: false, errorCode: 'forbidden' },
-      { endpoint: 'roleAssignments', ok: true, httpStatusCode: 200, schemaValid: true, counts: { assignmentsSeen: 14, ourRolesSeen: 13 }, cprFieldPresentInResponse: false },
-      { endpoint: 'constraints', ok: false, httpStatusCode: 200, schemaValid: false, errorCode: 'invalid_response' },
-      { endpoint: 'rolesAsList', ok: false, httpStatusCode: null, schemaValid: false, skipped: true },
-    ],
-  };
-
-  it('renders one row per endpoint with status, http code, format and a Danish result', async () => {
-    const mock = installFetch({ [`GET ${SYNC}`]: latest(run()), [`POST ${CHECK}`]: () => json(report) });
-    render(<SyncStatus me={ROLLEKATALOG_ME} />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Test forbindelse' }));
-    const orgRow = (await screen.findByText('Organisation (brugere og enheder)')).closest('tr')!;
-    expect(within(orgRow).getByText('OK')).toBeInTheDocument();
-    expect(within(orgRow).getByText('200')).toBeInTheDocument();
-    expect(within(orgRow).getByText('Genkendt')).toBeInTheDocument();
-    expect(within(orgRow).getByText('9 brugere, 5 enheder')).toBeInTheDocument();
-
-    const mgrRow = screen.getByText('Ledere og stedfortrædere').closest('tr')!;
-    expect(within(mgrRow).getByText('Fejl')).toBeInTheDocument();
-    expect(within(mgrRow).getByText('403')).toBeInTheDocument();
-    expect(within(mgrRow).getByText('API-nøglen har ikke de nødvendige rettigheder i Rollekatalog.')).toBeInTheDocument();
-
-    const conRow = screen.getByText('Dataafgrænsninger').closest('tr')!;
-    expect(within(conRow).getByText('Ikke genkendt')).toBeInTheDocument();
-
-    const rolesRow = screen.getByText('Dine roller (login-opslag)').closest('tr')!;
-    expect(within(rolesRow).getByText('Sprunget over')).toBeInTheDocument();
-    expect(calls(mock, 'POST', CHECK)).toHaveLength(1);
-  });
-
-  it('tells the operator that cpr fields are sent and dropped, without showing any value', async () => {
-    installFetch({ [`GET ${SYNC}`]: latest(run()), [`POST ${CHECK}`]: () => json(report) });
-    render(<SyncStatus me={ROLLEKATALOG_ME} />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Test forbindelse' }));
-    expect(await screen.findByRole('note')).toHaveTextContent('kasserer dem ved indlæsning');
-  });
-
-  it('shows no cpr note when none is flagged', async () => {
-    installFetch({
-      [`GET ${SYNC}`]: latest(run()),
-      [`POST ${CHECK}`]: () => json({ ...report, endpoints: report.endpoints.map((e) => ({ ...e, cprFieldPresentInResponse: false })) }),
-    });
-    render(<SyncStatus me={ROLLEKATALOG_ME} />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Test forbindelse' }));
-    await screen.findByText('Organisation (brugere og enheder)');
-    expect(screen.queryByRole('note')).toBeNull();
-  });
-
-  it('shows the server message when the check itself fails', async () => {
-    installFetch({ [`GET ${SYNC}`]: latest(run()), [`POST ${CHECK}`]: () => json({ error: 'Forbidden' }, 403) });
-    render(<SyncStatus me={ROLLEKATALOG_ME} />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Test forbindelse' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Du har ikke adgang til denne handling.');
   });
 });
 

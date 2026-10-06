@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -35,11 +35,6 @@ export function AdminOverview() {
       cancelled = true;
     };
   }, [canReadNames]);
-
-  const scopedCapabilities = useMemo(
-    () => (me ? me.capabilities.filter((c) => SCOPED_CAPABILITIES.has(c)) : []),
-    [me],
-  );
 
   if (loading) return <AdminPage title="Overblik"><p className="text-sm text-[var(--muted)]">Indlæser …</p></AdminPage>;
   if (error || !me) {
@@ -102,7 +97,7 @@ export function AdminOverview() {
               <TableRow key={cap}>
                 <TableCell>{capabilityLabels[cap] ?? cap}</TableCell>
                 <TableCell>
-                  {scopedCapabilities.includes(cap) ? describeCapabilityScope(me.scopes[cap], names) : 'Hele løsningen'}
+                  {SCOPED_CAPABILITIES.has(cap) ? describeCapabilityScope(me.scopes[cap], names) : 'Hele løsningen'}
                 </TableCell>
               </TableRow>
             ))}

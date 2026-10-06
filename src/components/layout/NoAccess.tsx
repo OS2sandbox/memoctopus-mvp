@@ -3,7 +3,7 @@
 import { Button } from '@/components/ui/button';
 import { signOut } from '@/lib/auth-client';
 
-export type NoAccessReason = 'disabled' | 'no_role';
+type NoAccessReason = 'disabled' | 'no_role';
 
 const TEXT: Record<NoAccessReason, string> = {
   disabled: 'Din konto er deaktiveret. Kontakt din administrator.',

@@ -1336,6 +1336,36 @@ describe('TranscriptReview', () => {
       expect(appendMinutesVersion).not.toHaveBeenCalled();
     });
 
+    it('reselects the personal default after a 404, so a second generate does not run without a template', async () => {
+      const fetchMock = mockFetch({
+        personal: [PERSONAL],
+        central: [CENTRAL],
+        refreshed: [],
+        minutes: { ok: false, status: 404, body: { error: 'Skabelonen er ikke tilgængelig' } },
+      });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Min skabelon/ })).toBeInTheDocument());
+      await pickCentral(user);
+      await generate(user);
+      await screen.findByText('Skabelonen er ikke længere tilgængelig. Vælg en anden skabelon.');
+      await waitFor(() => {
+        expect(fetchMock.mock.calls.filter((c) => c[0] === '/api/skabeloner')).toHaveLength(2);
+      });
+      await waitFor(() => expect(screen.getByRole('button', { name: /Min skabelon/ })).toBeInTheDocument());
+      // Seeded from the personal default: only Beslutningspunkter is on.
+      expect(screen.getAllByText('×')).toHaveLength(1);
+
+      await generate(user);
+      await waitFor(() => {
+        expect(fetchMock.mock.calls.filter((c) => c[0] === '/api/minutes')).toHaveLength(2);
+      });
+      const second = JSON.parse(fetchMock.mock.calls.filter((c) => c[0] === '/api/minutes')[1][1].body as string);
+      expect(second.skabelonId).toBe('per-1');
+      expect(second.skabelonSource).toBe('personal');
+      expect(second.includeBeslutningspunkter).toBe(true);
+    });
+
     it('does not use the central message for a 404 on a personal template', async () => {
       mockFetch({
         personal: [PERSONAL],

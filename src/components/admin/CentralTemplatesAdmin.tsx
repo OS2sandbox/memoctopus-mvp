@@ -7,8 +7,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableEmptyRow, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { meToPrincipal } from '@/lib/authz/me';
-import { explainDenial } from '@/lib/authz/permissions';
 import { useMe } from '@/lib/hooks/use-me';
 import type {
   CentralScopeOrgUnit,
@@ -56,10 +54,8 @@ export function CentralTemplatesAdmin() {
 
   const unitName = useMemo(() => unitNameLookup(units), [units]);
 
-  // Advisory only: the server decides. Keeps the UI from offering what it would refuse.
-  const principal = me ? meToPrincipal(me) : null;
-  const denial = principal ? explainDenial(principal, 'template.manage') : null;
-  const canManage = !!me && denial === null;
+  // The page gate guarantees template.manage; the controls only wait for /api/me. The server decides on every write.
+  const canManage = !!me;
 
   async function openEditor(item: CentralTemplateListItem | null) {
     setActionError(null);
@@ -77,7 +73,6 @@ export function CentralTemplatesAdmin() {
       <ErrorBanner message={meError} />
       <ErrorBanner message={loadError} onRetry={load} />
       <ErrorBanner message={actionError} />
-      {me && denial && <p className="text-[13px] text-[var(--muted)]">Kun visning. {denial}</p>}
 
       <div className="flex flex-wrap items-end justify-between gap-3">
         <Select

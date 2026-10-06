@@ -1,14 +1,11 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
-  centralRequest,
   changedContentFields,
   diffTargets,
   noteLength,
   noteProblem,
   targetsWithinOwner,
 } from './central-template-utils';
-
-afterEach(() => vi.unstubAllGlobals());
 
 describe('noteProblem', () => {
   it('trims and counts code points like the server', () => {
@@ -65,33 +62,5 @@ describe('diff helpers', () => {
     ];
     expect(targetsWithinOwner(units, 'r', t)).toEqual([t[0]]);
     expect(targetsWithinOwner(units, '', t)).toEqual([]);
-  });
-});
-
-describe('centralRequest', () => {
-  it('keeps code and currentVersion of a 409 body', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() =>
-        Promise.resolve(
-          new Response(JSON.stringify({ error: 'x', code: 'version_conflict', currentVersion: 4 }), { status: 409 }),
-        ),
-      ),
-    );
-    expect(await centralRequest('/x')).toEqual({
-      ok: false,
-      status: 409,
-      message: 'x',
-      code: 'version_conflict',
-      currentVersion: 4,
-    });
-  });
-
-  it('turns a network failure into a Danish message', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => Promise.reject(new Error('down'))),
-    );
-    expect(await centralRequest('/x')).toMatchObject({ ok: false, status: 0, message: 'Netværksfejl. Prøv igen.' });
   });
 });

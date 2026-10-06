@@ -8,7 +8,7 @@ export interface TreeUnit {
   parentUuid: string | null;
 }
 
-export interface TreeRow<T extends TreeUnit> {
+interface TreeRow<T extends TreeUnit> {
   unit: T;
   depth: number;
 }
@@ -75,5 +75,5 @@ export function selfAndDescendants(units: readonly TreeUnit[], uuid: string): Se
 
 /** Label with em-space indentation so a plain <option> reads as a hierarchy. */
 export function indentedLabel(name: string, depth: number): string {
-  return depth > 0 ? `${' '.repeat(depth)}└ ${name}` : name;
+  return depth > 0 ? `${'\u2003'.repeat(depth)}└ ${name}` : name;
 }
