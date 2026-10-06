@@ -50,7 +50,12 @@ Closed list: `src/lib/audit/events/*.ts`, aggregated in `events/index.ts` (`EVEN
 | `template.set_default` | server | template (required) | - |
 | `template.share` | server | template (required) | `kind` |
 | `template.import` | server | template (required) | `kind` |
-| `minutes.generate` | server | meeting (optional) + secondary: template | `templateSource`, `durationMs`, `segmentCount`, `outcomeCode?` |
+| `central_template.create` | server | central_template (required) + secondary: org_unit (owner) | `version`, `targetCount` |
+| `central_template.update` | server | central_template (required) + secondary: org_unit (owner) | `version`, `changedFields` (field names, incl. `targets`) |
+| `central_template.retarget` | server | central_template (required) + secondary: org_unit (owner) | `version`, `targetCount` |
+| `central_template.archive` | server | central_template (required) + secondary: org_unit (owner) | `version` |
+| `central_template.restore` | server | central_template (required) + secondary: org_unit (owner) | `version` |
+| `minutes.generate` | server | meeting (optional) + secondary: template or central_template | `templateSource`, `templateVersion?`, `durationMs`, `segmentCount`, `outcomeCode?` |
 | `transcription.request` | server | meeting (optional) | `mode`, `audioSeconds?`, `bytes?`, `durationMs`, `outcomeCode?` |
 | `diarization.request` | server | meeting (optional) | `audioSeconds?`, `speakerCount?`, `durationMs`, `outcomeCode?` |
 | `chapters.request` | server | meeting (optional) | `segmentCount?`, `chapterCount?`, `durationMs`, `outcomeCode?` |
@@ -87,7 +92,8 @@ Notes on specific events:
 - `auth.login`: `method` is `password`, `oidc` or `microsoft`, derived from the better-auth route; `unknown` otherwise. A self-registration also creates a session and so also emits `auth.login`; there is no separate sign-up event.
 - `auth.login_failed`: never stores the attempted email. `emailHmac` is the first 16 hex characters of an HMAC-SHA256 over the trimmed, lower-cased address, keyed with `BETTER_AUTH_SECRET`; it lets repeated attempts against one address be correlated without storing the address. It is omitted when no secret is configured. Recorded server-side from better-auth hooks (`outcome = error`).
 - `template.*`: only the id and, for `update`, which fields changed. Only the server-stored **link** flow is logged for share/import; see Known limitations.
-- `minutes.generate`: `templateSource` is `personal`, `default` or `none`; the template id is the secondary entity. The meeting entity is present when the client sends a UUID `meetingId` (`TranscriptReview` does); an absent or non-UUID id gives an event without a meeting entity.
+- `central_template.*` (Phase 4) are written on the same transaction as the change and the version row in `central_template_versions`. `version` is the template version the change produced. `changedFields` holds field names only; the name, prompt and the mandatory change note are never logged here: they live in the (append-only) changelog table, readable by managers in scope.
+- `minutes.generate`: `templateSource` is `personal`, `default`, `none` or `central`; the template id is the secondary entity (type `template`, or `central_template` for a central one, which also carries `templateVersion`). The meeting entity is present when the client sends a UUID `meetingId` (`TranscriptReview` does); an absent or non-UUID id gives an event without a meeting entity.
 - `transcription.request` has three modes: `live` (coalesced, see below), `batch` and `upload`.
 - `bot.joined`, `bot.ended` and `bot.error` come from the bot-service through `POST /api/bot/lifecycle` (source `system`). The other `bot.*` events are emitted by the Next.js proxy routes; failed starts and control calls are recorded with `outcome = error`.
 - `meeting.*` are client-reported and self-reported, see "Client-reported events".

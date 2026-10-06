@@ -1,6 +1,6 @@
 # Central access control: architecture overview
 
-Audience: engineers working on Phases 1-5. This describes what is in the code after Phase 3 (the sections on roles, scope and local mode are from Phase 1 and still hold). Where the original plan differs from the code, the code is documented here. Evidence for the Rollekatalog and better-auth facts is in `phase0-findings.md`.
+Audience: engineers working on Phases 1-5. This describes what is in the code after Phase 4 (the sections on roles, scope and local mode are from Phase 1 and still hold). Where the original plan differs from the code, the code is documented here. Evidence for the Rollekatalog and better-auth facts is in `phase0-findings.md`.
 
 ## What Phase 1 delivers
 
@@ -113,10 +113,26 @@ Phase 3 (the Rollekatalog provider) is implemented; the operator guide is `rolle
 - **Not verified**: everything ran against synthetic fixtures and the mock, never against a live Rollekatalog. Run "Test forbindelse" on the real instance before go-live. The compose service was never started. Of the gated Postgres tests, `sync.pg.test.ts` and `e2e.pg.test.ts` were run once on PostgreSQL 18 (not on 15, the documented minimum); `login-refresh.pg.test.ts` and the Phase 3 additions to `directory-match.pg.test.ts` were written without a database and have not been run, so treat them as unexecuted until you run them with `TEST_DATABASE_URL`.
 - **Known gaps**: org units that disappear upstream are never deleted (no stale flag in the schema); the removal-threshold numbers are only in the server log, not in the UI; `rolesAsList` identifies roles by system-role identifier and filters by weight, so keep all four roles at weight 1; the local link of a user relinked to a Rollekatalog row is not restored when you switch back to local mode.
 
-## Still not done (Phases 4 and 5)
+## Status after Phase 4
 
-- **Phase 2 gaps worth knowing**: the older `/api` routes still only check the session, so a denial there is never an `authz.denied` event; the share-code flow for templates is client-side and not logged; the `(app)/layout.tsx` fail-open question is unchanged (deliberately left alone in Phase 3 as well). The full list is under "Known limitations" in `audit.md`.
-- **Existing API routes** (`/api/meetings`, `/api/bot`, `/api/minutes` and so on) still only check the session. Disabled users and `REQUIRE_ROLE_TO_LOGIN` are enforced by `withAuthz` and the `(app)` layout only; routes migrate to `withAuthz` gradually.
-- **Central templates** (Phase 4): no template tables, no resolution or enforcement in `/api/minutes`.
-- Admin UI is limited to what `src/lib/authz/admin-sections.ts` lists (Overblik, Brugere og roller, Organisation, and since Phase 2 Log); the template section arrives with Phase 4. UI checks are advisory, the server re-checks everything.
+Phase 4 (central templates) is implemented; the operator and implementer guide is `templates.md`, the code is in `src/lib/skabeloner/` (`central.ts` manager service, `resolve.ts` recipient resolution), `src/app/api/admin/central-templates/`, `src/app/api/minutes/route.ts` and the admin page `/admin/skabeloner`.
+
+- **What it does.** A holder of `template.manage` creates a locked template owned by an org unit in their scope and delegates it to org units inside that unit's subtree. Recipients (members of a target unit, or of a descendant when `include_descendants`; only linked, non-disabled directory users) can generate minutes with it but cannot edit it. The server enforces the lock in `POST /api/minutes`; the prompt text is never sent to recipients.
+- **Changelog.** Every write needs a change note (10-2000 characters) and appends an immutable version row (trigger-protected, no prune bypass) in the same transaction as the change and its `central_template.*` audit event. Concurrent edits are caught with `baseVersion` (409). Templates are archived, never deleted; an org unit that owns a template cannot be deleted.
+- **Provenance.** `templateRef` is returned by `/api/minutes`, stored with the minutes in IndexedDB and shown in the minutes screen; `minutes.generate` audits `templateSource: 'central'` and `templateVersion`.
+- **Not verified.** `central.pg.test.ts` and `resolve.pg.test.ts` (and the migration on a real instance) have never run against a real Postgres; the UI was only tested with jsdom and mocked `fetch`. Phase 4 added no environment variables.
+- **Known gaps** (details in `templates.md`): personal templates are still allowed; recipient membership is only as fresh as the last successful sync; targets are checked against the owner subtree at write time only; the older `/api` routes, `/api/minutes` included, still do not consult the principal.
+
+## Still not done (Phase 5, rollout)
+
+Phase 5 is hardening and rollout (plan section 10). What remains:
+
+- **Run the unrun lanes.** `TEST_DATABASE_URL=postgres://... npx vitest run src/lib/skabeloner src/lib/audit src/lib/authz` on the Postgres version you deploy (15 or newer; the compose file pins 16), including `central.pg.test.ts`, `resolve.pg.test.ts` and the Phase 3 files listed above, and apply migration `0003_central_templates` to a copy of production first. Try the admin page and the review screen in a real browser.
+- **Rollekatalog go-live check.** Run "Test forbindelse" and a first sync against the real instance (`rollekatalog.md`), then confirm that recipients of a test template match the real org tree.
+- **Deployment docs.** Update `DEPLOY.md` (Rollekatalog setup, migration order, the client-side audit limits, the central template rollout) and re-check `.env.example` and `docker-compose.yml` against the full variable list; Phase 4 itself adds none.
+- **Rollout order** (plan section 10): migrations; deploy with `ACCESS_SOURCE=local` and `REQUIRE_ROLE_TO_LOGIN=false` (no behaviour change for users); enable audit; create a first administrator and a few `tt-skabelonansvarlig` assignments; pilot one central template with one department; switch to `rollekatalog` per environment after a successful sync.
+- **GDPR notes for the client.** The audit log stores user id, name snapshot, IP (`AUDIT_STORE_IP`) and user agent; choose `AUDIT_RETENTION_DAYS` and schedule the prune route. The template changelog stores the actor's name snapshot and the change notes and has no retention or erasure path (append-only by design); decide whether that is acceptable. Content stays out of the audit log by construction.
+- **Open product decisions.** The `(app)/layout.tsx` fail-open versus fail-closed behaviour for users the access check cannot resolve (deliberately unchanged in Phases 3 and 4); whether recipients should be allowed to see central prompts (default: no, see `templates.md` for how to flip); whether to add a "central templates only" policy per org unit or a per-template default.
+- **Older routes.** `/api/meetings`, `/api/bot`, `/api/minutes` and the rest still only check the session, so disabled users and `REQUIRE_ROLE_TO_LOGIN` are not enforced there and a refusal is never an `authz.denied` event; they migrate to `withAuthz` gradually.
+- **Phase 2 gaps worth knowing**: the share-code flow for templates is client-side and not logged. The full list is under "Known limitations" in `audit.md`.
 - The unjournaled `drizzle/0000_wet_impossible_man.sql` is untouched (a human decision, see `phase0-findings.md`).
