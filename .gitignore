@@ -47,3 +47,6 @@ next-env.d.ts
 # audio storage
 /audio-storage
 .env.docker
+
+# Machine-local Claude Code settings (hook commands, paths)
+/.claude/settings.local.json
