@@ -22,6 +22,13 @@
       "when": 1791205659820,
       "tag": "0002_audit_events",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791211893532,
+      "tag": "0003_central_templates",
+      "breakpoints": true
     }
   ]
 }

@@ -286,6 +286,98 @@ export const auditEvents = pgTable(
   ],
 );
 
+// ─── Central templates (public schema) ─────────────────────────────────────
+// Locked prompts a super user (template.manage, scoped to org units) delegates
+// to the people beneath an org unit. central_template_versions is the changelog:
+// append-only (immutability trigger hand-appended to
+// drizzle/0003_central_templates.sql, drizzle-kit cannot express it). The
+// *_user_id columns have NO foreign key so history survives user deletion.
+
+export const centralTemplateStatusValues = ['active', 'archived'] as const;
+export const centralTemplateChangeTypeValues = ['create', 'update', 'retarget', 'archive', 'restore'] as const;
+
+export const centralTemplates = pgTable(
+  'central_templates',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    // RESTRICT: an org unit that owns a central template cannot be deleted.
+    ownerOrgUnitUuid: uuid('owner_org_unit_uuid')
+      .notNull()
+      .references(() => orgUnits.uuid, { onDelete: 'restrict' }),
+    name: text('name').notNull(),
+    description: text('description').notNull().default(''),
+    prompt: text('prompt').notNull(),
+    includeDeltagere: boolean('include_deltagere').notNull().default(false),
+    includeBeslutningspunkter: boolean('include_beslutningspunkter').notNull().default(false),
+    includeDagsorden: boolean('include_dagsorden').notNull().default(false),
+    includeDato: boolean('include_dato').notNull().default(false),
+    allowUserInstruction: boolean('allow_user_instruction').notNull().default(false),
+    allowToggleOverrides: boolean('allow_toggle_overrides').notNull().default(false),
+    status: text('status').notNull().default('active'),
+    currentVersion: integer('current_version').notNull().default(1),
+    createdByUserId: text('created_by_user_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('central_templates_owner_idx').on(t.ownerOrgUnitUuid),
+    check('central_templates_status_check', sql`${t.status} in ('active', 'archived')`),
+    check('central_templates_name_check', sql`btrim(${t.name}) <> '' and char_length(${t.name}) <= 120`),
+    check('central_templates_description_check', sql`char_length(${t.description}) <= 1000`),
+    check('central_templates_prompt_check', sql`btrim(${t.prompt}) <> '' and char_length(${t.prompt}) <= 20000`),
+    check('central_templates_version_check', sql`${t.currentVersion} >= 1`),
+  ],
+);
+
+export const centralTemplateVersions = pgTable(
+  'central_template_versions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    templateId: uuid('template_id')
+      .notNull()
+      .references(() => centralTemplates.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    changeType: text('change_type').notNull(),
+    changeNote: text('change_note').notNull(),
+    changedByUserId: text('changed_by_user_id'),
+    // Name as it was when the change was made (the user may be renamed or deleted later).
+    changedByName: text('changed_by_name'),
+    changedAt: timestamp('changed_at', { withTimezone: true }).notNull().defaultNow(),
+    // Snapshot of ALL content fields and of the targets at this version.
+    content: jsonb('content').notNull(),
+    targets: jsonb('targets').notNull(),
+  },
+  (t) => [
+    unique('central_template_versions_template_version_unique').on(t.templateId, t.version),
+    check('central_template_versions_version_check', sql`${t.version} >= 1`),
+    check(
+      'central_template_versions_change_type_check',
+      sql`${t.changeType} in ('create', 'update', 'retarget', 'archive', 'restore')`,
+    ),
+    check(
+      'central_template_versions_change_note_check',
+      sql`char_length(btrim(${t.changeNote})) >= 10 and char_length(${t.changeNote}) <= 2000`,
+    ),
+  ],
+);
+
+export const centralTemplateTargets = pgTable(
+  'central_template_targets',
+  {
+    templateId: uuid('template_id')
+      .notNull()
+      .references(() => centralTemplates.id, { onDelete: 'cascade' }),
+    orgUnitUuid: uuid('org_unit_uuid')
+      .notNull()
+      .references(() => orgUnits.uuid, { onDelete: 'cascade' }),
+    includeDescendants: boolean('include_descendants').notNull().default(true),
+  },
+  (t) => [
+    primaryKey({ columns: [t.templateId, t.orgUnitUuid] }),
+    index('central_template_targets_org_unit_idx').on(t.orgUnitUuid),
+  ],
+);
+
 // ─── Per-user schema helpers ────────────────────────────────────────────────
 // These are the SQL strings used when building per-user schemas.
 // Drizzle cannot target dynamic schema names, so we use raw SQL in user-schema.ts.
