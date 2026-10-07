@@ -3,7 +3,8 @@ import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { withHandler } from '@/lib/api-handler';
 import { recordAuthzDenied } from '@/lib/audit/authz-denied';
-import { accessSource, requireRoleToLogin } from './config';
+import { accessSource, localAdminEnabled, requireRoleToLogin } from './config';
+import { readOnlyMessage } from './access-errors';
 import { hasCapability } from './permissions';
 import { resolvePrincipal } from './principal';
 import type { Capability, Principal } from './types';
@@ -19,8 +20,9 @@ export interface AuthzContext<P = Record<string, never>> {
 
 export interface AuthzOptions {
   /**
-   * For write endpoints of the local provider: answer 409 when roles are
-   * owned by Rollekatalog (ACCESS_SOURCE=rollekatalog). Checked after the
+   * For write endpoints of the local provider: answer 409 when the in-app role
+   * administration is unavailable, i.e. roles are owned by Rollekatalog or the IdP's
+   * claims, or the kill switch ACCESS_LOCAL_ADMIN is off. Checked after the
    * capability, so a caller without access learns nothing about the mode.
    */
   requireLocalSource?: boolean;
@@ -112,9 +114,13 @@ export function withAuthz<P = Record<string, never>>(
       const denied = requireCapability(principal, capability);
       if (denied) return denied;
     }
-    if (options.requireLocalSource && accessSource() !== 'local') {
+    if (options.requireLocalSource && !localAdminEnabled()) {
       recordAuthzDenied({ actorUserId: principal.userId, required: capability ?? 'login', reason: 'wrong_source' });
-      return NextResponse.json({ error: 'Roller styres af Rollekatalog' }, { status: 409 });
+      const source = accessSource();
+      return NextResponse.json(
+        { error: source === 'rollekatalog' ? 'Roller styres af Rollekatalog' : readOnlyMessage(source) },
+        { status: 409 },
+      );
     }
 
     const params = (routeCtx?.params ? await routeCtx.params : {}) as P;

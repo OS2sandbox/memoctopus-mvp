@@ -10,6 +10,7 @@
 // contribute only whether they are set, so a fingerprint cannot be used to recover
 // one and a rotated secret is NOT detected (it cannot be, without hashing it).
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { recordEvent } from '@/lib/audit/record';
 import { defaultRunner, type SqlRunner } from '@/lib/authz/pg-runner';
 
@@ -26,7 +27,7 @@ const SETTING_NAMES = [
   'AUTHENTIK_CLIENT_ID', 'AUTHENTIK_CLIENT_SECRET', 'AUTHENTIK_DISCOVERY_URL',
   'ACCESS_SOURCE', 'REQUIRE_ROLE_TO_LOGIN', 'BOOTSTRAP_ADMIN_EMAILS',
   'DIRECTORY_MATCH', 'DIRECTORY_USERID_CLAIM', 'DIRECTORY_USERID_TRANSFORM', 'DIRECTORY_USERID_DOMAIN',
-  'AUTH_IP_HEADERS', 'ROLE_STALE_MAX_SECONDS',
+  'AUTH_IP_HEADERS', 'ROLE_STALE_MAX_SECONDS', 'ROLE_CLAIMS_MAX_SECONDS', 'ACCESS_LOCAL_ADMIN', 'AUTH_CONFIG_FILE',
   'ROLLEKATALOG_URL', 'ROLLEKATALOG_READ_API_KEY', 'ROLLEKATALOG_ORG_API_KEY', 'ROLLEKATALOG_ITSYSTEM_ID',
   'ROLLEKATALOG_DOMAIN', 'ROLLEKATALOG_TIMEOUT_MS', 'ROLLEKATALOG_MAX_RESPONSE_BYTES', 'ROLLEKATALOG_ALLOW_HTTP',
   'ROLLEKATALOG_SCOPE_DESCENDANTS', 'ROLLEKATALOG_GLOBAL_ROLES', 'ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT',
@@ -47,6 +48,14 @@ function isSecret(name: string, value: string): boolean {
   return SECRET_NAME.test(name) || URL_CREDENTIALS.test(value);
 }
 
+function fileDigest(path: string): string {
+  try {
+    return createHash('sha256').update(readFileSync(path)).digest('hex').slice(0, 16);
+  } catch {
+    return '<unreadable>';
+  }
+}
+
 /**
  * First 16 hex characters of a sha256 over the sorted `NAME=value` lines, with a
  * secret's value replaced by `<set>` (or `<unset>`). Pure; the same environment always
@@ -58,6 +67,12 @@ export function configFingerprint(env: Record<string, string | undefined> = proc
     if (isSecret(name, value)) return `${name}=${value ? '<set>' : '<unset>'}`;
     return `${name}=${value}`;
   });
+  // The auth config file holds the identity providers and the role mapping: a change to its
+  // CONTENT is a configuration change too. Only a digest of the raw bytes enters the
+  // fingerprint (the file carries secrets by ${ENV} reference, never in clear, but it is not
+  // ours to echo), and an unreadable file is its own state.
+  const authFile = (env.AUTH_CONFIG_FILE ?? '').trim();
+  if (authFile) lines.push(`AUTH_CONFIG_FILE_CONTENT=${fileDigest(authFile)}`);
   return createHash('sha256').update(lines.join('\n')).digest('hex').slice(0, 16);
 }
 

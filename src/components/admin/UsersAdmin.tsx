@@ -43,7 +43,8 @@ interface AppUser {
 }
 
 const roleName = (key: string) => (isRoleKey(key) ? roleLabels[key] : key);
-const sourceName = (s: string) => (s === 'local' || s === 'rollekatalog' ? sourceLabels[s as AccessSource] : s);
+const sourceName = (s: string) =>
+  s === 'local' || s === 'rollekatalog' || s === 'claims' ? sourceLabels[s as AccessSource] : s;
 const day = (iso: string) => iso.slice(0, 10);
 
 function inactiveReason(a: Assignment, now = Date.now()): string {
@@ -126,7 +127,7 @@ export function UsersAdmin() {
 
   return (
     <AdminPage title="Brugere og roller" description="Brugere i løsningen og de roller, de er tildelt.">
-      {me?.readOnly && <RoleSourceCard itSystem={sync.data?.itSystem} />}
+      {me?.readOnly && <RoleSourceCard source={me.source} itSystem={sync.data?.itSystem} />}
       <LastSyncLine me={me} sync={sync} />
       <ErrorBanner message={meError} />
       <ErrorBanner message={loadError} onRetry={() => load(appliedQ)} />

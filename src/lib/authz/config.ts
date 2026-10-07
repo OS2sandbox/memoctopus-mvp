@@ -1,8 +1,9 @@
 // Access-control settings. Read from process.env at CALL time (same idiom as
 // src/lib/auth/providers.ts) so an operator can change .env and restart
 // without an image rebuild. Never NEXT_PUBLIC_*.
+import { microsoftTenantId } from '@/lib/auth/providers';
 
-export type AccessSource = 'local' | 'rollekatalog';
+export type AccessSource = 'local' | 'rollekatalog' | 'claims';
 export type DirectoryMatchMode = 'userid-claim' | 'extuuid-claim' | 'email';
 
 function clean(name: string): string {
@@ -22,16 +23,51 @@ export class ConfigError extends Error {
 }
 
 /**
- * Unset or blank => 'local' (the default). 'local' / 'rollekatalog' (trimmed,
+ * Unset or blank => 'local' (the default). 'local' / 'rollekatalog' / 'claims' (trimmed,
  * case-insensitive) as written. Anything else THROWS ConfigError: 'local' is the
- * permissive mode (bootstrap admin, writable local admin API, Rollekatalog roles
- * ignored), so a typo such as "rolekatalog" must fail closed, never fall back to it.
+ * permissive mode (bootstrap admin, writable local admin API, IdP roles ignored), so a
+ * typo such as "rolekatalog" or "claim" must fail closed, never fall back to it.
+ *
+ *  - local:        roles are assigned in the app's own admin UI.
+ *  - rollekatalog: roles and org units are synced from Rollekatalog.
+ *  - claims:       roles come from the IdP's role/group claims at every login (see
+ *                  auth/config-file.ts for the mapping); the app has no role admin.
  */
 export function accessSource(): AccessSource {
   const v = clean('ACCESS_SOURCE').toLowerCase();
   if (v === '' || v === 'local') return 'local';
   if (v === 'rollekatalog') return 'rollekatalog';
-  throw new ConfigError('ACCESS_SOURCE must be "local" or "rollekatalog"');
+  if (v === 'claims') return 'claims';
+  throw new ConfigError('ACCESS_SOURCE must be "local", "rollekatalog" or "claims"');
+}
+
+/**
+ * Kill switch for the in-app role administration: role grant/revoke, local org-unit
+ * and member edits, and the first-administrator bootstrap. Only meaningful in 'local'
+ * mode (in the others every local write would be inert, because local rows are
+ * ignored), so there it is always false whatever the variable says. In 'local' mode
+ * it defaults to on, and ACCESS_LOCAL_ADMIN=false turns it off. Municipal deployments
+ * run claims (or rollekatalog) and never expose a local admin.
+ */
+export function localAdminEnabled(): boolean {
+  if (accessSource() !== 'local') return false;
+  return clean('ACCESS_LOCAL_ADMIN').toLowerCase() !== 'false';
+}
+
+const DEFAULT_ROLE_CLAIMS_MAX_SECONDS = 8 * 3600;
+
+/**
+ * How long roles taken from IdP claims count after the login that wrote them
+ * (ROLE_CLAIMS_MAX_SECONDS, default 8 hours). Claims only change at login, so this is
+ * also how long a removed role can linger; in claims mode the session lifetime is set
+ * to the same value (auth/index.ts) so a session never outlives its role snapshot.
+ * Fail closed: an unusable value falls back to the DEFAULT, never to "unlimited".
+ */
+export function roleClaimsMaxSeconds(): number {
+  const raw = clean('ROLE_CLAIMS_MAX_SECONDS');
+  if (raw === '') return DEFAULT_ROLE_CLAIMS_MAX_SECONDS;
+  const n = /^\d{1,9}$/.test(raw) ? Number(raw) : NaN;
+  return n >= 60 && n <= 30 * 86_400 ? n : DEFAULT_ROLE_CLAIMS_MAX_SECONDS;
 }
 
 export function requireRoleToLogin(): boolean {
@@ -61,8 +97,8 @@ export function directoryUserIdClaim(): string {
 // Multi-tenant aliases are not a single tenant: any Entra tenant can sign in.
 const MULTI_TENANT_ALIASES = new Set(['common', 'organizations', 'consumers']);
 
-/** MICROSOFT_TENANT_ID when it names exactly one tenant, else null. */
+/** The configured Entra tenant (config file, else MICROSOFT_TENANT_ID) when it names exactly one tenant, else null. */
 export function singleTenantId(): string | null {
-  const tenant = clean('MICROSOFT_TENANT_ID').toLowerCase();
+  const tenant = (microsoftTenantId() ?? '').trim().toLowerCase();
   return tenant && !MULTI_TENANT_ALIASES.has(tenant) ? tenant : null;
 }

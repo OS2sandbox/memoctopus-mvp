@@ -7,12 +7,22 @@ import { asHeaderSource, clientIp, requestIdOf, userAgentOf, type HeaderSource }
 import { CODE_RE } from '@/lib/audit/events/types';
 import { maybeBootstrapAdmin } from './bootstrap';
 import { enabledAuthProviders } from '@/lib/auth/providers';
+import { applyClaimsLoginSafely, clearClaimsRoles } from './claims-roles';
+import { takeLoginClaims } from './claims-stash';
 import { accessSource } from './config';
 import { matchDirectoryUser } from './directory-match';
-import { captureExternalIdentity, type ExternalIdentity } from './identity';
-import { errorLabel } from './pg-runner';
+import { captureExternalIdentity, captureIdentityFromAttributes, decodeJwtPayload, type ExternalIdentity } from './identity';
+import { defaultRunner, errorLabel } from './pg-runner';
 
-export async function runLoginHooks(userId: string): Promise<void> {
+/** The sign-in routes of the better-auth sso plugin that complete a SAML login (route templates). */
+const SAML_LOGIN_PATHS = new Set(['/sso/saml2/callback/:providerId', '/sso/saml2/sp/acs/:providerId']);
+
+export async function runLoginHooks(userId: string, ctx?: AuthHookContext | null): Promise<void> {
+  const { method, provider } = authMethodOf(ctx);
+  // SAML: the assertion's attributes only reach us in the sso plugin's provisionUser callback,
+  // which runs right after the session is created. runSamlLoginHooks does this work there.
+  if (method === 'saml') return;
+
   let identities: ExternalIdentity[] = [];
 
   try {
@@ -36,8 +46,78 @@ export async function runLoginHooks(userId: string): Promise<void> {
     console.error(`[authz] login step failed: access_source (${errorLabel(err)})`);
     return;
   }
+  if (mode === 'claims') {
+    await applyOidcLoginClaims(userId, method, provider);
+    return;
+  }
   if (mode !== 'rollekatalog') return;
   for (const identity of identities) {
+    try {
+      await matchDirectoryUser(identity);
+    } catch (err) {
+      console.error(`[authz] login step failed: match_directory_user (${errorLabel(err)})`);
+    }
+  }
+}
+
+/**
+ * ACCESS_SOURCE=claims, OIDC / Entra: the role claims of THIS login, taken from the profile the
+ * provider mapper saw (id_token + userinfo) or, failing that, from the id_token stored on the
+ * account. A session that did not come from an IdP (password sign-in) carries no claims, so it
+ * must not keep roles an earlier SSO login wrote: they are cleared. Never throws.
+ */
+async function applyOidcLoginClaims(userId: string, method: LoginMethod, provider: string): Promise<void> {
+  try {
+    if (method !== 'oidc' && method !== 'microsoft') {
+      await clearClaimsRoles(userId);
+      return;
+    }
+    const res = await defaultRunner().query<{ account_id: string; id_token: string | null }>(
+      'SELECT account_id, id_token FROM public.accounts WHERE user_id = $1 AND provider_id = $2 LIMIT 1',
+      [userId, provider],
+    );
+    const account = res.rows[0];
+    const claims =
+      (account ? takeLoginClaims(provider, account.account_id) : null) ??
+      (account?.id_token ? decodeJwtPayload(account.id_token) : null);
+    await applyClaimsLoginSafely({ userId, providerId: provider, claims });
+  } catch (err) {
+    console.error(`[authz] login step failed: claims_roles (${errorLabel(err)})`);
+    try {
+      await clearClaimsRoles(userId);
+    } catch (clearErr) {
+      console.error(`[authz] login step failed: clear_claims (${errorLabel(clearErr)})`);
+    }
+  }
+}
+
+/**
+ * Everything runLoginHooks does for an OIDC login, for a SAML login: called from the sso
+ * plugin's provisionUser (provisionUserOnEveryLogin) with the mapped assertion attributes,
+ * i.e. after the session exists but before the response is sent. Never throws.
+ */
+export async function runSamlLoginHooks(
+  userId: string,
+  providerId: string,
+  userInfo: Record<string, unknown>,
+): Promise<void> {
+  let identity: ExternalIdentity | null = null;
+  try {
+    identity = await captureIdentityFromAttributes(userId, providerId, userInfo);
+  } catch (err) {
+    console.error(`[authz] login step failed: capture_identity (${errorLabel(err)})`);
+  }
+
+  let mode: ReturnType<typeof accessSource>;
+  try {
+    mode = accessSource();
+  } catch (err) {
+    console.error(`[authz] login step failed: access_source (${errorLabel(err)})`);
+    return;
+  }
+  if (mode === 'claims') {
+    await applyClaimsLoginSafely({ userId, providerId, claims: userInfo });
+  } else if (mode === 'rollekatalog' && identity) {
     try {
       await matchDirectoryUser(identity);
     } catch (err) {
@@ -86,7 +166,7 @@ export interface AuthHookContext {
   context?: { returned?: unknown; responseHeaders?: unknown } | null;
 }
 
-type LoginMethod = 'password' | 'oidc' | 'microsoft' | 'unknown';
+type LoginMethod = 'password' | 'oidc' | 'microsoft' | 'saml' | 'unknown';
 
 // The provider id comes from the URL path of an unauthenticated request, so it is
 // only stored when it names a provider that is actually configured; anything else
@@ -104,6 +184,9 @@ export function authMethodOf(ctx: AuthHookContext | null | undefined): { method:
       return { method: 'password', provider: 'password' };
     case '/oauth2/callback/:providerId':
       return { method: 'oidc', provider: asProvider(ctx.params?.providerId) };
+    case '/sso/saml2/callback/:providerId':
+    case '/sso/saml2/sp/acs/:providerId':
+      return { method: 'saml', provider: asProvider(ctx.params?.providerId) };
     case '/callback/:id': {
       const provider = asProvider(ctx.params?.id);
       return { method: provider === 'microsoft' ? 'microsoft' : 'unknown', provider };
@@ -301,26 +384,47 @@ export function classifyAuthFailure(ctx: AuthHookContext | null | undefined): Au
     const hmac = emailHmac((ctx.body as { email?: unknown } | null | undefined)?.email);
     return { reason, method, provider, ...(hmac ? { emailHmac: hmac } : {}) };
   }
+  if (ctx.path && SAML_LOGIN_PATHS.has(ctx.path)) {
+    // The ACS answers success AND most failures with a redirect (?error=...); a few failures are
+    // thrown as a 4xx instead. Neither carries anything but a short code, and none is stored.
+    const location = locationOf(ctx);
+    if (!location) {
+      const status = statusOf(ctx.context?.returned);
+      return status !== null && status >= 400 ? { reason: 'oauth_error', method, provider } : null;
+    }
+    return failureFromLocation(location, method, provider);
+  }
   if (ctx.path === '/callback/:id' || ctx.path === '/oauth2/callback/:providerId') {
     const location = locationOf(ctx);
     if (!location) return null;
-    let error: string | null;
-    try {
-      error = new URL(location, 'http://localhost').searchParams.get('error');
-    } catch {
-      return null;
-    }
-    if (!error) return null;
-    return { reason: error === 'account_not_linked' ? 'account_not_linked' : 'oauth_error', method, provider };
+    return failureFromLocation(location, method, provider);
   }
   return null;
+}
+
+function failureFromLocation(location: string, method: LoginMethod, provider: string): AuthFailure | null {
+  let error: string | null;
+  try {
+    error = new URL(location, 'http://localhost').searchParams.get('error');
+  } catch {
+    return null;
+  }
+  if (!error) return null;
+  return { reason: error === 'account_not_linked' ? 'account_not_linked' : 'oauth_error', method, provider };
 }
 
 /** auth.login_failed: no actor (the attempt has no session). Capped per IP, with the excess counted in a summary row. */
 export async function auditAuthFailure(ctx: AuthHookContext | null | undefined): Promise<void> {
   try {
     // Cheap path filter first: this hook sees every better-auth request.
-    if (ctx?.path !== '/sign-in/email' && ctx?.path !== '/callback/:id' && ctx?.path !== '/oauth2/callback/:providerId') return;
+    if (
+      ctx?.path !== '/sign-in/email' &&
+      ctx?.path !== '/callback/:id' &&
+      ctx?.path !== '/oauth2/callback/:providerId' &&
+      !(ctx?.path && SAML_LOGIN_PATHS.has(ctx.path))
+    ) {
+      return;
+    }
     const failure = classifyAuthFailure(ctx);
     if (!failure) return;
     const headers = headersOf(ctx);

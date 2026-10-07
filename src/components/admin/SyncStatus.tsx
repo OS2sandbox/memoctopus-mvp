@@ -32,7 +32,7 @@ const formatSyncTime = (iso: string | null) => formatDateTime(iso, { dateStyle: 
 
 // Advisory: the routes re-check sync.run / access.manage on every request.
 export const canSeeSyncRun = (me: MeResponse) =>
-  me.readOnly && (me.capabilities.includes('sync.run') || me.capabilities.includes('access.manage'));
+  me.source === 'rollekatalog' && (me.capabilities.includes('sync.run') || me.capabilities.includes('access.manage'));
 
 export interface SyncRunState {
   data: SyncResponse | null;
@@ -65,7 +65,7 @@ export function LastSyncLine({ me, sync }: { me: MeResponse | null; sync?: SyncR
   // A page that already holds the run passes it in, so the route is read once per page.
   const own = useSyncRun(showTime && !sync);
   const { data, loading } = sync ?? own;
-  if (!me || !me.readOnly) return null;
+  if (!me || me.source !== 'rollekatalog') return null;
 
   let freshness: string | null = null;
   if (showTime && !loading && data) {
@@ -225,6 +225,6 @@ function SyncPanel({ sync }: { sync?: SyncRunState }) {
  * owns the data (in local mode there is nothing to sync). The server enforces both on every call.
  */
 export function SyncStatus({ me, sync }: { me: MeResponse; sync?: SyncRunState }) {
-  if (!me.readOnly || !me.capabilities.includes('sync.run')) return null;
+  if (me.source !== 'rollekatalog' || !me.capabilities.includes('sync.run')) return null;
   return <SyncPanel sync={sync} />;
 }

@@ -170,10 +170,69 @@ deprecation warning; on that path the provider id stays `authentik`, so your
 registered redirect URI and existing accounts are unaffected. To migrate, copy the
 three values to their `OIDC_*` names and set `OIDC_PROVIDER_ID=authentik`.
 
+## Municipal installation: own IdP, roles from claims (OIDC and SAML)
+
+Each municipality or region runs its own installation against its own identity provider
+(FKA, Entra ID, OS2faktor, Authentik, ...). Which providers exist, how users and roles are
+read from the IdP's answer, and which claim value means which app role is described in **one
+JSON file per installation** — no code change, no rebuild, nothing shared with other
+installations. The full format and one recipe per IdP is in
+[`docs/central-access/idp.md`](docs/central-access/idp.md). In short:
+
+1. Put `auth.json` (and any SAML metadata XML it points at) in a directory on the host, by
+   default `./auth-config` next to `docker-compose.yml` (`AUTH_CONFIG_DIR`). It is mounted
+   read-only at `/config` and is git-ignored, because it may hold client secrets. Prefer
+   `"clientSecret": "${MY_IDP_SECRET}"` in the file and the secret in `.env`; for the app to
+   see it, forward the variable in a `docker-compose.override.yml`:
+
+   ```yaml
+   services:
+     app:
+       environment:
+         - MY_IDP_SECRET=${MY_IDP_SECRET}
+   ```
+
+2. In `.env`:
+
+   ```bash
+   AUTH_CONFIG_FILE=/config/auth.json
+   ACCESS_SOURCE=claims              # roles come from the IdP's claims, not from the app
+   EMAIL_PASSWORD_ENABLED=false      # a password account has no role; do not offer it
+   REQUIRE_ROLE_TO_LOGIN=true        # no role claim, no access
+   # ROLE_CLAIMS_MAX_SECONDS=28800   # how long a login's roles count; sessions end with it
+   ```
+
+3. Register with the IdP, with `BETTER_AUTH_URL` as the public URL of the app:
+
+   | Protocol | What the IdP is given |
+   |---|---|
+   | OIDC | redirect URI `<BETTER_AUTH_URL>/api/auth/oauth2/callback/<provider id>` |
+   | SAML 2.0 | ACS URL (HTTP-POST) `<BETTER_AUTH_URL>/api/auth/sso/saml2/sp/acs/<provider id>`; SP metadata at `<BETTER_AUTH_URL>/api/auth/sso/saml2/sp/metadata?providerId=<provider id>`; entity id = that metadata URL unless `spEntityId` is set |
+
+4. `docker compose up -d app`. The file is read once at start, so a change needs this
+   restart. A provider with an invalid entry is skipped with a content-free warning in the
+   log (`[auth] Ignoring providers[2]: ...`); an invalid `roles` section grants **nobody** a
+   role (fail closed) and is reported the same way.
+
+Rights and administrator assignment happen **outside** the app: removing a person's role
+in the IdP removes it here at their next login (and at the latest when
+`ROLE_CLAIMS_MAX_SECONDS` has passed, after which the session has ended too). The
+in-app role administration is switched off in claims mode, and there is no in-app
+administrator to lock out, so keep a **break-glass path on the IdP side** (a documented
+account that carries the administrator claim). A password sign-up can never be a way around
+this: password accounts get no roles. The in-app admin (`ACCESS_SOURCE=local`) stays for
+development and demos and can be turned off with `ACCESS_LOCAL_ADMIN=false`.
+
+**Not supported (ask the client before promising them):** RP-initiated logout / OIDC
+back-channel logout and SAML single logout (signing out of the app does not sign out of the
+IdP), encrypted SAML assertions, Entra group overage (use app roles instead of `groups`),
+and removing a role in the IdP taking effect inside a still-running session before
+`ROLE_CLAIMS_MAX_SECONDS` (the IdP is only asked at login).
+
 ## Central access, audit log and Rollekatalog
 
-- **PostgreSQL 15 or newer** (the migrations use `NULLS NOT DISTINCT`); the compose file runs `postgres:16-alpine`. Migrations `0001` to `0003` run in the `migrate` service like the others.
-- **Set first** (all in `.env.example`; runtime only, restart without rebuild): `ACCESS_SOURCE` (`local` by default; a typo makes access control answer 503), `BOOTSTRAP_ADMIN_EMAILS`, `INTERNAL_CRON_SECRET`, and `AUDIT_RETENTION_DAYS` (default 365 days; `forever` keeps the log, see `docs/central-access/audit.md`). Rollekatalog variables are only needed for `ACCESS_SOURCE=rollekatalog`. If you set `DIRECTORY_USERID_TRANSFORM=strip-upn-domain`, also set `DIRECTORY_USERID_DOMAIN` (your UPN domain, for example `kommune.dk`); without it no login is matched (see `docs/central-access/rollekatalog.md`).
+- **PostgreSQL 15 or newer** (the migrations use `NULLS NOT DISTINCT`); the compose file runs `postgres:16-alpine`. Migrations `0001` to `0004` run in the `migrate` service like the others.
+- **Set first** (all in `.env.example`; runtime only, restart without rebuild): `ACCESS_SOURCE` (`local` by default, or `rollekatalog`, or `claims`; a typo makes access control answer 503), `BOOTSTRAP_ADMIN_EMAILS`, `INTERNAL_CRON_SECRET`, and `AUDIT_RETENTION_DAYS` (default 365 days; `forever` keeps the log, see `docs/central-access/audit.md`). Rollekatalog variables are only needed for `ACCESS_SOURCE=rollekatalog`. If you set `DIRECTORY_USERID_TRANSFORM=strip-upn-domain`, also set `DIRECTORY_USERID_DOMAIN` (your UPN domain, for example `kommune.dk`); without it no login is matched (see `docs/central-access/rollekatalog.md`).
 - **First administrator.** In local mode, list your address in `BOOTSTRAP_ADMIN_EMAILS` and sign in through SSO (Microsoft needs a single-tenant `MICROSOFT_TENANT_ID`; OIDC needs `email_verified`). It grants `tt-administrator` once; the flag `bootstrap_admin_done` in `public.system_flags` then disables it. Recovery after a lock-out: `DELETE FROM system_flags WHERE key = 'bootstrap_admin_done';` and sign in again, or insert a `role_assignments` row by SQL.
 - **Scheduling.** Nothing in the app runs timers. Call the routes from a host or cluster cron with `X-Cron-Secret`; both answer 404 until `INTERNAL_CRON_SECRET` is set, and the sync answers 409 unless `ACCESS_SOURCE=rollekatalog` and the integration is configured:
 
@@ -194,7 +253,7 @@ three values to their `OIDC_*` names and set `OIDC_PROVIDER_ID=authentik`.
   ```
 
   (`!override` needs Docker Compose 2.24 or newer; on older versions list the port in a separate overlay that replaces the `ports` key, or remove the publish and let the proxy reach `app:3000` over the Docker network), or firewall `APP_PORT` so only the proxy can reach it. The cron examples above call `http://localhost:8080` and keep working with the loopback binding, because they run on the host. With no proxy in front at all, the stored IP is simply whatever the client sends.
-- **Docs.** `docs/central-access/README.md` (overview), `rollekatalog.md` (operator guide), `audit.md` (log, feed, retention), `templates.md` (central templates).
+- **Docs.** `docs/central-access/README.md` (overview), `idp.md` (identity providers, SAML, roles from claims), `rollekatalog.md` (operator guide), `audit.md` (log, feed, retention), `templates.md` (central templates).
 
 ## Day-2 operations
 

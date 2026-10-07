@@ -56,7 +56,7 @@ describe('role matrix tripwire', () => {
       'tt-bruger': { capabilities: ['template.use'], globalScopeAllowed: false },
       'tt-skabelonansvarlig': {
         capabilities: ['template.use', 'template.manage', 'directory.read'],
-        globalScopeAllowed: false,
+        globalScopeAllowed: true,
       },
       'tt-logleser': {
         capabilities: ['template.use', 'audit.read', 'audit.export', 'directory.read'],
@@ -99,11 +99,18 @@ describe('buildPrincipalFromAssignments', () => {
     expect(p.capabilities).toEqual(['template.use']);
   });
 
-  it('fails closed: tt-skabelonansvarlig with NULL scope covers no org unit', () => {
+  it('tt-skabelonansvarlig with NULL scope is the GLOBAL superuser (template.manage everywhere), but never access.manage', () => {
     const p = build([{ roleKey: 'tt-skabelonansvarlig', scopeOrgUnitUuid: null }]);
     expect(p.capabilities).toContain('template.manage');
-    expect(p.scopes['template.manage']).toEqual({ global: false, roots: [] });
-    expect(p.scopes['directory.read']).toEqual({ global: false, roots: [] });
+    expect(p.capabilities).not.toContain('access.manage');
+    expect(p.scopes['template.manage']).toEqual({ global: true, roots: [] });
+    expect(p.scopes['directory.read']).toEqual({ global: true, roots: [] });
+  });
+
+  it('still fails closed for a role that may not be global: tt-bruger with a NULL scope adds no scoped power', () => {
+    const p = build([{ roleKey: 'tt-bruger', scopeOrgUnitUuid: null }]);
+    expect(p.capabilities).toEqual(['template.use']);
+    expect(p.scopes).toEqual({});
   });
 
   it('scopes tt-skabelonansvarlig to its org unit', () => {

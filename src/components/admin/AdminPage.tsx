@@ -14,15 +14,20 @@ export function AdminPage({ title, description, children }: { title: string; des
   );
 }
 
-/** Shown instead of write controls when roles and organisation are owned by Rollekatalog. */
-export function ReadOnlyBanner() {
+const READ_ONLY_TEXT = {
+  rollekatalog: 'Roller og organisation styres af Rollekatalog og kan ikke ændres her.',
+  claims: 'Roller følger med fra identitetsudbyderen ved login og kan ikke ændres her.',
+  local: 'Den lokale rolle- og organisationsadministration er slået fra.',
+} as const;
+
+/** Shown instead of write controls when roles and organisation are owned outside the app. */
+export function ReadOnlyBanner({ source = 'rollekatalog' }: { source?: keyof typeof READ_ONLY_TEXT }) {
   return (
     <div
       role="status"
       className="rounded-[var(--radius)] border border-[var(--line-strong)] bg-[var(--surface-2)] px-3 py-2.5 text-[13px] leading-snug text-[var(--ink-2)]"
     >
-      <strong className="font-medium">Skrivebeskyttet.</strong> Roller og organisation styres af Rollekatalog og kan ikke
-      ændres her.
+      <strong className="font-medium">Skrivebeskyttet.</strong> {READ_ONLY_TEXT[source]}
     </div>
   );
 }

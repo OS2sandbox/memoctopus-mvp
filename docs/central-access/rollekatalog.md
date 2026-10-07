@@ -2,6 +2,8 @@
 
 For the person who connects the app to a municipality's OS2rollekatalog and keeps it running. Architecture: `README.md`. Audit: `audit.md`.
 
+> **Optional.** Most installations get their roles straight from the IdP's claims (`ACCESS_SOURCE=claims`, `idp.md`) and never run this integration; it is dormant unless `ACCESS_SOURCE=rollekatalog` (or the planned role catalogue is switched on). A municipality may still use OS2rollekatalog *upstream* of the IdP, so that Rollekatalog writes the roles into the IdP's claims; that needs nothing from this guide.
+
 > **Never run against a live Rollekatalog.** The integration was built from the OS2rollekatalog source (release 2026r4) and tested against synthetic fixtures and an in-process mock server. HTTP statuses for wrong keys, the real size of `organisation/v3` and the menu names in the Rollekatalog UI are modelled, not observed. Do the first sync with a small, known set of users and check the result before you rely on it (section 2).
 
 ## 1. What it does
@@ -90,7 +92,7 @@ Rollekatalog gives each assignment an optional constraint. **The scope of `tt-sk
 - **Staleness.** Every successful sync refreshes `synced_at` on all mirrored assignments. An assignment older than `ROLE_STALE_MAX_SECONDS` (default 86400, 24 h) is ignored: elevated capabilities vanish, the baseline `tt-bruger` stays (unless `REQUIRE_ROLE_TO_LOGIN=true`). If syncs fail for longer than that, administrators lose access, so alert on failed runs and keep the interval well below the limit. Staleness affects roles only; membership and the `disabled` flag keep their last known value.
 - **Removal means disabled and signed out.** A user missing from Rollekatalog's answer, or `disabled` there, becomes `disabled=true` in the mirror (the two cases are not told apart): no roles, no baseline, 403 from the APIs and "Ingen adgang" in the app. Rollekatalog does not blank the roles of a disabled user, so the app relies on this flag. **In the same transaction the sync deletes the better-auth sessions of every disabled linked user**, so existing cookies die at once (counter "Sessioner afsluttet", `sessionsRevoked`). The person is re-enabled by a later sync that lists them as active, and then logs in again. Org units are never deleted (a unit that disappears keeps its row, loses its members and assignments); assignments and memberships follow the answer exactly.
 - **Org units that Rollekatalog stops exporting keep their old parent link (known limitation).** Units are never deleted, and a unit that is no longer in the answer is not updated, so its row keeps the `parent_uuid` it had at the last sync it appeared in. Children that are still exported are repointed normally. Until an administrator removes such a unit by hand, the stale link can place it in the old tree.
-- **Mode symmetry.** In local mode `source='rollekatalog'` assignments are ignored, in rollekatalog mode `source='local'` ones are (and rows of an unknown source in both).
+- **Mode symmetry.** In local mode `source='rollekatalog'` assignments are ignored, in rollekatalog mode `source='local'` ones are (and rows of an unknown source in both). The same goes for `source='claims'` rows (written by `ACCESS_SOURCE=claims`, `idp.md`): they count only in claims mode.
 
 A sync fetches everything first and applies it in **one transaction**: a failure rolls back and the mirror stays as it was.
 
@@ -131,7 +133,7 @@ It answers 404 while `INTERNAL_CRON_SECRET` is unset and 401 on a wrong secret. 
 
 **rollekatalog to local** (also the way out of a lock-out): set `ACCESS_SOURCE=local` and restart. Local assignments apply again and `source='rollekatalog'` assignments are ignored. A user who was moved to a Rollekatalog row has no local link until an administrator links them again, and a linked Rollekatalog row keeps its `disabled` flag. `BOOTSTRAP_ADMIN_EMAILS` is one-shot: if it was already used, recover with `DELETE FROM system_flags WHERE key = 'bootstrap_admin_done';` (`README.md`).
 
-**A typo is not local.** `ACCESS_SOURCE` must be `local` or `rollekatalog` (or empty, meaning `local`). Any other value makes access control answer 503 "Adgangskontrol er midlertidigt utilgængelig" and the pages show the retry screen until it is fixed.
+**A typo is not local.** `ACCESS_SOURCE` must be `local`, `rollekatalog` or `claims` (or empty, meaning `local`). Any other value makes access control answer 503 "Adgangskontrol er midlertidigt utilgængelig" and the pages show the retry screen until it is fixed.
 
 ## 8. Environment variables
 

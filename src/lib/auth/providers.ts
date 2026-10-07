@@ -12,12 +12,57 @@
 // inline at all, so importing it as a *value* from a client component would
 // silently yield undefined. Import the AuthProvider type with `import type`.)
 //
+// Where the providers come from: the JSON file named by AUTH_CONFIG_FILE (any number
+// of OIDC providers, Entra and SAML, see ./config-file.ts), or — when no file is
+// configured — the legacy OIDC_* / MICROSOFT_* / AUTHENTIK_* variables, which are
+// synthesised into the same shapes. A configured file replaces the variables entirely.
+//
 // Server-only: must not import @/lib/db (it opens a pg.Pool at module scope).
+import {
+  ENTRA_PROVIDER_ID,
+  PROVIDER_ID_RE,
+  authConfigFilePath,
+  loadAuthConfig,
+  type CatalogueEntry,
+  type ClaimListSpec,
+  type ClaimMapping,
+  type RolesConfig,
+  type SamlFileProvider,
+} from './config-file';
+
+export type { CatalogueEntry, ClaimListSpec, ClaimMapping, RolesConfig, SamlFileProvider };
 
 /** Crosses the server→client boundary as a prop — must carry no secrets. */
 export type AuthProvider =
   | { kind: 'social'; id: 'microsoft'; label: string }
-  | { kind: 'oauth2'; id: string; label: string };
+  | { kind: 'oauth2'; id: string; label: string }
+  // SAML (and any other better-auth sso provider): signed in with signIn.sso({ providerId }).
+  | { kind: 'sso'; id: string; label: string };
+
+/** A fully resolved generic OIDC provider (from the config file or the legacy variables). */
+export interface OidcProviderConfig {
+  providerId: string;
+  providerName: string;
+  clientId: string;
+  clientSecret: string;
+  discoveryUrl?: string;
+  issuer?: string;
+  authorizationUrl?: string;
+  tokenUrl?: string;
+  userInfoUrl?: string;
+  scopes: string[];
+  pkce: boolean;
+  claims: ClaimMapping;
+  rolesClaim?: ClaimListSpec;
+  groupsClaim?: ClaimListSpec;
+}
+
+/** Which claims carry roles/groups for a login method; absent entries mean "not configured". */
+export interface ProviderClaimSpecs {
+  claims: ClaimMapping;
+  rolesClaim?: ClaimListSpec;
+  groupsClaim?: ClaimListSpec;
+}
 
 interface OidcConfig {
   providerId: string;
@@ -51,8 +96,7 @@ const DEPRECATED_CREDENTIALS = [
 // <providerId>) and in the accounts.provider_id column, so it must be a safe URL
 // path segment. Reusing a built-in social provider's id would make two different
 // identity sources write the same accounts.provider_id and cross-match.
-const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9_-]*$/;
-const RESERVED_PROVIDER_IDS = ['microsoft'];
+const RESERVED_PROVIDER_IDS = [ENTRA_PROVIDER_ID];
 
 // `||` not `??`: docker-compose passes unset variables through as `${VAR:-}`,
 // which arrives as an empty string rather than undefined (same hazard documented
@@ -95,7 +139,25 @@ export function emailPasswordEnabled(): boolean {
  * configures Microsoft for the first time after upgrading would silently get
  * nothing. warnDeprecatedAuthEnv() flags it instead.
  */
-export function microsoftConfig() {
+export function microsoftConfig(): {
+  clientId: string;
+  clientSecret: string;
+  tenantId: string;
+  scopes?: string[];
+} | null {
+  const file = loadAuthConfig();
+  if (file.configured) {
+    const entra = file.providers.find((p) => p.type === 'entra');
+    return entra?.type === 'entra'
+      ? {
+          clientId: entra.clientId,
+          clientSecret: entra.clientSecret,
+          tenantId: entra.tenantId,
+          ...(entra.scopes ? { scopes: entra.scopes } : {}),
+        }
+      : null;
+  }
+
   const clientId = env('MICROSOFT_CLIENT_ID');
   const clientSecret = env('MICROSOFT_CLIENT_SECRET');
   if (!clientId || !clientSecret) return null;
@@ -104,8 +166,20 @@ export function microsoftConfig() {
   return { clientId, clientSecret, tenantId: env('MICROSOFT_TENANT_ID') || 'common' };
 }
 
+/** The Entra tenant id as configured (file or MICROSOFT_TENANT_ID), enabled or not; undefined when none. */
+export function microsoftTenantId(): string | undefined {
+  const file = loadAuthConfig();
+  if (file.configured) {
+    const entra = file.providers.find((p) => p.type === 'entra');
+    return entra?.type === 'entra' ? entra.tenantId : undefined;
+  }
+  return env('MICROSOFT_TENANT_ID');
+}
+
 /**
- * The generic OIDC provider — Keycloak, Authentik, or any compliant IdP.
+ * The generic OIDC provider of the LEGACY variables — Keycloak, Authentik, or any
+ * compliant IdP. oidcProviders() is what the rest of the app uses; it falls back to this
+ * when no AUTH_CONFIG_FILE is configured.
  *
  * Credential sets are all-or-nothing and never mixed: the OIDC_* triple wins,
  * and the deprecated AUTHENTIK_* triple is used only when OIDC_* is incomplete.
@@ -154,16 +228,80 @@ function defaultProviderLabel(providerId: string): string {
   return providerId === DEFAULT_PROVIDER_ID ? DEFAULT_PROVIDER_LABEL : titleCase(providerId);
 }
 
+/** Every enabled OIDC provider: the config file's, or the one the legacy variables describe. */
+export function oidcProviders(): OidcProviderConfig[] {
+  const file = loadAuthConfig();
+  if (file.configured) {
+    return file.providers.flatMap((p): OidcProviderConfig[] =>
+      p.type === 'oidc'
+        ? [
+            {
+              providerId: p.id,
+              providerName: p.label ?? defaultProviderLabel(p.id),
+              clientId: p.clientId,
+              clientSecret: p.clientSecret,
+              discoveryUrl: p.discoveryUrl,
+              issuer: p.issuer,
+              authorizationUrl: p.authorizationUrl,
+              tokenUrl: p.tokenUrl,
+              userInfoUrl: p.userInfoUrl,
+              scopes: p.scopes,
+              pkce: p.pkce,
+              claims: p.claims ?? {},
+              rolesClaim: p.rolesClaim,
+              groupsClaim: p.groupsClaim,
+            },
+          ]
+        : [],
+    );
+  }
+  const legacy = oidcConfig();
+  return legacy
+    ? [{ ...legacy, scopes: ['openid', 'profile', 'email'], claims: {} }]
+    : [];
+}
+
+/** Every enabled SAML provider from the config file (there is no legacy variable form). */
+export function samlProviders(): SamlFileProvider[] {
+  return loadAuthConfig().providers.flatMap((p) => (p.type === 'saml' ? [p] : []));
+}
+
+/** Claim mapping and role/group claim names for one login method; null for an unknown id or legacy variables. */
+export function providerClaimSpecs(providerId: string): ProviderClaimSpecs | null {
+  const p = loadAuthConfig().providers.find((x) => x.id === providerId);
+  if (!p) return null;
+  return {
+    claims: p.type === 'entra' ? {} : (p.claims ?? {}),
+    rolesClaim: p.rolesClaim,
+    groupsClaim: p.groupsClaim,
+  };
+}
+
+/** The `roles` section (claim value -> app role). 'invalid' means grant nothing; 'unset' means no mapping. */
+export function authRolesConfig(): RolesConfig {
+  return loadAuthConfig().roles;
+}
+
+/** The `catalogue` section: role/group values that may be stored for a user (and targeted by prompts). */
+export function authConfigCatalogue(): CatalogueEntry[] {
+  return loadAuthConfig().catalogue;
+}
+
 export function enabledAuthProviders(): AuthProvider[] {
   const providers: AuthProvider[] = [];
 
-  if (microsoftConfig()) {
-    providers.push({ kind: 'social', id: 'microsoft', label: 'Microsoft' });
+  const microsoft = microsoftConfig();
+  if (microsoft) {
+    const label = loadAuthConfig().providers.find((p) => p.type === 'entra')?.label;
+    providers.push({ kind: 'social', id: 'microsoft', label: label ?? 'Microsoft' });
   }
 
-  const oidc = oidcConfig();
-  if (oidc) {
+  for (const oidc of oidcProviders()) {
     providers.push({ kind: 'oauth2', id: oidc.providerId, label: oidc.providerName });
+  }
+
+  for (const saml of samlProviders()) {
+    providers.push({ kind: 'sso', id: saml.id, label: saml.label ?? defaultProviderLabel(saml.id) });
   }
 
   return providers;
@@ -171,6 +309,21 @@ export function enabledAuthProviders(): AuthProvider[] {
 
 /** Called once at startup from auth/index.ts. */
 export function warnDeprecatedAuthEnv(): void {
+  if (authConfigFilePath()) {
+    // The file replaces the variables; say so, or an operator keeps editing .env in vain.
+    const ignored = [
+      'OIDC_CLIENT_ID',
+      'OIDC_CLIENT_SECRET',
+      'OIDC_DISCOVERY_URL',
+      'MICROSOFT_CLIENT_ID',
+      'MICROSOFT_CLIENT_SECRET',
+      ...DEPRECATED_CREDENTIALS,
+    ].filter((name) => env(name) !== undefined);
+    if (ignored.length > 0) {
+      console.warn(`[auth] AUTH_CONFIG_FILE is set, so these variables are ignored: ${ignored.join(', ')}.`);
+    }
+    return;
+  }
   const inUse = [...Object.values(DEPRECATED_FLAGS), ...DEPRECATED_CREDENTIALS].filter(
     (name) => env(name) !== undefined,
   );

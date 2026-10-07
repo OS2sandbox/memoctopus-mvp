@@ -103,7 +103,7 @@ export function OrganisationAdmin() {
 
   return (
     <AdminPage title="Organisation" description="Organisationsenheder og deres medlemmer.">
-      {me?.readOnly && <ReadOnlyBanner />}
+      {me?.readOnly && <ReadOnlyBanner source={me.source} />}
       <LastSyncLine me={me} />
       {me && !me.readOnly && denial && (
         <p className="text-[13px] text-[var(--muted)]">Kun visning. {denial}</p>

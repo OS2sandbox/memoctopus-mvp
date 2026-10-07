@@ -104,7 +104,12 @@ services:
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-}
-      # Generic OIDC (Keycloak, Authentik, any compliant IdP).
+      # Identity providers (several OIDC, Entra, SAML) and role claims from ONE JSON file,
+      # mounted at /config (see the volume below). Set AUTH_CONFIG_FILE=/config/auth.json
+      # to use it; it then REPLACES the MICROSOFT_* / OIDC_* variables. Format and recipes:
+      # docs/central-access/idp.md. Read once at start: edit, then `up -d app`.
+      - AUTH_CONFIG_FILE=${AUTH_CONFIG_FILE:-}
+      # Generic OIDC (Keycloak, Authentik, any compliant IdP). Ignored when AUTH_CONFIG_FILE is set.
       - OIDC_ENABLED=${OIDC_ENABLED:-}
       - OIDC_PROVIDER_ID=${OIDC_PROVIDER_ID:-}
       - OIDC_PROVIDER_NAME=${OIDC_PROVIDER_NAME:-}
@@ -122,7 +127,12 @@ services:
       - AUTHENTIK_DISCOVERY_URL=${AUTHENTIK_DISCOVERY_URL:-}
       # Central access control. Read at runtime (no rebuild). Defaults keep
       # today's behaviour: local roles, everyone gets the baseline role.
+      # local | rollekatalog | claims. claims = roles come from the IdP at login (idp.md).
       - ACCESS_SOURCE=${ACCESS_SOURCE:-local}
+      # Kill switch for the in-app role administration (local mode only; always off otherwise).
+      - ACCESS_LOCAL_ADMIN=${ACCESS_LOCAL_ADMIN:-}
+      # Claims mode: how long the roles of a login count (and how long a session lasts). Blank = 28800 (8 h).
+      - ROLE_CLAIMS_MAX_SECONDS=${ROLE_CLAIMS_MAX_SECONDS:-}
       - REQUIRE_ROLE_TO_LOGIN=${REQUIRE_ROLE_TO_LOGIN:-false}
       - BOOTSTRAP_ADMIN_EMAILS=${BOOTSTRAP_ADMIN_EMAILS:-}
       - DIRECTORY_MATCH=${DIRECTORY_MATCH:-userid-claim}
@@ -162,6 +172,9 @@ services:
       - INTERNAL_CRON_SECRET=${INTERNAL_CRON_SECRET:-}
     volumes:
       - audio-storage:/audio-storage
+      # The auth config file and anything it points at (SAML metadata, certificates), read-only.
+      # A missing host directory is created empty by Docker and is harmless without AUTH_CONFIG_FILE.
+      - ${AUTH_CONFIG_DIR:-./auth-config}:/config:ro
     networks:
       - internal
     depends_on:

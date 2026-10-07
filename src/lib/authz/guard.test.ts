@@ -164,6 +164,26 @@ describe('withAuthz', () => {
       expect(res.status).toBe(200);
     });
 
+    it('409 in claims mode, naming the identity provider as the owner of the roles', async () => {
+      vi.stubEnv('ACCESS_SOURCE', 'claims');
+      const handler = vi.fn(ok);
+      const res = await withAuthz('t', 'access.manage', handler, { requireLocalSource: true })(req(), NO_PARAMS);
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toMatch(/identitetsudbyderen/);
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('409 in local mode once the kill switch ACCESS_LOCAL_ADMIN is off', async () => {
+      vi.stubEnv('ACCESS_SOURCE', 'local');
+      vi.stubEnv('ACCESS_LOCAL_ADMIN', 'false');
+      const handler = vi.fn(ok);
+      const res = await withAuthz('t', 'access.manage', handler, { requireLocalSource: true })(req(), NO_PARAMS);
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toMatch(/slået fra/);
+      expect(handler).not.toHaveBeenCalled();
+      expect(mockDenied).toHaveBeenCalledWith(expect.objectContaining({ reason: 'wrong_source' }));
+    });
+
     it('is not enforced unless asked for', async () => {
       vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
       const res = await withAuthz('t', 'access.manage', ok)(req(), NO_PARAMS);

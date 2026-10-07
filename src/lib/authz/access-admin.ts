@@ -12,7 +12,7 @@ import { ADMIN_LOCK_NAME, ADMIN_ROLE, USABLE_LOCAL_ADMIN_SQL, activeSql } from '
 import { ConflictError, NotFoundError, ReadOnlyModeError, ValidationError } from './access-errors';
 import { isRoleKey } from './capabilities';
 import { roleScopeRule } from './role-rules';
-import { accessSource } from './config';
+import { accessSource, localAdminEnabled } from './config';
 import { defaultRunner, type SqlQueryable, type SqlRunner } from './pg-runner';
 import type { RoleKey } from './types';
 
@@ -66,9 +66,13 @@ interface OrgUnitMemberView {
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-/** Defence in depth: the routes check this first, but the service must not rely on its callers. */
+/**
+ * Defence in depth: the routes check this first, but the service must not rely on its callers.
+ * The in-app administration is only available in local mode AND while the kill switch
+ * ACCESS_LOCAL_ADMIN is not off; anything else is a 409 that says who owns the roles.
+ */
 function assertLocalMode(): void {
-  if (accessSource() !== 'local') throw new ReadOnlyModeError();
+  if (!localAdminEnabled()) throw new ReadOnlyModeError(accessSource());
 }
 
 const iso = (d: unknown): string | null => (d instanceof Date ? d.toISOString() : d == null ? null : String(d));

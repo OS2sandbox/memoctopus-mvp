@@ -52,13 +52,11 @@ describe('RoleGrantDialog — scope rules per role', () => {
     expect(screen.queryByLabelText(/Organisationsenhed/)).toBeNull();
   });
 
-  it('requires a unit for Skabelonansvarlig and does not call the API without one', async () => {
+  it('makes the unit optional for Skabelonansvarlig too: no unit means the global superuser', async () => {
     setup();
     await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-skabelonansvarlig');
-    expect(screen.getByLabelText('Organisationsenhed')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Tildel rolle' }));
-    expect(screen.getByText('Rollen kræver en organisationsenhed')).toBeInTheDocument();
-    expect(fetchMock).not.toHaveBeenCalled();
+    const select = screen.getByLabelText('Organisationsenhed (valgfri)');
+    expect(within(select).getByRole('option', { name: 'Hele organisationen' })).toBeInTheDocument();
   });
 
   it('makes the unit optional for Logleser (global allowed) and hides it for Administrator (global only)', async () => {
@@ -73,8 +71,8 @@ describe('RoleGrantDialog — scope rules per role', () => {
   it('shows units as an indented hierarchy', async () => {
     setup();
     await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-skabelonansvarlig');
-    const options = within(screen.getByLabelText('Organisationsenhed')).getAllByRole('option');
-    expect(options.map((o) => o.textContent)).toEqual(['Vælg enhed', 'Kommune', '\u2003└ Børn']);
+    const options = within(screen.getByLabelText('Organisationsenhed (valgfri)')).getAllByRole('option');
+    expect(options.map((o) => o.textContent)).toEqual(['Hele organisationen', 'Kommune', '\u2003└ Børn']);
   });
 
   it('clears the chosen unit when the role changes to one without scope', async () => {
@@ -135,7 +133,7 @@ describe('RoleGrantDialog — submit', () => {
     fetchMock.mockReturnValue(json({ assignment: { id: 'a1' } }, 201));
     setup();
     await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-skabelonansvarlig');
-    await userEvent.selectOptions(screen.getByLabelText('Organisationsenhed'), CHILD);
+    await userEvent.selectOptions(screen.getByLabelText('Organisationsenhed (valgfri)'), CHILD);
     await userEvent.click(screen.getByLabelText('Gælder også underenheder'));
     await userEvent.type(screen.getByLabelText('Startdato (valgfri)'), '2026-01-01');
     await userEvent.type(screen.getByLabelText('Gælder indtil (valgfri)'), '2026-12-31');

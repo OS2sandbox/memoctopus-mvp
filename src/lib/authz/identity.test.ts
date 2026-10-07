@@ -3,7 +3,7 @@ import { makeFakeRunner } from '@/test/fake-runner';
 
 vi.mock('@/lib/db', () => ({ pool: {} }));
 
-import { CLAIM_WHITELIST, captureExternalIdentity, decodeJwtPayload, pickClaims } from './identity';
+import { CLAIM_WHITELIST, captureExternalIdentity, captureIdentityFromAttributes, decodeJwtPayload, pickClaims } from './identity';
 
 function jwt(payload: unknown): string {
   const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -112,5 +112,49 @@ describe('captureExternalIdentity', () => {
       sql.includes('FROM public.accounts') ? [{ provider_id: 'oidc', id_token: jwt({ sub: 's' }) }] : [],
     );
     expect(await captureExternalIdentity('u1', runner)).toEqual([]);
+  });
+});
+
+describe('captureIdentityFromAttributes (SAML: no id_token)', () => {
+  const attrs = {
+    id: 'ola01',
+    email: 'ola@k.dk',
+    name: 'Ola Olsen',
+    upn: 'ola01@k.dk',
+    preferred_username: ['ola01'],
+    emailVerified: false,
+    // Everything below must never reach the snapshot.
+    roles: ['admin'],
+    groups: 'g-1;g-2',
+    cpr: '0101011234',
+  };
+
+  it('stores the whitelist only, from the mapped assertion attributes', async () => {
+    const { runner, calls } = makeFakeRunner((sql) => (sql.includes('INSERT INTO public.external_identities') ? [{ id: 'x' }] : []));
+    const out = await captureIdentityFromAttributes('u1', 'kommune', attrs, runner);
+    expect(out).toEqual({
+      userId: 'u1',
+      providerId: 'kommune',
+      subject: 'ola01',
+      claims: { sub: 'ola01', email: 'ola@k.dk', name: 'Ola Olsen', upn: 'ola01@k.dk', preferred_username: 'ola01', email_verified: false },
+    });
+    const insert = calls.find((c) => c.sql.includes('INSERT INTO'))!;
+    expect(insert.params.slice(0, 3)).toEqual(['u1', 'kommune', 'ola01']);
+    const stored = JSON.stringify(insert.params);
+    for (const secret of ['admin', 'g-1', '0101011234', 'roles', 'groups']) expect(stored).not.toContain(secret);
+  });
+
+  it('email_verified is only ever a real boolean', async () => {
+    const { runner } = makeFakeRunner((sql) => (sql.includes('INSERT INTO') ? [{ id: 'x' }] : []));
+    expect((await captureIdentityFromAttributes('u1', 'k', { ...attrs, emailVerified: 'true' }, runner))?.claims).not.toHaveProperty('email_verified');
+    expect((await captureIdentityFromAttributes('u1', 'k', { ...attrs, emailVerified: true }, runner))?.claims.email_verified).toBe(true);
+  });
+
+  it('is null without a subject, for the credential provider, and when the subject belongs to another user', async () => {
+    const { runner, calls } = makeFakeRunner();
+    expect(await captureIdentityFromAttributes('u1', 'k', { email: 'a@b.dk' }, runner)).toBeNull();
+    expect(await captureIdentityFromAttributes('u1', 'credential', attrs, runner)).toBeNull();
+    expect(calls).toHaveLength(0);
+    expect(await captureIdentityFromAttributes('u1', 'k', attrs, runner)).toBeNull(); // INSERT ... WHERE finds no row to update
   });
 });

@@ -14,7 +14,7 @@ export const roleLabels: Record<RoleKey, string> = {
 export const roleDescriptions: Record<RoleKey, string> = {
   'tt-bruger': 'Kan bruge løsningen og de skabeloner, der er stillet til rådighed.',
   'tt-skabelonansvarlig':
-    'Kan administrere skabeloner og se organisationen for de enheder, rollen er tildelt.',
+    'Kan administrere skabeloner og se organisationen for de enheder, rollen er tildelt. Uden enhed (fx fra login) gælder den hele organisationen: superbrugeren for fælles prompts.',
   'tt-logleser': 'Kan læse og eksportere loggen samt se organisationen.',
   'tt-administrator': 'Har alle rettigheder, herunder styring af brugere, roller og synkronisering.',
 };
@@ -49,4 +49,5 @@ export function scopeKind(scope: {
 export const sourceLabels: Record<AccessSource, string> = {
   local: 'Lokal',
   rollekatalog: 'Rollekatalog',
+  claims: 'Identitetsudbyder',
 };

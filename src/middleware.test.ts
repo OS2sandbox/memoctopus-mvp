@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { NextRequest } from 'next/server';
-import { middleware } from './middleware';
+import { config, middleware } from './middleware';
 
 function makeReq(pathname: string, cookies: Record<string, string> = {}): NextRequest {
   const url = `http://localhost${pathname}`;
@@ -98,5 +98,26 @@ describe('middleware', () => {
       const res = middleware(makeReq('/settings'));
       expect(res.status).toBe(307);
     });
+  });
+});
+
+// The IdP's POST to the SAML ACS arrives with no session cookie and from another origin. It
+// must never be redirected to the sign-in page, so the auth API is outside the matcher.
+describe('middleware matcher and the identity-provider callbacks', () => {
+  const matcher = new RegExp(`^${config.matcher[0]}$`);
+
+  it.each([
+    '/api/auth/sso/saml2/sp/acs/kommune',
+    '/api/auth/sso/saml2/callback/kommune',
+    '/api/auth/sso/saml2/sp/metadata',
+    '/api/auth/oauth2/callback/fka',
+    '/api/auth/callback/microsoft',
+    '/api/auth/error',
+  ])('does not run for %s', (pathname) => {
+    expect(matcher.test(pathname)).toBe(false);
+  });
+
+  it('still runs for pages', () => {
+    for (const pathname of ['/', '/dashboard', '/admin/users']) expect(matcher.test(pathname)).toBe(true);
   });
 });

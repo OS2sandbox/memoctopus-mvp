@@ -392,6 +392,16 @@ describe('action events for access, processing, editing and deletion', () => {
     expect(validateEvent({ ...ok, source: 'server' } as unknown as AuditEventInput)).toEqual({ ok: false, code: 'source_not_allowed' });
   });
 
+  it('auth events take the login methods password, oidc, microsoft, saml and unknown, and nothing else', () => {
+    for (const method of ['password', 'oidc', 'microsoft', 'saml', 'unknown']) {
+      expect(validateEvent({ type: 'auth.login', details: { method, provider: 'kommune' } } as unknown as AuditEventInput).ok, method).toBe(true);
+      expect(validateEvent({ type: 'auth.login_failed', details: { reason: 'oauth_error', method, provider: 'kommune' } } as unknown as AuditEventInput).ok, method).toBe(true);
+    }
+    expect(validateEvent({ type: 'auth.login', details: { method: 'ldap', provider: 'x' } } as unknown as AuditEventInput).ok).toBe(false);
+    // No room for claim content: roles, groups and assertions have no field.
+    expect(validateEvent({ type: 'auth.login', details: { method: 'saml', provider: 'x', roles: ['admin'] } } as unknown as AuditEventInput).ok).toBe(false);
+  });
+
   it('auth.login_failed accepts a burst summary with a drop count', () => {
     const res = validateEvent({ type: 'auth.login_failed', details: { reason: 'burst_summary', droppedCount: 140 } } as unknown as AuditEventInput);
     expect(res).toMatchObject({ ok: true });

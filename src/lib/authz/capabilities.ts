@@ -21,9 +21,13 @@ export const ROLE_DEFINITIONS: Record<RoleKey, RoleDefinition> = {
     capabilities: ['template.use'],
     globalScopeAllowed: false,
   },
+  // Global (NULL scope) is the "superuser" who manages every shared prompt, which is
+  // what an IdP claim can grant (a claim carries no org unit). Scoped grants (local /
+  // Rollekatalog) still work; a NULL scope from a source that cannot be global stays
+  // the caller's problem, see dropStaleAssignments and the grant validation.
   'tt-skabelonansvarlig': {
     capabilities: ['template.use', 'template.manage', 'directory.read'],
-    globalScopeAllowed: false,
+    globalScopeAllowed: true,
   },
   'tt-logleser': {
     capabilities: ['template.use', 'audit.read', 'audit.export', 'directory.read'],
@@ -69,7 +73,7 @@ interface BuildPrincipalInput {
   now: Date;
   requireRoleToLogin: boolean;
   /** Where the assignments came from; defaults to 'baseline' when there are none. */
-  source?: 'local' | 'rollekatalog';
+  source?: 'local' | 'rollekatalog' | 'claims';
 }
 
 function isActive(a: RoleAssignmentRow, now: Date): boolean {

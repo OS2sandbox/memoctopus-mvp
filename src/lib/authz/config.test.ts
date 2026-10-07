@@ -5,7 +5,10 @@ import {
   bootstrapAdminEmails,
   directoryMatchMode,
   directoryUserIdClaim,
+  localAdminEnabled,
   requireRoleToLogin,
+  roleClaimsMaxSeconds,
+  singleTenantId,
 } from './config';
 
 afterEach(() => vi.unstubAllEnvs());
@@ -26,11 +29,15 @@ describe('accessSource', () => {
     delete process.env.ACCESS_SOURCE;
     expect(accessSource()).toBe('local');
   });
+  it('accepts claims case-insensitively and trimmed', () => {
+    vi.stubEnv('ACCESS_SOURCE', ' Claims ');
+    expect(accessSource()).toBe('claims');
+  });
   it('accepts local case-insensitively and trimmed', () => {
     vi.stubEnv('ACCESS_SOURCE', ' LOCAL ');
     expect(accessSource()).toBe('local');
   });
-  it.each(['ldap', 'rolekatalog', 'local;', 'rollekatalog,local', 'true'])(
+  it.each(['ldap', 'rolekatalog', 'local;', 'rollekatalog,local', 'true', 'claim', 'claims,local', 'oidc'])(
     'fails closed on the invalid value "%s": throws ConfigError, never falls back to local',
     (v) => {
       vi.stubEnv('ACCESS_SOURCE', v);
@@ -47,7 +54,7 @@ describe('accessSource', () => {
     }
     expect(err).toBeInstanceOf(ConfigError);
     expect((err as Error).name).toBe('ConfigError');
-    expect((err as Error).message).toBe('ACCESS_SOURCE must be "local" or "rollekatalog"');
+    expect((err as Error).message).toBe('ACCESS_SOURCE must be "local", "rollekatalog" or "claims"');
     expect((err as Error).message).not.toContain('sekret');
   });
   it('is read at call time', () => {
@@ -111,5 +118,70 @@ describe('directoryUserIdClaim', () => {
   it('uses a trimmed override and keeps its case (claim names are case-sensitive)', () => {
     vi.stubEnv('DIRECTORY_USERID_CLAIM', ' sAMAccountName ');
     expect(directoryUserIdClaim()).toBe('sAMAccountName');
+  });
+});
+
+describe('localAdminEnabled (kill switch ACCESS_LOCAL_ADMIN)', () => {
+  it('defaults to on in local mode only', () => {
+    vi.stubEnv('ACCESS_SOURCE', 'local');
+    vi.stubEnv('ACCESS_LOCAL_ADMIN', '');
+    expect(localAdminEnabled()).toBe(true);
+    for (const mode of ['rollekatalog', 'claims']) {
+      vi.stubEnv('ACCESS_SOURCE', mode);
+      expect(localAdminEnabled()).toBe(false);
+    }
+  });
+  it('is switched off by "false" (any case, trimmed) in local mode', () => {
+    vi.stubEnv('ACCESS_SOURCE', 'local');
+    vi.stubEnv('ACCESS_LOCAL_ADMIN', ' False ');
+    expect(localAdminEnabled()).toBe(false);
+  });
+  it('anything else keeps it on in local mode (it is a kill switch, not an opt-in)', () => {
+    vi.stubEnv('ACCESS_SOURCE', 'local');
+    for (const v of ['true', '0', 'no', 'off']) {
+      vi.stubEnv('ACCESS_LOCAL_ADMIN', v);
+      expect(localAdminEnabled()).toBe(true);
+    }
+  });
+  it('can never be forced on outside local mode: local grants are inert there', () => {
+    vi.stubEnv('ACCESS_LOCAL_ADMIN', 'true');
+    vi.stubEnv('ACCESS_SOURCE', 'claims');
+    expect(localAdminEnabled()).toBe(false);
+    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+    expect(localAdminEnabled()).toBe(false);
+  });
+  it('an invalid ACCESS_SOURCE throws instead of answering', () => {
+    vi.stubEnv('ACCESS_SOURCE', 'rolekatalog');
+    expect(() => localAdminEnabled()).toThrow(ConfigError);
+  });
+});
+
+describe('roleClaimsMaxSeconds (ROLE_CLAIMS_MAX_SECONDS)', () => {
+  it('defaults to 8 hours', () => {
+    vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', '');
+    expect(roleClaimsMaxSeconds()).toBe(28_800);
+  });
+  it('takes an integer within 1 minute .. 30 days', () => {
+    vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', '3600');
+    expect(roleClaimsMaxSeconds()).toBe(3600);
+    vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', '60');
+    expect(roleClaimsMaxSeconds()).toBe(60);
+    vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', String(30 * 86_400));
+    expect(roleClaimsMaxSeconds()).toBe(30 * 86_400);
+  });
+  it.each(['0', '-5', '59', '1.5', 'soon', '99999999999', String(30 * 86_400 + 1), '1e3'])('falls back to the default for "%s", never to "unlimited"', (v) => {
+    vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', v);
+    expect(roleClaimsMaxSeconds()).toBe(28_800);
+  });
+});
+
+describe('singleTenantId', () => {
+  it('is the tenant only when it names exactly one tenant', () => {
+    vi.stubEnv('MICROSOFT_TENANT_ID', ' Tenant-1 ');
+    expect(singleTenantId()).toBe('tenant-1');
+    for (const alias of ['common', 'organizations', 'consumers', '']) {
+      vi.stubEnv('MICROSOFT_TENANT_ID', alias);
+      expect(singleTenantId()).toBeNull();
+    }
   });
 });

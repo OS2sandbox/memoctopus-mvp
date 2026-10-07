@@ -11,6 +11,7 @@ export interface MeResponse {
   capabilities: Capability[];
   scopes: Partial<Record<Capability, CapabilityScope>>;
   source: AccessSource;
+  /** True when the in-app role/org administration is unavailable (kill switch off, or roles owned elsewhere). */
   readOnly: boolean;
 }
 
@@ -27,7 +28,7 @@ export function isMeResponse(value: unknown): value is MeResponse {
     Array.isArray(v.capabilities) &&
     typeof v.scopes === 'object' &&
     v.scopes !== null &&
-    (v.source === 'local' || v.source === 'rollekatalog') &&
+    (v.source === 'local' || v.source === 'rollekatalog' || v.source === 'claims') &&
     typeof v.readOnly === 'boolean'
   );
 }

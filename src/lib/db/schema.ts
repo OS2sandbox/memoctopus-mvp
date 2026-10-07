@@ -13,6 +13,7 @@ import {
   uniqueIndex,
   bigserial,
   check,
+  foreignKey,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
@@ -88,11 +89,12 @@ export const sharedSkabeloner = pgTable('shared_skabeloner', {
 });
 
 // ─── Central access control (public schema) ────────────────────────────────
-// One set of mirror tables fed by two sources (`source` = 'local' admin UI or
-// 'rollekatalog' sync). Permission code reads only these tables.
+// One set of mirror tables fed by three sources (`source` = 'local' admin UI,
+// 'rollekatalog' sync, or 'claims': role rows written at login from the IdP's claims).
+// Permission code reads only these tables.
 // Requires PostgreSQL 15+ (UNIQUE ... NULLS NOT DISTINCT on role_assignments).
 
-const sourceIn = (col: string) => sql.raw(`"${col}" in ('local', 'rollekatalog')`);
+const sourceIn = (col: string) => sql.raw(`"${col}" in ('local', 'rollekatalog', 'claims')`);
 
 export const directoryUsers = pgTable(
   'directory_users',
@@ -215,6 +217,53 @@ export const externalIdentities = pgTable(
   (t) => [
     unique('external_identities_provider_subject_unique').on(t.providerId, t.subject),
     index('external_identities_user_id_idx').on(t.userId),
+  ],
+);
+
+// Catalogue of the roles and groups that may be stored for a user and targeted by a
+// shared prompt. Filled from the Rollekatalog or from the `catalogue` section of
+// AUTH_CONFIG_FILE (source 'config'); an IdP value that is not in here is never stored.
+export const externalRoles = pgTable(
+  'external_roles',
+  {
+    kind: text('kind').notNull(),
+    identifier: text('identifier').notNull(),
+    name: text('name').notNull(),
+    source: text('source').notNull(),
+    // Inactive = withdrawn from the catalogue: not stored for logins, not offered for targeting.
+    active: boolean('active').notNull().default(true),
+    syncedAt: timestamp('synced_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.kind, t.identifier] }),
+    check('external_roles_kind_check', sql`${t.kind} in ('role', 'group')`),
+    check('external_roles_source_check', sql`${t.source} in ('rollekatalog', 'config', 'claims')`),
+    check('external_roles_identifier_check', sql`char_length(${t.identifier}) between 1 and 200`),
+    check('external_roles_name_check', sql`char_length(${t.name}) between 1 and 200`),
+  ],
+);
+
+// The catalogue roles/groups an app user's IdP claimed at their latest login (replaced at
+// every claims login in one transaction). The composite FK is the privacy guarantee: a
+// value that is not in external_roles cannot be stored here at all.
+export const userExternalRoles = pgTable(
+  'user_external_roles',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    identifier: text('identifier').notNull(),
+    seenAt: timestamp('seen_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.userId, t.kind, t.identifier] }),
+    foreignKey({
+      columns: [t.kind, t.identifier],
+      foreignColumns: [externalRoles.kind, externalRoles.identifier],
+      name: 'user_external_roles_role_fk',
+    }).onDelete('cascade'),
+    index('user_external_roles_role_idx').on(t.kind, t.identifier),
   ],
 );
 

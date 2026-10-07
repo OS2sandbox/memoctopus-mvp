@@ -139,6 +139,18 @@ describe('maybeBootstrapAdmin', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('is closed in claims mode, and in local mode once the kill switch ACCESS_LOCAL_ADMIN is off', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'claims');
+    const first = makeFakeRunner();
+    expect(await maybeBootstrapAdmin('u1', first.runner)).toEqual({ granted: false, reason: 'not_local_mode' });
+    vi.stubEnv('ACCESS_SOURCE', 'local');
+    vi.stubEnv('ACCESS_LOCAL_ADMIN', 'false');
+    const second = makeFakeRunner();
+    expect(await maybeBootstrapAdmin('u1', second.runner)).toEqual({ granted: false, reason: 'local_admin_disabled' });
+    expect(first.calls).toHaveLength(0);
+    expect(second.calls).toHaveLength(0);
+  });
+
   it('does nothing without an allow-list', async () => {
     vi.stubEnv('BOOTSTRAP_ADMIN_EMAILS', '');
     const { runner, calls } = makeFakeRunner();

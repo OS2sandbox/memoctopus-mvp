@@ -60,8 +60,8 @@ describe('validateGrantShape', () => {
     expect(validateGrantShape({ ...base, roleKey: 'tt-bruger' })).toBe('tt-bruger');
   });
 
-  it('requires a scope on tt-skabelonansvarlig (a NULL scope would cover nothing)', () => {
-    expect(() => validateGrantShape({ ...base, roleKey: 'tt-skabelonansvarlig' })).toThrow(/kræver/);
+  it('allows tt-skabelonansvarlig with a scope, or without one (the global superuser)', () => {
+    expect(validateGrantShape({ ...base, roleKey: 'tt-skabelonansvarlig' })).toBe('tt-skabelonansvarlig');
     expect(validateGrantShape({ ...base, roleKey: 'tt-skabelonansvarlig', scopeOrgUnitUuid: U1 })).toBe(
       'tt-skabelonansvarlig',
     );
@@ -111,6 +111,34 @@ describe('read-only mode', () => {
     await expect(call(runner as never)).rejects.toBeInstanceOf(ReadOnlyModeError);
     expect(calls).toHaveLength(0);
     expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  describe.each([
+    ['claims mode', { ACCESS_SOURCE: 'claims' }, /identitetsudbyderen/],
+    ['local mode with the kill switch ACCESS_LOCAL_ADMIN=false', { ACCESS_SOURCE: 'local', ACCESS_LOCAL_ADMIN: 'false' }, /slået fra/],
+  ])('%s', (_label, env, message) => {
+    it.each([
+      ['grantRole', (r: never) => grantRole({ appUserId: 'u', roleKey: 'tt-bruger', actorUserId: 'a' }, r)],
+      ['revokeAssignment', (r: never) => revokeAssignment(ASG, 'a', r)],
+      ['createOrgUnit', (r: never) => createOrgUnit({ name: 'x', actorUserId: 'a' }, r)],
+      ['updateOrgUnit', (r: never) => updateOrgUnit(U1, { name: 'x' }, 'a', r)],
+      ['deleteOrgUnit', (r: never) => deleteOrgUnit(U1, 'a', r)],
+      ['setOrgUnitMembers', (r: never) => setOrgUnitMembers(U1, [], 'a', r)],
+    ])('%s answers read_only (409) and never touches the database', async (_n, call) => {
+      for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
+      const { runner, calls } = makeFakeRunner();
+      const err = await call(runner as never).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ReadOnlyModeError);
+      expect(err).toMatchObject({ code: 'read_only' });
+      expect((err as Error).message).toMatch(message);
+      expect(calls).toHaveLength(0);
+    });
+  });
+
+  it('is on by default in local mode (the kill switch only ever turns it off)', async () => {
+    vi.stubEnv('ACCESS_LOCAL_ADMIN', '');
+    const { runner } = makeFakeRunner();
+    await expect(createOrgUnit({ name: 'x', actorUserId: 'a' }, runner as never)).rejects.not.toBeInstanceOf(ReadOnlyModeError);
   });
 });
 
@@ -204,7 +232,7 @@ describe('grantRole', () => {
 
   it('validates the role shape before opening a transaction', async () => {
     const { runner, calls } = makeFakeRunner();
-    await expect(grantRole({ ...input, roleKey: 'tt-skabelonansvarlig' }, runner)).rejects.toBeInstanceOf(ValidationError);
+    await expect(grantRole({ ...input, roleKey: 'tt-god' }, runner)).rejects.toBeInstanceOf(ValidationError);
     expect(calls).toHaveLength(0);
   });
 

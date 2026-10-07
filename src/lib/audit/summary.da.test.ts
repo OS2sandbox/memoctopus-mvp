@@ -89,6 +89,13 @@ describe('summariseEvent', () => {
     expect(Object.keys(CASES).sort()).toEqual([...EVENT_TYPES].sort());
   });
 
+  it('says how a person logged in, SAML included', () => {
+    const login = (method: string) => summariseEvent(ev('auth.login', { details: { method, provider: 'kommune' } }));
+    expect(login('saml')).toBe(`${NAME} loggede ind via single sign-on (SAML)`);
+    expect(login('oidc')).toBe(`${NAME} loggede ind via single sign-on`);
+    expect(login('microsoft')).toBe(`${NAME} loggede ind med Microsoft`);
+  });
+
   it('names an unknown actor and the system', () => {
     expect(summariseEvent(ev('auth.login', { actorName: null }))).toBe('Ukendt bruger loggede ind');
     expect(summariseEvent(ev('auth.login', { actorName: '  ', actorUserId: null, source: 'system' }))).toBe('Systemet loggede ind');

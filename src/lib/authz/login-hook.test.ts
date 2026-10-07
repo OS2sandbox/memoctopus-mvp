@@ -1,10 +1,31 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetAuthConfigCache } from '@/lib/auth/config-file';
 
 vi.mock('@/lib/db', () => ({ pool: {} }));
 const capture = vi.fn();
+const captureAttrs = vi.fn();
+const decode = vi.fn();
 const bootstrap = vi.fn();
 const match = vi.fn();
-vi.mock('./identity', () => ({ captureExternalIdentity: (...a: unknown[]) => capture(...a) }));
+const applyClaims = vi.fn();
+const clearClaims = vi.fn();
+const accountQuery = vi.fn();
+vi.mock('./identity', () => ({
+  captureExternalIdentity: (...a: unknown[]) => capture(...a),
+  captureIdentityFromAttributes: (...a: unknown[]) => captureAttrs(...a),
+  decodeJwtPayload: (...a: unknown[]) => decode(...a),
+}));
+vi.mock('./claims-roles', () => ({
+  applyClaimsLoginSafely: (...a: unknown[]) => applyClaims(...a),
+  clearClaimsRoles: (...a: unknown[]) => clearClaims(...a),
+}));
+vi.mock('./pg-runner', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./pg-runner')>()),
+  defaultRunner: () => ({ query: (...a: unknown[]) => accountQuery(...a) }),
+}));
 vi.mock('./bootstrap', () => ({ maybeBootstrapAdmin: (...a: unknown[]) => bootstrap(...a) }));
 vi.mock('./directory-match', () => ({ matchDirectoryUser: (...a: unknown[]) => match(...a) }));
 const recordEvent = vi.fn();
@@ -24,7 +45,9 @@ import {
   emailHmac,
   LOGIN_FAILURE_LIMIT_PER_MINUTE,
   runLoginHooks,
+  runSamlLoginHooks,
 } from './login-hook';
+import { clearLoginClaimsStash, stashLoginClaims } from './claims-stash';
 import { createHmac } from 'node:crypto';
 import { EVENT_CATALOGUE } from '@/lib/audit/events';
 import { checkDetailsShape, validateEvent } from '@/lib/audit/record';
@@ -41,6 +64,12 @@ beforeEach(() => {
   vi.stubEnv('OIDC_DISCOVERY_URL', 'https://idp.example/.well-known/openid-configuration');
   vi.stubEnv('OIDC_PROVIDER_ID', 'keycloak');
   capture.mockReset().mockResolvedValue([ID]);
+  captureAttrs.mockReset().mockResolvedValue(ID);
+  decode.mockReset().mockReturnValue(null);
+  applyClaims.mockReset().mockResolvedValue(undefined);
+  clearClaims.mockReset().mockResolvedValue(undefined);
+  accountQuery.mockReset().mockResolvedValue({ rows: [] });
+  clearLoginClaimsStash();
   bootstrap.mockReset().mockResolvedValue({ granted: false, reason: 'no_allowlist' });
   match.mockReset().mockResolvedValue({ status: 'linked' });
   recordEvent.mockReset().mockResolvedValue({ status: 'stored' });
@@ -408,5 +437,173 @@ describe('createThrottle', () => {
   it('exposes a shared per-IP budget that buckets a missing ip', () => {
     const results = Array.from({ length: LOGIN_FAILURE_LIMIT_PER_MINUTE + 1 }, () => allowLoginFailureEvent(null));
     expect(results.filter(Boolean)).toHaveLength(LOGIN_FAILURE_LIMIT_PER_MINUTE);
+  });
+});
+
+// ─── claims mode, SAML ───────────────────────────────────────────────────────
+
+describe('runLoginHooks in claims mode', () => {
+  const oidcCtx = { path: '/oauth2/callback/:providerId', params: { providerId: 'keycloak' } };
+  beforeEach(() => vi.stubEnv('ACCESS_SOURCE', 'claims'));
+
+  it('applies the claims the profile mapper handed over, for the provider of THIS login', async () => {
+    accountQuery.mockResolvedValue({ rows: [{ account_id: 'acct-1', id_token: 'tok' }] });
+    stashLoginClaims('keycloak', 'acct-1', { roles: ['admin'] });
+    await runLoginHooks('u1', oidcCtx);
+    expect(accountQuery.mock.calls[0][1]).toEqual(['u1', 'keycloak']);
+    expect(applyClaims).toHaveBeenCalledWith({ userId: 'u1', providerId: 'keycloak', claims: { roles: ['admin'] } });
+    expect(decode).not.toHaveBeenCalled();
+    expect(match).not.toHaveBeenCalled();
+    expect(clearClaims).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the id_token stored on the account (Entra, or a missing hand-over)', async () => {
+    accountQuery.mockResolvedValue({ rows: [{ account_id: 'acct-1', id_token: 'tok' }] });
+    decode.mockReturnValue({ roles: ['from-token'] });
+    await runLoginHooks('u1', { path: '/callback/:id', params: { id: 'microsoft' } });
+    expect(decode).toHaveBeenCalledWith('tok');
+    expect(applyClaims).toHaveBeenCalledWith({ userId: 'u1', providerId: 'microsoft', claims: { roles: ['from-token'] } });
+  });
+
+  it('applies "no claims" (which clears) when there is neither a hand-over nor a readable token', async () => {
+    accountQuery.mockResolvedValue({ rows: [{ account_id: 'acct-1', id_token: null }] });
+    await runLoginHooks('u1', oidcCtx);
+    expect(applyClaims).toHaveBeenCalledWith({ userId: 'u1', providerId: 'keycloak', claims: null });
+  });
+
+  it.each([
+    ['a password sign-in', { path: '/sign-in/email' }],
+    ['a sign-up', { path: '/sign-up/email' }],
+    ['a route nobody knows', { path: '/some/other/route' }],
+    ['no context at all', undefined],
+  ])('clears instead of applying for %s: a session without IdP claims never inherits an earlier SSO login\'s roles', async (_n, ctx) => {
+    await runLoginHooks('u1', ctx);
+    expect(clearClaims).toHaveBeenCalledWith('u1');
+    expect(applyClaims).not.toHaveBeenCalled();
+  });
+
+  it('a database error while reading the account clears (fail closed), never throws and never logs values', async () => {
+    accountQuery.mockRejectedValue(Object.assign(new Error('secret-value'), { code: '08006' }));
+    await expect(runLoginHooks('u1', oidcCtx)).resolves.toBeUndefined();
+    expect(clearClaims).toHaveBeenCalledWith('u1');
+    const logged = JSON.stringify((console.error as any).mock.calls);
+    expect(logged).toContain('claims_roles');
+    expect(logged).not.toContain('secret-value');
+  });
+
+  it('is not touched in the other modes', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'local');
+    await runLoginHooks('u1', oidcCtx);
+    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+    await runLoginHooks('u1', oidcCtx);
+    expect(applyClaims).not.toHaveBeenCalled();
+    expect(clearClaims).not.toHaveBeenCalled();
+  });
+});
+
+describe('SAML', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'login-hook-'));
+    const file = path.join(dir, 'auth.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        providers: [
+          { type: 'oidc', id: 'keycloak', clientId: 'a', clientSecret: 'b', discoveryUrl: 'https://idp.example/.well-known/openid-configuration' },
+          { type: 'saml', id: 'kommune', entryPoint: 'https://idp.example/sso', idpEntityId: 'https://idp.example', cert: 'MIIC' },
+        ],
+      }),
+    );
+    vi.stubEnv('AUTH_CONFIG_FILE', file);
+    vi.stubEnv('BETTER_AUTH_SECRET', SECRET);
+    resetAuthConfigCache();
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    resetAuthConfigCache();
+  });
+  const acs = (id = 'kommune') => ({ path: '/sso/saml2/sp/acs/:providerId', params: { providerId: id }, headers: new Headers({ 'x-forwarded-for': '203.0.113.50' }) });
+
+  it('authMethodOf: both SAML routes are method saml, and only a configured provider id is recorded', () => {
+    expect(authMethodOf(acs())).toEqual({ method: 'saml', provider: 'kommune' });
+    expect(authMethodOf({ path: '/sso/saml2/callback/:providerId', params: { providerId: 'kommune' } })).toEqual({ method: 'saml', provider: 'kommune' });
+    expect(authMethodOf(acs('attacker-chosen'))).toEqual({ method: 'saml', provider: 'unknown' });
+  });
+
+  it('records auth.login with method saml (valid against the closed catalogue)', async () => {
+    await auditLogin({ userId: 'u1' } as any, acs());
+    const [event] = recordEvent.mock.calls[0];
+    expect(event.details).toEqual({ method: 'saml', provider: 'kommune' });
+    expect(validateEvent(event).ok).toBe(true);
+  });
+
+  it('runLoginHooks leaves a SAML login alone: its attributes arrive through runSamlLoginHooks', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'claims');
+    await runLoginHooks('u1', acs());
+    expect(capture).not.toHaveBeenCalled();
+    expect(bootstrap).not.toHaveBeenCalled();
+    expect(clearClaims).not.toHaveBeenCalled();
+    expect(applyClaims).not.toHaveBeenCalled();
+  });
+
+  describe('failed logins', () => {
+    const withLocation = (location: string | null, status = 302) => ({
+      ...acs(),
+      context: { returned: apiError(status), responseHeaders: location ? new Headers({ location }) : new Headers() },
+    });
+
+    it('classifies an error redirect, a thrown 4xx, and leaves a success alone', () => {
+      expect(classifyAuthFailure(withLocation('http://localhost:3004/?error=invalid_saml_response'))).toEqual({ reason: 'oauth_error', method: 'saml', provider: 'kommune' });
+      expect(classifyAuthFailure(withLocation('/?error=account_not_linked'))?.reason).toBe('account_not_linked');
+      expect(classifyAuthFailure(withLocation(null, 400))).toEqual({ reason: 'oauth_error', method: 'saml', provider: 'kommune' });
+      expect(classifyAuthFailure(withLocation('/dashboard'))).toBeNull();
+      expect(classifyAuthFailure(withLocation(null, 302))).toBeNull();
+    });
+
+    it('records auth.login_failed with method saml and no assertion content', async () => {
+      await auditAuthFailure({ ...withLocation('/?error=bad'), body: { SAMLResponse: 'PHNhbWw+c2VjcmV0LXZhbHVlPC9zYW1sPg==' } } as any);
+      const [event] = recordEvent.mock.calls[0];
+      expect(event.details).toEqual({ reason: 'oauth_error', method: 'saml', provider: 'kommune' });
+      expect(validateEvent(event).ok).toBe(true);
+      expect(JSON.stringify(recordEvent.mock.calls)).not.toContain('PHNhbWw');
+    });
+  });
+});
+
+describe('runSamlLoginHooks', () => {
+  const attrs = { id: 'ola01', email: 'ola@k.dk', roles: ['admin'] };
+
+  it('claims mode: captures the identity from the attributes, then applies the attributes as claims', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'claims');
+    await runSamlLoginHooks('u1', 'kommune', attrs);
+    expect(captureAttrs).toHaveBeenCalledWith('u1', 'kommune', attrs);
+    expect(applyClaims).toHaveBeenCalledWith({ userId: 'u1', providerId: 'kommune', claims: attrs });
+    expect(match).not.toHaveBeenCalled();
+    expect(bootstrap).not.toHaveBeenCalled();
+  });
+
+  it('rollekatalog mode: matches the captured identity to the directory; claims are not used', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+    await runSamlLoginHooks('u1', 'kommune', attrs);
+    expect(match).toHaveBeenCalledWith(ID);
+    expect(applyClaims).not.toHaveBeenCalled();
+  });
+
+  it('local mode: only the snapshot', async () => {
+    await runSamlLoginHooks('u1', 'kommune', attrs);
+    expect(captureAttrs).toHaveBeenCalled();
+    expect(match).not.toHaveBeenCalled();
+    expect(applyClaims).not.toHaveBeenCalled();
+  });
+
+  it('never throws and logs no attribute values', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+    captureAttrs.mockRejectedValue(new Error('boom ola@k.dk'));
+    match.mockRejectedValue(new Error('boom2 ola@k.dk'));
+    await expect(runSamlLoginHooks('u1', 'kommune', attrs)).resolves.toBeUndefined();
+    vi.stubEnv('ACCESS_SOURCE', 'bogus');
+    await expect(runSamlLoginHooks('u1', 'kommune', attrs)).resolves.toBeUndefined();
+    expect(JSON.stringify((console.error as any).mock.calls)).not.toContain('ola@k.dk');
   });
 });

@@ -14,6 +14,11 @@ export interface Persona {
   emailVerified: boolean;
   /** One line shown on the login page. */
   note?: string;
+  /**
+   * Extra claims put into the id token and userinfo, e.g. `{ roles: ['referat-admin'], memberOf: 'G-A;G-B' }`
+   * (what ACCESS_SOURCE=claims reads). Can be replaced at runtime with MockIdp.setClaims.
+   */
+  claims?: Record<string, unknown>;
 }
 
 interface PendingCode {
@@ -28,6 +33,8 @@ const b64u = (b: Buffer | string) => Buffer.from(b).toString('base64url');
 
 export interface MockIdp {
   close(): Promise<void>;
+  /** Replaces the extra claims of one person from now on (null: back to the persona's own). */
+  setClaims(username: string, claims: Record<string, unknown> | null): void;
   /** Number of completed logins, for the acceptance script. */
   logins: Array<{ username: string }>;
 }
@@ -40,11 +47,13 @@ export async function startMockIdp(getPersonas: () => Persona[]): Promise<MockId
   const codes = new Map<string, PendingCode>();
   const tokens = new Map<string, Persona>();
   const logins: Array<{ username: string }> = [];
+  const claimOverrides = new Map<string, Record<string, unknown>>();
 
   const sub = (p: Persona) => createHash('sha256').update(`sim-sub:${p.username}`).digest('hex').slice(0, 32);
 
   function claimsOf(p: Persona) {
     return {
+      ...(claimOverrides.get(p.username) ?? p.claims ?? {}),
       sub: sub(p),
       name: p.name,
       email: p.email,
@@ -91,7 +100,7 @@ export async function startMockIdp(getPersonas: () => Persona[]): Promise<MockId
         scopes_supported: ['openid', 'profile', 'email'],
         token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
         code_challenge_methods_supported: ['S256'],
-        claims_supported: ['sub', 'name', 'email', 'email_verified', 'preferred_username'],
+        claims_supported: ['sub', 'name', 'email', 'email_verified', 'preferred_username', 'roles', 'memberOf'],
       });
     }
     if (url.pathname === '/favicon.ico') {
@@ -207,6 +216,10 @@ export async function startMockIdp(getPersonas: () => Persona[]): Promise<MockId
 
   return {
     logins,
+    setClaims: (username, claims) => {
+      if (claims) claimOverrides.set(username, claims);
+      else claimOverrides.delete(username);
+    },
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections?.();

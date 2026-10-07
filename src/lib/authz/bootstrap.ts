@@ -16,13 +16,14 @@
 // which re-arms the bootstrap for the next allow-listed SSO login, or insert a
 // role_assignments row by hand.
 import { ADMIN_LOCK_NAME, ADMIN_ROLE, USABLE_LOCAL_ADMIN_SQL } from './admin-sql';
-import { accessSource, bootstrapAdminEmails, singleTenantId } from './config';
+import { accessSource, bootstrapAdminEmails, localAdminEnabled, singleTenantId } from './config';
 import type { IdentityClaims } from './identity';
 import { defaultRunner, type SqlQueryable, type SqlRunner } from './pg-runner';
 
 type BootstrapReason =
   | 'granted'
   | 'not_local_mode'
+  | 'local_admin_disabled'
   | 'no_allowlist'
   | 'no_qualifying_identity'
   | 'admin_exists'
@@ -89,6 +90,8 @@ export async function maybeBootstrapAdmin(
   const no = (reason: BootstrapReason): BootstrapResult => ({ granted: false, reason });
 
   if (accessSource() !== 'local') return no('not_local_mode');
+  // The kill switch also closes this way in: with the local admin off nobody may be made one here.
+  if (!localAdminEnabled()) return no('local_admin_disabled');
   const allowlist = bootstrapAdminEmails();
   if (allowlist.length === 0) return no('no_allowlist');
 

@@ -15,6 +15,10 @@ describe('isMeResponse', () => {
     expect(isMeResponse(base)).toBe(true);
   });
 
+  it.each(['local', 'rollekatalog', 'claims'] as const)('accepts source %s', (source) => {
+    expect(isMeResponse({ ...base, source })).toBe(true);
+  });
+
   it.each([
     ['null', null],
     ['a string', 'x'],

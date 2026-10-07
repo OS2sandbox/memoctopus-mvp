@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeRunner } from '@/test/fake-runner';
 
 vi.mock('@/lib/db', () => ({ db: {}, pool: { query: vi.fn(), connect: vi.fn() } }));
@@ -42,6 +45,42 @@ describe('configFingerprint', () => {
     const a = configFingerprint({ ...env, BOT_SERVICE_URL: 'http://user:pw1@bot:3001' });
     expect(configFingerprint({ ...env, BOT_SERVICE_URL: 'http://user:pw2@bot:3001' })).toBe(a);
     expect(configFingerprint({ ...env, DATABASE_URL: 'postgres://u:p@h/db1' })).toBe(configFingerprint({ ...env, DATABASE_URL: 'postgres://u:q@h/db2' }));
+  });
+});
+
+describe('configFingerprint and the auth config file', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'fingerprint-'));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  const file = (content: string) => {
+    const f = path.join(dir, 'auth.json');
+    writeFileSync(f, content);
+    return f;
+  };
+
+  it('changes when the CONTENT of AUTH_CONFIG_FILE changes (a new provider or role mapping is a configuration change)', () => {
+    const f = file('{"providers":[]}');
+    const before = configFingerprint({ AUTH_CONFIG_FILE: f });
+    writeFileSync(f, '{"providers":[],"roles":{"appRoleMap":{"x":"tt-administrator"}}}');
+    expect(configFingerprint({ AUTH_CONFIG_FILE: f })).not.toBe(before);
+  });
+
+  it('is stable for unchanged content (only a digest of the bytes enters the fingerprint)', () => {
+    const f = file('{"secret-looking":"value-1234"}');
+    expect(configFingerprint({ AUTH_CONFIG_FILE: f })).toBe(configFingerprint({ AUTH_CONFIG_FILE: f }));
+  });
+
+  it('treats an unreadable file as its own state, without throwing', () => {
+    const gone = path.join(dir, 'missing.json');
+    expect(configFingerprint({ AUTH_CONFIG_FILE: gone })).toMatch(/^[0-9a-f]{16}$/);
+    expect(configFingerprint({ AUTH_CONFIG_FILE: gone })).not.toBe(configFingerprint({}));
+  });
+
+  it('sees the new access settings', () => {
+    expect(configFingerprint({ ACCESS_LOCAL_ADMIN: 'false' })).not.toBe(configFingerprint({}));
+    expect(configFingerprint({ ROLE_CLAIMS_MAX_SECONDS: '3600' })).not.toBe(configFingerprint({}));
   });
 });
 

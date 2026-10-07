@@ -6,8 +6,11 @@
 |---|---|---|
 | Mock **Rollekatalog** | 4010 | `GET /api/organisation/v3` and `GET /api/read/itsystem/roleAssignmentsWithContraints/{system}`, with the real `ApiKey` rules (READ key and ORG key are not interchangeable). Data comes from the synthetic fixtures in `src/lib/rollekatalog/__fixtures__/`. |
 | Mock **OIDC login** | 4020 | The municipality's IdP. A page lists every simulated person; click one to log in as them. Claims: `preferred_username` = the Rollekatalog userId, `email`, `email_verified`. |
+| Mock **SAML login** | 4021 | The same for SAML 2.0: it signs real assertions with a throwaway key (needs `openssl`), publishes its metadata at `/metadata` and to `$TMPDIR/referat-dev-sim/saml-idp-metadata.xml`, and posts the response to the app's ACS URL. Only used by the claims mode. |
 | Mock **LLM** | 4030 | OpenAI. It writes a fixed reply and records what the app sent, so you can prove which prompt reached the model. |
 | **Control panel** | 4011 | Change what "Rollekatalog" says (remove a role, disable a person, move a unit), break it on purpose, switch the LLM into "repeats its instructions" mode, and trigger the app's sync. |
+
+Both IdP stand-ins can also emit **roles and groups claims** per person (the OIDC `roles` array and `memberOf` string; SAML attributes of the same names), which is what the claims mode reads; see "Claims mode" below.
 
 Everything binds to `127.0.0.1`, uses public throw-away secrets and refuses to start with `NODE_ENV=production`.
 
@@ -49,7 +52,33 @@ npx tsx scripts/dev-sim/acceptance.ts
 
 It logs in as the simulated people through the real login flow and checks about 100 things, grouped in sections: sync, who gets which role and scope, the template lock and changelog (including that the model really received the stored prompt and never the client's instruction), the audit log's scope and its no-content guarantee (it scans every audit row for the secret prompt, the change note, the template name and the transcript), the SIEM feed, what happens when Rollekatalog changes or fails, and that Rollekatalog is only ever read. It prints one line per check and exits 1 on any failure. It is repeatable on the same database.
 
-## The simulated people
+## Claims mode (roles from the IdP, OIDC and SAML)
+
+The municipal setup: no Rollekatalog, no in-app role admin, roles from the IdP's claims. Start the stand-ins and the app in that mode (the stand-ins first: the app reads the SAML metadata file at start):
+
+```bash
+scripts/dev-sim/setup-db.sh                                   # or a database of your own whose name contains "sim"/"test"
+SIM_ACCESS_SOURCE=claims npx tsx scripts/dev-sim/index.ts     # terminal 1
+SIM_ACCESS_SOURCE=claims scripts/dev-sim/start-app.sh         # terminal 2
+npx tsx scripts/dev-sim/acceptance-claims.ts                  # terminal 3: 40 checks
+```
+
+`SIM_ACCESS_SOURCE=claims` makes `--env` print `ACCESS_SOURCE=claims` and `AUTH_CONFIG_FILE=scripts/dev-sim/auth-config.claims.json`: an OIDC and a SAML provider, the `roles` mapping (`referat-admin` -> `tt-administrator`, `referat-superuser` -> `tt-skabelonansvarlig`, `referat-log` -> `tt-logleser`, `referat-bruger` -> `tt-bruger`) and a catalogue of four roles and two groups. The ports can be moved with `SIM_APP_URL`, `SIM_*_PORT` and `PORT` if another stack is running.
+
+| Login as | Claims | Expected |
+|---|---|---|
+| `admin.a` | role `referat-admin`, groups `G-Borgerservice`, `G-Okonomi` | Administrator, organisation-wide. Users page is read-only. |
+| `super.s` | role `referat-superuser` | Global *skabelonansvarlig* (the shared-prompt superuser), no administrator power. |
+| `log.l` | role `referat-log` | Can read and export the log. |
+| `bruger.c` | `referat-bruger`, an unknown role, a known and an unknown group | `tt-bruger` only; only the two catalogue values are stored for the person. |
+| `ingen.i` | no roles | "Ingen adgang" (`REQUIRE_ROLE_TO_LOGIN=true`). |
+| `bad.b` | `roles` is an object (malformed) | "Ingen adgang"; nothing stored. |
+
+Use the control panel's `POST /idp/claims` (`{"username":"admin.a","claims":{"roles":["referat-bruger"]}}`, `claims: null` to restore) to change what the IdP says about someone, then log in again: the role follows the claims, and the old session of the same person loses it at once.
+
+`acceptance-claims.ts` checks: claims become global role rows (source `claims`) and the directory row is created at the first login; catalogue filtering; the session ends with the role snapshot (8 h); roles are replaced, not accumulated, also for a second session; a malformed claim keeps nothing; the SAML flow end to end (signed assertion, cross-site POST, attributes, roles, groups, identity snapshot, role removal); local admin writes, revoke and the Rollekatalog sync answer 409; a password account has no role and cannot take over an SSO person; `auth.login` events carry `oidc` / `saml`, a refused SAML response is audited as `auth.login_failed`, and no claim value, role or person name appears in any audit row.
+
+## The simulated people (Rollekatalog mode)
 
 | Login as | In Rollekatalog | Expected in the app (`REQUIRE_ROLE_TO_LOGIN=true`) |
 |---|---|---|

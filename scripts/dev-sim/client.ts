@@ -84,4 +84,36 @@ export class AppSession {
     u.searchParams.set('login_hint', username);
     return this.follow(u.toString());
   }
+
+  /**
+   * Logs in through the simulated SAML IdP as `username`: the app's AuthnRequest, the IdP's auto-posting
+   * form (found in its HTML), and the cross-site POST to the app's ACS URL without any cookie of ours
+   * going along, exactly as a browser would send it.
+   */
+  async loginSaml(username: string, providerId = SIM.saml.providerId): Promise<Reply> {
+    const start = await this.post('/api/auth/sign-in/sso', { providerId, callbackURL: '/dashboard' });
+    const authUrl = start.json?.url as string | undefined;
+    if (!authUrl) throw new Error(`loginSaml(${username}): no IdP URL (status ${start.status}: ${start.text.slice(0, 200)})`);
+    const u = new URL(authUrl);
+    u.searchParams.set('login_hint', username);
+    const page = await (await fetch(u)).text();
+    const unescape = (v: string) => v.replace(/&#(\d+);/g, (_m, n: string) => String.fromCharCode(Number(n)));
+    const field = (name: string) => {
+      const m = new RegExp(`name="${name}" value="([^"]*)"`).exec(page);
+      return m ? unescape(m[1]) : undefined;
+    };
+    const action = /<form method="post" action="([^"]*)"/.exec(page)?.[1];
+    const samlResponse = field('SAMLResponse');
+    if (!action || !samlResponse) throw new Error(`loginSaml(${username}): IdP gave no form (${page.slice(0, 200)})`);
+    const body = new URLSearchParams({ SAMLResponse: samlResponse, ...(field('RelayState') ? { RelayState: field('RelayState')! } : {}) });
+    const res = await fetch(unescape(action), {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: u.origin },
+      body: body.toString(),
+    });
+    this.absorb(res);
+    const loc = res.headers.get('location');
+    return loc ? this.follow(new URL(loc, this.base).toString()) : { status: res.status, headers: res.headers, text: await res.text(), json: null };
+  }
 }

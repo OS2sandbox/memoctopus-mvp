@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { OrganisationAdmin } from './OrganisationAdmin';
-import { ADMIN_ME, READER_ME, ROLLEKATALOG_ME, calls, installFetch, json, renderWithToasts } from './test-helpers';
+import { ADMIN_ME, CLAIMS_ME, LOCKED_LOCAL_ME, READER_ME, ROLLEKATALOG_ME, calls, installFetch, json, renderWithToasts } from './test-helpers';
 
 const ROOT = '11111111-1111-4111-8111-111111111111';
 const CHILD = '22222222-2222-4222-8222-222222222222';
@@ -83,6 +83,20 @@ describe('OrganisationAdmin — per role and mode', () => {
     expect(screen.queryByRole('button', { name: 'Rediger medlemmer i Synkroniseret' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Vis medlemmer af Synkroniseret' })).toBeInTheDocument();
     expect(screen.getByText('Styres af Rollekatalog')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['claims', CLAIMS_ME, /identitetsudbyderen/],
+    ['local with the kill switch off', LOCKED_LOCAL_ME, /slået fra/],
+  ])('is read-only in %s mode, and the banner says why', async (_n, me, why) => {
+    setup(me);
+    renderWithToasts(<OrganisationAdmin />);
+    await screen.findByText('Kommune');
+    expect(screen.getByRole('status')).toHaveTextContent('Skrivebeskyttet');
+    expect(screen.getByRole('status')).toHaveTextContent(why);
+    expect(screen.queryByText(/Rollekatalog/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Opret enhed' })).toBeNull();
+    expect(screen.queryByRole('columnheader', { name: 'Handlinger' })).toBeNull();
   });
 
   it('is read-only in rollekatalog mode: banner, no create/edit/delete/actions column, members only viewable', async () => {

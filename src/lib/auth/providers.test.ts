@@ -1,9 +1,18 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { resetAuthConfigCache } from './config-file';
 import {
+  authRolesConfig,
   emailPasswordEnabled,
   enabledAuthProviders,
   microsoftConfig,
+  microsoftTenantId,
   oidcConfig,
+  oidcProviders,
+  providerClaimSpecs,
+  samlProviders,
   warnDeprecatedAuthEnv,
 } from './providers';
 
@@ -31,9 +40,10 @@ beforeEach(() => {
   // ambient .env can't leak in and make assertions pass for the wrong reason.
   const clean = { ...ENV } as Record<string, string | undefined>;
   for (const key of Object.keys(clean)) {
-    if (/^(OIDC_|AUTHENTIK_|MICROSOFT_|EMAIL_PASSWORD_|NEXT_PUBLIC_)/.test(key)) delete clean[key];
+    if (/^(OIDC_|AUTHENTIK_|MICROSOFT_|EMAIL_PASSWORD_|NEXT_PUBLIC_|AUTH_CONFIG_FILE)/.test(key)) delete clean[key];
   }
   process.env = clean as NodeJS.ProcessEnv;
+  resetAuthConfigCache();
 });
 
 afterEach(() => {
@@ -257,5 +267,103 @@ describe('warnDeprecatedAuthEnv', () => {
     warnDeprecatedAuthEnv();
     expect(warn.mock.calls[0][0]).toContain('AUTHENTIK_CLIENT_ID');
     expect(warn.mock.calls[0][0]).toContain('NEXT_PUBLIC_MICROSOFT_ENABLED');
+  });
+});
+
+// ─── AUTH_CONFIG_FILE ────────────────────────────────────────────────────────
+
+describe('providers from AUTH_CONFIG_FILE', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'providers-'));
+    spyOnWarn();
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    resetAuthConfigCache();
+  });
+  function config(content: unknown) {
+    const file = path.join(dir, 'auth.json');
+    writeFileSync(file, JSON.stringify(content));
+    process.env.AUTH_CONFIG_FILE = file;
+    resetAuthConfigCache();
+  }
+  const FKA = { type: 'oidc', id: 'fka', label: 'FKA Log ind', clientId: 'a', clientSecret: 'b', discoveryUrl: 'https://fka.example/.well-known/openid-configuration' };
+  const HJORRING = { type: 'oidc', id: 'authentik', clientId: 'c', clientSecret: 'd', discoveryUrl: 'https://ak.example/o/app/.well-known/openid-configuration', scopes: ['openid', 'profile', 'email', 'groups'], pkce: false };
+  const SAML = { type: 'saml', id: 'os2faktor', label: 'OS2faktor', entryPoint: 'https://idp.example/sso', idpEntityId: 'https://idp.example', cert: 'MIIC' };
+
+  it('lists several OIDC providers, then SAML, with their labels (and no secret)', () => {
+    config({ providers: [FKA, HJORRING, SAML, { type: 'entra', clientId: 'e', clientSecret: 'f', tenantId: 't-1', label: 'Entra' }] });
+    expect(enabledAuthProviders()).toEqual([
+      { kind: 'social', id: 'microsoft', label: 'Entra' },
+      { kind: 'oauth2', id: 'fka', label: 'FKA Log ind' },
+      { kind: 'oauth2', id: 'authentik', label: 'Authentik' },
+      { kind: 'sso', id: 'os2faktor', label: 'OS2faktor' },
+    ]);
+    const serialized = JSON.stringify(enabledAuthProviders());
+    for (const secret of ['"b"', '"d"', '"f"', 'MIIC']) expect(serialized).not.toContain(secret);
+  });
+
+  it('carries scopes, pkce and endpoints through to the resolved OIDC provider', () => {
+    config({ providers: [HJORRING] });
+    expect(oidcProviders()).toEqual([
+      expect.objectContaining({ providerId: 'authentik', scopes: ['openid', 'profile', 'email', 'groups'], pkce: false, claims: {} }),
+    ]);
+  });
+
+  it('a configured file REPLACES the legacy variables, even a broken file', () => {
+    Object.assign(process.env, OIDC, MICROSOFT);
+    config({ providers: [SAML] });
+    expect(enabledAuthProviders().map((p) => p.id)).toEqual(['os2faktor']);
+    process.env.AUTH_CONFIG_FILE = path.join(dir, 'does-not-exist.json');
+    resetAuthConfigCache();
+    expect(enabledAuthProviders()).toEqual([]);
+    expect(microsoftConfig()).toBeNull();
+  });
+
+  it('warns that the legacy variables are ignored, naming the variables only', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    Object.assign(process.env, OIDC);
+    config({ providers: [FKA] });
+    warnDeprecatedAuthEnv();
+    expect(warn.mock.calls.flat().join(' ')).toMatch(/AUTH_CONFIG_FILE is set.*OIDC_CLIENT_ID/);
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('oidc-secret');
+  });
+
+  it('exposes the claim names per provider, for the login hook', () => {
+    config({ providers: [{ ...FKA, claims: { email: 'mail' }, rolesClaim: 'roles', groupsClaim: { name: 'g', format: 'delimited', separator: ';' } }] });
+    expect(providerClaimSpecs('fka')).toEqual({
+      claims: { email: 'mail' },
+      rolesClaim: { name: 'roles', format: 'array', separator: ',' },
+      groupsClaim: { name: 'g', format: 'delimited', separator: ';' },
+    });
+    expect(providerClaimSpecs('nobody')).toBeNull();
+  });
+
+  it('has no claim specs for the legacy variables (claims mode needs the file)', () => {
+    Object.assign(process.env, OIDC);
+    expect(providerClaimSpecs('oidc')).toBeNull();
+    expect(oidcProviders()).toEqual([expect.objectContaining({ providerId: 'oidc', scopes: ['openid', 'profile', 'email'] })]);
+  });
+
+  it('exposes the SAML providers and the roles section', () => {
+    config({ providers: [SAML], roles: { appRoleMap: { admin: 'tt-administrator' } } });
+    expect(samlProviders().map((p) => p.id)).toEqual(['os2faktor']);
+    expect(authRolesConfig().state).toBe('ok');
+  });
+
+  it('takes the Entra tenant from the file, else from MICROSOFT_TENANT_ID', () => {
+    process.env.MICROSOFT_TENANT_ID = 'env-tenant';
+    expect(microsoftTenantId()).toBe('env-tenant');
+    config({ providers: [{ type: 'entra', clientId: 'e', clientSecret: 'f', tenantId: 'file-tenant' }] });
+    expect(microsoftTenantId()).toBe('file-tenant');
+    expect(microsoftConfig()).toMatchObject({ tenantId: 'file-tenant' });
+    config({ providers: [FKA] });
+    expect(microsoftTenantId()).toBeUndefined();
+  });
+
+  it('passes Entra scopes through', () => {
+    config({ providers: [{ type: 'entra', clientId: 'e', clientSecret: 'f', scopes: ['GroupMember.Read.All'] }] });
+    expect(microsoftConfig()).toEqual({ clientId: 'e', clientSecret: 'f', tenantId: 'common', scopes: ['GroupMember.Read.All'] });
   });
 });

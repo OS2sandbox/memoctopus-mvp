@@ -51,6 +51,7 @@ const METHOD_TEXT: Record<string, string> = {
   password: ' med adgangskode',
   microsoft: ' med Microsoft',
   oidc: ' via single sign-on',
+  saml: ' via single sign-on (SAML)',
 };
 
 const LOGIN_FAILED_REASON: Record<string, string> = {

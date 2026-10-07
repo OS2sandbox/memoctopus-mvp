@@ -5,6 +5,7 @@ import http from 'node:http';
 import { SIM } from './config';
 import type { MockLlm, LlmMode } from './llm';
 import type { MockIdp } from './oidc';
+import type { MockSamlIdp } from './saml';
 import type { MockData, MockFault, MockRollekatalog } from '../../src/lib/rollekatalog/mock-server';
 
 type Json = Record<string, any>;
@@ -67,9 +68,10 @@ export interface ControlDeps {
   rollekatalog: MockRollekatalog;
   llm: MockLlm;
   idp: MockIdp;
+  samlIdp: MockSamlIdp;
 }
 
-export async function startControl({ rollekatalog, llm, idp }: ControlDeps): Promise<{ close(): Promise<void> }> {
+export async function startControl({ rollekatalog, llm, idp, samlIdp }: ControlDeps): Promise<{ close(): Promise<void> }> {
   const readJson = (req: http.IncomingMessage) =>
     new Promise<Json>((resolve) => {
       let s = '';
@@ -124,6 +126,7 @@ export async function startControl({ rollekatalog, llm, idp }: ControlDeps): Pro
         requests: rollekatalog.requests.slice(-40),
         llmCalls: llm.calls.length,
         idpLogins: idp.logins.slice(-20),
+        samlLogins: samlIdp.logins.slice(-20),
       });
     }
     if (req.method === 'GET' && url.pathname === '/llm/calls') return send(200, llm.calls);
@@ -148,6 +151,15 @@ export async function startControl({ rollekatalog, llm, idp }: ControlDeps): Pro
     }
     if (url.pathname === '/llm') {
       llm.mode = body.mode as LlmMode;
+      return ok();
+    }
+    // What the IdPs (OIDC and SAML) claim about one person from now on, e.g. { username, claims: { roles: [...] } };
+    // claims null restores the persona's own. For the claims mode.
+    if (url.pathname === '/idp/claims') {
+      const username = String(body.username ?? '');
+      const claims = body.claims && typeof body.claims === 'object' ? (body.claims as Record<string, unknown>) : null;
+      idp.setClaims(username, claims);
+      samlIdp.setClaims(username, claims);
       return ok();
     }
     if (url.pathname === '/llm/clear') {

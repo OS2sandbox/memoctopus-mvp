@@ -26,6 +26,8 @@ yarn-error.log*
 
 # local env files
 .env
+# per-installation identity provider config (client secrets, SAML metadata); mounted into the app, never committed
+/auth-config/
 .env*.local
 .env.development.local
 .env.test.local

@@ -5,9 +5,9 @@
 import { z } from 'zod';
 import { code, count, defineEvent } from './types';
 
-// 'password' | 'oidc' | 'microsoft' come from the better-auth route that created or
+// 'password' | 'oidc' | 'microsoft' | 'saml' come from the better-auth route that created or
 // rejected the session; 'unknown' when the route is none of those.
-const method = () => z.enum(['password', 'oidc', 'microsoft', 'unknown']);
+const method = () => z.enum(['password', 'oidc', 'microsoft', 'saml', 'unknown']);
 
 export const authEvents = {
   'auth.login': defineEvent({

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { UsersAdmin } from './UsersAdmin';
-import { ADMIN_ME, ROLLEKATALOG_ME, calls, installFetch, json, renderWithToasts } from './test-helpers';
+import { ADMIN_ME, CLAIMS_ME, LOCKED_LOCAL_ME, ROLLEKATALOG_ME, calls, installFetch, json, renderWithToasts } from './test-helpers';
 
 const UNIT = '11111111-1111-4111-8111-111111111111';
 
@@ -173,6 +173,38 @@ describe('UsersAdmin — write controls by mode and role', () => {
     expect(screen.queryByRole('button', { name: /Tildel rolle/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Fjern/ })).toBeNull();
     expect(screen.queryByRole('columnheader', { name: 'Handlinger' })).toBeNull();
+  });
+
+  it('claims mode: no write controls, an explanation of where the roles come from, and no Rollekatalog wording or sync request', async () => {
+    const mock = setup(CLAIMS_ME);
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    const card = screen.getByRole('region', { name: 'Roller følger med fra login' });
+    expect(card).toHaveTextContent('identitetsudbyderen');
+    expect(card).toHaveTextContent('næste gang personen logger ind');
+    expect(within(card).getByText('tt-administrator')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Roller tildeles i Rollekatalog' })).toBeNull();
+    expect(screen.queryByText(/Data hentes fra Rollekatalog/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Tildel rolle/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Fjern/ })).toBeNull();
+    expect(calls(mock, 'GET', '/api/admin/access/sync')).toHaveLength(0);
+  });
+
+  it('local mode with the kill switch off: read-only card that says the local administration is off', async () => {
+    setup(LOCKED_LOCAL_ME);
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.getByRole('region', { name: 'Rolleadministration er slået fra' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Tildel rolle/ })).toBeNull();
+  });
+
+  it('names claims-sourced assignments as coming from the identity provider', async () => {
+    setup(CLAIMS_ME, {
+      'GET /api/admin/access/users': () => json({ users: [{ ...USERS.users[0], roles: [assignment({ source: 'claims', roleKey: 'tt-logleser', scopeOrgUnitUuid: null, scopeOrgUnitName: null })] }] }),
+    });
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.getByText('Identitetsudbyder')).toBeInTheDocument();
   });
 
   it('shows no write controls while /api/me is still unknown', async () => {

@@ -90,10 +90,10 @@ describe('resolvePrincipal', () => {
     });
   });
 
-  it('tt-skabelonansvarlig with NULL scope covers nothing (fail closed)', async () => {
+  it('tt-skabelonansvarlig with NULL scope is global (the superuser)', async () => {
     rowsRef.rows = [row({ roleKey: 'tt-skabelonansvarlig', scopeOrgUnitUuid: null })];
     const p = await resolvePrincipal('u1');
-    expect(p.scopes['template.manage']).toEqual({ global: false, roots: [] });
+    expect(p.scopes['template.manage']).toEqual({ global: true, roots: [] });
   });
 
   it('a disabled directory user yields a disabled principal without roles', async () => {
@@ -285,5 +285,100 @@ describe('resolvePrincipal with an invalid ACCESS_SOURCE', () => {
     vi.stubEnv('ACCESS_SOURCE', v);
     rowsRef.rows = [row({ roleKey: 'tt-administrator' })];
     await expect(resolvePrincipal('u1')).rejects.toMatchObject({ name: 'ConfigError' });
+  });
+});
+
+describe('dropStaleAssignments, claims mode (pure)', () => {
+  const cl = (rows: AssignmentSourceRow[], claimsMaxAgeSeconds = 100, maxAgeSeconds = 5) =>
+    dropStaleAssignments(rows, { now: NOW, mode: 'claims', maxAgeSeconds, claimsMaxAgeSeconds }).map((x) => x.roleKey);
+
+  it.each([
+    ['fresh', ago(10), true],
+    ['exactly at the limit', ago(100), true],
+    ['one millisecond past it', new Date(NOW.getTime() - 100_001), false],
+    ['NULL synced_at', null, false],
+    ['unreadable date', new Date('nope'), false],
+  ])('claims row, %s -> kept=%s (against ROLE_CLAIMS_MAX_SECONDS, not the Rollekatalog limit)', (_l, syncedAt, kept) => {
+    expect(cl([r('claims', 'tt-administrator', syncedAt as Date | null)])).toEqual(kept ? ['tt-administrator'] : []);
+  });
+
+  it('local and rollekatalog rows grant nothing in claims mode, however fresh; unknown sources neither', () => {
+    expect(cl([r('local', 'tt-administrator', NOW), r('rollekatalog', 'tt-administrator', NOW), r('other', 'tt-administrator', NOW)])).toEqual([]);
+  });
+
+  it('claims rows grant nothing in the other modes', () => {
+    const rows = [r('claims', 'tt-administrator', NOW)];
+    expect(dropStaleAssignments(rows, { now: NOW, mode: 'local', maxAgeSeconds: 100 })).toEqual([]);
+    expect(dropStaleAssignments(rows, { now: NOW, mode: 'rollekatalog', maxAgeSeconds: 100 })).toEqual([]);
+  });
+});
+
+describe('resolvePrincipal in claims mode', () => {
+  beforeEach(() => {
+    vi.stubEnv('ACCESS_SOURCE', 'claims');
+    vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', '3600');
+  });
+
+  it('a fresh claims role resolves, tagged claims; global NULL scope on a role that may be global', async () => {
+    rowsRef.rows = [row({ roleKey: 'tt-skabelonansvarlig', source: 'claims', syncedAt: new Date() })];
+    const p = await resolvePrincipal('u1');
+    expect(p.roles).toEqual(['tt-bruger', 'tt-skabelonansvarlig']);
+    expect(p.scopes['template.manage']).toEqual({ global: true, roots: [] });
+    expect(p.source).toBe('claims');
+  });
+
+  it('access.manage still needs a GLOBAL administrator: a claims admin row is NULL-scoped, so it has it', async () => {
+    rowsRef.rows = [row({ roleKey: 'tt-administrator', source: 'claims', syncedAt: new Date() })];
+    expect((await resolvePrincipal('u1')).capabilities).toEqual(expect.arrayContaining(['access.manage', 'sync.run', 'audit.export']));
+  });
+
+  it('a snapshot older than ROLE_CLAIMS_MAX_SECONDS grants nothing: the baseline tt-bruger only', async () => {
+    rowsRef.rows = [row({ roleKey: 'tt-administrator', source: 'claims', syncedAt: new Date(Date.now() - 2 * 3_600_000) })];
+    const p = await resolvePrincipal('u1');
+    expect(p.roles).toEqual(['tt-bruger']);
+    expect(p.capabilities).toEqual(['template.use']);
+    expect(p.source).toBe('baseline');
+    expect(p.directoryUserUuid).toBe(DU);
+  });
+
+  it('with REQUIRE_ROLE_TO_LOGIN a stale snapshot leaves the person without any role (refused at login)', async () => {
+    vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'true');
+    rowsRef.rows = [row({ roleKey: 'tt-administrator', source: 'claims', syncedAt: new Date(Date.now() - 2 * 3_600_000) })];
+    expect((await resolvePrincipal('u1')).roles).toEqual([]);
+  });
+
+  it('reads ROLE_CLAIMS_MAX_SECONDS at call time; an unusable value means the 8 hour default, never "unlimited"', async () => {
+    rowsRef.rows = [row({ roleKey: 'tt-logleser', source: 'claims', syncedAt: new Date(Date.now() - 600_000) })];
+    vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', '300');
+    expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger']);
+    vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', '3600');
+    expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger', 'tt-logleser']);
+    vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', 'forever');
+    rowsRef.rows = [row({ roleKey: 'tt-logleser', source: 'claims', syncedAt: new Date(Date.now() - 9 * 3_600_000) })];
+    expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger']);
+  });
+
+  it('local and rollekatalog rows are ignored next to a fresh claims row', async () => {
+    rowsRef.rows = [
+      row({ roleKey: 'tt-administrator', source: 'local' }),
+      row({ roleKey: 'tt-administrator', source: 'rollekatalog', syncedAt: new Date() }),
+      row({ roleKey: 'tt-logleser', source: 'claims', syncedAt: new Date() }),
+    ];
+    const p = await resolvePrincipal('u1');
+    expect(p.roles).toEqual(['tt-bruger', 'tt-logleser']);
+    expect(p.capabilities).not.toContain('access.manage');
+  });
+
+  it('a claims row is ignored once the installation is back in local mode', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'local');
+    rowsRef.rows = [row({ roleKey: 'tt-administrator', source: 'claims', syncedAt: new Date() })];
+    expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger']);
+  });
+
+  it('a disabled directory row refuses the person whatever the claims say', async () => {
+    rowsRef.rows = [row({ disabled: true, roleKey: 'tt-administrator', source: 'claims', syncedAt: new Date() })];
+    const p = await resolvePrincipal('u1');
+    expect(p.disabled).toBe(true);
+    expect(p.roles).toEqual([]);
   });
 });

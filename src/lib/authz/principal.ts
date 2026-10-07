@@ -3,7 +3,7 @@ import { db } from '@/lib/db';
 import { directoryUsers, roleAssignments } from '@/lib/db/schema';
 import { buildPrincipalFromAssignments } from './capabilities';
 import { roleStaleMaxSeconds } from '@/lib/rollekatalog/config';
-import { accessSource, requireRoleToLogin, type AccessSource } from './config';
+import { accessSource, requireRoleToLogin, roleClaimsMaxSeconds, type AccessSource } from './config';
 import type { Principal, RoleAssignmentRow } from './types';
 
 export type AssignmentSourceRow = RoleAssignmentRow & { source: string; syncedAt?: Date | null };
@@ -12,6 +12,8 @@ interface StaleOptions {
   now: Date;
   mode: AccessSource;
   maxAgeSeconds: number;
+  /** Freshness limit of source='claims' rows (ROLE_CLAIMS_MAX_SECONDS); defaults to maxAgeSeconds. */
+  claimsMaxAgeSeconds?: number;
 }
 
 /**
@@ -26,13 +28,18 @@ interface StaleOptions {
  *   unreadable) are ignored: if the sync stops, elevated capabilities vanish
  *   instead of lingering forever. The baseline tt-bruger is implicit and stays.
  *   Exactly at the limit still counts.
+ * - claims mode: only source='claims' rows count (local grants cannot be edited there,
+ *   Rollekatalog rows are not ours), and only while the login that wrote them is
+ *   younger than the claims limit. A claim row is a snapshot of the IdP at login, so
+ *   an old one says nothing about today.
  */
 export function dropStaleAssignments(rows: AssignmentSourceRow[], opts: StaleOptions): AssignmentSourceRow[] {
   // Fail closed: a source other than the two the DB CHECK allows counts as nothing.
   if (opts.mode === 'local') return rows.filter((r) => r.source === 'local');
-  const limitMs = opts.maxAgeSeconds * 1000;
+  const wanted = opts.mode === 'claims' ? 'claims' : 'rollekatalog';
+  const limitMs = (opts.mode === 'claims' ? (opts.claimsMaxAgeSeconds ?? opts.maxAgeSeconds) : opts.maxAgeSeconds) * 1000;
   return rows.filter((r) => {
-    if (r.source !== 'rollekatalog' || !r.syncedAt) return false;
+    if (r.source !== wanted || !r.syncedAt) return false;
     // Negated <= so that an invalid date (NaN) counts as stale.
     return opts.now.getTime() - r.syncedAt.getTime() <= limitMs;
   });
@@ -84,7 +91,7 @@ export async function resolvePrincipal(userId: string): Promise<Principal> {
             },
           ],
     ),
-    { now, mode: accessSource(), maxAgeSeconds: roleStaleMaxSeconds() },
+    { now, mode: accessSource(), maxAgeSeconds: roleStaleMaxSeconds(), claimsMaxAgeSeconds: roleClaimsMaxSeconds() },
   );
 
   return buildPrincipalFromAssignments({
@@ -94,6 +101,10 @@ export async function resolvePrincipal(userId: string): Promise<Principal> {
     assignments,
     now,
     requireRoleToLogin: requireRoleToLogin(),
-    source: assignments.some((a) => a.source === 'rollekatalog') ? 'rollekatalog' : 'local',
+    source: assignments.some((a) => a.source === 'rollekatalog')
+      ? 'rollekatalog'
+      : assignments.some((a) => a.source === 'claims')
+        ? 'claims'
+        : 'local',
   });
 }

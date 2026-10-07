@@ -22,6 +22,10 @@ export const ADMIN_ME: MeResponse = {
 };
 
 export const ROLLEKATALOG_ME: MeResponse = { ...ADMIN_ME, source: 'rollekatalog', readOnly: true };
+/** Roles come from the IdP's claims at login: read-only, and nothing to synchronise. */
+export const CLAIMS_ME: MeResponse = { ...ADMIN_ME, source: 'claims', readOnly: true };
+/** Local mode with the kill switch ACCESS_LOCAL_ADMIN=false. */
+export const LOCKED_LOCAL_ME: MeResponse = { ...ADMIN_ME, source: 'local', readOnly: true };
 
 /** A skabelonansvarlig: may read the directory (scoped) but not manage access. */
 export const READER_ME: MeResponse = {

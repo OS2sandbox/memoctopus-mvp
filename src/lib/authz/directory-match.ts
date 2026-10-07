@@ -1,7 +1,9 @@
 // Links a logged-in SSO user to a Rollekatalog-synced directory_users row.
 // ROLLEKATALOG MODE ONLY. In local mode links are made explicitly by an admin
 // (directory_users.app_user_id) and must never be inferred from claims: an
-// attacker could password-sign-up with a pre-assigned address.
+// attacker could password-sign-up with a pre-assigned address. In claims mode there
+// is nothing to match: the login's own claims are the roles (authz/claims-roles.ts),
+// written straight onto the person's own directory row.
 import { directoryConfigIssue, transformUserId } from '@/lib/rollekatalog/config';
 import {
   accessSource,

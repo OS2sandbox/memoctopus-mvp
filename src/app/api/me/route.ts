@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { withAuthz } from '@/lib/authz/guard';
-import { accessSource } from '@/lib/authz/config';
+import { accessSource, localAdminEnabled } from '@/lib/authz/config';
 
 // Advisory only: the UI uses this to decide what to show. The server
 // re-checks every capability and scope on every request, so nothing here is
@@ -23,6 +23,7 @@ export const GET = withAuthz('me/GET', null, async (_req, { session, principal }
     capabilities: principal.capabilities,
     scopes,
     source,
-    readOnly: source !== 'local',
+    // The kill switch ACCESS_LOCAL_ADMIN (false outside local mode) decides; the UI then shows the read-only card.
+    readOnly: !localAdminEnabled(),
   });
 });

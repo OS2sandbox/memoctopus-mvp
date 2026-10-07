@@ -61,6 +61,8 @@ describe.skipIf(!hasPg)('central access migration (real Postgres)', () => {
           'org_unit_members',
           'role_assignments',
           'external_identities',
+          'external_roles',
+          'user_external_roles',
           'sync_runs',
           'system_flags',
         ]),

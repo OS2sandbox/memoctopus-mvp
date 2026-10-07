@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { LastSyncLine, SyncStatus, type SyncRunView } from './SyncStatus';
-import { ADMIN_ME, READER_ME, ROLLEKATALOG_ME, calls, installFetch, json } from './test-helpers';
+import { ADMIN_ME, CLAIMS_ME, LOCKED_LOCAL_ME, READER_ME, ROLLEKATALOG_ME, calls, installFetch, json } from './test-helpers';
 import { emptySyncCounts } from '@/lib/rollekatalog/types';
 import { syncErrorMessage } from '@/lib/rollekatalog/labels.da';
 
@@ -39,9 +39,25 @@ describe('SyncStatus visibility', () => {
     expect(mock).not.toHaveBeenCalled();
   });
 
+  it.each([['claims', CLAIMS_ME], ['local with the kill switch off', LOCKED_LOCAL_ME]])('renders nothing and does not fetch in %s mode: there is no Rollekatalog to synchronise', (_n, me) => {
+    const mock = installFetch({});
+    const { container } = render(<SyncStatus me={me} />);
+    expect(container).toBeEmptyDOMElement();
+    expect(mock).not.toHaveBeenCalled();
+  });
+
   it('renders nothing without sync.run (a read-only viewer) and does not fetch', () => {
     const mock = installFetch({});
     const { container } = render(<SyncStatus me={{ ...READER_ME, source: 'rollekatalog', readOnly: true }} />);
+    expect(container).toBeEmptyDOMElement();
+    expect(mock).not.toHaveBeenCalled();
+  });
+});
+
+describe('LastSyncLine outside Rollekatalog mode', () => {
+  it.each([['claims', CLAIMS_ME], ['locked local', LOCKED_LOCAL_ME]])('is not shown in %s mode', (_n, me) => {
+    const mock = installFetch({});
+    const { container } = render(<LastSyncLine me={me} />);
     expect(container).toBeEmptyDOMElement();
     expect(mock).not.toHaveBeenCalled();
   });

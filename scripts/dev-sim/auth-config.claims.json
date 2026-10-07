@@ -1,0 +1,43 @@
+{
+  "providers": [
+    {
+      "type": "oidc",
+      "id": "oidc",
+      "label": "Simuleret kommune-login (OIDC)",
+      "clientId": "${SIM_OIDC_CLIENT_ID}",
+      "clientSecret": "${SIM_OIDC_CLIENT_SECRET}",
+      "discoveryUrl": "${SIM_OIDC_DISCOVERY_URL}",
+      "scopes": ["openid", "profile", "email"],
+      "pkce": true,
+      "claims": { "email": "email", "name": "name" },
+      "rolesClaim": "roles",
+      "groupsClaim": { "name": "memberOf", "format": "delimited", "separator": ";" }
+    },
+    {
+      "type": "saml",
+      "id": "saml",
+      "label": "Simuleret kommune-login (SAML)",
+      "idpMetadataFile": "${SIM_SAML_METADATA_FILE}",
+      "claims": { "userId": "uid", "email": "mail", "name": "displayName" },
+      "rolesClaim": "roles",
+      "groupsClaim": { "name": "memberOf", "format": "delimited", "separator": ";" }
+    }
+  ],
+  "roles": {
+    "appRoleMap": {
+      "referat-admin": "tt-administrator",
+      "referat-superuser": "tt-skabelonansvarlig",
+      "referat-log": "tt-logleser",
+      "referat-bruger": "tt-bruger"
+    },
+    "groupRoleMap": {}
+  },
+  "catalogue": [
+    { "kind": "role", "identifier": "referat-admin", "name": "Referat: administrator" },
+    { "kind": "role", "identifier": "referat-superuser", "name": "Referat: superbruger" },
+    { "kind": "role", "identifier": "referat-log", "name": "Referat: logleser" },
+    { "kind": "role", "identifier": "referat-bruger", "name": "Referat: bruger" },
+    { "kind": "group", "identifier": "G-Borgerservice", "name": "Borgerservice" },
+    { "kind": "group", "identifier": "G-Okonomi", "name": "Økonomi" }
+  ]
+}

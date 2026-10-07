@@ -74,6 +74,21 @@ describe('GET /api/me', () => {
     expect(json.readOnly).toBe(true);
   });
 
+  it('claims mode: source claims, read-only', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'claims');
+    mockResolve.mockResolvedValue(makePrincipal({ source: 'claims' }));
+    const json = await (await GET(req(), NO_PARAMS)).json();
+    expect(json.source).toBe('claims');
+    expect(json.readOnly).toBe(true);
+  });
+
+  it('local mode is read-only exactly when the kill switch ACCESS_LOCAL_ADMIN is off', async () => {
+    vi.stubEnv('ACCESS_LOCAL_ADMIN', 'false');
+    expect((await (await GET(req(), NO_PARAMS)).json()).readOnly).toBe(true);
+    vi.stubEnv('ACCESS_LOCAL_ADMIN', '');
+    expect((await (await GET(req(), NO_PARAMS)).json()).readOnly).toBe(false);
+  });
+
   it('never leaks session internals, tokens or extra user fields', async () => {
     const text = JSON.stringify(await (await GET(req(), NO_PARAMS)).json());
     expect(text).not.toContain('secret-session-token');

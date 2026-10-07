@@ -72,6 +72,43 @@ interface AccountRow {
 }
 
 /**
+ * Upserts one external_identities row from an already-decoded claim set. The shared
+ * tail of both capture paths: the id_token of an OIDC account (below) and the mapped
+ * attributes of a SAML assertion (captureIdentityFromAttributes), neither of which
+ * persists anything beyond the whitelist. Null when the claims carry no subject or the
+ * subject is already bound to another user.
+ */
+async function upsertIdentity(
+  runner: SqlRunner,
+  userId: string,
+  providerId: string,
+  payload: Record<string, unknown>,
+): Promise<ExternalIdentity | null> {
+  const claims = pickClaims(payload);
+  if (!claims.sub) {
+    console.warn(`[authz] identity without subject (provider ${providerId})`);
+    return null;
+  }
+
+  // The WHERE keeps (provider, subject) bound to the first user that claimed
+  // it: a second app user presenting the same subject must not steal the row.
+  const res = await runner.query(
+    `INSERT INTO public.external_identities AS ei (user_id, provider_id, subject, claims)
+     VALUES ($1, $2, $3, $4::jsonb)
+     ON CONFLICT (provider_id, subject) DO UPDATE
+       SET claims = EXCLUDED.claims, last_seen_at = now()
+       WHERE ei.user_id = EXCLUDED.user_id
+     RETURNING id`,
+    [userId, providerId, claims.sub, JSON.stringify(claims)],
+  );
+  if (res.rows.length === 0) {
+    console.warn(`[authz] external identity already bound to another user (code identity_conflict, provider ${providerId})`);
+    return null;
+  }
+  return { userId, providerId, subject: claims.sub, claims };
+}
+
+/**
  * Upserts one external_identities row per SSO account of the user. Never throws
  * for bad tokens (logged by label only); DB errors propagate to the caller,
  * which owns the swallow-and-log policy.
@@ -82,6 +119,7 @@ export async function captureExternalIdentity(
 ): Promise<ExternalIdentity[]> {
   // 'credential' is better-auth's email/password account: its "identity" is
   // whatever the visitor typed at sign-up and must never be treated as SSO.
+  // SAML accounts have no id_token and are captured from the assertion instead.
   const accounts = await runner.query<AccountRow>(
     `SELECT provider_id, id_token FROM public.accounts
       WHERE user_id = $1 AND provider_id <> 'credential' AND id_token IS NOT NULL`,
@@ -95,28 +133,33 @@ export async function captureExternalIdentity(
       console.warn(`[authz] id_token not decodable for an SSO account (provider ${account.provider_id})`);
       continue;
     }
-    const claims = pickClaims(payload);
-    if (!claims.sub) {
-      console.warn(`[authz] id_token without sub claim (provider ${account.provider_id})`);
-      continue;
-    }
-
-    // The WHERE keeps (provider, subject) bound to the first user that claimed
-    // it: a second app user presenting the same subject must not steal the row.
-    const res = await runner.query(
-      `INSERT INTO public.external_identities AS ei (user_id, provider_id, subject, claims)
-       VALUES ($1, $2, $3, $4::jsonb)
-       ON CONFLICT (provider_id, subject) DO UPDATE
-         SET claims = EXCLUDED.claims, last_seen_at = now()
-         WHERE ei.user_id = EXCLUDED.user_id
-       RETURNING id`,
-      [userId, account.provider_id, claims.sub, JSON.stringify(claims)],
-    );
-    if (res.rows.length === 0) {
-      console.warn(`[authz] external identity already bound to another user (code identity_conflict, provider ${account.provider_id})`);
-      continue;
-    }
-    captured.push({ userId, providerId: account.provider_id, subject: claims.sub, claims });
+    const identity = await upsertIdentity(runner, userId, account.provider_id, payload);
+    if (identity) captured.push(identity);
   }
   return captured;
+}
+
+/**
+ * The SAML counterpart of captureExternalIdentity: there is no id_token, so the identity
+ * snapshot is built from the attributes that better-auth's SAML mapping delivered
+ * (userInfo: id, email, name, plus the optional `upn` / `preferred_username` extras).
+ * Same whitelist, same ownership rule. `email_verified` is only ever true when the
+ * mapping said so as a real boolean (better-auth leaves it false unless trusted).
+ */
+export async function captureIdentityFromAttributes(
+  userId: string,
+  providerId: string,
+  userInfo: Record<string, unknown>,
+  runner: SqlRunner = defaultRunner(),
+): Promise<ExternalIdentity | null> {
+  if (providerId === 'credential') return null;
+  const first = (v: unknown) => (Array.isArray(v) ? v[0] : v);
+  return upsertIdentity(runner, userId, providerId, {
+    sub: typeof userInfo.id === 'number' ? String(userInfo.id) : userInfo.id,
+    email: first(userInfo.email),
+    name: first(userInfo.name),
+    upn: first(userInfo.upn),
+    preferred_username: first(userInfo.preferred_username),
+    email_verified: userInfo.emailVerified,
+  });
 }
