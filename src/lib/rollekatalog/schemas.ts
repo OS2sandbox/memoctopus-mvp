@@ -319,6 +319,83 @@ export const roleAssignmentsSchema = z.array(z.unknown()).transform((raw, ctx): 
   return { rows, skipped: skippedRows + skippedEntries };
 });
 
+// ─── role catalogue (user roles and role groups) ───────────────────────────
+//
+// Names and identifiers ONLY, by decision: the user-role DTO also carries itSystemName and a
+// description, which are dropped here. Adding a field is a privacy decision. Row by row, like
+// the other arrays: a bad row is dropped and counted, too many bad rows fail the payload.
+
+export const CATALOGUE_VALUE_MAX = 200;
+
+export interface RkCatalogueEntry {
+  kind: 'role' | 'group';
+  identifier: string;
+  name: string;
+}
+
+export interface RkCatalogue {
+  entries: RkCatalogueEntry[];
+  /** Rows dropped for failing the schema, and duplicates dropped (first wins). Counts only. */
+  skipped: number;
+}
+
+const catalogueText = z.string().trim().min(1).max(CATALOGUE_VALUE_MAX);
+// The numeric database id of a user role / role group, as a number or a digit string.
+const numericId = z
+  .union([z.number().int().nonnegative(), z.string().trim().regex(/^\d{1,18}$/)])
+  .transform((v) => String(v));
+
+// A user role carries a string `identifier` when the endpoint lists it; the id is the fallback key.
+const userRoleRowSchema = z
+  .object({
+    id: numericId.nullish(),
+    identifier: z.string().nullish(),
+    name: catalogueText,
+  })
+  .strip()
+  .transform((r, ctx) => {
+    const ident = r.identifier?.trim();
+    const identifier = ident ? ident : r.id ?? '';
+    if (identifier === '' || identifier.length > CATALOGUE_VALUE_MAX) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'no usable identifier' });
+      return z.NEVER;
+    }
+    return { identifier, name: r.name };
+  });
+
+const roleGroupRowSchema = z
+  .object({ id: numericId, name: catalogueText })
+  .strip()
+  .transform((r) => ({ identifier: r.id, name: r.name }));
+
+function catalogueSchema(kind: RkCatalogueEntry['kind'], row: z.ZodType<{ identifier: string; name: string }, z.ZodTypeDef, unknown>) {
+  return z.array(z.unknown()).transform((raw, ctx): RkCatalogue => {
+    const seen = new Set<string>();
+    const entries: RkCatalogueEntry[] = [];
+    let skipped = 0;
+    let invalid = 0;
+    for (const item of raw) {
+      const parsed = row.safeParse(item);
+      if (!parsed.success) {
+        invalid++;
+        skipped++;
+        continue;
+      }
+      if (seen.has(parsed.data.identifier)) {
+        skipped++;
+        continue;
+      }
+      seen.add(parsed.data.identifier);
+      entries.push({ kind, ...parsed.data });
+    }
+    guardInvalidRows(invalid, raw.length, ctx);
+    return { entries, skipped };
+  });
+}
+
+export const userRolesCatalogueSchema = catalogueSchema('role', userRoleRowSchema);
+export const roleGroupsCatalogueSchema = catalogueSchema('group', roleGroupRowSchema);
+
 /** Parses a response body; a mismatch is `invalid_response` and never echoes the data. */
 export function parseOrThrow<S extends z.ZodTypeAny>(schema: S, data: unknown): z.output<S> {
   const res = schema.safeParse(data);

@@ -1,11 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { changeNoteSchema } from '@/lib/skabeloner/central-schemas';
 import {
+  audienceEntries,
   changedContentFields,
+  diffPrincipals,
   diffTargets,
   noteLength,
   noteProblem,
+  principalKey,
+  principalsEqual,
   targetsWithinOwner,
+  truncateAudience,
+  viewAgainstCatalogue,
 } from './central-template-utils';
 
 describe('noteProblem', () => {
@@ -79,5 +85,60 @@ describe('diff helpers', () => {
     ];
     expect(targetsWithinOwner(units, 'r', t)).toEqual([t[0]]);
     expect(targetsWithinOwner(units, '', t)).toEqual([]);
+  });
+});
+
+describe('role/group targets', () => {
+  type Kind = 'role' | 'group';
+  const role = (identifier: string, name = identifier, status: 'active' | 'inactive' | 'unknown' = 'active') => ({ kind: 'role' as Kind, identifier, name, status });
+  const group = (identifier: string) => ({ kind: 'group' as Kind, identifier, name: identifier, status: 'active' as const });
+
+  it('a role and a group with the same identifier are different targets', () => {
+    expect(principalKey(role('x'))).not.toBe(principalKey(group('x')));
+    expect(diffPrincipals([role('x')], [group('x')])).toEqual({ added: [group('x')], removed: [role('x')] });
+  });
+
+  it('diffs added and removed, and ignores order and name/status', () => {
+    expect(principalsEqual([role('a'), group('b')], [group('b'), role('a', 'Andet navn', 'inactive')])).toBe(true);
+    expect(diffPrincipals([role('a')], [role('a'), role('b')])).toEqual({ added: [role('b')], removed: [] });
+  });
+
+  it('re-reads a target against the catalogue: its name wins; withdrawn is inactive; missing is unknown', () => {
+    const cat = new Map([
+      [principalKey(role('a')), { kind: 'role' as const, identifier: 'a', name: 'Nyt navn', source: 'config' as const, active: true }],
+      [principalKey(role('b')), { kind: 'role' as const, identifier: 'b', name: 'B', source: 'rollekatalog' as const, active: false }],
+    ]);
+    expect(viewAgainstCatalogue(role('a', 'Gammelt navn'), cat)).toEqual(role('a', 'Nyt navn'));
+    expect(viewAgainstCatalogue(role('b'), cat).status).toBe('inactive');
+    expect(viewAgainstCatalogue(role('c', 'Borte'), cat)).toEqual(role('c', 'Borte', 'unknown'));
+    // Without a name the identifier is shown.
+    expect(viewAgainstCatalogue({ kind: 'group', identifier: 'zz' }, cat).name).toBe('zz');
+  });
+
+  it('names the whole audience: roles and groups first, then units; flags withdrawn ones', () => {
+    const entries = audienceEntries(
+      { principalTargets: [role('a', 'Sagsbehandler'), role('b', 'Gammel', 'inactive'), group('g')], targets: [{ orgUnitUuid: 'u1', includeDescendants: true }, { orgUnitUuid: 'u2', includeDescendants: false }] },
+      (u) => (u === 'u1' ? 'Børn' : 'Ukendt enhed'),
+    );
+    expect(entries.map((e) => e.label)).toEqual([
+      'Rolle: Sagsbehandler',
+      'Rolle: Gammel',
+      'Gruppe: g',
+      'Enhed: Børn (inkl. underenheder)',
+      'Enhed: Ukendt enhed',
+    ]);
+    expect(entries.map((e) => e.flagged)).toEqual([false, true, false, false, false]);
+  });
+
+  it('truncates to N with the rest counted, and shows flagged entries first so they are never hidden', () => {
+    const entries = audienceEntries(
+      { principalTargets: [role('a'), role('b'), role('c'), role('d'), role('e', 'E', 'unknown')], targets: [] },
+      () => '',
+    );
+    const t = truncateAudience(entries, 3);
+    expect(t.shown.map((e) => e.label)).toEqual(['Rolle: E', 'Rolle: a', 'Rolle: b']);
+    expect(t.more).toHaveLength(2);
+    expect(truncateAudience(entries, 10).more).toEqual([]);
+    expect(truncateAudience([], 3)).toEqual({ shown: [], more: [] });
   });
 });

@@ -33,6 +33,13 @@ export class NotFoundError extends AccessError {
   }
 }
 
+/** The caller is known and may use the feature in general, but not this variant of it. */
+export class ForbiddenError extends AccessError {
+  constructor(message: string, code = 'forbidden') {
+    super(code, message);
+  }
+}
+
 export class ConflictError extends AccessError {
   constructor(message: string, code = 'conflict') {
     super(code, message);

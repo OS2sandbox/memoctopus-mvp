@@ -81,6 +81,66 @@ export async function setDefaultSkabelon(userId: string, id: string): Promise<Sk
   return getSkabelon(userId, id);
 }
 
+// ─── Own changelog (skabelon_versions, per-user schema) ─────────────────────────
+
+export interface SkabelonVersion {
+  version: number;
+  changeNote: string | null;
+  /** Field NAMES that changed in this version (empty for the first one). */
+  changedFields: string[];
+  createdAt: string;
+}
+
+interface VersionRow {
+  version: number;
+  change_note: string | null;
+  changed_fields: string[];
+  created_at: string | Date;
+}
+
+const snapshotOf = (s: Skabelon) => ({
+  name: s.name,
+  description: s.description,
+  prompt: s.prompt,
+  includeDeltagere: s.includeDeltagere,
+  includeBeslutningspunkter: s.includeBeslutningspunkter,
+  includeDagsorden: s.includeDagsorden,
+  includeDato: s.includeDato,
+});
+
+/** Appends the next version row (own schema only). The note is optional and never leaves the user's schema. */
+export async function recordSkabelonVersion(
+  userId: string,
+  skabelon: Skabelon,
+  changedFields: readonly string[],
+  changeNote: string | null,
+): Promise<void> {
+  await queryUserSchema(
+    userId,
+    `INSERT INTO skabelon_versions (skabelon_id, version, change_note, changed_fields, snapshot)
+     SELECT $1, COALESCE(MAX(version), 0) + 1, $2, $3::text[], $4::jsonb
+       FROM skabelon_versions WHERE skabelon_id = $1`,
+    [skabelon.id, changeNote, [...changedFields], JSON.stringify(snapshotOf(skabelon))],
+  );
+}
+
+/** Newest first. null when the template does not exist in the user's schema. */
+export async function listSkabelonVersions(userId: string, id: string): Promise<SkabelonVersion[] | null> {
+  if (!(await getSkabelon(userId, id))) return null;
+  const rows = await queryUserSchema<VersionRow>(
+    userId,
+    `SELECT version, change_note, changed_fields, created_at
+       FROM skabelon_versions WHERE skabelon_id = $1 ORDER BY version DESC LIMIT 200`,
+    [id],
+  );
+  return rows.map((r) => ({
+    version: r.version,
+    changeNote: r.change_note,
+    changedFields: r.changed_fields ?? [],
+    createdAt: iso(r.created_at),
+  }));
+}
+
 export async function createSkabelon(userId: string, input: SkabelonInput): Promise<Skabelon> {
   const row = await queryUserSchemaOne<SkabelonRow>(
     userId,
@@ -98,7 +158,9 @@ export async function createSkabelon(userId: string, input: SkabelonInput): Prom
       input.includeDato ?? false,
     ],
   );
-  return mapSkabelon(row!);
+  const created = mapSkabelon(row!);
+  await recordSkabelonVersion(userId, created, [], null);
+  return created;
 }
 
 export async function updateSkabelon(

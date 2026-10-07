@@ -8,6 +8,9 @@ import { z } from 'zod';
 import type { ZodTypeAny } from 'zod';
 import { parseWith } from '@/lib/authz/access-http';
 import type {
+  CentralCatalogueEntry,
+  CentralPrincipalTargetSnapshot,
+  CentralPrincipalTargetView,
   CentralScopeOrgUnit,
   CentralTarget,
   CentralTemplateAdmin,
@@ -27,7 +30,7 @@ export function json(body: unknown, status = 200): NextResponse {
 // Only issues on our own fields with Danish, static messages are forwarded. Zod's own
 // messages are English and can echo input (unrecognized keys), so for everything else
 // the client gets path + code only (see parseBody).
-const OWN_MESSAGE_FIELDS = new Set(['name', 'description', 'prompt', 'changeNote', 'targets']);
+const OWN_MESSAGE_FIELDS = new Set(['name', 'description', 'prompt', 'changeNote', 'targets', 'principalTargets']);
 
 type Parsed<S extends ZodTypeAny> = { ok: true; data: z.output<S> } | { ok: false; response: NextResponse };
 
@@ -70,6 +73,27 @@ const target = (t: CentralTarget): CentralTarget => ({
   includeDescendants: t.includeDescendants,
 });
 
+const principalView = (t: CentralPrincipalTargetView): CentralPrincipalTargetView => ({
+  kind: t.kind,
+  identifier: t.identifier,
+  name: t.name,
+  status: t.status,
+});
+
+const principalSnapshot = (t: CentralPrincipalTargetSnapshot): CentralPrincipalTargetSnapshot => ({
+  kind: t.kind,
+  identifier: t.identifier,
+  name: t.name,
+});
+
+export const catalogueEntryDto = (e: CentralCatalogueEntry): CentralCatalogueEntry => ({
+  kind: e.kind,
+  identifier: e.identifier,
+  name: e.name,
+  source: e.source,
+  active: e.active,
+});
+
 const content = (c: CentralTemplateContent): CentralTemplateContent => ({
   name: c.name,
   description: c.description,
@@ -90,6 +114,7 @@ export function adminDto(t: CentralTemplateAdmin): CentralTemplateAdmin {
     status: t.status,
     currentVersion: t.currentVersion,
     targets: t.targets.map(target),
+    principalTargets: t.principalTargets.map(principalView),
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
     createdByName: t.createdByName ?? null,
@@ -107,6 +132,8 @@ export function listItemDto(t: CentralTemplateListItem): CentralTemplateListItem
     status: t.status,
     currentVersion: t.currentVersion,
     targetCount: t.targetCount,
+    targets: t.targets.map(target),
+    principalTargets: t.principalTargets.map(principalView),
     updatedAt: t.updatedAt,
     createdByName: t.createdByName ?? null,
     lastEditedByName: t.lastEditedByName ?? null,
@@ -123,6 +150,7 @@ export function versionDto(v: CentralTemplateVersion): CentralTemplateVersion {
     changedAt: v.changedAt,
     content: content(v.content),
     targets: v.targets.map(target),
+    principalTargets: (v.principalTargets ?? []).map(principalSnapshot),
   };
 }
 

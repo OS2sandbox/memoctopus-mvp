@@ -30,9 +30,9 @@ interface Props {
 
 const COPY = {
   archive: {
-    title: 'Arkivér skabelon',
+    title: 'Arkivér skabelon (fjerner for alle)',
     description:
-      'En arkiveret skabelon er ikke længere til rådighed for brugerne og kan ikke bruges til nye referater. Du kan gendanne den senere.',
+      'En arkiveret skabelon fjernes for alle brugere og kan ikke bruges til nye referater. Skabelonen slettes ikke: ændringshistorikken bevares, og du kan gendanne den senere.',
     confirm: 'Arkivér',
     busy: 'Arkiverer …',
     toast: 'Skabelonen er arkiveret',

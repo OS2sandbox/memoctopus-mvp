@@ -259,9 +259,9 @@ describe('central template events (Phase 4)', () => {
 
   it('accept the details the service writes, with the owning org unit as secondary entity', () => {
     const cases: Array<[EventType, Record<string, unknown>]> = [
-      ['central_template.create', { version: 1, targetCount: 3 }],
-      ['central_template.update', { version: 2, changedFields: ['prompt', 'allowUserInstruction', 'targets'] }],
-      ['central_template.retarget', { version: 3, targetCount: 0 }],
+      ['central_template.create', { version: 1, targetCount: 3, principalTargetCount: 2 }],
+      ['central_template.update', { version: 2, changedFields: ['prompt', 'allowUserInstruction', 'targets', 'principalTargets'] }],
+      ['central_template.retarget', { version: 3, targetCount: 0, principalTargetCount: 4 }],
       ['central_template.archive', { version: 4 }],
       ['central_template.restore', { version: 5 }],
     ];
@@ -275,11 +275,28 @@ describe('central template events (Phase 4)', () => {
     }
   });
 
+  it('an organisation-wide template has no owner unit: the secondary entity is optional', () => {
+    const res = validateEvent({
+      type: 'central_template.create',
+      actorUserId: 'user-1',
+      entityId: UUID_A,
+      details: { version: 1, targetCount: 0, principalTargetCount: 1 },
+    } as unknown as AuditEventInput);
+    expect(res).toMatchObject({ ok: true });
+  });
+
+  it('role and group targets are COUNTED, never named: a name or identifier is rejected', () => {
+    for (const extra of [{ principalTargets: ['sagsbehandler'] }, { roles: [{ kind: 'role', identifier: 'x' }] }, { principalTargetCount: -1 }, { principalTargetCount: 'to' }]) {
+      expect(validateEvent(event('central_template.create', { version: 1, targetCount: 0, ...extra })).ok).toBe(false);
+    }
+    expect(validateEvent(event('central_template.create', { version: 1, targetCount: 0, principalTargetCount: 1, principal: 'sagsbehandler' })).ok).toBe(false);
+  });
+
   it('records field NAMES only: a value or an unknown field is rejected', () => {
     expect(validateEvent(event('central_template.update', { version: 2, changedFields: ['Ny prompt til alle'] })).ok).toBe(false);
     expect(validateEvent(event('central_template.update', { version: 2, changedFields: ['changeNote'] })).ok).toBe(false);
     expect(validateEvent(event('central_template.update', { version: 2, changedFields: ['prompt'], changeNote: 'Rettet' })).ok).toBe(false);
-    expect(validateEvent(event('central_template.create', { version: 1, targetCount: 1, name: 'Referat' })).ok).toBe(false);
+    expect(validateEvent(event('central_template.create', { version: 1, targetCount: 1, principalTargetCount: 0, name: 'Referat' })).ok).toBe(false);
   });
 
   it('requires a version of at least 1 and an entity id', () => {
@@ -406,5 +423,18 @@ describe('action events for access, processing, editing and deletion', () => {
     const res = validateEvent({ type: 'auth.login_failed', details: { reason: 'burst_summary', droppedCount: 140 } } as unknown as AuditEventInput);
     expect(res).toMatchObject({ ok: true });
     expect(validateEvent({ type: 'auth.login_failed', details: { reason: 'burst_summary', droppedCount: 0 } } as unknown as AuditEventInput).ok).toBe(false);
+  });
+});
+
+describe('personal template update (own change note)', () => {
+  const update = (details: unknown) =>
+    ({ type: 'template.update', actorUserId: 'user-1', entityId: UUID_A, details }) as unknown as AuditEventInput;
+
+  it('records only WHETHER a note was written, never the note', () => {
+    expect(validateEvent(update({ changedFields: ['prompt'], hasChangeNote: true }))).toMatchObject({ ok: true });
+    expect(validateEvent(update({ changedFields: [], hasChangeNote: false }))).toMatchObject({ ok: true });
+    expect(validateEvent(update({ changedFields: ['prompt'], hasChangeNote: 'Rettede prompten' })).ok).toBe(false);
+    expect(validateEvent(update({ changedFields: ['prompt'], hasChangeNote: true, changeNote: 'Rettede prompten' })).ok).toBe(false);
+    expect(validateEvent(update({ changedFields: ['prompt'] })).ok).toBe(false);
   });
 });

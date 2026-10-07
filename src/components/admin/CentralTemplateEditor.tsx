@@ -19,6 +19,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
 import { CENTRAL_LIMITS } from '@/lib/skabeloner/central-types';
 import type {
+  CentralCatalogueEntry,
+  CentralPrincipalTargetView,
   CentralScopeOrgUnit,
   CentralTarget,
   CentralTemplateAdmin,
@@ -30,15 +32,21 @@ import {
   changedContentFields,
   conflictMessage,
   contentFieldLabels,
+  diffPrincipals,
   diffTargets,
   formatTime,
   noteProblem,
+  principalKey,
+  principalKindLabels,
+  principalsEqual,
   targetsEqual,
   targetsWithinOwner,
   unitNameLookup,
+  viewAgainstCatalogue,
 } from './central-template-utils';
 import { flattenOrgTree, indentedLabel } from './org-tree';
 import { OrgUnitTargetPicker } from './OrgUnitTargetPicker';
+import { PrincipalTargetPicker } from './PrincipalTargetPicker';
 import { PromptDiff } from './TemplateVersionHistory';
 
 interface Props {
@@ -48,10 +56,25 @@ interface Props {
   template: CentralTemplateAdmin | null;
   /** Units inside the caller's template.manage scope (owner and recipient pickers). */
   units: CentralScopeOrgUnit[];
+  /** The role/group catalogue for the role/group picker. */
+  catalogue?: CentralCatalogueEntry[];
+  /**
+   * The caller holds template.manage for the whole organisation: only then may a template have no
+   * owner unit and be made available to roles and groups (the server enforces the same).
+   */
+  isGlobalManager?: boolean;
   onSaved: () => void;
 }
 
-export function CentralTemplateEditor({ open, onOpenChange, template, units, onSaved }: Props) {
+export function CentralTemplateEditor({
+  open,
+  onOpenChange,
+  template,
+  units,
+  catalogue = [],
+  isGlobalManager = false,
+  onSaved,
+}: Props) {
   // The form reports whether it holds unsaved text and whether a save is in flight. While either
   // is true the dialog cannot be dismissed by Escape or an outside click, and a dirty form asks
   // before it is closed by any other route (Annuller): a long prompt and note are not thrown away
@@ -82,6 +105,8 @@ export function CentralTemplateEditor({ open, onOpenChange, template, units, onS
           <EditorForm
             template={template}
             units={units}
+            catalogue={catalogue}
+            isGlobalManager={isGlobalManager}
             onClose={() => onOpenChange(false)}
             onRequestClose={requestClose}
             onGuardChange={(dirty, saving) => setGuard((g) => (g.dirty === dirty && g.saving === saving ? g : { dirty, saving }))}
@@ -154,6 +179,8 @@ function contentOf(t: CentralTemplateAdmin | null): CentralTemplateContent {
 function EditorForm({
   template,
   units,
+  catalogue,
+  isGlobalManager,
   onClose,
   onRequestClose,
   onGuardChange,
@@ -161,6 +188,8 @@ function EditorForm({
 }: {
   template: CentralTemplateAdmin | null;
   units: CentralScopeOrgUnit[];
+  catalogue: CentralCatalogueEntry[];
+  isGlobalManager: boolean;
   /** Closes at once (after a successful save). */
   onClose: () => void;
   /** Closes on the user's request: asks first when there is unsaved text. */
@@ -174,6 +203,11 @@ function EditorForm({
   const [content, setContent] = useState<CentralTemplateContent>(() => contentOf(template));
   const [owner, setOwner] = useState(template?.ownerOrgUnitUuid ?? '');
   const [targets, setTargets] = useState<CentralTarget[]>(() => template?.targets ?? []);
+  const catalogueByKey = useMemo(() => new Map(catalogue.map((e) => [principalKey(e), e])), [catalogue]);
+  // Names and states come from the catalogue when it knows the entry; a target it does not know is flagged.
+  const asViews = (list: readonly CentralPrincipalTargetView[]) =>
+    list.map((t) => viewAgainstCatalogue(t, catalogueByKey));
+  const [principals, setPrincipals] = useState<CentralPrincipalTargetView[]>(() => asViews(template?.principalTargets ?? []));
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
@@ -191,12 +225,13 @@ function EditorForm({
 
   function changeOwner(next: string) {
     setOwner(next);
-    // Targets must stay inside the owner's subtree.
-    setTargets((t) => targetsWithinOwner(units, next, t));
+    // Targets must stay inside the owner's subtree; without an owner (organisation-wide) any unit may be chosen.
+    setTargets((t) => (next === '' ? t : targetsWithinOwner(units, next, t)));
   }
 
   const changedFields = base ? changedContentFields(contentOf(base), content) : [];
   const targetsChanged = base ? !targetsEqual(base.targets, targets) : false;
+  const principalsChanged = base ? !principalsEqual(base.principalTargets, principals) : false;
   const archivedNow = latest?.status === 'archived';
 
   // Unsaved text: anything typed into a new template, any difference from the loaded version of
@@ -204,16 +239,16 @@ function EditorForm({
   const dirty =
     note.trim() !== '' ||
     (editing
-      ? changedFields.length > 0 || targetsChanged
-      : owner !== '' || targets.length > 0 || changedContentFields(EMPTY, content).length > 0);
+      ? changedFields.length > 0 || targetsChanged || principalsChanged
+      : owner !== '' || targets.length > 0 || principals.length > 0 || changedContentFields(EMPTY, content).length > 0);
   useEffect(() => onGuardChange(dirty, saving), [dirty, saving, onGuardChange]);
 
   // First blocking reason, shown next to the disabled save button.
   const reason = ((): string | null => {
-    if (!editing && !owner) return 'Vælg en ejerenhed';
+    if (!editing && !owner && !isGlobalManager) return 'Vælg en ejerenhed';
     if (content.name.trim() === '') return 'Angiv et navn';
     if (content.prompt.trim() === '') return 'Angiv en prompt';
-    if (editing && changedFields.length === 0 && !targetsChanged) return 'Ingen ændringer at gemme';
+    if (editing && changedFields.length === 0 && !targetsChanged && !principalsChanged) return 'Ingen ændringer at gemme';
     if (conflict && !latest) return 'Genindlæs den gemte version, før du gemmer';
     if (archivedNow) return 'Skabelonen er arkiveret. Gendan den, før du ændrer den';
     return noteProblem(note);
@@ -232,11 +267,18 @@ function EditorForm({
             changeNote: note.trim(),
             ...Object.fromEntries(changedFields.map((f) => [f, content[f]])),
             ...(targetsChanged ? { targets } : {}),
+            ...(principalsChanged ? { principalTargets: principals.map(({ kind, identifier }) => ({ kind, identifier })) } : {}),
           },
         })
       : await apiRequest<{ template: CentralTemplateAdmin }>('/api/admin/central-templates', {
           method: 'POST',
-          json: { ownerOrgUnitUuid: owner, ...content, targets, changeNote: note.trim() },
+          json: {
+            ownerOrgUnitUuid: owner || null,
+            ...content,
+            targets,
+            principalTargets: principals.map(({ kind, identifier }) => ({ kind, identifier })),
+            changeNote: note.trim(),
+          },
         });
     setSaving(false);
     if (!res.ok) {
@@ -270,6 +312,7 @@ function EditorForm({
     if (!latest) return;
     setContent(contentOf(latest));
     setTargets(latest.targets);
+    setPrincipals(asViews(latest.principalTargets));
     setNote('');
     setConflict(false);
     setLatest(null);
@@ -277,6 +320,7 @@ function EditorForm({
 
   const latestFields = latest ? changedContentFields(contentOf(latest), content) : [];
   const latestTargets = latest ? diffTargets(latest.targets, targets) : null;
+  const latestPrincipalsDiffer = latest ? !principalsEqual(latest.principalTargets, principals) : false;
 
   return (
     <form onSubmit={submit} noValidate className="flex flex-col gap-4">
@@ -310,14 +354,15 @@ function EditorForm({
           <PromptDiff before={latest.prompt} after={content.prompt} label="Forskel mellem gemt version og din prompt" />
           {(latestFields.filter((f) => f !== 'prompt').length > 0 ||
             (latestTargets &&
-              (latestTargets.added.length || latestTargets.removed.length || latestTargets.changed.length) > 0)) && (
+              (latestTargets.added.length || latestTargets.removed.length || latestTargets.changed.length) > 0) ||
+            latestPrincipalsDiffer) && (
             <ul aria-label="Øvrige forskelle" className="list-disc pl-5 text-[13px] text-[var(--ink-2)]">
               {latestFields
                 .filter((f) => f !== 'prompt')
                 .map((f) => (
                   <li key={f}>{contentFieldLabels[f]} er forskellig fra den gemte version</li>
                 ))}
-              {latestTargets && !targetsEqual(latest.targets, targets) && (
+              {((latestTargets && !targetsEqual(latest.targets, targets)) || latestPrincipalsDiffer) && (
                 <li>Hvem der har skabelonen til rådighed er forskelligt fra den gemte version</li>
               )}
             </ul>
@@ -332,16 +377,26 @@ function EditorForm({
 
       {editing ? (
         <p className="text-sm text-[var(--ink)]">
-          <span className="font-medium">Ejerenhed:</span> {unitName(base!.ownerOrgUnitUuid)}
+          <span className="font-medium">Ejerenhed:</span>{' '}
+          {base!.ownerOrgUnitUuid === null ? 'Hele organisationen (ingen ejerenhed)' : unitName(base!.ownerOrgUnitUuid)}
+        </p>
+      ) : units.length === 0 && isGlobalManager ? (
+        <p className="text-sm text-[var(--ink)]">
+          <span className="font-medium">Ejerenhed:</span> Hele organisationen (ingen ejerenhed). Kun skabelonansvarlige
+          for hele organisationen kan redigere skabelonen.
         </p>
       ) : (
         <Select
           label="Ejerenhed"
           value={owner}
           onChange={(e) => changeOwner(e.target.value)}
-          hint="Skabelonen kan administreres af alle, der er skabelonansvarlige for denne enhed. De enheder, der får skabelonen til rådighed, skal ligge under den."
+          hint={
+            isGlobalManager
+              ? 'Uden ejerenhed gælder skabelonen hele organisationen, og kun skabelonansvarlige for hele organisationen kan redigere den. Med en ejerenhed skal de enheder, der får skabelonen til rådighed, ligge under den.'
+              : 'Skabelonen kan administreres af alle, der er skabelonansvarlige for denne enhed. De enheder, der får skabelonen til rådighed, skal ligge under den.'
+          }
         >
-          <option value="">Vælg enhed …</option>
+          <option value="">{isGlobalManager ? 'Hele organisationen (ingen ejerenhed)' : 'Vælg enhed …'}</option>
           {ownerOptions.map(({ unit, depth }) => (
             <option key={unit.uuid} value={unit.uuid}>
               {indentedLabel(unit.name, depth)}
@@ -437,12 +492,32 @@ function EditorForm({
         </div>
       </fieldset>
 
-      <OrgUnitTargetPicker units={units} ownerUuid={owner} value={targets} onChange={setTargets} />
+      {/* Without org units (claims mode) there is nothing to pick; the roles and groups below carry the audience. */}
+      {!(units.length === 0 && (isGlobalManager || template?.ownerOrgUnitUuid === null)) && (
+        <OrgUnitTargetPicker
+          units={units}
+          ownerUuid={editing ? (base!.ownerOrgUnitUuid ?? '') : owner}
+          orgWide={isGlobalManager && (editing ? base!.ownerOrgUnitUuid === null : owner === '')}
+          value={targets}
+          onChange={setTargets}
+          hasOtherAudience={principals.length > 0}
+        />
+      )}
+
+      {(isGlobalManager || principals.length > 0 || catalogue.length > 0) && (
+        <PrincipalTargetPicker catalogue={catalogue} value={principals} onChange={setPrincipals} canEdit={isGlobalManager} />
+      )}
 
       <ChangeNoteField id="ct-note" value={note} onChange={setNote} />
 
-      {editing && latest === null && !conflict && changedFields.length + (targetsChanged ? 1 : 0) > 0 && (
-        <OtherChangesPreview base={base!} content={content} targets={targets} unitName={unitName} />
+      {editing && latest === null && !conflict && changedFields.length + (targetsChanged ? 1 : 0) + (principalsChanged ? 1 : 0) > 0 && (
+        <OtherChangesPreview
+          base={base!}
+          content={content}
+          targets={targets}
+          principals={principals}
+          unitName={unitName}
+        />
       )}
 
       <DialogFooter className="items-center gap-2">
@@ -471,15 +546,18 @@ function OtherChangesPreview({
   base,
   content,
   targets,
+  principals,
   unitName,
 }: {
   base: CentralTemplateAdmin;
   content: CentralTemplateContent;
   targets: CentralTarget[];
+  principals: CentralPrincipalTargetView[];
   unitName: (uuid: string) => string;
 }) {
   const fields = changedContentFields(contentOf(base), content);
   const t = diffTargets(base.targets, targets);
+  const p = diffPrincipals(base.principalTargets, principals);
   const lines = [
     ...fields.map((f) => `${contentFieldLabels[f]} ændres`),
     ...t.added.map(
@@ -487,6 +565,8 @@ function OtherChangesPreview({
     ),
     ...t.removed.map((x) => `Ikke længere tilgængelig for: ${unitName(x.orgUnitUuid)}`),
     ...t.changed.map((x) => `Underenheder ændres for: ${unitName(x.orgUnitUuid)}`),
+    ...p.added.map((x) => `Gøres tilgængelig for: ${x.name} (${principalKindLabels[x.kind].toLowerCase()})`),
+    ...p.removed.map((x) => `Ikke længere tilgængelig for: ${x.name} (${principalKindLabels[x.kind].toLowerCase()})`),
   ];
   if (lines.length === 0) return null;
   return (

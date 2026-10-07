@@ -135,7 +135,7 @@ The values are one of the four role keys (`tt-bruger`, `tt-skabelonansvarlig`, `
 ]
 ```
 
-The role/group **catalogue**: the only values the app will remember for a person, and later the list a superuser picks from when targeting a shared prompt. It is loaded into `public.external_roles` at start (source `config`); an entry that leaves the file is deactivated, never deleted. Without a catalogue (or with a Rollekatalog one, later) nothing is stored for any person. This is deliberate: **the app keeps no role or group name it was not told to keep.**
+The role/group **catalogue**: the only values the app will remember for a person, and the list a superuser picks from when targeting a shared prompt at roles or groups (`templates.md`). It is loaded into `public.external_roles` at start (source `config`); an entry that leaves the file is deactivated, never deleted. The catalogue can also be filled from OS2rollekatalog's read API (source `rollekatalog`, optional, refreshed by a cron route or the admin button; `rollekatalog.md` section 12); both sources live side by side in the same table and the targeting UI shows them merged. Without any catalogue nothing is stored for any person. The identifiers must equal the **values the IdP puts in the claims**, or a person never matches a prompt targeted at them. This is deliberate: **the app keeps no role or group name it was not told to keep.**
 
 ### 3.6 Failure behaviour
 

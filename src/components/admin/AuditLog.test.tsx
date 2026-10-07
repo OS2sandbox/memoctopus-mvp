@@ -107,7 +107,7 @@ describe('AuditLog', () => {
     expect(sentence.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // Only the event that has a note gets a note block.
     expect(screen.getAllByText(/Ændringsbeskrivelse/)).toHaveLength(1);
-    expect(screen.getByText('Anne Admin arkiverede den centrale skabelon »Standardreferat« (version 2)')).toBeInTheDocument();
+    expect(screen.getByText('Anne Admin arkiverede den centrale skabelon »Standardreferat«, så den er fjernet for alle (version 2)')).toBeInTheDocument();
   });
 
   it('shows an outcome badge only for denied and failed events', async () => {

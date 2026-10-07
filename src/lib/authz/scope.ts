@@ -79,6 +79,11 @@ function scopeOf(principal: Principal, capability: Capability): CapabilityScope 
   return principal.scopes[capability] ?? null;
 }
 
+/** Does the principal hold the capability with a GLOBAL scope (not limited to org units)? Fails closed. */
+export function hasGlobalScope(principal: Principal, capability: Capability): boolean {
+  return scopeOf(principal, capability)?.global === true;
+}
+
 /**
  * Is this org unit inside the caller's scope for the capability? Walks UP from
  * the unit (one short chain) instead of expanding the roots' whole subtrees.

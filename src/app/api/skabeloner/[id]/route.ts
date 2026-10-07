@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSkabelon, updateSkabelon, deleteSkabelon } from '@/lib/skabeloner/server';
+import { getSkabelon, updateSkabelon, deleteSkabelon, recordSkabelonVersion } from '@/lib/skabeloner/server';
+import { parseLocalChangeNote } from '@/lib/skabeloner/change-note';
 import { withHandler } from '@/lib/api-handler';
 import { recordServerEvent } from '@/lib/audit/record';
 import type { Skabelon } from '@/types';
@@ -46,6 +47,10 @@ export const PUT = withHandler('skabeloner/[id] PUT', async (req: NextRequest, {
   const body = await req.json().catch(() => ({}));
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   if (!name) return NextResponse.json({ error: 'Navn er påkrævet' }, { status: 400 });
+  // Optional note about this edit: kept in the person's own changelog, never audited or logged.
+  const parsedNote = parseLocalChangeNote(body.changeNote);
+  if (!parsedNote.ok) return NextResponse.json({ error: parsedNote.error, code: 'change_note_invalid' }, { status: 400 });
+  const changeNote = parsedNote.note;
 
   const prev = await getSkabelon(session.user.id, id);
   if (!prev) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
@@ -67,18 +72,20 @@ export const PUT = withHandler('skabeloner/[id] PUT', async (req: NextRequest, {
       outcome: 'error',
       actorUserId: session.user.id,
       ...entityOf(id),
-      details: { changedFields: [] },
+      details: { changedFields: [], hasChangeNote: changeNote !== null },
     });
     throw err;
   }
   if (!skabelon) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
   const changed = changedFields(prev, skabelon);
   if (changed.length > 0) {
+    await recordSkabelonVersion(session.user.id, skabelon, changed, changeNote);
     await recordServerEvent(req, {
       type: 'template.update',
       actorUserId: session.user.id,
       entityId: skabelon.id,
-      details: { changedFields: changed },
+      // Whether a note was written, never the note.
+      details: { changedFields: changed, hasChangeNote: changeNote !== null },
     });
   }
   return NextResponse.json({ skabelon });

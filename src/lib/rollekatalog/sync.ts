@@ -540,19 +540,21 @@ async function fetchAll(client: SyncClient): Promise<Fetched> {
 
 // ─── Advisory lock ─────────────────────────────────────────────────────────
 
-interface Lock {
+export interface Lock {
   release(): Promise<void>;
 }
 
 // One lock per schema, so the throwaway schemas of the Postgres test lane never block each other.
 const lockKey = (env: SyncEnv): string => `os2taletiltekst.rollekatalog.sync:${env.schema}`;
 
+const tryLock = (env: SyncEnv): Promise<Lock | null> => tryAdvisoryLock(env, lockKey(env));
+
 /** Non-blocking. The lock lives on one dedicated connection that is held for the whole run. */
-async function tryLock(env: SyncEnv): Promise<Lock | null> {
+export async function tryAdvisoryLock(env: SyncEnv, key: string): Promise<Lock | null> {
   const client = await env.connect();
   let ok: boolean;
   try {
-    const res = await client.query<{ ok: boolean }>('SELECT pg_try_advisory_lock(hashtext($1)::bigint) AS ok', [lockKey(env)]);
+    const res = await client.query<{ ok: boolean }>('SELECT pg_try_advisory_lock(hashtext($1)::bigint) AS ok', [key]);
     ok = res.rows[0]?.ok === true;
   } catch (err) {
     client.release(true);
@@ -566,7 +568,7 @@ async function tryLock(env: SyncEnv): Promise<Lock | null> {
     async release() {
       let destroy = false;
       try {
-        const res = await client.query<{ ok: boolean }>('SELECT pg_advisory_unlock(hashtext($1)::bigint) AS ok', [lockKey(env)]);
+        const res = await client.query<{ ok: boolean }>('SELECT pg_advisory_unlock(hashtext($1)::bigint) AS ok', [key]);
         if (res.rows[0]?.ok !== true) destroy = true;
       } catch {
         destroy = true;

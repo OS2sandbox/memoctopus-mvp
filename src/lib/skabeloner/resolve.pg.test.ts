@@ -14,10 +14,11 @@ import { listCentralForUser, resolveCentralTemplate, type ResolveEnv } from './r
 
 const PROMPT = 'HEMMELIG-PROMPT-TEKST';
 
-function envOf(c: Client, schema: string) {
+function envOf(c: Client, schema: string, claimsMaxSeconds: number | null = null) {
   const calls: string[] = [];
   const env: ResolveEnv = {
     schema,
+    claimsMaxSeconds,
     query: (text, params) => {
       calls.push(text);
       return c.query(text, params as unknown[]) as unknown as Promise<{ rows: Array<Record<string, unknown>> }>;
@@ -46,7 +47,7 @@ async function person(c: Client, id: string, opts: { units?: string[]; linked?: 
 
 async function template(
   c: Client,
-  owner: string,
+  owner: string | null,
   name: string,
   targets: Array<{ unit: string; descendants?: boolean }>,
   opts: { status?: 'active' | 'archived'; version?: number } = {},
@@ -374,4 +375,173 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
       expect(out).toContain(all);
       expect(out).not.toContain(other);
     }), 60_000);
+
+  describe('by role or group (claims mode)', () => {
+    const MAX = 8 * 3600;
+
+    async function catalogue(c: Client, kind: 'role' | 'group', identifier: string, active = true) {
+      await c.query(`INSERT INTO external_roles (kind, identifier, name, source, active) VALUES ($1, $2, $2, 'config', $3)`, [kind, identifier, active]);
+    }
+    /** The person's latest IdP login claimed this catalogue value `ageSeconds` ago. */
+    async function holds(c: Client, userId: string, kind: 'role' | 'group', identifier: string, ageSeconds = 0) {
+      await c.query(
+        `INSERT INTO user_external_roles (user_id, kind, identifier, seen_at) VALUES ($1, $2, $3, now() - make_interval(secs => $4))`,
+        [userId, kind, identifier, ageSeconds],
+      );
+    }
+    async function target(c: Client, templateId: string, kind: 'role' | 'group', identifier: string) {
+      await c.query('INSERT INTO central_template_principal_targets (template_id, kind, identifier) VALUES ($1, $2, $3)', [templateId, kind, identifier]);
+    }
+    const idsFor = async (c: Client, schema: string, userId: string, max: number | null = MAX) =>
+      (await listCentralForUser(userId, envOf(c, schema, max).env)).map((x) => x.id).sort();
+
+    /** An organisation-wide template (no owner) targeted at one role. */
+    async function wide(c: Client, name = 'Org-bred') {
+      await catalogue(c, 'role', 'sagsbehandler');
+      const id = await template(c, null, name, []);
+      await target(c, id, 'role', 'sagsbehandler');
+      return id;
+    }
+
+    it('a person holding the role receives an org-wide template with no org units at all; the prompt only to the server resolver', () =>
+      withFreshSchema(async (c, schema) => {
+        const tpl = await wide(c);
+        await person(c, 'u-yes');
+        await holds(c, 'u-yes', 'role', 'sagsbehandler');
+        await person(c, 'u-no');
+        expect(await idsFor(c, schema, 'u-yes')).toEqual([tpl]);
+        expect(JSON.stringify(await listCentralForUser('u-yes', envOf(c, schema, MAX).env))).not.toContain(PROMPT);
+        expect(await resolveCentralTemplate('u-yes', tpl, envOf(c, schema, MAX).env)).toMatchObject({ id: tpl, prompt: PROMPT });
+        // A non-recipient gets the same null as for an unknown id.
+        expect(await idsFor(c, schema, 'u-no')).toEqual([]);
+        expect(await resolveCentralTemplate('u-no', tpl, envOf(c, schema, MAX).env)).toBeNull();
+        expect(await resolveCentralTemplate('u-no', '00000000-0000-4000-8000-000000000000', envOf(c, schema, MAX).env)).toBeNull();
+      }));
+
+    it('a role and a group with the same identifier are different targets', () =>
+      withFreshSchema(async (c, schema) => {
+        await catalogue(c, 'role', 'x');
+        await catalogue(c, 'group', 'x');
+        const tpl = await template(c, null, 'Kun rollen', []);
+        await target(c, tpl, 'role', 'x');
+        await person(c, 'u-group');
+        await holds(c, 'u-group', 'group', 'x');
+        await person(c, 'u-role');
+        await holds(c, 'u-role', 'role', 'x');
+        expect(await idsFor(c, schema, 'u-group')).toEqual([]);
+        expect(await idsFor(c, schema, 'u-role')).toEqual([tpl]);
+      }));
+
+    it('the claim row must be fresh (ROLE_CLAIMS_MAX_SECONDS): a stale snapshot grants nothing, at the second', () =>
+      withFreshSchema(async (c, schema) => {
+        const tpl = await wide(c);
+        await person(c, 'u-stale');
+        await holds(c, 'u-stale', 'role', 'sagsbehandler', MAX + 5);
+        await person(c, 'u-fresh');
+        await holds(c, 'u-fresh', 'role', 'sagsbehandler', MAX - 60);
+        expect(await idsFor(c, schema, 'u-stale')).toEqual([]);
+        expect(await resolveCentralTemplate('u-stale', tpl, envOf(c, schema, MAX).env)).toBeNull();
+        expect(await idsFor(c, schema, 'u-fresh')).toEqual([tpl]);
+        // A shorter limit retires the same row.
+        expect(await idsFor(c, schema, 'u-fresh', 30)).toEqual([]);
+      }));
+
+    it('the branch is off when the freshness is null (not claims mode), even for a holder', () =>
+      withFreshSchema(async (c, schema) => {
+        const tpl = await wide(c);
+        await person(c, 'u-yes');
+        await holds(c, 'u-yes', 'role', 'sagsbehandler');
+        expect(await idsFor(c, schema, 'u-yes', null)).toEqual([]);
+        expect(await resolveCentralTemplate('u-yes', tpl, envOf(c, schema, null).env)).toBeNull();
+      }));
+
+    it('an unlinked or disabled person receives nothing, whatever role rows exist (fail closed)', () =>
+      withFreshSchema(async (c, schema) => {
+        const tpl = await wide(c);
+        await person(c, 'u-unlinked', { linked: false });
+        await holds(c, 'u-unlinked', 'role', 'sagsbehandler');
+        await person(c, 'u-disabled', { disabled: true });
+        await holds(c, 'u-disabled', 'role', 'sagsbehandler');
+        expect(await idsFor(c, schema, 'u-unlinked')).toEqual([]);
+        expect(await idsFor(c, schema, 'u-disabled')).toEqual([]);
+        expect(await resolveCentralTemplate('u-disabled', tpl, envOf(c, schema, MAX).env)).toBeNull();
+      }));
+
+    it('a withdrawn (inactive) catalogue entry reaches nobody at once, and reactivating brings it back', () =>
+      withFreshSchema(async (c, schema) => {
+        const tpl = await wide(c);
+        await person(c, 'u-yes');
+        await holds(c, 'u-yes', 'role', 'sagsbehandler');
+        await c.query(`UPDATE external_roles SET active = false WHERE identifier = 'sagsbehandler'`);
+        expect(await idsFor(c, schema, 'u-yes')).toEqual([]);
+        await c.query(`UPDATE external_roles SET active = true WHERE identifier = 'sagsbehandler'`);
+        expect(await idsFor(c, schema, 'u-yes')).toEqual([tpl]);
+      }));
+
+    it('archiving, retargeting and a role that left the person at their next login each withdraw access', () =>
+      withFreshSchema(async (c, schema) => {
+        const tpl = await wide(c);
+        await person(c, 'u-yes');
+        await holds(c, 'u-yes', 'role', 'sagsbehandler');
+        expect(await idsFor(c, schema, 'u-yes')).toEqual([tpl]);
+
+        await c.query(`UPDATE central_templates SET status = 'archived' WHERE id = $1`, [tpl]);
+        expect(await idsFor(c, schema, 'u-yes')).toEqual([]);
+        expect(await resolveCentralTemplate('u-yes', tpl, envOf(c, schema, MAX).env)).toBeNull();
+        await c.query(`UPDATE central_templates SET status = 'active' WHERE id = $1`, [tpl]);
+        expect(await idsFor(c, schema, 'u-yes')).toEqual([tpl]);
+
+        await c.query('DELETE FROM central_template_principal_targets WHERE template_id = $1', [tpl]);
+        expect(await idsFor(c, schema, 'u-yes')).toEqual([]);
+        await target(c, tpl, 'role', 'sagsbehandler');
+        expect(await idsFor(c, schema, 'u-yes')).toEqual([tpl]);
+
+        await c.query(`DELETE FROM user_external_roles WHERE user_id = 'u-yes'`);
+        expect(await idsFor(c, schema, 'u-yes')).toEqual([]);
+      }));
+
+    it('either branch is enough, and a template matched by both is listed once', () =>
+      withFreshSchema(async (c, schema) => {
+        const t = await tree(c);
+        await catalogue(c, 'role', 'r');
+        const both = await template(c, t.a, 'Begge', [{ unit: t.a1 }]);
+        await target(c, both, 'role', 'r');
+        const unitOnly = await template(c, t.a, 'Kun enhed', [{ unit: t.a1 }]);
+        const roleOnly = await template(c, null, 'Kun rolle', []);
+        await target(c, roleOnly, 'role', 'r');
+
+        await person(c, 'u-unit', { units: [t.a1] });
+        await person(c, 'u-role');
+        await holds(c, 'u-role', 'role', 'r');
+        await person(c, 'u-both', { units: [t.a1] });
+        await holds(c, 'u-both', 'role', 'r');
+
+        expect(await idsFor(c, schema, 'u-unit')).toEqual([both, unitOnly].sort());
+        expect(await idsFor(c, schema, 'u-role')).toEqual([both, roleOnly].sort());
+        const all = await listCentralForUser('u-both', envOf(c, schema, MAX).env);
+        expect(all.map((x) => x.id).sort()).toEqual([both, unitOnly, roleOnly].sort());
+        expect(all).toHaveLength(3);
+      }));
+
+    it('an org-wide template (no owner) delivers its unit targets without the owner walk; owned ones still re-check the owner subtree', () =>
+      withFreshSchema(async (c, schema) => {
+        const t = await tree(c);
+        const wideUnits = await template(c, null, 'Org-bred', [{ unit: t.b1 }, { unit: t.a1 }]);
+        // Owned by A but targeting B1 (outside A's subtree: drifted data): still blocked.
+        const drifted = await template(c, t.a, 'Skred', [{ unit: t.b1 }]);
+        await person(c, 'u-b1', { units: [t.b1] });
+        expect(await idsFor(c, schema, 'u-b1', null)).toEqual([wideUnits]);
+        expect(await idsFor(c, schema, 'u-b1', null)).not.toContain(drifted);
+      }));
+
+    it('the plan holds with ONE statement per call, and a user without role rows is not slowed by them', () =>
+      withFreshSchema(async (c, schema) => {
+        await wide(c);
+        await person(c, 'u-no');
+        const { env, calls } = envOf(c, schema, MAX);
+        await listCentralForUser('u-no', env);
+        await resolveCentralTemplate('u-no', '00000000-0000-4000-8000-000000000000', env);
+        expect(calls).toHaveLength(2);
+      }));
+  });
 });

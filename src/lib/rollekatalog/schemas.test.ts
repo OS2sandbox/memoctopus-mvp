@@ -9,6 +9,8 @@ import {
   organisationSchema,
   parseOrThrow,
   roleAssignmentsSchema,
+  roleGroupsCatalogueSchema,
+  userRolesCatalogueSchema,
 } from './schemas';
 
 const fx = (name: string): unknown => JSON.parse(readFileSync(path.join(__dirname, '__fixtures__', name), 'utf8'));
@@ -380,5 +382,62 @@ describe('roleAssignmentsWithContraints: row-by-row tolerance', () => {
     ];
     expect(parseOrThrow(roleAssignmentsSchema, [row(1, { assignments: entries(7, 3) })]).skipped).toBe(3);
     expect(code(() => parseOrThrow(roleAssignmentsSchema, [row(1, { assignments: entries(6, 4) })]))).toBe('invalid_response');
+  });
+});
+
+describe('role catalogue (user roles and role groups)', () => {
+  const roles = fx('user-roles.json') as Array<Record<string, unknown>>;
+  const groups = fx('role-groups.json') as Array<Record<string, unknown>>;
+
+  it('the raw fixtures really carry fields we must drop (positive control)', () => {
+    expect(roles[0]).toHaveProperty('itSystemName');
+    expect(roles[0]).toHaveProperty('description');
+  });
+
+  it('keeps ONLY kind, identifier and name: itSystemName, description and the numeric id do not survive', () => {
+    const parsed = parseOrThrow(userRolesCatalogueSchema, roles);
+    expect(parsed.entries).toEqual([
+      { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler' },
+      { kind: 'role', identifier: 'tt-skabelonansvarlig', name: 'Skabelonansvarlig' },
+      { kind: 'role', identifier: 'leder', name: 'Leder' },
+      // No identifier on the row: the database id is the key.
+      { kind: 'role', identifier: '104', name: 'Rolle uden identifikator' },
+    ]);
+    for (const e of parsed.entries) expect(Object.keys(e).sort()).toEqual(['identifier', 'kind', 'name']);
+    expect(JSON.stringify(parsed)).not.toMatch(/Sagssystem|Synthetic description|itSystem/);
+  });
+
+  it('role groups are keyed by their id, kind group', () => {
+    expect(parseOrThrow(roleGroupsCatalogueSchema, groups).entries).toEqual([
+      { kind: 'group', identifier: '11', name: 'Rollebuket: Socialforvaltningen' },
+      { kind: 'group', identifier: '12', name: 'Rollebuket: Skole og dagtilbud' },
+    ]);
+  });
+
+  it('trims, accepts a numeric string id and drops duplicates (first wins)', () => {
+    const p = parseOrThrow(userRolesCatalogueSchema, [
+      { id: '7', name: '  Ni  ', identifier: '  ni ' },
+      { id: 8, name: 'Dublet', identifier: 'ni' },
+      { id: '9', name: 'Kun id' },
+    ]);
+    expect(p.entries).toEqual([
+      { kind: 'role', identifier: 'ni', name: 'Ni' },
+      { kind: 'role', identifier: '9', name: 'Kun id' },
+    ]);
+    expect(p.skipped).toBe(1);
+  });
+
+  it('drops and counts a bad row (no name, no key, too long); too many bad rows fail the payload', () => {
+    const bad = [{ id: 1 }, { name: 'Uden nøgle' }, { id: 2, name: 'x'.repeat(201) }];
+    const p = parseOrThrow(userRolesCatalogueSchema, [{ id: 3, name: 'God' }, ...bad]);
+    expect(p.entries).toHaveLength(1);
+    expect(p.skipped).toBe(3);
+    expect(code(() => parseOrThrow(userRolesCatalogueSchema, [...bad, { id: 4 }]))).toBe('invalid_response');
+    expect(code(() => parseOrThrow(roleGroupsCatalogueSchema, [{ id: 'abc', name: 'x' }, { id: -1, name: 'y' }, { name: 'z' }, {}]))).toBe('invalid_response');
+  });
+
+  it('an empty list parses (the empty-response guard is the sync\'s job), a non-array does not', () => {
+    expect(parseOrThrow(userRolesCatalogueSchema, [])).toEqual({ entries: [], skipped: 0 });
+    for (const v of [{}, null, 'x', { roles: [] }]) expect(code(() => parseOrThrow(userRolesCatalogueSchema, v))).toBe('invalid_response');
   });
 });

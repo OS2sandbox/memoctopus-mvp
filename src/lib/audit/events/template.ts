@@ -28,7 +28,14 @@ export const templateEvents = {
   }),
   'template.update': defineEvent({
     ...base,
-    details: z.object({ changedFields: z.array(z.enum(TEMPLATE_FIELDS)).max(TEMPLATE_FIELDS.length) }).strict(),
+    // hasChangeNote: whether the person wrote an (optional) note about the edit; the note itself
+    // lives only in their own schema and never reaches the log.
+    details: z
+      .object({
+        changedFields: z.array(z.enum(TEMPLATE_FIELDS)).max(TEMPLATE_FIELDS.length),
+        hasChangeNote: z.boolean(),
+      })
+      .strict(),
   }),
   'template.delete': defineEvent({ ...base, details: z.object({}).strict() }),
   'template.share': defineEvent({

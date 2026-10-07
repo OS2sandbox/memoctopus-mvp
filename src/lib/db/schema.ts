@@ -367,10 +367,10 @@ export const centralTemplates = pgTable(
   'central_templates',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    // RESTRICT: an org unit that owns a central template cannot be deleted.
-    ownerOrgUnitUuid: uuid('owner_org_unit_uuid')
-      .notNull()
-      .references(() => orgUnits.uuid, { onDelete: 'restrict' }),
+    // RESTRICT: an org unit that owns a central template cannot be deleted. NULL = an
+    // ORGANISATION-WIDE template (claims mode has no org units): only a manager with a GLOBAL
+    // template.manage assignment may touch it, and a scoped manager never sees it.
+    ownerOrgUnitUuid: uuid('owner_org_unit_uuid').references(() => orgUnits.uuid, { onDelete: 'restrict' }),
     name: text('name').notNull(),
     description: text('description').notNull().default(''),
     prompt: text('prompt').notNull(),
@@ -415,6 +415,8 @@ export const centralTemplateVersions = pgTable(
     // Snapshot of ALL content fields and of the targets at this version.
     content: jsonb('content').notNull(),
     targets: jsonb('targets').notNull(),
+    // The role/group targets at this version: [{kind, identifier, name}] (name as it was then).
+    principalTargets: jsonb('principal_targets').notNull().default(sql`'[]'::jsonb`),
   },
   (t) => [
     unique('central_template_versions_template_version_unique').on(t.templateId, t.version),
@@ -444,6 +446,29 @@ export const centralTemplateTargets = pgTable(
   (t) => [
     primaryKey({ columns: [t.templateId, t.orgUnitUuid] }),
     index('central_template_targets_org_unit_idx').on(t.orgUnitUuid),
+  ],
+);
+
+// The roles and groups a template is made available to (global managers only). The composite FK
+// to the catalogue is RESTRICT: a catalogue entry that a template still targets is never
+// deleted (a refresh only deactivates it), so a target cannot silently disappear.
+export const centralTemplatePrincipalTargets = pgTable(
+  'central_template_principal_targets',
+  {
+    templateId: uuid('template_id')
+      .notNull()
+      .references(() => centralTemplates.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    identifier: text('identifier').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.templateId, t.kind, t.identifier] }),
+    foreignKey({
+      columns: [t.kind, t.identifier],
+      foreignColumns: [externalRoles.kind, externalRoles.identifier],
+      name: 'central_template_principal_targets_role_fk',
+    }).onDelete('restrict'),
+    index('central_template_principal_targets_role_idx').on(t.kind, t.identifier),
   ],
 );
 

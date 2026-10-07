@@ -5,7 +5,11 @@ import userEvent from '@testing-library/user-event';
 import { CentralTemplatesAdmin } from './CentralTemplatesAdmin';
 import { formatTime } from './central-template-utils';
 import { ADMIN_ME, READER_ME, calls, installFetch, json, renderWithToasts } from './test-helpers';
-import type { CentralTemplateAdmin, CentralTemplateListItem } from '@/lib/skabeloner/central-types';
+import type {
+  CentralCatalogueEntry,
+  CentralTemplateAdmin,
+  CentralTemplateListItem,
+} from '@/lib/skabeloner/central-types';
 
 const ROOT = '11111111-1111-4111-8111-111111111111';
 const CHILD = '22222222-2222-4222-8222-222222222222';
@@ -20,6 +24,11 @@ const item = (over: Partial<CentralTemplateListItem>): CentralTemplateListItem =
   status: 'active',
   currentVersion: 3,
   targetCount: 2,
+  targets: [
+    { orgUnitUuid: ROOT, includeDescendants: true },
+    { orgUnitUuid: CHILD, includeDescendants: false },
+  ],
+  principalTargets: [],
   updatedAt: '2026-10-02T10:00:00.000Z',
   createdByName: 'Anne Admin',
   lastEditedByName: 'Bo Beslutter',
@@ -29,7 +38,7 @@ const item = (over: Partial<CentralTemplateListItem>): CentralTemplateListItem =
 
 const ACTIVE = [
   item({}),
-  item({ id: B, name: 'Tom skabelon', description: '', targetCount: 0, ownerOrgUnitUuid: CHILD }),
+  item({ id: B, name: 'Tom skabelon', description: '', targetCount: 1, targets: [{ orgUnitUuid: CHILD, includeDescendants: false }], ownerOrgUnitUuid: CHILD }),
 ];
 const ARCHIVED = [item({ id: B, name: 'Gammel', status: 'archived', currentVersion: 7 })];
 
@@ -48,6 +57,7 @@ const DETAIL: CentralTemplateAdmin = {
   status: 'active',
   currentVersion: 3,
   targets: [],
+  principalTargets: [],
   createdAt: '2026-10-01T10:00:00.000Z',
   updatedAt: '2026-10-02T10:00:00.000Z',
   createdByName: null,
@@ -62,12 +72,20 @@ const SCOPE = {
   ],
 };
 
+const CATALOGUE: CentralCatalogueEntry[] = [
+  { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', source: 'rollekatalog', active: true },
+  { kind: 'group', identifier: 'social', name: 'Socialforvaltningen', source: 'config', active: true },
+  { kind: 'role', identifier: 'gammel', name: 'Gammel rolle', source: 'rollekatalog', active: false },
+];
+const ROLES = { roles: CATALOGUE, canTarget: true, canRefresh: false, lastRefreshedAt: null };
+
 afterEach(() => vi.unstubAllGlobals());
 
 function setup(me = ADMIN_ME, extra: Parameters<typeof installFetch>[0] = {}) {
   return installFetch({
     'GET /api/me': () => json(me),
     'GET /api/admin/central-templates/scope': () => json(SCOPE),
+    'GET /api/admin/central-templates/roles': () => json(ROLES),
     'GET /api/admin/central-templates?status=active': () => json({ templates: ACTIVE }),
     'GET /api/admin/central-templates?status=archived': () => json({ templates: ARCHIVED }),
     'GET /api/admin/central-templates?status=all': () => json({ templates: [...ACTIVE, ...ARCHIVED] }),
@@ -84,7 +102,9 @@ describe('CentralTemplatesAdmin — list', () => {
     expect(within(row).getByText('Kommune')).toBeInTheDocument();
     expect(within(row).getByText('Aktiv')).toBeInTheDocument();
     expect(within(row).getByText('3')).toBeInTheDocument();
-    expect(within(row).getByText('2 enheder')).toBeInTheDocument();
+    // The audience is named, not counted.
+    expect(within(row).getByText('Enhed: Kommune (inkl. underenheder)')).toBeInTheDocument();
+    expect(within(row).getByText('Enhed: Børn')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Til rådighed for' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Modtagere' })).toBeNull();
     expect(within(row).getByText(formatTime('2026-10-02T10:00:00.000Z'))).toBeInTheDocument();
@@ -115,8 +135,7 @@ describe('CentralTemplatesAdmin — list', () => {
     setup();
     renderWithToasts(<CentralTemplatesAdmin />);
     const row = (await screen.findByText('Tom skabelon')).closest('tr')!;
-    expect(within(row).getByText('Ikke til rådighed for nogen')).toBeInTheDocument();
-    expect(within(row).getByText('Børn')).toBeInTheDocument();
+    expect(within(row).getByText('Enhed: Børn')).toBeInTheDocument();
   });
 
   it('never fetches or shows prompt text in the list', async () => {
@@ -178,7 +197,7 @@ describe('CentralTemplatesAdmin — gating and actions', () => {
     await screen.findByText('Bestyrelse');
     expect(screen.getByRole('button', { name: 'Ny central skabelon' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Rediger Bestyrelse' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Arkivér Bestyrelse' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Arkivér (fjerner for alle) Bestyrelse' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Historik for Bestyrelse' })).toBeInTheDocument();
   });
 
@@ -232,8 +251,8 @@ describe('CentralTemplatesAdmin — archive and restore', () => {
     const post = vi.fn(() => json({ template: { ...DETAIL, status: 'archived' } }));
     const mock = setup(ADMIN_ME, { [`POST /api/admin/central-templates/${A}/archive`]: post });
     renderWithToasts(<CentralTemplatesAdmin />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Arkivér Bestyrelse' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Arkivér skabelon' });
+    await userEvent.click(await screen.findByRole('button', { name: 'Arkivér (fjerner for alle) Bestyrelse' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Arkivér skabelon (fjerner for alle)' });
     const confirm = within(dialog).getByRole('button', { name: 'Arkivér' });
     expect(confirm).toBeDisabled();
     expect(within(dialog).getByText('Beskriv ændringen (mindst 10 tegn)')).toBeInTheDocument();
@@ -269,8 +288,8 @@ describe('CentralTemplatesAdmin — archive and restore', () => {
     const post = vi.fn(() => json({ error: 'x', code: 'version_conflict', currentVersion: 4 }, 409));
     setup(ADMIN_ME, { [`POST /api/admin/central-templates/${A}/archive`]: post });
     renderWithToasts(<CentralTemplatesAdmin />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Arkivér Bestyrelse' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Arkivér skabelon' });
+    await userEvent.click(await screen.findByRole('button', { name: 'Arkivér (fjerner for alle) Bestyrelse' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Arkivér skabelon (fjerner for alle)' });
     await userEvent.type(within(dialog).getByLabelText('Ændringsbeskrivelse'), NOTE);
     await userEvent.click(within(dialog).getByRole('button', { name: 'Arkivér' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
@@ -304,5 +323,109 @@ describe('CentralTemplatesAdmin — history', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Ændringshistorik' });
     expect(await within(dialog).findAllByText('Første udgave af skabelonen')).toHaveLength(2); // list row and detail
     expect(calls(mock, 'GET', `/api/admin/central-templates/${A}/versions`)).toHaveLength(1);
+  });
+});
+
+describe('CentralTemplatesAdmin — audience by role, group and unit', () => {
+  const P = (kind: 'role' | 'group', identifier: string, name: string, status: 'active' | 'inactive' | 'unknown' = 'active') => ({ kind, identifier, name, status });
+  const rowOf = async (list: CentralTemplateListItem[]) => {
+    setup(ADMIN_ME, { 'GET /api/admin/central-templates?status=active': () => json({ templates: list }) });
+    renderWithToasts(<CentralTemplatesAdmin />);
+    return (await screen.findByText(list[0].name)).closest('tr')!;
+  };
+
+  it('names the roles, groups and units a template is available to', async () => {
+    const row = await rowOf([
+      item({ ownerOrgUnitUuid: null, targets: [{ orgUnitUuid: CHILD, includeDescendants: true }], targetCount: 1, principalTargets: [P('role', 'a', 'Sagsbehandler'), P('group', 'g', 'Socialforvaltningen')] }),
+    ]);
+    const audience = within(row).getByRole('list', { name: 'Til rådighed for, Bestyrelse' });
+    expect(within(audience).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      'Rolle: Sagsbehandler',
+      'Gruppe: Socialforvaltningen',
+      'Enhed: Børn (inkl. underenheder)',
+    ]);
+  });
+
+  it('shows an org-wide template as "Hele organisationen", not as a missing unit', async () => {
+    const row = await rowOf([item({ ownerOrgUnitUuid: null })]);
+    expect(within(row).getByText('Hele organisationen')).toBeInTheDocument();
+    expect(within(row).queryByText('Ukendt enhed')).toBeNull();
+  });
+
+  it('truncates a long audience with "+N flere", listing the rest on hover, never hiding a flagged one', async () => {
+    const many = ['a', 'b', 'c', 'd', 'e'].map((x) => P('role', x, `Rolle ${x.toUpperCase()}`));
+    const row = await rowOf([
+      item({ targets: [], targetCount: 0, principalTargets: [...many, P('role', 'x', 'Udgået', 'inactive')] }),
+    ]);
+    const audience = within(row).getByRole('list', { name: 'Til rådighed for, Bestyrelse' });
+    expect(within(audience).getAllByRole('listitem')).toHaveLength(4); // 3 shown + "+3 flere"
+    expect(within(audience).getByText('Rolle: Udgået (ukendt/inaktiv)')).toBeInTheDocument();
+    const more = within(audience).getByText('+3 flere');
+    expect(more).toHaveAttribute('title', expect.stringContaining('Rolle: Rolle D'));
+  });
+
+  it('flags a target that was withdrawn from the catalogue or is not in it', async () => {
+    const row = await rowOf([
+      item({ targets: [], targetCount: 0, principalTargets: [P('role', 'a', 'Gammel', 'inactive'), P('group', 'g', 'Ukendt gruppe', 'unknown'), P('role', 'b', 'Sund')] }),
+    ]);
+    expect(within(row).getByText('Rolle: Gammel (ukendt/inaktiv)')).toBeInTheDocument();
+    expect(within(row).getByText('Gruppe: Ukendt gruppe (ukendt/inaktiv)')).toBeInTheDocument();
+    expect(within(row).getByText('Rolle: Sund')).toBeInTheDocument();
+  });
+
+  it('still warns that nobody has it when there is no unit, role or group', async () => {
+    const row = await rowOf([item({ targets: [], targetCount: 0, principalTargets: [] })]);
+    expect(within(row).getByText('Ikke til rådighed for nogen')).toBeInTheDocument();
+  });
+});
+
+describe('CentralTemplatesAdmin — role catalogue refresh', () => {
+  const REFRESH = 'POST /api/admin/central-templates/roles/refresh';
+  const withRefresh = { 'GET /api/admin/central-templates/roles': () => json({ ...ROLES, canRefresh: true, lastRefreshedAt: '2026-10-02T10:00:00.000Z' }) };
+
+  it('offers the button only when the server says the caller may refresh (sync.run and a configured Rollekatalog)', async () => {
+    setup();
+    renderWithToasts(<CentralTemplatesAdmin />);
+    await screen.findByText('Bestyrelse');
+    expect(screen.queryByRole('button', { name: 'Opdatér rollekatalog' })).toBeNull();
+  });
+
+  it('refreshes, reports what changed, and reloads the list and the catalogue', async () => {
+    const post = vi.fn(() => json({ status: 'success', counts: { fetched: 12, added: 3, updated: 9, deactivated: 1, skipped: 0 }, errorCode: null }));
+    const mock = setup(ADMIN_ME, { ...withRefresh, [REFRESH]: post });
+    renderWithToasts(<CentralTemplatesAdmin />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Opdatér rollekatalog' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Rollekataloget er opdateret: 12 roller og grupper, 3 nye, 1 fjernet.');
+    expect(post).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(calls(mock, 'GET', '/api/admin/central-templates/roles').length).toBeGreaterThan(1));
+  });
+
+  it('shows the Danish reason when the refresh fails, and does not claim success', async () => {
+    setup(ADMIN_ME, {
+      ...withRefresh,
+      [REFRESH]: () => json({ error: 'Rollekatalog afviste API-nøglen.', code: 'unauthorized' }, 502),
+    });
+    renderWithToasts(<CentralTemplatesAdmin />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Opdatér rollekatalog' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Rollekatalog afviste API-nøglen.');
+    expect(screen.queryByText(/Rollekataloget er opdateret/)).toBeNull();
+  });
+
+  it('passes the catalogue and the global-manager flag on to the editor, so a global manager can pick roles', async () => {
+    setup();
+    renderWithToasts(<CentralTemplatesAdmin />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Ny central skabelon' }));
+    await screen.findByRole('dialog', { name: 'Ny central skabelon' });
+    expect(screen.getByLabelText('Til rådighed for rolle: Sagsbehandler')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Hele organisationen (ingen ejerenhed)' })).toBeInTheDocument();
+  });
+
+  it('a scoped manager gets no role picker and must pick an owner', async () => {
+    setup(READER_ME, { 'GET /api/admin/central-templates/roles': () => json({ ...ROLES, canTarget: false }) });
+    renderWithToasts(<CentralTemplatesAdmin />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Ny central skabelon' }));
+    await screen.findByRole('dialog', { name: 'Ny central skabelon' });
+    expect(screen.queryByLabelText('Søg i roller og grupper')).toBeNull();
+    expect(screen.queryByRole('option', { name: 'Hele organisationen (ingen ejerenhed)' })).toBeNull();
   });
 });

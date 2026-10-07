@@ -143,6 +143,21 @@ describe('queryUserSchema', () => {
     expect(createSchemaCalls()).toHaveLength(2);
   });
 
+  it("ensureUserSchema creates the person's own template changelog, idempotently, after the skabeloner it references", async () => {
+    const { client } = makeClient();
+    mockConnect.mockResolvedValue(client);
+    await queryUserSchema(USER, 'SELECT 1');
+
+    const ddl = client.query.mock.calls.map(([sql]) => String(sql));
+    const at = (needle: string) => ddl.findIndex((q) => q.includes(needle));
+    const versions = ddl[at(`"${SCHEMA}".skabelon_versions (`)];
+    expect(versions).toContain('CREATE TABLE IF NOT EXISTS');
+    expect(versions).toContain(`REFERENCES "${SCHEMA}".skabeloner(id) ON DELETE CASCADE`);
+    expect(versions).toContain('UNIQUE (skabelon_id, version)');
+    expect(versions).toMatch(/change_note\s+TEXT,/); // nullable: the note is optional
+    expect(at(`"${SCHEMA}".skabelon_versions (`)).toBeGreaterThan(at(`"${SCHEMA}".skabeloner (`));
+  });
+
   it('ensureUserSchema does not set search_path on its pooled client', async () => {
     const { client } = makeClient();
     mockConnect.mockResolvedValue(client);

@@ -62,6 +62,33 @@ describe('migration 0004_claims_roles', () => {
     expect(columns).toEqual(['user_id', 'kind', 'identifier', 'seen_at']);
   });
 
+  it('makes the owner unit optional (an organisation-wide template) and keeps the RESTRICT foreign key for owned ones', () => {
+    expect(sql).toContain('ALTER TABLE "central_templates" ALTER COLUMN "owner_org_unit_uuid" DROP NOT NULL');
+    // 0003 still holds the FK with ON DELETE restrict; only the NOT NULL goes.
+    expect(readFileSync(path.join(DRIZZLE, '0003_central_templates.sql'), 'utf8')).toMatch(
+      /"central_templates_owner_org_unit_uuid_org_units_uuid_fk".*ON DELETE restrict/,
+    );
+  });
+
+  it('creates the role/group targets: cascade from the template, RESTRICT on the catalogue (a targeted entry is never deleted)', () => {
+    expect(sql).toContain('CREATE TABLE "central_template_principal_targets"');
+    expect(sql).toContain('PRIMARY KEY("template_id","kind","identifier")');
+    expect(sql).toMatch(
+      /"central_template_principal_targets_template_id_central_templates_id_fk" FOREIGN KEY \("template_id"\) REFERENCES "public"\."central_templates"\("id"\) ON DELETE cascade/,
+    );
+    expect(sql).toMatch(
+      /"central_template_principal_targets_role_fk" FOREIGN KEY \("kind","identifier"\) REFERENCES "public"\."external_roles"\("kind","identifier"\) ON DELETE restrict/,
+    );
+    expect(sql).toContain('CREATE INDEX "central_template_principal_targets_role_idx"');
+    const table = /CREATE TABLE "central_template_principal_targets" \(([\s\S]*?)\);/.exec(sql)![1];
+    expect([...table.matchAll(/^\s*"(\w+)"/gm)].map((m) => m[1])).toEqual(['template_id', 'kind', 'identifier']);
+  });
+
+  it('adds the principal snapshot to the append-only version rows as a defaulted column (the trigger is untouched)', () => {
+    expect(sql).toContain(`ALTER TABLE "central_template_versions" ADD COLUMN "principal_targets" jsonb DEFAULT '[]'::jsonb NOT NULL`);
+    expect(sql).not.toMatch(/TRIGGER|central_template_versions_guard/);
+  });
+
   it('is one statement per breakpoint (the pg driver sends each on its own)', () => {
     for (const s of statements) {
       const body = s.replace(/--[^\n]*/g, '').replace(/\$\$[\s\S]*?\$\$/g, '');

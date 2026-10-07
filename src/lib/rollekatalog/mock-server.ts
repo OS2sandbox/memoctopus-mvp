@@ -4,6 +4,8 @@
 //   - the READ key is refused (403) on /api/organisation/v3; the ORG key is refused
 //     (403) on the read endpoints (ORGANISATION does not imply READ_ACCESS)
 //   - roleAssignmentsWithContraints: unknown system = 404 with body []
+//   - the role catalogue lists (user roles incl. identifier, role groups) need the READ key; the
+//     DTOs still carry itSystemName and a description so tests can prove they are dropped
 //   - organisation v3 returns ONLY users with at least one position, and the user DTO
 //     still carries cpr/nemloginUuid/phone (fake values) so tests can prove they are dropped
 // Never use against production code paths other than tests; the keys are public constants.
@@ -47,6 +49,10 @@ export interface MockData {
   orgUnits: unknown[];
   /** Body of roleAssignmentsWithContraints (an array). */
   roleAssignments: unknown[];
+  /** Body of /api/read/userroles/itsystems (UserRoleExtendedReadDTO); /api/read/userroles serves the same rows without identifier and description. */
+  userRoles: unknown[];
+  /** Body of /api/read/rolegroups (RoleGroupReadDTO). */
+  roleGroups: unknown[];
 }
 
 export interface MockFault {
@@ -104,6 +110,8 @@ export function fixtureData(): MockData {
     users: org.users,
     orgUnits: org.orgUnits,
     roleAssignments: fixture('role-assignments-with-constraints.json') as unknown[],
+    userRoles: fixture('user-roles.json') as unknown[],
+    roleGroups: fixture('role-groups.json') as unknown[],
   };
 }
 
@@ -208,6 +216,21 @@ export async function startMockRollekatalog(options: MockOptions = {}): Promise<
         if (system !== itSystem) return finish(404, keyRole, []);
         return finish(200, keyRole, data.roleAssignments);
       }
+
+      // The role catalogue: lists, no query parameters.
+      if (pathname === '/api/read/userroles/itsystems') return finish(200, keyRole, data.userRoles);
+      if (pathname === '/api/read/userroles') {
+        // UserRoleReadDTO: id, name and itSystemName only.
+        return finish(
+          200,
+          keyRole,
+          data.userRoles.map((r) => {
+            const { id, name, itSystemName } = r as Record<string, unknown>;
+            return { id, name, itSystemName };
+          }),
+        );
+      }
+      if (pathname === '/api/read/rolegroups') return finish(200, keyRole, data.roleGroups);
 
       return finish(404, keyRole);
     }

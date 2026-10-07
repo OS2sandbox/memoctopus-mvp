@@ -2,7 +2,7 @@
 
 For the person who connects the app to a municipality's OS2rollekatalog and keeps it running. Architecture: `README.md`. Audit: `audit.md`.
 
-> **Optional.** Most installations get their roles straight from the IdP's claims (`ACCESS_SOURCE=claims`, `idp.md`) and never run this integration; it is dormant unless `ACCESS_SOURCE=rollekatalog` (or the planned role catalogue is switched on). A municipality may still use OS2rollekatalog *upstream* of the IdP, so that Rollekatalog writes the roles into the IdP's claims; that needs nothing from this guide.
+> **Optional.** Most installations get their roles straight from the IdP's claims (`ACCESS_SOURCE=claims`, `idp.md`) and never run the user and organisation sync (sections 1 to 8); it is dormant unless `ACCESS_SOURCE=rollekatalog`. A municipality may still use OS2rollekatalog *upstream* of the IdP, so that Rollekatalog writes the roles into the IdP's claims; that needs nothing from this guide. What **can** be used in every mode is the read-only **role catalogue** (section 12): the list of roles and role groups a superuser picks from when making a shared prompt available to roles. It needs only a URL and the READ key.
 
 > **Never run against a live Rollekatalog.** The integration was built from the OS2rollekatalog source (release 2026r4) and tested against synthetic fixtures and an in-process mock server. HTTP statuses for wrong keys, the real size of `organisation/v3` and the menu names in the Rollekatalog UI are modelled, not observed. Do the first sync with a small, known set of users and check the result before you rely on it (section 2).
 
@@ -14,12 +14,13 @@ With `ACCESS_SOURCE=rollekatalog`, Rollekatalog decides who holds which role and
 Rollekatalog --(GET, ApiKey)--> sync --one transaction--> mirror tables --> resolvePrincipal() --> capabilities
 ```
 
-**The app never writes to Rollekatalog.** It sends only GET requests, and only these two:
+**The app never writes to Rollekatalog.** It sends only GET requests, and only these (the first two for the sync, the last two for the optional role catalogue, section 12):
 
 | Endpoint | Key (client role) | Used for |
 |---|---|---|
 | `GET /api/organisation/v3` | `ROLLEKATALOG_ORG_API_KEY` (`ORGANISATION`) | users, org units, positions. Heavy, and synchronized on the Rollekatalog side: do not poll it more often than the sync |
 | `GET /api/read/itsystem/roleAssignmentsWithContraints/{system}` | `ROLLEKATALOG_READ_API_KEY` (`READ_ACCESS`) | effective role assignments with resolved org-unit constraint values |
+| `GET /api/read/userroles/itsystems`, `GET /api/read/rolegroups` | `ROLLEKATALOG_READ_API_KEY` | the role catalogue: names and identifiers of user roles and role groups, nothing else is kept (unverified paths, section 12) |
 
 An `ORGANISATION` client does not imply `READ_ACCESS` (and vice versa), so a sync needs both keys. Never request `ROLE_MANAGEMENT` or `ADMINISTRATOR` for these clients: they can assign roles, and the app does not need that.
 
@@ -156,6 +157,8 @@ Read at call time (restart, no rebuild); an invalid value falls back to the defa
 | `DIRECTORY_USERID_TRANSFORM` | `none` | `none` or `strip-upn-domain` |
 | `DIRECTORY_USERID_DOMAIN` | blank | the UPN domain accepted by `strip-upn-domain` (required with it) |
 | `INTERNAL_CRON_SECRET` | unset | secret of the cron routes (shared with the audit prune route) |
+| `ROLLEKATALOG_ROLES_PATH` | `/api/read/userroles/itsystems` | where the role catalogue reads the user roles (section 12); a path under `/api/read/`, or `none` |
+| `ROLLEKATALOG_ROLEGROUPS_PATH` | `/api/read/rolegroups` | where it reads the role groups; a path under `/api/read/`, or `none` |
 
 Related: `ACCESS_SOURCE`, `REQUIRE_ROLE_TO_LOGIN`, `DIRECTORY_MATCH`, `DIRECTORY_USERID_CLAIM`, `MICROSOFT_TENANT_ID`.
 
@@ -182,7 +185,7 @@ The codes appear in the sync responses, `sync_runs.error_code`, and the admin pa
 | `server_error` | 5xx or 429 after the retries | Rollekatalog's own log and load |
 | `invalid_response` | not JSON, did not match the whitelist schema, **more bad rows than the allowance** (section 5), a redirect or another unexpected status | version mismatch, a login page instead of the API (wrong URL), or many rows with ids that are not uuids in Rollekatalog |
 | `too_large` | above `ROLLEKATALOG_MAX_RESPONSE_BYTES` | raise the cap if the size is legitimate |
-| `empty_response` | zero users or zero org units | Rollekatalog may be mid-import or the domain is wrong; nothing changed |
+| `empty_response` | zero users or zero org units (catalogue refresh: zero roles and zero groups) | Rollekatalog may be mid-import or the domain is wrong; nothing changed |
 | `removal_threshold` | too many users or assignments would go | verify in Rollekatalog, then "Gennemtving" |
 | `already_running` | another sync runs | wait |
 | `db_error` | the transaction failed and was rolled back | app log (content-free), database, migrations |
@@ -208,3 +211,26 @@ Symptoms:
 - **Empty constraints are silently dropped:** a constraint whose resolved value is empty is left out, so such a role looks unconstrained. This is why "no scope" is never read as "everywhere".
 - Authentication is the header `ApiKey: <key>` (not `Authorization`). A `READ_ACCESS` client carries only that authority and an `ORGANISATION` client only its own; `ADMINISTRATOR` carries all. A missing or invalid key is 401, a missing role 403 (Spring defaults, not observed).
 - The OpenAPI document (`/v3/api-docs`) sits behind SAML login and is not readable with an ApiKey, so response shapes come from the DTO sources of the pinned release (the fixtures in `src/lib/rollekatalog/__fixtures__/`). Shape drift in a newer release is a maintenance risk.
+
+## 12. The role catalogue (optional, any `ACCESS_SOURCE`)
+
+Shared prompts (central templates, `templates.md`) can be made available to **roles and groups** instead of org units. The roles and groups a superuser can pick from are the **catalogue**, the table `external_roles` (`kind` `role` or `group`, `identifier`, `name`, `source`, `active`). It has two sources, merged in one table: the `catalogue` section of `AUTH_CONFIG_FILE` (`idp.md`; source `config`, works without Rollekatalog) and **Rollekatalog** (source `rollekatalog`, this section). Only a catalogue value is ever stored for a person at login and only one can be a target, so the catalogue is also the privacy filter on what the IdP claims.
+
+**What is read.** Two more GET endpoints, both with the **READ key** (no `ORGANISATION` key needed):
+
+| Endpoint | Becomes | Fields kept |
+|---|---|---|
+| `GET /api/read/userroles/itsystems` (default `ROLLEKATALOG_ROLES_PATH`) | `kind='role'`, jobfunktionsroller of every IT system | `identifier` (else the numeric `id`), `name` |
+| `GET /api/read/rolegroups` (default `ROLLEKATALOG_ROLEGROUPS_PATH`) | `kind='group'`, rollebuketter | `id` (as the identifier), `name` |
+
+**The whitelisting zod schemas keep nothing but kind, identifier and name** (`userRolesCatalogueSchema`, `roleGroupsCatalogueSchema` in `schemas.ts`): the DTOs also carry `itSystemName` and a description, which are dropped at parse time (a test proves it). Adding a field is a privacy decision. Bad rows are dropped and counted (same allowance as the sync), duplicates are dropped (first wins).
+
+> **UNVERIFIED against a real instance.** The paths come from the OS2rollekatalog source (`ReadOnlyApi.java`: `/api/read/userroles`, `/api/read/userroles/itsystems`, `/api/read/rolegroups`; all need `READ_ACCESS`) and were read from the **current development branch**, not from a pinned release and not from a running installation. The mock server and the fixtures model them. Before relying on it: call both endpoints with a READ key and check the answer, and set `ROLLEKATALOG_ROLES_PATH` / `ROLLEKATALOG_ROLEGROUPS_PATH` if your version differs (only a path under `/api/read/` is accepted; `none` switches one list off). Two open questions that only the client can answer: (1) **do the claim values the IdP sends equal these identifiers?** Targeting only works where they match; a role's string `identifier` is used when the endpoint lists it, otherwise the numeric id, and `ROLLEKATALOG_ROLES_PATH=/api/read/userroles` lists ids only. (2) What counts as a "role" and what as a "group" (jobfunktionsrolle, systemrolle, rollebuket, IdP group): here user roles are `role` and role groups are `group`, provisionally; the `config` catalogue can say anything. Two roles of different IT systems can have the same name; the picker shows the identifier small next to the name. `itSystemName` is **not** kept, so adding it to the displayed name would be a conscious privacy and UX decision.
+
+**Refresh.** A refresh fetches both lists first, then writes in one transaction under an advisory lock, like the sync: an entry that is new is added, a known one gets its name refreshed (and is reactivated if it had been withdrawn), and an entry that left Rollekatalog is **deactivated, never deleted**, so people's role rows (`user_external_roles`) and the templates' targets (`central_template_principal_targets`, `RESTRICT`) keep their reference; an inactive entry matches nobody and is not offered for picking. Only `source='rollekatalog'` rows are written (a `config` entry with the same key wins). Guards (all fail closed, nothing is written): an empty answer (`empty_response`, cannot be forced), too many bad rows (`invalid_response`), more than `ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT` percent of the active entries would be deactivated (`removal_threshold`; up to 3 removals are always allowed, and the admin button can force), an overlapping run (`already_running`). Timeout and response size cap are the sync's (`ROLLEKATALOG_TIMEOUT_MS`, `ROLLEKATALOG_MAX_RESPONSE_BYTES`); failures are the same short codes (section 10) plus `db_error`; keys never appear in logs, errors or audit. A refresh leaves no `sync_runs` row and no audit event; `external_roles.synced_at` of the Rollekatalog rows is "last refreshed" (shown by `GET /api/admin/central-templates/roles`).
+
+**Calling it.**
+- Cron (independent of `ACCESS_SOURCE`): `curl -fsS -m 120 -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" https://app.example.dk/api/internal/rollekatalog/roles`. 404 while `INTERNAL_CRON_SECRET` is unset, 401 on a wrong secret, 409 `not_configured` / `insecure_url` without a usable URL and READ key, 200 success, 409 already running, 502 aborted or upstream failure, 500 unexpected; body `{status, counts: {fetched, added, updated, deactivated, skipped}, errorCode}`. A daily run is plenty.
+- Admin: the button "Opdatér rollekatalog" on Administration → Centrale skabeloner (`POST /api/admin/central-templates/roles/refresh`, `sync.run`, optional `{"force": true}`), shown only when the caller holds `sync.run` and a URL and READ key are configured.
+
+The catalogue is **not** part of the role matrix and grants nothing by itself: a catalogue entry is a label that a prompt can be targeted at. Which capability a role gives is still `appRoleMap` in the auth config (`idp.md`).

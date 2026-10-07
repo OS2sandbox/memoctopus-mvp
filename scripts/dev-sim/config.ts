@@ -67,6 +67,9 @@ export function appEnv(databaseUrl: string, mode: string | undefined = undefined
       // Password sign-up stays on here to prove it never inherits a role.
       EMAIL_PASSWORD_ENABLED: 'true',
       INTERNAL_CRON_SECRET: SIM.cronSecret,
+      // Rollekatalog is only the role CATALOGUE here (READ key; the user/organisation sync is off).
+      ROLLEKATALOG_URL: rollekatalogUrl,
+      ROLLEKATALOG_READ_API_KEY: 'mock-read-key-0000',
       AUDIT_FEED_API_KEY_HASH: SIM.feedKeyHash,
       AUDIT_FEED_DELAY_SECONDS: '0',
       LLM_BASE_URL: llmUrl,

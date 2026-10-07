@@ -28,11 +28,44 @@ export const CENTRAL_LIMITS = {
   changeNoteMin: 10,
   changeNoteMax: 2000,
   targets: 200,
+  principalTargets: 200,
+  principalIdentifier: 200,
 } as const;
 
 export interface CentralTarget {
   orgUnitUuid: string;
   includeDescendants: boolean;
+}
+
+/** What a role or group target points at: a value of the catalogue (public.external_roles). */
+export type PrincipalKind = 'role' | 'group';
+export const PRINCIPAL_KINDS = ['role', 'group'] as const;
+
+export interface CentralPrincipalTarget {
+  kind: PrincipalKind;
+  identifier: string;
+}
+
+/**
+ * A role/group target as the manager sees it: with the catalogue's current name. `inactive` = the
+ * catalogue entry was withdrawn (nobody matches it any more); `unknown` = not in the catalogue
+ * at all (only possible in an old snapshot).
+ */
+export interface CentralPrincipalTargetView extends CentralPrincipalTarget {
+  name: string;
+  status: 'active' | 'inactive' | 'unknown';
+}
+
+/** A role/group target as frozen in a version row: the name is the one it had then. */
+export interface CentralPrincipalTargetSnapshot extends CentralPrincipalTarget {
+  name: string;
+}
+
+/** One entry of the role/group catalogue as offered to the target picker. */
+export interface CentralCatalogueEntry extends CentralPrincipalTarget {
+  name: string;
+  source: 'rollekatalog' | 'config' | 'claims';
+  active: boolean;
 }
 
 export interface CentralTemplateContent {
@@ -50,10 +83,12 @@ export interface CentralTemplateContent {
 /** Manager-side view: includes the prompt. Never returned to ordinary users. */
 export interface CentralTemplateAdmin extends CentralTemplateContent {
   id: string;
-  ownerOrgUnitUuid: string;
+  /** null = an organisation-wide template: only a manager with a GLOBAL template.manage can touch it. */
+  ownerOrgUnitUuid: string | null;
   status: CentralStatus;
   currentVersion: number;
   targets: CentralTarget[];
+  principalTargets: CentralPrincipalTargetView[];
   createdAt: string;
   updatedAt: string;
   createdByName: string | null;
@@ -66,10 +101,13 @@ export interface CentralTemplateListItem {
   id: string;
   name: string;
   description: string;
-  ownerOrgUnitUuid: string;
+  ownerOrgUnitUuid: string | null;
   status: CentralStatus;
   currentVersion: number;
+  /** Org-unit targets: the count and the targets themselves (names are resolved by the client from the scope list). */
   targetCount: number;
+  targets: CentralTarget[];
+  principalTargets: CentralPrincipalTargetView[];
   updatedAt: string;
   /** Name snapshot of whoever wrote version 1. Manager-side only, never in CentralSkabelonSummary. */
   createdByName: string | null;
@@ -87,6 +125,7 @@ export interface CentralTemplateVersion {
   changedAt: string;
   content: CentralTemplateContent;
   targets: CentralTarget[];
+  principalTargets: CentralPrincipalTargetSnapshot[];
 }
 
 /** USER-FACING: what a recipient may see of a central template. No prompt text, by design. */

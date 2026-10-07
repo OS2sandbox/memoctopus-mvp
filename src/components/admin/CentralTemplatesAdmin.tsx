@@ -9,6 +9,7 @@ import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableEmptyRow, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useMe } from '@/lib/hooks/use-me';
 import type {
+  CentralCatalogueEntry,
   CentralScopeOrgUnit,
   CentralTemplateAdmin,
   CentralTemplateListItem,
@@ -17,7 +18,13 @@ import { apiRequest } from './api';
 import { AdminPage } from './AdminPage';
 import { CentralTemplateEditor } from './CentralTemplateEditor';
 import { CentralTemplatesStateDialog, type StateChange } from './CentralTemplatesStateDialog';
-import { formatTime, unitNameLookup } from './central-template-utils';
+import {
+  FLAG_TEXT,
+  audienceEntries,
+  formatTime,
+  truncateAudience,
+  unitNameLookup,
+} from './central-template-utils';
 import { TemplateVersionHistory } from './TemplateVersionHistory';
 
 type Filter = 'active' | 'archived' | 'all';
@@ -28,6 +35,12 @@ export function CentralTemplatesAdmin() {
   const [filter, setFilter] = useState<Filter>('active');
   const [templates, setTemplates] = useState<CentralTemplateListItem[]>([]);
   const [units, setUnits] = useState<CentralScopeOrgUnit[]>([]);
+  const [catalogue, setCatalogue] = useState<CentralCatalogueEntry[]>([]);
+  // From the catalogue endpoint: may this caller target roles and groups (a global manager), and may
+  // they refresh the catalogue from Rollekatalog.
+  const [catalogueInfo, setCatalogueInfo] = useState({ canTarget: false, canRefresh: false, lastRefreshedAt: null as string | null });
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshNote, setRefreshNote] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -43,15 +56,26 @@ export function CentralTemplatesAdmin() {
     const seq = ++requestSeq.current;
     setLoading(true);
     setLoadError(null);
-    const [list, scope] = await Promise.all([
+    const [list, scope, roles] = await Promise.all([
       apiRequest<{ templates: CentralTemplateListItem[] }>(`/api/admin/central-templates?status=${filter}`),
       apiRequest<{ orgUnits: CentralScopeOrgUnit[] }>('/api/admin/central-templates/scope'),
+      apiRequest<{ roles: CentralCatalogueEntry[]; canTarget: boolean; canRefresh: boolean; lastRefreshedAt: string | null }>(
+        '/api/admin/central-templates/roles',
+      ),
     ]);
     if (seq !== requestSeq.current) return;
     if (list.ok) setTemplates(list.data.templates);
     else setLoadError(list.message);
     if (scope.ok) setUnits(scope.data.orgUnits);
     else setLoadError((prev) => prev ?? scope.message);
+    if (roles.ok) {
+      setCatalogue(roles.data.roles);
+      setCatalogueInfo({
+        canTarget: roles.data.canTarget,
+        canRefresh: roles.data.canRefresh,
+        lastRefreshedAt: roles.data.lastRefreshedAt,
+      });
+    } else setLoadError((prev) => prev ?? roles.message);
     setLoading(false);
   }, [filter]);
   useEffect(() => {
@@ -62,6 +86,21 @@ export function CentralTemplatesAdmin() {
 
   // The page gate guarantees template.manage; the controls only wait for /api/me. The server decides on every write.
   const canManage = !!me;
+
+  async function refreshCatalogue() {
+    setRefreshing(true);
+    setActionError(null);
+    setRefreshNote(null);
+    const res = await apiRequest<{ counts: { fetched: number; added: number; deactivated: number } }>(
+      '/api/admin/central-templates/roles/refresh',
+      { method: 'POST', json: {} },
+    );
+    setRefreshing(false);
+    if (!res.ok) return setActionError(res.message);
+    const c = res.data.counts;
+    setRefreshNote(`Rollekataloget er opdateret: ${c.fetched} roller og grupper, ${c.added} nye, ${c.deactivated} fjernet.`);
+    load();
+  }
 
   async function openEditor(item: CentralTemplateListItem | null) {
     setActionError(null);
@@ -74,7 +113,7 @@ export function CentralTemplatesAdmin() {
   return (
     <AdminPage
       title="Centrale skabeloner"
-      description="Skabeloner, som du uddelegerer til medarbejdere under dig. Brugerne kan ikke ændre dem."
+      description="Fælles skabeloner, som du gør til rådighed for enheder, roller og grupper. Brugerne kan bruge dem, men ikke læse eller ændre dem."
     >
       <ErrorBanner message={meError} />
       <ErrorBanner message={loadError} onRetry={load} />
@@ -91,12 +130,24 @@ export function CentralTemplatesAdmin() {
           <option value="archived">Arkiverede</option>
           <option value="all">Alle</option>
         </Select>
-        {canManage && (
-          <Button type="button" onClick={() => openEditor(null)}>
-            Ny central skabelon
-          </Button>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {canManage && catalogueInfo.canRefresh && (
+            <Button type="button" variant="outline" onClick={refreshCatalogue} disabled={refreshing}>
+              {refreshing ? 'Opdaterer …' : 'Opdatér rollekatalog'}
+            </Button>
+          )}
+          {canManage && (
+            <Button type="button" onClick={() => openEditor(null)}>
+              Ny central skabelon
+            </Button>
+          )}
+        </div>
       </div>
+      {refreshNote && (
+        <p role="status" className="text-[13px] text-[var(--ink-2)]">
+          {refreshNote}
+        </p>
+      )}
 
       {loading || meLoading ? (
         <p role="status" className="text-sm text-[var(--muted)]">Indlæser …</p>
@@ -125,7 +176,15 @@ export function CentralTemplatesAdmin() {
                     <div className="font-medium">{t.name}</div>
                     {t.description && <div className="text-[13px] text-[var(--muted)]">{t.description}</div>}
                   </TableCell>
-                  <TableCell>{unitName(t.ownerOrgUnitUuid)}</TableCell>
+                  <TableCell>
+                    {t.ownerOrgUnitUuid === null ? (
+                      <span title="Ingen ejerenhed: kun skabelonansvarlige for hele organisationen kan redigere den">
+                        Hele organisationen
+                      </span>
+                    ) : (
+                      unitName(t.ownerOrgUnitUuid)
+                    )}
+                  </TableCell>
                   <TableCell>
                     <Badge variant={t.status === 'active' ? 'success' : 'secondary'}>
                       {t.status === 'active' ? 'Aktiv' : 'Arkiveret'}
@@ -133,11 +192,7 @@ export function CentralTemplatesAdmin() {
                   </TableCell>
                   <TableCell>{t.currentVersion}</TableCell>
                   <TableCell>
-                    {t.targetCount === 0 ? (
-                      <Badge variant="warning">Ikke til rådighed for nogen</Badge>
-                    ) : (
-                      `${t.targetCount} ${t.targetCount === 1 ? 'enhed' : 'enheder'}`
-                    )}
+                    <Audience template={t} unitName={unitName} />
                   </TableCell>
                   <TableCell>{t.createdByName ?? <span className="text-[var(--muted)]">Ukendt</span>}</TableCell>
                   <TableCell>
@@ -171,12 +226,12 @@ export function CentralTemplatesAdmin() {
                           type="button"
                           size="sm"
                           variant={t.status === 'active' ? 'danger-ghost' : 'outline'}
-                          aria-label={`${t.status === 'active' ? 'Arkivér' : 'Gendan'} ${t.name}`}
+                          aria-label={`${t.status === 'active' ? 'Arkivér (fjerner for alle)' : 'Gendan'} ${t.name}`}
                           onClick={() =>
                             setStateChange({ template: t, mode: t.status === 'active' ? 'archive' : 'restore' })
                           }
                         >
-                          {t.status === 'active' ? 'Arkivér' : 'Gendan'}
+                          {t.status === 'active' ? 'Arkivér (fjerner for alle)' : 'Gendan'}
                         </Button>
                       )}
                     </div>
@@ -194,6 +249,8 @@ export function CentralTemplatesAdmin() {
           onOpenChange={(o) => !o && setEditor({ open: false })}
           template={editor.template}
           units={units}
+          catalogue={catalogue}
+          isGlobalManager={catalogueInfo.canTarget}
           onSaved={load}
         />
       )}
@@ -216,5 +273,26 @@ export function CentralTemplatesAdmin() {
         </DialogContent>
       </Dialog>
     </AdminPage>
+  );
+}
+
+/** Who the template is made available to, by name: roles, groups and units, a few shown and "+N" for the rest. */
+function Audience({ template, unitName }: { template: CentralTemplateListItem; unitName: (uuid: string) => string }) {
+  const { shown, more } = truncateAudience(audienceEntries(template, unitName));
+  if (shown.length === 0) return <Badge variant="warning">Ikke til rådighed for nogen</Badge>;
+  return (
+    <ul aria-label={`Til rådighed for, ${template.name}`} className="flex flex-col gap-0.5 text-[13px]">
+      {shown.map((e) => (
+        <li key={e.key} style={e.flagged ? { color: 'var(--warn)' } : undefined}>
+          {e.label}
+          {e.flagged && ` (${FLAG_TEXT})`}
+        </li>
+      ))}
+      {more.length > 0 && (
+        <li className="text-[var(--muted)]" title={more.map((e) => e.label).join('\n')}>
+          +{more.length} flere
+        </li>
+      )}
+    </ul>
   );
 }

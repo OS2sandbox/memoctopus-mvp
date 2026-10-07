@@ -200,6 +200,28 @@ export async function startControl({ rollekatalog, llm, idp, samlIdp }: ControlD
       }
     }
 
+    // The role/group CATALOGUE the mock Rollekatalog serves (user roles with identifier, role groups),
+    // for the claims mode; either list may be left out. The app picks it up on its next refresh.
+    if (url.pathname === '/roles') {
+      const part: { userRoles?: unknown[]; roleGroups?: unknown[] } = {};
+      if (Array.isArray(body.userRoles)) part.userRoles = body.userRoles;
+      if (Array.isArray(body.roleGroups)) part.roleGroups = body.roleGroups;
+      rollekatalog.setData(part);
+      return ok();
+    }
+    // Calls the APP's catalogue cron route, exactly like a scheduler would.
+    if (url.pathname === '/roles/refresh') {
+      try {
+        const r = await fetch(`${SIM.appUrl}/api/internal/rollekatalog/roles`, {
+          method: 'POST',
+          headers: { 'X-Cron-Secret': SIM.cronSecret },
+        });
+        return send(200, { httpStatus: r.status, body: await r.json().catch(() => null) });
+      } catch {
+        return send(200, { httpStatus: 0, body: { error: 'appen svarer ikke på ' + SIM.appUrl } });
+      }
+    }
+
     if (url.pathname === '/user') {
       const { userId, name, email, orgUnitUuid, roles } = body;
       if (!userId || !orgUnitUuid) return send(400, { error: 'userId og orgUnitUuid kræves' });

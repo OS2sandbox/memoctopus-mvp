@@ -104,3 +104,28 @@ describe('test controls', () => {
     ]);
   });
 });
+
+describe('role catalogue endpoints', () => {
+  it('user roles (extended) and role groups need the READ key; the ORG key is refused', async () => {
+    for (const path of ['/api/read/userroles/itsystems', '/api/read/userroles', '/api/read/rolegroups']) {
+      expect((await get(path, MOCK_READ_KEY)).status, path).toBe(200);
+      expect((await get(path, MOCK_ORG_KEY)).status, path).toBe(403);
+      expect((await get(path)).status, path).toBe(401);
+    }
+  });
+
+  it('the extended list carries identifier and description, the plain one only id, name and itSystemName', async () => {
+    const extended = (await (await get('/api/read/userroles/itsystems', MOCK_READ_KEY)).json()) as Array<Record<string, unknown>>;
+    expect(Object.keys(extended[0]).sort()).toEqual(['description', 'id', 'identifier', 'itSystemName', 'name']);
+    const plain = (await (await get('/api/read/userroles', MOCK_READ_KEY)).json()) as Array<Record<string, unknown>>;
+    expect(Object.keys(plain[0]).sort()).toEqual(['id', 'itSystemName', 'name']);
+    const groups = (await (await get('/api/read/rolegroups', MOCK_READ_KEY)).json()) as Array<Record<string, unknown>>;
+    expect(Object.keys(groups[0]).sort()).toEqual(['id', 'name']);
+  });
+
+  it('serves what setData gives it, and only GET', async () => {
+    mock.setData({ roleGroups: [{ id: 99, name: 'Ny' }] });
+    expect(await (await get('/api/read/rolegroups', MOCK_READ_KEY)).json()).toEqual([{ id: 99, name: 'Ny' }]);
+    expect((await fetch(`${mock.url}/api/read/rolegroups`, { method: 'POST', headers: { ApiKey: MOCK_READ_KEY } })).status).toBe(405);
+  });
+});

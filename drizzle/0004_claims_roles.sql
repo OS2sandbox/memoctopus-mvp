@@ -29,3 +29,16 @@ CREATE INDEX "user_external_roles_role_idx" ON "user_external_roles" USING btree
 ALTER TABLE "directory_users" ADD CONSTRAINT "directory_users_source_check" CHECK ("source" in ('local', 'rollekatalog', 'claims'));--> statement-breakpoint
 ALTER TABLE "org_units" ADD CONSTRAINT "org_units_source_check" CHECK ("source" in ('local', 'rollekatalog', 'claims'));--> statement-breakpoint
 ALTER TABLE "role_assignments" ADD CONSTRAINT "role_assignments_source_check" CHECK ("source" in ('local', 'rollekatalog', 'claims'));
+--> statement-breakpoint
+CREATE TABLE "central_template_principal_targets" (
+	"template_id" uuid NOT NULL,
+	"kind" text NOT NULL,
+	"identifier" text NOT NULL,
+	CONSTRAINT "central_template_principal_targets_template_id_kind_identifier_pk" PRIMARY KEY("template_id","kind","identifier")
+);
+--> statement-breakpoint
+ALTER TABLE "central_templates" ALTER COLUMN "owner_org_unit_uuid" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "central_template_versions" ADD COLUMN "principal_targets" jsonb DEFAULT '[]'::jsonb NOT NULL;--> statement-breakpoint
+ALTER TABLE "central_template_principal_targets" ADD CONSTRAINT "central_template_principal_targets_template_id_central_templates_id_fk" FOREIGN KEY ("template_id") REFERENCES "public"."central_templates"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "central_template_principal_targets" ADD CONSTRAINT "central_template_principal_targets_role_fk" FOREIGN KEY ("kind","identifier") REFERENCES "public"."external_roles"("kind","identifier") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "central_template_principal_targets_role_idx" ON "central_template_principal_targets" USING btree ("kind","identifier");

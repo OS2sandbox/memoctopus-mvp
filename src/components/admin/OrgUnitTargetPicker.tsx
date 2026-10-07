@@ -11,18 +11,22 @@ interface Props {
   value: readonly CentralTarget[];
   onChange: (targets: CentralTarget[]) => void;
   disabled?: boolean;
+  /** An organisation-wide template (no owner): every unit in the list may be chosen. */
+  orgWide?: boolean;
+  /** Roles or groups are chosen too, so zero units is not "nobody". */
+  hasOtherAudience?: boolean;
 }
 
 /**
  * Availability picker ("who has the template at their disposal"). The server only accepts targets inside the owner unit's
  * subtree (no sideways or upward delegation), so nothing else is offered here.
  */
-export function OrgUnitTargetPicker({ units, ownerUuid, value, onChange, disabled }: Props) {
+export function OrgUnitTargetPicker({ units, ownerUuid, value, onChange, disabled, orgWide, hasOtherAudience }: Props) {
   const rows = useMemo(() => {
-    if (!ownerUuid) return [];
+    if (!ownerUuid) return orgWide ? flattenOrgTree(units) : [];
     const inside = selfAndDescendants(units, ownerUuid);
     return flattenOrgTree(units.filter((u) => inside.has(u.uuid)));
-  }, [units, ownerUuid]);
+  }, [units, ownerUuid, orgWide]);
 
   const byUuid = useMemo(() => new Map(value.map((t) => [t.orgUnitUuid, t])), [value]);
   const offered = new Set(rows.map((r) => r.unit.uuid));
@@ -41,11 +45,11 @@ export function OrgUnitTargetPicker({ units, ownerUuid, value, onChange, disable
     <fieldset className="flex flex-col gap-2" disabled={disabled}>
       <legend className="text-sm font-medium text-[var(--ink)]">Hvem skal have skabelonen til rådighed?</legend>
       <p className="text-[13px] text-[var(--muted)]">
-        Vælg de enheder, hvis medarbejdere kan bruge skabelonen. Underenheder kan vælges med. Du kan kun vælge
-        ejerenheden og enheder under den.
+        Vælg de enheder, hvis medarbejdere kan bruge skabelonen. Underenheder kan vælges med.{' '}
+        {orgWide && !ownerUuid ? 'Skabelonen har ingen ejerenhed, så du kan vælge alle enheder.' : 'Du kan kun vælge ejerenheden og enheder under den.'}
       </p>
 
-      {!ownerUuid ? (
+      {!ownerUuid && !orgWide ? (
         <p className="text-[13px] text-[var(--muted)]">Vælg først en ejerenhed.</p>
       ) : (
         <ul
@@ -105,7 +109,7 @@ export function OrgUnitTargetPicker({ units, ownerUuid, value, onChange, disable
         </ul>
       )}
 
-      {ownerUuid && value.length === 0 && (
+      {(ownerUuid || orgWide) && value.length === 0 && !hasOtherAudience && (
         <p role="status" className="text-[13px]" style={{ color: 'var(--warn)' }}>
           Skabelonen er ikke til rådighed for nogen, før du vælger mindst én enhed.
         </p>

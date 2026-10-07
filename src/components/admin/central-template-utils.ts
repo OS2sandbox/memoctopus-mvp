@@ -2,14 +2,19 @@
 import { CHANGE_NOTE_MESSAGE, changeNoteLength, stripInvisible } from '@/lib/skabeloner/change-note';
 import { CENTRAL_LIMITS } from '@/lib/skabeloner/central-types';
 import type {
+  CentralCatalogueEntry,
   CentralChangeType,
   CentralContentField,
+  CentralPrincipalTarget,
+  CentralPrincipalTargetView,
   CentralTarget,
   CentralTemplateContent,
 } from '@/lib/skabeloner/central-types';
 import { CENTRAL_CONTENT_FIELDS } from '@/lib/skabeloner/central-types';
 import { formatDateTime } from './format';
 import { selfAndDescendants, type TreeUnit } from './org-tree';
+
+export const FLAG_TEXT = 'ukendt/inaktiv';
 
 export const changeTypeLabels: Record<CentralChangeType, string> = {
   create: 'Oprettet',
@@ -73,6 +78,75 @@ export function diffTargets(before: readonly CentralTarget[], after: readonly Ce
 export function targetsEqual(a: readonly CentralTarget[], b: readonly CentralTarget[]): boolean {
   const d = diffTargets(a, b);
   return d.added.length === 0 && d.removed.length === 0 && d.changed.length === 0;
+}
+
+// ─── Role/group targets ────────────────────────────────────────────────────
+
+export const principalKindLabels: Record<CentralPrincipalTarget['kind'], string> = { role: 'Rolle', group: 'Gruppe' };
+
+/** `kind:identifier`; the kind never contains a colon, so the key is unambiguous. */
+export const principalKey = (t: CentralPrincipalTarget): string => `${t.kind}:${t.identifier}`;
+
+export function diffPrincipals<T extends CentralPrincipalTarget>(
+  before: readonly T[],
+  after: readonly T[],
+): { added: T[]; removed: T[] } {
+  const prev = new Set(before.map(principalKey));
+  const next = new Set(after.map(principalKey));
+  return {
+    added: after.filter((t) => !prev.has(principalKey(t))),
+    removed: before.filter((t) => !next.has(principalKey(t))),
+  };
+}
+
+export function principalsEqual(a: readonly CentralPrincipalTarget[], b: readonly CentralPrincipalTarget[]): boolean {
+  const d = diffPrincipals(a, b);
+  return d.added.length === 0 && d.removed.length === 0;
+}
+
+/**
+ * Re-reads a target against the current catalogue: the catalogue's name wins, a target that
+ * is not in it is `unknown`, one that was withdrawn is `inactive`.
+ */
+export function viewAgainstCatalogue(
+  t: CentralPrincipalTarget & { name?: string },
+  catalogue: ReadonlyMap<string, CentralCatalogueEntry>,
+): CentralPrincipalTargetView {
+  const hit = catalogue.get(principalKey(t));
+  if (!hit) return { kind: t.kind, identifier: t.identifier, name: t.name ?? t.identifier, status: 'unknown' };
+  return { kind: t.kind, identifier: t.identifier, name: hit.name, status: hit.active ? 'active' : 'inactive' };
+}
+
+export interface AudienceEntry {
+  key: string;
+  label: string;
+  /** A role/group that is withdrawn from or missing in the catalogue: it reaches nobody. */
+  flagged: boolean;
+}
+
+/** Every role, group and unit a template is made available to, named; roles and groups first. */
+export function audienceEntries(
+  t: { targets: readonly CentralTarget[]; principalTargets: readonly CentralPrincipalTargetView[] },
+  unitName: (uuid: string) => string,
+): AudienceEntry[] {
+  return [
+    ...t.principalTargets.map((p) => ({
+      key: principalKey(p),
+      label: `${principalKindLabels[p.kind]}: ${p.name}`,
+      flagged: p.status !== 'active',
+    })),
+    ...t.targets.map((u) => ({
+      key: `unit:${u.orgUnitUuid}`,
+      label: `Enhed: ${unitName(u.orgUnitUuid)}${u.includeDescendants ? ' (inkl. underenheder)' : ''}`,
+      flagged: false,
+    })),
+  ];
+}
+
+/** At most `max` entries, flagged ones first (a manager must see those), and how many were left out. */
+export function truncateAudience(entries: readonly AudienceEntry[], max = 3): { shown: AudienceEntry[]; more: AudienceEntry[] } {
+  const ordered = [...entries.filter((e) => e.flagged), ...entries.filter((e) => !e.flagged)];
+  return { shown: ordered.slice(0, max), more: ordered.slice(max) };
 }
 
 /** Keeps only targets inside the owner's subtree (the server refuses anything else). */

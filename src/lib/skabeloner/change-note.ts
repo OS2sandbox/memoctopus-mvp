@@ -28,3 +28,30 @@ export const meaningfulLength = (v: string): number => {
 
 /** The number that counts towards the minimum: strip, trim, drop whitespace, count code points. */
 export const changeNoteLength = (note: string): number => meaningfulLength(stripInvisible(note));
+
+/** Longest optional note on a PERSONAL template edit (free text for the person themselves). */
+export const LOCAL_CHANGE_NOTE_MAX = 2000;
+
+export type LocalChangeNote = { ok: true; note: string | null } | { ok: false; error: string };
+
+/**
+ * The OPTIONAL "what did you change" note of a personal template edit. Absent, null or blank
+ * means no note (null); there is no minimum, unlike the mandatory note of a central template.
+ * Stored only in the person's own schema; never audited or logged. NFC, invisible characters
+ * stripped, NUL and lone surrogates (which Postgres text cannot hold) rejected.
+ */
+export function parseLocalChangeNote(raw: unknown): LocalChangeNote {
+  if (raw === undefined || raw === null) return { ok: true, note: null };
+  if (typeof raw !== 'string') return { ok: false, error: 'Ændringsbeskrivelsen skal være tekst' };
+  if (raw.length > LOCAL_CHANGE_NOTE_MAX * 4) return { ok: false, error: tooLong() };
+  if (raw.includes('\u0000') || /\p{Cs}/u.test(raw)) {
+    return { ok: false, error: 'Ændringsbeskrivelsen indeholder ugyldige tegn' };
+  }
+  const note = stripInvisible(raw).normalize('NFC');
+  if (note.length > LOCAL_CHANGE_NOTE_MAX) return { ok: false, error: tooLong() };
+  return { ok: true, note: note === '' ? null : note };
+}
+
+function tooLong(): string {
+  return `Ændringsbeskrivelsen er for lang (højst ${LOCAL_CHANGE_NOTE_MAX} tegn)`;
+}

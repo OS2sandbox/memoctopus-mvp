@@ -9,17 +9,19 @@ vi.mock('@/lib/db', () => ({ pool: {}, db: {} }));
 const recordEvent = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => ({ status: 'stored' })));
 vi.mock('@/lib/audit/record', () => ({ recordEvent }));
 const scope = vi.hoisted(() => ({
+  hasGlobalScope: vi.fn(),
   isOrgUnitWithinScope: vi.fn(),
   orgSubtreeUuids: vi.fn(),
   orgUnitsInScope: vi.fn(),
 }));
 vi.mock('@/lib/authz/scope', () => scope);
 
-import { ConflictError, NotFoundError, ValidationError, VersionConflictError } from '@/lib/authz/access-errors';
+import { ForbiddenError, NotFoundError, ValidationError, VersionConflictError } from '@/lib/authz/access-errors';
 import {
   archiveCentralTemplate,
   createCentralTemplate,
   getManageableTemplate,
+  listCatalogue,
   listManageableTemplates,
   listScopeOrgUnits,
   listVersions,
@@ -67,6 +69,11 @@ type Rows = Array<Record<string, unknown>>;
 interface World {
   template?: Rows;
   targets?: Rows;
+  /** The template's current role/group targets (joined with the catalogue). */
+  principals?: Rows;
+  /** How many of the role/group targets being added are active catalogue entries (default: all). */
+  catalogueHits?: number;
+  orgUnitsFound?: number;
   unit?: Rows;
   updated?: Rows;
   actorName?: string;
@@ -74,11 +81,19 @@ interface World {
 }
 
 function world(w: World = {}): Responder {
-  return (sql) => {
+  return (sql, params) => {
     if (sql.includes('FROM "public".org_units') && sql.includes('FOR SHARE')) return w.unit ?? [{ '?column?': 1 }];
     if (sql.includes('INSERT INTO "public".central_templates')) return w.inserted ?? [{ id: TPL }];
     if (sql.includes('UPDATE "public".central_templates')) return w.updated ?? [{ current_version: 4 }];
     if (sql.includes('FROM "public".central_template_targets') && sql.startsWith('SELECT org_unit_uuid')) return w.targets ?? [];
+    if (sql.includes('FROM "public".central_template_principal_targets pt')) return w.principals ?? [];
+    if (sql.includes('FROM "public".external_roles e') && sql.includes('JOIN unnest')) {
+      const added = (params[0] as unknown[]).length;
+      return Array.from({ length: w.catalogueHits ?? added }, () => ({ '?column?': 1 }));
+    }
+    if (sql.startsWith('SELECT uuid FROM "public".org_units WHERE uuid = ANY')) {
+      return Array.from({ length: w.orgUnitsFound ?? (params[0] as unknown[]).length }, () => ({ uuid: 'x' }));
+    }
     if (sql.includes('FROM "public".central_templates ct') && sql.includes('WHERE ct.id')) return w.template ?? [row()];
     if (sql.includes('FROM "public".users')) return [{ name: w.actorName ?? 'Mikkel Manager' }];
     return [];
@@ -97,6 +112,7 @@ const writes = (calls: Array<{ sql: string }>) =>
 beforeEach(() => {
   recordEvent.mockClear();
   recordEvent.mockResolvedValue({ status: 'stored' });
+  scope.hasGlobalScope.mockReset().mockReturnValue(false);
   scope.isOrgUnitWithinScope.mockReset().mockResolvedValue(true);
   scope.orgSubtreeUuids.mockReset().mockResolvedValue(new Set([OWNER, CHILD]));
   scope.orgUnitsInScope.mockReset().mockResolvedValue({ all: false, uuids: [OWNER, CHILD] });
@@ -124,6 +140,7 @@ describe('createCentralTemplate', () => {
       'INSERT INTO "public".central_templates',
       'DELETE FROM "public".central_template_targets WHERE template_id = $1::uuid',
       'INSERT INTO "public".central_template_targets (template_id, org_unit_uuid, include_descendants)',
+      'DELETE FROM "public".central_template_principal_targets WHERE template_id = $1::uuid',
       'INSERT INTO "public".central_template_versions',
     ]);
     expect(calls.filter((c) => /^(INSERT|UPDATE|DELETE|SELECT)/.test(c.sql)).every((c) => c.tx)).toBe(true);
@@ -142,6 +159,7 @@ describe('createCentralTemplate', () => {
       allowToggleOverrides: false,
     });
     expect(JSON.parse(String(versionInsert.params[7]))).toEqual([{ orgUnitUuid: CHILD, includeDescendants: true }]);
+    expect(JSON.parse(String(versionInsert.params[8]))).toEqual([]);
     expect(out).toMatchObject({ id: TPL, currentVersion: 3, createdByName: 'Anne Ansvarlig', lastEditedByName: 'Bo Beslutter', lastEditedAt: '2026-02-01T10:00:00.000Z' });
   });
 
@@ -155,11 +173,90 @@ describe('createCentralTemplate', () => {
       actorUserId: 'mgr-1',
       entityId: TPL,
       secondaryEntityId: OWNER,
-      details: { version: 1, targetCount: 1 },
+      details: { version: 1, targetCount: 1, principalTargetCount: 0 },
     });
     expect(opts.tx).toBeDefined();
     expect(opts.table).toBe('"public".audit_events');
     expect(JSON.stringify(event)).not.toMatch(/Dialogmøde|Skriv et kort|Første version/);
+  });
+
+  describe('organisation-wide templates and role/group targets', () => {
+    const ROLE = { kind: 'role' as const, identifier: 'sagsbehandler' };
+    const GROUP = { kind: 'group' as const, identifier: 'socialforvaltningen' };
+    const wide = { ...input, ownerOrgUnitUuid: null, targets: [] };
+
+    it('a global manager creates an org-wide template targeted at roles and groups; the audit event carries counts only', async () => {
+      scope.hasGlobalScope.mockReturnValue(true);
+      const { env, calls } = setup({
+        principals: [
+          { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', active: true },
+          { kind: 'group', identifier: 'socialforvaltningen', name: 'Socialforvaltningen', active: true },
+        ],
+      });
+      await createCentralTemplate(manager, { ...wide, principalTargets: [GROUP, ROLE, ROLE] }, env);
+
+      const insert = calls.find((c) => c.sql.includes('INSERT INTO "public".central_templates'))!;
+      expect(insert.params[0]).toBeNull();
+      // No owner unit lookup, no scope walk: a global manager owns the whole organisation.
+      expect(calls.some((c) => c.sql.includes('FROM "public".org_units') && c.sql.includes('FOR SHARE'))).toBe(false);
+      expect(scope.isOrgUnitWithinScope).not.toHaveBeenCalled();
+
+      const rolesInsert = calls.find((c) => c.sql.includes('INSERT INTO "public".central_template_principal_targets'))!;
+      expect(rolesInsert.params).toEqual([TPL, ['group', 'role'], ['socialforvaltningen', 'sagsbehandler']].map((p, i) => (i === 0 ? TPL : p)));
+      const version = calls.find((c) => c.sql.includes('INSERT INTO "public".central_template_versions'))!;
+      expect(JSON.parse(String(version.params[8]))).toEqual([
+        { kind: 'group', identifier: 'socialforvaltningen', name: 'Socialforvaltningen' },
+        { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler' },
+      ]);
+
+      const event = recordEvent.mock.calls[0][0] as Record<string, unknown>;
+      expect(event).toEqual({
+        type: 'central_template.create',
+        actorUserId: 'mgr-1',
+        entityId: TPL,
+        details: { version: 1, targetCount: 0, principalTargetCount: 2 },
+      });
+      expect(JSON.stringify(event)).not.toMatch(/sagsbehandler|socialforvaltningen|Sagsbehandler/);
+    });
+
+    it('403 for a scoped manager: no org-wide template, no role/group targets, nothing written', async () => {
+      const a = setup();
+      await expect(createCentralTemplate(manager, wide, a.env)).rejects.toMatchObject({ name: 'ForbiddenError', code: 'org_wide_needs_global' });
+      expect(writes(a.calls)).toEqual([]);
+
+      const b = setup();
+      await expect(createCentralTemplate(manager, { ...input, principalTargets: [ROLE] }, b.env)).rejects.toBeInstanceOf(ForbiddenError);
+      expect(writes(b.calls)).toEqual([]);
+      expect(recordEvent).not.toHaveBeenCalled();
+    });
+
+    it('400 when a role or group is not an active catalogue entry', async () => {
+      scope.hasGlobalScope.mockReturnValue(true);
+      const { env, calls } = setup({ catalogueHits: 1 });
+      await expect(createCentralTemplate(manager, { ...wide, principalTargets: [ROLE, GROUP] }, env)).rejects.toMatchObject({
+        code: 'principal_target_unknown',
+      });
+      expect(writes(calls)).toEqual([]);
+    });
+
+    it('an org-wide template may target any existing unit, but not an unknown one', async () => {
+      scope.hasGlobalScope.mockReturnValue(true);
+      const ok = setup();
+      await createCentralTemplate(manager, { ...wide, targets: [{ orgUnitUuid: OTHER }] }, ok.env);
+      expect(scope.orgSubtreeUuids).not.toHaveBeenCalled();
+      const bad = setup({ orgUnitsFound: 0 });
+      await expect(createCentralTemplate(manager, { ...wide, targets: [{ orgUnitUuid: OTHER }] }, bad.env)).rejects.toMatchObject({
+        code: 'target_outside_owner',
+      });
+    });
+
+    it('rejects an unknown kind and an over-long identifier before touching the database', async () => {
+      scope.hasGlobalScope.mockReturnValue(true);
+      const { env, calls } = setup();
+      await expect(createCentralTemplate(manager, { ...wide, principalTargets: [{ kind: 'user', identifier: 'x' }] } as never, env)).rejects.toBeInstanceOf(ValidationError);
+      await expect(createCentralTemplate(manager, { ...wide, principalTargets: [{ kind: 'role', identifier: 'x'.repeat(201) }] }, env)).rejects.toBeInstanceOf(ValidationError);
+      expect(calls).toHaveLength(0);
+    });
   });
 
   it('rolls back when the audit write fails: nothing is committed', async () => {
@@ -267,6 +364,98 @@ describe('updateCentralTemplate', () => {
       entityId: TPL,
       secondaryEntityId: OWNER,
       details: { version: 4, changedFields: ['prompt', 'includeDato'] },
+    });
+  });
+
+  describe('role/group targets and organisation-wide templates', () => {
+    const ROLE = { kind: 'role' as const, identifier: 'sagsbehandler' };
+    const current = [{ kind: 'group', identifier: 'gammel', name: 'Gammel gruppe', active: false }];
+
+    it('a role/group-only change is a retarget; the audit event has counts only', async () => {
+      scope.hasGlobalScope.mockReturnValue(true);
+      const { env, calls } = setup({ principals: current });
+      await updateCentralTemplate(manager, TPL, { ...base, principalTargets: [ROLE] }, env);
+      const version = calls.find((c) => c.sql.includes('INSERT INTO "public".central_template_versions'))!;
+      expect(version.params[2]).toBe('retarget');
+      expect(writes(calls)).toContain('DELETE FROM "public".central_template_principal_targets WHERE template_id = $1::uuid');
+      const event = recordEvent.mock.calls[0][0] as Record<string, unknown>;
+      expect(event).toMatchObject({ type: 'central_template.retarget', details: { version: 4, targetCount: 0, principalTargetCount: 1 } });
+      expect(JSON.stringify(event)).not.toMatch(/sagsbehandler|gammel/i);
+    });
+
+    it('names principalTargets among the changed fields of an update', async () => {
+      scope.hasGlobalScope.mockReturnValue(true);
+      const { env } = setup();
+      await updateCentralTemplate(manager, TPL, { ...base, name: 'Nyt navn', principalTargets: [ROLE] }, env);
+      expect(recordEvent.mock.calls[0][0]).toMatchObject({
+        type: 'central_template.update',
+        details: { version: 4, changedFields: ['name', 'principalTargets'] },
+      });
+    });
+
+    it('only NEWLY added targets are checked against the catalogue: an existing, now inactive one may stay', async () => {
+      scope.hasGlobalScope.mockReturnValue(true);
+      const keep = setup({ principals: current });
+      await updateCentralTemplate(
+        manager,
+        TPL,
+        { ...base, name: 'Nyt navn', principalTargets: [{ kind: 'group', identifier: 'gammel' }] },
+        keep.env,
+      );
+      expect(keep.calls.some((c) => c.sql.includes('FROM "public".external_roles e'))).toBe(false);
+    });
+
+    it('the same targets in another order are unchanged', async () => {
+      const { env } = setup({
+        principals: [
+          { kind: 'group', identifier: 'b', name: 'B', active: true },
+          { kind: 'role', identifier: 'a', name: 'A', active: true },
+        ],
+      });
+      await expect(
+        updateCentralTemplate(
+          manager,
+          TPL,
+          { ...base, principalTargets: [{ kind: 'role', identifier: 'a' }, { kind: 'group', identifier: 'b' }] },
+          env,
+        ),
+      ).rejects.toMatchObject({ code: 'no_changes' });
+    });
+
+    it('403 for a scoped manager who adds role/group targets', async () => {
+      const { env, calls } = setup();
+      await expect(updateCentralTemplate(manager, TPL, { ...base, principalTargets: [ROLE] }, env)).rejects.toMatchObject({
+        code: 'principal_targets_need_global',
+      });
+      expect(writes(calls)).toEqual([]);
+    });
+
+    it('removing targets needs no catalogue lookup and no global scope', async () => {
+      const { env, calls } = setup({ principals: current });
+      await updateCentralTemplate(manager, TPL, { ...base, principalTargets: [] }, env);
+      expect(calls.some((c) => c.sql.includes('FROM "public".external_roles e'))).toBe(false);
+      expect(recordEvent.mock.calls[0][0]).toMatchObject({ type: 'central_template.retarget', details: { principalTargetCount: 0 } });
+    });
+
+    it('an org-wide template (no owner) is 404 for a scoped manager, whatever the unit scope says', async () => {
+      const { env, calls } = setup({ template: [row({ owner_org_unit_uuid: null })] });
+      await expect(updateCentralTemplate(manager, TPL, { ...base, name: 'Nyt' }, env)).rejects.toBeInstanceOf(NotFoundError);
+      await expect(archiveCentralTemplate(manager, TPL, { baseVersion: 3, changeNote: NOTE }, env)).rejects.toBeInstanceOf(NotFoundError);
+      await expect(getManageableTemplate(manager, TPL, env)).rejects.toBeInstanceOf(NotFoundError);
+      expect(scope.isOrgUnitWithinScope).not.toHaveBeenCalled();
+      expect(writes(calls)).toEqual([]);
+    });
+
+    it('a global manager edits, archives and restores an org-wide template; no secondary entity in the audit', async () => {
+      scope.hasGlobalScope.mockReturnValue(true);
+      const org = { template: [row({ owner_org_unit_uuid: null })] };
+      await updateCentralTemplate(manager, TPL, { ...base, name: 'Nyt' }, setup(org).env);
+      await archiveCentralTemplate(manager, TPL, { baseVersion: 3, changeNote: NOTE }, setup(org).env);
+      await restoreCentralTemplate(manager, TPL, { baseVersion: 3, changeNote: NOTE }, setup({ template: [row({ owner_org_unit_uuid: null, status: 'archived' })] }).env);
+      for (const [event] of recordEvent.mock.calls as Array<[Record<string, unknown>]>) {
+        expect(event).not.toHaveProperty('secondaryEntityId');
+      }
+      expect(recordEvent).toHaveBeenCalledTimes(3);
     });
   });
 
@@ -392,13 +581,18 @@ describe('archive and restore', () => {
   const input = { baseVersion: 3, changeNote: 'Skabelonen bruges ikke længere' };
 
   it('archive: status flips, version +1, version row of type archive, audit', async () => {
-    const { env, calls } = setup({ targets: [{ org_unit_uuid: CHILD, include_descendants: true }] });
+    const { env, calls } = setup({
+      targets: [{ org_unit_uuid: CHILD, include_descendants: true }],
+      principals: [{ kind: 'role', identifier: 'r', name: 'Rolle R', active: true }],
+    });
     await archiveCentralTemplate(manager, TPL, input, env);
     const update = calls.find((c) => c.sql.startsWith('UPDATE'))!;
     expect(update.params).toEqual([TPL, 3, 'archived']);
     const version = calls.find((c) => c.sql.includes('INSERT INTO "public".central_template_versions'))!;
     expect(version.params.slice(0, 4)).toEqual([TPL, 4, 'archive', input.changeNote]);
     expect(JSON.parse(String(version.params[7]))).toEqual([{ orgUnitUuid: CHILD, includeDescendants: true }]);
+    // The snapshot of an archive keeps the role/group audience, so a restore is known to bring it back.
+    expect(JSON.parse(String(version.params[8]))).toEqual([{ kind: 'role', identifier: 'r', name: 'Rolle R' }]);
     expect(recordEvent.mock.calls[0][0]).toMatchObject({ type: 'central_template.archive', details: { version: 4 } });
   });
 
@@ -436,10 +630,22 @@ describe('reads', () => {
   });
 
   it('list: filters on the scoped owner units; a global scope passes NULL; default is active only', async () => {
-    const item = { id: TPL, name: 'A', description: '', owner_org_unit_uuid: OWNER, status: 'active', current_version: 2, target_count: 4, updated_at: new Date('2026-03-01T00:00:00Z'), created_by_name: 'Anne Ansvarlig', last_edited_by_name: 'Bo Beslutter', last_edited_at: new Date('2026-03-01T00:00:00Z') };
-    const scoped = makeFakeRunner(() => [item]);
+    const item = { id: TPL, name: 'A', description: '', owner_org_unit_uuid: OWNER, status: 'active', current_version: 2, target_count: 1, updated_at: new Date('2026-03-01T00:00:00Z'), created_by_name: 'Anne Ansvarlig', last_edited_by_name: 'Bo Beslutter', last_edited_at: new Date('2026-03-01T00:00:00Z') };
+    const scoped = makeFakeRunner((sql) => {
+      if (sql.startsWith('SELECT template_id')) return [{ template_id: TPL, org_unit_uuid: CHILD, include_descendants: true }];
+      if (sql.startsWith('SELECT pt.template_id')) {
+        return [{ template_id: TPL, kind: 'role', identifier: 'r', name: 'Rolle R', active: false }];
+      }
+      return [item];
+    });
     const out = await listManageableTemplates(manager, {}, { schema: 'public', runner: scoped.runner });
-    expect(out).toEqual([{ id: TPL, name: 'A', description: '', ownerOrgUnitUuid: OWNER, status: 'active', currentVersion: 2, targetCount: 4, updatedAt: '2026-03-01T00:00:00.000Z', createdByName: 'Anne Ansvarlig', lastEditedByName: 'Bo Beslutter', lastEditedAt: '2026-03-01T00:00:00.000Z' }]);
+    expect(out).toEqual([{
+      id: TPL, name: 'A', description: '', ownerOrgUnitUuid: OWNER, status: 'active', currentVersion: 2, targetCount: 1,
+      // The audience, named: units by uuid (the client resolves names), roles/groups with the catalogue's name and state.
+      targets: [{ orgUnitUuid: CHILD, includeDescendants: true }],
+      principalTargets: [{ kind: 'role', identifier: 'r', name: 'Rolle R', status: 'inactive' }],
+      updatedAt: '2026-03-01T00:00:00.000Z', createdByName: 'Anne Ansvarlig', lastEditedByName: 'Bo Beslutter', lastEditedAt: '2026-03-01T00:00:00.000Z',
+    }]);
     expect(scoped.calls[0].params).toEqual(['active', [OWNER, CHILD]]);
 
     scope.orgUnitsInScope.mockResolvedValue({ all: true });
@@ -450,13 +656,41 @@ describe('reads', () => {
 
   it('list: creator and last editor come from the same single query (joined version rows, no N+1)', async () => {
     const item = { id: TPL, name: 'A', description: '', owner_org_unit_uuid: OWNER, status: 'active', current_version: 2, target_count: 0, updated_at: new Date('2026-03-01T00:00:00Z'), created_by_name: null, last_edited_by_name: null, last_edited_at: null };
-    const fake = makeFakeRunner(() => [item, { ...item, id: '99999999-9999-4999-8999-999999999999' }]);
+    const fake = makeFakeRunner((sql) => (sql.startsWith('SELECT template_id') || sql.startsWith('SELECT pt.template_id') ? [] : [item, { ...item, id: '99999999-9999-4999-8999-999999999999' }]));
     const out = await listManageableTemplates(manager, {}, { schema: 'public', runner: fake.runner });
-    expect(fake.calls).toHaveLength(1);
+    // One query for the page plus ONE each for the org-unit and the role/group audience: no N+1.
+    expect(fake.calls).toHaveLength(3);
     expect(fake.calls[0].sql).toMatch(/JOIN "public".central_template_versions v1 ON .*v1\.version = 1/);
     expect(fake.calls[0].sql).toMatch(/JOIN "public".central_template_versions vc ON .*vc\.version = ct\.current_version/);
     // Missing snapshots stay null; the edit time falls back to updated_at.
     expect(out[0]).toMatchObject({ createdByName: null, lastEditedByName: null, lastEditedAt: '2026-03-01T00:00:00.000Z' });
+  });
+
+  it('list: a global manager also sees org-wide templates (null owner), listed without an owner', async () => {
+    scope.orgUnitsInScope.mockResolvedValue({ all: true });
+    const item = { id: TPL, name: 'A', description: '', owner_org_unit_uuid: null, status: 'active', current_version: 1, target_count: 0, updated_at: new Date('2026-03-01T00:00:00Z'), created_by_name: null, last_edited_by_name: null, last_edited_at: null };
+    const fake = makeFakeRunner((sql) => (sql.startsWith('SELECT template_id') || sql.startsWith('SELECT pt.') ? [] : [item]));
+    const out = await listManageableTemplates(manager, {}, { schema: 'public', runner: fake.runner });
+    expect(out[0].ownerOrgUnitUuid).toBeNull();
+    // A scoped manager's query filters on the owner list, which never matches NULL.
+    expect(fake.calls[0].sql).toContain('ct.owner_org_unit_uuid = ANY($2::uuid[])');
+  });
+
+  it('catalogue: both sources merged, withdrawn entries included, names and identifiers only', async () => {
+    const fake = makeFakeRunner(() => [
+      { kind: 'role', identifier: 'a', name: 'A', source: 'rollekatalog', active: true, synced_at: new Date('2026-03-02T00:00:00Z') },
+      { kind: 'group', identifier: 'b', name: 'B', source: 'config', active: true, synced_at: new Date('2026-03-05T00:00:00Z') },
+      { kind: 'role', identifier: 'c', name: 'C', source: 'rollekatalog', active: false, synced_at: new Date('2026-03-01T00:00:00Z') },
+    ]);
+    const out = await listCatalogue({ schema: 'public', runner: fake.runner });
+    expect(out.entries).toEqual([
+      { kind: 'role', identifier: 'a', name: 'A', source: 'rollekatalog', active: true },
+      { kind: 'group', identifier: 'b', name: 'B', source: 'config', active: true },
+      { kind: 'role', identifier: 'c', name: 'C', source: 'rollekatalog', active: false },
+    ]);
+    // "Last refreshed" is the newest ROLLEKATALOG row, not the config one.
+    expect(out.lastRefreshedAt).toBe('2026-03-02T00:00:00.000Z');
+    expect(fake.calls[0].sql).toContain('FROM "public".external_roles');
   });
 
   it('get: returns the prompt to a manager in scope, 404 otherwise', async () => {
@@ -474,11 +708,13 @@ describe('reads', () => {
   });
 
   it('versions: newest first, scope-checked like the template', async () => {
-    const v = (version: number) => ({ version, change_type: 'update', change_note: NOTE, changed_by_name: 'M', changed_at: new Date('2026-03-01T00:00:00Z'), content: { name: 'x' }, targets: [] });
+    const v = (version: number) => ({ version, change_type: 'update', change_note: NOTE, changed_by_name: 'M', changed_at: new Date('2026-03-01T00:00:00Z'), content: { name: 'x' }, targets: [], principal_targets: version === 3 ? [{ kind: 'role', identifier: 'r', name: 'R' }] : null });
     const fake = makeFakeRunner((sql) => (sql.startsWith('SELECT version') ? [v(3), v(2)] : [row()]));
     const env = { schema: 'public', runner: fake.runner };
     const out = await listVersions(manager, TPL, env);
     expect(out.map((x) => x.version)).toEqual([3, 2]);
+    // A version written before role/group targets existed has none.
+    expect(out.map((x) => x.principalTargets)).toEqual([[{ kind: 'role', identifier: 'r', name: 'R' }], []]);
     expect(fake.calls.find((c) => c.sql.startsWith('SELECT version'))!.sql).toContain('ORDER BY version DESC');
     scope.isOrgUnitWithinScope.mockResolvedValue(false);
     await expect(listVersions(manager, TPL, env)).rejects.toBeInstanceOf(NotFoundError);

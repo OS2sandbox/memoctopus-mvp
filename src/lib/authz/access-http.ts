@@ -4,6 +4,7 @@ import type { ZodTypeAny, z } from 'zod';
 import {
   AccessError,
   ConflictError,
+  ForbiddenError,
   NotFoundError,
   ReadOnlyModeError,
   ValidationError,
@@ -12,6 +13,7 @@ import {
 
 const STATUS: Array<[new (...args: never[]) => AccessError, number]> = [
   [NotFoundError, 404],
+  [ForbiddenError, 403],
   [ValidationError, 400],
   [ConflictError, 409],
   [ReadOnlyModeError, 409],

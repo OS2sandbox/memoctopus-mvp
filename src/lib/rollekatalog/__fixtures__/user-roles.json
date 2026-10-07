@@ -1,0 +1,6 @@
+[
+  { "id": 101, "name": "Sagsbehandler", "identifier": "sagsbehandler", "description": "Synthetic description that must not survive parsing", "itSystemName": "Sagssystem" },
+  { "id": 102, "name": "Skabelonansvarlig", "identifier": "tt-skabelonansvarlig", "description": "", "itSystemName": "Tale til tekst" },
+  { "id": 103, "name": "Leder", "identifier": "leder", "description": null, "itSystemName": "Sagssystem" },
+  { "id": 104, "name": "Rolle uden identifikator", "identifier": null, "description": "", "itSystemName": "Sagssystem" }
+]

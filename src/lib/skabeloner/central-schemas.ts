@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CENTRAL_LIMITS } from './central-types';
+import { CENTRAL_LIMITS, PRINCIPAL_KINDS } from './central-types';
 import { CHANGE_NOTE_MESSAGE, meaningfulLength, stripInvisible } from './change-note';
 
 // Request bodies for the manager-side central template routes. Every object is
@@ -70,6 +70,38 @@ export const centralTargetsSchema = z
   .max(CENTRAL_LIMITS.targets, `Højst ${CENTRAL_LIMITS.targets} enheder`)
   .transform((targets) => dedupeTargets(targets));
 
+// A role/group value of the catalogue. Compared exactly as the IdP sends it, so no case folding or
+// normalisation: only trimmed, and rejected when it holds NUL, a lone surrogate or a control character.
+const principalIdentifierSchema = z
+  .string()
+  .trim()
+  .min(1, 'Rollen eller gruppen mangler en identifikator')
+  .max(CENTRAL_LIMITS.principalIdentifier, 'Identifikatoren er for lang')
+  .refine(noNul, NUL_MESSAGE)
+  .refine(wellFormed, MALFORMED_MESSAGE)
+  .refine((v) => !/\p{Cc}/u.test(v), 'Identifikatoren indeholder ugyldige tegn');
+
+const centralPrincipalTargetSchema = z
+  .object({ kind: z.enum(PRINCIPAL_KINDS), identifier: principalIdentifierSchema })
+  .strict();
+
+export function dedupePrincipalTargets<T extends { kind: string; identifier: string }>(targets: readonly T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const t of targets) {
+    const key = `${t.kind}\u0000${t.identifier}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out;
+}
+
+export const centralPrincipalTargetsSchema = z
+  .array(centralPrincipalTargetSchema)
+  .max(CENTRAL_LIMITS.principalTargets, `Højst ${CENTRAL_LIMITS.principalTargets} roller og grupper`)
+  .transform((targets) => dedupePrincipalTargets(targets));
+
 // NUL and lone surrogates are checked on the raw value, then invisible characters are
 // stripped (so a name of only invisible characters is empty) and the text is made NFC.
 const nameSchema = z
@@ -123,7 +155,8 @@ const contentShape = {
 
 export const createCentralTemplateSchema = z
   .object({
-    ownerOrgUnitUuid: uuidSchema,
+    // Omitted or null = an organisation-wide template (global managers only).
+    ownerOrgUnitUuid: uuidSchema.nullish().transform((v) => v ?? null),
     name: contentShape.name,
     description: contentShape.description.default(''),
     prompt: contentShape.prompt,
@@ -134,6 +167,7 @@ export const createCentralTemplateSchema = z
     allowUserInstruction: contentShape.allowUserInstruction.default(false),
     allowToggleOverrides: contentShape.allowToggleOverrides.default(false),
     targets: centralTargetsSchema.default([]),
+    principalTargets: centralPrincipalTargetsSchema.default([]),
     changeNote: changeNoteSchema,
   })
   .strict();
@@ -154,6 +188,7 @@ export const updateCentralTemplateSchema = z
     allowUserInstruction: contentShape.allowUserInstruction.optional(),
     allowToggleOverrides: contentShape.allowToggleOverrides.optional(),
     targets: centralTargetsSchema.optional(),
+    principalTargets: centralPrincipalTargetsSchema.optional(),
   })
   .strict();
 

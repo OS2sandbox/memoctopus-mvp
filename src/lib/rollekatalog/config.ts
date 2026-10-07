@@ -98,6 +98,40 @@ export function rollekatalogConfigIssue(): RollekatalogConfigIssue | null {
   return readKey() && orgKey() ? null : 'not_configured';
 }
 
+/** Why the role catalogue refresh cannot run (it needs a usable URL and the READ key only), or null when it can. */
+export function catalogueConfigIssue(): RollekatalogConfigIssue | null {
+  const u = rollekatalogUrl();
+  if (u.issue) return u.issue;
+  return readKey() ? null : 'not_configured';
+}
+
+// The role/group catalogue endpoints (READ_ACCESS, GET only). Defaults are from the
+// OS2rollekatalog source (ReadOnlyApi.java: `/api/read/userroles/itsystems` lists every user
+// role with its identifier, `/api/read/rolegroups` every role group); NOT verified against a
+// live instance, so an operator can point them elsewhere. Only a path under /api/read/ is
+// accepted (nothing that could reach a write endpoint or another host); anything else, and an
+// unset variable, gives the default. `none` switches that list off.
+const DEFAULT_ROLES_PATH = '/api/read/userroles/itsystems';
+const DEFAULT_ROLEGROUPS_PATH = '/api/read/rolegroups';
+const READ_PATH_RE = /^\/api\/read\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+){0,3}$/;
+
+function cataloguePath(name: string, fallback: string): string | null {
+  const v = clean(name);
+  if (v === '') return fallback;
+  if (v.toLowerCase() === 'none') return null;
+  return READ_PATH_RE.test(v) ? v : fallback;
+}
+
+/** ROLLEKATALOG_ROLES_PATH: where the user roles (jobfunktionsroller) are listed; null = not read. */
+export function rolesPath(): string | null {
+  return cataloguePath('ROLLEKATALOG_ROLES_PATH', DEFAULT_ROLES_PATH);
+}
+
+/** ROLLEKATALOG_ROLEGROUPS_PATH: where the role groups (rollebuketter) are listed; null = not read. */
+export function roleGroupsPath(): string | null {
+  return cataloguePath('ROLLEKATALOG_ROLEGROUPS_PATH', DEFAULT_ROLEGROUPS_PATH);
+}
+
 export function itSystemId(): string {
   const v = clean('ROLLEKATALOG_ITSYSTEM_ID');
   return /^[A-Za-z0-9_-]{1,100}$/.test(v) ? v : DEFAULT_ITSYSTEM_ID;

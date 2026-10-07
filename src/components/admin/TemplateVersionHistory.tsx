@@ -10,8 +10,10 @@ import {
   changeTypeLabels,
   changedContentFields,
   contentFieldLabels,
+  diffPrincipals,
   diffTargets,
   formatTime,
+  principalKindLabels,
 } from './central-template-utils';
 
 const LINE_STYLE = {
@@ -80,6 +82,9 @@ function OtherChanges({
 }) {
   const fields = before ? changedContentFields(before.content, after.content).filter((f) => f !== 'prompt') : [];
   const targets = diffTargets(before?.targets ?? [], after.targets);
+  // Names are the ones the roles and groups had when each version was written.
+  const principals = diffPrincipals(before?.principalTargets ?? [], after.principalTargets ?? []);
+  const kind = (k: 'role' | 'group') => principalKindLabels[k].toLowerCase();
   const lines: string[] = [
     ...fields.map((f) => `${contentFieldLabels[f]} ændret`),
     ...targets.added.map(
@@ -89,6 +94,8 @@ function OtherChanges({
     ...targets.changed.map(
       (t) => `Tilgængelig for ${unitName(t.orgUnitUuid)}: ${t.includeDescendants ? 'inkl. underenheder' : 'kun enheden selv'}`,
     ),
+    ...principals.added.map((t) => `Gjort tilgængelig for: ${t.name} (${kind(t.kind)})`),
+    ...principals.removed.map((t) => `Ikke længere tilgængelig for: ${t.name} (${kind(t.kind)})`),
   ];
   if (lines.length === 0) return null;
   return (

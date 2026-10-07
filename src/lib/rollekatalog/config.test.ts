@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  catalogueConfigIssue,
   directoryConfigIssue,
   directoryUserIdDomain,
   directoryUserIdTransform,
@@ -11,7 +12,9 @@ import {
   rollekatalogConfigIssue,
   rollekatalogDomain,
   rollekatalogUrl,
+  roleGroupsPath,
   roleStaleMaxSeconds,
+  rolesPath,
   scopeDescendants,
   syncMaxRemovalPercent,
   timeoutMs,
@@ -197,5 +200,55 @@ describe('read at call time', () => {
     expect(timeoutMs()).toBe(2000);
     vi.stubEnv('ROLLEKATALOG_TIMEOUT_MS', '3000');
     expect(timeoutMs()).toBe(3000);
+  });
+});
+
+describe('role catalogue settings', () => {
+  it('needs a usable URL and the READ key only (not the ORG key)', () => {
+    vi.stubEnv('ROLLEKATALOG_URL', 'https://rk.example.dk');
+    vi.stubEnv('ROLLEKATALOG_READ_API_KEY', 'read');
+    vi.stubEnv('ROLLEKATALOG_ORG_API_KEY', '');
+    expect(catalogueConfigIssue()).toBeNull();
+    // The full sync needs both keys; the catalogue does not.
+    expect(rollekatalogConfigIssue()).toBe('not_configured');
+    vi.stubEnv('ROLLEKATALOG_READ_API_KEY', '');
+    expect(catalogueConfigIssue()).toBe('not_configured');
+    vi.stubEnv('ROLLEKATALOG_READ_API_KEY', 'read');
+    vi.stubEnv('ROLLEKATALOG_URL', 'http://rk.example.dk');
+    expect(catalogueConfigIssue()).toBe('insecure_url');
+    vi.stubEnv('ROLLEKATALOG_URL', '');
+    expect(catalogueConfigIssue()).toBe('not_configured');
+  });
+
+  it('defaults to the paths of the OS2rollekatalog read API (unverified against a live instance)', () => {
+    expect(rolesPath()).toBe('/api/read/userroles/itsystems');
+    expect(roleGroupsPath()).toBe('/api/read/rolegroups');
+  });
+
+  it('takes an override only under /api/read/, and none switches a list off', () => {
+    vi.stubEnv('ROLLEKATALOG_ROLES_PATH', '/api/read/userroles');
+    expect(rolesPath()).toBe('/api/read/userroles');
+    vi.stubEnv('ROLLEKATALOG_ROLEGROUPS_PATH', 'NONE');
+    expect(roleGroupsPath()).toBeNull();
+    vi.stubEnv('ROLLEKATALOG_ROLES_PATH', ' ');
+    expect(rolesPath()).toBe('/api/read/userroles/itsystems');
+  });
+
+  it.each([
+    '/api/organisation/v3',
+    '/api/read/',
+    '/api/read/../organisation/v3',
+    '/api/read/userroles?x=1',
+    '/api/read//userroles',
+    'https://evil.example/api/read/userroles',
+    '//evil.example/api/read/x',
+    '/api/read/a/b/c/d/e',
+    '/api/read/userroles#frag',
+    '/api/read/user roles',
+  ])('falls back to the default for the path %j (nothing outside the read API, no query, no other host)', (bad) => {
+    vi.stubEnv('ROLLEKATALOG_ROLES_PATH', bad);
+    vi.stubEnv('ROLLEKATALOG_ROLEGROUPS_PATH', bad);
+    expect(rolesPath()).toBe('/api/read/userroles/itsystems');
+    expect(roleGroupsPath()).toBe('/api/read/rolegroups');
   });
 });

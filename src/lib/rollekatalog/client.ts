@@ -7,6 +7,8 @@ import {
   maxResponseBytes,
   orgKey as configuredOrgKey,
   readKey as configuredReadKey,
+  roleGroupsPath as configuredRoleGroupsPath,
+  rolesPath as configuredRolesPath,
   rollekatalogDomain,
   rollekatalogUrl,
   timeoutMs as configuredTimeoutMs,
@@ -17,6 +19,9 @@ import {
   organisationSchema,
   parseOrThrow,
   roleAssignmentsSchema,
+  roleGroupsCatalogueSchema,
+  userRolesCatalogueSchema,
+  type RkCatalogue,
   type RkOrganisation,
   type RkRoleAssignments,
 } from './schemas';
@@ -36,6 +41,9 @@ export interface ClientOptions {
   orgKey?: string | null;
   itSystemId?: string;
   domain?: string | null;
+  /** Test seam: replace ROLLEKATALOG_ROLES_PATH / ROLLEKATALOG_ROLEGROUPS_PATH. null = that list is not read. */
+  rolesPath?: string | null;
+  roleGroupsPath?: string | null;
   /** Deadline for ONE attempt, response body included. Default ROLLEKATALOG_TIMEOUT_MS (2 min). */
   timeoutMs?: number;
   maxBytes?: number;
@@ -209,6 +217,30 @@ export class RollekatalogClient {
     });
     return parseOrThrow(roleAssignmentsSchema, data);
   }
+
+  /**
+   * READ key. The role CATALOGUE: every user role and role group, names and identifiers only
+   * (see schemas.ts). The paths are configurable and unverified against a live instance.
+   */
+  async getRoleCatalogue(): Promise<RkRoleCatalogue> {
+    const rolesAt = this.opts.rolesPath !== undefined ? this.opts.rolesPath : configuredRolesPath();
+    const groupsAt = this.opts.roleGroupsPath !== undefined ? this.opts.roleGroupsPath : configuredRoleGroupsPath();
+    const empty: RkCatalogue = { entries: [], skipped: 0 };
+    // Sequential: both are plain lists, but there is no reason to double the load on the server.
+    const roles = rolesAt
+      ? parseOrThrow(userRolesCatalogueSchema, await this.request({ path: rolesAt, key: 'read' }))
+      : empty;
+    const groups = groupsAt
+      ? parseOrThrow(roleGroupsCatalogueSchema, await this.request({ path: groupsAt, key: 'read' }))
+      : empty;
+    return { roles, groups };
+  }
+}
+
+/** What the catalogue refresh reads: a list per kind, an empty one when that list is switched off. */
+export interface RkRoleCatalogue {
+  roles: RkCatalogue;
+  groups: RkCatalogue;
 }
 
 /** A client that reads URL, keys and limits from the environment at call time. */

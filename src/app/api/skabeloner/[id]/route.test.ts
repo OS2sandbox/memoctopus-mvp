@@ -26,17 +26,19 @@ vi.mock('@/lib/skabeloner/server', () => ({
   getSkabelon: vi.fn(),
   updateSkabelon: vi.fn(),
   deleteSkabelon: vi.fn(),
+  recordSkabelonVersion: vi.fn(),
 }));
 
 import { GET, PUT, DELETE } from './route';
 import { auth } from '@/lib/auth';
-import { getSkabelon, updateSkabelon, deleteSkabelon } from '@/lib/skabeloner/server';
+import { getSkabelon, updateSkabelon, deleteSkabelon, recordSkabelonVersion } from '@/lib/skabeloner/server';
 import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockGetSkabelon = vi.mocked(getSkabelon);
 const mockUpdateSkabelon = vi.mocked(updateSkabelon);
 const mockDeleteSkabelon = vi.mocked(deleteSkabelon);
+const mockVersion = vi.mocked(recordSkabelonVersion);
 
 const SK_ID = '11111111-2222-4333-8444-555555555555';
 const BASE_URL = `http://localhost/api/skabeloner/${SK_ID}`;
@@ -100,6 +102,7 @@ describe('PUT /api/skabeloner/[id]', () => {
     mockGetSkabelon.mockResolvedValue(SAMPLE_SKABELON as never);
     mockRecord.mockReset();
     mockRecord.mockResolvedValue({ status: 'stored' });
+    mockVersion.mockReset().mockResolvedValue(undefined);
   });
 
   it('returns 401 when not authenticated', async () => {
@@ -149,9 +152,57 @@ describe('PUT /api/skabeloner/[id]', () => {
       type: 'template.update',
       actorUserId: 'user-123',
       entityId: SK_ID,
-      details: { changedFields: ['name', 'prompt', 'includeDato'] },
+      details: { changedFields: ['name', 'prompt', 'includeDato'], hasChangeNote: false },
     });
     expect(JSON.stringify(event)).not.toMatch(/Fortrolig|Testskabelon/);
+    // Every real edit lands in the person's own changelog, here without a note.
+    expect(mockVersion).toHaveBeenCalledWith('user-123', expect.objectContaining({ id: SK_ID }), ['name', 'prompt', 'includeDato'], null);
+  });
+
+  describe('optional change note (own changelog)', () => {
+    const edited = { ...SAMPLE_SKABELON, prompt: 'Ny prompt' };
+
+    it('stores the note in the own changelog and audits only that one was written, never the note', async () => {
+      mockUpdateSkabelon.mockResolvedValueOnce(edited as never);
+      const NOTE = 'Gjorde tonen mere formel efter mødet med chefen';
+      const res = await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Testskabelon', prompt: 'Ny prompt', changeNote: `  ${NOTE} ` }), CTX);
+      expect(res.status).toBe(200);
+      expect(mockVersion).toHaveBeenCalledWith('user-123', expect.anything(), ['prompt'], NOTE);
+      const [, event] = mockRecord.mock.calls[0];
+      expect(event).toEqual({ type: 'template.update', actorUserId: 'user-123', entityId: SK_ID, details: { changedFields: ['prompt'], hasChangeNote: true } });
+      expect(JSON.stringify(mockRecord.mock.calls)).not.toContain('formel');
+      // The note is not part of the updated template either.
+      expect(mockUpdateSkabelon.mock.calls[0][2]).not.toHaveProperty('changeNote');
+    });
+
+    it('treats a blank or invisible-only note as no note', async () => {
+      mockUpdateSkabelon.mockResolvedValue(edited as never);
+      for (const changeNote of ['', '   ', '\u200b\u200b', null]) {
+        mockVersion.mockClear();
+        await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Testskabelon', changeNote }), CTX);
+        expect(mockVersion.mock.calls[0][3]).toBeNull();
+      }
+    });
+
+    it.each([
+      ['a non-string', 42],
+      ['too long', 'x'.repeat(2001)],
+      ['a NUL character', 'abc\u0000def'],
+      ['a lone surrogate', 'abc\ud800def'],
+    ])('answers 400 for a note that is %s, before anything is changed', async (_l, changeNote) => {
+      const res = await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Ny', changeNote }), CTX);
+      expect(res.status).toBe(400);
+      expect((await res.json()).code).toBe('change_note_invalid');
+      expect(mockUpdateSkabelon).not.toHaveBeenCalled();
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
+
+    it('writes no version row and no event when nothing changed, whatever the note says', async () => {
+      mockUpdateSkabelon.mockResolvedValueOnce({ ...SAMPLE_SKABELON } as never);
+      await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Testskabelon', changeNote: 'Ingen ændring alligevel' }), CTX);
+      expect(mockVersion).not.toHaveBeenCalled();
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
   });
 
   it('records a failed update as outcome error without field values, and still answers a JSON 500', async () => {
@@ -165,7 +216,7 @@ describe('PUT /api/skabeloner/[id]', () => {
       outcome: 'error',
       actorUserId: 'user-123',
       entityId: SK_ID,
-      details: { changedFields: [] },
+      details: { changedFields: [], hasChangeNote: false },
     });
     expect(JSON.stringify(mockRecord.mock.calls)).not.toContain('Fortrolig');
   });

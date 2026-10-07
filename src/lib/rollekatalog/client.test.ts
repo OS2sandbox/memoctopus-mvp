@@ -67,6 +67,51 @@ describe('happy paths against the mock', () => {
   });
 });
 
+describe('getRoleCatalogue (READ key, GET, names and identifiers only)', () => {
+  it('reads user roles and role groups with the READ key and returns the whitelisted catalogue', async () => {
+    const c = await createRollekatalogClient(opts()).getRoleCatalogue();
+    expect(c.roles.entries.map((e) => e.identifier)).toEqual(['sagsbehandler', 'tt-skabelonansvarlig', 'leder', '104']);
+    expect(c.groups.entries.map((e) => e.identifier)).toEqual(['11', '12']);
+    expect(mock.requests).toEqual([
+      { method: 'GET', path: '/api/read/userroles/itsystems', query: '', keyRole: 'read', status: 200 },
+      { method: 'GET', path: '/api/read/rolegroups', query: '', keyRole: 'read', status: 200 },
+    ]);
+    expect(JSON.stringify(c)).not.toMatch(/Sagssystem|itSystemName|description/);
+  });
+
+  it('honours configured paths, and none skips a list without a request', async () => {
+    const c = await createRollekatalogClient(opts({ rolesPath: '/api/read/userroles', roleGroupsPath: null })).getRoleCatalogue();
+    expect(c.roles.entries.map((e) => e.identifier)).toEqual(['101', '102', '103', '104']);
+    expect(c.groups.entries).toEqual([]);
+    expect(mock.requests.map((r) => r.path)).toEqual(['/api/read/userroles']);
+  });
+
+  it('the ORG key is refused on these endpoints (403 forbidden), and no key is not_configured', async () => {
+    expect((await failure(createRollekatalogClient(opts({ readKey: mock.orgKey })).getRoleCatalogue())).code).toBe('forbidden');
+    expect((await failure(createRollekatalogClient(opts({ readKey: null })).getRoleCatalogue())).code).toBe('not_configured');
+  });
+
+  it('fails with short codes only: server error, invalid JSON, wrong shape, oversize', async () => {
+    mock.setFaults([{ match: '/api/read/rolegroups', status: 404 }]);
+    expect((await failure(createRollekatalogClient(opts()).getRoleCatalogue())).code).toBe('not_found');
+    mock.setFaults([{ match: '/api/read/userroles', invalidJson: true }]);
+    expect((await failure(createRollekatalogClient(opts()).getRoleCatalogue())).code).toBe('invalid_response');
+    mock.setData({ userRoles: [{ no: 'name' }, { no: 'name' }, { no: 'name' }, { no: 'name' }] });
+    mock.setFaults([]);
+    expect((await failure(createRollekatalogClient(opts()).getRoleCatalogue())).code).toBe('invalid_response');
+    mock.resetData();
+    mock.setFaults([{ match: '/api/read/userroles', oversize: { bytes: 5000 } }]);
+    expect((await failure(createRollekatalogClient(opts({ maxBytes: 4096 })).getRoleCatalogue())).code).toBe('too_large');
+  });
+
+  it('never leaks the key or the URL in a failure', async () => {
+    mock.setFaults([{ match: '/api/read/userroles', status: 500 }]);
+    const err = await failure(createRollekatalogClient(opts({ retries: 0 })).getRoleCatalogue());
+    expect(err.message).not.toContain(mock.readKey);
+    expect(err.message).not.toContain(mock.url);
+  });
+});
+
 describe('auth header and key roles', () => {
   it('sends the key in the ApiKey header and never in Authorization', async () => {
     const seen: Array<Record<string, string>> = [];

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { MEANINGLESS_CHARS_CLASS } from '@/lib/db/schema';
-import { INVISIBLE_SOURCE, changeNoteLength, meaningfulLength, stripInvisible } from './change-note';
+import { INVISIBLE_SOURCE, LOCAL_CHANGE_NOTE_MAX, changeNoteLength, meaningfulLength, parseLocalChangeNote, stripInvisible } from './change-note';
 
 describe('changeNoteLength (shared by the server schema and the UI counter)', () => {
   it('does not count interior whitespace', () => {
@@ -70,5 +70,37 @@ describe('MEANINGLESS_CHARS_CLASS', () => {
     expect(sql.split(literal).length - 1).toBe(2);
     const snapshot = readFileSync('drizzle/meta/0003_snapshot.json', 'utf8');
     expect(snapshot.split(literal.replace(/\\/g, '\\\\')).length - 1).toBe(2);
+  });
+});
+
+describe('parseLocalChangeNote (the optional note of a personal template edit)', () => {
+  it('is optional: absent, null, blank and invisible-only all mean no note', () => {
+    for (const raw of [undefined, null, '', '   ', '\u200b \u200b', '\n\t']) {
+      expect(parseLocalChangeNote(raw), String(raw)).toEqual({ ok: true, note: null });
+    }
+  });
+
+  it('has no minimum length, unlike the mandatory note of a central template', () => {
+    expect(parseLocalChangeNote('ok')).toEqual({ ok: true, note: 'ok' });
+  });
+
+  it('keeps interior newlines, strips invisible characters and makes the text NFC', () => {
+    expect(parseLocalChangeNote('  a\u200bb\nc  ')).toEqual({ ok: true, note: 'ab\nc' });
+    expect(parseLocalChangeNote('e\u0301')).toEqual({ ok: true, note: '\u00e9' });
+  });
+
+  it('rejects a non-string, an over-long note, NUL and a lone surrogate', () => {
+    expect(parseLocalChangeNote(1)).toMatchObject({ ok: false });
+    expect(parseLocalChangeNote({})).toMatchObject({ ok: false });
+    expect(parseLocalChangeNote('x'.repeat(LOCAL_CHANGE_NOTE_MAX + 1))).toMatchObject({ ok: false });
+    expect(parseLocalChangeNote('x'.repeat(LOCAL_CHANGE_NOTE_MAX))).toMatchObject({ ok: true });
+    expect(parseLocalChangeNote('a\u0000b')).toMatchObject({ ok: false });
+    expect(parseLocalChangeNote('a\ud800b')).toMatchObject({ ok: false });
+  });
+
+  it('gives Danish messages that do not echo the input', () => {
+    const r = parseLocalChangeNote('hemmelig\u0000');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).not.toContain('hemmelig');
   });
 });

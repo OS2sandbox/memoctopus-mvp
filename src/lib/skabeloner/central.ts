@@ -7,8 +7,14 @@
 //    unit. Anything outside that scope is NotFound (existence is not revealed);
 //    a principal without the capability gets the same, so the service fails
 //    closed even if a route forgot the guard.
+//  - A template with NO owner unit is ORGANISATION-WIDE (claims mode has no org
+//    units): only a manager with a GLOBAL template.manage may create or touch
+//    it; to a scoped manager it does not exist.
 //  - Targets (recipient units) must lie inside the owner unit's subtree: no
-//    sideways or upward delegation.
+//    sideways or upward delegation. An ownerless template may target any existing unit.
+//  - Role/group targets (recipients by catalogue role or group) are for global
+//    managers only; every one must be an ACTIVE catalogue entry when it is added
+//    (one that is kept while the catalogue later deactivates it just stops matching).
 //  - Every write is ONE transaction: the template row (+ targets), a version
 //    row with the mandatory change note, and the audit event (recordEvent with
 //    `tx`, which throws, so everything rolls back together).
@@ -26,13 +32,14 @@
 import { z } from 'zod';
 import type { AuditEventOf, EventType } from '@/lib/audit/events';
 import { recordEvent } from '@/lib/audit/record';
-import { ConflictError, NotFoundError, ValidationError, VersionConflictError } from '@/lib/authz/access-errors';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError, VersionConflictError } from '@/lib/authz/access-errors';
 import { defaultRunner, type SqlQueryable, type SqlRunner } from '@/lib/authz/pg-runner';
-import { isOrgUnitWithinScope, orgSubtreeUuids, orgUnitsInScope, type ScopeEnv } from '@/lib/authz/scope';
+import { hasGlobalScope, isOrgUnitWithinScope, orgSubtreeUuids, orgUnitsInScope, type ScopeEnv } from '@/lib/authz/scope';
 import type { Principal } from '@/lib/authz/types';
 import {
   centralStateChangeSchema,
   createCentralTemplateSchema,
+  dedupePrincipalTargets,
   dedupeTargets,
   updateCentralTemplateSchema,
   type CentralStatusFilter,
@@ -41,6 +48,10 @@ import {
   CENTRAL_CONTENT_FIELDS,
   type CentralChangeType,
   type CentralContentField,
+  type CentralCatalogueEntry,
+  type CentralPrincipalTarget,
+  type CentralPrincipalTargetSnapshot,
+  type CentralPrincipalTargetView,
   type CentralScopeOrgUnit,
   type CentralStatus,
   type CentralTarget,
@@ -129,9 +140,23 @@ const sortTargets = (targets: readonly CentralTarget[]): CentralTarget[] =>
 const sameTargets = (a: readonly CentralTarget[], b: readonly CentralTarget[]): boolean =>
   JSON.stringify(sortTargets(a)) === JSON.stringify(sortTargets(b));
 
+const sortPrincipal = <T extends CentralPrincipalTarget>(targets: readonly T[]): T[] =>
+  [...targets].sort((a, b) =>
+    a.kind !== b.kind ? (a.kind < b.kind ? -1 : 1) : a.identifier < b.identifier ? -1 : a.identifier > b.identifier ? 1 : 0,
+  );
+
+const samePrincipal = (a: readonly CentralPrincipalTarget[], b: readonly CentralPrincipalTarget[]): boolean =>
+  JSON.stringify(sortPrincipal(a).map((t) => [t.kind, t.identifier])) ===
+  JSON.stringify(sortPrincipal(b).map((t) => [t.kind, t.identifier]));
+
+const principalKey = (t: CentralPrincipalTarget): string => `${t.kind}\u0000${t.identifier}`;
+
+const snapshotOf = (views: readonly CentralPrincipalTargetView[]): CentralPrincipalTargetSnapshot[] =>
+  views.map((v) => ({ kind: v.kind, identifier: v.identifier, name: v.name }));
+
 interface TemplateRow {
   id: string;
-  owner_org_unit_uuid: string;
+  owner_org_unit_uuid: string | null;
   name: string;
   description: string;
   prompt: string;
@@ -162,7 +187,11 @@ const contentOf = (r: TemplateRow): CentralTemplateContent => ({
   allowToggleOverrides: r.allow_toggle_overrides,
 });
 
-function adminView(r: TemplateRow, targets: CentralTarget[]): CentralTemplateAdmin {
+function adminView(
+  r: TemplateRow,
+  targets: CentralTarget[],
+  principalTargets: CentralPrincipalTargetView[],
+): CentralTemplateAdmin {
   return {
     ...contentOf(r),
     id: r.id,
@@ -170,6 +199,7 @@ function adminView(r: TemplateRow, targets: CentralTarget[]): CentralTemplateAdm
     status: r.status as CentralStatus,
     currentVersion: r.current_version,
     targets: sortTargets(targets),
+    principalTargets,
     createdAt: iso(r.created_at),
     updatedAt: iso(r.updated_at),
     // The name as it was when version 1 was written, so it survives a rename or deletion of the user.
@@ -206,6 +236,88 @@ async function selectTargets(env: CentralEnv, q: SqlQueryable, id: string): Prom
   return rows.map((r) => ({ orgUnitUuid: r.org_unit_uuid, includeDescendants: r.include_descendants }));
 }
 
+interface PrincipalRow {
+  kind: string;
+  identifier: string;
+  name: string | null;
+  active: boolean | null;
+}
+
+const principalView = (r: PrincipalRow): CentralPrincipalTargetView => ({
+  kind: r.kind as CentralPrincipalTarget['kind'],
+  identifier: r.identifier,
+  // The FK keeps every row in the catalogue, so a missing name only happens for a hand-edited database.
+  name: r.name ?? r.identifier,
+  status: r.active === null ? 'unknown' : r.active ? 'active' : 'inactive',
+});
+
+/** Role/group targets with the catalogue's CURRENT name and state. */
+async function selectPrincipalTargets(env: CentralEnv, q: SqlQueryable, id: string): Promise<CentralPrincipalTargetView[]> {
+  const { rows } = await q.query<PrincipalRow>(
+    `SELECT pt.kind, pt.identifier, er.name, er.active
+       FROM ${tbl(env, 'central_template_principal_targets')} pt
+       LEFT JOIN ${tbl(env, 'external_roles')} er ON er.kind = pt.kind AND er.identifier = pt.identifier
+      WHERE pt.template_id = $1::uuid
+      ORDER BY pt.kind, pt.identifier`,
+    [id],
+  );
+  return rows.map(principalView);
+}
+
+async function replacePrincipalTargets(
+  env: CentralEnv,
+  q: SqlQueryable,
+  id: string,
+  targets: readonly CentralPrincipalTarget[],
+): Promise<void> {
+  await q.query(`DELETE FROM ${tbl(env, 'central_template_principal_targets')} WHERE template_id = $1::uuid`, [id]);
+  if (targets.length === 0) return;
+  await q.query(
+    `INSERT INTO ${tbl(env, 'central_template_principal_targets')} (template_id, kind, identifier)
+     SELECT $1::uuid, x.k, x.i FROM unnest($2::text[], $3::text[]) AS x(k, i)`,
+    [id, targets.map((t) => t.kind), targets.map((t) => t.identifier)],
+  );
+}
+
+/**
+ * Role/group targets are for GLOBAL managers (the owner-subtree rule has no meaning for them), and a
+ * target that is NEWLY added must be an active entry of the catalogue. A target that was already
+ * there may have been deactivated since; keeping it is fine (it just stops matching anybody).
+ */
+async function assertPrincipalTargetsAllowed(
+  env: CentralEnv,
+  q: SqlQueryable,
+  principal: Principal,
+  added: readonly CentralPrincipalTarget[],
+): Promise<void> {
+  if (added.length === 0) return;
+  if (!hasGlobalScope(principal, 'template.manage')) {
+    throw new ForbiddenError(
+      'Kun en skabelonansvarlig med tilladelse for hele organisationen kan gøre en skabelon tilgængelig for roller og grupper',
+      'principal_targets_need_global',
+    );
+  }
+  const { rows } = await q.query(
+    `SELECT 1 FROM ${tbl(env, 'external_roles')} e
+       JOIN unnest($1::text[], $2::text[]) AS x(k, i) ON x.k = e.kind AND x.i = e.identifier
+      WHERE e.active`,
+    [added.map((t) => t.kind), added.map((t) => t.identifier)],
+  );
+  if (rows.length !== added.length) {
+    throw new ValidationError('En valgt rolle eller gruppe findes ikke i kataloget', 'principal_target_unknown');
+  }
+}
+
+/** Every owner-less (organisation-wide) write needs a GLOBAL template.manage. */
+function assertGlobalForOrgWide(principal: Principal): void {
+  if (!hasGlobalScope(principal, 'template.manage')) {
+    throw new ForbiddenError(
+      'Kun en skabelonansvarlig med tilladelse for hele organisationen kan oprette en skabelon uden ejerenhed',
+      'org_wide_needs_global',
+    );
+  }
+}
+
 /**
  * Loads a template the principal may manage, or throws NotFound: unknown,
  * ill-formed id, owner unit outside template.manage scope, or no capability.
@@ -221,19 +333,35 @@ async function loadManageable(
   if (!isUuid(id)) throw new NotFoundError(NOT_FOUND);
   const row = await selectRow(env, q, id.toLowerCase(), lock);
   if (!row) throw new NotFoundError(NOT_FOUND);
-  const inScope = await isOrgUnitWithinScope(principal, 'template.manage', row.owner_org_unit_uuid, scopeEnv(env, q));
+  // An organisation-wide template (no owner unit) belongs to the global managers only.
+  const inScope =
+    row.owner_org_unit_uuid === null
+      ? hasGlobalScope(principal, 'template.manage')
+      : await isOrgUnitWithinScope(principal, 'template.manage', row.owner_org_unit_uuid, scopeEnv(env, q));
   if (!inScope) throw new NotFoundError(NOT_FOUND);
   return row;
 }
 
-/** Targets must be inside the owner's subtree (the owner itself included). Unknown units are not in it. */
+/**
+ * Targets must be inside the owner's subtree (the owner itself included). Unknown units are not in it.
+ * An organisation-wide template (no owner) may target any EXISTING unit (its manager is global).
+ */
 async function assertTargetsInOwnerSubtree(
   env: CentralEnv,
   q: SqlQueryable,
-  ownerUuid: string,
+  ownerUuid: string | null,
   targets: readonly CentralTarget[],
 ): Promise<void> {
   if (targets.length === 0) return;
+  if (ownerUuid === null) {
+    const { rows } = await q.query(`SELECT uuid FROM ${tbl(env, 'org_units')} WHERE uuid = ANY($1::uuid[])`, [
+      targets.map((t) => t.orgUnitUuid),
+    ]);
+    if (rows.length !== targets.length) {
+      throw new ValidationError('En valgt enhed findes ikke', 'target_outside_owner');
+    }
+    return;
+  }
   const subtree = await orgSubtreeUuids([{ orgUnitUuid: ownerUuid, includeDescendants: true }], scopeEnv(env, q));
   for (const t of targets) {
     if (!subtree.has(t.orgUnitUuid.toLowerCase())) {
@@ -268,14 +396,15 @@ interface VersionInsert {
   actor: Principal;
   content: CentralTemplateContent;
   targets: readonly CentralTarget[];
+  principalTargets: readonly CentralPrincipalTargetSnapshot[];
 }
 
 async function appendVersion(env: CentralEnv, q: SqlQueryable, v: VersionInsert): Promise<void> {
   const name = await actorName(env, q, v.actor.userId);
   await q.query(
     `INSERT INTO ${tbl(env, 'central_template_versions')}
-       (template_id, version, change_type, change_note, changed_by_user_id, changed_by_name, content, targets)
-     VALUES ($1::uuid, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb)`,
+       (template_id, version, change_type, change_note, changed_by_user_id, changed_by_name, content, targets, principal_targets)
+     VALUES ($1::uuid, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb)`,
     [
       v.templateId,
       v.version,
@@ -285,9 +414,14 @@ async function appendVersion(env: CentralEnv, q: SqlQueryable, v: VersionInsert)
       name,
       JSON.stringify(v.content),
       JSON.stringify(sortTargets(v.targets)),
+      JSON.stringify(sortPrincipal(v.principalTargets)),
     ],
   );
 }
+
+/** The owner unit as the audit event's secondary entity; an organisation-wide template has none. */
+const ownerRef = (row: TemplateRow): { secondaryEntityId?: string } =>
+  row.owner_org_unit_uuid ? { secondaryEntityId: row.owner_org_unit_uuid } : {};
 
 /** Audit row on the SAME transaction: throws on failure, so the whole change rolls back. */
 async function audit<T extends EventType>(env: CentralEnv, tx: SqlQueryable, event: AuditEventOf<T>): Promise<void> {
@@ -297,7 +431,7 @@ async function audit<T extends EventType>(env: CentralEnv, tx: SqlQueryable, eve
 async function reload(env: CentralEnv, q: SqlQueryable, id: string): Promise<CentralTemplateAdmin> {
   const row = await selectRow(env, q, id, false);
   if (!row) throw new NotFoundError(NOT_FOUND);
-  return adminView(row, await selectTargets(env, q, id));
+  return adminView(row, await selectTargets(env, q, id), await selectPrincipalTargets(env, q, id));
 }
 
 // ─── Create ────────────────────────────────────────────────────────────────
@@ -310,6 +444,7 @@ export async function createCentralTemplate(
   const input = parseInput(createCentralTemplateSchema, rawInput);
   const owner = input.ownerOrgUnitUuid;
   const targets = sortTargets(dedupeTargets(input.targets));
+  const principalTargets = sortPrincipal(dedupePrincipalTargets(input.principalTargets));
   const content: CentralTemplateContent = {
     name: input.name,
     description: input.description,
@@ -323,13 +458,18 @@ export async function createCentralTemplate(
   };
 
   return inTx(env, async (tx) => {
-    // FOR SHARE: a concurrent deleteOrgUnit (FOR UPDATE) waits for us instead of racing the RESTRICT FK.
-    const unit = await tx.query(`SELECT 1 FROM ${tbl(env, 'org_units')} WHERE uuid = $1::uuid FOR SHARE`, [owner]);
-    const inScope =
-      unit.rows.length > 0 && (await isOrgUnitWithinScope(principal, 'template.manage', owner, scopeEnv(env, tx)));
-    if (!inScope) throw new NotFoundError('Organisationsenheden findes ikke', 'org_unit_not_found');
+    if (owner === null) {
+      assertGlobalForOrgWide(principal);
+    } else {
+      // FOR SHARE: a concurrent deleteOrgUnit (FOR UPDATE) waits for us instead of racing the RESTRICT FK.
+      const unit = await tx.query(`SELECT 1 FROM ${tbl(env, 'org_units')} WHERE uuid = $1::uuid FOR SHARE`, [owner]);
+      const inScope =
+        unit.rows.length > 0 && (await isOrgUnitWithinScope(principal, 'template.manage', owner, scopeEnv(env, tx)));
+      if (!inScope) throw new NotFoundError('Organisationsenheden findes ikke', 'org_unit_not_found');
+    }
 
     await assertTargetsInOwnerSubtree(env, tx, owner, targets);
+    await assertPrincipalTargetsAllowed(env, tx, principal, principalTargets);
 
     const inserted = await tx.query<{ id: string }>(
       `INSERT INTO ${tbl(env, 'central_templates')}
@@ -354,6 +494,7 @@ export async function createCentralTemplate(
     const id = inserted.rows[0].id;
 
     await replaceTargets(env, tx, id, targets);
+    await replacePrincipalTargets(env, tx, id, principalTargets);
     await appendVersion(env, tx, {
       templateId: id,
       version: 1,
@@ -362,13 +503,14 @@ export async function createCentralTemplate(
       actor: principal,
       content,
       targets,
+      principalTargets: snapshotOf(await selectPrincipalTargets(env, tx, id)),
     });
     await audit(env, tx, {
       type: 'central_template.create',
       actorUserId: principal.userId,
       entityId: id,
-      secondaryEntityId: owner,
-      details: { version: 1, targetCount: targets.length },
+      ...(owner ? { secondaryEntityId: owner } : {}),
+      details: { version: 1, targetCount: targets.length, principalTargetCount: principalTargets.length },
     });
     return reload(env, tx, id);
   });
@@ -400,10 +542,23 @@ export async function updateCentralTemplate(
     const nextTargets = input.targets === undefined ? currentTargets : sortTargets(input.targets);
     const targetsChanged = input.targets !== undefined && !sameTargets(currentTargets, nextTargets);
 
-    if (changedFields.length === 0 && !targetsChanged) {
+    const currentPrincipal = await selectPrincipalTargets(env, tx, row.id);
+    const nextPrincipal = input.principalTargets === undefined ? currentPrincipal : sortPrincipal(input.principalTargets);
+    const principalChanged = input.principalTargets !== undefined && !samePrincipal(currentPrincipal, nextPrincipal);
+
+    if (changedFields.length === 0 && !targetsChanged && !principalChanged) {
       throw new ValidationError('Der er ingen ændringer at gemme', 'no_changes');
     }
     if (targetsChanged) await assertTargetsInOwnerSubtree(env, tx, row.owner_org_unit_uuid, nextTargets);
+    if (principalChanged) {
+      const had = new Set(currentPrincipal.map(principalKey));
+      await assertPrincipalTargetsAllowed(
+        env,
+        tx,
+        principal,
+        nextPrincipal.filter((t) => !had.has(principalKey(t))),
+      );
+    }
 
     const newVersion = row.current_version + 1;
     const params: unknown[] = [row.id, row.current_version];
@@ -425,6 +580,8 @@ export async function updateCentralTemplate(
     }
 
     if (targetsChanged) await replaceTargets(env, tx, row.id, nextTargets);
+    if (principalChanged) await replacePrincipalTargets(env, tx, row.id, nextPrincipal);
+    const principalSnapshot = principalChanged ? snapshotOf(await selectPrincipalTargets(env, tx, row.id)) : snapshotOf(currentPrincipal);
 
     const retargetOnly = changedFields.length === 0;
     await appendVersion(env, tx, {
@@ -435,6 +592,7 @@ export async function updateCentralTemplate(
       actor: principal,
       content: next,
       targets: nextTargets,
+      principalTargets: principalSnapshot,
     });
     await audit(
       env,
@@ -444,15 +602,22 @@ export async function updateCentralTemplate(
             type: 'central_template.retarget',
             actorUserId: principal.userId,
             entityId: row.id,
-            secondaryEntityId: row.owner_org_unit_uuid,
-            details: { version: newVersion, targetCount: nextTargets.length },
+            ...ownerRef(row),
+            details: { version: newVersion, targetCount: nextTargets.length, principalTargetCount: nextPrincipal.length },
           }
         : {
             type: 'central_template.update',
             actorUserId: principal.userId,
             entityId: row.id,
-            secondaryEntityId: row.owner_org_unit_uuid,
-            details: { version: newVersion, changedFields: [...changedFields, ...(targetsChanged ? (['targets'] as const) : [])] },
+            ...ownerRef(row),
+            details: {
+              version: newVersion,
+              changedFields: [
+                ...changedFields,
+                ...(targetsChanged ? (['targets'] as const) : []),
+                ...(principalChanged ? (['principalTargets'] as const) : []),
+              ],
+            },
           },
     );
     return reload(env, tx, row.id);
@@ -494,6 +659,7 @@ async function changeStatus(
     }
 
     const targets = await selectTargets(env, tx, row.id);
+    const principalTargets = await selectPrincipalTargets(env, tx, row.id);
     await appendVersion(env, tx, {
       templateId: row.id,
       version: newVersion,
@@ -502,12 +668,13 @@ async function changeStatus(
       actor: principal,
       content: contentOf(row),
       targets,
+      principalTargets: snapshotOf(principalTargets),
     });
     await audit(env, tx, {
       type: archiving ? 'central_template.archive' : 'central_template.restore',
       actorUserId: principal.userId,
       entityId: row.id,
-      secondaryEntityId: row.owner_org_unit_uuid,
+      ...ownerRef(row),
       details: { version: newVersion },
     });
     return reload(env, tx, row.id);
@@ -530,7 +697,10 @@ export const restoreCentralTemplate = (
 
 // ─── Reads ─────────────────────────────────────────────────────────────────
 
-/** Templates whose OWNER unit is inside the caller's template.manage scope. Default filter: active only. */
+/**
+ * Templates whose OWNER unit is inside the caller's template.manage scope; organisation-wide ones
+ * (no owner) only for a global manager. Default filter: active only.
+ */
 export async function listManageableTemplates(
   principal: Principal,
   opts: { status?: CentralStatusFilter } = {},
@@ -545,7 +715,7 @@ export async function listManageableTemplates(
     id: string;
     name: string;
     description: string;
-    owner_org_unit_uuid: string;
+    owner_org_unit_uuid: string | null;
     status: string;
     current_version: number;
     target_count: number;
@@ -566,6 +736,34 @@ export async function listManageableTemplates(
       ORDER BY ct.updated_at DESC, ct.id`,
     [status === 'all' ? null : status, scope.all ? null : scope.uuids],
   );
+  // The audience of every listed template, two statements for the whole page.
+  const ids = rows.map((r) => r.id);
+  const orgTargets = new Map<string, CentralTarget[]>();
+  const principalTargets = new Map<string, CentralPrincipalTargetView[]>();
+  if (ids.length > 0) {
+    const org = await q.query<{ template_id: string; org_unit_uuid: string; include_descendants: boolean }>(
+      `SELECT template_id, org_unit_uuid, include_descendants FROM ${tbl(env, 'central_template_targets')}
+        WHERE template_id = ANY($1::uuid[]) ORDER BY org_unit_uuid`,
+      [ids],
+    );
+    for (const t of org.rows) {
+      const list = orgTargets.get(t.template_id) ?? [];
+      list.push({ orgUnitUuid: t.org_unit_uuid, includeDescendants: t.include_descendants });
+      orgTargets.set(t.template_id, list);
+    }
+    const pr = await q.query<PrincipalRow & { template_id: string }>(
+      `SELECT pt.template_id, pt.kind, pt.identifier, er.name, er.active
+         FROM ${tbl(env, 'central_template_principal_targets')} pt
+         LEFT JOIN ${tbl(env, 'external_roles')} er ON er.kind = pt.kind AND er.identifier = pt.identifier
+        WHERE pt.template_id = ANY($1::uuid[]) ORDER BY pt.kind, pt.identifier`,
+      [ids],
+    );
+    for (const t of pr.rows) {
+      const list = principalTargets.get(t.template_id) ?? [];
+      list.push(principalView(t));
+      principalTargets.set(t.template_id, list);
+    }
+  }
   return rows.map((r) => ({
     id: r.id,
     name: r.name,
@@ -574,6 +772,8 @@ export async function listManageableTemplates(
     status: r.status as CentralStatus,
     currentVersion: r.current_version,
     targetCount: r.target_count,
+    targets: orgTargets.get(r.id) ?? [],
+    principalTargets: principalTargets.get(r.id) ?? [],
     updatedAt: iso(r.updated_at),
     createdByName: r.created_by_name ?? null,
     lastEditedByName: r.last_edited_by_name ?? null,
@@ -587,7 +787,11 @@ export async function getManageableTemplate(
   env: CentralEnv = defaultCentralEnv(),
 ): Promise<CentralTemplateAdmin> {
   const row = await loadManageable(env, env.runner, principal, id, false);
-  return adminView(row, await selectTargets(env, env.runner, row.id));
+  return adminView(
+    row,
+    await selectTargets(env, env.runner, row.id),
+    await selectPrincipalTargets(env, env.runner, row.id),
+  );
 }
 
 /** The changelog, newest first. Same scope rule as the template itself. */
@@ -605,8 +809,9 @@ export async function listVersions(
     changed_at: Date | string;
     content: CentralTemplateContent;
     targets: CentralTarget[];
+    principal_targets: CentralPrincipalTargetSnapshot[] | null;
   }>(
-    `SELECT version, change_type, change_note, changed_by_name, changed_at, content, targets
+    `SELECT version, change_type, change_note, changed_by_name, changed_at, content, targets, principal_targets
        FROM ${tbl(env, 'central_template_versions')}
       WHERE template_id = $1::uuid
       ORDER BY version DESC`,
@@ -620,6 +825,7 @@ export async function listVersions(
     changedAt: iso(r.changed_at),
     content: r.content,
     targets: r.targets,
+    principalTargets: r.principal_targets ?? [],
   }));
 }
 
@@ -648,4 +854,38 @@ export async function listScopeOrgUnits(
     name: r.name,
     parentUuid: r.parent_uuid !== null && visible.has(r.parent_uuid) ? r.parent_uuid : null,
   }));
+}
+
+/**
+ * The role/group catalogue as the target picker needs it: every entry (inactive ones too, so a
+ * target that was withdrawn from the catalogue can still be named), both sources merged. Names and
+ * identifiers only. Callers must hold template.manage; whether the caller may actually USE it for
+ * targeting (global managers only) is the caller's `canTarget`.
+ */
+export async function listCatalogue(env: CentralEnv = defaultCentralEnv()): Promise<{
+  entries: CentralCatalogueEntry[];
+  lastRefreshedAt: string | null;
+}> {
+  const { rows } = await env.runner.query<{
+    kind: string;
+    identifier: string;
+    name: string;
+    source: string;
+    active: boolean;
+    synced_at: Date | string;
+  }>(
+    `SELECT kind, identifier, name, source, active, synced_at FROM ${tbl(env, 'external_roles')}
+      ORDER BY active DESC, kind, lower(name), identifier`,
+  );
+  const refreshed = rows.filter((r) => r.source === 'rollekatalog').map((r) => iso(r.synced_at));
+  return {
+    entries: rows.map((r) => ({
+      kind: r.kind as CentralCatalogueEntry['kind'],
+      identifier: r.identifier,
+      name: r.name,
+      source: r.source as CentralCatalogueEntry['source'],
+      active: r.active,
+    })),
+    lastRefreshedAt: refreshed.length > 0 ? refreshed.reduce((a, b) => (a > b ? a : b)) : null,
+  };
 }

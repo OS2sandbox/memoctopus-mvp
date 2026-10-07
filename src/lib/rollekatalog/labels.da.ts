@@ -51,3 +51,20 @@ export const syncCountLabels: Record<keyof SyncCounts, string> = {
   assignmentRowsSkippedInvalid: 'Rolle-rækker sprunget over (ugyldig række)',
   membershipsSkippedInvalid: 'Stillinger sprunget over (ugyldig række)',
 };
+
+// The role catalogue refresh: its own wording where the sync's would be wrong (it reads roles
+// and groups, not users and units), the sync's for every upstream error.
+const CATALOGUE_MESSAGES: Record<string, string> = {
+  empty_response: 'Rollekatalog returnerede ingen roller eller grupper. Opdateringen er afbrudt, og kataloget er uændret.',
+  removal_threshold:
+    'Opdateringen ville fjerne usædvanligt mange roller eller grupper fra kataloget og er afbrudt. Intet er ændret. Kontrollér Rollekatalog, eller gennemtving opdateringen.',
+  invalid_response: 'Svaret fra Rollekatalog havde et uventet format, eller for mange rækker i det var ugyldige. Intet er ændret.',
+  already_running: 'En opdatering af rollekataloget kører allerede.',
+  db_error: 'Rollekataloget kunne ikke gemmes. Intet er ændret.',
+  unexpected: 'Der opstod en uventet fejl under opdateringen af rollekataloget. Intet er ændret.',
+};
+
+export function catalogueErrorMessage(code: string | null | undefined): string {
+  if (code && Object.prototype.hasOwnProperty.call(CATALOGUE_MESSAGES, code)) return CATALOGUE_MESSAGES[code];
+  return syncErrorMessage(code);
+}

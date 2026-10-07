@@ -81,6 +81,21 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         ADD COLUMN IF NOT EXISTS include_dato BOOLEAN NOT NULL DEFAULT FALSE
     `);
 
+    // skabelon_versions — the person's own changelog of a personal skabelon. Own data in own
+    // schema: the optional note they wrote and a snapshot live ONLY here, never in the audit log.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".skabelon_versions (
+        id             TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        skabelon_id    TEXT NOT NULL REFERENCES "${schema}".skabeloner(id) ON DELETE CASCADE,
+        version        INTEGER NOT NULL,
+        change_note    TEXT,
+        changed_fields TEXT[] NOT NULL DEFAULT '{}',
+        snapshot       JSONB NOT NULL DEFAULT '{}',
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (skabelon_id, version)
+      )
+    `);
+
     // meetings
     await client.query(`
       CREATE TABLE IF NOT EXISTS "${schema}".meetings (

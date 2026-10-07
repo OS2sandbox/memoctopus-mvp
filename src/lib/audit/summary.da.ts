@@ -98,7 +98,7 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   },
 
   'template.create': (c) => `${c.actor} oprettede en skabelon`,
-  'template.update': (c) => `${c.actor} ændrede en skabelon`,
+  'template.update': (c) => `${c.actor} ændrede en skabelon${c.details.hasChangeNote === true ? ' og skrev en ændringsbeskrivelse' : ''}`,
   'template.delete': (c) => `${c.actor} slettede en skabelon`,
   'template.share': (c) => `${c.actor} delte en skabelon via link`,
   'template.import': (c) => `${c.actor} importerede en skabelon fra et link`,
@@ -106,7 +106,7 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   'central_template.create': (c) => `${c.actor} oprettede ${centralTemplate(c)}`,
   'central_template.update': (c) => `${c.actor} ændrede ${centralTemplate(c)}${version(c.details)}`,
   'central_template.retarget': (c) => `${c.actor} ændrede, hvem der har ${centralTemplate(c)} til rådighed${version(c.details)}`,
-  'central_template.archive': (c) => `${c.actor} arkiverede ${centralTemplate(c)}${version(c.details)}`,
+  'central_template.archive': (c) => `${c.actor} arkiverede ${centralTemplate(c)}, så den er fjernet for alle${version(c.details)}`,
   'central_template.restore': (c) => `${c.actor} genoprettede ${centralTemplate(c)}${version(c.details)}`,
 
   'audio.upload': (c) => {

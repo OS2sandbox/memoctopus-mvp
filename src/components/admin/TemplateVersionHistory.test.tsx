@@ -31,6 +31,7 @@ const v = (over: Partial<CentralTemplateVersion>): CentralTemplateVersion => ({
   changedAt: '2026-10-01T10:00:00.000Z',
   content: content(),
   targets: [{ orgUnitUuid: UNIT, includeDescendants: true }],
+  principalTargets: [],
   ...over,
 });
 
@@ -164,5 +165,43 @@ describe('TemplateVersionHistory', () => {
     installFetch({ [`GET /api/admin/central-templates/${ID}/versions`]: () => json({ error: 'x' }, 404) });
     render(<TemplateVersionHistory templateId={ID} unitName={names} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Ikke fundet.');
+  });
+
+  it('words role and group changes with the names they had in each version ("Gjort tilgængelig for: …")', async () => {
+    const before = v({ version: 1, principalTargets: [{ kind: 'role', identifier: 'a', name: 'Sagsbehandler' }] });
+    const after = v({
+      version: 2,
+      changeType: 'retarget',
+      changeNote: 'Skiftede målgruppe',
+      principalTargets: [
+        { kind: 'group', identifier: 'g', name: 'Socialforvaltningen' },
+        { kind: 'role', identifier: 'b', name: 'Leder' },
+      ],
+    });
+    setup([after, before]);
+    const other = await screen.findByRole('list', { name: 'Øvrige ændringer' });
+    expect(other).toHaveTextContent('Gjort tilgængelig for: Socialforvaltningen (gruppe)');
+    expect(other).toHaveTextContent('Gjort tilgængelig for: Leder (rolle)');
+    expect(other).toHaveTextContent('Ikke længere tilgængelig for: Sagsbehandler (rolle)');
+  });
+
+  it('copes with a version written before role/group targets existed', async () => {
+    const same = [{ kind: 'role' as const, identifier: 'a', name: 'Sagsbehandler' }];
+    const old = { ...v({ version: 1 }), principalTargets: undefined } as unknown as CentralTemplateVersion;
+    const next = v({ version: 2, changeType: 'update', changeNote: 'Rettet teksten lidt', content: content({ includeDato: true }), principalTargets: same });
+    setup([next, old]);
+    const other = await screen.findByRole('list', { name: 'Øvrige ændringer' });
+    // From "none" to "one role" is a change; the old version simply had none.
+    expect(other).toHaveTextContent('Gjort tilgængelig for: Sagsbehandler (rolle)');
+  });
+
+  it('says nothing about roles when they did not change between two versions', async () => {
+    const same = [{ kind: 'role' as const, identifier: 'a', name: 'Sagsbehandler' }];
+    const first = v({ version: 1, principalTargets: same });
+    const second = v({ version: 2, changeType: 'update', changeNote: 'Slog kategorien til', content: content({ includeDato: true }), principalTargets: same });
+    setup([second, first]);
+    const other = await screen.findByRole('list', { name: 'Øvrige ændringer' });
+    expect(other).toHaveTextContent('Kategori: Dato ændret');
+    expect(other).not.toHaveTextContent('Sagsbehandler');
   });
 });

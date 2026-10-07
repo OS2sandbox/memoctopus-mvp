@@ -114,7 +114,12 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         `SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_name LIKE 'central_template%' ORDER BY 1`,
         [schema],
       );
-      expect(t.rows.map((r) => r.table_name)).toEqual(['central_template_targets', 'central_template_versions', 'central_templates']);
+      expect(t.rows.map((r) => r.table_name)).toEqual([
+        'central_template_principal_targets',
+        'central_template_targets',
+        'central_template_versions',
+        'central_templates',
+      ]);
       const f = await c.query(
         `SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1 AND p.proname = 'central_template_versions_guard'`,
         [schema],
@@ -169,7 +174,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
           secondary_entity_id: t.a,
           outcome: 'success',
         });
-        expect(a[0].details).toEqual({ version: 1, targetCount: 2 });
+        expect(a[0].details).toEqual({ version: 1, targetCount: 2, principalTargetCount: 0 });
         await close();
       }));
 
@@ -438,7 +443,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
           change_type: 'retarget',
           targets: [{ orgUnitUuid: t.a, includeDescendants: true }],
         });
-        expect((await c.query(`SELECT details FROM audit_events WHERE event_type = 'central_template.retarget'`)).rows[0].details).toEqual({ version: 2, targetCount: 1 });
+        expect((await c.query(`SELECT details FROM audit_events WHERE event_type = 'central_template.retarget'`)).rows[0].details).toEqual({ version: 2, targetCount: 1, principalTargetCount: 0 });
         expect(await count(c, 'audit_events', `event_type = 'central_template.update'`)).toBe(0);
         expect(await count(c, 'central_template_targets')).toBe(1);
 
@@ -720,6 +725,164 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         const dump = JSON.stringify((await c.query(`SELECT * FROM audit_events WHERE event_type LIKE 'central_template.%'`)).rows);
         expect((await c.query(`SELECT count(*)::int AS n FROM audit_events WHERE event_type LIKE 'central_template.%'`)).rows[0].n).toBe(4);
         for (const s of ['Hemmeligt', 'Hemmelig prompt', 'promptTekst', 'ændringsnote']) expect(dump).not.toContain(s);
+        await close();
+      }));
+  });
+  describe('organisation-wide templates and role/group targets', () => {
+    async function role(c: Client, kind: 'role' | 'group', identifier: string, name = identifier, active = true) {
+      await c.query(`INSERT INTO external_roles (kind, identifier, name, source, active) VALUES ($1, $2, $3, 'rollekatalog', $4)`, [kind, identifier, name, active]);
+    }
+
+    it('a global manager creates an org-wide template (NULL owner) with role and group targets; names are snapshotted', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        await user(c, 'adm', 'Anne Admin');
+        await role(c, 'role', 'sagsbehandler', 'Sagsbehandler');
+        await role(c, 'group', 'social', 'Socialforvaltningen');
+
+        const out = await createCentralTemplate(
+          globalManager('adm'),
+          { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'sagsbehandler' }, { kind: 'group', identifier: 'social' }], changeNote: NOTE },
+          env,
+        );
+        expect(out.ownerOrgUnitUuid).toBeNull();
+        expect(out.principalTargets).toEqual([
+          { kind: 'group', identifier: 'social', name: 'Socialforvaltningen', status: 'active' },
+          { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active' },
+        ]);
+        const v = (await c.query('SELECT principal_targets FROM central_template_versions WHERE version = 1')).rows[0];
+        expect(v.principal_targets).toEqual([
+          { kind: 'group', identifier: 'social', name: 'Socialforvaltningen' },
+          { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler' },
+        ]);
+        // The audit event has no secondary entity and only counts.
+        const a = (await c.query(`SELECT secondary_entity_id, details FROM audit_events WHERE event_type = 'central_template.create'`)).rows[0];
+        expect(a.secondary_entity_id).toBeNull();
+        expect(a.details).toEqual({ version: 1, targetCount: 0, principalTargetCount: 2 });
+        expect(JSON.stringify(a)).not.toMatch(/sagsbehandler|social/i);
+        await close();
+      }));
+
+    it('a scoped manager can neither create org-wide, nor see, read or touch one; a global manager sees it in the list', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        const t = await tree(c);
+        await user(c, 'adm');
+        await user(c, 'mgr');
+        const scoped = managerOf('mgr', t.root); // even the root of the whole tree is not "the whole organisation"
+        await expect(createCentralTemplate(scoped, { ...BASE, targets: [], changeNote: NOTE }, env)).rejects.toMatchObject({ code: 'org_wide_needs_global' });
+
+        const wide = await createCentralTemplate(globalManager('adm'), { ...BASE, targets: [], changeNote: NOTE }, env);
+        expect(await count(c, 'central_templates')).toBe(1);
+        expect((await listManageableTemplates(scoped, { status: 'all' }, env)).map((x) => x.id)).toEqual([]);
+        expect((await listManageableTemplates(globalManager('adm'), { status: 'all' }, env)).map((x) => x.id)).toEqual([wide.id]);
+        await expect(getManageableTemplate(scoped, wide.id, env)).rejects.toBeInstanceOf(NotFoundError);
+        await expect(listVersions(scoped, wide.id, env)).rejects.toBeInstanceOf(NotFoundError);
+        await expect(updateCentralTemplate(scoped, wide.id, { baseVersion: 1, changeNote: NOTE, name: 'Kapret' }, env)).rejects.toBeInstanceOf(NotFoundError);
+        await expect(archiveCentralTemplate(scoped, wide.id, { baseVersion: 1, changeNote: NOTE }, env)).rejects.toBeInstanceOf(NotFoundError);
+        expect((await c.query('SELECT name, status FROM central_templates')).rows[0]).toEqual({ name: BASE.name, status: 'active' });
+        await close();
+      }));
+
+    it('a scoped manager cannot add role/group targets even to their own template', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        const t = await tree(c);
+        await user(c, 'mgr');
+        await role(c, 'role', 'sagsbehandler');
+        const mgr = managerOf('mgr', t.a);
+        const tpl = await createCentralTemplate(mgr, { ...BASE, ownerOrgUnitUuid: t.a, changeNote: NOTE }, env);
+        await expect(
+          updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE, principalTargets: [{ kind: 'role', identifier: 'sagsbehandler' }] }, env),
+        ).rejects.toMatchObject({ code: 'principal_targets_need_global' });
+        expect(await count(c, 'central_template_principal_targets')).toBe(0);
+        await close();
+      }));
+
+    it('only an ACTIVE catalogue entry can be added; a kept one that was withdrawn since stays and is flagged inactive', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        await user(c, 'adm');
+        await role(c, 'role', 'a', 'Rolle A');
+        await role(c, 'role', 'gone', 'Udgået', false);
+        const adm = globalManager('adm');
+        await expect(createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'gone' }], changeNote: NOTE }, env)).rejects.toMatchObject({ code: 'principal_target_unknown' });
+        await expect(createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'finnes-ikke' }], changeNote: NOTE }, env)).rejects.toMatchObject({ code: 'principal_target_unknown' });
+        expect(await count(c, 'central_templates')).toBe(0);
+
+        const tpl = await createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
+        await c.query(`UPDATE external_roles SET active = false WHERE identifier = 'a'`);
+        expect((await getManageableTemplate(adm, tpl.id, env)).principalTargets).toEqual([{ kind: 'role', identifier: 'a', name: 'Rolle A', status: 'inactive' }]);
+        expect((await listManageableTemplates(adm, {}, env))[0].principalTargets[0].status).toBe('inactive');
+        // Editing something else keeps the withdrawn target (it is not re-validated).
+        const next = await updateCentralTemplate(adm, tpl.id, { baseVersion: 1, changeNote: NOTE, name: 'Nyt navn', principalTargets: [{ kind: 'role', identifier: 'a' }] }, env);
+        expect(next.principalTargets).toHaveLength(1);
+        await close();
+      }));
+
+    it('retargeting writes a retarget version whose snapshot carries the new audience, and the audit counts only', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        await user(c, 'adm');
+        await role(c, 'role', 'a', 'Rolle A');
+        await role(c, 'group', 'b', 'Gruppe B');
+        const adm = globalManager('adm');
+        const tpl = await createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
+        const out = await updateCentralTemplate(adm, tpl.id, { baseVersion: 1, changeNote: NOTE, principalTargets: [{ kind: 'group', identifier: 'b' }] }, env);
+        expect(out.principalTargets.map((p) => p.identifier)).toEqual(['b']);
+        const v = (await c.query(`SELECT change_type, principal_targets FROM central_template_versions ORDER BY version`)).rows;
+        expect(v.map((r) => r.change_type)).toEqual(['create', 'retarget']);
+        expect(v[1].principal_targets).toEqual([{ kind: 'group', identifier: 'b', name: 'Gruppe B' }]);
+        // The old version keeps what it was.
+        expect(v[0].principal_targets).toEqual([{ kind: 'role', identifier: 'a', name: 'Rolle A' }]);
+        const e = (await c.query(`SELECT details FROM audit_events WHERE event_type = 'central_template.retarget'`)).rows[0];
+        expect(e.details).toEqual({ version: 2, targetCount: 0, principalTargetCount: 1 });
+        expect(JSON.stringify(e)).not.toMatch(/Gruppe B|Rolle A/);
+        // Archive and restore keep the audience in the snapshot.
+        await archiveCentralTemplate(adm, tpl.id, { baseVersion: 2, changeNote: NOTE }, env);
+        expect((await c.query(`SELECT principal_targets FROM central_template_versions WHERE version = 3`)).rows[0].principal_targets).toHaveLength(1);
+        await close();
+      }));
+
+    it('the catalogue cannot lose a targeted entry (RESTRICT) nor hold a target that is not in it; an untargeted entry can be deleted', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        await user(c, 'adm');
+        await role(c, 'role', 'a', 'Rolle A');
+        await role(c, 'role', 'free', 'Fri');
+        const tpl = await createCentralTemplate(globalManager('adm'), { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
+        await expectSqlState(c.query(`DELETE FROM external_roles WHERE identifier = 'a'`), '23503');
+        await c.query(`DELETE FROM external_roles WHERE identifier = 'free'`);
+        // The composite FK also stops a target that is not in the catalogue at all.
+        await expectSqlState(
+          c.query(`INSERT INTO central_template_principal_targets (template_id, kind, identifier) VALUES ('${tpl.id}', 'role', 'ukendt')`),
+          '23503',
+        );
+        await expectSqlState(
+          c.query(`INSERT INTO central_template_principal_targets (template_id, kind, identifier) VALUES ('${tpl.id}', 'user', 'a')`),
+          ['23503', '23514'],
+        );
+        // A template is never deleted (the append-only changelog refuses the cascade), so its targets stay too.
+        await expectSqlState(c.query(`DELETE FROM central_templates WHERE id = '${tpl.id}'`), '55000');
+        expect(await count(c, 'central_template_principal_targets')).toBe(1);
+        await close();
+      }));
+
+    it('the version trigger still refuses UPDATE and DELETE of a row with principal targets', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        await user(c, 'adm');
+        await role(c, 'role', 'a');
+        await createCentralTemplate(globalManager('adm'), { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
+        await expectSqlState(c.query(`UPDATE central_template_versions SET principal_targets = '[]'::jsonb`), '55000');
+        await expectSqlState(c.query('DELETE FROM central_template_versions'), '55000');
         await close();
       }));
   });
