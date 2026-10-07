@@ -134,19 +134,45 @@ describe('POST /api/meetings/[id]/diarize', () => {
 });
 
 describe('audit', () => {
-  it('writes no audit event: pipeline steps are not audited (success, failure or rejected input)', async () => {
-    mockRecord.mockReset();
+  const MEETING = '11111111-2222-4333-8444-555555555555';
+  const UUID_PARAMS = { params: Promise.resolve({ id: MEETING }) };
+  const events = () => mockRecord.mock.calls.map((c) => c[1] as Record<string, unknown>);
+
+  beforeEach(() => {
+    mockRecord.mockReset().mockResolvedValue({ status: 'stored' });
     mockGetSession.mockReset();
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
     mockDiarize.mockReset();
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('records the recording sent for speaker detection (channel diarize: size, time, meeting), never the turns', async () => {
     mockDiarize.mockResolvedValueOnce([{ speaker: 'SPEAKER_00', start: 0, end: 2 }]);
-    await POST(makeAudioRequest(5_000), PARAMS);
-    mockDiarize.mockRejectedValueOnce(new Error('down'));
-    await POST(makeAudioRequest(5_000), PARAMS);
+    await POST(makeAudioRequest(5_000), UUID_PARAMS);
+    expect(events()).toHaveLength(1);
+    expect(events()[0]).toMatchObject({
+      type: 'audio.upload',
+      actorUserId: FAKE_SESSION.user.id,
+      entityId: MEETING,
+      details: { channel: 'diarize', bytes: 5_000, durationMs: expect.any(Number) },
+    });
+    expect(events()[0].outcome ?? 'success').toBe('success');
+    expect(JSON.stringify(events())).not.toContain('SPEAKER');
+  });
+
+  it('records an error outcome with a closed code when diarization fails (the response stays empty turns)', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockDiarize.mockRejectedValueOnce(Object.assign(new Error('down: Jensens barn'), { status: 503 }));
+    const res = await POST(makeAudioRequest(5_000), PARAMS);
+    spy.mockRestore();
+    expect((await res.json()).turns).toEqual([]);
+    expect(events()[0]).toMatchObject({ outcome: 'error', details: { channel: 'diarize', outcomeCode: 'http_503' } });
+    expect(events()[0].entityId).toBeUndefined();
+    expect(JSON.stringify(events())).not.toContain('Jensen');
+  });
+
+  it('records nothing for rejected input', async () => {
     await POST(makeRequestWithoutAudio(), PARAMS);
     await POST(makeAudioRequest(1_000), PARAMS);
-    spy.mockRestore();
     expect(mockRecord).not.toHaveBeenCalled();
   });
 });

@@ -4,7 +4,7 @@
 // fingerprint is a short hash over setting NAMES and non-secret values; it can say
 // "something changed", never what, and never a secret.
 import { z } from 'zod';
-import { defineEvent } from './types';
+import { code, defineEvent } from './types';
 
 export const systemEvents = {
   'system.config_changed': defineEvent({
@@ -17,6 +17,9 @@ export const systemEvents = {
         fingerprint: z.string().regex(/^[0-9a-f]{16}$/),
         // false = the first fingerprint ever stored (the baseline), true = it differs from the stored one.
         changed: z.boolean(),
+        // Names (never values) of the settings whose set/unset state or non-secret value
+        // differs from the stored fingerprint. Only on a change; at most 32.
+        changedKeys: z.array(code()).max(32).optional(),
       })
       .strict(),
   }),

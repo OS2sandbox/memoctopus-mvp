@@ -20,6 +20,8 @@ import { formatDateTime } from './format';
 interface AuditEventView {
   id: string;
   occurredAt: string;
+  /** The browser's own claim (clamped by the server); client events only. */
+  clientOccurredAt?: string | null;
   source: 'server' | 'client' | 'system';
   eventType: string;
   outcome: 'success' | 'denied' | 'error';
@@ -175,13 +177,27 @@ function TechnicalDetails({ e }: { e: AuditEventView }) {
   );
 }
 
+/** A client event whose own clock differs from the server's by more than a minute shows both times. */
+const CLIENT_TIME_SHOWN_AFTER_MS = 60_000;
+function clientTimeToShow(e: AuditEventView): string | null {
+  if (e.source !== 'client' || !e.clientOccurredAt) return null;
+  const diff = Math.abs(Date.parse(e.clientOccurredAt) - Date.parse(e.occurredAt));
+  return Number.isFinite(diff) && diff > CLIENT_TIME_SHOWN_AFTER_MS ? e.clientOccurredAt : null;
+}
+
 function EventRow({ e }: { e: AuditEventView }) {
+  const clientTime = clientTimeToShow(e);
   const version = typeof e.details.version === 'number' ? e.details.version : null;
   return (
     <li className="flex flex-col gap-1 border-b border-[var(--line)] px-1 py-3.5 last:border-b-0 sm:flex-row sm:gap-4">
-      <time dateTime={e.occurredAt} className="shrink-0 text-[13px] text-[var(--muted)] sm:w-40 sm:pt-0.5">
-        {formatTime(e.occurredAt)}
-      </time>
+      <div className="shrink-0 text-[13px] text-[var(--muted)] sm:w-40 sm:pt-0.5">
+        <time dateTime={e.occurredAt}>{formatTime(e.occurredAt)}</time>
+        {clientTime && (
+          <span className="mt-0.5 block text-[12px]" title="Browserens eget tidspunkt (selvrapporteret)">
+            Handlingen skete (selvrapporteret): <time dateTime={clientTime}>{formatTime(clientTime)}</time>
+          </span>
+        )}
+      </div>
       <div className="min-w-0 flex-1">
         <p className="m-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-[15px] font-medium leading-snug text-[var(--ink)]">
           <span className="[overflow-wrap:anywhere]">{summariseEvent(e)}</span>

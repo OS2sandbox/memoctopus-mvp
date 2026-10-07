@@ -19,6 +19,7 @@ import {
   archiveCentralTemplate,
   createCentralTemplate,
   getManageableTemplate,
+  listCatalogue,
   listManageableTemplates,
   listScopeOrgUnits,
   listVersions,
@@ -736,7 +737,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
     it('a global manager creates an org-wide template (NULL owner) with role and group targets; names are snapshotted', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
-        const env: CentralEnv = { schema, runner };
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
         await user(c, 'adm', 'Anne Admin');
         await role(c, 'role', 'sagsbehandler', 'Sagsbehandler');
         await role(c, 'group', 'social', 'Socialforvaltningen');
@@ -748,8 +749,8 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         );
         expect(out.ownerOrgUnitUuid).toBeNull();
         expect(out.principalTargets).toEqual([
-          { kind: 'group', identifier: 'social', name: 'Socialforvaltningen', status: 'active' },
-          { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active' },
+          { kind: 'group', identifier: 'social', name: 'Socialforvaltningen', status: 'active', holders: 0 },
+          { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active', holders: 0 },
         ]);
         const v = (await c.query('SELECT principal_targets FROM central_template_versions WHERE version = 1')).rows[0];
         expect(v.principal_targets).toEqual([
@@ -767,7 +768,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
     it('a scoped manager can neither create org-wide, nor see, read or touch one; a global manager sees it in the list', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
-        const env: CentralEnv = { schema, runner };
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
         const t = await tree(c);
         await user(c, 'adm');
         await user(c, 'mgr');
@@ -789,7 +790,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
     it('a scoped manager cannot add role/group targets even to their own template', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
-        const env: CentralEnv = { schema, runner };
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
         const t = await tree(c);
         await user(c, 'mgr');
         await role(c, 'role', 'sagsbehandler');
@@ -805,7 +806,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
     it('only an ACTIVE catalogue entry can be added; a kept one that was withdrawn since stays and is flagged inactive', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
-        const env: CentralEnv = { schema, runner };
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
         await user(c, 'adm');
         await role(c, 'role', 'a', 'Rolle A');
         await role(c, 'role', 'gone', 'Udgået', false);
@@ -816,7 +817,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
 
         const tpl = await createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
         await c.query(`UPDATE external_roles SET active = false WHERE identifier = 'a'`);
-        expect((await getManageableTemplate(adm, tpl.id, env)).principalTargets).toEqual([{ kind: 'role', identifier: 'a', name: 'Rolle A', status: 'inactive' }]);
+        expect((await getManageableTemplate(adm, tpl.id, env)).principalTargets).toEqual([{ kind: 'role', identifier: 'a', name: 'Rolle A', status: 'inactive', holders: 0 }]);
         expect((await listManageableTemplates(adm, {}, env))[0].principalTargets[0].status).toBe('inactive');
         // Editing something else keeps the withdrawn target (it is not re-validated).
         const next = await updateCentralTemplate(adm, tpl.id, { baseVersion: 1, changeNote: NOTE, name: 'Nyt navn', principalTargets: [{ kind: 'role', identifier: 'a' }] }, env);
@@ -827,7 +828,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
     it('retargeting writes a retarget version whose snapshot carries the new audience, and the audit counts only', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
-        const env: CentralEnv = { schema, runner };
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
         await user(c, 'adm');
         await role(c, 'role', 'a', 'Rolle A');
         await role(c, 'group', 'b', 'Gruppe B');
@@ -852,7 +853,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
     it('the catalogue cannot lose a targeted entry (RESTRICT) nor hold a target that is not in it; an untargeted entry can be deleted', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
-        const env: CentralEnv = { schema, runner };
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
         await user(c, 'adm');
         await role(c, 'role', 'a', 'Rolle A');
         await role(c, 'role', 'free', 'Fri');
@@ -877,12 +878,93 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
     it('the version trigger still refuses UPDATE and DELETE of a row with principal targets', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
-        const env: CentralEnv = { schema, runner };
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
         await user(c, 'adm');
         await role(c, 'role', 'a');
         await createCentralTemplate(globalManager('adm'), { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
         await expectSqlState(c.query(`UPDATE central_template_versions SET principal_targets = '[]'::jsonb`), '55000');
         await expectSqlState(c.query('DELETE FROM central_template_versions'), '55000');
+        await close();
+      }));
+    it('principal targets can only be ADDED in claims mode (409 principal_targets_need_claims); an existing audience can still be cleared', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const claims: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
+        await user(c, 'adm');
+        await role(c, 'role', 'a', 'Rolle A');
+        const adm = globalManager('adm');
+        for (const accessSource of ['local', 'rollekatalog'] as const) {
+          await expect(
+            createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, { ...claims, accessSource }),
+          ).rejects.toMatchObject({ name: 'ConflictError', code: 'principal_targets_need_claims' });
+        }
+        expect(await count(c, 'central_templates')).toBe(0);
+        const tpl = await createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, claims);
+        const local = { ...claims, accessSource: 'local' as const };
+        await expect(
+          updateCentralTemplate(adm, tpl.id, { baseVersion: 1, changeNote: NOTE, principalTargets: [{ kind: 'role', identifier: 'a' }, { kind: 'role', identifier: 'x' }] }, local),
+        ).rejects.toMatchObject({ code: 'principal_targets_need_claims' });
+        const cleared = await updateCentralTemplate(adm, tpl.id, { baseVersion: 1, changeNote: NOTE, principalTargets: [] }, local);
+        expect(cleared.principalTargets).toEqual([]);
+        await close();
+      }));
+
+    it('a SCOPED manager cannot update, archive or restore a template that reaches roles (403, unchanged), but can still read it', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
+        const t = await tree(c);
+        await user(c, 'adm');
+        await user(c, 'mgr');
+        await role(c, 'role', 'a', 'Rolle A');
+        const mgr = managerOf('mgr', t.a);
+        // Owned by A, so the scoped manager sees it, but a global manager gave it a role audience.
+        const tpl = await createCentralTemplate(globalManager('adm'), { ...BASE, ownerOrgUnitUuid: t.a, principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
+        const denied = { name: 'ForbiddenError', code: 'principal_targets_need_global' };
+        await expect(updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE, name: 'Kapret' }, env)).rejects.toMatchObject(denied);
+        await expect(updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE, targets: [{ orgUnitUuid: t.a1 }] }, env)).rejects.toMatchObject(denied);
+        await expect(archiveCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE }, env)).rejects.toMatchObject(denied);
+        expect((await c.query('SELECT name, status, current_version FROM central_templates')).rows[0]).toEqual({ name: BASE.name, status: 'active', current_version: 1 });
+        await archiveCentralTemplate(globalManager('adm'), tpl.id, { baseVersion: 1, changeNote: NOTE }, env);
+        await expect(restoreCentralTemplate(mgr, tpl.id, { baseVersion: 2, changeNote: NOTE }, env)).rejects.toMatchObject(denied);
+        expect((await c.query('SELECT status, current_version FROM central_templates')).rows[0]).toEqual({ status: 'archived', current_version: 2 });
+        expect((await getManageableTemplate(mgr, tpl.id, env)).principalTargets).toHaveLength(1);
+        expect((await listVersions(mgr, tpl.id, env)).map((v) => v.version)).toEqual([2, 1]);
+        // Without role targets the same scoped manager works as before.
+        const plain = await createCentralTemplate(mgr, { ...BASE, name: 'Egen', ownerOrgUnitUuid: t.a, changeNote: NOTE }, env);
+        await expect(updateCentralTemplate(mgr, plain.id, { baseVersion: 1, changeNote: NOTE, name: 'Egen 2' }, env)).resolves.toMatchObject({ name: 'Egen 2' });
+        await close();
+      }));
+
+    it('holders: counts fresh claim rows of linked, enabled users per catalogue entry, never who; none outside claims mode', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
+        await user(c, 'adm');
+        for (const u of ['u1', 'u2', 'u3', 'u4']) await user(c, u);
+        await role(c, 'role', 'a', 'Rolle A');
+        await role(c, 'role', 'b', 'Rolle B');
+        const dir = async (appUser: string, disabled = false) =>
+          c.query(`INSERT INTO directory_users (ext_user_id, name, source, app_user_id, disabled) VALUES ($1, $1, 'claims', $1, $2)`, [appUser, disabled]);
+        for (const [u, disabled] of [['u1', false], ['u2', false], ['u3', true]] as const) await dir(u, disabled);
+        const has = (u: string, id: string, ageSeconds = 0) =>
+          c.query(`INSERT INTO user_external_roles (user_id, kind, identifier, seen_at) VALUES ($1, 'role', $2, now() - make_interval(secs => $3::int))`, [u, id, ageSeconds]);
+        await has('u1', 'a');
+        await has('u2', 'a', 7200); // stale: older than the claims freshness
+        await has('u3', 'a'); // disabled directory user
+        await has('u4', 'a'); // no directory user at all
+        expect((await c.query('SELECT count(*)::int AS n FROM directory_users')).rows[0].n).toBe(3);
+
+        const adm = globalManager('adm');
+        const cat = (await listCatalogue(env)).entries;
+        expect(cat.find((e) => e.identifier === 'a')!.holders).toBe(1);
+        expect(cat.find((e) => e.identifier === 'b')!.holders).toBe(0);
+        const tpl = await createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }, { kind: 'role', identifier: 'b' }], changeNote: NOTE }, env);
+        expect(tpl.principalTargets.map((p) => [p.identifier, p.holders])).toEqual([['a', 1], ['b', 0]]);
+        expect((await listManageableTemplates(adm, {}, env))[0].principalTargets.map((p) => p.holders)).toEqual([1, 0]);
+        // Outside claims mode nobody holds anything from a claim.
+        const local = { ...env, accessSource: 'local' as const, claimsMaxSeconds: undefined };
+        expect((await listCatalogue(local)).entries.every((e) => e.holders === 0)).toBe(true);
         await close();
       }));
   });

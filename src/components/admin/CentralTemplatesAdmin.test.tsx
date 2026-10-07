@@ -73,9 +73,9 @@ const SCOPE = {
 };
 
 const CATALOGUE: CentralCatalogueEntry[] = [
-  { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', source: 'rollekatalog', active: true },
-  { kind: 'group', identifier: 'social', name: 'Socialforvaltningen', source: 'config', active: true },
-  { kind: 'role', identifier: 'gammel', name: 'Gammel rolle', source: 'rollekatalog', active: false },
+  { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', source: 'rollekatalog', active: true, holders: 4 },
+  { kind: 'group', identifier: 'social', name: 'Socialforvaltningen', source: 'config', active: true, holders: 2 },
+  { kind: 'role', identifier: 'gammel', name: 'Gammel rolle', source: 'rollekatalog', active: false, holders: 0 },
 ];
 const ROLES = { roles: CATALOGUE, canTarget: true, canRefresh: false, lastRefreshedAt: null };
 
@@ -327,7 +327,7 @@ describe('CentralTemplatesAdmin — history', () => {
 });
 
 describe('CentralTemplatesAdmin — audience by role, group and unit', () => {
-  const P = (kind: 'role' | 'group', identifier: string, name: string, status: 'active' | 'inactive' | 'unknown' = 'active') => ({ kind, identifier, name, status });
+  const P = (kind: 'role' | 'group', identifier: string, name: string, status: 'active' | 'inactive' | 'unknown' = 'active', holders = 3) => ({ kind, identifier, name, status, holders });
   const rowOf = async (list: CentralTemplateListItem[]) => {
     setup(ADMIN_ME, { 'GET /api/admin/central-templates?status=active': () => json({ templates: list }) });
     renderWithToasts(<CentralTemplatesAdmin />);
@@ -352,16 +352,25 @@ describe('CentralTemplatesAdmin — audience by role, group and unit', () => {
     expect(within(row).queryByText('Ukendt enhed')).toBeNull();
   });
 
-  it('truncates a long audience with "+N flere", listing the rest on hover, never hiding a flagged one', async () => {
+  it('truncates a long audience with a "+N flere" disclosure (keyboard and touch), never hiding a flagged one', async () => {
     const many = ['a', 'b', 'c', 'd', 'e'].map((x) => P('role', x, `Rolle ${x.toUpperCase()}`));
     const row = await rowOf([
       item({ targets: [], targetCount: 0, principalTargets: [...many, P('role', 'x', 'Udgået', 'inactive')] }),
     ]);
     const audience = within(row).getByRole('list', { name: 'Til rådighed for, Bestyrelse' });
-    expect(within(audience).getAllByRole('listitem')).toHaveLength(4); // 3 shown + "+3 flere"
+    // The flagged one is shown first, not folded away.
     expect(within(audience).getByText('Rolle: Udgået (ukendt/inaktiv)')).toBeInTheDocument();
-    const more = within(audience).getByText('+3 flere');
-    expect(more).toHaveAttribute('title', expect.stringContaining('Rolle: Rolle D'));
+    const summary = within(audience).getByText('+3 flere');
+    expect(summary.tagName).toBe('SUMMARY');
+    expect(summary).not.toHaveAttribute('title');
+    const details = summary.closest('details')!;
+    expect(details).not.toHaveAttribute('open');
+    // The rest is a real list inside the disclosure, reachable without hovering.
+    const rest = within(details).getByRole('list', { name: 'Flere, Bestyrelse' });
+    expect(within(rest).getAllByRole('listitem')).toHaveLength(3);
+    expect(within(rest).getByText('Rolle: Rolle D')).toBeInTheDocument();
+    await userEvent.click(summary);
+    expect(details).toHaveAttribute('open');
   });
 
   it('flags a target that was withdrawn from the catalogue or is not in it', async () => {
@@ -373,6 +382,14 @@ describe('CentralTemplatesAdmin — audience by role, group and unit', () => {
     expect(within(row).getByText('Rolle: Sund')).toBeInTheDocument();
   });
 
+  it('says so on a role nobody holds from their latest login (zero holders), never who holds it', async () => {
+    const row = await rowOf([
+      item({ targets: [], targetCount: 0, principalTargets: [P('role', 'a', 'Sagsbehandler', 'active', 0), P('role', 'b', 'Leder', 'active', 7)] }),
+    ]);
+    expect(within(row).getByText('Rolle: Sagsbehandler (0 personer har den ved seneste login)')).toBeInTheDocument();
+    expect(within(row).getByText('Rolle: Leder')).toBeInTheDocument();
+  });
+
   it('still warns that nobody has it when there is no unit, role or group', async () => {
     const row = await rowOf([item({ targets: [], targetCount: 0, principalTargets: [] })]);
     expect(within(row).getByText('Ikke til rådighed for nogen')).toBeInTheDocument();
@@ -380,6 +397,10 @@ describe('CentralTemplatesAdmin — audience by role, group and unit', () => {
 });
 
 describe('CentralTemplatesAdmin — role catalogue refresh', () => {
+  const THRESHOLD = {
+    error: 'Opdateringen ville fjerne usædvanligt mange roller eller grupper fra kataloget og er afbrudt. Intet er ændret. Kontrollér Rollekatalog, eller gennemtving opdateringen.',
+    code: 'removal_threshold',
+  };
   const REFRESH = 'POST /api/admin/central-templates/roles/refresh';
   const withRefresh = { 'GET /api/admin/central-templates/roles': () => json({ ...ROLES, canRefresh: true, lastRefreshedAt: '2026-10-02T10:00:00.000Z' }) };
 
@@ -409,6 +430,53 @@ describe('CentralTemplatesAdmin — role catalogue refresh', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Opdatér rollekatalog' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Rollekatalog afviste API-nøglen.');
     expect(screen.queryByText(/Rollekataloget er opdateret/)).toBeNull();
+  });
+
+  it('offers a confirm-then-force step after the removal threshold aborted, and only then sends force', async () => {
+    const post = vi.fn((_url?: string, _init?: RequestInit) => json(THRESHOLD, 502));
+    setup(ADMIN_ME, { ...withRefresh, [REFRESH]: post });
+    renderWithToasts(<CentralTemplatesAdmin />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Opdatér rollekatalog' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Gennemtving opdateringen?' });
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(post.mock.calls[0][1]?.body ?? '{}'))).toEqual({}); // the first attempt is never forced
+    expect(dialog).toHaveTextContent('usædvanligt mange');
+
+    post.mockImplementation(() => json({ status: 'success', counts: { fetched: 5, added: 0, updated: 5, deactivated: 9, skipped: 0 }, errorCode: null }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Gennemtving opdateringen' }));
+    expect(await screen.findByText(/Rollekataloget er opdateret: 5 roller og grupper, 0 nye, 9 fjernet/)).toBeInTheDocument();
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(post.mock.calls[1][1]?.body))).toEqual({ force: true });
+    expect(screen.queryByRole('dialog', { name: 'Gennemtving opdateringen?' })).toBeNull();
+  });
+
+  it('cancelling the confirmation sends nothing more and shows no error', async () => {
+    const post = vi.fn(() => json(THRESHOLD, 502));
+    setup(ADMIN_ME, { ...withRefresh, [REFRESH]: post });
+    renderWithToasts(<CentralTemplatesAdmin />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Opdatér rollekatalog' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Gennemtving opdateringen?' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Annuller' }));
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('other failures (also empty_response) are plain errors: no force is offered', async () => {
+    setup(ADMIN_ME, { ...withRefresh, [REFRESH]: () => json({ error: 'Rollekatalog returnerede ingen roller eller grupper.', code: 'empty_response' }, 502) });
+    renderWithToasts(<CentralTemplatesAdmin />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Opdatér rollekatalog' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('ingen roller eller grupper');
+    expect(screen.queryByRole('dialog', { name: 'Gennemtving opdateringen?' })).toBeNull();
+  });
+
+  it('outside claims mode the picker is explained instead of offered, but a global manager still gets org-wide templates', async () => {
+    setup(ADMIN_ME, { 'GET /api/admin/central-templates/roles': () => json({ ...ROLES, canTarget: false, isGlobalManager: true, reason: 'needs_claims' }) });
+    renderWithToasts(<CentralTemplatesAdmin />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Ny central skabelon' }));
+    await screen.findByRole('dialog', { name: 'Ny central skabelon' });
+    expect(screen.queryByLabelText('Søg i roller og grupper')).toBeNull();
+    expect(screen.getByText(/kun vælges, når rollerne kommer fra brugernes login/)).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Hele organisationen (ingen ejerenhed)' })).toBeInTheDocument();
   });
 
   it('passes the catalogue and the global-manager flag on to the editor, so a global manager can pick roles', async () => {

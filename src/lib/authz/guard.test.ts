@@ -94,6 +94,8 @@ describe('withAuthz', () => {
       reason: 'missing_capability',
       entityType: undefined,
       entityId: undefined,
+      // The request goes along, so the denial is stored with ip and user agent.
+      req: expect.objectContaining({ headers: expect.anything() }),
     });
   });
 

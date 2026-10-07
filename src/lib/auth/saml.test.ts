@@ -98,9 +98,28 @@ describe('ssoPluginOptions', () => {
       providersLimit: 0,
       trustEmailVerified: false,
       provisionUserOnEveryLogin: true,
-      saml: { requireTimestamps: true },
+      saml: { requireTimestamps: true, algorithms: { onDeprecated: 'reject' } },
     });
     expect(o.defaultSSO).toHaveLength(1);
+  });
+
+  it('only warns about deprecated algorithms when a provider opted in (installation-wide switch)', () => {
+    const o = ssoPluginOptions([provider(), provider({ id: 'other', allowDeprecatedAlgorithms: true })], hooks, BASE)!;
+    expect(o.saml?.algorithms).toEqual({ onDeprecated: 'warn' });
+  });
+
+  it('passes one certificate as is and a rollover list on to samlify', () => {
+    expect(defaultSsoFor(provider({ cert: ['MIIC1', 'MIIC2'] }), BASE)!.samlConfig).toMatchObject({
+      cert: 'MIIC1',
+      idpMetadata: { cert: ['MIIC1', 'MIIC2'] },
+    });
+    expect(defaultSsoFor(provider({ cert: ['MIIC1'] }), BASE)!.samlConfig?.idpMetadata).toMatchObject({ cert: 'MIIC1' });
+  });
+
+  it('skips a provider without BETTER_AUTH_URL even when it has its own spEntityId (no ACS URL)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(ssoPluginOptions([provider({ spEntityId: 'urn:referat:kommune' })], hooks, undefined)).toBeNull();
+    warn.mockRestore();
   });
 
   it('hands the app user, the provider id and the mapped attributes to onLogin', async () => {

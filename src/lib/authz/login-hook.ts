@@ -9,18 +9,49 @@ import { maybeBootstrapAdmin } from './bootstrap';
 import { enabledAuthProviders } from '@/lib/auth/providers';
 import { applyClaimsLoginSafely, clearClaimsRoles } from './claims-roles';
 import { takeLoginClaims } from './claims-stash';
-import { accessSource } from './config';
+import { accessSource, singleTenantId } from './config';
 import { matchDirectoryUser } from './directory-match';
-import { captureExternalIdentity, captureIdentityFromAttributes, decodeJwtPayload, type ExternalIdentity } from './identity';
-import { defaultRunner, errorLabel } from './pg-runner';
+import { captureExternalIdentity, captureIdentityFromAttributes, type ExternalIdentity } from './identity';
+import { defaultRunner, errorLabel, type SqlRunner } from './pg-runner';
 
 /** The sign-in routes of the better-auth sso plugin that complete a SAML login (route templates). */
 const SAML_LOGIN_PATHS = new Set(['/sso/saml2/callback/:providerId', '/sso/saml2/sp/acs/:providerId']);
 
 export async function runLoginHooks(userId: string, ctx?: AuthHookContext | null): Promise<void> {
+  try {
+    await runLoginSteps(userId, ctx);
+  } finally {
+    // Whatever the steps did: no provider token stays in the database (never throws).
+    await scrubAccountTokens(userId);
+  }
+}
+
+/**
+ * Nothing in this app uses an access or refresh token after the login (no Graph or userinfo call is made later, no
+ * refresh), and the id token's claims have been captured into the whitelisted snapshot. Keeping them would put a
+ * credential for the person's account at the IdP into every database backup, so they are removed as soon as the
+ * login hooks have read them (better-auth rewrites them at the next login). Never throws.
+ */
+export async function scrubAccountTokens(userId: string, runner: SqlRunner = defaultRunner()): Promise<void> {
+  try {
+    await runner.query(
+      `UPDATE public.accounts
+          SET id_token = NULL, access_token = NULL, refresh_token = NULL,
+              access_token_expires_at = NULL, refresh_token_expires_at = NULL
+        WHERE user_id = $1 AND provider_id <> 'credential'
+          AND (id_token IS NOT NULL OR access_token IS NOT NULL OR refresh_token IS NOT NULL)`,
+      [userId],
+    );
+  } catch (err) {
+    console.error(`[authz] login step failed: scrub_tokens (${errorLabel(err)})`);
+  }
+}
+
+async function runLoginSteps(userId: string, ctx?: AuthHookContext | null): Promise<void> {
   const { method, provider } = authMethodOf(ctx);
   // SAML: the assertion's attributes only reach us in the sso plugin's provisionUser callback,
-  // which runs right after the session is created. runSamlLoginHooks does this work there.
+  // which runs right after the session is created. runSamlLoginHooks does ALL the work there
+  // (identity capture, first-administrator bootstrap, claims or directory match).
   if (method === 'saml') return;
 
   let identities: ExternalIdentity[] = [];
@@ -61,10 +92,12 @@ export async function runLoginHooks(userId: string, ctx?: AuthHookContext | null
 }
 
 /**
- * ACCESS_SOURCE=claims, OIDC / Entra: the role claims of THIS login, taken from the profile the
- * provider mapper saw (id_token + userinfo) or, failing that, from the id_token stored on the
- * account. A session that did not come from an IdP (password sign-in) carries no claims, so it
- * must not keep roles an earlier SSO login wrote: they are cleared. Never throws.
+ * ACCESS_SOURCE=claims, OIDC / Entra: the role claims of THIS login, exactly as the provider mapper saw them
+ * (id token + userinfo, after the audience / issuer / tenant checks), handed over in memory. There is no
+ * fallback to a stored id token (none is kept, and a stash miss means something went wrong): then the person
+ * holds no claim roles. A session that did not come from an IdP (password sign-in) carries no claims either, so
+ * it must not keep roles an earlier SSO login wrote: they are cleared. For Entra the tenant is checked once more
+ * here. Never throws.
  */
 async function applyOidcLoginClaims(userId: string, method: LoginMethod, provider: string): Promise<void> {
   try {
@@ -72,14 +105,21 @@ async function applyOidcLoginClaims(userId: string, method: LoginMethod, provide
       await clearClaimsRoles(userId);
       return;
     }
-    const res = await defaultRunner().query<{ account_id: string; id_token: string | null }>(
-      'SELECT account_id, id_token FROM public.accounts WHERE user_id = $1 AND provider_id = $2 LIMIT 1',
+    const res = await defaultRunner().query<{ account_id: string }>(
+      'SELECT account_id FROM public.accounts WHERE user_id = $1 AND provider_id = $2 LIMIT 1',
       [userId, provider],
     );
     const account = res.rows[0];
-    const claims =
-      (account ? takeLoginClaims(provider, account.account_id) : null) ??
-      (account?.id_token ? decodeJwtPayload(account.id_token) : null);
+    let claims = account ? takeLoginClaims(provider, account.account_id) : null;
+    if (claims && method === 'microsoft') {
+      // Only ever one tenant in claims mode: a token of another tenant (or one without `tid`) grants nothing.
+      const tenant = singleTenantId();
+      const tid = typeof claims.tid === 'string' ? claims.tid.trim().toLowerCase() : null;
+      if (tenant === null || tid !== tenant) {
+        console.warn('[authz] claims refused: the Microsoft login is not from the configured tenant');
+        claims = null;
+      }
+    }
     await applyClaimsLoginSafely({ userId, providerId: provider, claims });
   } catch (err) {
     console.error(`[authz] login step failed: claims_roles (${errorLabel(err)})`);
@@ -106,6 +146,15 @@ export async function runSamlLoginHooks(
     identity = await captureIdentityFromAttributes(userId, providerId, userInfo);
   } catch (err) {
     console.error(`[authz] login step failed: capture_identity (${errorLabel(err)})`);
+  }
+
+  // The same first-administrator path as an OIDC login. A SAML identity only qualifies where
+  // identityQualifies says so (the plugin never asserts email_verified, so in practice it does not:
+  // bootstrapping the first administrator needs an OIDC / Entra login).
+  try {
+    await maybeBootstrapAdmin(userId);
+  } catch (err) {
+    console.error(`[authz] login step failed: bootstrap_admin (${errorLabel(err)})`);
   }
 
   let mode: ReturnType<typeof accessSource>;
@@ -251,12 +300,18 @@ export async function auditLogout(session: LoginSession, ctx: AuthHookContext | 
  * Nothing is dropped SILENTLY: events over the limit are counted, and when the window
  * ends `onSummary(key, droppedCount)` is called once (from a timer, or earlier when the
  * key is evicted or its next window starts). A crash inside the window loses that count.
+ *
+ * `summaryAt` (e.g. [100, 1000, 10000]) reports a burst while it is still going: when the
+ * dropped count of a window reaches one of those values, `onSummary` is called with the
+ * number dropped since the previous report, so a flood that outlives a crash is on record,
+ * and the reports of one window add up to its total.
  */
 export function createThrottle(opts: {
   limit: number;
   windowMs: number;
   maxKeys: number;
   now?: () => number;
+  summaryAt?: readonly number[];
   onSummary?: (key: string, dropped: number) => void;
 }) {
   const now = opts.now ?? Date.now;
@@ -264,20 +319,27 @@ export function createThrottle(opts: {
     start: number;
     count: number;
     dropped: number;
+    /** How much of `dropped` has already been reported. */
+    reported: number;
     timer?: ReturnType<typeof setTimeout>;
   }
   const windows = new Map<string, Win>();
 
+  const report = (key: string, w: Win) => {
+    const unreported = w.dropped - w.reported;
+    if (unreported <= 0) return;
+    w.reported = w.dropped;
+    try {
+      opts.onSummary?.(key, unreported);
+    } catch {
+      // A summary that cannot be written must not break the login that triggered it.
+    }
+  };
+
   const close = (key: string, w: Win) => {
     if (w.timer) clearTimeout(w.timer);
     windows.delete(key);
-    if (w.dropped > 0) {
-      try {
-        opts.onSummary?.(key, w.dropped);
-      } catch {
-        // A summary that cannot be written must not break the login that triggered it.
-      }
-    }
+    report(key, w);
   };
 
   return {
@@ -289,6 +351,7 @@ export function createThrottle(opts: {
         w.count += 1;
         if (w.count <= opts.limit) return true;
         w.dropped += 1;
+        if (opts.summaryAt?.includes(w.dropped)) report(key, w);
         if (opts.onSummary && !w.timer) {
           // Report the burst when its window ends even if no further failure arrives.
           w.timer = setTimeout(() => {
@@ -308,24 +371,33 @@ export function createThrottle(opts: {
           close(oldest.value[0], oldest.value[1]);
         }
       }
-      windows.set(key, { start: t, count: 1, dropped: 0 });
+      windows.set(key, { start: t, count: 1, dropped: 0, reported: 0 });
       return true;
     },
     size: () => windows.size,
+    /** Test only: forget every window (and its pending summary). */
+    reset(): void {
+      for (const w of windows.values()) if (w.timer) clearTimeout(w.timer);
+      windows.clear();
+    },
   };
 }
 
-/** Stored one by one per IP and minute; beyond it the failures are counted into one summary event. */
+/** Stored one by one per IP and minute; beyond it the failures are counted into summary rows. */
 export const LOGIN_FAILURE_LIMIT_PER_MINUTE = 60;
+/** Across ALL addresses: a flood from many addresses (or a spoofed forwarding header) cannot fill the log either. */
+export const LOGIN_FAILURE_GLOBAL_LIMIT_PER_MINUTE = 300;
+/** A burst is also summarised when this many of its failures have been dropped, so a long flood is on record early. */
+const SUMMARY_AT = [100, 1000, 10_000];
 const NO_IP = 'no-ip';
 
-/** One auth.login_failed row for a burst: how many further failures from this address were not stored one by one. */
-async function recordFailureSummary(ip: string, dropped: number): Promise<void> {
+/** One auth.login_failed row for a burst: how many further failures were not stored one by one (an address, or all of them). */
+async function recordFailureSummary(ip: string | null, dropped: number): Promise<void> {
   await bestEffort('audit_login_failed_summary', async () => {
     await recordEvent({
       type: 'auth.login_failed',
       details: { reason: 'burst_summary', droppedCount: dropped },
-    }, { context: { ip: ip === NO_IP ? null : ip } });
+    }, { context: { ip } });
   });
 }
 
@@ -333,11 +405,32 @@ const failureThrottle = createThrottle({
   limit: LOGIN_FAILURE_LIMIT_PER_MINUTE,
   windowMs: 60_000,
   maxKeys: 10_000,
-  onSummary: (ip, dropped) => void recordFailureSummary(ip, dropped),
+  summaryAt: SUMMARY_AT,
+  onSummary: (ip, dropped) => void recordFailureSummary(ip === NO_IP ? null : ip, dropped),
 });
 
-/** Shared per-IP budget for individually stored login_failed events. Events without an IP share one bucket. */
-export const allowLoginFailureEvent = (ip: string | null): boolean => failureThrottle.allow(ip ?? NO_IP);
+const GLOBAL_KEY = 'all';
+const globalFailureThrottle = createThrottle({
+  limit: LOGIN_FAILURE_GLOBAL_LIMIT_PER_MINUTE,
+  windowMs: 60_000,
+  maxKeys: 1,
+  summaryAt: SUMMARY_AT,
+  // A summary with no address: the excess of the global cap, whoever it came from.
+  onSummary: (_key, dropped) => void recordFailureSummary(null, dropped),
+});
+
+/**
+ * Budget for individually stored login_failed events: per IP and minute, then across all addresses. Events
+ * without an IP share one per-IP bucket. Whatever is over either cap is counted into a summary, never lost silently.
+ */
+export const allowLoginFailureEvent = (ip: string | null): boolean =>
+  failureThrottle.allow(ip ?? NO_IP) && globalFailureThrottle.allow(GLOBAL_KEY);
+
+/** Test only. */
+export function resetLoginFailureThrottles(): void {
+  failureThrottle.reset();
+  globalFailureThrottle.reset();
+}
 
 type FailedReason = 'invalid_credentials' | 'oauth_error' | 'account_not_linked' | 'rate_limited' | 'unknown';
 

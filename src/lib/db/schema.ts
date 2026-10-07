@@ -429,6 +429,7 @@ export const centralTemplateVersions = pgTable(
       'central_template_versions_change_note_check',
       sql`char_length(regexp_replace(${t.changeNote}, ${sql.raw(MEANINGLESS_CHARS_CLASS)}, '', 'g')) >= 10 and char_length(${t.changeNote}) <= 2000`,
     ),
+    check('central_template_versions_principal_targets_check', sql`jsonb_typeof(${t.principalTargets}) = 'array'`),
   ],
 );
 

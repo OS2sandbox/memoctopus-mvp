@@ -58,6 +58,8 @@ export function defaultSsoFor(p: SamlFileProvider, base = authBaseUrl()): Defaul
     extraFields: extraFields(p),
   };
 
+  // One or several signing certificates (a rollover): samlify accepts a list, the plugin's type says string.
+  const certs = p.cert === undefined ? undefined : Array.isArray(p.cert) ? (p.cert.length === 1 ? p.cert[0] : p.cert) : p.cert;
   return {
     // Only matched for e-mail-domain lookups, which this app never uses (sign-in always names the
     // provider); an unroutable name keeps it from ever matching a real address.
@@ -66,7 +68,7 @@ export function defaultSsoFor(p: SamlFileProvider, base = authBaseUrl()): Defaul
     samlConfig: {
       issuer: p.idpEntityId ?? entityId,
       entryPoint: p.entryPoint ?? '',
-      cert: p.cert ?? '',
+      cert: (Array.isArray(certs) ? certs[0] : certs) ?? '',
       // Empty: the plugin then uses its own ACS route for the metadata and the sign-in
       // return trip, and RelayState carries the page to land on.
       callbackUrl: '',
@@ -75,7 +77,7 @@ export function defaultSsoFor(p: SamlFileProvider, base = authBaseUrl()): Defaul
         ? { metadata: p.idpMetadata }
         : {
             entityID: p.idpEntityId,
-            cert: p.cert,
+            cert: certs as string | undefined,
             singleSignOnService: [{ Binding: REDIRECT_BINDING, Location: p.entryPoint ?? '' }],
           },
       spMetadata: { entityID: entityId, ...(p.signingPrivateKey ? { privateKey: p.signingPrivateKey } : {}) },
@@ -97,7 +99,8 @@ export interface SamlSsoHooks {
 /**
  * Options for the sso plugin. Hardened beyond its defaults: no runtime provider registration
  * (providersLimit 0), the e-mail-verified flag is never trusted, timestamps are required on
- * assertions, and the callback runs on EVERY login (not only the first) so that roles follow
+ * assertions (the library checks NotBefore / NotOnOrAfter with no tolerance: the host needs NTP),
+ * deprecated signature algorithms are rejected, and the callback runs on EVERY login (not only the first) so that roles follow
  * the IdP. Returns null when no provider is usable.
  */
 export function ssoPluginOptions(
@@ -106,9 +109,10 @@ export function ssoPluginOptions(
   base = authBaseUrl(),
 ): SSOOptions | null {
   const defaultSSO = providers.flatMap((p) => {
-    const entry = defaultSsoFor(p, base);
+    // The ACS URL (and so the Recipient / Destination checks) is derived from BETTER_AUTH_URL, never from a request.
+    const entry = base ? defaultSsoFor(p, base) : null;
     if (!entry) {
-      console.warn('[auth] Ignoring a SAML provider: BETTER_AUTH_URL is not set, so there is no SP entity id (or set spEntityId).');
+      console.warn('[auth] Ignoring a SAML provider: BETTER_AUTH_URL is not set, so there is no ACS URL / SP entity id.');
       return [];
     }
     return [entry];
@@ -123,7 +127,11 @@ export function ssoPluginOptions(
     provisionUser: async ({ user, userInfo, provider }) => {
       await hooks.onLogin(user.id, provider.providerId, userInfo);
     },
-    saml: { requireTimestamps: true },
+    saml: {
+      requireTimestamps: true,
+      // SHA-1 signatures (and RSA1_5 / 3DES) are rejected unless a provider opts out (installation-wide: one switch).
+      algorithms: { onDeprecated: providers.some((p) => p.allowDeprecatedAlgorithms) ? 'warn' : 'reject' },
+    },
   };
 }
 

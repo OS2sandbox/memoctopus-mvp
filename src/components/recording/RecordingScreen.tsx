@@ -182,6 +182,8 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
 
   const interimTextRef = useRef('');
   const recordingActiveRef = useRef(false);
+  // The recorder failed on its own and the stop was already reported (so saving afterwards does not report a second stop).
+  const stopReportedRef = useRef(false);
   // Silero VAD instance (created in startVAD, destroyed on stop/cancel).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const vadRef = useRef<any>(null);
@@ -785,6 +787,11 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       // corrupt or truncate the final blob.
       recorder.onerror = (e) => {
         console.error('[recorder] error:', e);
+        // The recording ended without the person pressing stop: that is still a stop of the recording.
+        if (!stopReportedRef.current) {
+          stopReportedRef.current = true;
+          reportAuditEvent('meeting.recording_stop', meetingId);
+        }
         // Stop recording cleanly and surface the fault so the user knows the
         // recording was interrupted (rather than seeing a silently empty result).
         recordingActiveRef.current = false;
@@ -806,6 +813,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       setRecordingState('recording');
       setElapsed(0);
       // Recording steps are reported as actions (the meeting id only); see lib/audit/client.ts.
+      stopReportedRef.current = false;
       reportAuditEvent('meeting.recording_start', meetingId);
 
       timerRef.current = setInterval(() => {
@@ -977,7 +985,10 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     if (!mediaRecorderRef.current) return;
     const recorder = mediaRecorderRef.current;
     recordingActiveRef.current = false;
-    reportAuditEvent('meeting.recording_stop', meetingId);
+    if (!stopReportedRef.current) {
+      stopReportedRef.current = true;
+      reportAuditEvent('meeting.recording_stop', meetingId);
+    }
     clearIntervals();
     vadRef.current?.destroy();
     vadRef.current = null;

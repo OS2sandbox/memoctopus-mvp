@@ -1026,6 +1026,22 @@ describe('SkabelonerList — central templates (read-only)', () => {
     expect(screen.queryByText('Centrale skabeloner (låst)')).not.toBeInTheDocument();
   });
 
+  it('says so when the server could not resolve the shared list (centralError), and stays silent otherwise', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve(url === '/api/skabeloner/share-config' ? { share: { code: true, link: false } } : { skabeloner: [makeSkabelon()], centralSkabeloner: [], centralError: true }),
+        } as Response),
+      ),
+    );
+    render(<SkabelonerList />);
+    await screen.findByText('Test skabelon');
+    expect(await screen.findByText(/Fælles skabeloner kunne ikke hentes/)).toBeInTheDocument();
+  });
+
   it('never renders a prompt, even if one slipped into the payload', async () => {
     const leaky = { ...makeCentral(), prompt: 'HEMMELIG PROMPT' } as CentralSkabelonSummary;
     setupFetch([], { code: true, link: false }, [leaky]);

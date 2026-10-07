@@ -29,7 +29,7 @@ const ITEM = {
   currentVersion: 3,
   targetCount: 1,
   targets: [{ orgUnitUuid: CHILD, includeDescendants: true }],
-  principalTargets: [{ kind: 'role' as const, identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active' as const }],
+  principalTargets: [{ kind: 'role' as const, identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active' as const, holders: 2 }],
   updatedAt: '2026-06-02T08:00:00.000Z',
   createdByName: 'Anne Admin',
   lastEditedByName: 'Bo Beslutter',
@@ -216,7 +216,7 @@ describe('POST /api/admin/central-templates', () => {
     it('lists the audience of each template, named, in the DTO whitelist', async () => {
       const body = await (await get()).json();
       expect(body.templates[0].principalTargets).toEqual([
-        { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active' },
+        { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active', holders: 2 },
       ]);
       expect(body.templates[0].targets).toEqual([{ orgUnitUuid: CHILD, includeDescendants: true }]);
     });

@@ -55,7 +55,8 @@ export const syncCountLabels: Record<keyof SyncCounts, string> = {
 // The role catalogue refresh: its own wording where the sync's would be wrong (it reads roles
 // and groups, not users and units), the sync's for every upstream error.
 const CATALOGUE_MESSAGES: Record<string, string> = {
-  empty_response: 'Rollekatalog returnerede ingen roller eller grupper. Opdateringen er afbrudt, og kataloget er uændret.',
+  empty_response:
+    'Rollekatalog returnerede ingen roller eller grupper, eller den ene af listerne var tom, selvom den før havde indhold. Opdateringen er afbrudt, og kataloget er uændret. Kontrollér stierne til rollelisterne og Rollekatalog.',
   removal_threshold:
     'Opdateringen ville fjerne usædvanligt mange roller eller grupper fra kataloget og er afbrudt. Intet er ændret. Kontrollér Rollekatalog, eller gennemtving opdateringen.',
   invalid_response: 'Svaret fra Rollekatalog havde et uventet format, eller for mange rækker i det var ugyldige. Intet er ændret.',

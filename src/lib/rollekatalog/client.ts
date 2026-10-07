@@ -233,7 +233,7 @@ export class RollekatalogClient {
     const groups = groupsAt
       ? parseOrThrow(roleGroupsCatalogueSchema, await this.request({ path: groupsAt, key: 'read' }))
       : empty;
-    return { roles, groups };
+    return { roles, groups, read: { roles: Boolean(rolesAt), groups: Boolean(groupsAt) } };
   }
 }
 
@@ -241,6 +241,8 @@ export class RollekatalogClient {
 export interface RkRoleCatalogue {
   roles: RkCatalogue;
   groups: RkCatalogue;
+  /** Which lists were actually requested (path not 'none'). Absent means both. A list that was not read says nothing about its entries. */
+  read?: { roles: boolean; groups: boolean };
 }
 
 /** A client that reads URL, keys and limits from the environment at call time. */

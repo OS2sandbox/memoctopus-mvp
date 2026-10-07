@@ -36,6 +36,13 @@
       "when": 1791376640098,
       "tag": "0004_claims_roles",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791380000000,
+      "tag": "0005_shared_prompt_targets",
+      "breakpoints": true
     }
   ]
 }

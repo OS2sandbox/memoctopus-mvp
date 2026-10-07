@@ -385,3 +385,46 @@ export async function queryUserSchemaOne<T = Record<string, unknown>>(
   const rows = await queryUserSchema<T>(userId, sql, params);
   return rows[0] ?? null;
 }
+
+/** The query function handed to a `withUserSchemaTx` callback: same search_path, same transaction. */
+export type UserSchemaTxQuery = <T = Record<string, unknown>>(sql: string, params?: unknown[]) => Promise<T[]>;
+
+/**
+ * Runs `fn` in ONE transaction on one connection with the user's search_path (BEGIN ... COMMIT, ROLLBACK
+ * when `fn` throws). For changes that must be atomic (a template row and its changelog row) or
+ * serialised by a row lock (SELECT ... FOR UPDATE).
+ */
+export async function withUserSchemaTx<T>(userId: string, fn: (query: UserSchemaTxQuery) => Promise<T>): Promise<T> {
+  if (!initializedSchemas.has(userId)) {
+    await ensureUserSchema(userId);
+    initializedSchemas.add(userId);
+  }
+  const client = await pool.connect();
+  let discard = false;
+  try {
+    await client.query(`SET search_path TO "${schemaName(userId)}", public`);
+    await client.query('BEGIN');
+    try {
+      const out = await fn(async <R = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
+        const result = await client.query(sql, params);
+        return result.rows as R[];
+      });
+      await client.query('COMMIT');
+      return out;
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        discard = true;
+      }
+      throw err;
+    }
+  } finally {
+    try {
+      await client.query('RESET search_path');
+    } catch {
+      discard = true;
+    }
+    client.release(discard);
+  }
+}

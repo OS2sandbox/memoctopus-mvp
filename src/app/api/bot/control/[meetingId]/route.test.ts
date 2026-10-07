@@ -224,12 +224,14 @@ describe('audit: bot.session_* events', () => {
     await POST(req({ action: 'nope' }), { params: uuidParams });
     expect(mockRecord).not.toHaveBeenCalled();
     expect(recordAuthzDenied).toHaveBeenCalledTimes(1);
-    expect(recordAuthzDenied).toHaveBeenCalledWith({
-      actorUserId: FAKE_SESSION.user.id,
-      required: 'bot.meeting_owner',
-      reason: 'not_owner',
-      entityType: 'meeting',
-      entityId: MEETING,
-    });
+    expect(recordAuthzDenied).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: FAKE_SESSION.user.id,
+        required: 'bot.meeting_owner',
+        reason: 'not_owner',
+        entityType: 'meeting',
+        entityId: MEETING,
+      }),
+    );
   });
 });

@@ -90,8 +90,8 @@ describe('diff helpers', () => {
 
 describe('role/group targets', () => {
   type Kind = 'role' | 'group';
-  const role = (identifier: string, name = identifier, status: 'active' | 'inactive' | 'unknown' = 'active') => ({ kind: 'role' as Kind, identifier, name, status });
-  const group = (identifier: string) => ({ kind: 'group' as Kind, identifier, name: identifier, status: 'active' as const });
+  const role = (identifier: string, name = identifier, status: 'active' | 'inactive' | 'unknown' = 'active') => ({ kind: 'role' as Kind, identifier, name, status, holders: 1 });
+  const group = (identifier: string) => ({ kind: 'group' as Kind, identifier, name: identifier, status: 'active' as const, holders: 1 });
 
   it('a role and a group with the same identifier are different targets', () => {
     expect(principalKey(role('x'))).not.toBe(principalKey(group('x')));
@@ -105,12 +105,12 @@ describe('role/group targets', () => {
 
   it('re-reads a target against the catalogue: its name wins; withdrawn is inactive; missing is unknown', () => {
     const cat = new Map([
-      [principalKey(role('a')), { kind: 'role' as const, identifier: 'a', name: 'Nyt navn', source: 'config' as const, active: true }],
-      [principalKey(role('b')), { kind: 'role' as const, identifier: 'b', name: 'B', source: 'rollekatalog' as const, active: false }],
+      [principalKey(role('a')), { kind: 'role' as const, identifier: 'a', name: 'Nyt navn', source: 'config' as const, active: true, holders: 1 }],
+      [principalKey(role('b')), { kind: 'role' as const, identifier: 'b', name: 'B', source: 'rollekatalog' as const, active: false, holders: 1 }],
     ]);
     expect(viewAgainstCatalogue(role('a', 'Gammelt navn'), cat)).toEqual(role('a', 'Nyt navn'));
     expect(viewAgainstCatalogue(role('b'), cat).status).toBe('inactive');
-    expect(viewAgainstCatalogue(role('c', 'Borte'), cat)).toEqual(role('c', 'Borte', 'unknown'));
+    expect(viewAgainstCatalogue(role('c', 'Borte'), cat)).toEqual({ ...role('c', 'Borte', 'unknown'), holders: 0 });
     // Without a name the identifier is shown.
     expect(viewAgainstCatalogue({ kind: 'group', identifier: 'zz' }, cat).name).toBe('zz');
   });

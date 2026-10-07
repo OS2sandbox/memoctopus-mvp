@@ -1,7 +1,7 @@
 // Danish wording for the audit viewer and the CSV header. Exhaustive Records:
 // adding an event type, source or outcome without a label is a compile error.
 import type { EventType } from './events';
-import type { EventOutcome, EventSource } from './events/types';
+import { CODE_RE, type EventOutcome, type EventSource } from './events/types';
 
 export const eventTypeLabels: Record<EventType, string> = {
   // Adgang
@@ -31,7 +31,7 @@ export const eventTypeLabels: Record<EventType, string> = {
   'bot.session_resume': 'Mødebot genoptaget',
   'bot.session_stop': 'Mødebot stoppet',
   'bot.session_abort': 'Mødebot afbrudt',
-  'bot.audio_delete': 'Mødebottens lydfil slettet på serveren',
+  'bot.audio_delete': 'Mødebottens optagelse slettet på serveren',
   'bot.ended': 'Mødebot er forladt mødet',
   'bot.error': 'Fejl i mødebot',
   // Møder (rapporteret af klienten)
@@ -47,6 +47,8 @@ export const eventTypeLabels: Record<EventType, string> = {
   'meeting.recording_resume': 'Optagelse genoptaget',
   'meeting.recording_stop': 'Optagelse stoppet',
   'meeting.minutes_save': 'Referat redigeret',
+  'meeting.transcript_edit': 'Transskription redigeret',
+  'meeting.metadata_edit': 'Mødets titel eller dato ændret',
   'meeting.minutes_version': 'Referatversion',
   'meeting.minutes_version_prune': 'Gamle referatversioner fjernet',
   'meeting.participants_edit': 'Deltagere ændret',
@@ -55,6 +57,7 @@ export const eventTypeLabels: Record<EventType, string> = {
   'system.config_changed': 'Systemkonfiguration ændret',
   // Loggen selv
   'audit.export': 'Log eksporteret',
+  'audit.events_dropped': 'Hændelser blev ikke registreret',
   'audit.prune': 'Gamle logposter slettet',
 };
 
@@ -79,5 +82,7 @@ export const sourceBadgeLabels: Record<EventSource, string> = {
 
 /** Label for a stored value that may predate the current catalogue (rows outlive code changes). */
 export function eventTypeLabel(type: string): string {
-  return Object.prototype.hasOwnProperty.call(eventTypeLabels, type) ? eventTypeLabels[type as EventType] : type;
+  if (Object.prototype.hasOwnProperty.call(eventTypeLabels, type)) return eventTypeLabels[type as EventType];
+  // Never hide a row whose type this build does not know (a newer or older release wrote it): say so, with the code.
+  return `Ukendt hændelsestype (${CODE_RE.test(type) ? type : 'ukendt'})`;
 }

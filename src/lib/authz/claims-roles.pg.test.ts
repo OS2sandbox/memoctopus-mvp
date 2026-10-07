@@ -260,15 +260,15 @@ describe.skipIf(!hasPg)('config catalogue sync (real Postgres)', () => {
       const { runner, close } = schemaRunner(c, schema);
       await c.query(`INSERT INTO external_roles (kind, identifier, name, source) VALUES ('role', 'from-rk', 'Fra Rollekatalog', 'rollekatalog')`);
 
-      expect(await syncConfigCatalogue([entry('role', 'a', 'A'), entry('group', 'g', 'G'), entry('role', 'from-rk', 'Hijack')], runner)).toEqual({ upserted: 2, deactivated: 0 });
+      expect(await syncConfigCatalogue([entry('role', 'a', 'A'), entry('group', 'g', 'G')], runner, 'ok')).toEqual({ upserted: 2, deactivated: 0 });
       const rows = () => c.query(`SELECT kind, identifier, name, source, active FROM external_roles ORDER BY kind, identifier`).then((r) => r.rows);
       expect(await rows()).toEqual([
         { kind: 'group', identifier: 'g', name: 'G', source: 'config', active: true },
         { kind: 'role', identifier: 'a', name: 'A', source: 'config', active: true },
-        { kind: 'role', identifier: 'from-rk', name: 'Fra Rollekatalog', source: 'rollekatalog', active: true }, // not overwritten
+        { kind: 'role', identifier: 'from-rk', name: 'Fra Rollekatalog', source: 'rollekatalog', active: true }, // not in the file: not touched
       ]);
 
-      expect(await syncConfigCatalogue([entry('role', 'a', 'A2')], runner)).toEqual({ upserted: 1, deactivated: 1 });
+      expect(await syncConfigCatalogue([entry('role', 'a', 'A2')], runner, 'ok')).toEqual({ upserted: 1, deactivated: 1 });
       expect((await rows()).map((r) => [r.identifier, r.name, r.active])).toEqual([
         ['g', 'G', false],
         ['a', 'A2', true],
@@ -276,10 +276,43 @@ describe.skipIf(!hasPg)('config catalogue sync (real Postgres)', () => {
       ]);
 
       // Back in the file: active again. An empty file deactivates every config entry, never the others.
-      await syncConfigCatalogue([entry('group', 'g')], runner);
+      await syncConfigCatalogue([entry('group', 'g')], runner, 'ok');
       expect((await rows()).find((r) => r.identifier === 'g')?.active).toBe(true);
-      await syncConfigCatalogue([], runner);
+      // Only a file with NO catalogue section ('absent') deactivates everything it used to list.
+      await syncConfigCatalogue([], runner, 'absent');
       expect((await rows()).map((r) => [r.identifier, r.active])).toEqual([['g', false], ['a', false], ['from-rk', true]]);
+      await close();
+    }));
+
+  it('a config entry takes over a Rollekatalog row with the same key (config wins)', () =>
+    withFreshSchema(async (c, schema) => {
+      const { runner, close } = schemaRunner(c, schema);
+      await c.query(`INSERT INTO external_roles (kind, identifier, name, source) VALUES ('role', 'both', 'Fra Rollekatalog', 'rollekatalog')`);
+      await syncConfigCatalogue([entry('role', 'both', 'Fra filen')], runner, 'ok');
+      const row = () => c.query(`SELECT name, source, active FROM external_roles WHERE identifier = 'both'`).then((r) => r.rows[0]);
+      expect(await row()).toEqual({ name: 'Fra filen', source: 'config', active: true });
+      await close();
+    }));
+
+  it('an unreadable/invalid catalogue, or an explicitly empty one, never deactivates what is stored', () =>
+    withFreshSchema(async (c, schema) => {
+      const { runner, close } = schemaRunner(c, schema);
+      await c.query(`INSERT INTO external_roles (kind, identifier, name, source) VALUES ('role', 'from-rk', 'Fra Rollekatalog', 'rollekatalog')`);
+      await syncConfigCatalogue([entry('role', 'a'), entry('group', 'g')], runner, 'ok');
+      const active = () => c.query(`SELECT identifier FROM external_roles WHERE active ORDER BY identifier`).then((r) => r.rows.map((x) => x.identifier));
+      expect(await active()).toEqual(['a', 'from-rk', 'g']);
+
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      expect(await syncConfigCatalogue([], runner, 'invalid')).toMatchObject({ skipped: 'invalid' });
+      expect(await syncConfigCatalogue([entry('role', 'x')], runner, 'invalid')).toMatchObject({ skipped: 'invalid' });
+      expect(await active()).toEqual(['a', 'from-rk', 'g']); // nothing deactivated, nothing added
+      expect(await syncConfigCatalogue([], runner, 'ok')).toMatchObject({ skipped: 'empty' });
+      expect(await active()).toEqual(['a', 'from-rk', 'g']);
+
+      // A person who logs in meanwhile still gets the stored values: the catalogue was not wiped.
+      await addUser(c, 'u1');
+      await applyClaimsLogin(login('u1', { roles: ['a'] }), runner);
+      expect(await external(c, 'u1')).toEqual(['role:a']);
       await close();
     }));
 
@@ -287,10 +320,10 @@ describe.skipIf(!hasPg)('config catalogue sync (real Postgres)', () => {
     withFreshSchema(async (c, schema) => {
       const { runner, close } = schemaRunner(c, schema);
       await addUser(c, 'u1');
-      await syncConfigCatalogue([entry('role', 'admin')], runner);
+      await syncConfigCatalogue([entry('role', 'admin')], runner, 'ok');
       await applyClaimsLogin(login('u1', { roles: ['admin'] }), runner);
       expect(await external(c, 'u1')).toEqual(['role:admin']);
-      await syncConfigCatalogue([], runner);
+      await syncConfigCatalogue([], runner, 'absent');
       await applyClaimsLogin(login('u1', { roles: ['admin'] }), runner);
       expect(await external(c, 'u1')).toEqual([]);
       await close();

@@ -72,13 +72,31 @@ const AUTO_TRIGGER_TEXT: Record<string, string> = {
 };
 const autoText = (d: Record<string, unknown>) => AUTO_TRIGGER_TEXT[String(d.trigger)] ?? '';
 
-const AUDIO_CHANNEL_TEXT: Record<string, string> = { batch: 'en optagelse', upload: 'en lydfil', bot: 'en mødebot-optagelse' };
+// What was sent and what for. `live` is logged at most once per person and meeting per 5
+// minutes (the audio of a live recording goes up utterance by utterance), `diarize` goes to
+// speaker detection rather than transcription.
+const AUDIO_CHANNEL_TEXT: Record<string, { what: string; purpose: string }> = {
+  batch: { what: 'en optagelse', purpose: 'transskribering' },
+  upload: { what: 'en lydfil', purpose: 'transskribering' },
+  bot: { what: 'en mødebot-optagelse', purpose: 'transskribering' },
+  live: { what: 'lyd fra en live optagelse', purpose: 'transskribering' },
+  diarize: { what: 'en optagelse', purpose: 'taleropdeling' },
+};
 
-const VERSION_ACTION_TEXT: Record<string, (v: string) => string> = {
+// `activate` is an in-app version switch: the nearest thing to a restore (nothing is copied or recreated).
+const VERSION_ACTION_TEXT: Record<string, (v: string, n: number | null) => string> = {
   view: (v) => `åbnede en tidligere version af referatet${v}`,
   snapshot: (v) => `gemte en ny version af referatet${v}`,
   generate: (v) => `genererede en ny version af referatet${v}`,
-  activate: (v) => `gendannede en tidligere version af referatet${v}`,
+  activate: (_v, n) => `satte ${n === null ? 'en version' : `version ${n}`} som den aktive version af referatet`,
+};
+
+const DROP_REASON_TEXT: Record<string, string> = {
+  daily_cap: 'dagsgrænsen for en bruger var nået',
+  rate_limit: 'for mange hændelser på kort tid',
+  actor_ceiling: 'grænsen for serverhændelser pr. bruger var nået',
+  throttle: 'gentagne visninger inden for et minut',
+  client_outbox: 'browserens kø mistede hændelser, før de blev sendt',
 };
 
 const SENTENCES: Record<EventType, (c: Ctx) => string> = {
@@ -92,6 +110,8 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
     return `Mislykket login-forsøg${reason ? ` (${reason})` : ''}`;
   },
   'authz.denied': (c) => {
+    const dropped = num(c.details.droppedCount);
+    if (dropped !== null) return `${plural(dropped, 'yderligere afvisning', 'yderligere afvisninger')} af adgang for ${c.actor} blev ikke registreret enkeltvis`;
     const required = String(c.details.required);
     const label = has(capabilityLabels, required) ? capabilityLabels[required as Capability] : null;
     return `${c.actor} fik adgang nægtet${label ? ` til »${label}«` : ''}`;
@@ -110,8 +130,8 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   'central_template.restore': (c) => `${c.actor} genoprettede ${centralTemplate(c)}${version(c.details)}`,
 
   'audio.upload': (c) => {
-    const what = AUDIO_CHANNEL_TEXT[String(c.details.channel)] ?? 'lyd';
-    return c.failed ? `${c.actor} kunne ikke uploade ${what} til transskribering` : `${c.actor} uploadede ${what} til transskribering`;
+    const { what, purpose } = AUDIO_CHANNEL_TEXT[String(c.details.channel)] ?? { what: 'lyd', purpose: 'transskribering' };
+    return c.failed ? `${c.actor} kunne ikke uploade ${what} til ${purpose}` : `${c.actor} uploadede ${what} til ${purpose}`;
   },
   'minutes.generate': (c) => {
     if (c.failed) return `${c.actor} kunne ikke generere et referat`;
@@ -129,10 +149,13 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   'bot.session_resume': (c) => `${c.actor} genoptog mødebotten`,
   'bot.session_stop': (c) => `${c.actor} stoppede mødebotten`,
   'bot.session_abort': (c) => `${c.actor} afbrød mødebotten`,
-  'bot.audio_delete': (c) =>
-    c.details.trigger === 'ttl'
-      ? 'Systemet slettede en mødebot-optagelse på serveren, som ingen havde hentet'
-      : 'Systemet slettede mødebottens optagelse på serveren, efter at den var hentet',
+  'bot.audio_delete': (c) => {
+    const transcript = c.details.object === 'transcript';
+    const what = transcript ? 'en mødebot-transskription' : 'en mødebot-optagelse';
+    return c.details.trigger === 'ttl'
+      ? `Systemet slettede ${what} på serveren, som ingen havde hentet`
+      : `Systemet slettede ${transcript ? 'mødebottens transskription' : 'mødebottens optagelse'} på serveren, efter at den var hentet`;
+  },
   'bot.ended': (c) => {
     const secs = num(c.details.durationSeconds);
     const mins = secs === null ? null : Math.max(1, Math.round(secs / 60));
@@ -144,7 +167,7 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
     const origin = ORIGIN_TEXT[String(c.details.origin)];
     return `${c.actor} oprettede et møde${origin ? ` (${origin})` : ''}`;
   },
-  'meeting.delete': (c) => `${c.actor} slettede et møde med transskription og alle referatversioner${autoText(c.details)}`,
+  'meeting.delete': (c) => `${c.actor} slettede et møde med transskription, referatversioner og lyd${autoText(c.details)}`,
   'meeting.redact': (c) => `${c.actor} slørede et møde`,
   'meeting.audio_delete': (c) => `${c.actor} slettede lyden fra et møde${autoText(c.details)}`,
   'meeting.minutes_view': (c) => `${c.actor} åbnede et referat`,
@@ -155,10 +178,13 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   'meeting.recording_resume': (c) => `${c.actor} genoptog en optagelse`,
   'meeting.recording_stop': (c) => `${c.actor} stoppede en optagelse`,
   'meeting.minutes_save': (c) => `${c.actor} redigerede et referat`,
+  'meeting.transcript_edit': (c) => `${c.actor} redigerede en transskription`,
+  'meeting.metadata_edit': (c) =>
+    `${c.actor} ændrede ${c.details.field === 'recorded_at' ? 'datoen for' : 'titlen på'} et møde`,
   'meeting.minutes_version': (c) => {
     const text = VERSION_ACTION_TEXT[String(c.details.action)];
     const v = version({ version: c.details.versionNumber });
-    return `${c.actor} ${text ? text(v) : `ændrede en version af et referat${v}`}`;
+    return `${c.actor} ${text ? text(v, num(c.details.versionNumber)) : `ændrede en version af et referat${v}`}`;
   },
   'meeting.minutes_version_prune': (c) => {
     const n = num(c.details.prunedCount);
@@ -176,6 +202,12 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   'audit.export': (c) => {
     const rows = num(c.details.rowCount);
     return `${c.actor} eksporterede loggen${rows === null ? '' : ` (${plural(rows, 'række', 'rækker')}${c.details.truncated === true ? ', afkortet' : ''})`}`;
+  },
+  'audit.events_dropped': (c) => {
+    const n = num(c.details.count);
+    const many = n === null ? 'Hændelser' : plural(n, 'hændelse', 'hændelser');
+    const why = DROP_REASON_TEXT[String(c.details.reason)];
+    return `${many} blev ikke registreret${why ? ` (${why})` : ''}`;
   },
   'audit.prune': (c) => {
     const n = num(c.details.deletedCount);

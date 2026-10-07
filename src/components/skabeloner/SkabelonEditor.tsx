@@ -375,7 +375,9 @@ export function SkabelonEditor({
                         Version {h.version} · {formatWhen(h.createdAt)}
                         {h.changedFields.length > 0
                           ? ` · ændret: ${h.changedFields.map((f) => FIELD_LABELS[f] ?? f).join(', ')}`
-                          : ' · oprettet'}
+                          : h.version === 1
+                            ? ' · oprettet'
+                            : ' · kun en note'}
                       </div>
                       {h.changeNote && <p className="whitespace-pre-wrap">{h.changeNote}</p>}
                     </li>

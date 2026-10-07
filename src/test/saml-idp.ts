@@ -90,6 +90,16 @@ export interface ResponseOptions {
   notBefore?: Date;
   notOnOrAfter?: Date;
   assertionId?: string;
+  /** Where InResponseTo is put: both (default), only on the Response, or only in the assertion's SubjectConfirmationData. */
+  inResponseToLevel?: 'both' | 'response' | 'assertion';
+  /** Recipient of the bearer confirmation; default the ACS URL, `null` leaves the attribute out. */
+  recipient?: string | null;
+  /** Destination of the Response; default the ACS URL, `null` leaves the attribute out. */
+  destination?: string | null;
+  /** XML-DSig signature algorithm URI; default RSA-SHA256. */
+  signatureAlgorithm?: string;
+  /** Markup put in front of the root element (e.g. a DOCTYPE), after signing. */
+  prelude?: string;
 }
 
 /** A base64 SAMLResponse (HTTP-POST binding) for the options. */
@@ -120,9 +130,9 @@ export function buildSamlResponse(o: ResponseOptions): string {
     {
       ID: rand(),
       AssertionID: o.assertionId ?? rand(),
-      Destination: o.acsUrl,
+      Destination: o.destination === undefined ? o.acsUrl : (o.destination ?? ''),
       Audience: o.audience,
-      SubjectRecipient: o.acsUrl,
+      SubjectRecipient: o.recipient === undefined ? o.acsUrl : (o.recipient ?? ''),
       Issuer: o.issuer,
       IssueInstant: now.toISOString(),
       StatusCode: 'urn:oasis:names:tc:SAML:2.0:status:Success',
@@ -139,14 +149,23 @@ export function buildSamlResponse(o: ResponseOptions): string {
 
   // Added after the tag replacement: samlify 2.13 escapes tag VALUES (the fix for an XML injection
   // through attribute values), so markup must not travel through it.
-  const withAttributes = raw.replace('</saml:Conditions>', `</saml:Conditions>${attributeStatement}`);
+  let withAttributes = raw.replace('</saml:Conditions>', `</saml:Conditions>${attributeStatement}`);
+
+  if (o.inResponseTo && o.inResponseToLevel === 'response') {
+    withAttributes = withAttributes.replace(/(<saml:SubjectConfirmationData[^>]*?) InResponseTo="[^"]*"/, '$1');
+  }
+  if (o.inResponseTo && o.inResponseToLevel === 'assertion') {
+    withAttributes = withAttributes.replace(/(<samlp:Response[^>]*?) InResponseTo="[^"]*"/, '$1');
+  }
+  if (o.recipient === null) withAttributes = withAttributes.replace(/ Recipient=""/, '');
+  if (o.destination === null) withAttributes = withAttributes.replace(/ Destination=""/, '');
 
   const sign = o.sign ?? 'assertion';
   const common = {
     privateKey: o.keys.key,
     // samlify wants the bare base64 body of the certificate, not the PEM armour.
     signingCert: o.keys.cert.replace(/-----[A-Z ]+-----|\s+/g, ''),
-    signatureAlgorithm: 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256',
+    signatureAlgorithm: o.signatureAlgorithm ?? 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256',
     isBase64Output: false,
   };
   let xml = withAttributes;
@@ -172,6 +191,7 @@ export function buildSamlResponse(o: ResponseOptions): string {
       },
     });
   }
+  if (o.prelude) xml = xml.startsWith('<?xml') ? xml.replace(/^(<\?xml[^>]*\?>)/, `$1${o.prelude}`) : `${o.prelude}${xml}`;
   return Buffer.from(xml, 'utf8').toString('base64');
 }
 

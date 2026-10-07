@@ -39,6 +39,10 @@ async function postHandler(req: NextRequest, { params }: Params) {
   const audioFile = formData.get('audio') as File | null;
   if (!audioFile) return NextResponse.json({ error: 'Missing audio' }, { status: 400 });
 
+  // Which path the audio came from, so the log says "a file upload" or "a recording" truthfully.
+  // A client-supplied hint, whitelisted: anything else counts as a recording (batch).
+  const channel = formData.get('channel') === 'upload' ? 'upload' : 'batch';
+
   const buffer = Buffer.from(await audioFile.arrayBuffer());
   if (buffer.length < 2_000) {
     return NextResponse.json({ error: 'Audio too short' }, { status: 400 });
@@ -108,7 +112,7 @@ async function postHandler(req: NextRequest, { params }: Params) {
             outcome,
             entityId,
             details: {
-              channel: 'batch',
+              channel,
               bytes: buffer.length,
               durationMs: elapsedMs(t0),
               ...(outcomeCode ? { outcomeCode } : {}),

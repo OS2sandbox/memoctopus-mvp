@@ -8,6 +8,7 @@ vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
 // record.ts opens the database at import time; only the write is replaced here,
 // validateEvent stays the real pure function so the catalogue is really applied.
 vi.mock('@/lib/db', () => ({ db: {}, pool: { query: vi.fn(), connect: vi.fn() } }));
+vi.mock('@/lib/audit/dropped', () => ({ noteDroppedEvents: vi.fn() }));
 vi.mock('@/lib/audit/record', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/audit/record')>()),
   recordServerEvent: vi.fn(),
@@ -16,7 +17,8 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 import { POST } from './route';
 import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
-import { recordServerEvent } from '@/lib/audit/record';
+import { recordServerEvent, validateEvent } from '@/lib/audit/record';
+import { noteDroppedEvents } from '@/lib/audit/dropped';
 import { pool } from '@/lib/db';
 import { THROTTLE_WINDOW_MS, THROTTLED_TYPES } from '@/lib/audit/client-ingest';
 import { __resetClientEventBudgets, RATE_LIMIT_EVENTS } from '@/lib/audit/client-ingest';
@@ -50,6 +52,7 @@ beforeEach(() => {
   mockRecord.mockReset().mockResolvedValue({ status: 'stored' });
   mockCount.mockReset();
   alreadyStored(0);
+  vi.mocked(noteDroppedEvents).mockClear();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -473,5 +476,136 @@ describe('POST /api/audit/client-events', () => {
         expect(await (await send({ events: [CREATE(1)] })).json()).toEqual({ accepted: 0, capped: true, refused: 1 });
       });
     });
+  });
+});
+
+describe('view throttle in EVENT time', () => {
+  const view = (n: number, at: string, over: Record<string, unknown> = {}) =>
+    ev({
+      type: 'meeting.minutes_view',
+      occurredAt: at,
+      clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(n).padStart(12, '0')}`,
+      ...over,
+    });
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+  const H = 3_600_000;
+
+  it('keeps two views four hours apart that arrive in ONE batch (an offline browser delivering later)', async () => {
+    const res = await send({ events: [view(1, ago(5 * H)), view(2, ago(1 * H))] });
+    expect(await res.json()).toEqual({ accepted: 2 });
+    expect(mockRecord).toHaveBeenCalledTimes(2);
+    expect(noteDroppedEvents).not.toHaveBeenCalledWith(expect.anything(), 'throttle', expect.anything(), expect.anything());
+  });
+
+  it('still drops a repeat less than 60 s of event time after the previous one, however late it arrives', async () => {
+    const res = await send({ events: [view(1, ago(5 * H)), view(2, ago(5 * H - 30_000)), view(3, ago(1 * H))] });
+    expect(await res.json()).toEqual({ accepted: 2, throttled: 1 });
+    expect(noteDroppedEvents).toHaveBeenCalledWith('user-123', 'throttle', 1, expect.anything());
+  });
+
+  it('judges a batch in event order, not in the order it was sent', async () => {
+    // Sent newest first; the 30 s repeat is the LATER one in event time, so that one is dropped.
+    const res = await send({ events: [view(2, ago(5 * H - 30_000)), view(1, ago(5 * H))] });
+    expect(await res.json()).toEqual({ accepted: 1, throttled: 1 });
+    const stored = mockRecord.mock.calls[0][1] as unknown as { clientEventId: string };
+    expect(stored.clientEventId).toBe('aaaaaaaa-bbbb-4ccc-8ddd-000000000001');
+  });
+
+  it('compares with what an earlier request stored, again by event time', async () => {
+    await send({ events: [view(1, ago(3 * H))] });
+    expect(await (await send({ events: [view(2, ago(3 * H - 20_000))] })).json()).toEqual({ accepted: 0, throttled: 1 });
+    expect(await (await send({ events: [view(3, ago(1 * H))] })).json()).toEqual({ accepted: 1 });
+  });
+});
+
+describe('drops are counted and reported (audit.events_dropped)', () => {
+  const batch = (n: number, off = 0) =>
+    Array.from({ length: n }, (_, i) => ev({ clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(off + i).padStart(12, '0')}` }));
+
+  it('daily cap', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    alreadyStored(20000);
+    await send({ events: batch(3) });
+    expect(noteDroppedEvents).toHaveBeenCalledWith('user-123', 'daily_cap', 3, expect.anything());
+  });
+
+  it('rate limit', async () => {
+    for (let sent = 0; sent < RATE_LIMIT_EVENTS; sent += 50) await send({ events: batch(50, sent) });
+    expect((await send({ events: batch(2, 9000) })).status).toBe(429);
+    expect(noteDroppedEvents).toHaveBeenCalledWith('user-123', 'rate_limit', 2, expect.anything());
+  });
+
+  it('nothing is reported when nothing was dropped', async () => {
+    await send({ events: batch(2) });
+    expect(noteDroppedEvents).not.toHaveBeenCalled();
+  });
+});
+
+describe('events the browser lost (droppedLocally)', () => {
+  const LOST_ID = 'cccccccc-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const lost = (count = 4) => ({ count, clientEventId: LOST_ID });
+
+  it('records one audit.events_dropped (client_outbox) next to the events, as a self-reported client event', async () => {
+    const res = await send({ events: [ev()], droppedLocally: lost() });
+    expect(await res.json()).toEqual({ accepted: 1 });
+    expect(mockRecord).toHaveBeenCalledTimes(2);
+    expect(mockRecord.mock.calls[1][1]).toMatchObject({
+      type: 'audit.events_dropped',
+      source: 'client',
+      actorUserId: 'user-123',
+      clientEventId: LOST_ID,
+      details: { reason: 'client_outbox', count: 4 },
+    });
+    expect(validateEvent(mockRecord.mock.calls[1][1] as never)).toMatchObject({ ok: true });
+  });
+
+  it('a batch may carry only the report', async () => {
+    const res = await send({ events: [], droppedLocally: lost(2) });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ accepted: 0 });
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+  });
+
+  it('is exempt from the daily cap and the throttle (it says that events are missing)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    alreadyStored(20000);
+    const res = await send({ events: [ev()], droppedLocally: lost() });
+    expect(await res.json()).toMatchObject({ accepted: 0, capped: true });
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(mockRecord.mock.calls[0][1]).toMatchObject({ type: 'audit.events_dropped' });
+  });
+
+  it('stays strict: no extra keys, count must be a positive integer, id a uuid, and nothing else is accepted as a type', async () => {
+    for (const bad of [
+      { count: 0, clientEventId: LOST_ID },
+      { count: 1.5, clientEventId: LOST_ID },
+      { count: 4, clientEventId: 'not-a-uuid' },
+      { count: 4, clientEventId: LOST_ID, reason: 'daily_cap' },
+      { count: 4, clientEventId: LOST_ID, details: { x: 1 } },
+    ]) {
+      expect((await send({ events: [ev()], droppedLocally: bad })).status).toBe(400);
+    }
+    expect((await send({ events: [ev({ type: 'audit.events_dropped', details: { reason: 'client_outbox', count: 1 } })] })).status).toBe(400);
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('answers 503 when the report cannot be stored, so the browser keeps it', async () => {
+    mockRecord.mockResolvedValueOnce({ status: 'stored' }).mockResolvedValueOnce({ status: 'dropped', code: 'db_error' });
+    expect((await send({ events: [ev()], droppedLocally: lost() })).status).toBe(503);
+  });
+});
+
+describe('an event type this server does not know (rolling deploy)', () => {
+  it('answers 400 with a code the browser reads as "try again later", and stores nothing', async () => {
+    const res = await send({ events: [ev(), ev({ type: 'meeting.something_new', clientEventId: 'bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee' })] });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Invalid request', code: 'unknown_event_type' });
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('a malformed event is still a plain 400 without that code', async () => {
+    const res = await send({ events: [ev({ details: { x: 1 } })] });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Invalid request' });
   });
 });

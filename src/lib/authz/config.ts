@@ -70,8 +70,21 @@ export function roleClaimsMaxSeconds(): number {
   return n >= 60 && n <= 30 * 86_400 ? n : DEFAULT_ROLE_CLAIMS_MAX_SECONDS;
 }
 
+/**
+ * "No role, no access". Default off, except in claims mode: there the roles come from the IdP, so a
+ * person the IdP maps to no role (a stranger from another tenant, a password account, somebody whose
+ * group was not mapped) must be refused rather than get the baseline. Explicit REQUIRE_ROLE_TO_LOGIN=false
+ * is the only way to open it up there (then ordinary users need no mapping to tt-bruger).
+ */
 export function requireRoleToLogin(): boolean {
-  return clean('REQUIRE_ROLE_TO_LOGIN').toLowerCase() === 'true';
+  const v = clean('REQUIRE_ROLE_TO_LOGIN').toLowerCase();
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  try {
+    return accessSource() === 'claims';
+  } catch {
+    return false;
+  }
 }
 
 export function bootstrapAdminEmails(): string[] {

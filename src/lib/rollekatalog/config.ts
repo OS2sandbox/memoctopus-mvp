@@ -119,7 +119,10 @@ function cataloguePath(name: string, fallback: string): string | null {
   const v = clean(name);
   if (v === '') return fallback;
   if (v.toLowerCase() === 'none') return null;
-  return READ_PATH_RE.test(v) ? v : fallback;
+  if (READ_PATH_RE.test(v)) return v;
+  // Names the variable only, never the value (a path can carry an operator's typo or a secret).
+  console.warn(`[rollekatalog] ${name} is not an accepted read-API path; using the default`);
+  return fallback;
 }
 
 /** ROLLEKATALOG_ROLES_PATH: where the user roles (jobfunktionsroller) are listed; null = not read. */

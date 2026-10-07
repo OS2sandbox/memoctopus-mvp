@@ -41,6 +41,7 @@ export const POST = withHandler(
     // supplying their (client-held) sessionId. Deny by default on an unbound meetingId.
     if (!(await assertBotMeetingOwner(meetingId, session.user.id))) {
       await recordAuthzDenied({
+        req,
         actorUserId: session.user.id,
         required: 'bot.meeting_owner',
         reason: 'not_owner',

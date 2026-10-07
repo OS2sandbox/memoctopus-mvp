@@ -78,6 +78,8 @@ interface World {
   updated?: Rows;
   actorName?: string;
   inserted?: Rows;
+  /** The access mode (default: claims, the only mode in which role/group targets can be added). */
+  accessSource?: 'local' | 'rollekatalog' | 'claims';
 }
 
 function world(w: World = {}): Responder {
@@ -86,6 +88,7 @@ function world(w: World = {}): Responder {
     if (sql.includes('INSERT INTO "public".central_templates')) return w.inserted ?? [{ id: TPL }];
     if (sql.includes('UPDATE "public".central_templates')) return w.updated ?? [{ current_version: 4 }];
     if (sql.includes('FROM "public".central_template_targets') && sql.startsWith('SELECT org_unit_uuid')) return w.targets ?? [];
+    if (sql.startsWith('SELECT 1 FROM "public".central_template_principal_targets WHERE')) return (w.principals ?? []).length > 0 ? [{ '?column?': 1 }] : [];
     if (sql.includes('FROM "public".central_template_principal_targets pt')) return w.principals ?? [];
     if (sql.includes('FROM "public".external_roles e') && sql.includes('JOIN unnest')) {
       const added = (params[0] as unknown[]).length;
@@ -102,7 +105,7 @@ function world(w: World = {}): Responder {
 
 function setup(w: World = {}) {
   const fake = makeFakeRunner(world(w));
-  const env: CentralEnv = { schema: 'public', runner: fake.runner };
+  const env: CentralEnv = { schema: 'public', runner: fake.runner, accessSource: w.accessSource ?? 'claims', claimsMaxSeconds: 28_800 };
   return { ...fake, env };
 }
 
@@ -406,6 +409,7 @@ describe('updateCentralTemplate', () => {
     });
 
     it('the same targets in another order are unchanged', async () => {
+      scope.hasGlobalScope.mockReturnValue(true);
       const { env } = setup({
         principals: [
           { kind: 'group', identifier: 'b', name: 'B', active: true },
@@ -430,11 +434,59 @@ describe('updateCentralTemplate', () => {
       expect(writes(calls)).toEqual([]);
     });
 
-    it('removing targets needs no catalogue lookup and no global scope', async () => {
+    it('removing targets needs no catalogue lookup (a global manager; see the scoped case below)', async () => {
+      scope.hasGlobalScope.mockReturnValue(true);
       const { env, calls } = setup({ principals: current });
       await updateCentralTemplate(manager, TPL, { ...base, principalTargets: [] }, env);
       expect(calls.some((c) => c.sql.includes('FROM "public".external_roles e'))).toBe(false);
       expect(recordEvent.mock.calls[0][0]).toMatchObject({ type: 'central_template.retarget', details: { principalTargetCount: 0 } });
+    });
+
+    it('principal targets can only be ADDED in claims mode: 409 elsewhere, nothing written, whoever asks', async () => {
+      scope.hasGlobalScope.mockReturnValue(true);
+      for (const accessSource of ['local', 'rollekatalog'] as const) {
+        const { env, calls } = setup({ accessSource });
+        await expect(updateCentralTemplate(manager, TPL, { ...base, principalTargets: [ROLE] }, env)).rejects.toMatchObject({
+          name: 'ConflictError',
+          code: 'principal_targets_need_claims',
+        });
+        expect(writes(calls)).toEqual([]);
+      }
+      expect(recordEvent).not.toHaveBeenCalled();
+    });
+
+    it('outside claims mode an existing audience may still be kept, narrowed or cleared', async () => {
+      scope.hasGlobalScope.mockReturnValue(true);
+      const { env } = setup({ accessSource: 'local', principals: current });
+      await updateCentralTemplate(manager, TPL, { ...base, principalTargets: [] }, env);
+      expect(recordEvent.mock.calls[0][0]).toMatchObject({ type: 'central_template.retarget' });
+    });
+
+    it('a SCOPED manager cannot update, archive or restore a template that reaches roles or groups (403, nothing written)', async () => {
+      const a = setup({ principals: current });
+      await expect(updateCentralTemplate(manager, TPL, { ...base, name: 'Nyt navn' }, a.env)).rejects.toMatchObject({
+        name: 'ForbiddenError',
+        code: 'principal_targets_need_global',
+      });
+      expect(writes(a.calls)).toEqual([]);
+      const b = setup({ principals: current });
+      await expect(archiveCentralTemplate(manager, TPL, { baseVersion: 3, changeNote: NOTE }, b.env)).rejects.toMatchObject({
+        code: 'principal_targets_need_global',
+      });
+      expect(writes(b.calls)).toEqual([]);
+      const c = setup({ principals: current, template: [row({ status: 'archived' })] });
+      await expect(restoreCentralTemplate(manager, TPL, { baseVersion: 3, changeNote: NOTE }, c.env)).rejects.toMatchObject({
+        code: 'principal_targets_need_global',
+      });
+      expect(writes(c.calls)).toEqual([]);
+      expect(recordEvent).not.toHaveBeenCalled();
+      // Reading stays allowed.
+      expect(await getManageableTemplate(manager, TPL, a.env)).toMatchObject({ id: TPL });
+    });
+
+    it('a scoped manager still works on a template without role/group targets', async () => {
+      const { env } = setup();
+      await expect(updateCentralTemplate(manager, TPL, { ...base, name: 'Nyt navn' }, env)).resolves.toBeDefined();
     });
 
     it('an org-wide template (no owner) is 404 for a scoped manager, whatever the unit scope says', async () => {
@@ -581,6 +633,7 @@ describe('archive and restore', () => {
   const input = { baseVersion: 3, changeNote: 'Skabelonen bruges ikke længere' };
 
   it('archive: status flips, version +1, version row of type archive, audit', async () => {
+    scope.hasGlobalScope.mockReturnValue(true); // it has role/group targets: only a global manager may archive it
     const { env, calls } = setup({
       targets: [{ org_unit_uuid: CHILD, include_descendants: true }],
       principals: [{ kind: 'role', identifier: 'r', name: 'Rolle R', active: true }],
@@ -634,7 +687,7 @@ describe('reads', () => {
     const scoped = makeFakeRunner((sql) => {
       if (sql.startsWith('SELECT template_id')) return [{ template_id: TPL, org_unit_uuid: CHILD, include_descendants: true }];
       if (sql.startsWith('SELECT pt.template_id')) {
-        return [{ template_id: TPL, kind: 'role', identifier: 'r', name: 'Rolle R', active: false }];
+        return [{ template_id: TPL, kind: 'role', identifier: 'r', name: 'Rolle R', active: false, holders: 0 }];
       }
       return [item];
     });
@@ -643,7 +696,7 @@ describe('reads', () => {
       id: TPL, name: 'A', description: '', ownerOrgUnitUuid: OWNER, status: 'active', currentVersion: 2, targetCount: 1,
       // The audience, named: units by uuid (the client resolves names), roles/groups with the catalogue's name and state.
       targets: [{ orgUnitUuid: CHILD, includeDescendants: true }],
-      principalTargets: [{ kind: 'role', identifier: 'r', name: 'Rolle R', status: 'inactive' }],
+      principalTargets: [{ kind: 'role', identifier: 'r', name: 'Rolle R', status: 'inactive', holders: 0 }],
       updatedAt: '2026-03-01T00:00:00.000Z', createdByName: 'Anne Ansvarlig', lastEditedByName: 'Bo Beslutter', lastEditedAt: '2026-03-01T00:00:00.000Z',
     }]);
     expect(scoped.calls[0].params).toEqual(['active', [OWNER, CHILD]]);
@@ -678,16 +731,20 @@ describe('reads', () => {
 
   it('catalogue: both sources merged, withdrawn entries included, names and identifiers only', async () => {
     const fake = makeFakeRunner(() => [
-      { kind: 'role', identifier: 'a', name: 'A', source: 'rollekatalog', active: true, synced_at: new Date('2026-03-02T00:00:00Z') },
-      { kind: 'group', identifier: 'b', name: 'B', source: 'config', active: true, synced_at: new Date('2026-03-05T00:00:00Z') },
-      { kind: 'role', identifier: 'c', name: 'C', source: 'rollekatalog', active: false, synced_at: new Date('2026-03-01T00:00:00Z') },
+      { kind: 'role', identifier: 'a', name: 'A', source: 'rollekatalog', active: true, holders: 5, synced_at: new Date('2026-03-02T00:00:00Z') },
+      { kind: 'group', identifier: 'b', name: 'B', source: 'config', active: true, holders: 0, synced_at: new Date('2026-03-05T00:00:00Z') },
+      { kind: 'role', identifier: 'c', name: 'C', source: 'rollekatalog', active: false, holders: 0, synced_at: new Date('2026-03-01T00:00:00Z') },
     ]);
-    const out = await listCatalogue({ schema: 'public', runner: fake.runner });
+    const out = await listCatalogue({ schema: 'public', runner: fake.runner, accessSource: 'claims', claimsMaxSeconds: 3600 });
+    // `holders` is a COUNT of fresh logins holding the entry, never who.
     expect(out.entries).toEqual([
-      { kind: 'role', identifier: 'a', name: 'A', source: 'rollekatalog', active: true },
-      { kind: 'group', identifier: 'b', name: 'B', source: 'config', active: true },
-      { kind: 'role', identifier: 'c', name: 'C', source: 'rollekatalog', active: false },
+      { kind: 'role', identifier: 'a', name: 'A', source: 'rollekatalog', active: true, holders: 5 },
+      { kind: 'group', identifier: 'b', name: 'B', source: 'config', active: true, holders: 0 },
+      { kind: 'role', identifier: 'c', name: 'C', source: 'rollekatalog', active: false, holders: 0 },
     ]);
+    expect(fake.calls[0].params).toEqual([3600]);
+    expect(fake.calls[0].sql).toContain('ur.seen_at > now() - make_interval');
+    expect(fake.calls[0].sql).not.toMatch(/user_id AS|ur\.user_id,/);
     // "Last refreshed" is the newest ROLLEKATALOG row, not the config one.
     expect(out.lastRefreshedAt).toBe('2026-03-02T00:00:00.000Z');
     expect(fake.calls[0].sql).toContain('FROM "public".external_roles');

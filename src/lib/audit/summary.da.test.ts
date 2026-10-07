@@ -47,7 +47,7 @@ const CASES: Record<EventType, [SummarisableEvent, string]> = {
   'bot.ended': [ev('bot.ended', { source: 'system', actorUserId: null, actorName: null, details: { durationSeconds: 1800 } }), 'Mødebotten forlod mødet efter 30 min.'],
   'bot.error': [ev('bot.error', { source: 'system', outcome: 'error', actorUserId: null, actorName: null, details: { code: 'join_failed' } }), 'Mødebotten fejlede'],
   'meeting.create': [ev('meeting.create', { source: 'client', details: { origin: 'upload' } }), `${NAME} oprettede et møde (upload)`],
-  'meeting.delete': [ev('meeting.delete', { source: 'client' }), `${NAME} slettede et møde med transskription og alle referatversioner`],
+  'meeting.delete': [ev('meeting.delete', { source: 'client' }), `${NAME} slettede et møde med transskription, referatversioner og lyd`],
   'meeting.redact': [ev('meeting.redact', { source: 'client' }), `${NAME} slørede et møde`],
   'meeting.audio_delete': [ev('meeting.audio_delete', { source: 'client' }), `${NAME} slettede lyden fra et møde`],
   'meeting.minutes_view': [ev('meeting.minutes_view', { source: 'client' }), `${NAME} åbnede et referat`],
@@ -57,6 +57,8 @@ const CASES: Record<EventType, [SummarisableEvent, string]> = {
   'meeting.recording_pause': [ev('meeting.recording_pause', { source: 'client' }), `${NAME} satte en optagelse på pause`],
   'meeting.recording_resume': [ev('meeting.recording_resume', { source: 'client' }), `${NAME} genoptog en optagelse`],
   'meeting.recording_stop': [ev('meeting.recording_stop', { source: 'client' }), `${NAME} stoppede en optagelse`],
+  'meeting.transcript_edit': [ev('meeting.transcript_edit', { source: 'client' }), `${NAME} redigerede en transskription`],
+  'meeting.metadata_edit': [ev('meeting.metadata_edit', { source: 'client', details: { field: 'title' } }), `${NAME} ændrede titlen på et møde`],
   'meeting.minutes_save': [ev('meeting.minutes_save', { source: 'client' }), `${NAME} redigerede et referat`],
   'meeting.minutes_version': [
     ev('meeting.minutes_version', { source: 'client', details: { versionNumber: 2, action: 'snapshot' } }),
@@ -76,6 +78,10 @@ const CASES: Record<EventType, [SummarisableEvent, string]> = {
     'Systemets konfiguration er ændret siden sidste start',
   ],
   'audit.export': [ev('audit.export', { details: { rowCount: 1200, format: 'csv' } }), `${NAME} eksporterede loggen (1.200 rækker)`],
+  'audit.events_dropped': [
+    ev('audit.events_dropped', { source: 'system', details: { reason: 'daily_cap', count: 12 } }),
+    '12 hændelser blev ikke registreret (dagsgrænsen for en bruger var nået)',
+  ],
   'audit.prune': [ev('audit.prune', { source: 'system', actorUserId: null, actorName: null, details: { deletedCount: 1, olderThanDays: 365 } }), 'Systemet slettede 1 logpost ældre end 365 dage'],
 };
 
@@ -139,14 +145,14 @@ describe('summariseEvent', () => {
       `${NAME} slettede lyden fra et møde (automatisk efter referatet blev genereret)`,
     );
     expect(summariseEvent(ev('meeting.delete', { source: 'client', details: { trigger: 'auto_pagehide' } }))).toBe(
-      `${NAME} slettede et møde med transskription og alle referatversioner (automatisk, da fanen blev lukket)`,
+      `${NAME} slettede et møde med transskription, referatversioner og lyd (automatisk, da fanen blev lukket)`,
     );
     expect(summariseEvent(ev('meeting.delete', { source: 'client', details: { trigger: 'user' } }))).not.toContain('automatisk');
     expect(summariseEvent(ev('meeting.minutes_version', { details: { versionNumber: 1, action: 'view' } }))).toBe(
       `${NAME} åbnede en tidligere version af referatet (version 1)`,
     );
     expect(summariseEvent(ev('meeting.minutes_version', { details: { versionNumber: 1, action: 'activate' } }))).toBe(
-      `${NAME} gendannede en tidligere version af referatet (version 1)`,
+      `${NAME} satte version 1 som den aktive version af referatet`,
     );
   });
 
@@ -160,6 +166,24 @@ describe('summariseEvent', () => {
   });
 
   it('falls back to the stored label for a legacy type', () => {
-    expect(summariseEvent(ev('legacy.thing'))).toBe(`${NAME}: legacy.thing`);
+    expect(summariseEvent(ev('legacy.thing'))).toBe(`${NAME}: Ukendt hændelsestype (legacy.thing)`);
+  });
+
+  it('words each audio channel by what was sent and what for', () => {
+    const s = (channel: string, outcome = 'success') => summariseEvent(ev('audio.upload', { outcome, details: { channel, bytes: 5 } }));
+    expect(s('live')).toBe(`${NAME} uploadede lyd fra en live optagelse til transskribering`);
+    expect(s('diarize')).toBe(`${NAME} uploadede en optagelse til taleropdeling`);
+    expect(s('batch')).toBe(`${NAME} uploadede en optagelse til transskribering`);
+    expect(s('upload', 'error')).toBe(`${NAME} kunne ikke uploade en lydfil til transskribering`);
+  });
+
+  it('says whether the server deleted a recording or a stashed transcript', () => {
+    const sys = { source: 'system', actorUserId: null, actorName: null };
+    expect(summariseEvent(ev('bot.audio_delete', { ...sys, details: { trigger: 'handoff', object: 'transcript' } }))).toBe(
+      'Systemet slettede mødebottens transskription på serveren, efter at den var hentet',
+    );
+    expect(summariseEvent(ev('bot.audio_delete', { ...sys, details: { trigger: 'ttl', object: 'transcript' } }))).toBe(
+      'Systemet slettede en mødebot-transskription på serveren, som ingen havde hentet',
+    );
   });
 });

@@ -33,7 +33,10 @@ vi.mock('idb', () => ({
 }));
 
 import {
+  addDroppedLocally,
   addToOutbox,
+  clearDroppedLocally,
+  getDroppedLocally,
   backoffMs,
   markFailed,
   outboxAvailable,
@@ -155,3 +158,42 @@ describe('outbox', () => {
     expect(h.opened).toHaveLength(0);
   });
 });
+
+describe('events lost before delivery are counted', () => {
+  it('eviction beyond 1000, expiry after 7 days and nothing else add to the count', async () => {
+    expect(getDroppedLocally('u')).toBeNull();
+    for (let i = 0; i < OUTBOX_MAX_EVENTS + 5; i++) await addToOutbox('u', ev(i), i);
+    expect(getDroppedLocally('u')?.count).toBe(5);
+    await takeDue('u', 10, OUTBOX_MAX_EVENTS + 10); // nothing expired yet
+    expect(getDroppedLocally('u')?.count).toBe(5);
+    await takeDue('u', 10, OUTBOX_TTL_MS + OUTBOX_MAX_EVENTS + 100); // everything is older than 7 days now
+    expect(getDroppedLocally('u')?.count).toBe(5 + OUTBOX_MAX_EVENTS);
+  });
+
+  it('is kept per user, with a new id whenever the count changes (a retry of the same count is idempotent)', () => {
+    addDroppedLocally('a', 2);
+    const first = getDroppedLocally('a')!;
+    expect(getDroppedLocally('a')).toEqual(first);
+    addDroppedLocally('a', 1);
+    const second = getDroppedLocally('a')!;
+    expect(second.count).toBe(3);
+    expect(second.clientEventId).not.toBe(first.clientEventId);
+    expect(getDroppedLocally('b')).toBeNull();
+  });
+
+  it('subtracts what was reported and forgets the count at zero', () => {
+    addDroppedLocally('a', 5);
+    clearDroppedLocally('a', 2);
+    expect(getDroppedLocally('a')?.count).toBe(3);
+    clearDroppedLocally('a', 3);
+    expect(getDroppedLocally('a')).toBeNull();
+    clearDroppedLocally('a', 1); // nothing there: no error
+  });
+
+  it('ignores zero and negative counts and never throws', () => {
+    addDroppedLocally('a', 0);
+    addDroppedLocally('a', -3);
+    expect(getDroppedLocally('a')).toBeNull();
+  });
+});
+

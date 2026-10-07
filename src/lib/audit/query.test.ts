@@ -203,14 +203,14 @@ describe('listAuditEvents filters and paging', () => {
   });
 
   describe('catalogue restriction', () => {
-    it('lists and exports only current catalogue types, so removed types never show up', async () => {
+    it('lists and exports unknown types too (shown as unknown), but hides the removed access.* events', async () => {
       const f = fakeEnv();
       await listAuditEvents({ scope: { all: true } }, f.env);
-      expect(f.sql()).toContain('event_type = ANY($1::text[])');
+      expect(f.sql()).toContain("(event_type = ANY($1::text[]) OR event_type NOT LIKE 'access.%')");
       expect(f.params()[0]).toEqual(EVENT_TYPES);
       const g = fakeEnv([[]]);
       await collectAuditEvents({ scope: { all: true }, maxRows: 10 }, g.env);
-      expect(g.sql()).toContain('event_type = ANY($1::text[])');
+      expect(g.sql()).toContain("OR event_type NOT LIKE 'access.%'");
     });
 
     it('the feed keeps returning every type', async () => {

@@ -20,7 +20,18 @@
 //  - `roles` that is invalid FAILS CLOSED: nobody gets a role from claims (a typo in a
 //    security mapping must never widen or silently narrow access in an unknown way);
 //  - `catalogue` that is invalid is dropped: no catalogue means no role/group values are
-//    stored for anybody (privacy-minimising).
+//    stored for anybody (privacy-minimising). Its state ('absent' | 'invalid' | 'ok') is
+//    reported, so that authz/external-roles.ts never deactivates the stored catalogue because
+//    of an unreadable file.
+//
+// Security rules enforced here (a provider that breaks one is skipped with a warning):
+//  - every IdP URL is https (http only for a loopback host outside production);
+//  - in production an oidc/saml provider needs BETTER_AUTH_URL to be a valid https URL;
+//  - Entra needs ONE tenant (a GUID): "common" / "organizations" / "consumers" accept any
+//    tenant of the world, and group GUIDs / app role names are only unique inside one;
+//  - ACCESS_SOURCE=claims: an OIDC provider may not use a multi-tenant authority and must
+//    give a discoveryUrl or issuer (the id token's `iss` is checked against it);
+//  - `claims.userId` may not be a mutable, re-assignable attribute (e-mail, upn, name ...).
 // Warnings name the section, the provider id or index and the field path, never a value.
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
@@ -31,9 +42,67 @@ import { ROLE_KEYS, type RoleKey } from '@/lib/authz/types';
 // reused by another identity source (two sources writing one provider_id would cross-match).
 export const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 export const ENTRA_PROVIDER_ID = 'microsoft';
+/**
+ * Ids no provider may take: 'microsoft' is the built-in Entra provider; 'credential' is
+ * better-auth's e-mail/password account provider; 'password' and 'unknown' are the audit
+ * log's method / provider placeholders. Two identity sources writing one accounts.provider_id
+ * would cross-match, and a look-alike would be indistinguishable in the log.
+ */
+export const RESERVED_PROVIDER_IDS: readonly string[] = [ENTRA_PROVIDER_ID, 'credential', 'password', 'unknown'];
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/** https, or http for a loopback host outside production (dev simulation, a local Keycloak). */
+export function isAllowedIdpUrl(raw: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (u.protocol === 'https:') return true;
+  return u.protocol === 'http:' && process.env.NODE_ENV !== 'production' && LOOPBACK_HOSTS.has(u.hostname);
+}
+
+/** ACCESS_SOURCE=claims, read straight from the environment (config.ts imports this module, not the other way round). */
+export function claimsModeConfigured(): boolean {
+  return (process.env.ACCESS_SOURCE ?? '').trim().toLowerCase() === 'claims';
+}
+
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const isGuid = (v: string): boolean => GUID_RE.test(v.trim());
+
+/** Authorities of Microsoft's multi-tenant endpoints: any tenant can sign in through them. */
+const MULTI_TENANT_PATH_RE = /\/(common|organizations|consumers)(\/|$)/i;
+export function isMultiTenantAuthority(raw: string | undefined): boolean {
+  if (!raw) return false;
+  try {
+    return MULTI_TENANT_PATH_RE.test(new URL(raw).pathname);
+  } catch {
+    return MULTI_TENANT_PATH_RE.test(raw);
+  }
+}
+
+/** In production BETTER_AUTH_URL must be a valid https URL, or the redirect / ACS URLs are not safe to hand to an IdP. */
+function baseUrlProblem(): string | null {
+  if (process.env.NODE_ENV !== 'production') return null;
+  const raw = process.env.BETTER_AUTH_URL?.trim();
+  if (!raw) return 'BETTER_AUTH_URL is not set';
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'https:' && u.hostname !== '' && !u.search && !u.hash ? null : 'BETTER_AUTH_URL is not a plain https URL';
+  } catch {
+    return 'BETTER_AUTH_URL is not a valid URL';
+  }
+}
+
+/** Claim names that identify a person only by something an administrator can change or re-assign. */
+const MUTABLE_USERID_CLAIMS = new Set(['email', 'mail', 'upn', 'preferred_username', 'name', 'email_verified']);
 
 const nonEmpty = (max: number) => z.string().trim().min(1).max(max);
 const urlString = z.string().trim().url().max(2048);
+/** An IdP endpoint: https only (http for a loopback host outside production). */
+const idpUrl = urlString.refine(isAllowedIdpUrl, { message: 'insecure_url' });
 
 // ─── Claims ──────────────────────────────────────────────────────────────────
 
@@ -84,7 +153,7 @@ const providerId = z
   .trim()
   .toLowerCase()
   .regex(PROVIDER_ID_RE)
-  .refine((id) => id !== ENTRA_PROVIDER_ID, { message: 'reserved' });
+  .refine((id) => !RESERVED_PROVIDER_IDS.includes(id), { message: 'reserved' });
 
 const label = nonEmpty(60).optional();
 const scopes = z.array(z.string().trim().regex(/^[^\s]{1,200}$/)).min(1).max(30);
@@ -97,13 +166,20 @@ const oidcSchema = z
     enabled: z.boolean().default(true),
     clientId: nonEmpty(512),
     clientSecret: nonEmpty(4096),
-    discoveryUrl: urlString.optional(),
-    issuer: urlString.optional(),
-    authorizationUrl: urlString.optional(),
-    tokenUrl: urlString.optional(),
-    userInfoUrl: urlString.optional(),
+    discoveryUrl: idpUrl.optional(),
+    issuer: idpUrl.optional(),
+    authorizationUrl: idpUrl.optional(),
+    tokenUrl: idpUrl.optional(),
+    userInfoUrl: idpUrl.optional(),
     scopes: scopes.default(['openid', 'profile', 'email']),
     pkce: z.boolean().default(true),
+    /**
+     * Sent as the `prompt` parameter. "login" forces a fresh sign-in at the IdP every time, which is what a shared
+     * workstation needs (signing out of the app does not sign the person out of the IdP, see idp.md section 5).
+     */
+    prompt: z.enum(['login', 'select_account', 'consent']).optional(),
+    /** Sent as `max_age` (seconds): the IdP must re-authenticate a person whose own session is older. 0 = always. */
+    maxAge: z.number().int().min(0).max(86_400).optional(),
     claims: claimMapping,
     rolesClaim: claimList,
     groupsClaim: claimList,
@@ -122,9 +198,19 @@ const entraSchema = z
     enabled: z.boolean().default(true),
     clientId: nonEmpty(512),
     clientSecret: nonEmpty(4096),
-    /** One tenant id; "common" / "organizations" / "consumers" accept any tenant. */
-    tenantId: nonEmpty(200).default('common'),
+    /**
+     * The ONE tenant (a GUID) whose people may sign in. Required: "common" / "organizations" /
+     * "consumers" let any tenant of the world in, and the group GUIDs and app role names that
+     * carry the roles are only unique inside a tenant.
+     */
+    tenantId: z
+      .string()
+      .trim()
+      .refine(isGuid, { message: 'tenant_guid_required' })
+      .transform((v) => v.toLowerCase()),
+    /** Extra scopes. openid, profile and email are always requested; offline_access is never (no refresh token is kept). */
     scopes: scopes.optional(),
+    prompt: z.enum(['login', 'select_account', 'consent']).optional(),
     rolesClaim: claimList,
     groupsClaim: claimList,
   })
@@ -140,17 +226,30 @@ const samlSchema = z
     idpMetadataFile: nonEmpty(1024).optional(),
     idpMetadataXml: z.string().trim().min(1).max(500_000).optional(),
     /** Without metadata: the IdP's single-sign-on URL, entity id and PEM signing certificate. */
-    entryPoint: urlString.optional(),
+    entryPoint: idpUrl.optional(),
     idpEntityId: nonEmpty(1024).optional(),
-    cert: z.string().trim().min(1).max(20_000).optional(),
+    /** PEM signing certificate; a list during a certificate rollover (any of them verifies). */
+    cert: z.union([z.string().trim().min(1).max(20_000), z.array(z.string().trim().min(1).max(20_000)).min(1).max(5)]).optional(),
     /** Our entity id (SP); default: the metadata URL of this installation for this provider. */
     spEntityId: nonEmpty(1024).optional(),
     audience: nonEmpty(1024).optional(),
-    /** Require the IdP to sign the assertion. Default true; turning it off is a conscious, logged choice. */
+    /**
+     * Cosmetic: passed to the SAML library, but an UNSIGNED response is refused whatever this says
+     * (saml.flow.test.ts proves it). `false` is only logged as a warning. Leave it out.
+     */
     wantAssertionsSigned: z.boolean().default(true),
     authnRequestsSigned: z.boolean().default(false),
-    /** Accept a response that answers no AuthnRequest of ours (login started at the IdP's portal). Default true. */
-    allowIdpInitiated: z.boolean().default(true),
+    /**
+     * Accept a response that answers no AuthnRequest of ours (login started at the IdP's portal). Default FALSE:
+     * an IdP-initiated response cannot be tied to a browser that started a login here, so it is login-CSRF
+     * material. With false, every response must carry a SIGNED InResponseTo that answers a request this app issued.
+     */
+    allowIdpInitiated: z.boolean().default(false),
+    /**
+     * Accept responses signed with SHA-1 (and RSA1_5 / 3DES). Default false: they are rejected. The escape is
+     * installation-wide (the plugin has one switch): if any SAML provider sets it, all of them warn instead of reject.
+     */
+    allowDeprecatedAlgorithms: z.boolean().default(false),
     /** PEM private key used to sign AuthnRequests (only with authnRequestsSigned). */
     signingPrivateKey: z.string().trim().min(1).max(20_000).optional(),
     signatureAlgorithm: nonEmpty(200).optional(),
@@ -188,7 +287,7 @@ const roleMapEntry = z.union([
 ]);
 const roleMap = z.record(nonEmpty(512), roleMapEntry).refine((m) => Object.keys(m).length <= 500, 'too many entries');
 
-const rolesSchema = z
+const providerRoleMaps = z
   .object({
     /** Values of the provider's `rolesClaim` -> app role. */
     appRoleMap: roleMap.default({}),
@@ -197,11 +296,29 @@ const rolesSchema = z
   })
   .strict();
 
+const rolesSchema = z
+  .object({
+    /** Fallback maps, used only when the file has exactly ONE provider (see RolesConfig). */
+    appRoleMap: roleMap.default({}),
+    groupRoleMap: roleMap.default({}),
+    /** Maps per provider id; a provider listed here uses ONLY its own maps. */
+    byProvider: z
+      .record(z.string().trim().toLowerCase().regex(PROVIDER_ID_RE), providerRoleMaps)
+      .default({}),
+  })
+  .strict();
+
 const catalogueEntry = z
   .object({
     kind: z.enum(['role', 'group']),
     identifier: nonEmpty(200),
     name: nonEmpty(200),
+    /**
+     * Provider ids whose claim values this entry belongs to. Absent = every provider. With it, a login through
+     * another provider that happens to carry the same value stores nothing, so provider B's values never match
+     * a prompt target meant for provider A.
+     */
+    providers: z.array(z.string().trim().toLowerCase().regex(PROVIDER_ID_RE)).min(1).max(20).optional(),
   })
   .strict();
 const catalogueSchema = z.array(catalogueEntry).max(5000);
@@ -212,16 +329,35 @@ export interface RoleMapping {
   global: boolean;
 }
 
+export interface ProviderRoleMaps {
+  appRoleMap: ReadonlyMap<string, RoleMapping>;
+  groupRoleMap: ReadonlyMap<string, RoleMapping>;
+}
+
 export type RolesConfig =
   | { state: 'unset' }
   | { state: 'invalid' }
-  | { state: 'ok'; appRoleMap: ReadonlyMap<string, RoleMapping>; groupRoleMap: ReadonlyMap<string, RoleMapping> };
+  | ({
+      state: 'ok';
+      /**
+       * The global maps. They apply to a provider without its own `byProvider` entry ONLY when the file has exactly one
+       * provider (`providerCount`, absent = 1): with several providers, one provider's role names must not grant
+       * roles through another.
+       */
+      byProvider?: ReadonlyMap<string, ProviderRoleMaps>;
+      providerCount?: number;
+    } & ProviderRoleMaps);
 
 export interface CatalogueEntry {
   kind: 'role' | 'group';
   identifier: string;
   name: string;
+  /** Provider ids this entry is for; absent = all. */
+  providers?: string[];
 }
+
+/** 'absent': no catalogue section (or no config file). 'invalid': there is one, but it could not be used. */
+export type CatalogueState = 'absent' | 'invalid' | 'ok';
 
 export interface LoadedAuthConfig {
   /** AUTH_CONFIG_FILE is set (even if it turned out to be unusable): legacy env providers then stay off. */
@@ -229,9 +365,23 @@ export interface LoadedAuthConfig {
   providers: FileProvider[];
   roles: RolesConfig;
   catalogue: CatalogueEntry[];
+  catalogueState: CatalogueState;
 }
 
-const NOT_CONFIGURED: LoadedAuthConfig = { configured: false, providers: [], roles: { state: 'unset' }, catalogue: [] };
+const NOT_CONFIGURED: LoadedAuthConfig = {
+  configured: false,
+  providers: [],
+  roles: { state: 'unset' },
+  catalogue: [],
+  catalogueState: 'absent',
+};
+const UNUSABLE: LoadedAuthConfig = {
+  configured: true,
+  providers: [],
+  roles: { state: 'invalid' },
+  catalogue: [],
+  catalogueState: 'invalid',
+};
 
 // ─── ${ENV} expansion ────────────────────────────────────────────────────────
 
@@ -303,6 +453,33 @@ function parseProvider(raw: unknown, index: number, seen: Set<string>): FileProv
     return null;
   }
 
+  if (provider.type !== 'entra') {
+    const problem = baseUrlProblem();
+    if (problem) {
+      warn(`Ignoring ${where}: ${problem}; an OIDC or SAML provider needs the public https URL of this installation in production.`);
+      return null;
+    }
+  }
+
+  if (provider.type === 'oidc') {
+    // The userId claim is the account key: it must never be something that can be edited or re-assigned.
+    if (provider.claims?.userId && MUTABLE_USERID_CLAIMS.has(provider.claims.userId.trim().toLowerCase())) {
+      warn(`Ignoring ${where}: claims.userId must be a stable identifier (sub, oid, ...), not an address or a name.`);
+      return null;
+    }
+    if (claimsModeConfigured()) {
+      const urls = [provider.discoveryUrl, provider.issuer, provider.authorizationUrl, provider.tokenUrl, provider.userInfoUrl];
+      if (urls.some(isMultiTenantAuthority)) {
+        warn(`Ignoring ${where}: a multi-tenant authority (common / organizations / consumers) cannot be used with ACCESS_SOURCE=claims; use the tenant-specific URL.`);
+        return null;
+      }
+      if (!provider.discoveryUrl && !provider.issuer) {
+        warn(`Ignoring ${where}: with ACCESS_SOURCE=claims the provider needs discoveryUrl or issuer (the id token issuer is checked against it).`);
+        return null;
+      }
+    }
+  }
+
   if (provider.type === 'saml') {
     // The metadata file is read here, once, so a missing file disables just this provider.
     if (provider.idpMetadataFile) {
@@ -315,15 +492,32 @@ function parseProvider(raw: unknown, index: number, seen: Set<string>): FileProv
     } else if (provider.idpMetadataXml) {
       provider.idpMetadata = provider.idpMetadataXml;
     }
+    // The endpoints inside the metadata are IdP URLs too.
+    if (provider.idpMetadata) {
+      const locations = [...provider.idpMetadata.matchAll(/\bLocation\s*=\s*["']([^"']*)["']/g)].map((m) => m[1].replaceAll('&amp;', '&'));
+      if (locations.some((l) => !isAllowedIdpUrl(l))) {
+        warn(`Ignoring ${where}: the IdP metadata has an endpoint that is not https.`);
+        return null;
+      }
+    }
+    if (provider.claims?.userId && provider.claims.email && provider.claims.userId.trim().toLowerCase() === provider.claims.email.trim().toLowerCase()) {
+      warn(`${where}: claims.userId is the same attribute as claims.email; an address can be re-assigned to another person at the IdP. Use a stable identifier.`);
+    }
     if (!provider.wantAssertionsSigned) {
-      warn(`${where}: wantAssertionsSigned is false; unsigned SAML assertions will be accepted. Do not use this in production.`);
+      warn(`${where}: wantAssertionsSigned is false; it has no effect, unsigned SAML responses are always refused.`);
+    }
+    if (provider.allowDeprecatedAlgorithms) {
+      warn(`${where}: allowDeprecatedAlgorithms is on; responses signed with SHA-1 are accepted for ALL SAML providers. Ask the IdP for SHA-256.`);
+    }
+    if (provider.allowIdpInitiated) {
+      warn(`${where}: allowIdpInitiated is on; a response that answers no request of this app is accepted (login CSRF). Prefer false.`);
     }
   }
   seen.add(provider.id);
   return provider;
 }
 
-function parseRoles(raw: unknown): RolesConfig {
+function parseRoles(raw: unknown, providerIds: readonly string[]): RolesConfig {
   if (raw === undefined) return { state: 'unset' };
   const missing = new Set<string>();
   const expanded = expandEnv(raw, missing);
@@ -338,39 +532,50 @@ function parseRoles(raw: unknown): RolesConfig {
   }
   const toMap = (m: Record<string, RoleMapping>) =>
     new Map(Object.entries(m).filter(([, v]) => v.global));
-  return { state: 'ok', appRoleMap: toMap(parsed.data.appRoleMap), groupRoleMap: toMap(parsed.data.groupRoleMap) };
+  const byProvider = new Map<string, ProviderRoleMaps>();
+  for (const [id, maps] of Object.entries(parsed.data.byProvider)) {
+    if (!providerIds.includes(id)) {
+      // Not fatal (the provider may just be disabled), and it grants nothing: only the named provider reads this entry.
+      warn('roles.byProvider names a provider id that is not configured; that entry is unused.');
+    }
+    byProvider.set(id, { appRoleMap: toMap(maps.appRoleMap), groupRoleMap: toMap(maps.groupRoleMap) });
+  }
+  const globalMaps = { appRoleMap: toMap(parsed.data.appRoleMap), groupRoleMap: toMap(parsed.data.groupRoleMap) };
+  if (providerIds.length > 1 && (globalMaps.appRoleMap.size > 0 || globalMaps.groupRoleMap.size > 0)) {
+    warn('roles.appRoleMap / groupRoleMap apply to a single provider only; with several providers use roles.byProvider.<id>. A provider without its own map grants no roles.');
+  }
+  return { state: 'ok', ...globalMaps, byProvider, providerCount: providerIds.length };
 }
 
-function parseCatalogue(raw: unknown): CatalogueEntry[] {
-  if (raw === undefined) return [];
+function parseCatalogue(raw: unknown): { entries: CatalogueEntry[]; state: CatalogueState } {
+  if (raw === undefined) return { entries: [], state: 'absent' };
   const missing = new Set<string>();
   const parsed = catalogueSchema.safeParse(expandEnv(raw, missing));
   if (missing.size > 0 || !parsed.success) {
     warn(`catalogue section is invalid${parsed.success ? '' : ` (${issueSummary(parsed.error)})`}; it is ignored.`);
-    return [];
+    return { entries: [], state: 'invalid' };
   }
   // Duplicate (kind, identifier): the first entry wins.
   const seen = new Set<string>();
-  return parsed.data.filter((e) => {
+  const entries = parsed.data.filter((e) => {
     const key = `${e.kind}\u0000${e.identifier}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+  return { entries, state: 'ok' };
 }
 
 function loadFile(path: string): LoadedAuthConfig {
   const json = readJsonFile(path);
   if (json === null || typeof json !== 'object' || Array.isArray(json)) {
     warn('AUTH_CONFIG_FILE could not be read or is not a JSON object; no providers from it and no roles from claims.');
-    return { configured: true, providers: [], roles: { state: 'invalid' }, catalogue: [] };
+    return UNUSABLE;
   }
   const top = json as Record<string, unknown>;
 
   const known = new Set(['providers', 'roles', 'catalogue']);
   const unknownKeys = Object.keys(top).filter((k) => !known.has(k));
-  // A misspelt "roles" would otherwise silently mean "no role mapping": fail closed instead.
-  const roles: RolesConfig = unknownKeys.length > 0 ? { state: 'invalid' } : parseRoles(top.roles);
   if (unknownKeys.length > 0) {
     warn(`AUTH_CONFIG_FILE has unknown top-level key(s): ${unknownKeys.map((k) => (/^[A-Za-z0-9_-]{1,40}$/.test(k) ? k : '?')).join(', ')}; no roles will be granted from claims.`);
   }
@@ -387,7 +592,13 @@ function loadFile(path: string): LoadedAuthConfig {
       });
     }
   }
-  return { configured: true, providers, roles, catalogue: parseCatalogue(top.catalogue) };
+  // A misspelt "roles" would otherwise silently mean "no role mapping": fail closed instead.
+  const roles: RolesConfig =
+    unknownKeys.length > 0
+      ? { state: 'invalid' }
+      : parseRoles(top.roles, providers.map((p) => p.id));
+  const catalogue = parseCatalogue(top.catalogue);
+  return { configured: true, providers, roles, catalogue: catalogue.entries, catalogueState: catalogue.state };
 }
 
 let cache: { path: string; value: LoadedAuthConfig } | null = null;
@@ -407,7 +618,7 @@ export function loadAuthConfig(): LoadedAuthConfig {
     value = loadFile(path);
   } catch {
     warn('AUTH_CONFIG_FILE could not be processed; no providers from it and no roles from claims.');
-    value = { configured: true, providers: [], roles: { state: 'invalid' }, catalogue: [] };
+    value = UNUSABLE;
   }
   cache = { path, value };
   return value;

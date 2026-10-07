@@ -1,8 +1,8 @@
-import { timingSafeEqual } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { withHandler } from '@/lib/api-handler';
+import { secretEquals } from '@/lib/audit/feed-auth';
 import { recordServerEvent } from '@/lib/audit/record';
 import { CODE_RE } from '@/lib/audit/events/types';
 import { db } from '@/lib/db';
@@ -22,10 +22,8 @@ const bodySchema = z
 
 function authorised(header: string | null): boolean {
   const secret = process.env.BOT_INTERNAL_SECRET;
-  if (!secret || !header) return false;
-  const given = Buffer.from(header);
-  const expected = Buffer.from(`Bearer ${secret}`);
-  return given.length === expected.length && timingSafeEqual(given, expected);
+  // Same constant-time comparison as /api/bot/audio-upload (both sides are hashed first).
+  return !!secret && !!header && secretEquals(header, `Bearer ${secret}`);
 }
 
 export const POST = withHandler('bot/lifecycle', async (req: NextRequest) => {

@@ -55,12 +55,15 @@ export const CATEGORY_OF: Record<EventType, CategoryKey> = {
   'meeting.transcript_view': 'views',
   'meeting.audio_play': 'views',
   'meeting.minutes_save': 'edits',
+  'meeting.transcript_edit': 'edits',
+  'meeting.metadata_edit': 'edits',
   'meeting.minutes_version': 'edits',
   'meeting.minutes_version_prune': 'edits',
   'meeting.participants_edit': 'edits',
   'meeting.speakers_edit': 'edits',
   'system.config_changed': 'log',
   'audit.export': 'log',
+  'audit.events_dropped': 'log',
   'audit.prune': 'log',
 };
 

@@ -16,7 +16,18 @@
 // Nothing but opaque ids, counts and codes may be passed in `details` (the server
 // enforces the same catalogue). Never titles, names, text or file names.
 import type { EventDetails, EventType } from './events';
-import { addToOutbox, markFailed, outboxAvailable, removeFromOutbox, takeDue, type OutboxEvent } from './outbox';
+import {
+  addDroppedLocally,
+  addToOutbox,
+  clearDroppedLocally,
+  getDroppedLocally,
+  markFailed,
+  outboxAvailable,
+  removeFromOutbox,
+  takeDue,
+  type DroppedLocally,
+  type OutboxEvent,
+} from './outbox';
 import { getStorageUserId } from '@/lib/storage/scope';
 
 type ClientEventType = Extract<EventType, `meeting.${string}`>;
@@ -45,6 +56,8 @@ const MAX_ROUNDS_PER_FLUSH = 20;
 export const COALESCE_WINDOW_MS = 30_000;
 export const COALESCED: Set<ClientEventType> = new Set([
   'meeting.minutes_save',
+  'meeting.transcript_edit',
+  'meeting.metadata_edit',
   'meeting.participants_edit',
   'meeting.speakers_edit',
 ]);
@@ -86,9 +99,10 @@ function newEventId(): string {
 
 async function commit(userId: string, event: Pending['event']): Promise<void> {
   try {
-    await addToOutbox(userId, event);
+    // A queue that cannot be written loses the event; it is counted and reported later.
+    if (!(await addToOutbox(userId, event))) addDroppedLocally(userId, 1);
   } catch {
-    // A queue that cannot be written loses the event; the caller carries on.
+    addDroppedLocally(userId, 1);
   }
 }
 
@@ -140,14 +154,22 @@ function install(): void {
   };
 }
 
-type PostResult = 'ok' | 'transient' | 'rejected';
+/**
+ * ok = stored; transient = try again later; rejected = refused for good; unknown_type = the
+ * server does not know an event type in the batch (a rolling deploy: this browser is newer
+ * than the instance it reached), which is transient for THAT event only.
+ */
+type PostResult = 'ok' | 'transient' | 'rejected' | 'unknown_type';
 
-async function post(events: Array<Omit<OutboxEvent, 'queuedAt' | 'attempts' | 'nextAttemptAt'>>): Promise<PostResult> {
+async function post(
+  events: Array<Omit<OutboxEvent, 'queuedAt' | 'attempts' | 'nextAttemptAt'>>,
+  droppedLocally?: DroppedLocally,
+): Promise<PostResult> {
   try {
     const res = await fetch(ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ events }),
+      body: JSON.stringify({ events, ...(droppedLocally ? { droppedLocally } : {}) }),
       // Lets the request finish while the page is unloading.
       keepalive: true,
       credentials: 'same-origin',
@@ -167,9 +189,19 @@ async function post(events: Array<Omit<OutboxEvent, 'queuedAt' | 'attempts' | 'n
     ) {
       return 'transient';
     }
+    if (res.status === 400 && (await isUnknownTypeBody(res))) return 'unknown_type';
     return 'rejected';
   } catch {
     return 'transient';
+  }
+}
+
+async function isUnknownTypeBody(res: Response): Promise<boolean> {
+  try {
+    const body = (await res.json()) as { code?: unknown } | null;
+    return body?.code === 'unknown_event_type';
+  } catch {
+    return false;
   }
 }
 
@@ -187,30 +219,53 @@ async function sendBatch(userId: string, due: OutboxEvent[]): Promise<boolean> {
   while (batch.length > 1 && new TextEncoder().encode(JSON.stringify({ events: batch.map(wire) })).length > MAX_BODY_BYTES) {
     batch = batch.slice(0, Math.ceil(batch.length / 2));
   }
-  const result = await post(batch.map(wire));
+  // The report of events lost earlier rides along with the first batch that goes out.
+  const lost = getDroppedLocally(userId) ?? undefined;
+  let result = await post(batch.map(wire), lost);
+  const reported = result === 'ok' && !!lost;
+  // The report itself may be what an older instance refused: send the events without it.
+  if (lost && result === 'rejected') result = await post(batch.map(wire));
   if (result === 'ok') {
     await removeFromOutbox(userId, batch.map((e) => e.clientEventId));
+    if (reported && lost) clearDroppedLocally(userId, lost.count);
     return true;
   }
   if (result === 'transient') {
     await markFailed(userId, batch.map((e) => e.clientEventId));
     return false;
   }
-  // The server refused the batch for good (4xx). One bad event must not block the
-  // others, so retry them one by one and drop only the ones refused on their own.
-  if (batch.length === 1) {
-    await removeFromOutbox(userId, [batch[0].clientEventId]);
-    return true;
-  }
+  // The server refused the batch (a 4xx other than "try later"), or does not know one of its
+  // event types. One bad event must not block the others, so retry them one by one: events the
+  // server refuses on their own are dropped (and counted), events of a type it does not know yet
+  // wait for the deploy to finish.
+  if (batch.length === 1) return settleSingle(userId, batch[0], result);
+  let keepDraining = true;
   for (const ev of batch) {
     const single = await post([wire(ev)]);
     if (single === 'transient') {
       await markFailed(userId, [ev.clientEventId]);
       return false;
     }
-    await removeFromOutbox(userId, [ev.clientEventId]);
+    if (!(await settleSingle(userId, ev, single))) keepDraining = false;
   }
+  return keepDraining;
+}
+
+async function settleSingle(userId: string, ev: OutboxEvent, result: PostResult): Promise<boolean> {
+  if (result === 'unknown_type') {
+    await markFailed(userId, [ev.clientEventId]);
+    return true;
+  }
+  await removeFromOutbox(userId, [ev.clientEventId]);
+  if (result === 'rejected') addDroppedLocally(userId, 1);
   return true;
+}
+
+/** Reports lost events when there is nothing else to send. */
+async function reportDroppedOnly(userId: string): Promise<void> {
+  const lost = getDroppedLocally(userId);
+  if (!lost) return;
+  if ((await post([], lost)) === 'ok') clearDroppedLocally(userId, lost.count);
 }
 
 /** Sends everything that is due for this user. Events leave the queue only after a 2xx. */
@@ -230,7 +285,10 @@ export async function flush(userId: string): Promise<void> {
       if (typeof navigator !== 'undefined' && navigator.onLine === false) break;
       if (getStorageUserId() !== userId) break;
       const due = await takeDue(userId, MAX_BATCH);
-      if (due.length === 0) break;
+      if (due.length === 0) {
+        await reportDroppedOnly(userId);
+        break;
+      }
       if (!(await sendBatch(userId, due))) break;
     }
   } catch {
@@ -238,6 +296,34 @@ export async function flush(userId: string): Promise<void> {
   } finally {
     flushing.delete(userId);
     if (rerun.delete(userId)) scheduleFlush(userId);
+  }
+}
+
+/**
+ * Writes everything still held in memory to the outbox and delivers what is due, now. Await it
+ * (with a short timeout, see below) before the session ends: after a sign-out the queue can only
+ * be delivered at that person's next login, so events still queued would be late by days.
+ * Never throws and never waits longer than `timeoutMs` (default 2 s): signing out must not hang
+ * on a slow server.
+ */
+export async function flushAuditNow(userId: string | null | undefined = getStorageUserId(), timeoutMs = 2_000): Promise<void> {
+  if (!userId) return;
+  const work = (async () => {
+    try {
+      await commitAllPending();
+      await flush(userId);
+    } catch {
+      // Reporting never throws.
+    }
+  })();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, timeoutMs);
+  });
+  try {
+    await Promise.race([work, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -260,24 +346,35 @@ export function startAuditReporting(userId: string): void {
  * Report a meeting event. `entityId` is the meeting's opaque uuid.
  *
  *   reportAuditEvent('meeting.create', meetingId, { origin: 'live' });
+ *
+ * Returns a `retract` function for an event that is queued at once (not the coalesced ones), or
+ * undefined when nothing was queued or the event was swallowed as a repeat. A caller that reports
+ * BEFORE it knows the action succeeded (the automatic deletes, which must be reported in the same
+ * tick as the delete request because the tab may be frozen right after) calls retract() when the
+ * action turns out not to have happened. Retracting removes the event from the outbox; once it
+ * has been delivered (about a second later at the earliest) it is too late and the event stays.
  */
 export function reportAuditEvent<T extends ClientEventType>(
   type: T,
   entityId: string,
   ...[details]: DetailsArgs<T>
-): void {
+): (() => void) | undefined {
   try {
-    if (!hasWindow() || !outboxAvailable()) return;
+    if (!hasWindow() || !outboxAvailable()) return undefined;
     const userId = getStorageUserId();
-    if (!userId) return;
+    if (!userId) return undefined;
     install();
 
-    const key = `${userId}|${type}|${entityId}`;
+    // metadata_edit is coalesced per field: renaming and re-dating inside one window are two edits.
+    const field = type === 'meeting.metadata_edit' ? (details as { field?: unknown } | undefined)?.field : undefined;
+    const key = `${userId}|${type}|${entityId}${typeof field === 'string' ? `|${field}` : ''}`;
     const dedupeMs = DEDUPE_WINDOW_MS[type];
+    let stamp: number | undefined;
     if (dedupeMs) {
       const last = recentlySent.get(key);
-      if (last !== undefined && Date.now() - last < dedupeMs) return;
-      recentlySent.set(key, Date.now());
+      if (last !== undefined && Date.now() - last < dedupeMs) return undefined;
+      stamp = Date.now();
+      recentlySent.set(key, stamp);
     }
 
     const event = {
@@ -293,7 +390,7 @@ export function reportAuditEvent<T extends ClientEventType>(
       if (held) {
         // Same window: keep the id, take the latest details and time.
         held.event = { ...held.event, details: event.details, occurredAt: event.occurredAt };
-        return;
+        return undefined;
       }
       const timer = setTimeout(() => {
         const p = pending.get(key);
@@ -302,12 +399,21 @@ export function reportAuditEvent<T extends ClientEventType>(
         void commit(p.userId, p.event).then(() => scheduleFlush(p.userId));
       }, COALESCE_WINDOW_MS);
       pending.set(key, { userId, event, timer });
-      return;
+      return undefined;
     }
 
-    void commit(userId, event).then(() => scheduleFlush(userId));
+    const committed = commit(userId, event).then(() => scheduleFlush(userId));
+    return () => {
+      try {
+        if (stamp !== undefined && recentlySent.get(key) === stamp) recentlySent.delete(key);
+        void committed.then(() => removeFromOutbox(userId, [event.clientEventId]));
+      } catch {
+        // A retract that fails leaves the event queued: accepted, see above.
+      }
+    };
   } catch {
     // Reporting must never break the caller.
+    return undefined;
   }
 }
 

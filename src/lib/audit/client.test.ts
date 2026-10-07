@@ -6,6 +6,8 @@ const h = vi.hoisted(() => ({
   available: true,
   addFails: false,
   failed: [] as string[][],
+  /** What the outbox says was lost before delivery (per user). */
+  dropped: null as null | { count: number; clientEventId: string },
 }));
 
 vi.mock('./outbox', () => ({
@@ -21,6 +23,14 @@ vi.mock('./outbox', () => ({
     h.queue = h.queue.filter((e) => !ids.includes(e.clientEventId));
   }),
   markFailed: vi.fn(async (_u: string, ids: string[]) => void h.failed.push(ids)),
+  addDroppedLocally: vi.fn((_u: string, n: number) => {
+    h.dropped = { count: (h.dropped?.count ?? 0) + n, clientEventId: crypto.randomUUID() };
+  }),
+  getDroppedLocally: vi.fn(() => h.dropped),
+  clearDroppedLocally: vi.fn((_u: string, n: number) => {
+    const left = (h.dropped?.count ?? 0) - n;
+    h.dropped = left > 0 ? { count: left, clientEventId: crypto.randomUUID() } : null;
+  }),
 }));
 
 const MEETING = '11111111-2222-4333-8444-555555555555';
@@ -48,6 +58,7 @@ beforeEach(async () => {
   h.available = true;
   h.addFails = false;
   h.failed = [];
+  h.dropped = null;
   fetchMock = vi.fn(async () => respond(200));
   vi.stubGlobal('fetch', fetchMock);
   Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
@@ -118,12 +129,16 @@ describe('reportAuditEvent', () => {
     const [first, second] = h.queue.map((e) => e.clientEventId);
     fetchMock.mockImplementation(async (_u: string, init: RequestInit) => {
       const events = JSON.parse(init.body as string).events as Array<{ clientEventId: string }>;
-      return respond(events.length > 1 || events[0].clientEventId === first ? 400 : 200);
+      return respond(events.length > 1 || events[0]?.clientEventId === first ? 400 : 200);
     });
     await vi.advanceTimersByTimeAsync(1500);
     expect(h.queue).toHaveLength(0);
-    expect(fetchMock).toHaveBeenCalledTimes(3); // batch, then each one alone
+    expect(fetchMock).toHaveBeenCalledTimes(4); // batch, then each one alone, then the report of the one that was refused
     expect(first).not.toBe(second);
+    // The refused event is not silent: it is counted and reported as events lost by the browser.
+    const last = JSON.parse(fetchMock.mock.calls[3][1].body as string);
+    expect(last).toEqual({ events: [], droppedLocally: { count: 1, clientEventId: expect.any(String) } });
+    expect(h.dropped).toBeNull();
   });
 
   it('does not send while offline and sends on the online event', async () => {
@@ -228,7 +243,13 @@ describe('reportAuditEvent', () => {
     it('coalesces the edit-like types by default and nothing else', async () => {
       await load();
       c.COALESCED.delete('meeting.create');
-      expect([...c.COALESCED].sort()).toEqual(['meeting.minutes_save', 'meeting.participants_edit', 'meeting.speakers_edit']);
+      expect([...c.COALESCED].sort()).toEqual([
+        'meeting.metadata_edit',
+        'meeting.minutes_save',
+        'meeting.participants_edit',
+        'meeting.speakers_edit',
+        'meeting.transcript_edit',
+      ]);
     });
 
     it('sends one event per meeting+type per 30 s window carrying the last details', async () => {
@@ -340,11 +361,16 @@ describe('reportAuditEvent', () => {
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
   });
 
-  it('never throws and never blocks when the outbox fails', async () => {
+  it('never throws and never blocks when the outbox fails; the lost event is counted and reported', async () => {
     h.addFails = true;
     expect(() => c.reportAuditEvent('meeting.delete', MEETING)).not.toThrow();
     await vi.advanceTimersByTimeAsync(2000);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+      events: [],
+      droppedLocally: { count: 1, clientEventId: expect.any(String) },
+    });
+    expect(h.dropped).toBeNull();
   });
 
   it('does nothing without IndexedDB or without a known user', async () => {
@@ -360,5 +386,147 @@ describe('reportAuditEvent', () => {
     c.reportAuditEvent('meeting.delete', MEETING);
     await vi.advanceTimersByTimeAsync(2000);
     expect(h.queue).toHaveLength(0);
+  });
+});
+
+
+describe('events lost before delivery (droppedLocally)', () => {
+  it('rides along with the next batch, and is cleared only after a 2xx', async () => {
+    h.dropped = { count: 7, clientEventId: '11111111-1111-4111-8111-111111111111' };
+    c.reportAuditEvent('meeting.delete', MEETING);
+    await vi.advanceTimersByTimeAsync(1500);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.droppedLocally).toEqual({ count: 7, clientEventId: '11111111-1111-4111-8111-111111111111' });
+    expect(body.events).toHaveLength(1);
+    expect(h.dropped).toBeNull();
+  });
+
+  it('is kept when the delivery fails, so it is reported later', async () => {
+    h.dropped = { count: 3, clientEventId: '11111111-1111-4111-8111-111111111111' };
+    fetchMock.mockResolvedValue(respond(503));
+    c.reportAuditEvent('meeting.delete', MEETING);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(h.dropped?.count).toBe(3);
+  });
+
+  it('subtracts only what was reported when more were lost meanwhile', async () => {
+    h.dropped = { count: 2, clientEventId: '11111111-1111-4111-8111-111111111111' };
+    let first = true;
+    fetchMock.mockImplementation(async () => {
+      if (first) h.dropped = { count: 5, clientEventId: '22222222-2222-4222-8222-222222222222' }; // three more lost during the request
+      first = false;
+      return respond(200);
+    });
+    c.reportAuditEvent('meeting.delete', MEETING);
+    await vi.advanceTimersByTimeAsync(1500);
+    // The three that were lost during the first request go out in a report of their own.
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body as string)).toEqual({ events: [], droppedLocally: { count: 3, clientEventId: expect.any(String) } });
+    expect(h.dropped).toBeNull();
+  });
+
+  it('an older server that refuses the report still gets the events', async () => {
+    h.dropped = { count: 2, clientEventId: '11111111-1111-4111-8111-111111111111' };
+    fetchMock.mockImplementation(async (_u: string, init: RequestInit) => respond('droppedLocally' in JSON.parse(init.body as string) ? 400 : 200));
+    c.reportAuditEvent('meeting.delete', MEETING);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(h.queue).toHaveLength(0); // delivered
+    expect(h.dropped?.count).toBe(2); // not reported yet, not lost either
+  });
+});
+
+describe('a server that does not know an event type yet (rolling deploy)', () => {
+  const unknownType = () => ({ ok: false, status: 400, json: async () => ({ error: 'Invalid request', code: 'unknown_event_type' }) }) as Response;
+
+  it('keeps the event and retries later instead of dropping it, and does not count it as lost', async () => {
+    fetchMock.mockResolvedValue(unknownType());
+    c.reportAuditEvent('meeting.metadata_edit', MEETING, { field: 'title' });
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(h.queue).toHaveLength(1);
+    expect(h.failed.length).toBeGreaterThan(0);
+    expect(h.dropped).toBeNull();
+  });
+
+  it('delivers the events the server does know and keeps only the one it does not', async () => {
+    fetchMock.mockImplementation(async (_u: string, init: RequestInit) => {
+      const events = JSON.parse(init.body as string).events as Array<{ type: string }>;
+      return events.some((e) => e.type === 'meeting.metadata_edit') ? unknownType() : respond(200);
+    });
+    c.reportAuditEvent('meeting.metadata_edit', OTHER, { field: 'title' }); // coalesced: queued after 30 s
+    await vi.advanceTimersByTimeAsync(29_500);
+    c.reportAuditEvent('meeting.delete', MEETING);
+    await vi.advanceTimersByTimeAsync(3_000); // both are now queued and go out in one batch
+    // The known one is delivered; the one the server cannot place yet stays queued (the real outbox backs it off).
+    expect(sentBodies().flat().map((e) => e.type)).toContain('meeting.delete');
+    expect(h.queue.map((e) => e.type)).toEqual(['meeting.metadata_edit']);
+    expect(h.dropped).toBeNull();
+  });
+
+  it('still drops an event the server refuses for another reason', async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 400, json: async () => ({ error: 'Invalid request' }) } as Response);
+    c.reportAuditEvent('meeting.delete', MEETING);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(h.queue).toHaveLength(0);
+  });
+});
+
+describe('metadata_edit coalescing', () => {
+  it('coalesces per field: a rename and a re-dating inside one window are two events', async () => {
+    c.reportAuditEvent('meeting.metadata_edit', MEETING, { field: 'title' });
+    c.reportAuditEvent('meeting.metadata_edit', MEETING, { field: 'title' });
+    c.reportAuditEvent('meeting.metadata_edit', MEETING, { field: 'recorded_at' });
+    await vi.advanceTimersByTimeAsync(32_000);
+    expect(sentBodies().flat().map((e) => e.details.field).sort()).toEqual(['recorded_at', 'title']);
+  });
+});
+
+describe('retract', () => {
+  it('removes an event that has not been delivered yet, and lets the same action be reported again', async () => {
+    const retract = c.reportAuditEvent('meeting.audio_delete', MEETING, { trigger: 'auto_leave' });
+    expect(typeof retract).toBe('function');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.queue).toHaveLength(1);
+    retract?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.queue).toHaveLength(0);
+    c.reportAuditEvent('meeting.audio_delete', MEETING, { trigger: 'user' }); // not swallowed by the dedupe window
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.queue).toHaveLength(1);
+  });
+
+  it('a coalesced or swallowed event has nothing to retract', () => {
+    expect(c.reportAuditEvent('meeting.minutes_save', MEETING)).toBeUndefined();
+    c.reportAuditEvent('meeting.minutes_view', MEETING);
+    expect(c.reportAuditEvent('meeting.minutes_view', MEETING)).toBeUndefined();
+  });
+});
+
+describe('flushAuditNow (before sign-out)', () => {
+  it('writes coalesced events out and delivers everything at once, without waiting for the debounce', async () => {
+    c.reportAuditEvent('meeting.minutes_save', MEETING); // held in memory for 30 s
+    c.reportAuditEvent('meeting.delete', OTHER);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await c.flushAuditNow('user-1');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sentBodies()[0].map((e) => e.type).sort()).toEqual(['meeting.delete', 'meeting.minutes_save']);
+    expect(h.queue).toHaveLength(0);
+  });
+
+  it('never waits longer than the timeout for a slow server, and never throws', async () => {
+    fetchMock.mockImplementation(() => new Promise(() => {}));
+    c.reportAuditEvent('meeting.delete', MEETING);
+    await vi.advanceTimersByTimeAsync(0);
+    let done = false;
+    void c.flushAuditNow('user-1', 2_000).then(() => (done = true));
+    await vi.advanceTimersByTimeAsync(1_900);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(done).toBe(true);
+  });
+
+  it('does nothing without a user', async () => {
+    await load(null);
+    await expect(c.flushAuditNow(null)).resolves.toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

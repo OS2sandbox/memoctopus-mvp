@@ -29,6 +29,8 @@ export function SkabelonerList() {
   const [skabeloner, setSkabeloner] = useState<Skabelon[]>([]);
   // Read-only: delegated by the organisation, no prompt, no controls.
   const [centralSkabeloner, setCentralSkabeloner] = useState<CentralSkabelonSummary[]>([]);
+  // The server could not resolve the shared list (a failure, not an empty list).
+  const [centralError, setCentralError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<Skabelon | null>(null);
@@ -60,9 +62,10 @@ export function SkabelonerList() {
         }
         return r.json();
       })
-      .then((data: { skabeloner: Skabelon[]; centralSkabeloner?: CentralSkabelonSummary[] }) => {
+      .then((data: { skabeloner: Skabelon[]; centralSkabeloner?: CentralSkabelonSummary[]; centralError?: boolean }) => {
         setSkabeloner(data.skabeloner ?? []);
         setCentralSkabeloner(data.centralSkabeloner ?? []);
+        setCentralError(data.centralError === true);
       })
       .catch((err) => {
         console.error('[skabeloner] Fejl ved indlæsning af skabeloner:', err);
@@ -349,6 +352,12 @@ export function SkabelonerList() {
             );
           })}
         </div>
+      )}
+
+      {!loading && centralError && (
+        <p role="status" className="mt-10 text-sm text-[var(--muted)]">
+          Fælles skabeloner kunne ikke hentes lige nu. Dine egne skabeloner vises som normalt. Prøv at genindlæse siden.
+        </p>
       )}
 
       {!loading && centralSkabeloner.length > 0 && (

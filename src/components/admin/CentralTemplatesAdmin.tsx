@@ -3,7 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableEmptyRow, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -20,6 +27,7 @@ import { CentralTemplateEditor } from './CentralTemplateEditor';
 import { CentralTemplatesStateDialog, type StateChange } from './CentralTemplatesStateDialog';
 import {
   FLAG_TEXT,
+  NO_HOLDERS_TEXT,
   audienceEntries,
   formatTime,
   truncateAudience,
@@ -38,7 +46,17 @@ export function CentralTemplatesAdmin() {
   const [catalogue, setCatalogue] = useState<CentralCatalogueEntry[]>([]);
   // From the catalogue endpoint: may this caller target roles and groups (a global manager), and may
   // they refresh the catalogue from Rollekatalog.
-  const [catalogueInfo, setCatalogueInfo] = useState({ canTarget: false, canRefresh: false, lastRefreshedAt: null as string | null });
+  const [catalogueInfo, setCatalogueInfo] = useState({
+    canTarget: false,
+    isGlobalManager: false,
+    reason: null as 'needs_claims' | 'needs_global' | null,
+    canRefresh: false,
+    lastRefreshedAt: null as string | null,
+  });
+  // false when the catalogue request failed: the editor then shows each target's server-side state.
+  const [catalogueLoaded, setCatalogueLoaded] = useState(true);
+  // Set by a refresh that aborted on the removal threshold: the manager may confirm and force it.
+  const [forceOffer, setForceOffer] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,9 +77,14 @@ export function CentralTemplatesAdmin() {
     const [list, scope, roles] = await Promise.all([
       apiRequest<{ templates: CentralTemplateListItem[] }>(`/api/admin/central-templates?status=${filter}`),
       apiRequest<{ orgUnits: CentralScopeOrgUnit[] }>('/api/admin/central-templates/scope'),
-      apiRequest<{ roles: CentralCatalogueEntry[]; canTarget: boolean; canRefresh: boolean; lastRefreshedAt: string | null }>(
-        '/api/admin/central-templates/roles',
-      ),
+      apiRequest<{
+        roles: CentralCatalogueEntry[];
+        canTarget: boolean;
+        isGlobalManager?: boolean;
+        reason?: 'needs_claims' | 'needs_global' | null;
+        canRefresh: boolean;
+        lastRefreshedAt: string | null;
+      }>('/api/admin/central-templates/roles'),
     ]);
     if (seq !== requestSeq.current) return;
     if (list.ok) setTemplates(list.data.templates);
@@ -70,12 +93,18 @@ export function CentralTemplatesAdmin() {
     else setLoadError((prev) => prev ?? scope.message);
     if (roles.ok) {
       setCatalogue(roles.data.roles);
+      setCatalogueLoaded(true);
       setCatalogueInfo({
         canTarget: roles.data.canTarget,
+        isGlobalManager: roles.data.isGlobalManager ?? roles.data.canTarget,
+        reason: roles.data.reason ?? null,
         canRefresh: roles.data.canRefresh,
         lastRefreshedAt: roles.data.lastRefreshedAt,
       });
-    } else setLoadError((prev) => prev ?? roles.message);
+    } else {
+      setCatalogueLoaded(false);
+      setLoadError((prev) => prev ?? roles.message);
+    }
     setLoading(false);
   }, [filter]);
   useEffect(() => {
@@ -87,16 +116,21 @@ export function CentralTemplatesAdmin() {
   // The page gate guarantees template.manage; the controls only wait for /api/me. The server decides on every write.
   const canManage = !!me;
 
-  async function refreshCatalogue() {
+  async function refreshCatalogue(force = false) {
     setRefreshing(true);
     setActionError(null);
     setRefreshNote(null);
+    setForceOffer(null);
     const res = await apiRequest<{ counts: { fetched: number; added: number; deactivated: number } }>(
       '/api/admin/central-templates/roles/refresh',
-      { method: 'POST', json: {} },
+      { method: 'POST', json: force ? { force: true } : {} },
     );
     setRefreshing(false);
-    if (!res.ok) return setActionError(res.message);
+    if (!res.ok) {
+      // The removal threshold is the one abort a manager may override, after a confirmation.
+      if (res.code === 'removal_threshold' && !force) return setForceOffer(res.message);
+      return setActionError(res.message);
+    }
     const c = res.data.counts;
     setRefreshNote(`Rollekataloget er opdateret: ${c.fetched} roller og grupper, ${c.added} nye, ${c.deactivated} fjernet.`);
     load();
@@ -132,7 +166,7 @@ export function CentralTemplatesAdmin() {
         </Select>
         <div className="flex flex-wrap items-center gap-2">
           {canManage && catalogueInfo.canRefresh && (
-            <Button type="button" variant="outline" onClick={refreshCatalogue} disabled={refreshing}>
+            <Button type="button" variant="outline" onClick={() => refreshCatalogue()} disabled={refreshing}>
               {refreshing ? 'Opdaterer …' : 'Opdatér rollekatalog'}
             </Button>
           )}
@@ -250,10 +284,34 @@ export function CentralTemplatesAdmin() {
           template={editor.template}
           units={units}
           catalogue={catalogue}
-          isGlobalManager={catalogueInfo.canTarget}
+          isGlobalManager={catalogueInfo.isGlobalManager}
+          canTargetPrincipals={catalogueInfo.canTarget}
+          targetLockedReason={catalogueInfo.reason}
+          catalogueLoaded={catalogueLoaded}
           onSaved={load}
         />
       )}
+
+      <Dialog open={forceOffer !== null} onOpenChange={(o) => !o && setForceOffer(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Gennemtving opdateringen?</DialogTitle>
+            <DialogDescription>{forceOffer}</DialogDescription>
+          </DialogHeader>
+          <p className="text-[13px] text-[var(--ink-2)]">
+            Roller og grupper, der ikke længere findes i Rollekatalog, deaktiveres. Skabeloner, der er rettet mod dem,
+            når ikke længere nogen, indtil de vender tilbage.
+          </p>
+          <DialogFooter className="gap-2">
+            <Button type="button" variant="outline" onClick={() => setForceOffer(null)}>
+              Annuller
+            </Button>
+            <Button type="button" onClick={() => refreshCatalogue(true)} disabled={refreshing}>
+              Gennemtving opdateringen
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <CentralTemplatesStateDialog
         open={stateChange !== null}
@@ -280,17 +338,25 @@ export function CentralTemplatesAdmin() {
 function Audience({ template, unitName }: { template: CentralTemplateListItem; unitName: (uuid: string) => string }) {
   const { shown, more } = truncateAudience(audienceEntries(template, unitName));
   if (shown.length === 0) return <Badge variant="warning">Ikke til rådighed for nogen</Badge>;
+  const line = (e: (typeof shown)[number]) => (
+    <li key={e.key} style={e.flagged || e.empty ? { color: 'var(--warn)' } : undefined}>
+      {e.label}
+      {e.flagged && ` (${FLAG_TEXT})`}
+      {e.empty && ` (${NO_HOLDERS_TEXT})`}
+    </li>
+  );
   return (
     <ul aria-label={`Til rådighed for, ${template.name}`} className="flex flex-col gap-0.5 text-[13px]">
-      {shown.map((e) => (
-        <li key={e.key} style={e.flagged ? { color: 'var(--warn)' } : undefined}>
-          {e.label}
-          {e.flagged && ` (${FLAG_TEXT})`}
-        </li>
-      ))}
+      {shown.map(line)}
       {more.length > 0 && (
-        <li className="text-[var(--muted)]" title={more.map((e) => e.label).join('\n')}>
-          +{more.length} flere
+        <li className="text-[var(--muted)]">
+          {/* A native disclosure: works with keyboard and touch, unlike a title tooltip. */}
+          <details>
+            <summary className="cursor-pointer">+{more.length} flere</summary>
+            <ul aria-label={`Flere, ${template.name}`} className="mt-0.5 flex flex-col gap-0.5">
+              {more.map(line)}
+            </ul>
+          </details>
         </li>
       )}
     </ul>

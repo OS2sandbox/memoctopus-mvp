@@ -123,6 +123,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         let result;
         try {
           result = await transcribeBatchesOnServer(id, file, {
+            source: 'upload',
             onMeta: (meta) => {
               if (!liveRef.current) return;
               setPhase('transcribing');

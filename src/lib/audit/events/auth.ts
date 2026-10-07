@@ -48,6 +48,9 @@ export const authEvents = {
     entityIdRequired: false,
     defaultOutcome: 'denied',
     // required = the capability or guard that refused, reason = short machine reason.
-    details: z.object({ required: code(), reason: code() }).strict(),
+    // On a reason 'burst_summary' row: this many further identical denials (same person, same
+    // guard, same entity type) in the same minute were not stored one by one, so a burst of
+    // probing is still evidenced (see authz-denied.ts).
+    details: z.object({ required: code(), reason: code(), droppedCount: count().min(1).optional() }).strict(),
   }),
 } as const;

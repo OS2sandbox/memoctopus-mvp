@@ -54,6 +54,12 @@ export interface CentralPrincipalTarget {
 export interface CentralPrincipalTargetView extends CentralPrincipalTarget {
   name: string;
   status: 'active' | 'inactive' | 'unknown';
+  /**
+   * How many people hold this role/group from their latest login (fresh claims, linked and enabled
+   * user). A count, never who. 0 means the target cannot reach anybody right now; the usual cause
+   * is an identifier that differs from what the IdP sends.
+   */
+  holders: number;
 }
 
 /** A role/group target as frozen in a version row: the name is the one it had then. */
@@ -66,6 +72,8 @@ export interface CentralCatalogueEntry extends CentralPrincipalTarget {
   name: string;
   source: 'rollekatalog' | 'config' | 'claims';
   active: boolean;
+  /** Same count as CentralPrincipalTargetView.holders: people only as a number. */
+  holders: number;
 }
 
 export interface CentralTemplateContent {

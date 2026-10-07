@@ -7,7 +7,8 @@ export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     try {
       const { checkConfigOnce } = await import('@/lib/system/config-fingerprint');
-      void checkConfigOnce();
+      // `next build` runs this too (NEXT_PHASE): it has no database and is not a start, so it records nothing.
+      if (process.env.NEXT_PHASE !== 'phase-production-build') void checkConfigOnce();
       const { syncConfigCatalogueOnce } = await import('@/lib/authz/external-roles');
       void syncConfigCatalogueOnce();
     } catch {

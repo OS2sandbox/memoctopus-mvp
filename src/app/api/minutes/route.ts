@@ -82,6 +82,23 @@ async function postHandler(req: NextRequest) {
   if (skabelonSource === 'central') {
     central = typeof skabelonId === 'string' ? await resolveCentralTemplate(userId, skabelonId) : null;
     if (!central) {
+      // The response is the same 404 for every cause; the log says that a generation was refused
+      // because the central template was not available (unknown, archived or not for this person).
+      await emitAudit(req, {
+        type: 'minutes.generate',
+        actorUserId: userId,
+        outcome: 'denied',
+        entityId: asEntityUuid(meetingId),
+        secondaryEntityId: asEntityUuid(skabelonId),
+        secondaryEntityType: 'central_template',
+        details: {
+          templateSource: 'central',
+          userInstruction: userInstruction !== undefined,
+          durationMs: 0,
+          segmentCount: segments.length,
+          outcomeCode: 'template_unavailable',
+        },
+      });
       return NextResponse.json({ error: 'Skabelonen er ikke tilgængelig' }, { status: 404 });
     }
   }

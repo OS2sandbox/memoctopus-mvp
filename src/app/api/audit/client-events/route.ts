@@ -1,16 +1,20 @@
 import { NextResponse } from 'next/server';
 import { withAuthz } from '@/lib/authz/guard';
 import { recordServerEvent, validateEvent } from '@/lib/audit/record';
+import { noteDroppedEvents } from '@/lib/audit/dropped';
 import type { AuditEventInput } from '@/lib/audit/events';
 import {
   clampClientTime,
   clientEventsBody,
+  hasUnknownEventType,
   isClientEventThrottled,
   markClientEventStored,
   MAX_CLIENT_BODY_BYTES,
   remainingClientEventsToday,
   takeClientEventBudget,
+  THROTTLE_WINDOW_MS,
   THROTTLED_TYPES,
+  UNKNOWN_EVENT_TYPE_BODY,
 } from '@/lib/audit/client-ingest';
 
 /**
@@ -55,8 +59,13 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
   } catch {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
+  // A type this server does not know is a rolling deploy (a newer browser, an older instance),
+  // not a bad event: say so, and the browser keeps the event for later instead of dropping it.
+  if (hasUnknownEventType(json)) return NextResponse.json(UNKNOWN_EVENT_TYPE_BODY, { status: 400 });
   const parsed = clientEventsBody.safeParse(json);
   if (!parsed.success) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+  // A batch carries events, or at least the browser's report of what it lost.
+  if (parsed.data.events.length === 0 && !parsed.data.droppedLocally) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
 
   const userId = session.user.id;
   const now = new Date();
@@ -76,27 +85,37 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
     if (!validateEvent(input).ok) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
     inputs.push(input);
   }
+  // Oldest first by (clamped) event time: the view throttle below compares event times, so a
+  // browser that delivers hours of queued events in one request is judged in the order they happened.
+  inputs.sort((a, b) => (a.clientOccurredAt as Date).getTime() - (b.clientOccurredAt as Date).getTime());
 
   const wait = takeClientEventBudget(userId, inputs.length);
   if (wait !== null) {
+    // Refused as a whole and retried by the browser (Retry-After), so nothing is lost; counted
+    // all the same, so a client that keeps hitting the limit is visible in the log.
+    noteDroppedEvents(userId, 'rate_limit', inputs.length, req);
     return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': String(wait) } });
   }
 
-  // Chatty types stored less than 60 s ago are dropped (acknowledged, so the client
-  // outbox does not retry them). Checked against the stored marks plus earlier events
-  // of this same batch, in order.
-  const nowMs = Date.now();
-  const batchSeen = new Set<string>();
+  // Repeats of a view or playback within 60 s of EVENT time are dropped (acknowledged, so the
+  // client outbox does not retry them). Judged against the last kept event of the same
+  // (meeting, type): stored by an earlier request, or kept earlier in this sorted batch. Two
+  // views four hours apart in one batch are both kept.
+  const batchLast = new Map<string, number>();
   let throttled = 0;
   const candidates = inputs.filter((input) => {
+    if (!THROTTLED_TYPES.has(input.type)) return true;
+    const eventMs = (input.clientOccurredAt as Date).getTime();
     const key = `${input.entityId}|${input.type}`;
-    if (batchSeen.has(key) || isClientEventThrottled(userId, input.entityId as string, input.type, nowMs)) {
+    const prev = batchLast.get(key);
+    if ((prev !== undefined && Math.abs(eventMs - prev) < THROTTLE_WINDOW_MS) || isClientEventThrottled(userId, input.entityId as string, input.type, eventMs)) {
       throttled += 1;
       return false;
     }
-    if (THROTTLED_TYPES.has(input.type)) batchSeen.add(key);
+    batchLast.set(key, eventMs);
     return true;
   });
+  if (throttled > 0) noteDroppedEvents(userId, 'throttle', throttled, req);
 
   // Daily cap per user, from the database. Self-reported telemetry: when the count
   // cannot be read, store nothing and let the client retry (503), never guess.
@@ -118,16 +137,33 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
     if (accepted >= remaining) {
       capped = candidates.length - accepted;
       console.warn(`[audit] client event cap reached, refused=${capped}`);
+      noteDroppedEvents(userId, 'daily_cap', capped, req);
       break;
     }
     const result = await recordServerEvent(req, input);
     // Only a storage failure can drop a pre-validated event. Answer 503 so the
     // client keeps the batch; redelivery is idempotent on (actor, clientEventId).
     if (result.status === 'dropped') return NextResponse.json({ error: 'Audit unavailable' }, { status: 503 });
-    markClientEventStored(userId, input.entityId as string, input.type);
+    markClientEventStored(userId, input.entityId as string, input.type, (input.clientOccurredAt as Date).getTime());
     accepted += 1;
   }
-  // `throttled`: repeats of a view within a minute (by design); `capped`: refused by the daily cap.
+
+  // What the browser lost before it could deliver (self-reported). Exempt from the caps above: it
+  // says that events are missing. Idempotent on (actor, clientEventId), so a retry does not double it.
+  const lost = parsed.data.droppedLocally;
+  if (lost) {
+    const result = await recordServerEvent(req, {
+      type: 'audit.events_dropped',
+      source: 'client',
+      actorUserId: userId,
+      clientEventId: lost.clientEventId,
+      clientOccurredAt: now,
+      details: { reason: 'client_outbox', count: lost.count },
+    });
+    if (result.status === 'dropped') return NextResponse.json({ error: 'Audit unavailable' }, { status: 503 });
+  }
+  // `throttled`: repeats of a view within a minute of event time (by design); `capped`: refused by the daily cap.
+  // Both are also counted in the log (audit.events_dropped).
   return NextResponse.json({
     accepted,
     ...(throttled > 0 ? { throttled } : {}),

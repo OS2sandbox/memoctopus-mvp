@@ -16,6 +16,9 @@ vi.mock('@/lib/auth', () => ({
   auth: { api: { getSession: vi.fn() } },
 }));
 
+const mockOwner = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/bot-pending-audio', () => ({ assertBotMeetingOwner: mockOwner }));
+
 vi.mock('@/lib/bot-service', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/bot-service')>();
   return { ...actual, getBotServiceConfig: vi.fn() };
@@ -25,6 +28,7 @@ import { GET } from './route';
 import { auth } from '@/lib/auth';
 import { getBotServiceConfig } from '@/lib/bot-service';
 import { FAKE_SESSION } from '@/test/helpers';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockGetBotConfig = vi.mocked(getBotServiceConfig);
@@ -44,6 +48,24 @@ beforeEach(() => {
   mockFetch.mockReset();
   mockGetBotConfig.mockReset();
   mockGetBotConfig.mockReturnValue(BOT_CONFIG);
+  mockOwner.mockReset().mockResolvedValue(true);
+  vi.mocked(recordAuthzDenied).mockClear();
+});
+
+describe('GET /api/bot/status/[meetingId] - ownership', () => {
+  it('answers a stranger like a session that has not started, never calls the bot, and records the probe', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockOwner.mockResolvedValueOnce(false);
+    const MEETING = '11111111-2222-4333-8444-555555555555';
+    const res = await GET(req(`?sessionId=${SID}`), { params: Promise.resolve({ meetingId: MEETING }) });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'forbinder', botStatus: 'idle', participants: [], elapsed: 0 });
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockOwner).toHaveBeenCalledWith(MEETING, FAKE_SESSION.user.id);
+    expect(recordAuthzDenied).toHaveBeenCalledWith(
+      expect.objectContaining({ actorUserId: FAKE_SESSION.user.id, required: 'bot.meeting_owner', reason: 'not_owner', entityType: 'meeting', entityId: MEETING }),
+    );
+  });
 });
 
 describe('GET /api/bot/status/[meetingId]', () => {

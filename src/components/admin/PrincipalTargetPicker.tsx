@@ -8,15 +8,21 @@ import type {
   CentralPrincipalTarget,
   CentralPrincipalTargetView,
 } from '@/lib/skabeloner/central-types';
-import { FLAG_TEXT, principalKey, principalKindLabels } from './central-template-utils';
+import { FLAG_TEXT, NO_HOLDERS_TEXT, holdersLabel, principalKey, principalKindLabels } from './central-template-utils';
 
 interface Props {
   /** The role/group catalogue (both sources merged). Only active entries are offered for picking. */
   catalogue: readonly CentralCatalogueEntry[];
   value: readonly CentralPrincipalTargetView[];
   onChange: (targets: CentralPrincipalTargetView[]) => void;
-  /** false: the caller is not a global manager, so the list is shown but cannot be changed. */
+  /** false: the list is shown but cannot be changed (see `lockedReason`). */
   canEdit: boolean;
+  /** Why it cannot be changed: 'needs_claims' = roles only come from login claims in ACCESS_SOURCE=claims; anything else = not a global manager. */
+  lockedReason?: 'needs_claims' | 'needs_global' | null;
+  /** Units are chosen too, so no roles is not "nobody". */
+  hasOtherAudience?: boolean;
+  /** Show the "nobody gets it" warning for an empty choice (the unit picker shows its own when it is on screen). */
+  warnWhenEmpty?: boolean;
   disabled?: boolean;
 }
 
@@ -28,7 +34,16 @@ const MAX_ROWS = 100;
  * A choice is a catalogue entry (names shown, the identifier small); one that is no longer in the
  * catalogue stays visible, flagged, and removable, so it cannot get stuck on a template.
  */
-export function PrincipalTargetPicker({ catalogue, value, onChange, canEdit, disabled }: Props) {
+export function PrincipalTargetPicker({
+  catalogue,
+  value,
+  onChange,
+  canEdit,
+  lockedReason = null,
+  hasOtherAudience = false,
+  warnWhenEmpty = false,
+  disabled,
+}: Props) {
   const [query, setQuery] = useState('');
   const chosen = useMemo(() => new Set(value.map(principalKey)), [value]);
 
@@ -41,7 +56,7 @@ export function PrincipalTargetPicker({ catalogue, value, onChange, canEdit, dis
   const rows = matches.slice(0, MAX_ROWS);
 
   function toggle(e: CentralCatalogueEntry, on: boolean) {
-    if (on) onChange([...value, { kind: e.kind, identifier: e.identifier, name: e.name, status: 'active' }]);
+    if (on) onChange([...value, { kind: e.kind, identifier: e.identifier, name: e.name, status: 'active', holders: e.holders }]);
     else onChange(value.filter((t) => principalKey(t) !== principalKey(e)));
   }
   const remove = (t: CentralPrincipalTarget) => onChange(value.filter((x) => principalKey(x) !== principalKey(t)));
@@ -62,6 +77,7 @@ export function PrincipalTargetPicker({ catalogue, value, onChange, canEdit, dis
               <span>{t.name}</span>
               <span className="font-mono text-[11px] text-[var(--muted)]">{t.identifier}</span>
               {t.status !== 'active' && <Badge variant="warning">{FLAG_TEXT}</Badge>}
+              {t.status === 'active' && t.holders === 0 && <HoldersNote n={0} />}
               {canEdit && (
                 <button
                   type="button"
@@ -79,7 +95,9 @@ export function PrincipalTargetPicker({ catalogue, value, onChange, canEdit, dis
 
       {!canEdit ? (
         <p className="text-[13px] text-[var(--muted)]">
-          Kun en skabelonansvarlig med tilladelse for hele organisationen kan vælge roller og grupper.
+          {lockedReason === 'needs_claims'
+            ? 'Roller og grupper kan kun vælges, når rollerne kommer fra brugernes login (ACCESS_SOURCE=claims). Uden login-claims har ingen en rolle, som skabelonen kan matche.'
+            : 'Kun en skabelonansvarlig med tilladelse for hele organisationen kan vælge roller og grupper.'}
         </p>
       ) : catalogue.length === 0 ? (
         <p className="text-[13px] text-[var(--muted)]">
@@ -110,6 +128,7 @@ export function PrincipalTargetPicker({ catalogue, value, onChange, canEdit, dis
                   <span>{e.name}</span>
                   <Badge variant="outline">{principalKindLabels[e.kind]}</Badge>
                   <span className="font-mono text-[11px] text-[var(--muted)]">{e.identifier}</span>
+                  <HoldersNote n={e.holders} />
                 </label>
               </li>
             ))}
@@ -122,6 +141,26 @@ export function PrincipalTargetPicker({ catalogue, value, onChange, canEdit, dis
           )}
         </>
       )}
+
+      {warnWhenEmpty && value.length === 0 && !hasOtherAudience && (
+        <p role="status" className="text-[13px]" style={{ color: 'var(--warn)' }}>
+          Ingen roller, grupper eller enheder er valgt. Ingen får skabelonen til rådighed, før du vælger mindst én.
+        </p>
+      )}
     </fieldset>
+  );
+}
+
+/**
+ * How many people hold the role from their latest login. Zero is flagged: targeting it cannot match
+ * anybody yet, and the usual cause is an identifier that differs from what the IdP sends.
+ */
+function HoldersNote({ n }: { n: number }) {
+  return n === 0 ? (
+    <span className="text-[12px]" style={{ color: 'var(--warn)' }}>
+      {NO_HOLDERS_TEXT}
+    </span>
+  ) : (
+    <span className="text-[12px] text-[var(--muted)]">{holdersLabel(n)}</span>
   );
 }

@@ -6,13 +6,19 @@
 // Safety nets, all fail-closed, like the user/organisation sync:
 //   - a non-blocking advisory lock: a concurrent run answers 'already_running'
 //   - everything is fetched first; a failed or partial fetch never touches the table
-//   - empty-response guard: no roles and no groups aborts ('empty_response')
+//   - empty-response guard: no roles and no groups aborts ('empty_response'); so does an empty
+//     list of ONE kind while active rollekatalog entries of that kind exist (a list that is
+//     configured but answers empty is a broken endpoint, not "everything was withdrawn"). Both
+//     apply even when forced. A kind whose path is 'none' is not read and never touched.
 //   - removal threshold: deactivating unusually many entries aborts ('removal_threshold')
 //     unless forced (the admin button)
 //   - rows are never DELETED: an entry that left Rollekatalog is deactivated, so a prompt that
 //     targets it (central_template_principal_targets, RESTRICT) and the people's role rows
 //     (user_external_roles) keep their reference; a deactivated entry matches nobody.
-//   - only rows with source='rollekatalog' are written; a 'config' entry with the same key wins.
+//   - only rows with source='rollekatalog' are written, and a key that exists as a 'config' row is
+//     left out of the upsert and the deactivation: the config entry wins. (The reverse order, a
+//     config entry added for a key that Rollekatalog already owns, is up to the config sync in
+//     src/lib/authz/external-roles.ts, which only refreshes rows it owns.)
 // The run is not audited and leaves no sync_runs row (that is the user/org sync's status
 // panel); `external_roles.synced_at` tells when it last ran. Failures surface as short codes.
 import { createRunner, errorLabel } from '@/lib/authz/pg-runner';
@@ -83,25 +89,50 @@ interface Entry {
   name: string;
 }
 
-async function apply(env: SyncEnv, entries: Entry[], force: boolean): Promise<CatalogueRefreshCounts> {
+async function apply(
+  env: SyncEnv,
+  fetched: Entry[],
+  force: boolean,
+  readKinds: Array<'role' | 'group'>,
+): Promise<CatalogueRefreshCounts> {
   const runner = createRunner({ query: (text, params) => queryOnce(env, text, params) }, () => env.connect());
   const t = (table: string) => tbl(env, table);
-  const kinds = entries.map((e) => e.kind);
-  const identifiers = entries.map((e) => e.identifier);
-  const names = entries.map((e) => e.name);
 
   return runner.transaction(async (tx) => {
+    // A list that was read and came back empty, while entries of that kind are active, is a
+    // broken endpoint: never "all of them were withdrawn". Judged before anything is written.
+    const activeByKind = await tx.query<{ kind: string; cnt: number }>(
+      `SELECT kind, count(*)::int AS cnt FROM ${t('external_roles')} WHERE source = 'rollekatalog' AND active GROUP BY kind`,
+    );
+    for (const row of activeByKind.rows) {
+      if (row.cnt > 0 && (readKinds as string[]).includes(row.kind) && !fetched.some((e) => e.kind === row.kind)) {
+        console.warn(`[rollekatalog] catalogue refresh aborted code=empty_response kind=${row.kind}`);
+        throw new CatalogueAbort('empty_response');
+      }
+    }
+
+    // Config wins: a key that exists as a config row is not ours to write or to deactivate.
+    const configRows = await tx.query<{ kind: string; identifier: string }>(
+      `SELECT kind, identifier FROM ${t('external_roles')} WHERE source = 'config'`,
+    );
+    const configKeys = new Set(configRows.rows.map((r) => `${r.kind}\u0000${r.identifier}`));
+    const entries = fetched.filter((e) => !configKeys.has(`${e.kind}\u0000${e.identifier}`));
+    const kinds = entries.map((e) => e.kind);
+    const identifiers = entries.map((e) => e.identifier);
+    const names = entries.map((e) => e.name);
+
     // What would leave, judged before anything is written.
     const base = await tx.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM ${t('external_roles')} WHERE source = 'rollekatalog' AND active`,
+      `SELECT count(*)::int AS n FROM ${t('external_roles')} WHERE source = 'rollekatalog' AND active AND kind = ANY($1::text[])`,
+      [readKinds],
     );
     const gone = await tx.query<{ kind: string; identifier: string }>(
       `SELECT e.kind, e.identifier FROM ${t('external_roles')} e
-        WHERE e.source = 'rollekatalog' AND e.active
+        WHERE e.source = 'rollekatalog' AND e.active AND e.kind = ANY($3::text[])
           AND NOT EXISTS (
             SELECT 1 FROM unnest($1::text[], $2::text[]) AS c(kind, identifier)
              WHERE c.kind = e.kind AND c.identifier = e.identifier)`,
-      [kinds, identifiers],
+      [kinds, identifiers, readKinds],
     );
     const activeBefore = base.rows[0]?.n ?? 0;
     if (
@@ -127,15 +158,15 @@ async function apply(env: SyncEnv, entries: Entry[], force: boolean): Promise<Ca
     );
     await tx.query(
       `UPDATE ${t('external_roles')} e SET active = false, synced_at = now()
-        WHERE e.source = 'rollekatalog' AND e.active
+        WHERE e.source = 'rollekatalog' AND e.active AND e.kind = ANY($3::text[])
           AND NOT EXISTS (
             SELECT 1 FROM unnest($1::text[], $2::text[]) AS c(kind, identifier)
              WHERE c.kind = e.kind AND c.identifier = e.identifier)`,
-      [kinds, identifiers],
+      [kinds, identifiers, readKinds],
     );
 
     const added = upserted.rows.filter((r) => r.inserted).length;
-    return { fetched: entries.length, added, updated: upserted.rows.length - added, deactivated: gone.rows.length, skipped: 0 };
+    return { fetched: fetched.length, added, updated: upserted.rows.length - added, deactivated: gone.rows.length, skipped: 0 };
   });
 }
 
@@ -157,12 +188,15 @@ export async function runCatalogueRefresh(
     if (!lock) return { status: 'already_running', counts: emptyCatalogueCounts(), errorCode: 'already_running' };
 
     const client = deps.client ?? createRollekatalogClient();
-    const { roles, groups } = await client.getRoleCatalogue();
+    const { roles, groups, read } = await client.getRoleCatalogue();
     const entries: Entry[] = [...roles.entries, ...groups.entries];
+    const readKinds: Array<'role' | 'group'> = [];
+    if (read?.roles !== false) readKinds.push('role');
+    if (read?.groups !== false) readKinds.push('group');
     // Checked before any write: an empty answer must never become "every role was withdrawn".
     if (entries.length === 0) throw new CatalogueAbort('empty_response');
 
-    const counts = await apply(env, entries, opts.force === true).catch((err: unknown) => {
+    const counts = await apply(env, entries, opts.force === true, readKinds).catch((err: unknown) => {
       if (err instanceof CatalogueAbort) throw err;
       console.warn(`[rollekatalog] catalogue refresh apply failed (${errorLabel(err)})`);
       throw new DbFailure();

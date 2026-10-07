@@ -18,6 +18,7 @@ describe('(marketing)/page providers', () => {
   beforeEach(() => {
     dir = mkdtempSync(path.join(tmpdir(), 'signin-'));
     vi.stubEnv('EMAIL_PASSWORD_ENABLED', 'false');
+    vi.stubEnv('BETTER_AUTH_URL', 'https://referat.example');
   });
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });

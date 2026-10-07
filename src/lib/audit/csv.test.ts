@@ -61,7 +61,7 @@ describe('auditRowsToCsv', () => {
     const csv = auditRowsToCsv([row(), row({ id: '8' })]);
     expect(csv.startsWith('\uFEFF')).toBe(true);
     const lines = csv.slice(1).split('\r\n');
-    expect(lines[0]).toBe(CSV_HEADER.join(','));
+    expect(lines[0]).toBe(CSV_HEADER.map(csvCell).join(','));
     expect(lines).toHaveLength(4); // header + 2 rows + trailing empty
     expect(lines[3]).toBe('');
   });
@@ -69,13 +69,28 @@ describe('auditRowsToCsv', () => {
   it('has as many fields per row as the header, and labels the event in Danish', () => {
     const fields = auditRowToCsvFields(row());
     expect(fields).toHaveLength(CSV_HEADER.length);
-    expect(fields[1]).toBe('Eksport hentet');
-    expect(fields[2]).toBe('export.download');
-    expect(fields[3]).toBe('Gennemført');
+    expect(fields[2]).toBe('Eksport hentet');
+    expect(fields[3]).toBe('export.download');
+    expect(fields[4]).toBe('Gennemført');
   });
 
   it('labels a client event as reported by the client', () => {
-    expect(auditRowToCsvFields(row({ source: 'client' }))[4]).toBe('Selvrapporteret af klienten');
+    expect(auditRowToCsvFields(row({ source: 'client' }))[5]).toBe('Selvrapporteret af klienten');
+  });
+
+  it('has a self-reported client time column, empty unless the event carries one', () => {
+    const at = CSV_HEADER.indexOf('Tidspunkt (klient, selvrapporteret)');
+    expect(at).toBe(1);
+    expect(auditRowToCsvFields(row())[at]).toBeNull();
+    const t = new Date('2026-10-05T07:00:00.000Z');
+    expect(auditRowToCsvFields(row({ source: 'client', clientOccurredAt: t }))[at]).toBe(t);
+    expect(auditRowsToCsv([row({ source: 'client', clientOccurredAt: t })])).toContain('2026-10-05T07:00:00.000Z');
+  });
+
+  it('shows a type this build does not know instead of hiding the row', () => {
+    const fields = auditRowToCsvFields(row({ eventType: 'future.thing' }));
+    expect(fields[2]).toBe('Ukendt hændelsestype (future.thing)');
+    expect(fields[3]).toBe('future.thing');
   });
 
   it('neutralises a hostile actor name', () => {
@@ -90,7 +105,7 @@ describe('auditRowsToCsv', () => {
   });
 
   it('survives an empty result: header only', () => {
-    expect(auditRowsToCsv([])).toBe(`\uFEFF${CSV_HEADER.join(',')}\r\n`);
+    expect(auditRowsToCsv([])).toBe(`\uFEFF${CSV_HEADER.map(csvCell).join(',')}\r\n`);
   });
 
   it('names a truncated export -afkortet and keeps the cap shared', () => {

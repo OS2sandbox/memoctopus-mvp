@@ -376,97 +376,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.central_template_principal_targets": {
-      "name": "central_template_principal_targets",
-      "schema": "",
-      "columns": {
-        "template_id": {
-          "name": "template_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "kind": {
-          "name": "kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "identifier": {
-          "name": "identifier",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "central_template_principal_targets_role_idx": {
-          "name": "central_template_principal_targets_role_idx",
-          "columns": [
-            {
-              "expression": "kind",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "identifier",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "central_template_principal_targets_template_id_central_templates_id_fk": {
-          "name": "central_template_principal_targets_template_id_central_templates_id_fk",
-          "tableFrom": "central_template_principal_targets",
-          "tableTo": "central_templates",
-          "columnsFrom": [
-            "template_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "central_template_principal_targets_role_fk": {
-          "name": "central_template_principal_targets_role_fk",
-          "tableFrom": "central_template_principal_targets",
-          "tableTo": "external_roles",
-          "columnsFrom": [
-            "kind",
-            "identifier"
-          ],
-          "columnsTo": [
-            "kind",
-            "identifier"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "central_template_principal_targets_template_id_kind_identifier_pk": {
-          "name": "central_template_principal_targets_template_id_kind_identifier_pk",
-          "columns": [
-            "template_id",
-            "kind",
-            "identifier"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.central_template_targets": {
       "name": "central_template_targets",
       "schema": "",
@@ -615,13 +524,6 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": true
-        },
-        "principal_targets": {
-          "name": "principal_targets",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'[]'::jsonb"
         }
       },
       "indexes": {},
@@ -683,7 +585,7 @@
           "name": "owner_org_unit_uuid",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "name": {
           "name": "name",

@@ -13,8 +13,12 @@
 //  - Targets (recipient units) must lie inside the owner unit's subtree: no
 //    sideways or upward delegation. An ownerless template may target any existing unit.
 //  - Role/group targets (recipients by catalogue role or group) are for global
-//    managers only; every one must be an ACTIVE catalogue entry when it is added
-//    (one that is kept while the catalogue later deactivates it just stops matching).
+//    managers only, and can only be ADDED while ACCESS_SOURCE=claims (that is the only mode
+//    in which anybody holds a role from a login claim; elsewhere they would silently reach
+//    nobody); every one must be an ACTIVE catalogue entry when it is added (one that is
+//    kept while the catalogue later deactivates it just stops matching).
+//  - A scoped manager may not change, archive or restore a template that has role/group
+//    targets (it reaches people outside their scope); reading it stays allowed.
 //  - Every write is ONE transaction: the template row (+ targets), a version
 //    row with the mandatory change note, and the audit event (recordEvent with
 //    `tx`, which throws, so everything rolls back together).
@@ -34,6 +38,7 @@ import type { AuditEventOf, EventType } from '@/lib/audit/events';
 import { recordEvent } from '@/lib/audit/record';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError, VersionConflictError } from '@/lib/authz/access-errors';
 import { defaultRunner, type SqlQueryable, type SqlRunner } from '@/lib/authz/pg-runner';
+import { accessSource, roleClaimsMaxSeconds, type AccessSource } from '@/lib/authz/config';
 import { hasGlobalScope, isOrgUnitWithinScope, orgSubtreeUuids, orgUnitsInScope, type ScopeEnv } from '@/lib/authz/scope';
 import type { Principal } from '@/lib/authz/types';
 import {
@@ -65,7 +70,30 @@ export interface CentralEnv {
   /** Postgres schema holding the central tables; 'public' in production. A trusted constant, never request input. */
   schema: string;
   runner: SqlRunner;
+  /** Test seam: the access mode. Omitted: ACCESS_SOURCE, read at call time. */
+  accessSource?: AccessSource;
+  /** Test seam: how old (seconds) a login's role claims may be to count as a holder; null = none count. Omitted: ROLE_CLAIMS_MAX_SECONDS in claims mode, else null. */
+  claimsMaxSeconds?: number | null;
 }
+
+const sourceOf = (env: CentralEnv): AccessSource => env.accessSource ?? accessSource();
+
+function claimsMaxOf(env: CentralEnv): number | null {
+  if (env.claimsMaxSeconds !== undefined) return env.claimsMaxSeconds;
+  return sourceOf(env) === 'claims' ? roleClaimsMaxSeconds() : null;
+}
+
+/**
+ * How many people hold the catalogue entry `er` from their latest login, on the same terms as the
+ * recipient predicate in resolve.ts (fresh claim row, linked and enabled directory user): a COUNT
+ * only, never who. `param` is the placeholder carrying the freshness in seconds (null = nobody).
+ */
+const holdersSql = (env: CentralEnv, er: string, param: string): string =>
+  `(SELECT count(*)::int FROM ${tbl(env, 'user_external_roles')} ur
+     WHERE ur.kind = ${er}.kind AND ur.identifier = ${er}.identifier
+       AND ${param}::int IS NOT NULL
+       AND ur.seen_at > now() - make_interval(secs => ${param}::int)
+       AND EXISTS (SELECT 1 FROM ${tbl(env, 'directory_users')} d WHERE d.app_user_id = ur.user_id AND d.disabled = false))`;
 
 export function defaultCentralEnv(): CentralEnv {
   return { schema: 'public', runner: defaultRunner() };
@@ -241,6 +269,7 @@ interface PrincipalRow {
   identifier: string;
   name: string | null;
   active: boolean | null;
+  holders?: number | null;
 }
 
 const principalView = (r: PrincipalRow): CentralPrincipalTargetView => ({
@@ -249,17 +278,18 @@ const principalView = (r: PrincipalRow): CentralPrincipalTargetView => ({
   // The FK keeps every row in the catalogue, so a missing name only happens for a hand-edited database.
   name: r.name ?? r.identifier,
   status: r.active === null ? 'unknown' : r.active ? 'active' : 'inactive',
+  holders: Number(r.holders ?? 0),
 });
 
 /** Role/group targets with the catalogue's CURRENT name and state. */
 async function selectPrincipalTargets(env: CentralEnv, q: SqlQueryable, id: string): Promise<CentralPrincipalTargetView[]> {
   const { rows } = await q.query<PrincipalRow>(
-    `SELECT pt.kind, pt.identifier, er.name, er.active
+    `SELECT pt.kind, pt.identifier, er.name, er.active, ${holdersSql(env, 'pt', '$2')} AS holders
        FROM ${tbl(env, 'central_template_principal_targets')} pt
        LEFT JOIN ${tbl(env, 'external_roles')} er ON er.kind = pt.kind AND er.identifier = pt.identifier
       WHERE pt.template_id = $1::uuid
       ORDER BY pt.kind, pt.identifier`,
-    [id],
+    [id, claimsMaxOf(env)],
   );
   return rows.map(principalView);
 }
@@ -291,6 +321,13 @@ async function assertPrincipalTargetsAllowed(
   added: readonly CentralPrincipalTarget[],
 ): Promise<void> {
   if (added.length === 0) return;
+  // Outside claims mode nobody holds a role or group from a login claim, so a target would be silent.
+  if (sourceOf(env) !== 'claims') {
+    throw new ConflictError(
+      'Roller og grupper kan kun vælges, når rollerne kommer fra brugernes login (ACCESS_SOURCE=claims)',
+      'principal_targets_need_claims',
+    );
+  }
   if (!hasGlobalScope(principal, 'template.manage')) {
     throw new ForbiddenError(
       'Kun en skabelonansvarlig med tilladelse for hele organisationen kan gøre en skabelon tilgængelig for roller og grupper',
@@ -305,6 +342,29 @@ async function assertPrincipalTargetsAllowed(
   );
   if (rows.length !== added.length) {
     throw new ValidationError('En valgt rolle eller gruppe findes ikke i kataloget', 'principal_target_unknown');
+  }
+}
+
+/**
+ * A template that reaches roles/groups reaches people outside any unit scope, so only a GLOBAL
+ * manager may change, archive or restore it. Reading it stays allowed. Called with the row locked.
+ */
+async function assertNoPrincipalTargetsUnlessGlobal(
+  env: CentralEnv,
+  q: SqlQueryable,
+  principal: Principal,
+  templateId: string,
+): Promise<void> {
+  if (hasGlobalScope(principal, 'template.manage')) return;
+  const { rows } = await q.query(
+    `SELECT 1 FROM ${tbl(env, 'central_template_principal_targets')} WHERE template_id = $1::uuid LIMIT 1`,
+    [templateId],
+  );
+  if (rows.length > 0) {
+    throw new ForbiddenError(
+      'Skabelonen er gjort tilgængelig for roller eller grupper. Kun en skabelonansvarlig med tilladelse for hele organisationen kan ændre, arkivere eller genoprette den',
+      'principal_targets_need_global',
+    );
   }
 }
 
@@ -528,6 +588,7 @@ export async function updateCentralTemplate(
 
   return inTx(env, async (tx) => {
     const row = await loadManageable(env, tx, principal, id, true);
+    await assertNoPrincipalTargetsUnlessGlobal(env, tx, principal, row.id);
     if (row.current_version !== input.baseVersion) throw new VersionConflictError(row.current_version);
     if (row.status !== 'active') {
       throw new ConflictError('Skabelonen er arkiveret. Genopret den, før den kan ændres.', 'template_archived');
@@ -638,6 +699,7 @@ async function changeStatus(
 
   return inTx(env, async (tx) => {
     const row = await loadManageable(env, tx, principal, id, true);
+    await assertNoPrincipalTargetsUnlessGlobal(env, tx, principal, row.id);
     if (row.current_version !== input.baseVersion) throw new VersionConflictError(row.current_version);
     if (row.status === to) {
       throw archiving
@@ -752,11 +814,11 @@ export async function listManageableTemplates(
       orgTargets.set(t.template_id, list);
     }
     const pr = await q.query<PrincipalRow & { template_id: string }>(
-      `SELECT pt.template_id, pt.kind, pt.identifier, er.name, er.active
+      `SELECT pt.template_id, pt.kind, pt.identifier, er.name, er.active, ${holdersSql(env, 'pt', '$2')} AS holders
          FROM ${tbl(env, 'central_template_principal_targets')} pt
          LEFT JOIN ${tbl(env, 'external_roles')} er ON er.kind = pt.kind AND er.identifier = pt.identifier
         WHERE pt.template_id = ANY($1::uuid[]) ORDER BY pt.kind, pt.identifier`,
-      [ids],
+      [ids, claimsMaxOf(env)],
     );
     for (const t of pr.rows) {
       const list = principalTargets.get(t.template_id) ?? [];
@@ -873,9 +935,12 @@ export async function listCatalogue(env: CentralEnv = defaultCentralEnv()): Prom
     source: string;
     active: boolean;
     synced_at: Date | string;
+    holders: number;
   }>(
-    `SELECT kind, identifier, name, source, active, synced_at FROM ${tbl(env, 'external_roles')}
-      ORDER BY active DESC, kind, lower(name), identifier`,
+    `SELECT er.kind, er.identifier, er.name, er.source, er.active, er.synced_at, ${holdersSql(env, 'er', '$1')} AS holders
+       FROM ${tbl(env, 'external_roles')} er
+      ORDER BY er.active DESC, er.kind, lower(er.name), er.identifier`,
+    [claimsMaxOf(env)],
   );
   const refreshed = rows.filter((r) => r.source === 'rollekatalog').map((r) => iso(r.synced_at));
   return {
@@ -885,6 +950,7 @@ export async function listCatalogue(env: CentralEnv = defaultCentralEnv()): Prom
       name: r.name,
       source: r.source as CentralCatalogueEntry['source'],
       active: r.active,
+      holders: Number(r.holders ?? 0),
     })),
     lastRefreshedAt: refreshed.length > 0 ? refreshed.reduce((a, b) => (a > b ? a : b)) : null,
   };

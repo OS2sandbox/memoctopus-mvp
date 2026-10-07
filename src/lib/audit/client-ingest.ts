@@ -15,12 +15,39 @@ const MAX_FUTURE_MS = 5 * 60 * 1000;
 
 // Only the meeting.* types: a browser may not report anything else through here.
 const TYPES = Object.keys(meetingEvents) as [EventType, ...EventType[]];
+const TYPE_SET: ReadonlySet<string> = new Set(TYPES);
+
+/**
+ * True when the body looks like a batch that only fails because one event has a type this
+ * server does not know (a newer client reaching an older instance in a rolling deploy). The
+ * route answers that with 400 + code 'unknown_event_type', which the browser treats as
+ * "try again later" instead of throwing the event away.
+ */
+export function hasUnknownEventType(json: unknown): boolean {
+  const events = (json as { events?: unknown } | null)?.events;
+  if (!Array.isArray(events)) return false;
+  return events.some((e) => {
+    const type = (e as { type?: unknown } | null)?.type;
+    return typeof type === 'string' && !TYPE_SET.has(type);
+  });
+}
+
+/** Response body for a batch with an unknown event type; the browser keys on `code`. */
+export const UNKNOWN_EVENT_TYPE_BODY = { error: 'Invalid request', code: 'unknown_event_type' } as const;
 
 // STRICT: any other key (an `actor`, `ip`, `userId`, `source` ...) fails parsing.
 // `details` is only shape-checked here; the per-type strict schema runs in
 // validateEvent / recordEvent.
 export const clientEventsBody = z
   .object({
+    // The browser's own count of events it lost before delivering them (outbox full, expired
+    // after 7 days, refused for good). Recorded as one audit.events_dropped row (reason
+    // client_outbox). The id makes a redelivery idempotent.
+    droppedLocally: z
+      .object({ count: z.number().int().min(1).max(1_000_000), clientEventId: z.string().uuid() })
+      .strict()
+      .optional(),
+    // May be empty only when droppedLocally is present (the route refuses a batch with neither).
     events: z
       .array(
         z
@@ -33,7 +60,6 @@ export const clientEventsBody = z
           })
           .strict(),
       )
-      .min(1)
       .max(MAX_CLIENT_EVENTS_PER_REQUEST),
   })
   .strict();
@@ -112,8 +138,13 @@ export async function remainingClientEventsToday(userId: string, runner?: SqlQue
 // play of the same meeting within a minute adds nothing the first row does not already
 // say. Edits, versions, recordings and deletes are NEVER throttled here (each is a
 // distinct action; the browser coalesces the chatty ones, see COALESCED in client.ts).
-// In memory and best effort like the budget above (per instance, lost on restart).
-// Throttled events are acknowledged and COUNTED in the response (`throttled`).
+//
+// The minute is measured in EVENT time (the clamped time the browser says the action
+// happened), not in the time the server received the batch: a browser that was offline
+// delivers hours of events in one request, and two views four hours apart are two views.
+// The route sorts a batch by event time before checking. In memory and best effort like the
+// budget above (per instance, lost on restart). Throttled events are acknowledged and
+// COUNTED in the response (`throttled`) and reported as audit.events_dropped (reason throttle).
 export const THROTTLED_TYPES: Set<string> = new Set([
   'meeting.minutes_view',
   'meeting.transcript_view',
@@ -121,26 +152,31 @@ export const THROTTLED_TYPES: Set<string> = new Set([
 ]);
 export const THROTTLE_WINDOW_MS = 60_000;
 export const THROTTLE_MAX_ENTRIES = 5000;
-const lastStored = new Map<string, number>();
+/** eventMs: event time of the last kept event; seenAt: server time it was kept (drives eviction only). */
+const lastStored = new Map<string, { eventMs: number; seenAt: number }>();
 
 const throttleKey = (userId: string, entityId: string, type: string) => `${userId}\u0000${entityId}\u0000${type}`;
 
-/** True when an event of this type for this meeting was stored by this user less than 60 s ago. */
-export function isClientEventThrottled(userId: string, entityId: string, type: string, now = Date.now()): boolean {
+/**
+ * True when an event of this type for this meeting was kept by this user less than 60 s away
+ * in EVENT time (`eventMs`, in either direction: a late-delivered older event inside the
+ * minute of a stored one is just as redundant).
+ */
+export function isClientEventThrottled(userId: string, entityId: string, type: string, eventMs: number): boolean {
   if (!THROTTLED_TYPES.has(type)) return false;
   const t = lastStored.get(throttleKey(userId, entityId, type));
-  return t !== undefined && now - t < THROTTLE_WINDOW_MS;
+  return t !== undefined && Math.abs(eventMs - t.eventMs) < THROTTLE_WINDOW_MS;
 }
 
-/** Remember that an event was stored now (call after a successful store only). Bounded: expired entries go first, then the oldest. */
-export function markClientEventStored(userId: string, entityId: string, type: string, now = Date.now()): void {
+/** Remember that an event with this EVENT time was stored (call after a successful store only). Bounded: expired entries go first, then the oldest. */
+export function markClientEventStored(userId: string, entityId: string, type: string, eventMs: number, now = Date.now()): void {
   if (!THROTTLED_TYPES.has(type)) return;
   const key = throttleKey(userId, entityId, type);
   lastStored.delete(key); // re-insert so Map order stays oldest-first
-  lastStored.set(key, now);
+  lastStored.set(key, { eventMs, seenAt: now });
   if (lastStored.size > THROTTLE_MAX_ENTRIES) {
     for (const [k, t] of lastStored) {
-      if (now - t >= THROTTLE_WINDOW_MS) lastStored.delete(k);
+      if (now - t.seenAt >= THROTTLE_WINDOW_MS) lastStored.delete(k);
     }
     // Still over: every entry is live, drop the oldest until back at the bound.
     for (const k of lastStored.keys()) {

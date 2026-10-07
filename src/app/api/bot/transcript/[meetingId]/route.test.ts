@@ -22,7 +22,7 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 
 vi.mock('@/lib/bot-pending-audio', () => ({
   readPendingTranscript: vi.fn(),
-  deletePendingTranscript: vi.fn().mockResolvedValue(undefined),
+  deletePendingTranscript: vi.fn().mockResolvedValue(true),
   assertBotMeetingOwner: vi.fn(),
 }));
 
@@ -49,7 +49,7 @@ const SEGMENTS = [{ speaker: 'Taler 1', start: 0, end: 3, text: 'hej' }];
 beforeEach(() => {
   mockGetSession.mockReset();
   mockRead.mockReset();
-  mockDelete.mockReset().mockResolvedValue(undefined);
+  mockDelete.mockReset().mockResolvedValue(true);
   mockAssertOwner.mockReset();
   mockAssertOwner.mockResolvedValue(true);
   mockRecord.mockReset().mockResolvedValue({ status: 'stored' });
@@ -95,7 +95,7 @@ describe('GET /api/bot/transcript/[meetingId]', () => {
     const res = await GET(REQ, PARAMS);
     const body = await res.json();
     expect(body).toMatchObject({ status: 'ready', segments: SEGMENTS, diarized: true });
-    expect(mockDelete).toHaveBeenCalledWith('m1');
+    expect(mockDelete).toHaveBeenCalledWith('m1', expect.objectContaining({ trigger: 'handoff', actorUserId: FAKE_SESSION.user.id }));
   });
 
   it("returns status 'failed' and deletes the stash so the client falls back", async () => {
@@ -103,7 +103,7 @@ describe('GET /api/bot/transcript/[meetingId]', () => {
     mockRead.mockResolvedValueOnce({ status: 'failed', createdAt: 1 });
     const res = await GET(REQ, PARAMS);
     expect((await res.json()).status).toBe('failed');
-    expect(mockDelete).toHaveBeenCalledWith('m1');
+    expect(mockDelete).toHaveBeenCalledWith('m1', expect.objectContaining({ trigger: 'handoff', actorUserId: FAKE_SESSION.user.id }));
   });
 });
 
@@ -131,13 +131,15 @@ describe('audit', () => {
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
     mockAssertOwner.mockResolvedValueOnce(false);
     await GET(REQ, params);
-    expect(recordAuthzDenied).toHaveBeenCalledWith({
-      actorUserId: FAKE_SESSION.user.id,
-      required: 'bot.meeting_owner',
-      reason: 'not_owner',
-      entityType: 'meeting',
-      entityId: MEETING,
-    });
+    expect(recordAuthzDenied).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: FAKE_SESSION.user.id,
+        required: 'bot.meeting_owner',
+        reason: 'not_owner',
+        entityType: 'meeting',
+        entityId: MEETING,
+      }),
+    );
     expect(mockRead).not.toHaveBeenCalled();
     expect(mockDelete).not.toHaveBeenCalled();
   });

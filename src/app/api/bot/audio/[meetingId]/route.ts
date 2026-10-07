@@ -33,6 +33,7 @@ export const GET = withHandler(
     if (!(await assertBotMeetingOwner(meetingId, session.user.id))) {
       // Someone probing another user's recording: the denial is recorded, the answer stays the same.
       await recordAuthzDenied({
+        req,
         actorUserId: session.user.id,
         required: 'bot.meeting_owner',
         reason: 'not_owner',

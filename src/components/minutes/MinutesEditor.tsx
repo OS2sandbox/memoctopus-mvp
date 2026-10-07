@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { SaveStatus, SaveState } from '@/components/layout/SaveStatus';
 import { RichEditor } from './RichEditor';
 import { saveMinutes, snapshotMinutes, setActiveMinutesVersion, updateMeeting } from '@/lib/storage';
+import { reportAuditEvent } from '@/lib/audit/client';
 import { minutesToBody } from '@/lib/minutes-format';
 
 interface VersionRecord {
@@ -212,6 +213,8 @@ export function MinutesEditor({
         const nextTitle = content.header?.title ?? meetingTitle;
         if (nextTitle !== savedTitleRef.current) {
           await updateMeeting(meetingId, { title: nextTitle });
+          // The title edited in the minutes header: which field only, never the title.
+          reportAuditEvent('meeting.metadata_edit', meetingId, { field: 'title' });
           savedTitleRef.current = nextTitle;
         }
         setSaveState('saved');

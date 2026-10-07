@@ -197,10 +197,21 @@ installations. The full format and one recipe per IdP is in
    ```bash
    AUTH_CONFIG_FILE=/config/auth.json
    ACCESS_SOURCE=claims              # roles come from the IdP's claims, not from the app
-   EMAIL_PASSWORD_ENABLED=false      # a password account has no role; do not offer it
-   REQUIRE_ROLE_TO_LOGIN=true        # no role claim, no access
+   # EMAIL_PASSWORD_ENABLED=         # leave blank: password sign-in is OFF in claims mode unless "true"
+   # REQUIRE_ROLE_TO_LOGIN=          # leave blank: in claims mode "no mapped role, no access" is the default
    # ROLE_CLAIMS_MAX_SECONDS=28800   # how long a login's roles count; sessions end with it
    ```
+
+   Claims mode is **closed by default**: password sign-in is off (an explicit
+   `EMAIL_PASSWORD_ENABLED=true` re-enables sign-in but never sign-up), a person the IdP does
+   not map to any role gets "Ingen adgang" (an explicit `REQUIRE_ROLE_TO_LOGIN=false` opens
+   that, and logs a warning), so **ordinary users must be mapped to `tt-bruger`** through
+   `appRoleMap` / `groupRoleMap` (in `roles.byProvider.<id>` when there are several providers).
+   An Entra provider needs its **single tenant id** (a GUID, never `common`), and an OIDC
+   provider may not use a multi-tenant authority. Do not put `REQUIRE_ROLE_TO_LOGIN` or
+   `EMAIL_PASSWORD_ENABLED` defaults in a compose override: unset must stay unset.
+   In production the file's OIDC and SAML providers need `BETTER_AUTH_URL` to be the public
+   **https** URL, and every IdP URL must be https.
 
 3. Register with the IdP, with `BETTER_AUTH_URL` as the public URL of the app:
 
@@ -220,8 +231,21 @@ in the IdP removes it here at their next login (and at the latest when
 in-app role administration is switched off in claims mode, and there is no in-app
 administrator to lock out, so keep a **break-glass path on the IdP side** (a documented
 account that carries the administrator claim). A password sign-up can never be a way around
-this: password accounts get no roles. The in-app admin (`ACCESS_SOURCE=local`) stays for
+this: in claims mode sign-up is closed and password accounts get no roles. The in-app admin (`ACCESS_SOURCE=local`) stays for
 development and demos and can be turned off with `ACCESS_LOCAL_ADMIN=false`.
+
+**Behind another load balancer or WAF.** The bundled nginx overwrites `X-Forwarded-For` with
+the address it sees (right for an edge proxy). If another proxy sits in front of it, nginx sees
+only that proxy, so the audit log and the failed-login throttle would record the proxy's address
+for everybody. Tell nginx to trust it and take the client from its header: in `nginx/nginx.conf`
+add `set_real_ip_from <the load balancer's CIDR>;` and `real_ip_header X-Forwarded-For;` in the
+`server` block (see the comment there). Never trust a range you do not control.
+
+**Shared workstations.** The app does not sign people out of the IdP (RP-initiated logout is
+not built), so on a shared PC the next person clicking the login button is signed straight back
+in as the previous one. Set `"prompt": "login"` (and optionally `"maxAge": 0`) on the provider
+in the config file so the IdP asks for credentials every time, or have the IdP end its own
+session. Entra: `"prompt": "login"` works the same.
 
 **Not supported (ask the client before promising them):** RP-initiated logout / OIDC
 back-channel logout and SAML single logout (signing out of the app does not sign out of the
@@ -238,10 +262,12 @@ and removing a role in the IdP taking effect inside a still-running session befo
 
   ```
   15 3 * * *    curl -fsS -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/audit/prune -o /dev/null
+  */30 * * * *  curl -fsS -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/bot-audio/sweep -o /dev/null
   */15 * * * *  curl -fsS -m 600 -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/rollekatalog/sync -o /dev/null
   30 3 * * *    curl -fsS -m 120 -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/rollekatalog/roles -o /dev/null
   ```
 
+  The `bot-audio/sweep` line deletes Teams-bot recordings and transcripts nobody collected within an hour (each deletion is logged as `bot.audio_delete`, `ttl`); it is idempotent, has no setup to be missing (so no 409) and is what makes the retention promise provable even when no new recording arrives to trigger the opportunistic sweep.
   The last line refreshes the role catalogue (optional, any `ACCESS_SOURCE`; it answers 409 without a URL and READ key). The catalogue only ever deactivates entries, so a prompt that targets a withdrawn role keeps its reference; a refresh that would withdraw an unusually large share of the entries is refused (`removal_threshold`) and has to be forced from the admin button.
   (`8080` is the default `APP_PORT`.) Keep the sync interval well below `ROLE_STALE_MAX_SECONDS` (24 h by default).
 - **Client IP and the `X-Forwarded-For` header.** The client IP stored in the audit log and used by the failed-login throttle is the **first** entry of `X-Forwarded-For` (`AUTH_IP_HEADERS`, default `x-forwarded-for`). The app trusts it as sent, so whatever sits in front must **overwrite** it with the real peer address; the shipped `nginx/nginx.conf` and `nginx-init.conf` set it to `$remote_addr`, and any other proxy must do the same. But `docker-compose.yml` publishes the app on **all host interfaces** (`${APP_PORT:-8080}:3000`): anyone who can reach that port directly can skip the proxy and send any `X-Forwarded-For`, forging the audit IP and sidestepping the per-IP failed-login cap. Whenever a proxy is in use, either bind the app to loopback with a compose override (do not edit the default in `docker-compose.yml`):

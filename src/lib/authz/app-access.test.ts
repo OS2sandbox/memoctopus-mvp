@@ -72,6 +72,22 @@ describe('requireAppAccess', () => {
     expect(await requireAppAccess()).not.toBeInstanceOf(NextResponse);
   });
 
+  it('claims mode: a user the IdP mapped to no role gets 403 by default, and a mapped one gets in', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'claims');
+    mockResolve.mockResolvedValue(makePrincipal({ roles: [], capabilities: [], source: 'baseline' }));
+    const res = (await requireAppAccess()) as NextResponse;
+    expect(res.status).toBe(403);
+    expect(mockDenied).toHaveBeenCalledWith({ actorUserId: 'user-123', required: 'login', reason: 'no_role' });
+
+    mockResolve.mockResolvedValue(makePrincipal({ roles: ['tt-bruger'], source: 'claims' }));
+    expect(await requireAppAccess()).not.toBeInstanceOf(NextResponse);
+
+    // Only an explicit opt-out opens it again.
+    vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'false');
+    mockResolve.mockResolvedValue(makePrincipal({ roles: [], source: 'baseline' }));
+    expect(await requireAppAccess()).not.toBeInstanceOf(NextResponse);
+  });
+
   it('lets the implicit baseline user through when the flag is off', async () => {
     mockResolve.mockResolvedValue(makePrincipal({ roles: [], source: 'baseline' }));
     expect(await requireAppAccess()).not.toBeInstanceOf(NextResponse);

@@ -99,6 +99,8 @@ services:
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
       - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:8080}
       # Auth. All read at runtime — change these and `up -d app` is enough, no rebuild.
+      # Blank = unset: on by default, but OFF with ACCESS_SOURCE=claims unless this is explicitly "true"
+      # (and sign-up stays closed there). Keep the blank default.
       - EMAIL_PASSWORD_ENABLED=${EMAIL_PASSWORD_ENABLED:-}
       - MICROSOFT_ENABLED=${MICROSOFT_ENABLED:-}
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
@@ -133,7 +135,9 @@ services:
       - ACCESS_LOCAL_ADMIN=${ACCESS_LOCAL_ADMIN:-}
       # Claims mode: how long the roles of a login count (and how long a session lasts). Blank = 28800 (8 h).
       - ROLE_CLAIMS_MAX_SECONDS=${ROLE_CLAIMS_MAX_SECONDS:-}
-      - REQUIRE_ROLE_TO_LOGIN=${REQUIRE_ROLE_TO_LOGIN:-false}
+      # Blank = unset: the default is then false, EXCEPT with ACCESS_SOURCE=claims where it is true (no mapped
+      # role, no access). Do not give it a default here: an explicit "false" is what opens claims mode.
+      - REQUIRE_ROLE_TO_LOGIN=${REQUIRE_ROLE_TO_LOGIN:-}
       - BOOTSTRAP_ADMIN_EMAILS=${BOOTSTRAP_ADMIN_EMAILS:-}
       - DIRECTORY_MATCH=${DIRECTORY_MATCH:-userid-claim}
       - DIRECTORY_USERID_CLAIM=${DIRECTORY_USERID_CLAIM:-preferred_username}

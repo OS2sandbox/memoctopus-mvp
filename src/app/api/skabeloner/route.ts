@@ -13,14 +13,17 @@ async function getHandler(): Promise<NextResponse> {
   const { session } = access;
 
   const skabeloner = await listSkabeloner(session.user.id);
-  // The central list is an addition: if it cannot be resolved the user keeps their personal templates.
+  // The central list is an addition: if it cannot be resolved the user keeps their personal templates,
+  // and `centralError` tells the UI the shared list is missing (not "empty"), so it can say so.
   let centralSkabeloner: CentralSkabelonSummary[] = [];
+  let centralError = false;
   try {
     centralSkabeloner = await listCentralForUser(session.user.id);
   } catch (err) {
     safeLogError('skabeloner/GET central', err);
+    centralError = true;
   }
-  return NextResponse.json({ skabeloner, centralSkabeloner });
+  return NextResponse.json({ skabeloner, centralSkabeloner, ...(centralError ? { centralError: true } : {}) });
 }
 
 async function postHandler(req: NextRequest): Promise<NextResponse> {

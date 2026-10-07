@@ -478,13 +478,14 @@ describe('org units', () => {
   });
 
   describe('deleteOrgUnit', () => {
-    const run = (over: { source?: string; children?: boolean; assigned?: boolean; exists?: boolean; owns?: boolean }) =>
+    const run = (over: { source?: string; children?: boolean; assigned?: boolean; exists?: boolean; owns?: boolean; targeted?: boolean }) =>
       makeFakeRunner(
         respondBy([
           ['SELECT source FROM public.org_units', over.exists === false ? [] : [{ source: over.source ?? 'local' }]],
           ['WHERE parent_uuid', over.children ? [{ x: 1 }] : []],
           ['WHERE scope_org_unit_uuid', over.assigned ? [{ x: 1 }] : []],
           ['FROM public.central_templates', over.owns ? [{ x: 1 }] : []],
+          ['FROM public.central_template_targets', over.targeted ? [{ x: 1 }] : []],
         ]),
       );
 
@@ -496,6 +497,15 @@ describe('org units', () => {
       });
       expect(calls.some((c) => c.sql.startsWith('DELETE'))).toBe(false);
       expect(recordEvent).not.toHaveBeenCalled();
+    });
+
+    it('409 while it is a target of central templates (the targets FK cascades silently), without deleting', async () => {
+      const { runner, calls } = run({ targeted: true });
+      await expect(deleteOrgUnit(U1, 'a', runner)).rejects.toMatchObject({
+        code: 'has_template_targets',
+        message: expect.stringContaining('målgruppe'),
+      });
+      expect(calls.some((c) => c.sql.startsWith('DELETE'))).toBe(false);
     });
 
     it('deletes a leaf without assignments', async () => {

@@ -78,6 +78,22 @@ describe('requireRoleToLogin', () => {
     vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', ' TRUE ');
     expect(requireRoleToLogin()).toBe(true);
   });
+
+  it('in claims mode it defaults to TRUE (no mapped role, no access); only an explicit "false" opens it', () => {
+    vi.stubEnv('ACCESS_SOURCE', 'claims');
+    for (const v of ['', '   ', '1', 'yes', 'true', 'nonsense']) {
+      vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', v);
+      expect(requireRoleToLogin(), v).toBe(true);
+    }
+    vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', ' False ');
+    expect(requireRoleToLogin()).toBe(false);
+  });
+
+  it('an invalid ACCESS_SOURCE does not throw here (the access guards answer 503 themselves)', () => {
+    vi.stubEnv('ACCESS_SOURCE', 'claim');
+    vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', '');
+    expect(requireRoleToLogin()).toBe(false);
+  });
 });
 
 describe('bootstrapAdminEmails', () => {

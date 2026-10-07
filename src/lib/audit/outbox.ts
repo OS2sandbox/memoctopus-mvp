@@ -84,6 +84,82 @@ export function backoffMs(attempts: number): number {
   return Math.min(BACKOFF_BASE_MS * 2 ** Math.max(0, attempts - 1), BACKOFF_MAX_MS);
 }
 
+// ─── events lost before delivery ─────────────────────────────────────────────
+//
+// An event that leaves the queue WITHOUT being delivered (evicted because the queue is full,
+// expired after 7 days, refused for good by the server, or never queued because storage failed)
+// is counted here and reported with the next successful flush as one audit.events_dropped row
+// (reason client_outbox), so a loss is a counted event and not silence. The count lives in
+// localStorage (per user; IndexedDB would need a schema bump) with an in-memory fallback, and
+// carries an id that changes whenever the count does, so a retry after a lost response is
+// idempotent on the server while a later, larger count is a new report.
+export interface DroppedLocally {
+  count: number;
+  clientEventId: string;
+}
+
+const DROPPED_KEY = (userId: string) => `referat-audit-dropped-u-${userId}`;
+const droppedMemory = new Map<string, DroppedLocally>();
+
+function newId(): string {
+  return crypto.randomUUID();
+}
+
+function readDropped(userId: string): DroppedLocally | null {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(DROPPED_KEY(userId)) : null;
+    if (raw) {
+      const v = JSON.parse(raw) as Partial<DroppedLocally>;
+      if (typeof v.count === 'number' && v.count > 0 && typeof v.clientEventId === 'string') {
+        return { count: v.count, clientEventId: v.clientEventId };
+      }
+    }
+  } catch {
+    // Fall through to the in-memory copy.
+  }
+  return droppedMemory.get(userId) ?? null;
+}
+
+function writeDropped(userId: string, value: DroppedLocally | null): void {
+  if (value) droppedMemory.set(userId, value);
+  else droppedMemory.delete(userId);
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (value) localStorage.setItem(DROPPED_KEY(userId), JSON.stringify(value));
+    else localStorage.removeItem(DROPPED_KEY(userId));
+  } catch {
+    // The in-memory copy still reports it during this page load.
+  }
+}
+
+/** Count `n` events that were lost before delivery. Never throws. */
+export function addDroppedLocally(userId: string, n: number): void {
+  if (n <= 0) return;
+  try {
+    const current = readDropped(userId);
+    writeDropped(userId, { count: Math.min((current?.count ?? 0) + n, 1_000_000), clientEventId: newId() });
+  } catch {
+    // Best effort.
+  }
+}
+
+/** What is waiting to be reported, or null. */
+export function getDroppedLocally(userId: string): DroppedLocally | null {
+  return readDropped(userId);
+}
+
+/** The server confirmed `reported` lost events: subtract them (more may have been added meanwhile). */
+export function clearDroppedLocally(userId: string, reported: number): void {
+  try {
+    const current = readDropped(userId);
+    if (!current) return;
+    const left = current.count - reported;
+    writeDropped(userId, left > 0 ? { count: left, clientEventId: newId() } : null);
+  } catch {
+    // Best effort.
+  }
+}
+
 /** Queue one event; evicts the oldest ones beyond the bound. Returns false if it could not be stored. */
 export async function addToOutbox(
   userId: string,
@@ -98,6 +174,7 @@ export async function addToOutbox(
     if (size > OUTBOX_MAX_EVENTS) {
       const oldest = await db.getAllKeysFromIndex('events', 'by-queued', undefined, size - OUTBOX_MAX_EVENTS);
       for (const key of oldest) await db.delete('events', key);
+      addDroppedLocally(userId, oldest.length);
     }
     return true;
   } catch {
@@ -115,6 +192,7 @@ export async function takeDue(userId: string, limit: number, now = Date.now()): 
     for (const ev of all) {
       if (now - ev.queuedAt > OUTBOX_TTL_MS) {
         await db.delete('events', ev.clientEventId);
+        addDroppedLocally(userId, 1);
       } else if (ev.nextAttemptAt <= now && due.length < limit) {
         due.push(ev);
       }
@@ -155,4 +233,5 @@ export async function markFailed(userId: string, ids: string[], now = Date.now()
 /** Test only: forget cached connections. */
 export function __resetOutbox(): void {
   opened.clear();
+  droppedMemory.clear();
 }

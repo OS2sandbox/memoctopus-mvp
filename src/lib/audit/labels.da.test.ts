@@ -12,9 +12,9 @@ describe('audit labels', () => {
     expect(sourceBadgeLabels.client).toBe('selvrapporteret');
   });
 
-  it('falls back to the raw code for a type this build does not know', () => {
+  it('shows a type this build does not know as "Ukendt hændelsestype" with its code', () => {
     expect(eventTypeLabel('meeting.delete')).toBe(eventTypeLabels['meeting.delete']);
-    expect(eventTypeLabel('legacy.thing')).toBe('legacy.thing');
-    expect(eventTypeLabel('toString')).toBe('toString');
+    expect(eventTypeLabel('legacy.thing')).toBe('Ukendt hændelsestype (legacy.thing)');
+    expect(eventTypeLabel('toString')).toBe('Ukendt hændelsestype (toString)');
   });
 });

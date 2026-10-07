@@ -152,14 +152,14 @@ async function main() {
   check('the Rollekatalog sync button is not available in claims mode', sync.status === 409, brief(sync));
 
   // ─────────────────────────────────────────────────────────────────────
-  heading('5. A password account never gets a claims role');
+  heading('5. Claims mode is not open: nobody can register a password account');
   const pwEmail = `pia.password.${Date.now()}@example.dk`; // unique per run: the database is not reset
   const pw = new AppSession('pw');
   const up = await pw.post('/api/auth/sign-up/email', { name: 'Pia Password', email: pwEmail, password: 'correct-horse-battery' });
-  check('password sign-up works (EMAIL_PASSWORD_ENABLED=true in the sim)', up.status === 200, brief(up));
+  check('password sign-up is refused even with EMAIL_PASSWORD_ENABLED=true (sign-up is closed in claims mode)', up.status >= 400, brief(up));
   const mePw = await pw.get('/api/me');
-  check('...and the new account has no role: REQUIRE_ROLE_TO_LOGIN refuses it', mePw.status === 403, brief(mePw));
-  check('no claims rows for it', (await rolesInDb(pwEmail)).length === 0);
+  check('...so there is no session and nothing to access', mePw.status === 401, brief(mePw));
+  check('no user and no claims rows for it', (await db.query('select 1 from public.users where email = $1', [pwEmail])).rows.length === 0 && (await rolesInDb(pwEmail)).length === 0);
   const taken = await new AppSession('pw2').post('/api/auth/sign-up/email', { name: 'Imposter', email: 'admin.a@example.dk', password: 'correct-horse-battery' });
   check('a password sign-up cannot take over an SSO person by e-mail', taken.status >= 400, brief(taken));
 

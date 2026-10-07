@@ -180,18 +180,19 @@ describe.skipIf(!hasPg)('audit query (real Postgres)', () => {
         expect(all.rows).toHaveLength(4);
       }));
 
-    it('the viewer and the export hide types outside the catalogue; the feed still returns them', () =>
+    it('the viewer and the export show unknown types (not access.*); the feed returns everything', () =>
       withFreshSchema(async (c, schema) => {
         const env = queryEnv(c, schema);
         const known = await add(c, { event_type: 'auth.login' });
         // A type removed from the catalogue in a later release: its old rows stay in the table.
-        const removed = await add(c, { event_type: 'directory.sync' });
+        const removed = await add(c, { event_type: 'access.role_grant' });
+        const unknown = await add(c, { event_type: 'directory.sync' });
         const listed = await listAuditEvents({ scope: { all: true } }, env);
-        expect(listed.rows.map((r) => Number(r.id))).toEqual([known]);
+        expect(listed.rows.map((r) => Number(r.id)).sort((a, b) => a - b)).toEqual([known, unknown]);
         const exported = await collectAuditEvents({ scope: { all: true }, maxRows: 10 }, env);
-        expect(exported.rows.map((r) => Number(r.id))).toEqual([known]);
+        expect(exported.rows.map((r) => Number(r.id)).sort((a, b) => a - b)).toEqual([known, unknown]);
         const feed = await getFeedPage({ offset: 0, size: 10, delaySeconds: 0 }, env);
-        expect(feed.rows.map((r) => Number(r.id))).toEqual([known, removed]);
+        expect(feed.rows.map((r) => Number(r.id))).toEqual([known, removed, unknown]);
       }));
   });
 

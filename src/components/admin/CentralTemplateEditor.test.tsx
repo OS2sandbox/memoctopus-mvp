@@ -390,9 +390,9 @@ describe('CentralTemplateEditor — closing with unsaved text', () => {
 });
 
 const CATALOGUE: CentralCatalogueEntry[] = [
-  { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', source: 'rollekatalog', active: true },
-  { kind: 'group', identifier: 'social', name: 'Socialforvaltningen', source: 'config', active: true },
-  { kind: 'role', identifier: 'gammel', name: 'Gammel rolle', source: 'rollekatalog', active: false },
+  { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', source: 'rollekatalog', active: true, holders: 4 },
+  { kind: 'group', identifier: 'social', name: 'Socialforvaltningen', source: 'config', active: true, holders: 2 },
+  { kind: 'role', identifier: 'gammel', name: 'Gammel rolle', source: 'rollekatalog', active: false, holders: 0 },
 ];
 
 describe('CentralTemplateEditor — organisation-wide templates and role/group targets', () => {
@@ -455,9 +455,9 @@ describe('CentralTemplateEditor — organisation-wide templates and role/group t
       ...TEMPLATE,
       ownerOrgUnitUuid: null,
       principalTargets: [
-        { kind: 'role' as const, identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active' as const },
-        { kind: 'role' as const, identifier: 'gammel', name: 'Gammel rolle', status: 'inactive' as const },
-        { kind: 'group' as const, identifier: 'findes-ikke', name: 'Slettet gruppe', status: 'active' as const },
+        { kind: 'role' as const, identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active' as const, holders: 4 },
+        { kind: 'role' as const, identifier: 'gammel', name: 'Gammel rolle', status: 'inactive' as const, holders: 0 },
+        { kind: 'group' as const, identifier: 'findes-ikke', name: 'Slettet gruppe', status: 'active' as const, holders: 1 },
       ],
     };
     const { mock } = setup(withTargets, { [`PUT /api/admin/central-templates/${ID}`]: () => json({ template: withTargets }) }, GLOBAL);
@@ -486,13 +486,13 @@ describe('CentralTemplateEditor — organisation-wide templates and role/group t
   });
 
   it('shows a chosen target as an unknown one when the catalogue does not list it any more', () => {
-    setup({ ...TEMPLATE, principalTargets: [{ kind: 'role', identifier: 'x', name: 'Borte', status: 'active' }] }, {}, GLOBAL);
+    setup({ ...TEMPLATE, principalTargets: [{ kind: 'role', identifier: 'x', name: 'Borte', status: 'active', holders: 1 }] }, {}, GLOBAL);
     const chosen = screen.getByRole('list', { name: 'Valgte roller og grupper' });
     expect(within(chosen).getByText('ukendt/inaktiv')).toBeInTheDocument();
   });
 
   it('a scoped manager sees the roles of their template read-only (no remove button) and saves without sending them', async () => {
-    const t = { ...TEMPLATE, principalTargets: [{ kind: 'role' as const, identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active' as const }] };
+    const t = { ...TEMPLATE, principalTargets: [{ kind: 'role' as const, identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active' as const, holders: 4 }] };
     const { mock } = setup(t, { [`PUT /api/admin/central-templates/${ID}`]: () => json({ template: t }) }, { catalogue: CATALOGUE, isGlobalManager: false });
     expect(within(screen.getByRole('list', { name: 'Valgte roller og grupper' })).getByText('Sagsbehandler')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Fjern rolle/ })).toBeNull();
@@ -525,5 +525,46 @@ describe('CentralTemplateEditor — organisation-wide templates and role/group t
     await userEvent.click(screen.getByLabelText('Til rådighed for rolle: Sagsbehandler'));
     await userEvent.click(screen.getByRole('button', { name: 'Annuller' }));
     expect(await screen.findByText('Kassér ændringer?')).toBeInTheDocument();
+  });
+
+  it('without org units, an empty audience is warned about by the role picker (the unit picker is not on screen)', async () => {
+    setup(null, {}, { ...GLOBAL, units: [] });
+    expect(screen.getByRole('status')).toHaveTextContent('Ingen roller, grupper eller enheder er valgt');
+    await userEvent.click(screen.getByLabelText('Til rådighed for rolle: Sagsbehandler'));
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('zero-match feedback: a role nobody holds from their latest login is flagged in the list and once chosen', async () => {
+    const quiet = [{ ...CATALOGUE[0], holders: 0 }, { ...CATALOGUE[1], holders: 12 }];
+    setup(null, {}, { catalogue: quiet, isGlobalManager: true });
+    const list = screen.getByRole('list', { name: 'Roller og grupper' });
+    expect(within(list).getByText('0 personer har den ved seneste login')).toBeInTheDocument();
+    expect(within(list).getByText('12 personer har den')).toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText('Til rådighed for rolle: Sagsbehandler'));
+    const chosen = screen.getByRole('list', { name: 'Valgte roller og grupper' });
+    expect(within(chosen).getByText('0 personer har den ved seneste login')).toBeInTheDocument();
+  });
+
+  it('outside claims mode the picker is replaced by the reason (roles come from login claims), but org-wide stays possible', () => {
+    setup(null, {}, { catalogue: CATALOGUE, isGlobalManager: true, canTargetPrincipals: false, targetLockedReason: 'needs_claims' });
+    expect(screen.getByText(/kun vælges, når rollerne kommer fra brugernes login/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Søg i roller og grupper')).toBeNull();
+    expect(screen.getByRole('option', { name: 'Hele organisationen (ingen ejerenhed)' })).toBeInTheDocument();
+  });
+
+  it('when the catalogue failed to load, targets keep the status the server gave them (not everything "ukendt/inaktiv")', () => {
+    const t = {
+      ...TEMPLATE,
+      principalTargets: [
+        { kind: 'role' as const, identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active' as const, holders: 4 },
+        { kind: 'role' as const, identifier: 'gammel', name: 'Gammel rolle', status: 'inactive' as const, holders: 0 },
+      ],
+    };
+    setup(t, {}, { catalogue: [], catalogueLoaded: false, isGlobalManager: true });
+    const chosen = screen.getByRole('list', { name: 'Valgte roller og grupper' });
+    expect(within(chosen).getAllByText('ukendt/inaktiv')).toHaveLength(1); // only the one the server itself calls inactive
+    expect(within(chosen).getByText('Sagsbehandler')).toBeInTheDocument();
+    // Without a catalogue nothing can be added, so the picker is locked rather than claiming it is empty.
+    expect(screen.queryByLabelText('Søg i roller og grupper')).toBeNull();
   });
 });

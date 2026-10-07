@@ -105,6 +105,41 @@ describe('runCatalogueRefresh', () => {
     expect(insert.sql).not.toContain('Navn a');
   });
 
+  it('an empty list of ONE read kind aborts while active rollekatalog entries of that kind exist, even when forced', async () => {
+    for (const force of [false, true]) {
+      const f = fakeEnv(script((sql) => (sql.startsWith('SELECT kind, count(*)::int AS cnt') ? rows([{ kind: 'group', cnt: 2 }, { kind: 'role', cnt: 5 }]) : undefined)));
+      const r = await runCatalogueRefresh({ trigger: 'manual', force }, { env: f.env, client: clientOf(catalogue(['a'], [])) });
+      expect(r).toEqual({ status: 'aborted', counts: emptyCatalogueCounts(), errorCode: 'empty_response' });
+      expect(f.sqls().some((s) => s.startsWith('INSERT') || s.startsWith('UPDATE'))).toBe(false);
+      expect(f.log.filter((l) => l.conn === 2).map((l) => l.sql).at(-1)).toBe('ROLLBACK');
+    }
+  });
+
+  it('an empty list is fine when no active entry of that kind exists, and when that kind is switched off (none)', async () => {
+    const f = fakeEnv(script((sql) => (sql.startsWith('SELECT kind, count(*)::int AS cnt') ? rows([{ kind: 'group', cnt: 2 }]) : undefined)));
+    const off: RkRoleCatalogue = { ...catalogue(['a'], []), read: { roles: true, groups: false } };
+    const r = await runCatalogueRefresh({ trigger: 'cron' }, { env: f.env, client: clientOf(off) });
+    expect(r.status).toBe('success');
+    // Only the kinds that were read take part in the removal judgement and the deactivation.
+    const gone = f.log.find((l) => l.sql.startsWith('SELECT e.kind, e.identifier'))!;
+    expect(gone.params?.[2]).toEqual(['role']);
+    const deactivate = f.log.find((l) => l.sql.startsWith('UPDATE'))!;
+    expect(deactivate.params?.[2]).toEqual(['role']);
+
+    const g = fakeEnv(script());
+    expect((await runCatalogueRefresh({ trigger: 'cron' }, { env: g.env, client: clientOf(catalogue(['a'], [])) })).status).toBe('success');
+  });
+
+  it('leaves a key that exists as a config row out of the upsert (config wins)', async () => {
+    const f = fakeEnv(script((sql) => (sql === "SELECT kind, identifier FROM external_roles WHERE source = 'config'" || sql.includes("WHERE source = 'config'") ? rows([{ kind: 'role', identifier: 'a' }]) : undefined)));
+    const r = await runCatalogueRefresh({ trigger: 'cron' }, { env: f.env, client: clientOf(catalogue(['a', 'b'], ['g'])) });
+    expect(r.status).toBe('success');
+    const insert = f.log.find((l) => l.sql.startsWith('INSERT'))!;
+    expect(insert.params).toEqual([['role', 'group'], ['b', 'g'], ['Navn b', 'Gruppe g']]);
+    // The answer still counts what Rollekatalog sent.
+    expect(r.counts.fetched).toBe(3);
+  });
+
   it.each([
     ['no URL', 'ROLLEKATALOG_URL', '', 'not_configured'],
     ['no READ key', 'ROLLEKATALOG_READ_API_KEY', '', 'not_configured'],

@@ -304,6 +304,18 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
         await close();
       }));
 
+    it('refuses to delete a unit that is a target of a central template (the FK would cascade silently)', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = schemaRunner(c, schema);
+        const owner = (await c.query(`INSERT INTO org_units (name, source) VALUES ('Ejer', 'local') RETURNING uuid`)).rows[0].uuid;
+        const target = (await c.query(`INSERT INTO org_units (name, source) VALUES ('Mål', 'local') RETURNING uuid`)).rows[0].uuid;
+        const tpl = (await c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt) VALUES ($1, 'x', 'p') RETURNING id`, [owner])).rows[0].id;
+        await c.query('INSERT INTO central_template_targets (template_id, org_unit_uuid) VALUES ($1, $2)', [tpl, target]);
+        await expect(deleteOrgUnit(target, 'x', runner)).rejects.toMatchObject({ code: 'has_template_targets' });
+        expect((await c.query('SELECT count(*)::int AS n FROM central_template_targets')).rows[0].n).toBe(1);
+        await close();
+      }));
+
     it('CONCURRENCY: a grant scoped to a unit and the deletion of that unit never lose the assignment silently', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = schemaRunner(c, schema);

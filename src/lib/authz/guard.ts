@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { withHandler } from '@/lib/api-handler';
 import { recordAuthzDenied } from '@/lib/audit/authz-denied';
+import type { HeaderSource } from '@/lib/audit/request-context';
 import { accessSource, localAdminEnabled, requireRoleToLogin } from './config';
 import { readOnlyMessage } from './access-errors';
 import { hasCapability } from './permissions';
@@ -43,9 +44,11 @@ export function requireCapability(
   principal: Principal,
   capability: Capability,
   entity?: { type: string; id: string },
+  req?: HeaderSource,
 ): NextResponse | null {
   if (hasCapability(principal, capability)) return null;
   recordAuthzDenied({
+    req,
     actorUserId: principal.userId,
     required: capability,
     reason: principal.disabled ? 'disabled' : 'missing_capability',
@@ -69,9 +72,11 @@ export function notFoundOrForbidden(
   capability: Capability,
   inScope: boolean,
   entity?: { type: string; id: string },
+  req?: HeaderSource,
 ): NextResponse | null {
   if (!inScope) {
     recordAuthzDenied({
+      req,
       actorUserId: principal.userId,
       required: capability,
       reason: 'out_of_scope',
@@ -80,7 +85,7 @@ export function notFoundOrForbidden(
     });
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
-  return requireCapability(principal, capability, entity);
+  return requireCapability(principal, capability, entity, req);
 }
 
 /**
@@ -107,15 +112,15 @@ export function withAuthz<P = Record<string, never>>(
     // routes that only need "a signed-in user" (a null capability).
     const refusal = loginRefusal(principal);
     if (refusal) {
-      recordAuthzDenied({ actorUserId: principal.userId, required: capability ?? 'login', reason: refusal });
+      recordAuthzDenied({ actorUserId: principal.userId, required: capability ?? 'login', reason: refusal, req });
       return FORBIDDEN();
     }
     if (capability) {
-      const denied = requireCapability(principal, capability);
+      const denied = requireCapability(principal, capability, undefined, req);
       if (denied) return denied;
     }
     if (options.requireLocalSource && !localAdminEnabled()) {
-      recordAuthzDenied({ actorUserId: principal.userId, required: capability ?? 'login', reason: 'wrong_source' });
+      recordAuthzDenied({ actorUserId: principal.userId, required: capability ?? 'login', reason: 'wrong_source', req });
       const source = accessSource();
       return NextResponse.json(
         { error: source === 'rollekatalog' ? 'Roller styres af Rollekatalog' : readOnlyMessage(source) },

@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSkabelon, updateSkabelon, deleteSkabelon, recordSkabelonVersion } from '@/lib/skabeloner/server';
+import { getSkabelon, updateSkabelonWithHistory, deleteSkabelon } from '@/lib/skabeloner/server';
 import { parseLocalChangeNote } from '@/lib/skabeloner/change-note';
 import { withHandler } from '@/lib/api-handler';
 import { recordServerEvent } from '@/lib/audit/record';
-import type { Skabelon } from '@/types';
 import { requireAppAccess } from '@/lib/authz/app-access';
 import { UUID_RE } from '@/lib/audit/record';
 
@@ -11,21 +10,6 @@ type Ctx = { params: Promise<{ id: string }> };
 
 // The id in the URL is not verified until the template is found: only a well-formed UUID becomes an entity.
 const entityOf = (id: string) => (UUID_RE.test(id) ? { entityId: id } : {});
-
-const TRACKED_FIELDS = [
-  'name',
-  'description',
-  'prompt',
-  'includeDeltagere',
-  'includeBeslutningspunkter',
-  'includeDagsorden',
-  'includeDato',
-] as const;
-
-// Field NAMES only: the audit log must never carry the values (names, prompt text).
-function changedFields(prev: Skabelon, next: Skabelon) {
-  return TRACKED_FIELDS.filter((f) => prev[f] !== next[f]);
-}
 
 export const GET = withHandler('skabeloner/[id] GET', async (_req: NextRequest, { params }: Ctx) => {
   const access = await requireAppAccess();
@@ -52,20 +36,24 @@ export const PUT = withHandler('skabeloner/[id] PUT', async (req: NextRequest, {
   if (!parsedNote.ok) return NextResponse.json({ error: parsedNote.error, code: 'change_note_invalid' }, { status: 400 });
   const changeNote = parsedNote.note;
 
-  const prev = await getSkabelon(session.user.id, id);
-  if (!prev) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
-
-  let skabelon;
+  // The update and its changelog entry are one transaction (server.ts); the audit event below is
+  // recorded whatever happened to the changelog write, which cannot fail the request.
+  let result;
   try {
-    skabelon = await updateSkabelon(session.user.id, id, {
-      name,
-      description: body.description,
-      prompt: body.prompt,
-      includeDeltagere: body.includeDeltagere,
-      includeBeslutningspunkter: body.includeBeslutningspunkter,
-      includeDagsorden: body.includeDagsorden,
-      includeDato: body.includeDato,
-    });
+    result = await updateSkabelonWithHistory(
+      session.user.id,
+      id,
+      {
+        name,
+        description: body.description,
+        prompt: body.prompt,
+        includeDeltagere: body.includeDeltagere,
+        includeBeslutningspunkter: body.includeBeslutningspunkter,
+        includeDagsorden: body.includeDagsorden,
+        includeDato: body.includeDato,
+      },
+      changeNote,
+    );
   } catch (err) {
     await recordServerEvent(req, {
       type: 'template.update',
@@ -76,10 +64,9 @@ export const PUT = withHandler('skabeloner/[id] PUT', async (req: NextRequest, {
     });
     throw err;
   }
-  if (!skabelon) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
-  const changed = changedFields(prev, skabelon);
+  if (!result) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
+  const { skabelon, changedFields: changed } = result;
   if (changed.length > 0) {
-    await recordSkabelonVersion(session.user.id, skabelon, changed, changeNote);
     await recordServerEvent(req, {
       type: 'template.update',
       actorUserId: session.user.id,

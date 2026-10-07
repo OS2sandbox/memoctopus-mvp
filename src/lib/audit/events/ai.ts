@@ -17,16 +17,19 @@ const meetingRef = {
 };
 
 export const aiEvents = {
-  // Audio received by the server for transcription. `channel`: batch = recording
-  // transcribed in batches, upload = a file upload, bot = the bot service handing in
-  // a Teams recording (source 'system', authenticated by BOT_INTERNAL_SECRET).
+  // Audio received by the server for transcription or speaker detection. `channel`:
+  // batch = a recording transcribed in batches, upload = a file upload, bot = the bot
+  // service handing in a Teams recording (source 'system', authenticated by
+  // BOT_INTERNAL_SECRET), live = the audio of a live recording sent utterance by
+  // utterance (logged at most once per person and meeting per 5 minutes, with the
+  // size of that one utterance), diarize = the whole recording sent for speaker detection.
   'audio.upload': defineEvent({
     sources: ['server', 'system'],
     entityType: 'meeting',
     entityIdRequired: false,
     details: z
       .object({
-        channel: z.enum(['batch', 'upload', 'bot']),
+        channel: z.enum(['batch', 'upload', 'bot', 'live', 'diarize']),
         bytes: count(),
         durationMs: amount().optional(),
         outcomeCode: outcomeCode(),

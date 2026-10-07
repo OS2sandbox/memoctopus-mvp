@@ -1056,6 +1056,20 @@ describe('RecordingScreen — recorder.onerror surfaces to the UI (HIGH)', () =>
     });
   });
 
+  it('reports a recording stop when the recorder fails on its own, and only once', async () => {
+    mockReport.mockClear();
+    renderScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
+    });
+    await waitFor(() => screen.getByRole('button', { name: 'Pause' }));
+    await act(async () => {
+      latestRecorder?.onerror?.({ type: 'error' });
+    });
+    latestRecorder?.onerror?.({ type: 'error' });
+    expect(mockReport.mock.calls.filter((c) => c[0] === 'meeting.recording_stop')).toEqual([['meeting.recording_stop', 'meeting-abc']]);
+  });
+
   it('logs the error via console.error when recorder fires onerror', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     renderScreen();

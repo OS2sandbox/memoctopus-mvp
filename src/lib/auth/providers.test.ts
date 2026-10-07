@@ -6,6 +6,7 @@ import { resetAuthConfigCache } from './config-file';
 import {
   authRolesConfig,
   emailPasswordEnabled,
+  emailPasswordSignUpDisabled,
   enabledAuthProviders,
   microsoftConfig,
   microsoftTenantId,
@@ -40,7 +41,7 @@ beforeEach(() => {
   // ambient .env can't leak in and make assertions pass for the wrong reason.
   const clean = { ...ENV } as Record<string, string | undefined>;
   for (const key of Object.keys(clean)) {
-    if (/^(OIDC_|AUTHENTIK_|MICROSOFT_|EMAIL_PASSWORD_|NEXT_PUBLIC_|AUTH_CONFIG_FILE)/.test(key)) delete clean[key];
+    if (/^(OIDC_|AUTHENTIK_|MICROSOFT_|EMAIL_PASSWORD_|NEXT_PUBLIC_|AUTH_CONFIG_FILE|ACCESS_SOURCE|BETTER_AUTH_URL)/.test(key)) delete clean[key];
   }
   process.env = clean as NodeJS.ProcessEnv;
   resetAuthConfigCache();
@@ -49,6 +50,47 @@ beforeEach(() => {
 afterEach(() => {
   process.env = ENV;
   vi.restoreAllMocks();
+});
+
+describe('claims mode is not open', () => {
+  beforeEach(() => {
+    process.env.ACCESS_SOURCE = 'claims';
+  });
+
+  it('email/password is OFF unless EMAIL_PASSWORD_ENABLED is explicitly "true"', () => {
+    expect(emailPasswordEnabled()).toBe(false);
+    for (const v of ['', 'yes', '1', 'false', 'TRUE ']) {
+      process.env.EMAIL_PASSWORD_ENABLED = v;
+      expect(emailPasswordEnabled(), v).toBe(v.trim().toLowerCase() === 'true');
+    }
+    delete process.env.EMAIL_PASSWORD_ENABLED;
+    process.env.NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED = 'true';
+    expect(emailPasswordEnabled()).toBe(true);
+  });
+
+  it('sign-up stays closed in claims mode, even with passwords enabled; other modes are unchanged', () => {
+    process.env.EMAIL_PASSWORD_ENABLED = 'true';
+    expect(emailPasswordSignUpDisabled()).toBe(true);
+    process.env.ACCESS_SOURCE = 'local';
+    expect(emailPasswordSignUpDisabled()).toBe(false);
+    process.env.ACCESS_SOURCE = 'rollekatalog';
+    expect(emailPasswordSignUpDisabled()).toBe(false);
+    delete process.env.EMAIL_PASSWORD_ENABLED;
+    expect(emailPasswordEnabled()).toBe(true);
+  });
+
+  it('the legacy Microsoft variables need a single-tenant GUID in claims mode (no common default)', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    Object.assign(process.env, MICROSOFT);
+    expect(microsoftConfig()).toBeNull();
+    process.env.MICROSOFT_TENANT_ID = 'organizations';
+    expect(microsoftConfig()).toBeNull();
+    process.env.MICROSOFT_TENANT_ID = '11111111-2222-3333-4444-555555555555';
+    expect(microsoftConfig()?.tenantId).toBe('11111111-2222-3333-4444-555555555555');
+    process.env.ACCESS_SOURCE = 'local';
+    delete process.env.MICROSOFT_TENANT_ID;
+    expect(microsoftConfig()?.tenantId).toBe('common');
+  });
 });
 
 describe('emailPasswordEnabled', () => {
@@ -276,6 +318,7 @@ describe('providers from AUTH_CONFIG_FILE', () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(path.join(tmpdir(), 'providers-'));
+    process.env.BETTER_AUTH_URL = 'https://referat.example';
     spyOnWarn();
   });
   afterEach(() => {
@@ -290,10 +333,11 @@ describe('providers from AUTH_CONFIG_FILE', () => {
   }
   const FKA = { type: 'oidc', id: 'fka', label: 'FKA Log ind', clientId: 'a', clientSecret: 'b', discoveryUrl: 'https://fka.example/.well-known/openid-configuration' };
   const HJORRING = { type: 'oidc', id: 'authentik', clientId: 'c', clientSecret: 'd', discoveryUrl: 'https://ak.example/o/app/.well-known/openid-configuration', scopes: ['openid', 'profile', 'email', 'groups'], pkce: false };
+  const TENANT = '11111111-2222-3333-4444-555555555555';
   const SAML = { type: 'saml', id: 'os2faktor', label: 'OS2faktor', entryPoint: 'https://idp.example/sso', idpEntityId: 'https://idp.example', cert: 'MIIC' };
 
   it('lists several OIDC providers, then SAML, with their labels (and no secret)', () => {
-    config({ providers: [FKA, HJORRING, SAML, { type: 'entra', clientId: 'e', clientSecret: 'f', tenantId: 't-1', label: 'Entra' }] });
+    config({ providers: [FKA, HJORRING, SAML, { type: 'entra', clientId: 'e', clientSecret: 'f', tenantId: TENANT, label: 'Entra' }] });
     expect(enabledAuthProviders()).toEqual([
       { kind: 'social', id: 'microsoft', label: 'Entra' },
       { kind: 'oauth2', id: 'fka', label: 'FKA Log ind' },
@@ -302,6 +346,12 @@ describe('providers from AUTH_CONFIG_FILE', () => {
     ]);
     const serialized = JSON.stringify(enabledAuthProviders());
     for (const secret of ['"b"', '"d"', '"f"', 'MIIC']) expect(serialized).not.toContain(secret);
+  });
+
+  it('does not offer SAML providers the plugin skips (no BETTER_AUTH_URL means no ACS URL)', () => {
+    config({ providers: [FKA, SAML] });
+    delete process.env.BETTER_AUTH_URL;
+    expect(enabledAuthProviders().map((p) => p.id)).toEqual(['fka']);
   });
 
   it('carries scopes, pkce and endpoints through to the resolved OIDC provider', () => {
@@ -355,15 +405,15 @@ describe('providers from AUTH_CONFIG_FILE', () => {
   it('takes the Entra tenant from the file, else from MICROSOFT_TENANT_ID', () => {
     process.env.MICROSOFT_TENANT_ID = 'env-tenant';
     expect(microsoftTenantId()).toBe('env-tenant');
-    config({ providers: [{ type: 'entra', clientId: 'e', clientSecret: 'f', tenantId: 'file-tenant' }] });
-    expect(microsoftTenantId()).toBe('file-tenant');
-    expect(microsoftConfig()).toMatchObject({ tenantId: 'file-tenant' });
+    config({ providers: [{ type: 'entra', clientId: 'e', clientSecret: 'f', tenantId: TENANT }] });
+    expect(microsoftTenantId()).toBe(TENANT);
+    expect(microsoftConfig()).toMatchObject({ tenantId: TENANT });
     config({ providers: [FKA] });
     expect(microsoftTenantId()).toBeUndefined();
   });
 
   it('passes Entra scopes through', () => {
-    config({ providers: [{ type: 'entra', clientId: 'e', clientSecret: 'f', scopes: ['GroupMember.Read.All'] }] });
-    expect(microsoftConfig()).toEqual({ clientId: 'e', clientSecret: 'f', tenantId: 'common', scopes: ['GroupMember.Read.All'] });
+    config({ providers: [{ type: 'entra', clientId: 'e', clientSecret: 'f', tenantId: TENANT, scopes: ['GroupMember.Read.All'], prompt: 'login' }] });
+    expect(microsoftConfig()).toEqual({ clientId: 'e', clientSecret: 'f', tenantId: TENANT, scopes: ['GroupMember.Read.All'], prompt: 'login' });
   });
 });

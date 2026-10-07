@@ -19,18 +19,22 @@
 //
 // Server-only: must not import @/lib/db (it opens a pg.Pool at module scope).
 import {
-  ENTRA_PROVIDER_ID,
   PROVIDER_ID_RE,
+  RESERVED_PROVIDER_IDS,
   authConfigFilePath,
+  claimsModeConfigured,
+  isGuid,
   loadAuthConfig,
   type CatalogueEntry,
+  type CatalogueState,
   type ClaimListSpec,
   type ClaimMapping,
   type RolesConfig,
   type SamlFileProvider,
 } from './config-file';
+import { authBaseUrl } from './saml';
 
-export type { CatalogueEntry, ClaimListSpec, ClaimMapping, RolesConfig, SamlFileProvider };
+export type { CatalogueEntry, CatalogueState, ClaimListSpec, ClaimMapping, RolesConfig, SamlFileProvider };
 
 /** Crosses the server→client boundary as a prop — must carry no secrets. */
 export type AuthProvider =
@@ -52,6 +56,9 @@ export interface OidcProviderConfig {
   userInfoUrl?: string;
   scopes: string[];
   pkce: boolean;
+  /** `prompt` / `max_age` sent to the IdP (session hygiene on shared workstations). */
+  prompt?: 'login' | 'select_account' | 'consent';
+  maxAge?: number;
   claims: ClaimMapping;
   rolesClaim?: ClaimListSpec;
   groupsClaim?: ClaimListSpec;
@@ -94,9 +101,9 @@ const DEPRECATED_CREDENTIALS = [
 
 // providerId ends up in the callback path (<baseURL>/api/auth/oauth2/callback/
 // <providerId>) and in the accounts.provider_id column, so it must be a safe URL
-// path segment. Reusing a built-in social provider's id would make two different
-// identity sources write the same accounts.provider_id and cross-match.
-const RESERVED_PROVIDER_IDS = [ENTRA_PROVIDER_ID];
+// path segment. Reusing a built-in provider's id ('microsoft', 'credential') or an
+// audit placeholder ('password', 'unknown') would make two identity sources
+// cross-match or look alike: see RESERVED_PROVIDER_IDS in ./config-file.
 
 // `||` not `??`: docker-compose passes unset variables through as `${VAR:-}`,
 // which arrives as an empty string rather than undefined (same hazard documented
@@ -125,8 +132,23 @@ function credentials(prefix: 'OIDC' | 'AUTHENTIK') {
   return clientId && clientSecret && discoveryUrl ? { clientId, clientSecret, discoveryUrl } : null;
 }
 
+/**
+ * E-mail/password sign-in. In claims mode the roles come from the IdP and a password account
+ * holds none, so an open sign-up form would let anybody create a (role-less) account and
+ * reach whatever the baseline allows: it is OFF there unless EMAIL_PASSWORD_ENABLED is
+ * EXPLICITLY "true" (and even then sign-up stays disabled, see emailPasswordSignUpDisabled).
+ */
 export function emailPasswordEnabled(): boolean {
+  if (claimsModeConfigured()) {
+    const explicit = env('EMAIL_PASSWORD_ENABLED') ?? env(DEPRECATED_FLAGS.EMAIL_PASSWORD_ENABLED);
+    return explicit?.toLowerCase() === 'true';
+  }
   return flag('EMAIL_PASSWORD_ENABLED', DEPRECATED_FLAGS.EMAIL_PASSWORD_ENABLED);
+}
+
+/** Claims mode never lets people register a password account (existing ones, if any, can still sign in). */
+export function emailPasswordSignUpDisabled(): boolean {
+  return claimsModeConfigured();
 }
 
 /**
@@ -144,6 +166,7 @@ export function microsoftConfig(): {
   clientSecret: string;
   tenantId: string;
   scopes?: string[];
+  prompt?: 'login' | 'select_account' | 'consent';
 } | null {
   const file = loadAuthConfig();
   if (file.configured) {
@@ -154,6 +177,7 @@ export function microsoftConfig(): {
           clientSecret: entra.clientSecret,
           tenantId: entra.tenantId,
           ...(entra.scopes ? { scopes: entra.scopes } : {}),
+          ...(entra.prompt ? { prompt: entra.prompt } : {}),
         }
       : null;
   }
@@ -163,7 +187,14 @@ export function microsoftConfig(): {
   if (!clientId || !clientSecret) return null;
   if (!flag('MICROSOFT_ENABLED')) return null;
 
-  return { clientId, clientSecret, tenantId: env('MICROSOFT_TENANT_ID') || 'common' };
+  // ACCESS_SOURCE=claims: a multi-tenant authority would let any tenant's people (and their
+  // self-assigned roles) in. The legacy variables carry no role mapping, but keep the rule uniform.
+  const tenantId = env('MICROSOFT_TENANT_ID') || 'common';
+  if (claimsModeConfigured() && !isGuid(tenantId)) {
+    console.warn('[auth] Ignoring Microsoft login: ACCESS_SOURCE=claims needs MICROSOFT_TENANT_ID to be one tenant id (a GUID), not common / organizations / consumers.');
+    return null;
+  }
+  return { clientId, clientSecret, tenantId };
 }
 
 /** The Entra tenant id as configured (file or MICROSOFT_TENANT_ID), enabled or not; undefined when none. */
@@ -247,6 +278,8 @@ export function oidcProviders(): OidcProviderConfig[] {
               userInfoUrl: p.userInfoUrl,
               scopes: p.scopes,
               pkce: p.pkce,
+              ...(p.prompt ? { prompt: p.prompt } : {}),
+              ...(p.maxAge !== undefined ? { maxAge: p.maxAge } : {}),
               claims: p.claims ?? {},
               rolesClaim: p.rolesClaim,
               groupsClaim: p.groupsClaim,
@@ -287,6 +320,11 @@ export function authConfigCatalogue(): CatalogueEntry[] {
   return loadAuthConfig().catalogue;
 }
 
+/** 'absent' (no section / no file), 'invalid' (there is one but it is unusable: never act on it) or 'ok'. */
+export function authConfigCatalogueState(): CatalogueState {
+  return loadAuthConfig().catalogueState;
+}
+
 export function enabledAuthProviders(): AuthProvider[] {
   const providers: AuthProvider[] = [];
 
@@ -300,7 +338,9 @@ export function enabledAuthProviders(): AuthProvider[] {
     providers.push({ kind: 'oauth2', id: oidc.providerId, label: oidc.providerName });
   }
 
-  for (const saml of samlProviders()) {
+  // The SAML plugin skips every provider while BETTER_AUTH_URL is unset (it has no ACS URL to give
+  // the IdP); a button for one would lead to a 404, so the sign-in page must not offer it.
+  for (const saml of authBaseUrl() ? samlProviders() : []) {
     providers.push({ kind: 'sso', id: saml.id, label: saml.label ?? defaultProviderLabel(saml.id) });
   }
 

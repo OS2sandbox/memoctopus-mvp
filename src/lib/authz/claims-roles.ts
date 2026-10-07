@@ -6,9 +6,10 @@
 // REPLACED by what the claims say now (so a removed role drops), and so are their
 // user_external_roles. A claim that cannot be parsed keeps nothing (the rows are
 // deleted): fail closed. Unknown values are ignored; only values listed in the
-// `roles` mapping can grant a role and only values in the catalogue (external_roles)
-// are ever stored. Claim values are never logged and never put in the audit log.
-import { authRolesConfig, providerClaimSpecs, type ClaimListSpec, type RolesConfig } from '@/lib/auth/providers';
+// `roles` mapping (the provider's own `byProvider` maps, or the global ones when the file
+// has a single provider) can grant a role, and only values in the catalogue (external_roles)
+// that belong to the login's provider are ever stored. Claim values are never logged and never put in the audit log.
+import { authConfigCatalogue, authRolesConfig, providerClaimSpecs, type ClaimListSpec, type RolesConfig } from '@/lib/auth/providers';
 import { accessSource } from './config';
 import { defaultRunner, errorLabel, type SqlQueryable, type SqlRunner } from './pg-runner';
 import type { RoleKey } from './types';
@@ -103,8 +104,25 @@ export function claimSubset(
   return out;
 }
 
+type RoleMap = ReadonlyMap<string, { role: RoleKey }>;
+
+/**
+ * The role maps that apply to one provider: its own `byProvider` entry, else the global maps, but
+ * only when the file has exactly one provider. With several providers a provider without a map of
+ * its own grants nothing (one IdP's role names must not mean something at another).
+ */
+export function roleMapsFor(
+  config: RolesConfig,
+  providerId: string,
+): { appRoleMap: RoleMap; groupRoleMap: RoleMap } | null {
+  if (config.state !== 'ok') return null;
+  const own = config.byProvider?.get(providerId);
+  if (own) return own;
+  return (config.providerCount ?? 1) === 1 ? config : null;
+}
+
 /** Roles that the mapping grants for these claim values. Unknown values grant nothing. */
-export function mapClaimRoles(values: readonly string[], map: ReadonlyMap<string, { role: RoleKey }>): RoleKey[] {
+export function mapClaimRoles(values: readonly string[], map: RoleMap): RoleKey[] {
   const roles = new Set<RoleKey>();
   for (const v of values) {
     const hit = map.get(v);
@@ -129,6 +147,7 @@ export function decideFromClaims(
   providerId: string,
   rolesConfig: RolesConfig = authRolesConfig(),
   specs = providerClaimSpecs(providerId),
+  catalogue: ReadonlyArray<{ kind: 'role' | 'group'; identifier: string; providers?: readonly string[] }> = authConfigCatalogue(),
 ): ClaimsDecision {
   const none: ClaimsDecision = { roles: [], external: [] };
   if (!claims || !specs) return none;
@@ -139,14 +158,24 @@ export function decideFromClaims(
   if (roleValues.status === 'invalid' || groupValues.status === 'invalid') return none;
 
   const roles = new Set<RoleKey>();
-  if (rolesConfig.state === 'ok') {
-    if (roleValues.status === 'ok') mapClaimRoles(roleValues.values, rolesConfig.appRoleMap).forEach((r) => roles.add(r));
-    if (groupValues.status === 'ok') mapClaimRoles(groupValues.values, rolesConfig.groupRoleMap).forEach((r) => roles.add(r));
+  const maps = roleMapsFor(rolesConfig, providerId);
+  if (maps) {
+    if (roleValues.status === 'ok') mapClaimRoles(roleValues.values, maps.appRoleMap).forEach((r) => roles.add(r));
+    if (groupValues.status === 'ok') mapClaimRoles(groupValues.values, maps.groupRoleMap).forEach((r) => roles.add(r));
   }
 
+  // A catalogue entry that names providers only matches values that arrive through one of them.
+  const forbidden = new Set(
+    catalogue
+      .filter((e) => e.providers && !e.providers.includes(providerId))
+      .map((e) => `${e.kind}\u0000${e.identifier}`),
+  );
   const external: ClaimsDecision['external'] = [];
-  if (roleValues.status === 'ok') roleValues.values.forEach((identifier) => external.push({ kind: 'role', identifier }));
-  if (groupValues.status === 'ok') groupValues.values.forEach((identifier) => external.push({ kind: 'group', identifier }));
+  const add = (kind: 'role' | 'group', identifier: string) => {
+    if (!forbidden.has(`${kind}\u0000${identifier}`)) external.push({ kind, identifier });
+  };
+  if (roleValues.status === 'ok') roleValues.values.forEach((identifier) => add('role', identifier));
+  if (groupValues.status === 'ok') groupValues.values.forEach((identifier) => add('group', identifier));
   return { roles: [...roles], external };
 }
 

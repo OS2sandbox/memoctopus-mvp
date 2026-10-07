@@ -13,18 +13,19 @@ import {
   runSamlLoginHooks,
   type AuthHookContext,
 } from '@/lib/authz/login-hook';
-import { accessSource, roleClaimsMaxSeconds } from '@/lib/authz/config';
+import { accessSource, requireRoleToLogin, roleClaimsMaxSeconds } from '@/lib/authz/config';
 import { users, sessions, accounts, verifications } from '@/lib/db/schema';
 import {
   authRolesConfig,
   emailPasswordEnabled,
+  emailPasswordSignUpDisabled,
   microsoftConfig,
   oidcProviders,
   samlProviders,
   warnDeprecatedAuthEnv,
 } from './providers';
 import { authIpHeaders } from './ip-headers';
-import { genericOAuthConfigFor } from './oidc-config';
+import { entraSocialConfig, genericOAuthConfigFor } from './oidc-config';
 import { SSO_DISABLED_PATHS, ssoPluginOptions } from './saml';
 import { samlBeforeHook } from './saml-guard';
 
@@ -42,34 +43,54 @@ const ipAddressHeaders = authIpHeaders();
 
 warnDeprecatedAuthEnv();
 
-// A deployment that reads roles from claims but has no usable role mapping would silently give
-// everybody the baseline: say so once at start. Content-free (no claim names or values).
-function warnClaimsMode(): void {
+// Start-up warnings about risky combinations. All content-free (no claim names, values or secrets), once.
+function warnRiskyConfig(): void {
+  let mode: ReturnType<typeof accessSource>;
   try {
-    if (accessSource() !== 'claims') return;
-    const roles = authRolesConfig();
-    if (roles.state !== 'ok') {
-      console.warn(
-        `[auth] ACCESS_SOURCE=claims but the config file has ${roles.state === 'unset' ? 'no' : 'an invalid'} "roles" section: nobody will get a role from claims.`,
-      );
-    }
+    mode = accessSource();
   } catch {
     // An invalid ACCESS_SOURCE is reported (503) by the request guards; startup stays alive.
+    return;
+  }
+  if (mode === 'local' && process.env.NODE_ENV === 'production') {
+    console.warn(
+      '[auth] ACCESS_SOURCE=local in production: the in-app role admin and the first-administrator bootstrap are active. ' +
+        'Municipal installations should use claims or rollekatalog (local mode is for development and demos).',
+    );
+  }
+  const roles = authRolesConfig();
+  if (mode !== 'claims' && roles.state !== 'unset') {
+    console.warn(`[auth] The config file has a "roles" section but ACCESS_SOURCE is not claims: it is ignored.`);
+  }
+  if (mode !== 'claims') return;
+  // A deployment that reads roles from claims but has no usable role mapping would silently give
+  // everybody the baseline: say so once at start.
+  if (roles.state !== 'ok') {
+    console.warn(
+      `[auth] ACCESS_SOURCE=claims but the config file has ${roles.state === 'unset' ? 'no' : 'an invalid'} "roles" section: nobody will get a role from claims.`,
+    );
+  }
+  if (!requireRoleToLogin()) {
+    console.warn('[auth] ACCESS_SOURCE=claims with REQUIRE_ROLE_TO_LOGIN=false: a person the IdP maps to no role still gets the baseline role.');
+  }
+  if (emailPasswordEnabled()) {
+    console.warn('[auth] ACCESS_SOURCE=claims with EMAIL_PASSWORD_ENABLED=true: existing password accounts can sign in (they hold no role); sign-up is closed.');
   }
 }
-warnClaimsMode();
+warnRiskyConfig();
 
 // In claims mode the roles of a login are a snapshot that expires (ROLE_CLAIMS_MAX_SECONDS), so
 // a session must not outlive it: it then ends and the next sign-in refreshes the roles. updateAge
-// equal to expiresIn means the session is never silently extended.
-function claimsSession(): { session: { expiresIn: number; updateAge: number } } | Record<string, never> {
+// equal to expiresIn means the session is never silently extended (disableSessionRefresh makes that explicit:
+// better-auth's own refresh on activity would otherwise push the expiry past the role snapshot).
+function claimsSession(): { session: { expiresIn: number; updateAge: number; disableSessionRefresh: true } } | Record<string, never> {
   try {
     if (accessSource() !== 'claims') return {};
   } catch {
     return {};
   }
   const seconds = roleClaimsMaxSeconds();
-  return { session: { expiresIn: seconds, updateAge: seconds } };
+  return { session: { expiresIn: seconds, updateAge: seconds, disableSessionRefresh: true } };
 }
 
 // ─── Real better-auth instance ────────────────────────────────────────────────
@@ -108,6 +129,8 @@ export const auth = betterAuth({
   }),
   emailAndPassword: {
     enabled: emailPasswordEnabled(),
+    // Claims mode: password accounts hold no role, and nobody may open new ones.
+    ...(emailPasswordSignUpDisabled() ? { disableSignUp: true } : {}),
   },
   ...claimsSession(),
   // The sso plugin can also manage identity providers in a database table; this app configures
@@ -162,16 +185,9 @@ export const auth = betterAuth({
       await auditAuthFailure(ctx as unknown as AuthHookContext);
     }),
   },
-  socialProviders: microsoft
-    ? {
-        microsoft: {
-          clientId: microsoft.clientId,
-          clientSecret: microsoft.clientSecret,
-          tenantId: microsoft.tenantId,
-          ...(microsoft.scopes ? { scope: microsoft.scopes } : {}),
-        },
-      }
-    : {},
+  // Entra: explicit scopes (no offline_access, no Graph), one tenant, audience / issuer / tenant checked
+  // before the login is built (see entraSocialConfig).
+  socialProviders: microsoft ? { microsoft: entraSocialConfig(microsoft) } : {},
   // No `account.accountLinking` override on purpose. Adding providers to
   // `trustedProviders` would drop better-auth's requirement that the *incoming*
   // IdP asserted email_verified (see dist/oauth2/link-account.mjs) — an attacker

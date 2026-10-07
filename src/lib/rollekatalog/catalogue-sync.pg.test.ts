@@ -116,7 +116,7 @@ describe.skipIf(!hasPg)('role catalogue refresh (real Postgres)', () => {
       expect((await catalogueRows(c)).find((x) => x.identifier === 'leder')).toMatchObject({ active: false });
     }));
 
-  it("never touches another source's rows: a config entry with the same key wins and a config-only entry stays active", () =>
+  it("never touches another source's rows: a key that exists as a config row is left out of the refresh (config wins) and a config-only entry stays active", () =>
     withFreshSchema(async (c, schema) => {
       await c.query(`INSERT INTO external_roles (kind, identifier, name, source) VALUES ('role', 'leder', 'Min leder', 'config'), ('group', 'kun-config', 'Kun config', 'config')`);
       const r = await refresh(schema);
@@ -135,6 +135,23 @@ describe.skipIf(!hasPg)('role catalogue refresh (real Postgres)', () => {
       const r = await refresh(schema, { force: true });
       expect(r).toMatchObject({ status: 'aborted', errorCode: 'empty_response' });
       expect(await catalogueRows(c)).toEqual(before);
+    }));
+
+  it('an empty list of ONE kind aborts while active entries of that kind exist, even when forced; a kind switched off with none is left alone', () =>
+    withFreshSchema(async (c, schema) => {
+      await refresh(schema);
+      const before = await catalogueRows(c);
+      mock.setData({ roleGroups: [] });
+      for (const force of [false, true]) {
+        expect(await refresh(schema, { force })).toMatchObject({ status: 'aborted', errorCode: 'empty_response' });
+      }
+      expect(await catalogueRows(c)).toEqual(before);
+
+      // With the group list switched off, only roles are read and the groups stay active.
+      vi.stubEnv('ROLLEKATALOG_ROLEGROUPS_PATH', 'none');
+      const r = await refresh(schema);
+      expect(r).toMatchObject({ status: 'success', counts: { fetched: 4, deactivated: 0 } });
+      expect((await catalogueRows(c)).filter((x) => x.kind === 'group').every((x) => x.active)).toBe(true);
     }));
 
   it('too many removals abort unless forced; the forced run deactivates them', () =>

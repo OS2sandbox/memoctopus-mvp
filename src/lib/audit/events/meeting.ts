@@ -44,6 +44,10 @@ export const meetingEvents = {
   // Edits. `minutes_save` is coalesced in the browser (one event per window), so it says
   // "the minutes were edited", not how many keystrokes.
   'meeting.minutes_save': defineEvent({ ...base, details: noDetails() }),
+  // The transcript text was edited (autosave, coalesced like minutes_save). No details.
+  'meeting.transcript_edit': defineEvent({ ...base, details: noDetails() }),
+  // The meeting's title or recording date was changed. Says which field, never the value.
+  'meeting.metadata_edit': defineEvent({ ...base, details: z.object({ field: z.enum(['title', 'recorded_at']) }).strict() }),
   // `action`: view = an earlier version was opened, snapshot = "Gem version", generate =
   // a regenerated minutes version, activate = another version became the active one
   // (the nearest thing to a restore). versionNumber is the label of the version

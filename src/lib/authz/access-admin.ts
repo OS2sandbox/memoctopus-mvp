@@ -546,6 +546,19 @@ export async function deleteOrgUnit(
       );
     }
 
+    // The targets FK CASCADES: deleting the unit would silently drop it from every central template that is
+    // aimed at it, with no version row recording the change. Retarget (or archive) the template first.
+    const targeted = await tx.query(
+      'SELECT 1 FROM public.central_template_targets WHERE org_unit_uuid = $1::uuid LIMIT 1',
+      [id],
+    );
+    if (targeted.rows.length > 0) {
+      throw new ConflictError(
+        'Enheden er målgruppe for centrale skabeloner. Fjern den fra skabelonernes målgrupper først.',
+        'has_template_targets',
+      );
+    }
+
     await tx.query('DELETE FROM public.org_units WHERE uuid = $1::uuid', [id]);
   });
 }

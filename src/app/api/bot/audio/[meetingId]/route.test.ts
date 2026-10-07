@@ -166,13 +166,15 @@ describe('audit', () => {
     mockAssertOwner.mockResolvedValueOnce(false);
     const res = await GET(makeRequest(MEETING), makeParams(MEETING));
     expect(res.status).toBe(404);
-    expect(recordAuthzDenied).toHaveBeenCalledWith({
-      actorUserId: 'u1',
-      required: 'bot.meeting_owner',
-      reason: 'not_owner',
-      entityType: 'meeting',
-      entityId: MEETING,
-    });
+    expect(recordAuthzDenied).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: 'u1',
+        required: 'bot.meeting_owner',
+        reason: 'not_owner',
+        entityType: 'meeting',
+        entityId: MEETING,
+      }),
+    );
     expect(deletePendingAudio).not.toHaveBeenCalled();
   });
 });

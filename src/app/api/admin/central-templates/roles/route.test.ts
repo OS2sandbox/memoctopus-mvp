@@ -32,8 +32,8 @@ const globalAdmin = makePrincipal({
 });
 
 const ENTRIES = [
-  { kind: 'role' as const, identifier: 'sagsbehandler', name: 'Sagsbehandler', source: 'rollekatalog' as const, active: true },
-  { kind: 'group' as const, identifier: 'social', name: 'Socialforvaltningen', source: 'config' as const, active: false },
+  { kind: 'role' as const, identifier: 'sagsbehandler', name: 'Sagsbehandler', source: 'rollekatalog' as const, active: true, holders: 3 },
+  { kind: 'group' as const, identifier: 'social', name: 'Socialforvaltningen', source: 'config' as const, active: false, holders: 0 },
 ];
 
 beforeEach(() => {
@@ -87,6 +87,6 @@ describe('GET /api/admin/central-templates/roles (template.manage)', () => {
       lastRefreshedAt: null,
     });
     const body = await (await get()).json();
-    expect(Object.keys(body.roles[0]).sort()).toEqual(['active', 'identifier', 'kind', 'name', 'source']);
+    expect(Object.keys(body.roles[0]).sort()).toEqual(['active', 'holders', 'identifier', 'kind', 'name', 'source']);
   });
 });

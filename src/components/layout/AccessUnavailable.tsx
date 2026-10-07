@@ -1,6 +1,7 @@
 'use client';
 
 import { Button } from '@/components/ui/button';
+import { flushAuditNow } from '@/lib/audit/client';
 import { signOut } from '@/lib/auth-client';
 
 // Shown instead of the app shell when the access check itself failed (e.g. the
@@ -10,7 +11,9 @@ export function AccessUnavailable({ embedded = false }: { embedded?: boolean } =
   const Root = embedded ? 'div' : 'main';
   const retry = () => window.location.reload();
   const leave = () => {
-    signOut()
+    // Deliver queued audit events first (at most 2 s): after sign-out they wait for the next login.
+    flushAuditNow()
+      .then(() => signOut())
       .catch((err) => console.error('signOut failed', err))
       .finally(() => window.location.assign('/'));
   };

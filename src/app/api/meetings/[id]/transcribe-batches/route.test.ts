@@ -187,6 +187,21 @@ describe('audit', () => {
     expect(JSON.stringify(events())).not.toContain('hemmelig');
   });
 
+  it('says upload for a file the person chose and batch for a recording (a client hint, whitelisted)', async () => {
+    const withChannel = (channel?: string) => {
+      const fd = new FormData();
+      fd.append('audio', new File([Buffer.alloc(5_000, 1)], 'recording', { type: 'audio/webm' }));
+      if (channel) fd.append('channel', channel);
+      return new NextRequest(BASE_URL, { method: 'POST', body: fd });
+    };
+    mockPrepare.mockResolvedValue([FAKE_BATCH]);
+    mockTranscribe.mockResolvedValue({ segments: [], totalBatches: 1, totalSpeechSeconds: 27, failedSeconds: 0 });
+    await readEvents(await POST(withChannel('upload'), UUID_PARAMS));
+    await readEvents(await POST(withChannel(), UUID_PARAMS));
+    await readEvents(await POST(withChannel('live'), UUID_PARAMS));
+    expect(events().map((e) => (e.details as { channel: string }).channel)).toEqual(['upload', 'batch', 'batch']);
+  });
+
   it('records an error outcome with a closed code when transcription fails (the stream still reports the error)', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     mockPrepare.mockRejectedValueOnce(Object.assign(new Error('ffmpeg failed: Jensens barn'), { status: 502 }));

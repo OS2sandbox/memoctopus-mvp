@@ -246,9 +246,24 @@ describe('role catalogue settings', () => {
     '/api/read/userroles#frag',
     '/api/read/user roles',
   ])('falls back to the default for the path %j (nothing outside the read API, no query, no other host)', (bad) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.stubEnv('ROLLEKATALOG_ROLES_PATH', bad);
     vi.stubEnv('ROLLEKATALOG_ROLEGROUPS_PATH', bad);
     expect(rolesPath()).toBe('/api/read/userroles/itsystems');
     expect(roleGroupsPath()).toBe('/api/read/rolegroups');
+    // One content-free line per fallback: the variable's name, never its value.
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(String(warn.mock.calls[0][0])).toContain('ROLLEKATALOG_ROLES_PATH');
+    expect(warn.mock.calls.flat().join(' ')).not.toContain(bad);
+    warn.mockRestore();
+  });
+
+  it('does not warn for the default, an override or none', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubEnv('ROLLEKATALOG_ROLEGROUPS_PATH', 'none');
+    rolesPath();
+    roleGroupsPath();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

@@ -63,6 +63,12 @@ interface Props {
    * owner unit and be made available to roles and groups (the server enforces the same).
    */
   isGlobalManager?: boolean;
+  /** false: the catalogue could not be loaded, so `catalogue` says nothing about a target (its server-side state is shown instead). Default true. */
+  catalogueLoaded?: boolean;
+  /** May role/group targets be changed: a global manager in claims mode. Default: `isGlobalManager`. */
+  canTargetPrincipals?: boolean;
+  /** Why role/group targets cannot be changed: roles only exist in claims mode ('needs_claims'), or the caller is not global. */
+  targetLockedReason?: 'needs_claims' | 'needs_global' | null;
   onSaved: () => void;
 }
 
@@ -73,6 +79,9 @@ export function CentralTemplateEditor({
   units,
   catalogue = [],
   isGlobalManager = false,
+  catalogueLoaded = true,
+  canTargetPrincipals,
+  targetLockedReason = null,
   onSaved,
 }: Props) {
   // The form reports whether it holds unsaved text and whether a save is in flight. While either
@@ -107,6 +116,9 @@ export function CentralTemplateEditor({
             units={units}
             catalogue={catalogue}
             isGlobalManager={isGlobalManager}
+            catalogueLoaded={catalogueLoaded}
+            canTargetPrincipals={canTargetPrincipals ?? isGlobalManager}
+            targetLockedReason={targetLockedReason}
             onClose={() => onOpenChange(false)}
             onRequestClose={requestClose}
             onGuardChange={(dirty, saving) => setGuard((g) => (g.dirty === dirty && g.saving === saving ? g : { dirty, saving }))}
@@ -181,6 +193,9 @@ function EditorForm({
   units,
   catalogue,
   isGlobalManager,
+  catalogueLoaded,
+  canTargetPrincipals,
+  targetLockedReason,
   onClose,
   onRequestClose,
   onGuardChange,
@@ -190,6 +205,9 @@ function EditorForm({
   units: CentralScopeOrgUnit[];
   catalogue: CentralCatalogueEntry[];
   isGlobalManager: boolean;
+  catalogueLoaded: boolean;
+  canTargetPrincipals: boolean;
+  targetLockedReason: 'needs_claims' | 'needs_global' | null;
   /** Closes at once (after a successful save). */
   onClose: () => void;
   /** Closes on the user's request: asks first when there is unsaved text. */
@@ -205,8 +223,10 @@ function EditorForm({
   const [targets, setTargets] = useState<CentralTarget[]>(() => template?.targets ?? []);
   const catalogueByKey = useMemo(() => new Map(catalogue.map((e) => [principalKey(e), e])), [catalogue]);
   // Names and states come from the catalogue when it knows the entry; a target it does not know is flagged.
+  // When the catalogue itself failed to load it knows nothing, so the server's own state of the target
+  // is kept instead of flagging everything "ukendt/inaktiv".
   const asViews = (list: readonly CentralPrincipalTargetView[]) =>
-    list.map((t) => viewAgainstCatalogue(t, catalogueByKey));
+    catalogueLoaded ? list.map((t) => viewAgainstCatalogue(t, catalogueByKey)) : [...list];
   const [principals, setPrincipals] = useState<CentralPrincipalTargetView[]>(() => asViews(template?.principalTargets ?? []));
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
@@ -218,6 +238,8 @@ function EditorForm({
 
   const editing = template !== null;
   const unitName = useMemo(() => unitNameLookup(units), [units]);
+  // The unit picker is hidden without org units (claims mode); then it cannot warn about an empty audience.
+  const unitPickerShown = !(units.length === 0 && (isGlobalManager || template?.ownerOrgUnitUuid === null));
   const ownerOptions = useMemo(() => flattenOrgTree(units), [units]);
 
   const set = <K extends keyof CentralTemplateContent>(key: K, value: CentralTemplateContent[K]) =>
@@ -493,7 +515,7 @@ function EditorForm({
       </fieldset>
 
       {/* Without org units (claims mode) there is nothing to pick; the roles and groups below carry the audience. */}
-      {!(units.length === 0 && (isGlobalManager || template?.ownerOrgUnitUuid === null)) && (
+      {unitPickerShown && (
         <OrgUnitTargetPicker
           units={units}
           ownerUuid={editing ? (base!.ownerOrgUnitUuid ?? '') : owner}
@@ -504,8 +526,16 @@ function EditorForm({
         />
       )}
 
-      {(isGlobalManager || principals.length > 0 || catalogue.length > 0) && (
-        <PrincipalTargetPicker catalogue={catalogue} value={principals} onChange={setPrincipals} canEdit={isGlobalManager} />
+      {(isGlobalManager || canTargetPrincipals || principals.length > 0 || catalogue.length > 0) && (
+        <PrincipalTargetPicker
+          catalogue={catalogue}
+          value={principals}
+          onChange={setPrincipals}
+          canEdit={canTargetPrincipals && catalogueLoaded}
+          lockedReason={targetLockedReason}
+          hasOtherAudience={targets.length > 0}
+          warnWhenEmpty={!unitPickerShown}
+        />
       )}
 
       <ChangeNoteField id="ct-note" value={note} onChange={setNote} />

@@ -43,7 +43,9 @@ import {
   classifyAuthFailure,
   createThrottle,
   emailHmac,
+  LOGIN_FAILURE_GLOBAL_LIMIT_PER_MINUTE,
   LOGIN_FAILURE_LIMIT_PER_MINUTE,
+  resetLoginFailureThrottles,
   runLoginHooks,
   runSamlLoginHooks,
 } from './login-hook';
@@ -73,6 +75,7 @@ beforeEach(() => {
   bootstrap.mockReset().mockResolvedValue({ granted: false, reason: 'no_allowlist' });
   match.mockReset().mockResolvedValue({ status: 'linked' });
   recordEvent.mockReset().mockResolvedValue({ status: 'stored' });
+  resetLoginFailureThrottles();
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
@@ -87,6 +90,30 @@ describe('runLoginHooks', () => {
     expect(capture).toHaveBeenCalledWith('u1');
     expect(bootstrap).toHaveBeenCalledWith('u1');
     expect(match).not.toHaveBeenCalled();
+  });
+
+  it('scrubs the provider tokens from the accounts table after the steps, whatever they did', async () => {
+    const order: string[] = [];
+    capture.mockImplementation(async () => (order.push('capture'), [ID]));
+    accountQuery.mockImplementation(async (sql: string) => (order.push(/^\s*UPDATE public\.accounts/.test(sql) ? 'scrub' : 'other'), { rows: [] }));
+    await runLoginHooks('u1', { path: '/oauth2/callback/:providerId', params: { providerId: 'keycloak' } });
+    expect(order).toEqual(['capture', 'scrub']);
+    const [sql, params] = accountQuery.mock.calls.find((c) => /UPDATE public\.accounts/.test(c[0]))!;
+    expect(sql).toMatch(/id_token = NULL, access_token = NULL, refresh_token = NULL/);
+    expect(sql).toMatch(/access_token_expires_at = NULL, refresh_token_expires_at = NULL/);
+    expect(sql).toContain("provider_id <> 'credential'");
+    expect(params).toEqual(['u1']);
+  });
+
+  it('scrubs even when a step failed or the access source is invalid, and a failing scrub never throws or leaks', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'bogus');
+    capture.mockRejectedValue(new Error('x'));
+    accountQuery.mockRejectedValue(Object.assign(new Error('secret-value'), { code: '08006' }));
+    await expect(runLoginHooks('u1')).resolves.toBeUndefined();
+    expect(accountQuery).toHaveBeenCalledTimes(1);
+    const logged = JSON.stringify((console.error as any).mock.calls);
+    expect(logged).toContain('scrub_tokens');
+    expect(logged).not.toContain('secret-value');
   });
 
   it('matches every captured identity in rollekatalog mode', async () => {
@@ -434,6 +461,65 @@ describe('createThrottle', () => {
     th.allow('a');
     expect(() => th.allow('b')).not.toThrow();
   });
+  it('also reports a long burst while it is going: at 100, 1000 and 10000 dropped, and the pieces add up to the total', () => {
+    const onSummary = vi.fn();
+    const th = createThrottle({ limit: 1, windowMs: 60_000, maxKeys: 5, now: () => 0, onSummary, summaryAt: [100, 1000, 10_000] });
+    th.allow('a'); // stored
+    for (let i = 0; i < 99; i++) th.allow('a');
+    expect(onSummary).not.toHaveBeenCalled();
+    th.allow('a'); // the 100th dropped
+    expect(onSummary).toHaveBeenLastCalledWith('a', 100);
+    for (let i = 0; i < 900; i++) th.allow('a');
+    expect(onSummary).toHaveBeenLastCalledWith('a', 900);
+    for (let i = 0; i < 50; i++) th.allow('a'); // 1050 dropped in all
+    expect(onSummary).toHaveBeenCalledTimes(2);
+    for (let i = 0; i < 8950; i++) th.allow('a'); // 10000 dropped in all
+    // Reports come in pieces that add up: 100 + 900 + 9000 so far.
+    for (let i = 0; i < 9000; i++) th.allow('a');
+    expect(onSummary.mock.calls.map((c) => c[1])).toEqual([100, 900, 9000]);
+  });
+
+  it('the end-of-window report carries only the unreported rest', () => {
+    vi.useFakeTimers();
+    try {
+      const onSummary = vi.fn();
+      const th = createThrottle({ limit: 1, windowMs: 1000, maxKeys: 5, onSummary, summaryAt: [3] });
+      for (let i = 0; i < 6; i++) th.allow('a'); // 5 dropped: 3 reported at once, 2 left
+      expect(onSummary.mock.calls).toEqual([['a', 3]]);
+      vi.advanceTimersByTime(1001);
+      expect(onSummary.mock.calls).toEqual([['a', 3], ['a', 2]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('caps the failures stored across ALL addresses per minute, and counts the excess in a summary row', () => {
+    const ips = Array.from({ length: LOGIN_FAILURE_GLOBAL_LIMIT_PER_MINUTE / 10 + 40 }, (_, i) => `198.51.100.${i}`);
+    let stored = 0;
+    // Ten failures per address: far below the per-IP cap of 60, but together over the global one.
+    for (const ip of ips) for (let i = 0; i < 10; i++) if (allowLoginFailureEvent(ip)) stored++;
+    expect(stored).toBe(LOGIN_FAILURE_GLOBAL_LIMIT_PER_MINUTE);
+    expect(ips.length * 10).toBeGreaterThan(LOGIN_FAILURE_GLOBAL_LIMIT_PER_MINUTE);
+  });
+
+  it('writes a summary row with no address for the global excess, and one per address for the per-IP excess', async () => {
+    vi.useFakeTimers();
+    try {
+      for (let i = 0; i < LOGIN_FAILURE_LIMIT_PER_MINUTE + 5; i++) allowLoginFailureEvent('203.0.113.9');
+      for (let ip = 0; ip < 40; ip++) for (let i = 0; i < 10; i++) allowLoginFailureEvent(`198.51.100.${ip}`);
+      await vi.advanceTimersByTimeAsync(61_000);
+      const summaries = recordEvent.mock.calls.filter((c) => c[0].details?.reason === 'burst_summary');
+      const perIp = summaries.find((c) => c[1].context.ip === '203.0.113.9');
+      expect(perIp?.[0].details.droppedCount).toBe(5);
+      // 60 + 400 attempts got past the per-address caps, 300 were stored in all: the rest was counted (in pieces).
+      const global = summaries.filter((c) => c[1].context.ip === null).reduce((n, c) => n + c[0].details.droppedCount, 0);
+      expect(global).toBe(60 + 400 - LOGIN_FAILURE_GLOBAL_LIMIT_PER_MINUTE);
+      expect(summaries.every((c) => validateEvent(c[0]).ok)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('exposes a shared per-IP budget that buckets a missing ip', () => {
     const results = Array.from({ length: LOGIN_FAILURE_LIMIT_PER_MINUTE + 1 }, () => allowLoginFailureEvent(null));
     expect(results.filter(Boolean)).toHaveLength(LOGIN_FAILURE_LIMIT_PER_MINUTE);
@@ -457,16 +543,49 @@ describe('runLoginHooks in claims mode', () => {
     expect(clearClaims).not.toHaveBeenCalled();
   });
 
-  it('falls back to the id_token stored on the account (Entra, or a missing hand-over)', async () => {
-    accountQuery.mockResolvedValue({ rows: [{ account_id: 'acct-1', id_token: 'tok' }] });
-    decode.mockReturnValue({ roles: ['from-token'] });
-    await runLoginHooks('u1', { path: '/callback/:id', params: { id: 'microsoft' } });
-    expect(decode).toHaveBeenCalledWith('tok');
-    expect(applyClaims).toHaveBeenCalledWith({ userId: 'u1', providerId: 'microsoft', claims: { roles: ['from-token'] } });
+  describe('Microsoft Entra (the built-in provider)', () => {
+    const TENANT = '11111111-2222-3333-4444-555555555555';
+    const ctx = { path: '/callback/:id', params: { id: 'microsoft' } };
+    beforeEach(() => vi.stubEnv('MICROSOFT_TENANT_ID', TENANT));
+
+    it('applies the claims handed over by the Entra mapper when the tenant is the configured one', async () => {
+      accountQuery.mockResolvedValue({ rows: [{ account_id: 'oid-1' }] });
+      stashLoginClaims('microsoft', 'oid-1', { roles: ['admin'], tid: TENANT.toUpperCase() });
+      await runLoginHooks('u1', ctx);
+      expect(applyClaims).toHaveBeenCalledWith({ userId: 'u1', providerId: 'microsoft', claims: { roles: ['admin'], tid: TENANT.toUpperCase() } });
+    });
+
+    it.each([
+      ['another tenant', { roles: ['admin'], tid: '99999999-2222-3333-4444-555555555555' }],
+      ['no tenant claim', { roles: ['admin'] }],
+    ])('clears the roles (and says so, content-free) for a token from %s', async (_n, claims) => {
+      accountQuery.mockResolvedValue({ rows: [{ account_id: 'oid-1' }] });
+      stashLoginClaims('microsoft', 'oid-1', claims);
+      await runLoginHooks('u1', ctx);
+      expect(applyClaims).toHaveBeenCalledWith({ userId: 'u1', providerId: 'microsoft', claims: null });
+      expect(JSON.stringify((console.warn as any).mock.calls)).not.toMatch(/99999999|admin/);
+    });
+
+    it('a multi-tenant configuration has no single tenant, so nobody gets claim roles through it', async () => {
+      vi.stubEnv('MICROSOFT_TENANT_ID', 'common');
+      accountQuery.mockResolvedValue({ rows: [{ account_id: 'oid-1' }] });
+      stashLoginClaims('microsoft', 'oid-1', { roles: ['admin'], tid: TENANT });
+      await runLoginHooks('u1', ctx);
+      // (In claims mode the provider is not even enabled then; either way the roles never reach the apply step.)
+      expect(applyClaims).not.toHaveBeenCalledWith(expect.objectContaining({ claims: expect.objectContaining({ roles: ['admin'] }) }));
+    });
+
+    it('does NOT fall back to an id token stored on the account: a missing hand-over means no roles', async () => {
+      accountQuery.mockResolvedValue({ rows: [{ account_id: 'oid-1', id_token: 'tok' }] });
+      decode.mockReturnValue({ roles: ['from-token'], tid: TENANT });
+      await runLoginHooks('u1', ctx);
+      expect(decode).not.toHaveBeenCalled();
+      expect(applyClaims).toHaveBeenCalledWith({ userId: 'u1', providerId: 'microsoft', claims: null });
+    });
   });
 
-  it('applies "no claims" (which clears) when there is neither a hand-over nor a readable token', async () => {
-    accountQuery.mockResolvedValue({ rows: [{ account_id: 'acct-1', id_token: null }] });
+  it('applies "no claims" (which clears) when there is no hand-over', async () => {
+    accountQuery.mockResolvedValue({ rows: [{ account_id: 'acct-1' }] });
     await runLoginHooks('u1', oidcCtx);
     expect(applyClaims).toHaveBeenCalledWith({ userId: 'u1', providerId: 'keycloak', claims: null });
   });
@@ -517,6 +636,7 @@ describe('SAML', () => {
     );
     vi.stubEnv('AUTH_CONFIG_FILE', file);
     vi.stubEnv('BETTER_AUTH_SECRET', SECRET);
+    vi.stubEnv('BETTER_AUTH_URL', 'https://referat.example');
     resetAuthConfigCache();
   });
   afterEach(() => {
@@ -580,7 +700,25 @@ describe('runSamlLoginHooks', () => {
     expect(captureAttrs).toHaveBeenCalledWith('u1', 'kommune', attrs);
     expect(applyClaims).toHaveBeenCalledWith({ userId: 'u1', providerId: 'kommune', claims: attrs });
     expect(match).not.toHaveBeenCalled();
-    expect(bootstrap).not.toHaveBeenCalled();
+  });
+
+  it('runs the same first-administrator bootstrap as an OIDC login, after the identity capture (it decides by itself whether the identity qualifies)', async () => {
+    const order: string[] = [];
+    captureAttrs.mockImplementation(async () => (order.push('capture'), ID));
+    bootstrap.mockImplementation(async () => (order.push('bootstrap'), { granted: false, reason: 'no_qualifying_identity' }));
+    await runSamlLoginHooks('u1', 'kommune', attrs);
+    expect(order).toEqual(['capture', 'bootstrap']);
+    expect(bootstrap).toHaveBeenCalledWith('u1');
+  });
+
+  it('a failing bootstrap neither throws nor stops the claims step, and logs the label only', async () => {
+    vi.stubEnv('ACCESS_SOURCE', 'claims');
+    bootstrap.mockRejectedValue(new Error('boom ola@k.dk'));
+    await expect(runSamlLoginHooks('u1', 'kommune', attrs)).resolves.toBeUndefined();
+    expect(applyClaims).toHaveBeenCalled();
+    const logged = JSON.stringify((console.error as any).mock.calls);
+    expect(logged).toContain('bootstrap_admin');
+    expect(logged).not.toContain('ola@k.dk');
   });
 
   it('rollekatalog mode: matches the captured identity to the directory; claims are not used', async () => {

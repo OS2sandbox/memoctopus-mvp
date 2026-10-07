@@ -15,6 +15,8 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 
 import {
   deletePendingAudio,
+  deletePendingTranscript,
+  sweepPendingBotData,
   storePendingAudio,
   readPendingMeta,
   readPendingTranscript,
@@ -271,5 +273,126 @@ describe('deletePendingAudio audit (bot.audio_delete)', () => {
     const ttl = recordEvent.mock.calls.filter((c) => (c[0] as { details: { trigger: string } }).details.trigger === 'ttl');
     expect(ttl).toHaveLength(1);
     expect(ttl[0][0]).toMatchObject({ type: 'bot.audio_delete', source: 'system', actorUserId: 'owner-1', entityId: ID });
+  });
+});
+
+// ─── the sweep: data after 1 h, the owner binding only after 24 h and when nothing is left ──
+
+describe('sweepPendingBotData', () => {
+  const ID = '11111111-2222-4333-8444-555555555555';
+  const H = 60 * 60 * 1000;
+  const enoent = () => Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+
+  /** Files of one meeting with their ages in hours; `data` = which data files exist on disk for stat. */
+  function disk(files: Record<string, number>, opts: { transcript?: unknown } = {}) {
+    const now = Date.now();
+    vi.mocked(fs.readdir).mockResolvedValue(Object.keys(files) as never);
+    vi.mocked(fs.readFile).mockImplementation((async (path: string) => {
+      const name = String(path).split('/').pop()!;
+      if (!(name in files)) throw enoent();
+      const createdAt = now - files[name] * H;
+      if (name.endsWith('.owner.json')) return JSON.stringify({ userId: 'owner-1', createdAt });
+      if (name.endsWith('.transcript.json')) return JSON.stringify({ createdAt, ...(opts.transcript as object) });
+      return JSON.stringify({ createdAt });
+    }) as never);
+    const present = new Set(Object.keys(files).map((n) => n.replace('.meta.json', '.audio')).concat(Object.keys(files)));
+    vi.mocked(fs.stat).mockImplementation((async (path: string) => {
+      if (!present.has(String(path).split('/').pop()!)) throw enoent();
+      return {} as never;
+    }) as never);
+    vi.mocked(fs.unlink).mockImplementation((async (path: string) => {
+      present.delete(String(path).split('/').pop()!);
+    }) as never);
+  }
+  const unlinked = () => vi.mocked(fs.unlink).mock.calls.map((c) => String(c[0]).split('/').pop());
+
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    recordEvent.mockReset().mockResolvedValue({ status: 'stored' });
+    vi.mocked(fs.unlink).mockReset();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('never deletes an owner binding before 24 h, even when the data is long gone (a live session keeps its owner)', async () => {
+    disk({ [`${ID}.owner.json`]: 5 });
+    expect(await sweepPendingBotData()).toEqual({ audio: 0, transcripts: 0, owners: 0 });
+    expect(unlinked()).toEqual([]);
+    disk({ [`${ID}.owner.json`]: 23.9 });
+    await sweepPendingBotData();
+    expect(unlinked()).toEqual([]);
+  });
+
+  it('deletes expired data after 1 h but keeps the owner until it is 24 h old', async () => {
+    disk({ [`${ID}.meta.json`]: 3, [`${ID}.owner.json`]: 3 });
+    expect(await sweepPendingBotData()).toEqual({ audio: 1, transcripts: 0, owners: 0 });
+    expect(unlinked()).toEqual(expect.arrayContaining([`${ID}.audio`, `${ID}.meta.json`]));
+    expect(unlinked()).not.toContain(`${ID}.owner.json`);
+    expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'bot.audio_delete', actorUserId: 'owner-1', details: { trigger: 'ttl' } }));
+  });
+
+  it('removes the owner once it is older than 24 h and no data is left', async () => {
+    disk({ [`${ID}.owner.json`]: 30 });
+    expect(await sweepPendingBotData()).toEqual({ audio: 0, transcripts: 0, owners: 1 });
+    expect(unlinked()).toEqual([`${ID}.owner.json`]);
+  });
+
+  it('keeps an old owner while a stash is still there (fresh data of the same meeting)', async () => {
+    disk({ [`${ID}.meta.json`]: 0.2, [`${ID}.owner.json`]: 30 });
+    expect(await sweepPendingBotData()).toEqual({ audio: 0, transcripts: 0, owners: 0 });
+    expect(unlinked()).toEqual([]);
+  });
+
+  it('never touches the meeting whose own upload triggered the sweep', async () => {
+    disk({ [`${ID}.meta.json`]: 3, [`${ID}.owner.json`]: 30 });
+    expect(await sweepPendingBotData({ skipId: ID })).toEqual({ audio: 0, transcripts: 0, owners: 0 });
+    expect(unlinked()).toEqual([]);
+  });
+
+  it('logs the deletion of an expired stashed transcript with object transcript', async () => {
+    disk({ [`${ID}.transcript.json`]: 3, [`${ID}.owner.json`]: 3 }, { transcript: { status: 'ready' } });
+    expect(await sweepPendingBotData()).toEqual({ audio: 0, transcripts: 1, owners: 0 });
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'bot.audio_delete', actorUserId: 'owner-1', details: { trigger: 'ttl', object: 'transcript' } }),
+    );
+  });
+
+  it('survives a missing directory', async () => {
+    vi.mocked(fs.readdir).mockRejectedValue(enoent());
+    expect(await sweepPendingBotData()).toEqual({ audio: 0, transcripts: 0, owners: 0 });
+  });
+});
+
+describe('deletePendingTranscript audit (bot.audio_delete, object transcript)', () => {
+  const ID = '11111111-2222-4333-8444-555555555555';
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    recordEvent.mockReset().mockResolvedValue({ status: 'stored' });
+    recordServerEvent.mockReset().mockResolvedValue({ status: 'stored' });
+    vi.mocked(fs.unlink).mockReset().mockResolvedValue(undefined as never);
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('records a handoff of a transcript that held text, on that request', async () => {
+    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ status: 'ready', segments: [], createdAt: 1 }) as never);
+    const req = { headers: new Headers() };
+    expect(await deletePendingTranscript(ID, { trigger: 'handoff', actorUserId: 'u1', req })).toBe(true);
+    expect(recordServerEvent).toHaveBeenCalledWith(req, {
+      type: 'bot.audio_delete',
+      source: 'system',
+      actorUserId: 'u1',
+      entityId: ID,
+      details: { trigger: 'handoff', object: 'transcript' },
+    });
+  });
+
+  it('records nothing for a processing/failed marker, a missing file, or when no audit is asked for', async () => {
+    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ status: 'failed', createdAt: 1 }) as never);
+    await deletePendingTranscript(ID, { trigger: 'handoff', actorUserId: 'u1' });
+    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ status: 'ready', createdAt: 1 }) as never);
+    vi.mocked(fs.unlink).mockRejectedValueOnce(Object.assign(new Error('x'), { code: 'ENOENT' }));
+    expect(await deletePendingTranscript(ID, { trigger: 'handoff', actorUserId: 'u1' })).toBe(false);
+    await deletePendingTranscript(ID);
+    expect(recordEvent).not.toHaveBeenCalled();
+    expect(recordServerEvent).not.toHaveBeenCalled();
   });
 });

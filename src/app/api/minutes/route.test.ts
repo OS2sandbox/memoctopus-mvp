@@ -462,7 +462,15 @@ describe('POST /api/minutes with a central template', () => {
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: 'Skabelonen er ikke tilgængelig' });
     expect(mockGenerateReferatBody).not.toHaveBeenCalled();
-    expect(mockRecord).not.toHaveBeenCalled();
+    // The response is identical, but the log says the generation was refused (denied, template_unavailable).
+    expect(events()).toHaveLength(1);
+    expect(events()[0]).toMatchObject({
+      type: 'minutes.generate',
+      actorUserId: FAKE_SESSION.user.id,
+      outcome: 'denied',
+      details: { templateSource: 'central', outcomeCode: 'template_unavailable', durationMs: 0 },
+    });
+    expect(JSON.stringify(events())).not.toMatch(/Alice|prompt/i);
     // A client cannot fall through to a personal/default template instead.
     expect(mockGetSkabelon).not.toHaveBeenCalled();
     expect(mockGetDefaultSkabelon).not.toHaveBeenCalled();

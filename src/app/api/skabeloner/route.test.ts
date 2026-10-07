@@ -93,6 +93,7 @@ describe('GET /api/skabeloner', () => {
     const json = await res.json();
     expect(json.skabeloner).toEqual([FAKE_SKABELON]);
     expect(json.centralSkabeloner).toEqual([central]);
+    expect(json).not.toHaveProperty('centralError');
     expect(mockListCentral).toHaveBeenCalledWith('user-123');
   });
 
@@ -105,6 +106,8 @@ describe('GET /api/skabeloner', () => {
     const json = await res.json();
     expect(json.skabeloner).toHaveLength(1);
     expect(json.centralSkabeloner).toEqual([]);
+    // Not silently empty: the response says the shared list is missing (the shape is otherwise unchanged).
+    expect(json.centralError).toBe(true);
     // safeLogError: class name and code only, never the message.
     expect(spy).toHaveBeenCalled();
     expect(JSON.stringify(spy.mock.calls)).not.toContain('Hemmelig');

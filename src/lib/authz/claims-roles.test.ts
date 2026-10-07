@@ -5,13 +5,19 @@ import type { ClaimListSpec, RolesConfig } from '@/lib/auth/providers';
 vi.mock('@/lib/db', () => ({ pool: {} }));
 
 // The role mapping and claim names are config (AUTH_CONFIG_FILE); here they are plain state.
-const state: { roles: RolesConfig; specs: { claims: object; rolesClaim?: ClaimListSpec; groupsClaim?: ClaimListSpec } | null } = {
+const state: {
+  roles: RolesConfig;
+  specs: { claims: object; rolesClaim?: ClaimListSpec; groupsClaim?: ClaimListSpec } | null;
+  catalogue: Array<{ kind: 'role' | 'group'; identifier: string; name: string; providers?: string[] }>;
+} = {
   roles: { state: 'unset' },
   specs: null,
+  catalogue: [],
 };
 vi.mock('@/lib/auth/providers', () => ({
   authRolesConfig: () => state.roles,
   providerClaimSpecs: () => state.specs,
+  authConfigCatalogue: () => state.catalogue,
 }));
 
 import {
@@ -23,6 +29,7 @@ import {
   extractClaimValues,
   mapClaimRoles,
   readClaim,
+  roleMapsFor,
 } from './claims-roles';
 
 const arr = (name: string): ClaimListSpec => ({ name, format: 'array', separator: ',' });
@@ -36,6 +43,7 @@ const rolesCfg = (appRoleMap: Record<string, string>, groupRoleMap: Record<strin
 beforeEach(() => {
   state.roles = rolesCfg({ admin: 'tt-administrator', su: 'tt-skabelonansvarlig' }, { 'g-log': 'tt-logleser' });
   state.specs = { claims: {}, rolesClaim: arr('roles'), groupsClaim: delim('memberOf') };
+  state.catalogue = [];
   vi.stubEnv('ACCESS_SOURCE', 'claims');
 });
 afterEach(() => {
@@ -151,6 +159,68 @@ describe('decideFromClaims', () => {
     expect(decideFromClaims({ roles: ['admin'], memberOf: 'g-log' }, 'p').external).toEqual([{ kind: 'role', identifier: 'admin' }]);
     state.specs = { claims: {} };
     expect(decideFromClaims({ roles: ['admin'], memberOf: 'g-log' }, 'p')).toEqual({ roles: [], external: [] });
+  });
+});
+
+describe('per-provider role maps', () => {
+  const map = (m: Record<string, string>) => new Map(Object.entries(m).map(([k, role]) => [k, { role: role as never, global: true }]));
+  const multi = (extra: Partial<Extract<RolesConfig, { state: 'ok' }>> = {}): RolesConfig => ({
+    ...(rolesCfg({ admin: 'tt-administrator' }) as Extract<RolesConfig, { state: 'ok' }>),
+    providerCount: 2,
+    byProvider: new Map([['a', { appRoleMap: map({ 'a-admin': 'tt-administrator' }), groupRoleMap: map({ 'a-grp': 'tt-logleser' }) }]]),
+    ...extra,
+  });
+
+  it('a provider with its own map uses ONLY that map; the global one is not merged in', () => {
+    expect(roleMapsFor(multi(), 'a')?.appRoleMap.has('a-admin')).toBe(true);
+    expect(roleMapsFor(multi(), 'a')?.appRoleMap.has('admin')).toBe(false);
+    const d = decideFromClaims({ roles: ['a-admin', 'admin'], memberOf: 'a-grp' }, 'a', multi());
+    expect(d.roles.sort()).toEqual(['tt-administrator', 'tt-logleser']);
+    expect(decideFromClaims({ roles: ['admin'] }, 'a', multi()).roles).toEqual([]);
+  });
+
+  it('with several providers, a provider without a map grants NOTHING (the global map is a single-provider fallback)', () => {
+    expect(roleMapsFor(multi(), 'b')).toBeNull();
+    expect(decideFromClaims({ roles: ['admin', 'a-admin'] }, 'b', multi()).roles).toEqual([]);
+    // Its values are still reported for the catalogue: they just grant no role.
+    expect(decideFromClaims({ roles: ['admin'] }, 'b', multi()).external).toEqual([{ kind: 'role', identifier: 'admin' }]);
+  });
+
+  it('with exactly one provider the global map applies, and so does a missing count (older state)', () => {
+    expect(decideFromClaims({ roles: ['admin'] }, 'p', { ...(multi() as Extract<RolesConfig, { state: 'ok' }>), providerCount: 1 }).roles).toEqual(['tt-administrator']);
+    expect(roleMapsFor(rolesCfg({ admin: 'tt-administrator' }), 'p')?.appRoleMap.has('admin')).toBe(true);
+  });
+
+  it('an unusable roles section has no maps at all', () => {
+    expect(roleMapsFor({ state: 'invalid' }, 'a')).toBeNull();
+    expect(roleMapsFor({ state: 'unset' }, 'a')).toBeNull();
+  });
+});
+
+describe('catalogue entries scoped to providers', () => {
+  const claims = { roles: ['r-a', 'r-all'], memberOf: 'g-b' };
+
+  it('a value that belongs to other providers is not reported when it arrives through this one', () => {
+    state.catalogue = [
+      { kind: 'role', identifier: 'r-a', name: 'A', providers: ['a'] },
+      { kind: 'role', identifier: 'r-all', name: 'Alle' },
+      { kind: 'group', identifier: 'g-b', name: 'B', providers: ['b'] },
+    ];
+    const viaA = decideFromClaims(claims, 'a').external;
+    expect(viaA).toEqual([
+      { kind: 'role', identifier: 'r-a' },
+      { kind: 'role', identifier: 'r-all' },
+    ]);
+    const viaB = decideFromClaims(claims, 'b').external;
+    expect(viaB).toEqual([
+      { kind: 'role', identifier: 'r-all' },
+      { kind: 'group', identifier: 'g-b' },
+    ]);
+  });
+
+  it('kind matters: a scoped role does not scope a group with the same identifier', () => {
+    state.catalogue = [{ kind: 'role', identifier: 'x', name: 'X', providers: ['a'] }];
+    expect(decideFromClaims({ roles: ['x'], memberOf: 'x' }, 'b').external).toEqual([{ kind: 'group', identifier: 'x' }]);
   });
 });
 

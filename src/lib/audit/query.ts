@@ -177,9 +177,12 @@ function buildWhere(
     params.push(likeContains(filters.q), filters.q);
     where.push(`(actor_name ILIKE $${params.length - 1} OR actor_user_id = $${params.length})`);
   }
-  // The viewer and the export only show the current catalogue; rows of types that were removed
-  // from it stay in the table (and in the SIEM feed, which does not use this) but are not listed.
-  add((p) => `event_type = ANY(${p}::text[])`, EVENT_TYPES);
+  // Rows of a type this build does not know (written by a newer or older release) are NOT hidden:
+  // the viewer and the export show them as "Ukendt hændelsestype (<kode>)", so a rolling deploy
+  // or a rollback never makes log rows vanish. The one exception is the removed, unreleased
+  // access.* events, which stay hidden (they stay in the table and in the SIEM feed, which
+  // does not use this filter).
+  add((p) => `(event_type = ANY(${p}::text[]) OR event_type NOT LIKE 'access.%')`, EVENT_TYPES);
   return where;
 }
 

@@ -1,18 +1,35 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockRecord = vi.hoisted(() => vi.fn());
+const mockRecordEvent = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/audit/record', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/audit/record')>()),
   recordServerEvent: mockRecord,
+  recordEvent: mockRecordEvent,
 }));
 
-import { asEntityUuid, elapsedMs, emitAudit, outcomeCodeOf } from './ai-audit';
+import { __resetDroppedEvents } from '@/lib/audit/dropped';
+import {
+  __liveAudioSize,
+  __resetLiveAudio,
+  asEntityUuid,
+  elapsedMs,
+  emitAudit,
+  emitLiveAudioUpload,
+  LIVE_AUDIO_MAX_ENTRIES,
+  LIVE_AUDIO_WINDOW_MS,
+  outcomeCodeOf,
+} from './ai-audit';
 
 const UUID = '11111111-2222-4333-8444-555555555555';
 
 beforeEach(() => {
   mockRecord.mockReset();
   mockRecord.mockResolvedValue({ status: 'stored' });
+  mockRecordEvent.mockReset();
+  mockRecordEvent.mockResolvedValue({ status: 'stored' });
+  __resetDroppedEvents();
+  __resetLiveAudio();
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -107,5 +124,67 @@ describe('emitAudit', () => {
     await emitAudit(req, event('other'));
     expect(mockRecord).toHaveBeenCalledTimes(RATE_LIMIT_EVENTS + 1);
     expect(takeClientEventBudget('flooder', 1)).toBeNull();
+  });
+
+  it('reports a drop as audit.events_dropped (actor_ceiling) once per window, never silently', async () => {
+    const { RATE_LIMIT_EVENTS } = await import('@/lib/audit/client-ingest');
+    const event = { type: 'export.download' as const, actorUserId: 'flooder2', details: { format: 'pdf' as const } };
+    for (let i = 0; i < RATE_LIMIT_EVENTS; i++) await emitAudit(req, event);
+    await emitAudit(req, event);
+    await emitAudit(req, event);
+    // First drop reported at once; the second is added up for the end of the window.
+    expect(mockRecordEvent).toHaveBeenCalledOnce();
+    expect(mockRecordEvent.mock.calls[0][0]).toMatchObject({
+      type: 'audit.events_dropped',
+      source: 'system',
+      actorUserId: 'flooder2',
+      details: { reason: 'actor_ceiling', count: 1 },
+    });
+  });
+});
+
+describe('emitLiveAudioUpload', () => {
+  const req = { headers: new Headers() };
+  const ev = (over = {}) => ({ actorUserId: 'u1', entityId: UUID, outcome: 'success' as const, bytes: 50_000, durationMs: 300, ...over });
+
+  it('emits audio.upload on the live channel with the size of that utterance', async () => {
+    emitLiveAudioUpload(req, ev());
+    await Promise.resolve();
+    expect(mockRecord).toHaveBeenCalledOnce();
+    expect(mockRecord.mock.calls[0][1]).toMatchObject({
+      type: 'audio.upload',
+      actorUserId: 'u1',
+      entityId: UUID,
+      details: { channel: 'live', bytes: 50_000, durationMs: 300 },
+    });
+  });
+
+  it('emits at most once per person, meeting and outcome per 5 minutes', () => {
+    const t = 1_000_000;
+    emitLiveAudioUpload(req, ev(), t);
+    emitLiveAudioUpload(req, ev({ bytes: 1 }), t + 60_000);
+    emitLiveAudioUpload(req, ev({ bytes: 2 }), t + LIVE_AUDIO_WINDOW_MS - 1);
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    emitLiveAudioUpload(req, ev({ bytes: 3 }), t + LIVE_AUDIO_WINDOW_MS);
+    expect(mockRecord).toHaveBeenCalledTimes(2);
+    expect(mockRecord.mock.calls[1][1].details.bytes).toBe(3);
+    // Another meeting, another person and a failure are separate keys.
+    emitLiveAudioUpload(req, ev({ entityId: '22222222-2222-4333-8444-555555555555' }), t + 1);
+    emitLiveAudioUpload(req, ev({ actorUserId: 'u2' }), t + 1);
+    emitLiveAudioUpload(req, ev({ outcome: 'error', outcomeCode: 'http_502' }), t + 1);
+    expect(mockRecord).toHaveBeenCalledTimes(5);
+    expect(mockRecord.mock.calls[4][1]).toMatchObject({ outcome: 'error', details: { outcomeCode: 'http_502' } });
+  });
+
+  it('is bounded: the map never grows past its cap, the oldest entries go first', () => {
+    const t = 5_000_000;
+    for (let i = 0; i < LIVE_AUDIO_MAX_ENTRIES + 50; i++) emitLiveAudioUpload(req, ev({ actorUserId: `user-${i}` }), t + i);
+    expect(__liveAudioSize()).toBeLessThanOrEqual(LIVE_AUDIO_MAX_ENTRIES);
+    // The newest key is still remembered, the very first was evicted.
+    mockRecord.mockClear();
+    emitLiveAudioUpload(req, ev({ actorUserId: `user-${LIVE_AUDIO_MAX_ENTRIES + 49}` }), t + 10_000);
+    expect(mockRecord).not.toHaveBeenCalled();
+    emitLiveAudioUpload(req, ev({ actorUserId: 'user-0' }), t + 10_000);
+    expect(mockRecord).toHaveBeenCalledOnce();
   });
 });

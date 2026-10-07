@@ -169,19 +169,115 @@ describe('auth wiring from the config file', () => {
     expect(plugin(options, 'generic-oauth').options.config).toHaveLength(1);
   });
 
-  it('passes the Entra tenant and scopes of the file to the Microsoft provider', async () => {
-    useConfig({ providers: [{ type: 'entra', clientId: 'e-id', clientSecret: 'e-secret', tenantId: 'tenant-1', scopes: ['User.Read'] }] });
+  it('passes the Entra tenant and scopes of the file to the Microsoft provider: explicit scopes, no offline_access', async () => {
+    const tenant = '11111111-2222-3333-4444-555555555555';
+    useConfig({ providers: [{ type: 'entra', clientId: 'e-id', clientSecret: 'e-secret', tenantId: tenant, scopes: ['User.Read', 'offline_access'] }] });
     const options = await loadOptions();
-    expect(options.socialProviders).toEqual({ microsoft: { clientId: 'e-id', clientSecret: 'e-secret', tenantId: 'tenant-1', scope: ['User.Read'] } });
+    expect(options.socialProviders.microsoft).toMatchObject({
+      clientId: 'e-id',
+      clientSecret: 'e-secret',
+      tenantId: tenant,
+      disableDefaultScope: true,
+      scope: ['openid', 'profile', 'email', 'User.Read'],
+    });
+    expect(typeof options.socialProviders.microsoft.getUserInfo).toBe('function');
+  });
+
+  it('does not register an Entra provider on a multi-tenant authority', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    useConfig({ providers: [{ type: 'entra', clientId: 'e-id', clientSecret: 'e-secret', tenantId: 'common' }] });
+    expect((await loadOptions()).socialProviders).toEqual({});
+  });
+
+  describe('claims mode is not open', () => {
+    beforeEach(() => {
+      vi.stubEnv('ACCESS_SOURCE', 'claims');
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    it('turns e-mail/password off unless it is explicitly "true", and then closes sign-up', async () => {
+      vi.stubEnv('EMAIL_PASSWORD_ENABLED', '');
+      expect((await loadOptions()).emailAndPassword).toEqual({ enabled: false, disableSignUp: true });
+      vi.resetModules();
+      vi.stubEnv('EMAIL_PASSWORD_ENABLED', 'true');
+      expect((await loadOptions()).emailAndPassword).toEqual({ enabled: true, disableSignUp: true });
+    });
+
+    it('leaves sign-up alone outside claims mode', async () => {
+      vi.stubEnv('ACCESS_SOURCE', 'local');
+      vi.stubEnv('EMAIL_PASSWORD_ENABLED', 'true');
+      expect((await loadOptions()).emailAndPassword).toEqual({ enabled: true });
+    });
+
+    it('warns (content-free) when roles are not required, or passwords are on', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'false');
+      vi.stubEnv('EMAIL_PASSWORD_ENABLED', 'true');
+      await loadOptions();
+      const out = warn.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(out).toContain('REQUIRE_ROLE_TO_LOGIN=false');
+      expect(out).toContain('EMAIL_PASSWORD_ENABLED=true');
+    });
+  });
+
+  describe('the real instance, end to end through its handler (no database needed)', () => {
+    const call = async (path: string, body?: unknown) => {
+      const { auth } = await import('./index');
+      return auth.handler(
+        new Request(`http://localhost:3004/api/auth${path}`, {
+          method: body === undefined ? 'GET' : 'POST',
+          headers: { 'content-type': 'application/json', origin: 'http://localhost:3004' },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        }),
+      );
+    };
+
+    it('builds and answers', async () => {
+      const res = await call('/ok');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+    });
+
+    it('claims mode: nobody can register a password account, and password sign-in is off unless explicitly enabled', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.stubEnv('ACCESS_SOURCE', 'claims');
+      vi.stubEnv('EMAIL_PASSWORD_ENABLED', '');
+      const signUp = await call('/sign-up/email', { email: 'a@b.dk', password: 'correct horse battery', name: 'A' });
+      expect(signUp.status).toBe(400);
+      const signIn = await call('/sign-in/email', { email: 'a@b.dk', password: 'correct horse battery' });
+      expect(signIn.status).toBe(400);
+
+      vi.resetModules();
+      vi.stubEnv('EMAIL_PASSWORD_ENABLED', 'true');
+      // Enabled explicitly: sign-in is possible again, sign-up is still closed (answered before the database is touched).
+      const signUp2 = await call('/sign-up/email', { email: 'a@b.dk', password: 'correct horse battery', name: 'A' });
+      expect(signUp2.status).toBe(400);
+      expect(((await signUp2.json()) as { code?: string }).code).toMatch(/SIGN_UP_DISABLED|EMAIL_PASSWORD/);
+    });
+  });
+
+  describe('start-up warnings about risky combinations', () => {
+    it('warns about ACCESS_SOURCE=local in production, and about a roles section outside claims mode', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.stubEnv('NODE_ENV', 'production');
+      vi.stubEnv('BETTER_AUTH_URL', 'https://referat.example');
+      vi.stubEnv('ACCESS_SOURCE', 'local');
+      useConfig({ providers: [OIDC('fka')], roles: { appRoleMap: { x: 'tt-bruger' } } });
+      await loadOptions();
+      const out = warn.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(out).toContain('ACCESS_SOURCE=local in production');
+      expect(out).toContain('"roles" section but ACCESS_SOURCE is not claims');
+      expect(out).not.toContain('tt-bruger');
+    });
   });
 
   describe('session lifetime in claims mode', () => {
     it('ends a session with the role snapshot: expiresIn and updateAge both ROLE_CLAIMS_MAX_SECONDS (default 8 h)', async () => {
       vi.stubEnv('ACCESS_SOURCE', 'claims');
-      expect((await loadOptions()).session).toEqual({ expiresIn: 28_800, updateAge: 28_800 });
+      expect((await loadOptions()).session).toEqual({ expiresIn: 28_800, updateAge: 28_800, disableSessionRefresh: true });
       vi.resetModules();
       vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', '3600');
-      expect((await loadOptions()).session).toEqual({ expiresIn: 3600, updateAge: 3600 });
+      expect((await loadOptions()).session).toEqual({ expiresIn: 3600, updateAge: 3600, disableSessionRefresh: true });
     });
 
     it.each(['local', 'rollekatalog'])('leaves the session default alone in %s mode', async (mode) => {

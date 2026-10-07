@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
 import { useIsMobile } from '@/lib/use-is-mobile';
+import { flushAuditNow } from '@/lib/audit/client';
 import { signOut, useSession } from '@/lib/auth-client';
 import { clearPendingUploads } from '@/lib/pending-upload';
 import { useReviewAudio } from '@/lib/review-audio-context';
@@ -133,7 +134,9 @@ export function TopBar() {
                 // Drop any in-memory upload picked by this user before the next one
                 // signs in (these module singletons survive an SPA sign-out).
                 clearPendingUploads();
-                signOut()
+                // Deliver queued audit events first (at most 2 s): after sign-out they wait for the next login.
+                flushAuditNow()
+                  .then(() => signOut())
                   .then(() => router.push('/'))
                   .catch((err) => {
                     console.error('signOut failed', err);

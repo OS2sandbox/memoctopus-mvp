@@ -14,11 +14,17 @@ import type { HeaderSource } from '@/lib/audit/request-context';
 // IndexedDB (where the normal client-side transcription pipeline takes over).
 //
 // Files are deleted as soon as the client downloads them; a TTL sweep drops anything
-// the client never collected (e.g. the tab was closed). Both deletions of the AUDIO
-// are recorded as bot.audio_delete (source 'system', trigger handoff | ttl). The sweep
-// is opportunistic: it runs when the next recording is stored, not on a timer.
+// the client never collected (e.g. the tab was closed). Every deletion of the AUDIO and of
+// the stashed TRANSCRIPT is recorded as bot.audio_delete (source 'system', trigger
+// handoff | ttl, object audio | transcript). The sweep runs opportunistically when the
+// next recording is stored, and on demand from POST /api/internal/bot-audio/sweep (an
+// operator cron, see DEPLOY.md), so the TTL is provable even when no recording follows.
 
-const TTL_MS = 60 * 60 * 1000; // 1 hour
+const TTL_MS = 60 * 60 * 1000; // 1 hour: audio, meta and transcript
+// The owner binding (who may collect or control a meeting) outlives the data: a bot session
+// can run for hours, and the binding must exist when its recording lands. It is removed only
+// after this long AND once no stash for the meeting is left, never while a session is live.
+const OWNER_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 function rootDir(): string {
   const base = process.env.AUDIO_STORAGE_PATH ?? path.join(process.cwd(), 'audio-storage');
@@ -97,38 +103,69 @@ export interface PendingTranscript {
   createdAt: number;
 }
 
-// Best-effort cleanup of entries older than the TTL.
-async function sweep(): Promise<void> {
+export interface SweepResult {
+  /** Recordings deleted because nobody collected them within the TTL. */
+  audio: number;
+  /** Stashed transcripts deleted for the same reason. */
+  transcripts: number;
+  /** Owner bindings removed (older than 24 h and nothing left for the meeting). */
+  owners: number;
+}
+
+async function ageOf(file: string): Promise<number | null> {
+  try {
+    const { createdAt } = JSON.parse(await fs.readFile(file, 'utf8')) as { createdAt?: unknown };
+    return typeof createdAt === 'number' ? Date.now() - createdAt : null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      safeLogError('bot-pending-audio sweep: skipping malformed/inaccessible entry', err);
+    }
+    return null;
+  }
+}
+
+/**
+ * Best-effort cleanup. Data (audio, meta, transcript) older than the TTL goes, each deletion
+ * recorded once per object; the owner binding is removed only when it is older than 24 h AND
+ * the meeting has no data left (so a live session, or a recording not yet collected, keeps its
+ * owner). `skipId` is the meeting whose upload triggered the sweep: it is never touched.
+ * Never throws.
+ */
+export async function sweepPendingBotData(opts: { skipId?: string } = {}): Promise<SweepResult> {
+  const result: SweepResult = { audio: 0, transcripts: 0, owners: 0 };
   try {
     const dir = rootDir();
     const entries = await fs.readdir(dir);
-    const now = Date.now();
-    const handled = new Set<string>();
-    await Promise.all(
-      entries
-        .filter((f) => f.endsWith('.meta.json') || f.endsWith('.transcript.json') || f.endsWith('.owner.json'))
-        .map(async (f) => {
-          try {
-            const meta = JSON.parse(await fs.readFile(path.join(dir, f), 'utf8')) as { createdAt: number };
-            if (now - meta.createdAt > TTL_MS) {
-              const id = f.replace(/\.(meta|transcript|owner)\.json$/, '');
-              // One id has up to three files: handle it once so the deletion is recorded once.
-              if (handled.has(id)) return;
-              handled.add(id);
-              // Read before the owner file goes: the owner is the person the deletion is on behalf of.
-              const owner = await getBotMeetingOwner(id);
-              await deletePendingAudio(id, { trigger: 'ttl', actorUserId: owner });
-              await deletePendingTranscript(id);
-              await fs.unlink(ownerPath(id)).catch(() => {});
-            }
-          } catch (err) {
-            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-              safeLogError('bot-pending-audio sweep: skipping malformed/inaccessible entry', err);
-            }
-          }
-        }),
-    );
-  } catch { /* dir may not exist yet */ }
+    const ids = new Set<string>();
+    for (const f of entries) {
+      const m = /^(.+)\.(?:meta|transcript|owner)\.json$/.exec(f);
+      if (m && /^[\w-]+$/.test(m[1]) && m[1] !== opts.skipId) ids.add(m[1]);
+    }
+    for (const id of ids) {
+      try {
+        // Read before anything is deleted: the owner is the person the deletions are on behalf of.
+        const owner = await getBotMeetingOwner(id);
+        const [metaAge, transcriptAge] = await Promise.all([ageOf(metaPath(id)), ageOf(transcriptPath(id))]);
+        // A no-recording marker has no audio file: it goes too, but there is nothing to log.
+        if (metaAge !== null && metaAge > TTL_MS && (await deletePendingAudio(id, { trigger: 'ttl', actorUserId: owner }))) result.audio += 1;
+        if (transcriptAge !== null && transcriptAge > TTL_MS) {
+          if (await deletePendingTranscript(id, { trigger: 'ttl', actorUserId: owner })) result.transcripts += 1;
+        }
+        const ownerAge = await ageOf(ownerPath(id));
+        const dataLeft = [metaPath(id), audioPath(id), transcriptPath(id)];
+        const stillThere = (await Promise.all(dataLeft.map((p) => fs.stat(p).then(() => true, () => false)))).some(Boolean);
+        if (ownerAge !== null && ownerAge > OWNER_TTL_MS && !stillThere) {
+          await fs.unlink(ownerPath(id)).catch(() => {});
+          result.owners += 1;
+        }
+      } catch (err) {
+        safeLogError('bot-pending-audio sweep: skipping entry', err);
+      }
+    }
+  } catch {
+    /* dir may not exist yet */
+  }
+  return result;
 }
 
 export async function storePendingAudio(
@@ -138,7 +175,8 @@ export async function storePendingAudio(
 ): Promise<void> {
   assertSafeId(meetingId);
   await fs.mkdir(rootDir(), { recursive: true });
-  await sweep();
+  // Other meetings' expired data goes; this meeting's own owner binding and files are left alone.
+  await sweepPendingBotData({ skipId: meetingId });
   const full: PendingMeta = { ...meta, createdAt: Date.now() };
   await fs.writeFile(audioPath(meetingId), buffer);
   await fs.writeFile(metaPath(meetingId), JSON.stringify(full));
@@ -180,7 +218,7 @@ export async function readPendingAudio(meetingId: string): Promise<Buffer | null
   }
 }
 
-export interface PendingAudioDeleteAudit {
+export interface PendingDeleteAudit {
   trigger: 'handoff' | 'ttl';
   /** The person the stash belonged to (the collecting user, or the owner for a sweep). */
   actorUserId?: string | null;
@@ -193,24 +231,28 @@ export interface PendingAudioDeleteAudit {
  * recorded (best effort, never throws) but only when an audio FILE was actually removed:
  * a no-recording marker has none. Returns whether one was.
  */
-export async function deletePendingAudio(meetingId: string, audit?: PendingAudioDeleteAudit): Promise<boolean> {
+export async function deletePendingAudio(meetingId: string, audit?: PendingDeleteAudit): Promise<boolean> {
   assertSafeId(meetingId);
   const [removed] = await Promise.all([
     fs.unlink(audioPath(meetingId)).then(() => true, () => false),
     fs.unlink(metaPath(meetingId)).catch(() => {}),
   ]);
-  if (removed && audit) {
-    // The id came from a URL or a file name: it is an entity only when it is a well-formed UUID.
-    const event = {
-      type: 'bot.audio_delete' as const,
-      source: 'system' as const,
-      actorUserId: audit.actorUserId ?? null,
-      ...(UUID_RE.test(meetingId) ? { entityId: meetingId } : {}),
-      details: { trigger: audit.trigger },
-    };
-    await (audit.req ? recordServerEvent(audit.req, event) : recordEvent(event));
-  }
+  if (removed && audit) await emitDeleted(meetingId, audit, 'audio');
   return removed;
+}
+
+/** One bot.audio_delete (best effort, never throws): the server-held recording or transcript is gone. */
+async function emitDeleted(meetingId: string, audit: PendingDeleteAudit, object: 'audio' | 'transcript'): Promise<void> {
+  // The id came from a URL or a file name: it is an entity only when it is a well-formed UUID.
+  const event = {
+    type: 'bot.audio_delete' as const,
+    source: 'system' as const,
+    actorUserId: audit.actorUserId ?? null,
+    ...(UUID_RE.test(meetingId) ? { entityId: meetingId } : {}),
+    // 'audio' is the default and stays out of the details, so existing rows and readers are unchanged.
+    details: object === 'audio' ? { trigger: audit.trigger } : { trigger: audit.trigger, object },
+  };
+  await (audit.req ? recordServerEvent(audit.req, event) : recordEvent(event));
 }
 
 export async function storePendingTranscript(
@@ -235,7 +277,15 @@ export async function readPendingTranscript(meetingId: string): Promise<PendingT
   }
 }
 
-export async function deletePendingTranscript(meetingId: string): Promise<void> {
+/**
+ * Deletes the stashed transcript. With `audit`, a bot.audio_delete (object transcript) is recorded
+ * when a transcript that actually held text (status ready) was removed; a 'processing' or
+ * 'failed' marker has no content, so deleting it is not logged. Returns whether a file was removed.
+ */
+export async function deletePendingTranscript(meetingId: string, audit?: PendingDeleteAudit): Promise<boolean> {
   assertSafeId(meetingId);
-  await fs.unlink(transcriptPath(meetingId)).catch(() => {});
+  const heldText = audit ? (await readPendingTranscript(meetingId))?.status === 'ready' : false;
+  const removed = await fs.unlink(transcriptPath(meetingId)).then(() => true, () => false);
+  if (removed && audit && heldText) await emitDeleted(meetingId, audit, 'transcript');
+  return removed;
 }

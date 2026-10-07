@@ -24,13 +24,26 @@
     }
   ],
   "roles": {
-    "appRoleMap": {
-      "referat-admin": "tt-administrator",
-      "referat-superuser": "tt-skabelonansvarlig",
-      "referat-log": "tt-logleser",
-      "referat-bruger": "tt-bruger"
-    },
-    "groupRoleMap": {}
+    "byProvider": {
+      "oidc": {
+        "appRoleMap": {
+          "referat-admin": "tt-administrator",
+          "referat-superuser": "tt-skabelonansvarlig",
+          "referat-log": "tt-logleser",
+          "referat-bruger": "tt-bruger"
+        },
+        "groupRoleMap": {}
+      },
+      "saml": {
+        "appRoleMap": {
+          "referat-admin": "tt-administrator",
+          "referat-superuser": "tt-skabelonansvarlig",
+          "referat-log": "tt-logleser",
+          "referat-bruger": "tt-bruger"
+        },
+        "groupRoleMap": {}
+      }
+    }
   },
   "catalogue": [
     { "kind": "role", "identifier": "referat-admin", "name": "Referat: administrator" },

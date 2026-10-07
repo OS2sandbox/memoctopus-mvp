@@ -64,7 +64,7 @@ describe.skipIf(!run)('SAML login through the sso plugin', () => {
       disabledPaths: SSO_DISABLED_PATHS,
       // better-auth switches the origin / CSRF check off under NODE_ENV=test; this test is about it.
       advanced: { disableOriginCheck: false },
-      hooks: { before: samlBeforeHook([p]) },
+      hooks: { before: samlBeforeHook([p], { base: AUTH }) },
       plugins: [sso(options)],
     });
   }
@@ -251,10 +251,133 @@ describe.skipIf(!run)('SAML login through the sso plugin', () => {
     expect(onLogin).toHaveBeenCalledTimes(1);
   });
 
-  it('accepts an unsolicited (IdP-initiated) response by default, and refuses it with allowIdpInitiated: false', async () => {
-    expect(hasSession(await acs(response(), null))).toBe(true);
-    auth = makeAuth(provider({ allowIdpInitiated: false }));
-    expect(hasSession(await acs(response({ assertionId: '_unsolicited-2' }), null))).toBe(false);
+  it('refuses an unsolicited (IdP-initiated) response by default, and accepts it only with allowIdpInitiated: true', async () => {
+    expect(hasSession(await acs(response(), null))).toBe(false);
+    expect(onLogin).not.toHaveBeenCalled();
+    auth = makeAuth(provider({ allowIdpInitiated: true }));
+    expect(hasSession(await acs(response({ assertionId: '_unsolicited-2' }), null))).toBe(true);
+  });
+
+  it('without IdP-initiated logins the SIGNED assertion-level InResponseTo is what counts, not the Response-level one', async () => {
+    const req = await startLogin();
+    const onlyOnResponse = response({ inResponseTo: req.id, inResponseToLevel: 'response' });
+    expect(hasSession(await acs(onlyOnResponse, req.relayState))).toBe(false);
+    expect(onLogin).not.toHaveBeenCalled();
+    // The request id was not consumed by the refusal: the proper answer still works.
+    const onlyInAssertion = response({ inResponseTo: req.id, inResponseToLevel: 'assertion' });
+    expect(hasSession(await acs(onlyInAssertion, req.relayState))).toBe(true);
+  });
+
+  it('refuses a response whose assertion carries no Recipient', async () => {
+    const req = await startLogin();
+    expect(hasSession(await acs(response({ inResponseTo: req.id, recipient: null }), req.relayState))).toBe(false);
+    expect(onLogin).not.toHaveBeenCalled();
+  });
+
+  it('requires the Destination of a response that is signed as a whole, but not of one with a signed assertion only', async () => {
+    const req = await startLogin();
+    expect(hasSession(await acs(response({ inResponseTo: req.id, sign: 'message', destination: null }), req.relayState))).toBe(false);
+    const req2 = await startLogin();
+    expect(hasSession(await acs(response({ inResponseTo: req2.id, sign: 'both', destination: 'https://other-sp.example/acs' }), req2.relayState))).toBe(false);
+    const req3 = await startLogin();
+    expect(hasSession(await acs(response({ inResponseTo: req3.id, sign: 'message' }), req3.relayState))).toBe(true);
+    const req4 = await startLogin();
+    expect(hasSession(await acs(response({ inResponseTo: req4.id, sign: 'assertion', destination: null }), req4.relayState))).toBe(true);
+  });
+
+  it('refuses a response with a DOCTYPE or ENTITY declaration before any XML parser sees it', async () => {
+    for (const prelude of ['<!DOCTYPE r [<!ENTITY x "y">]>', '<!doctype r>']) {
+      const req = await startLogin();
+      const res = await acs(response({ inResponseTo: req.id, prelude }), req.relayState);
+      expect(hasSession(res), prelude).toBe(false);
+    }
+    expect(onLogin).not.toHaveBeenCalled();
+  });
+
+  it('applies the same checks to a JSON-bodied POST (the guard does not depend on the content type)', async () => {
+    const req = await startLogin();
+    const foreign = response({ inResponseTo: req.id, audience: 'https://other-sp.example/meta' });
+    const res = await auth.handler(
+      new Request(ACS, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'https://idp.example' },
+        body: JSON.stringify({ SAMLResponse: foreign, RelayState: req.relayState }),
+      }),
+    );
+    expect(hasSession(res)).toBe(false);
+    expect(db.user).toHaveLength(0);
+    const unsigned = await auth.handler(
+      new Request(ACS, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'https://idp.example' },
+        body: JSON.stringify({ SAMLResponse: response({ inResponseTo: req.id, sign: 'none' }), RelayState: req.relayState }),
+      }),
+    );
+    expect(hasSession(unsigned)).toBe(false);
+    expect(onLogin).not.toHaveBeenCalled();
+  });
+
+  it('still refuses an unsigned response when wantAssertionsSigned is switched off (the option is cosmetic)', async () => {
+    auth = makeAuth(provider({ wantAssertionsSigned: false }));
+    const req = await startLogin();
+    expect(hasSession(await acs(response({ inResponseTo: req.id, sign: 'none' }), req.relayState))).toBe(false);
+    expect(db.user).toHaveLength(0);
+    expect(onLogin).not.toHaveBeenCalled();
+  });
+
+  it('refuses a NotBefore a few seconds ahead: the library keeps no clock tolerance (the host needs NTP)', async () => {
+    const req = await startLogin();
+    const soon = new Date(Date.now() + 5_000);
+    const res = await acs(response({ inResponseTo: req.id, notBefore: soon, notOnOrAfter: new Date(soon.getTime() + 300_000) }), req.relayState);
+    expect(hasSession(res)).toBe(false);
+    expect(onLogin).not.toHaveBeenCalled();
+  });
+
+  it('refuses a SHA-1 signature unless allowDeprecatedAlgorithms is set', async () => {
+    const sha1 = 'http://www.w3.org/2000/09/xmldsig#rsa-sha1';
+    const req = await startLogin();
+    expect(hasSession(await acs(response({ inResponseTo: req.id, signatureAlgorithm: sha1 }), req.relayState))).toBe(false);
+    expect(onLogin).not.toHaveBeenCalled();
+    auth = makeAuth(provider({ allowDeprecatedAlgorithms: true }));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const req2 = await startLogin();
+    expect(hasSession(await acs(response({ inResponseTo: req2.id, signatureAlgorithm: sha1, assertionId: '_sha1' }), req2.relayState))).toBe(true);
+  });
+
+  it('accepts a list of certificates (a rollover): a response signed by either verifies', async () => {
+    auth = makeAuth(provider({ cert: [otherKeys.cert, keys.cert] }));
+    const req = await startLogin();
+    expect(hasSession(await acs(response({ inResponseTo: req.id }), req.relayState))).toBe(true);
+    const req2 = await startLogin();
+    expect(hasSession(await acs(response({ inResponseTo: req2.id, keys: otherKeys, assertionId: '_other' }), req2.relayState))).toBe(true);
+    const third = generateIdpKeys('third');
+    const req3 = await startLogin();
+    expect(hasSession(await acs(response({ inResponseTo: req3.id, keys: third, assertionId: '_third' }), req3.relayState))).toBe(false);
+  });
+
+  describe('IdP metadata', () => {
+    const metadata = (cert?: string) =>
+      `<EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${IDP}"><IDPSSODescriptor WantAuthnRequestsSigned="false" protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">` +
+      (cert
+        ? `<KeyDescriptor use="signing"><KeyInfo xmlns="http://www.w3.org/2000/09/xmldsig#"><X509Data><X509Certificate>${cert.replace(/-----[A-Z ]+-----|\s+/g, '')}</X509Certificate></X509Data></KeyInfo></KeyDescriptor>`
+        : '') +
+      `<SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://idp.example/sso"/></IDPSSODescriptor></EntityDescriptor>`;
+
+    const withMetadata = (xml: string) =>
+      provider({ entryPoint: undefined, idpEntityId: undefined, cert: undefined, idpMetadata: xml });
+
+    it('logs in with metadata that carries the signing certificate (control)', async () => {
+      auth = makeAuth(withMetadata(metadata(keys.cert)));
+      const req = await startLogin();
+      expect(hasSession(await acs(response({ inResponseTo: req.id }), req.relayState))).toBe(true);
+    });
+
+    it('refuses everything when the metadata carries no signing certificate', async () => {
+      auth = makeAuth(withMetadata(metadata()));
+      const req = await startLogin();
+      expect(hasSession(await acs(response({ inResponseTo: req.id }), req.relayState))).toBe(false);
+      expect(onLogin).not.toHaveBeenCalled();
+    });
   });
 
   it('refuses an oversized response without parsing it', async () => {

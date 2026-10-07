@@ -1,7 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { clearLoginClaimsStash, takeLoginClaims } from '@/lib/authz/claims-stash';
-import { genericOAuthConfigFor, loadOidcProfile, mapOidcProfile, resetOidcDiscoveryCache } from './oidc-config';
+import { checkEntraIdToken, checkIdTokenClaims, entraSocialConfig, genericOAuthConfigFor, loadOidcProfile, mapOidcProfile, resetOidcDiscoveryCache } from './oidc-config';
 import type { OidcProviderConfig } from './providers';
+
+const ISS = 'https://idp.example';
 
 function provider(over: Partial<OidcProviderConfig> = {}): OidcProviderConfig {
   return {
@@ -10,6 +12,7 @@ function provider(over: Partial<OidcProviderConfig> = {}): OidcProviderConfig {
     clientId: 'cid',
     clientSecret: 'secret',
     discoveryUrl: 'https://idp.example/.well-known/openid-configuration',
+    issuer: ISS,
     scopes: ['openid', 'profile', 'email'],
     pkce: true,
     claims: {},
@@ -17,8 +20,9 @@ function provider(over: Partial<OidcProviderConfig> = {}): OidcProviderConfig {
   };
 }
 
+/** An id token as the token endpoint would issue it: the right issuer and audience unless a test says otherwise. */
 const jwt = (payload: Record<string, unknown>) =>
-  `h.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.s`;
+  `h.${Buffer.from(JSON.stringify({ iss: ISS, aud: 'cid', ...payload })).toString('base64url')}.s`;
 
 beforeEach(() => {
   clearLoginClaimsStash();
@@ -150,6 +154,77 @@ describe('loadOidcProfile', () => {
     expect(await loadOidcProfile(p, { idToken: jwt({ email: 'a@k.dk' }), accessToken: undefined }, fetchFn as never)).toBeNull();
   });
 
+  describe('id token checks (iss, aud, exp) before any claim is trusted', () => {
+    let warn: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+    afterEach(() => warn.mockRestore());
+    const load = (p: OidcProviderConfig, payload: Record<string, unknown>, fetchFn: unknown = vi.fn()) =>
+      loadOidcProfile(p, { idToken: jwt(payload), accessToken: undefined }, fetchFn as never);
+
+    it('refuses a foreign issuer (another tenant, another IdP) and a foreign audience', async () => {
+      expect(await load(provider(), { sub: 's', email: 'a@k.dk', iss: 'https://evil.example' })).toBeNull();
+      expect(await load(provider(), { sub: 's', email: 'a@k.dk', aud: 'someone-elses-client' })).toBeNull();
+      expect(await load(provider(), { sub: 's', email: 'a@k.dk', aud: ['x', 'y'] })).toBeNull();
+      expect(await load(provider(), { sub: 's', email: 'a@k.dk', aud: undefined })).toBeNull();
+      expect(await load(provider(), { sub: 's', email: 'a@k.dk', iss: undefined })).toBeNull();
+    });
+
+    it('accepts the audience as one of several, and needs an exact issuer', async () => {
+      expect(await load(provider(), { sub: 's', email: 'a@k.dk', aud: ['x', 'cid'] })).toMatchObject({ id: 's' });
+      expect(await load(provider(), { sub: 's', email: 'a@k.dk', iss: `${ISS}/` })).toBeNull();
+    });
+
+    it('refuses an expired token (with a minute of tolerance)', async () => {
+      const now = Math.floor(Date.now() / 1000);
+      expect(await load(provider(), { sub: 's', email: 'a@k.dk', exp: now - 3600 })).toBeNull();
+      expect(await load(provider(), { sub: 's', email: 'a@k.dk', exp: now - 30 })).toMatchObject({ id: 's' });
+      expect(await load(provider(), { sub: 's', email: 'a@k.dk', exp: now + 3600 })).toMatchObject({ id: 's' });
+    });
+
+    it('with only a discoveryUrl the issuer is the discovery document\'s; no answer means no login', async () => {
+      const p = provider({ issuer: undefined });
+      const ok = vi.fn(async () => reply({ issuer: ISS, userinfo_endpoint: 'https://idp.example/ui' }));
+      expect(await load(p, { sub: 's', email: 'a@k.dk' }, ok)).toMatchObject({ id: 's' });
+      expect(await load(p, { sub: 's', email: 'a@k.dk', iss: 'https://evil.example' }, ok)).toBeNull();
+
+      resetOidcDiscoveryCache();
+      const down = vi.fn(async () => {
+        throw new Error('network');
+      });
+      expect(await load(p, { sub: 's', email: 'a@k.dk' }, down)).toBeNull();
+      // A blip is not remembered: the next login discovers again.
+      expect(await load(p, { sub: 's', email: 'a@k.dk' }, ok)).toMatchObject({ id: 's' });
+    });
+
+    it('with explicit endpoints and no issuer there is nothing to compare, but the audience still counts', async () => {
+      const p = provider({ issuer: undefined, discoveryUrl: undefined, authorizationUrl: 'https://i/a', tokenUrl: 'https://i/t' });
+      expect(await load(p, { sub: 's', email: 'a@k.dk', iss: 'https://anything.example' })).toMatchObject({ id: 's' });
+      expect(await load(p, { sub: 's', email: 'a@k.dk', aud: 'other' })).toBeNull();
+    });
+
+    it('an undecodable id token is refused rather than ignored', async () => {
+      expect(await loadOidcProfile(provider(), { idToken: 'not-a-jwt', accessToken: 'at' }, vi.fn() as never)).toBeNull();
+    });
+
+    it('logs the provider and the failing check only, never a claim', async () => {
+      await load(provider(), { sub: 's', email: 'secret@k.dk', roles: ['top-secret-role'], iss: 'https://evil.example' });
+      const logged = JSON.stringify(warn.mock.calls);
+      expect(logged).toContain('fka');
+      expect(logged).toContain('iss');
+      expect(logged).not.toMatch(/secret|evil/);
+    });
+
+    it('checkIdTokenClaims reports which check failed', () => {
+      expect(checkIdTokenClaims({ aud: 'c', iss: 'i' }, 'c', 'i')).toBe('ok');
+      expect(checkIdTokenClaims({ aud: 'x', iss: 'i' }, 'c', 'i')).toBe('aud');
+      expect(checkIdTokenClaims({ aud: 'c', iss: 'x' }, 'c', 'i')).toBe('iss');
+      expect(checkIdTokenClaims({ aud: 'c', iss: 'i', exp: 1 }, 'c', 'i')).toBe('exp');
+      expect(checkIdTokenClaims({ aud: 'c' }, 'c', undefined)).toBe('ok');
+    });
+  });
+
   it('refuses a profile without any e-mail address itself, so better-auth never logs the claims', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const out = await loadOidcProfile(provider(), { idToken: jwt({ sub: 's1', roles: ['secret-role'], name: 'Ola Olsen' }), accessToken: undefined }, vi.fn() as never);
@@ -177,5 +252,63 @@ describe('genericOAuthConfigFor', () => {
     expect(cfg).not.toHaveProperty('discoveryUrl');
     expect(typeof cfg.getUserInfo).toBe('function');
     expect(typeof cfg.mapProfileToUser).toBe('function');
+  });
+
+  it('passes prompt and max_age to the IdP when configured, and nothing otherwise', () => {
+    expect(genericOAuthConfigFor(provider({ prompt: 'login', maxAge: 0 }))).toMatchObject({ prompt: 'login', authorizationUrlParams: { max_age: '0' } });
+    const plain = genericOAuthConfigFor(provider());
+    expect(plain).not.toHaveProperty('prompt');
+    expect(plain).not.toHaveProperty('authorizationUrlParams');
+  });
+});
+
+describe('Microsoft Entra ID (built-in provider)', () => {
+  const TENANT = '11111111-2222-3333-4444-555555555555';
+  const m = { clientId: 'cid', clientSecret: 'secret', tenantId: TENANT };
+  const token = (payload: Record<string, unknown>) =>
+    jwt({ iss: `https://login.microsoftonline.com/${TENANT}/v2.0`, aud: 'cid', tid: TENANT, sub: 'oid-1', email: 'a@k.dk', ...payload });
+
+  it('checks audience, issuer and tenant for a single tenant, and only the audience for a multi-tenant authority', () => {
+    const good = { iss: `https://login.microsoftonline.com/${TENANT}/v2.0`, aud: 'cid', tid: TENANT };
+    expect(checkEntraIdToken(good, m)).toBe('ok');
+    expect(checkEntraIdToken({ ...good, aud: 'x' }, m)).toBe('aud');
+    expect(checkEntraIdToken({ ...good, iss: 'https://login.microsoftonline.com/other/v2.0' }, m)).toBe('iss');
+    // A token with the right issuer but a foreign tenant id cannot happen from Entra, but is refused anyway.
+    expect(checkEntraIdToken({ ...good, tid: '99999999-2222-3333-4444-555555555555' }, m)).toBe('tid');
+    expect(checkEntraIdToken({ ...good, tid: undefined }, m)).toBe('tid');
+    expect(checkEntraIdToken({ aud: 'cid', iss: 'whatever', tid: 'foreign' }, { ...m, tenantId: 'common' })).toBe('ok');
+  });
+
+  it('asks for explicit scopes only: no offline_access, no User.Read, no photo', () => {
+    const cfg = entraSocialConfig({ ...m, scopes: ['GroupMember.Read.All', 'offline_access', 'openid'], prompt: 'login' });
+    expect(cfg).toMatchObject({ disableDefaultScope: true, disableProfilePhoto: true, prompt: 'login', tenantId: TENANT });
+    expect(cfg.scope).toEqual(['openid', 'profile', 'email', 'GroupMember.Read.All']);
+    expect(entraSocialConfig(m).scope).toEqual(['openid', 'profile', 'email']);
+    expect(entraSocialConfig(m)).not.toHaveProperty('prompt');
+  });
+
+  it('getUserInfo builds the login from the id token and stashes the claims for the hook in claims mode only', async () => {
+    const take = takeLoginClaims;
+    vi.stubEnv('ACCESS_SOURCE', 'claims');
+    try {
+      const out = await entraSocialConfig(m).getUserInfo({ idToken: token({ name: 'Ola', roles: ['admin'] }) });
+      expect(out).toMatchObject({ user: { id: 'oid-1', email: 'a@k.dk', name: 'Ola' } });
+      // No rolesClaim configured here: only the tenant travels, which is what the hook re-checks.
+      expect(take('microsoft', 'oid-1')).toEqual({ tid: TENANT });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    await entraSocialConfig(m).getUserInfo({ idToken: token({}) });
+    expect(take('microsoft', 'oid-1')).toBeNull();
+  });
+
+  it('getUserInfo refuses (null: the login fails) a token for the wrong audience, issuer or tenant, or without a subject', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = entraSocialConfig(m);
+    expect(await cfg.getUserInfo({ idToken: token({ aud: 'x' }) })).toBeNull();
+    expect(await cfg.getUserInfo({ idToken: token({ iss: 'https://login.microsoftonline.com/other/v2.0' }) })).toBeNull();
+    expect(await cfg.getUserInfo({ idToken: token({ tid: 'other' }) })).toBeNull();
+    expect(await cfg.getUserInfo({ idToken: token({ sub: undefined }) })).toBeNull();
+    expect(await cfg.getUserInfo({})).toBeNull();
   });
 });

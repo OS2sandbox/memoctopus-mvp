@@ -1,7 +1,8 @@
 // Teams bot lifecycle. The entity is the meeting (client-generated uuid), never
 // its title or URL. `bot.ended/error` may arrive from the bot-service
 // callback (source 'system', authenticated by BOT_INTERNAL_SECRET). bot.audio_delete
-// is the server deleting the recording it held for the browser (system action).
+// is the server deleting the recording (or the transcript stashed next to it) it held for
+// the browser (system action).
 import { z } from 'zod';
 import { amount, code, defineEvent } from './types';
 
@@ -19,7 +20,14 @@ export const botEvents = {
   // it, ttl = nobody did and the retention sweep removed it. Automatic, so 'system' first.
   'bot.audio_delete': defineEvent({
     ...callback,
-    details: z.object({ trigger: z.enum(['handoff', 'ttl']) }).strict(),
+    details: z
+      .object({
+        trigger: z.enum(['handoff', 'ttl']),
+        // What was deleted: the recording itself or the transcript stashed next to it.
+        // Absent = the audio (older rows).
+        object: z.enum(['audio', 'transcript']).optional(),
+      })
+      .strict(),
   }),
   'bot.ended': defineEvent({
     ...callback,

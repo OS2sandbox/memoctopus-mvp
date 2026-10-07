@@ -31,6 +31,7 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 }));
 
 import { POST } from './route';
+import { __resetLiveAudio } from '@/app/api/meetings/ai-audit';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION, makePrincipal } from '@/test/helpers';
 import { resolvePrincipal } from '@/lib/authz/principal';
@@ -193,19 +194,45 @@ describe('POST /api/meetings/[id]/utterance', () => {
 });
 
 describe('audit', () => {
-  it('writes no audit event: live transcription is a pipeline step (success, failure or rejected input)', async () => {
-    mockRecord.mockReset();
+  const MEETING = '11111111-2222-4333-8444-555555555555';
+  const UUID_PARAMS = { params: Promise.resolve({ id: MEETING }) };
+  const events = () => mockRecord.mock.calls.map((c) => c[1] as Record<string, unknown>);
+
+  beforeEach(() => {
+    mockRecord.mockReset().mockResolvedValue({ status: 'stored' });
     mockGetSession.mockReset();
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
     mockTranscribeRaw.mockReset();
+    __resetLiveAudio();
+  });
+
+  it('records the live audio (channel live, that utterance size) at most once per meeting and 5 minutes, never the text', async () => {
+    mockTranscribeRaw.mockResolvedValue({ text: 'Hemmelig udtalelse fra Alice', latencyMs: 5 });
+    expect((await POST(makeAudioRequest(5_000), UUID_PARAMS)).status).toBe(200);
+    expect((await POST(makeAudioRequest(6_000), UUID_PARAMS)).status).toBe(200);
+    expect((await POST(makeAudioRequest(7_000), UUID_PARAMS)).status).toBe(200);
+    expect(events()).toHaveLength(1);
+    expect(events()[0]).toMatchObject({
+      type: 'audio.upload',
+      actorUserId: FAKE_SESSION.user.id,
+      entityId: MEETING,
+      details: { channel: 'live', bytes: 5_000, durationMs: expect.any(Number) },
+    });
+    expect(JSON.stringify(events())).not.toContain('Hemmelig');
+  });
+
+  it('records a failed utterance as an error with a closed code', async () => {
     const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
-    mockTranscribeRaw.mockResolvedValueOnce({ text: 'Hemmelig udtalelse fra Alice', latencyMs: 5 });
-    expect((await POST(makeAudioRequest(5_000), PARAMS)).status).toBe(200);
-    mockTranscribeRaw.mockRejectedValueOnce(new Error('down'));
-    expect((await POST(makeAudioRequest(5_000), PARAMS)).status).toBe(502);
+    mockTranscribeRaw.mockRejectedValueOnce(Object.assign(new Error('down: Jensens barn'), { status: 502 }));
+    expect((await POST(makeAudioRequest(5_000), UUID_PARAMS)).status).toBe(502);
+    warn.mockRestore();
+    expect(events()[0]).toMatchObject({ outcome: 'error', details: { channel: 'live', bytes: 5_000, outcomeCode: 'http_502' } });
+    expect(JSON.stringify(events())).not.toContain('Jensen');
+  });
+
+  it('records nothing for rejected input or a clip too short to transcribe', async () => {
     await POST(makeRequestWithoutAudio(), PARAMS);
     await POST(makeAudioRequest(1_999), PARAMS);
-    warn.mockRestore();
     expect(mockRecord).not.toHaveBeenCalled();
   });
 });

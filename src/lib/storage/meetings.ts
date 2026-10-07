@@ -81,8 +81,10 @@ const sameStrings = (a: string[] | undefined, b: string[] | undefined) => {
 
 // Audit reporting is derived from what actually changed against the stored row, so
 // a write that repeats the current value (the participants effect re-saving on
-// mount) reports nothing. Reported here: redaction, audio deletion and a change of the
-// participant list. Status changes and renames are not audited. Only the opaque
+// mount) reports nothing. Reported here: redaction, audio deletion, a change of the
+// participant list and of the recording date. Status changes are not audited, and neither is the
+// title here: pipeline steps also write it, so a RENAME by the person is reported where the person
+// makes it (settings page, minutes header) as meeting.metadata_edit. Only the opaque
 // meeting id and a participant COUNT leave here, never a name or the title.
 function reportMeetingChanges(
   existing: StoredMeeting,
@@ -94,6 +96,9 @@ function reportMeetingChanges(
   if (patch.audioDeleted === true && !existing.audioDeleted) {
     reportAuditEvent('meeting.audio_delete', id, { trigger: opts.trigger ?? 'user' });
   }
+  if (opts.automatic !== true && patch.recordedAt !== undefined && patch.recordedAt !== existing.recordedAt) {
+    reportAuditEvent('meeting.metadata_edit', id, { field: 'recorded_at' });
+  }
   if (opts.automatic !== true && patch.participants !== undefined && !sameStrings(patch.participants, existing.participants)) {
     reportAuditEvent('meeting.participants_edit', id, { participantCount: (patch.participants ?? []).length });
   }
@@ -104,8 +109,29 @@ export async function deleteMeeting(
   // Why it was deleted, for the audit log: the person asked (default) or the app did it on its own.
   opts: { trigger?: DeleteTrigger } = {},
 ): Promise<void> {
+  const trigger = opts.trigger ?? 'user';
+  // An automatic delete is reported before anything is awaited: it can run from the tab-close
+  // purge (pagehide), where a frozen page never gets to a later step. It is retracted below when
+  // the meeting did not exist or the delete failed (a retract only undoes an event that has not
+  // been delivered yet, about a second; after that the event stays, which is accepted).
+  let retract: (() => void) | undefined;
+  try {
+    if (trigger !== 'user') retract = reportAuditEvent('meeting.delete', id, { trigger });
+  } catch {
+    // Reporting never fails a delete.
+  }
+  try {
+    await deleteMeetingRows(id, trigger, retract);
+  } catch (err) {
+    retract?.();
+    throw err;
+  }
+}
+
+async function deleteMeetingRows(id: string, trigger: DeleteTrigger, retract: (() => void) | undefined): Promise<void> {
   const db = await getDB();
   const existed = (await db.get('meetings', id)) !== undefined;
+  if (!existed) retract?.();
   const tx = db.transaction(['meetings', 'transcripts', 'minutes', 'audio'], 'readwrite');
 
   // Find and delete transcript
@@ -123,5 +149,5 @@ export async function deleteMeeting(
   await tx.objectStore('meetings').delete(id);
   await tx.done;
   // Only a meeting that existed was deleted; a repeated call reports nothing.
-  if (existed) reportAuditEvent('meeting.delete', id, { trigger: opts.trigger ?? 'user' });
+  if (existed && trigger === 'user') reportAuditEvent('meeting.delete', id, { trigger });
 }

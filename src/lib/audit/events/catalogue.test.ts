@@ -123,10 +123,10 @@ describe('catalogue structure', () => {
         'meeting.create', 'meeting.delete', 'meeting.redact', 'meeting.audio_delete',
         'meeting.minutes_view', 'meeting.transcript_view', 'meeting.audio_play',
         'meeting.recording_start', 'meeting.recording_pause', 'meeting.recording_resume', 'meeting.recording_stop',
-        'meeting.minutes_save', 'meeting.minutes_version', 'meeting.minutes_version_prune',
+        'meeting.minutes_save', 'meeting.transcript_edit', 'meeting.metadata_edit', 'meeting.minutes_version', 'meeting.minutes_version_prune',
         'meeting.participants_edit', 'meeting.speakers_edit',
         'system.config_changed',
-        'audit.export', 'audit.prune',
+        'audit.export', 'audit.prune', 'audit.events_dropped',
       ].sort(),
     );
   });
@@ -152,7 +152,10 @@ describe('catalogue structure', () => {
 
   it('allows the browser to report only meeting.*', () => {
     const clientTypes = EVENT_TYPES.filter((t) => (EVENT_CATALOGUE[t].sources as readonly string[]).includes('client'));
-    expect([...clientTypes].sort()).toEqual(Object.keys(meetingEvents).sort());
+    // The one exception is the browser's report of events it lost (audit.events_dropped, reason
+    // client_outbox): it does not go through the event list of the ingest route (whose type enum is
+    // exactly meeting.*) but through its own strict field, see client-ingest.ts.
+    expect([...clientTypes].sort()).toEqual([...Object.keys(meetingEvents), 'audit.events_dropped'].sort());
   });
 
   it('has no access.* events: rights and organisation changes are out of the log', () => {
@@ -372,6 +375,53 @@ describe('action events for access, processing, editing and deletion', () => {
     for (const [type, details] of bad) {
       expect(validateEvent(meeting(type, details, { source: 'client' })).ok, `${type} ${JSON.stringify(details)}`).toBe(false);
     }
+  });
+
+  it('audio.upload: the live and diarize channels exist next to batch, upload and bot', () => {
+    for (const channel of ['batch', 'upload', 'bot', 'live', 'diarize']) {
+      expect(validateEvent({ type: 'audio.upload', actorUserId: 'u1', details: { channel, bytes: 5 } } as unknown as AuditEventInput)).toMatchObject({ ok: true });
+    }
+  });
+
+  it('audit.events_dropped: a reason from a closed set and a positive count; system, or the browser for client_outbox', () => {
+    const ev = (over: Record<string, unknown>) => ({ type: 'audit.events_dropped', actorUserId: 'u1', source: 'system', details: { reason: 'daily_cap', count: 3 }, ...over }) as unknown as AuditEventInput;
+    for (const reason of ['daily_cap', 'rate_limit', 'actor_ceiling', 'throttle', 'client_outbox']) {
+      expect(validateEvent(ev({ details: { reason, count: 1 } }))).toMatchObject({ ok: true });
+    }
+    expect(validateEvent(ev({ source: 'client', details: { reason: 'client_outbox', count: 2 } }))).toMatchObject({ ok: true });
+    expect(validateEvent(ev({ source: 'server' })).ok).toBe(false);
+    expect(validateEvent(ev({ details: { reason: 'because I felt like it', count: 1 } })).ok).toBe(false);
+    expect(validateEvent(ev({ details: { reason: 'daily_cap', count: 0 } })).ok).toBe(false);
+    expect(validateEvent(ev({ details: { reason: 'daily_cap', count: 1, eventType: 'meeting.delete' } })).ok).toBe(false);
+    expect(validateEvent(ev({ entityId: UUID_A })).ok).toBe(false);
+  });
+
+  it('new meeting edits carry no content: metadata_edit names the field only, transcript_edit has no details', () => {
+    const base = { source: 'client', actorUserId: 'u1', entityId: UUID_A };
+    expect(validateEvent({ ...base, type: 'meeting.metadata_edit', details: { field: 'title' } } as unknown as AuditEventInput)).toMatchObject({ ok: true });
+    expect(validateEvent({ ...base, type: 'meeting.metadata_edit', details: { field: 'recorded_at' } } as unknown as AuditEventInput)).toMatchObject({ ok: true });
+    expect(validateEvent({ ...base, type: 'meeting.metadata_edit', details: { field: 'title', value: 'Sag om Jensen' } } as unknown as AuditEventInput).ok).toBe(false);
+    expect(validateEvent({ ...base, type: 'meeting.metadata_edit', details: { field: 'participants' } } as unknown as AuditEventInput).ok).toBe(false);
+    expect(validateEvent({ ...base, type: 'meeting.transcript_edit', details: {} } as unknown as AuditEventInput)).toMatchObject({ ok: true });
+    expect(validateEvent({ ...base, type: 'meeting.transcript_edit', details: { text: 'x' } } as unknown as AuditEventInput).ok).toBe(false);
+  });
+
+  it('bot.audio_delete may say the transcript was deleted; system.config_changed may name settings (names only, at most 32)', () => {
+    const del = (details: Record<string, unknown>) => ({ type: 'bot.audio_delete', source: 'system', details }) as unknown as AuditEventInput;
+    expect(validateEvent(del({ trigger: 'ttl', object: 'transcript' }))).toMatchObject({ ok: true });
+    expect(validateEvent(del({ trigger: 'handoff' }))).toMatchObject({ ok: true });
+    expect(validateEvent(del({ trigger: 'ttl', object: 'minutes' })).ok).toBe(false);
+    const cfg = (details: Record<string, unknown>) => ({ type: 'system.config_changed', source: 'system', details }) as unknown as AuditEventInput;
+    const fp = '0123456789abcdef';
+    expect(validateEvent(cfg({ fingerprint: fp, changed: true, changedKeys: ['ACCESS_SOURCE', 'HVISKE_URL'] }))).toMatchObject({ ok: true });
+    expect(validateEvent(cfg({ fingerprint: fp, changed: true, changedKeys: ['ACCESS_SOURCE=local'] })).ok).toBe(false);
+    expect(validateEvent(cfg({ fingerprint: fp, changed: true, changedKeys: Array.from({ length: 33 }, (_, i) => `K_${i}`) })).ok).toBe(false);
+  });
+
+  it('authz.denied can carry a droppedCount for a summarised burst', () => {
+    const ev = (details: Record<string, unknown>) => ({ type: 'authz.denied', actorUserId: 'u1', details }) as unknown as AuditEventInput;
+    expect(validateEvent(ev({ required: 'bot.meeting_owner', reason: 'burst_summary', droppedCount: 40 }))).toMatchObject({ ok: true });
+    expect(validateEvent(ev({ required: 'x', reason: 'y', droppedCount: 0 })).ok).toBe(false);
   });
 
   it('audio.upload: server or system source, meeting optional, sizes and codes only', () => {

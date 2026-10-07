@@ -113,15 +113,23 @@ export function viewAgainstCatalogue(
   catalogue: ReadonlyMap<string, CentralCatalogueEntry>,
 ): CentralPrincipalTargetView {
   const hit = catalogue.get(principalKey(t));
-  if (!hit) return { kind: t.kind, identifier: t.identifier, name: t.name ?? t.identifier, status: 'unknown' };
-  return { kind: t.kind, identifier: t.identifier, name: hit.name, status: hit.active ? 'active' : 'inactive' };
+  if (!hit) return { kind: t.kind, identifier: t.identifier, name: t.name ?? t.identifier, status: 'unknown', holders: 0 };
+  return { kind: t.kind, identifier: t.identifier, name: hit.name, status: hit.active ? 'active' : 'inactive', holders: hit.holders };
 }
+
+/** "0 personer har den ved seneste login": the zero-match feedback for a role or group. */
+export const NO_HOLDERS_TEXT = '0 personer har den ved seneste login';
+
+/** How many people hold a role/group from their latest login, as a short Danish phrase (a count, never who). */
+export const holdersLabel = (n: number): string => (n === 0 ? NO_HOLDERS_TEXT : n === 1 ? '1 person har den' : `${n} personer har den`);
 
 export interface AudienceEntry {
   key: string;
   label: string;
   /** A role/group that is withdrawn from or missing in the catalogue: it reaches nobody. */
   flagged: boolean;
+  /** An active role/group that nobody holds from their latest login: it cannot match yet (often an identifier that differs from the IdP's claim value). */
+  empty: boolean;
 }
 
 /** Every role, group and unit a template is made available to, named; roles and groups first. */
@@ -134,18 +142,21 @@ export function audienceEntries(
       key: principalKey(p),
       label: `${principalKindLabels[p.kind]}: ${p.name}`,
       flagged: p.status !== 'active',
+      empty: p.status === 'active' && p.holders === 0,
     })),
     ...t.targets.map((u) => ({
       key: `unit:${u.orgUnitUuid}`,
       label: `Enhed: ${unitName(u.orgUnitUuid)}${u.includeDescendants ? ' (inkl. underenheder)' : ''}`,
       flagged: false,
+      empty: false,
     })),
   ];
 }
 
-/** At most `max` entries, flagged ones first (a manager must see those), and how many were left out. */
+/** At most `max` entries, flagged (and zero-holder) ones first (a manager must see those), and how many were left out. */
 export function truncateAudience(entries: readonly AudienceEntry[], max = 3): { shown: AudienceEntry[]; more: AudienceEntry[] } {
-  const ordered = [...entries.filter((e) => e.flagged), ...entries.filter((e) => !e.flagged)];
+  const warn = (e: AudienceEntry) => e.flagged || e.empty;
+  const ordered = [...entries.filter(warn), ...entries.filter((e) => !warn(e))];
   return { shown: ordered.slice(0, max), more: ordered.slice(max) };
 }
 

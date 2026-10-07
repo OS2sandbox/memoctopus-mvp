@@ -40,6 +40,7 @@ export function csvCell(value: unknown): string {
 
 export const CSV_HEADER = [
   'Tidspunkt (UTC)',
+  'Tidspunkt (klient, selvrapporteret)',
   'Hændelse',
   'Hændelseskode',
   'Resultat',
@@ -60,6 +61,8 @@ export const CSV_HEADER = [
 export function auditRowToCsvFields(row: AuditEventRow): unknown[] {
   return [
     row.occurredAt,
+    // Only a client event carries one; it is the browser's own claim (clamped), not proof.
+    row.clientOccurredAt,
     eventTypeLabel(row.eventType),
     row.eventType,
     outcomeLabels[row.outcome] ?? row.outcome,

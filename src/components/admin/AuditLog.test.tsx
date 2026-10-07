@@ -136,8 +136,25 @@ describe('AuditLog', () => {
   it('marks client events as selvrapporteret', async () => {
     setup(ADMIN_ME, () => json({ events: [ev({ source: 'client', eventType: 'meeting.delete', details: {} })], nextCursor: null }));
     render(<AuditLog />);
-    const row = (await screen.findByText('Anne Admin slettede et møde med transskription og alle referatversioner')).closest('li')!;
+    const row = (await screen.findByText('Anne Admin slettede et møde med transskription, referatversioner og lyd')).closest('li')!;
     expect(within(row).getByText('selvrapporteret')).toBeInTheDocument();
+  });
+
+  it('shows the browser own time for a client event only when it differs from the server time by over a minute', async () => {
+    setup(ADMIN_ME, () =>
+      json({
+        events: [
+          ev({ id: '2', source: 'client', eventType: 'meeting.minutes_view', details: {}, clientOccurredAt: '2026-10-05T06:00:00.000Z' }),
+          ev({ id: '1', source: 'client', eventType: 'meeting.audio_play', details: {}, clientOccurredAt: '2026-10-05T09:30:20.000Z' }),
+        ],
+        nextCursor: null,
+      }),
+    );
+    render(<AuditLog />);
+    const viewed = (await screen.findByText('Anne Admin åbnede et referat')).closest('li')!;
+    expect(within(viewed).getByText(/Handlingen skete \(selvrapporteret\)/)).toBeInTheDocument();
+    const played = (await screen.findByText('Anne Admin afspillede lyden fra et møde')).closest('li')!;
+    expect(within(played).queryByText(/Handlingen skete/)).toBeNull();
   });
 
   it('shows an empty state', async () => {

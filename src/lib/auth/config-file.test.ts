@@ -16,6 +16,8 @@ function writeConfig(content: unknown, name = 'auth.json'): string {
 }
 const warned = () => JSON.stringify(warn.mock.calls);
 
+const TENANT = '11111111-2222-3333-4444-555555555555';
+
 const OIDC = {
   type: 'oidc',
   id: 'fka',
@@ -114,12 +116,27 @@ describe('AUTH_CONFIG_FILE', () => {
     expect(loadAuthConfig().providers[0]).toMatchObject({ authorizationUrl: 'https://i/auth', tokenUrl: 'https://i/token' });
   });
 
-  it('entra is always the built-in "microsoft" provider, with the tenant defaulting to common', () => {
-    writeConfig({ providers: [{ type: 'entra', clientId: 'a', clientSecret: 'b', tenantId: 'tenant-1' }, { type: 'entra', clientId: 'c', clientSecret: 'd' }] });
+  it('entra is always the built-in "microsoft" provider and needs ONE tenant (a GUID): no "common" default', () => {
+    writeConfig({
+      providers: [
+        { type: 'entra', clientId: 'a', clientSecret: 'b', tenantId: TENANT.toUpperCase() },
+        { type: 'entra', clientId: 'c', clientSecret: 'd', tenantId: TENANT },
+      ],
+    });
     const cfg = loadAuthConfig();
     expect(cfg.providers).toHaveLength(1); // the second one reuses the id "microsoft"
-    expect(cfg.providers[0]).toMatchObject({ type: 'entra', id: 'microsoft', tenantId: 'tenant-1' });
+    expect(cfg.providers[0]).toMatchObject({ type: 'entra', id: 'microsoft', tenantId: TENANT });
   });
+
+  it.each([['missing', undefined], ['common', 'common'], ['organizations', 'organizations'], ['consumers', 'consumers'], ['a name', 'contoso.onmicrosoft.com']])(
+    'skips an entra provider whose tenant is %s, with a content-free warning',
+    (_n, tenantId) => {
+      writeConfig({ providers: [{ type: 'entra', clientId: 'a', clientSecret: 'top-secret-b', ...(tenantId ? { tenantId } : {}) }, { ...OIDC, id: 'other' }] });
+      expect(loadAuthConfig().providers.map((p) => p.id)).toEqual(['other']);
+      expect(warned()).toContain('providers[0]');
+      expect(warned()).not.toContain('top-secret-b');
+    },
+  );
 
   describe('claim lists', () => {
     it('a string is an array claim; the object form can say delimited', () => {
@@ -146,15 +163,44 @@ describe('AUTH_CONFIG_FILE', () => {
       expect(loadAuthConfig().providers.map((p) => p.id)).toEqual(['kommune']);
     });
 
-    it('requires signed assertions and allows IdP-initiated login by default', () => {
+    it('is strict by default: IdP-initiated login off, deprecated algorithms off', () => {
       writeConfig({ providers: [SAML] });
-      expect(loadAuthConfig().providers[0]).toMatchObject({ wantAssertionsSigned: true, allowIdpInitiated: true, authnRequestsSigned: false });
+      expect(loadAuthConfig().providers[0]).toMatchObject({
+        wantAssertionsSigned: true,
+        allowIdpInitiated: false,
+        allowDeprecatedAlgorithms: false,
+        authnRequestsSigned: false,
+      });
     });
 
-    it('warns when signing is switched off', () => {
-      writeConfig({ providers: [{ ...SAML, wantAssertionsSigned: false }] });
+    it('warns when the cosmetic wantAssertionsSigned is false, and when a weakening option is on', () => {
+      writeConfig({ providers: [{ ...SAML, wantAssertionsSigned: false, allowIdpInitiated: true, allowDeprecatedAlgorithms: true }] });
       loadAuthConfig();
       expect(warned()).toContain('wantAssertionsSigned is false');
+      expect(warned()).toContain('allowIdpInitiated is on');
+      expect(warned()).toContain('allowDeprecatedAlgorithms is on');
+    });
+
+    it('accepts one certificate or a list (a rollover), nothing else', () => {
+      writeConfig({ providers: [{ ...SAML, cert: ['MIIC1', 'MIIC2'] }, { ...SAML, id: 'two', cert: 7 }] });
+      const cfg = loadAuthConfig();
+      expect(cfg.providers.map((p) => p.id)).toEqual(['kommune']);
+      expect(cfg.providers[0]).toMatchObject({ cert: ['MIIC1', 'MIIC2'] });
+    });
+
+    it('warns (does not skip) when the SAML userId attribute is the e-mail attribute', () => {
+      writeConfig({ providers: [{ ...SAML, claims: { userId: 'Mail', email: 'mail' } }] });
+      expect(loadAuthConfig().providers).toHaveLength(1);
+      expect(warned()).toContain('claims.userId is the same attribute as claims.email');
+    });
+
+    it('skips a provider whose IdP metadata has an http endpoint (outside a loopback host)', () => {
+      const bad = path.join(dir, 'bad.xml');
+      const good = path.join(dir, 'good.xml');
+      writeFileSync(bad, '<EntityDescriptor><IDPSSODescriptor><SingleSignOnService Binding="x" Location="http://idp.example/sso"/></IDPSSODescriptor></EntityDescriptor>');
+      writeFileSync(good, '<EntityDescriptor><IDPSSODescriptor><SingleSignOnService Binding="x" Location="https://idp.example/sso?a=1&amp;b=2"/></IDPSSODescriptor></EntityDescriptor>');
+      writeConfig({ providers: [{ type: 'saml', id: 'bad', idpMetadataFile: bad }, { type: 'saml', id: 'good', idpMetadataFile: good }] });
+      expect(loadAuthConfig().providers.map((p) => p.id)).toEqual(['good']);
     });
 
     it('reads the IdP metadata file once, and skips the provider when it cannot be read', () => {
@@ -169,6 +215,103 @@ describe('AUTH_CONFIG_FILE', () => {
     it('authnRequestsSigned needs a private key', () => {
       writeConfig({ providers: [{ ...SAML, authnRequestsSigned: true }] });
       expect(loadAuthConfig().providers).toEqual([]);
+    });
+  });
+
+  describe('IdP URL hygiene', () => {
+    it('refuses every non-https IdP URL, except http on a loopback host outside production', () => {
+      writeConfig({
+        providers: [
+          { ...OIDC, id: 'plain', discoveryUrl: 'http://idp.example/d' },
+          { ...OIDC, id: 'issuer', issuer: 'http://idp.example' },
+          { ...OIDC, id: 'ftp', discoveryUrl: 'ftp://idp.example/d' },
+          { ...OIDC, id: 'ep', discoveryUrl: undefined, authorizationUrl: 'https://i/a', tokenUrl: 'http://i/t' },
+          { ...OIDC, id: 'ui', userInfoUrl: 'http://i/ui' },
+          { type: 'saml', id: 'saml-http', entryPoint: 'http://idp.example/sso', idpEntityId: 'x', cert: 'MIIC' },
+          { ...OIDC, id: 'local', discoveryUrl: 'http://localhost:8080/d' },
+          { ...OIDC, id: 'loop', discoveryUrl: 'http://127.0.0.1:8080/d' },
+        ],
+      });
+      expect(loadAuthConfig().providers.map((p) => p.id)).toEqual(['local', 'loop']);
+    });
+
+    it('in production loopback http is refused too, and an oidc/saml provider needs BETTER_AUTH_URL to be an https URL', () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      vi.stubEnv('BETTER_AUTH_URL', 'https://referat.kommune.dk');
+      writeConfig({ providers: [{ ...OIDC, id: 'local', discoveryUrl: 'http://localhost:8080/d' }, OIDC] });
+      expect(loadAuthConfig().providers.map((p) => p.id)).toEqual(['fka']);
+
+      for (const base of ['', 'http://referat.kommune.dk', 'not a url', 'https://referat.kommune.dk/?x=1']) {
+        vi.stubEnv('BETTER_AUTH_URL', base);
+        writeConfig({ providers: [OIDC, { type: 'saml', id: 's', entryPoint: 'https://idp.example/sso', idpEntityId: 'x', cert: 'M' }] });
+        expect(loadAuthConfig().providers, base).toEqual([]);
+      }
+      expect(warned()).toContain('BETTER_AUTH_URL');
+    });
+
+    it('the https requirement on BETTER_AUTH_URL does not apply to entra, nor outside production', () => {
+      vi.stubEnv('BETTER_AUTH_URL', 'http://localhost:3004');
+      writeConfig({ providers: [OIDC] });
+      expect(loadAuthConfig().providers).toHaveLength(1);
+      vi.stubEnv('NODE_ENV', 'production');
+      writeConfig({ providers: [{ type: 'entra', clientId: 'a', clientSecret: 'b', tenantId: TENANT }] });
+      expect(loadAuthConfig().providers).toHaveLength(1);
+    });
+  });
+
+  describe('ACCESS_SOURCE=claims', () => {
+    beforeEach(() => vi.stubEnv('ACCESS_SOURCE', 'claims'));
+
+    it.each([
+      'https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration',
+      'https://login.microsoftonline.com/organizations/v2.0/.well-known/openid-configuration',
+      'https://login.microsoftonline.com/consumers/v2.0/.well-known/openid-configuration',
+      'https://login.microsoftonline.com/Common/',
+    ])('refuses an oidc provider on a multi-tenant authority: %s', (discoveryUrl) => {
+      writeConfig({ providers: [{ ...OIDC, discoveryUrl }, { ...OIDC, id: 'issuer', discoveryUrl: undefined, issuer: 'https://login.microsoftonline.com/organizations/v2.0', authorizationUrl: 'https://a/a', tokenUrl: 'https://a/t' }] });
+      expect(loadAuthConfig().providers).toEqual([]);
+      expect(warned()).toContain('multi-tenant authority');
+    });
+
+    it('accepts the tenant-specific authority, and refuses explicit endpoints without a discoveryUrl or issuer', () => {
+      writeConfig({
+        providers: [
+          { ...OIDC, discoveryUrl: `https://login.microsoftonline.com/${TENANT}/v2.0/.well-known/openid-configuration` },
+          { type: 'oidc', id: 'ep', clientId: 'a', clientSecret: 'b', authorizationUrl: 'https://i/auth', tokenUrl: 'https://i/token' },
+          { type: 'oidc', id: 'ep2', clientId: 'a', clientSecret: 'b', authorizationUrl: 'https://i/auth', tokenUrl: 'https://i/token', issuer: 'https://i' },
+        ],
+      });
+      expect(loadAuthConfig().providers.map((p) => p.id)).toEqual(['fka', 'ep2']);
+    });
+
+    it('outside claims mode a multi-tenant authority is not refused (no roles come from it)', () => {
+      vi.stubEnv('ACCESS_SOURCE', 'local');
+      writeConfig({ providers: [{ ...OIDC, discoveryUrl: 'https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration' }] });
+      expect(loadAuthConfig().providers).toHaveLength(1);
+    });
+  });
+
+  describe('identity key and reserved ids', () => {
+    it.each(['email', 'mail', 'upn', 'preferred_username', 'name', 'email_verified', 'Email', ' UPN '])(
+      'refuses an oidc provider whose claims.userId is the mutable attribute %j',
+      (userId) => {
+        writeConfig({ providers: [{ ...OIDC, claims: { userId } }, { ...OIDC, id: 'ok', claims: { userId: 'oid' } }] });
+        expect(loadAuthConfig().providers.map((p) => p.id)).toEqual(['ok']);
+      },
+    );
+
+    it.each(['credential', 'password', 'unknown', 'microsoft'])('refuses the reserved provider id %s', (id) => {
+      writeConfig({ providers: [{ ...OIDC, id }, { type: 'saml', id, entryPoint: 'https://i/sso', idpEntityId: 'x', cert: 'M' }] });
+      expect(loadAuthConfig().providers).toEqual([]);
+    });
+  });
+
+  describe('session hygiene options', () => {
+    it('passes prompt and maxAge through, and refuses nonsense', () => {
+      writeConfig({ providers: [{ ...OIDC, prompt: 'login', maxAge: 0 }, { ...OIDC, id: 'bad1', prompt: 'none' }, { ...OIDC, id: 'bad2', maxAge: -1 }] });
+      const cfg = loadAuthConfig();
+      expect(cfg.providers.map((p) => p.id)).toEqual(['fka']);
+      expect(cfg.providers[0]).toMatchObject({ prompt: 'login', maxAge: 0 });
     });
   });
 
@@ -232,6 +375,33 @@ describe('AUTH_CONFIG_FILE', () => {
       writeConfig('[]');
       expect(loadAuthConfig().roles).toEqual({ state: 'invalid' });
     });
+
+    it('byProvider carries the maps per provider; the global maps are a fallback for a single provider only', () => {
+      writeConfig({
+        providers: [OIDC, { ...OIDC, id: 'b' }],
+        roles: {
+          appRoleMap: { g: 'tt-bruger' },
+          byProvider: { fka: { appRoleMap: { admin: 'tt-administrator' }, groupRoleMap: { x: 'tt-logleser' } } },
+        },
+      });
+      const { roles } = loadAuthConfig();
+      if (roles.state !== 'ok') throw new Error('expected ok');
+      expect(roles.providerCount).toBe(2);
+      expect([...(roles.byProvider?.get('fka')?.appRoleMap.keys() ?? [])]).toEqual(['admin']);
+      expect([...(roles.byProvider?.get('fka')?.groupRoleMap.keys() ?? [])]).toEqual(['x']);
+      expect(roles.byProvider?.has('b')).toBe(false);
+      expect(warned()).toContain('roles.byProvider');
+    });
+
+    it('a byProvider entry for an unknown provider id is kept but unused (warned); a bad id or entry fails closed', () => {
+      writeConfig({ providers: [OIDC], roles: { byProvider: { nobody: { appRoleMap: { a: 'tt-bruger' } } } } });
+      expect(loadAuthConfig().roles.state).toBe('ok');
+      expect(warned()).toContain('not configured');
+      writeConfig({ providers: [OIDC], roles: { byProvider: { 'Bad Id!': { appRoleMap: {} } } } });
+      expect(loadAuthConfig().roles).toEqual({ state: 'invalid' });
+      writeConfig({ providers: [OIDC], roles: { byProvider: { fka: { appRoleMap: { a: 'tt-god' } } } } });
+      expect(loadAuthConfig().roles).toEqual({ state: 'invalid' });
+    });
   });
 
   describe('catalogue', () => {
@@ -253,8 +423,33 @@ describe('AUTH_CONFIG_FILE', () => {
       writeConfig({ providers: [OIDC], roles: { appRoleMap: { a: 'tt-administrator' } }, catalogue: [{ kind: 'team', identifier: 'x', name: 'y' }] });
       const cfg = loadAuthConfig();
       expect(cfg.catalogue).toEqual([]);
+      expect(cfg.catalogueState).toBe('invalid');
       expect(cfg.roles.state).toBe('ok');
       expect(cfg.providers).toHaveLength(1);
+    });
+
+    it('reports its state: absent without a section or a file, ok with one (even an empty list), invalid when unusable', () => {
+      expect(loadAuthConfig().catalogueState).toBe('absent'); // no AUTH_CONFIG_FILE
+      writeConfig({ providers: [OIDC] });
+      expect(loadAuthConfig().catalogueState).toBe('absent');
+      writeConfig({ catalogue: [] });
+      expect(loadAuthConfig().catalogueState).toBe('ok');
+      writeConfig({ catalogue: [{ kind: 'role', identifier: 'r', name: 'R' }] });
+      expect(loadAuthConfig().catalogueState).toBe('ok');
+      writeConfig({ catalogue: [{ kind: 'role', identifier: '${NOT_SET_ANYWHERE}', name: 'R' }] });
+      expect(loadAuthConfig().catalogueState).toBe('invalid');
+      writeConfig('{ not json');
+      expect(loadAuthConfig().catalogueState).toBe('invalid');
+      vi.stubEnv('AUTH_CONFIG_FILE', path.join(dir, 'nope.json'));
+      resetAuthConfigCache();
+      expect(loadAuthConfig().catalogueState).toBe('invalid');
+    });
+
+    it('keeps the optional providers list of an entry', () => {
+      writeConfig({ catalogue: [{ kind: 'role', identifier: 'r', name: 'R', providers: ['a', 'B'] }] });
+      expect(loadAuthConfig().catalogue[0]).toMatchObject({ providers: ['a', 'b'] });
+      writeConfig({ catalogue: [{ kind: 'role', identifier: 'r', name: 'R', providers: [] }] });
+      expect(loadAuthConfig().catalogueState).toBe('invalid');
     });
   });
 

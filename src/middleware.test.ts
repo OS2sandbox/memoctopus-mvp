@@ -52,6 +52,16 @@ describe('middleware', () => {
       expect(cleared).toContain(`${SECURE_SESSION_COOKIE}=;`);
     });
 
+    it('clears the __Secure- cookie with the Secure attribute (the browser ignores a delete without it), and the plain one', () => {
+      const res = middleware(makeReq('/?expired=1', { [SECURE_SESSION_COOKIE]: TOKEN }));
+      const cookies = res.headers.getSetCookie();
+      const secure = cookies.find((c) => c.startsWith(`${SECURE_SESSION_COOKIE}=`))!;
+      expect(secure).toMatch(/;\s*Secure/i);
+      expect(secure).toMatch(/Path=\//i);
+      expect(secure).toMatch(/Max-Age=0|Expires=/i);
+      expect(cookies.some((c) => c.startsWith(`${SESSION_COOKIE}=`))).toBe(true);
+    });
+
     it('redirects to /dashboard when the secure cookie variant is set', () => {
       const res = middleware(makeReq('/', { [SECURE_SESSION_COOKIE]: TOKEN }));
       expect(res.status).toBe(307);

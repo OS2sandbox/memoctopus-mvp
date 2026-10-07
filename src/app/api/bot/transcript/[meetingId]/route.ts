@@ -13,7 +13,7 @@ import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 //   { status: 'failed' }              → server-side run failed — client fallback
 //   { status: 'ready', segments, diarized } → done; the stash is deleted on hand-off
 export const GET = withHandler('bot/transcript', async (
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ meetingId: string }> },
 ) => {
   const access = await requireAppAccess();
@@ -27,6 +27,7 @@ export const GET = withHandler('bot/transcript', async (
   // transcript is never exposed and the destructive delete below is never reached.
   if (!(await assertBotMeetingOwner(meetingId, session.user.id))) {
     await recordAuthzDenied({
+      req,
       actorUserId: session.user.id,
       required: 'bot.meeting_owner',
       reason: 'not_owner',
@@ -43,7 +44,8 @@ export const GET = withHandler('bot/transcript', async (
     return NextResponse.json({ status: 'processing' }, { headers: { 'Cache-Control': 'no-store' } });
   }
 
-  await deletePendingTranscript(meetingId);
+  // The server-held copy goes as soon as the browser has it; the deletion is recorded (when it held text).
+  await deletePendingTranscript(meetingId, { trigger: 'handoff', actorUserId: session.user.id, req });
   if (transcript.status === 'failed') return NextResponse.json({ status: 'failed' });
   return NextResponse.json({
     status: 'ready',

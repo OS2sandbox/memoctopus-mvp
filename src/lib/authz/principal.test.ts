@@ -18,6 +18,7 @@ vi.mock('@/lib/db', () => ({
   },
 }));
 
+import { loginRefusal } from './guard';
 import { dropStaleAssignments, resolvePrincipal, type AssignmentSourceRow } from './principal';
 
 const DU = 'dddd0000-0000-4000-8000-000000000001';
@@ -317,6 +318,9 @@ describe('resolvePrincipal in claims mode', () => {
   beforeEach(() => {
     vi.stubEnv('ACCESS_SOURCE', 'claims');
     vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', '3600');
+    // These cases are about WHICH rows count; the baseline role they fall back to only exists when
+    // the installation opted out of "no role, no access" (see the next describe for the default).
+    vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'false');
   });
 
   it('a fresh claims role resolves, tagged claims; global NULL scope on a role that may be global', async () => {
@@ -380,5 +384,50 @@ describe('resolvePrincipal in claims mode', () => {
     const p = await resolvePrincipal('u1');
     expect(p.disabled).toBe(true);
     expect(p.roles).toEqual([]);
+  });
+});
+
+describe('claims mode requires a mapped role by default', () => {
+  beforeEach(() => {
+    vi.stubEnv('ACCESS_SOURCE', 'claims');
+    vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', '3600');
+    vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', '');
+  });
+
+  it('a person the IdP mapped to no role (no row at all) has no role, not even the baseline', async () => {
+    const p = await resolvePrincipal('u1');
+    expect(p).toMatchObject({ roles: [], capabilities: [], directoryUserUuid: null });
+    expect(loginRefusal(p)).toBe('no_role');
+  });
+
+  it('a stale or foreign-source row leaves nobody with a role either', async () => {
+    rowsRef.rows = [
+      row({ roleKey: 'tt-administrator', source: 'claims', syncedAt: new Date(Date.now() - 2 * 3_600_000) }),
+      row({ roleKey: 'tt-administrator', source: 'local' }),
+    ];
+    const p = await resolvePrincipal('u1');
+    expect(p.roles).toEqual([]);
+    expect(loginRefusal(p)).toBe('no_role');
+  });
+
+  it('a mapped role (even just tt-bruger) logs in', async () => {
+    rowsRef.rows = [row({ roleKey: 'tt-bruger', source: 'claims', syncedAt: new Date() })];
+    const p = await resolvePrincipal('u1');
+    expect(p.roles).toEqual(['tt-bruger']);
+    expect(loginRefusal(p)).toBeNull();
+  });
+
+  it('only an explicit REQUIRE_ROLE_TO_LOGIN=false brings the baseline back', async () => {
+    vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'false');
+    const p = await resolvePrincipal('u1');
+    expect(p.roles).toEqual(['tt-bruger']);
+    expect(loginRefusal(p)).toBeNull();
+  });
+
+  it('the other modes keep the baseline by default', async () => {
+    for (const mode of ['local', 'rollekatalog']) {
+      vi.stubEnv('ACCESS_SOURCE', mode);
+      expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger']);
+    }
   });
 });

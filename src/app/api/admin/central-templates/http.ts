@@ -78,6 +78,7 @@ const principalView = (t: CentralPrincipalTargetView): CentralPrincipalTargetVie
   identifier: t.identifier,
   name: t.name,
   status: t.status,
+  holders: t.holders ?? 0,
 });
 
 const principalSnapshot = (t: CentralPrincipalTargetSnapshot): CentralPrincipalTargetSnapshot => ({
@@ -92,6 +93,7 @@ export const catalogueEntryDto = (e: CentralCatalogueEntry): CentralCatalogueEnt
   name: e.name,
   source: e.source,
   active: e.active,
+  holders: e.holders ?? 0,
 });
 
 const content = (c: CentralTemplateContent): CentralTemplateContent => ({
