@@ -219,15 +219,16 @@ describe('reportAuditEvent', () => {
   });
 
   describe('coalescing', () => {
-    // No reported type is chatty any more, so the set is empty; the mechanism is
-    // exercised by listing one type (the module is reloaded for every test).
+    // The edit-like types are coalesced by default; the generic mechanism below is
+    // exercised with meeting.create (the module is reloaded for every test).
     beforeEach(() => {
       c.COALESCED.add('meeting.create');
     });
 
-    it('is empty by default: the reported types are one-off lifecycle moments', async () => {
+    it('coalesces the edit-like types by default and nothing else', async () => {
       await load();
-      expect(c.COALESCED.size).toBe(0);
+      c.COALESCED.delete('meeting.create');
+      expect([...c.COALESCED].sort()).toEqual(['meeting.minutes_save', 'meeting.participants_edit', 'meeting.speakers_edit']);
     });
 
     it('sends one event per meeting+type per 30 s window carrying the last details', async () => {
@@ -290,6 +291,53 @@ describe('reportAuditEvent', () => {
     c.reportAuditEvent('meeting.audio_delete', MEETING);
     await vi.advanceTimersByTimeAsync(1500);
     expect(sentBodies().flat()).toHaveLength(3);
+  });
+
+  it.each(['meeting.minutes_view', 'meeting.transcript_view', 'meeting.audio_play'] as const)(
+    'collapses repeated %s of one meeting inside 60 s (each type and meeting on its own) and reports again later',
+    async (type) => {
+      c.reportAuditEvent(type, MEETING);
+      c.reportAuditEvent(type, MEETING);
+      c.reportAuditEvent(type, OTHER);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(sentBodies().flat().map((e) => [e.type, e.entityId])).toEqual([[type, MEETING], [type, OTHER]]);
+      await vi.advanceTimersByTimeAsync(61_000);
+      c.reportAuditEvent(type, MEETING);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(sentBodies().flat()).toHaveLength(3);
+    },
+  );
+
+  it('does not collapse actions that are each distinct: recording steps, versions and deletes are all reported', async () => {
+    c.reportAuditEvent('meeting.recording_pause', MEETING);
+    c.reportAuditEvent('meeting.recording_resume', MEETING);
+    c.reportAuditEvent('meeting.recording_pause', MEETING);
+    c.reportAuditEvent('meeting.minutes_version', MEETING, { versionNumber: 2, action: 'activate' });
+    c.reportAuditEvent('meeting.minutes_version', MEETING, { versionNumber: 1, action: 'activate' });
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(sentBodies().flat()).toHaveLength(5);
+  });
+
+  it('coalesces autosave and the participant/speaker lists to one event per window', async () => {
+    for (let i = 0; i < 20; i++) c.reportAuditEvent('meeting.minutes_save', MEETING);
+    c.reportAuditEvent('meeting.participants_edit', MEETING, { participantCount: 2 });
+    c.reportAuditEvent('meeting.participants_edit', MEETING, { participantCount: 5 });
+    c.reportAuditEvent('meeting.speakers_edit', MEETING, { speakerCount: 3 });
+    expect(h.queue).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(31_000 + 1500);
+    const sent = sentBodies().flat();
+    expect(sent.map((e) => e.type).sort()).toEqual(['meeting.minutes_save', 'meeting.participants_edit', 'meeting.speakers_edit']);
+    expect(sent.find((e) => e.type === 'meeting.participants_edit')!.details).toEqual({ participantCount: 5 });
+  });
+
+  it('writes a coalesced event out early when the tab is hidden, so closing the tab loses nothing', async () => {
+    c.reportAuditEvent('meeting.minutes_save', MEETING);
+    expect(h.queue).toHaveLength(0);
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.queue.map((e) => e.type).concat(sentBodies().flat().map((e) => e.type))).toContain('meeting.minutes_save');
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
   });
 
   it('never throws and never blocks when the outbox fails', async () => {

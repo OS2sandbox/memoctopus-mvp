@@ -5,6 +5,13 @@ vi.mock('@/lib/bot-pending-audio', () => ({
   storePendingAudio: vi.fn().mockResolvedValue(undefined),
   storePendingTranscript: vi.fn().mockResolvedValue(undefined),
   markNoRecording: vi.fn().mockResolvedValue(undefined),
+  getBotMeetingOwner: vi.fn().mockResolvedValue('owner-1'),
+}));
+
+vi.mock('@/lib/db', () => ({ db: {}, pool: {} }));
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
+  recordServerEvent: vi.fn().mockResolvedValue({ status: 'stored' }),
 }));
 
 vi.mock('@/lib/bot-transcribe', () => ({
@@ -12,13 +19,17 @@ vi.mock('@/lib/bot-transcribe', () => ({
 }));
 
 import { POST } from './route';
-import { storePendingAudio, storePendingTranscript, markNoRecording } from '@/lib/bot-pending-audio';
+import { storePendingAudio, storePendingTranscript, markNoRecording, getBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { recordServerEvent } from '@/lib/audit/record';
 import { processBotRecording } from '@/lib/bot-transcribe';
 
 const mockStore = vi.mocked(storePendingAudio);
 const mockStoreTranscript = vi.mocked(storePendingTranscript);
 const mockMarkNoRecording = vi.mocked(markNoRecording);
 const mockProcess = vi.mocked(processBotRecording);
+const mockOwner = vi.mocked(getBotMeetingOwner);
+const mockRecord = vi.mocked(recordServerEvent);
+const MEETING = '11111111-2222-4333-8444-555555555555';
 
 const SECRET = 'test-bot-secret';
 
@@ -29,6 +40,8 @@ beforeEach(() => {
   mockStoreTranscript.mockReset().mockResolvedValue(undefined);
   mockMarkNoRecording.mockReset().mockResolvedValue(undefined);
   mockProcess.mockReset().mockResolvedValue(undefined);
+  mockOwner.mockReset().mockResolvedValue('owner-1');
+  mockRecord.mockReset().mockResolvedValue({ status: 'stored' });
   consoleErrorSpy.mockClear();
   process.env.BOT_INTERNAL_SECRET = SECRET;
 });
@@ -176,5 +189,53 @@ describe('POST /api/bot/audio-upload', () => {
     expect(String(consoleErrorSpy.mock.calls[0][0])).not.toContain('write error');
     // Fire-and-forget processing should still be kicked off despite transcript marker failure.
     expect(mockProcess).toHaveBeenCalledTimes(1);
+  });
+
+  describe('audit: audio.upload (system source)', () => {
+    const form = (id = MEETING) => {
+      const f = new FormData();
+      f.append('audio', new File(['audio bytes'], 'Møde med Jensens barn.webm', { type: 'audio/webm' }));
+      f.append('meetingId', id);
+      return f;
+    };
+
+    it('records the hand-in as the system, on behalf of the session owner, with the size only', async () => {
+      expect((await POST(formReq(form()))).status).toBe(200);
+      expect(mockRecord).toHaveBeenCalledTimes(1);
+      const event = mockRecord.mock.calls[0][1] as unknown as Record<string, unknown>;
+      expect(event).toMatchObject({
+        type: 'audio.upload',
+        source: 'system',
+        actorUserId: 'owner-1',
+        entityId: MEETING,
+        details: { channel: 'bot', bytes: 'audio bytes'.length },
+      });
+      expect(event.outcome ?? 'success').toBe('success');
+      expect(JSON.stringify(event)).not.toMatch(/Jensen|\.webm/);
+    });
+
+    it('records an error outcome with a closed code when the stash fails', async () => {
+      mockStore.mockRejectedValueOnce(Object.assign(new Error('disk full'), { code: 'ENOSPC' }));
+      expect((await POST(formReq(form()))).status).toBe(500);
+      expect(mockRecord.mock.calls[0][1]).toMatchObject({
+        type: 'audio.upload',
+        outcome: 'error',
+        details: { channel: 'bot', outcomeCode: 'unknown' },
+      });
+    });
+
+    it('uses no entity for a meeting id that is not a uuid, and no actor when the owner binding is gone', async () => {
+      mockOwner.mockResolvedValue(null);
+      await POST(formReq(form('m1')));
+      const event = mockRecord.mock.calls[0][1] as unknown as Record<string, unknown>;
+      expect(event.entityId).toBeUndefined();
+      expect(event.actorUserId).toBeNull();
+    });
+
+    it('records nothing for the no-recording notification or a bad secret', async () => {
+      await POST(jsonReq({ meetingId: MEETING, hasRecording: false }));
+      await POST(formReq(form(), 'Bearer wrong'));
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
   });
 });

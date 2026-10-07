@@ -42,7 +42,7 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 }));
 
 import { POST } from './route';
-import { leakyError } from '@/app/api/meetings/ai-audit.test-utils';
+import { expectValidMetadataOnly, leakyError } from '@/app/api/meetings/ai-audit.test-utils';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION, makePrincipal } from '@/test/helpers';
 import { resolvePrincipal } from '@/lib/authz/principal';
@@ -137,33 +137,56 @@ describe('POST /api/transcribe', () => {
   });
 });
 
-describe('audit: pipeline steps are not audited', () => {
+describe('audit: the upload is recorded, the pipeline steps behind it are not', () => {
   const MEETING = '11111111-2222-4333-8444-555555555555';
   beforeEach(() => {
     mockRecord.mockReset();
     mockRecord.mockResolvedValue({ status: 'stored' });
   });
 
-  it('writes no audit event for a successful transcription (transcription and chapters are pipeline steps)', async () => {
+  it('records one audio.upload with the size and time of a successful transcription, never the text', async () => {
     const res = await POST(makeFormRequest(MEETING));
     expect(res.status).toBe(200);
-    expect(mockRecord).not.toHaveBeenCalled();
+    // Transcription, PII and chapters are steps of the upload: only the upload is an event.
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    const event = mockRecord.mock.calls[0][1];
+    expect(event).toMatchObject({
+      type: 'audio.upload',
+      actorUserId: FAKE_SESSION.user.id,
+      entityId: MEETING,
+      details: { channel: 'upload', bytes: 'audio bytes'.length, durationMs: expect.any(Number) },
+    });
+    expectValidMetadataOnly(event, ['Hej verden', 'recording.webm']);
   });
 
-  it('writes none for failures either, and logs no message from the failing call', async () => {
+  it('records an error outcome with a closed code when transcription fails, and logs no message from the failing call', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     mockTranscribe.mockRejectedValueOnce(leakyError('Hej verden', { status: 503 }));
     const res = await POST(makeFormRequest(MEETING));
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: 'Transcription failed' });
-    // PII and chapter failures are non-fatal and must not log the message either.
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(mockRecord.mock.calls[0][1]).toMatchObject({
+      type: 'audio.upload',
+      outcome: 'error',
+      details: { channel: 'upload', outcomeCode: 'http_503' },
+    });
+    expectValidMetadataOnly(mockRecord.mock.calls[0][1], ['Hej verden']);
+    // PII and chapter failures are non-fatal, are not events, and must not log the message either.
+    mockRecord.mockClear();
     mockGroupChapters.mockRejectedValueOnce(leakyError('Hej verden'));
     expect((await (await POST(makeFormRequest(MEETING))).json()).chapters).toEqual([]);
     mockDetectPii.mockRejectedValueOnce(leakyError('Hej verden'));
     await POST(makeFormRequest(MEETING));
-    expect(mockRecord).not.toHaveBeenCalled();
+    expect(mockRecord.mock.calls.every((c) => (c[1] as { type: string }).type === 'audio.upload')).toBe(true);
     expect(JSON.stringify(spy.mock.calls)).not.toContain('Hej verden');
     spy.mockRestore();
+  });
+
+  it('uses no entity for a meeting id that is not a uuid', async () => {
+    await POST(makeFormRequest('meet-1'));
+    expect(mockRecord.mock.calls[0][1]).toMatchObject({ type: 'audio.upload' });
+    expect((mockRecord.mock.calls[0][1] as { entityId?: string }).entityId).toBeUndefined();
   });
 
   it('returns a JSON 500 (withHandler) for an unexpected failure', async () => {

@@ -144,6 +144,8 @@ async function postHandler(req: NextRequest) {
       details: {
         templateSource,
         ...(central ? { templateVersion: central.version } : {}),
+        // Only whether an instruction took part, never its text.
+        userInstruction: effectiveCustomPrompt !== undefined,
         durationMs: elapsedMs(t0),
         segmentCount: Array.isArray(segments) ? segments.length : 0,
         ...(code ? { outcomeCode: code } : {}),

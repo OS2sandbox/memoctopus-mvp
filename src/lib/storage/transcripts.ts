@@ -1,6 +1,7 @@
 import { getDB, StoredTranscript } from './db';
 import type { TranscriptSegment, PiiReplacement } from '@/types';
 import type { TranscriptChapter } from '@/lib/ai/chapters';
+import { reportAuditEvent } from '@/lib/audit/client';
 
 function newId(): string {
   return crypto.randomUUID();
@@ -39,7 +40,11 @@ export async function saveTranscript(
   return transcript;
 }
 
-// Transcript writes are not audited: editing a transcript is not a reported event.
+// Audit reporting: only a change of WHO SPOKE (a voice linked, unlinked, renamed or removed)
+// is reported, as meeting.speakers_edit with the number of distinct speakers. Text edits,
+// chapters and the machine writes (the diarization pass, which passes a diarizationStatus)
+// are not reported, and a write that repeats the stored speakers reports nothing. Never
+// the names or the text.
 export async function saveTranscriptChapters(
   meetingId: string,
   chapters: TranscriptChapter[],
@@ -65,4 +70,13 @@ export async function saveTranscriptSegments(
     rawText,
     ...(diarizationStatus ? { diarizationStatus } : {}),
   });
+  try {
+    const before = existing.segments ?? [];
+    const speakersChanged = before.length === segments.length && segments.some((seg, i) => seg.speaker !== before[i].speaker);
+    if (diarizationStatus === undefined && speakersChanged) {
+      reportAuditEvent('meeting.speakers_edit', meetingId, { speakerCount: new Set(segments.map((s) => s.speaker)).size });
+    }
+  } catch {
+    // Reporting is best effort and must never turn a successful write into an error.
+  }
 }

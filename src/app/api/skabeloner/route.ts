@@ -32,15 +32,22 @@ async function postHandler(req: NextRequest): Promise<NextResponse> {
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   if (!name) return NextResponse.json({ error: 'Navn er påkrævet' }, { status: 400 });
 
-  const skabelon = await createSkabelon(session.user.id, {
-    name,
-    description: body.description,
-    prompt: body.prompt,
-    includeDeltagere: body.includeDeltagere,
-    includeBeslutningspunkter: body.includeBeslutningspunkter,
-    includeDagsorden: body.includeDagsorden,
-    includeDato: body.includeDato,
-  });
+  let skabelon;
+  try {
+    skabelon = await createSkabelon(session.user.id, {
+      name,
+      description: body.description,
+      prompt: body.prompt,
+      includeDeltagere: body.includeDeltagere,
+      includeBeslutningspunkter: body.includeBeslutningspunkter,
+      includeDagsorden: body.includeDagsorden,
+      includeDato: body.includeDato,
+    });
+  } catch (err) {
+    // The failed attempt is part of the trail too; the error itself still reaches withHandler (500).
+    await recordServerEvent(req, { type: 'template.create', outcome: 'error', actorUserId: session.user.id, details: {} });
+    throw err;
+  }
   await recordServerEvent(req, {
     type: 'template.create',
     actorUserId: session.user.id,

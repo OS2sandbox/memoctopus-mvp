@@ -5,9 +5,8 @@ import type { Client } from 'pg';
 import { addUser, hasPg, schemaRunner, withFreshSchema } from '@/test/pg';
 
 vi.mock('@/lib/db', () => ({ pool: {}, db: {} }));
-// The relink's "audit and link commit or roll back together" guarantee is only provable
-// with the real writer (recordEvent), which inserts on the transaction into the throwaway
-// schema (the actor snapshot is best effort).
+// Linking is not audited (rights and organisation changes are out of the log), so these
+// tests also assert that no audit row is written.
 
 import { matchDirectoryUser } from './directory-match';
 
@@ -38,7 +37,7 @@ const links = async (c: Client) =>
   }>;
 
 describe.skipIf(!hasPg)('mode-switch relink (real Postgres)', () => {
-  it('moves a link from a source=local row to the matching rollekatalog row and audits it', () =>
+  it('moves a link from a source=local row to the matching rollekatalog row', () =>
     withFreshSchema(async (c, schema) => {
       const { runner, close } = schemaRunner(c, schema);
       await addUser(c, 'u1');
@@ -50,9 +49,8 @@ describe.skipIf(!hasPg)('mode-switch relink (real Postgres)', () => {
         { source: 'local', app_user_id: null },
         { source: 'rollekatalog', app_user_id: 'u1' },
       ]);
-      const audit = await c.query("SELECT entity_id, details FROM audit_events WHERE event_type = 'access.user_link'");
-      expect(audit.rowCount).toBe(1);
-      expect(audit.rows[0].details).toEqual({ via: 'userid-claim', automatic: true });
+      // Linking is not audited.
+      expect((await c.query('SELECT 1 FROM audit_events')).rowCount).toBe(0);
       // Second login: stable.
       expect((await matchDirectoryUser(identity('u1'), 'userid-claim', runner)).status).toBe('already_linked');
       await close();
@@ -118,7 +116,7 @@ describe.skipIf(!hasPg)('mode-switch relink (real Postgres)', () => {
         { name: 'New', app_user_id: 'u1' },
         { name: 'Old', app_user_id: null },
       ]);
-      expect((await c.query("SELECT 1 FROM audit_events WHERE event_type = 'access.user_link'")).rowCount).toBe(1);
+      expect((await c.query('SELECT 1 FROM audit_events')).rowCount).toBe(0);
       expect((await matchDirectoryUser(identity('u1'), 'userid-claim', runner)).status).toBe('already_linked');
       await close();
     }));
@@ -165,22 +163,6 @@ describe.skipIf(!hasPg)('mode-switch relink (real Postgres)', () => {
       await close();
     }));
 
-  it('a failure after the release (here: the audit insert) rolls the whole relink back and restores the local link', () =>
-    withFreshSchema(async (c, schema) => {
-      const { runner, close } = schemaRunner(c, schema);
-      await addUser(c, 'u1');
-      await c.query("INSERT INTO directory_users (name, source, app_user_id) VALUES ('Local', 'local', 'u1')");
-      await c.query("INSERT INTO directory_users (name, ext_user_id, source) VALUES ('Rk', 'abc123', 'rollekatalog')");
-      // A failing audit insert aborts the transaction after the release and the link.
-      await c.query('ALTER TABLE audit_events ADD CONSTRAINT never_ok CHECK (false) NOT VALID');
-      await expect(matchDirectoryUser(identity('u1'), 'userid-claim', runner)).rejects.toThrow();
-      expect(await links(c)).toEqual([
-        { source: 'local', app_user_id: 'u1' },
-        { source: 'rollekatalog', app_user_id: null },
-      ]);
-      await close();
-    }));
-
   it('a disabled row that still holds a reused userId does not make the new person ambiguous', () =>
     withFreshSchema(async (c, schema) => {
       const { runner, close } = schemaRunner(c, schema);
@@ -207,7 +189,7 @@ describe.skipIf(!hasPg)('mode-switch relink (real Postgres)', () => {
         { source: 'local', app_user_id: null },
         { source: 'rollekatalog', app_user_id: 'u1' },
       ]);
-      expect((await c.query("SELECT 1 FROM audit_events WHERE event_type = 'access.user_link'")).rowCount).toBe(1);
+      expect((await c.query('SELECT 1 FROM audit_events')).rowCount).toBe(0);
       await close();
     }));
 
@@ -250,7 +232,7 @@ describe.skipIf(!hasPg)('mode-switch relink (real Postgres)', () => {
         expect((await matchDirectoryUser(ms('u1'), 'userid-claim', runner)).status).toBe('refused');
 
         expect(await links(c)).toEqual([{ source: 'rollekatalog', app_user_id: null }]);
-        expect((await c.query("SELECT 1 FROM audit_events WHERE event_type = 'access.user_link'")).rowCount).toBe(0);
+        expect((await c.query('SELECT 1 FROM audit_events')).rowCount).toBe(0);
         await close();
       }));
 
@@ -262,7 +244,7 @@ describe.skipIf(!hasPg)('mode-switch relink (real Postgres)', () => {
         vi.stubEnv('MICROSOFT_TENANT_ID', TID);
         expect((await matchDirectoryUser(ms('u1', TID.toUpperCase()), 'userid-claim', runner)).status).toBe('linked');
         expect(await links(c)).toEqual([{ source: 'rollekatalog', app_user_id: 'u1' }]);
-        expect((await c.query("SELECT 1 FROM audit_events WHERE event_type = 'access.user_link'")).rowCount).toBe(1);
+        expect((await c.query('SELECT 1 FROM audit_events')).rowCount).toBe(0);
         await close();
       }));
   });

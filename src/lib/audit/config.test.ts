@@ -72,10 +72,10 @@ describe('auditRetentionDays', () => {
 });
 
 describe('auditClientEventsDailyCap', () => {
-  it('defaults to 2000 when unset, 0 or invalid', () => {
+  it('defaults to 20000 when unset, 0 or invalid', () => {
     for (const v of ['', '0', '-1', 'abc', '1.5', '10x', '99999999999999999999']) {
       vi.stubEnv('AUDIT_CLIENT_EVENTS_DAILY_CAP', v);
-      expect(auditClientEventsDailyCap()).toBe(2000);
+      expect(auditClientEventsDailyCap()).toBe(20000);
     }
   });
   it('parses a positive integer at call time', () => {

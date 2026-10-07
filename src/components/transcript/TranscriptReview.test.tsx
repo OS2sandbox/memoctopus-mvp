@@ -18,6 +18,9 @@ vi.mock('@/lib/storage', () => ({
   getMeeting: vi.fn().mockResolvedValue(null),
 }));
 
+const mockReport = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audit/client', () => ({ reportAuditEvent: mockReport }));
+
 vi.mock('@/lib/transcript-events', () => ({
   onTranscriptUpdated: vi.fn().mockReturnValue(() => {}),
 }));
@@ -424,6 +427,13 @@ describe('TranscriptReview', () => {
         expect(appendMinutesVersion).toHaveBeenCalled();
         expect(onDataChange).toHaveBeenCalled();
       });
+      // The recording is deleted by the app once the minutes exist: logged as an automatic delete.
+      expect(deleteAudio).toHaveBeenCalledWith('meeting-abc', { trigger: 'auto_generate' });
+      expect(updateMeeting).toHaveBeenCalledWith(
+        'meeting-abc',
+        expect.objectContaining({ audioDeleted: true }),
+        { trigger: 'auto_generate' },
+      );
 
       Object.defineProperty(window, 'location', { value: originalLocation, configurable: true });
     });
@@ -739,6 +749,22 @@ describe('TranscriptReview', () => {
   // ── Audio player bottom bar ────────────────────────────────────────────────
 
   describe('audio player bottom bar', () => {
+    it('reports audio_play (the meeting id only) when the audio element starts playing, however playback was started', async () => {
+      mockReport.mockClear();
+      const { container } = setup({ audioUrl: '/audio/test.webm' });
+      const audio = await waitFor(() => {
+        const el = container.querySelector('audio');
+        expect(el).not.toBeNull();
+        return el as HTMLAudioElement;
+      });
+      expect(mockReport).not.toHaveBeenCalledWith('meeting.audio_play', expect.anything());
+      await act(async () => {
+        audio.dispatchEvent(new Event('play'));
+      });
+      expect(mockReport).toHaveBeenCalledWith('meeting.audio_play', 'meeting-abc');
+      expect(mockReport.mock.calls.filter((c) => c[0] === 'meeting.audio_play').every((c) => c.length === 2)).toBe(true);
+    });
+
     it('renders play button when audioUrl is provided', async () => {
       setup({ audioUrl: '/audio/test.webm' });
       // The play button is a circular button in the sticky bar

@@ -38,9 +38,21 @@ describe('clientEventsBody', () => {
     expect([...shape.options].sort()).toEqual(
       [
         'meeting.audio_delete',
+        'meeting.audio_play',
         'meeting.create',
         'meeting.delete',
+        'meeting.minutes_save',
+        'meeting.minutes_version',
+        'meeting.minutes_version_prune',
+        'meeting.minutes_view',
+        'meeting.participants_edit',
+        'meeting.recording_pause',
+        'meeting.recording_resume',
+        'meeting.recording_start',
+        'meeting.recording_stop',
         'meeting.redact',
+        'meeting.speakers_edit',
+        'meeting.transcript_view',
       ].sort(),
     );
   });
@@ -81,11 +93,11 @@ describe('countRecentClientEvents / remainingClientEventsToday', () => {
     await expect(countRecentClientEvents('u', 5, empty.runner)).rejects.toThrow();
   });
 
-  it('remaining = cap - used, never negative, default cap 2000', async () => {
-    expect(await remainingClientEventsToday('u', makeFakeRunner(() => [{ n: 0 }]).runner)).toBe(2000);
-    expect(await remainingClientEventsToday('u', makeFakeRunner(() => [{ n: 1999 }]).runner)).toBe(1);
-    expect(await remainingClientEventsToday('u', makeFakeRunner(() => [{ n: 2000 }]).runner)).toBe(0);
-    expect(await remainingClientEventsToday('u', makeFakeRunner(() => [{ n: 2500 }]).runner)).toBe(0);
+  it('remaining = cap - used, never negative, default cap 20000', async () => {
+    expect(await remainingClientEventsToday('u', makeFakeRunner(() => [{ n: 0 }]).runner)).toBe(20000);
+    expect(await remainingClientEventsToday('u', makeFakeRunner(() => [{ n: 19999 }]).runner)).toBe(1);
+    expect(await remainingClientEventsToday('u', makeFakeRunner(() => [{ n: 20000 }]).runner)).toBe(0);
+    expect(await remainingClientEventsToday('u', makeFakeRunner(() => [{ n: 25000 }]).runner)).toBe(0);
     vi.stubEnv('AUDIT_CLIENT_EVENTS_DAILY_CAP', '100');
     expect(await remainingClientEventsToday('u', makeFakeRunner(() => [{ n: 40 }]).runner)).toBe(60);
   });
@@ -95,14 +107,20 @@ describe('client event throttle', () => {
   const M = '11111111-2222-4333-8444-555555555555';
   const T0 = 1_000_000;
 
-  // No reported type is chatty any more, so the set is empty by default; the mechanism
-  // is exercised by listing meeting.create for the duration of these tests.
-  it('is empty by default: nothing is throttled until a chatty type is listed', () => {
-    expect(THROTTLED_TYPES.size).toBe(0);
+  // Only the repeatable "look" events are throttled; edits, versions, recordings and
+  // deletes are distinct actions and never are. meeting.create is listed for the
+  // duration of the generic tests below.
+  it('throttles only views and playback by default', () => {
+    expect([...THROTTLED_TYPES].sort()).toEqual(['meeting.audio_play', 'meeting.minutes_view', 'meeting.transcript_view']);
     __resetClientEventBudgets();
-    markClientEventStored('u', M, 'meeting.create', T0);
-    expect(isClientEventThrottled('u', M, 'meeting.create', T0 + 1)).toBe(false);
-    expect(__throttleSize()).toBe(0);
+    for (const type of ['meeting.minutes_save', 'meeting.minutes_version', 'meeting.recording_start', 'meeting.delete']) {
+      markClientEventStored('u', M, type, T0);
+      expect(isClientEventThrottled('u', M, type, T0 + 1)).toBe(false);
+    }
+    markClientEventStored('u', M, 'meeting.minutes_view', T0);
+    expect(isClientEventThrottled('u', M, 'meeting.minutes_view', T0 + 1)).toBe(true);
+    expect(isClientEventThrottled('u', M, 'meeting.minutes_view', T0 + 60_001)).toBe(false);
+    expect(__throttleSize()).toBe(1);
   });
 
   describe('with meeting.create listed', () => {

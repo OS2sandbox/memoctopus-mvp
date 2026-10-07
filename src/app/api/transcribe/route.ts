@@ -6,6 +6,7 @@ import { TranscriptSegment, PiiReplacement } from '@/types';
 import type { TranscriptChapter } from '@/lib/ai/chapters';
 import { withHandler } from '@/lib/api-handler';
 import { safeLogError } from '@/lib/audit/safe-log';
+import { asEntityUuid, elapsedMs, emitAudit, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
 import { requireAppAccess } from '@/lib/authz/app-access';
 
 export const maxDuration = 300;
@@ -19,6 +20,7 @@ function parseDuration(raw: string | null): number | null {
 async function postHandler(req: NextRequest) {
   const access = await requireAppAccess();
   if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const formData = await req.formData();
   const audioFile = formData.get('audio') as File | null;
@@ -31,10 +33,13 @@ async function postHandler(req: NextRequest) {
 
   const buffer = Buffer.from(await audioFile.arrayBuffer());
   const mimeType = audioFile.type || 'audio/webm';
+  // Unverified client field: only a well-formed UUID becomes an audit entity.
+  const entityId = asEntityUuid(meetingId);
 
   let segments: TranscriptSegment[] = [];
   let piiReplacements: PiiReplacement[] = [];
 
+  const tTranscribe = Date.now();
   try {
     const provider = getTranscriptionProvider();
     // Pass the actual recording duration so timestamps reflect real wall-clock time,
@@ -42,8 +47,22 @@ async function postHandler(req: NextRequest) {
     segments = await provider.transcribe(buffer, mimeType, duration ?? undefined);
   } catch (err) {
     safeLogError('transcribe', err);
+    await emitAudit(req, {
+      type: 'audio.upload',
+      actorUserId: session.user.id,
+      outcome: 'error',
+      entityId,
+      details: { channel: 'upload', bytes: buffer.length, durationMs: elapsedMs(tTranscribe), outcomeCode: outcomeCodeOf(err) },
+    });
     return NextResponse.json({ error: 'Transcription failed' }, { status: 500 });
   }
+  // Metadata only: the size and how long it took, never the audio or the text.
+  await emitAudit(req, {
+    type: 'audio.upload',
+    actorUserId: session.user.id,
+    entityId,
+    details: { channel: 'upload', bytes: buffer.length, durationMs: elapsedMs(tTranscribe) },
+  });
   try {
     const piiResult = await detectPiiInSegments(segments);
     piiReplacements = piiResult.replacements;

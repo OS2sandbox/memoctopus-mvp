@@ -107,12 +107,41 @@ describe('POST /api/audit/client-events', () => {
   it.each([
     ['meeting.status_change', { fromStatus: 'review', toStatus: 'minutes' }],
     ['meeting.rename', {}],
-    ['meeting.participants_edit', { participantCount: 3 }],
     ['meeting.transcript_edit', { segmentCount: 4 }],
-    ['meeting.minutes_save', {}],
-    ['meeting.minutes_version', { versionNumber: 2, action: 'snapshot' }],
-  ])('%s is no longer reported: refused with 400 and nothing recorded', async (type, details) => {
+  ])('%s is not reported: refused with 400 and nothing recorded', async (type, details) => {
     expect((await send({ events: [ev({ type, details })] })).status).toBe(400);
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['meeting.minutes_view', {}],
+    ['meeting.transcript_view', {}],
+    ['meeting.audio_play', {}],
+    ['meeting.recording_start', {}],
+    ['meeting.recording_pause', {}],
+    ['meeting.recording_resume', {}],
+    ['meeting.recording_stop', {}],
+    ['meeting.minutes_save', {}],
+    ['meeting.minutes_version', { versionNumber: 2, action: 'activate' }],
+    ['meeting.minutes_version_prune', { prunedCount: 2 }],
+    ['meeting.participants_edit', { participantCount: 3 }],
+    ['meeting.speakers_edit', { speakerCount: 2 }],
+    ['meeting.audio_delete', { trigger: 'auto_generate' }],
+    ['meeting.delete', { trigger: 'auto_leave' }],
+  ])('%s (an action, never content) is recorded with the session as actor', async (type, details) => {
+    const res = await send({ events: [ev({ type, details })] });
+    expect(await res.json()).toEqual({ accepted: 1 });
+    expect(mockRecord.mock.calls[0][1]).toMatchObject({ type, source: 'client', actorUserId: 'user-123', entityId: MEETING, details });
+  });
+
+  it('refuses content-like details for the new action events', async () => {
+    const bad = [
+      ev({ type: 'meeting.participants_edit', details: { participantCount: 2, participants: ['Jens', 'Mette'] } }),
+      ev({ type: 'meeting.minutes_version', details: { versionNumber: 2, action: 'Gendannet efter Jensens ønske' } }),
+      ev({ type: 'meeting.minutes_view', details: { title: 'Budgetmøde' } }),
+      ev({ type: 'meeting.audio_delete', details: { trigger: 'ttl' } }),
+    ];
+    for (const e of bad) expect((await send({ events: [e] })).status).toBe(400);
     expect(mockRecord).not.toHaveBeenCalled();
   });
 
@@ -271,35 +300,39 @@ describe('POST /api/audit/client-events', () => {
       expect(flat).toContain('actor_user_id = $1');
       expect(flat).toContain("source = 'client'");
       expect(flat).toContain("interval '24 hours'");
-      expect(params).toEqual(['user-123', 2000]);
+      expect(params).toEqual(['user-123', 20000]);
     });
 
     it('stores everything below the cap and omits `capped`', async () => {
-      alreadyStored(1990);
+      alreadyStored(19990);
       const res = await send({ events: batch(5) });
       expect(await res.json()).toEqual({ accepted: 5 });
     });
 
     it('boundary: exactly filling the cap is fully accepted, not capped', async () => {
-      alreadyStored(1995);
+      alreadyStored(19995);
       const res = await send({ events: batch(5) });
       expect(await res.json()).toEqual({ accepted: 5 });
       expect(mockRecord).toHaveBeenCalledTimes(5);
     });
 
-    it('boundary: at the cap nothing is stored, but 200 {accepted:0, capped:true}', async () => {
-      alreadyStored(2000);
+    it('boundary: at the cap nothing is stored, but 200 {accepted:0, capped:true, refused:3} and a warning', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      alreadyStored(20000);
       const res = await send({ events: batch(3) });
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ accepted: 0, capped: true });
+      expect(await res.json()).toEqual({ accepted: 0, capped: true, refused: 3 });
       expect(mockRecord).not.toHaveBeenCalled();
+      // Counted, not silent; the warning carries a number only.
+      expect(warn).toHaveBeenCalledWith('[audit] client event cap reached, refused=3');
     });
 
-    it('a batch crossing the cap stores the first events in order, drops the rest, capped:true', async () => {
-      alreadyStored(1998);
+    it('a batch crossing the cap stores the first events in order, counts the rest as refused', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      alreadyStored(19998);
       const list = batch(5);
       const res = await send({ events: list });
-      expect(await res.json()).toEqual({ accepted: 2, capped: true });
+      expect(await res.json()).toEqual({ accepted: 2, capped: true, refused: 3 });
       expect(mockRecord).toHaveBeenCalledTimes(2);
       const stored = mockRecord.mock.calls.map((c) => (c[1] as unknown as { clientEventId: string }).clientEventId);
       expect(stored).toEqual(ids(5).slice(0, 2));
@@ -307,19 +340,20 @@ describe('POST /api/audit/client-events', () => {
 
     it('honours AUDIT_CLIENT_EVENTS_DAILY_CAP and passes it as the scan limit', async () => {
       vi.stubEnv('AUDIT_CLIENT_EVENTS_DAILY_CAP', '10');
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
       alreadyStored(8);
       const res = await send({ events: batch(4) });
-      expect(await res.json()).toEqual({ accepted: 2, capped: true });
+      expect(await res.json()).toEqual({ accepted: 2, capped: true, refused: 2 });
       expect((mockCount.mock.calls[0] as [string, unknown[]])[1]).toEqual(['user-123', 10]);
     });
 
-    it('an invalid or zero cap setting falls back to 2000', async () => {
+    it('an invalid or zero cap setting falls back to 20000', async () => {
       for (const v of ['0', 'abc', '-3']) {
         vi.stubEnv('AUDIT_CLIENT_EVENTS_DAILY_CAP', v);
         mockCount.mockClear();
         alreadyStored(0);
         await send({ events: [ev()] });
-        expect((mockCount.mock.calls[0] as [string, unknown[]])[1]).toEqual(['user-123', 2000]);
+        expect((mockCount.mock.calls[0] as [string, unknown[]])[1]).toEqual(['user-123', 20000]);
       }
     });
 
@@ -340,7 +374,8 @@ describe('POST /api/audit/client-events', () => {
     });
 
     it('does not echo input in the capped response', async () => {
-      alreadyStored(2000);
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      alreadyStored(20000);
       const res = await send({ events: [ev()] });
       const text = JSON.stringify(await res.json());
       expect(text).not.toContain(MEETING);
@@ -349,8 +384,8 @@ describe('POST /api/audit/client-events', () => {
   });
 
   describe('per-type throttle', () => {
-    // The throttle exists for chatty types; none of the reported ones is chatty any more,
-    // so THROTTLED_TYPES is empty. The mechanism is exercised by listing meeting.create.
+    // The throttle exists for repeatable "look" events (views, playback). The generic
+    // mechanism is exercised with meeting.create listed as throttled.
     const CREATE = (n: number, meeting = MEETING) =>
       ev({
         type: 'meeting.create',
@@ -359,10 +394,22 @@ describe('POST /api/audit/client-events', () => {
         clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(n).padStart(12, '0')}`,
       });
 
-    it('throttles nothing by default: a repeat of the same type for the same meeting is stored', async () => {
-      expect(await (await send({ events: [CREATE(1)] })).json()).toEqual({ accepted: 1 });
-      expect(await (await send({ events: [CREATE(2)] })).json()).toEqual({ accepted: 1 });
-      expect(mockRecord).toHaveBeenCalledTimes(2);
+    it('throttles views and playback by default, and says so in the response', async () => {
+      const view = (n: number) =>
+        ev({ type: 'meeting.minutes_view', clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(n).padStart(12, '0')}` });
+      expect(await (await send({ events: [view(1)] })).json()).toEqual({ accepted: 1 });
+      expect(await (await send({ events: [view(2)] })).json()).toEqual({ accepted: 0, throttled: 1 });
+      expect(mockRecord).toHaveBeenCalledTimes(1);
+    });
+
+    it('never throttles edits, versions, recordings or deletes: a repeat is a distinct action', async () => {
+      for (const [i, type] of ['meeting.minutes_save', 'meeting.recording_pause', 'meeting.delete'].entries()) {
+        const one = ev({ type, clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(i * 2 + 1).padStart(12, '0')}` });
+        const two = ev({ type, clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(i * 2 + 2).padStart(12, '0')}` });
+        expect(await (await send({ events: [one] })).json()).toEqual({ accepted: 1 });
+        expect(await (await send({ events: [two] })).json()).toEqual({ accepted: 1 });
+      }
+      expect(mockRecord).toHaveBeenCalledTimes(6);
     });
 
     describe('with meeting.create listed as throttled', () => {
@@ -376,7 +423,7 @@ describe('POST /api/audit/client-events', () => {
         vi.setSystemTime(new Date('2026-10-05T12:00:59Z'));
         const res = await send({ events: [CREATE(2)] });
         expect(res.status).toBe(200);
-        expect(await res.json()).toEqual({ accepted: 0 });
+        expect(await res.json()).toEqual({ accepted: 0, throttled: 1 });
         expect(mockRecord).toHaveBeenCalledTimes(1);
       });
 
@@ -391,7 +438,7 @@ describe('POST /api/audit/client-events', () => {
 
       it('collapses duplicates inside one batch to the first', async () => {
         const res = await send({ events: [CREATE(1), CREATE(2), CREATE(3)] });
-        expect(await res.json()).toEqual({ accepted: 1 });
+        expect(await res.json()).toEqual({ accepted: 1, throttled: 2 });
         expect(mockRecord).toHaveBeenCalledTimes(1);
       });
 
@@ -420,9 +467,10 @@ describe('POST /api/audit/client-events', () => {
       });
 
       it('a throttled event is not reported as capped', async () => {
-        alreadyStored(2000);
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        alreadyStored(20000);
         // First one is capped (dropped), nothing was stored so nothing is throttled either.
-        expect(await (await send({ events: [CREATE(1)] })).json()).toEqual({ accepted: 0, capped: true });
+        expect(await (await send({ events: [CREATE(1)] })).json()).toEqual({ accepted: 0, capped: true, refused: 1 });
       });
     });
   });

@@ -1,7 +1,8 @@
 // Which storage operations report a client audit event, with what details, and
-// that none of them ever carries content (titles, names, text). Only four events are
-// reported at all: meeting.create, meeting.delete, meeting.redact, meeting.audio_delete. The reporter and
-// the database are faked; the storage functions under test are the real ones.
+// that none of them ever carries content (titles, names, text): lifecycle (create,
+// delete, redact, audio delete with its trigger), the participant list and speakers
+// (counts), and the minutes (edit, versions, pruning). The reporter and the database
+// are faked; the storage functions under test are the real ones.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MinutesContent, TranscriptSegment } from '@/types';
 import { validateEvent } from '@/lib/audit/record';
@@ -92,16 +93,30 @@ describe('meetings', () => {
       h.report.mockReset();
     });
 
-    it('reports nothing for status changes, renames, participant edits and other patches', async () => {
+    it('reports nothing for status changes, renames and other patches', async () => {
       await updateMeeting(id, { status: 'processing' });
-      await updateMeeting(id, { status: 'review', title: 'Et helt andet navn om Hansen', participants: ['A', 'B', 'C'] });
+      await updateMeeting(id, { status: 'review', title: 'Et helt andet navn om Hansen' });
       await updateMeeting(id, { audioSizeBytes: 10, botSession: 'abc', audioDurationSeconds: 5 });
+      expect(h.report).not.toHaveBeenCalled();
+    });
+
+    it('a changed participant list reports participants_edit with the COUNT only; a repeat, a machine write or no change report nothing', async () => {
+      await updateMeeting(id, { participants: [SECRET_NAME, 'A', 'B'] });
+      expect(calls()).toEqual([{ type: 'meeting.participants_edit', entityId: id, details: { participantCount: 3 } }]);
+      expectNoContent();
+      h.report.mockClear();
+      await updateMeeting(id, { participants: [SECRET_NAME, 'A', 'B'] }); // the mount effect re-saving the same list
+      await updateMeeting(id, { participants: ['X'] }, { automatic: true }); // the bot's roster poll
+      await updateMeeting(id, { status: 'review' });
       expect(h.report).not.toHaveBeenCalled();
     });
 
     it('status becoming redacted reports redact (plus audio_delete when the audio went too), and no status_change', async () => {
       await updateMeeting(id, { status: 'redacted', audioDeleted: true });
-      expect(types()).toEqual(['meeting.redact', 'meeting.audio_delete']);
+      expect(calls()).toEqual([
+        { type: 'meeting.redact', entityId: id, details: undefined },
+        { type: 'meeting.audio_delete', entityId: id, details: { trigger: 'user' } },
+      ]);
       expectNoContent();
     });
 
@@ -128,6 +143,11 @@ describe('meetings', () => {
       expect(types()).toEqual(['meeting.audio_delete']);
     });
 
+    it('passes an automatic trigger through to audio_delete', async () => {
+      await updateMeeting(id, { audioDeleted: true }, { trigger: 'auto_leave' });
+      expect(calls()).toEqual([{ type: 'meeting.audio_delete', entityId: id, details: { trigger: 'auto_leave' } }]);
+    });
+
     it('a missing meeting reports nothing', async () => {
       await updateMeeting('00000000-0000-4000-8000-000000000000', { status: 'redacted' });
       expect(h.report).not.toHaveBeenCalled();
@@ -140,7 +160,14 @@ describe('meetings', () => {
       h.report.mockImplementation(() => expect(h.stores.meetings.has(m.id)).toBe(false));
       h.report.mockClear();
       await deleteMeeting(m.id);
-      expect(calls()).toEqual([{ type: 'meeting.delete', entityId: m.id, details: undefined }]);
+      expect(calls()).toEqual([{ type: 'meeting.delete', entityId: m.id, details: { trigger: 'user' } }]);
+    });
+
+    it('says when the app deleted the meeting on its own', async () => {
+      const m = await createMeeting({ title: 'x', origin: 'live' });
+      h.report.mockClear();
+      await deleteMeeting(m.id, { trigger: 'auto_empty' });
+      expect(calls()).toEqual([{ type: 'meeting.delete', entityId: m.id, details: { trigger: 'auto_empty' } }]);
     });
 
     it('reports nothing for a meeting that does not exist (repeat delete)', async () => {
@@ -154,7 +181,13 @@ describe('audio', () => {
   it('deleteAudio reports meeting.audio_delete when audio existed', async () => {
     await saveAudio('m1', new Blob(['x']), 'audio/webm');
     await deleteAudio('m1');
-    expect(calls()).toEqual([{ type: 'meeting.audio_delete', entityId: 'm1', details: undefined }]);
+    expect(calls()).toEqual([{ type: 'meeting.audio_delete', entityId: 'm1', details: { trigger: 'user' } }]);
+  });
+
+  it.each(['auto_generate', 'auto_leave', 'auto_pagehide'] as const)('deleteAudio reports the automatic trigger %s', async (trigger) => {
+    await saveAudio('m1', new Blob(['x']), 'audio/webm');
+    await deleteAudio('m1', { trigger });
+    expect(calls()).toEqual([{ type: 'meeting.audio_delete', entityId: 'm1', details: { trigger } }]);
   });
 
   it('reports nothing when there was no audio, and saving audio reports nothing', async () => {
@@ -164,23 +197,91 @@ describe('audio', () => {
   });
 });
 
-describe('transcripts and minutes (edits are not audited)', () => {
-  it('transcript writes report nothing: initial save, user edits, diarization and chapters', async () => {
-    await saveTranscript('m1', { rawText: SECRET_TEXT, chapters: [], piiReplacements: [], segments: [seg('a'), seg('b')] });
-    await saveTranscriptSegments('m1', [seg(SECRET_TEXT, SECRET_NAME), seg('b'), seg('c')]);
-    await saveTranscriptSegments('m1', [seg('a', 'Taler 2')], 'done');
+describe('transcripts', () => {
+  it('reports speakers_edit (a count) only when who spoke changed by a user; text edits, diarization and chapters report nothing', async () => {
+    await saveTranscript('m1', { rawText: SECRET_TEXT, chapters: [], piiReplacements: [], segments: [seg('a'), seg('b', 'Taler 2')] });
+    expect(h.report).not.toHaveBeenCalled();
+
+    await saveTranscriptSegments('m1', [seg(SECRET_TEXT), seg('b', 'Taler 2')]); // text edit
+    await saveTranscriptSegments('m1', [seg('a', 'Taler 3')], 'done'); // diarization pass (different length too)
     await saveTranscriptChapters('m1', [{ id: 'c1', title: SECRET_TITLE, startIndex: 0, endIndex: 1 }] as never);
+    expect(h.report).not.toHaveBeenCalled();
+
+    await saveTranscript('m1', { rawText: 't', chapters: [], piiReplacements: [], segments: [seg('a'), seg('b', 'Taler 2')] });
+    await saveTranscriptSegments('m1', [seg('a', SECRET_NAME), seg('b', 'Taler 2')]); // a voice linked to a person
+    expect(calls()).toEqual([{ type: 'meeting.speakers_edit', entityId: 'm1', details: { speakerCount: 2 } }]);
+    expectNoContent();
+
+    h.report.mockClear();
+    await saveTranscriptSegments('m1', [seg('a', SECRET_NAME), seg('b', 'Taler 2')]); // same speakers again
     expect(h.report).not.toHaveBeenCalled();
   });
 
-  it('minutes writes report nothing: autosave, snapshot, generate and switching versions', async () => {
+  it('a throwing reporter never fails the write', async () => {
+    await saveTranscript('m1', { rawText: 't', chapters: [], piiReplacements: [], segments: [seg('a')] });
+    h.report.mockImplementation(() => {
+      throw new Error('reporter down');
+    });
+    await expect(saveTranscriptSegments('m1', [seg('a', 'Taler 2')])).resolves.toBeUndefined();
+    expect(h.stores.transcripts.size).toBe(1);
+  });
+});
+
+describe('minutes', () => {
+  it('the first save and every changed autosave report minutes_save; identical content (closing the editor) reports nothing', async () => {
     await saveMinutes('m1', minutes(SECRET_TEXT));
+    expect(types()).toEqual(['meeting.minutes_save']);
+    await saveMinutes('m1', minutes(SECRET_TEXT));
+    expect(types()).toEqual(['meeting.minutes_save']);
     await saveMinutes('m1', minutes('anden tekst'));
+    expect(types()).toEqual(['meeting.minutes_save', 'meeting.minutes_save']);
+    expectNoContent();
+  });
+
+  it('"Gem version" and regeneration report minutes_version with the version label, never content', async () => {
+    await saveMinutes('m1', minutes('a'));
+    h.report.mockClear();
     await snapshotMinutes('m1', minutes('y'));
     await appendMinutesVersion('m1', minutes('x'));
-    const row = await appendMinutesVersion('m1', minutes('z'));
-    await setActiveMinutesVersion('m1', row.versions[0].id);
+    expect(calls()).toEqual([
+      { type: 'meeting.minutes_version', entityId: 'm1', details: { versionNumber: 2, action: 'snapshot' } },
+      { type: 'meeting.minutes_version', entityId: 'm1', details: { versionNumber: 3, action: 'generate' } },
+    ]);
+    expectNoContent();
+  });
+
+  it('the very first generation is version 1', async () => {
+    await appendMinutesVersion('m1', minutes('x'));
+    expect(calls()).toEqual([{ type: 'meeting.minutes_version', entityId: 'm1', details: { versionNumber: 1, action: 'generate' } }]);
+  });
+
+  it('switching to an earlier version reports view + activate; to the newest only activate; to the active one nothing', async () => {
+    await appendMinutesVersion('m1', minutes('one'));
+    const row = await appendMinutesVersion('m1', minutes('two'));
+    h.report.mockClear();
+    await setActiveMinutesVersion('m1', row.versions[0].id); // version 1 of 2
+    expect(calls().map((c) => c.details)).toEqual([
+      { versionNumber: 1, action: 'view' },
+      { versionNumber: 1, action: 'activate' },
+    ]);
+    h.report.mockClear();
+    await setActiveMinutesVersion('m1', row.versions[1].id); // back to the newest
+    expect(calls().map((c) => c.details)).toEqual([{ versionNumber: 2, action: 'activate' }]);
+    h.report.mockClear();
+    await setActiveMinutesVersion('m1', row.versions[1].id); // already active
+    await setActiveMinutesVersion('m1', 'not-a-version');
     expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it('reports minutes_version_prune with the number of versions the 50-version cap removed', async () => {
+    for (let i = 0; i < 50; i++) await appendMinutesVersion('m1', minutes(`v${i}`));
+    expect(types().filter((t) => t === 'meeting.minutes_version_prune')).toEqual([]);
+    await appendMinutesVersion('m1', minutes('51'));
+    expect(calls().filter((c) => c.type === 'meeting.minutes_version_prune')).toEqual([
+      { type: 'meeting.minutes_version_prune', entityId: 'm1', details: { prunedCount: 1 } },
+    ]);
+    await snapshotMinutes('m1', minutes('52'));
+    expect(types().filter((t) => t === 'meeting.minutes_version_prune')).toHaveLength(2);
   });
 });
 
@@ -192,11 +293,29 @@ describe('contract with the server catalogue', () => {
     await saveTranscript(m.id, { rawText: 't', chapters: [], piiReplacements: [], segments: [seg('a')] });
     await saveMinutes(m.id, minutes('x'));
     await saveAudio(m.id, new Blob(['x']), 'audio/webm');
+    await saveMinutes(m.id, minutes('y'));
+    await snapshotMinutes(m.id, minutes('z'));
+    const row = await appendMinutesVersion(m.id, minutes('w'));
+    await setActiveMinutesVersion(m.id, row.versions[0].id);
+    for (let i = 0; i < 50; i++) await appendMinutesVersion(m.id, minutes(`v${i}`));
+    await saveTranscriptSegments(m.id, [seg('a', SECRET_NAME)]);
+    await updateMeeting(m.id, { participants: ['A', 'B', 'C'] });
     await deleteAudio(m.id);
     await deleteMeeting(m.id);
 
+
     const seen = new Set(types());
-    expect([...seen].sort()).toEqual(['meeting.audio_delete', 'meeting.create', 'meeting.delete', 'meeting.redact']);
+    expect([...seen].sort()).toEqual([
+      'meeting.audio_delete',
+      'meeting.create',
+      'meeting.delete',
+      'meeting.minutes_save',
+      'meeting.minutes_version',
+      'meeting.minutes_version_prune',
+      'meeting.participants_edit',
+      'meeting.redact',
+      'meeting.speakers_edit',
+    ]);
     for (const c of calls()) {
       const result = validateEvent({
         type: c.type,

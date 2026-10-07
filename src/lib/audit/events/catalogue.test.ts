@@ -10,13 +10,13 @@ vi.mock('@/lib/db', () => ({ db: {}, pool: { query: poolQuery, connect: vi.fn() 
 
 import { AuditWriteError, recordEvent, validateEvent } from '../record';
 import { EVENT_CATALOGUE, EVENT_TYPES, type AuditEventInput, type EventType } from './index';
-import { accessEvents } from './access';
 import { aiEvents } from './ai';
 import { auditEvents } from './audit';
 import { authEvents } from './auth';
 import { botEvents } from './bot';
 import { centralTemplateEvents } from './central-template';
 import { meetingEvents } from './meeting';
+import { systemEvents } from './system';
 import { templateEvents } from './template';
 import { CODE_RE } from './types';
 
@@ -68,7 +68,7 @@ function sampleOf(s: z.ZodTypeAny): unknown {
     case 'ZodString': {
       const checks = (inner._def.checks as Array<{ kind: string }>) ?? [];
       if (checks.some((c) => c.kind === 'uuid')) return UUID_A;
-      const ok = ['sample_code', '0123456789abcdef0123456789abcdef'].find((c) => inner.safeParse(c).success);
+      const ok = ['sample_code', '0123456789abcdef', '0123456789abcdef0123456789abcdef'].find((c) => inner.safeParse(c).success);
       if (!ok) throw new Error('no sample string for a regex-constrained field');
       return ok;
     }
@@ -111,24 +111,28 @@ function eventFor(type: EventType, details: unknown): AuditEventInput {
 }
 
 describe('catalogue structure', () => {
-  it('is exactly the user-action set: no reads, pipeline steps or sync status', () => {
+  it('is exactly the action set: what people did, never content, pipeline steps or sync status', () => {
     expect([...EVENT_TYPES].sort()).toEqual(
       [
         'auth.login', 'auth.logout', 'auth.login_failed', 'authz.denied',
         'template.create', 'template.update', 'template.delete', 'template.share', 'template.import',
         'central_template.create', 'central_template.update', 'central_template.retarget', 'central_template.archive', 'central_template.restore',
-        'minutes.generate', 'export.download',
-        'bot.session_start', 'bot.session_stop', 'bot.session_abort', 'bot.ended', 'bot.error',
+        'audio.upload', 'minutes.generate', 'export.download',
+        'bot.session_start', 'bot.session_pause', 'bot.session_resume', 'bot.session_stop', 'bot.session_abort',
+        'bot.audio_delete', 'bot.ended', 'bot.error',
         'meeting.create', 'meeting.delete', 'meeting.redact', 'meeting.audio_delete',
-        'access.role_assign', 'access.role_revoke', 'access.org_unit_create', 'access.org_unit_update', 'access.org_unit_delete',
-        'access.member_add', 'access.member_remove', 'access.user_create', 'access.user_link',
+        'meeting.minutes_view', 'meeting.transcript_view', 'meeting.audio_play',
+        'meeting.recording_start', 'meeting.recording_pause', 'meeting.recording_resume', 'meeting.recording_stop',
+        'meeting.minutes_save', 'meeting.minutes_version', 'meeting.minutes_version_prune',
+        'meeting.participants_edit', 'meeting.speakers_edit',
+        'system.config_changed',
         'audit.export', 'audit.prune',
       ].sort(),
     );
   });
 
   it('has no event type defined in two domain files (a spread would silently override)', () => {
-    const files = [accessEvents, authEvents, templateEvents, centralTemplateEvents, aiEvents, botEvents, meetingEvents, auditEvents];
+    const files = [authEvents, templateEvents, centralTemplateEvents, aiEvents, botEvents, meetingEvents, systemEvents, auditEvents];
     const all = files.flatMap((f) => Object.keys(f));
     expect(new Set(all).size).toBe(all.length);
     expect(all.length).toBe(EVENT_TYPES.length);
@@ -136,19 +140,23 @@ describe('catalogue structure', () => {
 
   it('is domain-scoped: each file only defines its own prefixes', () => {
     const prefixes = (f: object) => new Set(Object.keys(f).map((k) => k.split('.')[0]));
-    expect([...prefixes(accessEvents)].sort()).toEqual(['access', 'authz']);
-    expect([...prefixes(authEvents)]).toEqual(['auth']);
+    expect([...prefixes(authEvents)].sort()).toEqual(['auth', 'authz']);
     expect([...prefixes(templateEvents)]).toEqual(['template']);
     expect([...prefixes(centralTemplateEvents)]).toEqual(['central_template']);
-    expect([...prefixes(aiEvents)].sort()).toEqual(['export', 'minutes']);
+    expect([...prefixes(aiEvents)].sort()).toEqual(['audio', 'export', 'minutes']);
     expect([...prefixes(botEvents)]).toEqual(['bot']);
     expect([...prefixes(meetingEvents)]).toEqual(['meeting']);
+    expect([...prefixes(systemEvents)]).toEqual(['system']);
     expect([...prefixes(auditEvents)]).toEqual(['audit']);
   });
 
   it('allows the browser to report only meeting.*', () => {
     const clientTypes = EVENT_TYPES.filter((t) => (EVENT_CATALOGUE[t].sources as readonly string[]).includes('client'));
     expect([...clientTypes].sort()).toEqual(Object.keys(meetingEvents).sort());
+  });
+
+  it('has no access.* events: rights and organisation changes are out of the log', () => {
+    expect(EVENT_TYPES.filter((t) => t.startsWith('access.'))).toEqual([]);
   });
 
   it('keeps meeting.* client-only (they are self-reported)', () => {
@@ -284,7 +292,7 @@ describe('central template events (Phase 4)', () => {
 
   it('minutes.generate accepts templateSource central with a templateVersion and the central template as secondary entity', () => {
     const base = { type: 'minutes.generate', actorUserId: 'user-1', secondaryEntityId: UUID_B } as const;
-    const details = { templateSource: 'central', templateVersion: 7, durationMs: 10, segmentCount: 2 };
+    const details = { templateSource: 'central', templateVersion: 7, userInstruction: false, durationMs: 10, segmentCount: 2 };
     const central = validateEvent({ ...base, secondaryEntityType: 'central_template', details } as unknown as AuditEventInput);
     expect(central).toMatchObject({ ok: true });
     if (central.ok) expect(central.value.secondaryEntityType).toBe('central_template');
@@ -296,20 +304,97 @@ describe('central template events (Phase 4)', () => {
   });
 });
 
-describe('Phase 1 admin call sites still validate', () => {
-  it('accepts every details shape access-admin / bootstrap / directory-match pass today', () => {
+describe('action events for access, processing, editing and deletion', () => {
+  const meeting = (type: EventType, details: unknown, extra: Record<string, unknown> = {}) =>
+    ({ type, actorUserId: 'user-1', entityId: UUID_A, details, ...extra }) as unknown as AuditEventInput;
+
+  it('accepts the details the browser reports, with the meeting as entity', () => {
     const cases: Array<[EventType, Record<string, unknown>]> = [
-      ['access.role_assign', { roleKey: 'tt-logleser', scopeOrgUnitUuid: null, includeDescendants: true }],
-      ['access.role_assign', { roleKey: 'tt-administrator', bootstrap: true }],
-      ['access.role_revoke', { roleKey: 'tt-logleser', scopeOrgUnitUuid: UUID_B }],
-      ['access.org_unit_update', { nameChanged: true, parentChanged: false }],
-      ['access.user_create', { source: 'local' }],
-      ['access.user_link', { via: 'userid-claim', automatic: true }],
-      ['access.org_unit_create', {}],
-      ['access.member_add', {}],
+      ['meeting.minutes_view', {}],
+      ['meeting.transcript_view', {}],
+      ['meeting.audio_play', {}],
+      ['meeting.recording_start', {}],
+      ['meeting.recording_pause', {}],
+      ['meeting.recording_resume', {}],
+      ['meeting.recording_stop', {}],
+      ['meeting.minutes_save', {}],
+      ['meeting.minutes_version', { versionNumber: 3, action: 'view' }],
+      ['meeting.minutes_version', { versionNumber: 3, action: 'activate' }],
+      ['meeting.minutes_version', { versionNumber: 4, action: 'snapshot' }],
+      ['meeting.minutes_version', { versionNumber: 5, action: 'generate' }],
+      ['meeting.minutes_version_prune', { prunedCount: 1 }],
+      ['meeting.participants_edit', { participantCount: 4 }],
+      ['meeting.speakers_edit', { speakerCount: 3 }],
+      ['meeting.speakers_edit', {}],
+      ['meeting.delete', { trigger: 'user' }],
+      ['meeting.delete', { trigger: 'auto_leave' }],
+      ['meeting.delete', {}],
+      ['meeting.audio_delete', { trigger: 'auto_generate' }],
+      ['meeting.audio_delete', { trigger: 'auto_pagehide' }],
+      ['meeting.audio_delete', { trigger: 'auto_empty' }],
     ];
     for (const [type, details] of cases) {
-      expect(validateEvent(eventFor(type, details)), `${type} ${JSON.stringify(details)}`).toMatchObject({ ok: true });
+      const res = validateEvent(meeting(type, details, { source: 'client' }));
+      expect(res, `${type} ${JSON.stringify(details)}`).toMatchObject({ ok: true });
+      if (res.ok) expect(res.value.entityType).toBe('meeting');
     }
+  });
+
+  it('rejects content-like or unknown values in those events', () => {
+    const bad: Array<[EventType, Record<string, unknown>]> = [
+      ['meeting.minutes_version', { versionNumber: 3, action: 'Gendannet version' }],
+      ['meeting.minutes_version', { versionNumber: 3 }],
+      ['meeting.minutes_version', { versionNumber: 'Referat v3', action: 'view' }],
+      ['meeting.minutes_version_prune', { prunedCount: 0 }],
+      ['meeting.participants_edit', { participantCount: 2, participants: ['Jens'] }],
+      ['meeting.speakers_edit', { speakerCount: 2, names: ['Jens'] }],
+      ['meeting.delete', { trigger: 'because I wanted to' }],
+      ['meeting.audio_delete', { trigger: 'ttl' }],
+      ['meeting.minutes_view', { title: 'Budgetmøde' }],
+    ];
+    for (const [type, details] of bad) {
+      expect(validateEvent(meeting(type, details, { source: 'client' })).ok, `${type} ${JSON.stringify(details)}`).toBe(false);
+    }
+  });
+
+  it('audio.upload: server or system source, meeting optional, sizes and codes only', () => {
+    const ok = { channel: 'batch', bytes: 120_000, durationMs: 4200, outcomeCode: 'http_503' };
+    expect(validateEvent({ type: 'audio.upload', actorUserId: 'u1', entityId: UUID_A, outcome: 'error', details: ok } as unknown as AuditEventInput)).toMatchObject({ ok: true });
+    expect(validateEvent({ type: 'audio.upload', source: 'system', details: { channel: 'bot', bytes: 10 } } as unknown as AuditEventInput)).toMatchObject({ ok: true });
+    expect(validateEvent({ type: 'audio.upload', source: 'client', actorUserId: 'u1', details: ok } as unknown as AuditEventInput).ok).toBe(false);
+    expect(validateEvent({ type: 'audio.upload', actorUserId: 'u1', details: { ...ok, fileName: 'moede.webm' } } as unknown as AuditEventInput).ok).toBe(false);
+    expect(validateEvent({ type: 'audio.upload', actorUserId: 'u1', details: { ...ok, channel: 'dropbox' } } as unknown as AuditEventInput).ok).toBe(false);
+  });
+
+  it('minutes.generate says whether an instruction took part, never what it said', () => {
+    const base = { type: 'minutes.generate', actorUserId: 'u1', details: { templateSource: 'none', durationMs: 5, segmentCount: 1 } };
+    expect(validateEvent(base as unknown as AuditEventInput).ok).toBe(false); // userInstruction is required
+    expect(validateEvent({ ...base, details: { ...base.details, userInstruction: true } } as unknown as AuditEventInput)).toMatchObject({ ok: true });
+    expect(validateEvent({ ...base, details: { ...base.details, userInstruction: 'Skriv kort' } } as unknown as AuditEventInput).ok).toBe(false);
+  });
+
+  it('bot.session_pause/resume are user actions, bot.audio_delete is a system action with a closed trigger', () => {
+    expect(validateEvent({ type: 'bot.session_pause', actorUserId: 'u1', entityId: UUID_A } as unknown as AuditEventInput)).toMatchObject({ ok: true });
+    expect(validateEvent({ type: 'bot.session_resume', actorUserId: 'u1', entityId: UUID_A } as unknown as AuditEventInput)).toMatchObject({ ok: true });
+    const del = validateEvent({ type: 'bot.audio_delete', entityId: UUID_A, details: { trigger: 'ttl' } } as unknown as AuditEventInput);
+    expect(del).toMatchObject({ ok: true });
+    if (del.ok) expect(del.value.source).toBe('system');
+    expect(validateEvent({ type: 'bot.audio_delete', entityId: UUID_A, details: { trigger: 'user' } } as unknown as AuditEventInput).ok).toBe(false);
+  });
+
+  it('system.config_changed: a 16-hex fingerprint and a flag, system source only', () => {
+    const ok = { type: 'system.config_changed', details: { fingerprint: '0123456789abcdef', changed: true } };
+    const res = validateEvent(ok as unknown as AuditEventInput);
+    expect(res).toMatchObject({ ok: true });
+    if (res.ok) expect(res.value.source).toBe('system');
+    expect(validateEvent({ ...ok, details: { fingerprint: 'not-a-hash', changed: true } } as unknown as AuditEventInput).ok).toBe(false);
+    expect(validateEvent({ ...ok, details: { fingerprint: '0123456789abcdef', changed: true, ANTHROPIC: 'x' } } as unknown as AuditEventInput).ok).toBe(false);
+    expect(validateEvent({ ...ok, source: 'server' } as unknown as AuditEventInput)).toEqual({ ok: false, code: 'source_not_allowed' });
+  });
+
+  it('auth.login_failed accepts a burst summary with a drop count', () => {
+    const res = validateEvent({ type: 'auth.login_failed', details: { reason: 'burst_summary', droppedCount: 140 } } as unknown as AuditEventInput);
+    expect(res).toMatchObject({ ok: true });
+    expect(validateEvent({ type: 'auth.login_failed', details: { reason: 'burst_summary', droppedCount: 0 } } as unknown as AuditEventInput).ok).toBe(false);
   });
 });

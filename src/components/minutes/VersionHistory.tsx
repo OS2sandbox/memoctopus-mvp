@@ -33,7 +33,7 @@ export function VersionHistory({ versions, currentVersion, onRestore }: VersionH
         className="px-5 py-3 text-[var(--muted)] border-b border-[var(--line)]"
         style={{ fontSize: 'var(--t-micro)', fontFamily: 'var(--font-mono)' }}
       >
-        Nuværende version: {currentVersion} · Bevares i 7 dage
+        Nuværende version: {currentVersion}
       </p>
       <div className="divide-y divide-[var(--line)]">
         {versions.map((v, i) => (

@@ -450,7 +450,7 @@ export function AuditLog() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <p className="max-w-prose text-[13px] text-[var(--muted)]">
-            Hændelser markeret »selvrapporteret« er indberettet af brugerens egen browser. De kan ikke bekræftes af serveren.
+            Hændelser markeret »selvrapporteret« er indberettet af brugerens egen browser (visning, redigering, afspilning og sletning af møder, som kun findes i browseren). De kan ikke bekræftes af serveren.
           </p>
           {filtered && (
             <Button type="button" variant="link" size="sm" onClick={reset}>

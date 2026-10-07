@@ -4,8 +4,12 @@ import { withHandler } from '@/lib/api-handler';
 import { recordServerEvent } from '@/lib/audit/record';
 import type { Skabelon } from '@/types';
 import { requireAppAccess } from '@/lib/authz/app-access';
+import { UUID_RE } from '@/lib/audit/record';
 
 type Ctx = { params: Promise<{ id: string }> };
+
+// The id in the URL is not verified until the template is found: only a well-formed UUID becomes an entity.
+const entityOf = (id: string) => (UUID_RE.test(id) ? { entityId: id } : {});
 
 const TRACKED_FIELDS = [
   'name',
@@ -46,15 +50,27 @@ export const PUT = withHandler('skabeloner/[id] PUT', async (req: NextRequest, {
   const prev = await getSkabelon(session.user.id, id);
   if (!prev) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
 
-  const skabelon = await updateSkabelon(session.user.id, id, {
-    name,
-    description: body.description,
-    prompt: body.prompt,
-    includeDeltagere: body.includeDeltagere,
-    includeBeslutningspunkter: body.includeBeslutningspunkter,
-    includeDagsorden: body.includeDagsorden,
-    includeDato: body.includeDato,
-  });
+  let skabelon;
+  try {
+    skabelon = await updateSkabelon(session.user.id, id, {
+      name,
+      description: body.description,
+      prompt: body.prompt,
+      includeDeltagere: body.includeDeltagere,
+      includeBeslutningspunkter: body.includeBeslutningspunkter,
+      includeDagsorden: body.includeDagsorden,
+      includeDato: body.includeDato,
+    });
+  } catch (err) {
+    await recordServerEvent(req, {
+      type: 'template.update',
+      outcome: 'error',
+      actorUserId: session.user.id,
+      ...entityOf(id),
+      details: { changedFields: [] },
+    });
+    throw err;
+  }
   if (!skabelon) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
   const changed = changedFields(prev, skabelon);
   if (changed.length > 0) {
@@ -74,7 +90,13 @@ export const DELETE = withHandler('skabeloner/[id] DELETE', async (req: NextRequ
   const { session } = access;
 
   const { id } = await params;
-  const ok = await deleteSkabelon(session.user.id, id);
+  let ok;
+  try {
+    ok = await deleteSkabelon(session.user.id, id);
+  } catch (err) {
+    await recordServerEvent(req, { type: 'template.delete', outcome: 'error', actorUserId: session.user.id, ...entityOf(id) });
+    throw err;
+  }
   if (!ok) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
   await recordServerEvent(req, { type: 'template.delete', actorUserId: session.user.id, entityId: id });
   return NextResponse.json({ ok: true });

@@ -3,24 +3,24 @@
 // this contract (ask the audit owner); refining the details of an existing one is
 // the domain owner's call.
 import type { z } from 'zod';
-import { accessEvents } from './access';
 import { aiEvents } from './ai';
 import { auditEvents } from './audit';
 import { authEvents } from './auth';
 import { botEvents } from './bot';
 import { centralTemplateEvents } from './central-template';
 import { meetingEvents } from './meeting';
+import { systemEvents } from './system';
 import { templateEvents } from './template';
 import type { EventDef, EventOutcome, EventSource } from './types';
 
 export const EVENT_CATALOGUE = {
-  ...accessEvents,
   ...authEvents,
   ...templateEvents,
   ...centralTemplateEvents,
   ...aiEvents,
   ...botEvents,
   ...meetingEvents,
+  ...systemEvents,
   ...auditEvents,
 } as const;
 

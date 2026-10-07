@@ -52,8 +52,10 @@ export function clampClientTime(claimed: string, now: Date = new Date()): Date {
 
 // Per-user fixed window, in memory: counts are per server instance, so with several
 // instances the effective limit is N times higher. Good enough to stop a runaway
-// client; it is not an accounting mechanism.
-export const RATE_LIMIT_EVENTS = 300;
+// client; it is not an accounting mechanism. Generous on purpose: the log is a
+// documentation requirement, so the limit is for runaway clients, not for normal use
+// (a refused batch stays in the browser's outbox and is retried, see client.ts).
+export const RATE_LIMIT_EVENTS = 1000;
 export const RATE_LIMIT_WINDOW_MS = 60_000;
 const windows = new Map<string, { start: number; count: number }>();
 
@@ -106,12 +108,17 @@ export async function remainingClientEventsToday(userId: string, runner?: SqlQue
   return Math.max(0, cap - used);
 }
 
-// Per-(user, meeting, type) throttle for chatty types: one stored row per minute says
-// all the log needs to say. Empty today (create, delete, redact and audio delete are
-// one-off lifecycle moments); the mechanism stays so a chatty type can be added by
-// listing it here (the browser-side counterpart is COALESCED). In memory and best
-// effort like the budget above (per instance, lost on restart).
-export const THROTTLED_TYPES: Set<string> = new Set();
+// Per-(user, meeting, type) throttle for repeatable "look" events: a second view or
+// play of the same meeting within a minute adds nothing the first row does not already
+// say. Edits, versions, recordings and deletes are NEVER throttled here (each is a
+// distinct action; the browser coalesces the chatty ones, see COALESCED in client.ts).
+// In memory and best effort like the budget above (per instance, lost on restart).
+// Throttled events are acknowledged and COUNTED in the response (`throttled`).
+export const THROTTLED_TYPES: Set<string> = new Set([
+  'meeting.minutes_view',
+  'meeting.transcript_view',
+  'meeting.audio_play',
+]);
 export const THROTTLE_WINDOW_MS = 60_000;
 export const THROTTLE_MAX_ENTRIES = 5000;
 const lastStored = new Map<string, number>();

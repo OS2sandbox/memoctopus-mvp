@@ -34,7 +34,8 @@ vi.mock('@/lib/bot-pending-audio', () => ({
 
 import { GET } from './route';
 import { recordServerEvent } from '@/lib/audit/record';
-import { readPendingMeta, readPendingAudio, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { readPendingMeta, readPendingAudio, deletePendingAudio, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 
 const mockReadMeta = vi.mocked(readPendingMeta);
 const mockReadAudio = vi.mocked(readPendingAudio);
@@ -55,6 +56,7 @@ beforeEach(() => {
   mockAssertOwner.mockReset();
   mockAssertOwner.mockResolvedValue(true);
   mockRecord.mockReset().mockResolvedValue({ status: 'stored' });
+  vi.mocked(deletePendingAudio).mockClear();
 });
 
 describe('GET /api/bot/audio/[meetingId]', () => {
@@ -139,17 +141,38 @@ describe('audit', () => {
     hasRecording: true, createdAt: Date.now(),
   };
 
-  it('writes no audit event when a recording is handed over, or for pending, no-recording and non-owner responses', async () => {
+  it('asks for the server-held copy to be deleted as a recorded handoff when the recording is handed over', async () => {
     mockReadMeta.mockResolvedValue(META);
     mockReadAudio.mockResolvedValue(Buffer.from('fake-audio'));
-    const res = await GET(makeRequest(MEETING), makeParams(MEETING));
-    expect(res.status).toBe(200);
+    const req = makeRequest(MEETING);
+    expect((await GET(req, makeParams(MEETING))).status).toBe(200);
+    expect(deletePendingAudio).toHaveBeenCalledTimes(1);
+    expect(deletePendingAudio).toHaveBeenCalledWith(MEETING, { trigger: 'handoff', actorUserId: 'u1', req });
+    // The event itself is written by deletePendingAudio (see bot-pending-audio.test.ts), not by the route.
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('records no deletion for pending and no-recording responses (nothing was held)', async () => {
     mockReadMeta.mockResolvedValueOnce(null);
     await GET(makeRequest(MEETING), makeParams(MEETING));
     mockReadMeta.mockResolvedValueOnce({ ...META, hasRecording: false });
     await GET(makeRequest(MEETING), makeParams(MEETING));
-    mockAssertOwner.mockResolvedValueOnce(false);
-    await GET(makeRequest(MEETING), makeParams(MEETING));
+    expect(vi.mocked(deletePendingAudio).mock.calls.every((c) => c[1] === undefined)).toBe(true);
     expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('records a non-owner as authz.denied (a probe of someone else\'s recording) and still answers like "pending"', async () => {
+    vi.mocked(recordAuthzDenied).mockClear();
+    mockAssertOwner.mockResolvedValueOnce(false);
+    const res = await GET(makeRequest(MEETING), makeParams(MEETING));
+    expect(res.status).toBe(404);
+    expect(recordAuthzDenied).toHaveBeenCalledWith({
+      actorUserId: 'u1',
+      required: 'bot.meeting_owner',
+      reason: 'not_owner',
+      entityType: 'meeting',
+      entityId: MEETING,
+    });
+    expect(deletePendingAudio).not.toHaveBeenCalled();
   });
 });

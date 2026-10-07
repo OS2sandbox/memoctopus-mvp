@@ -31,6 +31,7 @@ import { GET } from './route';
 import { auth } from '@/lib/auth';
 import { readPendingTranscript, deletePendingTranscript, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
 import { recordServerEvent } from '@/lib/audit/record';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 import { FAKE_SESSION } from '@/test/helpers';
 
 const mockRecord = vi.mocked(recordServerEvent);
@@ -110,7 +111,7 @@ describe('audit', () => {
   const MEETING = '11111111-1111-4111-8111-111111111111';
   const params = { params: Promise.resolve({ meetingId: MEETING }) };
 
-  it('writes no audit event for a hand-over, a failed run, none, processing or a non-owner', async () => {
+  it('writes no bot event for a hand-over, a failed run, none, processing or a non-owner (the pipeline is not audited)', async () => {
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
     mockRead.mockResolvedValueOnce({ status: 'ready', segments: SEGMENTS, diarized: true, createdAt: 1 });
     await GET(REQ, params);
@@ -123,5 +124,21 @@ describe('audit', () => {
     mockAssertOwner.mockResolvedValueOnce(false);
     await GET(REQ, params);
     expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('records a non-owner as authz.denied, without reading or deleting the stash', async () => {
+    vi.mocked(recordAuthzDenied).mockClear();
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    mockAssertOwner.mockResolvedValueOnce(false);
+    await GET(REQ, params);
+    expect(recordAuthzDenied).toHaveBeenCalledWith({
+      actorUserId: FAKE_SESSION.user.id,
+      required: 'bot.meeting_owner',
+      reason: 'not_owner',
+      entityType: 'meeting',
+      entityId: MEETING,
+    });
+    expect(mockRead).not.toHaveBeenCalled();
+    expect(mockDelete).not.toHaveBeenCalled();
   });
 });

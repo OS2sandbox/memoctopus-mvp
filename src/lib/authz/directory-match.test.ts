@@ -60,7 +60,8 @@ describe('userid-claim', () => {
     expect(select.params).toEqual(['ABC123']);
     expect(calls.map((c) => c.sql)[0]).toBe('BEGIN');
     expect(calls.at(-1)!.sql).toBe('COMMIT');
-    expect(recordEvent).toHaveBeenCalledOnce();
+    // Linking a user to the directory is not audited.
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('uses DIRECTORY_USERID_CLAIM', async () => {
@@ -372,7 +373,7 @@ describe('links', () => {
 describe('mode-switch relink (local row -> rollekatalog row)', () => {
   const OLD_LOCAL = { uuid: 'old-local', source: 'local' };
 
-  it('moves the link in ONE transaction: release the local row first, then link the Rollekatalog row, then audit', async () => {
+  it('moves the link in ONE transaction: release the local row first, then link the Rollekatalog row', async () => {
     const { runner, calls } = db([D1], [OLD_LOCAL]);
     const res = await matchDirectoryUser(identity(), 'userid-claim', runner);
     expect(res).toEqual({ status: 'linked', directoryUserUuid: 'd1' });
@@ -388,14 +389,7 @@ describe('mode-switch relink (local row -> rollekatalog row)', () => {
     expect(calls[release]!.params).toEqual(['old-local', 'u1']);
     expect(calls[release]!.sql).toContain("source = 'local'");
     expect(calls[link]!.params).toEqual(['u1', 'd1']);
-    expect(recordEvent).toHaveBeenCalledOnce();
-    expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'access.user_link',
-      actorUserId: 'u1',
-      entityType: 'directory_user',
-      entityId: 'd1',
-      details: { via: 'userid-claim', automatic: true },
-    }), { tx: expect.anything() });
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('does not relink when the existing link is to an ENABLED rollekatalog row', async () => {
@@ -453,7 +447,7 @@ describe('mode-switch relink (local row -> rollekatalog row)', () => {
 describe('person re-created in Rollekatalog (stale link to a disabled rollekatalog row)', () => {
   const OLD_RK_DISABLED = { uuid: 'old-rk', source: 'rollekatalog', disabled: true };
 
-  it('releases the disabled row and links the new one in ONE transaction, then audits', async () => {
+  it('releases the disabled row and links the new one in ONE transaction', async () => {
     const { runner, calls } = db([D1], [OLD_RK_DISABLED]);
     const res = await matchDirectoryUser(identity(), 'userid-claim', runner);
     expect(res).toEqual({ status: 'linked', directoryUserUuid: 'd1' });
@@ -471,12 +465,7 @@ describe('person re-created in Rollekatalog (stale link to a disabled rollekatal
     expect(calls[release]!.sql).toContain('app_user_id = $2');
     expect(calls[release]!.sql).toContain("source = 'rollekatalog' AND disabled = true");
     expect(calls[link]!.params).toEqual(['u1', 'd1']);
-    expect(recordEvent).toHaveBeenCalledOnce();
-    expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'access.user_link',
-      entityId: 'd1',
-      details: { via: 'userid-claim', automatic: true },
-    }), { tx: expect.anything() });
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('is a conflict when the old row is still enabled (nothing is released)', async () => {

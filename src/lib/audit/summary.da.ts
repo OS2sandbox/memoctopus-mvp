@@ -8,8 +8,8 @@
 // sentence is a compile error.
 import type { EventType } from './events';
 import { isEventType } from './events';
-import { capabilityLabels, roleLabels } from '@/lib/authz/labels.da';
-import type { Capability, RoleKey } from '@/lib/authz/types';
+import { capabilityLabels } from '@/lib/authz/labels.da';
+import type { Capability } from '@/lib/authz/types';
 import { eventTypeLabel } from './labels.da';
 
 export interface SummarisableEvent {
@@ -43,10 +43,6 @@ function plural(n: number, one: string, many: string): string {
   return `${n.toLocaleString('da-DK')} ${n === 1 ? one : many}`;
 }
 
-function roleName(v: unknown): string {
-  return typeof v === 'string' && has(roleLabels, v) ? `»${roleLabels[v as RoleKey]}«` : 'en rolle';
-}
-
 function centralTemplate(c: Ctx): string {
   return c.templateName ? `den centrale skabelon »${c.templateName}«` : 'en central skabelon';
 }
@@ -66,11 +62,31 @@ const LOGIN_FAILED_REASON: Record<string, string> = {
 
 const ORIGIN_TEXT: Record<string, string> = { live: 'live optagelse', upload: 'upload', bot: 'mødebot' };
 
+// Deletes the app made on its own say so; a user delete or a missing trigger reads as the person's own.
+const AUTO_TRIGGER_TEXT: Record<string, string> = {
+  auto_generate: ' (automatisk efter referatet blev genereret)',
+  auto_leave: ' (automatisk, da siden blev forladt)',
+  auto_pagehide: ' (automatisk, da fanen blev lukket)',
+  auto_empty: ' (automatisk, fordi optagelsen var tom)',
+};
+const autoText = (d: Record<string, unknown>) => AUTO_TRIGGER_TEXT[String(d.trigger)] ?? '';
+
+const AUDIO_CHANNEL_TEXT: Record<string, string> = { batch: 'en optagelse', upload: 'en lydfil', bot: 'en mødebot-optagelse' };
+
+const VERSION_ACTION_TEXT: Record<string, (v: string) => string> = {
+  view: (v) => `åbnede en tidligere version af referatet${v}`,
+  snapshot: (v) => `gemte en ny version af referatet${v}`,
+  generate: (v) => `genererede en ny version af referatet${v}`,
+  activate: (v) => `gendannede en tidligere version af referatet${v}`,
+};
+
 const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   'auth.login': (c) => `${c.actor} loggede ind${METHOD_TEXT[String(c.details.method)] ?? ''}`,
   'auth.logout': (c) => `${c.actor} loggede ud`,
   // The attempt has no (trusted) user, so there is no actor in the sentence.
   'auth.login_failed': (c) => {
+    const dropped = num(c.details.droppedCount);
+    if (dropped !== null) return `${plural(dropped, 'yderligere mislykket login-forsøg', 'yderligere mislykkede login-forsøg')} fra samme adresse blev ikke registreret enkeltvis`;
     const reason = LOGIN_FAILED_REASON[String(c.details.reason)];
     return `Mislykket login-forsøg${reason ? ` (${reason})` : ''}`;
   },
@@ -92,10 +108,15 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   'central_template.archive': (c) => `${c.actor} arkiverede ${centralTemplate(c)}${version(c.details)}`,
   'central_template.restore': (c) => `${c.actor} genoprettede ${centralTemplate(c)}${version(c.details)}`,
 
+  'audio.upload': (c) => {
+    const what = AUDIO_CHANNEL_TEXT[String(c.details.channel)] ?? 'lyd';
+    return c.failed ? `${c.actor} kunne ikke uploade ${what} til transskribering` : `${c.actor} uploadede ${what} til transskribering`;
+  },
   'minutes.generate': (c) => {
     if (c.failed) return `${c.actor} kunne ikke generere et referat`;
     const central = c.details.templateSource === 'central';
-    return `${c.actor} genererede et referat${central ? ` med en central skabelon${version({ version: c.details.templateVersion })}` : ''}`;
+    const instruction = c.details.userInstruction === true ? ' og en ekstra instruktion' : '';
+    return `${c.actor} genererede et referat${central ? ` med en central skabelon${version({ version: c.details.templateVersion })}` : ''}${instruction}`;
   },
   'export.download': (c) => {
     const format = typeof c.details.format === 'string' ? ` (${c.details.format})` : '';
@@ -103,8 +124,14 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   },
 
   'bot.session_start': (c) => `${c.actor} startede mødebotten`,
+  'bot.session_pause': (c) => `${c.actor} satte mødebotten på pause`,
+  'bot.session_resume': (c) => `${c.actor} genoptog mødebotten`,
   'bot.session_stop': (c) => `${c.actor} stoppede mødebotten`,
   'bot.session_abort': (c) => `${c.actor} afbrød mødebotten`,
+  'bot.audio_delete': (c) =>
+    c.details.trigger === 'ttl'
+      ? 'Systemet slettede en mødebot-optagelse på serveren, som ingen havde hentet'
+      : 'Systemet slettede mødebottens optagelse på serveren, efter at den var hentet',
   'bot.ended': (c) => {
     const secs = num(c.details.durationSeconds);
     const mins = secs === null ? null : Math.max(1, Math.round(secs / 60));
@@ -116,27 +143,34 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
     const origin = ORIGIN_TEXT[String(c.details.origin)];
     return `${c.actor} oprettede et møde${origin ? ` (${origin})` : ''}`;
   },
-  'meeting.delete': (c) => `${c.actor} slettede et møde`,
+  'meeting.delete': (c) => `${c.actor} slettede et møde med transskription og alle referatversioner${autoText(c.details)}`,
   'meeting.redact': (c) => `${c.actor} slørede et møde`,
-  'meeting.audio_delete': (c) => `${c.actor} slettede lyden fra et møde`,
-
-  'access.role_assign': (c) =>
-    `${c.actor} tildelte en bruger rollen ${roleName(c.details.roleKey)}${c.details.bootstrap === true ? ' (opstartsadministrator)' : ''}`,
-  'access.role_revoke': (c) => `${c.actor} fjernede rollen ${roleName(c.details.roleKey)} fra en bruger`,
-  'access.org_unit_create': (c) => `${c.actor} oprettede en organisationsenhed`,
-  'access.org_unit_update': (c) => {
-    const what = [c.details.nameChanged === true && 'navn', c.details.parentChanged === true && 'placering'].filter(Boolean);
-    return `${c.actor} ændrede en organisationsenhed${what.length > 0 ? ` (${what.join(' og ')})` : ''}`;
+  'meeting.audio_delete': (c) => `${c.actor} slettede lyden fra et møde${autoText(c.details)}`,
+  'meeting.minutes_view': (c) => `${c.actor} åbnede et referat`,
+  'meeting.transcript_view': (c) => `${c.actor} åbnede en transskription`,
+  'meeting.audio_play': (c) => `${c.actor} afspillede lyden fra et møde`,
+  'meeting.recording_start': (c) => `${c.actor} startede en optagelse`,
+  'meeting.recording_pause': (c) => `${c.actor} satte en optagelse på pause`,
+  'meeting.recording_resume': (c) => `${c.actor} genoptog en optagelse`,
+  'meeting.recording_stop': (c) => `${c.actor} stoppede en optagelse`,
+  'meeting.minutes_save': (c) => `${c.actor} redigerede et referat`,
+  'meeting.minutes_version': (c) => {
+    const text = VERSION_ACTION_TEXT[String(c.details.action)];
+    const v = version({ version: c.details.versionNumber });
+    return `${c.actor} ${text ? text(v) : `ændrede en version af et referat${v}`}`;
   },
-  'access.org_unit_delete': (c) => `${c.actor} slettede en organisationsenhed`,
-  'access.member_add': (c) => `${c.actor} tilføjede en bruger til en organisationsenhed`,
-  'access.member_remove': (c) => `${c.actor} fjernede en bruger fra en organisationsenhed`,
-  'access.user_create': (c) => `${c.actor} oprettede en bruger i organisationen`,
-  // The actor of a link is the user who logged in and was matched.
-  'access.user_link': (c) =>
-    c.details.automatic === false
-      ? `${c.actor} blev koblet til en brugerprofil i organisationen`
-      : `${c.actor} blev automatisk koblet til sin brugerprofil i organisationen`,
+  'meeting.minutes_version_prune': (c) => {
+    const n = num(c.details.prunedCount);
+    return `Appen fjernede de ældste referatversioner fra et møde, fordi grænsen for antal versioner var nået${n === null ? '' : ` (${plural(n, 'version', 'versioner')})`}`;
+  },
+  'meeting.participants_edit': (c) => {
+    const n = num(c.details.participantCount);
+    return `${c.actor} ændrede deltagerne på et møde${n === null ? '' : ` (${plural(n, 'deltager', 'deltagere')})`}`;
+  },
+  'meeting.speakers_edit': (c) => `${c.actor} ændrede talerne på et møde`,
+
+  'system.config_changed': (c) =>
+    c.details.changed === true ? 'Systemets konfiguration er ændret siden sidste start' : 'Systemets konfiguration blev registreret ved opstart',
 
   'audit.export': (c) => {
     const rows = num(c.details.rowCount);

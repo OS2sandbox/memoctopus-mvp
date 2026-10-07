@@ -9,6 +9,7 @@ import { getTranscript, getAudio, saveTranscriptChapters, saveTranscriptSegments
 import { onTranscriptUpdated } from '@/lib/transcript-events';
 import { isDiarizationInFlight, ensureDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import { getStorageUserId } from '@/lib/storage/scope';
+import { reportAuditEvent } from '@/lib/audit/client';
 import { isDefaultSpeakerLabel, nextAvailableSpeakerLabel } from '@/lib/audio/speaker-labels';
 import type { MinutesContent, Skabelon, CentralSkabelonSummary, MinutesTemplateRef } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
@@ -581,7 +582,12 @@ export function TranscriptReview({
     const onDurationChange = () => {
       if (isFinite(audio.duration) && audio.duration > 0) setDuration(audio.duration);
     };
-    const onPlay = () => setIsPlaying(true);
+    // Every way of starting playback (waveform, a segment, a speaker soundbite) fires 'play'.
+    // Reported as an action only (repeats within a minute are deduped by the audit client).
+    const onPlay = () => {
+      setIsPlaying(true);
+      reportAuditEvent('meeting.audio_play', meetingId);
+    };
     const onPause = () => { setIsPlaying(false); setPlayingBite(null); };
     const onEnded = () => { setIsPlaying(false); setPlayingBite(null); };
     const onError = () => setAudioError('Lydfilen kunne ikke indlæses');
@@ -1042,8 +1048,9 @@ export function TranscriptReview({
           }
         : undefined;
       await appendMinutesVersion(meetingId, content, data.skabelonId ?? null, templateRef);
-      await deleteAudio(meetingId);
-      await updateMeeting(meetingId, { status: 'minutes', audioDeleted: true });
+      // The app deletes the recording once the minutes exist (privacy); logged as automatic.
+      await deleteAudio(meetingId, { trigger: 'auto_generate' });
+      await updateMeeting(meetingId, { status: 'minutes', audioDeleted: true }, { trigger: 'auto_generate' });
       onDataChange?.();
       window.location.href = `/meeting/${meetingId}/minutes`;
     } catch (err) {

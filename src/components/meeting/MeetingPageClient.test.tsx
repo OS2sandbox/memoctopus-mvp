@@ -25,17 +25,19 @@ const mockGetMeeting = vi.fn<() => Promise<StoredMeeting | null>>();
 const mockGetTranscript = vi.fn<() => Promise<StoredTranscript | null>>();
 const mockGetMinutes = vi.fn<() => Promise<StoredMinutes | null>>();
 const mockGetAudio = vi.fn<() => Promise<{ blob: Blob; mimeType: string } | null>>();
-const mockDeleteAudio = vi.fn<() => Promise<void>>();
-const mockUpdateMeeting = vi.fn<() => Promise<void>>();
+const mockDeleteAudio = vi.fn<(...args: unknown[]) => Promise<void>>();
+const mockUpdateMeeting = vi.fn<(...args: unknown[]) => Promise<void>>();
+const mockReport = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/storage', () => ({
   getMeeting: () => mockGetMeeting(),
   getTranscript: () => mockGetTranscript(),
   getMinutes: () => mockGetMinutes(),
   getAudio: () => mockGetAudio(),
-  deleteAudio: () => mockDeleteAudio(),
-  updateMeeting: () => mockUpdateMeeting(),
+  deleteAudio: (...args: unknown[]) => mockDeleteAudio(...args),
+  updateMeeting: (...args: unknown[]) => mockUpdateMeeting(...args),
 }));
+vi.mock('@/lib/audit/client', () => ({ reportAuditEvent: mockReport }));
 
 // ─── Heavy child components ────────────────────────────────────────────────────
 vi.mock('@/components/recording/RecordingScreen', () => ({
@@ -800,5 +802,51 @@ describe('MeetingPageClient — pagehide cleanup', () => {
 
     addSpy.mockRestore();
     removeSpy.mockRestore();
+  });
+});
+
+// ─── audit: access and automatic deletion ───────────────────────────────────────
+
+describe('MeetingPageClient — audit reporting', () => {
+  it('reports that the minutes were viewed when the minutes tab shows them, and the transcript on the review tab', async () => {
+    mockGetMeeting.mockResolvedValue(makeMeeting());
+    mockGetMinutes.mockResolvedValue(makeMinutes());
+    mockGetTranscript.mockResolvedValue(makeTranscript());
+
+    renderClient({ initialTab: 'minutes' });
+    await waitFor(() => screen.getByTestId('minutes-editor'));
+    expect(mockReport).toHaveBeenCalledWith('meeting.minutes_view', MEETING_ID);
+    expect(mockReport).not.toHaveBeenCalledWith('meeting.transcript_view', expect.anything());
+
+    await act(async () => { await userEvent.click(screen.getByTestId('tab-review')); });
+    await waitFor(() => screen.getByTestId('transcript-review'));
+    expect(mockReport).toHaveBeenCalledWith('meeting.transcript_view', MEETING_ID);
+    // Only the opaque id is reported, never content.
+    for (const call of mockReport.mock.calls) expect(call).toHaveLength(2);
+  });
+
+  it('reports no view when there is nothing to view (no minutes, no transcript, other tabs)', async () => {
+    mockGetMeeting.mockResolvedValue(makeMeeting());
+    renderClient({ initialTab: 'minutes' });
+    await waitFor(() => screen.getByText('Ingen referat endnu'));
+    await act(async () => { await userEvent.click(screen.getByTestId('tab-export')); });
+    await act(async () => { await userEvent.click(screen.getByTestId('tab-recording')); });
+    expect(mockReport).not.toHaveBeenCalled();
+  });
+
+  it('deletes the leftover audio as an automatic delete when the person leaves, and when the tab closes', async () => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({ audioDeleted: false }));
+    mockGetAudio.mockResolvedValue({ blob: mockAudioBlob, mimeType: 'audio/webm' });
+    const { unmount } = renderClient({ initialTab: 'review' });
+    mockGetTranscript.mockResolvedValue(makeTranscript());
+    await waitFor(() => expect(mockCreateObjectURL).toHaveBeenCalled());
+
+    window.dispatchEvent(new Event('pagehide'));
+    expect(mockDeleteAudio).toHaveBeenCalledWith(MEETING_ID, { trigger: 'auto_pagehide' });
+
+    mockDeleteAudio.mockClear();
+    unmount();
+    expect(mockDeleteAudio).toHaveBeenCalledWith(MEETING_ID, { trigger: 'auto_leave' });
+    expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, { audioDeleted: true }, { trigger: 'auto_leave' });
   });
 });

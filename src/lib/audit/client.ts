@@ -1,11 +1,13 @@
 // Browser side of the client-reported audit events (meeting.* in the catalogue).
 //
-// Meetings live only in this browser's IndexedDB, so the server cannot observe
-// what happens to them. The storage layer therefore reports each lifecycle action
-// here; events are queued in a small per-user IndexedDB outbox (./outbox) and
+// Meetings, transcripts, minutes versions and audio live only in this browser's
+// IndexedDB, so the server cannot observe what happens to them. The storage layer
+// and the screens therefore report each ACTION (view, edit, version switch, playback,
+// recording step, delete) here, never its content; events are queued in a small per-user IndexedDB outbox (./outbox) and
 // delivered to POST /api/audit/client-events. They are SELF-REPORTED: the server
 // takes actor, IP and time from the session and request, never from this payload,
-// but it cannot know that the described action really happened.
+// but it cannot know that the described action really happened: a user (or a script
+// in their browser) can omit, forge or replay them, so they are not proof.
 //
 // reportAuditEvent() is fire-and-forget: it returns synchronously, never throws
 // and never delays the storage operation. It does nothing on the server, in tests
@@ -36,23 +38,29 @@ const MAX_ROUNDS_PER_FLUSH = 20;
  * is held in memory and sent when the window ends, carrying the LAST details of the
  * window and the time of the last occurrence. The held event is written to the outbox
  * early when the tab is hidden or closed; a crash inside the window loses at most that
- * one coalesced event.
- *
- * Empty today: the only events reported now (create, delete, redact, audio delete) are
- * one-off lifecycle moments, and the edit-like ones (rename, participants, transcript,
- * minutes saves) are not reported at all. The mechanism stays so a chatty type can be
- * added by listing it here (the server-side counterpart is THROTTLED_TYPES).
+ * one coalesced event. These are the edit-like events (autosave of the minutes, the
+ * participant and speaker lists): "the minutes were edited" is all the log needs, not
+ * one row per keystroke. The server-side counterpart is THROTTLED_TYPES.
  */
 export const COALESCE_WINDOW_MS = 30_000;
-export const COALESCED: Set<ClientEventType> = new Set();
+export const COALESCED: Set<ClientEventType> = new Set([
+  'meeting.minutes_save',
+  'meeting.participants_edit',
+  'meeting.speakers_edit',
+]);
 
 /**
  * One user action can reach several storage functions (the redact flow calls
- * deleteAudio and then updateMeeting({audioDeleted: true})). Events here are queued
- * at once but a repeat for the same meeting inside the window is swallowed.
+ * deleteAudio and then updateMeeting({audioDeleted: true})), and a screen can render
+ * the same view again (switching tabs and back, pressing play twice). Events here are
+ * queued at once but a repeat for the same meeting inside the window is swallowed.
  */
+const VIEW_DEDUPE_MS = 60_000;
 const DEDUPE_WINDOW_MS: Partial<Record<ClientEventType, number>> = {
   'meeting.audio_delete': 60_000,
+  'meeting.minutes_view': VIEW_DEDUPE_MS,
+  'meeting.transcript_view': VIEW_DEDUPE_MS,
+  'meeting.audio_play': VIEW_DEDUPE_MS,
 };
 
 interface Pending {

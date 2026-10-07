@@ -87,9 +87,13 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
   // of this same batch, in order.
   const nowMs = Date.now();
   const batchSeen = new Set<string>();
+  let throttled = 0;
   const candidates = inputs.filter((input) => {
     const key = `${input.entityId}|${input.type}`;
-    if (batchSeen.has(key) || isClientEventThrottled(userId, input.entityId as string, input.type, nowMs)) return false;
+    if (batchSeen.has(key) || isClientEventThrottled(userId, input.entityId as string, input.type, nowMs)) {
+      throttled += 1;
+      return false;
+    }
     if (THROTTLED_TYPES.has(input.type)) batchSeen.add(key);
     return true;
   });
@@ -107,11 +111,13 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
   }
 
   let accepted = 0;
-  let capped = false;
+  let capped = 0;
   for (const input of candidates) {
     // Beyond the cap: dropped but acknowledged, so the outbox does not retry forever.
+    // Counted and warned about (content-free), so it is never a silent loss.
     if (accepted >= remaining) {
-      capped = true;
+      capped = candidates.length - accepted;
+      console.warn(`[audit] client event cap reached, refused=${capped}`);
       break;
     }
     const result = await recordServerEvent(req, input);
@@ -121,5 +127,10 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
     markClientEventStored(userId, input.entityId as string, input.type);
     accepted += 1;
   }
-  return NextResponse.json(capped ? { accepted, capped: true } : { accepted });
+  // `throttled`: repeats of a view within a minute (by design); `capped`: refused by the daily cap.
+  return NextResponse.json({
+    accepted,
+    ...(throttled > 0 ? { throttled } : {}),
+    ...(capped > 0 ? { capped: true, refused: capped } : {}),
+  });
 });

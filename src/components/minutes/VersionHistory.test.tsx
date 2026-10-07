@@ -86,9 +86,9 @@ describe('VersionHistory — renders one row per version', () => {
     expect(screen.getByText(/Nuværende version: 5/)).toBeInTheDocument();
   });
 
-  it('renders the "Bevares i 7 dage" retention note in the header', () => {
+  it('states no retention period (the component keeps no history of its own)', () => {
     setup([makeVersion('v1', '2024-01-15T10:00:00Z', CONTENT_A)]);
-    expect(screen.getByText(/Bevares i 7 dage/)).toBeInTheDocument();
+    expect(screen.queryByText(/Bevares i/)).not.toBeInTheDocument();
   });
 
   it('renders version labels counting down from newest to oldest', () => {

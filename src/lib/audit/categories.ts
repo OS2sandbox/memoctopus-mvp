@@ -1,19 +1,20 @@
-// The viewer groups the closed event catalogue into five human categories. The
+// The viewer groups the closed event catalogue into six human categories. The
 // Record is exhaustive over EventType: a new event type without a category is a
 // compile error, and the categories together cover the catalogue exactly once.
 // Client-safe: only a type import and plain data (EVENT_TYPES is a value import
 // from the catalogue, which the viewer already pulls in through labels.da).
 import { EVENT_TYPES, type EventType } from './events';
 
-export const CATEGORY_KEYS = ['login', 'templates', 'meetings', 'access', 'log'] as const;
+export const CATEGORY_KEYS = ['login', 'templates', 'meetings', 'views', 'edits', 'log'] as const;
 export type CategoryKey = (typeof CATEGORY_KEYS)[number];
 
 export const categoryLabels: Record<CategoryKey, string> = {
   login: 'Login og adgang',
   templates: 'Skabeloner',
   meetings: 'Møder og optagelser',
-  access: 'Brugere og roller',
-  log: 'Loggen',
+  views: 'Visning og afspilning',
+  edits: 'Redigering af møder',
+  log: 'Loggen og systemet',
 };
 
 export const CATEGORY_OF: Record<EventType, CategoryKey> = {
@@ -33,24 +34,32 @@ export const CATEGORY_OF: Record<EventType, CategoryKey> = {
   'central_template.restore': 'templates',
   'minutes.generate': 'meetings',
   'export.download': 'meetings',
+  'audio.upload': 'meetings',
   'bot.session_start': 'meetings',
+  'bot.session_pause': 'meetings',
+  'bot.session_resume': 'meetings',
   'bot.session_stop': 'meetings',
   'bot.session_abort': 'meetings',
+  'bot.audio_delete': 'meetings',
   'bot.ended': 'meetings',
   'bot.error': 'meetings',
   'meeting.create': 'meetings',
   'meeting.delete': 'meetings',
   'meeting.redact': 'meetings',
   'meeting.audio_delete': 'meetings',
-  'access.role_assign': 'access',
-  'access.role_revoke': 'access',
-  'access.org_unit_create': 'access',
-  'access.org_unit_update': 'access',
-  'access.org_unit_delete': 'access',
-  'access.member_add': 'access',
-  'access.member_remove': 'access',
-  'access.user_create': 'access',
-  'access.user_link': 'access',
+  'meeting.recording_start': 'meetings',
+  'meeting.recording_pause': 'meetings',
+  'meeting.recording_resume': 'meetings',
+  'meeting.recording_stop': 'meetings',
+  'meeting.minutes_view': 'views',
+  'meeting.transcript_view': 'views',
+  'meeting.audio_play': 'views',
+  'meeting.minutes_save': 'edits',
+  'meeting.minutes_version': 'edits',
+  'meeting.minutes_version_prune': 'edits',
+  'meeting.participants_edit': 'edits',
+  'meeting.speakers_edit': 'edits',
+  'system.config_changed': 'log',
   'audit.export': 'log',
   'audit.prune': 'log',
 };

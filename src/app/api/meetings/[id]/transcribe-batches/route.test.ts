@@ -152,26 +152,59 @@ describe('POST /api/meetings/[id]/transcribe-batches', () => {
 });
 
 describe('audit', () => {
-  it('writes no audit event: batch transcription is a pipeline step (VAD, ensemble, failure or rejected input)', async () => {
-    mockRecord.mockReset();
+  const MEETING = '11111111-2222-4333-8444-555555555555';
+  const UUID_PARAMS = { params: Promise.resolve({ id: MEETING }) };
+  const events = () => mockRecord.mock.calls.map((c) => c[1] as Record<string, unknown>);
+
+  beforeEach(() => {
+    mockRecord.mockReset().mockResolvedValue({ status: 'stored' });
     mockGetSession.mockReset();
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('records the upload (size, time, meeting) once the stream is done, in the VAD and the ensemble path', async () => {
     mockPrepare.mockResolvedValueOnce([FAKE_BATCH]);
     mockTranscribe.mockResolvedValueOnce({
       segments: [{ speaker: 'Taler 1', start: 0, end: 5, text: 'hemmelig tekst' }],
       totalBatches: 1, totalSpeechSeconds: 27, failedSeconds: 0,
     });
-    await readEvents(await POST(makeAudioRequest(5_000), PARAMS));
+    await readEvents(await POST(makeAudioRequest(5_000), UUID_PARAMS));
     mockIsEnsemble.mockReturnValue(true);
     mockEnsemble.mockResolvedValueOnce([{ speaker: 'Taler 1', start: 0, end: 3, text: 'hemmelig' }]);
+    await readEvents(await POST(makeAudioRequest(5_000), UUID_PARAMS));
+
+    expect(events()).toHaveLength(2);
+    for (const e of events()) {
+      expect(e).toMatchObject({
+        type: 'audio.upload',
+        actorUserId: FAKE_SESSION.user.id,
+        entityId: MEETING,
+        details: { channel: 'batch', bytes: 5_000, durationMs: expect.any(Number) },
+      });
+      expect(e.outcome ?? 'success').toBe('success');
+    }
+    // Metadata only: the transcript never reaches the audit log.
+    expect(JSON.stringify(events())).not.toContain('hemmelig');
+  });
+
+  it('records an error outcome with a closed code when transcription fails (the stream still reports the error)', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockPrepare.mockRejectedValueOnce(Object.assign(new Error('ffmpeg failed: Jensens barn'), { status: 502 }));
+    expect((await readEvents(await POST(makeAudioRequest(5_000), UUID_PARAMS))).at(-1)).toMatchObject({ type: 'error' });
+    spy.mockRestore();
+    expect(events()).toHaveLength(1);
+    expect(events()[0]).toMatchObject({ type: 'audio.upload', outcome: 'error', details: { channel: 'batch', outcomeCode: 'http_502' } });
+    expect(JSON.stringify(events())).not.toContain('Jensen');
+  });
+
+  it('uses no entity for a meeting id that is not a uuid, and records nothing for rejected input', async () => {
+    mockPrepare.mockResolvedValueOnce([]);
+    mockTranscribe.mockResolvedValueOnce({ segments: [], totalBatches: 0, totalSpeechSeconds: 0, failedSeconds: 0 });
     await readEvents(await POST(makeAudioRequest(5_000), PARAMS));
-    mockIsEnsemble.mockReturnValue(false);
-    mockPrepare.mockRejectedValueOnce(new Error('ffmpeg failed'));
-    expect((await readEvents(await POST(makeAudioRequest(5_000), PARAMS))).at(-1)).toMatchObject({ type: 'error' });
+    expect(events()[0].entityId).toBeUndefined();
+    mockRecord.mockClear();
     await POST(new NextRequest(BASE_URL, { method: 'POST', body: new FormData() }), PARAMS);
     await POST(makeAudioRequest(1_999), PARAMS);
-    spy.mockRestore();
     expect(mockRecord).not.toHaveBeenCalled();
   });
 });

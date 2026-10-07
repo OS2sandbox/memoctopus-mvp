@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { readPendingMeta, readPendingAudio, deletePendingAudio, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
 import { withHandler } from '@/lib/api-handler';
 import { requireAppAccess } from '@/lib/authz/app-access';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 
 // Client pulls down a finished Teams-bot recording so it can be saved into IndexedDB
 // and transcribed client-side. The bot stashes audio here via /api/bot/audio-upload.
@@ -17,7 +18,7 @@ import { requireAppAccess } from '@/lib/authz/app-access';
 export const GET = withHandler(
   'bot/audio',
   async (
-    _req: NextRequest,
+    req: NextRequest,
     { params }: { params: Promise<{ meetingId: string }> },
   ) => {
     const access = await requireAppAccess();
@@ -30,6 +31,14 @@ export const GET = withHandler(
     // Respond exactly like "not ready yet" so a non-owner can't even detect that a
     // recording exists (and never reaches the destructive read/delete below).
     if (!(await assertBotMeetingOwner(meetingId, session.user.id))) {
+      // Someone probing another user's recording: the denial is recorded, the answer stays the same.
+      await recordAuthzDenied({
+        actorUserId: session.user.id,
+        required: 'bot.meeting_owner',
+        reason: 'not_owner',
+        entityType: 'meeting',
+        entityId: meetingId,
+      });
       return NextResponse.json({ status: 'pending' }, { status: 404 });
     }
 
@@ -44,7 +53,8 @@ export const GET = withHandler(
     const buffer = await readPendingAudio(meetingId);
     if (!buffer) return NextResponse.json({ status: 'pending' }, { status: 404 });
 
-    await deletePendingAudio(meetingId);
+    // The server-held copy goes as soon as the browser has it; the deletion is recorded.
+    await deletePendingAudio(meetingId, { trigger: 'handoff', actorUserId: session.user.id, req });
 
     return new NextResponse(new Uint8Array(buffer), {
       status: 200,

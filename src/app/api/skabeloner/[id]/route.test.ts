@@ -16,7 +16,11 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 const mockRecord = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/audit/record', () => ({ recordServerEvent: mockRecord }));
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
+  recordServerEvent: mockRecord,
+}));
+vi.mock('@/lib/db', () => ({ db: {}, pool: {} }));
 
 vi.mock('@/lib/skabeloner/server', () => ({
   getSkabelon: vi.fn(),
@@ -150,6 +154,22 @@ describe('PUT /api/skabeloner/[id]', () => {
     expect(JSON.stringify(event)).not.toMatch(/Fortrolig|Testskabelon/);
   });
 
+  it('records a failed update as outcome error without field values, and still answers a JSON 500', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockUpdateSkabelon.mockRejectedValueOnce(new Error('DB error for Fortrolig titel'));
+    const res = await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Fortrolig titel', prompt: 'Fortrolig prompt' }), CTX);
+    expect(res.status).toBe(500);
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(mockRecord.mock.calls[0][1]).toEqual({
+      type: 'template.update',
+      outcome: 'error',
+      actorUserId: 'user-123',
+      entityId: SK_ID,
+      details: { changedFields: [] },
+    });
+    expect(JSON.stringify(mockRecord.mock.calls)).not.toContain('Fortrolig');
+  });
+
   it('emits nothing when no tracked field changed, but still returns the skabelon', async () => {
     mockUpdateSkabelon.mockResolvedValueOnce({ ...SAMPLE_SKABELON } as never);
     const res = await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Testskabelon' }), CTX);
@@ -215,6 +235,23 @@ describe('DELETE /api/skabeloner/[id]', () => {
     await DELETE(makeJsonReq(BASE_URL, 'DELETE'), CTX);
     expect(mockRecord).toHaveBeenCalledTimes(1);
     expect(mockRecord.mock.calls[0][1]).toEqual({ type: 'template.delete', actorUserId: 'user-123', entityId: SK_ID });
+  });
+
+  it('records a failed delete as outcome error (with the id, no content) and still answers a JSON 500', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockDeleteSkabelon.mockRejectedValueOnce(new Error('DB error for Hr. Jensen'));
+    const res = await DELETE(makeJsonReq(BASE_URL, 'DELETE'), CTX);
+    expect(res.status).toBe(500);
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(mockRecord.mock.calls[0][1]).toEqual({ type: 'template.delete', outcome: 'error', actorUserId: 'user-123', entityId: SK_ID });
+    expect(JSON.stringify(mockRecord.mock.calls)).not.toContain('Jensen');
+  });
+
+  it('a failed delete of an id that is not a uuid is recorded without an entity', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockDeleteSkabelon.mockRejectedValueOnce(new Error('x'));
+    await DELETE(makeJsonReq(`${BASE_URL}x`, 'DELETE'), { params: Promise.resolve({ id: 'not-a-uuid' }) });
+    expect(mockRecord.mock.calls[0][1]).toEqual({ type: 'template.delete', outcome: 'error', actorUserId: 'user-123' });
   });
 
   it('does not emit when nothing was deleted', async () => {

@@ -43,11 +43,13 @@ export function auditRetentionDays(): number | null {
   return Number.isSafeInteger(n) && n > 0 ? n : DEFAULT_AUDIT_RETENTION_DAYS;
 }
 
-export const DEFAULT_CLIENT_EVENTS_DAILY_CAP = 2000;
+export const DEFAULT_CLIENT_EVENTS_DAILY_CAP = 20000;
 
 /**
- * Most client-reported (source = 'client') events stored per user per rolling 24 h. Default 2000;
- * unset, 0 or invalid => default (the cap cannot be switched off by a typo).
+ * Most client-reported (source = 'client') events stored per user per rolling 24 h. Default 20000
+ * (a runaway-client guard, well above normal use: views, edits and recording steps are all
+ * reported); unset, 0 or invalid => default (the cap cannot be switched off by a typo).
+ * Events refused by the cap are counted in the ingest response and warned about, never silent.
  */
 export function auditClientEventsDailyCap(): number {
   const v = clean('AUDIT_CLIENT_EVENTS_DAILY_CAP');

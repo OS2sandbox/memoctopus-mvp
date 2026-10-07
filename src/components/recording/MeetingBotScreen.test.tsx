@@ -137,7 +137,8 @@ describe('MeetingBotScreen', () => {
     routeFetch({ status: () => jsonOk({ status: 'optager', botStatus: 'recording', participants: ['Alice', 'Bob'], elapsed: 5 }) });
     renderBot();
     await waitFor(() => {
-      expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, { participants: ['Alice', 'Bob'] });
+      // The roster poll is a machine write: it must not be reported as a user edit of the participants.
+      expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, { participants: ['Alice', 'Bob'] }, { automatic: true });
     });
   });
 
@@ -169,7 +170,7 @@ describe('MeetingBotScreen', () => {
       status: 'processing',
       botSession: null,
       audioDurationSeconds: 42,
-    }));
+    }), { automatic: true });
   });
 
   it('shows cancelled and discards the meeting when the bot has no recording', async () => {
@@ -181,7 +182,8 @@ describe('MeetingBotScreen', () => {
     });
     renderBot();
     await waitFor(() => expect(screen.getByText('AFBRUDT')).toBeInTheDocument());
-    expect(mockDeleteMeeting).toHaveBeenCalledWith(MEETING_ID);
+    // The app discards the empty meeting by itself: recorded as an automatic delete.
+    expect(mockDeleteMeeting).toHaveBeenCalledWith(MEETING_ID, { trigger: 'auto_empty' });
   });
 
   // ─── Controls ─────────────────────────────────────────────────────────────────

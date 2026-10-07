@@ -35,6 +35,7 @@ import { auth } from '@/lib/auth';
 import { getBotServiceConfig } from '@/lib/bot-service';
 import { assertBotMeetingOwner } from '@/lib/bot-pending-audio';
 import { recordServerEvent } from '@/lib/audit/record';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 import { FAKE_SESSION } from '@/test/helpers';
 
 const mockRecord = vi.mocked(recordServerEvent);
@@ -172,6 +173,8 @@ describe('audit: bot.session_* events', () => {
   const uuidParams = Promise.resolve({ meetingId: MEETING });
 
   it.each([
+    ['pause', 'bot.session_pause'],
+    ['resume', 'bot.session_resume'],
     ['stop', 'bot.session_stop'],
     ['abort', 'bot.session_abort'],
   ] as const)('%s emits exactly one %s with the meeting uuid and no details', async (action, type) => {
@@ -187,14 +190,20 @@ describe('audit: bot.session_* events', () => {
     });
   });
 
-  it.each(['pause', 'resume'] as const)('%s is forwarded but writes no audit event (success or failure)', async (action) => {
+  it.each([
+    ['pause', 'bot.session_pause'],
+    ['resume', 'bot.session_resume'],
+  ] as const)('%s is audited on success and as an error when the bot rejects it', async (action, type) => {
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
     expect((await POST(req({ action, sessionId: SID }), { params: uuidParams })).status).toBe(200);
     mockFetch.mockResolvedValueOnce(new Response('x', { status: 503 }));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect((await POST(req({ action, sessionId: SID }), { params: uuidParams })).status).toBe(502);
     errorSpy.mockRestore();
-    expect(mockRecord).not.toHaveBeenCalled();
+    expect(mockRecord.mock.calls.map((c) => [(c[1] as { type: string }).type, (c[1] as { outcome: string }).outcome])).toEqual([
+      [type, 'success'],
+      [type, 'error'],
+    ]);
   });
 
   it('records outcome error when the bot rejects stop', async () => {
@@ -207,11 +216,20 @@ describe('audit: bot.session_* events', () => {
     expect(mockRecord.mock.calls[0][1]).toMatchObject({ type: 'bot.session_stop', outcome: 'error' });
   });
 
-  it('emits nothing for a non-owner (404) or an invalid action', async () => {
+  it('emits no bot event for a non-owner (404) or an invalid action, but records the probe as authz.denied', async () => {
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    vi.mocked(recordAuthzDenied).mockClear();
     mockAssertOwner.mockResolvedValueOnce(false);
     await POST(req({ action: 'stop', sessionId: SID }), { params: uuidParams });
     await POST(req({ action: 'nope' }), { params: uuidParams });
     expect(mockRecord).not.toHaveBeenCalled();
+    expect(recordAuthzDenied).toHaveBeenCalledTimes(1);
+    expect(recordAuthzDenied).toHaveBeenCalledWith({
+      actorUserId: FAKE_SESSION.user.id,
+      required: 'bot.meeting_owner',
+      reason: 'not_owner',
+      entityType: 'meeting',
+      entityId: MEETING,
+    });
   });
 });

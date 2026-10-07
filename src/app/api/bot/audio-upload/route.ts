@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { storePendingAudio, storePendingTranscript, markNoRecording } from '@/lib/bot-pending-audio';
+import { storePendingAudio, storePendingTranscript, markNoRecording, getBotMeetingOwner } from '@/lib/bot-pending-audio';
 import { processBotRecording } from '@/lib/bot-transcribe';
 import { withHandler } from '@/lib/api-handler';
 import { safeLogError } from '@/lib/audit/safe-log';
 import { secretEquals } from '@/lib/audit/feed-auth';
+import { recordServerEvent } from '@/lib/audit/record';
+import { asEntityUuid, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
 
 // Called by the bot service — authenticated with BOT_INTERNAL_SECRET, not a user session.
 //
@@ -62,6 +64,19 @@ export const POST = withHandler('bot/audio-upload', async (req: NextRequest) => 
   const durationSeconds = durationStr ? Math.max(0, parseInt(durationStr, 10) || 0) : null;
   const buffer = Buffer.from(await audioFile.arrayBuffer());
 
+  // Recorded as the system (the bot service is the caller, authenticated by secret). The
+  // person it belongs to is the one who started the bot session; unknown when that binding is gone.
+  const owner = await getBotMeetingOwner(meetingId).catch(() => null);
+  const audit = (outcome: 'success' | 'error', outcomeCode?: string) =>
+    recordServerEvent(req, {
+      type: 'audio.upload',
+      source: 'system',
+      outcome,
+      actorUserId: owner,
+      entityId: asEntityUuid(meetingId),
+      details: { channel: 'bot', bytes: buffer.length, ...(outcomeCode ? { outcomeCode } : {}) },
+    });
+
   try {
     await storePendingAudio(meetingId, buffer, {
       mimeType,
@@ -71,6 +86,7 @@ export const POST = withHandler('bot/audio-upload', async (req: NextRequest) => 
     });
   } catch (err) {
     safeLogError('bot/audio-upload stash audio', err);
+    await audit('error', outcomeCodeOf(err));
     return NextResponse.json({ error: 'Failed to store audio' }, { status: 500 });
   }
 
@@ -84,6 +100,7 @@ export const POST = withHandler('bot/audio-upload', async (req: NextRequest) => 
     safeLogError('bot/audio-upload storePendingTranscript', err);
   });
   void processBotRecording(meetingId, buffer, mimeType);
+  await audit('success');
 
   return NextResponse.json({ ok: true });
 });

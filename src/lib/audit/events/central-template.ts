@@ -1,6 +1,7 @@
 // Central (locked) templates. create/update/retarget/archive/restore are written
-// in the same transaction as the change (central.ts). Reading a template is not
-// audited. Ids, counts and FIELD NAMES only: never the name, prompt or
+// in the same transaction as the change (central.ts); "archive" is how a common prompt
+// is withdrawn (the history is append-only, nothing is deleted). Reading a template or
+// its prompt is not audited (unlike opening a meeting's records, see meeting.ts). Ids, counts and FIELD NAMES only: never the name, prompt or
 // change note. Those live in central_template_versions; the log viewer shows the change
 // note by looking it up there at read time (change-notes.ts), nothing is copied here.
 import { z } from 'zod';

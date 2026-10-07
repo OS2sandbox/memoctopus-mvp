@@ -2,7 +2,6 @@
 // ROLLEKATALOG MODE ONLY. In local mode links are made explicitly by an admin
 // (directory_users.app_user_id) and must never be inferred from claims: an
 // attacker could password-sign-up with a pre-assigned address.
-import { recordEvent } from '@/lib/audit/record';
 import { directoryConfigIssue, transformUserId } from '@/lib/rollekatalog/config';
 import {
   accessSource,
@@ -138,13 +137,6 @@ export async function matchDirectoryUser(
       const updated = await linkRow(tx, target.uuid, identity.userId);
       if (updated.rows.length === 0) return conflict('target_linked_to_other_user');
 
-      await recordEvent({
-        type: 'access.user_link',
-        actorUserId: identity.userId,
-        entityType: 'directory_user',
-        entityId: target.uuid,
-        details: { via: mode, automatic: true },
-      }, { tx });
       return { status: 'linked' as const, directoryUserUuid: target.uuid };
     });
   } catch (err) {

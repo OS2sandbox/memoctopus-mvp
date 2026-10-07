@@ -15,9 +15,12 @@ describe('audit categories', () => {
 
   it('groups by prefix as documented', () => {
     expect([...eventTypesOfCategory('login')].sort()).toEqual(['auth.login', 'auth.login_failed', 'auth.logout', 'authz.denied']);
-    expect([...eventTypesOfCategory('log')].sort()).toEqual(['audit.export', 'audit.prune']);
+    expect([...eventTypesOfCategory('log')].sort()).toEqual(['audit.export', 'audit.prune', 'system.config_changed']);
     expect(eventTypesOfCategory('templates').every((t) => /^(central_)?template\./.test(t))).toBe(true);
-    expect(eventTypesOfCategory('access').every((t) => t.startsWith('access.'))).toBe(true);
+    expect([...eventTypesOfCategory('views')].sort()).toEqual(['meeting.audio_play', 'meeting.minutes_view', 'meeting.transcript_view']);
+    expect(eventTypesOfCategory('edits').every((t) => t.startsWith('meeting.'))).toBe(true);
+    expect(eventTypesOfCategory('log')).toContain('system.config_changed');
+    expect(CATEGORY_KEYS).not.toContain('access');
     const meetings = eventTypesOfCategory('meetings');
     expect(meetings).toEqual(expect.arrayContaining(['minutes.generate', 'export.download', 'meeting.delete', 'bot.error']));
   });
@@ -27,8 +30,9 @@ describe('audit categories', () => {
       'Login og adgang',
       'Skabeloner',
       'Møder og optagelser',
-      'Brugere og roller',
-      'Loggen',
+      'Visning og afspilning',
+      'Redigering af møder',
+      'Loggen og systemet',
     ]);
     expect(Object.keys(categoryLabels)).toHaveLength(CATEGORY_KEYS.length);
   });

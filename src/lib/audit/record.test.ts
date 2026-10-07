@@ -112,23 +112,23 @@ describe('recordEvent: tx variant (throws)', () => {
 
   it('writes the admin events with the secondary type defaulted and free text in details rejected', async () => {
     const tx = fakeTx();
-    // Omitted secondaryEntityType: the first allowed one (directory_user for a role assignment).
+    // Omitted secondaryEntityType: the first allowed one (org_unit for a central template).
     await recordEvent(
-      { type: 'access.role_assign', actorUserId: 'u1', entityId: UUID, secondaryEntityId: DIR, details: { roleKey: 'tt-logleser', scopeOrgUnitUuid: UNIT, includeDescendants: true } },
+      { type: 'central_template.update', actorUserId: 'u1', entityId: UUID, secondaryEntityId: UNIT, details: { version: 2, changedFields: ['prompt', 'targets'] } },
       { tx },
     );
     expect(params(tx)).toMatchObject({
-      event_type: 'access.role_assign',
-      entity_type: 'role_assignment',
-      secondary_entity_type: 'directory_user',
-      secondary_entity_id: DIR,
-      details: JSON.stringify({ roleKey: 'tt-logleser', scopeOrgUnitUuid: UNIT, includeDescendants: true }),
+      event_type: 'central_template.update',
+      entity_type: 'central_template',
+      secondary_entity_type: 'org_unit',
+      secondary_entity_id: UNIT,
+      details: JSON.stringify({ version: 2, changedFields: ['prompt', 'targets'] }),
     });
     await expect(
-      recordEvent({ type: 'access.user_create', actorUserId: 'u1', entityId: DIR, details: { source: 'Jens Jensen' as never } }, { tx }),
+      recordEvent({ type: 'central_template.update', actorUserId: 'u1', entityId: UUID, details: { version: 2, changedFields: ['Ny prompt til alle' as never] } }, { tx }),
     ).rejects.toMatchObject({ code: 'invalid_details' });
     await expect(
-      recordEvent({ type: 'access.role_revoke', actorUserId: 'u1', entityId: 'r1', details: { roleKey: 'tt-logleser' } }, { tx }),
+      recordEvent({ type: 'central_template.archive', actorUserId: 'u1', entityId: 'r1', details: { version: 1 } }, { tx }),
     ).rejects.toMatchObject({ code: 'invalid_entity_id' });
     expect(tx.query).toHaveBeenCalledOnce();
   });
@@ -206,7 +206,9 @@ describe('id validation', () => {
       ok: false,
       code: 'entity_id_required',
     });
-    expect(validateEvent({ type: 'template.delete', actorUserId: 'u' } as never)).toEqual({ ok: false, code: 'entity_id_required' });
+    expect(validateEvent({ type: 'central_template.archive', actorUserId: 'u', details: { version: 1 } } as never)).toEqual({ ok: false, code: 'entity_id_required' });
+    // A failed personal-template write may have no id yet, so it does not require one.
+    expect(validateEvent({ type: 'template.create', outcome: 'error', actorUserId: 'u' } as never).ok).toBe(true);
     // export.download does not require one.
     expect(validateEvent({ type: 'export.download', actorUserId: 'u', details: { format: 'md' } } as never).ok).toBe(true);
   });
@@ -217,20 +219,20 @@ describe('id validation', () => {
   });
 
   it('validates the secondary entity and its type', () => {
-    const base = { type: 'access.role_assign', actorUserId: 'u', entityId: UUID, details: { roleKey: 'tt-logleser' } };
+    const base = { type: 'central_template.archive', actorUserId: 'u', entityId: UUID, details: { version: 1 } };
     expect(validateEvent({ ...base, secondaryEntityId: 'x1' } as never)).toEqual({ ok: false, code: 'invalid_secondary_entity_id' });
-    expect(validateEvent({ ...base, secondaryEntityType: 'org_unit', secondaryEntityId: DIR } as never)).toEqual({
+    expect(validateEvent({ ...base, secondaryEntityType: 'directory_user', secondaryEntityId: DIR } as never)).toEqual({
       ok: false,
       code: 'invalid_secondary_entity_type',
     });
     const ok = validateEvent({ ...base, secondaryEntityId: DIR } as never);
-    expect(ok.ok && [ok.value.secondaryEntityType, ok.value.secondaryEntityId]).toEqual(['directory_user', DIR]);
+    expect(ok.ok && [ok.value.secondaryEntityType, ok.value.secondaryEntityId]).toEqual(['org_unit', DIR]);
     // With several allowed types an omitted type means the first one.
     const multi = validateEvent({
       type: 'minutes.generate',
       actorUserId: 'u',
       secondaryEntityId: DIR,
-      details: { templateSource: 'personal', durationMs: 1, segmentCount: 1 },
+      details: { templateSource: 'personal', userInstruction: false, durationMs: 1, segmentCount: 1 },
     } as never);
     expect(multi.ok && multi.value.secondaryEntityType).toBe('template');
     // An event without a secondary entity refuses one.

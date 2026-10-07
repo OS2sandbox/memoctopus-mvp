@@ -195,13 +195,20 @@ describe('audit: minutes.generate', () => {
       type: 'minutes.generate',
       actorUserId: 'user-123',
       secondaryEntityId: TEMPLATE,
-      details: { templateSource: 'default', segmentCount: 1 },
+      details: { templateSource: 'default', userInstruction: false, segmentCount: 1 },
     });
     expect(e.entityId).toBeUndefined();
     expect(e.outcome ?? 'success').toBe('success');
     expect(typeof e.details.durationMs).toBe('number');
     expect(e.details).not.toHaveProperty('outcomeCode');
     expectValidMetadataOnly(e, CONTENT_STRINGS);
+  });
+
+  it('records only WHETHER an instruction took part, never its text; a blank one counts as none', async () => {
+    await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, customPrompt: 'Skriv kort og nævn Jensens sag' }));
+    await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, customPrompt: '   ' }));
+    expect(events().map((e) => e.details.userInstruction)).toEqual([true, false]);
+    expectValidMetadataOnly(events()[0], ['Jensens', 'Skriv kort']);
   });
 
   it('marks an explicitly chosen template as personal and records a valid meeting id', async () => {
@@ -483,6 +490,14 @@ describe('POST /api/minutes with a central template', () => {
       details: { templateSource: 'central', templateVersion: 4, segmentCount: 1 },
     });
     expectValidMetadataOnly(e, ['HEMMELIG', CUSTOM, 'Alice', 'Vi besluttede']);
+  });
+
+  it('reports an instruction as used only when the locked template allows one', async () => {
+    await send({ customPrompt: CUSTOM });
+    mockResolveCentral.mockResolvedValue(central({ allowUserInstruction: true }));
+    await send({ customPrompt: CUSTOM });
+    expect(events().map((e) => e.details.userInstruction)).toEqual([false, true]);
+    expectValidMetadataOnly(events()[1], [CUSTOM]);
   });
 
   it('audits an error outcome with the version too, and the leaky error message stays out', async () => {

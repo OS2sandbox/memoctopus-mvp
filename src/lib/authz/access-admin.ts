@@ -1,13 +1,13 @@
 // Service layer of the LOCAL access provider: the only code that mutates the
 // central access tables on behalf of an admin. Every mutation runs in one
-// transaction together with its recordEvent(..., { tx }) call, so the audit
-// row commits or rolls back with the change.
+// transaction. Rights and organisation changes are deliberately NOT audited (the
+// audit log records what people did with meetings, templates and the app, not who
+// holds which role); denials are still recorded by the guards.
 //
 // Raw, public.-qualified SQL through the SqlRunner seam (same as bootstrap.ts),
 // not Drizzle builders: the guard logic below depends on FOR UPDATE / FOR SHARE
 // and advisory locks, and the unit tests fake the runner while the *.pg.test.ts
 // lane runs the same code against a real Postgres.
-import { recordEvent } from '@/lib/audit/record';
 import { ADMIN_LOCK_NAME, ADMIN_ROLE, USABLE_LOCAL_ADMIN_SQL, activeSql } from './admin-sql';
 import { ConflictError, NotFoundError, ReadOnlyModeError, ValidationError } from './access-errors';
 import { isRoleKey } from './capabilities';
@@ -232,27 +232,16 @@ async function assignmentView(tx: SqlQueryable, id: string): Promise<AssignmentV
 async function ensureDirectoryUsers(
   tx: SqlQueryable,
   appUserIds: string[],
-  actorUserId: string,
 ): Promise<Map<string, { uuid: string; disabled: boolean }>> {
   const out = new Map<string, { uuid: string; disabled: boolean }>();
   if (appUserIds.length === 0) return out;
 
-  const created = await tx.query<{ uuid: string }>(
+  await tx.query(
     `INSERT INTO public.directory_users (name, email, source, app_user_id)
      SELECT name, email, 'local', id FROM public.users WHERE id = ANY($1::text[])
-     ON CONFLICT (app_user_id) DO NOTHING
-     RETURNING uuid`,
+     ON CONFLICT (app_user_id) DO NOTHING`,
     [appUserIds],
   );
-  for (const c of created.rows) {
-    await recordEvent({
-      type: 'access.user_create',
-      actorUserId,
-      entityType: 'directory_user',
-      entityId: c.uuid,
-      details: { source: 'local' },
-    }, { tx });
-  }
 
   const all = await tx.query<{ uuid: string; app_user_id: string; disabled: boolean }>(
     'SELECT uuid, app_user_id, disabled FROM public.directory_users WHERE app_user_id = ANY($1::text[])',
@@ -292,7 +281,7 @@ export async function grantRole(input: GrantRoleInput, runner: SqlRunner = defau
       if (unit.rows.length === 0) throw new NotFoundError('Organisationsenheden findes ikke', 'org_unit_not_found');
     }
 
-    const dir = (await ensureDirectoryUsers(tx, [input.appUserId], input.actorUserId)).get(input.appUserId);
+    const dir = (await ensureDirectoryUsers(tx, [input.appUserId])).get(input.appUserId);
     if (!dir) throw new NotFoundError('Brugeren findes ikke', 'user_not_found');
     if (dir.disabled) throw new ConflictError('Brugeren er deaktiveret', 'user_disabled');
 
@@ -308,15 +297,6 @@ export async function grantRole(input: GrantRoleInput, runner: SqlRunner = defau
     const id = inserted.rows[0]?.id;
     if (!id) throw new ConflictError('Rollen er allerede tildelt', 'already_assigned');
 
-    await recordEvent({
-      type: 'access.role_assign',
-      actorUserId: input.actorUserId,
-      entityType: 'role_assignment',
-      entityId: id,
-      secondaryEntityType: 'directory_user',
-      secondaryEntityId: dir.uuid,
-      details: { roleKey, scopeOrgUnitUuid: scope, includeDescendants },
-    }, { tx });
     return assignmentView(tx, id);
   });
 }
@@ -374,15 +354,6 @@ export async function revokeAssignment(
     }
 
     await tx.query('DELETE FROM public.role_assignments WHERE id = $1::uuid', [assignmentId]);
-    await recordEvent({
-      type: 'access.role_revoke',
-      actorUserId,
-      entityType: 'role_assignment',
-      entityId: assignmentId,
-      secondaryEntityType: 'directory_user',
-      secondaryEntityId: String(row.directory_user_uuid),
-      details: { roleKey: String(row.role_key) as RoleKey, scopeOrgUnitUuid: (row.scope_org_unit_uuid as string | null) ?? null },
-    }, { tx });
   });
 }
 
@@ -452,13 +423,6 @@ export async function createOrgUnit(
       [name, parent],
     );
     const view = orgUnitView(rows[0]);
-    await recordEvent({
-      type: 'access.org_unit_create',
-      actorUserId: input.actorUserId,
-      entityType: 'org_unit',
-      entityId: view.uuid,
-      ...(parent ? { secondaryEntityType: 'org_unit' as const, secondaryEntityId: parent } : {}),
-    }, { tx });
     return view;
   });
 }
@@ -532,14 +496,6 @@ export async function updateOrgUnit(
        RETURNING uuid, name, parent_uuid, source`,
       params,
     );
-    await recordEvent({
-      type: 'access.org_unit_update',
-      actorUserId,
-      entityType: 'org_unit',
-      entityId: id,
-      ...(parentChanged && parent ? { secondaryEntityType: 'org_unit' as const, secondaryEntityId: parent } : {}),
-      details: { nameChanged, parentChanged },
-    }, { tx });
     return orgUnitView(updated.rows[0]);
   });
 }
@@ -587,12 +543,6 @@ export async function deleteOrgUnit(
     }
 
     await tx.query('DELETE FROM public.org_units WHERE uuid = $1::uuid', [id]);
-    await recordEvent({
-      type: 'access.org_unit_delete',
-      actorUserId,
-      entityType: 'org_unit',
-      entityId: id,
-    }, { tx });
   });
 }
 
@@ -644,7 +594,7 @@ export async function setOrgUnitMembers(
       if (known.rows.length !== wanted.length) throw new NotFoundError('En bruger findes ikke', 'user_not_found');
     }
 
-    const dir = await ensureDirectoryUsers(tx, wanted, actorUserId);
+    const dir = await ensureDirectoryUsers(tx, wanted);
     const desired = new Set<string>();
     for (const id of wanted) {
       const d = dir.get(id);
@@ -675,21 +625,6 @@ export async function setOrgUnitMembers(
       );
     }
 
-    for (const [type, list] of [
-      ['access.member_remove', toRemove],
-      ['access.member_add', toAdd],
-    ] as const) {
-      for (const directoryUuid of list) {
-        await recordEvent({
-          type,
-          actorUserId,
-          entityType: 'org_unit_member',
-          entityId: unitUuid,
-          secondaryEntityType: 'directory_user',
-          secondaryEntityId: directoryUuid,
-        }, { tx });
-      }
-    }
     return membersOf(tx, unitUuid);
   });
 }

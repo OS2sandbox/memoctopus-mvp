@@ -4,7 +4,7 @@ For engineers. Operators: start with `rollekatalog.md` (connecting a Rollekatalo
 
 ## Purpose
 
-Per-user data stays in the browser and in per-user schemas. On top of that the app has a **central layer** in the shared `public` schema: who holds which role, in which part of the organisation (org units), an append-only audit log, and locked central minutes templates. Roles come either from administrators in the app (`ACCESS_SOURCE=local`, the default) or from OS2rollekatalog (`rollekatalog`).
+Meetings, transcripts, minutes and audio stay in the browser (IndexedDB); the per-user PostgreSQL schemas hold only personal templates (the meeting tables they still create are unused legacy). On top of that the app has a **central layer** in the shared `public` schema: who holds which role, in which part of the organisation (org units), an append-only audit log, and locked central minutes templates. Roles come either from administrators in the app (`ACCESS_SOURCE=local`, the default) or from OS2rollekatalog (`rollekatalog`).
 
 Tables (Drizzle, `src/lib/db/schema.ts`, migrations `0001_central_access`, `0002_audit_events`, `0003_central_templates` in `drizzle/`): `directory_users`, `org_units`, `org_unit_members`, `role_assignments`, `external_identities`, `sync_runs`, `system_flags`, `audit_events`, `central_templates`, `central_template_versions`, `central_template_targets`. PostgreSQL 15 or newer is required (`NULLS NOT DISTINCT`).
 
@@ -58,7 +58,7 @@ The symmetry is enforced in one pure function (`dropStaleAssignments`): rows of 
 - `withAuthz(label, capability, handler)` in `src/lib/authz/guard.ts`: 401 no session, 403 disabled or missing capability (+ `authz.denied`). `requireLocalSource` is an option of the wrapper; no route uses it, the service layer enforces read-only mode itself.
 - `requireAppAccess()` in `src/lib/authz/app-access.ts` for the older `/api` routes (minutes, transcribe, export, meetings, bot, skabeloner): 401, 503 when the principal cannot be resolved (or `ConfigError`), 403 for a disabled user or, with `REQUIRE_ROLE_TO_LOGIN=true`, a user without a role (+ `authz.denied`). Routes that authenticate by shared secret (bot callbacks, cron, feed) are separate.
 - `(app)/layout.tsx`: same refusal for pages (`NoAccess`), and `AccessUnavailable` when the lookup fails (fail closed). `/admin` pages are gated per section (`admin-sections.ts`, `page-gate.ts`; 404 without capability). `/admin` itself has no page: it redirects to the first section the user may open (the same order as the tab bar), so every role combination lands on a page it can use.
-- Denials are recorded with `recordAuthzDenied` (`src/lib/audit/authz-denied.ts`); admin writes call `recordEvent(event, { tx })` on the same transaction as the change.
+- Denials are recorded with `recordAuthzDenied` (`src/lib/audit/authz-denied.ts`). Central template writes call `recordEvent(event, { tx })` on the same transaction as the change; role, org-unit, member and user-link changes are **not audited** (out of the log's scope).
 
 ## Identity linking and bootstrap
 
@@ -74,7 +74,7 @@ Read at call time (restart, no rebuild; never `NEXT_PUBLIC_*`): `src/lib/authz/c
 
 - **Not run against a live Rollekatalog.** Everything was built from the source of release 2026r4 and tested against synthetic fixtures and an in-process mock. HTTP statuses for wrong keys and the size of `organisation/v3` are modelled, not observed (`rollekatalog.md`).
 - **Postgres lane.** `*.pg.test.ts` run in CI against `postgres:16` (`.github/workflows/test.yml`); CI covers PostgreSQL 16 only. The UI is tested with jsdom, not in a real browser.
-- **Per-instance, in-memory throttles.** The failed-login throttle, the client-event rate limit and per-type throttle are per process: with several app instances the limits multiply, and a restart resets them.
+- **Per-instance, in-memory throttles.** The failed-login cap, the client-event rate limit and per-type throttle are per process: with several app instances the limits multiply, and a restart resets them.
 - **Stale membership.** Org-unit membership (and so central template recipients) is only as fresh as the last successful sync; `ROLE_STALE_MAX_SECONDS` applies to role assignments only. The sync never deletes org units.
 - **Share CODE is not audited.** The stateless template share code is built and read in the browser; only the link flow produces `template.share` / `template.import`.
 - **Client-reported events are self-reported** (`audit.md`), and a template changelog entry is permanent: neither the audit log nor the changelog has a per-person erasure path in the app.

@@ -22,6 +22,7 @@ import {
   classifyAuthFailure,
   createThrottle,
   emailHmac,
+  LOGIN_FAILURE_LIMIT_PER_MINUTE,
   runLoginHooks,
 } from './login-hook';
 import { createHmac } from 'node:crypto';
@@ -306,11 +307,28 @@ describe('auditAuthFailure', () => {
     expect(recordEvent.mock.calls[0][0].details).toEqual({ reason: 'oauth_error', method: 'microsoft', provider: 'microsoft' });
   });
 
-  it('throttles per IP: 20 per minute, other IPs unaffected', async () => {
-    for (let i = 0; i < 30; i++) await auditAuthFailure(passwordCtx(apiError(401), 'a@b.dk', '203.0.113.30'));
-    expect(recordEvent).toHaveBeenCalledTimes(20);
-    await auditAuthFailure(passwordCtx(apiError(401), 'a@b.dk', '203.0.113.31'));
-    expect(recordEvent).toHaveBeenCalledTimes(21);
+  it('caps the rows per IP and minute but never drops silently: the excess becomes one summary row', async () => {
+    vi.useFakeTimers();
+    try {
+      const over = 25;
+      for (let i = 0; i < LOGIN_FAILURE_LIMIT_PER_MINUTE + over; i++) {
+        await auditAuthFailure(passwordCtx(apiError(401), 'a@b.dk', '203.0.113.30'));
+      }
+      expect(recordEvent).toHaveBeenCalledTimes(LOGIN_FAILURE_LIMIT_PER_MINUTE);
+      // Other IPs are unaffected.
+      await auditAuthFailure(passwordCtx(apiError(401), 'a@b.dk', '203.0.113.31'));
+      expect(recordEvent).toHaveBeenCalledTimes(LOGIN_FAILURE_LIMIT_PER_MINUTE + 1);
+      // When the window ends the burst is evidenced, without any further failure arriving.
+      await vi.advanceTimersByTimeAsync(60_001);
+      expect(recordEvent).toHaveBeenCalledTimes(LOGIN_FAILURE_LIMIT_PER_MINUTE + 2);
+      const [event, opts] = recordEvent.mock.calls.at(-1)!;
+      expect(event).toMatchObject({ type: 'auth.login_failed', details: { reason: 'burst_summary', droppedCount: over } });
+      expect(event.actorUserId).toBeUndefined();
+      expect(opts.context).toMatchObject({ ip: '203.0.113.30' });
+      expect(validateEvent(event).ok).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('never throws, even when the audit write fails or throws synchronously', async () => {
@@ -353,8 +371,42 @@ describe('createThrottle', () => {
     expect(th.size()).toBe(2);
     expect(th.allow('c')).toBe(false);
   });
+  it('reports how many were counted instead of stored when the window ends (timer, next window, eviction)', () => {
+    vi.useFakeTimers();
+    try {
+      const onSummary = vi.fn();
+      const th = createThrottle({ limit: 2, windowMs: 1000, maxKeys: 2, onSummary });
+      for (let i = 0; i < 5; i++) th.allow('a');
+      expect(onSummary).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1001);
+      expect(onSummary).toHaveBeenCalledExactlyOnceWith('a', 3);
+      expect(th.size()).toBe(0);
+
+      // The next window of a key also flushes the previous one (when its timer has not fired yet).
+      onSummary.mockClear();
+      for (let i = 0; i < 4; i++) th.allow('b');
+      vi.setSystemTime(Date.now() + 1001);
+      th.allow('b');
+      expect(onSummary).toHaveBeenCalledExactlyOnceWith('b', 2);
+
+      // Eviction of a live window with a count flushes it too.
+      onSummary.mockClear();
+      for (let i = 0; i < 3; i++) th.allow('c');
+      th.allow('d');
+      th.allow('e');
+      expect(onSummary).toHaveBeenCalledWith('c', 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('a failing summary callback never breaks the caller', () => {
+    const th = createThrottle({ limit: 1, windowMs: 100, maxKeys: 5, now: () => 0, onSummary: () => { throw new Error('x'); } });
+    th.allow('a');
+    th.allow('a');
+    expect(() => th.allow('b')).not.toThrow();
+  });
   it('exposes a shared per-IP budget that buckets a missing ip', () => {
-    const results = Array.from({ length: 21 }, () => allowLoginFailureEvent(null));
-    expect(results.filter(Boolean)).toHaveLength(20);
+    const results = Array.from({ length: LOGIN_FAILURE_LIMIT_PER_MINUTE + 1 }, () => allowLoginFailureEvent(null));
+    expect(results.filter(Boolean)).toHaveLength(LOGIN_FAILURE_LIMIT_PER_MINUTE);
   });
 });

@@ -136,7 +136,7 @@ describe('AuditLog', () => {
   it('marks client events as selvrapporteret', async () => {
     setup(ADMIN_ME, () => json({ events: [ev({ source: 'client', eventType: 'meeting.delete', details: {} })], nextCursor: null }));
     render(<AuditLog />);
-    const row = (await screen.findByText('Anne Admin slettede et møde')).closest('li')!;
+    const row = (await screen.findByText('Anne Admin slettede et møde med transskription og alle referatversioner')).closest('li')!;
     expect(within(row).getByText('selvrapporteret')).toBeInTheDocument();
   });
 
@@ -229,10 +229,10 @@ describe('AuditLog', () => {
       expect(lastParams(m).has('eventType')).toBe(false);
     });
 
-    it('offers the five categories', async () => {
+    it('offers the six categories', async () => {
       await loaded();
       const options = within(screen.getByLabelText('Kategori')).getAllByRole('option').map((o) => o.textContent);
-      expect(options).toEqual(['Alle hændelser', 'Login og adgang', 'Skabeloner', 'Møder og optagelser', 'Brugere og roller', 'Loggen']);
+      expect(options).toEqual(['Alle hændelser', 'Login og adgang', 'Skabeloner', 'Møder og optagelser', 'Visning og afspilning', 'Redigering af møder', 'Loggen og systemet']);
     });
 
     it('offers the periods and applies them on change', async () => {

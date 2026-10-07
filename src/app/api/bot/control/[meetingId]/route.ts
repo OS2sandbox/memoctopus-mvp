@@ -7,6 +7,7 @@ import { safeLogError } from '@/lib/audit/safe-log';
 import { asEntityUuid } from '@/app/api/meetings/ai-audit';
 import { z } from 'zod';
 import { requireAppAccess } from '@/lib/authz/app-access';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 
 const bodySchema = z.object({
   action: z.enum(['pause', 'resume', 'stop', 'abort']),
@@ -14,8 +15,9 @@ const bodySchema = z.object({
   sessionId: z.string().uuid().optional(),
 });
 
-// Only stop and abort are audited; pause and resume are operational and leave no event.
 const EVENT_FOR_ACTION = {
+  pause: 'bot.session_pause',
+  resume: 'bot.session_resume',
   stop: 'bot.session_stop',
   abort: 'bot.session_abort',
 } as const;
@@ -38,6 +40,13 @@ export const POST = withHandler(
     // any authenticated user could stop/pause/abort another user's live recording by
     // supplying their (client-held) sessionId. Deny by default on an unbound meetingId.
     if (!(await assertBotMeetingOwner(meetingId, session.user.id))) {
+      await recordAuthzDenied({
+        actorUserId: session.user.id,
+        required: 'bot.meeting_owner',
+        reason: 'not_owner',
+        entityType: 'meeting',
+        entityId: meetingId,
+      });
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 
@@ -51,15 +60,13 @@ export const POST = withHandler(
     if (!parsed.success) return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
 
     const { action, sessionId } = parsed.data;
-    const audit = async (outcome: 'success' | 'error') => {
-      if (action !== 'stop' && action !== 'abort') return;
-      await recordServerEvent(req, {
+    const audit = (outcome: 'success' | 'error') =>
+      recordServerEvent(req, {
         type: EVENT_FOR_ACTION[action],
         outcome,
         actorUserId: session.user.id,
         entityId: asEntityUuid(meetingId),
       });
-    };
 
     const bot = getBotServiceConfig();
     if (!bot) {

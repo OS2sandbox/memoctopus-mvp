@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeRunner, type Responder } from '@/test/fake-runner';
 
 vi.mock('@/lib/db', () => ({ pool: {} }));
+// Rights and organisation changes are NOT audited (only denials are): the mock is a tripwire.
 const recordEvent = vi.fn(async (..._args: unknown[]) => {});
 vi.mock('@/lib/audit/record', () => ({
   recordEvent: (...a: unknown[]) => recordEvent(...a),
@@ -136,7 +137,7 @@ describe('grantRole', () => {
       ['FROM public.role_assignments ra', [assignmentRow]],
     ]);
 
-  it('links by app_user_id (never email), inserts a local row and audits inside the transaction', async () => {
+  it('links by app_user_id (never email), inserts a local row inside the transaction, without an audit event', async () => {
     const { runner, calls } = makeFakeRunner(happy());
     const view = await grantRole({ ...input, scopeOrgUnitUuid: null }, runner);
 
@@ -149,21 +150,7 @@ describe('grantRole', () => {
     expect(insert.sql).toContain("'local'");
     expect(insert.params).toEqual([DIR, 'tt-logleser', null, true, null, null, 'admin-1']);
 
-    expect(recordEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'access.role_assign',
-        actorUserId: 'admin-1',
-        entityId: ASG,
-        secondaryEntityId: DIR,
-        details: { roleKey: 'tt-logleser', scopeOrgUnitUuid: null, includeDescendants: true },
-      }),
-      { tx: expect.anything() },
-    );
-    // The same tx handle goes to recordEvent as the one used for the writes.
-    expect(recordEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'access.user_create' }),
-      { tx: expect.objectContaining({ query: expect.any(Function) }) },
-    );
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('locks the scope unit FOR SHARE and lowercases it', async () => {
@@ -260,14 +247,11 @@ describe('revokeAssignment', () => {
     await expect(revokeAssignment(ASG, 'admin-1', runner)).rejects.toThrow(/din egen administratorrolle/);
   });
 
-  it('allows the revoke when another active local administrator remains, and audits it', async () => {
+  it('allows the revoke when another active local administrator remains', async () => {
     const { runner, calls } = makeFakeRunner(responder(row(), 1));
     await revokeAssignment(ASG, 'admin-1', runner);
     expect(calls.some((c) => c.sql.startsWith('DELETE FROM public.role_assignments'))).toBe(true);
-    expect(recordEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'access.role_revoke', entityId: ASG, secondaryEntityId: DIR }),
-      { tx: expect.anything() },
-    );
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('takes the advisory lock before reading the assignment and counting admins', async () => {
@@ -355,7 +339,7 @@ describe('org units', () => {
       });
     });
 
-    it('creates a local unit, trims the name and audits with the parent as secondary entity', async () => {
+    it('creates a local unit and trims the name', async () => {
       const { runner, calls } = makeFakeRunner(
         respondBy([
           ['FOR SHARE', [{ x: 1 }]],
@@ -365,10 +349,7 @@ describe('org units', () => {
       const view = await createOrgUnit({ name: '  A ', parentUuid: U1, actorUserId: 'a' }, runner);
       expect(view).toEqual({ uuid: U2, name: 'A', parentUuid: U1, source: 'local', memberCount: 0 });
       expect(calls.find((c) => c.sql.includes('INSERT INTO public.org_units'))!.params).toEqual(['A', U1]);
-      expect(recordEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ type: 'access.org_unit_create', entityId: U2, secondaryEntityId: U1 }),
-        { tx: expect.anything() },
-      );
+      expect(recordEvent).not.toHaveBeenCalled();
     });
   });
 
@@ -413,15 +394,12 @@ describe('org units', () => {
       await expect(result).rejects.toBeInstanceOf(ConflictError);
     });
 
-    it('allows moving under a unit outside the subtree, and audits it', async () => {
+    it('allows moving under a unit outside the subtree', async () => {
       const OUTSIDE = '44444444-4444-4444-8444-444444444444';
       const { result, calls } = run({ parentUuid: OUTSIDE }, U3, unit(U3, { parent_uuid: U2 }), false);
       await expect(result).resolves.toMatchObject({ uuid: U3, parentUuid: OUTSIDE });
       expect(calls.find((c) => c.sql.startsWith('UPDATE'))!.sql).toContain('parent_uuid = $2::uuid');
-      expect(recordEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ type: 'access.org_unit_update', details: { nameChanged: false, parentChanged: true } }),
-        { tx: expect.anything() },
-      );
+      expect(recordEvent).not.toHaveBeenCalled();
     });
 
     it('serialises tree moves on an advisory lock taken before reading the unit', async () => {
@@ -492,11 +470,11 @@ describe('org units', () => {
       expect(recordEvent).not.toHaveBeenCalled();
     });
 
-    it('deletes a leaf without assignments and audits it', async () => {
+    it('deletes a leaf without assignments', async () => {
       const { runner, calls } = run({});
       await deleteOrgUnit(U1, 'a', runner);
       expect(calls.some((c) => c.sql.startsWith('DELETE FROM public.org_units'))).toBe(true);
-      expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'access.org_unit_delete', entityId: U1 }), { tx: expect.anything() });
+      expect(recordEvent).not.toHaveBeenCalled();
     });
 
     it('409 when it has children', async () => {
@@ -537,7 +515,7 @@ describe('org units', () => {
         ]),
       );
 
-    it('diffs: removes missing members, adds new ones, audits each', async () => {
+    it('diffs: removes missing members and adds new ones', async () => {
       const { runner, calls } = run(['a1', 'a2'], [D2, D3]);
       await setOrgUnitMembers(U1, ['a1', 'a2', 'a1'], 'admin', runner);
 
@@ -545,11 +523,7 @@ describe('org units', () => {
       expect(del.params).toEqual([U1, [D3]]);
       const ins = calls.find((c) => c.sql.startsWith('INSERT INTO public.org_unit_members'))!;
       expect(ins.params).toEqual([U1, [D1]]);
-      const types = recordEvent.mock.calls.map((c) => (c[0] as { type: string; secondaryEntityId?: string }));
-      expect(types).toEqual([
-        { type: 'access.member_remove', actorUserId: 'admin', entityType: 'org_unit_member', entityId: U1, secondaryEntityType: 'directory_user', secondaryEntityId: D3 },
-        { type: 'access.member_add', actorUserId: 'admin', entityType: 'org_unit_member', entityId: U1, secondaryEntityType: 'directory_user', secondaryEntityId: D1 },
-      ]);
+      expect(recordEvent).not.toHaveBeenCalled();
     });
 
     it('an empty list clears the unit', async () => {

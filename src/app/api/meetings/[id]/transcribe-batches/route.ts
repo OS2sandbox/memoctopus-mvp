@@ -3,6 +3,7 @@ import { prepareVadBatches, transcribeVadBatches, transcribeEnsemble, isEnsemble
 import type { TranscriptSegment } from '@/types';
 import { withHandler } from '@/lib/api-handler';
 import { safeLogError } from '@/lib/audit/safe-log';
+import { asEntityUuid, elapsedMs, emitAudit, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
 import { requireAppAccess } from '@/lib/authz/app-access';
 
 interface Params {
@@ -28,9 +29,11 @@ export type TranscribeBatchesEvent =
 // throughput, not by the transport). Progress streams back as NDJSON so the client
 // can keep its live preview. No persistence — the client stores the transcript in
 // IndexedDB, same as the per-utterance path.
-async function postHandler(req: NextRequest, _ctx: Params) {
+async function postHandler(req: NextRequest, { params }: Params) {
+  const { id } = await params;
   const access = await requireAppAccess();
   if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const formData = await req.formData();
   const audioFile = formData.get('audio') as File | null;
@@ -41,6 +44,8 @@ async function postHandler(req: NextRequest, _ctx: Params) {
     return NextResponse.json({ error: 'Audio too short' }, { status: 400 });
   }
 
+  // The id in the URL is never verified against a meeting: UUID or no entity.
+  const entityId = asEntityUuid(id);
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -48,6 +53,8 @@ async function postHandler(req: NextRequest, _ctx: Params) {
         controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
 
       const t0 = Date.now();
+      let outcome: 'success' | 'error' = 'success';
+      let outcomeCode: string | undefined;
       try {
         // Ensemble path: one call returns diarized, timestamped segments — no VAD
         // fan-out, no separate diarization pass. Emitted as a single batch so the
@@ -87,9 +94,29 @@ async function postHandler(req: NextRequest, _ctx: Params) {
         send({ type: 'done', segments: result.segments, failedSeconds: result.failedSeconds });
       } catch (err) {
         safeLogError(`transcribe-batches failed after ${Date.now() - t0} ms`, err);
+        outcome = 'error';
+        outcomeCode = outcomeCodeOf(err);
         send({ type: 'error', message: err instanceof Error ? err.message : 'Transcription failed' });
       } finally {
-        controller.close();
+        try {
+          // Recorded before the stream closes so the write is not left dangling. The
+          // upload is the action: only its size and how long it took, never the audio or
+          // the transcript.
+          await emitAudit(req, {
+            type: 'audio.upload',
+            actorUserId: session.user.id,
+            outcome,
+            entityId,
+            details: {
+              channel: 'batch',
+              bytes: buffer.length,
+              durationMs: elapsedMs(t0),
+              ...(outcomeCode ? { outcomeCode } : {}),
+            },
+          });
+        } finally {
+          controller.close();
+        }
       }
     },
   });

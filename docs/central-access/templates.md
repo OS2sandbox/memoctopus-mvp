@@ -103,7 +103,7 @@ There is no hard delete. `archive` and `restore` set `status`, each with a note 
 | `central_template.*` audit events (ids, versions, field names) | holders of `audit.read` within their scope |
 | Change notes | the changelog only, never the audit log |
 
-Writes are audited in the same transaction as the change. **Reading is not audited**: `GET /api/admin/central-templates/[id]` and `GET .../[id]/versions` write no event, in line with the audit principle that the log records what people did, not what they looked at (`audit.md`). The prompt is still protected where it matters: only managers in scope can read it (403 and 404 as above), it never reaches recipients, and it is never logged.
+Writes are audited in the same transaction as the change. **Reading is not audited**: `GET /api/admin/central-templates/[id]` and `GET .../[id]/versions` write no event (the log records who opened a meeting's records, `audit.md`, not the template management screens). The prompt is still protected where it matters: only managers in scope can read it (403 and 404 as above), it never reaches recipients, and it is never logged.
 
 ## Routes
 

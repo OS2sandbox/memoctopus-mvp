@@ -32,26 +32,49 @@ const CASES: Record<EventType, [SummarisableEvent, string]> = {
   'central_template.retarget': [ev('central_template.retarget', { templateName: 'X', details: { version: 4, targetCount: 1 } }), `${NAME} ændrede, hvem der har den centrale skabelon »X« til rådighed (version 4)`],
   'central_template.archive': [ev('central_template.archive', { templateName: 'X', details: { version: 5 } }), `${NAME} arkiverede den centrale skabelon »X« (version 5)`],
   'central_template.restore': [ev('central_template.restore', { templateName: 'X', details: { version: 6 } }), `${NAME} genoprettede den centrale skabelon »X« (version 6)`],
-  'minutes.generate': [ev('minutes.generate', { details: { templateSource: 'personal', durationMs: 5, segmentCount: 2 } }), `${NAME} genererede et referat`],
+  'audio.upload': [ev('audio.upload', { details: { channel: 'upload', bytes: 1000 } }), `${NAME} uploadede en lydfil til transskribering`],
+  'minutes.generate': [ev('minutes.generate', { details: { templateSource: 'personal', userInstruction: false, durationMs: 5, segmentCount: 2 } }), `${NAME} genererede et referat`],
   'export.download': [ev('export.download', { details: { format: 'pdf' } }), `${NAME} hentede en eksport (pdf)`],
   'bot.session_start': [ev('bot.session_start'), `${NAME} startede mødebotten`],
+  'bot.session_pause': [ev('bot.session_pause'), `${NAME} satte mødebotten på pause`],
+  'bot.session_resume': [ev('bot.session_resume'), `${NAME} genoptog mødebotten`],
   'bot.session_stop': [ev('bot.session_stop'), `${NAME} stoppede mødebotten`],
   'bot.session_abort': [ev('bot.session_abort'), `${NAME} afbrød mødebotten`],
+  'bot.audio_delete': [
+    ev('bot.audio_delete', { source: 'system', actorUserId: null, actorName: null, details: { trigger: 'ttl' } }),
+    'Systemet slettede en mødebot-optagelse på serveren, som ingen havde hentet',
+  ],
   'bot.ended': [ev('bot.ended', { source: 'system', actorUserId: null, actorName: null, details: { durationSeconds: 1800 } }), 'Mødebotten forlod mødet efter 30 min.'],
   'bot.error': [ev('bot.error', { source: 'system', outcome: 'error', actorUserId: null, actorName: null, details: { code: 'join_failed' } }), 'Mødebotten fejlede'],
   'meeting.create': [ev('meeting.create', { source: 'client', details: { origin: 'upload' } }), `${NAME} oprettede et møde (upload)`],
-  'meeting.delete': [ev('meeting.delete', { source: 'client' }), `${NAME} slettede et møde`],
+  'meeting.delete': [ev('meeting.delete', { source: 'client' }), `${NAME} slettede et møde med transskription og alle referatversioner`],
   'meeting.redact': [ev('meeting.redact', { source: 'client' }), `${NAME} slørede et møde`],
   'meeting.audio_delete': [ev('meeting.audio_delete', { source: 'client' }), `${NAME} slettede lyden fra et møde`],
-  'access.role_assign': [ev('access.role_assign', { details: { roleKey: 'tt-logleser' } }), `${NAME} tildelte en bruger rollen »Logleser«`],
-  'access.role_revoke': [ev('access.role_revoke', { details: { roleKey: 'tt-administrator' } }), `${NAME} fjernede rollen »Administrator« fra en bruger`],
-  'access.org_unit_create': [ev('access.org_unit_create'), `${NAME} oprettede en organisationsenhed`],
-  'access.org_unit_update': [ev('access.org_unit_update', { details: { nameChanged: true, parentChanged: true } }), `${NAME} ændrede en organisationsenhed (navn og placering)`],
-  'access.org_unit_delete': [ev('access.org_unit_delete'), `${NAME} slettede en organisationsenhed`],
-  'access.member_add': [ev('access.member_add'), `${NAME} tilføjede en bruger til en organisationsenhed`],
-  'access.member_remove': [ev('access.member_remove'), `${NAME} fjernede en bruger fra en organisationsenhed`],
-  'access.user_create': [ev('access.user_create', { details: { source: 'local' } }), `${NAME} oprettede en bruger i organisationen`],
-  'access.user_link': [ev('access.user_link', { details: { via: 'email', automatic: true } }), `${NAME} blev automatisk koblet til sin brugerprofil i organisationen`],
+  'meeting.minutes_view': [ev('meeting.minutes_view', { source: 'client' }), `${NAME} åbnede et referat`],
+  'meeting.transcript_view': [ev('meeting.transcript_view', { source: 'client' }), `${NAME} åbnede en transskription`],
+  'meeting.audio_play': [ev('meeting.audio_play', { source: 'client' }), `${NAME} afspillede lyden fra et møde`],
+  'meeting.recording_start': [ev('meeting.recording_start', { source: 'client' }), `${NAME} startede en optagelse`],
+  'meeting.recording_pause': [ev('meeting.recording_pause', { source: 'client' }), `${NAME} satte en optagelse på pause`],
+  'meeting.recording_resume': [ev('meeting.recording_resume', { source: 'client' }), `${NAME} genoptog en optagelse`],
+  'meeting.recording_stop': [ev('meeting.recording_stop', { source: 'client' }), `${NAME} stoppede en optagelse`],
+  'meeting.minutes_save': [ev('meeting.minutes_save', { source: 'client' }), `${NAME} redigerede et referat`],
+  'meeting.minutes_version': [
+    ev('meeting.minutes_version', { source: 'client', details: { versionNumber: 2, action: 'snapshot' } }),
+    `${NAME} gemte en ny version af referatet (version 2)`,
+  ],
+  'meeting.minutes_version_prune': [
+    ev('meeting.minutes_version_prune', { source: 'client', details: { prunedCount: 1 } }),
+    'Appen fjernede de ældste referatversioner fra et møde, fordi grænsen for antal versioner var nået (1 version)',
+  ],
+  'meeting.participants_edit': [
+    ev('meeting.participants_edit', { source: 'client', details: { participantCount: 3 } }),
+    `${NAME} ændrede deltagerne på et møde (3 deltagere)`,
+  ],
+  'meeting.speakers_edit': [ev('meeting.speakers_edit', { source: 'client' }), `${NAME} ændrede talerne på et møde`],
+  'system.config_changed': [
+    ev('system.config_changed', { source: 'system', actorUserId: null, actorName: null, details: { fingerprint: '0123456789abcdef', changed: true } }),
+    'Systemets konfiguration er ændret siden sidste start',
+  ],
   'audit.export': [ev('audit.export', { details: { rowCount: 1200, format: 'csv' } }), `${NAME} eksporterede loggen (1.200 rækker)`],
   'audit.prune': [ev('audit.prune', { source: 'system', actorUserId: null, actorName: null, details: { deletedCount: 1, olderThanDays: 365 } }), 'Systemet slettede 1 logpost ældre end 365 dage'],
 };
@@ -101,8 +124,32 @@ describe('summariseEvent', () => {
   it('never repeats free text or unknown values from details', () => {
     const s = summariseEvent(ev('authz.denied', { details: { required: 'EVIL<script>', reason: 'x' } }));
     expect(s).toBe(`${NAME} fik adgang nægtet`);
-    expect(summariseEvent(ev('access.role_assign', { details: { roleKey: 'hacker' } }))).toBe(`${NAME} tildelte en bruger rollen en rolle`);
     expect(summariseEvent(ev('auth.login_failed', { details: { reason: 'free text here' } }))).toBe('Mislykket login-forsøg');
+  });
+
+  it('says when the app deleted something on its own, and when a version was opened or restored', () => {
+    expect(summariseEvent(ev('meeting.audio_delete', { source: 'client', details: { trigger: 'auto_generate' } }))).toBe(
+      `${NAME} slettede lyden fra et møde (automatisk efter referatet blev genereret)`,
+    );
+    expect(summariseEvent(ev('meeting.delete', { source: 'client', details: { trigger: 'auto_pagehide' } }))).toBe(
+      `${NAME} slettede et møde med transskription og alle referatversioner (automatisk, da fanen blev lukket)`,
+    );
+    expect(summariseEvent(ev('meeting.delete', { source: 'client', details: { trigger: 'user' } }))).not.toContain('automatisk');
+    expect(summariseEvent(ev('meeting.minutes_version', { details: { versionNumber: 1, action: 'view' } }))).toBe(
+      `${NAME} åbnede en tidligere version af referatet (version 1)`,
+    );
+    expect(summariseEvent(ev('meeting.minutes_version', { details: { versionNumber: 1, action: 'activate' } }))).toBe(
+      `${NAME} gendannede en tidligere version af referatet (version 1)`,
+    );
+  });
+
+  it('mentions an extra instruction without ever quoting it, and a burst of failed logins', () => {
+    expect(summariseEvent(ev('minutes.generate', { details: { templateSource: 'none', userInstruction: true } }))).toBe(
+      `${NAME} genererede et referat og en ekstra instruktion`,
+    );
+    expect(
+      summariseEvent(ev('auth.login_failed', { outcome: 'error', actorUserId: null, actorName: null, details: { reason: 'burst_summary', droppedCount: 140 } })),
+    ).toBe('140 yderligere mislykkede login-forsøg fra samme adresse blev ikke registreret enkeltvis');
   });
 
   it('falls back to the stored label for a legacy type', () => {

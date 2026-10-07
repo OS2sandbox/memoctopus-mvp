@@ -1,6 +1,7 @@
 import { getDB, StoredMeeting } from './db';
 import { MeetingStatus } from '@/types';
 import { reportAuditEvent } from '@/lib/audit/client';
+import type { DeleteTrigger } from '@/lib/audit/events/meeting';
 
 export type MeetingOrigin = 'live' | 'upload' | 'bot';
 
@@ -56,34 +57,53 @@ export async function createMeeting(data: {
 export async function updateMeeting(
   id: string,
   patch: Partial<Omit<StoredMeeting, 'id' | 'createdAt'>>,
+  // Machine writes (the Teams bot's roster poll) pass `automatic: true`: a roster that
+  // changed because people joined or left is not a user edit, so it is not reported as one.
+  opts: { automatic?: boolean; trigger?: DeleteTrigger } = {},
 ): Promise<void> {
   const db = await getDB();
   const existing = await db.get('meetings', id);
   if (!existing) return;
   await db.put('meetings', { ...existing, ...patch, updatedAt: new Date().toISOString() });
   try {
-    reportMeetingChanges(existing, patch);
+    reportMeetingChanges(existing, patch, opts);
   } catch {
     // Reporting is best effort and must never turn a successful write into an error.
   }
 }
 
+// Rows written by older versions may lack the array; treat that as empty.
+const sameStrings = (a: string[] | undefined, b: string[] | undefined) => {
+  const x = a ?? [];
+  const y = b ?? [];
+  return x.length === y.length && x.every((v, i) => v === y[i]);
+};
+
 // Audit reporting is derived from what actually changed against the stored row, so
-// a write that repeats the current value reports nothing. Only two transitions are
-// reported here (redaction and audio deletion); status changes, renames and
-// participant edits are not audited. Only the opaque meeting id leaves here.
+// a write that repeats the current value (the participants effect re-saving on
+// mount) reports nothing. Reported here: redaction, audio deletion and a change of the
+// participant list. Status changes and renames are not audited. Only the opaque
+// meeting id and a participant COUNT leave here, never a name or the title.
 function reportMeetingChanges(
   existing: StoredMeeting,
   patch: Partial<Omit<StoredMeeting, 'id' | 'createdAt'>>,
+  opts: { automatic?: boolean; trigger?: DeleteTrigger },
 ): void {
   const id = existing.id;
   if (patch.status === 'redacted' && existing.status !== 'redacted') reportAuditEvent('meeting.redact', id);
   if (patch.audioDeleted === true && !existing.audioDeleted) {
-    reportAuditEvent('meeting.audio_delete', id);
+    reportAuditEvent('meeting.audio_delete', id, { trigger: opts.trigger ?? 'user' });
+  }
+  if (opts.automatic !== true && patch.participants !== undefined && !sameStrings(patch.participants, existing.participants)) {
+    reportAuditEvent('meeting.participants_edit', id, { participantCount: (patch.participants ?? []).length });
   }
 }
 
-export async function deleteMeeting(id: string): Promise<void> {
+export async function deleteMeeting(
+  id: string,
+  // Why it was deleted, for the audit log: the person asked (default) or the app did it on its own.
+  opts: { trigger?: DeleteTrigger } = {},
+): Promise<void> {
   const db = await getDB();
   const existed = (await db.get('meetings', id)) !== undefined;
   const tx = db.transaction(['meetings', 'transcripts', 'minutes', 'audio'], 'readwrite');
@@ -103,5 +123,5 @@ export async function deleteMeeting(id: string): Promise<void> {
   await tx.objectStore('meetings').delete(id);
   await tx.done;
   // Only a meeting that existed was deleted; a repeated call reports nothing.
-  if (existed) reportAuditEvent('meeting.delete', id);
+  if (existed) reportAuditEvent('meeting.delete', id, { trigger: opts.trigger ?? 'user' });
 }

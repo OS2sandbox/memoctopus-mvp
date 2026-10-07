@@ -16,7 +16,11 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 const mockRecord = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/audit/record', () => ({ recordServerEvent: mockRecord }));
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
+  recordServerEvent: mockRecord,
+}));
+vi.mock('@/lib/db', () => ({ db: {}, pool: {} }));
 
 vi.mock('@/lib/skabeloner/server', () => ({
   listSkabeloner: vi.fn(),
@@ -188,6 +192,16 @@ describe('POST /api/skabeloner', () => {
       details: { hasPrompt: true },
     });
     expect(JSON.stringify(event)).not.toMatch(/Standardreferat|Hemmelig|Jensen/);
+  });
+
+  it('records a failed create as outcome error (no id, no content) and still answers a JSON 500', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockCreate.mockRejectedValueOnce(new Error('DB error for Standardreferat'));
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { name: 'Standardreferat', prompt: 'Hemmelig' }));
+    expect(res.status).toBe(500);
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(mockRecord.mock.calls[0][1]).toEqual({ type: 'template.create', outcome: 'error', actorUserId: 'user-123', details: {} });
+    expect(JSON.stringify(mockRecord.mock.calls)).not.toMatch(/Standardreferat|Hemmelig/);
   });
 
   it('does not emit on validation failure', async () => {

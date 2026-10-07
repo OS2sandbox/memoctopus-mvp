@@ -164,40 +164,97 @@ export async function auditLogout(session: LoginSession, ctx: AuthHookContext | 
  * Fixed-window counter per key with a hard cap on tracked keys, so an attacker
  * rotating source addresses cannot grow memory. In-memory and per process:
  * with several app instances the effective limit is per instance.
+ *
+ * Nothing is dropped SILENTLY: events over the limit are counted, and when the window
+ * ends `onSummary(key, droppedCount)` is called once (from a timer, or earlier when the
+ * key is evicted or its next window starts). A crash inside the window loses that count.
  */
-export function createThrottle(opts: { limit: number; windowMs: number; maxKeys: number; now?: () => number }) {
+export function createThrottle(opts: {
+  limit: number;
+  windowMs: number;
+  maxKeys: number;
+  now?: () => number;
+  onSummary?: (key: string, dropped: number) => void;
+}) {
   const now = opts.now ?? Date.now;
-  const windows = new Map<string, { start: number; count: number }>();
+  interface Win {
+    start: number;
+    count: number;
+    dropped: number;
+    timer?: ReturnType<typeof setTimeout>;
+  }
+  const windows = new Map<string, Win>();
+
+  const close = (key: string, w: Win) => {
+    if (w.timer) clearTimeout(w.timer);
+    windows.delete(key);
+    if (w.dropped > 0) {
+      try {
+        opts.onSummary?.(key, w.dropped);
+      } catch {
+        // A summary that cannot be written must not break the login that triggered it.
+      }
+    }
+  };
+
   return {
-    /** True when this event may be recorded; false once the key is over its limit for the window. */
+    /** True when this event may be recorded; false once the key is over its limit for the window (it is then counted). */
     allow(key: string): boolean {
       const t = now();
       const w = windows.get(key);
       if (w && t - w.start < opts.windowMs) {
         w.count += 1;
-        return w.count <= opts.limit;
+        if (w.count <= opts.limit) return true;
+        w.dropped += 1;
+        if (opts.onSummary && !w.timer) {
+          // Report the burst when its window ends even if no further failure arrives.
+          w.timer = setTimeout(() => {
+            if (windows.get(key) === w) close(key, w);
+          }, Math.max(0, w.start + opts.windowMs - t));
+          w.timer.unref?.();
+        }
+        return false;
       }
-      windows.delete(key);
+      if (w) close(key, w);
       if (windows.size >= opts.maxKeys) {
-        for (const [k, v] of windows) if (t - v.start >= opts.windowMs) windows.delete(k);
+        for (const [k, v] of windows) if (t - v.start >= opts.windowMs) close(k, v);
         // Still full of live windows: evict the oldest (Map keeps insertion order).
         while (windows.size >= opts.maxKeys) {
-          const oldest = windows.keys().next();
+          const oldest = windows.entries().next();
           if (oldest.done) break;
-          windows.delete(oldest.value);
+          close(oldest.value[0], oldest.value[1]);
         }
       }
-      windows.set(key, { start: t, count: 1 });
+      windows.set(key, { start: t, count: 1, dropped: 0 });
       return true;
     },
     size: () => windows.size,
   };
 }
 
-const failureThrottle = createThrottle({ limit: 20, windowMs: 60_000, maxKeys: 10_000 });
+/** Stored one by one per IP and minute; beyond it the failures are counted into one summary event. */
+export const LOGIN_FAILURE_LIMIT_PER_MINUTE = 60;
+const NO_IP = 'no-ip';
 
-/** Shared per-IP budget for login_failed events (20 per minute). Events without an IP share one bucket. */
-export const allowLoginFailureEvent = (ip: string | null): boolean => failureThrottle.allow(ip ?? 'no-ip');
+/** One auth.login_failed row for a burst: how many further failures from this address were not stored one by one. */
+async function recordFailureSummary(ip: string, dropped: number): Promise<void> {
+  await bestEffort('audit_login_failed_summary', async () => {
+    await recordEvent({
+      type: 'auth.login_failed',
+      details: { reason: 'burst_summary', droppedCount: dropped },
+    }, { context: { ip: ip === NO_IP ? null : ip } });
+  });
+}
+
+const failureThrottle = createThrottle({
+  limit: LOGIN_FAILURE_LIMIT_PER_MINUTE,
+  windowMs: 60_000,
+  maxKeys: 10_000,
+  onSummary: (ip, dropped) => void recordFailureSummary(ip, dropped),
+});
+
+/** Shared per-IP budget for individually stored login_failed events. Events without an IP share one bucket. */
+export const allowLoginFailureEvent = (ip: string | null): boolean => failureThrottle.allow(ip ?? NO_IP);
 
 type FailedReason = 'invalid_credentials' | 'oauth_error' | 'account_not_linked' | 'rate_limited' | 'unknown';
 
@@ -259,7 +316,7 @@ export function classifyAuthFailure(ctx: AuthHookContext | null | undefined): Au
   return null;
 }
 
-/** auth.login_failed: no actor (the attempt has no session), throttled per IP. */
+/** auth.login_failed: no actor (the attempt has no session). Capped per IP, with the excess counted in a summary row. */
 export async function auditAuthFailure(ctx: AuthHookContext | null | undefined): Promise<void> {
   try {
     // Cheap path filter first: this hook sees every better-auth request.

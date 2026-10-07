@@ -15,7 +15,6 @@
 //   DELETE FROM system_flags WHERE key = 'bootstrap_admin_done';
 // which re-arms the bootstrap for the next allow-listed SSO login, or insert a
 // role_assignments row by hand.
-import { recordEvent } from '@/lib/audit/record';
 import { ADMIN_LOCK_NAME, ADMIN_ROLE, USABLE_LOCAL_ADMIN_SQL } from './admin-sql';
 import { accessSource, bootstrapAdminEmails, singleTenantId } from './config';
 import type { IdentityClaims } from './identity';
@@ -124,7 +123,7 @@ export async function maybeBootstrapAdmin(
       const directoryUuid = await ensureDirectoryUser(tx, userId);
       if (directoryUuid === null) return no('directory_user_disabled');
 
-      const assignmentId = await grantAdmin(tx, directoryUuid);
+      await grantAdmin(tx, directoryUuid);
 
       // Same transaction, same lock as the grant: a failure here rolls the grant back.
       const flag = await tx.query(
@@ -133,15 +132,6 @@ export async function maybeBootstrapAdmin(
       );
       if (flag.rows.length === 0) throw new FlagTakenError();
 
-      await recordEvent({
-        type: 'access.role_assign',
-        actorUserId: userId,
-        entityType: 'role_assignment',
-        entityId: assignmentId,
-        secondaryEntityType: 'directory_user',
-        secondaryEntityId: directoryUuid,
-        details: { roleKey: ADMIN_ROLE, bootstrap: true },
-      }, { tx });
       return { granted: true, reason: 'granted' as const };
     });
   } catch (err) {

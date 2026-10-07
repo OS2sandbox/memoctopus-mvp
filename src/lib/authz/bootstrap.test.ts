@@ -197,11 +197,8 @@ describe('maybeBootstrapAdmin', () => {
     const { runner, state } = statefulDb({ identities: { u1: oidcIdentity } });
     expect(await maybeBootstrapAdmin('u1', runner)).toEqual({ granted: true, reason: 'granted' });
     expect(state.grants).toEqual(['dir-u1']);
-    expect(recordEvent).toHaveBeenCalledOnce();
-    expect(recordEvent.mock.calls[0]).toMatchObject([
-      { type: 'access.role_assign', actorUserId: 'u1', details: { roleKey: 'tt-administrator', bootstrap: true } },
-      { tx: expect.anything() },
-    ]);
+    // Rights changes are not audited (the bootstrap grant included).
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('writes created_by_user_id NULL, scope NULL and source local', async () => {
