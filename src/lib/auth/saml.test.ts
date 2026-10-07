@@ -90,10 +90,10 @@ describe('defaultSsoFor', () => {
 });
 
 describe('ssoPluginOptions', () => {
-  const hooks = { onLogin: vi.fn(async () => {}) };
+  const onLogin = vi.fn(async () => {});
 
   it('is hardened: no provider registration, no trusted e-mail flag, callback on every login, timestamps required', () => {
-    const o = ssoPluginOptions([provider()], hooks, BASE)!;
+    const o = ssoPluginOptions([provider()], onLogin, BASE)!;
     expect(o).toMatchObject({
       providersLimit: 0,
       trustEmailVerified: false,
@@ -104,7 +104,7 @@ describe('ssoPluginOptions', () => {
   });
 
   it('only warns about deprecated algorithms when a provider opted in (installation-wide switch)', () => {
-    const o = ssoPluginOptions([provider(), provider({ id: 'other', allowDeprecatedAlgorithms: true })], hooks, BASE)!;
+    const o = ssoPluginOptions([provider(), provider({ id: 'other', allowDeprecatedAlgorithms: true })], onLogin, BASE)!;
     expect(o.saml?.algorithms).toEqual({ onDeprecated: 'warn' });
   });
 
@@ -118,21 +118,21 @@ describe('ssoPluginOptions', () => {
 
   it('skips a provider without BETTER_AUTH_URL even when it has its own spEntityId (no ACS URL)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    expect(ssoPluginOptions([provider({ spEntityId: 'urn:referat:kommune' })], hooks, undefined)).toBeNull();
+    expect(ssoPluginOptions([provider({ spEntityId: 'urn:referat:kommune' })], onLogin, undefined)).toBeNull();
     warn.mockRestore();
   });
 
   it('hands the app user, the provider id and the mapped attributes to onLogin', async () => {
-    const o = ssoPluginOptions([provider()], hooks, BASE)!;
+    const o = ssoPluginOptions([provider()], onLogin, BASE)!;
     await o.provisionUser!({ user: { id: 'u1' } as never, userInfo: { id: 'x', roles: ['r'] }, provider: { providerId: 'kommune' } as never });
-    expect(hooks.onLogin).toHaveBeenCalledWith('u1', 'kommune', { id: 'x', roles: ['r'] });
+    expect(onLogin).toHaveBeenCalledWith('u1', 'kommune', { id: 'x', roles: ['r'] });
   });
 
   it('is null (and warns, content-free) when no provider is usable', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    expect(ssoPluginOptions([provider()], hooks, undefined)).toBeNull();
+    expect(ssoPluginOptions([provider()], onLogin, undefined)).toBeNull();
     expect(warn).toHaveBeenCalledOnce();
-    expect(ssoPluginOptions([], hooks, BASE)).toBeNull();
+    expect(ssoPluginOptions([], onLogin, BASE)).toBeNull();
     warn.mockRestore();
   });
 

@@ -8,7 +8,8 @@ import type {
   CentralPrincipalTarget,
   CentralPrincipalTargetView,
 } from '@/lib/skabeloner/central-types';
-import { FLAG_TEXT, NO_HOLDERS_TEXT, holdersLabel, principalKey, principalKindLabels } from './central-template-utils';
+import { principalKey } from '@/lib/skabeloner/central-types';
+import { FLAG_TEXT, NO_HOLDERS_TEXT, holdersLabel, principalKindLabels } from './central-template-utils';
 
 interface Props {
   /** The role/group catalogue (both sources merged). Only active entries are offered for picking. */

@@ -4,8 +4,7 @@
 // the sync writes is exactly what the permission code reads.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from 'pg';
-import { hasPg, withFreshSchema } from '@/test/pg';
-import type { ClientLike, SqlResult } from '@/lib/authz/pg-runner';
+import { hasPg, withFreshSchema, pgSchemaEnv } from '@/test/pg';
 
 // resolvePrincipal uses the app's Drizzle instance. Point it at the throwaway
 // schema's connection: Drizzle emits unqualified table names, which resolve
@@ -33,7 +32,6 @@ import type { Principal } from '@/lib/authz/types';
 import { createRollekatalogClient } from './client';
 import { fixtureData, startMockRollekatalog, type MockRollekatalog } from './mock-server';
 import { runSync } from './sync';
-import type { SyncEnv } from './sync-run';
 
 const U = (n: number) => `7e5e0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const O = (n: number) => `5a1b0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -68,20 +66,7 @@ afterEach(async () => {
   await Promise.allSettled(opened.splice(0).map((c) => c.end()));
 });
 
-function schemaEnv(schema: string): SyncEnv {
-  return {
-    schema,
-    connect: async (): Promise<ClientLike> => {
-      const c = new Client({ connectionString: process.env.TEST_DATABASE_URL });
-      await c.connect();
-      opened.push(c);
-      return {
-        query: (text, params) => c.query(text, params as unknown[] | undefined) as unknown as Promise<SqlResult<never>>,
-        release: () => void c.end().catch(() => {}),
-      };
-    },
-  };
-}
+const schemaEnv = pgSchemaEnv(opened);
 
 interface World {
   c: Client;

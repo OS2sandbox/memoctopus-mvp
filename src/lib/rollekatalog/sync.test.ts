@@ -6,7 +6,7 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
   recordEvent: vi.fn(async () => ({ status: 'stored' })),
 }));
 
-import type { ClientLike, SqlResult } from '@/lib/authz/pg-runner';
+import { makeFakeSyncEnv, type FakeReply } from '@/test/fake-sync-env';
 import { recordEvent } from '@/lib/audit/record';
 import { createRollekatalogClient } from './client';
 import { mapToMirror, type MapperConfig, type MapperInput, type MirrorSet } from './mapper';
@@ -292,38 +292,13 @@ describe('sync-run helpers', () => {
 
 // ─── runSync against a scripted connection ─────────────────────────────────
 
-type Reply = SqlResult<Record<string, unknown>> | Error | undefined;
-
-function fakeEnv(script: (sql: string, params: readonly unknown[] | undefined) => Reply) {
-  const log: Array<{ conn: number; sql: string }> = [];
-  const released: Array<{ conn: number; destroy: boolean }> = [];
-  let n = 0;
-  const env: SyncEnv = {
-    schema: 'public',
-    connect: async (): Promise<ClientLike> => {
-      const conn = ++n;
-      return {
-        query: async (sql, params) => {
-          const flat = sql.replace(/\s+/g, ' ').trim();
-          log.push({ conn, sql: flat });
-          const reply = script(flat, params);
-          if (reply instanceof Error) throw reply;
-          return (reply ?? { rows: [], rowCount: 0 }) as unknown as SqlResult<never>;
-        },
-        release: (destroy) => void released.push({ conn, destroy: destroy === true }),
-      };
-    },
-  };
-  const sqls = () => log.map((l) => l.sql);
-  return { env, log, released, sqls };
-}
 
 const RUN_ID = '3f9a8c1e-0000-4000-8000-000000000001';
-const ok = (row: Record<string, unknown>): Reply => ({ rows: [row], rowCount: 1 });
+const ok = (row: Record<string, unknown>): FakeReply => ({ rows: [row], rowCount: 1 });
 
 /** Replies for everything the run needs outside the apply transaction. */
-function baseScript(over: (sql: string) => Reply = () => undefined) {
-  return (sql: string): Reply => {
+function baseScript(over: (sql: string) => FakeReply = () => undefined) {
+  return (sql: string): FakeReply => {
     const o = over(sql);
     if (o !== undefined) return o;
     if (sql.includes('pg_try_advisory_lock')) return ok({ ok: true });
@@ -366,7 +341,7 @@ const deps = (env: SyncEnv, over: Partial<SyncDeps> = {}): SyncDeps => ({
 describe('runSync flow', () => {
   it('not configured: records a failed run with the code and does nothing else', async () => {
     vi.stubEnv('ROLLEKATALOG_URL', '');
-    const f = fakeEnv(baseScript());
+    const f = makeFakeSyncEnv(baseScript());
     const r = await runSync({ trigger: 'cron' }, deps(f.env));
     expect(r).toMatchObject({ status: 'error', runId: RUN_ID, errorCode: 'not_configured' });
     expect(f.sqls()).toHaveLength(1);
@@ -377,7 +352,7 @@ describe('runSync flow', () => {
 
   it('a missing key is not configured too (the sync needs both)', async () => {
     vi.stubEnv('ROLLEKATALOG_ORG_API_KEY', '');
-    const r = await runSync({ trigger: 'cron' }, deps(fakeEnv(baseScript()).env));
+    const r = await runSync({ trigger: 'cron' }, deps(makeFakeSyncEnv(baseScript()).env));
     expect(r).toMatchObject({ status: 'error', errorCode: 'not_configured' });
   });
 
@@ -389,7 +364,7 @@ describe('runSync flow', () => {
   });
 
   it('a held lock answers already_running before any row, fetch or write', async () => {
-    const f = fakeEnv(baseScript((s) => (s.includes('pg_try_advisory_lock') ? ok({ ok: false }) : undefined)));
+    const f = makeFakeSyncEnv(baseScript((s) => (s.includes('pg_try_advisory_lock') ? ok({ ok: false }) : undefined)));
     const r = await runSync({ trigger: 'manual', actorUserId: 'admin-1' }, deps(f.env));
     expect(r).toMatchObject({ status: 'already_running', runId: null, errorCode: 'already_running' });
     expect(f.sqls()).toHaveLength(1);
@@ -399,7 +374,7 @@ describe('runSync flow', () => {
 
   it('a failed fetch records the code, never opens a transaction, and still unlocks', async () => {
     mock.setFaults([{ match: '/api/organisation/v3', status: 503 }]);
-    const f = fakeEnv(baseScript());
+    const f = makeFakeSyncEnv(baseScript());
     const r = await runSync({ trigger: 'cron' }, deps(f.env));
     expect(r).toMatchObject({ status: 'error', runId: RUN_ID, errorCode: 'server_error' });
     const sqls = f.sqls();
@@ -412,7 +387,7 @@ describe('runSync flow', () => {
 
   it('an empty response aborts before the other endpoints are called', async () => {
     mock.setData({ orgUnits: [] });
-    const f = fakeEnv(baseScript());
+    const f = makeFakeSyncEnv(baseScript());
     const r = await runSync({ trigger: 'cron' }, deps(f.env));
     expect(r).toMatchObject({ status: 'aborted', errorCode: 'empty_response' });
     expect(mock.requests.map((q) => q.path)).toEqual(['/api/organisation/v3']);
@@ -438,7 +413,7 @@ describe('runSync flow', () => {
         orgUnits: [...base.orgUnits, { uuid: 'LEGACY-UNIT', name: 'Gammel enhed', parentOrgUnitUuid: null }],
       });
       let finishParams: readonly unknown[] | undefined;
-      const f = fakeEnv(baseScript());
+      const f = makeFakeSyncEnv(baseScript());
       const wrapped: SyncEnv = {
         schema: f.env.schema,
         connect: async () => {
@@ -471,7 +446,7 @@ describe('runSync flow', () => {
     it('bad role assignment rows are counted too', async () => {
       const base = fixtureData();
       mock.setData({ roleAssignments: [...base.roleAssignments, 'junk', { userId: 5 }] });
-      const r = await runSync({ trigger: 'cron' }, deps(fakeEnv(baseScript()).env));
+      const r = await runSync({ trigger: 'cron' }, deps(makeFakeSyncEnv(baseScript()).env));
       expect(r).toMatchObject({ status: 'success' });
       expect(r.counts).toMatchObject({ assignmentRowsSkippedInvalid: 2, assignmentsUpserted: 10 });
     });
@@ -480,7 +455,7 @@ describe('runSync flow', () => {
       const base = fixtureData();
       // 9 fixture users + 4 bad rows: allowance of 13 rows is max(3, 0) = 3.
       mock.setData({ users: [...base.users, ...[1, 2, 3, 4].map((n) => goodUser(n, { uuid: `legacy-${n}` }))] });
-      const f = fakeEnv(baseScript());
+      const f = makeFakeSyncEnv(baseScript());
       const r = await runSync({ trigger: 'cron' }, deps(f.env));
       expect(r).toMatchObject({ status: 'error', errorCode: 'invalid_response', counts: expect.objectContaining({ usersSkippedInvalid: 0 }) });
       const sqls = f.sqls();
@@ -493,7 +468,7 @@ describe('runSync flow', () => {
 
     it('more bad assignment rows than the allowance aborts before any transaction', async () => {
       mock.setData({ roleAssignments: [...fixtureData().roleAssignments, 'a', 'b', 'c', 'd'] });
-      const f = fakeEnv(baseScript());
+      const f = makeFakeSyncEnv(baseScript());
       const r = await runSync({ trigger: 'cron' }, deps(f.env));
       expect(r).toMatchObject({ status: 'error', errorCode: 'invalid_response' });
       expect(f.sqls()).not.toContain('BEGIN');
@@ -501,7 +476,7 @@ describe('runSync flow', () => {
   });
 
   it('applies in ONE transaction on one connection and commits', async () => {
-    const f = fakeEnv(baseScript());
+    const f = makeFakeSyncEnv(baseScript());
     const r = await runSync({ trigger: 'cron' }, deps(f.env));
     expect(r).toMatchObject({ status: 'success', runId: RUN_ID, errorCode: null });
     expect(r.counts).toMatchObject({ usersUpserted: 9, orgUnitsUpserted: 5, assignmentsUpserted: 10 });
@@ -528,7 +503,7 @@ describe('runSync flow', () => {
   });
 
   it('revokes sessions of disabled linked rollekatalog users inside the transaction, after the user writes', async () => {
-    const f = fakeEnv(
+    const f = makeFakeSyncEnv(
       baseScript((s) => (s.startsWith('DELETE FROM "public".sessions') ? { rows: [], rowCount: 3 } : undefined)),
     );
     const r = await runSync({ trigger: 'cron' }, deps(f.env));
@@ -556,7 +531,7 @@ describe('runSync flow', () => {
   });
 
   it('a failure after the session delete still rolls back (the delete is inside the transaction)', async () => {
-    const f = fakeEnv(
+    const f = makeFakeSyncEnv(
       baseScript((s) =>
         s.startsWith('DELETE FROM "public".sessions') ? Object.assign(new Error('boom'), { code: '40001' }) : undefined,
       ),
@@ -569,7 +544,7 @@ describe('runSync flow', () => {
   });
 
   it('an aborted run (removal threshold) issues no session delete', async () => {
-    const f = fakeEnv(
+    const f = makeFakeSyncEnv(
       baseScript((s) => {
         // Existing mirror: 20 enabled users the fetch does not contain -> far over the threshold.
         if (s.includes('FROM "public".directory_users WHERE source = \'rollekatalog\'') && s.includes('ext_user_id')) {
@@ -589,7 +564,7 @@ describe('runSync flow', () => {
 
   it('a failing statement rolls back, reports db_error, and never leaks the database message', async () => {
     let inserted = 0;
-    const f = fakeEnv(
+    const f = makeFakeSyncEnv(
       baseScript((s) => {
         if (s.startsWith('INSERT INTO "public".org_units')) {
           inserted++;
@@ -614,7 +589,7 @@ describe('runSync flow', () => {
   });
 
   it('a lock that cannot be released destroys its connection (ending the session drops the lock)', async () => {
-    const f = fakeEnv(baseScript((s) => (s.includes('pg_advisory_unlock') ? ok({ ok: false }) : undefined)));
+    const f = makeFakeSyncEnv(baseScript((s) => (s.includes('pg_advisory_unlock') ? ok({ ok: false }) : undefined)));
     await runSync({ trigger: 'cron' }, deps(f.env));
     const lockConn = f.log.find((l) => l.sql.includes('pg_try_advisory_lock'))!.conn;
     expect(f.released.find((r) => r.conn === lockConn)).toEqual({ conn: lockConn, destroy: true });
@@ -622,7 +597,7 @@ describe('runSync flow', () => {
 
   it('sets the scope configuration from the environment at call time', async () => {
     vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'tt-administrator,tt-logleser');
-    const f = fakeEnv(baseScript());
+    const f = makeFakeSyncEnv(baseScript());
     const r = await runSync({ trigger: 'cron' }, deps(f.env));
     // ida.l's unscoped logleser is now a global row, so one more assignment than with the default.
     expect(r.counts.assignmentsUpserted).toBe(11);
@@ -632,11 +607,11 @@ describe('runSync flow', () => {
 
 describe('runSync audit', () => {
   it('writes nothing to the audit log: the sync is housekeeping, its status lives in sync_runs', async () => {
-    await runSync({ trigger: 'cron' }, deps(fakeEnv(baseScript()).env));
-    await runSync({ trigger: 'manual', actorUserId: 'admin-1' }, deps(fakeEnv(baseScript()).env));
+    await runSync({ trigger: 'cron' }, deps(makeFakeSyncEnv(baseScript()).env));
+    await runSync({ trigger: 'manual', actorUserId: 'admin-1' }, deps(makeFakeSyncEnv(baseScript()).env));
     mock.setData({ users: [] });
-    await runSync({ trigger: 'cron' }, deps(fakeEnv(baseScript()).env));
-    const locked = fakeEnv(baseScript((q) => (q.includes('pg_try_advisory_lock') ? ok({ ok: false }) : undefined)));
+    await runSync({ trigger: 'cron' }, deps(makeFakeSyncEnv(baseScript()).env));
+    const locked = makeFakeSyncEnv(baseScript((q) => (q.includes('pg_try_advisory_lock') ? ok({ ok: false }) : undefined)));
     await runSync({ trigger: 'cron' }, deps(locked.env));
     expect(recordEvent).not.toHaveBeenCalled();
   });

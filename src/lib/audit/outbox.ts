@@ -169,13 +169,18 @@ export async function addToOutbox(
   if (!outboxAvailable()) return false;
   try {
     const db = await open(userId);
-    await db.put('events', { ...event, queuedAt: now, attempts: 0, nextAttemptAt: now });
-    const size = await db.count('events');
+    // One transaction: the event and the eviction of the oldest ones beyond the bound go in together.
+    const tx = db.transaction('events', 'readwrite');
+    await tx.store.put({ ...event, queuedAt: now, attempts: 0, nextAttemptAt: now });
+    const size = await tx.store.count();
+    let evicted = 0;
     if (size > OUTBOX_MAX_EVENTS) {
-      const oldest = await db.getAllKeysFromIndex('events', 'by-queued', undefined, size - OUTBOX_MAX_EVENTS);
-      for (const key of oldest) await db.delete('events', key);
-      addDroppedLocally(userId, oldest.length);
+      const oldest = await tx.store.index('by-queued').getAllKeys(undefined, size - OUTBOX_MAX_EVENTS);
+      await Promise.all(oldest.map((key) => tx.store.delete(key)));
+      evicted = oldest.length;
     }
+    await tx.done;
+    addDroppedLocally(userId, evicted);
     return true;
   } catch {
     return false;
@@ -187,16 +192,19 @@ export async function takeDue(userId: string, limit: number, now = Date.now()): 
   if (!outboxAvailable()) return [];
   try {
     const db = await open(userId);
-    const all = await db.getAllFromIndex('events', 'by-queued');
+    // An empty queue (the usual case at every flush) costs one count, not a full read.
+    if ((await db.count('events')) === 0) return [];
+    const tx = db.transaction('events', 'readwrite');
+    const all = await tx.store.index('by-queued').getAll();
     const due: OutboxEvent[] = [];
+    const expired: string[] = [];
     for (const ev of all) {
-      if (now - ev.queuedAt > OUTBOX_TTL_MS) {
-        await db.delete('events', ev.clientEventId);
-        addDroppedLocally(userId, 1);
-      } else if (ev.nextAttemptAt <= now && due.length < limit) {
-        due.push(ev);
-      }
+      if (now - ev.queuedAt > OUTBOX_TTL_MS) expired.push(ev.clientEventId);
+      else if (ev.nextAttemptAt <= now && due.length < limit) due.push(ev);
     }
+    await Promise.all(expired.map((id) => tx.store.delete(id)));
+    await tx.done;
+    addDroppedLocally(userId, expired.length);
     return due;
   } catch {
     return [];
@@ -208,7 +216,9 @@ export async function removeFromOutbox(userId: string, ids: string[]): Promise<v
   if (!outboxAvailable() || ids.length === 0) return;
   try {
     const db = await open(userId);
-    for (const id of ids) await db.delete('events', id);
+    const tx = db.transaction('events', 'readwrite');
+    await Promise.all(ids.map((id) => tx.store.delete(id)));
+    await tx.done;
   } catch {
     // Left in the queue: redelivery is idempotent on the server.
   }
@@ -219,12 +229,16 @@ export async function markFailed(userId: string, ids: string[], now = Date.now()
   if (!outboxAvailable() || ids.length === 0) return;
   try {
     const db = await open(userId);
-    for (const id of ids) {
-      const ev = await db.get('events', id);
-      if (!ev) continue;
-      const attempts = ev.attempts + 1;
-      await db.put('events', { ...ev, attempts, nextAttemptAt: now + backoffMs(attempts) });
-    }
+    const tx = db.transaction('events', 'readwrite');
+    await Promise.all(
+      ids.map(async (id) => {
+        const ev = await tx.store.get(id);
+        if (!ev) return;
+        const attempts = ev.attempts + 1;
+        await tx.store.put({ ...ev, attempts, nextAttemptAt: now + backoffMs(attempts) });
+      }),
+    );
+    await tx.done;
   } catch {
     // Best effort.
   }

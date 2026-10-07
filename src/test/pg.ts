@@ -20,6 +20,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Client } from 'pg';
 import { createRunner, type ClientLike, type SqlResult, type SqlRunner } from '@/lib/authz/pg-runner';
+import type { SyncEnv } from '@/lib/rollekatalog/sync-run';
 
 export const hasPg = !!process.env.TEST_DATABASE_URL;
 
@@ -86,3 +87,22 @@ export function schemaRunner(base: Client, schema: string): { runner: SqlRunner;
 
 export const addUser = (c: Client, id: string, email = `${id}@example.dk`) =>
   c.query('INSERT INTO users (id, name, email) VALUES ($1, $1, $2)', [id, email]);
+
+/**
+ * A rollekatalog SyncEnv over a throwaway schema: every connection is its own client (so the advisory
+ * lock and the transaction really contend), pushed on `opened` for the test's afterEach to end.
+ */
+export const pgSchemaEnv =
+  (opened: Client[]) =>
+  (schema: string): SyncEnv => ({
+    schema,
+    connect: async (): Promise<ClientLike> => {
+      const c = new Client({ connectionString: process.env.TEST_DATABASE_URL });
+      await c.connect();
+      opened.push(c);
+      return {
+        query: (text, params) => c.query(text, params as unknown[] | undefined) as unknown as Promise<SqlResult<never>>,
+        release: () => void c.end().catch(() => {}),
+      };
+    },
+  });

@@ -402,9 +402,11 @@ export async function withUserSchemaTx<T>(userId: string, fn: (query: UserSchema
   const client = await pool.connect();
   let discard = false;
   try {
-    await client.query(`SET search_path TO "${schemaName(userId)}", public`);
     await client.query('BEGIN');
     try {
+      // LOCAL: the setting ends with the transaction (COMMIT or ROLLBACK), so nothing leaks to the next
+      // borrower of the pooled connection and no RESET is needed.
+      await client.query(`SET LOCAL search_path TO "${schemaName(userId)}", public`);
       const out = await fn(async <R = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
         const result = await client.query(sql, params);
         return result.rows as R[];
@@ -420,11 +422,7 @@ export async function withUserSchemaTx<T>(userId: string, fn: (query: UserSchema
       throw err;
     }
   } finally {
-    try {
-      await client.query('RESET search_path');
-    } catch {
-      discard = true;
-    }
+    // A failed ROLLBACK leaves the connection in an unknown state: destroy it.
     client.release(discard);
   }
 }

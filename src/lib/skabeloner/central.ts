@@ -38,9 +38,10 @@ import type { AuditEventOf, EventType } from '@/lib/audit/events';
 import { recordEvent } from '@/lib/audit/record';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError, VersionConflictError } from '@/lib/authz/access-errors';
 import { defaultRunner, type SqlQueryable, type SqlRunner } from '@/lib/authz/pg-runner';
-import { accessSource, roleClaimsMaxSeconds, type AccessSource } from '@/lib/authz/config';
+import { accessSource, claimsFreshnessSeconds, type AccessSource } from '@/lib/authz/config';
 import { hasGlobalScope, isOrgUnitWithinScope, orgSubtreeUuids, orgUnitsInScope, type ScopeEnv } from '@/lib/authz/scope';
 import type { Principal } from '@/lib/authz/types';
+import { UUID_RE, heldRoleSql, qualifyTable } from './audience-sql';
 import {
   centralStateChangeSchema,
   createCentralTemplateSchema,
@@ -51,6 +52,9 @@ import {
 } from './central-schemas';
 import {
   CENTRAL_CONTENT_FIELDS,
+  principalKey,
+  principalsEqual,
+  sortPrincipal,
   type CentralChangeType,
   type CentralContentField,
   type CentralCatalogueEntry,
@@ -78,35 +82,24 @@ export interface CentralEnv {
 
 const sourceOf = (env: CentralEnv): AccessSource => env.accessSource ?? accessSource();
 
-function claimsMaxOf(env: CentralEnv): number | null {
-  if (env.claimsMaxSeconds !== undefined) return env.claimsMaxSeconds;
-  return sourceOf(env) === 'claims' ? roleClaimsMaxSeconds() : null;
-}
+const claimsMaxOf = (env: CentralEnv): number | null => claimsFreshnessSeconds(env.claimsMaxSeconds, sourceOf(env));
 
 /**
- * How many people hold the catalogue entry `er` from their latest login, on the same terms as the
- * recipient predicate in resolve.ts (fresh claim row, linked and enabled directory user): a COUNT
- * only, never who. `param` is the placeholder carrying the freshness in seconds (null = nobody).
+ * How many people hold the role/group `pt` (any alias with kind and identifier) from their latest
+ * login, on the same terms as the recipient predicate in resolve.ts (heldRoleSql): a COUNT only,
+ * never who. `param` is the placeholder carrying the freshness in seconds (null = nobody).
  */
-const holdersSql = (env: CentralEnv, er: string, param: string): string =>
+const holdersSql = (env: CentralEnv, pt: string, param: string): string =>
   `(SELECT count(*)::int FROM ${tbl(env, 'user_external_roles')} ur
-     WHERE ur.kind = ${er}.kind AND ur.identifier = ${er}.identifier
-       AND ${param}::int IS NOT NULL
-       AND ur.seen_at > now() - make_interval(secs => ${param}::int)
-       AND EXISTS (SELECT 1 FROM ${tbl(env, 'directory_users')} d WHERE d.app_user_id = ur.user_id AND d.disabled = false))`;
+     WHERE ur.kind = ${pt}.kind AND ur.identifier = ${pt}.identifier
+       AND ${heldRoleSql((table) => tbl(env, table), 'ur', param)})`;
 
 export function defaultCentralEnv(): CentralEnv {
   return { schema: 'public', runner: defaultRunner() };
 }
 
-const SCHEMA_RE = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
+const tbl = (env: CentralEnv, table: string): string => qualifyTable(env.schema, table);
 
-function tbl(env: CentralEnv, table: string): string {
-  if (!SCHEMA_RE.test(env.schema)) throw new Error('invalid schema name');
-  return `"${env.schema}".${table}`;
-}
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID_RE.test(v);
 
 const NOT_FOUND = 'Skabelonen findes ikke';
@@ -167,17 +160,6 @@ const sortTargets = (targets: readonly CentralTarget[]): CentralTarget[] =>
 
 const sameTargets = (a: readonly CentralTarget[], b: readonly CentralTarget[]): boolean =>
   JSON.stringify(sortTargets(a)) === JSON.stringify(sortTargets(b));
-
-const sortPrincipal = <T extends CentralPrincipalTarget>(targets: readonly T[]): T[] =>
-  [...targets].sort((a, b) =>
-    a.kind !== b.kind ? (a.kind < b.kind ? -1 : 1) : a.identifier < b.identifier ? -1 : a.identifier > b.identifier ? 1 : 0,
-  );
-
-const samePrincipal = (a: readonly CentralPrincipalTarget[], b: readonly CentralPrincipalTarget[]): boolean =>
-  JSON.stringify(sortPrincipal(a).map((t) => [t.kind, t.identifier])) ===
-  JSON.stringify(sortPrincipal(b).map((t) => [t.kind, t.identifier]));
-
-const principalKey = (t: CentralPrincipalTarget): string => `${t.kind}\u0000${t.identifier}`;
 
 const snapshotOf = (views: readonly CentralPrincipalTargetView[]): CentralPrincipalTargetSnapshot[] =>
   views.map((v) => ({ kind: v.kind, identifier: v.identifier, name: v.name }));
@@ -281,15 +263,24 @@ const principalView = (r: PrincipalRow): CentralPrincipalTargetView => ({
   holders: Number(r.holders ?? 0),
 });
 
-/** Role/group targets with the catalogue's CURRENT name and state. */
-async function selectPrincipalTargets(env: CentralEnv, q: SqlQueryable, id: string): Promise<CentralPrincipalTargetView[]> {
+/**
+ * Role/group targets with the catalogue's CURRENT name and state. `withHolders` adds the holders
+ * count (a correlated count per target): on for what a manager reads back (reload, get), off for
+ * version snapshots and change detection, which never look at it (holders is then 0).
+ */
+async function selectPrincipalTargets(
+  env: CentralEnv,
+  q: SqlQueryable,
+  id: string,
+  withHolders: boolean,
+): Promise<CentralPrincipalTargetView[]> {
   const { rows } = await q.query<PrincipalRow>(
-    `SELECT pt.kind, pt.identifier, er.name, er.active, ${holdersSql(env, 'pt', '$2')} AS holders
+    `SELECT pt.kind, pt.identifier, er.name, er.active${withHolders ? `, ${holdersSql(env, 'pt', '$2')} AS holders` : ''}
        FROM ${tbl(env, 'central_template_principal_targets')} pt
        LEFT JOIN ${tbl(env, 'external_roles')} er ON er.kind = pt.kind AND er.identifier = pt.identifier
       WHERE pt.template_id = $1::uuid
       ORDER BY pt.kind, pt.identifier`,
-    [id, claimsMaxOf(env)],
+    withHolders ? [id, claimsMaxOf(env)] : [id],
   );
   return rows.map(principalView);
 }
@@ -491,7 +482,7 @@ async function audit<T extends EventType>(env: CentralEnv, tx: SqlQueryable, eve
 async function reload(env: CentralEnv, q: SqlQueryable, id: string): Promise<CentralTemplateAdmin> {
   const row = await selectRow(env, q, id, false);
   if (!row) throw new NotFoundError(NOT_FOUND);
-  return adminView(row, await selectTargets(env, q, id), await selectPrincipalTargets(env, q, id));
+  return adminView(row, await selectTargets(env, q, id), await selectPrincipalTargets(env, q, id, true));
 }
 
 // ─── Create ────────────────────────────────────────────────────────────────
@@ -563,7 +554,7 @@ export async function createCentralTemplate(
       actor: principal,
       content,
       targets,
-      principalTargets: snapshotOf(await selectPrincipalTargets(env, tx, id)),
+      principalTargets: snapshotOf(await selectPrincipalTargets(env, tx, id, false)),
     });
     await audit(env, tx, {
       type: 'central_template.create',
@@ -603,9 +594,9 @@ export async function updateCentralTemplate(
     const nextTargets = input.targets === undefined ? currentTargets : sortTargets(input.targets);
     const targetsChanged = input.targets !== undefined && !sameTargets(currentTargets, nextTargets);
 
-    const currentPrincipal = await selectPrincipalTargets(env, tx, row.id);
+    const currentPrincipal = await selectPrincipalTargets(env, tx, row.id, false);
     const nextPrincipal = input.principalTargets === undefined ? currentPrincipal : sortPrincipal(input.principalTargets);
-    const principalChanged = input.principalTargets !== undefined && !samePrincipal(currentPrincipal, nextPrincipal);
+    const principalChanged = input.principalTargets !== undefined && !principalsEqual(currentPrincipal, nextPrincipal);
 
     if (changedFields.length === 0 && !targetsChanged && !principalChanged) {
       throw new ValidationError('Der er ingen ændringer at gemme', 'no_changes');
@@ -642,7 +633,7 @@ export async function updateCentralTemplate(
 
     if (targetsChanged) await replaceTargets(env, tx, row.id, nextTargets);
     if (principalChanged) await replacePrincipalTargets(env, tx, row.id, nextPrincipal);
-    const principalSnapshot = principalChanged ? snapshotOf(await selectPrincipalTargets(env, tx, row.id)) : snapshotOf(currentPrincipal);
+    const principalSnapshot = principalChanged ? snapshotOf(await selectPrincipalTargets(env, tx, row.id, false)) : snapshotOf(currentPrincipal);
 
     const retargetOnly = changedFields.length === 0;
     await appendVersion(env, tx, {
@@ -721,7 +712,7 @@ async function changeStatus(
     }
 
     const targets = await selectTargets(env, tx, row.id);
-    const principalTargets = await selectPrincipalTargets(env, tx, row.id);
+    const principalTargets = await selectPrincipalTargets(env, tx, row.id, false);
     await appendVersion(env, tx, {
       templateId: row.id,
       version: newVersion,
@@ -852,7 +843,7 @@ export async function getManageableTemplate(
   return adminView(
     row,
     await selectTargets(env, env.runner, row.id),
-    await selectPrincipalTargets(env, env.runner, row.id),
+    await selectPrincipalTargets(env, env.runner, row.id, true),
   );
 }
 
@@ -937,8 +928,16 @@ export async function listCatalogue(env: CentralEnv = defaultCentralEnv()): Prom
     synced_at: Date | string;
     holders: number;
   }>(
-    `SELECT er.kind, er.identifier, er.name, er.source, er.active, er.synced_at, ${holdersSql(env, 'er', '$1')} AS holders
+    // The holders of every entry in ONE grouped pass over the claim rows (not a count per entry).
+    `WITH held AS (
+       SELECT ur.kind, ur.identifier, count(*)::int AS holders
+         FROM ${tbl(env, 'user_external_roles')} ur
+        WHERE ${heldRoleSql((table) => tbl(env, table), 'ur', '$1')}
+        GROUP BY ur.kind, ur.identifier
+     )
+     SELECT er.kind, er.identifier, er.name, er.source, er.active, er.synced_at, COALESCE(h.holders, 0) AS holders
        FROM ${tbl(env, 'external_roles')} er
+       LEFT JOIN held h ON h.kind = er.kind AND h.identifier = er.identifier
       ORDER BY er.active DESC, er.kind, lower(er.name), er.identifier`,
     [claimsMaxOf(env)],
   );

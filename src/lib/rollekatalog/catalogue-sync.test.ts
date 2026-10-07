@@ -2,45 +2,20 @@
 // which order, what is never written, and that only short codes come out. The behaviour that
 // needs a database (upsert, deactivation, RESTRICT, a real lock) is in catalogue-sync.pg.test.ts.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ClientLike, SqlResult } from '@/lib/authz/pg-runner';
+import { makeFakeSyncEnv, type FakeReply } from '@/test/fake-sync-env';
 
 vi.mock('@/lib/db', () => ({ pool: {}, db: {} }));
 
 import { runCatalogueRefresh, emptyCatalogueCounts } from './catalogue-sync';
 import { RollekatalogError } from './errors';
 import type { RkRoleCatalogue } from './client';
-import type { SyncEnv } from './sync-run';
 
-type Reply = SqlResult<Record<string, unknown>> | Error | undefined;
 
-function fakeEnv(script: (sql: string, params: readonly unknown[] | undefined) => Reply) {
-  const log: Array<{ conn: number; sql: string; params: readonly unknown[] | undefined }> = [];
-  const released: Array<{ conn: number; destroy: boolean }> = [];
-  let n = 0;
-  const env: SyncEnv = {
-    schema: 'public',
-    connect: async (): Promise<ClientLike> => {
-      const conn = ++n;
-      return {
-        query: async (sql, params) => {
-          const flat = sql.replace(/\s+/g, ' ').trim();
-          log.push({ conn, sql: flat, params });
-          const reply = script(flat, params);
-          if (reply instanceof Error) throw reply;
-          return (reply ?? { rows: [], rowCount: 0 }) as unknown as SqlResult<never>;
-        },
-        release: (destroy) => void released.push({ conn, destroy: destroy === true }),
-      };
-    },
-  };
-  return { env, log, released, sqls: () => log.map((l) => l.sql) };
-}
-
-const rows = (r: Array<Record<string, unknown>>): Reply => ({ rows: r, rowCount: r.length });
+const rows = (r: Array<Record<string, unknown>>): FakeReply => ({ rows: r, rowCount: r.length });
 
 /** An answer for everything the run needs: lock, the base count, nothing leaving, N upserts. */
-function script(over: (sql: string) => Reply = () => undefined) {
-  return (sql: string): Reply => {
+function script(over: (sql: string) => FakeReply = () => undefined) {
+  return (sql: string): FakeReply => {
     const o = over(sql);
     if (o !== undefined) return o;
     if (sql.includes('pg_try_advisory_lock')) return rows([{ ok: true }]);
@@ -74,7 +49,7 @@ afterEach(() => {
 
 describe('runCatalogueRefresh', () => {
   it('locks, fetches, writes in one transaction, unlocks, and reports counts', async () => {
-    const f = fakeEnv(script());
+    const f = makeFakeSyncEnv(script());
     const client = clientOf(catalogue(['a', 'b'], ['g'], 2));
     const r = await runCatalogueRefresh({ trigger: 'cron' }, { env: f.env, client });
 
@@ -91,7 +66,7 @@ describe('runCatalogueRefresh', () => {
   });
 
   it('writes only source=rollekatalog rows, never deletes, and passes the values as parameters', async () => {
-    const f = fakeEnv(script());
+    const f = makeFakeSyncEnv(script());
     await runCatalogueRefresh({ trigger: 'cron' }, { env: f.env, client: clientOf(catalogue(['a'], ['g'])) });
     const writes = f.log.filter((l) => /^(INSERT|UPDATE|DELETE)/.test(l.sql));
     expect(writes.map((w) => w.sql.split(' ')[0])).toEqual(['INSERT', 'UPDATE']);
@@ -107,7 +82,7 @@ describe('runCatalogueRefresh', () => {
 
   it('an empty list of ONE read kind aborts while active rollekatalog entries of that kind exist, even when forced', async () => {
     for (const force of [false, true]) {
-      const f = fakeEnv(script((sql) => (sql.startsWith('SELECT kind, count(*)::int AS cnt') ? rows([{ kind: 'group', cnt: 2 }, { kind: 'role', cnt: 5 }]) : undefined)));
+      const f = makeFakeSyncEnv(script((sql) => (sql.startsWith('SELECT kind, count(*)::int AS cnt') ? rows([{ kind: 'group', cnt: 2 }, { kind: 'role', cnt: 5 }]) : undefined)));
       const r = await runCatalogueRefresh({ trigger: 'manual', force }, { env: f.env, client: clientOf(catalogue(['a'], [])) });
       expect(r).toEqual({ status: 'aborted', counts: emptyCatalogueCounts(), errorCode: 'empty_response' });
       expect(f.sqls().some((s) => s.startsWith('INSERT') || s.startsWith('UPDATE'))).toBe(false);
@@ -116,7 +91,7 @@ describe('runCatalogueRefresh', () => {
   });
 
   it('an empty list is fine when no active entry of that kind exists, and when that kind is switched off (none)', async () => {
-    const f = fakeEnv(script((sql) => (sql.startsWith('SELECT kind, count(*)::int AS cnt') ? rows([{ kind: 'group', cnt: 2 }]) : undefined)));
+    const f = makeFakeSyncEnv(script((sql) => (sql.startsWith('SELECT kind, count(*)::int AS cnt') ? rows([{ kind: 'group', cnt: 2 }]) : undefined)));
     const off: RkRoleCatalogue = { ...catalogue(['a'], []), read: { roles: true, groups: false } };
     const r = await runCatalogueRefresh({ trigger: 'cron' }, { env: f.env, client: clientOf(off) });
     expect(r.status).toBe('success');
@@ -126,12 +101,12 @@ describe('runCatalogueRefresh', () => {
     const deactivate = f.log.find((l) => l.sql.startsWith('UPDATE'))!;
     expect(deactivate.params?.[2]).toEqual(['role']);
 
-    const g = fakeEnv(script());
+    const g = makeFakeSyncEnv(script());
     expect((await runCatalogueRefresh({ trigger: 'cron' }, { env: g.env, client: clientOf(catalogue(['a'], [])) })).status).toBe('success');
   });
 
   it('leaves a key that exists as a config row out of the upsert (config wins)', async () => {
-    const f = fakeEnv(script((sql) => (sql === "SELECT kind, identifier FROM external_roles WHERE source = 'config'" || sql.includes("WHERE source = 'config'") ? rows([{ kind: 'role', identifier: 'a' }]) : undefined)));
+    const f = makeFakeSyncEnv(script((sql) => (sql === "SELECT kind, identifier FROM external_roles WHERE source = 'config'" || sql.includes("WHERE source = 'config'") ? rows([{ kind: 'role', identifier: 'a' }]) : undefined)));
     const r = await runCatalogueRefresh({ trigger: 'cron' }, { env: f.env, client: clientOf(catalogue(['a', 'b'], ['g'])) });
     expect(r.status).toBe('success');
     const insert = f.log.find((l) => l.sql.startsWith('INSERT'))!;
@@ -146,7 +121,7 @@ describe('runCatalogueRefresh', () => {
     ['an insecure URL', 'ROLLEKATALOG_URL', 'http://rk.example.dk', 'insecure_url'],
   ])('%s: error, and nothing is connected, locked or fetched', async (_l, name, value, code) => {
     vi.stubEnv(name, value);
-    const f = fakeEnv(script());
+    const f = makeFakeSyncEnv(script());
     const client = clientOf(catalogue(['a']));
     expect(await runCatalogueRefresh({ trigger: 'manual' }, { env: f.env, client })).toEqual({
       status: 'error',
@@ -158,7 +133,7 @@ describe('runCatalogueRefresh', () => {
   });
 
   it('an overlapping run answers already_running without fetching or writing', async () => {
-    const f = fakeEnv(script((s) => (s.includes('pg_try_advisory_lock') ? rows([{ ok: false }]) : undefined)));
+    const f = makeFakeSyncEnv(script((s) => (s.includes('pg_try_advisory_lock') ? rows([{ ok: false }]) : undefined)));
     const client = clientOf(catalogue(['a']));
     const r = await runCatalogueRefresh({ trigger: 'cron' }, { env: f.env, client });
     expect(r).toMatchObject({ status: 'already_running', errorCode: 'already_running' });
@@ -169,7 +144,7 @@ describe('runCatalogueRefresh', () => {
 
   it('an empty answer aborts (empty_response) before any write, whatever the force flag', async () => {
     for (const force of [false, true]) {
-      const f = fakeEnv(script());
+      const f = makeFakeSyncEnv(script());
       const r = await runCatalogueRefresh({ trigger: 'manual', force }, { env: f.env, client: clientOf(catalogue([], [])) });
       expect(r).toEqual({ status: 'aborted', counts: emptyCatalogueCounts(), errorCode: 'empty_response' });
       expect(f.sqls().some((s) => s === 'BEGIN' || s.startsWith('INSERT'))).toBe(false);
@@ -187,7 +162,7 @@ describe('runCatalogueRefresh', () => {
     ['invalid_response'],
     ['too_large'],
   ] as const)('a fetch failure (%s) is an error with that short code, nothing is written, and the lock is released', async (code) => {
-    const f = fakeEnv(script());
+    const f = makeFakeSyncEnv(script());
     const r = await runCatalogueRefresh({ trigger: 'cron' }, { env: f.env, client: clientOf(new RollekatalogError(code)) });
     expect(r).toEqual({ status: 'error', counts: emptyCatalogueCounts(), errorCode: code });
     expect(f.sqls().some((s) => s === 'BEGIN')).toBe(false);
@@ -195,7 +170,7 @@ describe('runCatalogueRefresh', () => {
   });
 
   it('an unexpected throw becomes code unexpected and never carries its message out', async () => {
-    const f = fakeEnv(script());
+    const f = makeFakeSyncEnv(script());
     const r = await runCatalogueRefresh({ trigger: 'cron' }, { env: f.env, client: clientOf(new Error('boom read-key-value https://rk.example.dk')) });
     expect(r.errorCode).toBe('unexpected');
     expect(JSON.stringify(r)).not.toMatch(/boom|read-key-value|rk\.example/);
@@ -203,7 +178,7 @@ describe('runCatalogueRefresh', () => {
   });
 
   it('a database failure rolls back, reports db_error, and logs a label only', async () => {
-    const f = fakeEnv(script((s) => (s.includes('RETURNING (xmax = 0)') ? new Error('relation "x" does not exist') : undefined)));
+    const f = makeFakeSyncEnv(script((s) => (s.includes('RETURNING (xmax = 0)') ? new Error('relation "x" does not exist') : undefined)));
     const r = await runCatalogueRefresh({ trigger: 'cron' }, { env: f.env, client: clientOf(catalogue(['a'])) });
     expect(r).toEqual({ status: 'error', counts: emptyCatalogueCounts(), errorCode: 'db_error' });
     expect(f.log.filter((l) => l.conn === 2).map((l) => l.sql).at(-1)).toBe('ROLLBACK');
@@ -220,31 +195,31 @@ describe('runCatalogueRefresh', () => {
       });
 
     it('aborts when too many entries would be deactivated, unless forced', async () => {
-      const a = fakeEnv(withGone(8));
+      const a = makeFakeSyncEnv(withGone(8));
       const r = await runCatalogueRefresh({ trigger: 'cron' }, { env: a.env, client: clientOf(catalogue(['a'])) });
       expect(r).toEqual({ status: 'aborted', counts: emptyCatalogueCounts(), errorCode: 'removal_threshold' });
       expect(a.sqls().some((s) => s.startsWith('INSERT') || s.startsWith('UPDATE'))).toBe(false);
       expect(a.log.filter((l) => l.conn === 2).map((l) => l.sql).at(-1)).toBe('ROLLBACK');
 
-      const b = fakeEnv(withGone(8));
+      const b = makeFakeSyncEnv(withGone(8));
       const forced = await runCatalogueRefresh({ trigger: 'manual', force: true }, { env: b.env, client: clientOf(catalogue(['a'])) });
       expect(forced.status).toBe('success');
       expect(forced.counts.deactivated).toBe(8);
     });
 
     it('passes below the threshold, and always allows a few removals from a small catalogue', async () => {
-      const a = fakeEnv(withGone(5));
+      const a = makeFakeSyncEnv(withGone(5));
       expect((await runCatalogueRefresh({ trigger: 'cron' }, { env: a.env, client: clientOf(catalogue(['a'])) })).status).toBe('success');
       // 3 of 5 is 60 %, but within the absolute allowance of 3.
-      const b = fakeEnv(withGone(3, 5));
+      const b = makeFakeSyncEnv(withGone(3, 5));
       expect((await runCatalogueRefresh({ trigger: 'cron' }, { env: b.env, client: clientOf(catalogue(['a'])) })).status).toBe('success');
-      const c = fakeEnv(withGone(4, 5));
+      const c = makeFakeSyncEnv(withGone(4, 5));
       expect((await runCatalogueRefresh({ trigger: 'cron' }, { env: c.env, client: clientOf(catalogue(['a'])) })).status).toBe('aborted');
     });
 
     it('honours ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT', async () => {
       vi.stubEnv('ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT', '50');
-      const f = fakeEnv(withGone(8));
+      const f = makeFakeSyncEnv(withGone(8));
       expect((await runCatalogueRefresh({ trigger: 'cron' }, { env: f.env, client: clientOf(catalogue(['a'])) })).status).toBe('success');
     });
   });

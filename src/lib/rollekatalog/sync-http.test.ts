@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { syncHttpStatus, syncResultResponse } from './sync-http';
+import { refreshHttpStatus } from './refresh-http';
+import { syncResultResponse } from './sync-http';
 import { emptySyncCounts, type SyncResult } from './types';
 
 const result = (over: Partial<SyncResult>): SyncResult => ({
@@ -10,7 +11,7 @@ const result = (over: Partial<SyncResult>): SyncResult => ({
   ...over,
 });
 
-describe('syncHttpStatus', () => {
+describe('refreshHttpStatus', () => {
   it.each([
     [{ status: 'success' }, 200],
     [{ status: 'already_running', runId: null }, 409],
@@ -21,7 +22,7 @@ describe('syncHttpStatus', () => {
     [{ status: 'error', errorCode: 'unexpected' }, 500],
     [{ status: 'error', errorCode: null }, 500],
   ] as const)('%j gives %i', (over, status) => {
-    expect(syncHttpStatus(result(over as Partial<SyncResult>))).toBe(status);
+    expect(refreshHttpStatus(result(over as Partial<SyncResult>))).toBe(status);
   });
 });
 

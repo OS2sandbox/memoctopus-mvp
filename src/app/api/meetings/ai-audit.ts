@@ -8,6 +8,7 @@ import type { HeaderSource } from '@/lib/audit/request-context';
 import { takeClientEventBudget } from '@/lib/audit/client-ingest';
 import { describeError } from '@/lib/audit/safe-log';
 import { noteDroppedEvents } from '@/lib/audit/dropped';
+import { createThrottle } from '@/lib/audit/throttle';
 
 /**
  * Route params and form fields are client-supplied and never verified against a
@@ -58,33 +59,20 @@ export function emitAudit<T extends EventType>(req: HeaderSource, event: AuditEv
 // ─── live audio ──────────────────────────────────────────────────────────────
 
 /** One utterance is sent every few seconds while recording; the log gets one row per person and meeting per window. */
-export const LIVE_AUDIO_WINDOW_MS = 5 * 60_000;
-export const LIVE_AUDIO_MAX_ENTRIES = 5_000;
-const liveAudioLast = new Map<string, number>();
+const liveAudioThrottle = createThrottle({ limit: 1, windowMs: 5 * 60_000, maxKeys: 5_000, now: () => Date.now() });
 
 /**
  * audio.upload for the live recording path (channel 'live'), at most once per (person, meeting,
  * outcome) per 5 minutes: a long recording sends hundreds of utterances and a row for each would
  * bury the log. The row carries the size of THAT utterance. By design this is coalescing, not a
- * loss, so the skipped ones are not reported as dropped. Bounded: the oldest entry is evicted.
+ * loss, so the skipped ones are not reported as dropped (no onSummary). Bounded: the oldest key is evicted.
  */
 export function emitLiveAudioUpload(
   req: HeaderSource,
   event: { actorUserId: string; entityId: string | undefined; outcome: 'success' | 'error'; bytes: number; durationMs: number; outcomeCode?: string },
-  now = Date.now(),
 ): void {
   const key = `${event.actorUserId}|${event.entityId ?? '-'}|${event.outcome}`;
-  const last = liveAudioLast.get(key);
-  if (last !== undefined && now - last < LIVE_AUDIO_WINDOW_MS) return;
-  liveAudioLast.delete(key); // re-insert so Map order stays oldest-first
-  liveAudioLast.set(key, now);
-  if (liveAudioLast.size > LIVE_AUDIO_MAX_ENTRIES) {
-    for (const [k, t] of liveAudioLast) if (now - t >= LIVE_AUDIO_WINDOW_MS) liveAudioLast.delete(k);
-    for (const k of liveAudioLast.keys()) {
-      if (liveAudioLast.size <= LIVE_AUDIO_MAX_ENTRIES) break;
-      liveAudioLast.delete(k);
-    }
-  }
+  if (!liveAudioThrottle.allow(key)) return;
   void emitAudit(req, {
     type: 'audio.upload',
     actorUserId: event.actorUserId,
@@ -101,10 +89,5 @@ export function emitLiveAudioUpload(
 
 /** Test only. */
 export function __resetLiveAudio(): void {
-  liveAudioLast.clear();
-}
-
-/** Test only. */
-export function __liveAudioSize(): number {
-  return liveAudioLast.size;
+  liveAudioThrottle.reset();
 }

@@ -22,7 +22,7 @@ vi.mock('@/lib/db/user-schema', () => q);
 const mockSafeLog = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/audit/safe-log', () => ({ safeLogError: mockSafeLog }));
 
-import { SKABELON_VERSION_CAP, createSkabelon, listSkabelonVersions, recordSkabelonVersion, updateSkabelonWithHistory } from './server';
+import { SKABELON_VERSION_CAP, createSkabelon, listSkabelonVersions, updateSkabelonWithHistory } from './server';
 
 const USER = 'user-1';
 const row = {
@@ -69,25 +69,21 @@ describe('personal template changelog (own schema)', () => {
     expect(sqls).not.toContain('RELEASE SAVEPOINT skabelon_version');
   });
 
-  it('retries a version number that collided with a concurrent writer (23505), but not forever', async () => {
-    const dup = Object.assign(new Error('dup'), { code: '23505' });
-    q.queryUserSchema.mockRejectedValueOnce(dup).mockResolvedValueOnce([]);
-    await recordSkabelonVersion(USER, { ...row, id: 'sk-1' } as never, ['prompt'], null);
-    expect(q.queryUserSchema).toHaveBeenCalledTimes(2);
-    q.queryUserSchema.mockReset().mockRejectedValue(dup);
-    await expect(recordSkabelonVersion(USER, { ...row, id: 'sk-1' } as never, ['prompt'], null)).rejects.toBe(dup);
-    expect(q.queryUserSchema).toHaveBeenCalledTimes(3);
-  });
-
-  it('records the next version number in ONE statement, with the optional note and a snapshot', async () => {
-    await recordSkabelonVersion(USER, { ...row, id: 'sk-1', isDefault: false, includeDeltagere: false, includeBeslutningspunkter: true, includeDagsorden: false, includeDato: false, createdAt: '', updatedAt: '' }, ['prompt'], 'Strammet op');
-    expect(q.queryUserSchema).toHaveBeenCalledTimes(1);
-    const [userId, sql, params] = q.queryUserSchema.mock.calls[0];
-    expect(userId).toBe(USER);
-    expect(sql).toMatch(/COALESCE\(MAX\(version\), 0\) \+ 1/);
-    expect(sql).toContain('FROM skabelon_versions WHERE skabelon_id = $1');
-    expect(params.slice(0, 3)).toEqual(['sk-1', 'Strammet op', ['prompt']]);
-    expect(JSON.parse(String(params[3]))).toMatchObject({ name: 'Mit navn', prompt: 'Min prompt' });
+  it('numbers a new version as MAX+1 in ONE statement, with the optional note and a snapshot of the tracked fields', async () => {
+    q.tx.script = (sql) => (sql.startsWith('INSERT INTO skabeloner') ? [row] : []);
+    await createSkabelon(USER, { name: 'Mit navn', prompt: 'Min prompt' });
+    const version = q.tx.log.find((l) => l.sql.startsWith('INSERT INTO skabelon_versions'))!;
+    expect(version.sql).toMatch(/COALESCE\(MAX\(version\), 0\) \+ 1/);
+    expect(version.sql).toContain('FROM skabelon_versions WHERE skabelon_id = $1');
+    expect(JSON.parse(String(version.params[3]))).toEqual({
+      name: 'Mit navn',
+      description: '',
+      prompt: 'Min prompt',
+      includeDeltagere: false,
+      includeBeslutningspunkter: true,
+      includeDagsorden: false,
+      includeDato: false,
+    });
   });
 
   it('lists newest first and maps rows; null for a template that is not in the schema', async () => {
@@ -112,12 +108,12 @@ describe('personal template changelog (own schema)', () => {
   describe('updateSkabelonWithHistory', () => {
     const before = { ...row, prompt: 'Gammel' };
     const after = { ...row, prompt: 'Ny' };
-    const script = (extra: (sql: string) => unknown[] | Error | undefined = () => undefined, seen = 1) => (sql: string): unknown[] | Error => {
+    const script = (extra: (sql: string) => unknown[] | Error | undefined = () => undefined, version = 2) => (sql: string): unknown[] | Error => {
       const o = extra(sql);
       if (o !== undefined) return o;
       if (sql.startsWith('SELECT * FROM skabeloner')) return [before];
       if (sql.startsWith('UPDATE skabeloner')) return [after];
-      if (sql.startsWith('SELECT count(*)')) return [{ n: seen }];
+      if (sql.includes('RETURNING version')) return [{ version }];
       return [];
     };
     const input = { name: 'Mit navn', prompt: 'Ny' };
@@ -130,7 +126,7 @@ describe('personal template changelog (own schema)', () => {
       const sqls = q.tx.log.map((l) => l.sql);
       expect(sqls[0]).toMatch(/^SELECT \* FROM skabeloner WHERE id = \$1 FOR UPDATE$/);
       expect(sqls.findIndex((s) => s.startsWith('UPDATE skabeloner'))).toBeLessThan(sqls.findIndex((s) => s.startsWith('INSERT INTO skabelon_versions')));
-      const ins = q.tx.log.filter((l) => l.sql.startsWith('INSERT INTO skabelon_versions'));
+      const ins = q.tx.log.filter((l) => l.sql.startsWith('INSERT INTO skabelon_versions') && !l.sql.includes('NOT EXISTS'));
       expect(ins).toHaveLength(1);
       expect(ins[0].params.slice(0, 3)).toEqual(['sk-1', 'Strammet op', ['prompt']]);
       expect(q.queryUserSchema).not.toHaveBeenCalled();
@@ -146,7 +142,7 @@ describe('personal template changelog (own schema)', () => {
       q.tx.script = script((s) => (s.startsWith('UPDATE skabeloner') ? [before] : undefined));
       const r = await updateSkabelonWithHistory(USER, 'sk-1', input, 'Bare en note til mig selv');
       expect(r?.changedFields).toEqual([]);
-      const ins = q.tx.log.filter((l) => l.sql.startsWith('INSERT INTO skabelon_versions'));
+      const ins = q.tx.log.filter((l) => l.sql.startsWith('INSERT INTO skabelon_versions') && !l.sql.includes('NOT EXISTS'));
       expect(ins).toHaveLength(1);
       expect(ins[0].params.slice(0, 3)).toEqual(['sk-1', 'Bare en note til mig selv', []]);
     });
@@ -157,22 +153,28 @@ describe('personal template changelog (own schema)', () => {
       expect(q.tx.log.some((l) => l.sql.startsWith('INSERT INTO skabelon_versions'))).toBe(false);
     });
 
-    it('creates version 1 (the state before the edit, no note) lazily for a template that predates the changelog', async () => {
-      q.tx.script = script(undefined, 0);
+    it('creates version 1 (the state before the edit, no note) lazily, in one INSERT guarded by NOT EXISTS, before the new entry', async () => {
+      q.tx.script = script();
       await updateSkabelonWithHistory(USER, 'sk-1', input, 'Første ændring');
       const ins = q.tx.log.filter((l) => l.sql.startsWith('INSERT INTO skabelon_versions'));
       expect(ins).toHaveLength(2);
-      expect(ins[0].params.slice(0, 3)).toEqual(['sk-1', null, []]);
-      expect(JSON.parse(String(ins[0].params[3])).prompt).toBe('Gammel');
+      expect(ins[0].sql).toContain('WHERE NOT EXISTS (SELECT 1 FROM skabelon_versions WHERE skabelon_id = $1)');
+      expect(ins[0].params[0]).toBe('sk-1');
+      expect(JSON.parse(String(ins[0].params[1])).prompt).toBe('Gammel');
       expect(ins[1].params.slice(0, 3)).toEqual(['sk-1', 'Første ændring', ['prompt']]);
+      expect(q.tx.log.some((l) => l.sql.startsWith('SELECT count(*)'))).toBe(false);
     });
 
-    it(`prunes everything older than the newest ${SKABELON_VERSION_CAP} versions`, async () => {
-      q.tx.script = script();
+    it(`prunes everything older than the newest ${SKABELON_VERSION_CAP} versions, only once the cap is exceeded`, async () => {
+      q.tx.script = script(undefined, SKABELON_VERSION_CAP);
+      await updateSkabelonWithHistory(USER, 'sk-1', input, null);
+      expect(q.tx.log.some((l) => l.sql.startsWith('DELETE FROM skabelon_versions'))).toBe(false);
+
+      q.tx.log.length = 0;
+      q.tx.script = script(undefined, SKABELON_VERSION_CAP + 3);
       await updateSkabelonWithHistory(USER, 'sk-1', input, null);
       const del = q.tx.log.find((l) => l.sql.startsWith('DELETE FROM skabelon_versions'))!;
-      expect(del.sql).toContain('MAX(version)');
-      expect(del.params).toEqual(['sk-1', SKABELON_VERSION_CAP]);
+      expect(del.params).toEqual(['sk-1', 3]);
       expect(SKABELON_VERSION_CAP).toBe(100);
     });
 

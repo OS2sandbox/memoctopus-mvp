@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { readPendingMeta, readPendingAudio, deletePendingAudio, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { readPendingMeta, readPendingAudio, deletePendingAudio } from '@/lib/bot-pending-audio';
+import { denyUnlessBotOwner } from '@/lib/bot-owner';
 import { withHandler } from '@/lib/api-handler';
 import { requireAppAccess } from '@/lib/authz/app-access';
-import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 
 // Client pulls down a finished Teams-bot recording so it can be saved into IndexedDB
 // and transcribed client-side. The bot stashes audio here via /api/bot/audio-upload.
@@ -30,16 +30,7 @@ export const GET = withHandler(
     // Only the user who started this meeting's bot session may pull its recording.
     // Respond exactly like "not ready yet" so a non-owner can't even detect that a
     // recording exists (and never reaches the destructive read/delete below).
-    if (!(await assertBotMeetingOwner(meetingId, session.user.id))) {
-      // Someone probing another user's recording: the denial is recorded, the answer stays the same.
-      await recordAuthzDenied({
-        req,
-        actorUserId: session.user.id,
-        required: 'bot.meeting_owner',
-        reason: 'not_owner',
-        entityType: 'meeting',
-        entityId: meetingId,
-      });
+    if (await denyUnlessBotOwner(req, meetingId, session.user.id)) {
       return NextResponse.json({ status: 'pending' }, { status: 404 });
     }
 

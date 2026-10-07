@@ -29,9 +29,11 @@ import {
   type CatalogueState,
   type ClaimListSpec,
   type ClaimMapping,
+  type IdpPrompt,
   type RolesConfig,
   type SamlFileProvider,
 } from './config-file';
+import type { EntraProviderConfig } from './oidc-config';
 import { authBaseUrl } from './saml';
 
 export type { CatalogueEntry, CatalogueState, ClaimListSpec, ClaimMapping, RolesConfig, SamlFileProvider };
@@ -57,7 +59,7 @@ export interface OidcProviderConfig {
   scopes: string[];
   pkce: boolean;
   /** `prompt` / `max_age` sent to the IdP (session hygiene on shared workstations). */
-  prompt?: 'login' | 'select_account' | 'consent';
+  prompt?: IdpPrompt;
   maxAge?: number;
   claims: ClaimMapping;
   rolesClaim?: ClaimListSpec;
@@ -161,13 +163,7 @@ export function emailPasswordSignUpDisabled(): boolean {
  * configures Microsoft for the first time after upgrading would silently get
  * nothing. warnDeprecatedAuthEnv() flags it instead.
  */
-export function microsoftConfig(): {
-  clientId: string;
-  clientSecret: string;
-  tenantId: string;
-  scopes?: string[];
-  prompt?: 'login' | 'select_account' | 'consent';
-} | null {
+export function microsoftConfig(): EntraProviderConfig | null {
   const file = loadAuthConfig();
   if (file.configured) {
     const entra = file.providers.find((p) => p.type === 'entra');

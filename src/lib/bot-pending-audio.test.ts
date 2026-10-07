@@ -23,6 +23,7 @@ import {
   setBotMeetingOwner,
   getBotMeetingOwner,
   assertBotMeetingOwner,
+  __resetSweepThrottle,
 } from './bot-pending-audio';
 
 // ─── readPendingMeta ──────────────────────────────────────────────────────────
@@ -261,6 +262,7 @@ describe('deletePendingAudio audit (bot.audio_delete)', () => {
   });
 
   it('the sweep (run when the next recording is stored) records one ttl deletion per expired recording, for its owner', async () => {
+    __resetSweepThrottle();
     const OLD = Date.now() - 2 * 60 * 60 * 1000;
     vi.mocked(fs.mkdir).mockResolvedValue(undefined as never);
     vi.mocked(fs.writeFile).mockResolvedValue(undefined as never);
@@ -273,6 +275,20 @@ describe('deletePendingAudio audit (bot.audio_delete)', () => {
     const ttl = recordEvent.mock.calls.filter((c) => (c[0] as { details: { trigger: string } }).details.trigger === 'ttl');
     expect(ttl).toHaveLength(1);
     expect(ttl[0][0]).toMatchObject({ type: 'bot.audio_delete', source: 'system', actorUserId: 'owner-1', entityId: ID });
+  });
+
+  it('the sweep that runs when a recording is stored goes at most once a minute per process', async () => {
+    __resetSweepThrottle();
+    vi.mocked(fs.mkdir).mockResolvedValue(undefined as never);
+    vi.mocked(fs.writeFile).mockResolvedValue(undefined as never);
+    vi.mocked(fs.readdir).mockReset().mockResolvedValue([] as never);
+    const meta = { mimeType: 'audio/webm', participants: [], durationSeconds: null, hasRecording: true };
+    await storePendingAudio('m-1', Buffer.from('x'), meta);
+    await storePendingAudio('m-2', Buffer.from('x'), meta);
+    expect(fs.readdir).toHaveBeenCalledTimes(1);
+    __resetSweepThrottle();
+    await storePendingAudio('m-3', Buffer.from('x'), meta);
+    expect(fs.readdir).toHaveBeenCalledTimes(2);
   });
 });
 

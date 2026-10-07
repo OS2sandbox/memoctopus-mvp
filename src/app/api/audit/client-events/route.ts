@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { withAuthz } from '@/lib/authz/guard';
-import { recordServerEvent, validateEvent } from '@/lib/audit/record';
+import { recordServerEvent, resolveActorSnapshot, validateEvent } from '@/lib/audit/record';
 import { noteDroppedEvents } from '@/lib/audit/dropped';
 import type { AuditEventInput } from '@/lib/audit/events';
 import {
@@ -129,6 +129,9 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
     }
   }
 
+  // The same person for every event of the request: look the actor up once, not per event.
+  const lost = parsed.data.droppedLocally;
+  const actor = candidates.length > 0 || lost ? await resolveActorSnapshot(userId) : undefined;
   let accepted = 0;
   let capped = 0;
   for (const input of candidates) {
@@ -140,7 +143,7 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
       noteDroppedEvents(userId, 'daily_cap', capped, req);
       break;
     }
-    const result = await recordServerEvent(req, input);
+    const result = await recordServerEvent(req, input, { actor });
     // Only a storage failure can drop a pre-validated event. Answer 503 so the
     // client keeps the batch; redelivery is idempotent on (actor, clientEventId).
     if (result.status === 'dropped') return NextResponse.json({ error: 'Audit unavailable' }, { status: 503 });
@@ -150,7 +153,6 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
 
   // What the browser lost before it could deliver (self-reported). Exempt from the caps above: it
   // says that events are missing. Idempotent on (actor, clientEventId), so a retry does not double it.
-  const lost = parsed.data.droppedLocally;
   if (lost) {
     const result = await recordServerEvent(req, {
       type: 'audit.events_dropped',
@@ -159,7 +161,7 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
       clientEventId: lost.clientEventId,
       clientOccurredAt: now,
       details: { reason: 'client_outbox', count: lost.count },
-    });
+    }, { actor });
     if (result.status === 'dropped') return NextResponse.json({ error: 'Audit unavailable' }, { status: 503 });
   }
   // `throttled`: repeats of a view within a minute of event time (by design); `capped`: refused by the daily cap.

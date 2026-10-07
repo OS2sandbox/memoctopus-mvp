@@ -71,6 +71,16 @@ export function roleClaimsMaxSeconds(): number {
 }
 
 /**
+ * How fresh (seconds) a user's role/group claim row must be to count, or null when claim-based
+ * roles are off. `override` is a test seam (null switches them off); otherwise
+ * ROLE_CLAIMS_MAX_SECONDS in claims mode, else null. `source` defaults to ACCESS_SOURCE.
+ */
+export function claimsFreshnessSeconds(override?: number | null, source: AccessSource = accessSource()): number | null {
+  if (override !== undefined) return override;
+  return source === 'claims' ? roleClaimsMaxSeconds() : null;
+}
+
+/**
  * "No role, no access". Default off, except in claims mode: there the roles come from the IdP, so a
  * person the IdP maps to no role (a stranger from another tenant, a password account, somebody whose
  * group was not mapped) must be refused rather than get the baseline. Explicit REQUIRE_ROLE_TO_LOGIN=false

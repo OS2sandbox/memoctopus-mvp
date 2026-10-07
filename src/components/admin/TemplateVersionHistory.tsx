@@ -4,13 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { diffLines, hasChanges } from '@/lib/skabeloner/diff';
-import type { CentralTemplateVersion } from '@/lib/skabeloner/central-types';
+import { diffPrincipals, type CentralTemplateVersion } from '@/lib/skabeloner/central-types';
 import { apiRequest } from './api';
 import {
   changeTypeLabels,
   changedContentFields,
   contentFieldLabels,
-  diffPrincipals,
   diffTargets,
   formatTime,
   principalKindLabels,

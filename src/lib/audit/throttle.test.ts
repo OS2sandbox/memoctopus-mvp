@@ -4,7 +4,7 @@ import { createThrottle } from './throttle';
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
-describe('createThrottle (audit copy)', () => {
+describe('createThrottle', () => {
   it('lets `limit` events through per window, counts the rest and reports them once when the window ends', async () => {
     const onSummary = vi.fn();
     const t = createThrottle({ limit: 2, windowMs: 60_000, maxKeys: 10, onSummary });

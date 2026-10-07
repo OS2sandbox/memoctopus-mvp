@@ -46,6 +46,32 @@ export interface CentralPrincipalTarget {
   identifier: string;
 }
 
+/** `kind:identifier`; the kind never contains a colon, so the key is unambiguous. */
+export const principalKey = (t: { kind: string; identifier: string }): string => `${t.kind}:${t.identifier}`;
+
+/** A copy ordered by kind, then identifier (code-unit order, locale-independent). */
+export const sortPrincipal = <T extends CentralPrincipalTarget>(targets: readonly T[]): T[] =>
+  [...targets].sort((a, b) =>
+    a.kind !== b.kind ? (a.kind < b.kind ? -1 : 1) : a.identifier < b.identifier ? -1 : a.identifier > b.identifier ? 1 : 0,
+  );
+
+export function diffPrincipals<T extends CentralPrincipalTarget>(
+  before: readonly T[],
+  after: readonly T[],
+): { added: T[]; removed: T[] } {
+  const prev = new Set(before.map(principalKey));
+  const next = new Set(after.map(principalKey));
+  return {
+    added: after.filter((t) => !prev.has(principalKey(t))),
+    removed: before.filter((t) => !next.has(principalKey(t))),
+  };
+}
+
+export function principalsEqual(a: readonly CentralPrincipalTarget[], b: readonly CentralPrincipalTarget[]): boolean {
+  const d = diffPrincipals(a, b);
+  return d.added.length === 0 && d.removed.length === 0;
+}
+
 /**
  * A role/group target as the manager sees it: with the catalogue's current name. `inactive` = the
  * catalogue entry was withdrawn (nobody matches it any more); `unknown` = not in the catalogue

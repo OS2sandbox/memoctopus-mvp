@@ -49,9 +49,9 @@ export type GuardResult = { ok: true } | { ok: false; code: 'unparsable' | 'audi
 // for a provider that opted in (allowDeprecatedAlgorithms).
 const NS_MORE = 'http://www.w3.org/2001/04/xmldsig-more#';
 const NS_ENC = 'http://www.w3.org/2001/04/xmlenc#';
-const SECURE_SIGNATURE_ALGORITHMS = new Set([
-  ...['rsa-sha256', 'rsa-sha384', 'rsa-sha512', 'ecdsa-sha256', 'ecdsa-sha384', 'ecdsa-sha512'].map((a) => NS_MORE + a),
-]);
+const SECURE_SIGNATURE_ALGORITHMS = new Set(
+  ['rsa-sha256', 'rsa-sha384', 'rsa-sha512', 'ecdsa-sha256', 'ecdsa-sha384', 'ecdsa-sha512'].map((a) => NS_MORE + a),
+);
 const SECURE_DIGEST_ALGORITHMS = new Set([`${NS_ENC}sha256`, `${NS_MORE}sha384`, `${NS_ENC}sha512`]);
 const DEPRECATED_ALGORITHMS = new Set([
   'http://www.w3.org/2000/09/xmldsig#rsa-sha1',
@@ -103,15 +103,15 @@ export async function checkSamlResponseBinding(opts: {
   provider: SamlFileProvider;
   /** base64 SAMLResponse from the POST body */
   samlResponse: string;
-  /** This app's ACS URL for the provider, as the IdP was told. */
-  acsUrl: string;
-  /** `<BETTER_AUTH_URL>/api/auth`, the base the plugin builds its URLs from. */
+  /** `<BETTER_AUTH_URL>/api/auth`, the base the plugin builds its URLs from (and the ACS URL is derived from; never from the request). */
   base: string;
   /** Accept a response that answers no request of ours (IdP-initiated login). Default false. */
   allowIdpInitiated?: boolean;
   store: VerificationStore;
 }): Promise<GuardResult> {
-  const { provider, acsUrl, store } = opts;
+  const { provider, store } = opts;
+  // This app's ACS URL for the provider, as the IdP was told: derived from the configured base, never from the request.
+  const acsUrl = `${opts.base}/sso/saml2/sp/acs/${provider.id}`;
   const spEntityId = spEntityIdFor(provider, opts.base);
   if (!spEntityId || opts.samlResponse.length > MAX_RESPONSE_LENGTH) return { ok: false, code: 'unparsable' };
   try {
@@ -249,8 +249,6 @@ export async function guardAcsRequest(
   return checkSamlResponseBinding({
     provider,
     samlResponse,
-    // The plugin tells the IdP its own ACS route; both routes accept the same POST.
-    acsUrl: `${base}/sso/saml2/sp/acs/${provider.id}`,
     base,
     allowIdpInitiated: provider.allowIdpInitiated === true,
     store: {

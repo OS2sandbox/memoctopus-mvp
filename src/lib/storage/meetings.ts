@@ -1,6 +1,7 @@
 import { getDB, StoredMeeting } from './db';
 import { MeetingStatus } from '@/types';
 import { reportAuditEvent } from '@/lib/audit/client';
+import { withRetractableReport } from '@/lib/audit/retractable-report';
 import type { DeleteTrigger } from '@/lib/audit/events/meeting';
 
 export type MeetingOrigin = 'live' | 'upload' | 'bot';
@@ -111,27 +112,20 @@ export async function deleteMeeting(
 ): Promise<void> {
   const trigger = opts.trigger ?? 'user';
   // An automatic delete is reported before anything is awaited: it can run from the tab-close
-  // purge (pagehide), where a frozen page never gets to a later step. It is retracted below when
-  // the meeting did not exist or the delete failed (a retract only undoes an event that has not
-  // been delivered yet, about a second; after that the event stays, which is accepted).
-  let retract: (() => void) | undefined;
-  try {
-    if (trigger !== 'user') retract = reportAuditEvent('meeting.delete', id, { trigger });
-  } catch {
-    // Reporting never fails a delete.
-  }
-  try {
-    await deleteMeetingRows(id, trigger, retract);
-  } catch (err) {
-    retract?.();
-    throw err;
-  }
+  // purge (pagehide), where a frozen page never gets to a later step. It is retracted when the
+  // meeting did not exist or the delete failed (see withRetractableReport).
+  await withRetractableReport(
+    trigger !== 'user',
+    () => reportAuditEvent('meeting.delete', id, { trigger }),
+    (retractIfMissing) => deleteMeetingRows(id, retractIfMissing),
+  );
 }
 
-async function deleteMeetingRows(id: string, trigger: DeleteTrigger, retract: (() => void) | undefined): Promise<void> {
+/** Deletes the meeting and everything that belongs to it; resolves to whether the meeting existed. */
+async function deleteMeetingRows(id: string, retractIfMissing: () => void): Promise<boolean> {
   const db = await getDB();
   const existed = (await db.get('meetings', id)) !== undefined;
-  if (!existed) retract?.();
+  if (!existed) retractIfMissing();
   const tx = db.transaction(['meetings', 'transcripts', 'minutes', 'audio'], 'readwrite');
 
   // Find and delete transcript
@@ -149,5 +143,5 @@ async function deleteMeetingRows(id: string, trigger: DeleteTrigger, retract: ((
   await tx.objectStore('meetings').delete(id);
   await tx.done;
   // Only a meeting that existed was deleted; a repeated call reports nothing.
-  if (existed && trigger === 'user') reportAuditEvent('meeting.delete', id, { trigger });
+  return existed;
 }

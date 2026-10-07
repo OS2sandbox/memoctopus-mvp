@@ -1,8 +1,7 @@
 'use client';
 
 import { Button } from '@/components/ui/button';
-import { flushAuditNow } from '@/lib/audit/client';
-import { signOut } from '@/lib/auth-client';
+import { signOutAfterFlush } from '@/lib/sign-out';
 
 type NoAccessReason = 'disabled' | 'no_role';
 
@@ -14,11 +13,7 @@ const TEXT: Record<NoAccessReason, string> = {
 // Shown instead of the app shell, so there is no TopBar or nav to click into.
 export function NoAccess({ reason }: { reason: NoAccessReason }) {
   const leave = () => {
-    // Deliver queued audit events first (at most 2 s): after sign-out they wait for the next login.
-    flushAuditNow()
-      .then(() => signOut())
-      .catch((err) => console.error('signOut failed', err))
-      .finally(() => window.location.assign('/'));
+    void signOutAfterFlush().finally(() => window.location.assign('/'));
   };
   return (
     <main className="mx-auto max-w-md px-4 py-24 text-center">

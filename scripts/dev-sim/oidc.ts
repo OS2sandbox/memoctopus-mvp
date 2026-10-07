@@ -4,7 +4,7 @@
 // needs. TEST ONLY: anyone who can reach this port can log in as anyone.
 import { createHash, createSign, generateKeyPairSync, randomBytes } from 'node:crypto';
 import http from 'node:http';
-import { idpUrl, SIM } from './config';
+import { escHtml, idpUrl, SIM } from './config';
 
 export interface Persona {
   /** Value of the preferred_username claim, the key the app matches on. */
@@ -78,7 +78,6 @@ export async function startMockIdp(getPersonas: () => Persona[]): Promise<MockId
       req.on('data', (c) => (s += c));
       req.on('end', () => resolve(s));
     });
-  const esc = (v: string) => v.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', idpUrl);
@@ -125,9 +124,9 @@ export async function startMockIdp(getPersonas: () => Persona[]): Promise<MockId
       const rows = personas
         .map(
           (p) => `<li><form method="post" action="/authorize">
-            ${Object.entries(params).map(([k, v]) => `<input type="hidden" name="${esc(k)}" value="${esc(v)}">`).join('')}
-            <button name="persona" value="${esc(p.username)}"><b>${esc(p.name)}</b> <code>${esc(p.username)}</code></button>
-            <small>${esc(p.email)}${p.emailVerified ? '' : ' (e-mail ikke verificeret)'}${p.note ? ' · ' + esc(p.note) : ''}</small>
+            ${Object.entries(params).map(([k, v]) => `<input type="hidden" name="${escHtml(k)}" value="${escHtml(v)}">`).join('')}
+            <button name="persona" value="${escHtml(p.username)}"><b>${escHtml(p.name)}</b> <code>${escHtml(p.username)}</code></button>
+            <small>${escHtml(p.email)}${p.emailVerified ? '' : ' (e-mail ikke verificeret)'}${p.note ? ' · ' + escHtml(p.note) : ''}</small>
           </form></li>`,
         )
         .join('');

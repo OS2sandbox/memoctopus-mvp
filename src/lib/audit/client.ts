@@ -29,6 +29,7 @@ import {
   type OutboxEvent,
 } from './outbox';
 import { getStorageUserId } from '@/lib/storage/scope';
+import { withTimeout } from './with-timeout';
 
 type ClientEventType = Extract<EventType, `meeting.${string}`>;
 
@@ -83,7 +84,10 @@ interface Pending {
 }
 
 const pending = new Map<string, Pending>();
+/** Key -> time of the last queued event, in insertion (= time) order, pruned by rememberSent. */
 const recentlySent = new Map<string, number>();
+const RECENTLY_SENT_MAX = 500;
+const MAX_DEDUPE_MS = Math.max(...Object.values(DEDUPE_WINDOW_MS));
 const flushing = new Set<string>();
 const rerun = new Set<string>();
 // One debounce timer per user: a single shared one would swallow the schedule of a second user.
@@ -92,6 +96,16 @@ let installed = false;
 let uninstall: (() => void) | null = null;
 
 const hasWindow = () => typeof window !== 'undefined' && typeof document !== 'undefined';
+
+/** Records a queued event for the repeat check and drops entries past their window, then the oldest beyond the cap. */
+function rememberSent(key: string, at: number): void {
+  recentlySent.delete(key); // re-insert so the map stays oldest-first
+  recentlySent.set(key, at);
+  for (const [k, t] of recentlySent) {
+    if (at - t < MAX_DEDUPE_MS && recentlySent.size <= RECENTLY_SENT_MAX) break;
+    recentlySent.delete(k);
+  }
+}
 
 function newEventId(): string {
   return crypto.randomUUID();
@@ -299,14 +313,17 @@ export async function flush(userId: string): Promise<void> {
   }
 }
 
+/** The longest a sign-out waits for the queue to be delivered. */
+const FLUSH_NOW_TIMEOUT_MS = 2_000;
+
 /**
  * Writes everything still held in memory to the outbox and delivers what is due, now. Await it
- * (with a short timeout, see below) before the session ends: after a sign-out the queue can only
- * be delivered at that person's next login, so events still queued would be late by days.
- * Never throws and never waits longer than `timeoutMs` (default 2 s): signing out must not hang
- * on a slow server.
+ * before the session ends: after a sign-out the queue can only be delivered at that person's next
+ * login, so events still queued would be late by days. Never throws and never waits longer than
+ * FLUSH_NOW_TIMEOUT_MS: signing out must not hang on a slow server.
  */
-export async function flushAuditNow(userId: string | null | undefined = getStorageUserId(), timeoutMs = 2_000): Promise<void> {
+export async function flushAuditNow(): Promise<void> {
+  const userId = getStorageUserId();
   if (!userId) return;
   const work = (async () => {
     try {
@@ -316,15 +333,7 @@ export async function flushAuditNow(userId: string | null | undefined = getStora
       // Reporting never throws.
     }
   })();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<void>((resolve) => {
-    timer = setTimeout(resolve, timeoutMs);
-  });
-  try {
-    await Promise.race([work, timeout]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+  await withTimeout(work, FLUSH_NOW_TIMEOUT_MS);
 }
 
 /**
@@ -374,7 +383,7 @@ export function reportAuditEvent<T extends ClientEventType>(
       const last = recentlySent.get(key);
       if (last !== undefined && Date.now() - last < dedupeMs) return undefined;
       stamp = Date.now();
-      recentlySent.set(key, stamp);
+      rememberSent(key, stamp);
     }
 
     const event = {

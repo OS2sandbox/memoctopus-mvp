@@ -12,7 +12,7 @@
 // Events carry ids and short codes ONLY (see ./events and ./record).
 import { recordEvent, UUID_RE } from './record';
 import { CODE_RE } from './events/types';
-import { requestContext, type HeaderSource, type RequestContext } from './request-context';
+import { safeRequestContext, type HeaderSource } from './request-context';
 import { createThrottle } from './throttle';
 
 export interface AuthzDeniedEvent {
@@ -55,15 +55,6 @@ export function __resetAuthzDeniedThrottle(): void {
   throttle.reset();
 }
 
-function contextOf(req: HeaderSource | null | undefined): Partial<RequestContext> | undefined {
-  if (!req) return undefined;
-  try {
-    return requestContext(req);
-  } catch {
-    return undefined;
-  }
-}
-
 export function recordAuthzDenied(event: AuthzDeniedEvent): Promise<void> {
   // A denial must be recorded even when the resource reference is unusable: drop the entity, keep the denial.
   const hasEntity = !!event.entityType && !!event.entityId && ENTITY_TYPE_RE.test(event.entityType) && UUID_RE.test(event.entityId);
@@ -72,7 +63,7 @@ export function recordAuthzDenied(event: AuthzDeniedEvent): Promise<void> {
   const key = [event.actorUserId ?? NO_ACTOR, required, hasEntity ? event.entityType : ''].join(SEP);
   // Over the limit: counted, and reported once when the minute ends.
   if (!throttle.allow(key)) return Promise.resolve();
-  const context = contextOf(event.req);
+  const context = safeRequestContext(event.req);
   const input = {
     type: 'authz.denied' as const,
     actorUserId: event.actorUserId,

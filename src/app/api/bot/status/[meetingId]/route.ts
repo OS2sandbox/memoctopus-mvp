@@ -4,8 +4,7 @@ import { withHandler } from '@/lib/api-handler';
 import { safeLogError } from '@/lib/audit/safe-log';
 import { z } from 'zod';
 import { requireAppAccess } from '@/lib/authz/app-access';
-import { recordAuthzDenied } from '@/lib/audit/authz-denied';
-import { assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { denyUnlessBotOwner } from '@/lib/bot-owner';
 
 // Polls the live bot-service session status. Stateless: the client supplies the
 // sessionId (stored in its IndexedDB meeting record) as a query param. No DB.
@@ -35,15 +34,7 @@ export const GET = withHandler('bot/status', async (
 
   // Only the person who started this meeting's bot may poll it. A stranger gets the same neutral
   // answer a not-yet-started session gives (so nothing is revealed), and the probe is recorded.
-  if (!(await assertBotMeetingOwner(meetingId, session.user.id))) {
-    await recordAuthzDenied({
-      req,
-      actorUserId: session.user.id,
-      required: 'bot.meeting_owner',
-      reason: 'not_owner',
-      entityType: 'meeting',
-      entityId: meetingId,
-    });
+  if (await denyUnlessBotOwner(req, meetingId, session.user.id)) {
     return connecting();
   }
 

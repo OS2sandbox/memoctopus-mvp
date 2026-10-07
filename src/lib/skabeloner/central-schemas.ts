@@ -1,6 +1,7 @@
 import { z } from 'zod';
-import { CENTRAL_LIMITS, PRINCIPAL_KINDS } from './central-types';
+import { CENTRAL_LIMITS, PRINCIPAL_KINDS, principalKey } from './central-types';
 import { CHANGE_NOTE_MESSAGE, meaningfulLength, stripInvisible } from './change-note';
+import { noNul, wellFormed } from './text-guards';
 
 // Request bodies for the manager-side central template routes. Every object is
 // strict: unknown keys are rejected, never silently ignored. Messages are
@@ -9,14 +10,7 @@ import { CHANGE_NOTE_MESSAGE, meaningfulLength, stripInvisible } from './change-
 
 export { CHANGE_NOTE_MESSAGE };
 export const NUL_MESSAGE = 'Teksten må ikke indeholde nul-tegn';
-// Postgres text and jsonb cannot hold U+0000; left to the database it surfaces as a 500.
-const noNul = (v: string) => !v.includes('\u0000');
-
-// A lone surrogate (an unpaired half of a UTF-16 pair) cannot be encoded as UTF-8 JSON and
-// Postgres jsonb rejects it (SQLSTATE 22P02). In u-mode a valid pair is one astral code point,
-// so \p{Cs} only matches a lone half.
 export const MALFORMED_MESSAGE = 'Teksten indeholder ugyldige tegn (ufuldstændigt Unicode-tegn)';
-const wellFormed = (v: string) => !/\p{Cs}/u.test(v);
 
 // Everything stored is NFC, so the same visible text always compares and counts the same.
 const nfc = (v: string) => v.normalize('NFC');
@@ -89,7 +83,7 @@ export function dedupePrincipalTargets<T extends { kind: string; identifier: str
   const seen = new Set<string>();
   const out: T[] = [];
   for (const t of targets) {
-    const key = `${t.kind}\u0000${t.identifier}`;
+    const key = principalKey(t);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(t);

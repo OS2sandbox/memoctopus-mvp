@@ -17,7 +17,7 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
-import { CENTRAL_LIMITS } from '@/lib/skabeloner/central-types';
+import { CENTRAL_LIMITS, diffPrincipals, principalKey, principalsEqual } from '@/lib/skabeloner/central-types';
 import type {
   CentralCatalogueEntry,
   CentralPrincipalTargetView,
@@ -32,13 +32,10 @@ import {
   changedContentFields,
   conflictMessage,
   contentFieldLabels,
-  diffPrincipals,
   diffTargets,
   formatTime,
   noteProblem,
-  principalKey,
   principalKindLabels,
-  principalsEqual,
   targetsEqual,
   targetsWithinOwner,
   unitNameLookup,

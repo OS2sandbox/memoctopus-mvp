@@ -76,6 +76,19 @@ export function requestContext(req: HeaderSource): RequestContext {
   return { ip: clientIp(req), userAgent: userAgentOf(req), requestId: requestIdOf(req) };
 }
 
+/**
+ * requestContext for the writers that must never fail over request metadata: undefined when there is
+ * no request or its headers are unusable (no metadata is better than no event).
+ */
+export function safeRequestContext(req: HeaderSource | null | undefined): RequestContext | undefined {
+  if (!req) return undefined;
+  try {
+    return requestContext(req);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Narrow an unknown handler argument to something with headers. */
 export function asHeaderSource(value: unknown): HeaderSource | null {
   const headers = (value as { headers?: { get?: unknown } } | null)?.headers;

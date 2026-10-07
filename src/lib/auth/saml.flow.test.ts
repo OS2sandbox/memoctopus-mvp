@@ -56,7 +56,7 @@ describe.skipIf(!run)('SAML login through the sso plugin', () => {
   }
 
   function makeAuth(p: SamlFileProvider = provider()) {
-    const options = ssoPluginOptions([p], { onLogin }, AUTH)!;
+    const options = ssoPluginOptions([p], onLogin, AUTH)!;
     return betterAuth({
       baseURL: BASE,
       secret: 'x'.repeat(40),

@@ -34,9 +34,7 @@ import { samlBeforeHook } from './saml-guard';
 const microsoft = microsoftConfig();
 const oidc = oidcProviders();
 const samlConfigured = samlProviders();
-const ssoOptions = ssoPluginOptions(samlConfigured, {
-  onLogin: runSamlLoginHooks,
-});
+const ssoOptions = ssoPluginOptions(samlConfigured, runSamlLoginHooks);
 // Only the providers the plugin actually got (one without a usable SP entity id is skipped there).
 const samlList = samlConfigured.filter((p) => ssoOptions?.defaultSSO?.some((d) => d.providerId === p.id));
 const ipAddressHeaders = authIpHeaders();
@@ -161,10 +159,9 @@ export const auth = betterAuth({
   // Failed sign-ins have no session, so they cannot come from databaseHooks.
   // Returns nothing: it must never change the response.
   hooks: {
-    // An sso request for a provider that is not configured is a plain 404 (the plugin would
-    // otherwise query a provider table that does not exist here).
-    // Unknown sso provider ids are a plain 404, and a SAML response must pass the audience /
-    // recipient / request checks of saml-guard.ts before the plugin sees it.
+    // Unknown sso provider ids are a plain 404 (the plugin would otherwise query a provider table
+    // that does not exist here), and a SAML response must pass the audience / recipient / request
+    // checks of saml-guard.ts before the plugin sees it.
     ...(ssoOptions
       ? {
           before: samlBeforeHook(samlList, {

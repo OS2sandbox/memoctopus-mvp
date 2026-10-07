@@ -62,7 +62,7 @@ The symmetry is enforced in one pure function (`dropStaleAssignments`): rows of 
 
 ## Enforcement points
 
-- `withAuthz(label, capability, handler)` in `src/lib/authz/guard.ts`: 401 no session, 403 disabled or missing capability (+ `authz.denied`). `requireLocalSource` is an option of the wrapper (409 when `localAdminEnabled()` is false); no route uses it, the service layer enforces read-only mode itself.
+- `withAuthz(label, capability, handler)` in `src/lib/authz/guard.ts`: 401 no session, 403 disabled or missing capability (+ `authz.denied`). The service layer enforces read-only mode itself.
 - `requireAppAccess()` in `src/lib/authz/app-access.ts` for the older `/api` routes (minutes, transcribe, export, meetings, bot, skabeloner): 401, 503 when the principal cannot be resolved (or `ConfigError`), 403 for a disabled user or, with `REQUIRE_ROLE_TO_LOGIN=true`, a user without a role (+ `authz.denied`). Routes that authenticate by shared secret (bot callbacks, cron, feed) are separate.
 - `(app)/layout.tsx`: same refusal for pages (`NoAccess`), and `AccessUnavailable` when the lookup fails (fail closed). `/admin` pages are gated per section (`admin-sections.ts`, `page-gate.ts`; 404 without capability). `/admin` itself has no page: it redirects to the first section the user may open (the same order as the tab bar), so every role combination lands on a page it can use.
 - Denials are recorded with `recordAuthzDenied` (`src/lib/audit/authz-denied.ts`). Central template writes call `recordEvent(event, { tx })` on the same transaction as the change; role, org-unit, member and user-link changes are **not audited** (out of the log's scope).

@@ -142,56 +142,6 @@ describe('withAuthz', () => {
     expect(res.status).toBe(500);
     expect(handler).not.toHaveBeenCalled();
   });
-
-  describe('requireLocalSource', () => {
-    it('409 in rollekatalog mode, after the capability check', async () => {
-      vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
-      const handler = vi.fn(ok);
-      const res = await withAuthz('t', 'access.manage', handler, { requireLocalSource: true })(req(), NO_PARAMS);
-      expect(res.status).toBe(409);
-      expect(handler).not.toHaveBeenCalled();
-      expect(mockDenied).toHaveBeenCalledWith(expect.objectContaining({ reason: 'wrong_source' }));
-    });
-
-    it('a caller without the capability still gets 403, not 409', async () => {
-      vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
-      mockResolve.mockResolvedValue(makePrincipal());
-      const res = await withAuthz('t', 'access.manage', ok, { requireLocalSource: true })(req(), NO_PARAMS);
-      expect(res.status).toBe(403);
-    });
-
-    it('passes in local mode', async () => {
-      vi.stubEnv('ACCESS_SOURCE', 'local');
-      const res = await withAuthz('t', 'access.manage', ok, { requireLocalSource: true })(req(), NO_PARAMS);
-      expect(res.status).toBe(200);
-    });
-
-    it('409 in claims mode, naming the identity provider as the owner of the roles', async () => {
-      vi.stubEnv('ACCESS_SOURCE', 'claims');
-      const handler = vi.fn(ok);
-      const res = await withAuthz('t', 'access.manage', handler, { requireLocalSource: true })(req(), NO_PARAMS);
-      expect(res.status).toBe(409);
-      expect((await res.json()).error).toMatch(/identitetsudbyderen/);
-      expect(handler).not.toHaveBeenCalled();
-    });
-
-    it('409 in local mode once the kill switch ACCESS_LOCAL_ADMIN is off', async () => {
-      vi.stubEnv('ACCESS_SOURCE', 'local');
-      vi.stubEnv('ACCESS_LOCAL_ADMIN', 'false');
-      const handler = vi.fn(ok);
-      const res = await withAuthz('t', 'access.manage', handler, { requireLocalSource: true })(req(), NO_PARAMS);
-      expect(res.status).toBe(409);
-      expect((await res.json()).error).toMatch(/slået fra/);
-      expect(handler).not.toHaveBeenCalled();
-      expect(mockDenied).toHaveBeenCalledWith(expect.objectContaining({ reason: 'wrong_source' }));
-    });
-
-    it('is not enforced unless asked for', async () => {
-      vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
-      const res = await withAuthz('t', 'access.manage', ok)(req(), NO_PARAMS);
-      expect(res.status).toBe(200);
-    });
-  });
 });
 
 describe('requireCapability / hasCapability', () => {
@@ -281,15 +231,6 @@ describe('invalid ACCESS_SOURCE (ConfigError) never falls open', () => {
     const res = await withAuthz('t', 'access.manage', handler)(req(), NO_PARAMS);
     expect(res.status).toBe(503);
     expect(await res.json()).toMatchObject({ error: 'Adgangskontrol er midlertidigt utilgængelig' });
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it('requireLocalSource with a mistyped ACCESS_SOURCE answers 503, never the local-mode handler', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.stubEnv('ACCESS_SOURCE', 'rolekatalog');
-    const handler = vi.fn(ok);
-    const res = await withAuthz('t', 'access.manage', handler, { requireLocalSource: true })(req(), NO_PARAMS);
-    expect(res.status).toBe(503);
     expect(handler).not.toHaveBeenCalled();
   });
 });

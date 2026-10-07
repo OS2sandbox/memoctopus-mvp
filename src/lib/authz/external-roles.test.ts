@@ -41,7 +41,8 @@ describe('syncConfigCatalogue', () => {
     expect(sqls[3]).toMatch(/^UPDATE public\.external_roles/);
     expect(sqls[4]).toBe('COMMIT');
     const upsert = calls[2];
-    expect(upsert.sql).toContain("e.source = 'config'"); // never overwrites a Rollekatalog row
+    expect(upsert.sql).toContain("source = 'config'"); // config wins: it takes over a Rollekatalog row with the same key
+    expect(upsert.sql).not.toContain('WHERE e.source');
     expect(upsert.sql).toContain('active = true');
     expect(upsert.params).toEqual([['role', 'group'], ['r1', 'g1'], ['Rolle 1', 'Gruppe 1']]);
     const deactivate = calls[3];

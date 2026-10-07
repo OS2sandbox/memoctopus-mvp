@@ -6,6 +6,7 @@
 // is the mode switch itself and throws ConfigError when invalid; every Rollekatalog
 // entry point (sync routes, directory match, principal) checks it first.
 import { ROLE_KEYS, type RoleKey } from '@/lib/authz/types';
+import { isLoopbackHost } from '@/lib/net/url-policy';
 
 export type UserIdTransform = 'none' | 'strip-upn-domain';
 
@@ -49,8 +50,6 @@ function intInRange(name: string, fallback: number, min: number, max: number): n
   return Number.isSafeInteger(n) && n >= min && n <= max ? n : fallback;
 }
 
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
-
 export type RollekatalogUrl = { url: string; issue: null } | { url: null; issue: RollekatalogConfigIssue };
 
 /**
@@ -70,7 +69,7 @@ export function validateRollekatalogUrl(raw: string): RollekatalogUrl {
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return { url: null, issue: 'not_configured' };
   // Credentials in the URL would end up in logs and error text.
   if (parsed.username || parsed.password) return { url: null, issue: 'not_configured' };
-  if (parsed.protocol === 'http:' && !LOOPBACK_HOSTS.has(parsed.hostname) && !boolFlag('ROLLEKATALOG_ALLOW_HTTP', false)) {
+  if (parsed.protocol === 'http:' && !isLoopbackHost(parsed.hostname) && !boolFlag('ROLLEKATALOG_ALLOW_HTTP', false)) {
     return { url: null, issue: 'insecure_url' };
   }
   return { url: `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, ''), issue: null };

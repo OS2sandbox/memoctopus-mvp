@@ -11,7 +11,7 @@
 // reported and evicted. A crash inside a window loses that window's pending count.
 import type { DropReason } from './events/audit';
 import { recordEvent } from './record';
-import { requestContext, type HeaderSource, type RequestContext } from './request-context';
+import { safeRequestContext, type HeaderSource, type RequestContext } from './request-context';
 
 /** The reasons the server itself reports; `client_outbox` is self-reported by the browser. */
 export type ServerDropReason = Exclude<DropReason, 'client_outbox'>;
@@ -71,13 +71,8 @@ export function noteDroppedEvents(
       entries.set(key, e);
     }
     e.pending += count;
-    if (req) {
-      try {
-        e.context = requestContext(req);
-      } catch {
-        // No request metadata is better than no report.
-      }
-    }
+    // No request metadata is better than no report.
+    if (req) e.context = safeRequestContext(req) ?? e.context;
     if (now - e.lastEmit >= DROPPED_WINDOW_MS) {
       emit(e, now);
       // Keep Map order oldest-first for eviction.

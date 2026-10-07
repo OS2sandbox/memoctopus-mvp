@@ -21,13 +21,20 @@ vi.mock('idb', () => ({
     const byQueued = () => [...rows.values()].sort((a, b) => (a.queuedAt as number) - (b.queuedAt as number));
     return {
       close: () => void h.closed.push(name),
-      put: async (_s: string, v: Record<string, unknown>) => void rows.set(v.clientEventId as string, { ...v }),
-      get: async (_s: string, k: string) => rows.get(k),
-      delete: async (_s: string, k: string) => void rows.delete(k),
       count: async () => rows.size,
-      getAllFromIndex: async () => byQueued().map((r) => ({ ...r })),
-      getAllKeysFromIndex: async (_s: string, _i: string, _q: unknown, n: number) =>
-        byQueued().slice(0, n).map((r) => r.clientEventId),
+      transaction: () => ({
+        store: {
+          put: async (v: Record<string, unknown>) => void rows.set(v.clientEventId as string, { ...v }),
+          get: async (k: string) => rows.get(k),
+          delete: async (k: string) => void rows.delete(k),
+          count: async () => rows.size,
+          index: () => ({
+            getAll: async () => byQueued().map((r) => ({ ...r })),
+            getAllKeys: async (_q: unknown, n: number) => byQueued().slice(0, n).map((r) => r.clientEventId),
+          }),
+        },
+        done: Promise.resolve(),
+      }),
     };
   }),
 }));

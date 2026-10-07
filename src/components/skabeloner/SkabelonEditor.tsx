@@ -13,6 +13,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { formatDateTime } from '@/components/admin/format';
+import { LOCAL_CHANGE_NOTE_MAX } from '@/lib/skabeloner/change-note';
 import {
   decodeSkabelonCode,
   extractImportToken,
@@ -40,8 +42,6 @@ const CATEGORIES = [
 
 type CategoryKey = (typeof CATEGORIES)[number][0];
 
-const NOTE_MAX = 2000;
-
 // The names the API reports for a changed field, in the words of the form.
 const FIELD_LABELS: Record<string, string> = {
   name: 'navn',
@@ -60,12 +60,8 @@ interface HistoryEntry {
   createdAt: string;
 }
 
-function formatWhen(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? ''
-    : d.toLocaleString('da-DK', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
+const formatWhen = (iso: string): string =>
+  formatDateTime(iso, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }, '');
 
 export function SkabelonEditor({
   open,
@@ -343,7 +339,7 @@ export function SkabelonEditor({
                 id="sk-note"
                 value={changeNote}
                 onChange={(e) => setChangeNote(e.target.value)}
-                maxLength={NOTE_MAX}
+                maxLength={LOCAL_CHANGE_NOTE_MAX}
                 rows={2}
                 placeholder="En note til dig selv om denne ændring"
               />

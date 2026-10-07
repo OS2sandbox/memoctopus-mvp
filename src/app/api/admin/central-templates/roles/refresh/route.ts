@@ -1,27 +1,17 @@
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
-import { parseWith } from '@/lib/authz/access-http';
+import { forceBodySchema, parseWith, readOptionalJsonBody } from '@/lib/authz/access-http';
 import { withAuthz } from '@/lib/authz/guard';
 import { runCatalogueRefresh } from '@/lib/rollekatalog/catalogue-sync';
 import { catalogueResultResponse } from '@/lib/rollekatalog/catalogue-http';
 import { catalogueConfigIssue } from '@/lib/rollekatalog/config';
 import { catalogueErrorMessage } from '@/lib/rollekatalog/labels.da';
 
-const bodySchema = z.object({ force: z.boolean().optional() }).strict();
-
 // The admin button "Opdatér rollekatalog". sync.run (a GLOBAL assignment), like the
 // user/organisation sync button; independent of ACCESS_SOURCE. Counts and short codes only.
 export const POST = withAuthz('admin/central-templates/roles/refresh POST', 'sync.run', async (req) => {
-  const text = await req.text();
-  let raw: unknown = {};
-  if (text.trim() !== '') {
-    try {
-      raw = JSON.parse(text) as unknown;
-    } catch {
-      return NextResponse.json({ error: 'Ugyldig JSON', code: 'invalid_json' }, { status: 400 });
-    }
-  }
-  const parsed = parseWith(bodySchema, raw);
+  const raw = await readOptionalJsonBody(req);
+  if (!raw.ok) return raw.response;
+  const parsed = parseWith(forceBodySchema, raw.value);
   if (!parsed.ok) return parsed.response;
 
   const issue = catalogueConfigIssue();

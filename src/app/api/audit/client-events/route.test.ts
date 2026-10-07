@@ -12,12 +12,13 @@ vi.mock('@/lib/audit/dropped', () => ({ noteDroppedEvents: vi.fn() }));
 vi.mock('@/lib/audit/record', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/audit/record')>()),
   recordServerEvent: vi.fn(),
+  resolveActorSnapshot: vi.fn().mockResolvedValue({ name: null, orgUnitUuid: null }),
 }));
 
 import { POST } from './route';
 import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
-import { recordServerEvent, validateEvent } from '@/lib/audit/record';
+import { recordServerEvent, resolveActorSnapshot, validateEvent } from '@/lib/audit/record';
 import { noteDroppedEvents } from '@/lib/audit/dropped';
 import { pool } from '@/lib/db';
 import { THROTTLE_WINDOW_MS, THROTTLED_TYPES } from '@/lib/audit/client-ingest';
@@ -89,6 +90,16 @@ describe('POST /api/audit/client-events', () => {
     expect(input.clientOccurredAt).toBeInstanceOf(Date);
     // ip / user agent / request id are read from the request itself by recordServerEvent.
     expect((mockRecord.mock.calls[0][0] as { headers: Headers }).headers).toBeInstanceOf(Headers);
+  });
+
+  it('looks the actor up once per request and hands the snapshot to every write', async () => {
+    const snapshot = { name: 'Anna', orgUnitUuid: null };
+    vi.mocked(resolveActorSnapshot).mockClear().mockResolvedValue(snapshot);
+    const events = [1, 2, 3].map((n) => ev({ clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee${n}`, type: 'meeting.create', details: { origin: 'live' } }));
+    expect((await send({ events })).status).toBe(200);
+    expect(mockRecord).toHaveBeenCalledTimes(3);
+    expect(resolveActorSnapshot).toHaveBeenCalledExactlyOnceWith('user-123');
+    for (const call of mockRecord.mock.calls) expect(call[2]).toEqual({ actor: snapshot });
   });
 
   it('rejects an actor / ip / source / time field in the payload (strict parsing)', async () => {

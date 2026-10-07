@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withHandler } from '@/lib/api-handler';
-import { readPendingTranscript, deletePendingTranscript, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { readPendingTranscript, deletePendingTranscript } from '@/lib/bot-pending-audio';
+import { denyUnlessBotOwner } from '@/lib/bot-owner';
 import { requireAppAccess } from '@/lib/authz/app-access';
-import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 
 // Client collects the server-side transcription of a Teams-bot recording
 // (kicked off by /api/bot/audio-upload the moment the bot uploaded the audio).
@@ -25,15 +25,7 @@ export const GET = withHandler('bot/transcript', async (
   // Only the meeting's owner may read its server-side transcript. A non-owner gets
   // the same "no server-side run" response a stranger meetingId would yield, so the
   // transcript is never exposed and the destructive delete below is never reached.
-  if (!(await assertBotMeetingOwner(meetingId, session.user.id))) {
-    await recordAuthzDenied({
-      req,
-      actorUserId: session.user.id,
-      required: 'bot.meeting_owner',
-      reason: 'not_owner',
-      entityType: 'meeting',
-      entityId: meetingId,
-    });
+  if (await denyUnlessBotOwner(req, meetingId, session.user.id)) {
     return NextResponse.json({ status: 'none' });
   }
 

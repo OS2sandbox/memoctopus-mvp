@@ -10,14 +10,11 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 
 import { __resetDroppedEvents } from '@/lib/audit/dropped';
 import {
-  __liveAudioSize,
   __resetLiveAudio,
   asEntityUuid,
   elapsedMs,
   emitAudit,
   emitLiveAudioUpload,
-  LIVE_AUDIO_MAX_ENTRIES,
-  LIVE_AUDIO_WINDOW_MS,
   outcomeCodeOf,
 } from './ai-audit';
 
@@ -160,31 +157,29 @@ describe('emitLiveAudioUpload', () => {
   });
 
   it('emits at most once per person, meeting and outcome per 5 minutes', () => {
-    const t = 1_000_000;
-    emitLiveAudioUpload(req, ev(), t);
-    emitLiveAudioUpload(req, ev({ bytes: 1 }), t + 60_000);
-    emitLiveAudioUpload(req, ev({ bytes: 2 }), t + LIVE_AUDIO_WINDOW_MS - 1);
-    expect(mockRecord).toHaveBeenCalledTimes(1);
-    emitLiveAudioUpload(req, ev({ bytes: 3 }), t + LIVE_AUDIO_WINDOW_MS);
-    expect(mockRecord).toHaveBeenCalledTimes(2);
-    expect(mockRecord.mock.calls[1][1].details.bytes).toBe(3);
-    // Another meeting, another person and a failure are separate keys.
-    emitLiveAudioUpload(req, ev({ entityId: '22222222-2222-4333-8444-555555555555' }), t + 1);
-    emitLiveAudioUpload(req, ev({ actorUserId: 'u2' }), t + 1);
-    emitLiveAudioUpload(req, ev({ outcome: 'error', outcomeCode: 'http_502' }), t + 1);
-    expect(mockRecord).toHaveBeenCalledTimes(5);
-    expect(mockRecord.mock.calls[4][1]).toMatchObject({ outcome: 'error', details: { outcomeCode: 'http_502' } });
-  });
-
-  it('is bounded: the map never grows past its cap, the oldest entries go first', () => {
-    const t = 5_000_000;
-    for (let i = 0; i < LIVE_AUDIO_MAX_ENTRIES + 50; i++) emitLiveAudioUpload(req, ev({ actorUserId: `user-${i}` }), t + i);
-    expect(__liveAudioSize()).toBeLessThanOrEqual(LIVE_AUDIO_MAX_ENTRIES);
-    // The newest key is still remembered, the very first was evicted.
-    mockRecord.mockClear();
-    emitLiveAudioUpload(req, ev({ actorUserId: `user-${LIVE_AUDIO_MAX_ENTRIES + 49}` }), t + 10_000);
-    expect(mockRecord).not.toHaveBeenCalled();
-    emitLiveAudioUpload(req, ev({ actorUserId: 'user-0' }), t + 10_000);
-    expect(mockRecord).toHaveBeenCalledOnce();
+    vi.useFakeTimers();
+    try {
+      const t = 1_000_000;
+      const WINDOW = 5 * 60_000;
+      vi.setSystemTime(t);
+      emitLiveAudioUpload(req, ev());
+      vi.setSystemTime(t + 60_000);
+      emitLiveAudioUpload(req, ev({ bytes: 1 }));
+      vi.setSystemTime(t + WINDOW - 1);
+      emitLiveAudioUpload(req, ev({ bytes: 2 }));
+      expect(mockRecord).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(t + WINDOW);
+      emitLiveAudioUpload(req, ev({ bytes: 3 }));
+      expect(mockRecord).toHaveBeenCalledTimes(2);
+      expect(mockRecord.mock.calls[1][1].details.bytes).toBe(3);
+      // Another meeting, another person and a failure are separate keys.
+      emitLiveAudioUpload(req, ev({ entityId: '22222222-2222-4333-8444-555555555555' }));
+      emitLiveAudioUpload(req, ev({ actorUserId: 'u2' }));
+      emitLiveAudioUpload(req, ev({ outcome: 'error', outcomeCode: 'http_502' }));
+      expect(mockRecord).toHaveBeenCalledTimes(5);
+      expect(mockRecord.mock.calls[4][1]).toMatchObject({ outcome: 'error', details: { outcomeCode: 'http_502' } });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

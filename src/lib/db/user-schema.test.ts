@@ -4,7 +4,7 @@ const { mockConnect } = vi.hoisted(() => ({ mockConnect: vi.fn() }));
 
 vi.mock('./index', () => ({ pool: { connect: mockConnect } }));
 
-import { queryUserSchema, queryUserSchemaOne, getUserSchemaName } from './user-schema';
+import { queryUserSchema, queryUserSchemaOne, getUserSchemaName, withUserSchemaTx } from './user-schema';
 
 const USER = '1234-abcd';
 const SCHEMA = 'u_1234_abcd';
@@ -186,5 +186,40 @@ describe('queryUserSchemaOne', () => {
 
     await expect(queryUserSchemaOne(USER, 'SELECT some')).resolves.toEqual({ a: 1 });
     await expect(queryUserSchemaOne(USER, 'SELECT none')).resolves.toBeNull();
+  });
+});
+
+describe('withUserSchemaTx', () => {
+  it('scopes the search_path to the transaction (BEGIN, then SET LOCAL) and needs no RESET', async () => {
+    markInitialized();
+    const { client, events } = makeClient();
+    mockConnect.mockResolvedValue(client);
+
+    await withUserSchemaTx(USER, async (q) => void (await q('SELECT 1')));
+
+    expect(events).toEqual([
+      'query:BEGIN',
+      `query:SET LOCAL search_path TO "${SCHEMA}", public`,
+      'query:SELECT 1',
+      'query:COMMIT',
+      'release:false',
+    ]);
+  });
+
+  it('rolls back, releases and rethrows when the callback fails; a failed ROLLBACK destroys the connection', async () => {
+    markInitialized();
+    const boom = new Error('boom');
+    const { client, events } = makeClient();
+    mockConnect.mockResolvedValue(client);
+    await expect(withUserSchemaTx(USER, async () => Promise.reject(boom))).rejects.toBe(boom);
+    expect(events.slice(-2)).toEqual(['query:ROLLBACK', 'release:false']);
+
+    const failing = makeClient((sql) => {
+      if (sql === 'ROLLBACK') throw new Error('rollback failed');
+      return { rows: [] };
+    });
+    mockConnect.mockResolvedValue(failing.client);
+    await expect(withUserSchemaTx(USER, async () => Promise.reject(boom))).rejects.toBe(boom);
+    expect(failing.events.at(-1)).toBe('release:true');
   });
 });

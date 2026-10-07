@@ -22,6 +22,7 @@
 // The run is not audited and leaves no sync_runs row (that is the user/org sync's status
 // panel); `external_roles.synced_at` tells when it last ran. Failures surface as short codes.
 import { createRunner, errorLabel } from '@/lib/authz/pg-runner';
+import { principalKey } from '@/lib/skabeloner/central-types';
 import { createRollekatalogClient, type RollekatalogClient } from './client';
 import { catalogueConfigIssue, syncMaxRemovalPercent } from './config';
 import { errorCodeOf } from './errors';
@@ -115,8 +116,8 @@ async function apply(
     const configRows = await tx.query<{ kind: string; identifier: string }>(
       `SELECT kind, identifier FROM ${t('external_roles')} WHERE source = 'config'`,
     );
-    const configKeys = new Set(configRows.rows.map((r) => `${r.kind}\u0000${r.identifier}`));
-    const entries = fetched.filter((e) => !configKeys.has(`${e.kind}\u0000${e.identifier}`));
+    const configKeys = new Set(configRows.rows.map(principalKey));
+    const entries = fetched.filter((e) => !configKeys.has(principalKey(e)));
     const kinds = entries.map((e) => e.kind);
     const identifiers = entries.map((e) => e.identifier);
     const names = entries.map((e) => e.name);

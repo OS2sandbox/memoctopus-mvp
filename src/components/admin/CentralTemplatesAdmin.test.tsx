@@ -157,6 +157,21 @@ describe('CentralTemplatesAdmin — list', () => {
     expect(calls(mock, 'GET', '/api/admin/central-templates?status=archived')).toHaveLength(1);
   });
 
+  it('fetches the catalogue on mount and when the editor opens, not on every filter change', async () => {
+    const mock = setup();
+    renderWithToasts(<CentralTemplatesAdmin />);
+    await screen.findByText('Bestyrelse');
+    expect(calls(mock, 'GET', '/api/admin/central-templates/roles')).toHaveLength(1);
+    await userEvent.selectOptions(screen.getByLabelText('Vis'), 'archived');
+    await screen.findByText('Gammel');
+    await userEvent.selectOptions(screen.getByLabelText('Vis'), 'all');
+    await screen.findByText('Bestyrelse');
+    expect(calls(mock, 'GET', '/api/admin/central-templates/roles')).toHaveLength(1);
+    await userEvent.click(screen.getByRole('button', { name: 'Ny central skabelon' }));
+    await screen.findByRole('dialog', { name: 'Ny central skabelon' });
+    expect(calls(mock, 'GET', '/api/admin/central-templates/roles')).toHaveLength(2);
+  });
+
   it('keeps the newest filter when an older request answers last', async () => {
     let releaseActive!: () => void;
     const gate = new Promise<void>((r) => (releaseActive = r));

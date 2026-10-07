@@ -99,16 +99,6 @@ interface VersionRow {
   created_at: string | Date;
 }
 
-const snapshotOf = (s: Skabelon) => ({
-  name: s.name,
-  description: s.description,
-  prompt: s.prompt,
-  includeDeltagere: s.includeDeltagere,
-  includeBeslutningspunkter: s.includeBeslutningspunkter,
-  includeDagsorden: s.includeDagsorden,
-  includeDato: s.includeDato,
-});
-
 /** The most versions kept per template; the oldest are pruned when a new one is written. */
 export const SKABELON_VERSION_CAP = 100;
 
@@ -122,6 +112,8 @@ export const TRACKED_FIELDS = [
   'includeDagsorden',
   'includeDato',
 ] as const;
+
+const snapshotOf = (s: Skabelon) => Object.fromEntries(TRACKED_FIELDS.map((f) => [f, s[f]]));
 
 export function changedSkabelonFields(prev: Skabelon, next: Skabelon) {
   return TRACKED_FIELDS.filter((f) => prev[f] !== next[f]);
@@ -138,27 +130,6 @@ const versionParams = (skabelon: Skabelon, changedFields: readonly string[], cha
   JSON.stringify(snapshotOf(skabelon)),
 ];
 
-/**
- * Appends the next version row (own schema only). The note is optional and never leaves the user's
- * schema. The number is MAX+1 in one statement; two writers that pick the same number collide on
- * UNIQUE (skabelon_id, version) (23505) and the loser retries with the new maximum.
- */
-export async function recordSkabelonVersion(
-  userId: string,
-  skabelon: Skabelon,
-  changedFields: readonly string[],
-  changeNote: string | null,
-): Promise<void> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await queryUserSchema(userId, INSERT_VERSION_SQL, versionParams(skabelon, changedFields, changeNote));
-      return;
-    } catch (err) {
-      if ((err as { code?: unknown } | null)?.code !== '23505' || attempt >= 3) throw err;
-    }
-  }
-}
-
 // Inside a transaction: the changelog is a convenience for the person, so a failure to write it must
 // never undo or hide the edit itself. It runs under a savepoint (a failed statement would otherwise
 // poison the transaction), and the failure is logged without content.
@@ -173,13 +144,10 @@ async function bestEffortVersion(q: UserSchemaTxQuery, write: () => Promise<void
   }
 }
 
-// Drops the oldest versions beyond the cap; the newest SKABELON_VERSION_CAP stay.
-const pruneVersions = (q: UserSchemaTxQuery, id: string) =>
-  q(
-    `DELETE FROM skabelon_versions WHERE skabelon_id = $1
-        AND version <= (SELECT MAX(version) FROM skabelon_versions WHERE skabelon_id = $1) - $2::int`,
-    [id, SKABELON_VERSION_CAP],
-  );
+// Drops the oldest versions beyond the cap; the newest SKABELON_VERSION_CAP stay. `newest` is the
+// version number just written.
+const pruneVersions = (q: UserSchemaTxQuery, id: string, newest: number) =>
+  q(`DELETE FROM skabelon_versions WHERE skabelon_id = $1 AND version <= $2::int`, [id, newest - SKABELON_VERSION_CAP]);
 
 /** Newest first. null when the template does not exist in the user's schema. */
 export async function listSkabelonVersions(userId: string, id: string): Promise<SkabelonVersion[] | null> {
@@ -274,10 +242,18 @@ export async function updateSkabelonWithHistory(
     const changed = changedSkabelonFields(prev, skabelon);
     if (changed.length > 0 || changeNote !== null) {
       await bestEffortVersion(q, async () => {
-        const [seen] = await q<{ n: number }>(`SELECT count(*)::int AS n FROM skabelon_versions WHERE skabelon_id = $1`, [id]);
-        if ((seen?.n ?? 0) === 0) await q(INSERT_VERSION_SQL, versionParams(prev, [], null));
-        await q(INSERT_VERSION_SQL, versionParams(skabelon, changed, changeNote));
-        await pruneVersions(q, id);
+        // A template that predates the changelog gets its version 1 (the state before this edit) first.
+        await q(
+          `INSERT INTO skabelon_versions (skabelon_id, version, change_note, changed_fields, snapshot)
+           SELECT $1, 1, NULL, '{}'::text[], $2::jsonb
+            WHERE NOT EXISTS (SELECT 1 FROM skabelon_versions WHERE skabelon_id = $1)`,
+          [id, JSON.stringify(snapshotOf(prev))],
+        );
+        const [written] = await q<{ version: number }>(
+          `${INSERT_VERSION_SQL} RETURNING version`,
+          versionParams(skabelon, changed, changeNote),
+        );
+        if (written && written.version > SKABELON_VERSION_CAP) await pruneVersions(q, id, written.version);
       });
     }
     return { skabelon, changedFields: changed };

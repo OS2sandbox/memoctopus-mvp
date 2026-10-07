@@ -41,7 +41,6 @@ import {
   auditLogout,
   authMethodOf,
   classifyAuthFailure,
-  createThrottle,
   emailHmac,
   LOGIN_FAILURE_GLOBAL_LIMIT_PER_MINUTE,
   LOGIN_FAILURE_LIMIT_PER_MINUTE,
@@ -49,6 +48,7 @@ import {
   runLoginHooks,
   runSamlLoginHooks,
 } from './login-hook';
+import { createThrottle } from '@/lib/audit/throttle';
 import { clearLoginClaimsStash, stashLoginClaims } from './claims-stash';
 import { createHmac } from 'node:crypto';
 import { EVENT_CATALOGUE } from '@/lib/audit/events';

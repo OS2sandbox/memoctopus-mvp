@@ -59,7 +59,8 @@ export function defaultSsoFor(p: SamlFileProvider, base = authBaseUrl()): Defaul
   };
 
   // One or several signing certificates (a rollover): samlify accepts a list, the plugin's type says string.
-  const certs = p.cert === undefined ? undefined : Array.isArray(p.cert) ? (p.cert.length === 1 ? p.cert[0] : p.cert) : p.cert;
+  const list = p.cert === undefined ? [] : [p.cert].flat();
+  const certs = list.length > 1 ? list : list[0];
   return {
     // Only matched for e-mail-domain lookups, which this app never uses (sign-in always names the
     // provider); an unroutable name keeps it from ever matching a real address.
@@ -68,7 +69,7 @@ export function defaultSsoFor(p: SamlFileProvider, base = authBaseUrl()): Defaul
     samlConfig: {
       issuer: p.idpEntityId ?? entityId,
       entryPoint: p.entryPoint ?? '',
-      cert: (Array.isArray(certs) ? certs[0] : certs) ?? '',
+      cert: list[0] ?? '',
       // Empty: the plugin then uses its own ACS route for the metadata and the sign-in
       // return trip, and RelayState carries the page to land on.
       callbackUrl: '',
@@ -91,10 +92,8 @@ export function defaultSsoFor(p: SamlFileProvider, base = authBaseUrl()): Defaul
   };
 }
 
-export interface SamlSsoHooks {
-  /** Called for every successful SAML login with the app user and the mapped assertion attributes. */
-  onLogin: (userId: string, providerId: string, userInfo: Record<string, unknown>) => Promise<void>;
-}
+/** Called for every successful SAML login with the app user and the mapped assertion attributes. */
+export type SamlLoginHook = (userId: string, providerId: string, userInfo: Record<string, unknown>) => Promise<void>;
 
 /**
  * Options for the sso plugin. Hardened beyond its defaults: no runtime provider registration
@@ -105,7 +104,7 @@ export interface SamlSsoHooks {
  */
 export function ssoPluginOptions(
   providers: SamlFileProvider[],
-  hooks: SamlSsoHooks,
+  onLogin: SamlLoginHook,
   base = authBaseUrl(),
 ): SSOOptions | null {
   const defaultSSO = providers.flatMap((p) => {
@@ -125,7 +124,7 @@ export function ssoPluginOptions(
     trustEmailVerified: false,
     provisionUserOnEveryLogin: true,
     provisionUser: async ({ user, userInfo, provider }) => {
-      await hooks.onLogin(user.id, provider.providerId, userInfo);
+      await onLogin(user.id, provider.providerId, userInfo);
     },
     saml: {
       requireTimestamps: true,

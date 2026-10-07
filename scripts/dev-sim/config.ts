@@ -43,14 +43,14 @@ export function refuseInProduction(): void {
 }
 
 /** The auth config file of the claims mode: OIDC + SAML stand-ins, role mapping, catalogue. */
-export const claimsAuthConfigFile = path.resolve(__dirname, 'auth-config.claims.json');
+const claimsAuthConfigFile = path.resolve(__dirname, 'auth-config.claims.json');
 
 /**
  * The .env block for the app under test. Printed by `index.ts --env` and used by the acceptance script.
  * mode 'claims' (SIM_ACCESS_SOURCE=claims) runs the app the way a municipality does: roles from the
  * IdP's claims, both stand-in IdPs configured by the JSON file, no local role admin, no Rollekatalog.
  */
-export function appEnv(databaseUrl: string, mode: string | undefined = undefined): Record<string, string> {
+export function appEnv(databaseUrl: string, mode?: string): Record<string, string> {
   if (mode === 'claims') {
     return {
       DATABASE_URL: databaseUrl,
@@ -111,3 +111,6 @@ export function appEnv(databaseUrl: string, mode: string | undefined = undefined
     OPENAI_API_KEY: '',
   };
 }
+
+/** HTML-escapes text and attribute values of the simulators' login pages (numeric character references). */
+export const escHtml = (v: string): string => v.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);

@@ -9,7 +9,7 @@ import path from 'node:path';
 import http from 'node:http';
 import * as saml from 'samlify';
 import { buildSamlResponse, generateIdpKeys, parseAuthnRequestUrl } from '../../src/test/saml-idp';
-import { samlUrl, SIM } from './config';
+import { escHtml, samlUrl, SIM } from './config';
 import type { Persona } from './oidc';
 
 export interface MockSamlIdp {
@@ -17,8 +17,6 @@ export interface MockSamlIdp {
   setClaims(username: string, claims: Record<string, unknown> | null): void;
   logins: Array<{ username: string }>;
 }
-
-const esc = (v: string) => v.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 export async function startMockSamlIdp(getPersonas: () => Persona[]): Promise<MockSamlIdp> {
   const keys = generateIdpKeys('dev-sim-saml-idp');
@@ -74,7 +72,7 @@ export async function startMockSamlIdp(getPersonas: () => Persona[]): Promise<Mo
         .map((p) => {
           const next = new URL(url);
           next.searchParams.set('login_hint', p.username);
-          return `<li><a href="${esc(next.pathname + next.search)}"><b>${esc(p.name)}</b> <code>${esc(p.username)}</code></a></li>`;
+          return `<li><a href="${escHtml(next.pathname + next.search)}"><b>${escHtml(p.name)}</b> <code>${escHtml(p.username)}</code></a></li>`;
         })
         .join('');
       return send(
@@ -101,9 +99,9 @@ export async function startMockSamlIdp(getPersonas: () => Persona[]): Promise<Mo
     return send(
       200,
       `<!doctype html><meta charset="utf-8"><body onload="document.forms[0].submit()">
-       <form method="post" action="${esc(acsUrl)}">
-         <input type="hidden" name="SAMLResponse" value="${esc(response)}">
-         ${request.relayState ? `<input type="hidden" name="RelayState" value="${esc(request.relayState)}">` : ''}
+       <form method="post" action="${escHtml(acsUrl)}">
+         <input type="hidden" name="SAMLResponse" value="${escHtml(response)}">
+         ${request.relayState ? `<input type="hidden" name="RelayState" value="${escHtml(request.relayState)}">` : ''}
          <noscript><button>Fortsæt</button></noscript>
        </form>`,
     );

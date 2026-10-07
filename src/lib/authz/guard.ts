@@ -4,8 +4,7 @@ import { auth } from '@/lib/auth';
 import { withHandler } from '@/lib/api-handler';
 import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 import type { HeaderSource } from '@/lib/audit/request-context';
-import { accessSource, localAdminEnabled, requireRoleToLogin } from './config';
-import { readOnlyMessage } from './access-errors';
+import { requireRoleToLogin } from './config';
 import { hasCapability } from './permissions';
 import { resolvePrincipal } from './principal';
 import type { Capability, Principal } from './types';
@@ -17,16 +16,6 @@ export interface AuthzContext<P = Record<string, never>> {
   principal: Principal;
   /** The awaited Next 15 route params; an empty object for routes without any. */
   params: P;
-}
-
-export interface AuthzOptions {
-  /**
-   * For write endpoints of the local provider: answer 409 when the in-app role
-   * administration is unavailable, i.e. roles are owned by Rollekatalog or the IdP's
-   * claims, or the kill switch ACCESS_LOCAL_ADMIN is off. Checked after the
-   * capability, so a caller without access learns nothing about the mode.
-   */
-  requireLocalSource?: boolean;
 }
 
 // Next 15 passes `{ params: Promise<...> }` as 2nd arg. The exported handler's
@@ -100,7 +89,6 @@ export function withAuthz<P = Record<string, never>>(
   label: string,
   capability: Capability | null,
   handler: (req: NextRequest, ctx: AuthzContext<P>) => Response | Promise<Response>,
-  options: AuthzOptions = {},
 ): (req: NextRequest, routeCtx: RouteContext<P>) => Promise<Response> {
   return withHandler(label, async (req: NextRequest, routeCtx: RouteContext<P>) => {
     const session = await auth.api.getSession({ headers: await headers() });
@@ -118,14 +106,6 @@ export function withAuthz<P = Record<string, never>>(
     if (capability) {
       const denied = requireCapability(principal, capability, undefined, req);
       if (denied) return denied;
-    }
-    if (options.requireLocalSource && !localAdminEnabled()) {
-      recordAuthzDenied({ actorUserId: principal.userId, required: capability ?? 'login', reason: 'wrong_source', req });
-      const source = accessSource();
-      return NextResponse.json(
-        { error: source === 'rollekatalog' ? 'Roller styres af Rollekatalog' : readOnlyMessage(source) },
-        { status: 409 },
-      );
     }
 
     const params = (routeCtx?.params ? await routeCtx.params : {}) as P;

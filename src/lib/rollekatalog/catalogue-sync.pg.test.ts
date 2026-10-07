@@ -4,15 +4,13 @@
 // references that must survive (people's role rows, templates' targets), the guards.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from 'pg';
-import { addUser, hasPg, withFreshSchema } from '@/test/pg';
-import type { ClientLike, SqlResult } from '@/lib/authz/pg-runner';
+import { addUser, hasPg, withFreshSchema, pgSchemaEnv } from '@/test/pg';
 
 vi.mock('@/lib/db', () => ({ pool: {}, db: {} }));
 
 import { createRollekatalogClient } from './client';
 import { runCatalogueRefresh } from './catalogue-sync';
 import { startMockRollekatalog, type MockRollekatalog } from './mock-server';
-import type { SyncEnv } from './sync-run';
 
 let mock: MockRollekatalog;
 const opened: Client[] = [];
@@ -39,20 +37,7 @@ afterEach(async () => {
   await Promise.allSettled(opened.splice(0).map((c) => c.end()));
 });
 
-function schemaEnv(schema: string): SyncEnv {
-  return {
-    schema,
-    connect: async (): Promise<ClientLike> => {
-      const c = new Client({ connectionString: process.env.TEST_DATABASE_URL });
-      await c.connect();
-      opened.push(c);
-      return {
-        query: (text, params) => c.query(text, params as unknown[] | undefined) as unknown as Promise<SqlResult<never>>,
-        release: () => void c.end().catch(() => {}),
-      };
-    },
-  };
-}
+const schemaEnv = pgSchemaEnv(opened);
 
 const client = () => createRollekatalogClient({ backoffMs: 1, sleep: async () => {} });
 const refresh = (schema: string, opts: { force?: boolean } = {}) =>

@@ -5,7 +5,7 @@ import type { GenericOAuthConfig } from 'better-auth/plugins';
 import { claimSubset, readClaim } from '@/lib/authz/claims-roles';
 import { stashLoginClaims } from '@/lib/authz/claims-stash';
 import { decodeJwtPayload } from '@/lib/authz/identity';
-import { claimsModeConfigured, isGuid } from './config-file';
+import { claimsModeConfigured, isGuid, type IdpPrompt } from './config-file';
 import { providerClaimSpecs, type OidcProviderConfig } from './providers';
 
 type Profile = Record<string, unknown>;
@@ -246,7 +246,7 @@ export interface EntraProviderConfig {
   clientSecret: string;
   tenantId: string;
   scopes?: string[];
-  prompt?: 'login' | 'select_account' | 'consent';
+  prompt?: IdpPrompt;
 }
 
 const ENTRA_AUTHORITY = 'https://login.microsoftonline.com';

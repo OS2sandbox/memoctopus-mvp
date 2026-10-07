@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import type { ZodTypeAny, z } from 'zod';
+import { z, type ZodTypeAny } from 'zod';
 import {
   AccessError,
   ConflictError,
@@ -66,4 +66,20 @@ export async function parseJsonBody<S extends ZodTypeAny>(req: NextRequest, sche
     return { ok: false, response: NextResponse.json({ error: 'Ugyldig JSON', code: 'invalid_json' }, { status: 400 }) };
   }
   return parseWith(schema, raw);
+}
+
+/** Body of the "run now" buttons: optionally `{ force: true }` to bypass the removal threshold. */
+export const forceBodySchema = z.object({ force: z.boolean().optional() }).strict();
+
+/** For routes whose body is optional: an absent or blank body is `{}`; anything else must be JSON. */
+export async function readOptionalJsonBody(
+  req: NextRequest,
+): Promise<{ ok: true; value: unknown } | { ok: false; response: NextResponse }> {
+  const text = await req.text();
+  if (text.trim() === '') return { ok: true, value: {} };
+  try {
+    return { ok: true, value: JSON.parse(text) as unknown };
+  } catch {
+    return { ok: false, response: NextResponse.json({ error: 'Ugyldig JSON', code: 'invalid_json' }, { status: 400 }) };
+  }
 }

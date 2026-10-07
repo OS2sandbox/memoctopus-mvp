@@ -208,7 +208,7 @@ export function validateEvent(input: AuditEventInput): ValidationResult {
 
 // ─── Actor snapshot ────────────────────────────────────────────────────────
 
-interface ActorSnapshot {
+export interface ActorSnapshot {
   name: string | null;
   orgUnitUuid: string | null;
 }
@@ -242,6 +242,19 @@ async function actorSnapshot(userId: string | null): Promise<ActorSnapshot> {
   return { name: row.name, orgUnitUuid: chosen ? chosen.orgUnitUuid : null };
 }
 
+/**
+ * actorSnapshot that never throws: a snapshot is metadata, so losing it must not lose the event.
+ * Without the unit, only global readers see the row (fail closed).
+ */
+export async function resolveActorSnapshot(userId: string | null): Promise<ActorSnapshot> {
+  try {
+    return await actorSnapshot(userId);
+  } catch (err) {
+    console.warn(`[audit] actor snapshot unavailable code=${errorCode(err)}`);
+    return NO_ACTOR;
+  }
+}
+
 // ─── Writing ───────────────────────────────────────────────────────────────
 
 export interface RecordOptions {
@@ -252,6 +265,12 @@ export interface RecordOptions {
   tx?: SqlQueryable;
   /** ip / user agent / request id; recordServerEvent fills it from the request. */
   context?: Partial<RequestContext>;
+  /**
+   * The actor's snapshot, resolved once by a caller that records several events of the SAME actor
+   * (the client-event ingest). It must come from resolveActorSnapshot(<this event's actorUserId>);
+   * without it each write looks the actor up itself.
+   */
+  actor?: ActorSnapshot;
   /** Test lane only: schema-qualified table, so the same code can run in a throwaway schema. */
   table?: string;
 }
@@ -308,13 +327,7 @@ async function write(input: AuditEventInput, opts: RecordOptions): Promise<Recor
   const table = opts.table ?? 'public.audit_events';
   if (!TABLE_RE.test(table)) throw new AuditWriteError('invalid_table');
 
-  let actor = NO_ACTOR;
-  try {
-    actor = await actorSnapshot(e.actorUserId);
-  } catch (err) {
-    // A snapshot is metadata: losing it must not lose the event. Without the unit, only global readers see the row (fail closed).
-    console.warn(`[audit] actor snapshot unavailable code=${errorCode(err)}`);
-  }
+  const actor = opts.actor ?? (await resolveActorSnapshot(e.actorUserId));
 
   const ctx = opts.context ?? {};
   const requestId = ctx.requestId && CODE_RE.test(ctx.requestId) ? ctx.requestId : null;

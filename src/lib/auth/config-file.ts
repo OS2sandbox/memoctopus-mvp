@@ -36,6 +36,7 @@
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import { ROLE_KEYS, type RoleKey } from '@/lib/authz/types';
+import { isHttpsOrLoopbackHttp } from '@/lib/net/url-policy';
 
 // providerId ends up in the callback path and in accounts.provider_id, so it must be a
 // safe URL segment. 'microsoft' is the id of the built-in Entra provider and may not be
@@ -50,8 +51,6 @@ export const ENTRA_PROVIDER_ID = 'microsoft';
  */
 export const RESERVED_PROVIDER_IDS: readonly string[] = [ENTRA_PROVIDER_ID, 'credential', 'password', 'unknown'];
 
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
-
 /** https, or http for a loopback host outside production (dev simulation, a local Keycloak). */
 export function isAllowedIdpUrl(raw: string): boolean {
   let u: URL;
@@ -60,8 +59,7 @@ export function isAllowedIdpUrl(raw: string): boolean {
   } catch {
     return false;
   }
-  if (u.protocol === 'https:') return true;
-  return u.protocol === 'http:' && process.env.NODE_ENV !== 'production' && LOOPBACK_HOSTS.has(u.hostname);
+  return isHttpsOrLoopbackHttp(u, process.env.NODE_ENV !== 'production');
 }
 
 /** ACCESS_SOURCE=claims, read straight from the environment (config.ts imports this module, not the other way round). */
@@ -90,7 +88,7 @@ function baseUrlProblem(): string | null {
   if (!raw) return 'BETTER_AUTH_URL is not set';
   try {
     const u = new URL(raw);
-    return u.protocol === 'https:' && u.hostname !== '' && !u.search && !u.hash ? null : 'BETTER_AUTH_URL is not a plain https URL';
+    return isHttpsOrLoopbackHttp(u, false) && u.hostname !== '' && !u.search && !u.hash ? null : 'BETTER_AUTH_URL is not a plain https URL';
   } catch {
     return 'BETTER_AUTH_URL is not a valid URL';
   }
@@ -101,6 +99,10 @@ const MUTABLE_USERID_CLAIMS = new Set(['email', 'mail', 'upn', 'preferred_userna
 
 const nonEmpty = (max: number) => z.string().trim().min(1).max(max);
 const urlString = z.string().trim().url().max(2048);
+/** The `prompt` parameter an OIDC / Entra provider may send to the IdP. */
+export const IDP_PROMPTS = ['login', 'select_account', 'consent'] as const;
+export type IdpPrompt = (typeof IDP_PROMPTS)[number];
+
 /** An IdP endpoint: https only (http for a loopback host outside production). */
 const idpUrl = urlString.refine(isAllowedIdpUrl, { message: 'insecure_url' });
 
@@ -177,7 +179,7 @@ const oidcSchema = z
      * Sent as the `prompt` parameter. "login" forces a fresh sign-in at the IdP every time, which is what a shared
      * workstation needs (signing out of the app does not sign the person out of the IdP, see idp.md section 5).
      */
-    prompt: z.enum(['login', 'select_account', 'consent']).optional(),
+    prompt: z.enum(IDP_PROMPTS).optional(),
     /** Sent as `max_age` (seconds): the IdP must re-authenticate a person whose own session is older. 0 = always. */
     maxAge: z.number().int().min(0).max(86_400).optional(),
     claims: claimMapping,
@@ -210,7 +212,7 @@ const entraSchema = z
       .transform((v) => v.toLowerCase()),
     /** Extra scopes. openid, profile and email are always requested; offline_access is never (no refresh token is kept). */
     scopes: scopes.optional(),
-    prompt: z.enum(['login', 'select_account', 'consent']).optional(),
+    prompt: z.enum(IDP_PROMPTS).optional(),
     rolesClaim: claimList,
     groupsClaim: claimList,
   })

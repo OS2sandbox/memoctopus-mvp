@@ -34,8 +34,9 @@
 //    prompt, and returns the separate internal ResolvedCentralTemplate type.
 //    That value must never be serialised to a response, a log or an audit event.
 import { pool } from '@/lib/db';
-import { accessSource, roleClaimsMaxSeconds } from '@/lib/authz/config';
+import { claimsFreshnessSeconds } from '@/lib/authz/config';
 import { MAX_ORG_DEPTH } from '@/lib/authz/scope';
+import { UUID_RE, heldRoleSql, qualifyTable } from './audience-sql';
 import type { CentralSkabelonSummary } from './central-types';
 
 export interface ResolveEnv {
@@ -47,11 +48,6 @@ export interface ResolveEnv {
    * branch off. Omitted: ROLE_CLAIMS_MAX_SECONDS in claims mode, else off. Test seam.
    */
   claimsMaxSeconds?: number | null;
-}
-
-function claimsMaxOf(env: ResolveEnv): number | null {
-  if (env.claimsMaxSeconds !== undefined) return env.claimsMaxSeconds;
-  return accessSource() === 'claims' ? roleClaimsMaxSeconds() : null;
 }
 
 export function defaultResolveEnv(): ResolveEnv {
@@ -71,13 +67,7 @@ export interface ResolvedCentralTemplate {
   allowToggleOverrides: boolean;
 }
 
-const SCHEMA_RE = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function qualified(env: ResolveEnv): (table: string) => string {
-  if (!SCHEMA_RE.test(env.schema)) throw new Error('invalid schema name');
-  return (table) => `"${env.schema}".${table}`;
-}
+const qualified = (env: ResolveEnv) => (table: string) => qualifyTable(env.schema, table);
 
 // Columns shared by both reads. `prompt` is deliberately NOT in this list.
 const SUMMARY_COLUMNS = `ct.id, ct.name, ct.description, ct.include_deltagere, ct.include_beslutningspunkter,
@@ -145,10 +135,8 @@ function audienceSql(t: (table: string) => string, byId: boolean): { cte: string
               FROM ${t('central_template_principal_targets')} pt
               JOIN ${t('user_external_roles')} ur ON ur.kind = pt.kind AND ur.identifier = pt.identifier
               JOIN ${t('external_roles')} er ON er.kind = pt.kind AND er.identifier = pt.identifier AND er.active
-             WHERE $3::int IS NOT NULL
-               AND ur.user_id = $1
-               AND ur.seen_at > now() - make_interval(secs => $3::int)
-               AND EXISTS (SELECT 1 FROM ${t('directory_users')} d WHERE d.app_user_id = $1 AND d.disabled = false)
+             WHERE ur.user_id = $1
+               AND ${heldRoleSql(t, 'ur', '$3')}
           )
         )`,
   };
@@ -184,7 +172,7 @@ export async function listCentralForUser(
        FROM ${t('central_templates')} ct
       WHERE ${where}
       ORDER BY lower(ct.name), ct.id`,
-    [userId, MAX_ORG_DEPTH, claimsMaxOf(env)],
+    [userId, MAX_ORG_DEPTH, claimsFreshnessSeconds(env.claimsMaxSeconds)],
   );
   return rows.map(summaryOf);
 }
@@ -207,7 +195,7 @@ export async function resolveCentralTemplate(
      SELECT ${SUMMARY_COLUMNS}, ct.prompt
        FROM ${t('central_templates')} ct
       WHERE ct.id = $4::uuid AND ${where}`,
-    [userId, MAX_ORG_DEPTH, claimsMaxOf(env), id.toLowerCase()],
+    [userId, MAX_ORG_DEPTH, claimsFreshnessSeconds(env.claimsMaxSeconds), id.toLowerCase()],
   );
   const r = rows[0];
   if (!r) return null;

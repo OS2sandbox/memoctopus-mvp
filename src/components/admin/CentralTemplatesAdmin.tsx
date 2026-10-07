@@ -61,6 +61,7 @@ export function CentralTemplatesAdmin() {
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [catalogueError, setCatalogueError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState>({ open: false });
   const [stateChange, setStateChange] = useState<{ template: CentralTemplateListItem; mode: StateChange } | null>(null);
@@ -69,31 +70,44 @@ export function CentralTemplatesAdmin() {
   // Only the newest request may write state, so switching the filter quickly cannot
   // leave the list of the previous filter on screen.
   const requestSeq = useRef(0);
+  const catalogueSeq = useRef(0);
 
-  const load = useCallback(async () => {
+  // The list follows the filter; the role/group catalogue does not, so it is NOT part of this.
+  const loadList = useCallback(async () => {
     const seq = ++requestSeq.current;
     setLoading(true);
     setLoadError(null);
-    const [list, scope, roles] = await Promise.all([
+    const [list, scope] = await Promise.all([
       apiRequest<{ templates: CentralTemplateListItem[] }>(`/api/admin/central-templates?status=${filter}`),
       apiRequest<{ orgUnits: CentralScopeOrgUnit[] }>('/api/admin/central-templates/scope'),
-      apiRequest<{
-        roles: CentralCatalogueEntry[];
-        canTarget: boolean;
-        isGlobalManager?: boolean;
-        reason?: 'needs_claims' | 'needs_global' | null;
-        canRefresh: boolean;
-        lastRefreshedAt: string | null;
-      }>('/api/admin/central-templates/roles'),
     ]);
     if (seq !== requestSeq.current) return;
     if (list.ok) setTemplates(list.data.templates);
     else setLoadError(list.message);
     if (scope.ok) setUnits(scope.data.orgUnits);
     else setLoadError((prev) => prev ?? scope.message);
+    setLoading(false);
+  }, [filter]);
+  useEffect(() => {
+    loadList();
+  }, [loadList]);
+
+  // On mount, after a catalogue refresh and whenever the editor opens (so holder counts are current).
+  const loadCatalogue = useCallback(async () => {
+    const seq = ++catalogueSeq.current;
+    const roles = await apiRequest<{
+      roles: CentralCatalogueEntry[];
+      canTarget: boolean;
+      isGlobalManager?: boolean;
+      reason?: 'needs_claims' | 'needs_global' | null;
+      canRefresh: boolean;
+      lastRefreshedAt: string | null;
+    }>('/api/admin/central-templates/roles');
+    if (seq !== catalogueSeq.current) return;
     if (roles.ok) {
       setCatalogue(roles.data.roles);
       setCatalogueLoaded(true);
+      setCatalogueError(null);
       setCatalogueInfo({
         canTarget: roles.data.canTarget,
         isGlobalManager: roles.data.isGlobalManager ?? roles.data.canTarget,
@@ -103,13 +117,17 @@ export function CentralTemplatesAdmin() {
       });
     } else {
       setCatalogueLoaded(false);
-      setLoadError((prev) => prev ?? roles.message);
+      setCatalogueError(roles.message);
     }
-    setLoading(false);
-  }, [filter]);
+  }, []);
   useEffect(() => {
-    load();
-  }, [load]);
+    loadCatalogue();
+  }, [loadCatalogue]);
+
+  const retry = () => {
+    loadList();
+    loadCatalogue();
+  };
 
   const unitName = useMemo(() => unitNameLookup(units), [units]);
 
@@ -133,13 +151,20 @@ export function CentralTemplatesAdmin() {
     }
     const c = res.data.counts;
     setRefreshNote(`Rollekataloget er opdateret: ${c.fetched} roller og grupper, ${c.added} nye, ${c.deactivated} fjernet.`);
-    load();
+    loadList();
+    loadCatalogue();
   }
 
   async function openEditor(item: CentralTemplateListItem | null) {
     setActionError(null);
-    if (item === null) return setEditor({ open: true, template: null });
-    const res = await apiRequest<{ template: CentralTemplateAdmin }>(`/api/admin/central-templates/${item.id}`);
+    if (item === null) {
+      await loadCatalogue();
+      return setEditor({ open: true, template: null });
+    }
+    const [res] = await Promise.all([
+      apiRequest<{ template: CentralTemplateAdmin }>(`/api/admin/central-templates/${item.id}`),
+      loadCatalogue(),
+    ]);
     if (!res.ok) return setActionError(res.message);
     setEditor({ open: true, template: res.data.template });
   }
@@ -150,7 +175,7 @@ export function CentralTemplatesAdmin() {
       description="Fælles skabeloner, som du gør til rådighed for enheder, roller og grupper. Brugerne kan bruge dem, men ikke læse eller ændre dem."
     >
       <ErrorBanner message={meError} />
-      <ErrorBanner message={loadError} onRetry={load} />
+      <ErrorBanner message={loadError ?? catalogueError} onRetry={retry} />
       <ErrorBanner message={actionError} />
 
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -288,7 +313,7 @@ export function CentralTemplatesAdmin() {
           canTargetPrincipals={catalogueInfo.canTarget}
           targetLockedReason={catalogueInfo.reason}
           catalogueLoaded={catalogueLoaded}
-          onSaved={load}
+          onSaved={loadList}
         />
       )}
 
@@ -318,7 +343,7 @@ export function CentralTemplatesAdmin() {
         onOpenChange={(o) => !o && setStateChange(null)}
         template={stateChange?.template ?? null}
         mode={stateChange?.mode ?? 'archive'}
-        onDone={load}
+        onDone={loadList}
       />
 
       <Dialog open={history !== null} onOpenChange={(o) => !o && setHistory(null)}>

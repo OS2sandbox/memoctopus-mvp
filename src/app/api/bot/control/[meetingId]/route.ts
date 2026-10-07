@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getBotServiceConfig, botFetch } from '@/lib/bot-service';
-import { assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { denyUnlessBotOwner } from '@/lib/bot-owner';
 import { withHandler } from '@/lib/api-handler';
 import { recordServerEvent } from '@/lib/audit/record';
 import { safeLogError } from '@/lib/audit/safe-log';
 import { asEntityUuid } from '@/app/api/meetings/ai-audit';
 import { z } from 'zod';
 import { requireAppAccess } from '@/lib/authz/app-access';
-import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 
 const bodySchema = z.object({
   action: z.enum(['pause', 'resume', 'stop', 'abort']),
@@ -39,15 +38,7 @@ export const POST = withHandler(
     // Only the user who started this meeting's session may control it. Without this,
     // any authenticated user could stop/pause/abort another user's live recording by
     // supplying their (client-held) sessionId. Deny by default on an unbound meetingId.
-    if (!(await assertBotMeetingOwner(meetingId, session.user.id))) {
-      await recordAuthzDenied({
-        req,
-        actorUserId: session.user.id,
-        required: 'bot.meeting_owner',
-        reason: 'not_owner',
-        entityType: 'meeting',
-        entityId: meetingId,
-      });
+    if (await denyUnlessBotOwner(req, meetingId, session.user.id)) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 

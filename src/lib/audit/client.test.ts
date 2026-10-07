@@ -506,7 +506,7 @@ describe('flushAuditNow (before sign-out)', () => {
     c.reportAuditEvent('meeting.delete', OTHER);
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchMock).not.toHaveBeenCalled();
-    await c.flushAuditNow('user-1');
+    await c.flushAuditNow();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(sentBodies()[0].map((e) => e.type).sort()).toEqual(['meeting.delete', 'meeting.minutes_save']);
     expect(h.queue).toHaveLength(0);
@@ -517,7 +517,7 @@ describe('flushAuditNow (before sign-out)', () => {
     c.reportAuditEvent('meeting.delete', MEETING);
     await vi.advanceTimersByTimeAsync(0);
     let done = false;
-    void c.flushAuditNow('user-1', 2_000).then(() => (done = true));
+    void c.flushAuditNow().then(() => (done = true));
     await vi.advanceTimersByTimeAsync(1_900);
     expect(done).toBe(false);
     await vi.advanceTimersByTimeAsync(200);
@@ -526,7 +526,7 @@ describe('flushAuditNow (before sign-out)', () => {
 
   it('does nothing without a user', async () => {
     await load(null);
-    await expect(c.flushAuditNow(null)).resolves.toBeUndefined();
+    await expect(c.flushAuditNow()).resolves.toBeUndefined();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -2,6 +2,8 @@
 // admin UI's character counter, so the counter shows the number the server enforces. Keep
 // this module free of zod and server imports: it is bundled into the client.
 
+import { noNul, wellFormed } from './text-guards';
+
 export const CHANGE_NOTE_MESSAGE = 'Beskriv ændringen (mindst 10 tegn)';
 
 // Invisible characters would let a note of "nothing" satisfy the length rule: every
@@ -44,7 +46,7 @@ export function parseLocalChangeNote(raw: unknown): LocalChangeNote {
   if (raw === undefined || raw === null) return { ok: true, note: null };
   if (typeof raw !== 'string') return { ok: false, error: 'Ændringsbeskrivelsen skal være tekst' };
   if (raw.length > LOCAL_CHANGE_NOTE_MAX * 4) return { ok: false, error: tooLong() };
-  if (raw.includes('\u0000') || /\p{Cs}/u.test(raw)) {
+  if (!noNul(raw) || !wellFormed(raw)) {
     return { ok: false, error: 'Ændringsbeskrivelsen indeholder ugyldige tegn' };
   }
   const note = stripInvisible(raw).normalize('NFC');

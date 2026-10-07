@@ -81,20 +81,28 @@ function settingLines(env: Record<string, string | undefined>): Array<[name: str
   return lines;
 }
 
+type SettingLines = ReturnType<typeof settingLines>;
+
+const fingerprintOf = (lines: SettingLines): string => sha(lines.map(([, line]) => line).join('\n')).slice(0, 16);
+
+function digestsOf(lines: SettingLines): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, line] of lines) out[name] = sha(line).slice(0, 12);
+  return out;
+}
+
 /**
  * First 16 hex characters of a sha256 over the sorted `NAME=value` lines, with a
  * secret's value replaced by `<set>` (or `<unset>`). Pure; the same environment always
  * gives the same fingerprint.
  */
 export function configFingerprint(env: Record<string, string | undefined> = process.env): string {
-  return sha(settingLines(env).map(([, line]) => line).join('\n')).slice(0, 16);
+  return fingerprintOf(settingLines(env));
 }
 
 /** name -> first 12 hex characters of a sha256 of that setting's line (a secret: of its set/unset state only). */
 export function settingDigests(env: Record<string, string | undefined> = process.env): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [name, line] of settingLines(env)) out[name] = sha(line).slice(0, 12);
-  return out;
+  return digestsOf(settingLines(env));
 }
 
 const MAX_CHANGED_KEYS = 32;
@@ -139,8 +147,9 @@ export async function recordConfigFingerprint(
   env: Record<string, string | undefined> = process.env,
   runner: SqlRunner = defaultRunner(),
 ): Promise<ConfigCheck> {
-  const fingerprint = configFingerprint(env);
-  const digests = settingDigests(env);
+  const lines = settingLines(env);
+  const fingerprint = fingerprintOf(lines);
+  const digests = digestsOf(lines);
   return runner.transaction(async (tx) => {
     const before = await tx.query<{ value: unknown }>('SELECT value FROM public.system_flags WHERE key = $1 FOR UPDATE', [CONFIG_FLAG_KEY]);
     const previous = storedDigests(before.rows[0]?.value);

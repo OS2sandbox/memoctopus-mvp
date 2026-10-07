@@ -4,8 +4,7 @@
 // actions, rollback or lock contention, which is what these tests are for.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from 'pg';
-import { addUser, hasPg, withFreshSchema } from '@/test/pg';
-import type { ClientLike, SqlResult } from '@/lib/authz/pg-runner';
+import { addUser, hasPg, withFreshSchema, pgSchemaEnv } from '@/test/pg';
 
 vi.mock('@/lib/db', () => ({ pool: {}, db: {} }));
 
@@ -45,21 +44,7 @@ afterEach(async () => {
   await Promise.allSettled(opened.splice(0).map((c) => c.end()));
 });
 
-/** Every connection is its own client, so the advisory lock and the transaction really contend. */
-function schemaEnv(schema: string): SyncEnv {
-  return {
-    schema,
-    connect: async (): Promise<ClientLike> => {
-      const c = new Client({ connectionString: process.env.TEST_DATABASE_URL });
-      await c.connect();
-      opened.push(c);
-      return {
-        query: (text, params) => c.query(text, params as unknown[] | undefined) as unknown as Promise<SqlResult<never>>,
-        release: () => void c.end().catch(() => {}),
-      };
-    },
-  };
-}
+const schemaEnv = pgSchemaEnv(opened);
 
 interface Harness {
   c: Client;

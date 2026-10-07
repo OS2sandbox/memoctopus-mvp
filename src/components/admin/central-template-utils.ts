@@ -1,6 +1,6 @@
 // Pure helpers shared by the central template admin UI.
 import { CHANGE_NOTE_MESSAGE, changeNoteLength, stripInvisible } from '@/lib/skabeloner/change-note';
-import { CENTRAL_LIMITS } from '@/lib/skabeloner/central-types';
+import { CENTRAL_LIMITS, principalKey } from '@/lib/skabeloner/central-types';
 import type {
   CentralCatalogueEntry,
   CentralChangeType,
@@ -83,26 +83,6 @@ export function targetsEqual(a: readonly CentralTarget[], b: readonly CentralTar
 // ─── Role/group targets ────────────────────────────────────────────────────
 
 export const principalKindLabels: Record<CentralPrincipalTarget['kind'], string> = { role: 'Rolle', group: 'Gruppe' };
-
-/** `kind:identifier`; the kind never contains a colon, so the key is unambiguous. */
-export const principalKey = (t: CentralPrincipalTarget): string => `${t.kind}:${t.identifier}`;
-
-export function diffPrincipals<T extends CentralPrincipalTarget>(
-  before: readonly T[],
-  after: readonly T[],
-): { added: T[]; removed: T[] } {
-  const prev = new Set(before.map(principalKey));
-  const next = new Set(after.map(principalKey));
-  return {
-    added: after.filter((t) => !prev.has(principalKey(t))),
-    removed: before.filter((t) => !next.has(principalKey(t))),
-  };
-}
-
-export function principalsEqual(a: readonly CentralPrincipalTarget[], b: readonly CentralPrincipalTarget[]): boolean {
-  const d = diffPrincipals(a, b);
-  return d.added.length === 0 && d.removed.length === 0;
-}
 
 /**
  * Re-reads a target against the current catalogue: the catalogue's name wins, a target that

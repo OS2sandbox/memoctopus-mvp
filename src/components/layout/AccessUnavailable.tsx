@@ -1,8 +1,7 @@
 'use client';
 
 import { Button } from '@/components/ui/button';
-import { flushAuditNow } from '@/lib/audit/client';
-import { signOut } from '@/lib/auth-client';
+import { signOutAfterFlush } from '@/lib/sign-out';
 
 // Shown instead of the app shell when the access check itself failed (e.g. the
 // database is unreachable). Fail closed: no TopBar, no children, just a retry.
@@ -11,11 +10,7 @@ export function AccessUnavailable({ embedded = false }: { embedded?: boolean } =
   const Root = embedded ? 'div' : 'main';
   const retry = () => window.location.reload();
   const leave = () => {
-    // Deliver queued audit events first (at most 2 s): after sign-out they wait for the next login.
-    flushAuditNow()
-      .then(() => signOut())
-      .catch((err) => console.error('signOut failed', err))
-      .finally(() => window.location.assign('/'));
+    void signOutAfterFlush().finally(() => window.location.assign('/'));
   };
   return (
     <Root className="mx-auto max-w-md px-4 py-24 text-center">

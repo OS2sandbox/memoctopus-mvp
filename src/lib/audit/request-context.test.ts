@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { asHeaderSource, clientIp, requestContext, requestIdOf, userAgentOf } from './request-context';
+import { asHeaderSource, clientIp, requestContext, requestIdOf, safeRequestContext, userAgentOf } from './request-context';
 
 const req = (h: Record<string, string>) => ({ headers: new Headers(h) });
 
@@ -70,5 +70,15 @@ describe('requestContext / asHeaderSource', () => {
     expect(asHeaderSource('req')).toBeNull();
     expect(asHeaderSource(null)).toBeNull();
     expect(asHeaderSource({ headers: {} })).toBeNull();
+  });
+});
+
+describe('safeRequestContext', () => {
+  it('is the request context, or undefined without a request or with unusable headers', () => {
+    expect(safeRequestContext(req({ 'x-forwarded-for': '203.0.113.5' }))).toMatchObject({ ip: '203.0.113.5' });
+    expect(safeRequestContext(null)).toBeUndefined();
+    expect(safeRequestContext(undefined)).toBeUndefined();
+    const broken = { headers: { get: () => { throw new Error('boom'); } } };
+    expect(safeRequestContext(broken)).toBeUndefined();
   });
 });

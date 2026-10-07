@@ -1,14 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { changeNoteSchema } from '@/lib/skabeloner/central-schemas';
+import { diffPrincipals, principalKey, principalsEqual } from '@/lib/skabeloner/central-types';
 import {
   audienceEntries,
   changedContentFields,
-  diffPrincipals,
   diffTargets,
   noteLength,
   noteProblem,
-  principalKey,
-  principalsEqual,
   targetsWithinOwner,
   truncateAudience,
   viewAgainstCatalogue,
