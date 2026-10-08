@@ -188,7 +188,7 @@ async function main() {
   const cat1 = await adminUser.get('/api/admin/central-templates/roles');
   const rk = (cat1.json?.roles ?? []).filter((r: any) => r.source === 'rollekatalog');
   check('user roles (jobfunktionsroller) and role groups are in the catalogue, by name', rk.some((r: any) => r.kind === 'role' && r.identifier === 'sagsbehandler' && r.name === 'Sagsbehandler') && rk.some((r: any) => r.kind === 'group' && r.identifier === '11'), JSON.stringify(rk));
-  check('nothing but kind, identifier, name, source and active is exposed', rk.every((r: any) => JSON.stringify(Object.keys(r).sort()) === JSON.stringify(['active', 'identifier', 'kind', 'name', 'source'])));
+  check('nothing but kind, identifier, name, source, active and the holders COUNT is exposed', rk.every((r: any) => JSON.stringify(Object.keys(r).sort()) === JSON.stringify(['active', 'holders', 'identifier', 'kind', 'name', 'source']) && Number.isInteger(r.holders)));
   const viaButton = await adminUser.post('/api/admin/central-templates/roles/refresh');
   check('the admin button works too, and a second refresh adds nothing', viaButton.status === 200 && viaButton.json?.counts?.added === 0, brief(viaButton));
 
@@ -215,7 +215,9 @@ async function main() {
   const tid: string = created.json?.template?.id;
   check('it has no owner unit, and the audience is named', created.json?.template?.ownerOrgUnitUuid === null && created.json?.template?.principalTargets?.[0]?.name === 'Sagsbehandler', brief(created));
   const listed = await superUser.get('/api/admin/central-templates?status=all');
-  check('the list names the audience (kind, name, state)', JSON.stringify(listed.json?.templates?.find((t: any) => t.id === tid)?.principalTargets) === JSON.stringify([{ kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active' }]), brief(listed));
+  const listedHolders = listed.json?.templates?.find((t: any) => t.id === tid)?.principalTargets?.[0]?.holders;
+  check('the audience carries a holders COUNT (a number, never people)', Number.isInteger(listedHolders), String(listedHolders));
+  check('the list names the audience (kind, name, state)', JSON.stringify(listed.json?.templates?.find((t: any) => t.id === tid)?.principalTargets) === JSON.stringify([{ kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active', holders: listedHolders }]), brief(listed));
 
   const mine = await brugerC.get('/api/skabeloner');
   check('bruger.c (holds the role) sees it in the picker without configuring anything, and never its prompt', mine.json?.centralSkabeloner?.some((t: any) => t.id === tid) && !mine.text.includes(SECRET), brief(mine));
@@ -259,7 +261,8 @@ async function main() {
   want('restore brings it back', await superUser.post(`/api/admin/central-templates/${tid}/restore`, { baseVersion: 5, changeNote: 'Genopretter, den skulle alligevel bruges.' }), 200);
   want('...to the role holder', await brugerC.post('/api/minutes', { segments, skabelonId: tid, skabelonSource: 'central' }), 200);
 
-  const events = (await db.query(`select event_type, details::text as d, secondary_entity_id from public.audit_events where event_type like 'central_template.%'`)).rows;
+  // Only this run's template: the database may hold other templates from earlier runs (e.g. the Rollekatalog mode's, which have owner units).
+  const events = (await db.query(`select event_type, details::text as d, secondary_entity_id from public.audit_events where event_type like 'central_template.%' and entity_id = $1`, [tid])).rows;
   const kinds = new Set(events.map((e) => e.event_type));
   check('create, retarget, update, archive and restore are in the log', ['central_template.create', 'central_template.retarget', 'central_template.update', 'central_template.archive', 'central_template.restore'].every((t) => kinds.has(t)), [...kinds].join(', '));
   check('the org-wide template has no owner unit in the log, and only counts for the audience', events.every((e) => e.secondary_entity_id === null) && events.every((e) => !/sagsbehandler|Sagsbehandler|"11"/.test(e.d)), events.map((e) => e.d).join(' '));

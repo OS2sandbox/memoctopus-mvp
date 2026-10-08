@@ -43,9 +43,16 @@ async function main() {
       { username: 'ingen.i', name: 'Ingrid Ingenrolle', email: 'ingen.i@example.dk', emailVerified: true, note: 'claims: ingen roller', claims: {} },
       { username: 'bad.b', name: 'Bent Beskadiget', email: 'bad.b@example.dk', emailVerified: true, note: 'claims: roles er et objekt (ugyldigt)', claims: { roles: { not: 'a list' } } },
     ];
+    // In the claims mode the roles come ONLY from the IdP's claims, so the Rollekatalog people
+    // (no `roles` claim) would log in to "Ingen adgang": list the claims people first and say so.
+    const claimsMode = process.env.SIM_ACCESS_SOURCE === 'claims';
+    const rollekatalogOnly = claimsMode
+      ? known.map((p) => ({ ...p, note: `Rollekatalog-person: ingen roller i claims-mode (giver «Ingen adgang»)${p.note ? ` · ${p.note}` : ''}` }))
+      : known;
     return [
-      ...known,
-      ...claimPeople,
+      ...(claimsMode ? claimPeople : []),
+      ...rollekatalogOnly,
+      ...(claimsMode ? [] : claimPeople),
       { username: 'ghost.u', name: 'Spøgelse (kun roller, ingen stilling)', email: 'ghost.u@example.dk', emailVerified: true, note: 'findes i rolletildelinger, ikke i organisationen' },
       { username: 'udenfor.p', name: 'Udenfor Person', email: 'udenfor.p@example.dk', emailVerified: true, note: 'findes slet ikke i Rollekatalog' },
       {
