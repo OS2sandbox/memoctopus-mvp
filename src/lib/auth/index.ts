@@ -8,6 +8,7 @@ import {
   emailPasswordEnabled,
   microsoftConfig,
   microsoftGraphScopes,
+  microsoftSingleTenant,
   oidcConfig,
   warnDeprecatedAuthEnv,
 } from './providers';
@@ -69,11 +70,23 @@ export const auth = betterAuth({
   // Users who signed in before these scopes existed keep a token without them;
   // hasGraphScopes() in src/lib/teams/graph-client.ts detects that and the UI
   // asks them to sign in again.
+  // overrideUserInfoOnSignIn keeps the stored name and email in step with Entra on every
+  // sign-in. Without it better-auth writes them once, at account creation, and never again:
+  // it matches the account on the provider's subject claim, so a user whose mail attribute
+  // or display name later changes keeps the address they first signed up with. That
+  // happened here: an account created under one address kept showing it after the user
+  // moved to a syddjurs.dk mailbox, which reads as being logged in as the wrong person.
+  //
+  // Only for one named tenant (MICROSOFT_TENANT_ID). There the tenant admin controls the
+  // `email` claim. Under the multi-tenant authorities (blank, common, organizations,
+  // consumers) it comes from whichever tenant the user signs in from, and Entra does not
+  // guarantee it is verified or unchanged, so it must not overwrite what we store.
   socialProviders: microsoft
     ? {
         microsoft: {
           ...microsoft,
           ...(graphScopes.length > 0 && { scope: graphScopes }),
+          ...(microsoftSingleTenant() && { overrideUserInfoOnSignIn: true }),
         },
       }
     : {},

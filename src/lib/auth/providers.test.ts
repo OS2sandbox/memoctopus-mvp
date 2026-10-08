@@ -4,6 +4,7 @@ import {
   enabledAuthProviders,
   microsoftConfig,
   microsoftGraphScopes,
+  microsoftSingleTenant,
   oidcConfig,
   teamsGraphEnabled,
   warnDeprecatedAuthEnv,
@@ -334,5 +335,22 @@ describe('warnDeprecatedAuthEnv', () => {
     warnDeprecatedAuthEnv();
     expect(warn.mock.calls[0][0]).toContain('AUTHENTIK_CLIENT_ID');
     expect(warn.mock.calls[0][0]).toContain('NEXT_PUBLIC_MICROSOFT_ENABLED');
+  });
+});
+
+describe('microsoftSingleTenant', () => {
+  it('is true for one named tenant', () => {
+    process.env = { ...process.env, ...MICROSOFT, MICROSOFT_TENANT_ID: 'contoso-tenant-id' } as NodeJS.ProcessEnv;
+    expect(microsoftSingleTenant()).toBe(true);
+  });
+
+  it.each(['', 'common', 'organizations', 'consumers', 'COMMON'])('is false for %j', (tenant) => {
+    process.env = { ...process.env, ...MICROSOFT, MICROSOFT_TENANT_ID: tenant } as NodeJS.ProcessEnv;
+    expect(microsoftSingleTenant()).toBe(false);
+  });
+
+  it('is false when Microsoft login is not configured at all', () => {
+    process.env = { ...process.env, MICROSOFT_TENANT_ID: 'contoso-tenant-id' } as NodeJS.ProcessEnv;
+    expect(microsoftSingleTenant()).toBe(false);
   });
 });

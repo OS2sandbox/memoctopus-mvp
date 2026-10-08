@@ -24,6 +24,11 @@ vi.mock('@/lib/skabeloner/server', () => ({
 import { POST } from './route';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
+import {
+  MinutesConfigError,
+  MinutesTooLongError,
+  MinutesTruncatedError,
+} from '@/lib/ai/minutes-errors';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 
@@ -143,5 +148,21 @@ describe('POST /api/minutes', () => {
     expect(body).toHaveProperty('error');
     // Must be JSON (not HTML) so the client can parse it without crashing.
     expect(typeof body.error).toBe('string');
+  });
+
+  // The typed errors carry their own status and Danish message; withHandler renders them.
+  it.each([
+    [MinutesTooLongError, 422, 'for langt'],
+    [MinutesTruncatedError, 422, 'svargrænse'],
+    [MinutesConfigError, 500, 'indstillinger'],
+  ])('shows %o as its own status and Danish message', async (ErrorClass, status, fragment) => {
+    mockGenerateReferatBody.mockRejectedValueOnce(new ErrorClass('technical detail'));
+
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
+
+    expect(res.status).toBe(status);
+    const { error } = await res.json();
+    expect(error).toContain(fragment);
+    expect(error).not.toContain('technical detail');
   });
 });
