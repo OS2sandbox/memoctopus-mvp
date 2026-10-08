@@ -161,6 +161,10 @@ ingen funktion til at slette en mødeoptagelse, så filen må slettes som en fil
 medarbejderens OneDrive. Memoctopus finder den i mappen *Optagelser* på dens
 præcise størrelse i bytes og sletter intet, hvis det ikke udpeger netop én fil.
 
+Teams' egen tekst-transskription ligger ikke som en selvstændig fil. Den er
+indlejret i optagelsens mp4-fil og forsvinder derfor sammen med den. Microsoft
+Graph har ingen funktion til at slette en transskription for sig.
+
 Der er fire ting, sletningen ikke dækker:
 
 - Har organisationen en opbevaringspolitik eller et retskrav (hold), som forbyder
@@ -169,8 +173,9 @@ Der er fire ting, sletningen ikke dækker:
 - Er medarbejderen kun inviteret til mødet, ligger optagelsen i arrangørens
   OneDrive, som Memoctopus ikke har adgang til. Den bliver liggende.
 - Optagelser af kanalmøder ligger i teamets SharePoint-site og bliver liggende.
-- Teams' egen tekst-transskription ligger fortsat på mødet. Graph tilbyder ingen
-  måde at slette den på; arrangøren kan slette den i Teams.
+- Med `TEAMS_ARTIFACT_MODE=transcript-only` henter Memoctopus aldrig optagelsen og
+  kan derfor ikke genkende filen. Både optagelse og transskription bliver
+  liggende, og arrangøren må selv slette dem i Teams.
 
 Kan Microsoft ikke nås, når optagelsen skal slettes, prøver Memoctopus igen hvert
 par minutter i op til et døgn.

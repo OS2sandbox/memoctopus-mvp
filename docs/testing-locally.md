@@ -172,3 +172,8 @@ for Teams (Business Basic or higher, or E3/E5).
    `GET /me/drive/special/recordings/children?$select=name,size`. If they differ,
    Graph's `/recordings/{id}/content` does not serve the stored file byte for byte
    and `src/lib/teams/recording-cleanup.ts` needs another way to identify it.
+   Then check the transcript went with it (it is embedded in the mp4, and Graph
+   has no delete for it): the meeting's Recap tab in Teams should show none, and
+   `GET /me/onlineMeetings/{id}/transcripts` should list none or 404 on its
+   content. If Graph still serves it, a copy lives outside the file and this app
+   cannot remove it.

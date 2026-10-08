@@ -226,9 +226,16 @@ single out one file. A throttled or unreachable Graph is retried on every poll f
 a day. If the tenant refuses a permanent delete (a retention policy or hold), the
 file goes to the recycle bin instead and the tenant's own retention rules take
 over. Not covered: a recording stored in someone else's OneDrive (the user is an
-invitee, not the organizer), a channel meeting's recording in the team's
-SharePoint site, and Teams' own text transcript, which Graph offers no way to
-delete.
+invitee, not the organizer) and a channel meeting's recording in the team's
+SharePoint site.
+
+Teams' own transcript needs no separate delete, and Graph offers none: it is not a
+file of its own but is embedded in the recording's mp4, so it goes when the
+recording does. Two cases are left. In `transcript-only` the app never downloads
+the mp4, cannot identify it, and so deletes neither. And tenants that recorded
+before Microsoft stopped doing so in 2025 may hold a second copy of old
+transcripts in the organizer's Exchange mailbox, which only deleting from the
+Teams client removes.
 
 **Retention of collected transcripts.** The recording is transcribed and dropped, but
 the finished transcript sits as a file under `AUDIO_STORAGE_PATH/pending-artifacts`

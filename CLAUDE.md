@@ -135,8 +135,11 @@ dead end and offers the saved transcript or a delete.
   day, and never changes the meeting's state. A row whose recording is gone passes
   `recordingDeleted` to the pipeline, so "Hent igen" goes straight to Teams' own
   transcript. Needs `Files.ReadWrite`; off with `TEAMS_DELETE_RECORDING=false`.
-  **Unverified against a real tenant** that Graph's recording content is byte-identical
-  to the stored file — see docs/testing-locally.md §B step 9.
+  Teams' transcript has no delete in Graph either, and needs none: it is embedded
+  in that mp4 rather than stored as a file, so it goes with the recording.
+  **Unverified against a real tenant**: that Graph's recording content is
+  byte-identical to the stored file, and that Graph stops serving the transcript
+  once the file is gone — see docs/testing-locally.md §B step 9.
 - `vtt.ts` — VTT parser; `turnsFromVtt()` feeds real speaker names into
   `src/lib/audio/merge-speakers.ts` (`preserveNames`), `segmentsFromVtt()` is the
   transcript-only path.
