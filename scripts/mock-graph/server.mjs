@@ -312,14 +312,14 @@ const server = http.createServer(async (req, res) => {
 
   try {
     // ---- control plane
-    if (p === '/__mock/state') return send(res, 200, { me: ME, settings: state.settings, media: { ...media, vtt: undefined }, meetings: Object.values(state.meetings).map((m) => ({ ...publicMeeting(m), _ended: endedInfo(m), _isOrganizer: m._organizer.id === ME.id })), log: state.log.slice(-40) });
+    if (p === '/__mock/state') return send(res, 200, { me: ME, settings: state.settings, media: { ...media, vtt: undefined }, meetings: Object.values(state.meetings).map((m) => ({ ...publicMeeting(m), _ended: endedInfo(m), _recordingDeleted: m._recordingDeleted ?? null, _isOrganizer: m._organizer.id === ME.id })), log: state.log.slice(-40) });
     if (p === '/__mock/reset' && req.method === 'POST') { state = freshState(); return send(res, 200, { ok: true }); }
     if (p === '/__mock/settings' && req.method === 'POST') { Object.assign(state.settings, await readJson(req)); return send(res, 200, state.settings); }
     let cm = /^\/__mock\/meetings\/([^/]+)\/(end|reset)$/.exec(p);
     if (cm && req.method === 'POST') {
       const m = state.meetings[cm[1]];
       if (!m) return send(res, 404, { error: 'unknown meeting' });
-      if (cm[2] === 'reset') m._ended = null;
+      if (cm[2] === 'reset') { m._ended = null; m._recordingDeleted = null; }
       else {
         const body = await readJson(req);
         m._ended = { at: new Date().toISOString(), transcribed: body.transcribed ?? true, recorded: body.recorded ?? true };
@@ -350,6 +350,31 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { value: m ? [publicMeeting(m)] : [] });
     }
 
+    // ---- the organizer's OneDrive: one file per recording, in the Recordings folder.
+    // Every mock recording is the same mp4, so two undeleted ones are the same size
+    // and the app (rightly) refuses to pick between them.
+    if (g === '/me/drive/special/recordings/children' && req.method === 'GET') {
+      const size = media.mp4Path ? fs.statSync(media.mp4Path).size : 0;
+      const value = Object.values(state.meetings)
+        .filter((x) => x._organizer.id === ME.id && endedInfo(x)?.recorded && media.mp4Path && !x._recordingDeleted)
+        .map((x) => ({
+          id: `drv-${x.id}`,
+          name: `${x.subject}-Meeting Recording.mp4`,
+          size,
+          file: { mimeType: 'video/mp4' },
+          parentReference: { driveId: 'mock-drive' },
+        }));
+      return send(res, 200, { value });
+    }
+    const dm = /^\/drives\/mock-drive\/items\/drv-([^/]+?)(\/permanentDelete)?$/.exec(g);
+    if (dm && (dm[2] ? req.method === 'POST' : req.method === 'DELETE')) {
+      const target = state.meetings[decodeURIComponent(dm[1])];
+      if (!target || target._recordingDeleted) return graphError(res, 404, 'itemNotFound', 'The resource could not be found.');
+      target._recordingDeleted = dm[2] ? 'permanent' : 'recycled';
+      res.writeHead(204);
+      return res.end();
+    }
+
     const mm = /^\/me\/onlineMeetings\/([^/]+)(?:\/(transcripts|recordings)(?:\/([^/]+)\/content)?)?$/.exec(g);
     if (!mm) return graphError(res, 404, 'ResourceNotFound', `No route for ${g}`);
     const m = state.meetings[decodeURIComponent(mm[1])];
@@ -375,7 +400,7 @@ const server = http.createServer(async (req, res) => {
       return graphError(res, 403, 'Forbidden', 'Graph API access to transcripts is disabled for this tenant.', 'GraphAccessToTranscriptsDisabled');
     }
     const ended = endedInfo(m);
-    const have = ended && (kind === 'transcripts' ? ended.transcribed : ended.recorded && media.mp4Path);
+    const have = ended && (kind === 'transcripts' ? ended.transcribed : ended.recorded && media.mp4Path && !m._recordingDeleted);
     if (!have) return graphError(res, 404, 'ResourceNotFound', `No ${kind} for this meeting yet`);
     const id = artifactId(m, kind === 'transcripts' ? 'tr' : 'rec');
     const item = {

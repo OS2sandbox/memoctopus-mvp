@@ -193,6 +193,7 @@ describe('processTeamsMeeting — recording + transcript', () => {
       speakers: ['Mette Hansen', 'Jens Poulsen'],
       transcriptId: 't1',
       recordingId: 'r1',
+      recordingBytes: 1234,
     });
 
     // mp4 lands under AUDIO_STORAGE_PATH, never in the repo.
@@ -322,6 +323,7 @@ describe('processTeamsMeeting — transcript only', () => {
       speakers: ['Mette Hansen', 'Jens Poulsen'],
       transcriptId: 't1',
       recordingId: null,
+      recordingBytes: null,
     });
     expect(mockDownloadRecording).not.toHaveBeenCalled();
     expect(mockSpawn).not.toHaveBeenCalled();
@@ -384,6 +386,24 @@ describe('processTeamsMeeting — transcript only', () => {
     expect(mockTranscribeRecording).not.toHaveBeenCalled();
   });
 
+  it('does not download a recording we have already deleted from OneDrive', async () => {
+    // Graph may go on listing a recording whose file is gone ("Hent igen").
+    mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [RECORDING_REF] });
+
+    const outcome = await processTeamsMeeting('u1', { ...MEETING, recordingDeleted: true }, AFTER_GRACE);
+
+    expect(outcome).toMatchObject({ status: 'ready', mode: 'transcript-only', recordingBytes: null });
+    expect(mockDownloadRecording).not.toHaveBeenCalled();
+  });
+
+  it('does not sit out the grace period for a recording we have already deleted', async () => {
+    mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [] });
+
+    expect(
+      await processTeamsMeeting('u1', { ...MEETING, recordingDeleted: true }, JUST_AFTER_END),
+    ).toMatchObject({ status: 'ready', mode: 'transcript-only' });
+  });
+
   it('is pending in transcript-only mode when only a recording exists', async () => {
     process.env.TEAMS_ARTIFACT_MODE = 'transcript-only';
     mockListArtifacts.mockResolvedValue({ transcripts: [], recordings: [RECORDING_REF] });
@@ -413,6 +433,7 @@ describe('processTeamsMeeting — recording only', () => {
       speakers: [],
       transcriptId: null,
       recordingId: 'r1',
+      recordingBytes: 1234,
     });
     expect(mockDownloadVtt).not.toHaveBeenCalled();
     // No turns injected — transcribe-recording runs its own diarization pass.

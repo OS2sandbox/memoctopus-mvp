@@ -29,10 +29,11 @@ af en bruger med rollen *Global administrator* eller *Privileged role administra
    | `OnlineMeetings.ReadWrite` | Slå automatisk transskription til på det enkelte møde |
    | `OnlineMeetingTranscript.Read.All` | Hente mødets transskription bagefter |
    | `OnlineMeetingRecording.Read.All` | Hente mødets optagelse bagefter (kan udelades ved `TEAMS_ARTIFACT_MODE=transcript-only`) |
+   | `Files.ReadWrite` | Slette optagelsen fra arrangørens OneDrive, når den er transskriberet (kan udelades ved `TEAMS_DELETE_RECORDING=false` eller `TEAMS_ARTIFACT_MODE=transcript-only`) |
    | `User.Read` | Læse brugerens eget navn og e-mail (findes typisk allerede) |
    | `offline_access` | Fornye adgangen, så brugeren ikke skal logge ind igen hver time |
 
-   Alle tre er **delegerede** tilladelser. Appen får ikke videre adgang end den
+   Alle er **delegerede** tilladelser. Appen får ikke videre adgang end den
    indloggede medarbejder og kan alene se møder med medarbejderen som inviteret.
    Der bliver **ikke** bedt om adgang til kalender eller postkasse.
 
@@ -61,7 +62,12 @@ af en bruger med rollen *Global administrator* eller *Privileged role administra
 > samtykke-anmodninger slået fra, kan brugerne heller ikke bede om det.
 > Indstillingen læses ved opstart, så appen skal genstartes efter en ændring.
 > Med `TEAMS_ARTIFACT_MODE=transcript-only` bliver optagelses-tilladelsen slet
-> ikke bedt om.
+> ikke bedt om. `Files.ReadWrite` bliver heller ikke bedt om dér, og heller ikke
+> med `TEAMS_DELETE_RECORDING=false`.
+>
+> **Ved opgradering:** `Files.ReadWrite` er ny. Har I allerede givet samtykke til de
+> øvrige tilladelser, skal den tilføjes og samtykket gives igen, før den nye version
+> tages i brug. Ellers rammer alle Microsoft-logins samme *"Need admin approval"*.
 
 ## Trin 2. Tillad optagelse og transskription i Teams
 
@@ -142,12 +148,35 @@ trin 2 eller trin 3.
 ## Hvor ligger data?
 
 Teams gemmer selv optagelsen i arrangørens OneDrive og transskriptionen på
-mødet, efter organisationens egne opbevaringsregler. Det er Microsofts
-standardopførsel og ikke noget Memoctopus styrer.
+mødet. Det er Microsofts standardopførsel.
 
-Memoctopus henter en kopi, transskriberer den og sletter derefter lyden. Selve
-lydoptagelsen bliver aldrig gemt i Memoctopus og bliver aldrig sendt til
-medarbejderens browser.
+Memoctopus henter en kopi af optagelsen, transskriberer den og sletter derefter
+lyden. Selve lydoptagelsen bliver aldrig gemt i Memoctopus og bliver aldrig sendt
+til medarbejderens browser.
+
+Når transskriptionen er færdig, sletter Memoctopus også optagelsen i arrangørens
+OneDrive. Filen slettes permanent og lægges ikke i papirkurven. Det er det,
+tilladelsen `Files.ReadWrite` bruges til, og kun til det: Microsoft Graph har
+ingen funktion til at slette en mødeoptagelse, så filen må slettes som en fil i
+medarbejderens OneDrive. Memoctopus finder den i mappen *Optagelser* på dens
+præcise størrelse i bytes og sletter intet, hvis det ikke udpeger netop én fil.
+
+Der er fire ting, sletningen ikke dækker:
+
+- Har organisationen en opbevaringspolitik eller et retskrav (hold), som forbyder
+  permanent sletning, lægges filen i papirkurven i stedet, og herefter gælder
+  organisationens egne regler.
+- Er medarbejderen kun inviteret til mødet, ligger optagelsen i arrangørens
+  OneDrive, som Memoctopus ikke har adgang til. Den bliver liggende.
+- Optagelser af kanalmøder ligger i teamets SharePoint-site og bliver liggende.
+- Teams' egen tekst-transskription ligger fortsat på mødet. Graph tilbyder ingen
+  måde at slette den på; arrangøren kan slette den i Teams.
+
+Kan Microsoft ikke nås, når optagelsen skal slettes, prøver Memoctopus igen hvert
+par minutter i op til et døgn.
+
+Ønsker kommunen at beholde optagelserne i OneDrive, kan driften sætte
+`TEAMS_DELETE_RECORDING=false`. Så bliver `Files.ReadWrite` heller ikke bedt om.
 
 Transskriptionen lægges midlertidigt som en fil på serverens lagerplads
 (`AUDIO_STORAGE_PATH`), indtil medarbejderens browser har hentet den og gemt den.
@@ -157,7 +186,9 @@ transskriptionen. Bliver den aldrig hentet (fx fordi fanen blev lukket), slettes
 filen senest cirka en time efter, at den blev lagt, af en oprydning der kører
 hvert femte minut uanset om andre møder bliver behandlet. Er filen væk, når
 medarbejderen kommer tilbage, tilbyder skærmen "Hent igen", som henter
-transskriptionen fra Teams på ny, så længe mødet er under et døgn gammelt.
+transskriptionen fra Teams på ny, så længe mødet er under et døgn gammelt. Er
+optagelsen på det tidspunkt slettet fra OneDrive, er det Teams' egen
+tekst-transskription, der hentes.
 Herefter ligger transskriptionen og referatet kun i medarbejderens browser
 (IndexedDB), ikke i en central database.
 

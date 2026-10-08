@@ -38,6 +38,9 @@ function serialize(row: TeamsMeetingRow) {
     // A run has this meeting's artifacts and is downloading/transcribing them.
     // The screen shows that instead of "Teams har ikke frigivet noget endnu".
     working: row.state === 'fetching',
+    // Where deleting the recording from the organizer's OneDrive stands, or null
+    // when this meeting had no recording to delete.
+    recordingCleanup: row.recordingCleanup,
   };
 }
 

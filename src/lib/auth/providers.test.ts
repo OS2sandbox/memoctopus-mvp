@@ -104,6 +104,7 @@ describe('microsoftGraphScopes', () => {
       'OnlineMeetings.ReadWrite',
       'OnlineMeetingTranscript.Read.All',
       'OnlineMeetingRecording.Read.All',
+      'Files.ReadWrite',
     ]);
   });
 
@@ -114,6 +115,22 @@ describe('microsoftGraphScopes', () => {
       'OnlineMeetings.ReadWrite',
       'OnlineMeetingTranscript.Read.All',
     ]);
+  });
+
+  it('leaves out the files scope when recordings are not deleted from OneDrive', () => {
+    process.env.TEAMS_GRAPH_ENABLED = 'true';
+    process.env.TEAMS_DELETE_RECORDING = ' False ';
+    expect(microsoftGraphScopes()).toEqual([
+      'OnlineMeetings.ReadWrite',
+      'OnlineMeetingTranscript.Read.All',
+      'OnlineMeetingRecording.Read.All',
+    ]);
+  });
+
+  it('keeps the files scope for anything but an explicit "false"', () => {
+    process.env.TEAMS_GRAPH_ENABLED = 'true';
+    process.env.TEAMS_DELETE_RECORDING = '';
+    expect(microsoftGraphScopes()).toContain('Files.ReadWrite');
   });
 
   it('keeps the recording scope for an unknown artifact mode', () => {

@@ -122,6 +122,21 @@ dead end and offers the saved transcript or a delete.
 - `artifacts.ts` — lists and downloads transcripts (VTT) and recordings; recording download
   follows Graph's 302 by hand with `redirect: 'manual'`, dropping the bearer once the URL
   leaves the Graph origin.
+- `recording-cleanup.ts` — `deleteRecordingFromDrive()`: removes a transcribed
+  recording from the organizer's OneDrive, so the audio does not outlive the
+  transcription in Microsoft 365 either. Graph has **no delete on `callRecording`**
+  and nothing on one names its driveItem, so the file is found in
+  `/me/drive/special/recordings` by the **exact byte count we downloaded** and
+  removed with `permanentDelete` (falling back to an ordinary delete when the tenant
+  refuses). Never match on file name or time: that could delete a recording this
+  run never fetched. More than one file of that size deletes nothing. The poller
+  owns the orchestration (`cleanUpRecording()`): `recording_cleanup = 'pending'` is
+  written in the same UPDATE that marks the row `ready`, retried every tick for a
+  day, and never changes the meeting's state. A row whose recording is gone passes
+  `recordingDeleted` to the pipeline, so "Hent igen" goes straight to Teams' own
+  transcript. Needs `Files.ReadWrite`; off with `TEAMS_DELETE_RECORDING=false`.
+  **Unverified against a real tenant** that Graph's recording content is byte-identical
+  to the stored file — see docs/testing-locally.md §B step 9.
 - `vtt.ts` — VTT parser; `turnsFromVtt()` feeds real speaker names into
   `src/lib/audio/merge-speakers.ts` (`preserveNames`), `segmentsFromVtt()` is the
   transcript-only path.
@@ -213,6 +228,7 @@ the container. Note also that `.env.deploy.example`, not `.env.example`, is what
 | `GRAPH_BASE_URL` | Microsoft Graph base URL (default `https://graph.microsoft.com/v1.0`) |
 | `TEAMS_SPOKEN_LANGUAGE` | Language Teams transcribes in (default `da-DK`) |
 | `TEAMS_ARTIFACT_MODE` | `prefer-recording` (default) or `transcript-only` (also drops the recording scope from sign-in) |
+| `TEAMS_DELETE_RECORDING` | On unless `false`: delete the recording from the organizer's OneDrive once transcribed (adds `Files.ReadWrite` to sign-in; no effect in `transcript-only`) |
 | `TEAMS_POLL_INTERVAL_MS` | Graph poll interval (default `120000`) |
 | `TEAMS_POLLER_DISABLED` | Set `true` to stop this instance from polling Graph |
 

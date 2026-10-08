@@ -14,7 +14,7 @@
 //
 // Server-only: must not import @/lib/db (it opens a pg.Pool at module scope).
 
-import { artifactMode } from '../teams/artifact-mode';
+import { artifactMode, deleteRecordingEnabled } from '../teams/artifact-mode';
 
 /** Crosses the server→client boundary as a prop — must carry no secrets. */
 export type AuthProvider =
@@ -98,6 +98,7 @@ export const GRAPH_DELEGATED_SCOPES = [
   'OnlineMeetings.ReadWrite',
   'OnlineMeetingTranscript.Read.All',
   'OnlineMeetingRecording.Read.All',
+  'Files.ReadWrite',
 ] as const;
 
 // better-auth's microsoft provider always asks for these (see
@@ -114,6 +115,11 @@ const MICROSOFT_BUILTIN_SCOPES: readonly string[] = [
 ];
 
 const RECORDING_SCOPE = 'OnlineMeetingRecording.Read.All';
+
+// Graph has no "delete this recording" call, so removing it from the organizer's
+// OneDrive afterwards (src/lib/teams/recording-cleanup.ts) goes through the drive
+// API, and its narrowest delegated permission is the user's own files, read/write.
+const FILES_SCOPE = 'Files.ReadWrite';
 
 /**
  * Whether the Teams/Graph integration is on. Opt-in and OFF by default: the
@@ -137,12 +143,16 @@ export function teamsGraphEnabled(): boolean {
  * empty while it is off; otherwise the full list, minus the recording scope in
  * transcript-only mode — the widest grant there is (video of every meeting the
  * user can reach), so it is never asked for when no recording is ever fetched.
+ * The files scope follows the same rule: asked for only while recordings are
+ * deleted from OneDrive after transcription (TEAMS_DELETE_RECORDING).
  */
 export function teamsGraphScopes(): string[] {
   if (!teamsGraphEnabled()) return [];
-  return GRAPH_DELEGATED_SCOPES.filter(
-    (s) => s !== RECORDING_SCOPE || artifactMode() !== 'transcript-only',
-  );
+  return GRAPH_DELEGATED_SCOPES.filter((s) => {
+    if (s === RECORDING_SCOPE) return artifactMode() !== 'transcript-only';
+    if (s === FILES_SCOPE) return deleteRecordingEnabled();
+    return true;
+  });
 }
 
 /** The Graph scopes to pass as `scope` on the microsoft social provider. */

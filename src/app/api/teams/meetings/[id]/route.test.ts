@@ -63,6 +63,8 @@ function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     failureReason: null,
     transcriptId: null,
     recordingId: null,
+    recordingCleanup: null,
+    recordingBytes: null,
     eventId: null,
     armResult: 'armed',
     createdAt: new Date('2026-09-08T09:00:00Z'),
@@ -130,6 +132,7 @@ describe('GET /api/teams/meetings/[id]', () => {
       enabled: true,
       working: false,
       attempts: 0,
+      recordingCleanup: null,
     });
     expect(mockPoll).not.toHaveBeenCalled();
   });

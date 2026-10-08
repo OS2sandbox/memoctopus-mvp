@@ -268,6 +268,8 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         ADD COLUMN IF NOT EXISTS event_id      TEXT,
         ADD COLUMN IF NOT EXISTS transcript_id TEXT,
         ADD COLUMN IF NOT EXISTS recording_id  TEXT,
+        ADD COLUMN IF NOT EXISTS recording_cleanup TEXT,
+        ADD COLUMN IF NOT EXISTS recording_bytes   BIGINT,
         ADD COLUMN IF NOT EXISTS created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         ADD COLUMN IF NOT EXISTS updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     `);

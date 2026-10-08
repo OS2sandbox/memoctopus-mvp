@@ -25,7 +25,7 @@ const ENV_KEYS = [
   'AUTHENTIK_CLIENT_ID', 'AUTHENTIK_CLIENT_SECRET', 'AUTHENTIK_DISCOVERY_URL',
   'EMAIL_PASSWORD_ENABLED', 'NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED', 'NEXT_PUBLIC_MICROSOFT_ENABLED',
   'BETTER_AUTH_URL', 'BETTER_AUTH_SECRET', 'BETTER_AUTH_TRUSTED_ORIGINS',
-  'TEAMS_GRAPH_ENABLED', 'TEAMS_ARTIFACT_MODE',
+  'TEAMS_GRAPH_ENABLED', 'TEAMS_ARTIFACT_MODE', 'TEAMS_DELETE_RECORDING',
 ];
 const saved: Record<string, string | undefined> = {};
 
@@ -67,6 +67,7 @@ describe('auth config — Graph scopes and token storage', () => {
       'OnlineMeetings.ReadWrite',
       'OnlineMeetingTranscript.Read.All',
       'OnlineMeetingRecording.Read.All',
+      'Files.ReadWrite',
     ]);
   });
 

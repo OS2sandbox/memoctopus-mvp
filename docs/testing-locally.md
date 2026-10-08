@@ -10,7 +10,8 @@ a real meeting to end.
 The mock (`scripts/mock-graph/server.mjs`, no dependencies) serves the slice of
 `graph.microsoft.com/v1.0` that `src/lib/teams/*` uses: `/me`, `/me/calendarView`,
 `/me/onlineMeetings` lookup by join URL, meeting option PATCH, transcripts (VTT)
-and recordings (302 to an off-origin blob, like real Graph). On macOS it
+and recordings (302 to an off-origin blob, like real Graph), plus the two drive
+calls that delete a transcribed recording from OneDrive. On macOS it
 synthesises a 30 s Danish two-speaker recording with `say` + ffmpeg and derives the
 VTT timings from it, so hviske gets real speech and speaker names line up.
 
@@ -105,6 +106,11 @@ Graph scope list. `--remove` takes it away again. Reload the dashboard: the
    waits until then. Use `mtgpast` for instant results.
 5. Flip `transcriptsDisabled` / `policyBlocked` and repeat steps 1 and 3 to see the
    admin-guide error paths.
+6. In `prefer-recording`, once `mtgpast` is ready, `/__mock/state` shows
+   `_recordingDeleted: "permanent"` on it and the request log has the
+   `/me/drive/special/recordings/children` and `…/permanentDelete` calls. Every
+   mock recording is the same file, so with two undeleted recordings at once the
+   app refuses to choose and deletes neither (`recording_cleanup = 'failed'`).
 
 The same flow through curl, which is how the smoke test in the PR was run:
 
@@ -131,7 +137,7 @@ for Teams (Business Basic or higher, or E3/E5).
    - A client secret.
    - API permissions → Microsoft Graph → *Delegated*: `OnlineMeetings.ReadWrite`,
      `OnlineMeetingTranscript.Read.All`, `OnlineMeetingRecording.Read.All`,
-     `User.Read`, `offline_access` → **Grant admin consent**.
+     `Files.ReadWrite`, `User.Read`, `offline_access` → **Grant admin consent**.
 2. **Teams admin center** → Meetings → Meeting policies → Global → Recording &
    transcription: *Transcription* **On**, *Meeting recording* **On**. Takes up to
    an hour to propagate. Without both, arming reports `policy_blocked`.
@@ -157,3 +163,12 @@ for Teams (Business Basic or higher, or E3/E5).
    → our bug. Not there → transcription never started in Teams.
 8. Try once each: a meeting where the other user is organizer, and
    `TEAMS_ARTIFACT_MODE=transcript-only`.
+9. **Recording deletion — not yet confirmed against a real tenant.** After a
+   `prefer-recording` meeting is ready, the mp4 should be gone from the organizer's
+   OneDrive → *Recordings* (and from the recycle bin), and
+   `select id, recording_cleanup, recording_bytes from u_<userId>.teams_meetings`
+   should say `deleted`. `not_found` means no file in that folder had exactly
+   `recording_bytes` bytes: compare it with the file's size in
+   `GET /me/drive/special/recordings/children?$select=name,size`. If they differ,
+   Graph's `/recordings/{id}/content` does not serve the stored file byte for byte
+   and `src/lib/teams/recording-cleanup.ts` needs another way to identify it.

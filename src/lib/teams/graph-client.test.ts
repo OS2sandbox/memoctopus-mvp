@@ -70,6 +70,7 @@ beforeEach(() => {
   refreshToken.mockReset();
   process.env.TEAMS_GRAPH_ENABLED = 'true';
   delete process.env.TEAMS_ARTIFACT_MODE;
+  delete process.env.TEAMS_DELETE_RECORDING;
   fetchMock = vi.fn();
   vi.stubGlobal('fetch', fetchMock);
   delete process.env.GRAPH_BASE_URL;
@@ -82,6 +83,7 @@ afterEach(() => {
   delete process.env.GRAPH_BASE_URL;
   delete process.env.TEAMS_GRAPH_ENABLED;
   delete process.env.TEAMS_ARTIFACT_MODE;
+  delete process.env.TEAMS_DELETE_RECORDING;
 });
 
 describe('graphOrigin', () => {
@@ -148,12 +150,13 @@ describe('getGraphAccessToken', () => {
       'OnlineMeetings.ReadWrite',
       'OnlineMeetingTranscript.Read.All',
       'OnlineMeetingRecording.Read.All',
+      'Files.ReadWrite',
     ]);
   });
 
   it('does not treat missing OIDC scopes as a consent gap', async () => {
     okToken(
-      'OnlineMeetings.ReadWrite OnlineMeetingTranscript.Read.All OnlineMeetingRecording.Read.All User.Read',
+      'OnlineMeetings.ReadWrite OnlineMeetingTranscript.Read.All OnlineMeetingRecording.Read.All Files.ReadWrite User.Read',
     );
     await expect(getGraphAccessToken('u')).resolves.toBe('tok-123');
   });
@@ -200,11 +203,17 @@ describe('getGraphAccessToken — transcript-only', () => {
     ]);
   });
 
+  it('does not require the files scope when recordings are left in OneDrive', async () => {
+    process.env.TEAMS_DELETE_RECORDING = 'false';
+    okToken(`${NO_RECORDING} OnlineMeetingRecording.Read.All`);
+    await expect(getGraphAccessToken('u')).resolves.toBe('tok-123');
+  });
+
   it('requires the recording scope again in the default mode', async () => {
     okToken(NO_RECORDING);
     await expect(getGraphAccessToken('u')).rejects.toMatchObject({
       code: 'consent_required',
-      missingScopes: ['OnlineMeetingRecording.Read.All'],
+      missingScopes: ['OnlineMeetingRecording.Read.All', 'Files.ReadWrite'],
     });
   });
 });
@@ -230,6 +239,7 @@ describe('hasGraphScopes', () => {
         'OnlineMeetings.ReadWrite',
         'OnlineMeetingTranscript.Read.All',
         'OnlineMeetingRecording.Read.All',
+        'Files.ReadWrite',
       ],
     });
   });

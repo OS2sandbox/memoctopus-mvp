@@ -16,6 +16,16 @@ export type TeamsMeetingState =
   | 'failed'
   | 'needs_reauth';
 
+/**
+ * `pending` is written before the first attempt and stays until Graph has given a
+ * definite answer, so a throttle, a restart or an expired sign-in only delays the
+ * delete. The rest are final: `deleted` (gone), `recycled` (the tenant refused a
+ * permanent delete, so it sits in the recycle bin), `not_found` (no such file in
+ * this user's Recordings folder — typically an invitee, whose organizer holds it)
+ * and `failed` (refused, ambiguous, or still unreachable after a day).
+ */
+export type RecordingCleanupState = 'pending' | 'deleted' | 'recycled' | 'not_found' | 'failed';
+
 /** Outcome of the one-shot arm PATCH, kept so the UI can explain itself later. */
 export type TeamsArmResult = 'armed' | 'armed_in_progress' | 'not_organizer' | 'policy_blocked';
 
@@ -38,6 +48,10 @@ export interface TeamsMeetingRow {
   failureReason: string | null;
   transcriptId: string | null;
   recordingId: string | null;
+  /** Where deleting the recording from the organizer's OneDrive stands; null when there was none to delete. */
+  recordingCleanup: RecordingCleanupState | null;
+  /** Size of the recording we downloaded — what identifies the file in OneDrive. */
+  recordingBytes: number | null;
   createdAt: Date | null;
 }
 
@@ -50,6 +64,8 @@ export type TeamsMeetingInput = Omit<
   | 'failureReason'
   | 'transcriptId'
   | 'recordingId'
+  | 'recordingCleanup'
+  | 'recordingBytes'
   | 'createdAt'
   | 'eventId'
   | 'armResult'
@@ -155,6 +171,8 @@ interface RawTeamsMeeting {
   failure_reason: string | null;
   transcript_id: string | null;
   recording_id: string | null;
+  recording_cleanup?: string | null;
+  recording_bytes?: number | string | null;
   created_at?: Date | string | null;
 }
 
@@ -182,6 +200,9 @@ function mapRow(raw: RawTeamsMeeting): TeamsMeetingRow {
     failureReason: raw.failure_reason ?? null,
     transcriptId: raw.transcript_id ?? null,
     recordingId: raw.recording_id ?? null,
+    recordingCleanup: (raw.recording_cleanup as RecordingCleanupState | null | undefined) ?? null,
+    // BIGINT arrives as a string from pg.
+    recordingBytes: raw.recording_bytes == null ? null : Number(raw.recording_bytes),
     createdAt: toDate(raw.created_at ?? null),
   };
 }
@@ -189,7 +210,8 @@ function mapRow(raw: RawTeamsMeeting): TeamsMeetingRow {
 const SELECT_COLUMNS = `
   id, graph_meeting_id, event_id, join_url, subject, organizer_id, is_organizer,
   armed, arm_result, scheduled_start, scheduled_end, state, last_polled_at,
-  attempts, failure_reason, transcript_id, recording_id, created_at
+  attempts, failure_reason, transcript_id, recording_id, recording_cleanup,
+  recording_bytes, created_at
 `;
 
 // ─── Queries ────────────────────────────────────────────────────────────────
@@ -372,6 +394,8 @@ export interface TeamsMeetingPatch {
   failureReason?: string | null;
   transcriptId?: string | null;
   recordingId?: string | null;
+  recordingCleanup?: RecordingCleanupState | null;
+  recordingBytes?: number | null;
 }
 
 const PATCH_COLUMNS: Record<keyof TeamsMeetingPatch, string> = {
@@ -379,6 +403,8 @@ const PATCH_COLUMNS: Record<keyof TeamsMeetingPatch, string> = {
   failureReason: 'failure_reason',
   transcriptId: 'transcript_id',
   recordingId: 'recording_id',
+  recordingCleanup: 'recording_cleanup',
+  recordingBytes: 'recording_bytes',
 };
 
 export interface MarkPollOptions {
@@ -473,6 +499,35 @@ export async function setTeamsMeetingState(
   );
   if (!result) throw new Error(`setTeamsMeetingState: no such Teams meeting: ${id}`);
   return mapRow(result);
+}
+
+/** Rows whose recording is still waiting to be deleted from OneDrive. */
+export async function listPendingRecordingCleanups(userId: string): Promise<TeamsMeetingRow[]> {
+  const rows = await queryUserSchema<RawTeamsMeeting>(
+    userId,
+    `SELECT ${SELECT_COLUMNS} FROM teams_meetings
+      WHERE recording_cleanup = 'pending' AND recording_bytes IS NOT NULL
+      ORDER BY updated_at ASC`,
+  );
+  return rows.map(mapRow);
+}
+
+/**
+ * Settles a pending cleanup. Only a row still `pending` is written, so of two runs
+ * racing on the same recording the first verdict stands — the second finds the
+ * file gone and would otherwise overwrite `deleted` with `not_found`.
+ */
+export async function settleRecordingCleanup(
+  userId: string,
+  id: string,
+  result: Exclude<RecordingCleanupState, 'pending'>,
+): Promise<void> {
+  await queryUserSchema(
+    userId,
+    `UPDATE teams_meetings SET recording_cleanup = $2, updated_at = NOW()
+      WHERE id = $1 AND recording_cleanup = 'pending'`,
+    [id, result],
+  );
 }
 
 export async function deleteTeamsMeeting(userId: string, id: string): Promise<void> {
