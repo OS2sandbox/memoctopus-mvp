@@ -38,7 +38,7 @@ curl -X POST -H "X-Cron-Secret: sim-cron-secret" http://localhost:3004/api/inter
 open http://localhost:3004      # "Simuleret kommune-login" button, then pick a person
 ```
 
-`npx tsx scripts/dev-sim/index.ts --env` prints the app's environment if you prefer to run the app yourself. Set `SIM_ACCESS_SOURCE=local` for `start-app.sh` to run the same app in local mode (the Rollekatalog stand-ins are then simply unused).
+`npx tsx scripts/dev-sim/index.ts --env` prints the app's environment if you prefer to run the app yourself. `SIM_REAL_LLM=1 scripts/dev-sim/start-app.sh` starts the app without the fake LLM, so a real `OPENAI_API_KEY` (and optionally `LLM_BASE_URL` / `LLM_MODEL`) from a gitignored `.env` in the repo root applies; the transcript text then goes to that provider, and the acceptance scripts (which read the fake LLM's record) will not pass in that mode. The same `.env` can hold `HVISKE_API_KEY` for real transcription. Set `SIM_ACCESS_SOURCE=local` for `start-app.sh` to run the same app in local mode (the Rollekatalog stand-ins are then simply unused).
 
 The control panel is at <http://127.0.0.1:4011>.
 
