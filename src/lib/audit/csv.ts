@@ -56,9 +56,13 @@ export const CSV_HEADER = [
   'Browser',
   'Anmodnings-id',
   'Detaljer',
+  'Ændringsbeskrivelse',
 ] as const;
 
-export function auditRowToCsvFields(row: AuditEventRow): unknown[] {
+/** Change notes by audit row id (looked up at read time, never stored in the log). */
+export type CsvChangeNotes = ReadonlyMap<string, { changeNote: string }>;
+
+export function auditRowToCsvFields(row: AuditEventRow, notes?: CsvChangeNotes): unknown[] {
   return [
     row.occurredAt,
     // Only a client event carries one; it is the browser's own claim (clamped), not proof.
@@ -78,11 +82,13 @@ export function auditRowToCsvFields(row: AuditEventRow): unknown[] {
     row.userAgent,
     row.requestId,
     JSON.stringify(row.details),
+    // The reason for a template change: user-written text, so csvCell neutralises formulas in it.
+    notes?.get(row.id)?.changeNote ?? '',
   ];
 }
 
 /** The whole file: BOM, header, one line per row. */
-export function auditRowsToCsv(rows: readonly AuditEventRow[]): string {
-  const lines = [CSV_HEADER.map(csvCell).join(','), ...rows.map((r) => auditRowToCsvFields(r).map(csvCell).join(','))];
+export function auditRowsToCsv(rows: readonly AuditEventRow[], notes?: CsvChangeNotes): string {
+  const lines = [CSV_HEADER.map(csvCell).join(','), ...rows.map((r) => auditRowToCsvFields(r, notes).map(csvCell).join(','))];
   return `${BOM}${lines.join('\r\n')}\r\n`;
 }

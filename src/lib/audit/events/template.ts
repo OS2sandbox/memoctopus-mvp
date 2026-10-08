@@ -4,7 +4,7 @@
 // route re-throws afterwards); such an event may have no id (a create that never got
 // one), so the id is not required.
 import { z } from 'zod';
-import { defineEvent } from './types';
+import { count, defineEvent } from './types';
 
 const TEMPLATE_FIELDS = [
   'name',
@@ -29,11 +29,14 @@ export const templateEvents = {
   'template.update': defineEvent({
     ...base,
     // hasChangeNote: whether the person wrote an (optional) note about the edit; the note itself
-    // lives only in their own schema and never reaches the log.
+    // lives only in their own schema and never reaches audit_events. `version` is the history version
+    // of that edit, so the viewer and the CSV export can look the note up at read time (same as the
+    // central templates' notes).
     details: z
       .object({
         changedFields: z.array(z.enum(TEMPLATE_FIELDS)).max(TEMPLATE_FIELDS.length),
         hasChangeNote: z.boolean(),
+        version: count().min(1).optional(),
       })
       .strict(),
   }),

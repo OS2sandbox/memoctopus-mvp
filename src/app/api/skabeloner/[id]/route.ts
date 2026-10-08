@@ -65,14 +65,14 @@ export const PUT = withHandler('skabeloner/[id] PUT', async (req: NextRequest, {
     throw err;
   }
   if (!result) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });
-  const { skabelon, changedFields: changed } = result;
+  const { skabelon, changedFields: changed, version } = result;
   if (changed.length > 0) {
     await recordServerEvent(req, {
       type: 'template.update',
       actorUserId: session.user.id,
       entityId: skabelon.id,
-      // Whether a note was written, never the note.
-      details: { changedFields: changed, hasChangeNote: changeNote !== null },
+      // Whether a note was written, never the note; the version lets the log look it up at read time.
+      details: { changedFields: changed, hasChangeNote: changeNote !== null, ...(version !== null ? { version } : {}) },
     });
   }
   return NextResponse.json({ skabelon });

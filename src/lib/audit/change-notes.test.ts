@@ -67,4 +67,59 @@ describe('changeNotesFor', () => {
     const notes = await changeNotesFor([row({ id: '9' })], { query: vi.fn().mockResolvedValue({ rows: [] }) });
     expect(notes.has('9')).toBe(false);
   });
+
+  describe('personal template notes', () => {
+    const P1 = '33333333-3333-4333-8333-333333333333';
+    const P2 = '44444444-4444-4444-8444-444444444444';
+    const personalRow = (over: Partial<AuditEventRow>) =>
+      row({ eventType: 'template.update', entityType: 'template', actorUserId: 'user-a', entityId: P1, details: { changedFields: ['prompt'], hasChangeNote: true, version: 3 }, ...over });
+
+    it('looks a personal note up per actor, in that person\'s own history, and keys it by audit row id', async () => {
+      const query = vi.fn();
+      const personal = vi.fn().mockImplementation(async (userId: string) =>
+        userId === 'user-a' ? [{ skabelon_id: P1, version: 3, change_note: 'Gjorde tonen mere formel.' }] : [{ skabelon_id: P2, version: 1, change_note: 'Første udgave.' }],
+      );
+      const notes = await changeNotesFor(
+        [personalRow({ id: '20' }), personalRow({ id: '21', actorUserId: 'user-b', entityId: P2, details: { changedFields: ['name'], hasChangeNote: true, version: 1 } })],
+        { query, personal },
+      );
+      expect(query).not.toHaveBeenCalled(); // no central rows
+      expect(personal).toHaveBeenCalledTimes(2);
+      expect(personal).toHaveBeenCalledWith('user-a', [P1], [3]);
+      expect(personal).toHaveBeenCalledWith('user-b', [P2], [1]);
+      expect(notes.get('20')).toEqual({ changeNote: 'Gjorde tonen mere formel.', templateName: null });
+      expect(notes.get('21')).toEqual({ changeNote: 'Første udgave.', templateName: null });
+    });
+
+    it('does not look up edits without a note, without a version (older events), without an actor, or with a bad id', async () => {
+      const query = vi.fn();
+      const personal = vi.fn();
+      const notes = await changeNotesFor(
+        [
+          personalRow({ id: '1', details: { changedFields: ['prompt'], hasChangeNote: false, version: 3 } }),
+          personalRow({ id: '2', details: { changedFields: ['prompt'], hasChangeNote: true } }),
+          personalRow({ id: '3', actorUserId: null }),
+          personalRow({ id: '4', entityId: 'not-a-uuid' }),
+          personalRow({ id: '5', eventType: 'template.delete', details: {} }),
+        ],
+        { query, personal },
+      );
+      expect(personal).not.toHaveBeenCalled();
+      expect(notes.size).toBe(0);
+    });
+
+    it('ignores a version the person no longer has, and a row that is not a string note', async () => {
+      const personal = vi.fn().mockResolvedValue([{ skabelon_id: P1, version: 9, change_note: 'Anden version.' }, { skabelon_id: P1, version: 3, change_note: null }]);
+      const notes = await changeNotesFor([personalRow({ id: '30' })], { query: vi.fn(), personal });
+      expect(notes.size).toBe(0);
+    });
+
+    it('does the central lookup and the personal lookup side by side', async () => {
+      const query = vi.fn().mockResolvedValue({ rows: [{ template_id: T1, version: 2, change_note: 'Præciserer tonen.', template_name: 'Referat' }] });
+      const personal = vi.fn().mockResolvedValue([{ skabelon_id: P1, version: 3, change_note: 'Min note.' }]);
+      const notes = await changeNotesFor([row({ id: '10' }), personalRow({ id: '11' })], { query, personal });
+      expect(notes.get('10')?.changeNote).toBe('Præciserer tonen.');
+      expect(notes.get('11')?.changeNote).toBe('Min note.');
+    });
+  });
 });

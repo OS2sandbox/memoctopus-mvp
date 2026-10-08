@@ -282,6 +282,14 @@ async function main() {
   const updates = (await db.query(`select details::text as d from public.audit_events where event_type = 'template.update'`)).rows.map((r) => r.d);
   check('the audit log says only THAT a note was written, never the note', updates.some((d) => d.includes('"hasChangeNote": true')) && updates.every((d) => !d.includes(PRIVATE_NOTE)), updates.join(' '));
   check('the note is nowhere in the shared schema', (await db.query(`select count(*)::int as n from public.audit_events where details::text like $1 or entity_id::text like $1`, [`%${PRIVATE_NOTE}%`])).rows[0].n === 0);
+  // ...but the log READER sees it: looked up at read time in the person's own history, in the viewer and in the CSV.
+  const logView = await adminUser.get(`/api/admin/audit?entityId=${ownId}&limit=100`);
+  const ownEvents = (logView.json?.events ?? []).filter((e: any) => e.eventType === 'template.update' && e.entityId === ownId);
+  check('the log viewer shows the personal note to the audit reader (only on the edit that wrote it)', ownEvents.length === 2 && ownEvents.filter((e: any) => e.changeNote === PRIVATE_NOTE).length === 1 && ownEvents.filter((e: any) => e.changeNote === undefined).length === 1, brief(logView));
+  const csv = await adminUser.get('/api/admin/audit/export');
+  check('the CSV export has a change-note column and holds the note', csv.status === 200 && csv.text.split('\r\n')[0].endsWith('Ændringsbeskrivelse') && csv.text.includes(PRIVATE_NOTE), `status ${csv.status}`);
+  const stillNone = (await db.query(`select count(*)::int as n from public.audit_events where details::text like $1`, [`%${PRIVATE_NOTE}%`])).rows[0].n;
+  check('...while audit_events itself still holds no note', stillNone === 0, String(stillNone));
 
   // ─────────────────────────────────────────────────────────────────────
   heading('8. Failed SAML logins are audited, claim values never are');

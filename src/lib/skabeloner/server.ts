@@ -195,6 +195,8 @@ export interface SkabelonUpdateResult {
   skabelon: Skabelon;
   /** Field names whose value changed (empty when only a note was written, or nothing changed). */
   changedFields: Array<(typeof TRACKED_FIELDS)[number]>;
+  /** The history version this edit wrote (the audit event names it so the note can be looked up); null when none was written. */
+  version: number | null;
 }
 
 /**
@@ -240,6 +242,7 @@ export async function updateSkabelonWithHistory(
     );
     const skabelon = mapSkabelon(row);
     const changed = changedSkabelonFields(prev, skabelon);
+    let version: number | null = null;
     if (changed.length > 0 || changeNote !== null) {
       await bestEffortVersion(q, async () => {
         // A template that predates the changelog gets its version 1 (the state before this edit) first.
@@ -253,10 +256,11 @@ export async function updateSkabelonWithHistory(
           `${INSERT_VERSION_SQL} RETURNING version`,
           versionParams(skabelon, changed, changeNote),
         );
+        version = written?.version ?? null;
         if (written && written.version > SKABELON_VERSION_CAP) await pruneVersions(q, id, written.version);
       });
     }
-    return { skabelon, changedFields: changed };
+    return { skabelon, changedFields: changed, version };
   });
 }
 

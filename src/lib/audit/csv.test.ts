@@ -104,6 +104,25 @@ describe('auditRowsToCsv', () => {
     expect(csv).toContain('"{""format"":""pdf"",""n"":2}"');
   });
 
+  it('has a last column with the change note looked up at read time, empty without one', () => {
+    expect(CSV_HEADER[CSV_HEADER.length - 1]).toBe('Ændringsbeskrivelse');
+    const r = row({ id: '9', eventType: 'template.update', details: { changedFields: ['prompt'], hasChangeNote: true, version: 2 } });
+    const notes = new Map([['9', { changeNote: 'Gjorde tonen mere formel, tak.' }]]);
+    const withNote = auditRowToCsvFields(r, notes);
+    expect(withNote).toHaveLength(CSV_HEADER.length);
+    expect(withNote[withNote.length - 1]).toBe('Gjorde tonen mere formel, tak.');
+    expect(auditRowToCsvFields(r)[CSV_HEADER.length - 1]).toBe('');
+    expect(auditRowToCsvFields(row({ id: '10' }), notes)[CSV_HEADER.length - 1]).toBe('');
+    expect(auditRowsToCsv([r], notes)).toContain('"Gjorde tonen mere formel, tak."');
+  });
+
+  it('neutralises a note that starts like a formula and keeps its line breaks inside one quoted cell', () => {
+    const csv = auditRowsToCsv([row({ id: '9' })], new Map([['9', { changeNote: '=HYPERLINK("http://x")' }]]));
+    expect(csv).toContain(`"'=HYPERLINK(""http://x"")"`);
+    const multi = auditRowsToCsv([row({ id: '9' })], new Map([['9', { changeNote: 'Linje 1\nLinje 2' }]]));
+    expect(multi).toContain('"Linje 1\nLinje 2"');
+  });
+
   it('survives an empty result: header only', () => {
     expect(auditRowsToCsv([])).toBe(`\uFEFF${CSV_HEADER.map(csvCell).join(',')}\r\n`);
   });

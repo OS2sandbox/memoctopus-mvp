@@ -41,6 +41,8 @@ const FIELDS = ['name', 'description', 'prompt', 'includeDeltagere', 'includeBes
 const outcome = (next: Record<string, unknown>) => ({
   skabelon: next,
   changedFields: FIELDS.filter((f) => (SAMPLE_SKABELON as Record<string, unknown>)[f] !== next[f]),
+  // The history version the edit wrote; the audit event carries it so the log can look the note up.
+  version: 4,
 });
 const mockUpdateSkabelon = {
   mockReset: () => mockUpdateRaw.mockReset(),
@@ -152,7 +154,7 @@ describe('PUT /api/skabeloner/[id]', () => {
       type: 'template.update',
       actorUserId: 'user-123',
       entityId: SK_ID,
-      details: { changedFields: ['name', 'prompt', 'includeDato'], hasChangeNote: false },
+      details: { changedFields: ['name', 'prompt', 'includeDato'], hasChangeNote: false, version: 4 },
     });
     expect(JSON.stringify(event)).not.toMatch(/Fortrolig|Testskabelon/);
     // The service writes the changelog entry in the same transaction, here without a note.
@@ -169,7 +171,7 @@ describe('PUT /api/skabeloner/[id]', () => {
       expect(res.status).toBe(200);
       expect(mockUpdateRaw.mock.calls[0][3]).toBe(NOTE);
       const [, event] = mockRecord.mock.calls[0];
-      expect(event).toEqual({ type: 'template.update', actorUserId: 'user-123', entityId: SK_ID, details: { changedFields: ['prompt'], hasChangeNote: true } });
+      expect(event).toEqual({ type: 'template.update', actorUserId: 'user-123', entityId: SK_ID, details: { changedFields: ['prompt'], hasChangeNote: true, version: 4 } });
       expect(JSON.stringify(mockRecord.mock.calls)).not.toContain('formel');
       // The note is not part of the updated template either.
       expect(mockUpdateRaw.mock.calls[0][2]).not.toHaveProperty('changeNote');

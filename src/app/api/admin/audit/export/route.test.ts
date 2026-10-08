@@ -4,7 +4,7 @@ vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers(
 vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
 vi.mock('@/lib/db', () => ({ pool: { query: vi.fn() }, db: {} }));
-vi.mock('@/lib/audit/record', () => ({ recordServerEvent: vi.fn() }));
+vi.mock('@/lib/audit/record', async (orig) => ({ ...(await orig<typeof import('@/lib/audit/record')>()), recordServerEvent: vi.fn() }));
 vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
 vi.mock('@/lib/audit/query', async (orig) => ({
   ...(await orig<typeof import('@/lib/audit/query')>()),
@@ -13,6 +13,7 @@ vi.mock('@/lib/audit/query', async (orig) => ({
 }));
 
 import { GET } from './route';
+import { pool } from '@/lib/db';
 
 import { AUDIT_EXPORT_MAX_ROWS as EXPORT_MAX_ROWS } from '@/lib/audit/csv';
 import { auth } from '@/lib/auth';
@@ -149,5 +150,31 @@ describe('GET /api/admin/audit/export (audit.export)', () => {
     expect((await GET(req(qs), NO_PARAMS)).status).toBe(400);
     expect(mockCollect).not.toHaveBeenCalled();
     expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  describe('change notes (looked up at read time, never stored in the log)', () => {
+    const CENTRAL = '11111111-1111-4111-8111-111111111111';
+    const central = (over: Partial<AuditEventRow> = {}) =>
+      row({ id: '8', eventType: 'central_template.update', entityType: 'central_template', entityId: CENTRAL, details: { version: 2 }, ...over });
+
+    it('puts the note of a template change in the last column of the file', async () => {
+      mockCollect.mockResolvedValueOnce({ rows: [central()], truncated: false });
+      vi.mocked(pool.query).mockResolvedValueOnce({ rows: [{ template_id: CENTRAL, version: 2, change_note: 'Præciserer tonen.', template_name: 'Referat' }] } as never);
+      const res = await GET(req(), NO_PARAMS);
+      expect(res.status).toBe(200);
+      const csv = await res.text();
+      expect(csv.split('\r\n')[0]).toContain('Ændringsbeskrivelse');
+      expect(csv).toContain('Præciserer tonen.');
+    });
+
+    it('refuses the export (and does not record it) when the notes cannot be fetched', async () => {
+      mockCollect.mockResolvedValueOnce({ rows: [central()], truncated: false });
+      vi.mocked(pool.query).mockRejectedValueOnce(new Error('connection lost'));
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const res = await GET(req(), NO_PARAMS);
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: expect.stringContaining('ændringsbeskrivelserne') });
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
   });
 });
