@@ -84,9 +84,17 @@ export function TopBar() {
             fontFamily: 'var(--mono)', fontWeight: 500, fontSize: 14,
             letterSpacing: '-0.03em', color: 'var(--ink)',
             textDecoration: 'none', flexShrink: 0,
+            display: 'flex', alignItems: 'center',
           }}
         >
-          memoctopus<span style={{ color: 'var(--accent)', padding: '0 5px' }}>·</span>referat
+          {/* The official OS2 lockup, and nothing beside it. A plain <img> rather
+              than next/image: it is a static SVG in public/, and next/image would
+              need dangerouslyAllowSVG to serve it at all. */}
+          <img
+            src="/brand/os2taletiltekst.svg"
+            alt="OS2taletiltekst"
+            style={{ height: 22, width: 'auto', display: 'block' }}
+          />
         </Link>
 
         {/* Nav */}

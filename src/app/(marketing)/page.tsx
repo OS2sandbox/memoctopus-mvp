@@ -1,5 +1,4 @@
 import { Suspense } from 'react';
-import { LogoMark } from '@/components/brand/logo-mark';
 import { HeroForm } from '@/components/auth/hero-form';
 import { emailPasswordEnabled, enabledAuthProviders } from '@/lib/auth/providers';
 
@@ -21,18 +20,13 @@ export default function SignInPage() {
       fontFamily: 'var(--font-geist-sans)',
     }}>
       <div style={{ width: '100%', maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 24 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
-          <LogoMark size={28} />
-          <span style={{
-            fontFamily: 'var(--font-geist-mono)',
-            fontWeight: 500,
-            fontSize: 15,
-            letterSpacing: '-0.03em',
-            color: 'var(--ink)',
-            whiteSpace: 'nowrap',
-          }}>
-            memoctopus<span style={{ color: 'var(--accent)', padding: '0 5px' }}>·</span>referat
-          </span>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/brand/os2taletiltekst.svg"
+            alt="OS2taletiltekst"
+            style={{ height: 26, width: 'auto', display: 'block' }}
+          />
         </div>
         <div style={{
           background: 'var(--surface)',
