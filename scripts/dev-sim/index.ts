@@ -37,7 +37,7 @@ async function main() {
     const claimPeople: Persona[] = [
       { username: 'admin.a', name: 'Alma Administrator', email: 'admin.a@example.dk', emailVerified: true, note: 'claims: referat-admin', claims: { roles: ['referat-admin'], memberOf: 'G-Borgerservice;G-Okonomi' } },
       { username: 'super.s', name: 'Svend Superbruger', email: 'super.s@example.dk', emailVerified: true, note: 'claims: referat-superuser (global skabelonansvarlig)', claims: { roles: ['referat-superuser'], memberOf: 'G-Borgerservice' } },
-      { username: 'log.l', name: 'Lene Logleser', email: 'log.l@example.dk', emailVerified: true, note: 'claims: referat-log', claims: { roles: ['referat-log'] } },
+      { username: 'log.l', name: 'Lene Loglæser', email: 'log.l@example.dk', emailVerified: true, note: 'claims: referat-log', claims: { roles: ['referat-log'] } },
       { username: 'bruger.c', name: 'Carl Bruger', email: 'bruger.c@example.dk', emailVerified: true, note: 'claims: referat-bruger + en rolle appen ikke kender', claims: { roles: ['referat-bruger', 'ukendt-rolle'], memberOf: 'G-Okonomi;G-Ukendt' } },
       { username: 'bruger.d', name: 'Dorte Bruger', email: 'bruger.d@example.dk', emailVerified: true, note: 'claims: referat-bruger (holder IKKE den rolle, delte prompts rettes mod)', claims: { roles: ['referat-bruger'] } },
       { username: 'ingen.i', name: 'Ingrid Ingenrolle', email: 'ingen.i@example.dk', emailVerified: true, note: 'claims: ingen roller', claims: {} },

@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableEmptyRow, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useMe } from '@/lib/hooks/use-me';
@@ -178,28 +179,31 @@ export function CentralTemplatesAdmin() {
       <ErrorBanner message={loadError ?? catalogueError} onRetry={retry} />
       <ErrorBanner message={actionError} />
 
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <Select
-          label="Vis"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value as Filter)}
-          wrapperClassName="w-48"
-        >
-          <option value="active">Aktive</option>
-          <option value="archived">Arkiverede</option>
-          <option value="all">Alle</option>
-        </Select>
-        <div className="flex flex-wrap items-center gap-2">
-          {canManage && catalogueInfo.canRefresh && (
-            <Button type="button" variant="outline" onClick={() => refreshCatalogue()} disabled={refreshing}>
-              {refreshing ? 'Opdaterer …' : 'Opdatér rollekatalog'}
-            </Button>
-          )}
-          {canManage && (
-            <Button type="button" onClick={() => openEditor(null)}>
-              Ny central skabelon
-            </Button>
-          )}
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="central-templates-filter">Vis</Label>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Select
+            id="central-templates-filter"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value as Filter)}
+            wrapperClassName="w-48"
+          >
+            <option value="active">Aktive</option>
+            <option value="archived">Arkiverede</option>
+            <option value="all">Alle</option>
+          </Select>
+          <div className="flex flex-wrap items-center gap-2">
+            {canManage && catalogueInfo.canRefresh && (
+              <Button type="button" variant="outline" onClick={() => refreshCatalogue()} disabled={refreshing}>
+                {refreshing ? 'Opdaterer …' : 'Opdatér rollekatalog'}
+              </Button>
+            )}
+            {canManage && (
+              <Button type="button" onClick={() => openEditor(null)}>
+                Ny central skabelon
+              </Button>
+            )}
+          </div>
         </div>
       </div>
       {refreshNote && (

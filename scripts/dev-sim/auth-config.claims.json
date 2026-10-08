@@ -48,7 +48,7 @@
   "catalogue": [
     { "kind": "role", "identifier": "referat-admin", "name": "Referat: administrator" },
     { "kind": "role", "identifier": "referat-superuser", "name": "Referat: superbruger" },
-    { "kind": "role", "identifier": "referat-log", "name": "Referat: logleser" },
+    { "kind": "role", "identifier": "referat-log", "name": "Referat: loglæser" },
     { "kind": "role", "identifier": "referat-bruger", "name": "Referat: bruger" },
     { "kind": "group", "identifier": "G-Borgerservice", "name": "Borgerservice" },
     { "kind": "group", "identifier": "G-Okonomi", "name": "Økonomi" }

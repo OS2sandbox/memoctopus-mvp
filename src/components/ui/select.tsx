@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { cn } from '@/lib/utils';
+import { Label } from '@/components/ui/label';
 
 interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
   /** Visible label, associated with the select via htmlFor/id. */
@@ -20,9 +21,7 @@ const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
     return (
       <div className={cn('flex flex-col gap-1.5', wrapperClassName)}>
         {label && (
-          <label htmlFor={selectId} className="text-sm font-medium text-[var(--ink)]">
-            {label}
-          </label>
+          <Label htmlFor={selectId}>{label}</Label>
         )}
         <select
           ref={ref}

@@ -59,7 +59,7 @@ describe('RoleGrantDialog — scope rules per role', () => {
     expect(within(select).getByRole('option', { name: 'Hele organisationen' })).toBeInTheDocument();
   });
 
-  it('makes the unit optional for Logleser (global allowed) and hides it for Administrator (global only)', async () => {
+  it('makes the unit optional for Loglæser (global allowed) and hides it for Administrator (global only)', async () => {
     setup();
     await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-logleser');
     const select = screen.getByLabelText('Organisationsenhed (valgfri)');

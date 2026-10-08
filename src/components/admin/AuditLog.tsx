@@ -153,7 +153,13 @@ function TechnicalDetails({ e }: { e: AuditEventView }) {
   return (
     <details className="mt-2 text-[13px]">
       <summary className="cursor-pointer select-none text-[var(--muted)] hover:text-[var(--ink-2)]">Tekniske detaljer</summary>
-      <dl className="mt-2 grid grid-cols-[7rem_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-sm bg-[var(--surface-2)] px-3 py-2">
+      <dl className="mt-2 grid grid-cols-[9.5rem_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-sm bg-[var(--surface-2)] px-3 py-2">
+        {e.changeNote && (
+          <div className="contents">
+            <dt className="text-[var(--muted)]">Ændringsbeskrivelse</dt>
+            <dd className="m-0 whitespace-pre-wrap text-[13px] text-[var(--ink)] [overflow-wrap:anywhere]">{e.changeNote}</dd>
+          </div>
+        )}
         {rows.map(([label, value]) =>
           value ? (
             <div key={label} className="contents">
@@ -187,7 +193,6 @@ function clientTimeToShow(e: AuditEventView): string | null {
 
 function EventRow({ e }: { e: AuditEventView }) {
   const clientTime = clientTimeToShow(e);
-  const version = typeof e.details.version === 'number' ? e.details.version : null;
   return (
     <li className="flex flex-col gap-1 border-b border-[var(--line)] px-1 py-3.5 last:border-b-0 sm:flex-row sm:gap-4">
       <div className="shrink-0 text-[13px] text-[var(--muted)] sm:w-40 sm:pt-0.5">
@@ -204,15 +209,6 @@ function EventRow({ e }: { e: AuditEventView }) {
           {e.outcome !== 'success' && <Badge variant={outcomeVariant[e.outcome] ?? 'outline'}>{outcomeLabels[e.outcome] ?? e.outcome}</Badge>}
           {e.source === 'client' && <Badge variant="secondary">{sourceBadgeLabels.client}</Badge>}
         </p>
-        {e.changeNote && (
-          <div className="mt-2.5 rounded-sm border-l-4 border-[var(--accent)] bg-[var(--accent-wash)] px-4 py-3.5">
-            <div className="text-[12px] font-semibold uppercase tracking-wide text-[var(--ink-2)]">
-              Ændringsbeskrivelse
-              {version !== null && <span className="font-normal normal-case"> · version {version}</span>}
-            </div>
-            <p className="m-0 mt-1.5 whitespace-pre-wrap break-words text-[16px] leading-relaxed text-[var(--ink)]">{e.changeNote}</p>
-          </div>
-        )}
         <TechnicalDetails e={e} />
       </div>
     </li>
@@ -353,7 +349,7 @@ export function AuditLog() {
         }}
         className="flex flex-col gap-3"
       >
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_12rem_12rem]">
+        <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[minmax(0,1fr)_12rem_12rem]">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="audit-search">Søg efter bruger</Label>
             <div className="flex gap-2">

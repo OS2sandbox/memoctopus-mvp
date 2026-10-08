@@ -7,7 +7,7 @@ import type { Capability, RoleKey } from './types';
 export const roleLabels: Record<RoleKey, string> = {
   'tt-bruger': 'Bruger',
   'tt-skabelonansvarlig': 'Skabelonansvarlig',
-  'tt-logleser': 'Logleser',
+  'tt-logleser': 'Loglæser',
   'tt-administrator': 'Administrator',
 };
 

@@ -54,7 +54,7 @@ describe('UsersAdmin — rendering', () => {
     const row = (await screen.findByText('Bo Bruger')).closest('tr')!;
     expect(within(row).getByText('Skabelonansvarlig')).toBeInTheDocument();
     expect(within(row).getByText('Børn – Denne enhed og alle underenheder')).toBeInTheDocument();
-    expect(within(row).getByText('Logleser')).toBeInTheDocument();
+    expect(within(row).getByText('Loglæser')).toBeInTheDocument();
     expect(within(row).getByText('Hele organisationen')).toBeInTheDocument();
     expect(within(row).getByText('Lokal')).toBeInTheDocument();
     expect(within(row).getByText('Rollekatalog')).toBeInTheDocument();
@@ -161,7 +161,7 @@ describe('UsersAdmin — write controls by mode and role', () => {
     expect(screen.getByRole('button', { name: 'Tildel rolle til Bo Bruger' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Fjern Skabelonansvarlig fra Bo Bruger' })).toBeInTheDocument();
     // The synced (rollekatalog) row is never editable here.
-    expect(screen.queryByRole('button', { name: 'Fjern Logleser fra Bo Bruger' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Fjern Loglæser fra Bo Bruger' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Tildel rolle til Dan Deaktiv' })).toBeDisabled();
   });
 

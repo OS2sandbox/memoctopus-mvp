@@ -82,7 +82,7 @@ describe('AuditLog', () => {
     expect(within(row).queryByText('IP-adresse')).toBeNull();
   });
 
-  it('shows the change note of a central template change prominently, under the sentence', async () => {
+  it('keeps the change note of a central template change inside the collapsed technical details', async () => {
     const NOTE = 'Tonen er gjort mere formel efter ønske fra afdelingen.\nBrug "mødet besluttede".';
     setup(ADMIN_ME, () =>
       json({
@@ -94,19 +94,21 @@ describe('AuditLog', () => {
       }),
     );
     render(<AuditLog />);
-    const heading = await screen.findByText(/Ændringsbeskrivelse/);
-    expect(heading).toHaveTextContent('version 3');
-    const block = heading.parentElement!;
+    const sentence = await screen.findByText('Anne Admin ændrede den centrale skabelon »Standardreferat« (version 3)');
+    const row = sentence.closest('li')!;
+    // The note is a row of the technical details (closed by default), not a block of its own under the sentence.
+    const label = within(row).getByText('Ændringsbeskrivelse');
+    const details = label.closest('details')!;
+    expect(details).not.toBeNull();
+    expect(details.open).toBe(false);
+    expect(within(details).getByText('Tekniske detaljer')).toBeInTheDocument();
+    const value = label.nextElementSibling as HTMLElement;
     // Whitespace and line breaks of the note are kept (pre-wrap) and the full text is shown.
-    expect(block.querySelector('p')!.textContent).toBe(NOTE);
-    expect(block.querySelector('p')!.className).toContain('whitespace-pre-wrap');
-    expect(block.className).toContain('bg-[var(--accent-wash)]');
-    // The sentence names the template and version, and comes before the note in the same row.
-    const row = block.closest('li')!;
-    const sentence = within(row).getByText('Anne Admin ændrede den centrale skabelon »Standardreferat« (version 3)');
-    expect(sentence.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // Only the event that has a note gets a note block.
-    expect(screen.getAllByText(/Ændringsbeskrivelse/)).toHaveLength(1);
+    expect(value.textContent).toBe(NOTE);
+    expect(value.className).toContain('whitespace-pre-wrap');
+    expect(row.querySelector('[class*="accent-wash"]')).toBeNull();
+    // Only the event that has a note gets a note row.
+    expect(screen.getAllByText('Ændringsbeskrivelse')).toHaveLength(1);
     expect(screen.getByText('Anne Admin arkiverede den centrale skabelon »Standardreferat«, så den er fjernet for alle (version 2)')).toBeInTheDocument();
   });
 

@@ -34,7 +34,7 @@ Menu names differ by version and language; confirm them in your installation.
    |---|---|---|
    | `tt-bruger` | Bruger | no |
    | `tt-skabelonansvarlig` | Skabelonansvarlig | yes (needed: without a unit the role grants nothing, section 4) |
-   | `tt-logleser` | Logleser | yes (needed unless listed in `ROLLEKATALOG_GLOBAL_ROLES`) |
+   | `tt-logleser` | Loglæser | yes (needed unless listed in `ROLLEKATALOG_GLOBAL_ROLES`) |
    | `tt-administrator` | Administrator | no (cannot be scoped to a unit; constraint values are ignored) |
 
    For a role that takes a constraint, use the organisation-unit constraint type (internal `http://digital-identity.dk/constraints/orgunit/1`, "Enhed", or KOMBIT `.../orgenhed/1`). Other constraint types, KLE for instance, are never used as scope, and they are dropped when the answer is parsed (only the fact that such a constraint existed is kept). An assignment that carries a non-empty constraint of another type and no usable org-unit scope gets **no row**, even for a role in `ROLLEKATALOG_GLOBAL_ROLES` and for `tt-administrator`: it is restricted in a way the app cannot read, so it is never widened to global (counted as `assignmentsWithoutScope`). Only an assignment with no constraint at all can become global.
