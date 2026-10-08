@@ -1,8 +1,25 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { tabTo } from '@/test/keyboard';
+import { getStep } from '@/lib/onboarding/steps';
+import { OnboardingProvider } from '@/lib/onboarding/context';
+import { renderWithOnboarding } from '@/test/onboarding';
 import { SkabelonEditor } from './SkabelonEditor';
+
+// rerender() replaces the whole tree render() was given, so a rerender with a bare
+// <SkabelonEditor> (no OnboardingProvider) drops the Tooltip.Provider it needs too —
+// wrap every rerender the same way renderWithOnboarding wraps the first render (same
+// default `initial` it uses, so this never triggers the client-side onboarding fetch).
+function withOnboarding(ui: React.ReactElement) {
+  return (
+    <OnboardingProvider initial={{ tourSkipped: true, tourCompleted: true, seen: [] }}>
+      {ui}
+    </OnboardingProvider>
+  );
+}
 import type { Skabelon } from '@/types';
 import { encodeSkabelonCode } from '@/lib/skabeloner/share-code';
 
@@ -66,7 +83,7 @@ function renderEditor(
     onSaved: vi.fn(),
     shareConfig: { code: true, link: false },
   };
-  return render(<SkabelonEditor {...defaults} {...props} />);
+  return renderWithOnboarding(<SkabelonEditor {...defaults} {...props} />);
 }
 
 // ---------------------------------------------------------------------------
@@ -176,34 +193,40 @@ describe('SkabelonEditor — form reset on open', () => {
     const { rerender } = renderEditor({ open: false, skabelon: null });
     // Open with a skabelon first
     rerender(
-      <SkabelonEditor
-        open={true}
-        onOpenChange={vi.fn()}
-        skabelon={SAMPLE_SKABELON}
-        onSaved={vi.fn()}
-        shareConfig={{ code: true, link: false }}
-      />,
+      withOnboarding(
+        <SkabelonEditor
+          open={true}
+          onOpenChange={vi.fn()}
+          skabelon={SAMPLE_SKABELON}
+          onSaved={vi.fn()}
+          shareConfig={{ code: true, link: false }}
+        />,
+      ),
     );
     expect(screen.getByLabelText('Navn')).toHaveValue('Bestyrelsesmøde');
 
     // Close then reopen with null
     rerender(
-      <SkabelonEditor
-        open={false}
-        onOpenChange={vi.fn()}
-        skabelon={null}
-        onSaved={vi.fn()}
-        shareConfig={{ code: true, link: false }}
-      />,
+      withOnboarding(
+        <SkabelonEditor
+          open={false}
+          onOpenChange={vi.fn()}
+          skabelon={null}
+          onSaved={vi.fn()}
+          shareConfig={{ code: true, link: false }}
+        />,
+      ),
     );
     rerender(
-      <SkabelonEditor
-        open={true}
-        onOpenChange={vi.fn()}
-        skabelon={null}
-        onSaved={vi.fn()}
-        shareConfig={{ code: true, link: false }}
-      />,
+      withOnboarding(
+        <SkabelonEditor
+          open={true}
+          onOpenChange={vi.fn()}
+          skabelon={null}
+          onSaved={vi.fn()}
+          shareConfig={{ code: true, link: false }}
+        />,
+      ),
     );
     expect(screen.getByLabelText('Navn')).toHaveValue('');
   });
@@ -969,7 +992,7 @@ describe('SkabelonEditor — paste import (link)', () => {
 
 describe('SkabelonEditor — default shareConfig', () => {
   it('uses code=true by default (paste affordance is visible)', () => {
-    render(
+    renderWithOnboarding(
       <SkabelonEditor
         open={true}
         onOpenChange={vi.fn()}
@@ -978,5 +1001,17 @@ describe('SkabelonEditor — default shareConfig', () => {
       />,
     );
     expect(screen.getByPlaceholderText('Indsæt kode…')).toBeInTheDocument();
+  });
+});
+
+describe('SkabelonEditor — category helper tooltip', () => {
+  it('opens when keyboard focus lands on a category button', async () => {
+    const user = userEvent.setup();
+    renderEditor();
+
+    await tabTo(user, screen.getByRole('button', { name: 'Deltagere' }));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      getStep('skabeloner.category-helper').copy,
+    );
   });
 });

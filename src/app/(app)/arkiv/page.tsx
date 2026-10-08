@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Meeting } from '@/types';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 
 type Tab = 'meetings' | 'skabeloner';
 
@@ -148,9 +149,11 @@ export default function ArkivPage() {
         </div>
 
         {tab === 'meetings' && !loading && meetings.length > 0 && !editMode && (
-          <Button variant="outline" size="sm" onClick={() => setEditMode(true)}>
-            Rediger arkiv
-          </Button>
+          <OnboardingHint stepId="arkiv.bulk-edit-button">
+            <Button variant="outline" size="sm" onClick={() => setEditMode(true)}>
+              Rediger arkiv
+            </Button>
+          </OnboardingHint>
         )}
       </div>
 

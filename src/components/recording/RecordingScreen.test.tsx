@@ -1,8 +1,34 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { tabTo } from '@/test/keyboard';
+import { getStep } from '@/lib/onboarding/steps';
 import { RecordingScreen } from './RecordingScreen';
+import { renderWithOnboarding } from '@/test/onboarding';
+
+// Onboarding hints wrap the start button, stop button, clarify panel, and
+// audio-lifecycle caption; mark them already-seen (for the "meeting-abc" id
+// used throughout this suite) so the popovers don't render and DOM queries
+// keep targeting the underlying controls (mirrors the real app, which mounts
+// RecordingScreen under the app-level OnboardingProvider).
+function render(ui: React.ReactElement) {
+  return renderWithOnboarding(ui, {
+    tourSkipped: true,
+    tourCompleted: true,
+    // These four are `scope: 'global'` — remembered once, not once per meeting —
+    // so they are seeded without a meetingId. Seeding them per meeting left them
+    // unseen, and the popover that then opened swallowed the Escape key the
+    // signal-bars tooltip test presses.
+    seen: [
+      { stepId: 'recording.start-button', meetingId: null },
+      { stepId: 'recording.stop-save-continue', meetingId: null },
+      { stepId: 'recording.clarify-panel', meetingId: null },
+      { stepId: 'recording.audio-lifecycle', meetingId: null },
+    ],
+  });
+}
 
 // ── Next.js navigation mocks ───────────────────────────────────────────────
 
@@ -1065,5 +1091,19 @@ describe('RecordingScreen — archivePromise failure surfaced to user (MEDIUM)',
       expect(screen.getByText(/lydfilen kunne ikke gemmes lokalt/)).toBeInTheDocument();
     }, { timeout: 5000 });
     expect(mockPush).not.toHaveBeenCalledWith('/meeting/meeting-abc/review');
+  });
+});
+
+describe('RecordingScreen — signal bars tooltip', () => {
+  it('opens when Tab reaches the signal bars and closes on Escape', async () => {
+    // Fake timers would stall userEvent's internal delays.
+    const user = userEvent.setup();
+    renderScreen();
+
+    await tabTo(user, screen.getByText('signal').parentElement as HTMLElement);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(getStep('recording.signal-bars').copy);
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
   });
 });
