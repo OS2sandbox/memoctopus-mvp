@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { renderWithOnboarding } from '@/test/onboarding';
 
 vi.mock('next/link', () => ({
   default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a>,
@@ -51,7 +52,7 @@ beforeEach(() => {
 
 describe('ArkivPage — bulk delete', () => {
   it('deletes every selected meeting through the shared helper', async () => {
-    render(<ArkivPage />);
+    renderWithOnboarding(<ArkivPage />);
     await selectAllAndDelete();
 
     await waitFor(() => expect(mockDelete).toHaveBeenCalledTimes(2));
@@ -64,7 +65,7 @@ describe('ArkivPage — bulk delete', () => {
     mockDelete.mockImplementation(async (id: string) => {
       if (id === 'a') throw new Error('offline');
     });
-    render(<ArkivPage />);
+    renderWithOnboarding(<ArkivPage />);
     await selectAllAndDelete();
 
     const message = await screen.findByText(/Kunne ikke slette 1 møde/);
