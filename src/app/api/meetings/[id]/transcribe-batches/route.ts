@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { prepareVadBatches, transcribeVadBatches, transcribeEnsemble, isEnsembleDiarization } from '@/lib/audio/vad-batch-server';
 import type { TranscriptSegment } from '@/types';
+import { withHandler } from '@/lib/api-handler';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { asEntityUuid, elapsedMs, emitAudit, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 interface Params {
   params: Promise<{ id: string }>;
@@ -27,20 +29,27 @@ export type TranscribeBatchesEvent =
 // throughput, not by the transport). Progress streams back as NDJSON so the client
 // can keep its live preview. No persistence — the client stores the transcript in
 // IndexedDB, same as the per-utterance path.
-export async function POST(req: NextRequest, { params }: Params) {
-  const { id: _id } = await params;
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+async function postHandler(req: NextRequest, { params }: Params) {
+  const { id } = await params;
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const formData = await req.formData();
   const audioFile = formData.get('audio') as File | null;
   if (!audioFile) return NextResponse.json({ error: 'Missing audio' }, { status: 400 });
+
+  // Which path the audio came from, so the log says "a file upload" or "a recording" truthfully.
+  // A client-supplied hint, whitelisted: anything else counts as a recording (batch).
+  const channel = formData.get('channel') === 'upload' ? 'upload' : 'batch';
 
   const buffer = Buffer.from(await audioFile.arrayBuffer());
   if (buffer.length < 2_000) {
     return NextResponse.json({ error: 'Audio too short' }, { status: 400 });
   }
 
+  // The id in the URL is never verified against a meeting: UUID or no entity.
+  const entityId = asEntityUuid(id);
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -48,6 +57,8 @@ export async function POST(req: NextRequest, { params }: Params) {
         controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'));
 
       const t0 = Date.now();
+      let outcome: 'success' | 'error' = 'success';
+      let outcomeCode: string | undefined;
       try {
         // Ensemble path: one call returns diarized, timestamped segments — no VAD
         // fan-out, no separate diarization pass. Emitted as a single batch so the
@@ -86,10 +97,30 @@ export async function POST(req: NextRequest, { params }: Params) {
         );
         send({ type: 'done', segments: result.segments, failedSeconds: result.failedSeconds });
       } catch (err) {
-        console.error(`[transcribe-batches] failed after ${Date.now() - t0} ms:`, err);
+        safeLogError(`transcribe-batches failed after ${Date.now() - t0} ms`, err);
+        outcome = 'error';
+        outcomeCode = outcomeCodeOf(err);
         send({ type: 'error', message: err instanceof Error ? err.message : 'Transcription failed' });
       } finally {
-        controller.close();
+        try {
+          // Recorded before the stream closes so the write is not left dangling. The
+          // upload is the action: only its size and how long it took, never the audio or
+          // the transcript.
+          await emitAudit(req, {
+            type: 'audio.upload',
+            actorUserId: session.user.id,
+            outcome,
+            entityId,
+            details: {
+              channel,
+              bytes: buffer.length,
+              durationMs: elapsedMs(t0),
+              ...(outcomeCode ? { outcomeCode } : {}),
+            },
+          });
+        } finally {
+          controller.close();
+        }
       }
     },
   });
@@ -104,3 +135,5 @@ export async function POST(req: NextRequest, { params }: Params) {
     },
   });
 }
+
+export const POST = withHandler('transcribe-batches', postHandler);

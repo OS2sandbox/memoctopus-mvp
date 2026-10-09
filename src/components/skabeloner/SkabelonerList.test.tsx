@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SkabelonerList } from './SkabelonerList';
-import type { Skabelon } from '@/types';
+import type { Skabelon, CentralSkabelonSummary } from '@/types';
 
 // ---------------------------------------------------------------------------
 // Mock SkabelonEditor — it's a complex dialog; we only care that SkabelonerList
@@ -89,6 +89,7 @@ function makeSkabelon(overrides: Partial<Skabelon> = {}): Skabelon {
 function setupFetch(
   skabeloner: Skabelon[] = [],
   shareConfig = { code: true, link: false },
+  centralSkabeloner?: CentralSkabelonSummary[],
 ) {
   vi.stubGlobal(
     'fetch',
@@ -96,7 +97,7 @@ function setupFetch(
       if (typeof url === 'string' && url === '/api/skabeloner' && (!init || init.method === undefined || init.method === 'GET')) {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({ skabeloner }),
+          json: () => Promise.resolve(centralSkabeloner ? { skabeloner, centralSkabeloner } : { skabeloner }),
         } as Response);
       }
       if (typeof url === 'string' && url === '/api/skabeloner/share-config') {
@@ -947,5 +948,105 @@ describe('SkabelonerList — set-default action error', () => {
 
     await waitFor(() => screen.getByRole('alert'));
     expect(screen.queryByText('Skabelon valgt som standard')).not.toBeInTheDocument();
+  });
+});
+
+function makeCentral(overrides: Partial<CentralSkabelonSummary> = {}): CentralSkabelonSummary {
+  return {
+    id: 'cen-1',
+    source: 'central',
+    name: 'Bestyrelsesmøde',
+    description: 'Fast referatformat',
+    includeDeltagere: true,
+    includeBeslutningspunkter: false,
+    includeDagsorden: false,
+    includeDato: true,
+    locked: true,
+    version: 4,
+    allowUserInstruction: false,
+    allowToggleOverrides: false,
+    ...overrides,
+  };
+}
+
+describe('SkabelonerList — central templates (read-only)', () => {
+  it('lists central templates in their own locked section from the same response', async () => {
+    setupFetch([makeSkabelon()], { code: true, link: true }, [makeCentral()]);
+    render(<SkabelonerList />);
+
+    expect(await screen.findByText('Centrale skabeloner (låst)')).toBeInTheDocument();
+    const card = screen.getByTestId('central-skabelon');
+    expect(card).toHaveTextContent('Bestyrelsesmøde');
+    expect(card).toHaveTextContent('Fast referatformat');
+    expect(card).toHaveTextContent('v4');
+    expect(card).toHaveTextContent('Deltagere');
+    expect(card).toHaveTextContent('Dato');
+    expect(screen.getByText(/stillet til rådighed af din organisation/)).toBeInTheDocument();
+
+    // One list request only, no extra central fetch.
+    const listCalls = vi.mocked(fetch).mock.calls.filter((c) => c[0] === '/api/skabeloner');
+    expect(listCalls).toHaveLength(1);
+  });
+
+  it('offers no edit, delete, share, default or code controls on central cards', async () => {
+    setupFetch([], { code: true, link: true }, [makeCentral()]);
+    render(<SkabelonerList />);
+    const card = await screen.findByTestId('central-skabelon');
+
+    expect(card.querySelectorAll('button')).toHaveLength(0);
+    for (const label of ['Rediger', 'Slet', 'Del']) {
+      expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument();
+    }
+    expect(screen.queryByRole('button', { name: /standard/i })).not.toBeInTheDocument();
+  });
+
+  it('shows the central section even when the user has no personal templates', async () => {
+    setupFetch([], { code: true, link: false }, [makeCentral()]);
+    render(<SkabelonerList />);
+    expect(await screen.findByText('Ingen skabeloner endnu.')).toBeInTheDocument();
+    expect(screen.getByTestId('central-skabelon')).toBeInTheDocument();
+  });
+
+  it('hints when users may add their own instructions', async () => {
+    setupFetch([], { code: true, link: false }, [makeCentral({ allowUserInstruction: true })]);
+    render(<SkabelonerList />);
+    expect(await screen.findByText('Du kan tilføje egne instruktioner.')).toBeInTheDocument();
+  });
+
+  it('omits the section when the response has no centralSkabeloner (older server) or none delegated', async () => {
+    setupFetch([makeSkabelon()]);
+    const { unmount } = render(<SkabelonerList />);
+    await screen.findByText('Test skabelon');
+    expect(screen.queryByText('Centrale skabeloner (låst)')).not.toBeInTheDocument();
+    unmount();
+
+    setupFetch([makeSkabelon()], { code: true, link: false }, []);
+    render(<SkabelonerList />);
+    await screen.findByText('Test skabelon');
+    expect(screen.queryByText('Centrale skabeloner (låst)')).not.toBeInTheDocument();
+  });
+
+  it('says so when the server could not resolve the shared list (centralError), and stays silent otherwise', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve(url === '/api/skabeloner/share-config' ? { share: { code: true, link: false } } : { skabeloner: [makeSkabelon()], centralSkabeloner: [], centralError: true }),
+        } as Response),
+      ),
+    );
+    render(<SkabelonerList />);
+    await screen.findByText('Test skabelon');
+    expect(await screen.findByText(/Fælles skabeloner kunne ikke hentes/)).toBeInTheDocument();
+  });
+
+  it('never renders a prompt, even if one slipped into the payload', async () => {
+    const leaky = { ...makeCentral(), prompt: 'HEMMELIG PROMPT' } as CentralSkabelonSummary;
+    setupFetch([], { code: true, link: false }, [leaky]);
+    render(<SkabelonerList />);
+    await screen.findByTestId('central-skabelon');
+    expect(document.body.textContent).not.toContain('HEMMELIG PROMPT');
   });
 });

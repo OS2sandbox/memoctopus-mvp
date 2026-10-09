@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { storePendingAudio, storePendingTranscript, markNoRecording } from '@/lib/bot-pending-audio';
+import { storePendingAudio, storePendingTranscript, markNoRecording, getBotMeetingOwner } from '@/lib/bot-pending-audio';
 import { processBotRecording } from '@/lib/bot-transcribe';
 import { withHandler } from '@/lib/api-handler';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { secretEquals } from '@/lib/audit/feed-auth';
+import { recordServerEvent } from '@/lib/audit/record';
+import { asEntityUuid, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
 
 // Called by the bot service — authenticated with BOT_INTERNAL_SECRET, not a user session.
 //
@@ -12,7 +16,7 @@ import { withHandler } from '@/lib/api-handler';
 export const POST = withHandler('bot/audio-upload', async (req: NextRequest) => {
   const authHeader = req.headers.get('Authorization');
   const secret = process.env.BOT_INTERNAL_SECRET;
-  if (!secret || authHeader !== `Bearer ${secret}`) {
+  if (!secret || !authHeader || !secretEquals(authHeader, `Bearer ${secret}`)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -26,7 +30,7 @@ export const POST = withHandler('bot/audio-upload', async (req: NextRequest) => 
     // Log failures: a silently dropped markNoRecording leaves the client polling
     // indefinitely instead of showing the correct cancelled state.
     await markNoRecording(body.meetingId).catch((err) => {
-      console.error('[bot/audio-upload] markNoRecording failed for', body.meetingId, err);
+      safeLogError('bot/audio-upload markNoRecording', err);
     });
     return NextResponse.json({ ok: true });
   }
@@ -53,12 +57,25 @@ export const POST = withHandler('bot/audio-upload', async (req: NextRequest) => 
       if (Array.isArray(parsed)) participants = parsed.filter((p) => typeof p === 'string');
     } catch (err) {
       // Non-fatal: participants list is best-effort metadata; missing it does not block transcription.
-      console.warn('[bot/audio-upload] could not parse participants JSON for', meetingId, err);
+      safeLogError('bot/audio-upload participants JSON unparseable (non-fatal)', err);
     }
   }
 
   const durationSeconds = durationStr ? Math.max(0, parseInt(durationStr, 10) || 0) : null;
   const buffer = Buffer.from(await audioFile.arrayBuffer());
+
+  // Recorded as the system (the bot service is the caller, authenticated by secret). The
+  // person it belongs to is the one who started the bot session; unknown when that binding is gone.
+  const owner = await getBotMeetingOwner(meetingId).catch(() => null);
+  const audit = (outcome: 'success' | 'error', outcomeCode?: string) =>
+    recordServerEvent(req, {
+      type: 'audio.upload',
+      source: 'system',
+      outcome,
+      actorUserId: owner,
+      entityId: asEntityUuid(meetingId),
+      details: { channel: 'bot', bytes: buffer.length, ...(outcomeCode ? { outcomeCode } : {}) },
+    });
 
   try {
     await storePendingAudio(meetingId, buffer, {
@@ -68,7 +85,8 @@ export const POST = withHandler('bot/audio-upload', async (req: NextRequest) => 
       hasRecording: true,
     });
   } catch (err) {
-    console.error('[bot/audio-upload] failed to stash audio:', err);
+    safeLogError('bot/audio-upload stash audio', err);
+    await audit('error', outcomeCodeOf(err));
     return NextResponse.json({ error: 'Failed to store audio' }, { status: 500 });
   }
 
@@ -79,9 +97,10 @@ export const POST = withHandler('bot/audio-upload', async (req: NextRequest) => 
   // must not block on minutes of inference, and failures degrade to the client-side
   // fallback path.
   await storePendingTranscript(meetingId, { status: 'processing' }).catch((err) => {
-    console.error('[bot/audio-upload] storePendingTranscript failed for', meetingId, err);
+    safeLogError('bot/audio-upload storePendingTranscript', err);
   });
   void processBotRecording(meetingId, buffer, mimeType);
+  await audit('success');
 
   return NextResponse.json({ ok: true });
 });

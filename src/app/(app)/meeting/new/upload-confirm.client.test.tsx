@@ -217,7 +217,7 @@ describe('UploadConfirmScreen — happy path (confirm)', () => {
     const file = makeFile('audio.mp3', 1024);
     await renderAndWaitForDone(file);
     expect(mockCreateMeeting).toHaveBeenCalledWith(
-      expect.objectContaining({ source: 'local', status: 'processing' }),
+      expect.objectContaining({ source: 'local', status: 'processing', origin: 'upload' }),
     );
   });
 

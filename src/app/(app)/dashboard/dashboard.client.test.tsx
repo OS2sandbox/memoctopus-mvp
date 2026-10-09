@@ -299,7 +299,7 @@ describe('OptaqPage — record flow', () => {
 
     await waitFor(() => {
       expect(mockCreateMeeting).toHaveBeenCalledWith(
-        expect.objectContaining({ source: 'local', status: 'recording' }),
+        expect.objectContaining({ source: 'local', status: 'recording', origin: 'live' }),
       );
     });
   });
@@ -576,7 +576,7 @@ describe('OptaqPage — Teams meeting link flow', () => {
 
     await waitFor(() => {
       expect(mockCreateMeeting).toHaveBeenCalledWith(
-        expect.objectContaining({ source: 'teams', status: 'joining' }),
+        expect.objectContaining({ source: 'teams', status: 'joining', origin: 'bot' }),
       );
       expect(mockPush).toHaveBeenCalledWith('/meeting/teams-1?join=1');
     });

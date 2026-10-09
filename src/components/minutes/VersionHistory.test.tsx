@@ -86,9 +86,9 @@ describe('VersionHistory — renders one row per version', () => {
     expect(screen.getByText(/Nuværende version: 5/)).toBeInTheDocument();
   });
 
-  it('renders the "Bevares i 7 dage" retention note in the header', () => {
+  it('states no retention period (the component keeps no history of its own)', () => {
     setup([makeVersion('v1', '2024-01-15T10:00:00Z', CONTENT_A)]);
-    expect(screen.getByText(/Bevares i 7 dage/)).toBeInTheDocument();
+    expect(screen.queryByText(/Bevares i/)).not.toBeInTheDocument();
   });
 
   it('renders version labels counting down from newest to oldest', () => {
@@ -128,8 +128,11 @@ describe('VersionHistory — formatDateTime label', () => {
       makeVersion('v1', '2023-03-01T08:00:00Z', CONTENT_A),
       makeVersion('v2', '2024-12-31T23:59:00Z', CONTENT_B),
     ]);
-    // Both years should appear somewhere in the rendered output
-    expect(screen.getByText(/2023|2024/)).toBeInTheDocument();
+    // One label per version, and they differ. Which year the second one shows depends on the time zone
+    // (23:59 UTC is already the next year in Copenhagen), so match any plausible year and compare the texts.
+    const labels = screen.getAllByText(/\b(2023|2024|2025)\b/).map((el) => el.textContent);
+    expect(labels).toHaveLength(2);
+    expect(new Set(labels).size).toBe(2);
   });
 });
 

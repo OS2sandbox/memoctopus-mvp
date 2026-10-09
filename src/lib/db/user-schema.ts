@@ -81,6 +81,21 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         ADD COLUMN IF NOT EXISTS include_dato BOOLEAN NOT NULL DEFAULT FALSE
     `);
 
+    // skabelon_versions — the person's own changelog of a personal skabelon. Own data in own
+    // schema: the optional note they wrote and a snapshot live ONLY here, never in the audit log.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".skabelon_versions (
+        id             TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        skabelon_id    TEXT NOT NULL REFERENCES "${schema}".skabeloner(id) ON DELETE CASCADE,
+        version        INTEGER NOT NULL,
+        change_note    TEXT,
+        changed_fields TEXT[] NOT NULL DEFAULT '{}',
+        snapshot       JSONB NOT NULL DEFAULT '{}',
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (skabelon_id, version)
+      )
+    `);
+
     // meetings
     await client.query(`
       CREATE TABLE IF NOT EXISTS "${schema}".meetings (
@@ -344,13 +359,21 @@ export async function queryUserSchema<T = Record<string, unknown>>(
     initializedSchemas.add(userId);
   }
   const client = await pool.connect();
+  let discard = false;
   try {
     const schema = schemaName(userId);
     await client.query(`SET search_path TO "${schema}", public`);
     const result = await client.query(sql, params);
     return result.rows as T[];
   } finally {
-    client.release();
+    // The pooled connection would otherwise keep this user's search_path for the
+    // next borrower. If the reset fails its state is unknown, so destroy it.
+    try {
+      await client.query('RESET search_path');
+    } catch {
+      discard = true;
+    }
+    client.release(discard);
   }
 }
 
@@ -361,4 +384,45 @@ export async function queryUserSchemaOne<T = Record<string, unknown>>(
 ): Promise<T | null> {
   const rows = await queryUserSchema<T>(userId, sql, params);
   return rows[0] ?? null;
+}
+
+/** The query function handed to a `withUserSchemaTx` callback: same search_path, same transaction. */
+export type UserSchemaTxQuery = <T = Record<string, unknown>>(sql: string, params?: unknown[]) => Promise<T[]>;
+
+/**
+ * Runs `fn` in ONE transaction on one connection with the user's search_path (BEGIN ... COMMIT, ROLLBACK
+ * when `fn` throws). For changes that must be atomic (a template row and its changelog row) or
+ * serialised by a row lock (SELECT ... FOR UPDATE).
+ */
+export async function withUserSchemaTx<T>(userId: string, fn: (query: UserSchemaTxQuery) => Promise<T>): Promise<T> {
+  if (!initializedSchemas.has(userId)) {
+    await ensureUserSchema(userId);
+    initializedSchemas.add(userId);
+  }
+  const client = await pool.connect();
+  let discard = false;
+  try {
+    await client.query('BEGIN');
+    try {
+      // LOCAL: the setting ends with the transaction (COMMIT or ROLLBACK), so nothing leaks to the next
+      // borrower of the pooled connection and no RESET is needed.
+      await client.query(`SET LOCAL search_path TO "${schemaName(userId)}", public`);
+      const out = await fn(async <R = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
+        const result = await client.query(sql, params);
+        return result.rows as R[];
+      });
+      await client.query('COMMIT');
+      return out;
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        discard = true;
+      }
+      throw err;
+    }
+  } finally {
+    // A failed ROLLBACK leaves the connection in an unknown state: destroy it.
+    client.release(discard);
+  }
 }

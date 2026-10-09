@@ -88,7 +88,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
       const ctype = res.headers.get('content-type') ?? '';
       if (ctype.includes('application/json')) {
         // No usable recording — discard the empty meeting and show a cancelled state.
-        await deleteMeeting(meetingId).catch(() => {});
+        await deleteMeeting(meetingId, { trigger: 'auto_empty' }).catch(() => {});
         setStatus('cancelled');
         return;
       }
@@ -108,7 +108,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
         audioSizeBytes: blob.size,
         audioDurationSeconds: Number.isFinite(duration) ? duration : null,
         ...(parts.length > 0 ? { participants: parts } : {}),
-      });
+      }, { automatic: true });
       router.push(`/meeting/${meetingId}/review`);
       return;
     }
@@ -149,7 +149,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
       if (newParticipantsJson !== participantsRef.current) {
         participantsRef.current = newParticipantsJson;
         setParticipants(data.participants ?? []);
-        updateMeeting(meetingId, { participants: data.participants ?? [] }).catch(() => {});
+        updateMeeting(meetingId, { participants: data.participants ?? [] }, { automatic: true }).catch(() => {});
       }
 
       // Sync timer start reference from server on every recording poll so the

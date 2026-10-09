@@ -1,15 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { getBotServiceConfig, botFetch } from '@/lib/bot-service';
 import { setBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { withHandler } from '@/lib/api-handler';
+import { recordServerEvent } from '@/lib/audit/record';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { asEntityUuid } from '@/app/api/meetings/ai-audit';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 // Starts a Teams bot-service session. Stateless: meetings live in the client's
 // IndexedDB, so the meeting URL is supplied by the client and the returned
 // sessionId is stored client-side (not in any server DB).
-export async function POST(req: NextRequest) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+export const POST = withHandler('bot/sessions', async (req: NextRequest) => {
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   let meetingId: string | undefined;
   let meetingUrl: string | undefined;
@@ -39,7 +43,8 @@ export async function POST(req: NextRequest) {
       }),
     });
   } catch (err) {
-    console.error('Bot service unreachable:', err);
+    safeLogError('bot/sessions unreachable', err);
+    await recordServerEvent(req, { type: 'bot.session_start', outcome: 'error', actorUserId: session.user.id, entityId: asEntityUuid(meetingId) });
     return NextResponse.json({ error: 'Bot service unreachable' }, { status: 503 });
   }
 
@@ -47,7 +52,8 @@ export async function POST(req: NextRequest) {
     let errBody: { error?: string } = {};
     try { errBody = await res.json(); } catch { /* ignore */ }
     const errMsg = errBody.error ?? 'Failed to start bot session';
-    console.error('Bot service error:', errMsg);
+    console.error(`[bot/sessions] bot service rejected start status=${res.status}`);
+    await recordServerEvent(req, { type: 'bot.session_start', outcome: 'error', actorUserId: session.user.id, entityId: asEntityUuid(meetingId) });
     return NextResponse.json({ error: errMsg }, { status: res.status === 400 ? 400 : 502 });
   }
 
@@ -57,9 +63,10 @@ export async function POST(req: NextRequest) {
   try {
     await setBotMeetingOwner(meetingId, session.user.id);
   } catch (err) {
-    console.error('[bot/sessions] failed to record meeting owner:', err);
+    safeLogError('bot/sessions owner', err);
   }
 
   const { sessionId } = await res.json();
+  await recordServerEvent(req, { type: 'bot.session_start', actorUserId: session.user.id, entityId: asEntityUuid(meetingId) });
   return NextResponse.json({ sessionId });
-}
+});

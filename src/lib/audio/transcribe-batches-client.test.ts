@@ -116,6 +116,15 @@ describe('request construction', () => {
     expect(audioEntry).toBeInstanceOf(Blob);
   });
 
+  it('tells the server it is a file upload only when asked to (audit log wording)', async () => {
+    mockFetch.mockResolvedValue(okResponse(ndjsonStream([META_EVENT, DONE_EVENT])));
+    await transcribeBatchesOnServer(MEETING_ID, AUDIO_BLOB, { source: 'upload' });
+    expect((mockFetch.mock.calls[0][1].body as FormData).get('channel')).toBe('upload');
+    mockFetch.mockResolvedValue(okResponse(ndjsonStream([META_EVENT, DONE_EVENT])));
+    await transcribeBatchesOnServer(MEETING_ID, AUDIO_BLOB);
+    expect((mockFetch.mock.calls[1][1].body as FormData).get('channel')).toBeNull();
+  });
+
   it('uses POST even when no handlers are provided', async () => {
     mockFetch.mockResolvedValueOnce(
       okResponse(ndjsonStream([META_EVENT, DONE_EVENT])),

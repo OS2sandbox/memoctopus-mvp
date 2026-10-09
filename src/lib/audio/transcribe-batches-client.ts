@@ -40,10 +40,13 @@ export async function transcribeBatchesOnServer(
   handlers?: {
     onMeta?: (meta: TranscribeMeta) => void;
     onBatch?: (update: TranscribeBatchUpdate) => void;
+    /** 'upload' for a file the person chose, 'recording' (default) for audio recorded here or by the bot. Only used for the audit log. */
+    source?: 'upload' | 'recording';
   },
 ): Promise<TranscribeResult> {
   const fd = new FormData();
   fd.append('audio', audio, 'recording');
+  if (handlers?.source === 'upload') fd.append('channel', 'upload');
 
   const res = await fetch(`/api/meetings/${meetingId}/transcribe-batches`, {
     method: 'POST',

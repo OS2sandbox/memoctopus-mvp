@@ -12,6 +12,7 @@ import {
 } from './lib/leave-detector';
 import { JoinRaceResult, isAdmitted, joinFailureMessage } from './lib/join-race';
 import { isRealParticipant, realParticipants } from './lib/participants';
+import { createLifecycleReporter, LifecycleReporter } from './lib/lifecycle';
 
 export type BotStatus = 'joining' | 'recording' | 'paused' | 'ended' | 'error';
 
@@ -21,6 +22,8 @@ export interface BotSessionConfig {
   userId: string;
   botName: string;
   callbackUrl: string;
+  /** POST /api/bot/lifecycle on the Next app; lifecycle reporting is off when unset. */
+  lifecycleUrl?: string;
   internalSecret: string;
 }
 
@@ -86,6 +89,7 @@ export class TeamsMeetingBot {
   private context: BrowserContext | null = null;
   private page: Page | null = null;
   private config: BotSessionConfig;
+  private readonly lifecycle: LifecycleReporter;
 
   status: BotStatus = 'joining';
   participants: string[] = [];
@@ -114,6 +118,12 @@ export class TeamsMeetingBot {
 
   constructor(config: BotSessionConfig) {
     this.config = config;
+    this.lifecycle = createLifecycleReporter({
+      url: config.lifecycleUrl,
+      secret: config.internalSecret,
+      userId: config.userId,
+      meetingId: config.meetingId,
+    });
     this.userDataDir = path.join(os.tmpdir(), `bot-${config.meetingId}-${Date.now()}`);
   }
 
@@ -133,6 +143,7 @@ export class TeamsMeetingBot {
       this.status = 'error';
       this.error = err instanceof Error ? err.message : String(err);
       console.error('[bot] Start failed:', err);
+      this.lifecycle.error('start_failed');
       await this._notifyNoRecording();
       await this._cleanup();
     }
@@ -1201,6 +1212,7 @@ export class TeamsMeetingBot {
 
   async stop(): Promise<void> {
     this.status = 'ended';
+    this.lifecycle.ended('stopped');
     this._stopElapsedTimer();
     this._stopParticipantPolling();
 
@@ -1217,6 +1229,7 @@ export class TeamsMeetingBot {
 
   async abort(): Promise<void> {
     this.status = 'ended';
+    this.lifecycle.ended('aborted');
     this._stopElapsedTimer();
     this._stopParticipantPolling();
     await this._cleanup();
@@ -1240,6 +1253,7 @@ export class TeamsMeetingBot {
       return;
     }
     this.status = 'ended';
+    this.lifecycle.ended('meeting_ended');
     this._stopElapsedTimer();
     this._stopParticipantPolling();
     await this._uploadAudio();

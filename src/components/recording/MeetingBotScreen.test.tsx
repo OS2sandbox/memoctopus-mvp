@@ -58,7 +58,9 @@ function routeFetch(handlers: {
 }
 
 function audioResponse(participants: string[] = [], duration = 30) {
-  return new Response(new Blob(['audio bytes']), {
+  // Bytes, not `new Blob(...)`: under jsdom the global Blob is jsdom's, which lacks the
+  // .stream() that Node's Response needs, so constructing the Response would throw.
+  return new Response(new TextEncoder().encode('audio bytes'), {
     status: 200,
     headers: {
       'Content-Type': 'audio/webm',
@@ -131,6 +133,15 @@ describe('MeetingBotScreen', () => {
     });
   });
 
+  it('saves the polled roster to the meeting', async () => {
+    routeFetch({ status: () => jsonOk({ status: 'optager', botStatus: 'recording', participants: ['Alice', 'Bob'], elapsed: 5 }) });
+    renderBot();
+    await waitFor(() => {
+      // The roster poll is a machine write: it must not be reported as a user edit of the participants.
+      expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, { participants: ['Alice', 'Bob'] }, { automatic: true });
+    });
+  });
+
   it('shows error state when poll returns error status', async () => {
     routeFetch({ status: () => jsonOk({ status: 'error', botStatus: 'error', participants: [], elapsed: 0 }) });
     renderBot();
@@ -153,12 +164,13 @@ describe('MeetingBotScreen', () => {
     });
     renderBot();
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/meeting/${MEETING_ID}/review`));
-    expect(mockSaveAudio).toHaveBeenCalledWith(MEETING_ID, expect.any(Blob), 'audio/webm');
+    // res.blob() yields Node's Blob, not jsdom's global one, so match on shape.
+    expect(mockSaveAudio).toHaveBeenCalledWith(MEETING_ID, expect.objectContaining({ size: 11 }), 'audio/webm');
     expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, expect.objectContaining({
       status: 'processing',
       botSession: null,
       audioDurationSeconds: 42,
-    }));
+    }), { automatic: true });
   });
 
   it('shows cancelled and discards the meeting when the bot has no recording', async () => {
@@ -170,7 +182,8 @@ describe('MeetingBotScreen', () => {
     });
     renderBot();
     await waitFor(() => expect(screen.getByText('AFBRUDT')).toBeInTheDocument());
-    expect(mockDeleteMeeting).toHaveBeenCalledWith(MEETING_ID);
+    // The app discards the empty meeting by itself: recorded as an automatic delete.
+    expect(mockDeleteMeeting).toHaveBeenCalledWith(MEETING_ID, { trigger: 'auto_empty' });
   });
 
   // ─── Controls ─────────────────────────────────────────────────────────────────

@@ -1,11 +1,23 @@
 import { getDB, StoredMinutes, StoredMinutesVersion } from './db';
-import type { MinutesContent } from '@/types';
+import type { MinutesContent, MinutesTemplateRef } from '@/types';
+import { reportAuditEvent } from '@/lib/audit/client';
 
 function newId(): string {
   return crypto.randomUUID();
 }
 
 const MAX_VERSIONS = 50;
+
+// Audit reporting (ACTIONS only, never content; see lib/audit/client.ts). Reported from
+// here because every write to the minutes goes through this module. The version number
+// is the stable label, never any of the version's text.
+function capVersions(meetingId: string, versions: StoredMinutesVersion[]): StoredMinutesVersion[] {
+  if (versions.length <= MAX_VERSIONS) return versions;
+  // Keep the highest labels (the active snapshot is always among them).
+  const kept = [...versions].sort((a, b) => a.label - b.label).slice(versions.length - MAX_VERSIONS);
+  reportAuditEvent('meeting.minutes_version_prune', meetingId, { prunedCount: versions.length - kept.length });
+  return kept;
+}
 
 // A stored row as it may exist on disk, including rows written before stable
 // version labels / an explicit active version existed (label + updatedAt absent).
@@ -21,6 +33,7 @@ interface LegacyMinutes {
   id: string;
   meetingId: string;
   templateId: string | null;
+  templateRef?: MinutesTemplateRef;
   content: MinutesContent;
   version: number;
   createdAt: string;
@@ -75,6 +88,8 @@ function ensureVersioned(row: LegacyMinutes): StoredMinutes {
     id: row.id,
     meetingId: row.meetingId,
     templateId: row.templateId,
+    // The legacy rebuild must not drop provenance (absent on pre-central rows).
+    ...(row.templateRef ? { templateRef: row.templateRef } : {}),
     content: active.content,
     version: active.label,
     createdAt: row.createdAt ?? now,
@@ -133,6 +148,7 @@ export async function saveMinutes(
       versions: [v],
     };
     await db.put('minutes', minutes);
+    reportAuditEvent('meeting.minutes_save', meetingId);
     return minutes;
   }
 
@@ -145,6 +161,12 @@ export async function saveMinutes(
     versions,
   });
   await db.put('minutes', minutes);
+  // The editor also saves when it is merely left open or closed: an autosave that
+  // rewrites identical content is not an edit and reports nothing.
+  const before = existing.versions.find((v) => v.id === existing.activeVersionId);
+  if (!before || JSON.stringify(before.content) !== JSON.stringify(content)) {
+    reportAuditEvent('meeting.minutes_save', meetingId);
+  }
   return minutes;
 }
 
@@ -179,14 +201,11 @@ export async function snapshotMinutes(
     updatedAt: now,
   };
 
-  let versions = [...reverted, snapshot];
-  if (versions.length > MAX_VERSIONS) {
-    // Keep the highest labels (the active snapshot is always among them).
-    versions = [...versions].sort((a, b) => a.label - b.label).slice(versions.length - MAX_VERSIONS);
-  }
+  const versions = capVersions(meetingId, [...reverted, snapshot]);
 
   const minutes = withActiveMirror({ ...existing, activeVersionId: snapshot.id, versions });
   await db.put('minutes', minutes);
+  reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: snapshot.label, action: 'snapshot' });
   return minutes;
 }
 
@@ -198,6 +217,7 @@ export async function appendMinutesVersion(
   meetingId: string,
   content: MinutesContent,
   templateId?: string | null,
+  templateRef?: MinutesTemplateRef,
 ): Promise<StoredMinutes> {
   const db = await getDB();
   const existing = await readRow(meetingId);
@@ -209,6 +229,7 @@ export async function appendMinutesVersion(
       id: newId(),
       meetingId,
       templateId: templateId ?? null,
+      ...(templateRef ? { templateRef } : {}),
       content,
       version: 1,
       createdAt: now,
@@ -216,22 +237,23 @@ export async function appendMinutesVersion(
       versions: [v],
     };
     await db.put('minutes', minutes);
+    reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: 1, action: 'generate' });
     return minutes;
   }
 
   const nextLabel = existing.versions.reduce((m, v) => Math.max(m, v.label), 0) + 1;
   const fresh: StoredMinutesVersion = { id: newId(), label: nextLabel, content, baseline: content, createdAt: now, updatedAt: now };
-  let versions = [...existing.versions, fresh];
-  if (versions.length > MAX_VERSIONS) {
-    versions = [...versions].sort((a, b) => a.label - b.label).slice(versions.length - MAX_VERSIONS);
-  }
+  const versions = capVersions(meetingId, [...existing.versions, fresh]);
   const minutes = withActiveMirror({
     ...existing,
     templateId: templateId !== undefined ? templateId : existing.templateId,
+    // A regeneration replaces the provenance; omitting it keeps the previous one.
+    ...(templateRef ? { templateRef } : {}),
     activeVersionId: fresh.id,
     versions,
   });
   await db.put('minutes', minutes);
+  reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: fresh.label, action: 'generate' });
   return minutes;
 }
 
@@ -249,5 +271,16 @@ export async function setActiveMinutesVersion(
 
   const minutes = withActiveMirror({ ...existing, activeVersionId: versionId });
   await db.put('minutes', minutes);
+  if (existing.activeVersionId !== versionId) {
+    const target = existing.versions.find((v) => v.id === versionId);
+    if (target) {
+      // In this app opening an earlier version makes it the active one (the nearest thing
+      // to a restore), so a switch is reported as 'activate'; opening a version older than
+      // the newest is also an access to history, reported as 'view'.
+      const newest = existing.versions.reduce((m, v) => Math.max(m, v.label), 0);
+      if (target.label < newest) reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: target.label, action: 'view' });
+      reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: target.label, action: 'activate' });
+    }
+  }
   return minutes;
 }

@@ -116,61 +116,61 @@ describe('createMeeting', () => {
   beforeEach(resetStores);
 
   it('generates a unique id', async () => {
-    const m1 = await createMeeting({ title: 'Meeting A' });
-    const m2 = await createMeeting({ title: 'Meeting B' });
+    const m1 = await createMeeting({ origin: 'live', title: 'Meeting A' });
+    const m2 = await createMeeting({ origin: 'live', title: 'Meeting B' });
     expect(m1.id).toBeTruthy();
     expect(m2.id).toBeTruthy();
     expect(m1.id).not.toBe(m2.id);
   });
 
   it('stores the provided title', async () => {
-    const m = await createMeeting({ title: 'Stand-up' });
+    const m = await createMeeting({ origin: 'live', title: 'Stand-up' });
     expect(m.title).toBe('Stand-up');
   });
 
   it('defaults status to "recording"', async () => {
-    const m = await createMeeting({ title: 'Test' });
+    const m = await createMeeting({ origin: 'live', title: 'Test' });
     expect(m.status).toBe('recording');
   });
 
   it('accepts a custom status', async () => {
-    const m = await createMeeting({ title: 'Test', status: 'processing' });
+    const m = await createMeeting({ origin: 'live', title: 'Test', status: 'processing' });
     expect(m.status).toBe('processing');
   });
 
   it('defaults source to "local"', async () => {
-    const m = await createMeeting({ title: 'Test' });
+    const m = await createMeeting({ origin: 'live', title: 'Test' });
     expect(m.source).toBe('local');
   });
 
   it('accepts source "teams"', async () => {
-    const m = await createMeeting({ title: 'Test', source: 'teams' });
+    const m = await createMeeting({ origin: 'live', title: 'Test', source: 'teams' });
     expect(m.source).toBe('teams');
   });
 
   it('defaults participants to an empty array', async () => {
-    const m = await createMeeting({ title: 'Test' });
+    const m = await createMeeting({ origin: 'live', title: 'Test' });
     expect(m.participants).toEqual([]);
   });
 
   it('stores provided participants', async () => {
-    const m = await createMeeting({ title: 'Test', participants: ['Alice', 'Bob'] });
+    const m = await createMeeting({ origin: 'live', title: 'Test', participants: ['Alice', 'Bob'] });
     expect(m.participants).toEqual(['Alice', 'Bob']);
   });
 
   it('defaults meetingUrl to null', async () => {
-    const m = await createMeeting({ title: 'Test' });
+    const m = await createMeeting({ origin: 'live', title: 'Test' });
     expect(m.meetingUrl).toBeNull();
   });
 
   it('stores provided meetingUrl', async () => {
-    const m = await createMeeting({ title: 'Test', meetingUrl: 'https://teams.example.com/meet' });
+    const m = await createMeeting({ origin: 'live', title: 'Test', meetingUrl: 'https://teams.example.com/meet' });
     expect(m.meetingUrl).toBe('https://teams.example.com/meet');
   });
 
   it('sets createdAt, updatedAt, and recordedAt as ISO strings', async () => {
     const before = new Date().toISOString();
-    const m = await createMeeting({ title: 'Test' });
+    const m = await createMeeting({ origin: 'live', title: 'Test' });
     const after = new Date().toISOString();
 
     expect(m.createdAt >= before).toBe(true);
@@ -183,32 +183,32 @@ describe('createMeeting', () => {
 
   it('accepts a custom recordedAt date', async () => {
     const past = '2023-01-15T10:00:00.000Z';
-    const m = await createMeeting({ title: 'Test', recordedAt: past });
+    const m = await createMeeting({ origin: 'live', title: 'Test', recordedAt: past });
     expect(m.recordedAt).toBe(past);
   });
 
   it('initialises audioDurationSeconds to null', async () => {
-    const m = await createMeeting({ title: 'Test' });
+    const m = await createMeeting({ origin: 'live', title: 'Test' });
     expect(m.audioDurationSeconds).toBeNull();
   });
 
   it('initialises audioSizeBytes to 0', async () => {
-    const m = await createMeeting({ title: 'Test' });
+    const m = await createMeeting({ origin: 'live', title: 'Test' });
     expect(m.audioSizeBytes).toBe(0);
   });
 
   it('initialises audioDeleted to false', async () => {
-    const m = await createMeeting({ title: 'Test' });
+    const m = await createMeeting({ origin: 'live', title: 'Test' });
     expect(m.audioDeleted).toBe(false);
   });
 
   it('initialises botSession to null', async () => {
-    const m = await createMeeting({ title: 'Test' });
+    const m = await createMeeting({ origin: 'live', title: 'Test' });
     expect(m.botSession).toBeNull();
   });
 
   it('persists the meeting so getMeeting can retrieve it', async () => {
-    const m = await createMeeting({ title: 'Persisted' });
+    const m = await createMeeting({ origin: 'live', title: 'Persisted' });
     const fetched = await getMeeting(m.id);
     expect(fetched).toMatchObject({ id: m.id, title: 'Persisted' });
   });
@@ -225,8 +225,8 @@ describe('getAllMeetings', () => {
   });
 
   it('returns all meetings', async () => {
-    await createMeeting({ title: 'A' });
-    await createMeeting({ title: 'B' });
+    await createMeeting({ origin: 'live', title: 'A' });
+    await createMeeting({ origin: 'live', title: 'B' });
     const all = await getAllMeetings();
     expect(all).toHaveLength(2);
   });
@@ -257,7 +257,7 @@ describe('getAllMeetings', () => {
   });
 
   it('returns a single meeting in a list', async () => {
-    await createMeeting({ title: 'Solo' });
+    await createMeeting({ origin: 'live', title: 'Solo' });
     const all = await getAllMeetings();
     expect(all).toHaveLength(1);
     expect(all[0].title).toBe('Solo');
@@ -275,14 +275,14 @@ describe('getMeeting', () => {
   });
 
   it('returns the meeting for a known id', async () => {
-    const m = await createMeeting({ title: 'Known' });
+    const m = await createMeeting({ origin: 'live', title: 'Known' });
     const fetched = await getMeeting(m.id);
     expect(fetched).not.toBeNull();
     expect(fetched!.title).toBe('Known');
   });
 
   it('returns null after the meeting has been deleted', async () => {
-    const m = await createMeeting({ title: 'Temp' });
+    const m = await createMeeting({ origin: 'live', title: 'Temp' });
     await deleteMeeting(m.id);
     const fetched = await getMeeting(m.id);
     expect(fetched).toBeNull();
@@ -295,7 +295,7 @@ describe('updateMeeting', () => {
   beforeEach(resetStores);
 
   it('merges patch fields into the existing meeting', async () => {
-    const m = await createMeeting({ title: 'Original' });
+    const m = await createMeeting({ origin: 'live', title: 'Original' });
     await updateMeeting(m.id, { title: 'Updated' });
 
     const fetched = await getMeeting(m.id);
@@ -303,7 +303,7 @@ describe('updateMeeting', () => {
   });
 
   it('bumps updatedAt after update', async () => {
-    const m = await createMeeting({ title: 'Test' });
+    const m = await createMeeting({ origin: 'live', title: 'Test' });
     const originalUpdatedAt = m.updatedAt;
 
     // Small delay so timestamps differ
@@ -315,7 +315,7 @@ describe('updateMeeting', () => {
   });
 
   it('preserves unchanged fields', async () => {
-    const m = await createMeeting({ title: 'Stable', participants: ['Alice'] });
+    const m = await createMeeting({ origin: 'live', title: 'Stable', participants: ['Alice'] });
     await updateMeeting(m.id, { status: 'done' });
 
     const fetched = await getMeeting(m.id);
@@ -331,7 +331,7 @@ describe('updateMeeting', () => {
   });
 
   it('can update multiple fields at once', async () => {
-    const m = await createMeeting({ title: 'Multi' });
+    const m = await createMeeting({ origin: 'live', title: 'Multi' });
     await updateMeeting(m.id, {
       title: 'New Title',
       status: 'review',
@@ -347,7 +347,7 @@ describe('updateMeeting', () => {
   });
 
   it('can set audioDeleted to true', async () => {
-    const m = await createMeeting({ title: 'Audio' });
+    const m = await createMeeting({ origin: 'live', title: 'Audio' });
     await updateMeeting(m.id, { audioDeleted: true });
 
     const fetched = await getMeeting(m.id);
@@ -361,13 +361,13 @@ describe('deleteMeeting', () => {
   beforeEach(resetStores);
 
   it('removes the meeting record', async () => {
-    const m = await createMeeting({ title: 'To Delete' });
+    const m = await createMeeting({ origin: 'live', title: 'To Delete' });
     await deleteMeeting(m.id);
     expect(await getMeeting(m.id)).toBeNull();
   });
 
   it('also deletes the associated audio entry', async () => {
-    const m = await createMeeting({ title: 'With Audio' });
+    const m = await createMeeting({ origin: 'live', title: 'With Audio' });
     seedAudio(m.id);
     expect(stores.audio.has(m.id)).toBe(true);
 
@@ -377,7 +377,7 @@ describe('deleteMeeting', () => {
   });
 
   it('removes associated transcripts', async () => {
-    const m = await createMeeting({ title: 'With Transcript' });
+    const m = await createMeeting({ origin: 'live', title: 'With Transcript' });
     seedTranscript('t1', m.id);
     seedTranscript('t2', m.id);
 
@@ -388,7 +388,7 @@ describe('deleteMeeting', () => {
   });
 
   it('removes associated minutes', async () => {
-    const m = await createMeeting({ title: 'With Minutes' });
+    const m = await createMeeting({ origin: 'live', title: 'With Minutes' });
     seedMinutes('min1', m.id);
 
     await deleteMeeting(m.id);
@@ -401,8 +401,8 @@ describe('deleteMeeting', () => {
   });
 
   it('does not affect other meetings', async () => {
-    const m1 = await createMeeting({ title: 'Keep' });
-    const m2 = await createMeeting({ title: 'Delete' });
+    const m1 = await createMeeting({ origin: 'live', title: 'Keep' });
+    const m2 = await createMeeting({ origin: 'live', title: 'Delete' });
 
     await deleteMeeting(m2.id);
 
@@ -411,8 +411,8 @@ describe('deleteMeeting', () => {
   });
 
   it('leaves transcripts belonging to other meetings intact', async () => {
-    const m1 = await createMeeting({ title: 'Keep' });
-    const m2 = await createMeeting({ title: 'Delete' });
+    const m1 = await createMeeting({ origin: 'live', title: 'Keep' });
+    const m2 = await createMeeting({ origin: 'live', title: 'Delete' });
     seedTranscript('keep-t', m1.id);
     seedTranscript('del-t', m2.id);
 

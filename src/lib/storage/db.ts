@@ -1,6 +1,6 @@
 import { openDB, deleteDB, DBSchema } from 'idb';
 import { getStorageUserId, waitForStorageUserId } from './scope';
-import type { TranscriptSegment, PiiReplacement, MinutesContent, MeetingStatus } from '@/types';
+import type { TranscriptSegment, PiiReplacement, MinutesContent, MeetingStatus, MinutesTemplateRef } from '@/types';
 import type { TranscriptChapter } from '@/lib/ai/chapters';
 
 export interface StoredMeeting {
@@ -61,6 +61,9 @@ export interface StoredMinutes {
   id: string;
   meetingId: string;
   templateId: string | null;
+  // Which template produced the latest generation. Optional: rows saved before
+  // central templates have none. Not indexed, so no IndexedDB version bump.
+  templateRef?: MinutesTemplateRef;
   // Mirror of the active version's content + label, kept in sync so consumers that
   // only read the "current" referat (export, meeting page) don't need version logic.
   content: MinutesContent;

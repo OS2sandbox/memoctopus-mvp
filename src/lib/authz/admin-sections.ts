@@ -1,0 +1,32 @@
+// One table drives both the admin navigation and the route gate, so what a
+// user sees in the menu can never differ from what the server lets them open.
+import { hasAnyCapability } from './permissions';
+import type { Capability, Principal } from './types';
+
+export type AdminSectionKey = 'users' | 'organisation' | 'templates' | 'log';
+
+export interface AdminSection {
+  key: AdminSectionKey;
+  href: string;
+  label: string;
+  /** ANY-OF: holding one of these is enough. Never empty. */
+  requiredCapability: readonly [Capability, ...Capability[]];
+}
+
+export const ADMIN_SECTIONS: readonly AdminSection[] = [
+  { key: 'users', href: '/admin/brugere', label: 'Brugere og roller', requiredCapability: ['access.manage'] },
+  { key: 'organisation', href: '/admin/organisation', label: 'Organisation', requiredCapability: ['directory.read'] },
+  { key: 'templates', href: '/admin/skabeloner', label: 'Centrale skabeloner', requiredCapability: ['template.manage'] },
+  { key: 'log', href: '/admin/log', label: 'Log', requiredCapability: ['audit.read'] },
+];
+
+const sectionByKey = new Map(ADMIN_SECTIONS.map((s) => [s.key, s]));
+
+export function canAccessSection(p: Principal, key: AdminSectionKey): boolean {
+  const section = sectionByKey.get(key);
+  return section !== undefined && hasAnyCapability(p, section.requiredCapability);
+}
+
+export function visibleSections(p: Principal): AdminSection[] {
+  return ADMIN_SECTIONS.filter((s) => canAccessSection(p, s.key));
+}

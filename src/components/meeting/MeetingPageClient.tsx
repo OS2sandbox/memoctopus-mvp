@@ -12,6 +12,7 @@ import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
 import { ProcessingTranscription } from '@/components/meeting/ProcessingTranscription';
 import { useReviewAudio } from '@/lib/review-audio-context';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { reportAuditEvent } from '@/lib/audit/client';
 import {
   getMeeting,
   getTranscript,
@@ -110,6 +111,18 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
     };
   }, [loadData]);
 
+  // Access log: opening the minutes or the transcript is reported as an action (the id
+  // only, never content). The audit client swallows repeats within a minute, so tab
+  // switches and the data reloads after a save do not flood the log.
+  const viewingMinutes = activeTab === 'minutes' && !!minutes;
+  const viewingTranscript = activeTab === 'review' && !!transcript;
+  useEffect(() => {
+    if (viewingMinutes) reportAuditEvent('meeting.minutes_view', meetingId);
+  }, [viewingMinutes, meetingId]);
+  useEffect(() => {
+    if (viewingTranscript) reportAuditEvent('meeting.transcript_view', meetingId);
+  }, [viewingTranscript, meetingId]);
+
   useEffect(() => {
     const hasAudio = activeTab === 'review' && !!audioUrl;
     setHasAudio(hasAudio);
@@ -130,8 +143,8 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
     return () => {
       if (activeRecorderRef.current) return;
       if (!audioDeletableRef.current) return;
-      void deleteAudio(meetingId).catch((err) => { console.error('[MeetingPageClient] deleteAudio (unmount) fejlede:', err); });
-      void updateMeeting(meetingId, { audioDeleted: true }).catch((err) => { console.error('[MeetingPageClient] updateMeeting (unmount) fejlede:', err); });
+      void deleteAudio(meetingId, { trigger: 'auto_leave' }).catch((err) => { console.error('[MeetingPageClient] deleteAudio (unmount) fejlede:', err); });
+      void updateMeeting(meetingId, { audioDeleted: true }, { trigger: 'auto_leave' }).catch((err) => { console.error('[MeetingPageClient] updateMeeting (unmount) fejlede:', err); });
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meetingId]);
@@ -142,7 +155,7 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
     if (!audioUrl) return;
     const purge = () => {
       if (activeRecorderRef.current || !audioDeletableRef.current) return;
-      void deleteAudio(meetingId).catch((err) => { console.error('[MeetingPageClient] deleteAudio (pagehide) fejlede:', err); });
+      void deleteAudio(meetingId, { trigger: 'auto_pagehide' }).catch((err) => { console.error('[MeetingPageClient] deleteAudio (pagehide) fejlede:', err); });
     };
     window.addEventListener('pagehide', purge);
     return () => window.removeEventListener('pagehide', purge);
@@ -316,6 +329,7 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
           version={minutes.version}
           activeVersionId={minutes.activeVersionId}
           versions={minutes.versions}
+          templateRef={minutes.templateRef}
           onSaved={loadData}
         />
       )}

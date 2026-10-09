@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// The access gate (requireAppAccess) resolves the live principal; a plain
+// bruger unless a test says otherwise.
+vi.mock('@/lib/authz/principal', async () => ({
+  resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
+}));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
+
 vi.mock('next/headers', () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
@@ -8,9 +15,14 @@ vi.mock('@/lib/auth', () => ({
   auth: { api: { getSession: vi.fn() } },
 }));
 
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
+  recordServerEvent: vi.fn().mockResolvedValue({ status: 'stored' }),
+}));
+
 vi.mock('@/lib/bot-pending-audio', () => ({
   readPendingTranscript: vi.fn(),
-  deletePendingTranscript: vi.fn().mockResolvedValue(undefined),
+  deletePendingTranscript: vi.fn().mockResolvedValue(true),
   assertBotMeetingOwner: vi.fn(),
 }));
 
@@ -18,7 +30,11 @@ import { NextRequest } from 'next/server';
 import { GET } from './route';
 import { auth } from '@/lib/auth';
 import { readPendingTranscript, deletePendingTranscript, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { recordServerEvent } from '@/lib/audit/record';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 import { FAKE_SESSION } from '@/test/helpers';
+
+const mockRecord = vi.mocked(recordServerEvent);
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockRead = vi.mocked(readPendingTranscript);
@@ -33,9 +49,10 @@ const SEGMENTS = [{ speaker: 'Taler 1', start: 0, end: 3, text: 'hej' }];
 beforeEach(() => {
   mockGetSession.mockReset();
   mockRead.mockReset();
-  mockDelete.mockReset().mockResolvedValue(undefined);
+  mockDelete.mockReset().mockResolvedValue(true);
   mockAssertOwner.mockReset();
   mockAssertOwner.mockResolvedValue(true);
+  mockRecord.mockReset().mockResolvedValue({ status: 'stored' });
 });
 
 describe('GET /api/bot/transcript/[meetingId]', () => {
@@ -78,7 +95,7 @@ describe('GET /api/bot/transcript/[meetingId]', () => {
     const res = await GET(REQ, PARAMS);
     const body = await res.json();
     expect(body).toMatchObject({ status: 'ready', segments: SEGMENTS, diarized: true });
-    expect(mockDelete).toHaveBeenCalledWith('m1');
+    expect(mockDelete).toHaveBeenCalledWith('m1', expect.objectContaining({ trigger: 'handoff', actorUserId: FAKE_SESSION.user.id }));
   });
 
   it("returns status 'failed' and deletes the stash so the client falls back", async () => {
@@ -86,6 +103,44 @@ describe('GET /api/bot/transcript/[meetingId]', () => {
     mockRead.mockResolvedValueOnce({ status: 'failed', createdAt: 1 });
     const res = await GET(REQ, PARAMS);
     expect((await res.json()).status).toBe('failed');
-    expect(mockDelete).toHaveBeenCalledWith('m1');
+    expect(mockDelete).toHaveBeenCalledWith('m1', expect.objectContaining({ trigger: 'handoff', actorUserId: FAKE_SESSION.user.id }));
+  });
+});
+
+describe('audit', () => {
+  const MEETING = '11111111-1111-4111-8111-111111111111';
+  const params = { params: Promise.resolve({ meetingId: MEETING }) };
+
+  it('writes no bot event for a hand-over, a failed run, none, processing or a non-owner (the pipeline is not audited)', async () => {
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    mockRead.mockResolvedValueOnce({ status: 'ready', segments: SEGMENTS, diarized: true, createdAt: 1 });
+    await GET(REQ, params);
+    mockRead.mockResolvedValueOnce({ status: 'failed', createdAt: 1 });
+    await GET(REQ, params);
+    mockRead.mockResolvedValueOnce(null);
+    await GET(REQ, params);
+    mockRead.mockResolvedValueOnce({ status: 'processing', createdAt: 1 });
+    await GET(REQ, params);
+    mockAssertOwner.mockResolvedValueOnce(false);
+    await GET(REQ, params);
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('records a non-owner as authz.denied, without reading or deleting the stash', async () => {
+    vi.mocked(recordAuthzDenied).mockClear();
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    mockAssertOwner.mockResolvedValueOnce(false);
+    await GET(REQ, params);
+    expect(recordAuthzDenied).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: FAKE_SESSION.user.id,
+        required: 'bot.meeting_owner',
+        reason: 'not_owner',
+        entityType: 'meeting',
+        entityId: MEETING,
+      }),
+    );
+    expect(mockRead).not.toHaveBeenCalled();
+    expect(mockDelete).not.toHaveBeenCalled();
   });
 });

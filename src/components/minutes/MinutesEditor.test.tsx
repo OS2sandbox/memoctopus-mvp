@@ -790,3 +790,30 @@ describe('MinutesEditor — flush on page hide', () => {
     );
   });
 });
+
+describe('MinutesEditor — template provenance', () => {
+  afterEach(() => cleanup());
+
+  it('shows "Skabelon: <navn> (central, v3)" for a central template', () => {
+    render(
+      <MinutesEditor
+        {...defaultProps({ templateRef: { source: 'central', id: 'c-1', version: 3, name: 'Bestyrelsesmøde' } })}
+      />,
+    );
+    expect(screen.getByTestId('template-provenance')).toHaveTextContent('Skabelon: Bestyrelsesmøde (central, v3)');
+  });
+
+  it('falls back to the version alone when the name is unknown', () => {
+    render(<MinutesEditor {...defaultProps({ templateRef: { source: 'central', id: 'c-1', version: 3 } })} />);
+    expect(screen.getByTestId('template-provenance')).toHaveTextContent('Skabelon: central, v3');
+  });
+
+  it('shows nothing for personal, none or missing provenance', () => {
+    const { rerender } = render(<MinutesEditor {...defaultProps()} />);
+    expect(screen.queryByTestId('template-provenance')).not.toBeInTheDocument();
+    rerender(<MinutesEditor {...defaultProps({ templateRef: { source: 'personal', id: 'p', version: null } })} />);
+    expect(screen.queryByTestId('template-provenance')).not.toBeInTheDocument();
+    rerender(<MinutesEditor {...defaultProps({ templateRef: { source: 'none', id: null, version: null } })} />);
+    expect(screen.queryByTestId('template-provenance')).not.toBeInTheDocument();
+  });
+});

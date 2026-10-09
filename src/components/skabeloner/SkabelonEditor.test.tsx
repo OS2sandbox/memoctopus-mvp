@@ -386,6 +386,81 @@ describe('SkabelonEditor — save (edit mode)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Own changelog: optional note and history
+// ---------------------------------------------------------------------------
+
+describe('SkabelonEditor — change note and history (edit mode)', () => {
+  const okJson = (body: unknown) => ({ ok: true, json: async () => body });
+  const putBody = () =>
+    JSON.parse(
+      (global.fetch as ReturnType<typeof vi.fn>).mock.calls.find(([, init]) => init?.method === 'PUT')![1].body,
+    );
+
+  it('offers an optional "Hvad ændrede du?" field only when editing, and says it stays private', () => {
+    const { unmount } = renderEditor({ skabelon: SAMPLE_SKABELON });
+    expect(screen.getByLabelText('Hvad ændrede du? (valgfri)')).toHaveValue('');
+    expect(screen.getByText(/kun i din egen historik/)).toBeInTheDocument();
+    unmount();
+    renderEditor();
+    expect(screen.queryByLabelText('Hvad ændrede du? (valgfri)')).toBeNull();
+  });
+
+  it('sends the note when written, and nothing when it is blank (saving works without one)', async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(okJson({ skabelon: SAMPLE_SKABELON }));
+    const { unmount } = renderEditor({ skabelon: SAMPLE_SKABELON });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Gem' }));
+    });
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+    expect(putBody()).not.toHaveProperty('changeNote');
+    unmount();
+
+    (global.fetch as ReturnType<typeof vi.fn>).mockClear();
+    renderEditor({ skabelon: SAMPLE_SKABELON });
+    fireEvent.change(screen.getByLabelText('Hvad ændrede du? (valgfri)'), { target: { value: 'Strammet op' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Gem' }));
+    });
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+    expect(putBody().changeNote).toBe('Strammet op');
+  });
+
+  it('shows the own history only when asked for, newest first, with notes and the field names that changed', async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      okJson({
+        versions: [
+          { version: 2, changeNote: 'Gjorde tonen mere formel', changedFields: ['prompt', 'includeDato'], createdAt: '2026-06-02T08:00:00.000Z' },
+          { version: 1, changeNote: null, changedFields: [], createdAt: '2026-06-01T08:00:00.000Z' },
+        ],
+      }),
+    );
+    renderEditor({ skabelon: SAMPLE_SKABELON });
+    expect(global.fetch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Vis historik' }));
+    const list = await screen.findByRole('list', { name: 'Historik' });
+    expect(global.fetch).toHaveBeenCalledWith(`/api/skabeloner/${SAMPLE_SKABELON.id}/history`);
+    expect(list).toHaveTextContent('Version 2');
+    expect(list).toHaveTextContent('ændret: prompt, dato');
+    expect(list).toHaveTextContent('Gjorde tonen mere formel');
+    expect(list).toHaveTextContent('oprettet');
+
+    // Closing and reopening does not fetch again.
+    fireEvent.click(screen.getByRole('button', { name: 'Skjul historik' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Vis historik' }));
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a failed history load without breaking the editor', async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, json: async () => ({}) });
+    renderEditor({ skabelon: SAMPLE_SKABELON });
+    fireEvent.click(screen.getByRole('button', { name: 'Vis historik' }));
+    expect(await screen.findByText('Kunne ikke hente historikken')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Gem' })).toBeEnabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Save — error states
 // ---------------------------------------------------------------------------
 

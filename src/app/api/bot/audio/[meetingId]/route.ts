@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
-import { readPendingMeta, readPendingAudio, deletePendingAudio, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { readPendingMeta, readPendingAudio, deletePendingAudio } from '@/lib/bot-pending-audio';
+import { denyUnlessBotOwner } from '@/lib/bot-owner';
 import { withHandler } from '@/lib/api-handler';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 // Client pulls down a finished Teams-bot recording so it can be saved into IndexedDB
 // and transcribed client-side. The bot stashes audio here via /api/bot/audio-upload.
@@ -18,18 +18,19 @@ import { withHandler } from '@/lib/api-handler';
 export const GET = withHandler(
   'bot/audio',
   async (
-    _req: NextRequest,
+    req: NextRequest,
     { params }: { params: Promise<{ meetingId: string }> },
   ) => {
-    const session = await auth.api.getSession({ headers: await headers() });
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const access = await requireAppAccess();
+    if (access instanceof NextResponse) return access;
+    const { session } = access;
 
     const { meetingId } = await params;
 
     // Only the user who started this meeting's bot session may pull its recording.
     // Respond exactly like "not ready yet" so a non-owner can't even detect that a
     // recording exists (and never reaches the destructive read/delete below).
-    if (!(await assertBotMeetingOwner(meetingId, session.user.id))) {
+    if (await denyUnlessBotOwner(req, meetingId, session.user.id)) {
       return NextResponse.json({ status: 'pending' }, { status: 404 });
     }
 
@@ -44,7 +45,8 @@ export const GET = withHandler(
     const buffer = await readPendingAudio(meetingId);
     if (!buffer) return NextResponse.json({ status: 'pending' }, { status: 404 });
 
-    await deletePendingAudio(meetingId);
+    // The server-held copy goes as soon as the browser has it; the deletion is recorded.
+    await deletePendingAudio(meetingId, { trigger: 'handoff', actorUserId: session.user.id, req });
 
     return new NextResponse(new Uint8Array(buffer), {
       status: 200,

@@ -62,6 +62,10 @@ services:
       # not here on purpose — it is runtime-only, see `environment` below.
       args:
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:8080}
+    # Published on ALL host interfaces. Behind a reverse proxy, bind it to loopback
+    # ("127.0.0.1:${APP_PORT:-8080}:3000" via an override) or firewall it: the app
+    # trusts the first X-Forwarded-For entry (audit IP, login throttle), so anyone
+    # who can reach this port directly can forge it. See DEPLOY.md.
     ports:
       - "${APP_PORT:-8080}:3000"
     # Lets the container reach services on the Docker host (e.g. an SSH tunnel to a
@@ -95,12 +99,19 @@ services:
       - BOT_INTERNAL_SECRET=${BOT_INTERNAL_SECRET}
       - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:8080}
       # Auth. All read at runtime — change these and `up -d app` is enough, no rebuild.
+      # Blank = unset: on by default, but OFF with ACCESS_SOURCE=claims unless this is explicitly "true"
+      # (and sign-up stays closed there). Keep the blank default.
       - EMAIL_PASSWORD_ENABLED=${EMAIL_PASSWORD_ENABLED:-}
       - MICROSOFT_ENABLED=${MICROSOFT_ENABLED:-}
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-}
-      # Generic OIDC (Keycloak, Authentik, any compliant IdP).
+      # Identity providers (several OIDC, Entra, SAML) and role claims from ONE JSON file,
+      # mounted at /config (see the volume below). Set AUTH_CONFIG_FILE=/config/auth.json
+      # to use it; it then REPLACES the MICROSOFT_* / OIDC_* variables. Format and recipes:
+      # docs/central-access/idp.md. Read once at start: edit, then `up -d app`.
+      - AUTH_CONFIG_FILE=${AUTH_CONFIG_FILE:-}
+      # Generic OIDC (Keycloak, Authentik, any compliant IdP). Ignored when AUTH_CONFIG_FILE is set.
       - OIDC_ENABLED=${OIDC_ENABLED:-}
       - OIDC_PROVIDER_ID=${OIDC_PROVIDER_ID:-}
       - OIDC_PROVIDER_NAME=${OIDC_PROVIDER_NAME:-}
@@ -116,8 +127,60 @@ services:
       - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID:-}
       - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET:-}
       - AUTHENTIK_DISCOVERY_URL=${AUTHENTIK_DISCOVERY_URL:-}
+      # Central access control. Read at runtime (no rebuild). Defaults keep
+      # today's behaviour: local roles, everyone gets the baseline role.
+      # local | rollekatalog | claims. claims = roles come from the IdP at login (idp.md).
+      - ACCESS_SOURCE=${ACCESS_SOURCE:-local}
+      # Kill switch for the in-app role administration (local mode only; always off otherwise).
+      - ACCESS_LOCAL_ADMIN=${ACCESS_LOCAL_ADMIN:-}
+      # Claims mode: how long the roles of a login count (and how long a session lasts). Blank = 28800 (8 h).
+      - ROLE_CLAIMS_MAX_SECONDS=${ROLE_CLAIMS_MAX_SECONDS:-}
+      # Blank = unset: the default is then false, EXCEPT with ACCESS_SOURCE=claims where it is true (no mapped
+      # role, no access). Do not give it a default here: an explicit "false" is what opens claims mode.
+      - REQUIRE_ROLE_TO_LOGIN=${REQUIRE_ROLE_TO_LOGIN:-}
+      - BOOTSTRAP_ADMIN_EMAILS=${BOOTSTRAP_ADMIN_EMAILS:-}
+      - DIRECTORY_MATCH=${DIRECTORY_MATCH:-userid-claim}
+      - DIRECTORY_USERID_CLAIM=${DIRECTORY_USERID_CLAIM:-preferred_username}
+      - AUTH_IP_HEADERS=${AUTH_IP_HEADERS:-}
+      # Rollekatalog (read-only authority; only used with ACCESS_SOURCE=rollekatalog).
+      # Runtime config, no rebuild. The API keys are blank by default; see
+      # docs/central-access/rollekatalog.md. The sync is scheduled by a host or cluster
+      # cron that calls POST /api/internal/rollekatalog/sync (DEPLOY.md).
+      - ROLLEKATALOG_URL=${ROLLEKATALOG_URL:-}
+      - ROLLEKATALOG_READ_API_KEY=${ROLLEKATALOG_READ_API_KEY:-}
+      - ROLLEKATALOG_ORG_API_KEY=${ROLLEKATALOG_ORG_API_KEY:-}
+      - ROLLEKATALOG_ITSYSTEM_ID=${ROLLEKATALOG_ITSYSTEM_ID:-os2taletiltekst}
+      - ROLLEKATALOG_DOMAIN=${ROLLEKATALOG_DOMAIN:-}
+      - ROLLEKATALOG_TIMEOUT_MS=${ROLLEKATALOG_TIMEOUT_MS:-120000}
+      - ROLLEKATALOG_MAX_RESPONSE_BYTES=${ROLLEKATALOG_MAX_RESPONSE_BYTES:-}
+      - ROLLEKATALOG_ALLOW_HTTP=${ROLLEKATALOG_ALLOW_HTTP:-}
+      - ROLLEKATALOG_SCOPE_DESCENDANTS=${ROLLEKATALOG_SCOPE_DESCENDANTS:-true}
+      - ROLLEKATALOG_GLOBAL_ROLES=${ROLLEKATALOG_GLOBAL_ROLES:-admin}
+      - ROLLEKATALOG_ROLES_PATH=${ROLLEKATALOG_ROLES_PATH:-}
+      - ROLLEKATALOG_ROLEGROUPS_PATH=${ROLLEKATALOG_ROLEGROUPS_PATH:-}
+      - ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT=${ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT:-30}
+      - ROLE_STALE_MAX_SECONDS=${ROLE_STALE_MAX_SECONDS:-86400}
+      - DIRECTORY_USERID_TRANSFORM=${DIRECTORY_USERID_TRANSFORM:-none}
+      # Skabelon sharing. Read at runtime (no rebuild). Code sharing is on unless
+      # "false"; link sharing is opt-in and only on when "true".
+      - SKABELON_SHARE_CODE=${SKABELON_SHARE_CODE:-true}
+      - SKABELON_SHARE_LINK=${SKABELON_SHARE_LINK:-false}
+      # Audit log. Read at runtime (no rebuild). Records activity metadata only, never
+      # content; see docs/central-access/audit.md. The feed and the prune/sync cron
+      # routes answer 404 until AUDIT_FEED_API_KEY_HASH / INTERNAL_CRON_SECRET are set.
+      # Retention defaults to 365 days in code; blank keeps that default.
+      - AUDIT_STDOUT=${AUDIT_STDOUT:-false}
+      - AUDIT_STORE_IP=${AUDIT_STORE_IP:-true}
+      - AUDIT_RETENTION_DAYS=${AUDIT_RETENTION_DAYS:-}
+      - AUDIT_CLIENT_EVENTS_DAILY_CAP=${AUDIT_CLIENT_EVENTS_DAILY_CAP:-}
+      - AUDIT_FEED_API_KEY_HASH=${AUDIT_FEED_API_KEY_HASH:-}
+      - AUDIT_FEED_DELAY_SECONDS=${AUDIT_FEED_DELAY_SECONDS:-10}
+      - INTERNAL_CRON_SECRET=${INTERNAL_CRON_SECRET:-}
     volumes:
       - audio-storage:/audio-storage
+      # The auth config file and anything it points at (SAML metadata, certificates), read-only.
+      # A missing host directory is created empty by Docker and is harmless without AUTH_CONFIG_FILE.
+      - ${AUTH_CONFIG_DIR:-./auth-config}:/config:ro
     networks:
       - internal
     depends_on:

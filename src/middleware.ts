@@ -16,6 +16,20 @@ export function middleware(req: NextRequest) {
 
   // Landing page is public — authenticated users go straight to the dashboard.
   if (pathname === '/') {
+    // `?expired=1` is where the (app) layout sends a request whose cookie no longer maps to
+    // a session (expired, or deleted because the person was disabled). Passing it through,
+    // and dropping the dead cookie, is what stops `/` and `/dashboard` redirecting to each other.
+    if (sessionToken && req.nextUrl.searchParams.has('expired')) {
+      const res = NextResponse.next();
+      // A cookie is only removed by a Set-Cookie that matches how it was set. The `__Secure-` variant
+      // is only ever accepted (or deleted) with the Secure attribute, so a plain delete would leave it
+      // in the browser and `/` -> `/dashboard` -> `/?expired=1` would loop. The plain-named one carries
+      // Secure whenever the app is served over https.
+      const expired = { value: '', maxAge: 0, path: '/', httpOnly: true, sameSite: 'lax' as const };
+      res.cookies.set({ ...expired, name: '__Secure-better-auth.session_token', secure: true });
+      res.cookies.set({ ...expired, name: 'better-auth.session_token', secure: req.nextUrl.protocol === 'https:' });
+      return res;
+    }
     if (sessionToken) {
       return NextResponse.redirect(new URL('/dashboard', req.url));
     }

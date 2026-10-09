@@ -1,6 +1,10 @@
 import { getDB, StoredMeeting } from './db';
 import { MeetingStatus } from '@/types';
-import { deleteAudio } from './audio';
+import { reportAuditEvent } from '@/lib/audit/client';
+import { withRetractableReport } from '@/lib/audit/retractable-report';
+import type { DeleteTrigger } from '@/lib/audit/events/meeting';
+
+export type MeetingOrigin = 'live' | 'upload' | 'bot';
 
 function newId(): string {
   return crypto.randomUUID();
@@ -26,6 +30,8 @@ export async function createMeeting(data: {
   // The audio's own recording date. Defaults to now (correct for live/Teams
   // recordings); upload flows pass the file's date so an old clip keeps its date.
   recordedAt?: string;
+  // How the meeting came about, reported as the meeting.create audit event.
+  origin: MeetingOrigin;
 }): Promise<StoredMeeting> {
   const db = await getDB();
   const now = new Date().toISOString();
@@ -45,21 +51,81 @@ export async function createMeeting(data: {
     botSession: null,
   };
   await db.put('meetings', meeting);
+  reportAuditEvent('meeting.create', meeting.id, { origin: data.origin });
   return meeting;
 }
 
 export async function updateMeeting(
   id: string,
   patch: Partial<Omit<StoredMeeting, 'id' | 'createdAt'>>,
+  // Machine writes (the Teams bot's roster poll) pass `automatic: true`: a roster that
+  // changed because people joined or left is not a user edit, so it is not reported as one.
+  opts: { automatic?: boolean; trigger?: DeleteTrigger } = {},
 ): Promise<void> {
   const db = await getDB();
   const existing = await db.get('meetings', id);
   if (!existing) return;
   await db.put('meetings', { ...existing, ...patch, updatedAt: new Date().toISOString() });
+  try {
+    reportMeetingChanges(existing, patch, opts);
+  } catch {
+    // Reporting is best effort and must never turn a successful write into an error.
+  }
 }
 
-export async function deleteMeeting(id: string): Promise<void> {
+// Rows written by older versions may lack the array; treat that as empty.
+const sameStrings = (a: string[] | undefined, b: string[] | undefined) => {
+  const x = a ?? [];
+  const y = b ?? [];
+  return x.length === y.length && x.every((v, i) => v === y[i]);
+};
+
+// Audit reporting is derived from what actually changed against the stored row, so
+// a write that repeats the current value (the participants effect re-saving on
+// mount) reports nothing. Reported here: redaction, audio deletion, a change of the
+// participant list and of the recording date. Status changes are not audited, and neither is the
+// title here: pipeline steps also write it, so a RENAME by the person is reported where the person
+// makes it (settings page, minutes header) as meeting.metadata_edit. Only the opaque
+// meeting id and a participant COUNT leave here, never a name or the title.
+function reportMeetingChanges(
+  existing: StoredMeeting,
+  patch: Partial<Omit<StoredMeeting, 'id' | 'createdAt'>>,
+  opts: { automatic?: boolean; trigger?: DeleteTrigger },
+): void {
+  const id = existing.id;
+  if (patch.status === 'redacted' && existing.status !== 'redacted') reportAuditEvent('meeting.redact', id);
+  if (patch.audioDeleted === true && !existing.audioDeleted) {
+    reportAuditEvent('meeting.audio_delete', id, { trigger: opts.trigger ?? 'user' });
+  }
+  if (opts.automatic !== true && patch.recordedAt !== undefined && patch.recordedAt !== existing.recordedAt) {
+    reportAuditEvent('meeting.metadata_edit', id, { field: 'recorded_at' });
+  }
+  if (opts.automatic !== true && patch.participants !== undefined && !sameStrings(patch.participants, existing.participants)) {
+    reportAuditEvent('meeting.participants_edit', id, { participantCount: (patch.participants ?? []).length });
+  }
+}
+
+export async function deleteMeeting(
+  id: string,
+  // Why it was deleted, for the audit log: the person asked (default) or the app did it on its own.
+  opts: { trigger?: DeleteTrigger } = {},
+): Promise<void> {
+  const trigger = opts.trigger ?? 'user';
+  // An automatic delete is reported before anything is awaited: it can run from the tab-close
+  // purge (pagehide), where a frozen page never gets to a later step. It is retracted when the
+  // meeting did not exist or the delete failed (see withRetractableReport).
+  await withRetractableReport(
+    trigger !== 'user',
+    () => reportAuditEvent('meeting.delete', id, { trigger }),
+    (retractIfMissing) => deleteMeetingRows(id, retractIfMissing),
+  );
+}
+
+/** Deletes the meeting and everything that belongs to it; resolves to whether the meeting existed. */
+async function deleteMeetingRows(id: string, retractIfMissing: () => void): Promise<boolean> {
   const db = await getDB();
+  const existed = (await db.get('meetings', id)) !== undefined;
+  if (!existed) retractIfMissing();
   const tx = db.transaction(['meetings', 'transcripts', 'minutes', 'audio'], 'readwrite');
 
   // Find and delete transcript
@@ -76,4 +142,6 @@ export async function deleteMeeting(id: string): Promise<void> {
   await tx.objectStore('audio').delete(id);
   await tx.objectStore('meetings').delete(id);
   await tx.done;
+  // Only a meeting that existed was deleted; a repeated call reports nothing.
+  return existed;
 }

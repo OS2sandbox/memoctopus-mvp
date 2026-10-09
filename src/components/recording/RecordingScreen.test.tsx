@@ -24,6 +24,8 @@ const mockDeleteMeeting = vi.fn().mockResolvedValue(undefined);
 const mockGetMeeting = vi.fn().mockResolvedValue(null);
 const mockGetTranscript = vi.fn().mockResolvedValue(null);
 const mockGetAudio = vi.fn().mockResolvedValue(null);
+const mockReport = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audit/client', () => ({ reportAuditEvent: mockReport }));
 
 vi.mock('@/lib/storage', () => ({
   saveAudio: (...args: unknown[]) => mockSaveAudio(...args),
@@ -583,6 +585,56 @@ describe('RecordingScreen — cancel / discard flow', () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════
+// 5b. Audit: recording steps are reported as actions (the meeting id only)
+// ══════════════════════════════════════════════════════════════════════════
+
+describe('RecordingScreen — audit reporting of the recording steps', () => {
+  const MEETING_ID = 'meeting-abc';
+  const steps = () => mockReport.mock.calls.map((c) => c.slice(0, 2));
+
+  beforeEach(() => mockReport.mockClear());
+
+  it('reports start, pause, resume and stop, in order, with only the meeting id', async () => {
+    renderScreen();
+    expect(mockReport).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
+    });
+    await waitFor(() => screen.getByRole('button', { name: 'Pause' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+    });
+    await waitFor(() => screen.getByRole('button', { name: 'Fortsæt' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Fortsæt' }));
+    });
+    await waitFor(() => screen.getByRole('button', { name: 'Pause' }));
+    await act(async () => {
+      fireEvent.click(screen.getByText(/gem.*fortsæt/i));
+    });
+    expect(steps()).toEqual([
+      ['meeting.recording_start', MEETING_ID],
+      ['meeting.recording_pause', MEETING_ID],
+      ['meeting.recording_resume', MEETING_ID],
+      ['meeting.recording_stop', MEETING_ID],
+    ]);
+    for (const call of mockReport.mock.calls) expect(call).toHaveLength(2);
+  });
+
+  it('reports no start when the microphone is refused', async () => {
+    (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new DOMException('denied', 'NotAllowedError'),
+    );
+    renderScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
+    });
+    await waitFor(() => screen.getByText(/Mikrofonens tilladelse er afvist/));
+    expect(mockReport).not.toHaveBeenCalled();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
 // 6. Stop and save
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -1002,6 +1054,20 @@ describe('RecordingScreen — recorder.onerror surfaces to the UI (HIGH)', () =>
       expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull();
       expect(screen.queryByText(/gem.*fortsæt/i)).toBeNull();
     });
+  });
+
+  it('reports a recording stop when the recorder fails on its own, and only once', async () => {
+    mockReport.mockClear();
+    renderScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
+    });
+    await waitFor(() => screen.getByRole('button', { name: 'Pause' }));
+    await act(async () => {
+      latestRecorder?.onerror?.({ type: 'error' });
+    });
+    latestRecorder?.onerror?.({ type: 'error' });
+    expect(mockReport.mock.calls.filter((c) => c[0] === 'meeting.recording_stop')).toEqual([['meeting.recording_stop', 'meeting-abc']]);
   });
 
   it('logs the error via console.error when recorder fires onerror', async () => {

@@ -91,6 +91,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
           source: 'local',
           status: 'processing',
           recordedAt,
+          origin: 'upload',
         });
         if (!liveRef.current) return;
         const id = meeting.id;
@@ -122,6 +123,7 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
         let result;
         try {
           result = await transcribeBatchesOnServer(id, file, {
+            source: 'upload',
             onMeta: (meta) => {
               if (!liveRef.current) return;
               setPhase('transcribing');

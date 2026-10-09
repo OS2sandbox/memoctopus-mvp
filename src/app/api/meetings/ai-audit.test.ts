@@ -1,0 +1,185 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+const mockRecord = vi.hoisted(() => vi.fn());
+const mockRecordEvent = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
+  recordServerEvent: mockRecord,
+  recordEvent: mockRecordEvent,
+}));
+
+import { __resetDroppedEvents } from '@/lib/audit/dropped';
+import {
+  __resetLiveAudio,
+  asEntityUuid,
+  elapsedMs,
+  emitAudit,
+  emitLiveAudioUpload,
+  outcomeCodeOf,
+} from './ai-audit';
+
+const UUID = '11111111-2222-4333-8444-555555555555';
+
+beforeEach(() => {
+  mockRecord.mockReset();
+  mockRecord.mockResolvedValue({ status: 'stored' });
+  mockRecordEvent.mockReset();
+  mockRecordEvent.mockResolvedValue({ status: 'stored' });
+  __resetDroppedEvents();
+  __resetLiveAudio();
+});
+afterEach(() => vi.restoreAllMocks());
+
+describe('asEntityUuid', () => {
+  it('accepts a well-formed UUID', () => {
+    expect(asEntityUuid(UUID)).toBe(UUID);
+  });
+
+  it.each(['meet-1', '', ' ', UUID + 'x', `${UUID}\n`, '../../etc/passwd', 'Referat om sag 42'])(
+    'rejects %j so arbitrary client strings never become an entity id',
+    (v) => expect(asEntityUuid(v)).toBeUndefined(),
+  );
+
+  it('rejects non-strings', () => {
+    expect(asEntityUuid(undefined)).toBeUndefined();
+    expect(asEntityUuid(null)).toBeUndefined();
+    expect(asEntityUuid(42)).toBeUndefined();
+    expect(asEntityUuid({ toString: () => UUID })).toBeUndefined();
+  });
+});
+
+describe('outcomeCodeOf', () => {
+  it('maps a numeric HTTP status to http_<status>', () => {
+    expect(outcomeCodeOf(Object.assign(new Error('x'), { status: 429 }))).toBe('http_429');
+    expect(outcomeCodeOf({ response: { status: 503 } })).toBe('http_503');
+  });
+
+  it('prefers the status over a code the upstream chose', () => {
+    expect(outcomeCodeOf(Object.assign(new Error('x'), { status: 502, code: 'ECONNRESET' }))).toBe('http_502');
+  });
+
+  it.each(['ETIMEDOUT', 'ESOCKETTIMEDOUT', 'UND_ERR_HEADERS_TIMEOUT'])('maps the timeout code %s to timeout', (code) => {
+    expect(outcomeCodeOf(Object.assign(new Error('x'), { code }))).toBe('timeout');
+  });
+
+  it('maps timeout-like and abort error names to timeout', () => {
+    class TimeoutError extends Error {
+      name = 'TimeoutError';
+    }
+    class AbortError extends Error {
+      name = 'AbortError';
+    }
+    expect(outcomeCodeOf(new TimeoutError('the secret transcript text'))).toBe('timeout');
+    expect(outcomeCodeOf(new AbortError('x'))).toBe('timeout');
+  });
+
+  it.each(['ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EPIPE'])('maps the connection code %s to network', (code) => {
+    expect(outcomeCodeOf(Object.assign(new Error('x'), { code }))).toBe('network');
+  });
+
+  it('never forwards a string chosen by the upstream: unknown codes, free text, class names and non-Errors give unknown', () => {
+    expect(outcomeCodeOf(Object.assign(new Error('x'), { code: 'rate_limit_exceeded' }))).toBe('unknown');
+    expect(outcomeCodeOf(Object.assign(new Error('x'), { code: 'attacker-chosen:1234' }))).toBe('unknown');
+    expect(outcomeCodeOf(Object.assign(new Error('x'), { code: 'has spaces in it' }))).toBe('unknown');
+    class SecretLeakError extends Error {
+      name = 'SecretLeakError';
+    }
+    expect(outcomeCodeOf(new SecretLeakError('the secret transcript text'))).toBe('unknown');
+    expect(outcomeCodeOf('plain string with content')).toBe('unknown');
+    expect(outcomeCodeOf(null)).toBe('unknown');
+  });
+
+  it('ignores an out-of-range or non-integer status', () => {
+    expect(outcomeCodeOf(Object.assign(new Error('x'), { status: 99999 }))).toBe('unknown');
+    expect(outcomeCodeOf(Object.assign(new Error('x'), { status: 'oops' }))).toBe('unknown');
+  });
+});
+
+describe('elapsedMs', () => {
+  it('is never negative', () => {
+    expect(elapsedMs(Date.now() + 10_000)).toBe(0);
+  });
+});
+
+describe('emitAudit', () => {
+  const req = { headers: new Headers() };
+
+  it('forwards the request and the event to recordServerEvent', async () => {
+    await emitAudit(req, { type: 'export.download', actorUserId: 'u', details: { format: 'pdf' } });
+    expect(mockRecord).toHaveBeenCalledOnce();
+    expect(mockRecord.mock.calls[0][0]).toBe(req);
+  });
+
+  it('drops events beyond a per-actor budget, per actor, without touching the client-event bucket', async () => {
+    const { RATE_LIMIT_EVENTS, takeClientEventBudget } = await import('@/lib/audit/client-ingest');
+    const event = (u: string) => ({ type: 'export.download' as const, actorUserId: u, details: { format: 'pdf' as const } });
+    for (let i = 0; i < RATE_LIMIT_EVENTS; i++) await emitAudit(req, event('flooder'));
+    expect(mockRecord).toHaveBeenCalledTimes(RATE_LIMIT_EVENTS);
+    expect(await emitAudit(req, event('flooder'))).toEqual({ status: 'dropped', code: 'actor_rate_limited' });
+    expect(mockRecord).toHaveBeenCalledTimes(RATE_LIMIT_EVENTS);
+    // Another actor, and the same actor's client-event budget, are unaffected.
+    await emitAudit(req, event('other'));
+    expect(mockRecord).toHaveBeenCalledTimes(RATE_LIMIT_EVENTS + 1);
+    expect(takeClientEventBudget('flooder', 1)).toBeNull();
+  });
+
+  it('reports a drop as audit.events_dropped (actor_ceiling) once per window, never silently', async () => {
+    const { RATE_LIMIT_EVENTS } = await import('@/lib/audit/client-ingest');
+    const event = { type: 'export.download' as const, actorUserId: 'flooder2', details: { format: 'pdf' as const } };
+    for (let i = 0; i < RATE_LIMIT_EVENTS; i++) await emitAudit(req, event);
+    await emitAudit(req, event);
+    await emitAudit(req, event);
+    // First drop reported at once; the second is added up for the end of the window.
+    expect(mockRecordEvent).toHaveBeenCalledOnce();
+    expect(mockRecordEvent.mock.calls[0][0]).toMatchObject({
+      type: 'audit.events_dropped',
+      source: 'system',
+      actorUserId: 'flooder2',
+      details: { reason: 'actor_ceiling', count: 1 },
+    });
+  });
+});
+
+describe('emitLiveAudioUpload', () => {
+  const req = { headers: new Headers() };
+  const ev = (over = {}) => ({ actorUserId: 'u1', entityId: UUID, outcome: 'success' as const, bytes: 50_000, durationMs: 300, ...over });
+
+  it('emits audio.upload on the live channel with the size of that utterance', async () => {
+    emitLiveAudioUpload(req, ev());
+    await Promise.resolve();
+    expect(mockRecord).toHaveBeenCalledOnce();
+    expect(mockRecord.mock.calls[0][1]).toMatchObject({
+      type: 'audio.upload',
+      actorUserId: 'u1',
+      entityId: UUID,
+      details: { channel: 'live', bytes: 50_000, durationMs: 300 },
+    });
+  });
+
+  it('emits at most once per person, meeting and outcome per 5 minutes', () => {
+    vi.useFakeTimers();
+    try {
+      const t = 1_000_000;
+      const WINDOW = 5 * 60_000;
+      vi.setSystemTime(t);
+      emitLiveAudioUpload(req, ev());
+      vi.setSystemTime(t + 60_000);
+      emitLiveAudioUpload(req, ev({ bytes: 1 }));
+      vi.setSystemTime(t + WINDOW - 1);
+      emitLiveAudioUpload(req, ev({ bytes: 2 }));
+      expect(mockRecord).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(t + WINDOW);
+      emitLiveAudioUpload(req, ev({ bytes: 3 }));
+      expect(mockRecord).toHaveBeenCalledTimes(2);
+      expect(mockRecord.mock.calls[1][1].details.bytes).toBe(3);
+      // Another meeting, another person and a failure are separate keys.
+      emitLiveAudioUpload(req, ev({ entityId: '22222222-2222-4333-8444-555555555555' }));
+      emitLiveAudioUpload(req, ev({ actorUserId: 'u2' }));
+      emitLiveAudioUpload(req, ev({ outcome: 'error', outcomeCode: 'http_502' }));
+      expect(mockRecord).toHaveBeenCalledTimes(5);
+      expect(mockRecord.mock.calls[4][1]).toMatchObject({ outcome: 'error', details: { outcomeCode: 'http_502' } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

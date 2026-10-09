@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
 import { eq } from 'drizzle-orm';
-import { auth } from '@/lib/auth';
 import { db } from '@/lib/db';
 import { sharedSkabeloner } from '@/lib/db/schema';
 import { createSkabelon } from '@/lib/skabeloner/server';
 import { getShareConfig } from '@/lib/skabeloner/share-config';
 import { ensureSharedSkabelonerTable } from '@/lib/skabeloner/shared-table';
 import { withHandler } from '@/lib/api-handler';
+import { recordServerEvent } from '@/lib/audit/record';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 type Ctx = { params: Promise<{ token: string }> };
 
@@ -23,8 +23,9 @@ async function loadShared(token: string) {
 
 // Preview a shared Skabelon.
 async function getHandler(_req: NextRequest, { params }: Ctx): Promise<NextResponse> {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
   if (!getShareConfig().link) {
     return NextResponse.json({ error: 'Linkdeling er deaktiveret' }, { status: 403 });
   }
@@ -47,9 +48,10 @@ async function getHandler(_req: NextRequest, { params }: Ctx): Promise<NextRespo
 }
 
 // Import a shared Skabelon as a copy into the caller's own list.
-async function postHandler(_req: NextRequest, { params }: Ctx): Promise<NextResponse> {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+async function postHandler(req: NextRequest, { params }: Ctx): Promise<NextResponse> {
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
   if (!getShareConfig().link) {
     return NextResponse.json({ error: 'Linkdeling er deaktiveret' }, { status: 403 });
   }
@@ -68,6 +70,13 @@ async function postHandler(_req: NextRequest, { params }: Ctx): Promise<NextResp
     includeDato: shared.includeDato,
   });
 
+  // Entity is the NEW copy; the share token is never logged.
+  await recordServerEvent(req, {
+    type: 'template.import',
+    actorUserId: session.user.id,
+    entityId: skabelon.id,
+    details: { kind: 'link' },
+  });
   return NextResponse.json({ skabelon }, { status: 201 });
 }
 

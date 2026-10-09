@@ -1,4 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// The access gate (requireAppAccess) resolves the live principal; a plain
+// bruger unless a test says otherwise.
+vi.mock('@/lib/authz/principal', async () => ({
+  resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
+}));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
 import { NextRequest } from 'next/server';
 
 vi.mock('@/lib/auth', () => ({
@@ -13,6 +20,11 @@ vi.mock('next/headers', () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
 
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
+  recordServerEvent: vi.fn().mockResolvedValue({ status: 'stored' }),
+}));
+
 vi.mock('@/lib/bot-pending-audio', () => ({
   readPendingMeta: vi.fn(),
   readPendingAudio: vi.fn(),
@@ -21,11 +33,14 @@ vi.mock('@/lib/bot-pending-audio', () => ({
 }));
 
 import { GET } from './route';
-import { readPendingMeta, readPendingAudio, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { recordServerEvent } from '@/lib/audit/record';
+import { readPendingMeta, readPendingAudio, deletePendingAudio, assertBotMeetingOwner } from '@/lib/bot-pending-audio';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 
 const mockReadMeta = vi.mocked(readPendingMeta);
 const mockReadAudio = vi.mocked(readPendingAudio);
 const mockAssertOwner = vi.mocked(assertBotMeetingOwner);
+const mockRecord = vi.mocked(recordServerEvent);
 
 function makeRequest(meetingId: string): NextRequest {
   return new NextRequest(`http://localhost/api/bot/audio/${meetingId}`, { method: 'GET' });
@@ -40,6 +55,8 @@ beforeEach(() => {
   mockReadAudio.mockReset();
   mockAssertOwner.mockReset();
   mockAssertOwner.mockResolvedValue(true);
+  mockRecord.mockReset().mockResolvedValue({ status: 'stored' });
+  vi.mocked(deletePendingAudio).mockClear();
 });
 
 describe('GET /api/bot/audio/[meetingId]', () => {
@@ -114,5 +131,50 @@ describe('GET /api/bot/audio/[meetingId]', () => {
     mockReadMeta.mockResolvedValue(null);
     const res = await GET(makeRequest('meeting-1'), makeParams('meeting-1'));
     expect(res.status).toBe(401);
+  });
+});
+
+describe('audit', () => {
+  const MEETING = '11111111-1111-4111-8111-111111111111';
+  const META = {
+    mimeType: 'audio/webm', participants: ['Anna', 'Bo'], durationSeconds: 120,
+    hasRecording: true, createdAt: Date.now(),
+  };
+
+  it('asks for the server-held copy to be deleted as a recorded handoff when the recording is handed over', async () => {
+    mockReadMeta.mockResolvedValue(META);
+    mockReadAudio.mockResolvedValue(Buffer.from('fake-audio'));
+    const req = makeRequest(MEETING);
+    expect((await GET(req, makeParams(MEETING))).status).toBe(200);
+    expect(deletePendingAudio).toHaveBeenCalledTimes(1);
+    expect(deletePendingAudio).toHaveBeenCalledWith(MEETING, { trigger: 'handoff', actorUserId: 'u1', req });
+    // The event itself is written by deletePendingAudio (see bot-pending-audio.test.ts), not by the route.
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('records no deletion for pending and no-recording responses (nothing was held)', async () => {
+    mockReadMeta.mockResolvedValueOnce(null);
+    await GET(makeRequest(MEETING), makeParams(MEETING));
+    mockReadMeta.mockResolvedValueOnce({ ...META, hasRecording: false });
+    await GET(makeRequest(MEETING), makeParams(MEETING));
+    expect(vi.mocked(deletePendingAudio).mock.calls.every((c) => c[1] === undefined)).toBe(true);
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it('records a non-owner as authz.denied (a probe of someone else\'s recording) and still answers like "pending"', async () => {
+    vi.mocked(recordAuthzDenied).mockClear();
+    mockAssertOwner.mockResolvedValueOnce(false);
+    const res = await GET(makeRequest(MEETING), makeParams(MEETING));
+    expect(res.status).toBe(404);
+    expect(recordAuthzDenied).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: 'u1',
+        required: 'bot.meeting_owner',
+        reason: 'not_owner',
+        entityType: 'meeting',
+        entityId: MEETING,
+      }),
+    );
+    expect(deletePendingAudio).not.toHaveBeenCalled();
   });
 });

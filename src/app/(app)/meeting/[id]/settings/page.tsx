@@ -14,6 +14,7 @@ import {
 import { ProcessStrip } from '@/components/layout/ProcessStrip';
 import { RedactDialog } from '@/components/compliance/RedactDialog';
 import { getMeeting, updateMeeting, deleteMeeting, deleteAudio, getTranscript, saveTranscript } from '@/lib/storage';
+import { reportAuditEvent } from '@/lib/audit/client';
 import { ErrorBanner } from '@/components/ui/error-banner';
 
 export default function MeetingSettingsPage() {
@@ -79,6 +80,8 @@ export default function MeetingSettingsPage() {
     setRenameError(null);
     try {
       await updateMeeting(id, { title: trimmed });
+      // A rename by the person: which field only, never the title (coalesced in the browser).
+      reportAuditEvent('meeting.metadata_edit', id, { field: 'title' });
       setMeetingTitle(trimmed);
     } catch (err) {
       console.error('[settings] kunne ikke omdøbe møde:', err);

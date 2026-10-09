@@ -1,3 +1,13 @@
+import type { CentralSkabelonSummary, TemplateRef } from '@/lib/skabeloner/central-types';
+
+// Central (locked) templates as offered to a recipient: never carries a prompt.
+export type { CentralSkabelonSummary, TemplateRef };
+
+// Provenance persisted with generated minutes. `name` is a client-side snapshot
+// taken from the picker so the minutes screen can name the template without a
+// round-trip; it is absent for records that predate it.
+export type MinutesTemplateRef = TemplateRef & { name?: string };
+
 export type MeetingStatus = 'joining' | 'recording' | 'processing' | 'review' | 'minutes' | 'done' | 'redacted' | 'failed';
 
 export interface TranscriptSegment {

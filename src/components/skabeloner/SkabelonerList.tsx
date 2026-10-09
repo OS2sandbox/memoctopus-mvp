@@ -16,7 +16,7 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { SkabelonEditor } from './SkabelonEditor';
 import { encodeSkabelonCode } from '@/lib/skabeloner/share-code';
 import type { ShareConfig } from '@/lib/skabeloner/share-config';
-import type { Skabelon } from '@/types';
+import type { Skabelon, CentralSkabelonSummary } from '@/types';
 
 const CATEGORY_LABELS: [keyof Skabelon, string][] = [
   ['includeDeltagere', 'Deltagere'],
@@ -27,6 +27,10 @@ const CATEGORY_LABELS: [keyof Skabelon, string][] = [
 
 export function SkabelonerList() {
   const [skabeloner, setSkabeloner] = useState<Skabelon[]>([]);
+  // Read-only: delegated by the organisation, no prompt, no controls.
+  const [centralSkabeloner, setCentralSkabeloner] = useState<CentralSkabelonSummary[]>([]);
+  // The server could not resolve the shared list (a failure, not an empty list).
+  const [centralError, setCentralError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<Skabelon | null>(null);
@@ -58,7 +62,11 @@ export function SkabelonerList() {
         }
         return r.json();
       })
-      .then((data: { skabeloner: Skabelon[] }) => setSkabeloner(data.skabeloner ?? []))
+      .then((data: { skabeloner: Skabelon[]; centralSkabeloner?: CentralSkabelonSummary[]; centralError?: boolean }) => {
+        setSkabeloner(data.skabeloner ?? []);
+        setCentralSkabeloner(data.centralSkabeloner ?? []);
+        setCentralError(data.centralError === true);
+      })
       .catch((err) => {
         console.error('[skabeloner] Fejl ved indlæsning af skabeloner:', err);
         setLoadError('Kunne ikke indlæse skabeloner. Prøv at genindlæse siden.');
@@ -344,6 +352,63 @@ export function SkabelonerList() {
             );
           })}
         </div>
+      )}
+
+      {!loading && centralError && (
+        <p role="status" className="mt-10 text-sm text-[var(--muted)]">
+          Fælles skabeloner kunne ikke hentes lige nu. Dine egne skabeloner vises som normalt. Prøv at genindlæse siden.
+        </p>
+      )}
+
+      {!loading && centralSkabeloner.length > 0 && (
+        <section className="mt-10" aria-labelledby="central-skabeloner-heading">
+          <h2 id="central-skabeloner-heading" className="text-sm font-semibold text-[var(--ink)]">
+            Centrale skabeloner (låst)
+          </h2>
+          <p className="mt-1 mb-4 text-sm text-[var(--muted)]">
+            Disse skabeloner er stillet til rådighed af din organisation. De kan bruges, når du genererer et referat,
+            men ikke redigeres, slettes eller deles, og selve prompten er skjult.
+          </p>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {centralSkabeloner.map((c) => {
+              const activeCats = CATEGORY_LABELS.filter(([key]) => c[key as keyof CentralSkabelonSummary]);
+              return (
+                <div
+                  key={c.id}
+                  data-testid="central-skabelon"
+                  className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--surface)] p-5 flex flex-col"
+                >
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <h3 className="font-semibold text-[var(--ink)]">{c.name}</h3>
+                    <span className="inline-flex items-center gap-1 text-xs whitespace-nowrap text-[var(--muted)] shrink-0">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                        <rect x="4" y="11" width="16" height="10" rx="2" />
+                        <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+                      </svg>
+                      Låst · v{c.version}
+                    </span>
+                  </div>
+                  <p className="text-sm text-[var(--muted)] mb-4">{c.description || 'Ingen beskrivelse'}</p>
+                  {activeCats.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {activeCats.map(([key, label]) => (
+                        <span
+                          key={key as string}
+                          className="text-xs px-2 py-0.5 rounded-full border border-[var(--line)] text-[var(--muted)]"
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {c.allowUserInstruction && (
+                    <p className="text-xs text-[var(--muted)] mt-auto pt-2">Du kan tilføje egne instruktioner.</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
       )}
 
       <SkabelonEditor

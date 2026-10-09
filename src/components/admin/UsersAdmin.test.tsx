@@ -1,0 +1,391 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { UsersAdmin } from './UsersAdmin';
+import { ADMIN_ME, CLAIMS_ME, LOCKED_LOCAL_ME, ROLLEKATALOG_ME, calls, installFetch, json, renderWithToasts } from './test-helpers';
+
+const UNIT = '11111111-1111-4111-8111-111111111111';
+
+const assignment = (over: Record<string, unknown> = {}) => ({
+  id: 'a-1',
+  roleKey: 'bygger',
+  scopeOrgUnitUuid: UNIT,
+  scopeOrgUnitName: 'Børn',
+  includeDescendants: true,
+  startDate: null,
+  stopDate: null,
+  source: 'local',
+  active: true,
+  ...over,
+});
+
+const USERS = {
+  users: [
+    {
+      id: 'u-1',
+      name: 'Bo Bruger',
+      email: 'bo@example.dk',
+      directoryUserUuid: null,
+      disabled: false,
+      roles: [assignment(), assignment({ id: 'a-2', roleKey: 'admin', scopeOrgUnitUuid: null, scopeOrgUnitName: null, source: 'rollekatalog' })],
+    },
+    { id: 'u-2', name: 'Carla Ny', email: 'carla@example.dk', directoryUserUuid: null, disabled: false, roles: [] },
+    { id: 'u-3', name: 'Dan Deaktiv', email: 'dan@example.dk', directoryUserUuid: 'x', disabled: true, roles: [] },
+  ],
+};
+const UNITS = { orgUnits: [{ uuid: UNIT, name: 'Børn', parentUuid: null, source: 'local', memberCount: 1 }] };
+
+afterEach(() => vi.unstubAllGlobals());
+
+function setup(me = ADMIN_ME, extra: Parameters<typeof installFetch>[0] = {}) {
+  return installFetch({
+    'GET /api/me': () => json(me),
+    'GET /api/admin/access/users': () => json(USERS),
+    'GET /api/admin/access/org-units': () => json(UNITS),
+    ...extra,
+  });
+}
+
+describe('UsersAdmin — rendering', () => {
+  it('lists users with Danish role labels, scope wording and source badges', async () => {
+    setup();
+    renderWithToasts(<UsersAdmin />);
+    const row = (await screen.findByText('Bo Bruger')).closest('tr')!;
+    expect(within(row).getByText('Bygger')).toBeInTheDocument();
+    expect(within(row).getByText('Børn – Denne enhed og alle underenheder')).toBeInTheDocument();
+    expect(within(row).getByText('Admin')).toBeInTheDocument();
+    expect(within(row).getByText('Hele organisationen')).toBeInTheDocument();
+    expect(within(row).getByText('Lokal')).toBeInTheDocument();
+    expect(within(row).getByText('Rollekatalog')).toBeInTheDocument();
+    const carla = screen.getByText('Carla Ny').closest('tr')!;
+    expect(within(carla).getByText('Ingen roller (standardrettighed)')).toBeInTheDocument();
+    expect(screen.getByText('Deaktiveret')).toBeInTheDocument();
+  });
+
+  it('flags an expired assignment', async () => {
+    setup(ADMIN_ME, {
+      'GET /api/admin/access/users': () =>
+        json({
+          users: [
+            {
+              ...USERS.users[1],
+              roles: [assignment({ active: false, stopDate: '2020-01-01T00:00:00.000Z' })],
+            },
+          ],
+        }),
+    });
+    renderWithToasts(<UsersAdmin />);
+    expect(await screen.findByText('Udløbet')).toBeInTheDocument();
+  });
+
+  it('words the exclusive end date as "indtil", not "til" (the grant is over when that day begins)', async () => {
+    setup(ADMIN_ME, {
+      'GET /api/admin/access/users': () =>
+        json({ users: [{ ...USERS.users[1], roles: [assignment({ stopDate: '2099-12-31T00:00:00.000Z' })] }] }),
+    });
+    renderWithToasts(<UsersAdmin />);
+    expect(await screen.findByText(/indtil 2099-12-31/)).toBeInTheDocument();
+    expect(screen.queryByText(/ til 2099-12-31/)).toBeNull();
+  });
+
+  it('shows an empty state', async () => {
+    setup(ADMIN_ME, { 'GET /api/admin/access/users': () => json({ users: [] }) });
+    renderWithToasts(<UsersAdmin />);
+    expect(await screen.findByText('Ingen brugere fundet')).toBeInTheDocument();
+  });
+
+  it('shows an error with retry when the user list fails', async () => {
+    setup(ADMIN_ME, { 'GET /api/admin/access/users': () => json({ error: 'x' }, 500) });
+    renderWithToasts(<UsersAdmin />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Noget gik galt');
+    expect(screen.getByRole('button', { name: 'Prøv igen' })).toBeInTheDocument();
+  });
+
+  it('searches via the q parameter', async () => {
+    const mock = setup();
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    await userEvent.type(screen.getByLabelText('Søg i brugere'), 'carla');
+    await userEvent.click(screen.getByRole('button', { name: 'Søg' }));
+    await waitFor(() => expect(calls(mock, 'GET', '/api/admin/access/users?q=carla')).toHaveLength(1));
+  });
+
+  it('says so when the server cut the list, and not otherwise', async () => {
+    setup(ADMIN_ME, { 'GET /api/admin/access/users': () => json({ ...USERS, truncated: true }) });
+    renderWithToasts(<UsersAdmin />);
+    expect(await screen.findByText('Viser de første 3. Brug søgefeltet for at finde flere.')).toBeInTheDocument();
+  });
+
+  it('shows no cut-off notice for a complete list', async () => {
+    setup(ADMIN_ME, { 'GET /api/admin/access/users': () => json({ ...USERS, truncated: false }) });
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.queryByText(/Viser de første/)).toBeNull();
+  });
+
+  it('announces loading as a status and gives the table an accessible name', async () => {
+    setup();
+    renderWithToasts(<UsersAdmin />);
+    expect(screen.getByRole('status')).toHaveTextContent('Indlæser');
+    await screen.findByText('Bo Bruger');
+    expect(screen.getByRole('table', { name: 'Brugere og deres roller' })).toBeInTheDocument();
+  });
+
+  it('ignores a slow response that was overtaken by a newer search', async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((r) => (releaseFirst = r));
+    setup(ADMIN_ME, {
+      'GET /api/admin/access/users': async (url) => {
+        if (url.includes('q=carla')) return json({ users: [USERS.users[1]] });
+        await firstGate; // the initial, unfiltered request is slow
+        return json(USERS);
+      },
+    });
+    renderWithToasts(<UsersAdmin />);
+    await userEvent.type(screen.getByLabelText('Søg i brugere'), 'carla');
+    await userEvent.click(screen.getByRole('button', { name: 'Søg' }));
+    await screen.findByText('Carla Ny');
+    releaseFirst();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText('Bo Bruger')).toBeNull();
+    expect(screen.getByText('Carla Ny')).toBeInTheDocument();
+  });
+});
+
+describe('UsersAdmin — write controls by mode and role', () => {
+  it('shows grant and revoke controls to a local-mode access manager, only on local rows', async () => {
+    setup();
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.getByRole('button', { name: 'Tildel rolle til Bo Bruger' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Fjern Bygger fra Bo Bruger' })).toBeInTheDocument();
+    // The synced (rollekatalog) row is never editable here.
+    expect(screen.queryByRole('button', { name: 'Fjern Admin fra Bo Bruger' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Tildel rolle til Dan Deaktiv' })).toBeDisabled();
+  });
+
+  it('hides every write control and explains where roles are assigned in rollekatalog mode', async () => {
+    setup(ROLLEKATALOG_ME);
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.getByRole('region', { name: 'Roller tildeles i Rollekatalog' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Tildel rolle/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Fjern/ })).toBeNull();
+    expect(screen.queryByRole('columnheader', { name: 'Handlinger' })).toBeNull();
+  });
+
+  it('claims mode: no write controls, an explanation of where the roles come from, and no Rollekatalog wording or sync request', async () => {
+    const mock = setup(CLAIMS_ME);
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    const card = screen.getByRole('region', { name: 'Roller følger med fra login' });
+    expect(card).toHaveTextContent('identitetsudbyderen');
+    expect(card).toHaveTextContent('næste gang personen logger ind');
+    expect(within(card).getByText('admin')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Roller tildeles i Rollekatalog' })).toBeNull();
+    expect(screen.queryByText(/Data hentes fra Rollekatalog/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Tildel rolle/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Fjern/ })).toBeNull();
+    expect(calls(mock, 'GET', '/api/admin/access/sync')).toHaveLength(0);
+  });
+
+  it('local mode with the kill switch off: read-only card that says the local administration is off', async () => {
+    setup(LOCKED_LOCAL_ME);
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.getByRole('region', { name: 'Rolleadministration er slået fra' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Tildel rolle/ })).toBeNull();
+  });
+
+  it('names claims-sourced assignments as coming from the identity provider', async () => {
+    setup(CLAIMS_ME, {
+      'GET /api/admin/access/users': () => json({ users: [{ ...USERS.users[0], roles: [assignment({ source: 'claims', roleKey: 'admin', scopeOrgUnitUuid: null, scopeOrgUnitName: null })] }] }),
+    });
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.getByText('Identitetsudbyder')).toBeInTheDocument();
+  });
+
+  it('shows no write controls while /api/me is still unknown', async () => {
+    setup(ADMIN_ME, { 'GET /api/me': () => json({ error: 'x' }, 403) });
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.queryByRole('button', { name: /Tildel rolle/ })).toBeNull();
+    expect(screen.getByRole('alert')).toHaveTextContent('Kunne ikke hente dine rettigheder.');
+  });
+});
+
+describe('UsersAdmin — grant dialog', () => {
+  it('opens for the chosen user and reloads the list after granting', async () => {
+    let created = false;
+    const mock = setup(ADMIN_ME, {
+      'POST /api/admin/access/assignments': () => {
+        created = true;
+        return json({ assignment: assignment() }, 201);
+      },
+    });
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Carla Ny');
+    await userEvent.click(screen.getByRole('button', { name: 'Tildel rolle til Carla Ny' }));
+    expect(await screen.findByText('Tildel en rolle til Carla Ny.')).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bruger');
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Tildel rolle' }));
+    await waitFor(() => expect(created).toBe(true));
+    const body = JSON.parse(calls(mock, 'POST', '/api/admin/access/assignments')[0][1].body);
+    expect(body).toMatchObject({ appUserId: 'u-2', roleKey: 'bruger' });
+    await waitFor(() => expect(calls(mock, 'GET', '/api/admin/access/users').length).toBeGreaterThan(1));
+  });
+});
+
+describe('UsersAdmin — revoke', () => {
+  async function openRevoke() {
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    await userEvent.click(screen.getByRole('button', { name: 'Fjern Bygger fra Bo Bruger' }));
+    return screen.findByRole('dialog');
+  }
+
+  it('asks for confirmation and does not delete before confirming', async () => {
+    const mock = setup();
+    const dialog = await openRevoke();
+    expect(dialog).toHaveTextContent('Vil du fjerne rollen »Bygger« fra Bo Bruger?');
+    expect(calls(mock, 'DELETE', '/api/admin/access/assignments')).toHaveLength(0);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Annuller' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(calls(mock, 'DELETE', '/api/admin/access/assignments')).toHaveLength(0);
+  });
+
+  it('deletes the assignment on confirm, toasts and reloads', async () => {
+    const mock = setup(ADMIN_ME, { 'DELETE /api/admin/access/assignments/a-1': () => json({ ok: true }) });
+    const dialog = await openRevoke();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Bekræft fjernelse' }));
+    await waitFor(() => expect(calls(mock, 'DELETE', '/api/admin/access/assignments/a-1')).toHaveLength(1));
+    expect(await screen.findByText(/er fjernet fra Bo Bruger/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(calls(mock, 'GET', '/api/admin/access/users').length).toBeGreaterThan(1));
+  });
+
+  it('shows the server message for the last-administrator guard and keeps the dialog open', async () => {
+    setup(ADMIN_ME, {
+      'DELETE /api/admin/access/assignments/a-1': () =>
+        json({ error: 'Den sidste administrator kan ikke fjernes', code: 'last_admin' }, 409),
+    });
+    const dialog = await openRevoke();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Bekræft fjernelse' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Den sidste administrator kan ikke fjernes');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('shows the read-only 409 message if the mode flipped under the page', async () => {
+    setup(ADMIN_ME, {
+      'DELETE /api/admin/access/assignments/a-1': () =>
+        json({ error: 'Skrivebeskyttet: roller og organisation styres af Rollekatalog', code: 'read_only' }, 409),
+    });
+    const dialog = await openRevoke();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Bekræft fjernelse' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Skrivebeskyttet');
+  });
+});
+
+describe('UsersAdmin — Rollekatalog data and last sync', () => {
+  const RUN = {
+    run: { id: 'r1', startedAt: '2026-10-05T10:00:00.000Z', finishedAt: '2026-10-05T10:00:03.000Z', status: 'success', counts: null, errorCode: null },
+    source: 'rollekatalog',
+    configIssue: null,
+  };
+
+  it('labels the data as coming from Rollekatalog and shows the last sync time in rollekatalog mode', async () => {
+    setup(ROLLEKATALOG_ME, { 'GET /api/admin/access/sync': () => json(RUN) });
+    renderWithToasts(<UsersAdmin />);
+    expect(await screen.findByText(/Data hentes fra Rollekatalog\. Sidst synkroniseret .*2026/)).toBeInTheDocument();
+  });
+
+  it('shows no sync line in local mode and does not ask for the run', async () => {
+    const mock = setup();
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.queryByText(/Data hentes fra Rollekatalog/)).toBeNull();
+    expect(calls(mock, 'GET', '/api/admin/access/sync')).toHaveLength(0);
+  });
+
+  it('still works (without the time) when the run cannot be read', async () => {
+    setup(ROLLEKATALOG_ME, { 'GET /api/admin/access/sync': () => json({ error: 'x' }, 500) });
+    renderWithToasts(<UsersAdmin />);
+    expect(await screen.findByText('Bo Bruger')).toBeInTheDocument();
+    expect(screen.getByText('Data hentes fra Rollekatalog.')).toBeInTheDocument();
+  });
+});
+
+describe('UsersAdmin — roles are assigned in Rollekatalog (explanation card)', () => {
+  const RUN = {
+    run: { id: 'r1', startedAt: '2026-10-05T10:00:00.000Z', finishedAt: '2026-10-05T10:00:03.000Z', status: 'success', counts: null, errorCode: null },
+    source: 'rollekatalog',
+    configIssue: null,
+    itSystem: 'os2taletiltekst',
+  };
+
+  it('names the IT system, lists the three roles with identifier and meaning, and says when changes appear', async () => {
+    setup(ROLLEKATALOG_ME, { 'GET /api/admin/access/sync': () => json(RUN) });
+    renderWithToasts(<UsersAdmin />);
+    const card = await screen.findByRole('region', { name: 'Roller tildeles i Rollekatalog' });
+    expect(await within(card).findByText('os2taletiltekst')).toBeInTheDocument();
+    const items = within(within(card).getByRole('list', { name: 'Roller' })).getAllByRole('listitem');
+    expect(items.map((li) => li.querySelector('code')?.textContent)).toEqual([
+      'bruger',
+      'bygger',
+      'admin',
+    ]);
+    expect(items[0]).toHaveTextContent('Bruger');
+    expect(items[0]).toHaveTextContent('Kan bruge løsningen og de skabeloner, der er stillet til rådighed.');
+    expect(items[2]).toHaveTextContent('Admin');
+    expect(items[2]).toHaveTextContent('Har alle rettigheder');
+    expect(card).toHaveTextContent('Ændringer vises her efter næste synkronisering');
+    // The existing "last synchronised" line stays.
+    expect(await screen.findByText(/Data hentes fra Rollekatalog\. Sidst synkroniseret .*2026/)).toBeInTheDocument();
+  });
+
+  it('still explains without the IT system when the run cannot be read', async () => {
+    setup(ROLLEKATALOG_ME, { 'GET /api/admin/access/sync': () => json({ error: 'x' }, 500) });
+    renderWithToasts(<UsersAdmin />);
+    const card = await screen.findByRole('region', { name: 'Roller tildeles i Rollekatalog' });
+    expect(card).toHaveTextContent('Tildel dem i Rollekatalog under løsningens it-system.');
+    expect(card.querySelector('code.font-mono')?.textContent).toBe('bruger');
+  });
+
+  it('is not shown in local mode, where roles are edited here', async () => {
+    setup();
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.queryByRole('region', { name: 'Roller tildeles i Rollekatalog' })).toBeNull();
+    expect(screen.queryByText('Roller kan ikke ændres her.')).toBeNull();
+  });
+
+  it('reads the sync route once for card, line and panel together', async () => {
+    const mock = setup(ROLLEKATALOG_ME, { 'GET /api/admin/access/sync': () => json(RUN) });
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText(/Sidst synkroniseret/);
+    await screen.findByRole('button', { name: 'Synkroniser nu' });
+    expect(calls(mock, 'GET', '/api/admin/access/sync')).toHaveLength(1);
+  });
+
+  it('keeps the manual "Synkroniser nu" button for a sync.run holder on this page, and hides it from local mode', async () => {
+    setup(ROLLEKATALOG_ME, { 'GET /api/admin/access/sync': () => json(RUN) });
+    const { unmount } = renderWithToasts(<UsersAdmin />);
+    expect(await screen.findByRole('button', { name: 'Synkroniser nu' })).toBeEnabled();
+    unmount();
+    setup(ADMIN_ME);
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.queryByRole('button', { name: 'Synkroniser nu' })).toBeNull();
+  });
+
+  it('does not offer the sync button to an access manager without sync.run', async () => {
+    setup({ ...ROLLEKATALOG_ME, capabilities: ROLLEKATALOG_ME.capabilities.filter((c) => c !== 'sync.run') }, {
+      'GET /api/admin/access/sync': () => json(RUN),
+    });
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText(/Sidst synkroniseret/);
+    expect(screen.queryByRole('button', { name: 'Synkroniser nu' })).toBeNull();
+  });
+});

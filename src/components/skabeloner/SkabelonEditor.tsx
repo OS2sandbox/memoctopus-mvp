@@ -13,6 +13,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { formatDateTime } from '@/components/admin/format';
+import { LOCAL_CHANGE_NOTE_MAX } from '@/lib/skabeloner/change-note';
 import {
   decodeSkabelonCode,
   extractImportToken,
@@ -40,6 +42,27 @@ const CATEGORIES = [
 
 type CategoryKey = (typeof CATEGORIES)[number][0];
 
+// The names the API reports for a changed field, in the words of the form.
+const FIELD_LABELS: Record<string, string> = {
+  name: 'navn',
+  description: 'beskrivelse',
+  prompt: 'prompt',
+  includeDeltagere: 'deltagere',
+  includeBeslutningspunkter: 'beslutningspunkter',
+  includeDagsorden: 'dagsorden',
+  includeDato: 'dato',
+};
+
+interface HistoryEntry {
+  version: number;
+  changeNote: string | null;
+  changedFields: string[];
+  createdAt: string;
+}
+
+const formatWhen = (iso: string): string =>
+  formatDateTime(iso, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }, '');
+
 export function SkabelonEditor({
   open,
   onOpenChange,
@@ -62,6 +85,11 @@ export function SkabelonEditor({
   const [pasteError, setPasteError] = useState<string | null>(null);
   const [pasting, setPasting] = useState(false);
   const [pasteApplied, setPasteApplied] = useState(false);
+  // Optional note about THIS edit; kept only in the person's own changelog.
+  const [changeNote, setChangeNote] = useState('');
+  const [history, setHistory] = useState<HistoryEntry[] | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   // Reset the form whenever the dialog opens (for a new skabelon or an edit).
   useEffect(() => {
@@ -79,7 +107,27 @@ export function SkabelonEditor({
     setPasteValue('');
     setPasteError(null);
     setPasteApplied(false);
+    setChangeNote('');
+    setHistory(null);
+    setHistoryOpen(false);
+    setHistoryError(null);
   }, [open, skabelon]);
+
+  // The person's own changelog is only fetched when they ask for it.
+  async function toggleHistory() {
+    const next = !historyOpen;
+    setHistoryOpen(next);
+    if (!next || history !== null || !skabelon) return;
+    setHistoryError(null);
+    try {
+      const res = await fetch(`/api/skabeloner/${skabelon.id}/history`);
+      if (!res.ok) throw new Error();
+      const data = (await res.json()) as { versions?: HistoryEntry[] };
+      setHistory(data.versions ?? []);
+    } catch {
+      setHistoryError('Kunne ikke hente historikken');
+    }
+  }
 
   function applyShareable(s: ShareableSkabelon) {
     setName(s.name);
@@ -151,7 +199,13 @@ export function SkabelonEditor({
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), description, prompt, ...cats }),
+        body: JSON.stringify({
+          name: name.trim(),
+          description,
+          prompt,
+          ...cats,
+          ...(skabelon && changeNote.trim() ? { changeNote } : {}),
+        }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -277,6 +331,57 @@ export function SkabelonEditor({
               })}
             </div>
           </div>
+
+          {skabelon && (
+            <div className="space-y-1.5">
+              <Label htmlFor="sk-note">Hvad ændrede du? (valgfri)</Label>
+              <Textarea
+                id="sk-note"
+                value={changeNote}
+                onChange={(e) => setChangeNote(e.target.value)}
+                maxLength={LOCAL_CHANGE_NOTE_MAX}
+                rows={2}
+                placeholder="En note til dig selv om denne ændring"
+              />
+              <p className="text-xs text-[var(--muted)]">
+                Noten gemmes kun i din egen historik og er ikke synlig for andre.
+              </p>
+            </div>
+          )}
+
+          {skabelon && (
+            <div className="space-y-1.5">
+              <button
+                type="button"
+                onClick={toggleHistory}
+                aria-expanded={historyOpen}
+                className="text-sm text-[var(--accent)] hover:underline"
+              >
+                {historyOpen ? 'Skjul historik' : 'Vis historik'}
+              </button>
+              {historyOpen && historyError && <p className="text-sm text-[var(--kill)]">{historyError}</p>}
+              {historyOpen && history && history.length === 0 && (
+                <p className="text-sm text-[var(--muted)]">Ingen ændringer endnu.</p>
+              )}
+              {historyOpen && history && history.length > 0 && (
+                <ul className="max-h-40 overflow-y-auto space-y-1.5 text-sm" aria-label="Historik">
+                  {history.map((h) => (
+                    <li key={h.version} className="rounded-[var(--radius)] border border-[var(--line)] px-2.5 py-1.5">
+                      <div className="text-xs text-[var(--muted)]">
+                        Version {h.version} · {formatWhen(h.createdAt)}
+                        {h.changedFields.length > 0
+                          ? ` · ændret: ${h.changedFields.map((f) => FIELD_LABELS[f] ?? f).join(', ')}`
+                          : h.version === 1
+                            ? ' · oprettet'
+                            : ' · kun en note'}
+                      </div>
+                      {h.changeNote && <p className="whitespace-pre-wrap">{h.changeNote}</p>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
 
           {error && <p className="text-sm text-[var(--kill)]">{error}</p>}
         </div>

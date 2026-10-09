@@ -1,28 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { getBotServiceConfig, botFetch } from '@/lib/bot-service';
+import { withHandler } from '@/lib/api-handler';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { z } from 'zod';
+import { requireAppAccess } from '@/lib/authz/app-access';
+import { denyUnlessBotOwner } from '@/lib/bot-owner';
 
 // Polls the live bot-service session status. Stateless: the client supplies the
 // sessionId (stored in its IndexedDB meeting record) as a query param. No DB.
 //
 // Returns a neutral 'forbinder' (connecting) state when no session is known yet
 // or the bot-service can't be reached, so the client keeps polling cleanly.
-export async function GET(
+export const GET = withHandler('bot/status', async (
   req: NextRequest,
   { params }: { params: Promise<{ meetingId: string }> },
-) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+) => {
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
-  await params; // meetingId is part of the path but the lookup is by sessionId
+  const { meetingId } = await params; // the lookup is by sessionId; the meeting id is only checked against the owner
   const sessionId = req.nextUrl.searchParams.get('sessionId');
+  // The bot-service issues UUID session ids; anything else never reaches it.
+  if (sessionId && !z.string().uuid().safeParse(sessionId).success) {
+    return NextResponse.json({ error: 'Invalid sessionId' }, { status: 400 });
+  }
 
   const connecting = (botStatus = 'idle') =>
     NextResponse.json({ status: 'forbinder', botStatus, participants: [], elapsed: 0 });
 
   // No session yet (pre-join or page reload before the session was created).
   if (!sessionId) return connecting();
+
+  // Only the person who started this meeting's bot may poll it. A stranger gets the same neutral
+  // answer a not-yet-started session gives (so nothing is revealed), and the probe is recorded.
+  if (await denyUnlessBotOwner(req, meetingId, session.user.id)) {
+    return connecting();
+  }
 
   const bot = getBotServiceConfig();
   if (!bot) {
@@ -33,9 +47,9 @@ export async function GET(
   // restart mid-poll should report 'forbinder', not 500.
   let res: Response;
   try {
-    res = await botFetch(bot, `/sessions/${sessionId}`);
+    res = await botFetch(bot, `/sessions/${encodeURIComponent(sessionId)}`);
   } catch (err) {
-    console.warn('[bot/status] unreachable, returning forbinder:', err);
+    safeLogError('bot/status unreachable, returning forbinder', err);
     return connecting();
   }
   if (!res.ok) return connecting();
@@ -61,4 +75,4 @@ export async function GET(
     participants,
     elapsed: botState.elapsed ?? 0,
   });
-}
+});

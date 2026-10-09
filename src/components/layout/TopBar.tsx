@@ -5,9 +5,12 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
 import { useIsMobile } from '@/lib/use-is-mobile';
-import { signOut, useSession } from '@/lib/auth-client';
+import { useSession } from '@/lib/auth-client';
+import { signOutAfterFlush } from '@/lib/sign-out';
 import { clearPendingUploads } from '@/lib/pending-upload';
 import { useReviewAudio } from '@/lib/review-audio-context';
+import { useMe } from '@/lib/hooks/use-me';
+import { visibleSectionsForMe } from '@/lib/authz/me';
 
 export function TopBar() {
   const pathname = usePathname();
@@ -19,9 +22,16 @@ export function TopBar() {
   const { hasAudio } = useReviewAudio();
   const [isPending, startTransition] = useTransition();
 
+  // Advisory: the link is only a shortcut. /admin is gated server-side, and
+  // while /api/me is loading (or failed) `me` is null, so ordinary users never
+  // see the link flash.
+  const { data: me } = useMe();
+  const showAdmin = me !== null && visibleSectionsForMe(me).length > 0;
+
   const nav = [
     { href: '/dashboard', label: 'Optag', exact: true },
     { href: '/arkiv', label: 'Arkiv' },
+    ...(showAdmin ? [{ href: '/admin', label: 'Administration', exact: false }] : []),
   ];
 
   const reviewMeetingId = useMemo(
@@ -124,12 +134,7 @@ export function TopBar() {
                 // Drop any in-memory upload picked by this user before the next one
                 // signs in (these module singletons survive an SPA sign-out).
                 clearPendingUploads();
-                signOut()
-                  .then(() => router.push('/'))
-                  .catch((err) => {
-                    console.error('signOut failed', err);
-                    router.push('/');
-                  });
+                void signOutAfterFlush().then(() => router.push('/'));
               }}
               style={{
                 fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)',

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { NextRequest } from 'next/server';
-import { middleware } from './middleware';
+import { config, middleware } from './middleware';
 
 function makeReq(pathname: string, cookies: Record<string, string> = {}): NextRequest {
   const url = `http://localhost${pathname}`;
@@ -40,6 +40,26 @@ describe('middleware', () => {
       const res = middleware(makeReq('/', { [SESSION_COOKIE]: TOKEN }));
       expect(res.status).toBe(307);
       expect(res.headers.get('location')).toBe('http://localhost/dashboard');
+    });
+
+    it('serves / (and drops the dead cookie) when the app layout sent a stale cookie back with ?expired', () => {
+      // Without this, / -> /dashboard -> / loops forever for a cookie whose session row is gone.
+      const res = middleware(makeReq('/?expired=1', { [SESSION_COOKIE]: TOKEN, [SECURE_SESSION_COOKIE]: TOKEN }));
+      expect(res.status).toBe(200);
+      expect(res.headers.get('location')).toBeNull();
+      const cleared = res.headers.getSetCookie().join('\n');
+      expect(cleared).toContain(`${SESSION_COOKIE}=;`);
+      expect(cleared).toContain(`${SECURE_SESSION_COOKIE}=;`);
+    });
+
+    it('clears the __Secure- cookie with the Secure attribute (the browser ignores a delete without it), and the plain one', () => {
+      const res = middleware(makeReq('/?expired=1', { [SECURE_SESSION_COOKIE]: TOKEN }));
+      const cookies = res.headers.getSetCookie();
+      const secure = cookies.find((c) => c.startsWith(`${SECURE_SESSION_COOKIE}=`))!;
+      expect(secure).toMatch(/;\s*Secure/i);
+      expect(secure).toMatch(/Path=\//i);
+      expect(secure).toMatch(/Max-Age=0|Expires=/i);
+      expect(cookies.some((c) => c.startsWith(`${SESSION_COOKIE}=`))).toBe(true);
     });
 
     it('redirects to /dashboard when the secure cookie variant is set', () => {
@@ -88,5 +108,26 @@ describe('middleware', () => {
       const res = middleware(makeReq('/settings'));
       expect(res.status).toBe(307);
     });
+  });
+});
+
+// The IdP's POST to the SAML ACS arrives with no session cookie and from another origin. It
+// must never be redirected to the sign-in page, so the auth API is outside the matcher.
+describe('middleware matcher and the identity-provider callbacks', () => {
+  const matcher = new RegExp(`^${config.matcher[0]}$`);
+
+  it.each([
+    '/api/auth/sso/saml2/sp/acs/kommune',
+    '/api/auth/sso/saml2/callback/kommune',
+    '/api/auth/sso/saml2/sp/metadata',
+    '/api/auth/oauth2/callback/fka',
+    '/api/auth/callback/microsoft',
+    '/api/auth/error',
+  ])('does not run for %s', (pathname) => {
+    expect(matcher.test(pathname)).toBe(false);
+  });
+
+  it('still runs for pages', () => {
+    for (const pathname of ['/', '/dashboard', '/admin/users']) expect(matcher.test(pathname)).toBe(true);
   });
 });

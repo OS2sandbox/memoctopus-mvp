@@ -18,6 +18,7 @@ vi.mock('next/navigation', () => ({
 const mockSignInEmail = vi.fn();
 const mockSignInSocial = vi.fn();
 const mockSignInOAuth2 = vi.fn();
+const mockSignInSso = vi.fn();
 const mockSignUpEmail = vi.fn();
 
 vi.mock('@/lib/auth-client', () => ({
@@ -31,12 +32,14 @@ vi.mock('@/lib/auth-client', () => ({
   authClient: {
     signIn: {
       oauth2: (...args: unknown[]) => mockSignInOAuth2(...args),
+      sso: (...args: unknown[]) => mockSignInSso(...args),
     },
   },
 }));
 
 const MICROSOFT: AuthProvider = { kind: 'social', id: 'microsoft', label: 'Microsoft' };
 const KEYCLOAK: AuthProvider = { kind: 'oauth2', id: 'keycloak', label: 'Keycloak' };
+const SAML: AuthProvider = { kind: 'sso', id: 'os2faktor', label: 'OS2faktor' };
 
 function renderForm(providers: AuthProvider[] = [], emailPasswordEnabled = true) {
   return render(<HeroForm providers={providers} emailPasswordEnabled={emailPasswordEnabled} />);
@@ -53,6 +56,7 @@ beforeEach(() => {
   mockSignInEmail.mockReset();
   mockSignInSocial.mockReset();
   mockSignInOAuth2.mockReset();
+  mockSignInSso.mockReset();
   mockSignUpEmail.mockReset();
 });
 
@@ -508,6 +512,61 @@ describe('HeroForm — generic OIDC sign-in', () => {
       'Fortsæt med Microsoft',
       'Fortsæt med Keycloak',
     ]);
+  });
+});
+
+describe('HeroForm — SAML (sso) sign-in', () => {
+  it('labels the button with the operator-configured name', () => {
+    renderForm([SAML]);
+    expect(screen.getByText('Fortsæt med OS2faktor')).toBeInTheDocument();
+  });
+
+  it('calls signIn.sso with the provider id, and neither oauth2 nor social', async () => {
+    mockSignInSso.mockResolvedValueOnce({ error: null });
+    renderForm([SAML]);
+    await clickProvider('OS2faktor');
+    expect(mockSignInSso).toHaveBeenCalledWith({ providerId: 'os2faktor', callbackURL: '/dashboard' });
+    expect(mockSignInOAuth2).not.toHaveBeenCalled();
+    expect(mockSignInSocial).not.toHaveBeenCalled();
+  });
+
+  it('passes the "from" search param as callbackURL', async () => {
+    mockSearchParamsGet.mockReturnValue('/meeting/xyz');
+    mockSignInSso.mockResolvedValueOnce({ error: null });
+    renderForm([SAML]);
+    await clickProvider('OS2faktor');
+    expect(mockSignInSso).toHaveBeenCalledWith({ providerId: 'os2faktor', callbackURL: '/meeting/xyz' });
+  });
+
+  it('names the provider in the error message, for a returned error and for a rejected call', async () => {
+    mockSignInSso.mockResolvedValueOnce({ error: { message: 'no provider' } });
+    renderForm([SAML]);
+    await clickProvider('OS2faktor');
+    await waitFor(() => expect(screen.getByText('OS2faktor login mislykkedes. Prøv igen.')).toBeInTheDocument());
+    mockSignInSso.mockRejectedValueOnce(new Error('network'));
+    await clickProvider('OS2faktor');
+    await waitFor(() => expect(screen.getByText('OS2faktor login mislykkedes. Prøv igen.')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /OS2faktor/ })).toBeEnabled();
+  });
+
+  it('shows several OIDC providers and a SAML one side by side, and the right one calls its own method', async () => {
+    mockSignInOAuth2.mockResolvedValue({ error: null });
+    mockSignInSso.mockResolvedValue({ error: null });
+    renderForm([MICROSOFT, KEYCLOAK, { kind: 'oauth2', id: 'fka', label: 'FKA' }, SAML], false);
+    expect(screen.getAllByText(/^Fortsæt med /).map((b) => b.textContent)).toEqual([
+      'Fortsæt med Microsoft',
+      'Fortsæt med Keycloak',
+      'Fortsæt med FKA',
+      'Fortsæt med OS2faktor',
+    ]);
+    await clickProvider('FKA');
+    expect(mockSignInOAuth2).toHaveBeenLastCalledWith({ providerId: 'fka', callbackURL: '/dashboard' });
+    expect(mockSignInSso).not.toHaveBeenCalled();
+  });
+
+  it('does not give the SAML button the Microsoft logo', () => {
+    const { container } = renderForm([SAML]);
+    expect(container.querySelector('svg path[fill="#f25022"]')).toBeNull();
   });
 });
 
