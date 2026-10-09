@@ -76,20 +76,6 @@ meeting, local recordings included, where it answers `{ status: 'none' }` and th
 client falls back to its own batch pass. `src/lib/transcribe-recording.ts`
 (`transcribeRecording`) is the server-side transcription pass over a recording.
 
-**A finished Teams transcript does not stay in that stash.** The stash is swept after
-an hour, which was fine while a late user could have Teams' artifacts fetched again;
-with the recording deleted from OneDrive straight after transcription, a swept
-transcript would be gone for good. So when a run comes back `ready`, the poller
-(`parkReadyTranscript`) moves the transcript and its meta into
-`parked_transcripts` in the owner's schema (`src/lib/teams/parked-transcripts.ts`):
-AES-256-GCM under a key derived from `BETTER_AUTH_SECRET`, deleted on the browser's
-acknowledgement or after `PARKED_TTL_DAYS` (30) by the hourly pass in
-`pending-sweeper.ts`. It is parked *before* the row is marked ready and *before* the
-stash is dropped, so the transcript is never in neither place. Both hand-off routes
-look there first; the per-user schema is the access control, so no owner file is
-involved. The file stash is now only the in-flight state of a run, and the hand-off
-for local recordings.
-
 **Raw meeting audio never reaches the browser from a Teams meeting.** Graph publishes
 nothing until a meeting has ended and the poller will not ask before `scheduled_end`,
 so nobody can follow a Teams meeting live here and nobody has a reason to hold the

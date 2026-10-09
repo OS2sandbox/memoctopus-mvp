@@ -9,12 +9,6 @@ vi.mock('@/lib/auth', () => ({ auth: { api: {} } }));
 vi.mock('./pipeline', () => ({ processTeamsMeeting: vi.fn() }));
 vi.mock('./meeting-resolver', () => ({ getMeeting: vi.fn() }));
 vi.mock('./recording-cleanup', () => ({ deleteRecordingFromDrive: vi.fn() }));
-vi.mock('./parked-transcripts', () => ({ parkTranscript: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@/lib/pending-artifacts', () => ({
-  readPendingTranscript: vi.fn().mockResolvedValue(null),
-  readPendingMeta: vi.fn().mockResolvedValue(null),
-  acknowledgePendingTranscript: vi.fn().mockResolvedValue(undefined),
-}));
 
 const mockQuery = vi.fn();
 vi.mock('@/lib/db/user-schema', () => ({
@@ -50,12 +44,6 @@ import {
 import { GraphError } from './graph-client';
 import { processTeamsMeeting, type PipelineOutcome } from './pipeline';
 import { deleteRecordingFromDrive } from './recording-cleanup';
-import { parkTranscript } from './parked-transcripts';
-import {
-  acknowledgePendingTranscript,
-  readPendingMeta,
-  readPendingTranscript,
-} from '@/lib/pending-artifacts';
 import { getMeeting } from './meeting-resolver';
 import {
   POLL_GIVE_UP_MS,
@@ -993,72 +981,5 @@ describe('deleting the recording from OneDrive', () => {
 
     expect(result).toEqual({ polled: 0 });
     expect(mockSettle).toHaveBeenCalledWith('u1', 'm1', 'deleted');
-  });
-});
-
-describe('parking the finished transcript', () => {
-  const mockPark = vi.mocked(parkTranscript);
-  const mockStash = vi.mocked(readPendingTranscript);
-  const mockMeta = vi.mocked(readPendingMeta);
-  const mockAck = vi.mocked(acknowledgePendingTranscript);
-  const SEGMENTS = [{ start: 0, end: 2, text: 'Goddag', speaker: 'Mette Hansen' }];
-  const ready: PipelineOutcome = {
-    status: 'ready', mode: 'transcript-only', speakers: [], transcriptId: 't1', recordingId: null, recordingBytes: null,
-  };
-
-  beforeEach(() => {
-    mockPark.mockResolvedValue(undefined);
-    mockAck.mockResolvedValue(undefined);
-    mockStash.mockResolvedValue({ status: 'ready', segments: SEGMENTS, diarized: true, createdAt: 1 });
-    mockMeta.mockResolvedValue({ participants: ['Mette Hansen'], durationSeconds: 120, createdAt: 1 });
-    mockGet.mockResolvedValue(row());
-  });
-
-  it('moves the result into the owner\'s schema, then drops the stash, then marks the row ready', async () => {
-    mockProcess.mockResolvedValueOnce(ready);
-
-    await pollMeeting('u1', 'm1', NOW);
-
-    expect(mockPark).toHaveBeenCalledWith('u1', 'm1', {
-      segments: SEGMENTS,
-      diarized: true,
-      participants: ['Mette Hansen'],
-      durationSeconds: 120,
-    });
-    expect(mockAck).toHaveBeenCalledWith('m1');
-    const parkedAt = mockPark.mock.invocationCallOrder[0];
-    expect(parkedAt).toBeLessThan(mockAck.mock.invocationCallOrder[0]);
-    const markedReady = mockMark.mock.invocationCallOrder[mockMark.mock.calls.findIndex((c) => c[2]?.state === 'ready')];
-    expect(parkedAt).toBeLessThan(markedReady);
-  });
-
-  it('keeps the stash, and still marks the meeting ready, when the database refuses', async () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    mockProcess.mockResolvedValueOnce(ready);
-    mockPark.mockRejectedValueOnce(new Error('db down'));
-
-    await pollMeeting('u1', 'm1', NOW);
-
-    expect(mockAck).not.toHaveBeenCalled();
-    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', expect.objectContaining({ state: 'ready' }));
-    error.mockRestore();
-  });
-
-  it('parks nothing for a meeting that is not ready', async () => {
-    mockProcess.mockResolvedValueOnce({ status: 'pending' });
-
-    await pollMeeting('u1', 'm1', NOW);
-
-    expect(mockPark).not.toHaveBeenCalled();
-  });
-
-  it('parks nothing when there is no finished stash to move', async () => {
-    mockStash.mockResolvedValue(null);
-    mockProcess.mockResolvedValueOnce(ready);
-
-    await pollMeeting('u1', 'm1', NOW);
-
-    expect(mockPark).not.toHaveBeenCalled();
-    expect(mockAck).not.toHaveBeenCalled();
   });
 });

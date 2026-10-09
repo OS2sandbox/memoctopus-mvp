@@ -13,27 +13,6 @@ import { sweepExpired } from '@/lib/pending-artifacts';
  */
 export const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
-/**
- * Parked transcripts (teams/parked-transcripts.ts) wait in the database for up to
- * 30 days, so their expiry needs no finer grain than this — and it is one query
- * per user schema, which is not something to run every five minutes.
- */
-export const PARKED_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
-
-async function sweepParked(): Promise<void> {
-  // Imported here, not at the top: these reach the pg pool, and this module is
-  // also loaded where only the file sweep is wanted.
-  const { listUserSchemaIds } = await import('@/lib/teams/store');
-  const { sweepParkedTranscripts } = await import('@/lib/teams/parked-transcripts');
-  for (const userId of await listUserSchemaIds()) {
-    try {
-      await sweepParkedTranscripts(userId);
-    } catch (err) {
-      console.error('[pending-sweeper] parked sweep failed for', userId, err);
-    }
-  }
-}
-
 let stopCurrent: (() => void) | null = null;
 
 function sweeperDisabled(): boolean {
@@ -52,16 +31,11 @@ export function startPendingSweeper(): () => void {
   if (stopCurrent) return stopCurrent;
 
   let running = false;
-  let parkedSweptAt = 0;
   const tick = async () => {
     if (running) return; // a slow sweep must not overlap with the next tick
     running = true;
     try {
       await sweepExpired();
-      if (Date.now() - parkedSweptAt >= PARKED_SWEEP_INTERVAL_MS) {
-        parkedSweptAt = Date.now();
-        await sweepParked();
-      }
     } catch (err) {
       console.error('[pending-sweeper] sweep failed:', err);
     } finally {

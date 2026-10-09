@@ -229,14 +229,6 @@ over. Not covered: a recording stored in someone else's OneDrive (the user is an
 invitee, not the organizer) and a channel meeting's recording in the team's
 SharePoint site.
 
-Because the recording is gone at once, the finished transcript is the only copy
-until its owner's browser collects it. It therefore waits in the database, in that
-user's own schema, encrypted with a key derived from `BETTER_AUTH_SECRET`, and is
-deleted when the browser confirms it has saved it or after 30 days. Two
-consequences for operations: **a database dump taken meanwhile contains waiting
-transcripts** (encrypted), and **rotating `BETTER_AUTH_SECRET` makes them
-unreadable**, exactly as it does the stored OAuth tokens.
-
 Teams' own transcript needs no separate delete, and Graph offers none: it is not a
 file of its own but is embedded in the recording's mp4, so it goes when the
 recording does. Two cases are left. In `transcript-only` the app never downloads

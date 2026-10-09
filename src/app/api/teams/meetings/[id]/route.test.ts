@@ -18,11 +18,6 @@ vi.mock('@/lib/teams/store', async (importOriginal) => ({
   setTeamsMeetingState: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@/lib/pending-artifacts', () => ({ readPendingTranscript: vi.fn() }));
-vi.mock('@/lib/teams/parked-transcripts', () => ({
-  readParkedTranscript: vi.fn().mockResolvedValue(null),
-  hasParkedTranscript: vi.fn().mockResolvedValue(false),
-  deleteParkedTranscript: vi.fn().mockResolvedValue(undefined),
-}));
 vi.mock('@/lib/teams/poller', () => ({ pollMeeting: vi.fn() }));
 vi.mock('@/lib/teams/meeting-arm', () => ({ disarmMeeting: vi.fn() }));
 
@@ -40,7 +35,6 @@ import {
   type TeamsMeetingRow,
 } from '@/lib/teams/store';
 import { readPendingTranscript } from '@/lib/pending-artifacts';
-import { deleteParkedTranscript, hasParkedTranscript } from '@/lib/teams/parked-transcripts';
 import { FAKE_SESSION } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
@@ -328,17 +322,6 @@ describe('POST /api/teams/meetings/[id] — recollect', () => {
   beforeEach(() => {
     mockSetState.mockResolvedValue(row());
     mockReadStash.mockResolvedValue(null);
-    vi.mocked(hasParkedTranscript).mockResolvedValue(false);
-  });
-
-  it('leaves a ready row alone while its transcript is parked, long after the stash is gone', async () => {
-    mockGet.mockResolvedValueOnce(row({ state: 'ready', scheduledEnd: recentlyEnded() }));
-    vi.mocked(hasParkedTranscript).mockResolvedValueOnce(true);
-
-    const res = await POST(post(), { params });
-
-    expect(res.status).toBe(200);
-    expect(mockSetState).not.toHaveBeenCalled();
   });
 
   it('returns 401 when not authenticated', async () => {
@@ -415,15 +398,5 @@ describe('POST /api/teams/meetings/[id] — recollect', () => {
     expect(res.status).toBe(409);
     expect((await res.json()).error).toBe('window_closed');
     expect(mockSetState).not.toHaveBeenCalled();
-  });
-});
-
-describe('DELETE /api/teams/meetings/[id] — parked transcript', () => {
-  it('forgets what was collected for the meeting along with the meeting', async () => {
-    mockGet.mockResolvedValueOnce(row({ state: 'ready' }));
-
-    await DELETE(new NextRequest('http://localhost/api/teams/meetings/m1', { method: 'DELETE' }), { params });
-
-    expect(deleteParkedTranscript).toHaveBeenCalledWith(FAKE_SESSION.user.id, 'm1');
   });
 });
