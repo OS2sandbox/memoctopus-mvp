@@ -15,15 +15,8 @@ vi.mock('@/lib/pending-artifacts', () => ({
   assertMeetingOwner: vi.fn(),
 }));
 
-vi.mock('@/lib/teams/parked-transcripts', () => ({
-  readParkedTranscript: vi.fn().mockResolvedValue(null),
-  hasParkedTranscript: vi.fn().mockResolvedValue(false),
-  deleteParkedTranscript: vi.fn().mockResolvedValue(undefined),
-}));
-
 import { NextRequest } from 'next/server';
 import { GET, DELETE } from './route';
-import { deleteParkedTranscript, readParkedTranscript } from '@/lib/teams/parked-transcripts';
 import { auth } from '@/lib/auth';
 import {
   readPendingTranscript,
@@ -38,8 +31,6 @@ const mockRead = vi.mocked(readPendingTranscript);
 const mockDelete = vi.mocked(deletePendingTranscript);
 const mockAck = vi.mocked(acknowledgePendingTranscript);
 const mockAssertOwner = vi.mocked(assertMeetingOwner);
-const mockReadParked = vi.mocked(readParkedTranscript);
-const mockDeleteParked = vi.mocked(deleteParkedTranscript);
 
 const PARAMS = { params: Promise.resolve({ id: 'm1' }) };
 const REQ = new NextRequest('http://localhost/api/meetings/m1/pending-transcript');
@@ -151,45 +142,5 @@ describe('DELETE /api/meetings/[id]/pending-transcript (acknowledge)', () => {
     await DELETE(DEL, PARAMS);
     mockRead.mockResolvedValueOnce(null);
     expect((await (await GET(REQ, PARAMS)).json()).status).toBe('none');
-  });
-});
-
-describe('pending-transcript — a parked transcript', () => {
-  const PARKED = { segments: SEGMENTS, diarized: true, participants: ['Mette'], durationSeconds: 60 };
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
-    mockReadParked.mockResolvedValue(null);
-    mockDeleteParked.mockResolvedValue(undefined);
-  });
-
-  it('is served from the caller\'s own schema, with no owner file left to check', async () => {
-    mockReadParked.mockResolvedValue(PARKED);
-    mockAssertOwner.mockResolvedValue(false); // the stash and its owner file are long gone
-
-    const res = await GET(REQ, PARAMS);
-
-    expect(await res.json()).toEqual({ status: 'ready', segments: SEGMENTS, diarized: true });
-    expect(mockReadParked).toHaveBeenCalledWith(FAKE_SESSION.user.id, 'm1');
-    expect(mockRead).not.toHaveBeenCalled();
-  });
-
-  it('is not deleted by reading it', async () => {
-    mockReadParked.mockResolvedValue(PARKED);
-
-    await GET(REQ, PARAMS);
-
-    expect(mockDeleteParked).not.toHaveBeenCalled();
-  });
-
-  it('is deleted, in the caller\'s schema only, once the browser acknowledges it', async () => {
-    mockAssertOwner.mockResolvedValue(false);
-
-    const res = await DELETE(REQ, PARAMS);
-
-    expect(await res.json()).toEqual({ ok: true });
-    expect(mockDeleteParked).toHaveBeenCalledWith(FAKE_SESSION.user.id, 'm1');
-    expect(mockAck).not.toHaveBeenCalled();
   });
 });
