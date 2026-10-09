@@ -2,7 +2,7 @@ import { graphFetch, GraphError } from '@/lib/teams/graph-client';
 import { getMeeting, type ResolvedMeeting } from '@/lib/teams/meeting-resolver';
 
 /**
- * "Memoctopus slået til" for one meeting.
+ * "OS2taletiltekst slået til" for one meeting.
  *
  * Arming is a single PATCH of the meeting's own options — exactly what the
  * organizer would tick in Teams' meeting options — so Teams records and
@@ -44,7 +44,7 @@ export type ArmResult = 'armed' | 'armed_in_progress' | 'not_organizer' | 'polic
  * came into being.
  *
  * That is NOT the same as "already running", and the UI must not say it is. The
- * link to such a meeting is routinely pasted into Memoctopus before anyone joins,
+ * link to such a meeting is routinely pasted into OS2taletiltekst before anyone joins,
  * and then `recordAutomatically` works perfectly. But delegated Graph offers no
  * roster and no in-progress flag, so we cannot tell the two apart — which is why
  * the result is reported separately and the screen offers the manual start as a
@@ -174,7 +174,7 @@ async function readOptions(
 }
 
 /**
- * "Slå Memoctopus fra". Puts back the options as they were before arming
+ * "Slå OS2taletiltekst fra". Puts back the options as they were before arming
  * (`original`, snapshotted by {@link armMeeting}) — including the ones that were
  * off, so we do not leave recording and transcription enabled on a meeting whose
  * organizer never wanted them.

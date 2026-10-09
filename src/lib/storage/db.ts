@@ -26,7 +26,7 @@ export interface StoredMeeting {
   // since it is false for an invitee, and `teamsSubject` / `scheduledStart` are
   // absent for instant meetings.
   graphManaged?: boolean;
-  // Microsoft Graph ("Memoctopus slået til") state, mirrored from the server-side
+  // Microsoft Graph ("OS2taletiltekst slået til") state, mirrored from the server-side
   // teams_meetings row so the meeting list and the awaiting screen can render
   // without a round-trip. All optional — meetings created before this existed, and
   // every local recording, simply don't carry them.

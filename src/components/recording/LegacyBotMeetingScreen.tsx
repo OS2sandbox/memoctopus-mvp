@@ -48,7 +48,7 @@ export function LegacyBotMeetingScreen({
         Dette møde blev startet med den gamle Teams-robot
       </h1>
       <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--muted)', marginBottom: 24 }}>
-        Memoctopus sender ikke længere en robot ind i Teams-møder. Referater hentes nu fra
+        OS2taletiltekst sender ikke længere en robot ind i Teams-møder. Referater hentes nu fra
         Teams&rsquo; egen transskription, og det kræver, at mødet slås til inden det starter.
         Robotten, der skulle have optaget dette møde, findes ikke længere.
       </p>

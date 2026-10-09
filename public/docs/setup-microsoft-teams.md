@@ -2,7 +2,7 @@
 
 Denne guide er til IT-administratoren i kommunen. Den skal kun følges én gang.
 
-Memoctopus henter ikke længere lyd ved at sende en robot ind i mødet. I stedet beder
+OS2taletiltekst henter ikke længere lyd ved at sende en robot ind i mødet. I stedet beder
 appen Microsoft Teams om selv at transskribere mødet, og henter bagefter Teams'
 egen transskription (og eventuelt optagelsen) via Microsoft Graph. Brugerne skal derfor ikke gøre
 noget nyt i Teams, og der kommer ingen ekstra deltager i mødet.
@@ -11,7 +11,7 @@ Opsætningen består af to trin i Microsoft-portalerne. Regn med 15 minutter, pl
 til en times ventetid på, at Teams-politikken slår igennem.
 
 **Teams-referater er slået fra som standard.** Driften slår dem til ved at sætte
-`TEAMS_GRAPH_ENABLED=true` i Memoctopus' miljøvariabler og genstarte appen, og det
+`TEAMS_GRAPH_ENABLED=true` i OS2taletiltekst' miljøvariabler og genstarte appen, og det
 skal først ske, **når trin 1 er gennemført**. Se rammen under trin 1.
 
 ## Trin 1. Giv appen adgang til møderne
@@ -20,7 +20,7 @@ Foretages i **Entra admin center** ([entra.microsoft.com](https://entra.microsof
 af en bruger med rollen *Global administrator* eller *Privileged role administrator*.
 
 1. Åbn under **Identity / Applications / App registrations** den app-registrering,
-   der i dag bruges til Microsoft-login i Memoctopus.
+   der i dag bruges til Microsoft-login i OS2taletiltekst.
 2. Vælg **API permissions / Add a permission / Microsoft Graph / Delegated
    permissions** og sæt flueben ved:
 
@@ -47,13 +47,13 @@ af en bruger med rollen *Global administrator* eller *Privileged role administra
    https://<jeres-referat-adresse>/api/auth/callback/microsoft
    ```
 
-5. Bekræft, at Memoctopus' `MICROSOFT_TENANT_ID` er sat til organisationens
+5. Bekræft, at OS2taletiltekst' `MICROSOFT_TENANT_ID` er sat til organisationens
    rigtige tenant-id. Står feltet tomt, bruger appen `common`, og så kan brugere
    fra alle tenants logge ind. Administrator-samtykket gælder fortsat i jeres
    tenant, men det gælder kun jeres tenant: samtykke gives **pr. tenant**, og det
    følger ikke med brugere fra andre organisationer.
 
-> **Vigtigt: giv samtykke, før Teams slås til i Memoctopus.** Når driften sætter
+> **Vigtigt: giv samtykke, før Teams slås til i OS2taletiltekst.** Når driften sætter
 > `TEAMS_GRAPH_ENABLED=true`, beder Microsoft-login om de tilladelser, der står
 > ovenfor. `OnlineMeetingTranscript.Read.All` og `OnlineMeetingRecording.Read.All`
 > kræver administrator-samtykke. Har tenanten ikke givet det, svarer Microsoft
@@ -79,11 +79,11 @@ Foretages i **Teams admin center** ([admin.teams.microsoft.com](https://admin.te
    - *Transcription*
    - *Meeting recording*
 3. Gem. **Ændringen kan være op til en time om at slå igennem.** Indtil da vil
-   Memoctopus melde, at mødet ikke kunne forberedes.
+   OS2taletiltekst melde, at mødet ikke kunne forberedes.
 
 Begge indstillinger skal være tilladt af politikken. Ellers accepterer Microsoft
 Graph godt nok anmodningen om automatisk transskription, men Teams ignorerer den
-i praksis. Memoctopus viser i det tilfælde fejlen *"Jeres Teams-politik tillader
+i praksis. OS2taletiltekst viser i det tilfælde fejlen *"Jeres Teams-politik tillader
 ikke optagelse eller transskription"*.
 
 ## Trin 3. Kontrollér at Graph må læse transskriptioner
@@ -92,7 +92,7 @@ Nogle organisationer har slået API-adgang til transskriptioner fra. Findes i
 **Teams admin center / Meetings / Meeting settings** under indstillingerne for
 adgang til transskription og optagelse via API.
 
-Er den slået fra, kan Memoctopus ikke hente transskriptionen, og viser fejlen
+Er den slået fra, kan OS2taletiltekst ikke hente transskriptionen, og viser fejlen
 *"Jeres organisation har slået Graph-adgang til transskriptioner fra"*. Der er
 ingen anden vej rundt om det end at slå indstillingen til.
 
@@ -100,22 +100,22 @@ ingen anden vej rundt om det end at slå indstillingen til.
 
 ## Sådan bruger medarbejderne det bagefter
 
-1. Log ind i Memoctopus med Microsoft. **Brugere, der loggede ind, før Teams blev
+1. Log ind i OS2taletiltekst med Microsoft. **Brugere, der loggede ind, før Teams blev
    slået til, skal logge ud og ind igen**, så den nye adgang bliver gemt. Indtil
    de gør det, viser forsiden en knap *"Giv adgang igen"*.
 2. Planlæg mødet i Outlook eller Teams som altid.
 3. Kopiér mødelinket, altså det samme "Deltag i Teams-møde"-link som deltagerne
-   får i indkaldelsen, og indsæt det i **Mødelink**-feltet i Memoctopus. Linket kan
+   får i indkaldelsen, og indsæt det i **Mødelink**-feltet i OS2taletiltekst. Linket kan
    kopieres både fra mødeindkaldelsen i Outlook og med "Kopiér link til deltagelse"
    i Teams. Har organisationen Defender Safe Links slået til, bliver links i mails
    skrevet om til en `safelinks.protection.outlook.com`-adresse. Det er i orden,
-   fordi Memoctopus selv finder det rigtige mødelink inde i den.
+   fordi OS2taletiltekst selv finder det rigtige mødelink inde i den.
 4. Hold mødet. **Ingen skal trykke på noget i Teams undervejs**, og der kommer
-   ingen ekstra deltager ind i mødet. Memoctopus beder Teams om selv at
+   ingen ekstra deltager ind i mødet. OS2taletiltekst beder Teams om selv at
    transskribere.
-5. Et par minutter efter mødet er referatet klar i Memoctopus.
+5. Et par minutter efter mødet er referatet klar i OS2taletiltekst.
 
-Memoctopus kan ikke slå transskription til på møder med en anden arrangør. I de
+OS2taletiltekst kan ikke slå transskription til på møder med en anden arrangør. I de
 tilfælde vises en sætning, der kan sendes videre til arrangøren.
 
 ## Fejlsøgning
@@ -130,7 +130,7 @@ tilfælde vises en sætning, der kan sendes videre til arrangøren.
 | "Jeres organisation har slået Graph-adgang til transskriptioner fra" | Indstillingen i trin 3 | Gennemgå trin 3 |
 | "Du skal være inviteret til mødet" | Mødet ligger ikke i brugerens kalender — fx et ad hoc "Mød nu", eller et link videresendt fra en anden | Brug et møde, brugeren selv er inviteret til |
 | "Mødelinket er ikke et gyldigt Teams-link" | Der er indsat noget andet end et Teams-mødelink | Kopiér linket fra mødeindkaldelsen igen |
-| Mødet står i "Venter på Teams" længe efter mødet | Microsoft er nogle gange et stykke tid om at frigive transskriptionen | Tryk **Tjek nu**. Memoctopus prøver selv i op til 24 timer |
+| Mødet står i "Venter på Teams" længe efter mødet | Microsoft er nogle gange et stykke tid om at frigive transskriptionen | Tryk **Tjek nu**. OS2taletiltekst prøver selv i op til 24 timer |
 
 Kommer der ingen transskription, kan forholdet kontrolleres i
 [Graph Explorer](https://developer.microsoft.com/graph/graph-explorer) som den
@@ -141,7 +141,7 @@ GET /me/onlineMeetings?$filter=JoinWebUrl eq '<mødelink>'
 GET /me/onlineMeetings/<id>/transcripts
 ```
 
-Ligger transskriptionen der, men ikke i Memoctopus, er det en fejl i Memoctopus.
+Ligger transskriptionen der, men ikke i OS2taletiltekst, er det en fejl i OS2taletiltekst.
 Ligger den ikke der, kom Teams aldrig i gang med at transskribere, og så mangler
 trin 2 eller trin 3.
 
@@ -150,15 +150,15 @@ trin 2 eller trin 3.
 Teams gemmer selv optagelsen i arrangørens OneDrive og transskriptionen på
 mødet. Det er Microsofts standardopførsel.
 
-Memoctopus henter en kopi af optagelsen, transskriberer den og sletter derefter
-lyden. Selve lydoptagelsen bliver aldrig gemt i Memoctopus og bliver aldrig sendt
+OS2taletiltekst henter en kopi af optagelsen, transskriberer den og sletter derefter
+lyden. Selve lydoptagelsen bliver aldrig gemt i OS2taletiltekst og bliver aldrig sendt
 til medarbejderens browser.
 
-Når transskriptionen er færdig, sletter Memoctopus også optagelsen i arrangørens
+Når transskriptionen er færdig, sletter OS2taletiltekst også optagelsen i arrangørens
 OneDrive. Filen slettes permanent og lægges ikke i papirkurven. Det er det,
 tilladelsen `Files.ReadWrite` bruges til, og kun til det: Microsoft Graph har
 ingen funktion til at slette en mødeoptagelse, så filen må slettes som en fil i
-medarbejderens OneDrive. Memoctopus finder den i mappen *Optagelser* på dens
+medarbejderens OneDrive. OS2taletiltekst finder den i mappen *Optagelser* på dens
 præcise størrelse i bytes og sletter intet, hvis det ikke udpeger netop én fil.
 
 Teams' egen tekst-transskription ligger ikke som en selvstændig fil. Den er
@@ -171,13 +171,13 @@ Der er fire ting, sletningen ikke dækker:
   permanent sletning, lægges filen i papirkurven i stedet, og herefter gælder
   organisationens egne regler.
 - Er medarbejderen kun inviteret til mødet, ligger optagelsen i arrangørens
-  OneDrive, som Memoctopus ikke har adgang til. Den bliver liggende.
+  OneDrive, som OS2taletiltekst ikke har adgang til. Den bliver liggende.
 - Optagelser af kanalmøder ligger i teamets SharePoint-site og bliver liggende.
-- Med `TEAMS_ARTIFACT_MODE=transcript-only` henter Memoctopus aldrig optagelsen og
+- Med `TEAMS_ARTIFACT_MODE=transcript-only` henter OS2taletiltekst aldrig optagelsen og
   kan derfor ikke genkende filen. Både optagelse og transskription bliver
   liggende, og arrangøren må selv slette dem i Teams.
 
-Kan Microsoft ikke nås, når optagelsen skal slettes, prøver Memoctopus igen hvert
+Kan Microsoft ikke nås, når optagelsen skal slettes, prøver OS2taletiltekst igen hvert
 par minutter i op til et døgn.
 
 Ønsker kommunen at beholde optagelserne i OneDrive, kan driften sætte
@@ -198,10 +198,10 @@ Herefter ligger transskriptionen og referatet kun i medarbejderens browser
 (IndexedDB), ikke i en central database.
 
 Baggrunden er, at Teams først frigiver optagelsen efter mødet. Et Teams-møde kan
-derfor ikke følges live i Memoctopus, og så er der heller ingen grund til at
+derfor ikke følges live i OS2taletiltekst, og så er der heller ingen grund til at
 opbevare lyden bagefter.
 
-Ønsker kommunen, at Memoctopus slet ikke downloader lyd, kan driften sætte
+Ønsker kommunen, at OS2taletiltekst slet ikke downloader lyd, kan driften sætte
 `TEAMS_ARTIFACT_MODE=transcript-only`. Så bruges alene Teams' egen
 tekst-transskription. Referatkvaliteten bliver typisk lidt lavere, fordi
-Memoctopus ellers transskriberer med sin egen danske model.
+OS2taletiltekst ellers transskriberer med sin egen danske model.

@@ -16,11 +16,11 @@ export function armErrorMessage(status: number, error?: string): string {
     case 'disabled':
       return 'Teams-integrationen er ikke slået til.';
     case 'consent_required':
-      return 'Memoctopus mangler adgang til dine Teams-møder. Log ind med Microsoft igen.';
+      return 'OS2taletiltekst mangler adgang til dine Teams-møder. Log ind med Microsoft igen.';
     case 'reauth_required':
       return 'Din adgang til Microsoft er udløbet. Log ind med Microsoft igen.';
     case 'transcripts_disabled':
-      return 'Jeres Teams-opsætning tillader ikke, at Memoctopus henter transskriptioner. Kontakt jeres IT-administrator.';
+      return 'Jeres Teams-opsætning tillader ikke, at OS2taletiltekst henter transskriptioner. Kontakt jeres IT-administrator.';
     default:
       return status === 401
         ? 'Du er ikke logget ind længere. Genindlæs siden.'

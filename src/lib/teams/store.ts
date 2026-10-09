@@ -281,7 +281,7 @@ export async function upsertTeamsMeeting(
 }
 
 /**
- * The organizer's meeting options as they were before Memoctopus ever armed
+ * The organizer's meeting options as they were before OS2taletiltekst ever armed
  * this Graph meeting, so disarming can put them back — one snapshot per
  * `graphMeetingId`, not per local id: a recurring series shares one
  * onlineMeeting but mints a new local id per pasted link, and the *first*
