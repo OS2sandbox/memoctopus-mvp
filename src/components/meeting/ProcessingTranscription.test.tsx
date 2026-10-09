@@ -387,6 +387,41 @@ describe('ProcessingTranscription', () => {
     expect(screen.getByText('Lydfil ikke fundet')).toBeInTheDocument();
   });
 
+  it('uses a ready server transcript even when there is no local audio', async () => {
+    // Teams transcript-only meetings never produce an audio file, and a Graph
+    // meeting the server already transcribed does not need one either.
+    mockGetAudio.mockResolvedValue(null as any);
+    mockFetch.mockResolvedValue(makeServerTranscript('ready', true));
+
+    renderComponent();
+
+    await waitFor(() => {
+      expect(mockSaveTranscript).toHaveBeenCalledWith(
+        MEETING_ID,
+        expect.objectContaining({ segments: FAKE_SEGMENTS, diarizationStatus: 'done' }),
+      );
+    });
+    expect(screen.queryByText('Lydfil ikke fundet')).not.toBeInTheDocument();
+    expect(mockStartDiarization).not.toHaveBeenCalled();
+  });
+
+  it('keeps the server labels when the transcript is undiarized but no audio exists', async () => {
+    // There is nothing to diarize from, so the labels stand as final rather than
+    // leaving the transcript stuck in the "pending" uncertainty state.
+    mockGetAudio.mockResolvedValue(null as any);
+    mockFetch.mockResolvedValue(makeServerTranscript('ready', false));
+
+    renderComponent();
+
+    await waitFor(() => {
+      expect(mockSaveTranscript).toHaveBeenCalledWith(
+        MEETING_ID,
+        expect.objectContaining({ diarizationStatus: 'done' }),
+      );
+    });
+    expect(mockStartDiarization).not.toHaveBeenCalled();
+  });
+
   it('enters error phase when transcribeBatchesOnServer throws', async () => {
     mockFetch.mockResolvedValue(makeServerTranscript('none'));
     mockTranscribeBatches.mockRejectedValue(new Error('hviske er nede'));
@@ -608,7 +643,7 @@ describe('ProcessingTranscription', () => {
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
 
     const url = mockFetch.mock.calls[0][0] as string;
-    expect(url).toBe(`/api/bot/transcript/${MEETING_ID}`);
+    expect(url).toBe(`/api/meetings/${MEETING_ID}/pending-transcript`);
   });
 
   // ─── Server transcript with empty segments falls back ────────────────────────
@@ -635,5 +670,103 @@ describe('ProcessingTranscription', () => {
     expect(() => render(<ProcessingTranscription meetingId={MEETING_ID} />)).not.toThrow();
 
     await waitFor(() => expect(mockSaveTranscript).toHaveBeenCalled());
+  });
+});
+
+// The server keeps its copy of the transcript until the browser says it has saved
+// it, so nothing is lost when the tab dies or the save fails half way.
+describe('ProcessingTranscription — acknowledging the server copy', () => {
+  const PENDING_URL = `/api/meetings/${MEETING_ID}/pending-transcript`;
+  const acks = () => mockFetch.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'DELETE');
+
+  it('acknowledges only after the transcript is saved and the meeting moved on', async () => {
+    const events: string[] = [];
+    mockFetch.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') { events.push('ack'); return { ok: true, json: async () => ({ ok: true }) }; }
+      return makeServerTranscript('ready', true);
+    });
+    mockSaveTranscript.mockImplementation(async () => { events.push('saveTranscript'); return {} as never; });
+    mockUpdateMeeting.mockImplementation(async () => { events.push('updateMeeting'); });
+
+    const onComplete = vi.fn();
+    renderComponent({ onComplete });
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+
+    expect(events).toEqual(['saveTranscript', 'updateMeeting', 'ack']);
+    expect(acks()[0][0]).toBe(PENDING_URL);
+  });
+
+  it('does not acknowledge, and so does not lose the server copy, when the save fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFetch.mockResolvedValue(makeServerTranscript('ready', true));
+    mockSaveTranscript.mockRejectedValueOnce(new Error('QuotaExceededError'));
+
+    renderComponent();
+
+    expect(await screen.findByText('Transskription fejlede')).toBeInTheDocument();
+    expect(acks()).toHaveLength(0);
+
+    // "Prøv igen" fetches the same transcript again and this time it sticks.
+    const onGetsBefore = mockFetch.mock.calls.length;
+    await userEvent.click(screen.getByText('Prøv igen'));
+    await waitFor(() => expect(acks()).toHaveLength(1));
+    expect(mockFetch.mock.calls.length).toBeGreaterThan(onGetsBefore);
+    expect(mockSaveTranscript).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not acknowledge when moving the meeting to review fails after the transcript was saved', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFetch.mockResolvedValue(makeServerTranscript('ready', true));
+    mockUpdateMeeting.mockRejectedValueOnce(new Error('idb closed'));
+
+    renderComponent();
+
+    expect(await screen.findByText('Transskription fejlede')).toBeInTheDocument();
+    expect(acks()).toHaveLength(0);
+  });
+
+  it('a failed acknowledgement does not fail the hand-off: the TTL sweep cleans up', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockFetch.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') throw new Error('offline');
+      return makeServerTranscript('ready', true);
+    });
+
+    const onComplete = vi.fn();
+    renderComponent({ onComplete });
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+  });
+
+  it('sends no acknowledgement when there was no server-side transcript to collect', async () => {
+    mockFetch.mockResolvedValue(makeServerTranscript('none'));
+    const onComplete = vi.fn();
+    renderComponent({ onComplete });
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(acks()).toHaveLength(0);
+  });
+});
+
+describe('ProcessingTranscription — a server-side run that produced nothing', () => {
+  it('says the meeting had no speech, not that a file is missing', async () => {
+    // A Teams meeting has no local audio by design, so "Lydfil ikke fundet" told
+    // the user about the fallback failing rather than about their meeting.
+    mockGetAudio.mockResolvedValue(null);
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'ready', segments: [], diarized: true }),
+    });
+    renderComponent();
+
+    expect(await screen.findByText(/Der blev ikke fundet tale i mødet/)).toBeInTheDocument();
+    expect(screen.queryByText('Lydfil ikke fundet')).not.toBeInTheDocument();
+  });
+
+  it('says the server run failed, and invites a retry', async () => {
+    mockGetAudio.mockResolvedValue(null);
+    mockFetch.mockResolvedValue(makeServerTranscript('failed'));
+    renderComponent();
+
+    expect(await screen.findByText(/Transskriptionen på serveren fejlede/)).toBeInTheDocument();
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { TranscriptSegment } from '@/types';
 import { formatDuration } from '@/lib/utils';
 import { SpeakerCombobox } from './SpeakerCombobox';
@@ -21,6 +21,15 @@ interface SpeakerRowProps {
   // Diarization is still running: show an uncertainty placeholder for the speaker
   // instead of the not-yet-meaningful default label, and don't offer rename yet.
   diarizing?: boolean;
+  /**
+   * The segment before this one is the same speaker, so this row continues a run
+   * rather than starting one. The name is then printed once for the run instead
+   * of on every line, and the row sits tight under its predecessor — a two-minute
+   * meeting is ~30 segments, and repeating "Nikolaj Bach Meineche" thirty times
+   * down the left rail buries the conversation. Teams groups its transcript the
+   * same way, and that is the layout this matches.
+   */
+  continuesSpeaker?: boolean;
 }
 
 export const SpeakerRow = React.memo(function SpeakerRow({
@@ -34,8 +43,27 @@ export const SpeakerRow = React.memo(function SpeakerRow({
   hasPii,
   isHighlighted,
   diarizing,
+  continuesSpeaker,
 }: SpeakerRowProps) {
   const [renameOpen, setRenameOpen] = useState(false);
+  const textRef = useRef<HTMLTextAreaElement>(null);
+
+  // Size the textarea to exactly the text it holds. The old `rows` estimate
+  // (one row per 80 characters, minimum two) gave every one-word utterance the
+  // height of two lines, which is most of the whitespace in a transcript of a
+  // real conversation — and it clipped text whose wrapping the estimate got
+  // wrong. Measuring is both tighter and safe at any width.
+  useEffect(() => {
+    const el = textRef.current;
+    if (!el) return;
+    const fit = () => {
+      el.style.height = 'auto';
+      el.style.height = `${el.scrollHeight}px`;
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    return () => window.removeEventListener('resize', fit);
+  }, [segment.text]);
 
   // Close the picker if diarization (re)starts under us.
   useEffect(() => {
@@ -54,7 +82,11 @@ export const SpeakerRow = React.memo(function SpeakerRow({
 
   return (
     <div
-      className="flex gap-0 py-4 transition-all duration-300"
+      className={
+        continuesSpeaker
+          ? 'pt-0.5 pb-1 transition-all duration-300'
+          : 'pt-5 pb-1 transition-all duration-300'
+      }
       style={{
         borderLeft: hasPii ? '3px solid var(--warning, #f59e0b)' : '3px solid transparent',
         paddingLeft: hasPii ? '12px' : '0',
@@ -62,8 +94,61 @@ export const SpeakerRow = React.memo(function SpeakerRow({
         borderRadius: isHighlighted ? 'var(--radius-sm)' : undefined,
       }}
     >
-      {/* Left rail: speaker + timestamp */}
-      <div className="w-24 shrink-0 pr-4 pt-0.5 relative">
+      {/* Who is speaking — a heading over the run, not a caption under its first
+          line. In the rail it sat below the timestamp, so it read as belonging to
+          the line above it, and the 96 px rail truncated it to "Nikolaj Bac…". */}
+      {!continuesSpeaker && (
+        <div className="relative mb-1">
+          {diarizing ? (
+            <span
+              className="flex items-center gap-1.5"
+              title="Genkender taler…"
+              aria-label="Genkender taler"
+            >
+              <span
+                aria-hidden
+                style={{
+                  display: 'block', height: 11, width: 52, borderRadius: 999,
+                  background: 'linear-gradient(90deg, var(--sunk) 25%, var(--line-2) 50%, var(--sunk) 75%)',
+                  backgroundSize: '300% 100%',
+                  animation: 'speakerShimmer 1.4s ease-in-out infinite',
+                }}
+              />
+            </span>
+          ) : (
+            <button
+              className="text-[var(--ink-2)] hover:text-[var(--accent)] transition-colors text-left"
+              style={{ fontSize: 'var(--t-small)', fontWeight: 600 }}
+              onClick={() => setRenameOpen((v) => !v)}
+              title="Klik for at vælge eller skrive taler"
+            >
+              {segment.speaker}
+            </button>
+          )}
+
+          {renameOpen && !diarizing && (
+            <div
+              className="absolute left-0 z-10 rounded-[var(--radius)] border border-[var(--line-strong)] bg-[var(--surface)] shadow-md"
+              style={{ top: '100%', minWidth: 240, padding: '12px 14px' }}
+            >
+              <p className="font-medium text-[var(--ink)] mb-0.5" style={{ fontSize: 'var(--t-small)' }}>
+                Hvem er {segment.speaker}?
+              </p>
+              <SpeakerCombobox
+                currentSpeaker={segment.speaker}
+                participants={participants}
+                segmentCount={speakerSegmentCount}
+                onAssign={assign}
+                onClose={() => setRenameOpen(false)}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="flex gap-0">
+      {/* Left rail: timestamp only — the speaker heads the run above. */}
+      <div className="w-24 shrink-0 pr-4 pt-0.5">
         {onSeek ? (
           <button
             type="button"
@@ -86,50 +171,6 @@ export const SpeakerRow = React.memo(function SpeakerRow({
             {formatDuration(segment.start)}
           </span>
         )}
-        {diarizing ? (
-          <span
-            className="flex items-center gap-1.5"
-            title="Genkender taler…"
-            aria-label="Genkender taler"
-          >
-            <span
-              aria-hidden
-              style={{
-                display: 'block', height: 11, width: 52, borderRadius: 999,
-                background: 'linear-gradient(90deg, var(--sunk) 25%, var(--line-2) 50%, var(--sunk) 75%)',
-                backgroundSize: '300% 100%',
-                animation: 'speakerShimmer 1.4s ease-in-out infinite',
-              }}
-            />
-          </span>
-        ) : (
-          <button
-            className="text-[var(--ink-2)] hover:text-[var(--accent)] transition-colors text-left w-full truncate"
-            style={{ fontSize: 'var(--t-small)', fontWeight: 500 }}
-            onClick={() => setRenameOpen((v) => !v)}
-            title="Klik for at vælge eller skrive taler"
-          >
-            {segment.speaker}
-          </button>
-        )}
-
-        {renameOpen && !diarizing && (
-          <div
-            className="absolute left-0 z-10 rounded-[var(--radius)] border border-[var(--line-strong)] bg-[var(--surface)] shadow-md"
-            style={{ top: '100%', minWidth: 240, padding: '12px 14px' }}
-          >
-            <p className="font-medium text-[var(--ink)] mb-0.5" style={{ fontSize: 'var(--t-small)' }}>
-              Hvem er {segment.speaker}?
-            </p>
-            <SpeakerCombobox
-              currentSpeaker={segment.speaker}
-              participants={participants}
-              segmentCount={speakerSegmentCount}
-              onAssign={assign}
-              onClose={() => setRenameOpen(false)}
-            />
-          </div>
-        )}
       </div>
 
       {/* Text block */}
@@ -137,10 +178,12 @@ export const SpeakerRow = React.memo(function SpeakerRow({
         <textarea
           value={segment.text}
           onChange={(e) => handleTextChange(e.target.value)}
-          rows={Math.max(2, Math.ceil(segment.text.length / 80))}
+          ref={textRef}
+          rows={1}
           style={{
             width: '100%',
             resize: 'none',
+            overflow: 'hidden',
             border: 'none',
             background: 'transparent',
             outline: 'none',
@@ -152,6 +195,7 @@ export const SpeakerRow = React.memo(function SpeakerRow({
           }}
           className="hover:bg-[var(--surface-2)] focus:bg-[var(--surface-2)] rounded-[var(--radius-sm)] px-1 -ml-1 transition-colors placeholder:text-[var(--muted-2)]"
         />
+      </div>
       </div>
     </div>
   );

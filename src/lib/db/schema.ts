@@ -84,12 +84,14 @@ export const sharedSkabeloner = pgTable('shared_skabeloner', {
 
 export const meetingStatusValues = [
   'joining',
+  'awaiting_teams',
   'recording',
   'processing',
   'review',
   'minutes',
   'done',
   'redacted',
+  'cancelled',
 ] as const;
 
 export type MeetingStatusValue = (typeof meetingStatusValues)[number];

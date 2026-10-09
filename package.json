@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "postinstall": "node scripts/copy-vad-assets.js",
-    "predev": "lsof -t -i :${PORT:-3004} -i :${BOT_PORT:-3001} | xargs kill -9 2>/dev/null || true",
-    "dev": "concurrently --kill-others -n next,bot,diar -c blue,green,magenta \"./node_modules/.bin/next dev -p ${PORT:-3004}\" \"npm --prefix bot-service run dev\" \"bash scripts/diar-tunnel.sh\"",
+    "predev": "lsof -t -i :${PORT:-3004} | xargs kill -9 2>/dev/null || true",
+    "dev": "concurrently --kill-others -n next,diar -c blue,magenta \"./node_modules/.bin/next dev -p ${PORT:-3004}\" \"bash scripts/diar-tunnel.sh\"",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
@@ -15,7 +15,9 @@
     "db:studio": "drizzle-kit studio",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "mock:graph": "node scripts/mock-graph/server.mjs",
+    "mock:graph:seed": "node scripts/mock-graph/seed-account.mjs"
   },
   "dependencies": {
     "@better-auth/core": "^1.6.11",
