@@ -156,7 +156,7 @@ describe.skipIf(!hasPg)('mode-switch relink (real Postgres)', () => {
       const local = (
         await c.query("INSERT INTO directory_users (name, source, app_user_id) VALUES ('Local', 'local', 'u1') RETURNING uuid")
       ).rows[0].uuid;
-      await c.query("INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'tt-logleser', 'local')", [local]);
+      await c.query("INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'admin', 'local')", [local]);
       await c.query("INSERT INTO directory_users (name, ext_user_id, source) VALUES ('Rk', 'abc123', 'rollekatalog')");
       await matchDirectoryUser(identity('u1'), 'userid-claim', runner);
       expect((await c.query('SELECT 1 FROM role_assignments WHERE directory_user_uuid = $1', [local])).rowCount).toBe(1);

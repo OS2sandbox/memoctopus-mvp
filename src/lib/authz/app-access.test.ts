@@ -68,7 +68,7 @@ describe('requireAppAccess', () => {
 
   it('lets a user with a role through when REQUIRE_ROLE_TO_LOGIN=true', async () => {
     vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'true');
-    mockResolve.mockResolvedValue(makePrincipal({ roles: ['tt-logleser'] }));
+    mockResolve.mockResolvedValue(makePrincipal({ roles: ['admin'] }));
     expect(await requireAppAccess()).not.toBeInstanceOf(NextResponse);
   });
 
@@ -79,7 +79,7 @@ describe('requireAppAccess', () => {
     expect(res.status).toBe(403);
     expect(mockDenied).toHaveBeenCalledWith({ actorUserId: 'user-123', required: 'login', reason: 'no_role' });
 
-    mockResolve.mockResolvedValue(makePrincipal({ roles: ['tt-bruger'], source: 'claims' }));
+    mockResolve.mockResolvedValue(makePrincipal({ roles: ['bruger'], source: 'claims' }));
     expect(await requireAppAccess()).not.toBeInstanceOf(NextResponse);
 
     // Only an explicit opt-out opens it again.

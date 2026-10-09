@@ -1,12 +1,8 @@
-// Shared contract for central access control. Roles are orthogonal capability
-// sets (not a ladder), so a log reader is not "above" a template manager.
+// Shared contract for central access control. Three user types, matching the OS2ai
+// roles: bruger (uses templates), bygger (the superuser who builds and distributes
+// central templates) and admin (administration, users/roles and the log).
 
-export const ROLE_KEYS = [
-  'tt-bruger',
-  'tt-skabelonansvarlig',
-  'tt-logleser',
-  'tt-administrator',
-] as const;
+export const ROLE_KEYS = ['bruger', 'bygger', 'admin'] as const;
 export type RoleKey = (typeof ROLE_KEYS)[number];
 
 export const CAPABILITIES = [

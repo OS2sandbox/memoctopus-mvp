@@ -73,7 +73,7 @@ describe('configFingerprint and the auth config file', () => {
   it('changes when the CONTENT of AUTH_CONFIG_FILE changes (a new provider or role mapping is a configuration change)', () => {
     const f = file('{"providers":[]}');
     const before = configFingerprint({ AUTH_CONFIG_FILE: f });
-    writeFileSync(f, '{"providers":[],"roles":{"appRoleMap":{"x":"tt-administrator"}}}');
+    writeFileSync(f, '{"providers":[],"roles":{"appRoleMap":{"x":"admin"}}}');
     expect(configFingerprint({ AUTH_CONFIG_FILE: f })).not.toBe(before);
   });
 

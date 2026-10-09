@@ -208,7 +208,7 @@ describe('loginRefusal', () => {
     expect(loginRefusal(p)).toBeNull();
     vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'true');
     expect(loginRefusal(p)).toBe('no_role');
-    expect(loginRefusal(makePrincipal({ roles: ['tt-bruger'] }))).toBeNull();
+    expect(loginRefusal(makePrincipal({ roles: ['bruger'] }))).toBeNull();
   });
 });
 

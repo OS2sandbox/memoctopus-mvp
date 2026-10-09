@@ -126,7 +126,7 @@ export async function getPrincipalForServerComponent(): Promise<Principal | null
 /**
  * Why a signed-in principal may not use the app at all, or null. A disabled
  * person is always refused; a person with no role only when
- * REQUIRE_ROLE_TO_LOGIN=true (otherwise tt-bruger is implicit).
+ * REQUIRE_ROLE_TO_LOGIN=true (otherwise bruger is implicit).
  */
 export function loginRefusal(principal: Principal): 'disabled' | 'no_role' | null {
   if (principal.disabled) return 'disabled';

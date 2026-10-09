@@ -32,7 +32,7 @@ export interface MirrorMember {
 export interface MirrorAssignment {
   directoryUserUuid: string;
   roleKey: RoleKey;
-  /** NULL = no org unit (global, or tt-bruger). */
+  /** NULL = no org unit (global, or bruger). */
   scopeOrgUnitUuid: string | null;
   includeDescendants: boolean;
 }

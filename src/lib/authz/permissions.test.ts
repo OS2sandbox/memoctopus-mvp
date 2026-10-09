@@ -26,7 +26,7 @@ describe('hasCapability', () => {
 
 describe('hasAnyCapability', () => {
   it('is any-of and false for an empty list', () => {
-    const p = principalFor('tt-bruger');
+    const p = principalFor('bruger');
     expect(hasAnyCapability(p, ['access.manage', 'template.use'])).toBe(true);
     expect(hasAnyCapability(p, ['access.manage', 'sync.run'])).toBe(false);
     expect(hasAnyCapability(p, [])).toBe(false);
@@ -34,7 +34,7 @@ describe('hasAnyCapability', () => {
 });
 
 describe('explainDenial', () => {
-  const user = principalFor('tt-bruger');
+  const user = principalFor('bruger');
 
   it('returns a Danish reason naming the capability for every capability a bruger lacks', () => {
     for (const cap of CAPABILITIES) {
@@ -50,15 +50,15 @@ describe('explainDenial', () => {
 
   it('pins the exact string and names the granting roles', () => {
     expect(explainDenial(user, 'directory.read')).toBe(
-      'Du har ikke rettigheden »Se organisationen«. Rettigheden gives af: Skabelonansvarlig, Loglæser, Administrator.',
+      'Du har ikke rettigheden »Se organisationen«. Rettigheden gives af: Bygger, Admin.',
     );
   });
 
   it('says the account is disabled before anything else', () => {
-    expect(explainDenial(principalFor('tt-administrator', true), 'sync.run')).toBe('Kontoen er deaktiveret');
+    expect(explainDenial(principalFor('admin', true), 'sync.run')).toBe('Kontoen er deaktiveret');
   });
 
   it('is null when the capability is held', () => {
-    expect(explainDenial(principalFor('tt-administrator'), 'sync.run')).toBeNull();
+    expect(explainDenial(principalFor('admin'), 'sync.run')).toBeNull();
   });
 });

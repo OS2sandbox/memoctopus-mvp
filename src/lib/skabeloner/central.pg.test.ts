@@ -60,7 +60,7 @@ async function user(c: Client, id: string, name = id) {
 const managerOf = (userId: string, ...roots: string[]): Principal =>
   makePrincipal({
     userId,
-    roles: ['tt-skabelonansvarlig'],
+    roles: ['bygger'],
     capabilities: ['template.use', 'template.manage'],
     scopes: { 'template.manage': { global: false, roots: roots.map((orgUnitUuid) => ({ orgUnitUuid, includeDescendants: true })) } },
   });
@@ -68,7 +68,7 @@ const managerOf = (userId: string, ...roots: string[]): Principal =>
 const globalManager = (userId: string): Principal =>
   makePrincipal({
     userId,
-    roles: ['tt-administrator'],
+    roles: ['admin'],
     capabilities: ['template.use', 'template.manage'],
     scopes: { 'template.manage': { global: true, roots: [] } },
   });

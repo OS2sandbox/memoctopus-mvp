@@ -12,12 +12,12 @@ export function makeJsonReq(url: string, method: string, body?: unknown): NextRe
   });
 }
 
-/** A plain tt-bruger (the implicit baseline). Override only what a test cares about. */
+/** A plain bruger (the implicit baseline). Override only what a test cares about. */
 export function makePrincipal(overrides: Partial<Principal> = {}): Principal {
   return {
     userId: FAKE_SESSION.user.id,
     directoryUserUuid: null,
-    roles: ['tt-bruger'],
+    roles: ['bruger'],
     capabilities: ['template.use'],
     scopes: {},
     disabled: false,
@@ -30,7 +30,7 @@ export function makePrincipal(overrides: Partial<Principal> = {}): Principal {
 export const FAKE_PRINCIPAL_ADMIN: Principal = makePrincipal({
   userId: 'admin-123',
   directoryUserUuid: 'dddd0000-0000-4000-8000-000000000001',
-  roles: ['tt-bruger', 'tt-administrator'],
+  roles: ['bruger', 'admin'],
   capabilities: [...CAPABILITIES],
   scopes: {
     'template.manage': { global: true, roots: [] },

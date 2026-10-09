@@ -21,7 +21,7 @@ const post = (body?: unknown) => POST(makeJsonReq('http://localhost/api/admin/ac
 const UNIT = '11111111-1111-4111-8111-111111111111';
 const VIEW = {
   id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-  roleKey: 'tt-logleser',
+  roleKey: 'admin',
   scopeOrgUnitUuid: null,
   scopeOrgUnitName: null,
   includeDescendants: true,
@@ -41,18 +41,18 @@ beforeEach(() => {
 describe('POST /api/admin/access/assignments (access.manage)', () => {
   it('401 without a session', async () => {
     mockGetSession.mockResolvedValueOnce(null as never);
-    expect((await post({ appUserId: 'u', roleKey: 'tt-bruger' })).status).toBe(401);
+    expect((await post({ appUserId: 'u', roleKey: 'bruger' })).status).toBe(401);
   });
 
   it('403 without access.manage, and nothing is granted', async () => {
     mockResolve.mockResolvedValue(makePrincipal());
-    expect((await post({ appUserId: 'u', roleKey: 'tt-administrator' })).status).toBe(403);
+    expect((await post({ appUserId: 'u', roleKey: 'admin' })).status).toBe(403);
     expect(mockGrant).not.toHaveBeenCalled();
   });
 
   it('409 with the Rollekatalog message when the service refuses in rollekatalog mode', async () => {
     mockGrant.mockRejectedValue(new ReadOnlyModeError());
-    const res = await post({ appUserId: 'u', roleKey: 'tt-bruger' });
+    const res = await post({ appUserId: 'u', roleKey: 'bruger' });
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({
       error: 'Skrivebeskyttet: roller og organisation styres af Rollekatalog',
@@ -69,13 +69,13 @@ describe('POST /api/admin/access/assignments (access.manage)', () => {
   it('403 still wins over 409 for a caller without access in rollekatalog mode', async () => {
     vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
     mockResolve.mockResolvedValue(makePrincipal());
-    expect((await post({ appUserId: 'u', roleKey: 'tt-bruger' })).status).toBe(403);
+    expect((await post({ appUserId: 'u', roleKey: 'bruger' })).status).toBe(403);
   });
 
   it('201 and the acting admin id on the happy path, with dates coerced', async () => {
     const res = await post({
       appUserId: 'app-1',
-      roleKey: 'tt-skabelonansvarlig',
+      roleKey: 'bygger',
       scopeOrgUnitUuid: UNIT,
       includeDescendants: false,
       startDate: '2026-01-01',
@@ -85,7 +85,7 @@ describe('POST /api/admin/access/assignments (access.manage)', () => {
     expect((await res.json()).assignment.id).toBe(VIEW.id);
     expect(mockGrant).toHaveBeenCalledWith({
       appUserId: 'app-1',
-      roleKey: 'tt-skabelonansvarlig',
+      roleKey: 'bygger',
       scopeOrgUnitUuid: UNIT,
       includeDescendants: false,
       startDate: new Date('2026-01-01'),
@@ -95,19 +95,19 @@ describe('POST /api/admin/access/assignments (access.manage)', () => {
   });
 
   it('accepts null scope and null dates', async () => {
-    const res = await post({ appUserId: 'app-1', roleKey: 'tt-logleser', scopeOrgUnitUuid: null, startDate: null, stopDate: null });
+    const res = await post({ appUserId: 'app-1', roleKey: 'admin', scopeOrgUnitUuid: null, startDate: null, stopDate: null });
     expect(res.status).toBe(201);
   });
 
   it.each([
-    ['unknown key', { appUserId: 'u', roleKey: 'tt-bruger', isAdmin: true }],
+    ['unknown key', { appUserId: 'u', roleKey: 'bruger', isAdmin: true }],
     ['unknown role', { appUserId: 'u', roleKey: 'tt-god' }],
-    ['missing user', { roleKey: 'tt-bruger' }],
-    ['empty user', { appUserId: '', roleKey: 'tt-bruger' }],
-    ['bad scope uuid', { appUserId: 'u', roleKey: 'tt-logleser', scopeOrgUnitUuid: 'not-a-uuid' }],
-    ['numeric date', { appUserId: 'u', roleKey: 'tt-bruger', startDate: 12345 }],
-    ['free-text date', { appUserId: 'u', roleKey: 'tt-bruger', startDate: 'next tuesday' }],
-    ['non-boolean flag', { appUserId: 'u', roleKey: 'tt-logleser', includeDescendants: 'yes' }],
+    ['missing user', { roleKey: 'bruger' }],
+    ['empty user', { appUserId: '', roleKey: 'bruger' }],
+    ['bad scope uuid', { appUserId: 'u', roleKey: 'admin', scopeOrgUnitUuid: 'not-a-uuid' }],
+    ['numeric date', { appUserId: 'u', roleKey: 'bruger', startDate: 12345 }],
+    ['free-text date', { appUserId: 'u', roleKey: 'bruger', startDate: 'next tuesday' }],
+    ['non-boolean flag', { appUserId: 'u', roleKey: 'admin', includeDescendants: 'yes' }],
     ['array body', [1]],
     ['null body', null],
   ])('400 for %s', async (_n, body) => {
@@ -122,28 +122,28 @@ describe('POST /api/admin/access/assignments (access.manage)', () => {
   });
 
   it('does not echo the offending input in validation errors', async () => {
-    const res = await post({ appUserId: 'u', roleKey: 'tt-bruger', secretField: 'hunter2' });
+    const res = await post({ appUserId: 'u', roleKey: 'bruger', secretField: 'hunter2' });
     expect(JSON.stringify(await res.json())).not.toContain('hunter2');
   });
 
   it('maps the scope rules of the service to 400', async () => {
     mockGrant.mockRejectedValue(new ValidationError('Rollen kræver en organisationsenhed', 'scope_required'));
-    const res = await post({ appUserId: 'u', roleKey: 'tt-skabelonansvarlig' });
+    const res = await post({ appUserId: 'u', roleKey: 'bygger' });
     expect(res.status).toBe(400);
     expect((await res.json()).code).toBe('scope_required');
   });
 
   it('maps not-found and conflict from the service to 404 and 409', async () => {
     mockGrant.mockRejectedValueOnce(new NotFoundError('Brugeren findes ikke', 'user_not_found'));
-    expect((await post({ appUserId: 'u', roleKey: 'tt-bruger' })).status).toBe(404);
+    expect((await post({ appUserId: 'u', roleKey: 'bruger' })).status).toBe(404);
     mockGrant.mockRejectedValueOnce(new ConflictError('Rollen er allerede tildelt', 'already_assigned'));
-    expect((await post({ appUserId: 'u', roleKey: 'tt-bruger' })).status).toBe(409);
+    expect((await post({ appUserId: 'u', roleKey: 'bruger' })).status).toBe(409);
   });
 
   it('500 (JSON) for an unexpected error', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     mockGrant.mockRejectedValue(new Error('boom'));
-    const res = await post({ appUserId: 'u', roleKey: 'tt-bruger' });
+    const res = await post({ appUserId: 'u', roleKey: 'bruger' });
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: 'Internal server error' });
   });

@@ -1,5 +1,5 @@
 // First-administrator bootstrap for LOCAL mode: a way to get the very first
-// tt-administrator without touching the database by hand. It is deliberately
+// admin without touching the database by hand. It is deliberately
 // narrow: ONE-SHOT, only while no active administrator exists, only for an
 // allow-listed address, and only when the address was asserted by a trusted SSO
 // provider.

@@ -168,7 +168,7 @@ describe('maybeBootstrapAdmin', () => {
     const { runner, calls } = makeFakeRunner();
     await maybeBootstrapAdmin('u1', runner);
     const sql = calls[0].sql;
-    expect(sql).toContain("role_key = 'tt-administrator'");
+    expect(sql).toContain("role_key = 'admin'");
     expect(sql).toContain('start_date <= now()');
     expect(sql).toContain('ra.stop_date IS NULL');
   });
@@ -205,7 +205,7 @@ describe('maybeBootstrapAdmin', () => {
     expect(state.admins).toBe(0);
   });
 
-  it('grants a global local tt-administrator, creating the directory user, in one transaction under the lock', async () => {
+  it('grants a global local admin, creating the directory user, in one transaction under the lock', async () => {
     const { runner, state } = statefulDb({ identities: { u1: oidcIdentity } });
     expect(await maybeBootstrapAdmin('u1', runner)).toEqual({ granted: true, reason: 'granted' });
     expect(state.grants).toEqual(['dir-u1']);
@@ -225,7 +225,7 @@ describe('maybeBootstrapAdmin', () => {
     await maybeBootstrapAdmin('u1', runner);
     const insert = calls.find((c) => c.sql.includes('INSERT INTO public.role_assignments'))!;
     expect(insert.tx).toBe(true);
-    expect(insert.sql).toMatch(/VALUES \(\$1, 'tt-administrator', NULL, true, 'local', NULL\)/);
+    expect(insert.sql).toMatch(/VALUES \(\$1, 'admin', NULL, true, 'local', NULL\)/);
     const sqls = calls.map((c) => c.sql);
     expect(sqls.findIndex((s) => s.includes('pg_advisory_xact_lock'))).toBeLessThan(
       sqls.findIndex((s) => s.includes('INSERT INTO public.role_assignments')),

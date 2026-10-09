@@ -50,7 +50,7 @@ async function main() {
   const state = await fetch(controlUrl + '/state').catch(() => null);
   check('control panel answers', state?.status === 200, 'is "npx tsx scripts/dev-sim/index.ts" running?');
   if (health?.status !== 200 || state?.status !== 200) return;
-  for (const u of ['admin.a', 'super.s', 'log.l', 'bruger.c', 'bruger.d', 'ingen.i', 'bad.b']) await setClaims(u, null);
+  for (const u of ['admin.a', 'super.s', 'bruger.c', 'bruger.d', 'ingen.i', 'bad.b']) await setClaims(u, null);
   await control('/reset');
 
   const db = new pg.Client({ connectionString: DB_URL });
@@ -79,7 +79,7 @@ async function main() {
   heading('1. OIDC: claims become roles');
   const admin = await oidc('admin.a');
   const meAdmin = await admin.get('/api/me');
-  check('admin.a (claim referat-admin) is administrator, globally', meAdmin.json?.roles?.includes('tt-administrator') && meAdmin.json?.scopes?.['audit.read']?.global === true, brief(meAdmin));
+  check('admin.a (claim referat-admin) is administrator, globally', meAdmin.json?.roles?.includes('admin') && meAdmin.json?.scopes?.['audit.read']?.global === true, brief(meAdmin));
   check('/api/me says source=claims, readOnly=true', meAdmin.json?.source === 'claims' && meAdmin.json?.readOnly === true);
   const adminRows = await rolesInDb('admin.a@example.dk');
   check('one role row, source claims, no org unit, fresh', adminRows.length === 1 && adminRows[0].source === 'claims' && adminRows[0].scope_org_unit_uuid === null && Date.now() - new Date(adminRows[0].synced_at).getTime() < 60_000, JSON.stringify(adminRows));
@@ -90,7 +90,7 @@ async function main() {
 
   const bruger = await oidc('bruger.c');
   const meBruger = await bruger.get('/api/me');
-  check('bruger.c: tt-bruger only; the unknown claim value grants nothing', JSON.stringify(meBruger.json?.roles) === JSON.stringify(['tt-bruger']) && !meBruger.json?.capabilities?.includes('template.manage'), brief(meBruger));
+  check('bruger.c: bruger only; the unknown claim value grants nothing', JSON.stringify(meBruger.json?.roles) === JSON.stringify(['bruger']) && !meBruger.json?.capabilities?.includes('template.manage'), brief(meBruger));
   check('values missing from the catalogue are NOT stored (privacy)', JSON.stringify(await externalOf('bruger.c@example.dk')) === JSON.stringify(['group:G-Okonomi', 'role:referat-bruger']), JSON.stringify(await externalOf('bruger.c@example.dk')));
 
   for (const [who, why] of [['ingen.i', 'no roles claim'], ['bad.b', 'a roles claim that is not a list']] as const) {
@@ -105,10 +105,10 @@ async function main() {
   await setClaims('admin.a', { roles: ['referat-bruger'], memberOf: 'G-Okonomi' });
   const admin2 = await oidc('admin.a');
   const me2 = await admin2.get('/api/me');
-  check('after the next login admin.a is only tt-bruger', JSON.stringify(me2.json?.roles) === JSON.stringify(['tt-bruger']), brief(me2));
+  check('after the next login admin.a is only bruger', JSON.stringify(me2.json?.roles) === JSON.stringify(['bruger']), brief(me2));
   const stale = await admin.get('/api/me');
-  check('the OLD session of the same person lost the role too (roles are read live)', JSON.stringify(stale.json?.roles) === JSON.stringify(['tt-bruger']), brief(stale));
-  check('the rows were replaced, not accumulated', JSON.stringify((await rolesInDb('admin.a@example.dk')).map((r) => r.role_key)) === JSON.stringify(['tt-bruger']));
+  check('the OLD session of the same person lost the role too (roles are read live)', JSON.stringify(stale.json?.roles) === JSON.stringify(['bruger']), brief(stale));
+  check('the rows were replaced, not accumulated', JSON.stringify((await rolesInDb('admin.a@example.dk')).map((r) => r.role_key)) === JSON.stringify(['bruger']));
   check('so were the stored groups', JSON.stringify(await externalOf('admin.a@example.dk')) === JSON.stringify(['group:G-Okonomi', 'role:referat-bruger']));
   await setClaims('admin.a', { roles: { not: 'a list' } });
   await oidc('admin.a');
@@ -119,7 +119,7 @@ async function main() {
   heading('3. SAML: the same, through a signed assertion');
   const superS = await saml('super.s');
   const meSuper = await superS.get('/api/me');
-  check('super.s (SAML attribute referat-superuser) is a GLOBAL tt-skabelonansvarlig', meSuper.json?.roles?.includes('tt-skabelonansvarlig') && meSuper.json?.scopes?.['template.manage']?.global === true, brief(meSuper));
+  check('super.s (SAML attribute referat-superuser) is a GLOBAL bygger', meSuper.json?.roles?.includes('bygger') && meSuper.json?.scopes?.['template.manage']?.global === true, brief(meSuper));
   check('...and has no administrator power', !meSuper.json?.capabilities?.includes('access.manage') && !meSuper.json?.capabilities?.includes('audit.export'));
   check('SAML roles are stored the same way (source claims)', (await rolesInDb('super.s@example.dk')).every((r) => r.source === 'claims') && (await rolesInDb('super.s@example.dk')).length === 1);
   check('SAML groups arrive too (delimited attribute)', JSON.stringify(await externalOf('super.s@example.dk')) === JSON.stringify(['group:G-Borgerservice', 'role:referat-superuser']), JSON.stringify(await externalOf('super.s@example.dk')));
@@ -130,18 +130,15 @@ async function main() {
   const meSuper2 = await superS.get('/api/me');
   check('SAML: no roles attribute at the next login -> the role is gone', meSuper2.status === 403 && (await rolesInDb('super.s@example.dk')).length === 0, brief(meSuper2));
   await setClaims('super.s', null);
-  const logL = await saml('log.l');
-  const meLog = await logL.get('/api/me');
-  check('log.l (SAML) can read and export the log', meLog.json?.capabilities?.includes('audit.read') && meLog.json?.capabilities?.includes('audit.export'), brief(meLog));
 
   // ─────────────────────────────────────────────────────────────────────
   heading('4. The in-app role administration is off');
   const admin3 = await oidc('admin.a'); // roles restored by the reset above
-  check('admin.a is administrator again after the claims were restored', (await admin3.get('/api/me')).json?.roles?.includes('tt-administrator'));
+  check('admin.a is administrator again after the claims were restored', (await admin3.get('/api/me')).json?.roles?.includes('admin'));
   const users = await admin3.get('/api/admin/access/users');
   check('the user list is still readable (access.manage)', users.status === 200, brief(users));
   const target = users.json?.users?.find((u: any) => u.email === 'bruger.c@example.dk');
-  const grant = await admin3.post('/api/admin/access/assignments', { appUserId: target?.id ?? 'x', roleKey: 'tt-logleser' });
+  const grant = await admin3.post('/api/admin/access/assignments', { appUserId: target?.id ?? 'x', roleKey: 'bygger' });
   check('granting a role answers 409 read_only', grant.status === 409 && grant.json?.code === 'read_only', brief(grant));
   const unit = await admin3.post('/api/admin/access/org-units', { name: 'Ny enhed' });
   check('creating an org unit answers 409', unit.status === 409, brief(unit));
@@ -282,7 +279,7 @@ async function main() {
   const updates = (await db.query(`select details::text as d from public.audit_events where event_type = 'template.update'`)).rows.map((r) => r.d);
   check('the audit log says only THAT a note was written, never the note', updates.some((d) => d.includes('"hasChangeNote": true')) && updates.every((d) => !d.includes(PRIVATE_NOTE)), updates.join(' '));
   check('the note is nowhere in the shared schema', (await db.query(`select count(*)::int as n from public.audit_events where details::text like $1 or entity_id::text like $1`, [`%${PRIVATE_NOTE}%`])).rows[0].n === 0);
-  // ...but the log READER sees it: looked up at read time in the person's own history, in the viewer and in the CSV.
+  // ...but the administrator (the log reader) sees it: looked up at read time in the person's own history, in the viewer and in the CSV.
   const logView = await adminUser.get(`/api/admin/audit?entityId=${ownId}&limit=100`);
   const ownEvents = (logView.json?.events ?? []).filter((e: any) => e.eventType === 'template.update' && e.entityId === ownId);
   check('the log viewer shows the personal note to the audit reader (only on the edit that wrote it)', ownEvents.length === 2 && ownEvents.filter((e: any) => e.changeNote === PRIVATE_NOTE).length === 1 && ownEvents.filter((e: any) => e.changeNote === undefined).length === 1, brief(logView));

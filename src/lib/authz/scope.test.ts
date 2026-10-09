@@ -38,7 +38,7 @@ describe('isOrgUnitWithinScope', () => {
     expect(await isOrgUnitWithinScope(p, 'template.manage', A)).toBe(false);
   });
 
-  it('is false for an empty scope (null-scope tt-skabelonansvarlig) without a query', async () => {
+  it('is false for an empty scope (null-scope bygger) without a query', async () => {
     expect(await isOrgUnitWithinScope(scoped([]), 'template.manage', A)).toBe(false);
     expect(query).not.toHaveBeenCalled();
   });

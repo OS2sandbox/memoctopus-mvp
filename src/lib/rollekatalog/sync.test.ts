@@ -25,7 +25,7 @@ const U = (n: number) => `7e5e0000-0000-4000-8000-${String(n).padStart(12, '0')}
 const O = (n: number) => `5a1b0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const E = (n: number) => `9d3c0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
-const DEFAULTS: MapperConfig = { includeDescendants: true, globalRoles: ['tt-administrator'] };
+const DEFAULTS: MapperConfig = { includeDescendants: true, globalRoles: ['admin'] };
 
 function fixtureMirror(): MirrorSet {
   const d = fixtureData();
@@ -161,7 +161,7 @@ describe('planMirror', () => {
       assignments: [
         ...rest,
         { ...second, includeDescendants: !second.includeDescendants },
-        { directoryUserUuid: U(7), roleKey: 'tt-bruger', scopeOrgUnitUuid: null, includeDescendants: true },
+        { directoryUserUuid: U(7), roleKey: 'bruger', scopeOrgUnitUuid: null, includeDescendants: true },
       ],
     };
     const plan = planMirror(existing, fetched);
@@ -171,15 +171,15 @@ describe('planMirror', () => {
     expect(plan.counts).toMatchObject({ assignmentsUpserted: 2, assignmentsRemoved: 1 });
     expect(first).toBeDefined();
     expect(plan.removal.assignments).toEqual({ removed: 1, base: 10 });
-    // `first` is an elevated row (the fixture has 7 elevated rows and 3 tt-bruger rows).
-    expect(plan.removal.elevatedAssignments).toEqual({ removed: first.roleKey === 'tt-bruger' ? 0 : 1, base: 7 });
+    // `first` is an elevated row (the fixture has 7 elevated rows and 3 bruger rows).
+    expect(plan.removal.elevatedAssignments).toEqual({ removed: first.roleKey === 'bruger' ? 0 : 1, base: 7 });
   });
 
-  it('elevated removals are counted apart from tt-bruger rows (the baseline dominates the total)', () => {
+  it('elevated removals are counted apart from bruger rows (the baseline dominates the total)', () => {
     const mirror = fixtureMirror();
     const existing = existingFrom(mirror);
-    const elevated = mirror.assignments.filter((a) => a.roleKey !== 'tt-bruger');
-    const bruger = mirror.assignments.filter((a) => a.roleKey === 'tt-bruger');
+    const elevated = mirror.assignments.filter((a) => a.roleKey !== 'bruger');
+    const bruger = mirror.assignments.filter((a) => a.roleKey === 'bruger');
     expect(elevated).toHaveLength(7);
     // Three elevated rows vanish: 3/10 overall is exactly the 30 % limit, 3/7 elevated is over it.
     const fetched: MirrorSet = { ...mirror, assignments: [...bruger, ...elevated.slice(3)] };
@@ -198,17 +198,17 @@ describe('planMirror', () => {
     expect(exceedsRemovalThreshold(1, 2, 30)).toBe(true);
     expect(exceedsRemovalThreshold(0, 2, 30)).toBe(false);
     expect(exceedsRemovalThreshold(2, 0, 30)).toBe(false);
-    const adminRow = { id: 'x', directoryUserUuid: U(1), roleKey: 'tt-administrator', scopeOrgUnitUuid: null, includeDescendants: true };
+    const adminRow = { id: 'x', directoryUserUuid: U(1), roleKey: 'admin', scopeOrgUnitUuid: null, includeDescendants: true };
     const plan = planMirror({ ...EMPTY, assignments: [adminRow] }, { ...fixtureMirror(), assignments: [] });
     expect(plan.removal.elevatedAssignments).toEqual({ removed: 1, base: 1 });
   });
 
   it('a NULL scope and a real scope of the same role are different rows', () => {
-    const base = { directoryUserUuid: U(7), roleKey: 'tt-logleser' as const, includeDescendants: true };
+    const base = { directoryUserUuid: U(7), roleKey: 'bygger' as const, includeDescendants: true };
     const mirror: MirrorSet = { ...fixtureMirror(), assignments: [{ ...base, scopeOrgUnitUuid: null }] };
     const existing: ExistingMirror = {
       ...EMPTY,
-      assignments: [{ id: 'x', directoryUserUuid: U(7), roleKey: 'tt-logleser', scopeOrgUnitUuid: O(1), includeDescendants: true }],
+      assignments: [{ id: 'x', directoryUserUuid: U(7), roleKey: 'bygger', scopeOrgUnitUuid: O(1), includeDescendants: true }],
     };
     const plan = planMirror(existing, mirror);
     expect(plan.assignments.insert).toHaveLength(1);
@@ -596,10 +596,10 @@ describe('runSync flow', () => {
   });
 
   it('sets the scope configuration from the environment at call time', async () => {
-    vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'tt-administrator,tt-logleser');
+    vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'admin,bygger');
     const f = makeFakeSyncEnv(baseScript());
     const r = await runSync({ trigger: 'cron' }, deps(f.env));
-    // ida.l's unscoped logleser is now a global row, so one more assignment than with the default.
+    // ida.l's unscoped bygger is now a global row, so one more assignment than with the default.
     expect(r.counts.assignmentsUpserted).toBe(11);
     expect(r.counts.assignmentsWithoutScope).toBe(1);
   });

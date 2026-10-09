@@ -262,12 +262,12 @@ describe('auth wiring from the config file', () => {
       vi.stubEnv('NODE_ENV', 'production');
       vi.stubEnv('BETTER_AUTH_URL', 'https://referat.example');
       vi.stubEnv('ACCESS_SOURCE', 'local');
-      useConfig({ providers: [OIDC('fka')], roles: { appRoleMap: { x: 'tt-bruger' } } });
+      useConfig({ providers: [OIDC('fka')], roles: { appRoleMap: { x: 'bruger' } } });
       await loadOptions();
       const out = warn.mock.calls.map((c) => String(c[0])).join('\n');
       expect(out).toContain('ACCESS_SOURCE=local in production');
       expect(out).toContain('"roles" section but ACCESS_SOURCE is not claims');
-      expect(out).not.toContain('tt-bruger');
+      expect(out).not.toContain('bruger');
     });
   });
 

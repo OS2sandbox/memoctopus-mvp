@@ -8,7 +8,7 @@ export const CHILD = '33333333-3333-4333-8333-333333333333';
 export const NOTE = 'Præciseret formuleringen af prompten';
 
 export const manager = makePrincipal({
-  roles: ['tt-bruger', 'tt-skabelonansvarlig'],
+  roles: ['bruger', 'bygger'],
   capabilities: ['template.use', 'template.manage'],
   scopes: { 'template.manage': { global: false, roots: [{ orgUnitUuid: OWNER, includeDescendants: true }] } },
 });

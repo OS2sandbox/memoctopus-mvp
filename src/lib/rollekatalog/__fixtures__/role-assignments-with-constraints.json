@@ -4,13 +4,13 @@
     "userId": "anne.p",
     "assignments": [
       {
-        "roleIdentifier": "tt-bruger",
+        "roleIdentifier": "bruger",
         "roleName": "Bruger",
         "roleConstraintValues": []
       },
       {
-        "roleIdentifier": "tt-skabelonansvarlig",
-        "roleName": "Skabelonansvarlig",
+        "roleIdentifier": "bygger",
+        "roleName": "Bygger",
         "roleConstraintValues": [
           {
             "constraintType": "http://sts.kombit.dk/constraints/orgenhed/1",
@@ -28,8 +28,8 @@
     "userId": "jens.t",
     "assignments": [
       {
-        "roleIdentifier": "tt-skabelonansvarlig",
-        "roleName": "Skabelonansvarlig",
+        "roleIdentifier": "bygger",
+        "roleName": "Bygger",
         "roleConstraintValues": [
           {
             "constraintType": "http://digital-identity.dk/constraints/orgunit/1",
@@ -53,8 +53,8 @@
     "userId": "peter.d",
     "assignments": [
       {
-        "roleIdentifier": "tt-skabelonansvarlig",
-        "roleName": "Skabelonansvarlig",
+        "roleIdentifier": "bygger",
+        "roleName": "Bygger",
         "roleConstraintValues": [
           {
             "constraintType": "http://sts.kombit.dk/constraints/orgenhed/1",
@@ -65,8 +65,8 @@
         ]
       },
       {
-        "roleIdentifier": "tt-skabelonansvarlig",
-        "roleName": "Skabelonansvarlig",
+        "roleIdentifier": "bygger",
+        "roleName": "Bygger",
         "roleConstraintValues": []
       }
     ]
@@ -76,7 +76,7 @@
     "userId": "sofie.s",
     "assignments": [
       {
-        "roleIdentifier": "tt-bruger",
+        "roleIdentifier": "bruger",
         "roleName": "Bruger",
         "roleConstraintValues": []
       }
@@ -87,13 +87,13 @@
     "userId": "lars.f",
     "assignments": [
       {
-        "roleIdentifier": "tt-bruger",
+        "roleIdentifier": "bruger",
         "roleName": "Bruger",
         "roleConstraintValues": []
       },
       {
-        "roleIdentifier": "tt-logleser",
-        "roleName": "Logleser",
+        "roleIdentifier": "bygger",
+        "roleName": "Bygger",
         "roleConstraintValues": [
           {
             "constraintType": "http://digital-identity.dk/constraints/orgunit/1",
@@ -111,8 +111,8 @@
     "userId": "mette.e",
     "assignments": [
       {
-        "roleIdentifier": "tt-administrator",
-        "roleName": "Administrator",
+        "roleIdentifier": "admin",
+        "roleName": "Admin",
         "roleConstraintValues": [
           {
             "constraintType": "http://digital-identity.dk/constraints/orgunit/1",
@@ -129,8 +129,8 @@
     "userId": "ida.l",
     "assignments": [
       {
-        "roleIdentifier": "tt-logleser",
-        "roleName": "Logleser",
+        "roleIdentifier": "bygger",
+        "roleName": "Bygger",
         "roleConstraintValues": []
       }
     ]
@@ -140,8 +140,8 @@
     "userId": "ole.k",
     "assignments": [
       {
-        "roleIdentifier": "tt-skabelonansvarlig",
-        "roleName": "Skabelonansvarlig",
+        "roleIdentifier": "bygger",
+        "roleName": "Bygger",
         "roleConstraintValues": [
           {
             "constraintType": "http://digital-identity.dk/constraints/orgunit/1",
@@ -163,8 +163,8 @@
     "userId": "rune.a",
     "assignments": [
       {
-        "roleIdentifier": "tt-administrator",
-        "roleName": "Administrator",
+        "roleIdentifier": "admin",
+        "roleName": "Admin",
         "roleConstraintValues": []
       }
     ]
@@ -174,7 +174,7 @@
     "userId": "ghost.u",
     "assignments": [
       {
-        "roleIdentifier": "tt-bruger",
+        "roleIdentifier": "bruger",
         "roleName": "Bruger",
         "roleConstraintValues": []
       }

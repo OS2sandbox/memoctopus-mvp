@@ -70,7 +70,7 @@ describe('happy paths against the mock', () => {
 describe('getRoleCatalogue (READ key, GET, names and identifiers only)', () => {
   it('reads user roles and role groups with the READ key and returns the whitelisted catalogue', async () => {
     const c = await createRollekatalogClient(opts()).getRoleCatalogue();
-    expect(c.roles.entries.map((e) => e.identifier)).toEqual(['sagsbehandler', 'tt-skabelonansvarlig', 'leder', '104']);
+    expect(c.roles.entries.map((e) => e.identifier)).toEqual(['sagsbehandler', 'bygger', 'leder', '104']);
     expect(c.groups.entries.map((e) => e.identifier)).toEqual(['11', '12']);
     expect(mock.requests).toEqual([
       { method: 'GET', path: '/api/read/userroles/itsystems', query: '', keyRole: 'read', status: 200 },

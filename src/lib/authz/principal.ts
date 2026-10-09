@@ -26,7 +26,7 @@ interface StaleOptions {
  *   revoked there, so it must not keep granting access: ignored.
  * - rollekatalog rows whose synced_at is older than the limit (or missing or
  *   unreadable) are ignored: if the sync stops, elevated capabilities vanish
- *   instead of lingering forever. The baseline tt-bruger is implicit and stays.
+ *   instead of lingering forever. The baseline bruger is implicit and stays.
  *   Exactly at the limit still counts.
  * - claims mode: only source='claims' rows count (local grants cannot be edited there,
  *   Rollekatalog rows are not ours), and only while the login that wrote them is

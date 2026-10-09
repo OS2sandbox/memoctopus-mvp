@@ -32,10 +32,9 @@ What the app **cannot** know without the municipality: which protocol their IdP 
   ],
   "roles": {
     "appRoleMap": {
-      "referat-administrator": "tt-administrator",
-      "referat-skabelon": "tt-skabelonansvarlig",
-      "referat-log": "tt-logleser",
-      "referat-bruger": "tt-bruger"
+      "referat-administrator": "admin",
+      "referat-skabelon": "bygger",
+      "referat-bruger": "bruger"
     }
   }
 }
@@ -134,8 +133,8 @@ One provider (the usual case):
 
 ```json
 "roles": {
-  "appRoleMap":   { "<value of rolesClaim>":  "tt-administrator" },
-  "groupRoleMap": { "<value of groupsClaim>": { "role": "tt-logleser" } }
+  "appRoleMap":   { "<value of rolesClaim>":  "admin" },
+  "groupRoleMap": { "<value of groupsClaim>": { "role": "bygger" } }
 }
 ```
 
@@ -144,17 +143,17 @@ Several providers: **each provider has its own maps**, because one IdP's role na
 ```json
 "roles": {
   "byProvider": {
-    "kommune": { "appRoleMap": { "referat-administrator": "tt-administrator", "referat-bruger": "tt-bruger" } },
-    "os2faktor": { "appRoleMap": { "Administrator": "tt-administrator" }, "groupRoleMap": { "G-Borger": "tt-bruger" } }
+    "kommune": { "appRoleMap": { "referat-administrator": "admin", "referat-bruger": "bruger" } },
+    "os2faktor": { "appRoleMap": { "Administrator": "admin" }, "groupRoleMap": { "G-Borger": "bruger" } }
   }
 }
 ```
 
 The top-level `appRoleMap` / `groupRoleMap` are only a shorthand for **one** provider: with exactly one provider in the file they apply to it; with several, a provider that has no `byProvider` entry **grants nothing** (and a start-up warning says so). A provider with a `byProvider` entry uses only that entry. A `byProvider` key must be a provider id; a key that names no configured provider is unused (warned).
 
-The values are one of the four role keys (`tt-bruger`, `tt-skabelonansvarlig`, `tt-logleser`, `tt-administrator`); the keys are matched exactly (case-sensitive) against the claim values. Unknown claim values are ignored. A role granted from a claim is always **global**, because a claim carries no org unit; the object form `{ "role": "...", "global": false }` exists only to switch an entry off without deleting it. `tt-skabelonansvarlig` as a global role is the **superuser** who manages every shared prompt; `access.manage`, `sync.run` and `audit.export` need a global role, which a claim always is, so `tt-administrator` and `tt-logleser` from a claim have them.
+The values are one of the three role keys (`bruger`, `bygger`, `admin`; Danish labels Bruger / Bygger / Admin, matching the OS2ai roles). The exact identifiers OS2ai uses are unverified, which is why the map exists: it translates whatever your IdP sends into these keys; the keys are matched exactly (case-sensitive) against the claim values. Unknown claim values are ignored. A role granted from a claim is always **global**, because a claim carries no org unit; the object form `{ "role": "...", "global": false }` exists only to switch an entry off without deleting it. `bygger` as a global role is the **superuser** who manages every shared prompt; `access.manage`, `sync.run` and `audit.export` need a global role, which a claim always is, so `admin` from a claim has them (and is the only role that can read the log).
 
-**Ordinary users must be mapped too.** In claims mode "no role, no access" is the default (section 4): a person who signs in at the IdP but is mapped to no role is refused. Map your ordinary users' value (an app role, or a group everybody has) to `tt-bruger`.
+**Ordinary users must be mapped too.** In claims mode "no role, no access" is the default (section 4): a person who signs in at the IdP but is mapped to no role is refused. Map your ordinary users' value (an app role, or a group everybody has) to `bruger`.
 
 ### 3.5 `catalogue`
 
@@ -197,7 +196,7 @@ Roles are read **live** at every request (`resolvePrincipal`); nothing role-rela
 
 What this means for offboarding: a role removed in the IdP is removed here at the person's next login, and at the latest when their session ends. The IdP is only asked at login. If that is too slow, lower `ROLE_CLAIMS_MAX_SECONDS` (60 at the shortest); the price is more frequent re-login. Disabling the *person* in the IdP also stops new logins at once.
 
-**Claims mode is closed by default.** `REQUIRE_ROLE_TO_LOGIN` is **true** unless it is explicitly `false`: a person who signs in at the IdP but is mapped to no role gets the "Ingen adgang" page and a 403 on every API call, so ordinary users must be mapped to `tt-bruger` (section 3.4). E-mail/password sign-in is **off** unless `EMAIL_PASSWORD_ENABLED` is explicitly `true`, and even then **sign-up stays disabled** (a password account holds no role anyway, and anyone able to type an address would otherwise get an account). Do not set either variable to its permissive value unless you mean it: both log a start-up warning. In docker compose leave them blank; "unset" must stay detectable.
+**Claims mode is closed by default.** `REQUIRE_ROLE_TO_LOGIN` is **true** unless it is explicitly `false`: a person who signs in at the IdP but is mapped to no role gets the "Ingen adgang" page and a 403 on every API call, so ordinary users must be mapped to `bruger` (section 3.4). E-mail/password sign-in is **off** unless `EMAIL_PASSWORD_ENABLED` is explicitly `true`, and even then **sign-up stays disabled** (a password account holds no role anyway, and anyone able to type an address would otherwise get an account). Do not set either variable to its permissive value unless you mean it: both log a start-up warning. In docker compose leave them blank; "unset" must stay detectable.
 
 **Break-glass.** There is no administrator in the app to lock out, and no bootstrap or last-administrator rule in this mode. Keep an administrator path on the IdP side (a named, controlled account that carries the administrator claim) and document who may use it.
 
@@ -274,7 +273,7 @@ OIDC. Discovery URL `https://<host>/application/o/<application slug>/.well-known
   "groupsClaim": "groups" }
 ```
 
-with `"roles": { "groupRoleMap": { "<authentik group name>": "tt-bruger" } }`. If the installation already used the `AUTHENTIK_*` variables, keep `"id": "authentik"` so the registered redirect URI and the existing accounts keep working.
+with `"roles": { "groupRoleMap": { "<authentik group name>": "bruger" } }`. If the installation already used the `AUTHENTIK_*` variables, keep `"id": "authentik"` so the registered redirect URI and the existing accounts keep working.
 
 ### FKA (Fælleskommunal Adgangsstyring)
 

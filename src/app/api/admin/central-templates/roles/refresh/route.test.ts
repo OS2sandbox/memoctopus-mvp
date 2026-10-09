@@ -20,7 +20,7 @@ const mockResolve = vi.mocked(resolvePrincipal);
 const mockRun = vi.mocked(runCatalogueRefresh);
 
 const admin = makePrincipal({
-  roles: ['tt-bruger', 'tt-administrator'],
+  roles: ['bruger', 'admin'],
   capabilities: ['template.use', 'template.manage', 'sync.run'],
   scopes: { 'template.manage': { global: true, roots: [] }, 'sync.run': { global: true, roots: [] } },
 });

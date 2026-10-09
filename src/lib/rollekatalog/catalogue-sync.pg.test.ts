@@ -54,9 +54,9 @@ describe.skipIf(!hasPg)('role catalogue refresh (real Postgres)', () => {
         { kind: 'group', identifier: '11', name: 'Rollebuket: Socialforvaltningen', source: 'rollekatalog', active: true },
         { kind: 'group', identifier: '12', name: 'Rollebuket: Skole og dagtilbud', source: 'rollekatalog', active: true },
         { kind: 'role', identifier: '104', name: 'Rolle uden identifikator', source: 'rollekatalog', active: true },
+        { kind: 'role', identifier: 'bygger', name: 'Bygger', source: 'rollekatalog', active: true },
         { kind: 'role', identifier: 'leder', name: 'Leder', source: 'rollekatalog', active: true },
         { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', source: 'rollekatalog', active: true },
-        { kind: 'role', identifier: 'tt-skabelonansvarlig', name: 'Skabelonansvarlig', source: 'rollekatalog', active: true },
       ]);
       // GET only, READ key only; the ORG key was never needed.
       expect(mock.requests.every((q) => q.method === 'GET' && q.keyRole === 'read')).toBe(true);

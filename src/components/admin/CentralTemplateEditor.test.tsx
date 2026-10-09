@@ -402,7 +402,7 @@ describe('CentralTemplateEditor — organisation-wide templates and role/group t
     setup(null, {}, { catalogue: CATALOGUE, isGlobalManager: false });
     expect(screen.getByText('Vælg en ejerenhed')).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /Hele organisationen/ })).toBeNull();
-    expect(screen.getByText(/Kun en skabelonansvarlig med tilladelse for hele organisationen kan vælge roller og grupper/)).toBeInTheDocument();
+    expect(screen.getByText(/Kun en bygger med tilladelse for hele organisationen kan vælge roller og grupper/)).toBeInTheDocument();
     expect(screen.queryByLabelText('Søg i roller og grupper')).toBeNull();
   });
 

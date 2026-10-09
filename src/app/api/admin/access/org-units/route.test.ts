@@ -27,7 +27,7 @@ const U2 = '22222222-2222-4222-8222-222222222222';
 const VIEW = { uuid: U1, name: 'Kommune', parentUuid: null, source: 'local', memberCount: 0 };
 
 const manager = makePrincipal({
-  roles: ['tt-bruger', 'tt-skabelonansvarlig'],
+  roles: ['bruger', 'bygger'],
   capabilities: ['template.use', 'template.manage', 'directory.read'],
   scopes: { 'directory.read': { global: false, roots: [{ orgUnitUuid: U2, includeDescendants: true }] } },
 });

@@ -43,7 +43,7 @@ describe('GET /api/me', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       user: { id: 'user-123', name: 'Anna', email: 'anna@example.dk' },
-      roles: ['tt-bruger'],
+      roles: ['bruger'],
       capabilities: ['template.use'],
       scopes: {},
       source: 'local',
@@ -55,7 +55,7 @@ describe('GET /api/me', () => {
     const unit = '11111111-1111-4111-8111-111111111111';
     mockResolve.mockResolvedValue(
       makePrincipal({
-        roles: ['tt-bruger', 'tt-skabelonansvarlig'],
+        roles: ['bruger', 'bygger'],
         capabilities: ['template.use', 'template.manage', 'directory.read'],
         scopes: { 'template.manage': { global: false, roots: [{ orgUnitUuid: unit, includeDescendants: true }] } },
         source: 'local',
@@ -63,7 +63,7 @@ describe('GET /api/me', () => {
     );
     const json = await (await GET(req(), NO_PARAMS)).json();
     expect(json.scopes).toEqual({ 'template.manage': { global: false, roots: [{ orgUnitUuid: unit, includeDescendants: true }] } });
-    expect(json.roles).toContain('tt-skabelonansvarlig');
+    expect(json.roles).toContain('bygger');
   });
 
   it('marks the response read-only outside local mode', async () => {

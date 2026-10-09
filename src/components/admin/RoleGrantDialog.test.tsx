@@ -48,29 +48,28 @@ describe('RoleGrantDialog — scope rules per role', () => {
   it('hides the scope field until a scoped role is chosen', async () => {
     setup();
     expect(screen.queryByLabelText(/Organisationsenhed/)).toBeNull();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-bruger');
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bruger');
     expect(screen.queryByLabelText(/Organisationsenhed/)).toBeNull();
   });
 
-  it('makes the unit optional for Skabelonansvarlig too: no unit means the global superuser', async () => {
+  it('makes the unit optional for Bygger too: no unit means the global superuser', async () => {
     setup();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-skabelonansvarlig');
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bygger');
     const select = screen.getByLabelText('Organisationsenhed (valgfri)');
     expect(within(select).getByRole('option', { name: 'Hele organisationen' })).toBeInTheDocument();
   });
 
-  it('makes the unit optional for Loglæser (global allowed) and hides it for Administrator (global only)', async () => {
+  it('hides the unit for Admin (global only) and for Bruger, but offers it for Bygger', async () => {
     setup();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-logleser');
-    const select = screen.getByLabelText('Organisationsenhed (valgfri)');
-    expect(within(select).getByRole('option', { name: 'Hele organisationen' })).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-administrator');
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bygger');
+    expect(screen.getByLabelText('Organisationsenhed (valgfri)')).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'admin');
     expect(screen.queryByLabelText(/Organisationsenhed/)).toBeNull();
   });
 
   it('shows units as an indented hierarchy', async () => {
     setup();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-skabelonansvarlig');
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bygger');
     const options = within(screen.getByLabelText('Organisationsenhed (valgfri)')).getAllByRole('option');
     expect(options.map((o) => o.textContent)).toEqual(['Hele organisationen', 'Kommune', '\u2003└ Børn']);
   });
@@ -78,18 +77,18 @@ describe('RoleGrantDialog — scope rules per role', () => {
   it('clears the chosen unit when the role changes to one without scope', async () => {
     fetchMock.mockReturnValue(json({ assignment: {} }, 201));
     setup();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-logleser');
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bygger');
     await userEvent.selectOptions(screen.getByLabelText('Organisationsenhed (valgfri)'), ROOT);
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-bruger');
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bruger');
     await userEvent.click(screen.getByRole('button', { name: 'Tildel rolle' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(body()).toMatchObject({ roleKey: 'tt-bruger', scopeOrgUnitUuid: null });
+    expect(body()).toMatchObject({ roleKey: 'bruger', scopeOrgUnitUuid: null });
     expect(body()).not.toHaveProperty('includeDescendants');
   });
 
   it('only offers "inkl. underenheder" once a unit is chosen', async () => {
     setup();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-logleser');
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bygger');
     expect(screen.queryByLabelText('Gælder også underenheder')).toBeNull();
     await userEvent.selectOptions(screen.getByLabelText('Organisationsenhed (valgfri)'), ROOT);
     expect(screen.getByLabelText('Gælder også underenheder')).toBeChecked();
@@ -106,7 +105,7 @@ describe('RoleGrantDialog — validation', () => {
 
   it('rejects a stop date that is not after the start date', async () => {
     setup();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-bruger');
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bruger');
     await userEvent.type(screen.getByLabelText('Startdato (valgfri)'), '2026-05-02');
     await userEvent.type(screen.getByLabelText('Gælder indtil (valgfri)'), '2026-05-02');
     await userEvent.click(screen.getByRole('button', { name: 'Tildel rolle' }));
@@ -116,7 +115,7 @@ describe('RoleGrantDialog — validation', () => {
 
   it('surfaces a load error for the unit list on the scope field', async () => {
     setup({ orgUnits: [], orgUnitsError: 'Kunne ikke hente organisationsenheder.' });
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-skabelonansvarlig');
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bygger');
     expect(screen.getByText('Kunne ikke hente organisationsenheder.')).toBeInTheDocument();
   });
 });
@@ -132,7 +131,7 @@ describe('RoleGrantDialog — submit', () => {
   it('posts the grant, toasts, reloads and closes', async () => {
     fetchMock.mockReturnValue(json({ assignment: { id: 'a1' } }, 201));
     setup();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-skabelonansvarlig');
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bygger');
     await userEvent.selectOptions(screen.getByLabelText('Organisationsenhed (valgfri)'), CHILD);
     await userEvent.click(screen.getByLabelText('Gælder også underenheder'));
     await userEvent.type(screen.getByLabelText('Startdato (valgfri)'), '2026-01-01');
@@ -144,7 +143,7 @@ describe('RoleGrantDialog — submit', () => {
     expect(fetchMock.mock.calls[0][1].method).toBe('POST');
     expect(body()).toEqual({
       appUserId: 'user-9',
-      roleKey: 'tt-skabelonansvarlig',
+      roleKey: 'bygger',
       scopeOrgUnitUuid: CHILD,
       includeDescendants: false,
       startDate: '2026-01-01',
@@ -157,7 +156,7 @@ describe('RoleGrantDialog — submit', () => {
   it('shows the server message and stays open on 409', async () => {
     fetchMock.mockReturnValue(json({ error: 'Rollen er allerede tildelt', code: 'already_assigned' }, 409));
     setup();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-bruger');
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bruger');
     await userEvent.click(screen.getByRole('button', { name: 'Tildel rolle' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Rollen er allerede tildelt');
     expect(onGranted).not.toHaveBeenCalled();
@@ -167,7 +166,7 @@ describe('RoleGrantDialog — submit', () => {
   it('shows a Danish message on a network failure', async () => {
     fetchMock.mockRejectedValue(new Error('offline'));
     setup();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-bruger');
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bruger');
     await userEvent.click(screen.getByRole('button', { name: 'Tildel rolle' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Netværksfejl');
   });
@@ -175,7 +174,7 @@ describe('RoleGrantDialog — submit', () => {
   it('does not show English server text for a 403', async () => {
     fetchMock.mockReturnValue(json({ error: 'Forbidden' }, 403));
     setup();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-bruger');
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bruger');
     await userEvent.click(screen.getByRole('button', { name: 'Tildel rolle' }));
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Du har ikke adgang');

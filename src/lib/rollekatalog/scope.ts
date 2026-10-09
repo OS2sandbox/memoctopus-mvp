@@ -32,9 +32,9 @@ function constraintUnits(input: ScopeInput): { all: string[]; known: string[]; u
 }
 
 /**
- * - tt-bruger needs no scope: it yields one NULL-scope row (`global` here only
+ * - bruger needs no scope: it yields one NULL-scope row (`global` here only
  *   means "no org unit"; the role grants nothing scoped).
- * - tt-administrator is never scoped (it needs a global assignment): constraints are ignored, and
+ * - admin is never scoped (it needs a global assignment): constraints are ignored, and
  *   it is global only when listed in `globalRoles`.
  * - Other roles take their units from the org-unit constraint only. Unit uuids that
  *   are not in the mirror are ignored; when all of them are unknown the assignment
@@ -47,16 +47,16 @@ function constraintUnits(input: ScopeInput): { all: string[]; known: string[]; u
  * - The same holds for an assignment that carries a non-empty constraint of an
  *   UNRECOGNISED type (KLE, a future type) and yields no org-unit scope: it is
  *   restricted in a way we cannot read, so it is `none` even for a global role (and
- *   for tt-administrator unless an org-unit constraint is present). Only an assignment
+ *   for admin unless an org-unit constraint is present). Only an assignment
  *   with no constraints at all can become global.
  */
 export function deriveScope(input: ScopeInput): DerivedScope {
   const role: RoleKey = input.roleKey;
-  if (role === 'tt-bruger') return { kind: 'global' };
+  if (role === 'bruger') return { kind: 'global' };
 
   const globalAllowed = input.globalRoles.includes(role);
   const c = constraintUnits(input);
-  if (role === 'tt-administrator') {
+  if (role === 'admin') {
     if (c.unrecognised && c.all.length === 0) return { kind: 'none' };
     return globalAllowed ? { kind: 'global' } : { kind: 'none' };
   }

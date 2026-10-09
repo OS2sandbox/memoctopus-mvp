@@ -8,7 +8,7 @@ const U = (n: number) => `7e5e0000-0000-4000-8000-${String(n).padStart(12, '0')}
 const O = (n: number) => `5a1b0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const E = (n: number) => `9d3c0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
-const DEFAULTS: MapperConfig = { includeDescendants: true, globalRoles: ['tt-administrator'] };
+const DEFAULTS: MapperConfig = { includeDescendants: true, globalRoles: ['admin'] };
 
 function fixtureInput(): MapperInput {
   const d = fixtureData();
@@ -96,22 +96,22 @@ describe('mapToMirror with the fixtures', () => {
   });
 
   it('maps role assignments per the fixture cases', () => {
-    expect(rolesOf(set, U(3))).toEqual([`tt-bruger@null`, `tt-skabelonansvarlig@${O(3)}`, `tt-skabelonansvarlig@${O(4)}`].sort()); // anne: two KOMBIT units
-    expect(rolesOf(set, U(2))).toEqual([`tt-skabelonansvarlig@${O(2)}`]); // jens: internal type, KLE ignored
-    expect(rolesOf(set, U(6))).toEqual([`tt-skabelonansvarlig@${O(3)}`]); // peter: duplicate entries unioned
-    expect(rolesOf(set, U(5))).toEqual(['tt-bruger@null']); // disabled user keeps the row; the principal checks `disabled`
-    expect(rolesOf(set, U(4))).toEqual(['tt-bruger@null', `tt-logleser@${O(4)}`]); // lars: unknown unit ignored
-    expect(rolesOf(set, U(1))).toEqual(['tt-administrator@null']); // mette: constraint on admin ignored
-    expect(rolesOf(set, U(9))).toEqual(['tt-administrator@null']);
-    expect(rolesOf(set, U(7))).toEqual([]); // ida: logleser without constraint is not global by default
-    expect(rolesOf(set, U(8))).toEqual([]); // ole: only an unknown unit
+    expect(rolesOf(set, U(3))).toEqual([`bruger@null`, `bygger@${O(3)}`, `bygger@${O(4)}`].sort()); // anne: two KOMBIT units
+    expect(rolesOf(set, U(2))).toEqual([`bygger@${O(2)}`]); // jens: internal type, KLE ignored
+    expect(rolesOf(set, U(6))).toEqual([`bygger@${O(3)}`]); // peter: duplicate entries unioned
+    expect(rolesOf(set, U(5))).toEqual(['bruger@null']); // disabled user keeps the row; the principal checks `disabled`
+    expect(rolesOf(set, U(4))).toEqual(['bruger@null', `bygger@${O(4)}`]); // lars: unknown unit ignored
+    expect(rolesOf(set, U(1))).toEqual(['admin@null']); // mette: constraint on admin ignored
+    expect(rolesOf(set, U(9))).toEqual(['admin@null']);
+    expect(rolesOf(set, U(7))).toEqual([]); // ida: bygger without constraint is not global by default
+    expect(rolesOf(set, U(8))).toEqual([]); // ole: bygger with only an unknown unit
     expect(set.assignments).toHaveLength(10);
   });
 
   it('counts what it dropped', () => {
     expect(set.stats.assignmentsIgnoredRole).toBe(1); // referat_legacy
     expect(set.stats.assignmentsSkippedUnknownUser).toBe(1); // ghost.u
-    expect(set.stats.assignmentsWithoutScope).toBe(2); // ida (logleser) and ole (skabelonansvarlig)
+    expect(set.stats.assignmentsWithoutScope).toBe(2); // ida (unscoped bygger) and ole (bygger with only an unknown unit)
   });
 
   it('every scoped row carries the descendants setting', () => {
@@ -131,10 +131,10 @@ describe('mapToMirror with the fixtures', () => {
 });
 
 describe('mapToMirror: GLOBAL_ROLES on the fixtures', () => {
-  it('GLOBAL_ROLES can make an unscoped logleser global', () => {
-    const set = mapToMirror(fixtureInput(), { ...DEFAULTS, globalRoles: ['tt-administrator', 'tt-logleser'] });
-    expect(rolesOf(set, U(7))).toEqual(['tt-logleser@null']);
-    expect(rolesOf(set, U(8))).toEqual([]); // skabelonansvarlig is never global
+  it('GLOBAL_ROLES can make an unscoped bygger global', () => {
+    const set = mapToMirror(fixtureInput(), { ...DEFAULTS, globalRoles: ['admin', 'bygger'] });
+    expect(rolesOf(set, U(7))).toEqual(['bygger@null']);
+    expect(rolesOf(set, U(8))).toEqual([]); // a bygger that names only an unknown unit is never widened to global
   });
 });
 
@@ -246,7 +246,7 @@ describe('mapToMirror: invalid rows', () => {
       input({
         users: [user(1, { positions: [p(1), p(2)] }), user(2, { uuid: 'legacy-user', positions: [p(1)] })],
         orgUnits: [unit(1, null), unit(2, 1), unit(3, 'legacy-unit'), unit(4, 3), unit(5, null, { uuid: 'legacy-unit' })],
-        assignments: [assignment(1, { id: 'tt-logleser' }), 'junk', { userId: 7 }],
+        assignments: [assignment(1, { id: 'bygger' }), 'junk', { userId: 7 }],
       }),
       DEFAULTS,
     );
@@ -262,7 +262,7 @@ describe('mapToMirror: invalid rows', () => {
       input({
         users: [user(1, { uuid: 'legacy-user', extUuid: E(1) }), user(2)],
         orgUnits: [unit(1, null)],
-        assignments: [assignment(1, { id: 'tt-logleser', units: [1] })],
+        assignments: [assignment(1, { id: 'bygger', units: [1] })],
       }),
       DEFAULTS,
     );
@@ -280,14 +280,14 @@ describe('mapToMirror: assignment edge cases', () => {
         ...base,
         users: [user(1), user(2), user(3, { userId: 'USER1' })],
         assignments: [
-          { extUuid: E(2), userId: 'wrong', assignments: [{ roleIdentifier: 'tt-bruger', roleConstraintValues: [] }] },
-          { extUuid: null, userId: 'user2', assignments: [{ roleIdentifier: 'tt-administrator', roleConstraintValues: [] }] },
-          { extUuid: null, userId: 'USER1', assignments: [{ roleIdentifier: 'tt-bruger', roleConstraintValues: [] }] },
+          { extUuid: E(2), userId: 'wrong', assignments: [{ roleIdentifier: 'bruger', roleConstraintValues: [] }] },
+          { extUuid: null, userId: 'user2', assignments: [{ roleIdentifier: 'admin', roleConstraintValues: [] }] },
+          { extUuid: null, userId: 'USER1', assignments: [{ roleIdentifier: 'bruger', roleConstraintValues: [] }] },
         ],
       }),
       DEFAULTS,
     );
-    expect(rolesOf(set, U(2))).toEqual(['tt-administrator@null', 'tt-bruger@null']);
+    expect(rolesOf(set, U(2))).toEqual(['admin@null', 'bruger@null']);
     // user1 and USER1 collide case-insensitively: not guessed.
     expect(rolesOf(set, U(1))).toEqual([]);
     expect(rolesOf(set, U(3))).toEqual([]);
@@ -299,7 +299,7 @@ describe('mapToMirror: assignment edge cases', () => {
       input({
         ...base,
         assignments: [
-          { extUuid: E(9), userId: 'user1', assignments: [{ roleIdentifier: 'tt-administrator', roleConstraintValues: [] }] },
+          { extUuid: E(9), userId: 'user1', assignments: [{ roleIdentifier: 'admin', roleConstraintValues: [] }] },
         ],
       }),
       DEFAULTS,
@@ -308,17 +308,17 @@ describe('mapToMirror: assignment edge cases', () => {
     expect(set.stats.assignmentsSkippedUnknownUser).toBe(1);
   });
 
-  it('only matches our four role identifiers exactly', () => {
+  it('only matches our three role identifiers exactly', () => {
     const set = mapToMirror(
       input({
         ...base,
         assignments: [
-          assignment(1, { id: 'tt-bruger' }, { id: 'TT-BRUGER' }, { id: 'referat_admin' }, { id: 'tt-logleser-x' }),
+          assignment(1, { id: 'bruger' }, { id: 'BRUGER' }, { id: 'referat_admin' }, { id: 'bygger-x' }),
         ],
       }),
       DEFAULTS,
     );
-    expect(rolesOf(set, U(1))).toEqual(['tt-bruger@null']);
+    expect(rolesOf(set, U(1))).toEqual(['bruger@null']);
     expect(set.stats.assignmentsIgnoredRole).toBe(3);
   });
 
@@ -326,20 +326,20 @@ describe('mapToMirror: assignment edge cases', () => {
     const set = mapToMirror(
       input({
         ...base,
-        assignments: [assignment(1, { id: 'tt-skabelonansvarlig', units: [1] }, { id: 'tt-skabelonansvarlig', units: [2] }, { id: 'tt-skabelonansvarlig' })],
+        assignments: [assignment(1, { id: 'bygger', units: [1] }, { id: 'bygger', units: [2] }, { id: 'bygger' })],
       }),
-      { ...DEFAULTS, globalRoles: ['tt-administrator', 'tt-skabelonansvarlig'] },
+      { ...DEFAULTS, globalRoles: ['admin', 'bygger'] },
     );
-    expect(rolesOf(set, U(1))).toEqual([`tt-skabelonansvarlig@${O(1)}`, `tt-skabelonansvarlig@${O(2)}`]);
+    expect(rolesOf(set, U(1))).toEqual([`bygger@${O(1)}`, `bygger@${O(2)}`]);
   });
 
   it('a role in GLOBAL_ROLES without scope is a single global row; a role not in it is counted', () => {
-    const roles: RoleKey[] = ['tt-logleser'];
-    const set = mapToMirror(input({ ...base, assignments: [assignment(1, { id: 'tt-logleser' }), assignment(2, { id: 'tt-skabelonansvarlig' })] }), {
+    const roles: RoleKey[] = ['bygger'];
+    const set = mapToMirror(input({ ...base, assignments: [assignment(1, { id: 'bygger' }), assignment(2, { id: 'admin' })] }), {
       ...DEFAULTS,
       globalRoles: roles,
     });
-    expect(rolesOf(set, U(1))).toEqual(['tt-logleser@null']);
+    expect(rolesOf(set, U(1))).toEqual(['bygger@null']);
     expect(rolesOf(set, U(2))).toEqual([]);
     expect(set.stats.assignmentsWithoutScope).toBe(1);
   });
@@ -352,22 +352,22 @@ describe('mapToMirror: assignment edge cases', () => {
       assignments: [{ roleIdentifier: role, roleName: null, roleConstraintValues: constraints }],
     });
 
-    it('tt-administrator and a GLOBAL_ROLES tt-logleser with only a KLE constraint get no row and are counted; unconstrained ones are global', () => {
+    it('admin and a GLOBAL_ROLES bygger with only a KLE constraint get no row and are counted; unconstrained ones are global', () => {
       const set = mapToMirror(
         input({
           ...base,
           users: [user(1), user(2), user(3)],
           assignments: [
-            entry(1, 'tt-administrator', KLE_C),
-            entry(2, 'tt-logleser', KLE_C),
-            { extUuid: E(3), userId: 'user3', assignments: [{ roleIdentifier: 'tt-logleser', roleConstraintValues: [] }] },
+            entry(1, 'admin', KLE_C),
+            entry(2, 'bygger', KLE_C),
+            { extUuid: E(3), userId: 'user3', assignments: [{ roleIdentifier: 'bygger', roleConstraintValues: [] }] },
           ],
         }),
-        { ...DEFAULTS, globalRoles: ['tt-administrator', 'tt-logleser'] },
+        { ...DEFAULTS, globalRoles: ['admin', 'bygger'] },
       );
       expect(rolesOf(set, U(1))).toEqual([]);
       expect(rolesOf(set, U(2))).toEqual([]);
-      expect(rolesOf(set, U(3))).toEqual(['tt-logleser@null']);
+      expect(rolesOf(set, U(3))).toEqual(['bygger@null']);
       expect(set.stats.assignmentsWithoutScope).toBe(2);
     });
 
@@ -380,13 +380,13 @@ describe('mapToMirror: assignment edge cases', () => {
               extUuid: E(1),
               userId: 'user1',
               assignments: [
-                { roleIdentifier: 'tt-logleser', roleConstraintValues: KLE_C },
-                { roleIdentifier: 'tt-logleser', roleConstraintValues: [] },
+                { roleIdentifier: 'bygger', roleConstraintValues: KLE_C },
+                { roleIdentifier: 'bygger', roleConstraintValues: [] },
               ],
             },
           ],
         }),
-        { ...DEFAULTS, globalRoles: ['tt-logleser'] },
+        { ...DEFAULTS, globalRoles: ['bygger'] },
       );
       expect(rolesOf(set, U(1))).toEqual([]);
       expect(set.stats.assignmentsWithoutScope).toBe(1);
@@ -394,14 +394,14 @@ describe('mapToMirror: assignment edge cases', () => {
   });
 
   describe('a dropped invalid entry drops the whole (user, role) group', () => {
-    const scopedEntry = { roleIdentifier: 'tt-logleser', roleConstraintValues: [{ constraintType: OU, constraintValues: [O(1)] }] };
-    const brokenEntry = { roleIdentifier: 'tt-logleser', roleConstraintValues: [{ constraintType: OU, constraintValues: [5] }] };
-    const plain = { roleIdentifier: 'tt-logleser', roleConstraintValues: [] };
+    const scopedEntry = { roleIdentifier: 'bygger', roleConstraintValues: [{ constraintType: OU, constraintValues: [O(1)] }] };
+    const brokenEntry = { roleIdentifier: 'bygger', roleConstraintValues: [{ constraintType: OU, constraintValues: [5] }] };
+    const plain = { roleIdentifier: 'bygger', roleConstraintValues: [] };
 
     it('a broken scoped entry next to an unconstrained one never leaves a global row (even for a GLOBAL_ROLES role)', () => {
       const set = mapToMirror(
         input({ ...base, assignments: [{ extUuid: E(1), userId: 'user1', assignments: [brokenEntry, plain] }] }),
-        { ...DEFAULTS, globalRoles: ['tt-logleser'] },
+        { ...DEFAULTS, globalRoles: ['bygger'] },
       );
       expect(rolesOf(set, U(1))).toEqual([]);
       expect(set.stats.assignmentRowsSkippedInvalid).toBe(1);
@@ -415,15 +415,15 @@ describe('mapToMirror: assignment edge cases', () => {
             {
               extUuid: E(1),
               userId: 'user1',
-              assignments: [scopedEntry, brokenEntry, { roleIdentifier: 'tt-bruger', roleConstraintValues: [] }],
+              assignments: [scopedEntry, brokenEntry, { roleIdentifier: 'bruger', roleConstraintValues: [] }],
             },
             { extUuid: E(2), userId: 'user2', assignments: [scopedEntry] },
           ],
         }),
         DEFAULTS,
       );
-      expect(rolesOf(set, U(1))).toEqual(['tt-bruger@null']);
-      expect(rolesOf(set, U(2))).toEqual([`tt-logleser@${O(1)}`]);
+      expect(rolesOf(set, U(1))).toEqual(['bruger@null']);
+      expect(rolesOf(set, U(2))).toEqual([`bygger@${O(1)}`]);
     });
 
     it('applies across rows that resolve to the same user, and to a group whose only entry was the broken one', () => {
@@ -435,7 +435,7 @@ describe('mapToMirror: assignment edge cases', () => {
             { extUuid: null, userId: 'user1', assignments: [plain] },
           ],
         }),
-        { ...DEFAULTS, globalRoles: ['tt-logleser'] },
+        { ...DEFAULTS, globalRoles: ['bygger'] },
       );
       expect(rolesOf(set, U(1))).toEqual([]);
     });
@@ -450,16 +450,16 @@ describe('mapToMirror: assignment edge cases', () => {
         }),
         DEFAULTS,
       );
-      expect(rolesOf(set, U(1))).toEqual([`tt-logleser@${O(1)}`]);
+      expect(rolesOf(set, U(1))).toEqual([`bygger@${O(1)}`]);
     });
   });
 
   it('the same user listed twice is merged into one group', () => {
     const set = mapToMirror(
-      input({ ...base, assignments: [assignment(1, { id: 'tt-skabelonansvarlig', units: [1] }), assignment(1, { id: 'tt-skabelonansvarlig', units: [2] })] }),
+      input({ ...base, assignments: [assignment(1, { id: 'bygger', units: [1] }), assignment(1, { id: 'bygger', units: [2] })] }),
       DEFAULTS,
     );
-    expect(rolesOf(set, U(1))).toEqual([`tt-skabelonansvarlig@${O(1)}`, `tt-skabelonansvarlig@${O(2)}`]);
+    expect(rolesOf(set, U(1))).toEqual([`bygger@${O(1)}`, `bygger@${O(2)}`]);
   });
 });
 

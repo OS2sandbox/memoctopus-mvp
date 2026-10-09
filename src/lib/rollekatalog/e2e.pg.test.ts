@@ -120,14 +120,14 @@ async function withWorld(fn: (w: World) => Promise<void>) {
 }
 
 describe.skipIf(!hasPg)('Rollekatalog sync -> principal -> scope (real Postgres)', () => {
-  it('a skabelonansvarlig constrained to Borgerservice may manage templates for exactly that subtree', () =>
+  it('a bygger constrained to Borgerservice may manage templates for exactly that subtree', () =>
     withWorld(async (w) => {
       expect((await w.sync()).status).toBe('success');
-      const jens = await w.principalOf(U(2)); // tt-skabelonansvarlig, constraint = Borgerservice (2)
+      const jens = await w.principalOf(U(2)); // bygger, constraint = Borgerservice (2)
 
       expect(jens.disabled).toBe(false);
       expect(jens.source).toBe('rollekatalog');
-      expect(jens.roles).toEqual(['tt-bruger', 'tt-skabelonansvarlig']);
+      expect(jens.roles).toEqual(['bruger', 'bygger']);
       expect(jens.capabilities).toContain('template.manage');
       expect(jens.capabilities).not.toContain('audit.read');
       expect(jens.capabilities).not.toContain('access.manage');
@@ -152,49 +152,53 @@ describe.skipIf(!hasPg)('Rollekatalog sync -> principal -> scope (real Postgres)
   it('an assignment with a constraint on an unknown unit grants no scoped capability at all', () =>
     withWorld(async (w) => {
       await w.sync();
-      const ole = await w.principalOf(U(8)); // tt-skabelonansvarlig constrained only to a unit Rollekatalog does not export
-      expect(ole.roles).toEqual(['tt-bruger']);
+      const ole = await w.principalOf(U(8)); // bygger constrained only to a unit Rollekatalog does not export
+      expect(ole.roles).toEqual(['bruger']);
       expect(ole.capabilities).not.toContain('template.manage');
       expect(await w.inScope(ole, 'template.manage')).toEqual([]);
     }));
 
-  it('a tt-logleser without a usable constraint gets NO audit.read scope under the defaults', () =>
+  it('a bygger without a usable constraint gets NO template.manage scope under the defaults', () =>
     withWorld(async (w) => {
       await w.sync();
-      const ida = await w.principalOf(U(7)); // tt-logleser, no constraint
-      expect(ida.roles).toEqual(['tt-bruger']);
-      expect(ida.capabilities).not.toContain('audit.read');
-      expect(ida.scopes['audit.read']).toBeUndefined();
-      expect(await w.inScope(ida, 'audit.read')).toEqual([]);
-      expect(await orgUnitsInScope(ida, 'audit.read', w.scopeEnv)).toEqual({ all: false, uuids: [] });
+      const ida = await w.principalOf(U(7)); // bygger, no constraint
+      expect(ida.roles).toEqual(['bruger']);
+      expect(ida.capabilities).not.toContain('template.manage');
+      expect(ida.scopes['template.manage']).toBeUndefined();
+      expect(await w.inScope(ida, 'template.manage')).toEqual([]);
+      expect(await orgUnitsInScope(ida, 'template.manage', w.scopeEnv)).toEqual({ all: false, uuids: [] });
     }));
 
-  it('a logleser with a constraint reads exactly that unit (lars: Økonomi, a leaf)', () =>
+  it('a bygger with a known and an unknown unit manages templates for exactly the known one (lars: Økonomi, a leaf)', () =>
     withWorld(async (w) => {
       await w.sync();
       const lars = await w.principalOf(U(4));
-      expect(lars.capabilities).toContain('audit.read');
-      expect(lars.capabilities).not.toContain('audit.export'); // global-only
-      expect(await w.inScope(lars, 'audit.read')).toEqual([4]);
+      expect(lars.roles).toEqual(['bruger', 'bygger']);
+      expect(lars.capabilities).toContain('template.manage');
+      expect(lars.capabilities).not.toContain('audit.read');
+      expect(await w.inScope(lars, 'template.manage')).toEqual([4]);
     }));
 
-  it('ROLLEKATALOG_GLOBAL_ROLES makes the same unscoped logleser global (the explicit opt-in)', () =>
+  it('ROLLEKATALOG_GLOBAL_ROLES makes the same unscoped bygger global (the explicit opt-in), but never an administrator', () =>
     withWorld(async (w) => {
-      vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'tt-administrator,tt-logleser');
+      vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'admin,bygger');
       await w.sync();
       const ida = await w.principalOf(U(7));
-      expect(ida.scopes['audit.read']).toEqual({ global: true, roots: [] });
-      expect(await w.inScope(ida, 'audit.read')).toEqual(ALL_UNITS);
-      expect(ida.capabilities).toContain('audit.export');
+      expect(ida.roles).toEqual(['bruger', 'bygger']);
+      expect(ida.scopes['template.manage']).toEqual({ global: true, roots: [] });
+      expect(await w.inScope(ida, 'template.manage')).toEqual(ALL_UNITS);
+      // bygger has no administrative capability, global or not.
+      expect(ida.capabilities).not.toContain('audit.read');
+      expect(ida.capabilities).not.toContain('access.manage');
     }));
 
-  it('tt-administrator becomes global, even when Rollekatalog attached an org-unit constraint to it', () =>
+  it('admin becomes global, even when Rollekatalog attached an org-unit constraint to it', () =>
     withWorld(async (w) => {
       await w.sync();
       for (const n of [1, 9]) {
         // mette.e carries a constraint on the admin role, rune.a none: both are global administrators.
         const admin = await w.principalOf(U(n));
-        expect(admin.roles).toContain('tt-administrator');
+        expect(admin.roles).toContain('admin');
         expect(admin.capabilities).toEqual(expect.arrayContaining(['access.manage', 'sync.run', 'audit.export', 'template.manage']));
         expect(admin.scopes['template.manage']).toEqual({ global: true, roots: [] });
         expect(await w.inScope(admin, 'template.manage')).toEqual(ALL_UNITS);
@@ -261,7 +265,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync -> principal -> scope (real Postgres)
             ? {
                 ...a,
                 assignments: [
-                  { roleIdentifier: 'tt-skabelonansvarlig', roleConstraintValues: [{ constraintType: 'http://digital-identity.dk/constraints/orgunit/1', constraintValues: [O(4)] }] },
+                  { roleIdentifier: 'bygger', roleConstraintValues: [{ constraintType: 'http://digital-identity.dk/constraints/orgunit/1', constraintValues: [O(4)] }] },
                 ],
               }
             : a,
@@ -274,7 +278,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync -> principal -> scope (real Postgres)
       await w.sync();
       const jens = await resolvePrincipal(`app-${U(2)}`);
       expect(jens.capabilities).not.toContain('template.manage');
-      expect(jens.roles).toEqual(['tt-bruger']); // the implicit baseline stays
+      expect(jens.roles).toEqual(['bruger']); // the implicit baseline stays
     }));
 
   it('ROLLEKATALOG_SCOPE_DESCENDANTS=false covers the unit only, not its subtree', () =>
@@ -299,10 +303,10 @@ describe.skipIf(!hasPg)('Rollekatalog sync -> principal -> scope (real Postgres)
     it('rollekatalog mode ignores a leftover source=local grant', () =>
       withWorld(async (w) => {
         await w.sync();
-        await w.c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'tt-administrator', 'local')`, [U(7)]);
+        await w.c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'admin', 'local')`, [U(7)]);
         const ida = await w.principalOf(U(7));
         expect(ida.capabilities).not.toContain('access.manage');
-        expect(ida.roles).not.toContain('tt-administrator');
+        expect(ida.roles).not.toContain('admin');
       }));
 
     it('grants older than ROLE_STALE_MAX_SECONDS vanish, the baseline stays, and the next sync brings them back', () =>
@@ -313,7 +317,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync -> principal -> scope (real Postgres)
         await w.c.query(`UPDATE role_assignments SET synced_at = now() - interval '2 days' WHERE source = 'rollekatalog'`);
         const stale = await resolvePrincipal(`app-${U(2)}`);
         expect(stale.capabilities).toEqual(['template.use']);
-        expect(stale.roles).toEqual(['tt-bruger']);
+        expect(stale.roles).toEqual(['bruger']);
         expect(stale.disabled).toBe(false);
 
         // An unchanged re-sync advances synced_at without changing a single row: that alone must restore access.

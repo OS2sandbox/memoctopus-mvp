@@ -232,7 +232,7 @@ export async function startControl({ rollekatalog, llm, idp, samlIdp }: ControlD
           uuid, extUuid, userId, name: name ?? userId, email: email ?? `${userId}@example.dk`,
           disabled: false, positions: [{ orgUnitUuid }],
         });
-        (d.roleAssignments as Json[]).push({ extUuid, userId, assignments: toAssignments(roles ?? [{ role: 'tt-bruger' }]) });
+        (d.roleAssignments as Json[]).push({ extUuid, userId, assignments: toAssignments(roles ?? [{ role: 'bruger' }]) });
       });
       return ok();
     }
@@ -316,11 +316,11 @@ Login-siden for appen findes på appens adresse; her vælger du kun, hvad Rollek
 const U={mette:'5a1b0000-0000-4000-8000-000000000001',borger:'5a1b0000-0000-4000-8000-000000000002',team:'5a1b0000-0000-4000-8000-000000000003',okonomi:'5a1b0000-0000-4000-8000-000000000004',support:'5a1b0000-0000-4000-8000-000000000005'};
 const ACTIONS=[
  ['Nulstil alt til udgangspunkt','/reset',{}],
- ['Anne mister skabelonansvarlig','/user/anne.p/roles',{roles:[{role:'tt-bruger'}]}],
+ ['Anne mister bygger-rollen','/user/anne.p/roles',{roles:[{role:'bruger'}]}],
  ['Jens deaktiveres','/user/jens.t/disabled',{disabled:true}],
  ['Jens aktiveres igen','/user/jens.t/disabled',{disabled:false}],
  ['Lars fjernes fra organisationen','/user/lars.f/remove',{}],
- ['Ny bruger bruger.b i Digital Support','/user',{userId:'bruger.b',name:'Bente Bruger',orgUnitUuid:U.support,roles:[{role:'tt-bruger'}]}],
+ ['Ny bruger bruger.b i Digital Support','/user',{userId:'bruger.b',name:'Bente Bruger',orgUnitUuid:U.support,roles:[{role:'bruger'}]}],
  ['Digital Support flyttes under Økonomi','/orgunit/'+U.support,{parentOrgUnitUuid:U.okonomi}],
  ['Team Selvbetjening omdøbes','/orgunit/'+U.team,{name:'Team Selvbetjening (omdøbt)'}],
  ['Fejl: Rollekatalog nede (500)','/fault',{kind:'down'}],

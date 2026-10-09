@@ -346,7 +346,7 @@ function EditorForm({
       <DialogHeader>
         <DialogTitle>{editing ? 'Rediger central skabelon' : 'Ny central skabelon'}</DialogTitle>
         <DialogDescription>
-          Brugerne kan ikke ændre en central skabelon. Kun du og andre skabelonansvarlige kan redigere den.
+          Brugerne kan ikke ændre en central skabelon. Kun du og andre byggere kan redigere den.
         </DialogDescription>
       </DialogHeader>
 
@@ -401,7 +401,7 @@ function EditorForm({
         </p>
       ) : units.length === 0 && isGlobalManager ? (
         <p className="text-sm text-[var(--ink)]">
-          <span className="font-medium">Ejerenhed:</span> Hele organisationen (ingen ejerenhed). Kun skabelonansvarlige
+          <span className="font-medium">Ejerenhed:</span> Hele organisationen (ingen ejerenhed). Kun byggere
           for hele organisationen kan redigere skabelonen.
         </p>
       ) : (
@@ -411,8 +411,8 @@ function EditorForm({
           onChange={(e) => changeOwner(e.target.value)}
           hint={
             isGlobalManager
-              ? 'Uden ejerenhed gælder skabelonen hele organisationen, og kun skabelonansvarlige for hele organisationen kan redigere den. Med en ejerenhed skal de enheder, der får skabelonen til rådighed, ligge under den.'
-              : 'Skabelonen kan administreres af alle, der er skabelonansvarlige for denne enhed. De enheder, der får skabelonen til rådighed, skal ligge under den.'
+              ? 'Uden ejerenhed gælder skabelonen hele organisationen, og kun byggere for hele organisationen kan redigere den. Med en ejerenhed skal de enheder, der får skabelonen til rådighed, ligge under den.'
+              : 'Skabelonen kan administreres af alle, der er byggere for denne enhed. De enheder, der får skabelonen til rådighed, skal ligge under den.'
           }
         >
           <option value="">{isGlobalManager ? 'Hele organisationen (ingen ejerenhed)' : 'Vælg enhed …'}</option>

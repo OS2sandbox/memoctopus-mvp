@@ -241,7 +241,7 @@ export function CentralTemplatesAdmin() {
                   </TableCell>
                   <TableCell>
                     {t.ownerOrgUnitUuid === null ? (
-                      <span title="Ingen ejerenhed: kun skabelonansvarlige for hele organisationen kan redigere den">
+                      <span title="Ingen ejerenhed: kun byggere for hele organisationen kan redigere den">
                         Hele organisationen
                       </span>
                     ) : (

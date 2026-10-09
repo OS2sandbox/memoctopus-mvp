@@ -160,18 +160,18 @@ export function scopeDescendants(): boolean {
 
 /**
  * Roles that may become GLOBAL from an assignment that carries no usable org-unit
- * scope. Default tt-administrator only. 'none' means no role. Unknown tokens are
+ * scope. Default admin only. 'none' means no role. Unknown tokens are
  * dropped; an unset or empty variable gives the default.
  */
 export function globalRoles(): RoleKey[] {
   const raw = clean('ROLLEKATALOG_GLOBAL_ROLES').toLowerCase();
-  if (!raw) return ['tt-administrator'];
+  if (!raw) return ['admin'];
   if (raw === 'none') return [];
   const out = raw
     .split(',')
     .map((s) => s.trim())
     .filter((s): s is RoleKey => (ROLE_KEYS as readonly string[]).includes(s));
-  return out.length > 0 ? [...new Set(out)] : ['tt-administrator'];
+  return out.length > 0 ? [...new Set(out)] : ['admin'];
 }
 
 export function syncMaxRemovalPercent(): number {

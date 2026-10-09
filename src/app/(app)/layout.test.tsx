@@ -97,7 +97,7 @@ describe('(app) layout — principal gate', () => {
     expect(el.props.reason).toBe('no_role');
   });
 
-  it('lets a user without an assignment in (implicit tt-bruger) when the flag is off', async () => {
+  it('lets a user without an assignment in (implicit bruger) when the flag is off', async () => {
     signedIn();
     const el = (await AppLayout({ children: 'CONTENT' })) as El;
     expect(el.type).not.toBe(NoAccess);
@@ -107,7 +107,7 @@ describe('(app) layout — principal gate', () => {
   it('lets a user with an assigned role in when the flag is on', async () => {
     vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'true');
     signedIn();
-    mockResolve.mockResolvedValue(makePrincipal({ roles: ['tt-logleser'] }));
+    mockResolve.mockResolvedValue(makePrincipal({ roles: ['admin'] }));
     const el = (await AppLayout({ children: 'CONTENT' })) as El;
     expect(el.type).not.toBe(NoAccess);
   });

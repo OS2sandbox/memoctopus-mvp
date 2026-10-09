@@ -5,7 +5,7 @@ import { useMe } from './use-me';
 
 const ME = {
   user: { id: 'u1', name: 'Anne', email: 'a@example.dk' },
-  roles: ['tt-bruger'],
+  roles: ['bruger'],
   capabilities: ['template.use'],
   scopes: {},
   source: 'local',

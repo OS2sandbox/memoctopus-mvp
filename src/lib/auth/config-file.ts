@@ -5,7 +5,7 @@
 //
 //   {
 //     "providers": [ { "type": "oidc" | "entra" | "saml", "id": "...", ... } ],
-//     "roles":     { "appRoleMap": { "<claim value>": "tt-administrator" }, "groupRoleMap": { ... } },
+//     "roles":     { "appRoleMap": { "<claim value>": "admin" }, "groupRoleMap": { ... } },
 //     "catalogue": [ { "kind": "role" | "group", "identifier": "...", "name": "..." } ]
 //   }
 //

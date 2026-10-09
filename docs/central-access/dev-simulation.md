@@ -60,17 +60,16 @@ The municipal setup: no Rollekatalog, no in-app role admin, roles from the IdP's
 scripts/dev-sim/setup-db.sh                                   # or a database of your own whose name contains "sim"/"test"
 SIM_ACCESS_SOURCE=claims npx tsx scripts/dev-sim/index.ts     # terminal 1
 SIM_ACCESS_SOURCE=claims scripts/dev-sim/start-app.sh         # terminal 2
-npx tsx scripts/dev-sim/acceptance-claims.ts                  # terminal 3: 40 checks
+npx tsx scripts/dev-sim/acceptance-claims.ts                  # terminal 3: about 40 checks
 ```
 
-`SIM_ACCESS_SOURCE=claims` makes `--env` print `ACCESS_SOURCE=claims` and `AUTH_CONFIG_FILE=scripts/dev-sim/auth-config.claims.json`: an OIDC and a SAML provider, the `roles` mapping (`referat-admin` -> `tt-administrator`, `referat-superuser` -> `tt-skabelonansvarlig`, `referat-log` -> `tt-logleser`, `referat-bruger` -> `tt-bruger`) and a catalogue of four roles and two groups. The ports can be moved with `SIM_APP_URL`, `SIM_*_PORT` and `PORT` if another stack is running.
+`SIM_ACCESS_SOURCE=claims` makes `--env` print `ACCESS_SOURCE=claims` and `AUTH_CONFIG_FILE=scripts/dev-sim/auth-config.claims.json`: an OIDC and a SAML provider, the `roles` mapping (`referat-admin` -> `admin`, `referat-superuser` -> `bygger`, `referat-bruger` -> `bruger`) and a catalogue of three roles and two groups. The ports can be moved with `SIM_APP_URL`, `SIM_*_PORT` and `PORT` if another stack is running.
 
 | Login as | Claims | Expected |
 |---|---|---|
-| `admin.a` | role `referat-admin`, groups `G-Borgerservice`, `G-Okonomi` | Administrator, organisation-wide. Users page is read-only. |
-| `super.s` | role `referat-superuser` | Global *skabelonansvarlig* (the shared-prompt superuser), no administrator power. |
-| `log.l` | role `referat-log` | Can read and export the log. |
-| `bruger.c` | `referat-bruger`, an unknown role, a known and an unknown group | `tt-bruger` only; only the two catalogue values are stored for the person. |
+| `admin.a` | role `referat-admin`, groups `G-Borgerservice`, `G-Okonomi` | Admin, organisation-wide (incl. the log). Users page is read-only. |
+| `super.s` | role `referat-superuser` | Global *Bygger* (the shared-prompt superuser), no Admin power (no log, no users). |
+| `bruger.c` | `referat-bruger`, an unknown role, a known and an unknown group | `bruger` only; only the two catalogue values are stored for the person. |
 | `ingen.i` | no roles | "Ingen adgang" (`REQUIRE_ROLE_TO_LOGIN=true`). |
 | `bad.b` | `roles` is an object (malformed) | "Ingen adgang"; nothing stored. |
 
@@ -84,14 +83,14 @@ The claims mode also exercises the **shared prompts by role**: the app is starte
 
 | Login as | In Rollekatalog | Expected in the app (`REQUIRE_ROLE_TO_LOGIN=true`) |
 |---|---|---|
-| `mette.e` | `tt-administrator` | Everything, organisation-wide. Admin menu: users, organisation, templates, log. Sync button. |
-| `rune.a` | `tt-administrator`, no constraint | Same. |
-| `anne.p` | `tt-bruger` + `tt-skabelonansvarlig` for *Team Selvbetjening* and *Økonomi* (KOMBIT constraint type) | Admin menu with **Skabeloner** only. Can create templates owned by those units (and their sub-units). |
-| `jens.t` | `tt-skabelonansvarlig` for *Borgerservice* (+ a KLE constraint that must be ignored) | Manages everything under Borgerservice, so also *Team Selvbetjening*. |
-| `peter.d` | `tt-skabelonansvarlig` for *Team Selvbetjening*, plus a duplicate row without scope | Only *Team Selvbetjening*; the unscoped duplicate grants nothing. |
-| `lars.f` | `tt-bruger` + `tt-logleser` for *Økonomi* and one unknown unit | Admin menu with **Log** only, showing only events from people in Økonomi. No IP addresses, no CSV export. |
-| `ida.l` | `tt-logleser` **without** a scope | Fails closed: no usable role, "ingen adgang" page. |
-| `ole.k` | `tt-skabelonansvarlig` for a unit that does not exist, plus an unknown role | No usable role, "ingen adgang". |
+| `mette.e` | `admin` (with a unit constraint that is ignored: Admin is never scoped) | Everything, organisation-wide. Admin menu: users, organisation, templates, log. Sync button. |
+| `rune.a` | `admin`, no constraint | Same. |
+| `anne.p` | `bruger` + `bygger` for *Team Selvbetjening* and *Økonomi* (KOMBIT constraint type) | Admin menu with **Centrale skabeloner** and **Organisation** (no Log, no Brugere). Can create templates owned by those units (and their sub-units). |
+| `jens.t` | `bygger` for *Borgerservice* (+ a KLE constraint that must be ignored) | Manages everything under Borgerservice, so also *Team Selvbetjening*. |
+| `peter.d` | `bygger` for *Team Selvbetjening*, plus a duplicate row without scope | Only *Team Selvbetjening*; the unscoped duplicate grants nothing. |
+| `lars.f` | `bruger` + `bygger` for *Økonomi* and one unknown unit (ignored) | Admin menu with **Centrale skabeloner** and **Organisation**, limited to *Økonomi*. No Log (log access is Admin only), no Brugere. |
+| `ida.l` | `bygger` **without** a scope | Fails closed: no usable role, "ingen adgang" page. |
+| `ole.k` | `bygger` for a unit that does not exist, plus an unknown role | No usable role, "ingen adgang". |
 | `sofie.s` | disabled in Rollekatalog | "ingen adgang". |
 | `ghost.u` | roles, but no position in the organisation | Never mirrored, "ingen adgang". |
 | `udenfor.p` | not in Rollekatalog at all | "ingen adgang". |
@@ -116,9 +115,9 @@ Use two browsers (or one normal and one private window) so you can be a manager 
 4. **Leaks are scrubbed.** Control panel → *Gentager hele system-prompten*, generate again: the answer contains `[udeladt]` instead of the prompt.
 5. **Changelog.** Edit the template as `anne.p` (note required), open it as `peter.d` in the other browser and save with the old version: you get the conflict dialog with a diff. The version history lists both versions with their notes and authors.
 6. **Re-organisation.** Control panel → *Digital Support flyttes under Økonomi* → sync. `bruger.b` no longer sees the template, because recipients are re-evaluated from the organisation on every read.
-7. **Access follows Rollekatalog.** *Anne mister skabelonansvarlig* → sync: her Administration menu disappears at once (roles are never cached). *Jens deaktiveres* → sync: his session ends and he is shown the login page.
+7. **Access follows Rollekatalog.** *Anne mister bygger-rollen* → sync: her Administration menu disappears at once (roles are never cached). *Jens deaktiveres* → sync: his session ends and he is shown the login page.
 8. **Rollekatalog misbehaves.** Try *nede (500)*, *forkert API-nøgle*, *ugyldigt JSON*, *tomt svar*, *2 ødelagte brugerrækker* (accepted and counted), *30 ødelagte brugerrækker* (rejected). Administration → Brugere og roller shows the status. Nothing changes in who has access while a sync fails.
-9. **Audit log.** As `mette.e` open Log: filter by type, export CSV. Then as `lars.f`: only Økonomi's events. In `psql referat_sim`, `select event_type, details from audit_events order by id desc limit 20;` shows ids, counts and codes only, never a title, prompt or name from a meeting.
+9. **Audit log.** As `mette.e` open Log: filter by type, export CSV. Then as `lars.f` (a scoped Bygger): the Log page is closed to him (403), because only Admin reads the log. In `psql referat_sim`, `select event_type, details from audit_events order by id desc limit 20;` shows ids, counts and codes only, never a title, prompt or name from a meeting.
 10. **Tamper test.** `update audit_events set outcome = outcome;` and `delete from audit_events;` are refused by the database.
 11. **SIEM feed.** `curl -H "X-Audit-Key: sim-feed-key" "http://localhost:3004/api/audit/feed?offset=0&size=20"`; without the header it answers 404.
 
@@ -128,7 +127,7 @@ Meeting events (`meeting.create`, `meeting.delete`, …) are reported by the bro
 
 The simulation cannot answer these; do them once on the municipality's test instance (details in `rollekatalog.md`):
 
-1. Create the IT system `os2taletiltekst` with the four roles; create API clients (READ_ACCESS and ORGANISATION).
+1. Create the IT system `os2taletiltekst` with the three roles (`admin`, `bygger`, `bruger`); create API clients (READ_ACCESS and ORGANISATION).
 2. Save one real answer of each endpoint (remove CPR first) and diff its shape against `__fixtures__/`. Look in particular at the org-unit **constraint type** strings and at whether inherited assignments appear.
 3. Run the first sync (`counts` in the sync panel): `assignmentsWithoutScope` and `assignmentsIgnoredRole` should be 0 or explainable.
 4. Log in through the real IdP and check the claim named in `DIRECTORY_USERID_CLAIM` carries the Rollekatalog userId (decode the id token); adjust `DIRECTORY_USERID_TRANSFORM`/`DIRECTORY_USERID_DOMAIN` if it is a UPN.

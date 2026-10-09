@@ -5,18 +5,16 @@ import type { AccessSource } from './config';
 import type { Capability, RoleKey } from './types';
 
 export const roleLabels: Record<RoleKey, string> = {
-  'tt-bruger': 'Bruger',
-  'tt-skabelonansvarlig': 'Skabelonansvarlig',
-  'tt-logleser': 'Loglæser',
-  'tt-administrator': 'Administrator',
+  'bruger': 'Bruger',
+  'bygger': 'Bygger',
+  'admin': 'Admin',
 };
 
 export const roleDescriptions: Record<RoleKey, string> = {
-  'tt-bruger': 'Kan bruge løsningen og de skabeloner, der er stillet til rådighed.',
-  'tt-skabelonansvarlig':
-    'Kan administrere skabeloner og se organisationen for de enheder, rollen er tildelt. Uden enhed (fx fra login) gælder den hele organisationen: superbrugeren for fælles prompts.',
-  'tt-logleser': 'Kan læse og eksportere loggen samt se organisationen.',
-  'tt-administrator': 'Har alle rettigheder, herunder styring af brugere, roller og synkronisering.',
+  'bruger': 'Kan bruge løsningen og de skabeloner, der er stillet til rådighed.',
+  'bygger':
+    'Superbruger: kan oprette og udbrede centrale skabeloner og se organisationen for de enheder, rollen er tildelt. Uden enhed (fx fra login) gælder den hele organisationen.',
+  'admin': 'Har alle rettigheder: administration, styring af brugere, roller og synkronisering samt log og eksport.',
 };
 
 export const capabilityLabels: Record<Capability, string> = {

@@ -71,7 +71,7 @@ describe.skipIf(!hasPg)('identity link and bootstrap (real Postgres)', () => {
       }
       const results = await Promise.all([maybeBootstrapAdmin('u1', runner), maybeBootstrapAdmin('u2', runner)]);
       expect(results.filter((r) => r.granted)).toHaveLength(1);
-      const admins = await c.query("SELECT 1 FROM role_assignments WHERE role_key = 'tt-administrator'");
+      const admins = await c.query("SELECT 1 FROM role_assignments WHERE role_key = 'admin'");
       expect(admins.rowCount).toBe(1);
       const flags = await c.query('SELECT key FROM system_flags');
       expect(flags.rows).toEqual([{ key: 'bootstrap_admin_done' }]);
@@ -98,7 +98,7 @@ describe.skipIf(!hasPg)('identity link and bootstrap (real Postgres)', () => {
       // Operator recovery: delete the flag, the next allow-listed SSO login bootstraps again.
       await c.query("DELETE FROM system_flags WHERE key = 'bootstrap_admin_done'");
       expect(await maybeBootstrapAdmin('u2', runner)).toEqual({ granted: true, reason: 'granted' });
-      expect((await c.query("SELECT 1 FROM role_assignments WHERE role_key = 'tt-administrator'")).rowCount).toBe(1);
+      expect((await c.query("SELECT 1 FROM role_assignments WHERE role_key = 'admin'")).rowCount).toBe(1);
       expect((await c.query('SELECT 1 FROM system_flags')).rowCount).toBe(1);
       await close();
     }));

@@ -17,7 +17,7 @@ interface RoleDefinition {
 // The one place the role matrix lives. Exhaustive Record: adding a RoleKey
 // without an entry here is a compile error.
 export const ROLE_DEFINITIONS: Record<RoleKey, RoleDefinition> = {
-  'tt-bruger': {
+  'bruger': {
     capabilities: ['template.use'],
     globalScopeAllowed: false,
   },
@@ -25,15 +25,11 @@ export const ROLE_DEFINITIONS: Record<RoleKey, RoleDefinition> = {
   // what an IdP claim can grant (a claim carries no org unit). Scoped grants (local /
   // Rollekatalog) still work; a NULL scope from a source that cannot be global stays
   // the caller's problem, see dropStaleAssignments and the grant validation.
-  'tt-skabelonansvarlig': {
+  'bygger': {
     capabilities: ['template.use', 'template.manage', 'directory.read'],
     globalScopeAllowed: true,
   },
-  'tt-logleser': {
-    capabilities: ['template.use', 'audit.read', 'audit.export', 'directory.read'],
-    globalScopeAllowed: true,
-  },
-  'tt-administrator': {
+  'admin': {
     capabilities: [...CAPABILITIES],
     globalScopeAllowed: true,
   },
@@ -48,7 +44,7 @@ export const SCOPED_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>(
 // Capabilities that cannot be narrowed to an org unit. They only take effect
 // from a GLOBAL assignment: a role granted for one unit must not quietly hand
 // out whole-system power (a "unit administrator" could otherwise promote
-// themselves to a global one; a unit log reader could export the whole log).
+// themselves to a global one; a unit-scoped grant could export the whole log).
 export const GLOBAL_ONLY_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   'audit.export',
   'access.manage',
@@ -107,7 +103,7 @@ export function buildPrincipalFromAssignments(input: BuildPrincipalInput): Princ
   );
 
   const roles = new Set<RoleKey>(active.map((a) => a.roleKey));
-  if (!requireRoleToLogin) roles.add('tt-bruger');
+  if (!requireRoleToLogin) roles.add('bruger');
 
   const capabilities = new Set<Capability>();
   // The implicit baseline is global by nature; assignments are global only
@@ -116,7 +112,7 @@ export function buildPrincipalFromAssignments(input: BuildPrincipalInput): Princ
     role: a.roleKey,
     global: a.scopeOrgUnitUuid === null && ROLE_DEFINITIONS[a.roleKey].globalScopeAllowed,
   }));
-  if (!requireRoleToLogin) grants.push({ role: 'tt-bruger', global: true });
+  if (!requireRoleToLogin) grants.push({ role: 'bruger', global: true });
   for (const { role, global } of grants) {
     for (const cap of ROLE_DEFINITIONS[role].capabilities) {
       if (GLOBAL_ONLY_CAPABILITIES.has(cap) && !global) continue;

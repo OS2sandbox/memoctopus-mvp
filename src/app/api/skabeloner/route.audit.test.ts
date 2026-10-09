@@ -3,7 +3,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The access gate (requireAppAccess) resolves the live principal; a plain
-// tt-bruger unless a test says otherwise.
+// bruger unless a test says otherwise.
 vi.mock('@/lib/authz/principal', async () => ({
   resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
 }));

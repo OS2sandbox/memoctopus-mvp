@@ -84,7 +84,7 @@ export function claimsFreshnessSeconds(override?: number | null, source: AccessS
  * "No role, no access". Default off, except in claims mode: there the roles come from the IdP, so a
  * person the IdP maps to no role (a stranger from another tenant, a password account, somebody whose
  * group was not mapped) must be refused rather than get the baseline. Explicit REQUIRE_ROLE_TO_LOGIN=false
- * is the only way to open it up there (then ordinary users need no mapping to tt-bruger).
+ * is the only way to open it up there (then ordinary users need no mapping to bruger).
  */
 export function requireRoleToLogin(): boolean {
   const v = clean('REQUIRE_ROLE_TO_LOGIN').toLowerCase();

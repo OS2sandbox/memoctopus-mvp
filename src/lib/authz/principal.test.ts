@@ -28,7 +28,7 @@ function row(over: Record<string, unknown> = {}) {
   return {
     directoryUserUuid: DU,
     disabled: false,
-    roleKey: 'tt-logleser',
+    roleKey: 'admin',
     scopeOrgUnitUuid: null,
     includeDescendants: true,
     startDate: null,
@@ -46,12 +46,12 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe('resolvePrincipal', () => {
-  it('gives a user with no directory row the tt-bruger baseline', async () => {
+  it('gives a user with no directory row the bruger baseline', async () => {
     const p = await resolvePrincipal('u1');
     expect(p).toMatchObject({
       userId: 'u1',
       directoryUserUuid: null,
-      roles: ['tt-bruger'],
+      roles: ['bruger'],
       capabilities: ['template.use'],
       disabled: false,
       source: 'baseline',
@@ -69,21 +69,21 @@ describe('resolvePrincipal', () => {
     rowsRef.rows = [row({ roleKey: null, includeDescendants: null, source: null })];
     const p = await resolvePrincipal('u1');
     expect(p.directoryUserUuid).toBe(DU);
-    expect(p.roles).toEqual(['tt-bruger']);
+    expect(p.roles).toEqual(['bruger']);
     expect(p.source).toBe('baseline');
   });
 
   it('resolves an assigned role with global scope', async () => {
     rowsRef.rows = [row()];
     const p = await resolvePrincipal('u1');
-    expect(p.roles).toEqual(['tt-bruger', 'tt-logleser']);
+    expect(p.roles).toEqual(['bruger', 'admin']);
     expect(p.capabilities).toContain('audit.read');
     expect(p.scopes['audit.read']).toEqual({ global: true, roots: [] });
     expect(p.source).toBe('local');
   });
 
   it('keeps an org-unit scope on a scoped role', async () => {
-    rowsRef.rows = [row({ roleKey: 'tt-skabelonansvarlig', scopeOrgUnitUuid: OU, includeDescendants: false })];
+    rowsRef.rows = [row({ roleKey: 'bygger', scopeOrgUnitUuid: OU, includeDescendants: false })];
     const p = await resolvePrincipal('u1');
     expect(p.scopes['template.manage']).toEqual({
       global: false,
@@ -91,14 +91,14 @@ describe('resolvePrincipal', () => {
     });
   });
 
-  it('tt-skabelonansvarlig with NULL scope is global (the superuser)', async () => {
-    rowsRef.rows = [row({ roleKey: 'tt-skabelonansvarlig', scopeOrgUnitUuid: null })];
+  it('bygger with NULL scope is global (the superuser)', async () => {
+    rowsRef.rows = [row({ roleKey: 'bygger', scopeOrgUnitUuid: null })];
     const p = await resolvePrincipal('u1');
     expect(p.scopes['template.manage']).toEqual({ global: true, roots: [] });
   });
 
   it('a disabled directory user yields a disabled principal without roles', async () => {
-    rowsRef.rows = [row({ disabled: true, roleKey: 'tt-administrator' })];
+    rowsRef.rows = [row({ disabled: true, roleKey: 'admin' })];
     const p = await resolvePrincipal('u1');
     expect(p.disabled).toBe(true);
     expect(p.roles).toEqual([]);
@@ -107,11 +107,11 @@ describe('resolvePrincipal', () => {
 
   it('ignores expired and not-yet-started assignments', async () => {
     rowsRef.rows = [
-      row({ roleKey: 'tt-administrator', stopDate: new Date(Date.now() - 1000) }),
-      row({ roleKey: 'tt-logleser', startDate: new Date(Date.now() + 60_000) }),
+      row({ roleKey: 'admin', stopDate: new Date(Date.now() - 1000) }),
+      row({ roleKey: 'admin', startDate: new Date(Date.now() + 60_000) }),
     ];
     const p = await resolvePrincipal('u1');
-    expect(p.roles).toEqual(['tt-bruger']);
+    expect(p.roles).toEqual(['bruger']);
   });
 
   it('tags the principal rollekatalog when a rollekatalog assignment is active', async () => {
@@ -122,20 +122,20 @@ describe('resolvePrincipal', () => {
 
   it('ignores leftover source=local assignments once ACCESS_SOURCE=rollekatalog (they cannot be revoked there)', async () => {
     vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
-    rowsRef.rows = [row({ roleKey: 'tt-administrator', source: 'local' })];
+    rowsRef.rows = [row({ roleKey: 'admin', source: 'local' })];
     const p = await resolvePrincipal('u1');
-    expect(p.roles).toEqual(['tt-bruger']);
+    expect(p.roles).toEqual(['bruger']);
     expect(p.capabilities).not.toContain('access.manage');
     expect(p.source).toBe('baseline');
   });
 
   it('still honours rollekatalog assignments in rollekatalog mode, and local ones in local mode', async () => {
     vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
-    rowsRef.rows = [row({ roleKey: 'tt-logleser', source: 'rollekatalog' }), row({ roleKey: 'tt-administrator', source: 'local' })];
-    expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger', 'tt-logleser']);
+    rowsRef.rows = [row({ roleKey: 'admin', source: 'rollekatalog' }), row({ roleKey: 'admin', source: 'local' })];
+    expect((await resolvePrincipal('u1')).roles).toEqual(['bruger', 'admin']);
 
     vi.stubEnv('ACCESS_SOURCE', 'local');
-    rowsRef.rows = [row({ roleKey: 'tt-administrator', source: 'local' })];
+    rowsRef.rows = [row({ roleKey: 'admin', source: 'local' })];
     expect((await resolvePrincipal('u1')).capabilities).toContain('access.manage');
   });
 
@@ -171,39 +171,39 @@ describe('dropStaleAssignments (pure)', () => {
     ['unreadable date', new Date('nope'), false],
     ['in the future (clock skew)', new Date(NOW.getTime() + 5_000), true],
   ])('rollekatalog row, %s -> kept=%s', (_label, syncedAt, kept) => {
-    expect(rk('rollekatalog', [r('rollekatalog', 'tt-logleser', syncedAt as Date | null | undefined)])).toEqual(
-      kept ? ['tt-logleser'] : [],
+    expect(rk('rollekatalog', [r('rollekatalog', 'admin', syncedAt as Date | null | undefined)])).toEqual(
+      kept ? ['admin'] : [],
     );
   });
 
   it('fails closed on an unknown source in either mode', () => {
-    expect(rk('rollekatalog', [r('other-source', 'tt-logleser', NOW)])).toEqual([]);
-    expect(rk('local', [r('other-source', 'tt-logleser', NOW)])).toEqual([]);
+    expect(rk('rollekatalog', [r('other-source', 'admin', NOW)])).toEqual([]);
+    expect(rk('local', [r('other-source', 'admin', NOW)])).toEqual([]);
   });
 
   it('rollekatalog mode ignores local rows regardless of age', () => {
-    expect(rk('rollekatalog', [r('local', 'tt-administrator', NOW)])).toEqual([]);
+    expect(rk('rollekatalog', [r('local', 'admin', NOW)])).toEqual([]);
   });
 
   it('local mode ignores rollekatalog rows (they cannot be edited or revoked there), fresh or not', () => {
-    expect(rk('local', [r('rollekatalog', 'tt-administrator', NOW), r('rollekatalog', 'tt-logleser', null)])).toEqual([]);
+    expect(rk('local', [r('rollekatalog', 'admin', NOW), r('rollekatalog', 'admin', null)])).toEqual([]);
   });
 
   it('local mode keeps local rows, whatever their synced_at', () => {
-    expect(rk('local', [r('local', 'tt-logleser', null), r('local', 'tt-administrator', ago(10_000_000))])).toEqual([
-      'tt-logleser',
-      'tt-administrator',
+    expect(rk('local', [r('local', 'admin', null), r('local', 'admin', ago(10_000_000))])).toEqual([
+      'admin',
+      'admin',
     ]);
   });
 
   it('mixed rows are filtered row by row', () => {
     expect(
       rk('rollekatalog', [
-        r('rollekatalog', 'tt-administrator', ago(500)),
-        r('rollekatalog', 'tt-logleser', ago(5)),
-        r('local', 'tt-skabelonansvarlig', ago(5)),
+        r('rollekatalog', 'admin', ago(500)),
+        r('rollekatalog', 'admin', ago(5)),
+        r('local', 'bygger', ago(5)),
       ]),
-    ).toEqual(['tt-logleser']);
+    ).toEqual(['admin']);
   });
 });
 
@@ -215,10 +215,10 @@ describe('resolvePrincipal staleness and mode symmetry', () => {
 
   const old = () => new Date(Date.now() - 7_200_000);
 
-  it('a stale rollekatalog elevated role is dropped; the baseline tt-bruger stays', async () => {
-    rowsRef.rows = [row({ roleKey: 'tt-administrator', source: 'rollekatalog', syncedAt: old() })];
+  it('a stale rollekatalog elevated role is dropped; the baseline bruger stays', async () => {
+    rowsRef.rows = [row({ roleKey: 'admin', source: 'rollekatalog', syncedAt: old() })];
     const p = await resolvePrincipal('u1');
-    expect(p.roles).toEqual(['tt-bruger']);
+    expect(p.roles).toEqual(['bruger']);
     expect(p.capabilities).toEqual(['template.use']);
     expect(p.source).toBe('baseline');
     expect(p.disabled).toBe(false);
@@ -226,7 +226,7 @@ describe('resolvePrincipal staleness and mode symmetry', () => {
 
   it('keeps the directory link and a REQUIRE_ROLE_TO_LOGIN principal empty when every row is stale', async () => {
     vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'true');
-    rowsRef.rows = [row({ roleKey: 'tt-logleser', source: 'rollekatalog', syncedAt: null })];
+    rowsRef.rows = [row({ roleKey: 'admin', source: 'rollekatalog', syncedAt: null })];
     const p = await resolvePrincipal('u1');
     expect(p.directoryUserUuid).toBe(DU);
     expect(p.roles).toEqual([]);
@@ -234,57 +234,57 @@ describe('resolvePrincipal staleness and mode symmetry', () => {
 
   it('a fresh row survives next to a stale one, and source stays truthful', async () => {
     rowsRef.rows = [
-      row({ roleKey: 'tt-administrator', source: 'rollekatalog', syncedAt: old() }),
-      row({ roleKey: 'tt-logleser', source: 'rollekatalog', syncedAt: new Date() }),
+      row({ roleKey: 'admin', source: 'rollekatalog', syncedAt: old() }),
+      row({ roleKey: 'bygger', source: 'rollekatalog', syncedAt: new Date() }),
     ];
     const p = await resolvePrincipal('u1');
-    expect(p.roles).toEqual(['tt-bruger', 'tt-logleser']);
+    expect(p.roles).toEqual(['bruger', 'bygger']);
     expect(p.capabilities).not.toContain('access.manage');
     expect(p.source).toBe('rollekatalog');
   });
 
   it('uses ROLE_STALE_MAX_SECONDS at call time', async () => {
-    rowsRef.rows = [row({ roleKey: 'tt-logleser', source: 'rollekatalog', syncedAt: new Date(Date.now() - 120_000) })];
+    rowsRef.rows = [row({ roleKey: 'admin', source: 'rollekatalog', syncedAt: new Date(Date.now() - 120_000) })];
     vi.stubEnv('ROLE_STALE_MAX_SECONDS', '60');
-    expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger']);
+    expect((await resolvePrincipal('u1')).roles).toEqual(['bruger']);
     vi.stubEnv('ROLE_STALE_MAX_SECONDS', '600');
-    expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger', 'tt-logleser']);
+    expect((await resolvePrincipal('u1')).roles).toEqual(['bruger', 'admin']);
   });
 
   it('an invalid ROLE_STALE_MAX_SECONDS falls back to 24 hours', async () => {
     vi.stubEnv('ROLE_STALE_MAX_SECONDS', 'soon');
     rowsRef.rows = [
-      row({ roleKey: 'tt-logleser', source: 'rollekatalog', syncedAt: new Date(Date.now() - 23 * 3_600_000) }),
-      row({ roleKey: 'tt-administrator', source: 'rollekatalog', syncedAt: new Date(Date.now() - 25 * 3_600_000) }),
+      row({ roleKey: 'admin', source: 'rollekatalog', syncedAt: new Date(Date.now() - 23 * 3_600_000) }),
+      row({ roleKey: 'admin', source: 'rollekatalog', syncedAt: new Date(Date.now() - 25 * 3_600_000) }),
     ];
-    expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger', 'tt-logleser']);
+    expect((await resolvePrincipal('u1')).roles).toEqual(['bruger', 'admin']);
   });
 
   it('in local mode a rollekatalog row is ignored even when fresh, and local rows still work', async () => {
     vi.stubEnv('ACCESS_SOURCE', 'local');
     rowsRef.rows = [
-      row({ roleKey: 'tt-administrator', source: 'rollekatalog', syncedAt: new Date() }),
-      row({ roleKey: 'tt-logleser', source: 'local' }),
+      row({ roleKey: 'admin', source: 'rollekatalog', syncedAt: new Date() }),
+      row({ roleKey: 'bygger', source: 'local' }),
     ];
     const p = await resolvePrincipal('u1');
-    expect(p.roles).toEqual(['tt-bruger', 'tt-logleser']);
+    expect(p.roles).toEqual(['bruger', 'bygger']);
     expect(p.capabilities).not.toContain('access.manage');
     expect(p.source).toBe('local');
   });
 
   it('in rollekatalog mode a local row is ignored next to a fresh rollekatalog row', async () => {
     rowsRef.rows = [
-      row({ roleKey: 'tt-administrator', source: 'local' }),
-      row({ roleKey: 'tt-logleser', source: 'rollekatalog', syncedAt: new Date() }),
+      row({ roleKey: 'admin', source: 'local' }),
+      row({ roleKey: 'admin', source: 'rollekatalog', syncedAt: new Date() }),
     ];
-    expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger', 'tt-logleser']);
+    expect((await resolvePrincipal('u1')).roles).toEqual(['bruger', 'admin']);
   });
 });
 
 describe('resolvePrincipal with an invalid ACCESS_SOURCE', () => {
   it.each(['rolekatalog', 'ldap'])('throws ConfigError for "%s" instead of resolving under local mode', async (v) => {
     vi.stubEnv('ACCESS_SOURCE', v);
-    rowsRef.rows = [row({ roleKey: 'tt-administrator' })];
+    rowsRef.rows = [row({ roleKey: 'admin' })];
     await expect(resolvePrincipal('u1')).rejects.toMatchObject({ name: 'ConfigError' });
   });
 });
@@ -300,15 +300,15 @@ describe('dropStaleAssignments, claims mode (pure)', () => {
     ['NULL synced_at', null, false],
     ['unreadable date', new Date('nope'), false],
   ])('claims row, %s -> kept=%s (against ROLE_CLAIMS_MAX_SECONDS, not the Rollekatalog limit)', (_l, syncedAt, kept) => {
-    expect(cl([r('claims', 'tt-administrator', syncedAt as Date | null)])).toEqual(kept ? ['tt-administrator'] : []);
+    expect(cl([r('claims', 'admin', syncedAt as Date | null)])).toEqual(kept ? ['admin'] : []);
   });
 
   it('local and rollekatalog rows grant nothing in claims mode, however fresh; unknown sources neither', () => {
-    expect(cl([r('local', 'tt-administrator', NOW), r('rollekatalog', 'tt-administrator', NOW), r('other', 'tt-administrator', NOW)])).toEqual([]);
+    expect(cl([r('local', 'admin', NOW), r('rollekatalog', 'admin', NOW), r('other', 'admin', NOW)])).toEqual([]);
   });
 
   it('claims rows grant nothing in the other modes', () => {
-    const rows = [r('claims', 'tt-administrator', NOW)];
+    const rows = [r('claims', 'admin', NOW)];
     expect(dropStaleAssignments(rows, { now: NOW, mode: 'local', maxAgeSeconds: 100 })).toEqual([]);
     expect(dropStaleAssignments(rows, { now: NOW, mode: 'rollekatalog', maxAgeSeconds: 100 })).toEqual([]);
   });
@@ -324,22 +324,22 @@ describe('resolvePrincipal in claims mode', () => {
   });
 
   it('a fresh claims role resolves, tagged claims; global NULL scope on a role that may be global', async () => {
-    rowsRef.rows = [row({ roleKey: 'tt-skabelonansvarlig', source: 'claims', syncedAt: new Date() })];
+    rowsRef.rows = [row({ roleKey: 'bygger', source: 'claims', syncedAt: new Date() })];
     const p = await resolvePrincipal('u1');
-    expect(p.roles).toEqual(['tt-bruger', 'tt-skabelonansvarlig']);
+    expect(p.roles).toEqual(['bruger', 'bygger']);
     expect(p.scopes['template.manage']).toEqual({ global: true, roots: [] });
     expect(p.source).toBe('claims');
   });
 
   it('access.manage still needs a GLOBAL administrator: a claims admin row is NULL-scoped, so it has it', async () => {
-    rowsRef.rows = [row({ roleKey: 'tt-administrator', source: 'claims', syncedAt: new Date() })];
+    rowsRef.rows = [row({ roleKey: 'admin', source: 'claims', syncedAt: new Date() })];
     expect((await resolvePrincipal('u1')).capabilities).toEqual(expect.arrayContaining(['access.manage', 'sync.run', 'audit.export']));
   });
 
-  it('a snapshot older than ROLE_CLAIMS_MAX_SECONDS grants nothing: the baseline tt-bruger only', async () => {
-    rowsRef.rows = [row({ roleKey: 'tt-administrator', source: 'claims', syncedAt: new Date(Date.now() - 2 * 3_600_000) })];
+  it('a snapshot older than ROLE_CLAIMS_MAX_SECONDS grants nothing: the baseline bruger only', async () => {
+    rowsRef.rows = [row({ roleKey: 'admin', source: 'claims', syncedAt: new Date(Date.now() - 2 * 3_600_000) })];
     const p = await resolvePrincipal('u1');
-    expect(p.roles).toEqual(['tt-bruger']);
+    expect(p.roles).toEqual(['bruger']);
     expect(p.capabilities).toEqual(['template.use']);
     expect(p.source).toBe('baseline');
     expect(p.directoryUserUuid).toBe(DU);
@@ -347,40 +347,40 @@ describe('resolvePrincipal in claims mode', () => {
 
   it('with REQUIRE_ROLE_TO_LOGIN a stale snapshot leaves the person without any role (refused at login)', async () => {
     vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'true');
-    rowsRef.rows = [row({ roleKey: 'tt-administrator', source: 'claims', syncedAt: new Date(Date.now() - 2 * 3_600_000) })];
+    rowsRef.rows = [row({ roleKey: 'admin', source: 'claims', syncedAt: new Date(Date.now() - 2 * 3_600_000) })];
     expect((await resolvePrincipal('u1')).roles).toEqual([]);
   });
 
   it('reads ROLE_CLAIMS_MAX_SECONDS at call time; an unusable value means the 8 hour default, never "unlimited"', async () => {
-    rowsRef.rows = [row({ roleKey: 'tt-logleser', source: 'claims', syncedAt: new Date(Date.now() - 600_000) })];
+    rowsRef.rows = [row({ roleKey: 'admin', source: 'claims', syncedAt: new Date(Date.now() - 600_000) })];
     vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', '300');
-    expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger']);
+    expect((await resolvePrincipal('u1')).roles).toEqual(['bruger']);
     vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', '3600');
-    expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger', 'tt-logleser']);
+    expect((await resolvePrincipal('u1')).roles).toEqual(['bruger', 'admin']);
     vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', 'forever');
-    rowsRef.rows = [row({ roleKey: 'tt-logleser', source: 'claims', syncedAt: new Date(Date.now() - 9 * 3_600_000) })];
-    expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger']);
+    rowsRef.rows = [row({ roleKey: 'admin', source: 'claims', syncedAt: new Date(Date.now() - 9 * 3_600_000) })];
+    expect((await resolvePrincipal('u1')).roles).toEqual(['bruger']);
   });
 
   it('local and rollekatalog rows are ignored next to a fresh claims row', async () => {
     rowsRef.rows = [
-      row({ roleKey: 'tt-administrator', source: 'local' }),
-      row({ roleKey: 'tt-administrator', source: 'rollekatalog', syncedAt: new Date() }),
-      row({ roleKey: 'tt-logleser', source: 'claims', syncedAt: new Date() }),
+      row({ roleKey: 'admin', source: 'local' }),
+      row({ roleKey: 'admin', source: 'rollekatalog', syncedAt: new Date() }),
+      row({ roleKey: 'bygger', source: 'claims', syncedAt: new Date() }),
     ];
     const p = await resolvePrincipal('u1');
-    expect(p.roles).toEqual(['tt-bruger', 'tt-logleser']);
+    expect(p.roles).toEqual(['bruger', 'bygger']);
     expect(p.capabilities).not.toContain('access.manage');
   });
 
   it('a claims row is ignored once the installation is back in local mode', async () => {
     vi.stubEnv('ACCESS_SOURCE', 'local');
-    rowsRef.rows = [row({ roleKey: 'tt-administrator', source: 'claims', syncedAt: new Date() })];
-    expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger']);
+    rowsRef.rows = [row({ roleKey: 'admin', source: 'claims', syncedAt: new Date() })];
+    expect((await resolvePrincipal('u1')).roles).toEqual(['bruger']);
   });
 
   it('a disabled directory row refuses the person whatever the claims say', async () => {
-    rowsRef.rows = [row({ disabled: true, roleKey: 'tt-administrator', source: 'claims', syncedAt: new Date() })];
+    rowsRef.rows = [row({ disabled: true, roleKey: 'admin', source: 'claims', syncedAt: new Date() })];
     const p = await resolvePrincipal('u1');
     expect(p.disabled).toBe(true);
     expect(p.roles).toEqual([]);
@@ -402,32 +402,32 @@ describe('claims mode requires a mapped role by default', () => {
 
   it('a stale or foreign-source row leaves nobody with a role either', async () => {
     rowsRef.rows = [
-      row({ roleKey: 'tt-administrator', source: 'claims', syncedAt: new Date(Date.now() - 2 * 3_600_000) }),
-      row({ roleKey: 'tt-administrator', source: 'local' }),
+      row({ roleKey: 'admin', source: 'claims', syncedAt: new Date(Date.now() - 2 * 3_600_000) }),
+      row({ roleKey: 'admin', source: 'local' }),
     ];
     const p = await resolvePrincipal('u1');
     expect(p.roles).toEqual([]);
     expect(loginRefusal(p)).toBe('no_role');
   });
 
-  it('a mapped role (even just tt-bruger) logs in', async () => {
-    rowsRef.rows = [row({ roleKey: 'tt-bruger', source: 'claims', syncedAt: new Date() })];
+  it('a mapped role (even just bruger) logs in', async () => {
+    rowsRef.rows = [row({ roleKey: 'bruger', source: 'claims', syncedAt: new Date() })];
     const p = await resolvePrincipal('u1');
-    expect(p.roles).toEqual(['tt-bruger']);
+    expect(p.roles).toEqual(['bruger']);
     expect(loginRefusal(p)).toBeNull();
   });
 
   it('only an explicit REQUIRE_ROLE_TO_LOGIN=false brings the baseline back', async () => {
     vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'false');
     const p = await resolvePrincipal('u1');
-    expect(p.roles).toEqual(['tt-bruger']);
+    expect(p.roles).toEqual(['bruger']);
     expect(loginRefusal(p)).toBeNull();
   });
 
   it('the other modes keep the baseline by default', async () => {
     for (const mode of ['local', 'rollekatalog']) {
       vi.stubEnv('ACCESS_SOURCE', mode);
-      expect((await resolvePrincipal('u1')).roles).toEqual(['tt-bruger']);
+      expect((await resolvePrincipal('u1')).roles).toEqual(['bruger']);
     }
   });
 });

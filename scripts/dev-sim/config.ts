@@ -90,7 +90,7 @@ export function appEnv(databaseUrl: string, mode?: string): Record<string, strin
     ROLLEKATALOG_ORG_API_KEY: 'mock-org-key-0000',
     ROLLEKATALOG_ITSYSTEM_ID: 'os2taletiltekst',
     ROLLEKATALOG_DOMAIN: '',
-    ROLLEKATALOG_GLOBAL_ROLES: 'tt-administrator',
+    ROLLEKATALOG_GLOBAL_ROLES: 'admin',
     DIRECTORY_MATCH: 'userid-claim',
     DIRECTORY_USERID_CLAIM: 'preferred_username',
     INTERNAL_CRON_SECRET: SIM.cronSecret,

@@ -20,8 +20,8 @@
 //     threshold like any other missing user.
 //   - removal threshold: disabling or deleting too much aborts ('removal_threshold')
 //     unless the admin forces it. Three ratios are checked: enabled users disabled, all
-//     mirrored assignments removed, and (separately, because tt-bruger rows dominate the
-//     total) ELEVATED assignments (every role but tt-bruger) removed.
+//     mirrored assignments removed, and (separately, because bruger rows dominate the
+//     total) ELEVATED assignments (every role but bruger) removed.
 //
 // Every run leaves a sync_runs row (the status panel reads it). The sync is NOT in the
 // audit log: that records what people did, not scheduled housekeeping.
@@ -102,15 +102,15 @@ interface MirrorPlan {
     users: { removed: number; base: number };
     assignments: { removed: number; base: number };
     /**
-     * Assignments of every role except the baseline tt-bruger. The total above is dominated by
-     * one tt-bruger row per user, so losing most administrators would hide in it.
+     * Assignments of every role except the baseline bruger. The total above is dominated by
+     * one bruger row per user, so losing most administrators would hide in it.
      */
     elevatedAssignments: { removed: number; base: number };
   };
 }
 
 /** The baseline role every enabled user holds; every other role is "elevated" for the removal guard. */
-const BASELINE_ROLE = 'tt-bruger';
+const BASELINE_ROLE = 'bruger';
 const isElevated = (roleKey: string): boolean => roleKey !== BASELINE_ROLE;
 
 const pairKey = (...parts: Array<string | null>): string => parts.map((p) => p ?? '\u0000').join('|');

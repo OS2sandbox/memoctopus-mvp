@@ -207,10 +207,10 @@ describe('POST /api/admin/central-templates', () => {
     });
 
     it('403 with the Danish reason when the service says only a global manager may', async () => {
-      mockCreate.mockRejectedValue(new ForbiddenError('Kun en global skabelonansvarlig', 'principal_targets_need_global'));
+      mockCreate.mockRejectedValue(new ForbiddenError('Kun en global bygger', 'principal_targets_need_global'));
       const res = await post({ ...VALID, principalTargets: [{ kind: 'role', identifier: 'x' }] });
       expect(res.status).toBe(403);
-      expect(await res.json()).toEqual({ error: 'Kun en global skabelonansvarlig', code: 'principal_targets_need_global' });
+      expect(await res.json()).toEqual({ error: 'Kun en global bygger', code: 'principal_targets_need_global' });
     });
 
     it('lists the audience of each template, named, in the DTO whitelist', async () => {

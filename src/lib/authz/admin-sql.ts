@@ -3,7 +3,7 @@
 // revoking (access-admin.ts) and the first-admin bootstrap (bootstrap.ts).
 // If they drift apart, bootstrap refuses forever while nobody can log in.
 
-export const ADMIN_ROLE = 'tt-administrator';
+export const ADMIN_ROLE = 'admin';
 // Bootstrap and the last-administrator guard serialise on this one advisory
 // lock, so "the last administrator" is decided against one consistent view.
 // Any constant works; it only has to be the same everywhere.

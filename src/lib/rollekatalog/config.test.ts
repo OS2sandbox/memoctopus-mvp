@@ -121,13 +121,13 @@ describe('simple settings', () => {
     expect(scopeDescendants()).toBe(true);
   });
   it('global roles: default administrator only; none; unknown tokens dropped', () => {
-    expect(globalRoles()).toEqual(['tt-administrator']);
-    vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'tt-administrator, tt-logleser,tt-logleser');
-    expect(globalRoles()).toEqual(['tt-administrator', 'tt-logleser']);
+    expect(globalRoles()).toEqual(['admin']);
+    vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'admin, bygger,bygger');
+    expect(globalRoles()).toEqual(['admin', 'bygger']);
     vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'none');
     expect(globalRoles()).toEqual([]);
     vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'root,superuser');
-    expect(globalRoles()).toEqual(['tt-administrator']);
+    expect(globalRoles()).toEqual(['admin']);
   });
   it('removal percent and stale seconds validate and fall back', () => {
     expect(syncMaxRemovalPercent()).toBe(30);

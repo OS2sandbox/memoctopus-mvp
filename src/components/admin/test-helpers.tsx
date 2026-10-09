@@ -10,7 +10,7 @@ export const json = (body: unknown, status = 200) =>
 
 export const ADMIN_ME: MeResponse = {
   user: { id: 'admin-1', name: 'Anne Admin', email: 'anne@example.dk' },
-  roles: ['tt-bruger', 'tt-administrator'],
+  roles: ['bruger', 'admin'],
   capabilities: ['template.use', 'template.manage', 'audit.read', 'audit.export', 'directory.read', 'access.manage', 'sync.run'],
   scopes: {
     'template.manage': { global: true, roots: [] },
@@ -27,11 +27,11 @@ export const CLAIMS_ME: MeResponse = { ...ADMIN_ME, source: 'claims', readOnly: 
 /** Local mode with the kill switch ACCESS_LOCAL_ADMIN=false. */
 export const LOCKED_LOCAL_ME: MeResponse = { ...ADMIN_ME, source: 'local', readOnly: true };
 
-/** A skabelonansvarlig: may read the directory (scoped) but not manage access. */
+/** A bygger: may read the directory (scoped) but not manage access. */
 export const READER_ME: MeResponse = {
   ...ADMIN_ME,
   user: { id: 'sk-1', name: 'Sven Skabelon', email: 'sven@example.dk' },
-  roles: ['tt-bruger', 'tt-skabelonansvarlig'],
+  roles: ['bruger', 'bygger'],
   capabilities: ['template.use', 'template.manage', 'directory.read'],
   scopes: {
     'template.manage': { global: false, roots: [] },

@@ -320,15 +320,15 @@ describe('AUTH_CONFIG_FILE', () => {
       writeConfig({
         providers: [OIDC],
         roles: {
-          appRoleMap: { admin: 'tt-administrator', su: { role: 'tt-skabelonansvarlig' }, off: { role: 'tt-logleser', global: false } },
-          groupRoleMap: { 'g-1': 'tt-bruger' },
+          appRoleMap: { admin: 'admin', su: { role: 'bygger' }, off: { role: 'admin', global: false } },
+          groupRoleMap: { 'g-1': 'bruger' },
         },
       });
       const { roles } = loadAuthConfig();
       if (roles.state !== 'ok') throw new Error('expected ok');
       expect([...roles.appRoleMap]).toEqual([
-        ['admin', { role: 'tt-administrator', global: true }],
-        ['su', { role: 'tt-skabelonansvarlig', global: true }],
+        ['admin', { role: 'admin', global: true }],
+        ['su', { role: 'bygger', global: true }],
       ]);
       expect([...roles.groupRoleMap.keys()]).toEqual(['g-1']);
     });
@@ -340,9 +340,9 @@ describe('AUTH_CONFIG_FILE', () => {
 
     it.each([
       ['an unknown role key', { appRoleMap: { x: 'tt-god' } }],
-      ['a misspelt section key', { appRolMap: { x: 'tt-administrator' } }],
-      ['a map that is not an object', { appRoleMap: ['tt-administrator'] }],
-      ['an entry with extra keys', { appRoleMap: { x: { role: 'tt-administrator', scope: 'u' } } }],
+      ['a misspelt section key', { appRolMap: { x: 'admin' } }],
+      ['a map that is not an object', { appRoleMap: ['admin'] }],
+      ['an entry with extra keys', { appRoleMap: { x: { role: 'admin', scope: 'u' } } }],
     ])('is invalid for %s: nobody gets a role', (_name, roles) => {
       writeConfig({ providers: [OIDC], roles });
       expect(loadAuthConfig().roles).toEqual({ state: 'invalid' });
@@ -353,13 +353,13 @@ describe('AUTH_CONFIG_FILE', () => {
     it('is invalid when a value references an unset variable (keys are never expanded)', () => {
       writeConfig({ roles: { appRoleMap: { admin: '${NOT_SET_ANYWHERE}' } } });
       expect(loadAuthConfig().roles).toEqual({ state: 'invalid' });
-      writeConfig({ roles: { appRoleMap: { '${NOT_SET_ANYWHERE}': 'tt-administrator' } } });
+      writeConfig({ roles: { appRoleMap: { '${NOT_SET_ANYWHERE}': 'admin' } } });
       const { roles } = loadAuthConfig();
       expect(roles.state === 'ok' && [...roles.appRoleMap.keys()]).toEqual(['${NOT_SET_ANYWHERE}']);
     });
 
     it('an unknown top-level key closes the roles too (a misspelt "roles" must not mean "no mapping")', () => {
-      writeConfig({ providers: [OIDC], rolez: { appRoleMap: {} }, roles: { appRoleMap: { a: 'tt-administrator' } } });
+      writeConfig({ providers: [OIDC], rolez: { appRoleMap: {} }, roles: { appRoleMap: { a: 'admin' } } });
       expect(loadAuthConfig().roles).toEqual({ state: 'invalid' });
     });
 
@@ -380,8 +380,8 @@ describe('AUTH_CONFIG_FILE', () => {
       writeConfig({
         providers: [OIDC, { ...OIDC, id: 'b' }],
         roles: {
-          appRoleMap: { g: 'tt-bruger' },
-          byProvider: { fka: { appRoleMap: { admin: 'tt-administrator' }, groupRoleMap: { x: 'tt-logleser' } } },
+          appRoleMap: { g: 'bruger' },
+          byProvider: { fka: { appRoleMap: { admin: 'admin' }, groupRoleMap: { x: 'admin' } } },
         },
       });
       const { roles } = loadAuthConfig();
@@ -394,7 +394,7 @@ describe('AUTH_CONFIG_FILE', () => {
     });
 
     it('a byProvider entry for an unknown provider id is kept but unused (warned); a bad id or entry fails closed', () => {
-      writeConfig({ providers: [OIDC], roles: { byProvider: { nobody: { appRoleMap: { a: 'tt-bruger' } } } } });
+      writeConfig({ providers: [OIDC], roles: { byProvider: { nobody: { appRoleMap: { a: 'bruger' } } } } });
       expect(loadAuthConfig().roles.state).toBe('ok');
       expect(warned()).toContain('not configured');
       writeConfig({ providers: [OIDC], roles: { byProvider: { 'Bad Id!': { appRoleMap: {} } } } });
@@ -420,7 +420,7 @@ describe('AUTH_CONFIG_FILE', () => {
     });
 
     it('an invalid catalogue is dropped as a whole (nothing stored), without touching roles or providers', () => {
-      writeConfig({ providers: [OIDC], roles: { appRoleMap: { a: 'tt-administrator' } }, catalogue: [{ kind: 'team', identifier: 'x', name: 'y' }] });
+      writeConfig({ providers: [OIDC], roles: { appRoleMap: { a: 'admin' } }, catalogue: [{ kind: 'team', identifier: 'x', name: 'y' }] });
       const cfg = loadAuthConfig();
       expect(cfg.catalogue).toEqual([]);
       expect(cfg.catalogueState).toBe('invalid');

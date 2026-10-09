@@ -9,7 +9,7 @@ const UNIT = '11111111-1111-4111-8111-111111111111';
 
 const assignment = (over: Record<string, unknown> = {}) => ({
   id: 'a-1',
-  roleKey: 'tt-skabelonansvarlig',
+  roleKey: 'bygger',
   scopeOrgUnitUuid: UNIT,
   scopeOrgUnitName: 'Børn',
   includeDescendants: true,
@@ -28,7 +28,7 @@ const USERS = {
       email: 'bo@example.dk',
       directoryUserUuid: null,
       disabled: false,
-      roles: [assignment(), assignment({ id: 'a-2', roleKey: 'tt-logleser', scopeOrgUnitUuid: null, scopeOrgUnitName: null, source: 'rollekatalog' })],
+      roles: [assignment(), assignment({ id: 'a-2', roleKey: 'admin', scopeOrgUnitUuid: null, scopeOrgUnitName: null, source: 'rollekatalog' })],
     },
     { id: 'u-2', name: 'Carla Ny', email: 'carla@example.dk', directoryUserUuid: null, disabled: false, roles: [] },
     { id: 'u-3', name: 'Dan Deaktiv', email: 'dan@example.dk', directoryUserUuid: 'x', disabled: true, roles: [] },
@@ -52,9 +52,9 @@ describe('UsersAdmin — rendering', () => {
     setup();
     renderWithToasts(<UsersAdmin />);
     const row = (await screen.findByText('Bo Bruger')).closest('tr')!;
-    expect(within(row).getByText('Skabelonansvarlig')).toBeInTheDocument();
+    expect(within(row).getByText('Bygger')).toBeInTheDocument();
     expect(within(row).getByText('Børn – Denne enhed og alle underenheder')).toBeInTheDocument();
-    expect(within(row).getByText('Loglæser')).toBeInTheDocument();
+    expect(within(row).getByText('Admin')).toBeInTheDocument();
     expect(within(row).getByText('Hele organisationen')).toBeInTheDocument();
     expect(within(row).getByText('Lokal')).toBeInTheDocument();
     expect(within(row).getByText('Rollekatalog')).toBeInTheDocument();
@@ -159,9 +159,9 @@ describe('UsersAdmin — write controls by mode and role', () => {
     renderWithToasts(<UsersAdmin />);
     await screen.findByText('Bo Bruger');
     expect(screen.getByRole('button', { name: 'Tildel rolle til Bo Bruger' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Fjern Skabelonansvarlig fra Bo Bruger' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Fjern Bygger fra Bo Bruger' })).toBeInTheDocument();
     // The synced (rollekatalog) row is never editable here.
-    expect(screen.queryByRole('button', { name: 'Fjern Loglæser fra Bo Bruger' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Fjern Admin fra Bo Bruger' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Tildel rolle til Dan Deaktiv' })).toBeDisabled();
   });
 
@@ -182,7 +182,7 @@ describe('UsersAdmin — write controls by mode and role', () => {
     const card = screen.getByRole('region', { name: 'Roller følger med fra login' });
     expect(card).toHaveTextContent('identitetsudbyderen');
     expect(card).toHaveTextContent('næste gang personen logger ind');
-    expect(within(card).getByText('tt-administrator')).toBeInTheDocument();
+    expect(within(card).getByText('admin')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Roller tildeles i Rollekatalog' })).toBeNull();
     expect(screen.queryByText(/Data hentes fra Rollekatalog/)).toBeNull();
     expect(screen.queryByRole('button', { name: /Tildel rolle/ })).toBeNull();
@@ -200,7 +200,7 @@ describe('UsersAdmin — write controls by mode and role', () => {
 
   it('names claims-sourced assignments as coming from the identity provider', async () => {
     setup(CLAIMS_ME, {
-      'GET /api/admin/access/users': () => json({ users: [{ ...USERS.users[0], roles: [assignment({ source: 'claims', roleKey: 'tt-logleser', scopeOrgUnitUuid: null, scopeOrgUnitName: null })] }] }),
+      'GET /api/admin/access/users': () => json({ users: [{ ...USERS.users[0], roles: [assignment({ source: 'claims', roleKey: 'admin', scopeOrgUnitUuid: null, scopeOrgUnitName: null })] }] }),
     });
     renderWithToasts(<UsersAdmin />);
     await screen.findByText('Bo Bruger');
@@ -229,11 +229,11 @@ describe('UsersAdmin — grant dialog', () => {
     await screen.findByText('Carla Ny');
     await userEvent.click(screen.getByRole('button', { name: 'Tildel rolle til Carla Ny' }));
     expect(await screen.findByText('Tildel en rolle til Carla Ny.')).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'tt-bruger');
+    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bruger');
     await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Tildel rolle' }));
     await waitFor(() => expect(created).toBe(true));
     const body = JSON.parse(calls(mock, 'POST', '/api/admin/access/assignments')[0][1].body);
-    expect(body).toMatchObject({ appUserId: 'u-2', roleKey: 'tt-bruger' });
+    expect(body).toMatchObject({ appUserId: 'u-2', roleKey: 'bruger' });
     await waitFor(() => expect(calls(mock, 'GET', '/api/admin/access/users').length).toBeGreaterThan(1));
   });
 });
@@ -242,14 +242,14 @@ describe('UsersAdmin — revoke', () => {
   async function openRevoke() {
     renderWithToasts(<UsersAdmin />);
     await screen.findByText('Bo Bruger');
-    await userEvent.click(screen.getByRole('button', { name: 'Fjern Skabelonansvarlig fra Bo Bruger' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Fjern Bygger fra Bo Bruger' }));
     return screen.findByRole('dialog');
   }
 
   it('asks for confirmation and does not delete before confirming', async () => {
     const mock = setup();
     const dialog = await openRevoke();
-    expect(dialog).toHaveTextContent('Vil du fjerne rollen »Skabelonansvarlig« fra Bo Bruger?');
+    expect(dialog).toHaveTextContent('Vil du fjerne rollen »Bygger« fra Bo Bruger?');
     expect(calls(mock, 'DELETE', '/api/admin/access/assignments')).toHaveLength(0);
     await userEvent.click(within(dialog).getByRole('button', { name: 'Annuller' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
@@ -325,22 +325,21 @@ describe('UsersAdmin — roles are assigned in Rollekatalog (explanation card)',
     itSystem: 'os2taletiltekst',
   };
 
-  it('names the IT system, lists the four roles with identifier and meaning, and says when changes appear', async () => {
+  it('names the IT system, lists the three roles with identifier and meaning, and says when changes appear', async () => {
     setup(ROLLEKATALOG_ME, { 'GET /api/admin/access/sync': () => json(RUN) });
     renderWithToasts(<UsersAdmin />);
     const card = await screen.findByRole('region', { name: 'Roller tildeles i Rollekatalog' });
     expect(await within(card).findByText('os2taletiltekst')).toBeInTheDocument();
     const items = within(within(card).getByRole('list', { name: 'Roller' })).getAllByRole('listitem');
     expect(items.map((li) => li.querySelector('code')?.textContent)).toEqual([
-      'tt-bruger',
-      'tt-skabelonansvarlig',
-      'tt-logleser',
-      'tt-administrator',
+      'bruger',
+      'bygger',
+      'admin',
     ]);
     expect(items[0]).toHaveTextContent('Bruger');
     expect(items[0]).toHaveTextContent('Kan bruge løsningen og de skabeloner, der er stillet til rådighed.');
-    expect(items[3]).toHaveTextContent('Administrator');
-    expect(items[3]).toHaveTextContent('Har alle rettigheder');
+    expect(items[2]).toHaveTextContent('Admin');
+    expect(items[2]).toHaveTextContent('Har alle rettigheder');
     expect(card).toHaveTextContent('Ændringer vises her efter næste synkronisering');
     // The existing "last synchronised" line stays.
     expect(await screen.findByText(/Data hentes fra Rollekatalog\. Sidst synkroniseret .*2026/)).toBeInTheDocument();
@@ -351,7 +350,7 @@ describe('UsersAdmin — roles are assigned in Rollekatalog (explanation card)',
     renderWithToasts(<UsersAdmin />);
     const card = await screen.findByRole('region', { name: 'Roller tildeles i Rollekatalog' });
     expect(card).toHaveTextContent('Tildel dem i Rollekatalog under løsningens it-system.');
-    expect(card.querySelector('code.font-mono')?.textContent).toBe('tt-bruger');
+    expect(card.querySelector('code.font-mono')?.textContent).toBe('bruger');
   });
 
   it('is not shown in local mode, where roles are edited here', async () => {

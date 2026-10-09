@@ -41,7 +41,7 @@ const rolesCfg = (appRoleMap: Record<string, string>, groupRoleMap: Record<strin
 });
 
 beforeEach(() => {
-  state.roles = rolesCfg({ admin: 'tt-administrator', su: 'tt-skabelonansvarlig' }, { 'g-log': 'tt-logleser' });
+  state.roles = rolesCfg({ admin: 'admin', su: 'bygger' }, { 'g-log': 'bruger' });
   state.specs = { claims: {}, rolesClaim: arr('roles'), groupsClaim: delim('memberOf') };
   state.catalogue = [];
   vi.stubEnv('ACCESS_SOURCE', 'claims');
@@ -110,16 +110,16 @@ describe('claimSubset', () => {
 
 describe('mapClaimRoles', () => {
   it('maps known values and ignores the rest', () => {
-    const map = rolesCfg({ admin: 'tt-administrator' });
+    const map = rolesCfg({ admin: 'admin' });
     if (map.state !== 'ok') throw new Error();
-    expect(mapClaimRoles(['admin', 'unknown', 'ADMIN'], map.appRoleMap)).toEqual(['tt-administrator']); // exact match, case-sensitive
+    expect(mapClaimRoles(['admin', 'unknown', 'ADMIN'], map.appRoleMap)).toEqual(['admin']); // exact match, case-sensitive
   });
 });
 
 describe('decideFromClaims', () => {
   it('maps roles claim values via appRoleMap and groups via groupRoleMap, unknown values grant nothing', () => {
     const d = decideFromClaims({ roles: ['admin', 'nonsense'], memberOf: 'g-log;g-other' }, 'p');
-    expect(d.roles.sort()).toEqual(['tt-administrator', 'tt-logleser']);
+    expect(d.roles.sort()).toEqual(['admin', 'bruger']);
     expect(d.external).toEqual([
       { kind: 'role', identifier: 'admin' },
       { kind: 'role', identifier: 'nonsense' },
@@ -165,9 +165,9 @@ describe('decideFromClaims', () => {
 describe('per-provider role maps', () => {
   const map = (m: Record<string, string>) => new Map(Object.entries(m).map(([k, role]) => [k, { role: role as never, global: true }]));
   const multi = (extra: Partial<Extract<RolesConfig, { state: 'ok' }>> = {}): RolesConfig => ({
-    ...(rolesCfg({ admin: 'tt-administrator' }) as Extract<RolesConfig, { state: 'ok' }>),
+    ...(rolesCfg({ admin: 'admin' }) as Extract<RolesConfig, { state: 'ok' }>),
     providerCount: 2,
-    byProvider: new Map([['a', { appRoleMap: map({ 'a-admin': 'tt-administrator' }), groupRoleMap: map({ 'a-grp': 'tt-logleser' }) }]]),
+    byProvider: new Map([['a', { appRoleMap: map({ 'a-admin': 'admin' }), groupRoleMap: map({ 'a-grp': 'bygger' }) }]]),
     ...extra,
   });
 
@@ -175,7 +175,7 @@ describe('per-provider role maps', () => {
     expect(roleMapsFor(multi(), 'a')?.appRoleMap.has('a-admin')).toBe(true);
     expect(roleMapsFor(multi(), 'a')?.appRoleMap.has('admin')).toBe(false);
     const d = decideFromClaims({ roles: ['a-admin', 'admin'], memberOf: 'a-grp' }, 'a', multi());
-    expect(d.roles.sort()).toEqual(['tt-administrator', 'tt-logleser']);
+    expect(d.roles.sort()).toEqual(['admin', 'bygger']);
     expect(decideFromClaims({ roles: ['admin'] }, 'a', multi()).roles).toEqual([]);
   });
 
@@ -187,8 +187,8 @@ describe('per-provider role maps', () => {
   });
 
   it('with exactly one provider the global map applies, and so does a missing count (older state)', () => {
-    expect(decideFromClaims({ roles: ['admin'] }, 'p', { ...(multi() as Extract<RolesConfig, { state: 'ok' }>), providerCount: 1 }).roles).toEqual(['tt-administrator']);
-    expect(roleMapsFor(rolesCfg({ admin: 'tt-administrator' }), 'p')?.appRoleMap.has('admin')).toBe(true);
+    expect(decideFromClaims({ roles: ['admin'] }, 'p', { ...(multi() as Extract<RolesConfig, { state: 'ok' }>), providerCount: 1 }).roles).toEqual(['admin']);
+    expect(roleMapsFor(rolesCfg({ admin: 'admin' }), 'p')?.appRoleMap.has('admin')).toBe(true);
   });
 
   it('an unusable roles section has no maps at all', () => {
@@ -255,7 +255,7 @@ describe('applyClaimsLogin', () => {
     expect(del).toBeGreaterThan(0);
     expect(inserts).toHaveLength(3); // admin, su and the group g-log
     expect(inserts.every((i) => i > del)).toBe(true);
-    expect(calls[inserts[0]].params).toEqual(['D1', expect.stringMatching(/^tt-/)]);
+    expect(calls[inserts[0]].params).toEqual(['D1', expect.stringMatching(/^(bruger|bygger|admin)$/)]);
     expect(sqls[inserts[0]]).toContain("NULL, true, 'claims', now()"); // global scope, claims source, fresh synced_at
     // Only values that are in the (active) catalogue are stored.
     const ext = calls.find((c) => c.sql.includes('INSERT INTO public.user_external_roles'))!;

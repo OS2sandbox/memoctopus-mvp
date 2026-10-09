@@ -38,7 +38,7 @@ const NOTE = 'Præciseret formuleringen af prompten';
 
 const manager = makePrincipal({
   userId: 'mgr-1',
-  roles: ['tt-skabelonansvarlig'],
+  roles: ['bygger'],
   capabilities: ['template.use', 'template.manage'],
   scopes: { 'template.manage': { global: false, roots: [{ orgUnitUuid: OWNER, includeDescendants: true }] } },
 });

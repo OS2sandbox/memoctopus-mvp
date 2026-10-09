@@ -55,51 +55,46 @@ describe('validateGrantShape', () => {
     expect(() => validateGrantShape({ ...base, roleKey: 'tt-god' })).toThrow(ValidationError);
   });
 
-  it('forbids a scope on tt-bruger', () => {
-    expect(() => validateGrantShape({ ...base, roleKey: 'tt-bruger', scopeOrgUnitUuid: U1 })).toThrow(/begrænses/);
-    expect(validateGrantShape({ ...base, roleKey: 'tt-bruger' })).toBe('tt-bruger');
+  it('forbids a scope on bruger', () => {
+    expect(() => validateGrantShape({ ...base, roleKey: 'bruger', scopeOrgUnitUuid: U1 })).toThrow(/begrænses/);
+    expect(validateGrantShape({ ...base, roleKey: 'bruger' })).toBe('bruger');
   });
 
-  it('allows tt-skabelonansvarlig with a scope, or without one (the global superuser)', () => {
-    expect(validateGrantShape({ ...base, roleKey: 'tt-skabelonansvarlig' })).toBe('tt-skabelonansvarlig');
-    expect(validateGrantShape({ ...base, roleKey: 'tt-skabelonansvarlig', scopeOrgUnitUuid: U1 })).toBe(
-      'tt-skabelonansvarlig',
+  it('allows bygger with a scope, or without one (the global superuser)', () => {
+    expect(validateGrantShape({ ...base, roleKey: 'bygger' })).toBe('bygger');
+    expect(validateGrantShape({ ...base, roleKey: 'bygger', scopeOrgUnitUuid: U1 })).toBe(
+      'bygger',
     );
   });
 
-  it('allows tt-logleser with and without scope', () => {
-    expect(validateGrantShape({ ...base, roleKey: 'tt-logleser' })).toBe('tt-logleser');
-    expect(validateGrantShape({ ...base, roleKey: 'tt-logleser', scopeOrgUnitUuid: U1 })).toBe('tt-logleser');
-  });
-
-  it('forbids a scope on tt-administrator: its access.manage/sync.run cannot be narrowed to a unit', () => {
-    expect(validateGrantShape({ ...base, roleKey: 'tt-administrator' })).toBe('tt-administrator');
-    expect(() => validateGrantShape({ ...base, roleKey: 'tt-administrator', scopeOrgUnitUuid: U1 })).toThrow(
+  it('forbids a scope on admin: its access.manage/sync.run cannot be narrowed to a unit', () => {
+    expect(validateGrantShape({ ...base, roleKey: 'admin' })).toBe('admin');
+    expect(() => validateGrantShape({ ...base, roleKey: 'admin', scopeOrgUnitUuid: U1 })).toThrow(
       expect.objectContaining({ code: 'scope_forbidden' }),
     );
   });
 
   it('rejects a malformed scope uuid', () => {
-    expect(() => validateGrantShape({ ...base, roleKey: 'tt-logleser', scopeOrgUnitUuid: 'nope' })).toThrow(
+    expect(() => validateGrantShape({ ...base, roleKey: 'bygger', scopeOrgUnitUuid: 'nope' })).toThrow(
       ValidationError,
     );
   });
 
   it('rejects stop <= start and invalid dates', () => {
     const d = new Date('2026-01-01T00:00:00Z');
-    expect(() => validateGrantShape({ ...base, roleKey: 'tt-bruger', startDate: d, stopDate: d })).toThrow(/Slutdato/);
+    expect(() => validateGrantShape({ ...base, roleKey: 'bruger', startDate: d, stopDate: d })).toThrow(/Slutdato/);
     expect(() =>
-      validateGrantShape({ ...base, roleKey: 'tt-bruger', startDate: new Date(NaN) }),
+      validateGrantShape({ ...base, roleKey: 'bruger', startDate: new Date(NaN) }),
     ).toThrow(/dato/);
     expect(() =>
-      validateGrantShape({ ...base, roleKey: 'tt-bruger', startDate: d, stopDate: new Date('2026-02-01T00:00:00Z') }),
+      validateGrantShape({ ...base, roleKey: 'bruger', startDate: d, stopDate: new Date('2026-02-01T00:00:00Z') }),
     ).not.toThrow();
   });
 });
 
 describe('read-only mode', () => {
   it.each([
-    ['grantRole', (r: never) => grantRole({ appUserId: 'u', roleKey: 'tt-bruger', actorUserId: 'a' }, r)],
+    ['grantRole', (r: never) => grantRole({ appUserId: 'u', roleKey: 'bruger', actorUserId: 'a' }, r)],
     ['revokeAssignment', (r: never) => revokeAssignment(ASG, 'a', r)],
     ['createOrgUnit', (r: never) => createOrgUnit({ name: 'x', actorUserId: 'a' }, r)],
     ['updateOrgUnit', (r: never) => updateOrgUnit(U1, { name: 'x' }, 'a', r)],
@@ -118,7 +113,7 @@ describe('read-only mode', () => {
     ['local mode with the kill switch ACCESS_LOCAL_ADMIN=false', { ACCESS_SOURCE: 'local', ACCESS_LOCAL_ADMIN: 'false' }, /slået fra/],
   ])('%s', (_label, env, message) => {
     it.each([
-      ['grantRole', (r: never) => grantRole({ appUserId: 'u', roleKey: 'tt-bruger', actorUserId: 'a' }, r)],
+      ['grantRole', (r: never) => grantRole({ appUserId: 'u', roleKey: 'bruger', actorUserId: 'a' }, r)],
       ['revokeAssignment', (r: never) => revokeAssignment(ASG, 'a', r)],
       ['createOrgUnit', (r: never) => createOrgUnit({ name: 'x', actorUserId: 'a' }, r)],
       ['updateOrgUnit', (r: never) => updateOrgUnit(U1, { name: 'x' }, 'a', r)],
@@ -143,10 +138,10 @@ describe('read-only mode', () => {
 });
 
 describe('grantRole', () => {
-  const input = { appUserId: 'app-1', roleKey: 'tt-logleser', actorUserId: 'admin-1' };
+  const input = { appUserId: 'app-1', roleKey: 'admin', actorUserId: 'admin-1' };
   const assignmentRow = {
     assignment_id: ASG,
-    role_key: 'tt-logleser',
+    role_key: 'admin',
     scope_org_unit_uuid: null,
     scope_name: null,
     include_descendants: true,
@@ -169,14 +164,14 @@ describe('grantRole', () => {
     const { runner, calls } = makeFakeRunner(happy());
     const view = await grantRole({ ...input, scopeOrgUnitUuid: null }, runner);
 
-    expect(view).toMatchObject({ id: ASG, roleKey: 'tt-logleser', source: 'local', scopeOrgUnitUuid: null });
+    expect(view).toMatchObject({ id: ASG, roleKey: 'admin', source: 'local', scopeOrgUnitUuid: null });
     const sqls = calls.map((c) => c.sql).join('\n');
     expect(sqls).not.toMatch(/lower\(email\)|email =/i);
     expect(calls.every((c) => c.tx)).toBe(true);
 
     const insert = calls.find((c) => c.sql.includes('INSERT INTO public.role_assignments'))!;
     expect(insert.sql).toContain("'local'");
-    expect(insert.params).toEqual([DIR, 'tt-logleser', null, true, null, null, 'admin-1']);
+    expect(insert.params).toEqual([DIR, 'admin', null, true, null, null, 'admin-1']);
 
     expect(recordEvent).not.toHaveBeenCalled();
   });
@@ -185,7 +180,7 @@ describe('grantRole', () => {
     const { runner, calls } = makeFakeRunner((sql, p) =>
       sql.includes('FROM public.org_units WHERE uuid = $1::uuid FOR SHARE') ? [{ '?column?': 1 }] : happy()(sql, p, true),
     );
-    await grantRole({ ...input, roleKey: 'tt-skabelonansvarlig', scopeOrgUnitUuid: U1.toUpperCase() }, runner);
+    await grantRole({ ...input, roleKey: 'bygger', scopeOrgUnitUuid: U1.toUpperCase() }, runner);
     const lock = calls.find((c) => c.sql.includes('FOR SHARE'))!;
     expect(lock.params).toEqual([U1]);
   });
@@ -204,7 +199,7 @@ describe('grantRole', () => {
 
   it('404 for an unknown scope unit', async () => {
     const { runner } = makeFakeRunner(respondBy([['FROM public.users WHERE id = $1', [{ x: 1 }]]]));
-    await expect(grantRole({ ...input, roleKey: 'tt-skabelonansvarlig', scopeOrgUnitUuid: U1 }, runner)).rejects.toMatchObject({
+    await expect(grantRole({ ...input, roleKey: 'bygger', scopeOrgUnitUuid: U1 }, runner)).rejects.toMatchObject({
       code: 'org_unit_not_found',
     });
   });
@@ -247,7 +242,7 @@ describe('grantRole', () => {
 describe('revokeAssignment', () => {
   const row = (over: Record<string, unknown> = {}) => ({
     id: ASG,
-    role_key: 'tt-administrator',
+    role_key: 'admin',
     source: 'local',
     directory_user_uuid: DIR,
     scope_org_unit_uuid: null,
@@ -324,7 +319,7 @@ describe('revokeAssignment', () => {
   });
 
   it('does not apply the admin guard to other roles', async () => {
-    const { runner, sqls } = makeFakeRunner(responder(row({ role_key: 'tt-logleser' }), 0));
+    const { runner, sqls } = makeFakeRunner(responder(row({ role_key: 'bygger' }), 0));
     await revokeAssignment(ASG, 'admin-1', runner);
     expect(sqls().some((s) => s.includes('count(*)'))).toBe(false);
   });
@@ -590,8 +585,8 @@ describe('org units', () => {
 describe('listing', () => {
   it('listAppUsersWithRoles groups role rows per user and caps limit, escaping LIKE wildcards', async () => {
     const { runner, calls } = makeFakeRunner(() => [
-      { id: 'u1', name: 'Anna', email: 'a@x.dk', directory_user_uuid: DIR, disabled: false, assignment_id: ASG, role_key: 'tt-logleser', scope_org_unit_uuid: null, scope_name: null, include_descendants: true, start_date: null, stop_date: new Date('2030-01-01T00:00:00Z'), assignment_source: 'local', active: true },
-      { id: 'u1', name: 'Anna', email: 'a@x.dk', directory_user_uuid: DIR, disabled: false, assignment_id: U1, role_key: 'tt-bruger', scope_org_unit_uuid: null, scope_name: null, include_descendants: true, start_date: null, stop_date: null, assignment_source: 'local', active: true },
+      { id: 'u1', name: 'Anna', email: 'a@x.dk', directory_user_uuid: DIR, disabled: false, assignment_id: ASG, role_key: 'admin', scope_org_unit_uuid: null, scope_name: null, include_descendants: true, start_date: null, stop_date: new Date('2030-01-01T00:00:00Z'), assignment_source: 'local', active: true },
+      { id: 'u1', name: 'Anna', email: 'a@x.dk', directory_user_uuid: DIR, disabled: false, assignment_id: U1, role_key: 'bruger', scope_org_unit_uuid: null, scope_name: null, include_descendants: true, start_date: null, stop_date: null, assignment_source: 'local', active: true },
       { id: 'u2', name: 'Bo', email: 'b@x.dk', directory_user_uuid: null, disabled: false, assignment_id: null },
     ]);
     const { users, truncated } = await listAppUsersWithRoles({ q: '50%_x', limit: 99999 }, runner);

@@ -51,17 +51,16 @@ describe('admin sections table', () => {
 
 describe('visibleSections per role (snapshot)', () => {
   it.each<[RoleKey, AdminSectionKey[]]>([
-    ['tt-bruger', []],
-    ['tt-skabelonansvarlig', ['organisation', 'templates']],
-    ['tt-logleser', ['organisation', 'log']],
-    ['tt-administrator', ['users', 'organisation', 'templates', 'log']],
+    ['bruger', []],
+    ['bygger', ['organisation', 'templates']],
+    ['admin', ['users', 'organisation', 'templates', 'log']],
   ])('%s sees %j', (role, expected) => {
     expect(keysFor(role)).toEqual(expected);
   });
 
   it('shows nothing to a disabled administrator', () => {
-    expect(keysFor('tt-administrator', true)).toEqual([]);
-    expect(canAccessSection(principalFor('tt-administrator', true), 'users')).toBe(false);
+    expect(keysFor('admin', true)).toEqual([]);
+    expect(canAccessSection(principalFor('admin', true), 'users')).toBe(false);
   });
 
   it('is any-of: a single admin capability opens exactly its own section', () => {

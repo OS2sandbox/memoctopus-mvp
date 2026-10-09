@@ -17,7 +17,7 @@ function input(over: Partial<ScopeInput> & { roleKey: RoleKey }): ScopeInput {
   return {
     constraints: [],
     knownOrgUnitUuids: KNOWN,
-    globalRoles: ['tt-administrator'],
+    globalRoles: ['admin'],
     includeDescendants: true,
     ...over,
   };
@@ -32,9 +32,10 @@ const scoped = (units: string[], includeDescendants = true): DerivedScope => ({
 const NONE: DerivedScope = { kind: 'none' };
 const GLOBAL: DerivedScope = { kind: 'global' };
 
-const SCOPED_ROLES: RoleKey[] = ['tt-skabelonansvarlig', 'tt-logleser'];
+// admin is never scoped (its own block below); bygger is the only role an org unit can narrow.
+const SCOPED_ROLES: RoleKey[] = ['bygger'];
 
-describe('deriveScope: org-unit constraint x situation, for every scoped role', () => {
+describe('deriveScope: org-unit constraint x situation, for the scoped role', () => {
   const cases: Array<{ label: string; constraints: ScopeConstraint[]; expected: DerivedScope }> = [
     { label: 'no constraint', constraints: [], expected: NONE },
     { label: 'known constraint', constraints: [ou(A)], expected: scoped([A]) },
@@ -83,35 +84,36 @@ describe('deriveScope: org-unit constraint x situation, for every scoped role', 
 });
 
 describe('deriveScope: GLOBAL_ROLES (the fail-closed switch)', () => {
-  it('only tt-administrator is global by default; a scoped role without scope gets no row', () => {
-    expect(deriveScope(input({ roleKey: 'tt-logleser' }))).toEqual(NONE);
-    expect(deriveScope(input({ roleKey: 'tt-skabelonansvarlig' }))).toEqual(NONE);
+  it('only admin is global by default; bygger without scope gets no row', () => {
+    expect(deriveScope(input({ roleKey: 'admin' }))).toEqual(GLOBAL);
+    expect(deriveScope(input({ roleKey: 'bygger' }))).toEqual(NONE);
   });
 
-  it('an operator can allow tt-logleser (and only it) to be global when it has no scope', () => {
-    const globalRoles: RoleKey[] = ['tt-logleser'];
-    expect(deriveScope(input({ roleKey: 'tt-logleser', globalRoles }))).toEqual(GLOBAL);
-    expect(deriveScope(input({ roleKey: 'tt-skabelonansvarlig', globalRoles }))).toEqual(NONE);
+  it('an operator can allow bygger to be global when it has no scope (and then only the listed roles are)', () => {
+    const globalRoles: RoleKey[] = ['bygger'];
+    expect(deriveScope(input({ roleKey: 'bygger', globalRoles }))).toEqual(GLOBAL);
+    expect(deriveScope(input({ roleKey: 'admin', globalRoles }))).toEqual(NONE);
   });
 
   it('a real scope always beats the global switch', () => {
-    expect(deriveScope(input({ roleKey: 'tt-logleser', constraints: [ou(A)], globalRoles: ['tt-logleser'] }))).toEqual(
+    expect(deriveScope(input({ roleKey: 'bygger', constraints: [ou(A)], globalRoles: ['bygger'] }))).toEqual(
       scoped([A]),
     );
   });
 
   it('an assignment that names only unknown units is NOT widened to global, even for a global role', () => {
-    expect(deriveScope(input({ roleKey: 'tt-logleser', constraints: [ou(UNKNOWN)], globalRoles: ['tt-logleser'] }))).toEqual(
+    expect(deriveScope(input({ roleKey: 'bygger', constraints: [ou(UNKNOWN)], globalRoles: ['bygger'] }))).toEqual(
       NONE,
     );
   });
 
   it('an empty constraint list (Rollekatalog dropped it) is the case the switch is for', () => {
-    expect(deriveScope(input({ roleKey: 'tt-logleser', constraints: [ou()], globalRoles: ['tt-logleser'] }))).toEqual(GLOBAL);
+    expect(deriveScope(input({ roleKey: 'bygger', constraints: [ou()], globalRoles: ['bygger'] }))).toEqual(GLOBAL);
   });
 
-  it('GLOBAL_ROLES=none (empty list): administrator is not global either', () => {
-    expect(deriveScope(input({ roleKey: 'tt-administrator', globalRoles: [] }))).toEqual(NONE);
+  it('GLOBAL_ROLES=none (empty list): neither admin nor bygger is global', () => {
+    expect(deriveScope(input({ roleKey: 'admin', globalRoles: [] }))).toEqual(NONE);
+    expect(deriveScope(input({ roleKey: 'bygger', globalRoles: [] }))).toEqual(NONE);
   });
 });
 
@@ -119,21 +121,21 @@ describe('deriveScope: unrecognised constraint types fail closed', () => {
   const kle: ScopeConstraint = { constraintType: KLE, constraintValues: ['27.45.00'] };
   const future: ScopeConstraint = { constraintType: 'http://example.test/constraints/future/1', constraintValues: ['x'] };
 
-  it('tt-administrator with only an unknown-type constraint gets no row', () => {
-    expect(deriveScope(input({ roleKey: 'tt-administrator', constraints: [kle] }))).toEqual(NONE);
-    expect(deriveScope(input({ roleKey: 'tt-administrator', constraints: [future] }))).toEqual(NONE);
+  it('admin with only an unknown-type constraint gets no row', () => {
+    expect(deriveScope(input({ roleKey: 'admin', constraints: [kle] }))).toEqual(NONE);
+    expect(deriveScope(input({ roleKey: 'admin', constraints: [future] }))).toEqual(NONE);
     // The schemas hand over only the flag.
-    expect(deriveScope(input({ roleKey: 'tt-administrator', hasUnrecognisedConstraints: true }))).toEqual(NONE);
+    expect(deriveScope(input({ roleKey: 'admin', hasUnrecognisedConstraints: true }))).toEqual(NONE);
   });
 
-  it('tt-logleser listed in GLOBAL_ROLES with an unknown-type constraint gets no row', () => {
-    const globalRoles: RoleKey[] = ['tt-logleser'];
-    expect(deriveScope(input({ roleKey: 'tt-logleser', constraints: [kle], globalRoles }))).toEqual(NONE);
-    expect(deriveScope(input({ roleKey: 'tt-logleser', hasUnrecognisedConstraints: true, globalRoles }))).toEqual(NONE);
+  it('bygger listed in GLOBAL_ROLES with an unknown-type constraint gets no row', () => {
+    const globalRoles: RoleKey[] = ['bygger'];
+    expect(deriveScope(input({ roleKey: 'bygger', constraints: [kle], globalRoles }))).toEqual(NONE);
+    expect(deriveScope(input({ roleKey: 'bygger', hasUnrecognisedConstraints: true, globalRoles }))).toEqual(NONE);
   });
 
   it('every global-capable role without any constraint at all is global', () => {
-    const globalRoles: RoleKey[] = ['tt-administrator', 'tt-logleser', 'tt-skabelonansvarlig'];
+    const globalRoles: RoleKey[] = ['admin', 'bygger'];
     for (const roleKey of globalRoles) {
       expect(deriveScope(input({ roleKey, globalRoles })), roleKey).toEqual(GLOBAL);
       expect(deriveScope(input({ roleKey, globalRoles, hasUnrecognisedConstraints: false })), roleKey).toEqual(GLOBAL);
@@ -142,47 +144,45 @@ describe('deriveScope: unrecognised constraint types fail closed', () => {
 
   it('a blank-valued unknown-type constraint is not a constraint', () => {
     const blank: ScopeConstraint = { constraintType: KLE, constraintValues: ['', '  '] };
-    expect(deriveScope(input({ roleKey: 'tt-logleser', constraints: [blank], globalRoles: ['tt-logleser'] }))).toEqual(GLOBAL);
+    expect(deriveScope(input({ roleKey: 'bygger', constraints: [blank], globalRoles: ['bygger'] }))).toEqual(GLOBAL);
   });
 
   it('a recognised known org unit still wins over an unknown-type constraint', () => {
-    expect(deriveScope(input({ roleKey: 'tt-logleser', constraints: [kle, ou(A)], globalRoles: ['tt-logleser'] }))).toEqual(
+    expect(deriveScope(input({ roleKey: 'bygger', constraints: [kle, ou(A)], globalRoles: ['bygger'] }))).toEqual(
       scoped([A]),
     );
-    expect(deriveScope(input({ roleKey: 'tt-logleser', constraints: [ou(A)], hasUnrecognisedConstraints: true }))).toEqual(
+    expect(deriveScope(input({ roleKey: 'bygger', constraints: [ou(A)], hasUnrecognisedConstraints: true }))).toEqual(
       scoped([A]),
     );
   });
 
-  it('tt-administrator with an org-unit constraint stays global (constraints are ignored for it)', () => {
-    expect(deriveScope(input({ roleKey: 'tt-administrator', constraints: [kle, ou(A)] }))).toEqual(GLOBAL);
+  it('admin with an org-unit constraint stays global (constraints are ignored for it)', () => {
+    expect(deriveScope(input({ roleKey: 'admin', constraints: [kle, ou(A)] }))).toEqual(GLOBAL);
   });
 });
 
-describe('deriveScope: tt-administrator is never scoped', () => {
+describe('deriveScope: admin is never scoped', () => {
   it('constraints are ignored', () => {
-    expect(deriveScope(input({ roleKey: 'tt-administrator', constraints: [ou(A, B)] }))).toEqual(GLOBAL);
+    expect(deriveScope(input({ roleKey: 'admin', constraints: [ou(A, B)] }))).toEqual(GLOBAL);
   });
   it('no constraint is global', () => {
-    expect(deriveScope(input({ roleKey: 'tt-administrator' }))).toEqual(GLOBAL);
+    expect(deriveScope(input({ roleKey: 'admin' }))).toEqual(GLOBAL);
   });
   it('not in GLOBAL_ROLES means no row, even with a constraint', () => {
-    expect(deriveScope(input({ roleKey: 'tt-administrator', constraints: [ou(A)], globalRoles: ['tt-logleser'] }))).toEqual(
-      NONE,
-    );
+    expect(deriveScope(input({ roleKey: 'admin', constraints: [ou(A)], globalRoles: ['bygger'] }))).toEqual(NONE);
   });
 });
 
-describe('deriveScope: tt-bruger needs no scope', () => {
+describe('deriveScope: bruger needs no scope', () => {
   it('always one NULL-scope row, whatever the constraints or GLOBAL_ROLES', () => {
-    expect(deriveScope(input({ roleKey: 'tt-bruger' }))).toEqual(GLOBAL);
-    expect(deriveScope(input({ roleKey: 'tt-bruger', constraints: [ou(A)], globalRoles: [] }))).toEqual(GLOBAL);
+    expect(deriveScope(input({ roleKey: 'bruger' }))).toEqual(GLOBAL);
+    expect(deriveScope(input({ roleKey: 'bruger', constraints: [ou(A)], globalRoles: [] }))).toEqual(GLOBAL);
   });
 });
 
 describe('deriveScope: descendants flag and purity', () => {
   it('passes ROLLEKATALOG_SCOPE_DESCENDANTS through', () => {
-    expect(deriveScope(input({ roleKey: 'tt-logleser', constraints: [ou(A)], includeDescendants: false }))).toEqual(
+    expect(deriveScope(input({ roleKey: 'bygger', constraints: [ou(A)], includeDescendants: false }))).toEqual(
       scoped([A], false),
     );
   });
@@ -190,7 +190,7 @@ describe('deriveScope: descendants flag and purity', () => {
   it('does not mutate its input', () => {
     const constraints = [ou(B, A)];
     const snapshot = JSON.stringify(constraints);
-    deriveScope(input({ roleKey: 'tt-logleser', constraints }));
+    deriveScope(input({ roleKey: 'bygger', constraints }));
     expect(JSON.stringify(constraints)).toBe(snapshot);
   });
 

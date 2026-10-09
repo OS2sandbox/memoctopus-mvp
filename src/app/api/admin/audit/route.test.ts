@@ -49,7 +49,7 @@ const row = (over: Partial<AuditEventRow> = {}): AuditEventRow => ({
 });
 
 const LOG_READER = makePrincipal({
-  roles: ['tt-bruger', 'tt-logleser'],
+  roles: ['bruger', 'admin'],
   capabilities: ['template.use', 'audit.read'],
   scopes: { 'audit.read': { global: false, roots: [{ orgUnitUuid: UNIT, includeDescendants: true }] } },
 });

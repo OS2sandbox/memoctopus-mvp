@@ -150,7 +150,7 @@ describe('roleAssignmentsWithContraints', () => {
   });
   it('keeps duplicate roleIdentifier entries as they come', () => {
     const peter = parsed.find((u) => u.userId === 'peter.d');
-    expect(peter?.assignments.map((a) => a.roleIdentifier)).toEqual(['tt-skabelonansvarlig', 'tt-skabelonansvarlig']);
+    expect(peter?.assignments.map((a) => a.roleIdentifier)).toEqual(['bygger', 'bygger']);
   });
   it('has no forbidden keys and tolerates null lists', () => {
     expect(forbiddenKeys(parsed)).toEqual([]);
@@ -159,7 +159,7 @@ describe('roleAssignmentsWithContraints', () => {
   });
   it('keeps only org-unit constraint types; KLE and other types never enter our types, only a flag', () => {
     const jens = parsed.find((u) => u.userId === 'jens.t');
-    const entry = jens?.assignments.find((a) => a.roleIdentifier === 'tt-skabelonansvarlig');
+    const entry = jens?.assignments.find((a) => a.roleIdentifier === 'bygger');
     expect(entry?.roleConstraintValues.every((c) => /orgunit|orgenhed/.test(c.constraintType))).toBe(true);
     expect(entry?.hasUnrecognisedConstraints).toBe(true);
     expect(JSON.stringify(parsed)).not.toMatch(/constraints\/KLE|27\.\d\d/);
@@ -325,7 +325,7 @@ describe('roleAssignmentsWithContraints: row-by-row tolerance', () => {
   const row = (n: number, extra: Record<string, unknown> = {}) => ({
     extUuid: null,
     userId: `u${n}`,
-    assignments: [{ roleIdentifier: 'tt-logleser', roleConstraintValues: [] }],
+    assignments: [{ roleIdentifier: 'admin', roleConstraintValues: [] }],
     ...extra,
   });
 
@@ -339,9 +339,9 @@ describe('roleAssignmentsWithContraints: row-by-row tolerance', () => {
     const out = parseOrThrow(roleAssignmentsSchema, [
       row(1, {
         assignments: [
-          { roleIdentifier: 'tt-logleser', roleConstraintValues: [] },
+          { roleIdentifier: 'admin', roleConstraintValues: [] },
           { roleName: 'n' }, // no roleIdentifier
-          { roleIdentifier: 'tt-logleser', roleConstraintValues: [{ constraintType: 'x', constraintValues: [1] }] },
+          { roleIdentifier: 'admin', roleConstraintValues: [{ constraintType: 'x', constraintValues: [1] }] },
         ],
       }),
     ]);
@@ -354,15 +354,15 @@ describe('roleAssignmentsWithContraints: row-by-row tolerance', () => {
     const out = parseOrThrow(roleAssignmentsSchema, [
       row(1, {
         assignments: [
-          { roleIdentifier: 'tt-logleser', roleConstraintValues: [] },
-          { roleIdentifier: ' tt-skabelonansvarlig ', roleConstraintValues: 'broken' },
-          { roleIdentifier: 'tt-skabelonansvarlig', roleConstraintValues: [{ constraintType: 'x', constraintValues: [1] }] },
+          { roleIdentifier: 'admin', roleConstraintValues: [] },
+          { roleIdentifier: ' bygger ', roleConstraintValues: 'broken' },
+          { roleIdentifier: 'bygger', roleConstraintValues: [{ constraintType: 'x', constraintValues: [1] }] },
           { roleIdentifier: 5 }, // role unreadable: nothing to record
         ],
       }),
     ]);
-    expect(out.rows[0].invalidRoles).toEqual(['tt-skabelonansvarlig']);
-    expect(out.rows[0].assignments.map((a) => a.roleIdentifier)).toEqual(['tt-logleser']);
+    expect(out.rows[0].invalidRoles).toEqual(['bygger']);
+    expect(out.rows[0].assignments.map((a) => a.roleIdentifier)).toEqual(['admin']);
     expect(out.skipped).toBe(3);
   });
 
@@ -377,7 +377,7 @@ describe('roleAssignmentsWithContraints: row-by-row tolerance', () => {
 
   it('boundary: bad assignment entries are guarded against all entries', () => {
     const entries = (good: number, bad: number) => [
-      ...Array.from({ length: good }, () => ({ roleIdentifier: 'tt-logleser' })),
+      ...Array.from({ length: good }, () => ({ roleIdentifier: 'admin' })),
       ...Array.from({ length: bad }, () => ({ nope: true })),
     ];
     expect(parseOrThrow(roleAssignmentsSchema, [row(1, { assignments: entries(7, 3) })]).skipped).toBe(3);
@@ -398,7 +398,7 @@ describe('role catalogue (user roles and role groups)', () => {
     const parsed = parseOrThrow(userRolesCatalogueSchema, roles);
     expect(parsed.entries).toEqual([
       { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler' },
-      { kind: 'role', identifier: 'tt-skabelonansvarlig', name: 'Skabelonansvarlig' },
+      { kind: 'role', identifier: 'bygger', name: 'Bygger' },
       { kind: 'role', identifier: 'leder', name: 'Leder' },
       // No identifier on the row: the database id is the key.
       { kind: 'role', identifier: '104', name: 'Rolle uden identifikator' },

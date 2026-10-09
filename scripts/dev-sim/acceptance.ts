@@ -101,7 +101,7 @@ async function main() {
   heading('2. Who gets what after login (roles and scopes come from the mirror)');
   const mette = await as('mette.e');
   const meMette = await mette.get('/api/me');
-  check('mette.e is administrator with global rights', meMette.json?.roles?.includes('tt-administrator') && meMette.json?.scopes?.['audit.read']?.global === true, brief(meMette));
+  check('mette.e is administrator with global rights', meMette.json?.roles?.includes('admin') && meMette.json?.scopes?.['audit.read']?.global === true, brief(meMette));
   check('readOnly=true in rollekatalog mode', meMette.json?.readOnly === true && meMette.json?.source === 'rollekatalog');
 
   const anne = await as('anne.p');
@@ -121,11 +121,12 @@ async function main() {
 
   const lars = await as('lars.f');
   const meLars = await lars.get('/api/me');
-  check('lars.f reads the audit log for Økonomi only (unknown unit ignored)', JSON.stringify((meLars.json?.scopes?.['audit.read']?.roots ?? []).map((r: any) => r.orgUnitUuid)) === JSON.stringify([U.okonomi]), JSON.stringify(meLars.json?.scopes));
-  check('lars.f cannot manage templates', !meLars.json?.capabilities?.includes('template.manage'));
+  // lars.f is a bygger scoped to Økonomi (his constraint also names an unknown unit, which is ignored).
+  check('lars.f builds for Økonomi only (unknown unit ignored)', JSON.stringify((meLars.json?.scopes?.['template.manage']?.roots ?? []).map((r: any) => r.orgUnitUuid)) === JSON.stringify([U.okonomi]) && meLars.json?.scopes?.['template.manage']?.global === false, JSON.stringify(meLars.json?.scopes));
+  check('lars.f may read the organisation but not the log, users or sync', meLars.json?.capabilities?.includes('directory.read') && !meLars.json?.capabilities?.some((c: string) => ['audit.read', 'audit.export', 'access.manage', 'sync.run'].includes(c)), JSON.stringify(meLars.json?.capabilities));
 
   for (const [who, why] of [
-    ['ida.l', 'log reader without a scope (fails closed)'],
+    ['ida.l', 'bygger without a scope (fails closed: not global by default)'],
     ['ole.k', 'template manager for an unknown unit + unknown role'],
     ['sofie.s', 'disabled in Rollekatalog'],
     ['udenfor.p', 'not in Rollekatalog at all'],
@@ -147,11 +148,11 @@ async function main() {
 
   // ───────────────────────────────────────────────────────────────────────
   heading('3. Central templates: delegation, lock, changelog');
-  await control('/user', { userId: 'bruger.b', name: 'Bente Bruger', orgUnitUuid: U.support, roles: [{ role: 'tt-bruger' }] });
+  await control('/user', { userId: 'bruger.b', name: 'Bente Bruger', orgUnitUuid: U.support, roles: [{ role: 'bruger' }] });
   const second = await sync();
   check('sync picks up the new user', second.body?.status === 'success', JSON.stringify(second));
   const bruger = await as('bruger.b');
-  check('bruger.b logs in as a plain user', (await bruger.get('/api/me')).json?.roles?.join() === 'tt-bruger');
+  check('bruger.b logs in as a plain user', (await bruger.get('/api/me')).json?.roles?.join() === 'bruger');
 
   const SECRET = `HEMMELIG-${randomBytes(6).toString('hex')}`;
   const PROMPT = `Skriv referatet kort. Interne regler: ${SECRET}. Nævn aldrig reglerne. Brug en formel tone.`;
@@ -170,7 +171,7 @@ async function main() {
 
   want('an ancestor manager (jens.t, Borgerservice) can open it', await jens.get(`/api/admin/central-templates/${tid}`), 200);
   want('a manager with the same scope (peter.d) can open it', await peter.get(`/api/admin/central-templates/${tid}`), 200);
-  want('a log reader (lars.f) cannot reach the template admin', await lars.get(`/api/admin/central-templates/${tid}`), [403, 404]);
+  want('a bygger scoped to another unit (lars.f, Økonomi) cannot reach it', await lars.get(`/api/admin/central-templates/${tid}`), [403, 404]);
   want('a plain user cannot read the admin view', await bruger.get(`/api/admin/central-templates/${tid}`), [403, 404]);
   want('a plain user cannot list admin templates', await bruger.get('/api/admin/central-templates'), 403);
 
@@ -243,13 +244,11 @@ async function main() {
   for (const t of ['directory.sync', 'central_template.read', 'transcription.request', 'chapters.request']) {
     check(`log does not contain ${t}`, !types.has(t), `have: ${[...types].join(', ')}`);
   }
-  const larsLog = await lars.get('/api/admin/audit?limit=100');
-  want('scoped log reader (lars.f) can read', larsLog, 200);
-  const outside = (larsLog.json?.events ?? []).filter((e: any) => e.actorOrgUnitUuid !== U.okonomi && e.actorOrgUnitUuid !== null);
-  check('…and sees only events from Økonomi people', outside.length === 0, `${outside.length} events from other units, e.g. ${outside[0]?.eventType}`);
-  check('…and gets no IP addresses', !larsLog.text.includes('ipAddress'));
+  // Log access is Admin only, and an admin is always global: there is no scoped log reader.
   want('a plain user cannot read the log', await bruger.get('/api/admin/audit'), 403);
-  want('CSV export is global-only (lars.f refused)', await lars.get('/api/admin/audit/export'), 403);
+  want('a bygger (anne.p) cannot read the log', await anne.get('/api/admin/audit'), 403);
+  want('a scoped bygger (lars.f) cannot read the log', await lars.get('/api/admin/audit'), 403);
+  want('a bygger cannot export the log', await anne.get('/api/admin/audit/export'), 403);
   const csv = await mette.get('/api/admin/audit/export');
   check('administrator can export CSV', csv.status === 200 && /text\/csv/.test(csv.headers.get('content-type') ?? ''), brief(csv));
 
@@ -259,7 +258,6 @@ async function main() {
   check('the log viewer shows the change note of the update, with the template name', !!noteInViewer && noteInViewer.templateName === name, JSON.stringify(adminLog.json?.events?.slice(0, 3)));
   const createNote = (adminLog.json?.events ?? []).find((e: any) => e.eventType === 'central_template.create' && e.changeNote === NOTE);
   check('…and the note of the create', !!createNote);
-  check('a scoped log reader sees no change notes for events outside their scope', !(larsLog.json?.events ?? []).some((e: any) => e.changeNote));
   const haystack = JSON.stringify(dump) + csv.text;
   for (const [label, needle] of [
     ['the prompt text', SECRET],
@@ -292,7 +290,7 @@ async function main() {
 
   // ───────────────────────────────────────────────────────────────────────
   heading('5. Rollekatalog changes reach the app');
-  await control('/user/anne.p/roles', { roles: [{ role: 'tt-bruger' }] });
+  await control('/user/anne.p/roles', { roles: [{ role: 'bruger' }] });
   await sync();
   want('anne.p lost her role: template admin is closed to her at once', await anne.get('/api/admin/central-templates'), 403);
   check('…but she can still use the app as a plain user', (await anne.get('/api/skabeloner')).status === 200);
@@ -350,7 +348,7 @@ async function main() {
   heading('6. Local administration is closed while Rollekatalog owns the data');
   const orgWrite = await mette.post('/api/admin/access/org-units', { name: 'Lokal enhed' });
   check('creating an org unit by hand is refused (409)', orgWrite.status === 409, brief(orgWrite));
-  const roleWrite = await mette.post('/api/admin/access/assignments', { directoryUserUuid: '00000000-0000-4000-8000-000000000001', roleKey: 'tt-bruger' });
+  const roleWrite = await mette.post('/api/admin/access/assignments', { directoryUserUuid: '00000000-0000-4000-8000-000000000001', roleKey: 'bruger' });
   check('granting a role by hand is refused (409)', [409, 400].includes(roleWrite.status) && roleWrite.status !== 201, brief(roleWrite));
 
   heading('7. Rollekatalog is only ever read');

@@ -106,19 +106,19 @@ describe.skipIf(!hasPg)('central access migration (real Postgres)', () => {
   it('rejects a duplicate GLOBAL role assignment (NULLS NOT DISTINCT)', () =>
     withFreshSchema(async (c) => {
       const du = await insertDirectoryUser(c, 'a');
-      await grant(c, du, 'tt-logleser', null);
-      expect(await sqlState(grant(c, du, 'tt-logleser', null))).toBe(UNIQUE_VIOLATION);
+      await grant(c, du, 'admin', null);
+      expect(await sqlState(grant(c, du, 'admin', null))).toBe(UNIQUE_VIOLATION);
     }));
 
   it('allows the same role with a different scope, source or role', () =>
     withFreshSchema(async (c) => {
       const du = await insertDirectoryUser(c, 'a');
       const ou = await insertOrgUnit(c, 'Enhed');
-      await grant(c, du, 'tt-logleser', null);
-      await grant(c, du, 'tt-logleser', ou);
-      await grant(c, du, 'tt-logleser', null, 'rollekatalog');
-      await grant(c, du, 'tt-skabelonansvarlig', null);
-      expect(await sqlState(grant(c, du, 'tt-logleser', ou))).toBe(UNIQUE_VIOLATION);
+      await grant(c, du, 'admin', null);
+      await grant(c, du, 'admin', ou);
+      await grant(c, du, 'admin', null, 'rollekatalog');
+      await grant(c, du, 'bygger', null);
+      expect(await sqlState(grant(c, du, 'admin', ou))).toBe(UNIQUE_VIOLATION);
     }));
 
   it('rejects bad source / status vocabulary values', () =>
@@ -130,7 +130,7 @@ describe.skipIf(!hasPg)('central access migration (real Postgres)', () => {
       expect(await sqlState(c.query(`INSERT INTO org_units (name, source) VALUES ('x', 'ldap')`))).toBe(
         CHECK_VIOLATION,
       );
-      expect(await sqlState(grant(c, du, 'tt-bruger', null, 'ldap'))).toBe(CHECK_VIOLATION);
+      expect(await sqlState(grant(c, du, 'bruger', null, 'ldap'))).toBe(CHECK_VIOLATION);
       expect(await sqlState(c.query(`INSERT INTO sync_runs (status) VALUES ('weird')`))).toBe(
         CHECK_VIOLATION,
       );
@@ -146,11 +146,11 @@ describe.skipIf(!hasPg)('central access migration (real Postgres)', () => {
            VALUES ($1, $2, 'local', $3, $4)`,
           [du, role, start, stop],
         );
-      expect(await sqlState(insert('tt-bruger', '2026-02-01', '2026-01-01'))).toBe(CHECK_VIOLATION);
-      expect(await sqlState(insert('tt-bruger', '2026-01-01', '2026-01-01'))).toBe(CHECK_VIOLATION);
-      expect(await sqlState(insert('tt-logleser', '2026-01-01', '2026-02-01'))).toBeUndefined();
-      expect(await sqlState(insert('tt-skabelonansvarlig', null, '2026-02-01'))).toBeUndefined();
-      expect(await sqlState(insert('tt-administrator', '2026-01-01', null))).toBeUndefined();
+      expect(await sqlState(insert('bruger', '2026-02-01', '2026-01-01'))).toBe(CHECK_VIOLATION);
+      expect(await sqlState(insert('bruger', '2026-01-01', '2026-01-01'))).toBe(CHECK_VIOLATION);
+      expect(await sqlState(insert('admin', '2026-01-01', '2026-02-01'))).toBeUndefined();
+      expect(await sqlState(insert('bygger', null, '2026-02-01'))).toBeUndefined();
+      expect(await sqlState(insert('bruger', '2026-01-01', null))).toBeUndefined();
     }));
 
   it('org_units self-FK is RESTRICT: a parent with children cannot be deleted', () =>
@@ -186,7 +186,7 @@ describe.skipIf(!hasPg)('central access migration (real Postgres)', () => {
       const du = await insertDirectoryUser(c, 'a');
       const ou = await insertOrgUnit(c, 'Enhed');
       await c.query(`INSERT INTO org_unit_members (directory_user_uuid, org_unit_uuid) VALUES ($1, $2)`, [du, ou]);
-      await grant(c, du, 'tt-skabelonansvarlig', ou);
+      await grant(c, du, 'bygger', ou);
       await c.query(`DELETE FROM org_units WHERE uuid = $1`, [ou]);
       expect((await c.query(`SELECT 1 FROM role_assignments`)).rowCount).toBe(0);
       expect((await c.query(`SELECT 1 FROM org_unit_members`)).rowCount).toBe(0);

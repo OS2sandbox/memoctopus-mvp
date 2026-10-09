@@ -27,19 +27,17 @@
     "byProvider": {
       "oidc": {
         "appRoleMap": {
-          "referat-admin": "tt-administrator",
-          "referat-superuser": "tt-skabelonansvarlig",
-          "referat-log": "tt-logleser",
-          "referat-bruger": "tt-bruger"
+          "referat-admin": "admin",
+          "referat-superuser": "bygger",
+          "referat-bruger": "bruger"
         },
         "groupRoleMap": {}
       },
       "saml": {
         "appRoleMap": {
-          "referat-admin": "tt-administrator",
-          "referat-superuser": "tt-skabelonansvarlig",
-          "referat-log": "tt-logleser",
-          "referat-bruger": "tt-bruger"
+          "referat-admin": "admin",
+          "referat-superuser": "bygger",
+          "referat-bruger": "bruger"
         },
         "groupRoleMap": {}
       }
@@ -47,8 +45,7 @@
   },
   "catalogue": [
     { "kind": "role", "identifier": "referat-admin", "name": "Referat: administrator" },
-    { "kind": "role", "identifier": "referat-superuser", "name": "Referat: superbruger" },
-    { "kind": "role", "identifier": "referat-log", "name": "Referat: loglæser" },
+    { "kind": "role", "identifier": "referat-superuser", "name": "Referat: bygger (superbruger)" },
     { "kind": "role", "identifier": "referat-bruger", "name": "Referat: bruger" },
     { "kind": "group", "identifier": "G-Borgerservice", "name": "Borgerservice" },
     { "kind": "group", "identifier": "G-Okonomi", "name": "Økonomi" }

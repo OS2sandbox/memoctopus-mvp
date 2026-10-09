@@ -321,7 +321,7 @@ async function assertPrincipalTargetsAllowed(
   }
   if (!hasGlobalScope(principal, 'template.manage')) {
     throw new ForbiddenError(
-      'Kun en skabelonansvarlig med tilladelse for hele organisationen kan gøre en skabelon tilgængelig for roller og grupper',
+      'Kun en bygger med tilladelse for hele organisationen kan gøre en skabelon tilgængelig for roller og grupper',
       'principal_targets_need_global',
     );
   }
@@ -353,7 +353,7 @@ async function assertNoPrincipalTargetsUnlessGlobal(
   );
   if (rows.length > 0) {
     throw new ForbiddenError(
-      'Skabelonen er gjort tilgængelig for roller eller grupper. Kun en skabelonansvarlig med tilladelse for hele organisationen kan ændre, arkivere eller genoprette den',
+      'Skabelonen er gjort tilgængelig for roller eller grupper. Kun en bygger med tilladelse for hele organisationen kan ændre, arkivere eller genoprette den',
       'principal_targets_need_global',
     );
   }
@@ -363,7 +363,7 @@ async function assertNoPrincipalTargetsUnlessGlobal(
 function assertGlobalForOrgWide(principal: Principal): void {
   if (!hasGlobalScope(principal, 'template.manage')) {
     throw new ForbiddenError(
-      'Kun en skabelonansvarlig med tilladelse for hele organisationen kan oprette en skabelon uden ejerenhed',
+      'Kun en bygger med tilladelse for hele organisationen kan oprette en skabelon uden ejerenhed',
       'org_wide_needs_global',
     );
   }

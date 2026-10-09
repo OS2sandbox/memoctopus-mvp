@@ -24,7 +24,7 @@ describe('Table', () => {
         <TableBody>
           <TableRow>
             <TableCell>Anna</TableCell>
-            <TableCell>tt-bruger</TableCell>
+            <TableCell>bruger</TableCell>
           </TableRow>
         </TableBody>
       </Table>,

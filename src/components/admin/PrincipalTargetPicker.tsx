@@ -98,7 +98,7 @@ export function PrincipalTargetPicker({
         <p className="text-[13px] text-[var(--muted)]">
           {lockedReason === 'needs_claims'
             ? 'Roller og grupper kan kun vælges, når rollerne kommer fra brugernes login (ACCESS_SOURCE=claims). Uden login-claims har ingen en rolle, som skabelonen kan matche.'
-            : 'Kun en skabelonansvarlig med tilladelse for hele organisationen kan vælge roller og grupper.'}
+            : 'Kun en bygger med tilladelse for hele organisationen kan vælge roller og grupper.'}
         </p>
       ) : catalogue.length === 0 ? (
         <p className="text-[13px] text-[var(--muted)]">

@@ -24,7 +24,7 @@ const TENANT = '11111111-2222-3333-4444-555555555555';
 const role = (m: Record<string, string>) => new Map(Object.entries(m).map(([k, r]) => [k, { role: r as never, global: true }]));
 const ROLES: RolesConfig = {
   state: 'ok',
-  appRoleMap: role({ 'referat-admin': 'tt-administrator', 'referat-bruger': 'tt-bruger' }),
+  appRoleMap: role({ 'referat-admin': 'admin', 'referat-bruger': 'bruger' }),
   groupRoleMap: role({}),
 };
 const SPECS = { claims: {}, rolesClaim: { name: 'roles', format: 'array' as const, separator: ',' } };
@@ -187,7 +187,7 @@ describe('OIDC login through the real plugins', () => {
       expect(hasSession(res)).toBe(true);
       expect(db.user).toHaveLength(1);
       expect(db.account[0]).toMatchObject({ providerId: 'fka', accountId: 'person-1' });
-      expect(logins).toEqual([{ providerId: 'fka', claims: { roles: ['referat-admin', 'noise'] }, roles: ['tt-administrator'] }]);
+      expect(logins).toEqual([{ providerId: 'fka', claims: { roles: ['referat-admin', 'noise'] }, roles: ['admin'] }]);
     });
 
     it('a SECOND login hands over the NEW roles for the same person: nothing is carried over', async () => {
@@ -196,7 +196,7 @@ describe('OIDC login through the real plugins', () => {
       expect(hasSession(second)).toBe(true);
       expect(db.user).toHaveLength(1); // the same person, not a new account
       expect(db.account).toHaveLength(1);
-      expect(logins.map((l) => l.roles)).toEqual([['tt-administrator'], ['tt-bruger']]);
+      expect(logins.map((l) => l.roles)).toEqual([['admin'], ['bruger']]);
       // The hand-over is single use: a later read finds nothing, so a stale entry can never be replayed.
       expect(takeLoginClaims('fka', 'person-1')).toBeNull();
     });
@@ -204,13 +204,13 @@ describe('OIDC login through the real plugins', () => {
     it('reads a role claim that is only at the userinfo endpoint', async () => {
       await login('c3', { idToken: tokenClaims(), userinfo: { sub: 'person-1', roles: ['referat-admin'] } });
       expect(userinfoCalls).toEqual(['c3']);
-      expect(logins[0].roles).toEqual(['tt-administrator']);
+      expect(logins[0].roles).toEqual(['admin']);
     });
 
     it('does not ask userinfo when the id token already carries the claim', async () => {
       await login('c4', { idToken: tokenClaims({ roles: ['referat-bruger'] }), userinfo: { sub: 'person-1', roles: ['referat-admin'] } });
       expect(userinfoCalls).toEqual([]);
-      expect(logins[0].roles).toEqual(['tt-bruger']);
+      expect(logins[0].roles).toEqual(['bruger']);
     });
 
     it('a userinfo answer for another subject is ignored: no roles', async () => {

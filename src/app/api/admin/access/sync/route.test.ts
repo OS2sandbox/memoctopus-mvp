@@ -27,7 +27,7 @@ const get = () => makeJsonReq(URL, 'GET');
 const counts = { ...emptySyncCounts(), usersUpserted: 3 };
 const result = (over: Partial<SyncResult> = {}): SyncResult => ({ status: 'success', runId: 'run-1', counts, errorCode: null, ...over });
 
-const OPERATOR = makePrincipal({ roles: ['tt-bruger', 'tt-logleser'], capabilities: ['template.use', 'audit.read', 'directory.read'] });
+const OPERATOR = makePrincipal({ roles: ['bruger', 'admin'], capabilities: ['template.use', 'audit.read', 'directory.read'] });
 const ACCESS_MANAGER = makePrincipal({ capabilities: ['template.use', 'access.manage'] });
 
 beforeEach(() => {

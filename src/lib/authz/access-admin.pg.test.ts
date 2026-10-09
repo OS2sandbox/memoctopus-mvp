@@ -25,7 +25,7 @@ import {
 async function activeAdmins(c: Client): Promise<number> {
   const r = await c.query(
     `SELECT count(*)::int AS n FROM role_assignments
-      WHERE role_key = 'tt-administrator' AND (stop_date IS NULL OR stop_date > now())`,
+      WHERE role_key = 'admin' AND (stop_date IS NULL OR stop_date > now())`,
   );
   return r.rows[0].n;
 }
@@ -48,7 +48,7 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
         const synced = await c.query(
           `INSERT INTO directory_users (name, email, source) VALUES ('Boss', 'boss@example.dk', 'rollekatalog') RETURNING uuid`,
         );
-        const a = await grantRole({ appUserId: 'victim', roleKey: 'tt-logleser', actorUserId: 'x' }, runner);
+        const a = await grantRole({ appUserId: 'victim', roleKey: 'admin', actorUserId: 'x' }, runner);
 
         const owner = await c.query(
           'SELECT du.uuid, du.app_user_id, du.source FROM role_assignments ra JOIN directory_users du ON du.uuid = ra.directory_user_uuid WHERE ra.id = $1',
@@ -64,11 +64,11 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
       withFreshSchema(async (c, schema) => {
         const { runner, close } = schemaRunner(c, schema);
         await addUser(c, 'u1');
-        await grantRole({ appUserId: 'u1', roleKey: 'tt-logleser', actorUserId: 'x' }, runner);
-        await expect(grantRole({ appUserId: 'u1', roleKey: 'tt-logleser', actorUserId: 'x' }, runner)).rejects.toMatchObject({
+        await grantRole({ appUserId: 'u1', roleKey: 'admin', actorUserId: 'x' }, runner);
+        await expect(grantRole({ appUserId: 'u1', roleKey: 'admin', actorUserId: 'x' }, runner)).rejects.toMatchObject({
           code: 'already_assigned',
         });
-        await grantRole({ appUserId: 'u1', roleKey: 'tt-bruger', actorUserId: 'x' }, runner);
+        await grantRole({ appUserId: 'u1', roleKey: 'bruger', actorUserId: 'x' }, runner);
         expect((await c.query('SELECT count(*)::int AS n FROM directory_users')).rows[0].n).toBe(1);
         await close();
       }));
@@ -79,7 +79,7 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
         await addUser(c, 'u1');
         await addUser(c, 'u2');
         const unit = await createOrgUnit({ name: 'Borgerservice', actorUserId: 'x' }, runner);
-        await grantRole({ appUserId: 'u1', roleKey: 'tt-skabelonansvarlig', scopeOrgUnitUuid: unit.uuid, actorUserId: 'x' }, runner);
+        await grantRole({ appUserId: 'u1', roleKey: 'bygger', scopeOrgUnitUuid: unit.uuid, actorUserId: 'x' }, runner);
         const { users } = await listAppUsersWithRoles({}, runner);
         expect(users.map((u) => [u.id, u.roles.length])).toEqual([['u1', 1], ['u2', 0]]);
         expect(users[0].roles[0]).toMatchObject({ scopeOrgUnitName: 'Borgerservice', active: true, source: 'local' });
@@ -95,11 +95,11 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
         const { runner, close } = schemaRunner(c, schema);
         await addUser(c, 'a1');
         await addUser(c, 'a2');
-        const g1 = await grantRole({ appUserId: 'a1', roleKey: 'tt-administrator', actorUserId: 'a1' }, runner);
+        const g1 = await grantRole({ appUserId: 'a1', roleKey: 'admin', actorUserId: 'a1' }, runner);
         await expect(revokeAssignment(g1.id, 'a1', runner)).rejects.toMatchObject({ code: 'last_administrator' });
         expect(await activeAdmins(c)).toBe(1);
 
-        const g2 = await grantRole({ appUserId: 'a2', roleKey: 'tt-administrator', actorUserId: 'a1' }, runner);
+        const g2 = await grantRole({ appUserId: 'a2', roleKey: 'admin', actorUserId: 'a1' }, runner);
         await revokeAssignment(g1.id, 'a1', runner);
         expect(await activeAdmins(c)).toBe(1);
         await expect(revokeAssignment(g2.id, 'a2', runner)).rejects.toMatchObject({ code: 'last_administrator' });
@@ -112,18 +112,18 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
         await addUser(c, 'a1');
         await addUser(c, 'expired');
         await addUser(c, 'disabled');
-        const g1 = await grantRole({ appUserId: 'a1', roleKey: 'tt-administrator', actorUserId: 'a1' }, runner);
+        const g1 = await grantRole({ appUserId: 'a1', roleKey: 'admin', actorUserId: 'a1' }, runner);
 
-        const exp = await grantRole({ appUserId: 'expired', roleKey: 'tt-administrator', actorUserId: 'a1' }, runner);
+        const exp = await grantRole({ appUserId: 'expired', roleKey: 'admin', actorUserId: 'a1' }, runner);
         await c.query(`UPDATE role_assignments SET start_date = now() - interval '2 days', stop_date = now() - interval '1 day' WHERE id = $1`, [exp.id]);
 
-        await grantRole({ appUserId: 'disabled', roleKey: 'tt-administrator', actorUserId: 'a1' }, runner);
+        await grantRole({ appUserId: 'disabled', roleKey: 'admin', actorUserId: 'a1' }, runner);
         await c.query(`UPDATE directory_users SET disabled = true WHERE app_user_id = 'disabled'`);
 
         const orphan = await c.query(`INSERT INTO directory_users (name, source) VALUES ('Ingen konto', 'local') RETURNING uuid`);
-        await c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'tt-administrator', 'local')`, [orphan.rows[0].uuid]);
+        await c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'admin', 'local')`, [orphan.rows[0].uuid]);
         const synced = await c.query(`INSERT INTO directory_users (name, source, app_user_id) VALUES ('Synk', 'rollekatalog', NULL) RETURNING uuid`);
-        await c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'tt-administrator', 'rollekatalog')`, [synced.rows[0].uuid]);
+        await c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'admin', 'rollekatalog')`, [synced.rows[0].uuid]);
 
         await expect(revokeAssignment(g1.id, 'a1', runner)).rejects.toMatchObject({ code: 'last_administrator' });
         await close();
@@ -134,10 +134,10 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
         const { runner, close } = schemaRunner(c, schema);
         await addUser(c, 'a1');
         await addUser(c, 'a2');
-        const g1 = await grantRole({ appUserId: 'a1', roleKey: 'tt-administrator', actorUserId: 'a1' }, runner);
+        const g1 = await grantRole({ appUserId: 'a1', roleKey: 'admin', actorUserId: 'a1' }, runner);
         const tomorrow = new Date(Date.now() + 24 * 3600 * 1000);
         const g2 = await grantRole(
-          { appUserId: 'a2', roleKey: 'tt-administrator', stopDate: tomorrow, actorUserId: 'a1' },
+          { appUserId: 'a2', roleKey: 'admin', stopDate: tomorrow, actorUserId: 'a1' },
           runner,
         );
         // a1 is the only PERMANENT administrator: self-revoke must be refused.
@@ -152,7 +152,7 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
       withFreshSchema(async (c, schema) => {
         const { runner, close } = schemaRunner(c, schema);
         const d = await c.query(`INSERT INTO directory_users (name, source) VALUES ('Synk', 'rollekatalog') RETURNING uuid`);
-        const a = await c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'tt-logleser', 'rollekatalog') RETURNING id`, [d.rows[0].uuid]);
+        const a = await c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'bygger', 'rollekatalog') RETURNING id`, [d.rows[0].uuid]);
         await expect(revokeAssignment(a.rows[0].id, 'x', runner)).rejects.toMatchObject({ code: 'not_local' });
         expect((await c.query('SELECT count(*)::int AS n FROM role_assignments')).rows[0].n).toBe(1);
         await close();
@@ -163,8 +163,8 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
         const { runner, close } = schemaRunner(c, schema);
         await addUser(c, 'a1');
         await addUser(c, 'a2');
-        let a1 = (await grantRole({ appUserId: 'a1', roleKey: 'tt-administrator', actorUserId: 'a1' }, runner)).id;
-        let a2 = (await grantRole({ appUserId: 'a2', roleKey: 'tt-administrator', actorUserId: 'a1' }, runner)).id;
+        let a1 = (await grantRole({ appUserId: 'a1', roleKey: 'admin', actorUserId: 'a1' }, runner)).id;
+        let a2 = (await grantRole({ appUserId: 'a2', roleKey: 'admin', actorUserId: 'a1' }, runner)).id;
 
         for (let round = 0; round < 8; round++) {
           const results = await Promise.allSettled([revokeAssignment(a1, 'a1', runner), revokeAssignment(a2, 'a2', runner)]);
@@ -173,9 +173,9 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
           expect(await activeAdmins(c)).toBe(1);
           // Restore the revoked one for the next round.
           if (results[0].status === 'fulfilled') {
-            a1 = (await grantRole({ appUserId: 'a1', roleKey: 'tt-administrator', actorUserId: 'a2' }, runner)).id;
+            a1 = (await grantRole({ appUserId: 'a1', roleKey: 'admin', actorUserId: 'a2' }, runner)).id;
           } else {
-            a2 = (await grantRole({ appUserId: 'a2', roleKey: 'tt-administrator', actorUserId: 'a1' }, runner)).id;
+            a2 = (await grantRole({ appUserId: 'a2', roleKey: 'admin', actorUserId: 'a1' }, runner)).id;
           }
         }
         await close();
@@ -187,7 +187,7 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
         const ids: string[] = [];
         for (const u of ['a1', 'a2', 'a3']) {
           await addUser(c, u);
-          ids.push((await grantRole({ appUserId: u, roleKey: 'tt-administrator', actorUserId: u }, runner)).id);
+          ids.push((await grantRole({ appUserId: u, roleKey: 'admin', actorUserId: u }, runner)).id);
         }
         const results = await Promise.allSettled(ids.map((id, i) => revokeAssignment(id, `a${i + 1}`, runner)));
         expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(2);
@@ -292,7 +292,7 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
         await expect(deleteOrgUnit(a, 'x', runner)).rejects.toMatchObject({ code: 'has_children' });
 
         await addUser(c, 'm1');
-        await grantRole({ appUserId: 'm1', roleKey: 'tt-skabelonansvarlig', scopeOrgUnitUuid: leaf, actorUserId: 'x' }, runner);
+        await grantRole({ appUserId: 'm1', roleKey: 'bygger', scopeOrgUnitUuid: leaf, actorUserId: 'x' }, runner);
         await expect(deleteOrgUnit(leaf, 'x', runner)).rejects.toMatchObject({ code: 'has_role_assignments' });
         expect((await c.query('SELECT count(*)::int AS n FROM role_assignments')).rows[0].n).toBe(1);
 
@@ -323,7 +323,7 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
         for (let round = 0; round < 8; round++) {
           const u = (await createOrgUnit({ name: `U${round}`, actorUserId: 'x' }, runner)).uuid;
           const [grant, del] = await Promise.allSettled([
-            grantRole({ appUserId: 'm1', roleKey: 'tt-logleser', scopeOrgUnitUuid: u, actorUserId: 'x' }, runner),
+            grantRole({ appUserId: 'm1', roleKey: 'bygger', scopeOrgUnitUuid: u, actorUserId: 'x' }, runner),
             deleteOrgUnit(u, 'x', runner),
           ]);
           const unitExists = (await c.query('SELECT 1 FROM org_units WHERE uuid = $1', [u])).rows.length === 1;

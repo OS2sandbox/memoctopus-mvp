@@ -41,7 +41,7 @@ vi.mock('@/lib/hooks/use-me', () => ({ useMe: () => mockMe }));
 
 const meWith = (capabilities: string[]) => ({
   user: { id: 'u1', name: 'A', email: 'a@example.com' },
-  roles: ['tt-bruger'],
+  roles: ['bruger'],
   capabilities,
   scopes: {},
   source: 'local',

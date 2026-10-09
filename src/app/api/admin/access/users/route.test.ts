@@ -33,7 +33,7 @@ describe('GET /api/admin/access/users (access.manage)', () => {
 
   it('403 without access.manage, even for a log reader with directory.read', async () => {
     mockResolve.mockResolvedValue(
-      makePrincipal({ roles: ['tt-bruger', 'tt-logleser'], capabilities: ['template.use', 'audit.read', 'directory.read'] }),
+      makePrincipal({ roles: ['bruger', 'admin'], capabilities: ['template.use', 'audit.read', 'directory.read'] }),
     );
     expect((await GET(req(), NO_PARAMS)).status).toBe(403);
     expect(mockList).not.toHaveBeenCalled();

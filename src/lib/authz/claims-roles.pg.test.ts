@@ -49,8 +49,8 @@ beforeEach(() => {
   vi.stubEnv('ACCESS_SOURCE', 'claims');
   state.roles = {
     state: 'ok',
-    appRoleMap: role({ admin: 'tt-administrator', su: 'tt-skabelonansvarlig' }),
-    groupRoleMap: role({ 'g-log': 'tt-logleser' }),
+    appRoleMap: role({ admin: 'admin', su: 'bygger' }),
+    groupRoleMap: role({ 'g-log': 'bruger' }),
   };
   state.specs = {
     claims: {},
@@ -76,7 +76,7 @@ describe.skipIf(!hasPg)('claims roles (real Postgres)', () => {
       expect(res).toMatchObject({ outcome: 'applied', rolesWritten: 2, externalStored: 2 });
 
       expect((await c.query(`SELECT source, disabled FROM directory_users WHERE app_user_id = 'u1'`)).rows).toEqual([{ source: 'claims', disabled: false }]);
-      expect(await claimRoles(c, 'u1')).toEqual(['tt-administrator', 'tt-logleser']);
+      expect(await claimRoles(c, 'u1')).toEqual(['admin', 'bruger']);
       const rows = (await c.query(`SELECT scope_org_unit_uuid, include_descendants, start_date, stop_date, synced_at FROM role_assignments`)).rows;
       expect(rows.every((r) => r.scope_org_unit_uuid === null && r.start_date === null && r.stop_date === null && r.synced_at instanceof Date)).toBe(true);
       // 'unknown', 'g-none' and the INACTIVE catalogue entry 'old' are not stored; 'admin' as a GROUP is a different key.
@@ -90,10 +90,10 @@ describe.skipIf(!hasPg)('claims roles (real Postgres)', () => {
       await addUser(c, 'u1');
       await catalogue(c, [['role', 'admin'], ['role', 'su'], ['group', 'g-log']]);
       await applyClaimsLogin(login('u1', { roles: ['admin', 'su'], memberOf: 'g-log' }), runner);
-      expect(await claimRoles(c, 'u1')).toEqual(['tt-administrator', 'tt-logleser', 'tt-skabelonansvarlig']);
+      expect(await claimRoles(c, 'u1')).toEqual(['admin', 'bruger', 'bygger']);
 
       await applyClaimsLogin(login('u1', { roles: ['su'] }), runner);
-      expect(await claimRoles(c, 'u1')).toEqual(['tt-skabelonansvarlig']);
+      expect(await claimRoles(c, 'u1')).toEqual(['bygger']);
       expect(await external(c, 'u1')).toEqual(['role:su']);
       expect((await c.query(`SELECT count(*)::int AS n FROM directory_users`)).rows[0].n).toBe(1);
 
@@ -109,7 +109,7 @@ describe.skipIf(!hasPg)('claims roles (real Postgres)', () => {
       await addUser(c, 'u1');
       await catalogue(c, [['role', 'admin']]);
       await applyClaimsLogin(login('u1', { roles: ['admin'] }), runner);
-      expect(await claimRoles(c, 'u1')).toEqual(['tt-administrator']);
+      expect(await claimRoles(c, 'u1')).toEqual(['admin']);
       await applyClaimsLogin(login('u1', { roles: { not: 'a list' } }), runner);
       expect(await claimRoles(c, 'u1')).toEqual([]);
       expect(await external(c, 'u1')).toEqual([]);
@@ -132,16 +132,16 @@ describe.skipIf(!hasPg)('claims roles (real Postgres)', () => {
       const { runner, close } = schemaRunner(c, schema);
       await addUser(c, 'u1');
       const du = (await c.query(`INSERT INTO directory_users (name, source, app_user_id) VALUES ('U', 'local', 'u1') RETURNING uuid`)).rows[0].uuid;
-      await c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'tt-logleser', 'local')`, [du]);
-      await c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source, synced_at) VALUES ($1, 'tt-administrator', 'rollekatalog', now())`, [du]);
+      await c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'bygger', 'local')`, [du]);
+      await c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source, synced_at) VALUES ($1, 'admin', 'rollekatalog', now())`, [du]);
       await catalogue(c, [['role', 'admin']]);
 
       await applyClaimsLogin(login('u1', { roles: ['admin'] }), runner);
       await applyClaimsLogin(login('u1', { roles: [] }), runner);
       const left = (await c.query(`SELECT role_key, source FROM role_assignments ORDER BY source`)).rows;
       expect(left).toEqual([
-        { role_key: 'tt-logleser', source: 'local' },
-        { role_key: 'tt-administrator', source: 'rollekatalog' },
+        { role_key: 'bygger', source: 'local' },
+        { role_key: 'admin', source: 'rollekatalog' },
       ]);
       expect((await c.query(`SELECT count(*)::int AS n FROM directory_users`)).rows[0].n).toBe(1);
       await close();
@@ -171,7 +171,7 @@ describe.skipIf(!hasPg)('claims roles (real Postgres)', () => {
       );
       const roles = await claimRoles(c, 'u1');
       expect(roles).toHaveLength(1);
-      expect(['tt-administrator', 'tt-skabelonansvarlig']).toContain(roles[0]);
+      expect(['admin', 'bygger']).toContain(roles[0]);
       expect((await external(c, 'u1'))).toHaveLength(1);
       expect((await c.query(`SELECT count(*)::int AS n FROM directory_users`)).rows[0].n).toBe(1);
       await close();
@@ -187,7 +187,7 @@ describe.skipIf(!hasPg)('claims roles (real Postgres)', () => {
       await c.query(`ALTER TABLE user_external_roles ADD CONSTRAINT zz_fail CHECK (identifier <> 'su')`);
       await c.query(`INSERT INTO external_roles (kind, identifier, name, source) VALUES ('role', 'su', 'su', 'config')`);
       await expect(applyClaimsLogin(login('u1', { roles: ['su'] }), runner)).rejects.toMatchObject({ code: CHECK_VIOLATION });
-      expect(await claimRoles(c, 'u1')).toEqual(['tt-administrator']); // untouched
+      expect(await claimRoles(c, 'u1')).toEqual(['admin']); // untouched
       expect(await external(c, 'u1')).toEqual(['role:admin']);
       await close();
     }));
@@ -199,11 +199,11 @@ describe.skipIf(!hasPg)('claims roles (real Postgres)', () => {
       await catalogue(c, [['role', 'admin']]);
       await applyClaimsLogin(login('u1', { roles: ['admin'] }), runner);
       const du = (await c.query(`SELECT uuid FROM directory_users WHERE app_user_id = 'u1'`)).rows[0].uuid;
-      await c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'tt-logleser', 'local')`, [du]);
+      await c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'admin', 'local')`, [du]);
       await clearClaimsRoles('u1', runner);
       expect(await claimRoles(c, 'u1')).toEqual([]);
       expect(await external(c, 'u1')).toEqual([]);
-      expect((await c.query(`SELECT role_key FROM role_assignments`)).rows).toEqual([{ role_key: 'tt-logleser' }]);
+      expect((await c.query(`SELECT role_key FROM role_assignments`)).rows).toEqual([{ role_key: 'admin' }]);
       await close();
     }));
 });
@@ -247,7 +247,7 @@ describe.skipIf(!hasPg)('external roles tables (real Postgres)', () => {
     withFreshSchema(async (c) => {
       const du = (await c.query(`INSERT INTO directory_users (name, source) VALUES ('x', 'claims') RETURNING uuid`)).rows[0].uuid;
       await c.query(`INSERT INTO org_units (name, source) VALUES ('x', 'claims')`);
-      await c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'tt-bruger', 'claims')`, [du]);
+      await c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, source) VALUES ($1, 'bruger', 'claims')`, [du]);
       await expect(c.query(`INSERT INTO directory_users (name, source) VALUES ('x', 'ldap')`)).rejects.toMatchObject({ code: CHECK_VIOLATION });
     }));
 });

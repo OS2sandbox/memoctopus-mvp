@@ -397,7 +397,7 @@ describe('providers from AUTH_CONFIG_FILE', () => {
   });
 
   it('exposes the SAML providers and the roles section', () => {
-    config({ providers: [SAML], roles: { appRoleMap: { admin: 'tt-administrator' } } });
+    config({ providers: [SAML], roles: { appRoleMap: { admin: 'admin' } } });
     expect(samlProviders().map((p) => p.id)).toEqual(['os2faktor']);
     expect(authRolesConfig().state).toBe('ok');
   });

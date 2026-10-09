@@ -52,7 +52,7 @@ function Intro({ source, itSystem }: { source: AccessSource; itSystem: string | 
 
 /**
  * Shown instead of the role controls while the roles are owned elsewhere (Rollekatalog, the
- * IdP's claims, or locked by the operator): says where roles are assigned and what the four roles
+ * IdP's claims, or locked by the operator): says where roles are assigned and what the three roles
  * mean. The wording of the roles comes from labels.da, the same source as the rest of the admin UI.
  */
 export function RoleSourceCard({

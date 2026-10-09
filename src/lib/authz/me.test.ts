@@ -3,7 +3,7 @@ import { isMeResponse, meToPrincipal, visibleSectionsForMe, type MeResponse } fr
 
 const base: MeResponse = {
   user: { id: 'u1', name: 'Anne', email: 'a@example.dk' },
-  roles: ['tt-bruger'],
+  roles: ['bruger'],
   capabilities: ['template.use'],
   scopes: {},
   source: 'local',
@@ -23,7 +23,7 @@ describe('isMeResponse', () => {
     ['null', null],
     ['a string', 'x'],
     ['no user', { ...base, user: undefined }],
-    ['roles not an array', { ...base, roles: 'tt-bruger' }],
+    ['roles not an array', { ...base, roles: 'bruger' }],
     ['capabilities missing', { ...base, capabilities: undefined }],
     ['unknown source', { ...base, source: 'baseline' }],
     ['readOnly not boolean', { ...base, readOnly: 'false' }],

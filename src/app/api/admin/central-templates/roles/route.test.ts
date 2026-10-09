@@ -21,12 +21,12 @@ const URL_ = 'http://localhost/api/admin/central-templates/roles';
 const get = () => GET(makeJsonReq(URL_, 'GET'), NO_PARAMS);
 
 const globalManager = makePrincipal({
-  roles: ['tt-bruger', 'tt-skabelonansvarlig'],
+  roles: ['bruger', 'bygger'],
   capabilities: ['template.use', 'template.manage'],
   scopes: { 'template.manage': { global: true, roots: [] } },
 });
 const globalAdmin = makePrincipal({
-  roles: ['tt-bruger', 'tt-administrator'],
+  roles: ['bruger', 'admin'],
   capabilities: ['template.use', 'template.manage', 'sync.run'],
   scopes: { 'template.manage': { global: true, roots: [] } },
 });

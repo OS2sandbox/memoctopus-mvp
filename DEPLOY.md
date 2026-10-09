@@ -205,7 +205,7 @@ installations. The full format and one recipe per IdP is in
    Claims mode is **closed by default**: password sign-in is off (an explicit
    `EMAIL_PASSWORD_ENABLED=true` re-enables sign-in but never sign-up), a person the IdP does
    not map to any role gets "Ingen adgang" (an explicit `REQUIRE_ROLE_TO_LOGIN=false` opens
-   that, and logs a warning), so **ordinary users must be mapped to `tt-bruger`** through
+   that, and logs a warning), so **ordinary users must be mapped to `bruger`** through
    `appRoleMap` / `groupRoleMap` (in `roles.byProvider.<id>` when there are several providers).
    An Entra provider needs its **single tenant id** (a GUID, never `common`), and an OIDC
    provider may not use a multi-tenant authority. Do not put `REQUIRE_ROLE_TO_LOGIN` or
@@ -257,7 +257,7 @@ and removing a role in the IdP taking effect inside a still-running session befo
 
 - **PostgreSQL 15 or newer** (the migrations use `NULLS NOT DISTINCT`); the compose file runs `postgres:16-alpine`. Migrations `0001` to `0004` run in the `migrate` service like the others.
 - **Set first** (all in `.env.example`; runtime only, restart without rebuild): `ACCESS_SOURCE` (`local` by default, or `rollekatalog`, or `claims`; a typo makes access control answer 503), `BOOTSTRAP_ADMIN_EMAILS`, `INTERNAL_CRON_SECRET`, and `AUDIT_RETENTION_DAYS` (default 365 days; `forever` keeps the log, see `docs/central-access/audit.md`). Rollekatalog variables are only needed for `ACCESS_SOURCE=rollekatalog`, except that the optional **role catalogue** (the roles and groups a shared prompt can be made available to) needs only `ROLLEKATALOG_URL` and `ROLLEKATALOG_READ_API_KEY`, in any mode (`ROLLEKATALOG_ROLES_PATH` / `ROLLEKATALOG_ROLEGROUPS_PATH` override its unverified default endpoints; section 12 of `docs/central-access/rollekatalog.md`). Without Rollekatalog the catalogue comes from the `catalogue` section of `AUTH_CONFIG_FILE`. If you set `DIRECTORY_USERID_TRANSFORM=strip-upn-domain`, also set `DIRECTORY_USERID_DOMAIN` (your UPN domain, for example `kommune.dk`); without it no login is matched (see `docs/central-access/rollekatalog.md`).
-- **First administrator.** In local mode, list your address in `BOOTSTRAP_ADMIN_EMAILS` and sign in through SSO (Microsoft needs a single-tenant `MICROSOFT_TENANT_ID`; OIDC needs `email_verified`). It grants `tt-administrator` once; the flag `bootstrap_admin_done` in `public.system_flags` then disables it. Recovery after a lock-out: `DELETE FROM system_flags WHERE key = 'bootstrap_admin_done';` and sign in again, or insert a `role_assignments` row by SQL.
+- **First administrator.** In local mode, list your address in `BOOTSTRAP_ADMIN_EMAILS` and sign in through SSO (Microsoft needs a single-tenant `MICROSOFT_TENANT_ID`; OIDC needs `email_verified`). It grants `admin` once; the flag `bootstrap_admin_done` in `public.system_flags` then disables it. Recovery after a lock-out: `DELETE FROM system_flags WHERE key = 'bootstrap_admin_done';` and sign in again, or insert a `role_assignments` row by SQL.
 - **Scheduling.** Nothing in the app runs timers. Call the routes from a host or cluster cron with `X-Cron-Secret`; both answer 404 until `INTERNAL_CRON_SECRET` is set, and the sync answers 409 unless `ACCESS_SOURCE=rollekatalog` and the integration is configured:
 
   ```

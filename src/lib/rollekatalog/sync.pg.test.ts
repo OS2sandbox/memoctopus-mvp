@@ -173,12 +173,12 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
       expect(byUuid[O(1)].parent_uuid).toBeNull();
 
       expect(await roleRows(h.c, U(3))).toEqual([
-        { role_key: 'tt-bruger', scope_org_unit_uuid: null, include_descendants: true },
-        { role_key: 'tt-skabelonansvarlig', scope_org_unit_uuid: O(3), include_descendants: true },
-        { role_key: 'tt-skabelonansvarlig', scope_org_unit_uuid: O(4), include_descendants: true },
+        { role_key: 'bruger', scope_org_unit_uuid: null, include_descendants: true },
+        { role_key: 'bygger', scope_org_unit_uuid: O(3), include_descendants: true },
+        { role_key: 'bygger', scope_org_unit_uuid: O(4), include_descendants: true },
       ]);
-      expect(await roleRows(h.c, U(7))).toEqual([]); // ida: logleser without scope is not global
-      expect(await roleRows(h.c, U(9))).toEqual([{ role_key: 'tt-administrator', scope_org_unit_uuid: null, include_descendants: true }]);
+      expect(await roleRows(h.c, U(7))).toEqual([]); // ida: bygger without scope is not global
+      expect(await roleRows(h.c, U(9))).toEqual([{ role_key: 'admin', scope_org_unit_uuid: null, include_descendants: true }]);
 
       // The run is recorded, counts only.
       const latest = await getLatestSyncRun(h.env);
@@ -210,7 +210,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
           ],
           roleAssignments: [
             ...d.roleAssignments,
-            { extUuid: E(99), userId: 'legacy-user', assignments: [{ roleIdentifier: 'tt-logleser', roleConstraintValues: [] }] },
+            { extUuid: E(99), userId: 'legacy-user', assignments: [{ roleIdentifier: 'admin', roleConstraintValues: [] }] },
             'not-a-row',
           ],
         });
@@ -492,7 +492,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
           [E(1)],
         )
       )[0].uuid;
-      await h.c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, scope_org_unit_uuid, source) VALUES ($1, 'tt-skabelonansvarlig', $2, 'local')`, [localUser, localUnit]);
+      await h.c.query(`INSERT INTO role_assignments (directory_user_uuid, role_key, scope_org_unit_uuid, source) VALUES ($1, 'bygger', $2, 'local')`, [localUser, localUnit]);
       await h.c.query(`INSERT INTO org_unit_members (directory_user_uuid, org_unit_uuid) VALUES ($1, $2)`, [localUser, localUnit]);
       const localBefore = {
         user: await rows(h.c, 'SELECT * FROM directory_users WHERE uuid = $1', [localUser]),
@@ -687,13 +687,13 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
       withHarness(async (h) => {
         await h.run();
         expect(await count(h.c, 'role_assignments')).toBe(10);
-        expect(await count(h.c, 'role_assignments', `role_key <> 'tt-bruger'`)).toBe(7);
+        expect(await count(h.c, 'role_assignments', `role_key <> 'bruger'`)).toBe(7);
         const d = fixtureData();
-        // Three users lose every elevated role but keep tt-bruger: 3/10 of all rows (not over 30 %), 3/7 of the elevated ones.
+        // Three users lose every elevated role but keep bruger: 3/10 of all rows (not over 30 %), 3/7 of the elevated ones.
         const stripped = new Set(['mette.e', 'rune.a', 'jens.t']);
         mock.setData({
           roleAssignments: (d.roleAssignments as Array<{ userId: string; assignments: Array<{ roleIdentifier: string }> }>).map((a) =>
-            stripped.has(a.userId) ? { ...a, assignments: a.assignments.filter((x) => x.roleIdentifier === 'tt-bruger') } : a,
+            stripped.has(a.userId) ? { ...a, assignments: a.assignments.filter((x) => x.roleIdentifier === 'bruger') } : a,
           ),
         });
         const aborted = await h.run();
@@ -702,18 +702,18 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         const forced = await h.run({ force: true });
         expect(forced).toMatchObject({ status: 'success' });
         expect(forced.counts.assignmentsRemoved).toBe(3);
-        expect(await count(h.c, 'role_assignments', `role_key <> 'tt-bruger'`)).toBe(4);
+        expect(await count(h.c, 'role_assignments', `role_key <> 'bruger'`)).toBe(4);
       }));
 
     it('an assignment entry that turns invalid counts as an elevated removal (the whole role group is dropped)', () =>
       withHarness(async (h) => {
         await h.run();
         const d = fixtureData();
-        // anne.p holds two tt-skabelonansvarlig rows; a broken entry for that role drops both. With
+        // anne.p holds two bygger rows; a broken entry for that role drops both. With
         // mette.e and rune.a gone as well, 4 of 7 elevated rows disappear.
         mock.setData({
           roleAssignments: (d.roleAssignments as Array<{ userId: string; assignments: unknown[] }>).map((a) => {
-            if (a.userId === 'anne.p') return { ...a, assignments: [...a.assignments, { roleIdentifier: 'tt-skabelonansvarlig', roleConstraintValues: 'broken' }] };
+            if (a.userId === 'anne.p') return { ...a, assignments: [...a.assignments, { roleIdentifier: 'bygger', roleConstraintValues: 'broken' }] };
             if (a.userId === 'mette.e' || a.userId === 'rune.a') return { ...a, assignments: [] };
             return a;
           }),
@@ -828,7 +828,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
     it('follows scope changes in place and honours ROLLEKATALOG_SCOPE_DESCENDANTS', () =>
       withHarness(async (h) => {
         await h.run();
-        const idBefore = (await rows(h.c, `SELECT id FROM role_assignments WHERE directory_user_uuid = $1 AND role_key = 'tt-bruger'`, [U(3)]))[0].id;
+        const idBefore = (await rows(h.c, `SELECT id FROM role_assignments WHERE directory_user_uuid = $1 AND role_key = 'bruger'`, [U(3)]))[0].id;
 
         vi.stubEnv('ROLLEKATALOG_SCOPE_DESCENDANTS', 'false');
         const flat = await h.run({ force: true });
@@ -836,7 +836,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         expect(flat.counts.assignmentsRemoved).toBe(0);
         expect(await count(h.c, 'role_assignments', 'scope_org_unit_uuid IS NOT NULL AND include_descendants = true')).toBe(0);
         // Unchanged rows keep their identity.
-        expect((await rows(h.c, `SELECT id FROM role_assignments WHERE directory_user_uuid = $1 AND role_key = 'tt-bruger'`, [U(3)]))[0].id).toBe(idBefore);
+        expect((await rows(h.c, `SELECT id FROM role_assignments WHERE directory_user_uuid = $1 AND role_key = 'bruger'`, [U(3)]))[0].id).toBe(idBefore);
       }));
 
     it('a changed constraint replaces the scope row', () =>
@@ -849,7 +849,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
               ? {
                   ...a,
                   assignments: [
-                    { roleIdentifier: 'tt-skabelonansvarlig', roleConstraintValues: [{ constraintType: 'http://digital-identity.dk/constraints/orgunit/1', constraintValues: [O(4)] }] },
+                    { roleIdentifier: 'bygger', roleConstraintValues: [{ constraintType: 'http://digital-identity.dk/constraints/orgunit/1', constraintValues: [O(4)] }] },
                   ],
                 }
               : a,
@@ -858,14 +858,14 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         const r = await h.run();
         expect(r.counts.assignmentsUpserted).toBe(1);
         expect(r.counts.assignmentsRemoved).toBe(1);
-        expect(await roleRows(h.c, U(2))).toEqual([{ role_key: 'tt-skabelonansvarlig', scope_org_unit_uuid: O(4), include_descendants: true }]);
+        expect(await roleRows(h.c, U(2))).toEqual([{ role_key: 'bygger', scope_org_unit_uuid: O(4), include_descendants: true }]);
       }));
 
-    it('ROLLEKATALOG_GLOBAL_ROLES can make an unscoped logleser global', () =>
+    it('ROLLEKATALOG_GLOBAL_ROLES can make an unscoped bygger global', () =>
       withHarness(async (h) => {
-        vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'tt-administrator,tt-logleser');
+        vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'admin,bygger');
         await h.run();
-        expect(await roleRows(h.c, U(7))).toEqual([{ role_key: 'tt-logleser', scope_org_unit_uuid: null, include_descendants: true }]);
+        expect(await roleRows(h.c, U(7))).toEqual([{ role_key: 'bygger', scope_org_unit_uuid: null, include_descendants: true }]);
       }));
   });
 

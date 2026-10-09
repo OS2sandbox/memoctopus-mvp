@@ -216,7 +216,7 @@ describe('CentralTemplatesAdmin — gating and actions', () => {
     expect(screen.getByRole('button', { name: 'Historik for Bestyrelse' })).toBeInTheDocument();
   });
 
-  it('works the same for a scoped skabelonansvarlig', async () => {
+  it('works the same for a scoped bygger', async () => {
     setup(READER_ME);
     renderWithToasts(<CentralTemplatesAdmin />);
     await screen.findByText('Bestyrelse');
