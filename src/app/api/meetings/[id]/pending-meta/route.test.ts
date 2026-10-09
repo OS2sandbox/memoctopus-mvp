@@ -19,7 +19,14 @@ vi.mock('@/lib/pending-artifacts', () => ({
   assertMeetingOwner: vi.fn(),
 }));
 
+vi.mock('@/lib/teams/parked-transcripts', () => ({
+  readParkedTranscript: vi.fn().mockResolvedValue(null),
+  hasParkedTranscript: vi.fn().mockResolvedValue(false),
+  deleteParkedTranscript: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { GET } from './route';
+import { readParkedTranscript } from '@/lib/teams/parked-transcripts';
 import { readPendingMeta, deletePendingMeta, assertMeetingOwner } from '@/lib/pending-artifacts';
 
 const mockReadMeta = vi.mocked(readPendingMeta);
@@ -115,5 +122,27 @@ describe('GET /api/meetings/[id]/pending-meta', () => {
     mockReadMeta.mockResolvedValue(null);
     const res = await GET(makeRequest('meeting-1'), makeParams('meeting-1'));
     expect(res.status).toBe(401);
+  });
+});
+
+describe('pending-meta — a parked transcript', () => {
+  it('answers with the names and duration parked alongside it', async () => {
+    vi.mocked(readParkedTranscript).mockResolvedValueOnce({
+      segments: [],
+      diarized: true,
+      participants: ['Mette Hansen', 'Jens Poulsen'],
+      durationSeconds: 1800,
+    });
+    mockAssertOwner.mockResolvedValue(false); // no stash, no owner file
+
+    const res = await GET(makeRequest('m1'), { params: Promise.resolve({ id: 'm1' }) });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      status: 'no-recording',
+      participants: ['Mette Hansen', 'Jens Poulsen'],
+      durationSeconds: 1800,
+    });
+    expect(mockReadMeta).not.toHaveBeenCalled();
   });
 });

@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { readPendingMeta, assertMeetingOwner } from '@/lib/pending-artifacts';
 import { withHandler } from '@/lib/api-handler';
+import { readParkedTranscript } from '@/lib/teams/parked-transcripts';
 
 // Tells the client what a server-side run produced, so the meeting record can be
 // filled in before Gennemgang opens. It carries no audio and never will: Graph
@@ -33,6 +34,16 @@ export const GET = withHandler(
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id: meetingId } = await params;
+
+    // A finished run's names and duration are parked with its transcript.
+    const parked = await readParkedTranscript(session.user.id, meetingId);
+    if (parked) {
+      return NextResponse.json({
+        status: 'no-recording',
+        participants: parked.participants,
+        durationSeconds: parked.durationSeconds,
+      });
+    }
 
     // Only the user this meeting was registered by may read it. Answer exactly like
     // "not finished yet" so a non-owner cannot detect that a run exists.

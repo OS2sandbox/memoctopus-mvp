@@ -7,6 +7,12 @@ import { graphDate, realDate } from './graph-dates';
 import { getMeeting } from './meeting-resolver';
 import { processTeamsMeeting } from './pipeline';
 import { deleteRecordingFromDrive } from './recording-cleanup';
+import { parkTranscript } from './parked-transcripts';
+import {
+  acknowledgePendingTranscript,
+  readPendingMeta,
+  readPendingTranscript,
+} from '@/lib/pending-artifacts';
 import {
   POLL_GIVE_UP_MS,
   giveUpAnchor,
@@ -163,6 +169,7 @@ export async function pollMeeting(
     );
 
     if (outcome.status === 'ready') {
+      await parkReadyTranscript(userId, id);
       // The transcript is safely stashed, so the copy Teams left in OneDrive has
       // done its job. `pending` goes onto the row in the same write that marks it
       // ready: whatever happens to the attempt below, the next tick knows there is
@@ -213,6 +220,32 @@ export async function pollMeeting(
         console.error('[teams/poller] unexpected error polling', id, err);
         return await waiting('awaiting_teams', message);
     }
+  }
+}
+
+/**
+ * Moves a finished run's result out of the one-hour stash on disk and into the
+ * owner's schema, encrypted, where it waits for up to 30 days.
+ *
+ * Before the row is marked ready, so `ready` means "parked". And parked before the
+ * stash is dropped, so there is no moment at which the transcript is in neither
+ * place. Never throws: if the database refuses, the stash on disk is left as it
+ * was and the meeting is still collectable for the hour that always applied.
+ */
+async function parkReadyTranscript(userId: string, id: string): Promise<void> {
+  try {
+    const stash = await readPendingTranscript(id);
+    if (stash?.status !== 'ready') return;
+    const meta = await readPendingMeta(id);
+    await parkTranscript(userId, id, {
+      segments: stash.segments ?? [],
+      diarized: stash.diarized ?? false,
+      participants: meta?.participants ?? [],
+      durationSeconds: meta?.durationSeconds ?? null,
+    });
+    await acknowledgePendingTranscript(id);
+  } catch (err) {
+    console.error('[teams/poller] could not park the transcript for', id, '- it stays in the short-lived stash:', err);
   }
 }
 

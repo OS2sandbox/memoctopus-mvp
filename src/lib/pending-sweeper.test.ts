@@ -1,9 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('@/lib/pending-artifacts', () => ({ sweepExpired: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@/lib/teams/store', () => ({ listUserSchemaIds: vi.fn().mockResolvedValue(['u1', 'u2']) }));
+vi.mock('@/lib/teams/parked-transcripts', () => ({
+  sweepParkedTranscripts: vi.fn().mockResolvedValue(undefined),
+}));
 
 import { sweepExpired } from '@/lib/pending-artifacts';
-import { startPendingSweeper, SWEEP_INTERVAL_MS } from './pending-sweeper';
+import { sweepParkedTranscripts } from '@/lib/teams/parked-transcripts';
+import { startPendingSweeper, SWEEP_INTERVAL_MS, PARKED_SWEEP_INTERVAL_MS } from './pending-sweeper';
 
 const mockSweep = vi.mocked(sweepExpired);
 
@@ -121,5 +126,33 @@ describe('startPendingSweeper', () => {
     await vi.advanceTimersByTimeAsync(SWEEP_INTERVAL_MS * 2);
     expect(mockSweep).toHaveBeenCalledTimes(1);
     release();
+  });
+
+  it('expires parked transcripts for every user at start-up, then hourly rather than every tick', async () => {
+    vi.useFakeTimers();
+    asProduction();
+    const mockParked = vi.mocked(sweepParkedTranscripts);
+    mockParked.mockClear();
+    start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockParked.mock.calls.map((c) => c[0])).toEqual(['u1', 'u2']);
+
+    mockParked.mockClear();
+    await vi.advanceTimersByTimeAsync(SWEEP_INTERVAL_MS * 3);
+    expect(mockParked).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(PARKED_SWEEP_INTERVAL_MS);
+    expect(mockParked).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps sweeping the other users when one user\'s parked sweep fails', async () => {
+    vi.useFakeTimers();
+    asProduction();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const mockParked = vi.mocked(sweepParkedTranscripts);
+    mockParked.mockClear().mockRejectedValueOnce(new Error('schema locked'));
+    start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockParked).toHaveBeenCalledTimes(2);
   });
 });
