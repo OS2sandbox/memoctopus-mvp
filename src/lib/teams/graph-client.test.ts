@@ -150,13 +150,12 @@ describe('getGraphAccessToken', () => {
       'OnlineMeetings.ReadWrite',
       'OnlineMeetingTranscript.Read.All',
       'OnlineMeetingRecording.Read.All',
-      'Files.ReadWrite',
     ]);
   });
 
   it('does not treat missing OIDC scopes as a consent gap', async () => {
     okToken(
-      'OnlineMeetings.ReadWrite OnlineMeetingTranscript.Read.All OnlineMeetingRecording.Read.All Files.ReadWrite User.Read',
+      'OnlineMeetings.ReadWrite OnlineMeetingTranscript.Read.All OnlineMeetingRecording.Read.All User.Read',
     );
     await expect(getGraphAccessToken('u')).resolves.toBe('tok-123');
   });
@@ -203,6 +202,12 @@ describe('getGraphAccessToken — transcript-only', () => {
     ]);
   });
 
+  it('hands out a token to a sign-in that only lacks the files scope', async () => {
+    okToken(`${NO_RECORDING} OnlineMeetingRecording.Read.All`);
+    await expect(getGraphAccessToken('u')).resolves.toBe('tok-123');
+    await expect(hasGraphScopes('u')).resolves.toEqual({ ok: false, missing: ['Files.ReadWrite'] });
+  });
+
   it('does not require the files scope when recordings are left in OneDrive', async () => {
     process.env.TEAMS_DELETE_RECORDING = 'false';
     okToken(`${NO_RECORDING} OnlineMeetingRecording.Read.All`);
@@ -213,7 +218,7 @@ describe('getGraphAccessToken — transcript-only', () => {
     okToken(NO_RECORDING);
     await expect(getGraphAccessToken('u')).rejects.toMatchObject({
       code: 'consent_required',
-      missingScopes: ['OnlineMeetingRecording.Read.All', 'Files.ReadWrite'],
+      missingScopes: ['OnlineMeetingRecording.Read.All'],
     });
   });
 });
