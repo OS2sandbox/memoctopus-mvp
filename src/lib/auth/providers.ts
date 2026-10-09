@@ -119,7 +119,7 @@ const RECORDING_SCOPE = 'OnlineMeetingRecording.Read.All';
 // Graph has no "delete this recording" call, so removing it from the organizer's
 // OneDrive afterwards (src/lib/teams/recording-cleanup.ts) goes through the drive
 // API, and its narrowest delegated permission is the user's own files, read/write.
-const FILES_SCOPE = 'Files.ReadWrite';
+export const FILES_SCOPE = 'Files.ReadWrite';
 
 /**
  * Whether the Teams/Graph integration is on. Opt-in and OFF by default: the

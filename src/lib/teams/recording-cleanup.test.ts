@@ -3,15 +3,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('./graph-client', async () => {
   // GraphError is the real class; only the network is replaced.
   const actual = await vi.importActual<typeof import('./graph-client')>('./graph-client');
-  return { ...actual, graphFetch: vi.fn(), graphJson: vi.fn() };
+  return { ...actual, graphFetch: vi.fn(), graphJson: vi.fn(), hasGraphScopes: vi.fn() };
 });
 vi.mock('@/lib/auth', () => ({ auth: { api: {} } }));
 
-import { GraphError, graphFetch, graphJson } from './graph-client';
+import { GraphError, graphFetch, graphJson, hasGraphScopes } from './graph-client';
 import { deleteRecordingFromDrive } from './recording-cleanup';
 
 const mockFetch = vi.mocked(graphFetch);
 const mockJson = vi.mocked(graphJson);
+const mockScopes = vi.mocked(hasGraphScopes);
 
 const file = (id: string, size: number, driveId: string | null = 'drive-1') => ({
   id,
@@ -23,6 +24,7 @@ const file = (id: string, size: number, driveId: string | null = 'drive-1') => (
 beforeEach(() => {
   vi.clearAllMocks();
   mockFetch.mockResolvedValue(new Response(null, { status: 204 }));
+  mockScopes.mockResolvedValue({ ok: true, missing: [] });
 });
 
 describe('deleteRecordingFromDrive', () => {
@@ -107,6 +109,17 @@ describe('deleteRecordingFromDrive', () => {
 
     await expect(deleteRecordingFromDrive('u1', 4242)).rejects.toBe(err);
     expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks for a new sign-in, and touches nothing, without the files scope', async () => {
+    mockScopes.mockResolvedValue({ ok: false, missing: ['Files.ReadWrite'] });
+
+    await expect(deleteRecordingFromDrive('u1', 4242)).rejects.toMatchObject({
+      code: 'consent_required',
+      missingScopes: ['Files.ReadWrite'],
+    });
+    expect(mockJson).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it('lets a failed listing through', async () => {

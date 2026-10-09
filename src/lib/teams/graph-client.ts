@@ -1,5 +1,10 @@
 import { auth } from '@/lib/auth';
-import { GRAPH_DELEGATED_SCOPES, teamsGraphEnabled, teamsGraphScopes } from '@/lib/auth/providers';
+import {
+  FILES_SCOPE,
+  GRAPH_DELEGATED_SCOPES,
+  teamsGraphEnabled,
+  teamsGraphScopes,
+} from '@/lib/auth/providers';
 
 // ─── Microsoft Graph, called as the signed-in user ────────────────────────────
 // Delegated auth, not application permissions: better-auth already stores the
@@ -167,6 +172,18 @@ function missingFrom(granted: Set<string>): string[] {
   return requiredGraphScopes().filter((s) => !granted.has(normaliseScope(s)));
 }
 
+/**
+ * The files scope is needed for exactly one thing — deleting a transcribed
+ * recording from OneDrive — so its absence must not stop a token being handed out
+ * for everything else. A user who signed in before it existed still has meetings
+ * waiting on Teams, and failing those polls over a permission they do not use
+ * would lose the meetings. {@link hasGraphScopes} still reports it missing, so the
+ * dashboard asks for a new sign-in; the delete waits for that.
+ */
+function blocking(missing: string[]): string[] {
+  return missing.filter((s) => s !== FILES_SCOPE);
+}
+
 interface TokenResult {
   accessToken: string;
   scopes: Set<string>;
@@ -301,7 +318,7 @@ function forceRefreshToken(userId: string): Promise<string> {
  */
 export async function getGraphAccessToken(userId: string): Promise<string> {
   const { accessToken, scopes } = await fetchToken(userId);
-  const missing = missingFrom(scopes);
+  const missing = blocking(missingFrom(scopes));
   if (missing.length > 0) {
     throw new GraphError(
       'consent_required',

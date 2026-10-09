@@ -918,6 +918,17 @@ describe('deleting the recording from OneDrive', () => {
     expect(result.recordingCleanup).toBe(stored);
   });
 
+  it('waits for the user to sign in again when the files scope is missing', async () => {
+    mockDeleteRecording.mockRejectedValueOnce(
+      new GraphError('consent_required', 'mangler Files.ReadWrite', { status: 403 }),
+    );
+
+    const result = await cleanUpRecording('u1', pending(), NOW);
+
+    expect(mockSettle).not.toHaveBeenCalled();
+    expect(result.recordingCleanup).toBe('pending');
+  });
+
   it('gives up at once on a refusal no retry can fix', async () => {
     mockDeleteRecording.mockRejectedValueOnce(new GraphError('forbidden', 'nej', { status: 403 }));
 

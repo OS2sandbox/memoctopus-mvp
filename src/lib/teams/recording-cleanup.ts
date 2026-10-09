@@ -1,4 +1,5 @@
-import { GraphError, graphFetch, graphJson } from './graph-client';
+import { FILES_SCOPE } from '@/lib/auth/providers';
+import { GraphError, graphFetch, graphJson, hasGraphScopes } from './graph-client';
 
 // Removing a transcribed recording from the organizer's OneDrive.
 //
@@ -76,6 +77,18 @@ export async function deleteRecordingFromDrive(
   userId: string,
   bytes: number,
 ): Promise<RecordingCleanupResult> {
+  // A sign-in from before the files scope existed cannot delete anything, and
+  // Graph would answer a bare 403. Say what is actually wrong, so the caller
+  // waits for the user to sign in again instead of writing the recording off.
+  const { missing } = await hasGraphScopes(userId);
+  if (missing.includes(FILES_SCOPE)) {
+    throw new GraphError(
+      'consent_required',
+      `Microsoft-loginet mangler adgang til: ${FILES_SCOPE}. Log ind med Microsoft igen for at give adgang.`,
+      { status: 403, missingScopes: [FILES_SCOPE] },
+    );
+  }
+
   let matches: DriveChild[];
   try {
     matches = await findBySize(userId, bytes);
