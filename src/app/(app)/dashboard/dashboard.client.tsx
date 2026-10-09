@@ -182,7 +182,7 @@ export default function OptaqPage() {
           {teamsStatus && !teamsOff && teamsStatus.microsoftLinked && !teamsStatus.scopesOk && (
             <div style={{ textAlign: 'center' }}>
               <div style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)' }}>
-                Memoctopus mangler adgang til dine Teams-møder.
+                OS2taletiltekst mangler adgang til dine Teams-møder.
               </div>
               <button
                 type="button"

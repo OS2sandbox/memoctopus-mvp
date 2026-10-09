@@ -108,7 +108,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 }
 
 /**
- * Turns Memoctopus off for a meeting: un-arm it (if we armed it) and forget it.
+ * Turns OS2taletiltekst off for a meeting: un-arm it (if we armed it) and forget it.
  *
  * The row is deleted even when the Graph side could not be undone — the user
  * asked us to stop collecting — but `disarmed: false` says the meeting may still

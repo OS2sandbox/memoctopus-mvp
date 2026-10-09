@@ -117,7 +117,7 @@ describe('TeamsMeetingScreen — armed, awaiting', () => {
     respondWith(statusBody({ scheduledEnd: new Date(Date.now() + 30 * 60_000).toISOString() }));
     renderScreen();
     expect(await screen.findByText('Ugentligt teammøde')).toBeInTheDocument();
-    expect(screen.getByTestId('armed-badge')).toHaveTextContent('Memoctopus er slået til');
+    expect(screen.getByTestId('armed-badge')).toHaveTextContent('OS2taletiltekst er slået til');
     expect(
       screen.getByText(/Mødet optages og transskriberes automatisk/),
     ).toBeInTheDocument();
@@ -327,11 +327,11 @@ describe('TeamsMeetingScreen — a meeting Graph gives no window for', () => {
   // we cannot see whether it has begun. The link to an instant meeting is often
   // pasted here BEFORE anyone joins, and the screen used to tell that user their
   // meeting was "allerede i gang" and demand they start what we had just armed.
-  it('leads with the fact that Memoctopus is on', async () => {
+  it('leads with the fact that OS2taletiltekst is on', async () => {
     respondWith(statusBody({ armed: true, armResult: 'armed_in_progress' }));
     renderScreen();
 
-    expect(await screen.findByText(/Memoctopus er slået til for mødet/)).toBeInTheDocument();
+    expect(await screen.findByText(/OS2taletiltekst er slået til for mødet/)).toBeInTheDocument();
     expect(screen.queryByText(/Mødet er allerede i gang/)).not.toBeInTheDocument();
   });
 
@@ -342,7 +342,7 @@ describe('TeamsMeetingScreen — a meeting Graph gives no window for', () => {
     respondWith(statusBody({ armed: true, armResult: 'armed_in_progress', attempts: 0 }));
     renderScreen();
 
-    await screen.findByText(/Memoctopus er slået til for mødet/);
+    await screen.findByText(/OS2taletiltekst er slået til for mødet/);
     expect(screen.queryByTestId('manual-start-hint')).toBeNull();
     expect(
       screen.queryByText(/Flere handlinger → Optag og transskriber → Start transskription/),
@@ -366,7 +366,7 @@ describe('TeamsMeetingScreen — a meeting Graph gives no window for', () => {
     respondWith(statusBody({ armed: true, armResult: 'armed_in_progress' }));
     renderScreen();
 
-    expect(await screen.findByTestId('armed-badge')).toHaveTextContent('Memoctopus er slået til');
+    expect(await screen.findByTestId('armed-badge')).toHaveTextContent('OS2taletiltekst er slået til');
   });
 
   it('says how to collect the referat when the meeting ends', async () => {
@@ -380,7 +380,7 @@ describe('TeamsMeetingScreen — a meeting Graph gives no window for', () => {
     respondWith(statusBody({ armed: true, armResult: 'armed_in_progress' }));
     renderScreen();
 
-    expect(await screen.findByText(/Memoctopus er slået til for mødet/)).toBeInTheDocument();
+    expect(await screen.findByText(/OS2taletiltekst er slået til for mødet/)).toBeInTheDocument();
     expect(screen.queryByText(/ikke organisator/)).not.toBeInTheDocument();
   });
 });
@@ -471,7 +471,7 @@ describe('TeamsMeetingScreen — integration switched off', () => {
     renderScreen();
     await screen.findByText(NOTICE);
     expect(screen.queryByText('Tjek nu')).toBeNull();
-    expect(screen.getByText('Slå Memoctopus fra')).toBeInTheDocument();
+    expect(screen.getByText('Slå OS2taletiltekst fra')).toBeInTheDocument();
   });
 
   it('stops polling', async () => {
@@ -503,9 +503,9 @@ describe('TeamsMeetingScreen — manual check and disarm', () => {
     });
   });
 
-  it('"Slå Memoctopus fra" deletes through the shared helper, then returns to the dashboard', async () => {
+  it('"Slå OS2taletiltekst fra" deletes through the shared helper, then returns to the dashboard', async () => {
     renderScreen();
-    const btn = await screen.findByText('Slå Memoctopus fra');
+    const btn = await screen.findByText('Slå OS2taletiltekst fra');
     await act(async () => { fireEvent.click(btn); });
     await waitFor(() => {
       expect(mockDeleteMeeting).toHaveBeenCalledWith(MEETING_ID);
@@ -517,10 +517,10 @@ describe('TeamsMeetingScreen — manual check and disarm', () => {
     mockDeleteMeeting.mockRejectedValueOnce(new Error('offline'));
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     renderScreen();
-    const btn = await screen.findByText('Slå Memoctopus fra');
+    const btn = await screen.findByText('Slå OS2taletiltekst fra');
     await act(async () => { fireEvent.click(btn); });
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Kunne ikke slå Memoctopus fra');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Kunne ikke slå OS2taletiltekst fra');
     expect(mockPush).not.toHaveBeenCalled();
     spy.mockRestore();
   });

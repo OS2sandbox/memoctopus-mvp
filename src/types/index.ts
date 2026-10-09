@@ -1,4 +1,4 @@
-// `awaiting_teams` is the Graph-era pre-meeting state: Memoctopus is armed on the
+// `awaiting_teams` is the Graph-era pre-meeting state: OS2taletiltekst is armed on the
 // meeting and we are waiting for Teams to hold it and produce its artifacts.
 // The removed bot's `joining` state is gone from this union. Its Postgres enum
 // value stays, since a value cannot be dropped from a Postgres enum, and an old

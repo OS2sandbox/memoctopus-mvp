@@ -16,7 +16,7 @@ export function artifactMode(): ArtifactMode {
  * Whether the recording Teams left in the organizer's OneDrive is deleted once it
  * has been transcribed. On unless explicitly "false": the platform's promise is
  * that no meeting audio outlives its transcription, and the copy in OneDrive only
- * exists because Memoctopus switched recording on.
+ * exists because OS2taletiltekst switched recording on.
  *
  * It costs a fourth delegated permission (`Files.ReadWrite`), which is why it can
  * be switched off — that also drops the scope from sign-in. Moot in

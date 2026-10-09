@@ -66,7 +66,7 @@ const SLOWDOWN_AFTER_MS = 60 * 60_000;
 
 // The sentence the invitee can hand to the organizer verbatim.
 export const ORGANIZER_REQUEST =
-  'Kan du slå "Optag og transskriber automatisk" til i mødeindstillingerne for dette møde? Så laver Memoctopus referatet automatisk.';
+  'Kan du slå "Optag og transskriber automatisk" til i mødeindstillingerne for dette møde? Så laver OS2taletiltekst referatet automatisk.';
 
 /**
  * Fill in what the server-side run produced before Gennemgang opens: the speaker
@@ -339,8 +339,8 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
     try {
       await deleteMeetingAndUnregister(meetingId);
     } catch (err) {
-      console.error('[TeamsMeetingScreen] kunne ikke slå Memoctopus fra:', err);
-      setError('Kunne ikke slå Memoctopus fra. Prøv igen.');
+      console.error('[TeamsMeetingScreen] kunne ikke slå OS2taletiltekst fra:', err);
+      setError('Kunne ikke slå OS2taletiltekst fra. Prøv igen.');
       return;
     }
     routerRef.current.push('/dashboard');
@@ -396,10 +396,10 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
           >
             {/* Both arm outcomes left the meeting armed (isArmed), so both say so.
                 A badge reading "Start transskription i Teams" next to copy that
-                says Memoctopus is on contradicted itself — and demanded an action
+                says OS2taletiltekst is on contradicted itself — and demanded an action
                 for a meeting nobody had joined yet. The nuance belongs in the
                 body text below, where it can be stated conditionally. */}
-            Memoctopus er slået til
+            OS2taletiltekst er slået til
           </span>
         )}
       </div>
@@ -407,7 +407,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
       <div style={{ marginTop: 28, borderTop: '1px solid var(--line)', paddingTop: 24 }}>
         {off && (
           <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
-            Teams-integrationen er ikke slået til, så Memoctopus henter ikke referatet fra dette møde.
+            Teams-integrationen er ikke slået til, så OS2taletiltekst henter ikke referatet fra dette møde.
             Kontakt jeres IT-administrator.
           </p>
         )}
@@ -416,13 +416,13 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
           <>
             <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
               {meetingOver
-                ? 'Mødet er slut. Memoctopus henter transskriptionen fra Teams, så snart Microsoft frigiver den — det tager typisk et par minutter, men kan tage længere.'
+                ? 'Mødet er slut. OS2taletiltekst henter transskriptionen fra Teams, så snart Microsoft frigiver den — det tager typisk et par minutter, men kan tage længere.'
                 : 'Mødet optages og transskriberes automatisk. Referatet er klar automatisk et par minutter efter mødet.'}
             </p>
             <WorkingIndicator label={meetingOver ? 'Spørger Teams…' : 'Venter på mødet…'} />
             {!meetingOver && !lastCheck && (
               <p style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-                Memoctopus venter til mødet er planlagt til at slutte. Sluttede I før tid,
+                OS2taletiltekst venter til mødet er planlagt til at slutte. Sluttede I før tid,
                 så tryk <strong>Mødet er slut – hent nu</strong>, så henter vi den med det samme.
               </p>
             )}
@@ -445,7 +445,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
         {state === 'awaiting_teams' && status?.armResult === 'armed_in_progress' && (
           <>
             <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
-              Memoctopus er slået til for mødet. Teams begynder at transskribere, når mødet går i gang,
+              OS2taletiltekst er slået til for mødet. Teams begynder at transskribere, når mødet går i gang,
               og referatet er klar et par minutter efter, I er færdige.
             </p>
             <WorkingIndicator label="Venter på mødet…" />
@@ -478,7 +478,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
         {state === 'awaiting_teams' && status?.armResult === 'policy_blocked' && (
           <>
             <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
-              Jeres Teams-politik blokerer automatisk optagelse og transskription, så Memoctopus
+              Jeres Teams-politik blokerer automatisk optagelse og transskription, så OS2taletiltekst
               kunne ikke slå det til for mødet. Bed jeres IT-administrator følge trin 2 i{' '}
               <a href={ADMIN_GUIDE} style={{ color: 'var(--ink-2)' }}>opsætningsguiden</a>.
             </p>
@@ -492,7 +492,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
           && status.armResult !== 'policy_blocked' && (
           <>
             <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
-              Du er inviteret til mødet, men ikke organisator, så Memoctopus kan ikke slå optagelse til for dig.
+              Du er inviteret til mødet, men ikke organisator, så OS2taletiltekst kan ikke slå optagelse til for dig.
               Bed organisatoren om at slå automatisk optagelse og transskription til:
             </p>
             <blockquote
@@ -524,7 +524,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
         {state === 'fetching' && (
           <div data-testid="fetching">
             <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
-              Teams har frigivet mødet, og Memoctopus er i gang med det nu: optagelsen hentes
+              Teams har frigivet mødet, og OS2taletiltekst er i gang med det nu: optagelsen hentes
               ned og transskriberes. Det tager typisk et par minutter — for et langt møde kan
               det tage et kvarter.
             </p>
@@ -635,7 +635,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
             color: 'var(--muted)', cursor: 'pointer',
           }}
         >
-          {status?.state === 'failed' ? 'Slet' : 'Slå Memoctopus fra'}
+          {status?.state === 'failed' ? 'Slet' : 'Slå OS2taletiltekst fra'}
         </button>
       </div>
     </div>
