@@ -183,19 +183,26 @@ par minutter i op til et døgn.
 Ønsker kommunen at beholde optagelserne i OneDrive, kan driften sætte
 `TEAMS_DELETE_RECORDING=false`. Så bliver `Files.ReadWrite` heller ikke bedt om.
 
-Transskriptionen lægges midlertidigt som en fil på serverens lagerplads
-(`AUDIO_STORAGE_PATH`), indtil medarbejderens browser har hentet den og gemt den.
-Først når browseren har bekræftet, at den er gemt, slettes filen; at browseren
-henter den, er ikke nok, så en lukket fane midt i hentningen ikke koster
-transskriptionen. Bliver den aldrig hentet (fx fordi fanen blev lukket), slettes
-filen senest cirka en time efter, at den blev lagt, af en oprydning der kører
-hvert femte minut uanset om andre møder bliver behandlet. Er filen væk, når
-medarbejderen kommer tilbage, tilbyder skærmen "Hent igen", som henter
-transskriptionen fra Teams på ny, så længe mødet er under et døgn gammelt. Er
-optagelsen på det tidspunkt slettet fra OneDrive, er det Teams' egen
-tekst-transskription, der hentes.
-Herefter ligger transskriptionen og referatet kun i medarbejderens browser
-(IndexedDB), ikke i en central database.
+Den færdige transskription venter på serveren, til medarbejderens browser har
+hentet den. Den ligger krypteret i OS2taletiltekst's database, i medarbejderens
+eget afsnit, som ingen anden bruger kan tilgå. Databasen kører på samme server som
+resten af løsningen, så transskriptionen forlader ikke kommunens eget miljø.
+
+Den slettes, så snart browseren har bekræftet, at den er gemt; at browseren henter
+den, er ikke nok, så en lukket fane midt i hentningen ikke koster transskriptionen.
+Bliver den aldrig hentet, slettes den automatisk efter 30 dage.
+
+Ventetiden er sat til 30 dage og ikke kortere, fordi optagelsen slettes fra
+OneDrive med det samme. Transskriptionen på serveren er derefter det eneste
+eksemplar, indtil medarbejderen åbner mødet, og den kan ikke genskabes.
+
+Det betyder, at en sikkerhedskopi af databasen kan indeholde ventende
+transskriptioner. De er krypteret med løsningens hemmelige nøgle
+(`BETTER_AUTH_SECRET`) og kan ikke læses uden den. Skiftes nøglen, kan ventende
+transskriptioner ikke længere læses.
+
+Når transskriptionen er hentet, ligger den og referatet kun i medarbejderens
+browser (IndexedDB).
 
 Baggrunden er, at Teams først frigiver optagelsen efter mødet. Et Teams-møde kan
 derfor ikke følges live i OS2taletiltekst, og så er der heller ingen grund til at

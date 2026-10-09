@@ -298,6 +298,17 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       )
     `);
 
+    // parked_transcripts — a finished Teams transcript waiting for its owner's
+    // browser to collect it (src/lib/teams/parked-transcripts.ts). `payload` is
+    // encrypted; rows are deleted on collection or after 30 days.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".parked_transcripts (
+        meeting_id TEXT PRIMARY KEY,
+        payload    TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
     // Seed default templates if none exist
     await client.query(`
       INSERT INTO "${schema}".templates (name, description, structure, is_default)

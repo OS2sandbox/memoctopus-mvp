@@ -6,6 +6,7 @@ import { teamsErrorResponse } from '@/lib/teams/http-errors';
 import { disarmMeeting } from '@/lib/teams/meeting-arm';
 import { pollMeeting } from '@/lib/teams/poller';
 import { readPendingTranscript } from '@/lib/pending-artifacts';
+import { deleteParkedTranscript, hasParkedTranscript } from '@/lib/teams/parked-transcripts';
 import {
   POLL_GIVE_UP_MS,
   deleteTeamsMeeting,
@@ -137,6 +138,8 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     }
   }
 
+  // Forgetting the meeting forgets what was collected for it.
+  await deleteParkedTranscript(userId, id);
   await deleteTeamsMeeting(userId, id);
   return NextResponse.json({ ok: true, disarmed });
 }
@@ -173,8 +176,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   if (row.state !== 'ready') return NextResponse.json({ error: 'not_ready' }, { status: 409 });
 
-  // The stash is still there: nothing is missing, the browser just has not collected it.
-  if (await readPendingTranscript(id)) return NextResponse.json(serialize(row));
+  // The transcript is still there: nothing is missing, the browser just has not collected it.
+  if ((await hasParkedTranscript(userId, id)) || (await readPendingTranscript(id))) {
+    return NextResponse.json(serialize(row));
+  }
 
   const anchor = giveUpAnchor(row);
   if (anchor && anchor.getTime() < Date.now() - POLL_GIVE_UP_MS) {

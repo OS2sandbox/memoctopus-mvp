@@ -8,6 +8,7 @@ import {
   assertMeetingOwner,
 } from '@/lib/pending-artifacts';
 import { withHandler } from '@/lib/api-handler';
+import { deleteParkedTranscript, readParkedTranscript } from '@/lib/teams/parked-transcripts';
 
 // Client collects the server-side transcription of a Teams-bot recording
 // (kicked off by the Graph pipeline as soon as it has the recording).
@@ -31,6 +32,15 @@ export async function GET(
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { id: meetingId } = await params;
+
+  // A finished Teams run is parked in the user's own schema (parked-transcripts.ts),
+  // which is its own access control: this can only ever find the caller's row. It is
+  // looked up first because that is where a ready transcript lives; the stash below
+  // then only answers for a run still in flight, and for local recordings.
+  const parked = await readParkedTranscript(session.user.id, meetingId);
+  if (parked) {
+    return NextResponse.json({ status: 'ready', segments: parked.segments, diarized: parked.diarized });
+  }
 
   // Only the meeting's owner may read its server-side transcript. A non-owner gets
   // the same "no server-side run" response a stranger meetingId would yield, so the
@@ -58,7 +68,7 @@ export async function GET(
 }
 
 // The browser has saved the transcript into IndexedDB: drop the server copy. The
-// only thing that deletes a ready transcript, apart from the TTL sweep.
+// only thing that deletes a ready transcript, apart from the TTL sweeps.
 //
 // Idempotent, and answers { ok: true } for a stranger's meetingId too, so nothing
 // tells a non-owner whether a run exists (they simply delete nothing).
@@ -69,6 +79,7 @@ export const DELETE = withHandler(
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id: meetingId } = await params;
+    await deleteParkedTranscript(session.user.id, meetingId);
     if (await assertMeetingOwner(meetingId, session.user.id)) {
       await acknowledgePendingTranscript(meetingId);
     }
