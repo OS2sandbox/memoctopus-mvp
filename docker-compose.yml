@@ -126,6 +126,10 @@ services:
       # takes speaker names from the VTT; transcript-only skips the download,
       # the ffmpeg transcode and the audio-at-rest entirely.
       - TEAMS_ARTIFACT_MODE=${TEAMS_ARTIFACT_MODE:-}
+      # Unset = on: once a recording is transcribed, its file is deleted from the
+      # organizer's OneDrive. That is what adds Files.ReadWrite to the sign-in, so
+      # the same "consent first" rule applies; "false" drops both.
+      - TEAMS_DELETE_RECORDING=${TEAMS_DELETE_RECORDING:-}
       - TEAMS_POLL_INTERVAL_MS=${TEAMS_POLL_INTERVAL_MS:-}
       # Set true on any instance that must not poll Graph (build/CI containers).
       # Instances are already serialised by a Postgres advisory lock, so leaving

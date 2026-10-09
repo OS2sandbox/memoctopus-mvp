@@ -23,6 +23,8 @@ import {
   setTeamsMeetingState,
   refreshTeamsMeetingSchedule,
   deleteTeamsMeeting,
+  listPendingRecordingCleanups,
+  settleRecordingCleanup,
   listUserSchemaIds,
   userIdFromSchemaName,
   POLL_GIVE_UP_MS,
@@ -81,6 +83,8 @@ function row(overrides: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     failureReason: null,
     transcriptId: null,
     recordingId: null,
+    recordingCleanup: null,
+    recordingBytes: null,
     createdAt: new Date('2026-09-08T08:00:00Z'),
     ...overrides,
   };
@@ -324,6 +328,8 @@ describe('upsertTeamsMeeting', () => {
       failureReason: null,
       transcriptId: null,
       recordingId: null,
+      recordingCleanup: null,
+      recordingBytes: null,
       createdAt: CREATED,
     });
   });
@@ -614,6 +620,49 @@ describe('setTeamsMeetingState', () => {
   it('throws when the row no longer exists', async () => {
     mockQueryOne.mockResolvedValue(null);
     await expect(setTeamsMeetingState(USER, 'gone', 'ready')).rejects.toThrow(/no such Teams meeting/);
+  });
+});
+
+describe('recording cleanup', () => {
+  it('maps the cleanup columns, reading the BIGINT size back as a number', async () => {
+    mockQueryOne.mockResolvedValue({ ...RAW, recording_cleanup: 'pending', recording_bytes: '123456789012' } as never);
+
+    const result = await getTeamsMeeting(USER, 'm1');
+
+    expect(result).toMatchObject({ recordingCleanup: 'pending', recordingBytes: 123456789012 });
+  });
+
+  it('queues a cleanup through markPollAttempt', async () => {
+    mockQueryOne.mockResolvedValue(RAW as never);
+
+    await markPollAttempt(USER, 'm1', { state: 'ready', recordingCleanup: 'pending', recordingBytes: 4242 });
+
+    const [, sql, params] = mockQueryOne.mock.calls[0];
+    expect(sql).toMatch(/recording_cleanup = \$3/);
+    expect(sql).toMatch(/recording_bytes = \$4/);
+    expect(params).toEqual(['m1', 'ready', 'pending', 4242]);
+  });
+
+  it('lists only rows whose delete is still pending', async () => {
+    mockQuery.mockResolvedValue([{ ...RAW, recording_cleanup: 'pending', recording_bytes: 4242 }] as never);
+
+    const rows = await listPendingRecordingCleanups(USER);
+
+    expect(mockQuery.mock.calls[0][1]).toMatch(/recording_cleanup = 'pending'/);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].recordingBytes).toBe(4242);
+  });
+
+  it('settles only a row that is still pending, so the first verdict stands', async () => {
+    mockQuery.mockResolvedValue([] as never);
+
+    await settleRecordingCleanup(USER, 'm1', 'deleted');
+
+    const [userId, sql, params] = mockQuery.mock.calls[0];
+    expect(userId).toBe(USER);
+    expect(sql).toMatch(/SET recording_cleanup = \$2/);
+    expect(sql).toMatch(/AND recording_cleanup = 'pending'/);
+    expect(params).toEqual(['m1', 'deleted']);
   });
 });
 

@@ -37,6 +37,12 @@ export type PipelineOutcome =
       speakers: string[];
       transcriptId: string | null;
       recordingId: string | null;
+      /**
+       * Size of the recording this run downloaded, or null when it downloaded
+       * none. It is how the poller finds the same file in the organizer's OneDrive
+       * to delete it (recording-cleanup.ts).
+       */
+      recordingBytes: number | null;
     }
   // `transient`: pending because Graph was throttled or unreachable, not because
   // Teams has nothing yet. Such a poll must not count toward RECORDING_GRACE_ATTEMPTS.
@@ -57,6 +63,12 @@ export interface PipelineMeeting {
   scheduledEnd: Date | null;
   /** Poll attempts so far — the escape hatch out of the transcript-only grace. */
   attempts?: number;
+  /**
+   * We have already deleted this meeting's recording from OneDrive. A later run
+   * ("Hent igen") must then not wait for a recording, nor try to download one
+   * Graph may still list: Teams' own transcript is all that is left to collect.
+   */
+  recordingDeleted?: boolean;
 }
 
 /**
@@ -146,6 +158,7 @@ async function runPipeline(
       speakers: meta?.participants ?? [],
       transcriptId: null,
       recordingId: null,
+      recordingBytes: null,
     };
   }
   if (existing?.status === 'processing') {
@@ -194,7 +207,8 @@ async function runPipeline(
   const windowEnd = realDate(meeting.scheduledEnd);
   const window = windowStart && windowEnd ? { start: windowStart, end: windowEnd } : undefined;
   const transcript = pickArtifact(artifacts.transcripts, window);
-  const recording = artifactMode() === 'transcript-only' ? null : pickArtifact(artifacts.recordings, window);
+  const skipRecording = artifactMode() === 'transcript-only' || meeting.recordingDeleted === true;
+  const recording = skipRecording ? null : pickArtifact(artifacts.recordings, window);
 
   if (!transcript && !recording) return { status: 'pending' };
 
@@ -202,7 +216,7 @@ async function runPipeline(
   // the transcript-only branch the moment it appears would permanently lock a
   // prefer-recording deployment out of hviske (the run is idempotent), so hold
   // out for the recording until the grace period is spent.
-  if (transcript && !recording && artifactMode() === 'prefer-recording' && !graceElapsed(meeting, now)) {
+  if (transcript && !recording && !skipRecording && !graceElapsed(meeting, now)) {
     return { status: 'pending' };
   }
 
@@ -257,7 +271,7 @@ async function runRecordingWithTranscript(
   const cues = parseVtt(await downloadTranscriptVtt(userId, meeting.graphMeetingId, transcriptId));
   const speakers = speakersFromVtt(cues);
   const fromTeams = segmentsFromVtt(cues);
-  const wav = await fetchRecordingAsWav(userId, meeting, recordingId);
+  const { wav, bytes } = await fetchRecordingAsWav(userId, meeting, recordingId);
 
   let heard: TranscriptSegment[] = [];
   try {
@@ -293,7 +307,7 @@ async function runRecordingWithTranscript(
     durationSeconds: durationFromCues(cues),
   });
 
-  return { status: 'ready', mode, speakers, transcriptId, recordingId };
+  return { status: 'ready', mode, speakers, transcriptId, recordingId, recordingBytes: bytes };
 }
 
 /**
@@ -348,6 +362,7 @@ async function runTranscriptOnly(
     speakers,
     transcriptId,
     recordingId: null,
+    recordingBytes: null,
   };
 }
 
@@ -357,7 +372,7 @@ async function runRecordingOnly(
   meeting: PipelineMeeting,
   recordingId: string,
 ): Promise<PipelineOutcome> {
-  const wav = await fetchRecordingAsWav(userId, meeting, recordingId);
+  const { wav, bytes } = await fetchRecordingAsWav(userId, meeting, recordingId);
 
   // Transcribed and dropped, as in mode 1 — see the note there.
   await transcribeRecording(meeting.id, wav, 'audio/wav');
@@ -368,7 +383,14 @@ async function runRecordingOnly(
   }
   await markNoRecording(meeting.id, { participants: [], durationSeconds: null });
 
-  return { status: 'ready', mode: 'recording-only', speakers: [], transcriptId: null, recordingId };
+  return {
+    status: 'ready',
+    mode: 'recording-only',
+    speakers: [],
+    transcriptId: null,
+    recordingId,
+    recordingBytes: bytes,
+  };
 }
 
 // transcribeRecording is fail-soft: it records its own failure in the stash rather
@@ -399,7 +421,7 @@ async function fetchRecordingAsWav(
   userId: string,
   meeting: PipelineMeeting,
   recordingId: string,
-): Promise<Buffer> {
+): Promise<{ wav: Buffer; bytes: number }> {
   assertSafeMeetingId(meeting.id);
   const root = tmpRoot();
   await fs.mkdir(root, { recursive: true });
@@ -410,9 +432,9 @@ async function fetchRecordingAsWav(
   const wavPath = path.join(dir, 'recording.wav');
 
   try {
-    await downloadRecording(userId, meeting.graphMeetingId, recordingId, mp4Path);
+    const { bytes } = await downloadRecording(userId, meeting.graphMeetingId, recordingId, mp4Path);
     await transcodeToWav(mp4Path, wavPath);
-    return await fs.readFile(wavPath);
+    return { wav: await fs.readFile(wavPath), bytes };
   } finally {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
   }

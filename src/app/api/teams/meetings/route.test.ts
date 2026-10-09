@@ -86,6 +86,8 @@ beforeEach(() => {
     failureReason: null,
     transcriptId: null,
     recordingId: null,
+    recordingCleanup: null,
+    recordingBytes: null,
     state: 'awaiting_teams' as const,
     eventId: null,
     armResult: 'not_organizer' as const,

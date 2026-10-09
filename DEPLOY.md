@@ -153,11 +153,19 @@ Microsoft login enables itself as soon as `MICROSOFT_CLIENT_ID` and
    | `OnlineMeetings.ReadWrite` | Turning on automatic transcription per meeting |
    | `OnlineMeetingTranscript.Read.All` | Fetching the transcript afterwards |
    | `OnlineMeetingRecording.Read.All` | Fetching the recording afterwards |
+   | `Files.ReadWrite` | Deleting that recording from the organizer's OneDrive once it is transcribed |
    | `User.Read`, `offline_access` | Identity, and refreshing access without re-login |
 
    `OnlineMeetingRecording.Read.All` is the widest of the three (the video of every
    meeting the user can reach). With `TEAMS_ARTIFACT_MODE=transcript-only` it is
    neither requested nor needed, so leave it out of the registration.
+
+   `Files.ReadWrite` is there for one call: Graph cannot delete a meeting
+   recording, so the app deletes the file from the signed-in user's OneDrive
+   instead, and the drive API has no narrower delegated permission than the user's
+   own files. It is only ever used on the Recordings folder. Set
+   `TEAMS_DELETE_RECORDING=false` (or use `transcript-only`) and it is neither
+   requested nor needed.
 
    Delegated means the app never sees more than the signed-in user can see — only
    that user's own meetings. Without admin consent each user is prompted
@@ -182,8 +190,14 @@ there is not even a way for users to ask. With the flag unset (the default) sign
 asks for nothing beyond the normal login scopes and the Teams features stay hidden.
 
 The flag is read once at startup, so **restart** the app after changing it
-(`docker compose up -d app` is enough, no `--build`). `TEAMS_ARTIFACT_MODE` is
-read the same way for the sign-in scopes, so restart after changing that too.
+(`docker compose up -d app` is enough, no `--build`). `TEAMS_ARTIFACT_MODE` and
+`TEAMS_DELETE_RECORDING` are read the same way for the sign-in scopes, so restart
+after changing those too.
+
+**Upgrading a deployment that already has Teams on:** `Files.ReadWrite` is new.
+Add it to the app registration and grant admin consent again *before* deploying,
+or set `TEAMS_DELETE_RECORDING=false`. Otherwise the tenant answers *"Need admin
+approval"* to every Microsoft sign-in, exactly as above.
 
 **Existing users must sign in again.** Consented scopes are stored per account at
 login, so users who signed in before step 3 keep a token with the old scope list.
@@ -203,6 +217,25 @@ downloads the Teams recording and re-transcribes it locally with hviske, while
 `transcript-only` uses Teams' own text transcript, never downloads audio and never
 asks for the recording permission — the right choice for a customer who does not
 want meeting audio at rest here.
+
+In `prefer-recording` the recording does not stay in Microsoft 365 either: once it
+has been transcribed, the app permanently deletes the file from the organizer's
+OneDrive (`TEAMS_DELETE_RECORDING`, on by default). It finds the file in the
+Recordings folder by its exact byte size and deletes nothing if that does not
+single out one file. A throttled or unreachable Graph is retried on every poll for
+a day. If the tenant refuses a permanent delete (a retention policy or hold), the
+file goes to the recycle bin instead and the tenant's own retention rules take
+over. Not covered: a recording stored in someone else's OneDrive (the user is an
+invitee, not the organizer) and a channel meeting's recording in the team's
+SharePoint site.
+
+Teams' own transcript needs no separate delete, and Graph offers none: it is not a
+file of its own but is embedded in the recording's mp4, so it goes when the
+recording does. Two cases are left. In `transcript-only` the app never downloads
+the mp4, cannot identify it, and so deletes neither. And tenants that recorded
+before Microsoft stopped doing so in 2025 may hold a second copy of old
+transcripts in the organizer's Exchange mailbox, which only deleting from the
+Teams client removes.
 
 **Retention of collected transcripts.** The recording is transcribed and dropped, but
 the finished transcript sits as a file under `AUDIO_STORAGE_PATH/pending-artifacts`

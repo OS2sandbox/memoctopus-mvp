@@ -1,19 +1,24 @@
 import type { PoolClient } from 'pg';
 import { pool } from '@/lib/db';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
+import { deleteRecordingEnabled } from './artifact-mode';
 import { classifyGraphError, GraphError } from './graph-client';
 import { graphDate, realDate } from './graph-dates';
 import { getMeeting } from './meeting-resolver';
 import { processTeamsMeeting } from './pipeline';
+import { deleteRecordingFromDrive } from './recording-cleanup';
 import {
   POLL_GIVE_UP_MS,
   giveUpAnchor,
   getTeamsMeeting,
   refreshTeamsMeetingSchedule,
   listDueTeamsMeetings,
+  listPendingRecordingCleanups,
   listUserSchemaIds,
   markPollAttempt,
   setTeamsMeetingState,
+  settleRecordingCleanup,
+  type RecordingCleanupState,
   type TeamsMeetingRow,
   type TeamsMeetingState,
 } from './store';
@@ -152,17 +157,27 @@ export async function pollMeeting(
         scheduledStart: row.scheduledStart,
         scheduledEnd: row.scheduledEnd,
         attempts: row.attempts,
+        recordingDeleted: row.recordingCleanup === 'deleted' || row.recordingCleanup === 'recycled',
       },
       now,
     );
 
     if (outcome.status === 'ready') {
-      return await markPollAttempt(userId, id, {
+      // The transcript is safely stashed, so the copy Teams left in OneDrive has
+      // done its job. `pending` goes onto the row in the same write that marks it
+      // ready: whatever happens to the attempt below, the next tick knows there is
+      // a recording still to delete.
+      const cleanUp = outcome.recordingBytes != null && deleteRecordingEnabled();
+      const ready = await markPollAttempt(userId, id, {
         state: 'ready',
         failureReason: null,
         transcriptId: outcome.transcriptId,
         recordingId: outcome.recordingId,
+        ...(cleanUp
+          ? { recordingCleanup: 'pending' as const, recordingBytes: outcome.recordingBytes }
+          : {}),
       });
+      return cleanUp ? await cleanUpRecording(userId, ready, now) : ready;
     }
     if (outcome.status === 'failed') {
       return await markPollAttempt(userId, id, { state: 'failed', failureReason: outcome.reason });
@@ -199,6 +214,52 @@ export async function pollMeeting(
         return await waiting('awaiting_teams', message);
     }
   }
+}
+
+/** How long a recording we could not reach Graph about is retried before it is given up on. */
+export const RECORDING_CLEANUP_GIVE_UP_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Deletes a transcribed meeting's recording from the organizer's OneDrive and
+ * writes the verdict to the row. Never throws, and never changes the meeting's
+ * state: the referat is ready whether or not the file could be removed.
+ *
+ * A throttle, an outage or an expired sign-in leaves the row `pending`, and
+ * {@link pollDueMeetings} comes back to it on every tick for a day.
+ */
+export async function cleanUpRecording(
+  userId: string,
+  row: TeamsMeetingRow,
+  now: Date,
+): Promise<TeamsMeetingRow> {
+  if (row.recordingCleanup !== 'pending' || row.recordingBytes == null) return row;
+
+  let result: Exclude<RecordingCleanupState, 'pending'>;
+  try {
+    const outcome = await deleteRecordingFromDrive(userId, row.recordingBytes);
+    result = outcome === 'ambiguous' ? 'failed' : outcome;
+    if (outcome !== 'deleted') {
+      console.warn(`[teams/poller] ${row.id}: recording not deleted from OneDrive (${outcome})`);
+    }
+  } catch (err) {
+    const kind = classifyGraphError(err);
+    // `ready` was stamped when the cleanup was queued, so this is its age.
+    const age = now.getTime() - (row.lastPolledAt ?? now).getTime();
+    if (kind !== 'graph_error' && kind !== 'transcripts_disabled' && age < RECORDING_CLEANUP_GIVE_UP_MS) {
+      console.warn(`[teams/poller] ${row.id}: deleting the recording from OneDrive postponed:`, err);
+      return row;
+    }
+    console.error(`[teams/poller] ${row.id}: could not delete the recording from OneDrive:`, err);
+    result = 'failed';
+  }
+
+  try {
+    await settleRecordingCleanup(userId, row.id, result);
+  } catch (err) {
+    console.error('[teams/poller] could not record the recording cleanup for', row.id, err);
+    return row;
+  }
+  return { ...row, recordingCleanup: result };
 }
 
 /**
@@ -293,6 +354,18 @@ async function pollUser(userId: string, now: Date): Promise<number> {
       console.error('[teams/poller] poll failed for', userId, row.id, err);
     }
     polled += 1;
+  }
+
+  // Recordings whose delete has not had a definite answer yet. Not counted as
+  // polls, and a failure here must not cost the user their meeting polls above.
+  if (deleteRecordingEnabled()) {
+    try {
+      for (const row of await listPendingRecordingCleanups(userId)) {
+        await cleanUpRecording(userId, row, now);
+      }
+    } catch (err) {
+      console.error('[teams/poller] recording cleanup failed for', userId, err);
+    }
   }
   return polled;
 }
