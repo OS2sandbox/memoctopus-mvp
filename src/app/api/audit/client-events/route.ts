@@ -7,13 +7,9 @@ import {
   clampClientTime,
   clientEventsBody,
   hasUnknownEventType,
-  isClientEventThrottled,
-  markClientEventStored,
   MAX_CLIENT_BODY_BYTES,
   remainingClientEventsToday,
   takeClientEventBudget,
-  THROTTLE_WINDOW_MS,
-  THROTTLED_TYPES,
   UNKNOWN_EVENT_TYPE_BODY,
 } from '@/lib/audit/client-ingest';
 
@@ -87,8 +83,8 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
     if (!validateEvent(input).ok) return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
     inputs.push(input);
   }
-  // Oldest first by (clamped) event time: the view throttle below compares event times, so a
-  // browser that delivers hours of queued events in one request is judged in the order they happened.
+  // Oldest first by (clamped) event time, so when the daily cap cuts a batch short it keeps the
+  // events that happened first.
   inputs.sort((a, b) => (a.clientOccurredAt as Date).getTime() - (b.clientOccurredAt as Date).getTime());
 
   const wait = takeClientEventBudget(userId, inputs.length);
@@ -99,30 +95,10 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
     return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': String(wait) } });
   }
 
-  // Repeats of a view or playback within 60 s of EVENT time are dropped (acknowledged, so the
-  // client outbox does not retry them). Judged against the last kept event of the same
-  // (meeting, type): stored by an earlier request, or kept earlier in this sorted batch. Two
-  // views four hours apart in one batch are both kept.
-  const batchLast = new Map<string, number>();
-  let throttled = 0;
-  const candidates = inputs.filter((input) => {
-    if (!THROTTLED_TYPES.has(input.type)) return true;
-    const eventMs = (input.clientOccurredAt as Date).getTime();
-    const key = `${input.entityId}|${input.type}`;
-    const prev = batchLast.get(key);
-    if ((prev !== undefined && Math.abs(eventMs - prev) < THROTTLE_WINDOW_MS) || isClientEventThrottled(userId, input.entityId as string, input.type, eventMs)) {
-      throttled += 1;
-      return false;
-    }
-    batchLast.set(key, eventMs);
-    return true;
-  });
-  if (throttled > 0) noteDroppedEvents(userId, 'throttle', throttled, req);
-
   // Daily cap per user, from the database. Self-reported telemetry: when the count
   // cannot be read, store nothing and let the client retry (503), never guess.
   let remaining = 0;
-  if (candidates.length > 0) {
+  if (inputs.length > 0) {
     try {
       remaining = await remainingClientEventsToday(userId);
     } catch {
@@ -133,14 +109,14 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
 
   // The same person for every event of the request: look the actor up once, not per event.
   const lost = parsed.data.droppedLocally;
-  const actor = candidates.length > 0 || lost ? await resolveActorSnapshot(userId) : undefined;
+  const actor = inputs.length > 0 || lost ? await resolveActorSnapshot(userId) : undefined;
   let accepted = 0;
   let capped = 0;
-  for (const input of candidates) {
+  for (const input of inputs) {
     // Beyond the cap: dropped but acknowledged, so the outbox does not retry forever.
     // Counted and warned about (content-free), so it is never a silent loss.
     if (accepted >= remaining) {
-      capped = candidates.length - accepted;
+      capped = inputs.length - accepted;
       console.warn(`[audit] client event cap reached, refused=${capped}`);
       noteDroppedEvents(userId, 'daily_cap', capped, req);
       break;
@@ -149,7 +125,6 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
     // Only a storage failure can drop a pre-validated event. Answer 503 so the
     // client keeps the batch; redelivery is idempotent on (actor, clientEventId).
     if (result.status === 'dropped') return NextResponse.json({ error: 'Audit unavailable' }, { status: 503 });
-    markClientEventStored(userId, input.entityId as string, input.type, (input.clientOccurredAt as Date).getTime());
     accepted += 1;
   }
 
@@ -166,11 +141,9 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
     }, { actor });
     if (result.status === 'dropped') return NextResponse.json({ error: 'Audit unavailable' }, { status: 503 });
   }
-  // `throttled`: repeats of a view within a minute of event time (by design); `capped`: refused by the daily cap.
-  // Both are also counted in the log (audit.events_dropped).
+  // `capped`: refused by the daily cap (also counted in the log as audit.events_dropped).
   return NextResponse.json({
     accepted,
-    ...(throttled > 0 ? { throttled } : {}),
     ...(capped > 0 ? { capped: true, refused: capped } : {}),
   });
 });

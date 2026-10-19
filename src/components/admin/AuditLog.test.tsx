@@ -242,7 +242,7 @@ describe('AuditLog', () => {
       const m = await loaded();
       await userEvent.selectOptions(screen.getByLabelText('Kategori'), 'Login og adgang');
       await waitFor(() => expect(auditCalls(m)).toHaveLength(2));
-      expect(lastParams(m).getAll('eventType').sort()).toEqual(['auth.login', 'auth.login_failed', 'auth.logout', 'authz.denied']);
+      expect(lastParams(m).getAll('eventType').sort()).toEqual(['auth.login', 'auth.login_failed', 'authz.denied']);
       await userEvent.selectOptions(screen.getByLabelText('Kategori'), 'Alle hændelser');
       await waitFor(() => expect(auditCalls(m)).toHaveLength(3));
       expect(lastParams(m).has('eventType')).toBe(false);

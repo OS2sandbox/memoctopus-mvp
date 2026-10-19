@@ -1,7 +1,6 @@
 // Shared constants for the local simulation stack (see docs/central-access/dev-simulation.md).
 // Everything here is a PUBLIC, throwaway test value. The stack binds to 127.0.0.1 only and
 // refuses to start with NODE_ENV=production.
-import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -25,8 +24,6 @@ export const SIM = {
     metadataFile: path.join(os.tmpdir(), 'referat-dev-sim', 'saml-idp-metadata.xml'),
   },
   cronSecret: 'sim-cron-secret',
-  feedKey: 'sim-feed-key',
-  feedKeyHash: createHash('sha256').update('sim-feed-key').digest('hex'),
 } as const;
 
 export const idpUrl = `http://127.0.0.1:${SIM.idpPort}`;
@@ -64,14 +61,11 @@ export function appEnv(databaseUrl: string, mode?: string): Record<string, strin
       SIM_OIDC_CLIENT_SECRET: SIM.oidc.clientSecret,
       SIM_OIDC_DISCOVERY_URL: `${idpUrl}/.well-known/openid-configuration`,
       SIM_SAML_METADATA_FILE: SIM.saml.metadataFile,
-      // Password sign-up stays on here to prove it never inherits a role.
-      EMAIL_PASSWORD_ENABLED: 'true',
+      // EMAIL_PASSWORD_ENABLED is deliberately not set: password sign-in is hard-wired off in claims mode.
       INTERNAL_CRON_SECRET: SIM.cronSecret,
       // Rollekatalog is only the role CATALOGUE here (READ key; the user/organisation sync is off).
       ROLLEKATALOG_URL: rollekatalogUrl,
       ROLLEKATALOG_READ_API_KEY: 'mock-read-key-0000',
-      AUDIT_FEED_API_KEY_HASH: SIM.feedKeyHash,
-      AUDIT_FEED_DELAY_SECONDS: '0',
       LLM_BASE_URL: llmUrl,
       LLM_MODEL: 'sim-model',
       OPENAI_API_KEY: '',
@@ -102,9 +96,6 @@ export function appEnv(databaseUrl: string, mode?: string): Record<string, strin
     OIDC_PROVIDER_NAME: 'Simuleret kommune-login',
     OIDC_PKCE: 'true',
     EMAIL_PASSWORD_ENABLED: 'true',
-    // Audit.
-    AUDIT_FEED_API_KEY_HASH: SIM.feedKeyHash,
-    AUDIT_FEED_DELAY_SECONDS: '0',
     // Minutes generation goes to the simulated LLM, which records what it was sent.
     LLM_BASE_URL: llmUrl,
     LLM_MODEL: 'sim-model',

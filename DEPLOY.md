@@ -22,14 +22,14 @@ git clone <repo> referat && cd referat
 ./scripts/bootstrap-host.sh --small    # app stack only (no GPU toolkit)
 ./scripts/bootstrap-host.sh --no-up    # install + verify, don't start
 ```
-On first run with no `.env` it creates one from the template and stops so you can
+On first run with no `.env` it creates one from `.env.example` and stops so you can
 fill in secrets; re-run to bring the stack up. It assumes the NVIDIA *driver* is
 already installed (`nvidia-smi` works) — it does not install kernel drivers.
 
 ## Two deploy modes
 
 ```bash
-cp .env.deploy.example .env        # then fill in the values
+cp .env.example .env        # then fill in the values; see the "COMPOSE / DEPLOYMENT ONLY" block
 ```
 
 ### "small" — app only (AI runs on another host)
@@ -107,180 +107,52 @@ Models used: `syvai/hviske-ensemble` (public, no token) and
 `pyannote/speaker-diarization-community-1` (gated — needs an `HF_TOKEN` whose
 account accepted the terms once; access is auto-granted).
 
-## Single sign-on (OIDC)
+## Login, roles and audit: where the facts live
 
-Memoctopus can sign users in against any standards-compliant OIDC provider —
-Keycloak, Authentik, Entra ID via OIDC, and so on. There is no provider-specific
-code: you supply a discovery URL, a client id and a client secret.
+Nothing about login methods, roles or the audit log is repeated here. Each fact has one home:
 
-**Auth configuration is read at runtime.** Change it and `docker compose up -d app`
-is enough — you never need `--build` for a login-method change.
+| Topic | Single source |
+|---|---|
+| Every environment variable and its default | `.env.example` (one template for development and compose) |
+| Identity providers (OIDC, Entra, SAML), `AUTH_CONFIG_FILE`, roles from claims, `ROLE_CLAIMS_MAX_SECONDS`, break-glass, shared workstations, what is not built, the legacy `OIDC_*` / `AUTHENTIK_*` variables | `docs/central-access/idp.md` |
+| Rollekatalog connection, sync, role catalogue | `docs/central-access/rollekatalog.md` |
+| Audit log, retention, client IP trust | `docs/central-access/audit.md` |
+| Architecture, role table, the three `ACCESS_SOURCE` modes | `docs/central-access/README.md` |
+| Central templates | `docs/central-access/templates.md` |
 
-1. In your IdP, create a **confidential** client (client id + secret) and register
-   this redirect URI, substituting your own values:
+What a deployment has to set (all in `.env`, runtime only: edit, then `docker compose up -d app`, never `--build`):
 
-   ```
-   <BETTER_AUTH_URL>/api/auth/oauth2/callback/<OIDC_PROVIDER_ID>
-   ```
+- **`ACCESS_SOURCE`**: `local` (default; development and demos), `rollekatalog` or `claims` (the municipal setup). A typo makes access control answer 503; it never means `local`.
+- **`AUTH_CONFIG_FILE=/config/auth.json`** for any real identity provider. The file lives in `AUTH_CONFIG_DIR` (default `./auth-config`, git-ignored, mounted read-only at `/config`); a `${NAME}` in it needs that variable forwarded to the `app` service in a `docker-compose.override.yml` (`idp.md` section 9). Register with the IdP using `BETTER_AUTH_URL` as the public URL (`idp.md` sections 5 and 6); in production it must be the **https** URL.
+- **`BETTER_AUTH_URL`**, `BETTER_AUTH_SECRET` and the compose `DATABASE_URL`.
+- **`INTERNAL_CRON_SECRET`** for the scheduled routes below.
+- Claims mode is closed by default: password sign-in is always off there, and `REQUIRE_ROLE_TO_LOGIN` must stay **blank** (unset means "no mapped role, no access"). Do not give either a default in a compose override.
+- `BOOTSTRAP_ADMIN_EMAILS` (local mode only; one-shot first administrator) and `AUDIT_RETENTION_DAYS` (default 365 days).
+- Rollekatalog variables are needed for `ACCESS_SOURCE=rollekatalog`; the optional role catalogue needs only `ROLLEKATALOG_URL` and `ROLLEKATALOG_READ_API_KEY`, in any mode.
 
-2. Find the discovery document:
+**PostgreSQL 15 or newer** is required (the migrations use `NULLS NOT DISTINCT`); the compose file runs `postgres:16-alpine`. Migrations run in the `migrate` service.
 
-   | IdP | Discovery URL |
-   |---|---|
-   | Keycloak | `https://<host>/realms/<realm>/.well-known/openid-configuration` |
-   | Authentik | `https://<host>/application/o/<app-slug>/.well-known/openid-configuration` |
+## Scheduling
 
-3. Fill in `.env`:
+Nothing in the app runs timers. Call the routes from a host or cluster cron with `X-Cron-Secret`; all answer 404 until `INTERNAL_CRON_SECRET` is set, and the Rollekatalog sync answers 409 unless `ACCESS_SOURCE=rollekatalog` and the integration is configured (`8080` is the default `APP_PORT`):
 
-   ```bash
-   OIDC_PROVIDER_ID=keycloak            # also the callback path segment
-   OIDC_PROVIDER_NAME=Kommune Login     # button label: "Fortsæt med Kommune Login"
-   OIDC_CLIENT_ID=...
-   OIDC_CLIENT_SECRET=...
-   OIDC_DISCOVERY_URL=https://.../.well-known/openid-configuration
-   ```
+```
+15 3 * * *    curl -fsS -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/audit/prune -o /dev/null
+*/30 * * * *  curl -fsS -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/bot-audio/sweep -o /dev/null
+*/15 * * * *  curl -fsS -m 600 -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/rollekatalog/sync -o /dev/null
+30 3 * * *    curl -fsS -m 120 -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/rollekatalog/roles -o /dev/null
+```
 
-4. `docker compose up -d app`, then load the sign-in page — the button appears as
-   soon as all three credentials are set. Scopes are always `openid profile email`;
-   PKCE is on unless you set `OIDC_PKCE=false`.
+- `audit/prune` applies the retention (`audit.md`).
+- `bot-audio/sweep` deletes Teams-bot recordings and transcripts nobody collected within an hour (each deletion is logged as `bot.audio_delete`, `ttl`); it is idempotent and is what makes the retention promise provable even when no new recording arrives to trigger the opportunistic sweep.
+- `rollekatalog/sync` (only in `rollekatalog` mode): keep the interval well below `ROLE_STALE_MAX_SECONDS` (24 h by default).
+- `rollekatalog/roles` refreshes the optional role catalogue (any `ACCESS_SOURCE`; 409 without a URL and READ key). It only ever deactivates entries; a refresh that would withdraw an unusually large share is refused (`removal_threshold`) and has to be forced from the admin button.
 
-To offer SSO only, set `EMAIL_PASSWORD_ENABLED=false`; that disables the
-email/password endpoints, not just the form.
+## Reverse proxy, client IP and the `X-Forwarded-For` header
 
-**⚠️ Pick `OIDC_PROVIDER_ID` once.** It is both the callback path segment and the
-key linking users to their accounts. Changing it after go-live means returning
-users no longer match their existing account and are given a new, empty one.
+The client IP stored in the audit log and used by the failed-login throttle is the **first** entry of `X-Forwarded-For` (`AUTH_IP_HEADERS`, default `x-forwarded-for`). The app trusts it as sent, so whatever sits in front must **overwrite** it with the real peer address; the shipped `nginx/nginx.conf` and `nginx-init.conf` set it to `$remote_addr`, and any other proxy must do the same.
 
-**Account linking.** An SSO login links into an existing account with the same
-email only when **both** sides are verified: your IdP must assert `email_verified`
-for the incoming login, and the existing account must already be verified. This
-app sends no verification emails, so accounts created with email/password are
-never linkable — if such a user later signs in via SSO they get "account not
-linked". Have them sign in the way they registered, or remove the password
-account first.
-
-This is deliberate and should not be relaxed by marking providers trusted: that
-would drop the check on the *incoming* IdP, so anyone able to self-register at a
-configured IdP under someone else's address could take over their account — and
-each account owns a private PostgreSQL schema.
-
-**Upgrading from the Authentik-specific setup.** `AUTHENTIK_CLIENT_ID`,
-`AUTHENTIK_CLIENT_SECRET` and `AUTHENTIK_DISCOVERY_URL` still work and log a
-deprecation warning; on that path the provider id stays `authentik`, so your
-registered redirect URI and existing accounts are unaffected. To migrate, copy the
-three values to their `OIDC_*` names and set `OIDC_PROVIDER_ID=authentik`.
-
-## Municipal installation: own IdP, roles from claims (OIDC and SAML)
-
-Each municipality or region runs its own installation against its own identity provider
-(FKA, Entra ID, OS2faktor, Authentik, ...). Which providers exist, how users and roles are
-read from the IdP's answer, and which claim value means which app role is described in **one
-JSON file per installation** — no code change, no rebuild, nothing shared with other
-installations. The full format and one recipe per IdP is in
-[`docs/central-access/idp.md`](docs/central-access/idp.md). In short:
-
-1. Put `auth.json` (and any SAML metadata XML it points at) in a directory on the host, by
-   default `./auth-config` next to `docker-compose.yml` (`AUTH_CONFIG_DIR`). It is mounted
-   read-only at `/config` and is git-ignored, because it may hold client secrets. Prefer
-   `"clientSecret": "${MY_IDP_SECRET}"` in the file and the secret in `.env`; for the app to
-   see it, forward the variable in a `docker-compose.override.yml`:
-
-   ```yaml
-   services:
-     app:
-       environment:
-         - MY_IDP_SECRET=${MY_IDP_SECRET}
-   ```
-
-2. In `.env`:
-
-   ```bash
-   AUTH_CONFIG_FILE=/config/auth.json
-   ACCESS_SOURCE=claims              # roles come from the IdP's claims, not from the app
-   # EMAIL_PASSWORD_ENABLED=         # leave blank: password sign-in is OFF in claims mode unless "true"
-   # REQUIRE_ROLE_TO_LOGIN=          # leave blank: in claims mode "no mapped role, no access" is the default
-   # ROLE_CLAIMS_MAX_SECONDS=28800   # how long a login's roles count; sessions end with it
-   ```
-
-   Claims mode is **closed by default**: password sign-in is off (an explicit
-   `EMAIL_PASSWORD_ENABLED=true` re-enables sign-in but never sign-up), a person the IdP does
-   not map to any role gets "Ingen adgang" (an explicit `REQUIRE_ROLE_TO_LOGIN=false` opens
-   that, and logs a warning), so **ordinary users must be mapped to `bruger`** through
-   `appRoleMap` / `groupRoleMap` (in `roles.byProvider.<id>` when there are several providers).
-   An Entra provider needs its **single tenant id** (a GUID, never `common`), and an OIDC
-   provider may not use a multi-tenant authority. Do not put `REQUIRE_ROLE_TO_LOGIN` or
-   `EMAIL_PASSWORD_ENABLED` defaults in a compose override: unset must stay unset.
-   In production the file's OIDC and SAML providers need `BETTER_AUTH_URL` to be the public
-   **https** URL, and every IdP URL must be https.
-
-3. Register with the IdP, with `BETTER_AUTH_URL` as the public URL of the app:
-
-   | Protocol | What the IdP is given |
-   |---|---|
-   | OIDC | redirect URI `<BETTER_AUTH_URL>/api/auth/oauth2/callback/<provider id>` |
-   | SAML 2.0 | ACS URL (HTTP-POST) `<BETTER_AUTH_URL>/api/auth/sso/saml2/sp/acs/<provider id>`; SP metadata at `<BETTER_AUTH_URL>/api/auth/sso/saml2/sp/metadata?providerId=<provider id>`; entity id = that metadata URL unless `spEntityId` is set |
-
-4. `docker compose up -d app`. The file is read once at start, so a change needs this
-   restart. A provider with an invalid entry is skipped with a content-free warning in the
-   log (`[auth] Ignoring providers[2]: ...`); an invalid `roles` section grants **nobody** a
-   role (fail closed) and is reported the same way.
-
-Rights and administrator assignment happen **outside** the app: removing a person's role
-in the IdP removes it here at their next login (and at the latest when
-`ROLE_CLAIMS_MAX_SECONDS` has passed, after which the session has ended too). The
-in-app role administration is switched off in claims mode, and there is no in-app
-administrator to lock out, so keep a **break-glass path on the IdP side** (a documented
-account that carries the administrator claim). A password sign-up can never be a way around
-this: in claims mode sign-up is closed and password accounts get no roles. The in-app admin (`ACCESS_SOURCE=local`) stays for
-development and demos and can be turned off with `ACCESS_LOCAL_ADMIN=false`.
-
-**Behind another load balancer or WAF.** The bundled nginx overwrites `X-Forwarded-For` with
-the address it sees (right for an edge proxy). If another proxy sits in front of it, nginx sees
-only that proxy, so the audit log and the failed-login throttle would record the proxy's address
-for everybody. Tell nginx to trust it and take the client from its header: in `nginx/nginx.conf`
-add `set_real_ip_from <the load balancer's CIDR>;` and `real_ip_header X-Forwarded-For;` in the
-`server` block (see the comment there). Never trust a range you do not control.
-
-**Shared workstations.** The app does not sign people out of the IdP (RP-initiated logout is
-not built), so on a shared PC the next person clicking the login button is signed straight back
-in as the previous one. Set `"prompt": "login"` (and optionally `"maxAge": 0`) on the provider
-in the config file so the IdP asks for credentials every time, or have the IdP end its own
-session. Entra: `"prompt": "login"` works the same.
-
-**Not supported (ask the client before promising them):** RP-initiated logout / OIDC
-back-channel logout and SAML single logout (signing out of the app does not sign out of the
-IdP), encrypted SAML assertions, Entra group overage (use app roles instead of `groups`),
-and removing a role in the IdP taking effect inside a still-running session before
-`ROLE_CLAIMS_MAX_SECONDS` (the IdP is only asked at login). SAML has no `prompt` switch: for
-shared workstations the IdP itself has to end its session or force re-authentication.
-OIDC id tokens are not signature-verified (they come straight from the token endpoint over
-TLS). **Verified only against the generic OIDC and SAML stand-ins of the dev simulation**:
-no Entra, Authentik, Keycloak, FKA or OS2faktor login has been run, so do one real login per
-role before go-live (`docs/central-access/idp.md` sections 8 and 11, where the FKA and
-OS2faktor recipes are skeletons with every unverified name marked).
-
-**Sharing prompts by role or group** needs `ACCESS_SOURCE=claims` (the IdP sends the roles
-with the login; OS2rollekatalog can feed the IdP). In `ACCESS_SOURCE=rollekatalog` a shared
-prompt is shared with org units instead. See `docs/central-access/rollekatalog.md` section 13.
-
-## Central access, audit log and Rollekatalog
-
-- **PostgreSQL 15 or newer** (the migrations use `NULLS NOT DISTINCT`); the compose file runs `postgres:16-alpine`. Migrations `0001` to `0004` run in the `migrate` service like the others.
-- **Set first** (all in `.env.example`; runtime only, restart without rebuild): `ACCESS_SOURCE` (`local` by default, or `rollekatalog`, or `claims`; a typo makes access control answer 503), `BOOTSTRAP_ADMIN_EMAILS`, `INTERNAL_CRON_SECRET`, and `AUDIT_RETENTION_DAYS` (default 365 days; `forever` keeps the log, see `docs/central-access/audit.md`). Rollekatalog variables are only needed for `ACCESS_SOURCE=rollekatalog`, except that the optional **role catalogue** (the roles and groups a shared prompt can be made available to) needs only `ROLLEKATALOG_URL` and `ROLLEKATALOG_READ_API_KEY`, in any mode (`ROLLEKATALOG_ROLES_PATH` / `ROLLEKATALOG_ROLEGROUPS_PATH` override its unverified default endpoints; section 12 of `docs/central-access/rollekatalog.md`). Without Rollekatalog the catalogue comes from the `catalogue` section of `AUTH_CONFIG_FILE`. If you set `DIRECTORY_USERID_TRANSFORM=strip-upn-domain`, also set `DIRECTORY_USERID_DOMAIN` (your UPN domain, for example `kommune.dk`); without it no login is matched (see `docs/central-access/rollekatalog.md`).
-- **First administrator.** In local mode, list your address in `BOOTSTRAP_ADMIN_EMAILS` and sign in through SSO (Microsoft needs a single-tenant `MICROSOFT_TENANT_ID`; OIDC needs `email_verified`). It grants `admin` once; the flag `bootstrap_admin_done` in `public.system_flags` then disables it. Recovery after a lock-out: `DELETE FROM system_flags WHERE key = 'bootstrap_admin_done';` and sign in again, or insert a `role_assignments` row by SQL.
-- **Scheduling.** Nothing in the app runs timers. Call the routes from a host or cluster cron with `X-Cron-Secret`; both answer 404 until `INTERNAL_CRON_SECRET` is set, and the sync answers 409 unless `ACCESS_SOURCE=rollekatalog` and the integration is configured:
-
-  ```
-  15 3 * * *    curl -fsS -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/audit/prune -o /dev/null
-  */30 * * * *  curl -fsS -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/bot-audio/sweep -o /dev/null
-  */15 * * * *  curl -fsS -m 600 -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/rollekatalog/sync -o /dev/null
-  30 3 * * *    curl -fsS -m 120 -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/rollekatalog/roles -o /dev/null
-  ```
-
-  The `bot-audio/sweep` line deletes Teams-bot recordings and transcripts nobody collected within an hour (each deletion is logged as `bot.audio_delete`, `ttl`); it is idempotent, has no setup to be missing (so no 409) and is what makes the retention promise provable even when no new recording arrives to trigger the opportunistic sweep.
-  The last line refreshes the role catalogue (optional, any `ACCESS_SOURCE`; it answers 409 without a URL and READ key). The catalogue only ever deactivates entries, so a prompt that targets a withdrawn role keeps its reference; a refresh that would withdraw an unusually large share of the entries is refused (`removal_threshold`) and has to be forced from the admin button.
-  (`8080` is the default `APP_PORT`.) Keep the sync interval well below `ROLE_STALE_MAX_SECONDS` (24 h by default).
-- **Client IP and the `X-Forwarded-For` header.** The client IP stored in the audit log and used by the failed-login throttle is the **first** entry of `X-Forwarded-For` (`AUTH_IP_HEADERS`, default `x-forwarded-for`). The app trusts it as sent, so whatever sits in front must **overwrite** it with the real peer address; the shipped `nginx/nginx.conf` and `nginx-init.conf` set it to `$remote_addr`, and any other proxy must do the same. But `docker-compose.yml` publishes the app on **all host interfaces** (`${APP_PORT:-8080}:3000`): anyone who can reach that port directly can skip the proxy and send any `X-Forwarded-For`, forging the audit IP and sidestepping the per-IP failed-login cap. Whenever a proxy is in use, either bind the app to loopback with a compose override (do not edit the default in `docker-compose.yml`):
+- **The app port is published on all host interfaces** (`${APP_PORT:-8080}:3000`): anyone who can reach it directly can skip the proxy and send any `X-Forwarded-For`, forging the audit IP and sidestepping the per-IP failed-login cap. Whenever a proxy is in use, bind the app to loopback with a compose override (do not edit the default in `docker-compose.yml`):
 
   ```yaml
   # docker-compose.override.yml
@@ -290,8 +162,8 @@ prompt is shared with org units instead. See `docs/central-access/rollekatalog.m
         - "127.0.0.1:${APP_PORT:-8080}:3000"
   ```
 
-  (`!override` needs Docker Compose 2.24 or newer; on older versions list the port in a separate overlay that replaces the `ports` key, or remove the publish and let the proxy reach `app:3000` over the Docker network), or firewall `APP_PORT` so only the proxy can reach it. The cron examples above call `http://localhost:8080` and keep working with the loopback binding, because they run on the host. With no proxy in front at all, the stored IP is simply whatever the client sends.
-- **Docs.** `docs/central-access/README.md` (overview), `idp.md` (identity providers, SAML, roles from claims), `rollekatalog.md` (operator guide), `audit.md` (log, feed, retention), `templates.md` (central templates).
+  (`!override` needs Docker Compose 2.24 or newer; on older versions list the port in a separate overlay that replaces the `ports` key, or remove the publish and let the proxy reach `app:3000` over the Docker network), or firewall `APP_PORT` so only the proxy can reach it. The cron examples above keep working with the loopback binding, because they run on the host. With no proxy in front at all, the stored IP is simply whatever the client sends.
+- **Behind another load balancer or WAF.** The bundled nginx overwrites `X-Forwarded-For` with the address it sees (right for an edge proxy). If another proxy sits in front of it, nginx sees only that proxy, so the audit log and the throttle would record the proxy's address for everybody. Tell nginx to trust it: in `nginx/nginx.conf` add `set_real_ip_from <the load balancer's CIDR>;` and `real_ip_header X-Forwarded-For;` in the `server` block (see the comment there). Never trust a range you do not control.
 
 ## Day-2 operations
 
@@ -318,7 +190,7 @@ docker compose -f docker-compose.yml -f docker-compose.ai.yml down
 4. From inside the app container, the AI services resolve:
    `docker compose exec app wget -qO- http://hviske:8000/v1/models`
    `docker compose exec app wget -qO- http://diarization-service:5000/health`
-5. Auth + DB roundtrip: sign up a user, confirm it lands in Postgres
+5. Auth + DB roundtrip: sign in (in `local` / `rollekatalog` mode with e-mail/password you can sign up a test user; in claims mode use the IdP), confirm the user lands in Postgres
    (`docker compose exec db psql -U referat -d referat -c 'select email from public.users;'`).
 
 ## Prerequisite: a Docker-capable GPU host

@@ -21,9 +21,8 @@ const CHANGE_NOTE_TOO_LONG_MESSAGE = `Ændringsbeskrivelsen er for lang (højst 
 // bounds the work of the strip. After stripping and trimming, only non-whitespace code
 // points count towards the minimum, so a note of spaces or invisible characters does not
 // pass. Code points, not UTF-16 units: 5 emoji are 10 units but 5 characters. The stored
-// note is the normalised one (interior whitespace kept). The table CHECKs mirror this rule
-// (counted meaningful characters) and must be kept in sync with MEANINGLESS_CHARS_CLASS in
-// src/lib/db/schema.ts; this schema is the first gate and gives the friendly message.
+// note is the normalised one (interior whitespace kept). The table CHECKs are plain length
+// bounds only; this schema is the only place the "meaningful characters" rule is enforced.
 export const changeNoteSchema = z
   .string({ required_error: CHANGE_NOTE_MESSAGE, invalid_type_error: CHANGE_NOTE_MESSAGE })
   .max(CENTRAL_LIMITS.changeNoteMax * 4, CHANGE_NOTE_TOO_LONG_MESSAGE)

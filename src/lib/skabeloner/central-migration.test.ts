@@ -35,22 +35,15 @@ describe('migration 0003_central_templates', () => {
     expect(sql).toMatch(/"central_template_versions_template_id_central_templates_id_fk".*ON DELETE cascade/);
   });
 
-  it('forces a change note of at least 10 meaningful characters (whitespace and invisibles stripped) on every version row', () => {
-    expect(sql).toContain('char_length(regexp_replace("central_template_versions"."change_note", \'');
-    expect(sql).toContain(`'g')) >= 10 and char_length("central_template_versions"."change_note") <= 2000`);
-    expect(sql).not.toContain('btrim("central_template_versions"."change_note")');
-    expect(sql).toContain('char_length("central_template_versions"."change_note") <= 2000');
+  it('bounds the change note to 10..2000 characters on every version row (plain length; the meaningful-character rule is app-side only)', () => {
+    expect(sql).toContain('char_length("central_template_versions"."change_note") between 10 and 2000');
+    expect(sql).not.toContain('regexp_replace');
     expect(sql).toContain('"change_note" text NOT NULL');
     expect(sql).toContain('CONSTRAINT "central_template_versions_template_version_unique" UNIQUE("template_id","version")');
   });
 
-  it('requires at least one meaningful character in the name, with the same class as the change note', () => {
-    const cls = (s: string) => /regexp_replace\([^,]+, '(\[[^']*\])', ''/.exec(s)?.[1];
-    const note = statements.find((s) => s.includes('"central_template_versions_change_note_check"'));
-    const name = statements.find((s) => s.includes('"central_templates_name_check"'));
-    expect(cls(name ?? '')).toBeDefined();
-    expect(cls(name ?? '')).toBe(cls(note ?? ''));
-    expect(sql).toContain(`'g')) >= 1 and char_length("central_templates"."name") <= 120`);
+  it('bounds the name to 1..120 characters in the database', () => {
+    expect(sql).toContain('char_length("central_templates"."name") between 1 and 120');
     expect(sql).not.toContain('btrim("central_templates"."name")');
   });
 

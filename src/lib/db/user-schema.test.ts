@@ -156,6 +156,24 @@ describe('queryUserSchema', () => {
     expect(versions).toContain('UNIQUE (skabelon_id, version)');
     expect(versions).toMatch(/change_note\s+TEXT,/); // nullable: the note is optional
     expect(at(`"${SCHEMA}".skabelon_versions (`)).toBeGreaterThan(at(`"${SCHEMA}".skabeloner (`));
+    // The prompt copy is no longer part of a new schema's table.
+    expect(versions).not.toContain('snapshot');
+  });
+
+  it('ensureUserSchema relaxes a NOT NULL snapshot column left by an older version, and does nothing otherwise', async () => {
+    const legacy = makeClient((sql) => (sql.includes('information_schema.columns') ? { rows: [{ '?column?': 1 }] } : { rows: [] }));
+    mockConnect.mockResolvedValue(legacy.client);
+    await queryUserSchema(USER, 'SELECT 1');
+    expect(legacy.client.query.mock.calls.map(([sql]) => String(sql))).toContain(
+      `ALTER TABLE "${SCHEMA}".skabelon_versions ALTER COLUMN snapshot DROP NOT NULL`,
+    );
+    expect(legacy.client.query.mock.calls.find(([sql]) => String(sql).includes('information_schema.columns'))![1]).toEqual([SCHEMA]);
+
+    (globalThis as unknown as { initializedSchemas: Set<string> }).initializedSchemas.clear();
+    const fresh = makeClient();
+    mockConnect.mockResolvedValue(fresh.client);
+    await queryUserSchema(USER, 'SELECT 1');
+    expect(fresh.client.query.mock.calls.map(([sql]) => String(sql)).some((q) => q.includes('DROP NOT NULL'))).toBe(false);
   });
 
   it('ensureUserSchema does not set search_path on its pooled client', async () => {

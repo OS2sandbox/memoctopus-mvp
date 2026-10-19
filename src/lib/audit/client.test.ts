@@ -72,10 +72,10 @@ afterEach(() => {
 
 describe('reportAuditEvent', () => {
   it('queues an event with an id, type, entity, details and time, then delivers it with keepalive and removes it after a 2xx', async () => {
-    c.reportAuditEvent('meeting.create', MEETING, { origin: 'upload' });
+    c.reportAuditEvent('meeting.minutes_version_prune', MEETING, { prunedCount: 2 });
     await vi.advanceTimersByTimeAsync(0);
     expect(h.queue).toHaveLength(1);
-    expect(h.queue[0]).toMatchObject({ type: 'meeting.create', entityId: MEETING, details: { origin: 'upload' } });
+    expect(h.queue[0]).toMatchObject({ type: 'meeting.minutes_version_prune', entityId: MEETING, details: { prunedCount: 2 } });
     expect(h.queue[0].clientEventId).toMatch(/^[0-9a-f-]{36}$/);
     expect(Number.isNaN(Date.parse(h.queue[0].occurredAt))).toBe(false);
 
@@ -124,7 +124,7 @@ describe('reportAuditEvent', () => {
 
   it('isolates a batch the server refuses for good: only the offending event is dropped', async () => {
     c.reportAuditEvent('meeting.delete', MEETING);
-    c.reportAuditEvent('meeting.redact', OTHER);
+    c.reportAuditEvent('meeting.transcript_delete', OTHER);
     await vi.advanceTimersByTimeAsync(0);
     const [first, second] = h.queue.map((e) => e.clientEventId);
     fetchMock.mockImplementation(async (_u: string, init: RequestInit) => {
@@ -182,21 +182,21 @@ describe('reportAuditEvent', () => {
 
   it('never posts one user\'s queue under the next user\'s session: it waits for the owner\'s next login', async () => {
     const scope = await import('@/lib/storage/scope');
-    c.COALESCED.add('meeting.create');
-    c.reportAuditEvent('meeting.create', MEETING, { origin: 'live' });
+    c.COALESCED.add('meeting.minutes_version_prune');
+    c.reportAuditEvent('meeting.minutes_version_prune', MEETING, { prunedCount: 1 });
     c.reportAuditEvent('meeting.delete', OTHER);
     // user-1 signs out and user-2 signs in while the coalesced event is still held.
     scope.setStorageUserId('user-2');
     await vi.advanceTimersByTimeAsync(c.COALESCE_WINDOW_MS + 5000);
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(h.queue.map((e) => e.type).sort()).toEqual(['meeting.create', 'meeting.delete']);
+    expect(h.queue.map((e) => e.type).sort()).toEqual(['meeting.delete', 'meeting.minutes_version_prune']);
     await c.flush('user-1');
     expect(fetchMock).not.toHaveBeenCalled();
 
     scope.setStorageUserId('user-1');
     c.startAuditReporting('user-1');
     await vi.advanceTimersByTimeAsync(1500);
-    expect(sentBodies().flat().map((e) => e.type).sort()).toEqual(['meeting.create', 'meeting.delete']);
+    expect(sentBodies().flat().map((e) => e.type).sort()).toEqual(['meeting.delete', 'meeting.minutes_version_prune']);
     expect(h.queue).toHaveLength(0);
   });
 
@@ -235,60 +235,58 @@ describe('reportAuditEvent', () => {
 
   describe('coalescing', () => {
     // The edit-like types are coalesced by default; the generic mechanism below is
-    // exercised with meeting.create (the module is reloaded for every test).
+    // exercised with meeting.minutes_version_prune (the module is reloaded for every test).
     beforeEach(() => {
-      c.COALESCED.add('meeting.create');
+      c.COALESCED.add('meeting.minutes_version_prune');
     });
 
     it('coalesces the edit-like types by default and nothing else', async () => {
       await load();
-      c.COALESCED.delete('meeting.create');
+      c.COALESCED.delete('meeting.minutes_version_prune');
       expect([...c.COALESCED].sort()).toEqual([
         'meeting.metadata_edit',
         'meeting.minutes_save',
-        'meeting.participants_edit',
-        'meeting.speakers_edit',
         'meeting.transcript_edit',
       ]);
     });
 
     it('sends one event per meeting+type per 30 s window carrying the last details', async () => {
-      c.reportAuditEvent('meeting.create', MEETING, { origin: 'live' });
+      c.reportAuditEvent('meeting.minutes_version_prune', MEETING, { prunedCount: 1 });
       await vi.advanceTimersByTimeAsync(10_000);
-      c.reportAuditEvent('meeting.create', MEETING, { origin: 'upload' });
-      c.reportAuditEvent('meeting.create', MEETING, { origin: 'bot' });
+      c.reportAuditEvent('meeting.minutes_version_prune', MEETING, { prunedCount: 2 });
+      c.reportAuditEvent('meeting.minutes_version_prune', MEETING, { prunedCount: 3 });
       expect(h.queue).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(20_000);
       expect(h.queue).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(1500);
       expect(sentBodies().flat()).toHaveLength(1);
-      expect(sentBodies().flat()[0]).toMatchObject({ type: 'meeting.create', details: { origin: 'bot' } });
+      expect(sentBodies().flat()[0]).toMatchObject({ type: 'meeting.minutes_version_prune', details: { prunedCount: 3 } });
     });
 
     it('coalesces independently per meeting', async () => {
       for (let i = 0; i < 5; i++) {
-        c.reportAuditEvent('meeting.create', MEETING, { origin: 'live' });
-        c.reportAuditEvent('meeting.create', OTHER, { origin: 'bot' });
+        c.reportAuditEvent('meeting.minutes_version_prune', MEETING, { prunedCount: 1 });
+        c.reportAuditEvent('meeting.minutes_version_prune', OTHER, { prunedCount: 3 });
       }
       await vi.advanceTimersByTimeAsync(31_000 + 1500);
       const sent = sentBodies().flat();
-      expect(sent.map((e) => [e.entityId, e.details.origin]).sort()).toEqual([[MEETING, 'live'], [OTHER, 'bot']].sort());
+      expect(sent.map((e) => [e.entityId, e.details.prunedCount]).sort()).toEqual([[MEETING, 1], [OTHER, 3]].sort());
     });
 
     it('starts a new window after the previous one ended', async () => {
-      c.reportAuditEvent('meeting.create', MEETING, { origin: 'live' });
+      c.reportAuditEvent('meeting.minutes_version_prune', MEETING, { prunedCount: 1 });
       await vi.advanceTimersByTimeAsync(31_000);
-      c.reportAuditEvent('meeting.create', MEETING, { origin: 'live' });
+      c.reportAuditEvent('meeting.minutes_version_prune', MEETING, { prunedCount: 1 });
       await vi.advanceTimersByTimeAsync(31_000 + 1500);
       expect(sentBodies().flat()).toHaveLength(2);
     });
 
     it('writes held events out immediately when the page is hidden or closed', async () => {
-      c.reportAuditEvent('meeting.create', MEETING, { origin: 'bot' });
+      c.reportAuditEvent('meeting.minutes_version_prune', MEETING, { prunedCount: 3 });
       window.dispatchEvent(new Event('pagehide'));
       await vi.advanceTimersByTimeAsync(0);
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(sentBodies()[0][0].details).toEqual({ origin: 'bot' });
+      expect(sentBodies()[0][0].details).toEqual({ prunedCount: 3 });
       // Nothing left to send when the window would have ended.
       await vi.advanceTimersByTimeAsync(40_000);
       expect(sentBodies().flat()).toHaveLength(1);
@@ -333,22 +331,22 @@ describe('reportAuditEvent', () => {
     c.reportAuditEvent('meeting.recording_pause', MEETING);
     c.reportAuditEvent('meeting.recording_resume', MEETING);
     c.reportAuditEvent('meeting.recording_pause', MEETING);
-    c.reportAuditEvent('meeting.minutes_version', MEETING, { versionNumber: 2, action: 'activate' });
-    c.reportAuditEvent('meeting.minutes_version', MEETING, { versionNumber: 1, action: 'activate' });
+    c.reportAuditEvent('meeting.minutes_version', MEETING, { versionNumber: 2, action: 'restore' });
+    c.reportAuditEvent('meeting.minutes_version', MEETING, { versionNumber: 1, action: 'restore' });
     await vi.advanceTimersByTimeAsync(1500);
     expect(sentBodies().flat()).toHaveLength(5);
   });
 
-  it('coalesces autosave and the participant/speaker lists to one event per window', async () => {
+  it('coalesces autosave and the metadata fields to one event per field per window', async () => {
     for (let i = 0; i < 20; i++) c.reportAuditEvent('meeting.minutes_save', MEETING);
-    c.reportAuditEvent('meeting.participants_edit', MEETING, { participantCount: 2 });
-    c.reportAuditEvent('meeting.participants_edit', MEETING, { participantCount: 5 });
-    c.reportAuditEvent('meeting.speakers_edit', MEETING, { speakerCount: 3 });
+    c.reportAuditEvent('meeting.metadata_edit', MEETING, { field: 'participants', count: 2 });
+    c.reportAuditEvent('meeting.metadata_edit', MEETING, { field: 'participants', count: 5 });
+    c.reportAuditEvent('meeting.metadata_edit', MEETING, { field: 'speakers', count: 3 });
     expect(h.queue).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(31_000 + 1500);
     const sent = sentBodies().flat();
-    expect(sent.map((e) => e.type).sort()).toEqual(['meeting.minutes_save', 'meeting.participants_edit', 'meeting.speakers_edit']);
-    expect(sent.find((e) => e.type === 'meeting.participants_edit')!.details).toEqual({ participantCount: 5 });
+    expect(sent.map((e) => e.type).sort()).toEqual(['meeting.metadata_edit', 'meeting.metadata_edit', 'meeting.minutes_save']);
+    expect(sent.find((e) => e.details.field === 'participants')!.details).toEqual({ field: 'participants', count: 5 });
   });
 
   it('writes a coalesced event out early when the tab is hidden, so closing the tab loses nothing', async () => {
@@ -576,15 +574,14 @@ describe('a delete that cannot be queued is counted, not silent', () => {
     c.reportAuditEvent('meeting.delete', MEETING, { trigger: 'user' });
     c.reportAuditEvent('meeting.audio_delete', MEETING);
     c.reportAuditEvent('meeting.transcript_delete', MEETING);
-    c.reportAuditEvent('meeting.redact', MEETING);
     expect(h.queue).toHaveLength(0);
     const scope = await import('@/lib/storage/scope');
     scope.setStorageUserId('user-2');
     c.startAuditReporting('user-2');
-    expect(h.dropped?.count).toBe(4);
+    expect(h.dropped?.count).toBe(3);
     await vi.advanceTimersByTimeAsync(1500);
     // The count rides along with the next request (as droppedLocally) and is cleared after the 2xx.
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).droppedLocally.count).toBe(4);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).droppedLocally.count).toBe(3);
     expect(h.dropped).toBeNull();
   });
 

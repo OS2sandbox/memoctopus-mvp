@@ -91,7 +91,6 @@ export function UploadConfirmScreen({ file, onCancel }: Props) {
           source: 'local',
           status: 'processing',
           recordedAt,
-          origin: 'upload',
         });
         if (!liveRef.current) return;
         const id = meeting.id;

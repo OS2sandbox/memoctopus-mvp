@@ -59,7 +59,7 @@ export async function saveTranscript(
 }
 
 // Audit reporting (saveTranscriptSegments): a change of WHO SPOKE (a voice linked, unlinked,
-// renamed or removed) is reported as meeting.speakers_edit with the number of distinct speakers,
+// renamed or removed) is reported as meeting.metadata_edit (field 'speakers') with the number of distinct speakers,
 // and a change of the TEXT as meeting.transcript_edit (coalesced in the browser, no details).
 // Chapters and the machine writes (the diarization pass, which passes a diarizationStatus)
 // are not reported, and a write that repeats what is stored reports nothing (so the mount
@@ -119,7 +119,7 @@ export async function saveTranscriptSegments(
     });
   } catch (err) {
     try {
-      if (speakersChanged) reportAuditEvent('meeting.speakers_edit', meetingId, { speakerCount }, { outcome: 'error' });
+      if (speakersChanged) reportAuditEvent('meeting.metadata_edit', meetingId, { field: 'speakers', count: speakerCount }, { outcome: 'error' });
       if (textChanged) reportAuditEvent('meeting.transcript_edit', meetingId, undefined, { outcome: 'error' });
     } catch {
       // Reporting never changes how the write failed.
@@ -127,7 +127,7 @@ export async function saveTranscriptSegments(
     throw err;
   }
   try {
-    if (speakersChanged) reportAuditEvent('meeting.speakers_edit', meetingId, { speakerCount });
+    if (speakersChanged) reportAuditEvent('meeting.metadata_edit', meetingId, { field: 'speakers', count: speakerCount });
     if (textChanged) reportAuditEvent('meeting.transcript_edit', meetingId);
   } catch {
     // Reporting is best effort and must never turn a successful write into an error.

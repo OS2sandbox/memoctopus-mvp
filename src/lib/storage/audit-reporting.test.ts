@@ -86,27 +86,20 @@ beforeEach(() => {
 });
 
 describe('meetings', () => {
-  it('createMeeting reports meeting.create once with the explicit origin', async () => {
-    const m = await createMeeting({ title: SECRET_TITLE, participants: [SECRET_NAME], origin: 'upload', status: 'processing' });
-    expect(calls()).toEqual([{ type: 'meeting.create', entityId: m.id, details: { origin: 'upload' } }]);
-    expectNoContent();
-  });
-
-  it.each(['live', 'upload', 'bot'] as const)('createMeeting passes the origin %s through', async (origin) => {
-    await createMeeting({ title: 'x', origin });
-    expect(calls()[0].details).toEqual({ origin });
-    expectNoContent();
+  it('createMeeting reports nothing (the creation is marked by recording_start, audio.upload or bot.session_start)', async () => {
+    await createMeeting({ title: SECRET_TITLE, participants: [SECRET_NAME], status: 'processing' });
+    expect(h.report).not.toHaveBeenCalled();
   });
 
   it('createMeeting still creates the meeting when reporting is silent', async () => {
-    const m = await createMeeting({ title: 'x', origin: 'live' });
+    const m = await createMeeting({ title: 'x' });
     expect(h.stores.meetings.get(m.id)?.title).toBe('x');
   });
 
   describe('updateMeeting', () => {
     let id: string;
     beforeEach(async () => {
-      id = (await createMeeting({ title: SECRET_TITLE, participants: [SECRET_NAME], origin: 'live', status: 'recording' })).id;
+      id = (await createMeeting({ title: SECRET_TITLE, participants: [SECRET_NAME], status: 'recording' })).id;
       h.report.mockReset();
     });
 
@@ -117,9 +110,9 @@ describe('meetings', () => {
       expect(h.report).not.toHaveBeenCalled();
     });
 
-    it('a changed participant list reports participants_edit with the COUNT only; a repeat, a machine write or no change report nothing', async () => {
+    it('a changed participant list reports metadata_edit (participants) with the COUNT only; a repeat, a machine write or no change report nothing', async () => {
       await updateMeeting(id, { participants: [SECRET_NAME, 'A', 'B'] });
-      expect(calls()).toEqual([{ type: 'meeting.participants_edit', entityId: id, details: { participantCount: 3 } }]);
+      expect(calls()).toEqual([{ type: 'meeting.metadata_edit', entityId: id, details: { field: 'participants', count: 3 } }]);
       expectNoContent();
       h.report.mockClear();
       await updateMeeting(id, { participants: [SECRET_NAME, 'A', 'B'] }); // the mount effect re-saving the same list
@@ -128,23 +121,16 @@ describe('meetings', () => {
       expect(h.report).not.toHaveBeenCalled();
     });
 
-    it('status becoming redacted reports redact (plus audio_delete when the audio went too), and no status_change', async () => {
+    it('status becoming redacted reports only the audio delete when the audio went too (the transcript text is its own event), no redact and no status_change', async () => {
       await updateMeeting(id, { status: 'redacted', audioDeleted: true });
-      expect(calls()).toEqual([
-        { type: 'meeting.redact', entityId: id, details: undefined },
-        { type: 'meeting.audio_delete', entityId: id, details: { trigger: 'user' } },
-      ]);
+      expect(calls()).toEqual([{ type: 'meeting.audio_delete', entityId: id, details: { trigger: 'user' } }]);
       expectNoContent();
+      h.report.mockClear();
+      await updateMeeting(id, { status: 'redacted' });
+      expect(h.report).not.toHaveBeenCalled();
     });
 
-    it('an already redacted meeting does not report redact again', async () => {
-      await updateMeeting(id, { status: 'redacted' });
-      expect(types()).toEqual(['meeting.redact']);
-      await updateMeeting(id, { status: 'redacted' });
-      expect(types()).toEqual(['meeting.redact']);
-    });
-
-    it('a text edit reports transcript_edit (no details), a pure text edit never speakers_edit', async () => {
+    it('a text edit reports transcript_edit (no details), a pure text edit never a speakers edit', async () => {
     await saveTranscript('m1', { rawText: 't', chapters: [], piiReplacements: [], segments: [seg('a'), seg('b', 'Taler 2')] });
     await saveTranscriptSegments('m1', [seg(SECRET_TEXT), seg('b', 'Taler 2')]);
     expect(calls()).toEqual([{ type: 'meeting.transcript_edit', entityId: 'm1', details: undefined }]);
@@ -152,11 +138,11 @@ describe('meetings', () => {
   });
 
   it('detects a speaker change even when the segment count differs (merged, split or removed segments)', async () => {
-    const count = (v: unknown) => (v as { speakerCount: number }).speakerCount;
+    const count = (v: unknown) => (v as { count: number }).count;
     await saveTranscript('m1', { rawText: 't', chapters: [], piiReplacements: [], segments: [seg('a'), seg('b', 'Taler 2'), seg('c')] });
     // Segment 1 and 2 merged into one for Taler 2, speakers changed: 3 segments -> 2.
     await saveTranscriptSegments('m1', [seg('a b', 'Taler 2'), seg('c')]);
-    expect(calls().filter((c) => c.type === 'meeting.speakers_edit').map((c) => count(c.details))).toEqual([2]);
+    expect(calls().filter((c) => c.type === 'meeting.metadata_edit').map((c) => count(c.details))).toEqual([2]);
     h.report.mockClear();
     // Splitting one speaker's segment in two keeps the speaker sequence: not a speaker edit.
     await saveTranscriptSegments('m1', [seg('a', 'Taler 2'), seg('b', 'Taler 2'), seg('c')]);
@@ -164,7 +150,7 @@ describe('meetings', () => {
     h.report.mockClear();
     // A voice relabelled across a changed number of segments is one.
     await saveTranscriptSegments('m1', [seg('ab', SECRET_NAME), seg('c')]);
-    expect(types().filter((t) => t === 'meeting.speakers_edit')).toEqual(['meeting.speakers_edit']);
+    expect(types().filter((t) => t === 'meeting.metadata_edit')).toEqual(['meeting.metadata_edit']);
     expectNoContent();
   });
 
@@ -197,7 +183,7 @@ describe('meetings', () => {
 
   describe('deleteMeeting', () => {
     it('reports meeting.delete once, after the data is gone', async () => {
-      const m = await createMeeting({ title: SECRET_TITLE, origin: 'live' });
+      const m = await createMeeting({ title: SECRET_TITLE });
       h.report.mockImplementation(() => expect(h.stores.meetings.has(m.id)).toBe(false));
       h.report.mockClear();
       await deleteMeeting(m.id);
@@ -205,7 +191,7 @@ describe('meetings', () => {
     });
 
     it('says when the app deleted the meeting on its own', async () => {
-      const m = await createMeeting({ title: 'x', origin: 'live' });
+      const m = await createMeeting({ title: 'x' });
       h.report.mockClear();
       await deleteMeeting(m.id, { trigger: 'auto_empty' });
       expect(calls()).toEqual([{ type: 'meeting.delete', entityId: m.id, details: { trigger: 'auto_empty' } }]);
@@ -219,7 +205,7 @@ describe('meetings', () => {
     it('an automatic delete is reported before anything is awaited and retracted when the meeting did not exist', async () => {
       const retract = vi.fn();
       h.report.mockReturnValue(retract);
-      const m = await createMeeting({ title: 'x', origin: 'live' });
+      const m = await createMeeting({ title: 'x' });
       h.report.mockClear();
       const pending = deleteMeeting(m.id, { trigger: 'auto_pagehide' });
       expect(calls()).toEqual([{ type: 'meeting.delete', entityId: m.id, details: { trigger: 'auto_pagehide' } }]);
@@ -273,7 +259,7 @@ describe('audio', () => {
 });
 
 describe('transcripts', () => {
-  it('reports speakers_edit (a count) only when who spoke changed by a user; diarization, chapters and an unchanged re-save report nothing', async () => {
+  it('reports metadata_edit/speakers (a count) only when who spoke changed by a user; diarization, chapters and an unchanged re-save report nothing', async () => {
     await saveTranscript('m1', { rawText: SECRET_TEXT, chapters: [], piiReplacements: [], segments: [seg('a'), seg('b', 'Taler 2')] });
     expect(h.report).not.toHaveBeenCalled();
 
@@ -284,7 +270,7 @@ describe('transcripts', () => {
 
     await saveTranscript('m1', { rawText: 't', chapters: [], piiReplacements: [], segments: [seg('a'), seg('b', 'Taler 2')] });
     await saveTranscriptSegments('m1', [seg('a', SECRET_NAME), seg('b', 'Taler 2')]); // a voice linked to a person
-    expect(calls()).toEqual([{ type: 'meeting.speakers_edit', entityId: 'm1', details: { speakerCount: 2 } }]);
+    expect(calls()).toEqual([{ type: 'meeting.metadata_edit', entityId: 'm1', details: { field: 'speakers', count: 2 } }]);
     expectNoContent();
 
     h.report.mockClear();
@@ -330,7 +316,7 @@ describe('minutes', () => {
     expect(calls()).toEqual([{ type: 'meeting.minutes_version', entityId: 'm1', details: { versionNumber: 1, action: 'generate' } }]);
   });
 
-  it('switching to an earlier version is ONE restore row; back to the newest is activate; to the active one nothing', async () => {
+  it('switching to an earlier version is ONE restore row; back to the newest or to the active one reports nothing', async () => {
     await appendMinutesVersion('m1', minutes('one'));
     const row = await appendMinutesVersion('m1', minutes('two'));
     h.report.mockClear();
@@ -338,7 +324,7 @@ describe('minutes', () => {
     expect(calls().map((c) => c.details)).toEqual([{ versionNumber: 1, action: 'restore' }]);
     h.report.mockClear();
     await setActiveMinutesVersion('m1', row.versions[1].id); // back to the newest
-    expect(calls().map((c) => c.details)).toEqual([{ versionNumber: 2, action: 'activate' }]);
+    expect(h.report).not.toHaveBeenCalled(); // exposes no older content
     h.report.mockClear();
     await setActiveMinutesVersion('m1', row.versions[1].id); // already active
     await setActiveMinutesVersion('m1', 'not-a-version');
@@ -359,7 +345,7 @@ describe('minutes', () => {
 
 describe('contract with the server catalogue', () => {
   it('every event the storage layer reports passes the same validation the server applies', async () => {
-    const m = await createMeeting({ title: SECRET_TITLE, participants: ['A'], origin: 'bot' });
+    const m = await createMeeting({ title: SECRET_TITLE, participants: ['A'] });
     await updateMeeting(m.id, { status: 'review', title: 'Nyt', participants: ['A', 'B'], audioDeleted: true });
     await updateMeeting(m.id, { status: 'redacted' });
     await saveTranscript(m.id, { rawText: 't', chapters: [], piiReplacements: [], segments: [seg('a')] });
@@ -383,15 +369,11 @@ describe('contract with the server catalogue', () => {
     const seen = new Set(types());
     expect([...seen].sort()).toEqual([
       'meeting.audio_delete',
-      'meeting.create',
       'meeting.delete',
       'meeting.metadata_edit',
       'meeting.minutes_save',
       'meeting.minutes_version',
       'meeting.minutes_version_prune',
-      'meeting.participants_edit',
-      'meeting.redact',
-      'meeting.speakers_edit',
       'meeting.transcript_delete',
       'meeting.transcript_edit',
     ]);
@@ -453,7 +435,7 @@ describe('failed writes are reported with outcome error', () => {
     h.failPut = true;
     await expect(saveTranscriptSegments('m1', [seg(SECRET_TEXT, SECRET_NAME), seg('b', 'Taler 2')])).rejects.toThrow();
     expect(calls().map((c) => [c.type, c.outcome])).toEqual([
-      ['meeting.speakers_edit', 'error'],
+      ['meeting.metadata_edit', 'error'],
       ['meeting.transcript_edit', 'error'],
     ]);
     expectNoContent();
@@ -462,17 +444,16 @@ describe('failed writes are reported with outcome error', () => {
     expect(h.report).not.toHaveBeenCalled();
   });
 
-  it('a failed meeting write reports what it would have: redact, recording date and participants as error, never the audio flag', async () => {
-    const id = (await createMeeting({ title: 'x', participants: ['A'], origin: 'live', status: 'recording' })).id;
+  it('a failed meeting write reports what it would have: recording date and participants as error, never the audio flag', async () => {
+    const id = (await createMeeting({ title: 'x', participants: ['A'], status: 'recording' })).id;
     h.report.mockClear();
     h.failPut = true;
     await expect(
       updateMeeting(id, { status: 'redacted', audioDeleted: true, recordedAt: '2026-01-01T00:00:00.000Z', participants: ['A', 'B'] }),
     ).rejects.toThrow();
     expect(calls().map((c) => [c.type, c.outcome])).toEqual([
-      ['meeting.redact', 'error'],
       ['meeting.metadata_edit', 'error'],
-      ['meeting.participants_edit', 'error'],
+      ['meeting.metadata_edit', 'error'],
     ]);
   });
 });
@@ -500,7 +481,7 @@ describe('transcript deletion (redaction)', () => {
 
 describe('failed deletes', () => {
   it('a user-asked delete that throws reports error; one that finds nothing reports nothing', async () => {
-    const id = (await createMeeting({ title: 'x', origin: 'live' })).id;
+    const id = (await createMeeting({ title: 'x' })).id;
     h.report.mockClear();
     h.failDelete = true;
     await expect(deleteMeeting(id)).rejects.toThrow();

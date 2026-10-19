@@ -59,17 +59,15 @@ const MAX_ROUNDS_PER_FLUSH = 20;
  * is held in memory and sent when the window ends, carrying the LAST details of the
  * window and the time of the last occurrence. The held event is written to the outbox
  * early when the tab is hidden or closed; a crash inside the window loses at most that
- * one coalesced event. These are the edit-like events (autosave of the minutes, the
- * participant and speaker lists): "the minutes were edited" is all the log needs, not
- * one row per keystroke. The server-side counterpart is THROTTLED_TYPES.
+ * one coalesced event. These are the edit-like events (autosave of the minutes and
+ * transcript, changes of the metadata fields): "the minutes were edited" is all the log needs, not
+ * one row per keystroke.
  */
 export const COALESCE_WINDOW_MS = 30_000;
 export const COALESCED: Set<ClientEventType> = new Set([
   'meeting.minutes_save',
   'meeting.transcript_edit',
   'meeting.metadata_edit',
-  'meeting.participants_edit',
-  'meeting.speakers_edit',
 ]);
 
 /**
@@ -102,7 +100,6 @@ const UNATTRIBUTED_COUNTED: ReadonlySet<ClientEventType> = new Set([
   'meeting.delete',
   'meeting.audio_delete',
   'meeting.transcript_delete',
-  'meeting.redact',
 ]);
 let unattributedLost = 0;
 
@@ -393,7 +390,7 @@ export function startAuditReporting(userId: string): void {
 /**
  * Report a meeting event. `entityId` is the meeting's opaque uuid.
  *
- *   reportAuditEvent('meeting.create', meetingId, { origin: 'live' });
+ *   reportAuditEvent('meeting.recording_start', meetingId);
  *
  * Returns a `retract` function for an event that is queued at once (not the coalesced ones), or
  * undefined when nothing was queued or the event was swallowed as a repeat. A caller that reports

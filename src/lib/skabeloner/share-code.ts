@@ -75,10 +75,3 @@ export function decodeSkabelonCode(raw: string): ShareableSkabelon | null {
     return null;
   }
 }
-
-// Pull the share token out of an old-style import link (any origin), so pasting
-// either a code or a link works. Returns null if no token is present.
-export function extractImportToken(raw: string): string | null {
-  const m = raw.trim().match(/skabeloner\/import\/([^/?#\s]+)/);
-  return m ? m[1] : null;
-}

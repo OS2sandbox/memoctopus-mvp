@@ -214,7 +214,7 @@ describe('id validation', () => {
   });
 
   it('rejects an entity on events that have none, and a wrong entity type', () => {
-    expect(validateEvent({ type: 'auth.logout', actorUserId: 'u', entityId: UUID } as never)).toEqual({ ok: false, code: 'entity_not_allowed' });
+    expect(validateEvent({ type: 'auth.login', actorUserId: 'u', entityId: UUID, details: { method: 'password', provider: 'credential' } } as never)).toEqual({ ok: false, code: 'entity_not_allowed' });
     expect(validateEvent(exportEvent({ entityType: 'user' }))).toEqual({ ok: false, code: 'invalid_entity_type' });
   });
 
@@ -256,11 +256,11 @@ describe('id validation', () => {
 
 function clientEvent(over: Record<string, unknown> = {}): AuditEventInput {
   return {
-    type: 'meeting.create',
+    type: 'meeting.recording_start',
     source: 'client',
     actorUserId: 'user-1',
     entityId: UUID,
-    details: { origin: 'live' },
+    details: {},
     ...over,
   } as AuditEventInput;
 }
@@ -504,7 +504,7 @@ describe('stdout mirror', () => {
 // Compile-time checks (tsc --noEmit): details are typed per event type.
 export function typeChecks() {
   void recordEvent({ type: 'export.download', details: { format: 'pdf' } });
-  void recordEvent({ type: 'auth.logout' });
+  void recordEvent({ type: 'auth.login', details: { method: 'password', provider: 'credential' } });
   // @ts-expect-error format must be one of pdf | docx | md
   void recordEvent({ type: 'export.download', details: { format: 'exe' } });
   // @ts-expect-error unknown event type

@@ -1,7 +1,7 @@
 // Needs a real Postgres 15+; skipped unless TEST_DATABASE_URL is set (see src/test/pg.ts).
 // The personal template changelog against a real per-user schema (u_<id>): concurrent edits must
 // number their versions without a unique-key collision or a lost entry, and a note alone, the lazy
-// version 1 and the cap must behave.
+// version 1, the absence of any pruning and a legacy NOT NULL snapshot column must behave.
 import { randomUUID } from 'node:crypto';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { Pool } from 'pg';
@@ -14,7 +14,7 @@ vi.mock('@/lib/db', async () => {
   return { pool: holder.pool, db: {} };
 });
 
-import { SKABELON_VERSION_CAP, createSkabelon, listSkabelonVersions, updateSkabelonWithHistory } from './server';
+import { createSkabelon, updateSkabelonWithHistory } from './server';
 
 const users: string[] = [];
 const newUser = () => {
@@ -78,25 +78,39 @@ describe.skipIf(!hasPg)('personal template changelog (real Postgres, per-user sc
     await updateSkabelonWithHistory(u, t.id, { name: 'Gammel', prompt: 'Efter' }, null);
     const rows = await versionsOf(u, t.id);
     expect(rows.map((r) => [r.version, r.changed_fields])).toEqual([[1, []], [2, ['prompt']]]);
-    const snap = (await holder.pool.query(`SELECT snapshot FROM "${schemaOf(u)}".skabelon_versions WHERE skabelon_id = $1 AND version = 1`, [t.id])).rows[0].snapshot;
-    expect(snap.prompt).toBe('Før');
   });
 
-  it('keeps only the newest versions (the cap) and prunes the oldest', async () => {
+  it('never prunes: a long history keeps every version (audit events reference them)', async () => {
     const u = newUser();
     const t = await createSkabelon(u, { name: 'Min', prompt: 'P0' });
-    // Seed a long history directly, then edit once.
     await holder.pool.query(
-      `INSERT INTO "${schemaOf(u)}".skabelon_versions (skabelon_id, version, change_note, changed_fields, snapshot)
-       SELECT $1, g, NULL, '{}', '{}' FROM generate_series(2, $2::int) g`,
-      [t.id, SKABELON_VERSION_CAP + 20],
+      `INSERT INTO "${schemaOf(u)}".skabelon_versions (skabelon_id, version, change_note, changed_fields)
+       SELECT $1, g, 'n' || g, '{}' FROM generate_series(2, 120) g`,
+      [t.id],
     );
     await updateSkabelonWithHistory(u, t.id, { name: 'Min', prompt: 'Ny' }, null);
     const rows = await versionsOf(u, t.id);
-    expect(rows).toHaveLength(SKABELON_VERSION_CAP);
-    expect(rows.at(-1)!.version).toBe(SKABELON_VERSION_CAP + 21);
-    expect(rows[0].version).toBe(SKABELON_VERSION_CAP + 21 - SKABELON_VERSION_CAP + 1);
-    expect((await listSkabelonVersions(u, t.id))!.length).toBe(SKABELON_VERSION_CAP);
+    expect(rows).toHaveLength(121);
+    expect(rows[0].version).toBe(1);
+    expect(rows.at(-1)!.version).toBe(121);
+  });
+
+  it('a schema from before has a NOT NULL snapshot column: ensureUserSchema relaxes it, keeps its data, and edits still work', async () => {
+    const u = newUser();
+    const t = await createSkabelon(u, { name: 'Min', prompt: 'P0' });
+    const sch = schemaOf(u);
+    await holder.pool.query(`ALTER TABLE "${sch}".skabelon_versions ADD COLUMN snapshot JSONB NOT NULL DEFAULT '{}'`);
+    await holder.pool.query(`UPDATE "${sch}".skabelon_versions SET snapshot = '{"prompt":"P0"}'`);
+    (globalThis as unknown as { initializedSchemas: Set<string> }).initializedSchemas.delete(u);
+    await updateSkabelonWithHistory(u, t.id, { name: 'Min', prompt: 'P1' }, 'efter');
+    const nullable = (await holder.pool.query(
+      `SELECT is_nullable FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'skabelon_versions' AND column_name = 'snapshot'`,
+      [sch],
+    )).rows[0].is_nullable;
+    expect(nullable).toBe('YES');
+    const snaps = (await holder.pool.query(`SELECT snapshot FROM "${sch}".skabelon_versions ORDER BY version`)).rows.map((r) => r.snapshot);
+    expect(snaps[0]).toEqual({ prompt: 'P0' });
+    expect((await versionsOf(u, t.id)).map((r) => r.version)).toEqual([1, 2]);
   });
 
   it('a missing template answers null and creates nothing', async () => {

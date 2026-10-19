@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { withHandler } from '@/lib/api-handler';
-import { secretEquals } from '@/lib/audit/feed-auth';
+import { secretEquals } from '@/lib/audit/internal-auth';
 import { recordServerEvent } from '@/lib/audit/record';
 import { CODE_RE } from '@/lib/audit/events/types';
 import { db } from '@/lib/db';

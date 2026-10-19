@@ -11,8 +11,7 @@ export const CHANGE_NOTE_MESSAGE = 'Beskriv ændringen (mindst 10 tegn)';
 // joiner, variation selectors, tag characters, Hangul fillers, ...), control and format
 // characters, and the blank "letters" that render as empty (Hangul fillers, braille
 // blank). Newlines, carriage returns and tabs are kept: the note is typed in a textarea.
-// MEANINGLESS_CHARS_CLASS in src/lib/db/schema.ts mirrors this (plus White_Space) for the
-// table CHECKs; change-note.test.ts derives the expected SQL class from this regex.
+// This rule lives in the app only; the table CHECKs are plain length bounds.
 export const INVISIBLE_SOURCE =
   '(?![\\n\\r\\t])[\\p{Default_Ignorable_Code_Point}\\p{Cc}\\p{Cf}\\u115f\\u1160\\u2800\\u3164\\uffa0]';
 

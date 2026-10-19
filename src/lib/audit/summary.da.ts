@@ -70,8 +70,6 @@ const LOGIN_FAILED_REASON: Record<string, string> = {
   rate_limited: 'for mange forsøg',
 };
 
-const ORIGIN_TEXT: Record<string, string> = { live: 'live optagelse', upload: 'upload', bot: 'mødebot' };
-
 // Deletes the app made on its own say so; a user delete or a missing trigger reads as the person's own.
 const AUTO_TRIGGER_TEXT: Record<string, string> = {
   auto_generate: ' (automatisk efter referatet blev genereret)',
@@ -82,37 +80,30 @@ const AUTO_TRIGGER_TEXT: Record<string, string> = {
 const autoText = (d: Record<string, unknown>) => AUTO_TRIGGER_TEXT[String(d.trigger)] ?? '';
 
 // What was sent and what for. `live` is logged at most once per person and meeting per 5
-// minutes (the audio of a live recording goes up utterance by utterance), `diarize` goes to
-// speaker detection rather than transcription.
+// minutes (the audio of a live recording goes up utterance by utterance).
 const AUDIO_CHANNEL_TEXT: Record<string, { what: string; purpose: string }> = {
   batch: { what: 'en optagelse', purpose: 'transskribering' },
   upload: { what: 'en lydfil', purpose: 'transskribering' },
   bot: { what: 'en mødebot-optagelse', purpose: 'transskribering' },
   live: { what: 'lyd fra en live optagelse', purpose: 'transskribering' },
-  diarize: { what: 'en optagelse', purpose: 'taleropdeling' },
 };
 
-// `restore` is an earlier version made the current one (nothing is copied or recreated); `activate` is the
-// newest version made current again; `view` is only on rows written before restore existed.
+// `restore` is an earlier version made the current one (nothing is copied or recreated). A row with an
+// action that no longer exists (`view`, `activate`, from earlier builds) gets the generic sentence below.
 const VERSION_ACTION_TEXT: Record<string, (v: string, n: number | null) => string> = {
-  view: (v) => `åbnede en tidligere version af referatet${v}`,
   snapshot: (v) => `gemte en ny version af referatet${v}`,
   generate: (v) => `genererede en ny version af referatet${v}`,
   restore: (_v, n) => `gendannede ${n === null ? 'en tidligere version' : `version ${n}`} af referatet`,
-  activate: (_v, n) => `satte ${n === null ? 'en version' : `version ${n}`} som den aktive version af referatet`,
 };
 
 const DROP_REASON_TEXT: Record<string, string> = {
   daily_cap: 'dagsgrænsen for en bruger var nået',
   rate_limit: 'for mange hændelser på kort tid',
-  actor_ceiling: 'grænsen for serverhændelser pr. bruger var nået',
-  throttle: 'gentagne visninger inden for et minut',
   client_outbox: 'browserens kø mistede hændelser, før de blev sendt',
 };
 
 const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   'auth.login': (c) => `${c.actor} loggede ind${METHOD_TEXT[String(c.details.method)] ?? ''}`,
-  'auth.logout': (c) => `${c.actor} loggede ud`,
   // The attempt has no (trusted) user, so there is no actor in the sentence.
   'auth.login_failed': (c) => {
     const dropped = num(c.details.droppedCount);
@@ -133,8 +124,6 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   'template.create': (c) => `${c.actor} oprettede en skabelon`,
   'template.update': (c) => `${c.actor} ændrede en skabelon${c.details.hasChangeNote === true ? ' og skrev en ændringsbeskrivelse' : ''}`,
   'template.delete': (c) => `${c.actor} slettede en skabelon`,
-  'template.share': (c) => `${c.actor} delte en skabelon via link`,
-  'template.import': (c) => `${c.actor} importerede en skabelon fra et link`,
 
   'central_template.create': (c) => `${c.actor} oprettede ${centralTemplate(c)}`,
   'central_template.update': (c) => `${c.actor} ændrede ${centralTemplate(c)}${version(c.details)}`,
@@ -177,12 +166,7 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   },
   'bot.error': () => 'Mødebotten fejlede',
 
-  'meeting.create': (c) => {
-    const origin = ORIGIN_TEXT[String(c.details.origin)];
-    return `${c.actor} oprettede et møde${origin ? ` (${origin})` : ''}`;
-  },
   'meeting.delete': (c) => `${c.actor} slettede et møde med transskription, referatversioner og lyd${autoText(c.details)}`,
-  'meeting.redact': (c) => `${c.actor} slørede et møde`,
   'meeting.transcript_delete': (c) => `${c.actor} slettede transskriptionens tekst fra et møde`,
   'meeting.audio_delete': (c) => `${c.actor} slettede lyden fra et møde${autoText(c.details)}`,
   'meeting.minutes_view': (c) => `${c.actor} åbnede et referat`,
@@ -194,8 +178,19 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   'meeting.recording_stop': (c) => `${c.actor} stoppede en optagelse`,
   'meeting.minutes_save': (c) => `${c.actor} redigerede et referat`,
   'meeting.transcript_edit': (c) => `${c.actor} redigerede en transskription`,
-  'meeting.metadata_edit': (c) =>
-    `${c.actor} ændrede ${c.details.field === 'recorded_at' ? 'datoen for' : 'titlen på'} et møde`,
+  'meeting.metadata_edit': (c) => {
+    const n = num(c.details.count);
+    switch (c.details.field) {
+      case 'recorded_at':
+        return `${c.actor} ændrede datoen for et møde`;
+      case 'participants':
+        return `${c.actor} ændrede deltagerne på et møde${n === null ? '' : ` (${plural(n, 'deltager', 'deltagere')})`}`;
+      case 'speakers':
+        return `${c.actor} ændrede talerne på et møde${n === null ? '' : ` (${plural(n, 'taler', 'talere')})`}`;
+      default:
+        return `${c.actor} ændrede titlen på et møde`;
+    }
+  },
   'meeting.minutes_version': (c) => {
     const text = VERSION_ACTION_TEXT[String(c.details.action)];
     const v = version({ version: c.details.versionNumber });
@@ -205,11 +200,6 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
     const n = num(c.details.prunedCount);
     return `Appen fjernede de ældste referatversioner fra et møde, fordi grænsen for antal versioner var nået${n === null ? '' : ` (${plural(n, 'version', 'versioner')})`}`;
   },
-  'meeting.participants_edit': (c) => {
-    const n = num(c.details.participantCount);
-    return `${c.actor} ændrede deltagerne på et møde${n === null ? '' : ` (${plural(n, 'deltager', 'deltagere')})`}`;
-  },
-  'meeting.speakers_edit': (c) => `${c.actor} ændrede talerne på et møde`,
 
   'system.config_changed': (c) =>
     c.details.changed === true ? 'Systemets konfiguration er ændret siden sidste start' : 'Systemets konfiguration blev registreret ved opstart',

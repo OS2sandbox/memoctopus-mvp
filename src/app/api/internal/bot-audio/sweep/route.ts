@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withHandler } from '@/lib/api-handler';
-import { cronGuard } from '@/lib/audit/feed-auth';
+import { cronGuard } from '@/lib/audit/internal-auth';
 import { sweepPendingBotData } from '@/lib/bot-pending-audio';
 
 // Called by the operator's scheduler with INTERNAL_CRON_SECRET (same guard as

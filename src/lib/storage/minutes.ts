@@ -286,15 +286,14 @@ export async function setActiveMinutesVersion(
   if (!target) return existing;
 
   // Switching to a version older than the newest IS a restore: the picker makes the chosen version the
-  // current one in a single step, so it is ONE row ('restore'), not a 'view' plus an 'activate'. Going
-  // back to the newest version is 'activate'. Re-selecting the active version changes nothing and reports nothing.
+  // current one in a single step, so it is ONE row ('restore'). Going back to the newest version exposes
+  // no older content and reports nothing, and neither does re-selecting the active version.
   const newest = existing.versions.reduce((m, v) => Math.max(m, v.label), 0);
-  const action = target.label < newest ? 'restore' : 'activate';
-  const switching = existing.activeVersionId !== versionId;
+  const restoring = target.label < newest && existing.activeVersionId !== versionId;
   const minutes = withActiveMirror({ ...existing, activeVersionId: versionId });
   await putMinutes(minutes, () => {
-    if (switching) reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: target.label, action }, { outcome: 'error' });
+    if (restoring) reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: target.label, action: 'restore' }, { outcome: 'error' });
   });
-  if (switching) reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: target.label, action });
+  if (restoring) reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: target.label, action: 'restore' });
   return minutes;
 }

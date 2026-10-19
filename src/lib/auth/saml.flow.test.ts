@@ -46,7 +46,6 @@ describe.skipIf(!run)('SAML login through the sso plugin', () => {
       entryPoint: 'https://idp.example/sso',
       idpEntityId: IDP,
       cert: keys.cert,
-      wantAssertionsSigned: true,
       authnRequestsSigned: false,
       claims: { email: 'mail', name: 'displayName', userId: 'uid', upn: 'upn' },
       rolesClaim: { name: 'roles', format: 'array', separator: ',' },
@@ -314,14 +313,6 @@ describe.skipIf(!run)('SAML login through the sso plugin', () => {
       }),
     );
     expect(hasSession(unsigned)).toBe(false);
-    expect(onLogin).not.toHaveBeenCalled();
-  });
-
-  it('still refuses an unsigned response when wantAssertionsSigned is switched off (the option is cosmetic)', async () => {
-    auth = makeAuth(provider({ wantAssertionsSigned: false }));
-    const req = await startLogin();
-    expect(hasSession(await acs(response({ inResponseTo: req.id, sign: 'none' }), req.relayState))).toBe(false);
-    expect(db.user).toHaveLength(0);
     expect(onLogin).not.toHaveBeenCalled();
   });
 

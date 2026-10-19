@@ -250,11 +250,6 @@ const samlSchema = z
     /** Our entity id (SP); default: the metadata URL of this installation for this provider. */
     spEntityId: nonEmpty(1024).optional(),
     audience: nonEmpty(1024).optional(),
-    /**
-     * Cosmetic: passed to the SAML library, but an UNSIGNED response is refused whatever this says
-     * (saml.flow.test.ts proves it). `false` is only logged as a warning. Leave it out.
-     */
-    wantAssertionsSigned: z.boolean().default(true),
     authnRequestsSigned: z.boolean().default(false),
     /**
      * Accept a response that answers no AuthnRequest of ours (login started at the IdP's portal). Default FALSE:
@@ -521,9 +516,6 @@ function parseProvider(raw: unknown, index: number, seen: Set<string>): FileProv
       warn(`${where}: claims.userId is the same attribute as claims.email; an address can be re-assigned to another person at the IdP. Use a stable identifier.`);
     } else if (provider.claims?.userId && isMutableUserIdAttribute(provider.claims.userId)) {
       warn(`${where}: claims.userId names an attribute that is usually a mutable name or address (e-mail, UPN, display name, account name); a renamed person would lose their account, a re-assigned one would take over another's. Use an immutable identifier (an object GUID or employee number).`);
-    }
-    if (!provider.wantAssertionsSigned) {
-      warn(`${where}: wantAssertionsSigned is false; it has no effect, unsigned SAML responses are always refused.`);
     }
     if (provider.allowDeprecatedAlgorithms) {
       warn(`${where}: allowDeprecatedAlgorithms is on; responses signed with SHA-1 are accepted for ALL SAML providers. Ask the IdP for SHA-256.`);

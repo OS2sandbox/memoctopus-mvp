@@ -50,7 +50,7 @@ With the stack and the app running:
 npx tsx scripts/dev-sim/acceptance.ts
 ```
 
-It logs in as the simulated people through the real login flow and checks about 100 things, grouped in sections: sync, who gets which role and scope, the template lock and changelog (including that the model really received the stored prompt and never the client's instruction), the audit log's scope and its no-content guarantee (it scans every audit row for the secret prompt, the change note, the template name and the transcript), the SIEM feed, what happens when Rollekatalog changes or fails, and that Rollekatalog is only ever read. It prints one line per check and exits 1 on any failure. It is repeatable on the same database.
+It logs in as the simulated people through the real login flow and checks about 100 things, grouped in sections: sync, who gets which role and scope, the template lock and changelog (including that the model really received the stored prompt and never the client's instruction), the audit log's scope and its no-content guarantee (it scans every audit row for the secret prompt, the change note, the template name and the transcript), what happens when Rollekatalog changes or fails, and that Rollekatalog is only ever read. It prints one line per check and exits 1 on any failure. It is repeatable on the same database.
 
 ## Claims mode (roles from the IdP, OIDC and SAML)
 
@@ -77,7 +77,7 @@ Use the control panel's `POST /idp/claims` (`{"username":"admin.a","claims":{"ro
 
 The claims mode also exercises the **shared prompts by role**: the app is started with `ROLLEKATALOG_URL` and the READ key of the mock (the catalogue only; the user and organisation sync stays off), `bruger.d` is a second plain user who does not hold the targeted role, and the control panel has `POST /roles` (replace the mock's user roles and role groups) and `POST /roles/refresh` (calls the app's `POST /api/internal/rollekatalog/roles` like a scheduler). Section 6 of `acceptance-claims.ts`: the catalogue refresh and its content, the superuser creating an organisation-wide template (no owner unit) targeted at a role, a role holder seeing it and generating with it, a person without the role getting the identical 404, retargeting and withdrawing, an update reaching the holder at once, the catalogue withdrawing the role, archive and restore, and the log holding only counts; section 7: the person's own template changelog with its optional note and that the note is not in the audit log.
 
-`acceptance-claims.ts` also checks: claims become global role rows (source `claims`) and the directory row is created at the first login; catalogue filtering; the session ends with the role snapshot (8 h); roles are replaced, not accumulated, also for a second session; a malformed claim keeps nothing; the SAML flow end to end (signed assertion, cross-site POST, attributes, roles, groups, identity snapshot, role removal); local admin writes, revoke and the Rollekatalog sync answer 409; password sign-up is closed in claims mode and cannot take over an SSO person; `auth.login` events carry `oidc` / `saml`, a refused SAML response is audited as `auth.login_failed`, and no claim value, role or person name appears in any audit row.
+`acceptance-claims.ts` also checks: claims become global role rows (source `claims`) and the directory row is created at the first login; catalogue filtering; the session ends with the role snapshot (8 h); roles are replaced, not accumulated, also for a second session; a malformed claim keeps nothing; the SAML flow end to end (signed assertion, cross-site POST, attributes, roles, groups, identity snapshot, role removal); local admin writes, revoke and the Rollekatalog sync answer 409; password sign-in and sign-up are off in claims mode (hard-wired, not an env choice) and cannot take over an SSO person; `auth.login` events carry `oidc` / `saml`, a refused SAML response is audited as `auth.login_failed`, and no claim value, role or person name appears in any audit row.
 
 ## The simulated people (Rollekatalog mode)
 
@@ -119,9 +119,8 @@ Use two browsers (or one normal and one private window) so you can be a manager 
 8. **Rollekatalog misbehaves.** Try *nede (500)*, *forkert API-nøgle*, *ugyldigt JSON*, *tomt svar*, *2 ødelagte brugerrækker* (accepted and counted), *30 ødelagte brugerrækker* (rejected). Administration → Brugere og roller shows the status. Nothing changes in who has access while a sync fails.
 9. **Audit log.** As `mette.e` open Log: filter by type, export CSV. Then as `lars.f` (a scoped Bygger): the Log page is closed to him (403), because only Admin reads the log. In `psql referat_sim`, `select event_type, details from audit_events order by id desc limit 20;` shows ids, counts and codes only, never a title, prompt or name from a meeting.
 10. **Tamper test.** `update audit_events set outcome = outcome;` and `delete from audit_events;` are refused by the database.
-11. **SIEM feed.** `curl -H "X-Audit-Key: sim-feed-key" "http://localhost:3004/api/audit/feed?offset=0&size=20"`; without the header it answers 404.
 
-Meeting events (`meeting.create`, `meeting.delete`, …) are reported by the browser when you use meetings; record or upload something and look for `source = 'client'` rows.
+Meeting events (`meeting.delete`, …) are reported by the browser when you use meetings; record or upload something and look for `source = 'client'` rows.
 
 ## Checklist for the first run against a real Rollekatalog
 

@@ -38,7 +38,6 @@ import {
   allowLoginFailureEvent,
   auditAuthFailure,
   auditLogin,
-  auditLogout,
   authMethodOf,
   classifyAuthFailure,
   emailHmac,
@@ -245,31 +244,6 @@ describe('auditLogin', () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-describe('auditLogout', () => {
-  const session = { userId: 'u1', ipAddress: '198.51.100.4', userAgent: 'UA/9' };
-
-  it('records auth.logout only for the /sign-out path', async () => {
-    await auditLogout(session, { path: '/sign-out', headers: new Headers({ 'x-forwarded-for': '203.0.113.9' }) });
-    expect(recordEvent).toHaveBeenCalledTimes(1);
-    const [event, opts] = recordEvent.mock.calls[0];
-    expect(event).toEqual({ type: 'auth.logout', actorUserId: 'u1' });
-    expect(opts.context.ip).toBe('203.0.113.9');
-  });
-
-  it.each([[null], [{ path: '/revoke-session' }], [{ path: '/revoke-sessions' }], [{ path: '/reset-password' }]])(
-    'ignores expiry cleanup and revocation (%j)',
-    async (ctx) => {
-      await auditLogout(session, ctx as any);
-      expect(recordEvent).not.toHaveBeenCalled();
-    },
-  );
-
-  it('resolves when the write fails', async () => {
-    recordEvent.mockRejectedValue(new Error('x'));
-    await expect(auditLogout(session, { path: '/sign-out' })).resolves.toBeUndefined();
   });
 });
 

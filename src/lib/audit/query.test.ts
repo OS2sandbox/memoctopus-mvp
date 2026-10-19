@@ -5,12 +5,9 @@ vi.mock('@/lib/db', () => ({ pool: { query: (...a: unknown[]) => poolQuery(...a)
 
 import { FAKE_PRINCIPAL_ADMIN, makePrincipal } from '@/test/helpers';
 import {
-  MAX_FEED_SIZE,
   MAX_PAGE_SIZE,
   auditScopeFor,
   collectAuditEvents,
-  getFeedHead,
-  getFeedPage,
   likeContains,
   listAuditEvents,
   type AuditQueryEnv,
@@ -212,12 +209,6 @@ describe('listAuditEvents filters and paging', () => {
       await collectAuditEvents({ scope: { all: true }, maxRows: 10 }, g.env);
       expect(g.sql()).toContain("OR event_type NOT LIKE 'access.%'");
     });
-
-    it('the feed keeps returning every type', async () => {
-      const f = fakeEnv();
-      await getFeedPage({ offset: 0, size: 10, delaySeconds: 0 }, f.env);
-      expect(f.sql()).not.toContain('event_type = ANY');
-    });
   });
 
   it('lists an explicit column set, not SELECT *', async () => {
@@ -310,42 +301,5 @@ describe('collectAuditEvents', () => {
   it('returns nothing for a scoped reader with no units', async () => {
     const f = fakeEnv([[dbRow(1)]]);
     expect(await collectAuditEvents({ scope: { all: false, orgUnitUuids: [] }, maxRows: 10 }, f.env)).toEqual({ rows: [], truncated: false });
-  });
-});
-
-describe('feed queries', () => {
-  it('head: parameterised delay, ids below the first still-young row', async () => {
-    const f = fakeEnv([[{ head: '42' }]]);
-    expect(await getFeedHead(10, f.env)).toBe(42);
-    expect(f.params()).toEqual([10]);
-    expect(f.sql()).toContain('occurred_at >= now() - make_interval(secs => $1::double precision)');
-    expect(f.sql()).toContain('id <');
-  });
-
-  it('head is 0 for an empty log', async () => {
-    expect(await getFeedHead(10, fakeEnv([[{ head: null }]]).env)).toBe(0);
-  });
-
-  it('page: ascending, after the offset, below the same bound, size capped', async () => {
-    const f = fakeEnv([[dbRow(11), dbRow(12)]]);
-    const page = await getFeedPage({ offset: 10, size: 99999, delaySeconds: 10 }, f.env);
-    expect(f.params()).toEqual([10, '10', MAX_FEED_SIZE]);
-    expect(f.sql()).toContain('id > $2::bigint');
-    expect(f.sql()).toContain('ORDER BY id ASC');
-    expect(page.rows.map((r) => r.id)).toEqual(['11', '12']);
-    expect(page.next).toBe(12);
-  });
-
-  it('page: next stays at the offset when nothing is new', async () => {
-    const page = await getFeedPage({ offset: 77, size: 10, delaySeconds: 10 }, fakeEnv([[]]).env);
-    expect(page).toEqual({ rows: [], next: 77 });
-  });
-
-  it.each([-1, 1.5, Number.NaN])('rejects offset %s', async (offset) => {
-    await expect(getFeedPage({ offset, size: 10, delaySeconds: 10 }, fakeEnv().env)).rejects.toThrow(RangeError);
-  });
-
-  it.each([0, -3, 2.5])('rejects size %s', async (size) => {
-    await expect(getFeedPage({ offset: 0, size, delaySeconds: 10 }, fakeEnv().env)).rejects.toThrow(RangeError);
   });
 });

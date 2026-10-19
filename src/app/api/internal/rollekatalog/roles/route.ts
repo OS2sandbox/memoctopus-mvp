@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withHandler } from '@/lib/api-handler';
-import { cronGuard } from '@/lib/audit/feed-auth';
+import { cronGuard } from '@/lib/audit/internal-auth';
 import { runCatalogueRefresh } from '@/lib/rollekatalog/catalogue-sync';
 import { catalogueResultResponse } from '@/lib/rollekatalog/catalogue-http';
 import { catalogueConfigIssue } from '@/lib/rollekatalog/config';

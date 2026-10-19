@@ -21,7 +21,6 @@ import { resolvePrincipal } from '@/lib/authz/principal';
 import { recordServerEvent, resolveActorSnapshot, validateEvent } from '@/lib/audit/record';
 import { noteDroppedEvents } from '@/lib/audit/dropped';
 import { pool } from '@/lib/db';
-import { THROTTLE_WINDOW_MS, THROTTLED_TYPES } from '@/lib/audit/client-ingest';
 import { __resetClientEventBudgets, RATE_LIMIT_EVENTS } from '@/lib/audit/client-ingest';
 import { makeJsonReq, makePrincipal, NO_PARAMS } from '@/test/helpers';
 
@@ -74,18 +73,18 @@ describe('POST /api/audit/client-events', () => {
   });
 
   it('records one client event with actor from the session and answers {accepted} only', async () => {
-    const res = await send({ events: [ev({ type: 'meeting.create', details: { origin: 'live' } })] });
+    const res = await send({ events: [ev({ type: 'meeting.recording_start' })] });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ accepted: 1 });
     expect(mockRecord).toHaveBeenCalledTimes(1);
     const input = mockRecord.mock.calls[0][1] as unknown as Record<string, unknown>;
     expect(input).toMatchObject({
-      type: 'meeting.create',
+      type: 'meeting.recording_start',
       source: 'client',
       actorUserId: 'user-123',
       entityId: MEETING,
       clientEventId: EVENT_ID,
-      details: { origin: 'live' },
+      details: {},
     });
     expect(input.clientOccurredAt).toBeInstanceOf(Date);
     // ip / user agent / request id are read from the request itself by recordServerEvent.
@@ -116,7 +115,7 @@ describe('POST /api/audit/client-events', () => {
   it('looks the actor up once per request and hands the snapshot to every write', async () => {
     const snapshot = { name: 'Anna', orgUnitUuid: null };
     vi.mocked(resolveActorSnapshot).mockClear().mockResolvedValue(snapshot);
-    const events = [1, 2, 3].map((n) => ev({ clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee${n}`, type: 'meeting.create', details: { origin: 'live' } }));
+    const events = [1, 2, 3].map((n) => ev({ clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee${n}`, type: 'meeting.recording_start' }));
     expect((await send({ events })).status).toBe(200);
     expect(mockRecord).toHaveBeenCalledTimes(3);
     expect(resolveActorSnapshot).toHaveBeenCalledExactlyOnceWith('user-123');
@@ -157,10 +156,11 @@ describe('POST /api/audit/client-events', () => {
     ['meeting.recording_resume', {}],
     ['meeting.recording_stop', {}],
     ['meeting.minutes_save', {}],
-    ['meeting.minutes_version', { versionNumber: 2, action: 'activate' }],
+    ['meeting.minutes_version', { versionNumber: 2, action: 'restore' }],
     ['meeting.minutes_version_prune', { prunedCount: 2 }],
-    ['meeting.participants_edit', { participantCount: 3 }],
-    ['meeting.speakers_edit', { speakerCount: 2 }],
+    ['meeting.metadata_edit', { field: 'participants', count: 3 }],
+    ['meeting.metadata_edit', { field: 'speakers', count: 2 }],
+    ['meeting.metadata_edit', { field: 'title' }],
     ['meeting.audio_delete', { trigger: 'auto_generate' }],
     ['meeting.delete', { trigger: 'auto_leave' }],
   ])('%s (an action, never content) is recorded with the session as actor', async (type, details) => {
@@ -171,7 +171,9 @@ describe('POST /api/audit/client-events', () => {
 
   it('refuses content-like details for the new action events', async () => {
     const bad = [
-      ev({ type: 'meeting.participants_edit', details: { participantCount: 2, participants: ['Jens', 'Mette'] } }),
+      ev({ type: 'meeting.metadata_edit', details: { field: 'participants', count: 2, participants: ['Jens', 'Mette'] } }),
+      ev({ type: 'meeting.metadata_edit', details: { field: 'Jensens barn' } }),
+      ev({ type: 'meeting.minutes_version', details: { versionNumber: 2, action: 'activate' } }),
       ev({ type: 'meeting.minutes_version', details: { versionNumber: 2, action: 'Gendannet efter Jensens ønske' } }),
       ev({ type: 'meeting.minutes_view', details: { title: 'Budgetmøde' } }),
       ev({ type: 'meeting.audio_delete', details: { trigger: 'ttl' } }),
@@ -183,8 +185,7 @@ describe('POST /api/audit/client-events', () => {
   it('rejects details with extra keys or free text and a non-uuid entity id', async () => {
     const bad = [
       ev({ type: 'meeting.delete', details: { title: 'Sag om Jensens barn' } }),
-      ev({ type: 'meeting.create', details: { origin: 'Vi taler om sagen' } }),
-      ev({ type: 'meeting.create', details: { origin: 'live', title: 'x' } }),
+      ev({ type: 'meeting.recording_start', details: { title: 'x' } }),
       ev({ entityId: 'not-a-uuid' }),
       ev({ clientEventId: 'nope' }),
       ev({ occurredAt: 'yesterday' }),
@@ -417,137 +418,6 @@ describe('POST /api/audit/client-events', () => {
       expect(text).not.toContain(EVENT_ID);
     });
   });
-
-  describe('per-type throttle', () => {
-    // The throttle exists for repeatable "look" events (views, playback). The generic
-    // mechanism is exercised with meeting.create listed as throttled.
-    const CREATE = (n: number, meeting = MEETING) =>
-      ev({
-        type: 'meeting.create',
-        details: { origin: 'live' },
-        entityId: meeting,
-        clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(n).padStart(12, '0')}`,
-      });
-
-    it('throttles views and playback by default, and says so in the response', async () => {
-      const view = (n: number) =>
-        ev({ type: 'meeting.minutes_view', clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(n).padStart(12, '0')}` });
-      expect(await (await send({ events: [view(1)] })).json()).toEqual({ accepted: 1 });
-      expect(await (await send({ events: [view(2)] })).json()).toEqual({ accepted: 0, throttled: 1 });
-      expect(mockRecord).toHaveBeenCalledTimes(1);
-    });
-
-    it('never throttles edits, versions, recordings or deletes: a repeat is a distinct action', async () => {
-      for (const [i, type] of ['meeting.minutes_save', 'meeting.recording_pause', 'meeting.delete'].entries()) {
-        const one = ev({ type, clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(i * 2 + 1).padStart(12, '0')}` });
-        const two = ev({ type, clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(i * 2 + 2).padStart(12, '0')}` });
-        expect(await (await send({ events: [one] })).json()).toEqual({ accepted: 1 });
-        expect(await (await send({ events: [two] })).json()).toEqual({ accepted: 1 });
-      }
-      expect(mockRecord).toHaveBeenCalledTimes(6);
-    });
-
-    describe('with meeting.create listed as throttled', () => {
-      beforeEach(() => void THROTTLED_TYPES.add('meeting.create'));
-      afterEach(() => void THROTTLED_TYPES.delete('meeting.create'));
-
-      it('stores the first event and drops (but acknowledges) a repeat within 60 s', async () => {
-        vi.useFakeTimers({ toFake: ['Date'] });
-        vi.setSystemTime(new Date('2026-10-05T12:00:00Z'));
-        expect(await (await send({ events: [CREATE(1)] })).json()).toEqual({ accepted: 1 });
-        vi.setSystemTime(new Date('2026-10-05T12:00:59Z'));
-        const res = await send({ events: [CREATE(2)] });
-        expect(res.status).toBe(200);
-        expect(await res.json()).toEqual({ accepted: 0, throttled: 1 });
-        expect(mockRecord).toHaveBeenCalledTimes(1);
-      });
-
-      it('stores again once the 60 s window has passed', async () => {
-        vi.useFakeTimers({ toFake: ['Date'] });
-        vi.setSystemTime(new Date('2026-10-05T12:00:00Z'));
-        await send({ events: [CREATE(1)] });
-        vi.setSystemTime(new Date(Date.parse('2026-10-05T12:00:00Z') + THROTTLE_WINDOW_MS));
-        expect(await (await send({ events: [CREATE(2)] })).json()).toEqual({ accepted: 1 });
-        expect(mockRecord).toHaveBeenCalledTimes(2);
-      });
-
-      it('collapses duplicates inside one batch to the first', async () => {
-        const res = await send({ events: [CREATE(1), CREATE(2), CREATE(3)] });
-        expect(await res.json()).toEqual({ accepted: 1, throttled: 2 });
-        expect(mockRecord).toHaveBeenCalledTimes(1);
-      });
-
-      it('is keyed on (actor, meeting, type): other meeting, other type, other user are not throttled', async () => {
-        await send({ events: [CREATE(1)] });
-        const other = '99999999-2222-4333-8444-555555555555';
-        expect(await (await send({ events: [CREATE(2, other)] })).json()).toEqual({ accepted: 1 });
-        const del = ev({ clientEventId: 'aaaaaaaa-bbbb-4ccc-8ddd-000000000007' });
-        expect(await (await send({ events: [del] })).json()).toEqual({ accepted: 1 });
-        mockSession.mockResolvedValue({ user: { id: 'user-999' }, session: { id: 's2' } } as never);
-        mockResolve.mockResolvedValue(makePrincipal({ userId: 'user-999' }));
-        expect(await (await send({ events: [CREATE(3)] })).json()).toEqual({ accepted: 1 });
-      });
-
-      it('a failed store does not start the window, so the retry is stored', async () => {
-        mockRecord.mockResolvedValueOnce({ status: 'dropped', code: 'db_error' });
-        expect((await send({ events: [CREATE(1)] })).status).toBe(503);
-        expect(await (await send({ events: [CREATE(1)] })).json()).toEqual({ accepted: 1 });
-      });
-
-      it('throttled events do not use the daily cap (no count query when nothing is left to store)', async () => {
-        await send({ events: [CREATE(1)] });
-        mockCount.mockClear();
-        await send({ events: [CREATE(2)] });
-        expect(mockCount).not.toHaveBeenCalled();
-      });
-
-      it('a throttled event is not reported as capped', async () => {
-        vi.spyOn(console, 'warn').mockImplementation(() => {});
-        alreadyStored(20000);
-        // First one is capped (dropped), nothing was stored so nothing is throttled either.
-        expect(await (await send({ events: [CREATE(1)] })).json()).toEqual({ accepted: 0, capped: true, refused: 1 });
-      });
-    });
-  });
-});
-
-describe('view throttle in EVENT time', () => {
-  const view = (n: number, at: string, over: Record<string, unknown> = {}) =>
-    ev({
-      type: 'meeting.minutes_view',
-      occurredAt: at,
-      clientEventId: `aaaaaaaa-bbbb-4ccc-8ddd-${String(n).padStart(12, '0')}`,
-      ...over,
-    });
-  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
-  const H = 3_600_000;
-
-  it('keeps two views four hours apart that arrive in ONE batch (an offline browser delivering later)', async () => {
-    const res = await send({ events: [view(1, ago(5 * H)), view(2, ago(1 * H))] });
-    expect(await res.json()).toEqual({ accepted: 2 });
-    expect(mockRecord).toHaveBeenCalledTimes(2);
-    expect(noteDroppedEvents).not.toHaveBeenCalledWith(expect.anything(), 'throttle', expect.anything(), expect.anything());
-  });
-
-  it('still drops a repeat less than 60 s of event time after the previous one, however late it arrives', async () => {
-    const res = await send({ events: [view(1, ago(5 * H)), view(2, ago(5 * H - 30_000)), view(3, ago(1 * H))] });
-    expect(await res.json()).toEqual({ accepted: 2, throttled: 1 });
-    expect(noteDroppedEvents).toHaveBeenCalledWith('user-123', 'throttle', 1, expect.anything());
-  });
-
-  it('judges a batch in event order, not in the order it was sent', async () => {
-    // Sent newest first; the 30 s repeat is the LATER one in event time, so that one is dropped.
-    const res = await send({ events: [view(2, ago(5 * H - 30_000)), view(1, ago(5 * H))] });
-    expect(await res.json()).toEqual({ accepted: 1, throttled: 1 });
-    const stored = mockRecord.mock.calls[0][1] as unknown as { clientEventId: string };
-    expect(stored.clientEventId).toBe('aaaaaaaa-bbbb-4ccc-8ddd-000000000001');
-  });
-
-  it('compares with what an earlier request stored, again by event time', async () => {
-    await send({ events: [view(1, ago(3 * H))] });
-    expect(await (await send({ events: [view(2, ago(3 * H - 20_000))] })).json()).toEqual({ accepted: 0, throttled: 1 });
-    expect(await (await send({ events: [view(3, ago(1 * H))] })).json()).toEqual({ accepted: 1 });
-  });
 });
 
 describe('drops are counted and reported (audit.events_dropped)', () => {
@@ -598,7 +468,7 @@ describe('events the browser lost (droppedLocally)', () => {
     expect(mockRecord).toHaveBeenCalledTimes(1);
   });
 
-  it('is exempt from the daily cap and the throttle (it says that events are missing)', async () => {
+  it('is exempt from the daily cap (it says that events are missing)', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     alreadyStored(20000);
     const res = await send({ events: [ev()], droppedLocally: lost() });

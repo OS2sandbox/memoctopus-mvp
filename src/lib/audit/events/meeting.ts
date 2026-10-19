@@ -21,14 +21,12 @@ export const CLIENT_DELETE_TRIGGERS = ['user', 'auto_generate', 'auto_leave', 'a
 export type DeleteTrigger = (typeof CLIENT_DELETE_TRIGGERS)[number];
 const trigger = () => z.enum(CLIENT_DELETE_TRIGGERS).optional();
 
+export const METADATA_FIELDS = ['title', 'recorded_at', 'participants', 'speakers'] as const;
+
 export const meetingEvents = {
-  'meeting.create': defineEvent({
-    ...base,
-    details: z.object({ origin: z.enum(['live', 'upload', 'bot']) }).strict(),
-  }),
   'meeting.delete': defineEvent({ ...base, details: z.object({ trigger: trigger() }).strict() }),
-  'meeting.redact': defineEvent({ ...base, details: noDetails() }),
-  // The transcript TEXT was removed while the meeting stays (the redact flow blanks it). Says that, never
+  // The transcript TEXT was removed while the meeting stays (the redact flow blanks it, and also
+  // deletes the audio: there is no separate 'redact' event). Says that, never
   // what it said. Deleting the whole meeting is meeting.delete.
   'meeting.transcript_delete': defineEvent({ ...base, details: noDetails() }),
   'meeting.audio_delete': defineEvent({ ...base, details: z.object({ trigger: trigger() }).strict() }),
@@ -50,32 +48,24 @@ export const meetingEvents = {
   'meeting.minutes_save': defineEvent({ ...base, details: noDetails() }),
   // The transcript text was edited (autosave, coalesced like minutes_save). No details.
   'meeting.transcript_edit': defineEvent({ ...base, details: noDetails() }),
-  // The meeting's title or recording date was changed. Says which field, never the value.
-  'meeting.metadata_edit': defineEvent({ ...base, details: z.object({ field: z.enum(['title', 'recorded_at']) }).strict() }),
-  // `action`: snapshot = "Gem version", generate = a regenerated minutes version, activate =
-  // the newest version became the active one again, restore = an EARLIER version became the
-  // active (current) one (the version picker switches and restores in one step; nothing is
-  // copied). `view` is no longer emitted (a restore is one row, not view + activate) but stays
-  // valid for rows written earlier. versionNumber is the label of the version concerned,
-  // never any of its content.
+  // Meeting metadata (title, recording date, participants, speakers) was changed by the person. Says
+  // which field, never the value; `count` is the number of participants or speakers after the change
+  // (never names).
+  'meeting.metadata_edit': defineEvent({
+    ...base,
+    details: z.object({ field: z.enum(METADATA_FIELDS), count: count().optional() }).strict(),
+  }),
+  // `action`: snapshot = "Gem version", generate = a regenerated minutes version, restore = an EARLIER
+  // version became the active (current) one (the version picker switches and restores in one step;
+  // nothing is copied). Switching to the newest version exposes no older content and logs nothing.
+  // versionNumber is the label of the version concerned, never any of its content.
   'meeting.minutes_version': defineEvent({
     ...base,
-    details: z
-      .object({ versionNumber: count(), action: z.enum(['view', 'snapshot', 'generate', 'activate', 'restore']) })
-      .strict(),
+    details: z.object({ versionNumber: count(), action: z.enum(['snapshot', 'generate', 'restore']) }).strict(),
   }),
   // The 50-version cap removed the oldest versions of a meeting.
   'meeting.minutes_version_prune': defineEvent({
     ...base,
     details: z.object({ prunedCount: count().min(1) }).strict(),
-  }),
-  // Meeting metadata: who took part and who spoke. Counts only, never names.
-  'meeting.participants_edit': defineEvent({
-    ...base,
-    details: z.object({ participantCount: count() }).strict(),
-  }),
-  'meeting.speakers_edit': defineEvent({
-    ...base,
-    details: z.object({ speakerCount: count().optional() }).strict(),
   }),
 } as const;

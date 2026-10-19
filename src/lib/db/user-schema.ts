@@ -40,7 +40,7 @@ export async function ensureUserSchema(userId: string): Promise<void> {
     `);
 
     // skabelon_versions — the person's own changelog of a personal skabelon. Own data in own
-    // schema: the optional note they wrote and a snapshot live ONLY here, never in the audit log.
+    // schema: the optional note they wrote lives ONLY here, never in the audit log.
     await client.query(`
       CREATE TABLE IF NOT EXISTS "${schema}".skabelon_versions (
         id             TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -48,11 +48,22 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         version        INTEGER NOT NULL,
         change_note    TEXT,
         changed_fields TEXT[] NOT NULL DEFAULT '{}',
-        snapshot       JSONB NOT NULL DEFAULT '{}',
         created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (skabelon_id, version)
       )
     `);
+
+    // Earlier versions of the app also stored a (never read) JSONB copy of the prompt per version. It is
+    // no longer written; relax a NOT NULL on schemas that still have the column, and keep its data.
+    const legacySnapshot = await client.query(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = 'skabelon_versions'
+          AND column_name = 'snapshot' AND is_nullable = 'NO'`,
+      [schema],
+    );
+    if (legacySnapshot?.rows?.length) {
+      await client.query(`ALTER TABLE "${schema}".skabelon_versions ALTER COLUMN snapshot DROP NOT NULL`);
+    }
 
     // Seed default skabeloner (prompt-based) if none exist
     await client.query(`

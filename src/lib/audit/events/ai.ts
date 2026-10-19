@@ -22,14 +22,15 @@ export const aiEvents = {
   // service handing in a Teams recording (source 'system', authenticated by
   // BOT_INTERNAL_SECRET), live = the audio of a live recording sent utterance by
   // utterance (logged at most once per person and meeting per 5 minutes, with the
-  // size of that one utterance), diarize = the whole recording sent for speaker detection.
+  // size of that one utterance). Sending the same recording on to speaker detection is a
+  // pipeline step, not an upload.
   'audio.upload': defineEvent({
     sources: ['server', 'system'],
     entityType: 'meeting',
     entityIdRequired: false,
     details: z
       .object({
-        channel: z.enum(['batch', 'upload', 'bot', 'live', 'diarize']),
+        channel: z.enum(['batch', 'upload', 'bot', 'live']),
         bytes: count(),
         durationMs: amount().optional(),
         outcomeCode: outcomeCode(),

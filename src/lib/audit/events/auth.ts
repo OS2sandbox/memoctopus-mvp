@@ -16,12 +16,6 @@ export const authEvents = {
     entityIdRequired: false,
     details: z.object({ method: method(), provider: code() }).strict(),
   }),
-  'auth.logout': defineEvent({
-    sources: ['server'],
-    entityType: null,
-    entityIdRequired: false,
-    details: z.object({}).strict(),
-  }),
   // Never carries the attempted email: only emailHmac (first 16 hex chars of an
   // HMAC-SHA256 keyed with BETTER_AUTH_SECRET over the lower-cased address).
   'auth.login_failed': defineEvent({

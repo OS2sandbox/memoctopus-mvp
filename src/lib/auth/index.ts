@@ -8,7 +8,6 @@ import { db } from '@/lib/db';
 import {
   auditAuthFailure,
   auditLogin,
-  auditLogout,
   runLoginHooks,
   runSamlLoginHooks,
   type AuthHookContext,
@@ -71,9 +70,6 @@ function warnRiskyConfig(): void {
   if (!requireRoleToLogin()) {
     console.warn('[auth] ACCESS_SOURCE=claims with REQUIRE_ROLE_TO_LOGIN=false: a person the IdP maps to no role still gets the baseline role.');
   }
-  if (emailPasswordEnabled()) {
-    console.warn('[auth] ACCESS_SOURCE=claims with EMAIL_PASSWORD_ENABLED=true: existing password accounts can sign in (they hold no role); sign-up is closed.');
-  }
 }
 warnRiskyConfig();
 
@@ -127,7 +123,7 @@ export const auth = betterAuth({
   }),
   emailAndPassword: {
     enabled: emailPasswordEnabled(),
-    // Claims mode: password accounts hold no role, and nobody may open new ones.
+    // Claims mode: enabled is false there (providers.ts) and sign-up is closed as well.
     ...(emailPasswordSignUpDisabled() ? { disableSignUp: true } : {}),
   },
   ...claimsSession(),
@@ -146,12 +142,6 @@ export const auth = betterAuth({
           await runLoginHooks(session.userId, ctx as AuthHookContext | null);
           // After the hooks above, so the actor snapshot sees a freshly linked org unit.
           await auditLogin(session, ctx as AuthHookContext | null);
-        },
-      },
-      delete: {
-        // Fires for expiry cleanup and revocation too; auditLogout keeps only /sign-out.
-        after: async (session, ctx) => {
-          await auditLogout(session, ctx as AuthHookContext | null);
         },
       },
     },

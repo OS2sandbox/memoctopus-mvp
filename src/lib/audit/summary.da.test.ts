@@ -16,7 +16,6 @@ const ev = (eventType: string, over: Partial<SummarisableEvent> = {}): Summarisa
 // One expectation per catalogue type: the table is typed over EventType, so a new type must be added here too.
 const CASES: Record<EventType, [SummarisableEvent, string]> = {
   'auth.login': [ev('auth.login', { details: { method: 'password', provider: 'credential' } }), `${NAME} loggede ind med adgangskode`],
-  'auth.logout': [ev('auth.logout'), `${NAME} loggede ud`],
   'auth.login_failed': [
     ev('auth.login_failed', { outcome: 'error', actorUserId: null, actorName: null, details: { reason: 'rate_limited' } }),
     'Mislykket login-forsøg (for mange forsøg)',
@@ -25,8 +24,6 @@ const CASES: Record<EventType, [SummarisableEvent, string]> = {
   'template.create': [ev('template.create'), `${NAME} oprettede en skabelon`],
   'template.update': [ev('template.update', { details: { changedFields: ['prompt'], hasChangeNote: false } }), `${NAME} ændrede en skabelon`],
   'template.delete': [ev('template.delete'), `${NAME} slettede en skabelon`],
-  'template.share': [ev('template.share', { details: { kind: 'link' } }), `${NAME} delte en skabelon via link`],
-  'template.import': [ev('template.import', { details: { kind: 'link' } }), `${NAME} importerede en skabelon fra et link`],
   'central_template.create': [ev('central_template.create', { templateName: 'Test af prompt', details: { version: 1, targetCount: 2, principalTargetCount: 1 } }), `${NAME} oprettede den centrale skabelon »Test af prompt«`],
   'central_template.update': [ev('central_template.update', { templateName: 'X', details: { version: 3, changedFields: ['prompt'] } }), `${NAME} ændrede den centrale skabelon »X« (version 3)`],
   'central_template.retarget': [ev('central_template.retarget', { templateName: 'X', details: { version: 4, targetCount: 1, principalTargetCount: 0 } }), `${NAME} ændrede, hvem der har den centrale skabelon »X« til rådighed (version 4)`],
@@ -46,9 +43,7 @@ const CASES: Record<EventType, [SummarisableEvent, string]> = {
   ],
   'bot.ended': [ev('bot.ended', { source: 'system', actorUserId: null, actorName: null, details: { durationSeconds: 1800 } }), 'Mødebotten forlod mødet efter 30 min.'],
   'bot.error': [ev('bot.error', { source: 'system', outcome: 'error', actorUserId: null, actorName: null, details: { code: 'join_failed' } }), 'Mødebotten fejlede'],
-  'meeting.create': [ev('meeting.create', { source: 'client', details: { origin: 'upload' } }), `${NAME} oprettede et møde (upload)`],
   'meeting.delete': [ev('meeting.delete', { source: 'client' }), `${NAME} slettede et møde med transskription, referatversioner og lyd`],
-  'meeting.redact': [ev('meeting.redact', { source: 'client' }), `${NAME} slørede et møde`],
   'meeting.transcript_delete': [ev('meeting.transcript_delete', { source: 'client' }), `${NAME} slettede transskriptionens tekst fra et møde`],
   'meeting.audio_delete': [ev('meeting.audio_delete', { source: 'client' }), `${NAME} slettede lyden fra et møde`],
   'meeting.minutes_view': [ev('meeting.minutes_view', { source: 'client' }), `${NAME} åbnede et referat`],
@@ -69,11 +64,6 @@ const CASES: Record<EventType, [SummarisableEvent, string]> = {
     ev('meeting.minutes_version_prune', { source: 'client', details: { prunedCount: 1 } }),
     'Appen fjernede de ældste referatversioner fra et møde, fordi grænsen for antal versioner var nået (1 version)',
   ],
-  'meeting.participants_edit': [
-    ev('meeting.participants_edit', { source: 'client', details: { participantCount: 3 } }),
-    `${NAME} ændrede deltagerne på et møde (3 deltagere)`,
-  ],
-  'meeting.speakers_edit': [ev('meeting.speakers_edit', { source: 'client' }), `${NAME} ændrede talerne på et møde`],
   'system.config_changed': [
     ev('system.config_changed', { source: 'system', actorUserId: null, actorName: null, details: { fingerprint: '0123456789abcdef', changed: true } }),
     'Systemets konfiguration er ændret siden sidste start',
@@ -145,7 +135,7 @@ describe('summariseEvent', () => {
     expect(summariseEvent(ev('auth.login_failed', { details: { reason: 'free text here' } }))).toBe('Mislykket login-forsøg');
   });
 
-  it('says when the app deleted something on its own, and when a version was opened or restored', () => {
+  it('says when the app deleted something on its own, and when a version was restored', () => {
     expect(summariseEvent(ev('meeting.audio_delete', { source: 'client', details: { trigger: 'auto_generate' } }))).toBe(
       `${NAME} slettede lyden fra et møde (automatisk efter referatet blev genereret)`,
     );
@@ -153,12 +143,6 @@ describe('summariseEvent', () => {
       `${NAME} slettede et møde med transskription, referatversioner og lyd (automatisk, da fanen blev lukket)`,
     );
     expect(summariseEvent(ev('meeting.delete', { source: 'client', details: { trigger: 'user' } }))).not.toContain('automatisk');
-    expect(summariseEvent(ev('meeting.minutes_version', { details: { versionNumber: 1, action: 'view' } }))).toBe(
-      `${NAME} åbnede en tidligere version af referatet (version 1)`,
-    );
-    expect(summariseEvent(ev('meeting.minutes_version', { details: { versionNumber: 1, action: 'activate' } }))).toBe(
-      `${NAME} satte version 1 som den aktive version af referatet`,
-    );
     expect(summariseEvent(ev('meeting.minutes_version', { details: { versionNumber: 2, action: 'restore' } }))).toBe(
       `${NAME} gendannede version 2 af referatet`,
     );
@@ -184,9 +168,23 @@ describe('summariseEvent', () => {
   it('words each audio channel by what was sent and what for', () => {
     const s = (channel: string, outcome = 'success') => summariseEvent(ev('audio.upload', { outcome, details: { channel, bytes: 5 } }));
     expect(s('live')).toBe(`${NAME} uploadede lyd fra en live optagelse til transskribering`);
-    expect(s('diarize')).toBe(`${NAME} uploadede en optagelse til taleropdeling`);
     expect(s('batch')).toBe(`${NAME} uploadede en optagelse til transskribering`);
     expect(s('upload', 'error')).toBe(`${NAME} kunne ikke uploade en lydfil til transskribering`);
+  });
+
+  it('words each metadata field, with a count for participants and speakers', () => {
+    const s = (details: Record<string, unknown>) => summariseEvent(ev('meeting.metadata_edit', { source: 'client', details }));
+    expect(s({ field: 'recorded_at' })).toBe(`${NAME} ændrede datoen for et møde`);
+    expect(s({ field: 'participants', count: 3 })).toBe(`${NAME} ændrede deltagerne på et møde (3 deltagere)`);
+    expect(s({ field: 'speakers', count: 1 })).toBe(`${NAME} ændrede talerne på et møde (1 taler)`);
+    expect(s({ field: 'speakers' })).toBe(`${NAME} ændrede talerne på et møde`);
+  });
+
+  it('words minutes_version actions, and a row with a removed action falls back to a generic sentence', () => {
+    const s = (action: string) => summariseEvent(ev('meeting.minutes_version', { source: 'client', details: { versionNumber: 2, action } }));
+    expect(s('restore')).toBe(`${NAME} gendannede version 2 af referatet`);
+    expect(s('generate')).toBe(`${NAME} genererede en ny version af referatet (version 2)`);
+    expect(s('activate')).toBe(`${NAME} ændrede en version af et referat (version 2)`);
   });
 
   it('says whether the server deleted a recording or a stashed transcript', () => {

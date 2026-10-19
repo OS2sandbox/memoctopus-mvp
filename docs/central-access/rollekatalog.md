@@ -148,27 +148,15 @@ It answers 404 while `INTERNAL_CRON_SECRET` is unset and 401 on a wrong secret. 
 
 ## 8. Environment variables
 
-Read at call time (restart, no rebuild); an invalid value falls back to the default (except `ACCESS_SOURCE`). Defaults and comments are in `.env.example`.
+Every variable, its default and its meaning is in `.env.example` (section "Rollekatalog", the single place for it); they are read at call time (restart, no rebuild) and an invalid value falls back to the default (except `ACCESS_SOURCE`). Behaviours worth knowing that the template does not spell out:
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `ROLLEKATALOG_URL` | unset | Base URL, `https://` (see section 9). Unset or unusable: not configured. Credentials in the URL are refused |
-| `ROLLEKATALOG_READ_API_KEY` | unset | Key of the `READ_ACCESS` client |
-| `ROLLEKATALOG_ORG_API_KEY` | unset | Key of the `ORGANISATION` client |
-| `ROLLEKATALOG_ITSYSTEM_ID` | `os2taletiltekst` | IT system identifier (letters, digits, `_`, `-`) |
-| `ROLLEKATALOG_DOMAIN` | unset | Rollekatalog domain; unset means its primary domain |
-| `ROLLEKATALOG_TIMEOUT_MS` | `120000` | per request attempt, response body included; 1000 to 300000. Both calls are bulk downloads, so the default is 2 minutes. A larger value is rejected and the default is used: the HTTP client ends a wait for response headers after 300 s regardless, which would show up as a retried `network` error |
-| `ROLLEKATALOG_MAX_RESPONSE_BYTES` | 64 MiB | cap for a response; larger gives `too_large`. The default is a guess |
-| `ROLLEKATALOG_ALLOW_HTTP` | `false` | `true` allows `http://` for a non-local host |
-| `ROLLEKATALOG_SCOPE_DESCENDANTS` | `true` | section 4 |
-| `ROLLEKATALOG_GLOBAL_ROLES` | `admin` | section 4 |
-| `ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT` | `30` | 0 to 100 |
-| `ROLE_STALE_MAX_SECONDS` | `86400` | section 5 |
-| `DIRECTORY_USERID_TRANSFORM` | `none` | `none` or `strip-upn-domain` |
-| `DIRECTORY_USERID_DOMAIN` | blank | the UPN domain accepted by `strip-upn-domain` (required with it) |
-| `INTERNAL_CRON_SECRET` | unset | secret of the cron routes (shared with the audit prune route) |
-| `ROLLEKATALOG_ROLES_PATH` | `/api/read/userroles/itsystems` | where the role catalogue reads the user roles (section 12); a path under `/api/read/`, or `none` |
-| `ROLLEKATALOG_ROLEGROUPS_PATH` | `/api/read/rolegroups` | where it reads the role groups; a path under `/api/read/`, or `none` |
+- An unset or unusable `ROLLEKATALOG_URL` means "not configured"; credentials inside the URL are refused.
+- `ROLLEKATALOG_TIMEOUT_MS` accepts 1000 to 300000; a larger value is rejected and the default (2 minutes) used, because the HTTP client ends a wait for response headers after 300 s anyway. Both calls are bulk downloads.
+- `ROLLEKATALOG_MAX_RESPONSE_BYTES` (default 64 MiB, a guess): a larger response is `too_large`.
+- `ROLLEKATALOG_ITSYSTEM_ID` accepts letters, digits, `_` and `-`; `ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT` is 0 to 100.
+- `ROLLEKATALOG_SCOPE_DESCENDANTS` and `ROLLEKATALOG_GLOBAL_ROLES`: section 4. `ROLE_STALE_MAX_SECONDS`: section 5. `ROLLEKATALOG_ROLES_PATH` / `ROLLEKATALOG_ROLEGROUPS_PATH`: section 12 (a path under `/api/read/`, or `none`).
+- `DIRECTORY_USERID_TRANSFORM=strip-upn-domain` needs `DIRECTORY_USERID_DOMAIN`, otherwise nothing matches.
+- `INTERNAL_CRON_SECRET` is shared by all the `/api/internal/*` cron routes (`DEPLOY.md`).
 
 Related: `ACCESS_SOURCE`, `REQUIRE_ROLE_TO_LOGIN`, `DIRECTORY_MATCH`, `DIRECTORY_USERID_CLAIM`, `MICROSOFT_TENANT_ID`.
 

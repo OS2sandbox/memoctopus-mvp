@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   auditClientEventsDailyCap,
-  auditFeedDelaySeconds,
-  auditFeedKeyHash,
   auditRetentionDays,
   auditStdout,
   auditStoreIp,
@@ -83,37 +81,6 @@ describe('auditClientEventsDailyCap', () => {
     expect(auditClientEventsDailyCap()).toBe(50);
     vi.stubEnv('AUDIT_CLIENT_EVENTS_DAILY_CAP', '7');
     expect(auditClientEventsDailyCap()).toBe(7);
-  });
-});
-
-describe('auditFeedKeyHash', () => {
-  const hash = 'a'.repeat(64);
-  it('is null when unset or not a sha256 hex digest', () => {
-    for (const v of ['', 'abc', 'g'.repeat(64), 'a'.repeat(63)]) {
-      vi.stubEnv('AUDIT_FEED_API_KEY_HASH', v);
-      expect(auditFeedKeyHash()).toBeNull();
-    }
-  });
-  it('is normalised to lower case', () => {
-    vi.stubEnv('AUDIT_FEED_API_KEY_HASH', ` ${hash.toUpperCase()} `);
-    expect(auditFeedKeyHash()).toBe(hash);
-  });
-});
-
-describe('auditFeedDelaySeconds', () => {
-  it('defaults to 10', () => {
-    vi.stubEnv('AUDIT_FEED_DELAY_SECONDS', '');
-    expect(auditFeedDelaySeconds()).toBe(10);
-    vi.stubEnv('AUDIT_FEED_DELAY_SECONDS', 'x');
-    expect(auditFeedDelaySeconds()).toBe(10);
-    vi.stubEnv('AUDIT_FEED_DELAY_SECONDS', '-3');
-    expect(auditFeedDelaySeconds()).toBe(10);
-  });
-  it('accepts 0 and positive integers', () => {
-    vi.stubEnv('AUDIT_FEED_DELAY_SECONDS', '0');
-    expect(auditFeedDelaySeconds()).toBe(0);
-    vi.stubEnv('AUDIT_FEED_DELAY_SECONDS', '30');
-    expect(auditFeedDelaySeconds()).toBe(30);
   });
 });
 

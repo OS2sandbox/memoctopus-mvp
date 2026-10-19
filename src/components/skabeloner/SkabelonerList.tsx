@@ -10,7 +10,6 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { SkabelonEditor } from './SkabelonEditor';
@@ -34,18 +33,14 @@ export function SkabelonerList() {
   const [loading, setLoading] = useState(true);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<Skabelon | null>(null);
-  // Default to the out-of-box config (code on, link off) so the share affordance
-  // renders correctly before the server config arrives; corrected on fetch.
-  const [shareConfig, setShareConfig] = useState<ShareConfig>({ code: true, link: false });
+  // Default to the out-of-box config (code on) so the share affordance renders
+  // correctly before the server config arrives; corrected on fetch.
+  const [shareConfig, setShareConfig] = useState<ShareConfig>({ code: true });
   const [shareTarget, setShareTarget] = useState<Skabelon | null>(null);
   const [shareCode, setShareCode] = useState<string | null>(null);
-  const [shareLink, setShareLink] = useState<string | null>(null);
-  const [linkLoading, setLinkLoading] = useState(false);
-  const [linkError, setLinkError] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
-  const [copiedLink, setCopiedLink] = useState(false);
-  // The skabelon whose code/link was just copied inline (single-method sharing),
-  // and the brief confirmation to show above its buttons.
+  // The skabelon whose code was just copied inline, and the brief confirmation
+  // to show above its buttons.
   const [copiedToast, setCopiedToast] = useState<{ id: string; text: string } | null>(null);
   const copiedToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -89,7 +84,7 @@ export function SkabelonerList() {
     if (copiedToastTimer.current) clearTimeout(copiedToastTimer.current);
   }, []);
 
-  const shareEnabled = shareConfig.code || shareConfig.link;
+  const shareEnabled = shareConfig.code;
 
   function handleSaved(saved: Skabelon) {
     setSkabeloner((prev) => {
@@ -158,79 +153,26 @@ export function SkabelonerList() {
     return true;
   }
 
-  // Publish the template server-side and return its import link, or null on failure.
-  async function createShareLink(s: Skabelon): Promise<string | null> {
-    try {
-      const res = await fetch(`/api/skabeloner/${s.id}/share`, { method: 'POST' });
-      if (!res.ok) throw new Error();
-      const { token } = (await res.json()) as { token: string };
-      return `${window.location.origin}/skabeloner/import/${token}`;
-    } catch {
-      return null;
-    }
-  }
-
   function resetShareState() {
     setCopiedCode(false);
-    setCopiedLink(false);
     setShareCode(null);
-    setShareLink(null);
-    setLinkError(null);
   }
 
+  // Copies the code straight to the clipboard and confirms inline: there's only
+  // one thing to hand over, so no dialog is needed.
   async function handleShare(s: Skabelon) {
-    const onlyCode = shareConfig.code && !shareConfig.link;
-    const onlyLink = shareConfig.link && !shareConfig.code;
-
-    // Single-method sharing copies straight to the clipboard and confirms inline —
-    // there's only one thing to hand over, so no dialog is needed.
-    if (onlyCode) {
-      const code = encodeSkabelonCode(s);
-      if (await copyInline(s.id, code, 'Kode kopieret til udklipsholder')) return;
-      // Clipboard blocked — open the dialog so the code stays selectable.
-      resetShareState();
-      setShareCode(code);
-      setShareTarget(s);
-      return;
-    }
-
-    if (onlyLink) {
-      const link = await createShareLink(s);
-      if (link && (await copyInline(s.id, link, 'Link kopieret til udklipsholder'))) return;
-      // Clipboard blocked or link creation failed — open the dialog (reuses the
-      // already-created link, or surfaces the error for a retry).
-      resetShareState();
-      if (link) setShareLink(link);
-      else setLinkError('Kunne ikke oprette delingslink');
-      setShareTarget(s);
-      return;
-    }
-
-    // Both methods enabled — open the dialog so the user can pick code or link.
-    resetShareState();
-    setShareTarget(s);
-
     const code = encodeSkabelonCode(s);
+    if (await copyInline(s.id, code, 'Kode kopieret til udklipsholder')) return;
+    // Clipboard blocked — open the dialog so the code stays selectable.
+    resetShareState();
     setShareCode(code);
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopiedCode(true);
-    } catch {
-      /* clipboard may be unavailable; the code is still selectable */
-    }
-
-    setLinkLoading(true);
-    const link = await createShareLink(s);
-    setLinkLoading(false);
-    if (link) setShareLink(link);
-    else setLinkError('Kunne ikke oprette delingslink');
+    setShareTarget(s);
   }
 
-  async function copyText(text: string, which: 'code' | 'link') {
+  async function copyCode(text: string) {
     try {
       await navigator.clipboard.writeText(text);
-      if (which === 'code') setCopiedCode(true);
-      else setCopiedLink(true);
+      setCopiedCode(true);
     } catch {
       /* clipboard may be unavailable; the value is still selectable */
     }
@@ -424,7 +366,7 @@ export function SkabelonerList() {
           <DialogHeader>
             <DialogTitle>Del skabelon</DialogTitle>
             <DialogDescription>
-              Send en kode eller et link til andre — de indsætter det under &quot;Ny skabelon&quot;.
+              Send en kode til andre — de indsætter den under &quot;Ny skabelon&quot;.
             </DialogDescription>
           </DialogHeader>
 
@@ -439,27 +381,9 @@ export function SkabelonerList() {
                   className="font-mono text-xs"
                   onFocus={(e) => e.currentTarget.select()}
                 />
-                <Button size="sm" onClick={() => copyText(shareCode, 'code')}>
+                <Button size="sm" onClick={() => copyCode(shareCode)}>
                   {copiedCode ? 'Kopieret' : 'Kopiér kode'}
                 </Button>
-              </div>
-            )}
-
-            {shareConfig.link && (
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-[var(--ink)]">Link</p>
-                {linkLoading ? (
-                  <p className="text-sm text-[var(--muted)]">Genererer link…</p>
-                ) : linkError ? (
-                  <p className="text-sm text-[var(--kill)]">{linkError}</p>
-                ) : shareLink ? (
-                  <div className="flex items-center gap-2">
-                    <Input readOnly value={shareLink} onFocus={(e) => e.currentTarget.select()} />
-                    <Button size="sm" onClick={() => copyText(shareLink, 'link')}>
-                      {copiedLink ? 'Kopieret' : 'Kopiér'}
-                    </Button>
-                  </div>
-                ) : null}
               </div>
             )}
           </div>

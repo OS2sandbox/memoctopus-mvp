@@ -1,6 +1,6 @@
 // Needs a real Postgres 15+; skipped unless TEST_DATABASE_URL is set (see src/test/pg.ts).
 // Proves what mocks cannot: keyset paging against real ids, scope filtering with
-// the recursive org tree, and the feed's delay/ordering rules.
+// the recursive org tree and pruning.
 import { describe, expect, it, vi } from 'vitest';
 import type { Client } from 'pg';
 import { createRunner, type SqlQueryable } from '@/lib/authz/pg-runner';
@@ -12,7 +12,7 @@ import { hasPg, withFreshSchema } from '@/test/pg';
 vi.mock('@/lib/db', () => ({ pool: { query: vi.fn(), connect: vi.fn() }, db: {} }));
 
 import { pruneAuditEvents } from './prune';
-import { auditScopeFor, collectAuditEvents, getFeedHead, getFeedPage, listAuditEvents, type AuditQueryEnv } from './query';
+import { auditScopeFor, collectAuditEvents, listAuditEvents, type AuditQueryEnv } from './query';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -180,7 +180,7 @@ describe.skipIf(!hasPg)('audit query (real Postgres)', () => {
         expect(all.rows).toHaveLength(4);
       }));
 
-    it('the viewer and the export show unknown types (not access.*); the feed returns everything', () =>
+    it('the viewer and the export show unknown types (not access.*)', () =>
       withFreshSchema(async (c, schema) => {
         const env = queryEnv(c, schema);
         const known = await add(c, { event_type: 'auth.login' });
@@ -191,8 +191,7 @@ describe.skipIf(!hasPg)('audit query (real Postgres)', () => {
         expect(listed.rows.map((r) => Number(r.id)).sort((a, b) => a - b)).toEqual([known, unknown]);
         const exported = await collectAuditEvents({ scope: { all: true }, maxRows: 10 }, env);
         expect(exported.rows.map((r) => Number(r.id)).sort((a, b) => a - b)).toEqual([known, unknown]);
-        const feed = await getFeedPage({ offset: 0, size: 10, delaySeconds: 0 }, env);
-        expect(feed.rows.map((r) => Number(r.id))).toEqual([known, removed, unknown]);
+        expect(removed).toBeGreaterThan(known);
       }));
   });
 
@@ -250,65 +249,16 @@ describe.skipIf(!hasPg)('audit query (real Postgres)', () => {
       }));
   });
 
-  describe('feed', () => {
-    it('serves rows after the offset in ascending id order, and pages with size', () =>
-      withFreshSchema(async (c, schema) => {
-        const env = queryEnv(c, schema);
-        const ids: number[] = [];
-        for (let i = 0; i < 5; i++) ids.push(await add(c));
-
-        const p1 = await getFeedPage({ offset: 0, size: 2, delaySeconds: 10 }, env);
-        expect(p1.rows.map((r) => Number(r.id))).toEqual([ids[0], ids[1]]);
-        expect(p1.next).toBe(ids[1]);
-        const p2 = await getFeedPage({ offset: p1.next, size: 2, delaySeconds: 10 }, env);
-        expect(p2.rows.map((r) => Number(r.id))).toEqual([ids[2], ids[3]]);
-        const p3 = await getFeedPage({ offset: p2.next, size: 2, delaySeconds: 10 }, env);
-        expect(p3.rows.map((r) => Number(r.id))).toEqual([ids[4]]);
-        const p4 = await getFeedPage({ offset: p3.next, size: 2, delaySeconds: 10 }, env);
-        expect(p4).toMatchObject({ next: ids[4] });
-        expect(p4.rows).toEqual([]);
-        expect(await getFeedHead(10, env)).toBe(ids[4]);
-      }));
-
-    it('withholds rows younger than the delay, and everything after them', () =>
-      withFreshSchema(async (c, schema) => {
-        const env = queryEnv(c, schema);
-        const a = await add(c, { occurred_at: agoMs(HOUR) });
-        const young = await add(c, { occurred_at: new Date() });
-        // Older than the delay, but behind a young row: held back with it, so a commit-order gap cannot skip it.
-        const behind = await add(c, { occurred_at: agoMs(HOUR) });
-
-        expect(await getFeedHead(10, env)).toBe(a);
-        expect((await getFeedPage({ offset: 0, size: 10, delaySeconds: 10 }, env)).rows.map((r) => Number(r.id))).toEqual([a]);
-
-        // Without a delay everything is served, in id order.
-        expect(await getFeedHead(0, env)).toBe(behind);
-        expect((await getFeedPage({ offset: 0, size: 10, delaySeconds: 0 }, env)).rows.map((r) => Number(r.id))).toEqual([a, young, behind]);
-      }));
-
-    it('an empty log has head 0 and no records', () =>
-      withFreshSchema(async (c, schema) => {
-        const env = queryEnv(c, schema);
-        expect(await getFeedHead(10, env)).toBe(0);
-        expect(await getFeedPage({ offset: 0, size: 10, delaySeconds: 10 }, env)).toEqual({ rows: [], next: 0 });
-      }));
-
-    it('a log with only young rows serves nothing yet', () =>
-      withFreshSchema(async (c, schema) => {
-        const env = queryEnv(c, schema);
-        await add(c, { occurred_at: new Date() });
-        expect(await getFeedHead(3600, env)).toBe(0);
-        expect((await getFeedPage({ offset: 0, size: 10, delaySeconds: 3600 }, env)).rows).toEqual([]);
-      }));
-
+  describe('stored fields', () => {
     it('returns ip only where one was stored, and the stored fields intact', () =>
       withFreshSchema(async (c, schema) => {
         const env = queryEnv(c, schema);
         await add(c, { ip_address: '10.0.0.9', user_agent: 'UA', details: JSON.stringify({ method: 'oidc' }) });
         await add(c, { ip_address: null });
-        const { rows } = await getFeedPage({ offset: 0, size: 10, delaySeconds: 10 }, env);
-        expect(rows[0]).toMatchObject({ ipAddress: '10.0.0.9', userAgent: 'UA', details: { method: 'oidc' } });
-        expect(rows[1].ipAddress).toBeNull();
+        const { rows } = await collectAuditEvents({ scope: { all: true }, maxRows: 10 }, env);
+        // Newest first.
+        expect(rows[1]).toMatchObject({ ipAddress: '10.0.0.9', userAgent: 'UA', details: { method: 'oidc' } });
+        expect(rows[0].ipAddress).toBeNull();
       }));
   });
 
@@ -318,16 +268,13 @@ describe.skipIf(!hasPg)('audit query (real Postgres)', () => {
       return createRunner(q, async () => ({ ...q, release: () => {} }));
     };
 
-    it('the viewer and the feed keep working after old rows are pruned; a stale offset skips the gap', () =>
+    it('the viewer keeps working after old rows are pruned', () =>
       withFreshSchema(async (c, schema) => {
         const env = queryEnv(c, schema);
         const old: number[] = [];
         for (let i = 0; i < 4; i++) old.push(await add(c, { occurred_at: agoMs(100 * DAY) }));
         const keep: number[] = [];
         for (let i = 0; i < 3; i++) keep.push(await add(c, { occurred_at: agoMs(2 * DAY) }));
-
-        // A consumer that had read up to the second old row.
-        const consumerOffset = old[1];
 
         const deleted = await pruneAuditEvents({
           olderThanDays: 30,
@@ -336,11 +283,6 @@ describe.skipIf(!hasPg)('audit query (real Postgres)', () => {
           emitEvent: false,
         });
         expect(deleted).toBe(4);
-
-        const feed = await getFeedPage({ offset: consumerOffset, size: 10, delaySeconds: 10 }, env);
-        expect(feed.rows.map((r) => Number(r.id))).toEqual(keep);
-        expect(feed.next).toBe(keep[2]);
-        expect(await getFeedHead(10, env)).toBe(keep[2]);
 
         const viewer = await listAuditEvents({ scope: { all: true }, limit: 10 }, env);
         expect(viewer.rows.map((r) => Number(r.id))).toEqual([...keep].reverse());

@@ -50,6 +50,13 @@
       "when": 1791390000000,
       "tag": "0006_three_roles",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791400000000,
+      "tag": "0007_drop_shared_skabeloner",
+      "breakpoints": true
     }
   ]
 }

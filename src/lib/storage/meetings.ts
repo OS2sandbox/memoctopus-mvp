@@ -4,8 +4,6 @@ import { reportAuditEvent } from '@/lib/audit/client';
 import { withRetractableReport } from '@/lib/audit/retractable-report';
 import type { DeleteTrigger } from '@/lib/audit/events/meeting';
 
-export type MeetingOrigin = 'live' | 'upload' | 'bot';
-
 function newId(): string {
   return crypto.randomUUID();
 }
@@ -30,8 +28,6 @@ export async function createMeeting(data: {
   // The audio's own recording date. Defaults to now (correct for live/Teams
   // recordings); upload flows pass the file's date so an old clip keeps its date.
   recordedAt?: string;
-  // How the meeting came about, reported as the meeting.create audit event.
-  origin: MeetingOrigin;
 }): Promise<StoredMeeting> {
   const db = await getDB();
   const now = new Date().toISOString();
@@ -51,7 +47,6 @@ export async function createMeeting(data: {
     botSession: null,
   };
   await db.put('meetings', meeting);
-  reportAuditEvent('meeting.create', meeting.id, { origin: data.origin });
   return meeting;
 }
 
@@ -92,8 +87,8 @@ const sameStrings = (a: string[] | undefined, b: string[] | undefined) => {
 
 // Audit reporting is derived from what actually changed against the stored row, so
 // a write that repeats the current value (the participants effect re-saving on
-// mount) reports nothing. Reported here: redaction, audio deletion, a change of the
-// participant list and of the recording date. Status changes are not audited, and neither is the
+// mount) reports nothing. Reported here: audio deletion, a change of the
+// participant list and of the recording date (redaction is its two deletes, not an event of its own). Status changes are not audited, and neither is the
 // title here: pipeline steps also write it, so a RENAME by the person is reported where the person
 // makes it (settings page, minutes header) as meeting.metadata_edit. Only the opaque
 // meeting id and a participant COUNT leave here, never a name or the title.
@@ -106,7 +101,6 @@ function reportMeetingChanges(
   const id = existing.id;
   // Success calls carry no options (success is the default); only a failed write says so.
   const o = outcome === 'error' ? { outcome } : undefined;
-  if (patch.status === 'redacted' && existing.status !== 'redacted') reportAuditEvent('meeting.redact', id, undefined, o);
   // The audio file itself is deleted (and reported, success or failure) by deleteAudio; this write only
   // sets the flag, so a failure of the flag alone is not reported as a failed audio delete.
   if (outcome === 'success' && patch.audioDeleted === true && !existing.audioDeleted) {
@@ -116,7 +110,7 @@ function reportMeetingChanges(
     reportAuditEvent('meeting.metadata_edit', id, { field: 'recorded_at' }, o);
   }
   if (opts.automatic !== true && patch.participants !== undefined && !sameStrings(patch.participants, existing.participants)) {
-    reportAuditEvent('meeting.participants_edit', id, { participantCount: (patch.participants ?? []).length }, o);
+    reportAuditEvent('meeting.metadata_edit', id, { field: 'participants', count: (patch.participants ?? []).length }, o);
   }
 }
 

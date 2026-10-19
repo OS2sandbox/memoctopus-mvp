@@ -8,14 +8,11 @@ export const eventTypeLabels: Record<EventType, string> = {
   'authz.denied': 'Adgang nægtet',
   // Login
   'auth.login': 'Login',
-  'auth.logout': 'Logout',
   'auth.login_failed': 'Mislykket login',
   // Skabeloner
   'template.create': 'Skabelon oprettet',
   'template.update': 'Skabelon ændret',
   'template.delete': 'Skabelon slettet',
-  'template.share': 'Skabelon delt',
-  'template.import': 'Skabelon importeret',
   'central_template.create': 'Central skabelon oprettet',
   'central_template.update': 'Central skabelon ændret',
   'central_template.retarget': 'Tilgængelighed af central skabelon ændret',
@@ -35,9 +32,7 @@ export const eventTypeLabels: Record<EventType, string> = {
   'bot.ended': 'Mødebot er forladt mødet',
   'bot.error': 'Fejl i mødebot',
   // Møder (rapporteret af klienten)
-  'meeting.create': 'Møde oprettet',
   'meeting.delete': 'Møde slettet',
-  'meeting.redact': 'Møde sløret',
   'meeting.transcript_delete': 'Transskription slettet',
   'meeting.audio_delete': 'Lyd slettet',
   'meeting.minutes_view': 'Referat vist',
@@ -49,11 +44,9 @@ export const eventTypeLabels: Record<EventType, string> = {
   'meeting.recording_stop': 'Optagelse stoppet',
   'meeting.minutes_save': 'Referat redigeret',
   'meeting.transcript_edit': 'Transskription redigeret',
-  'meeting.metadata_edit': 'Mødets titel eller dato ændret',
+  'meeting.metadata_edit': 'Mødets oplysninger ændret',
   'meeting.minutes_version': 'Referatversion',
   'meeting.minutes_version_prune': 'Gamle referatversioner fjernet',
-  'meeting.participants_edit': 'Deltagere ændret',
-  'meeting.speakers_edit': 'Talere ændret',
   // Systemet
   'system.config_changed': 'Systemkonfiguration ændret',
   'integration.sync_run': 'Synkronisering med Rollekatalog kørt',

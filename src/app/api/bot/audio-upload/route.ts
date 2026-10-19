@@ -3,7 +3,7 @@ import { storePendingAudio, storePendingTranscript, markNoRecording, getBotMeeti
 import { processBotRecording } from '@/lib/bot-transcribe';
 import { withHandler } from '@/lib/api-handler';
 import { safeLogError } from '@/lib/audit/safe-log';
-import { secretEquals } from '@/lib/audit/feed-auth';
+import { secretEquals } from '@/lib/audit/internal-auth';
 import { recordServerEvent } from '@/lib/audit/record';
 import { asEntityUuid, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
 

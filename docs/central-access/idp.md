@@ -48,8 +48,7 @@ This is the one-provider form. With several providers each one gets its own maps
 AUTH_CONFIG_FILE=/config/auth.json
 ACCESS_SOURCE=claims
 KOMMUNE_CLIENT_SECRET=...        # forwarded to the container, see section 9
-# Leave these two BLANK: claims mode is closed by default (see section 4).
-# EMAIL_PASSWORD_ENABLED=
+# Leave this BLANK: claims mode is closed by default (see section 4).
 # REQUIRE_ROLE_TO_LOGIN=
 ```
 
@@ -95,7 +94,6 @@ All URLs (`discoveryUrl`, `issuer`, `authorizationUrl`, `tokenUrl`, `userInfoUrl
 | or `entryPoint` + `idpEntityId` + `cert` | the SSO URL, the IdP's entity id and its PEM signing certificate |
 | `spEntityId` | this app's entity id; default is the SP metadata URL (section 6) |
 | `cert` | a PEM string, **or a list of them during a certificate rollover** (a response signed by any of them verifies) |
-| `wantAssertionsSigned` | cosmetic, leave it out. Unsigned responses are **always** refused whatever it says; `false` only logs a warning. |
 | `allowIdpInitiated` | default **`false`**: every login must start here and the response must carry a signed InResponseTo that answers a request this app issued. `true` also accepts a response that answers no request of ours (a login started from the IdP's portal); it cannot be tied to the browser that started it (login CSRF), so prefer to keep the IdP's portal link pointing at this app's sign-in page. |
 | `allowDeprecatedAlgorithms` | default `false`: responses signed with SHA-1 (or digests with SHA-1) are refused. The escape is installation-wide for the plugin's own (SP-side) checks and warns at start; use it only until the IdP is fixed. |
 | `authnRequestsSigned` + `signingPrivateKey` | sign the AuthnRequest with this PEM key (if the IdP demands it) |
@@ -196,7 +194,7 @@ Roles are read **live** at every request (`resolvePrincipal`); nothing role-rela
 
 What this means for offboarding: a role removed in the IdP is removed here at the person's next login, and at the latest when their session ends. The IdP is only asked at login. If that is too slow, lower `ROLE_CLAIMS_MAX_SECONDS` (60 at the shortest); the price is more frequent re-login. Disabling the *person* in the IdP also stops new logins at once.
 
-**Claims mode is closed by default.** `REQUIRE_ROLE_TO_LOGIN` is **true** unless it is explicitly `false`: a person who signs in at the IdP but is mapped to no role gets the "Ingen adgang" page and a 403 on every API call, so ordinary users must be mapped to `bruger` (section 3.4). E-mail/password sign-in is **off** unless `EMAIL_PASSWORD_ENABLED` is explicitly `true`, and even then **sign-up stays disabled** (a password account holds no role anyway, and anyone able to type an address would otherwise get an account). Do not set either variable to its permissive value unless you mean it: both log a start-up warning. In docker compose leave them blank; "unset" must stay detectable.
+**Claims mode is closed by default.** `REQUIRE_ROLE_TO_LOGIN` is **true** unless it is explicitly `false`: a person who signs in at the IdP but is mapped to no role gets the "Ingen adgang" page and a 403 on every API call, so ordinary users must be mapped to `bruger` (section 3.4). E-mail/password sign-in is **always off** in claims mode and sign-up is closed (hard-wired: `EMAIL_PASSWORD_ENABLED` is ignored here and only means something in local and rollekatalog mode; a password account would hold no role, and anyone able to type an address would otherwise get an account). Do not set `REQUIRE_ROLE_TO_LOGIN=false` unless you mean it: it logs a start-up warning. In docker compose leave it blank; "unset" must stay detectable.
 
 **Break-glass.** There is no administrator in the app to lock out, and no bootstrap or last-administrator rule in this mode. Keep an administrator path on the IdP side (a named, controlled account that carries the administrator claim) and document who may use it.
 
@@ -224,7 +222,7 @@ URLs of the installation (substitute `BASE` = `BETTER_AUTH_URL` and `ID` = the p
 
 `BETTER_AUTH_URL` must be the public https URL; a SAML provider is skipped (with a warning) when it is not set and there is no `spEntityId`.
 
-**What is checked on a response.** The signature (of the response or of the assertion) with the IdP certificate from the metadata or the `cert` field(s); the signature and digest **algorithms** (SHA-256 and up; SHA-1 only with `allowDeprecatedAlgorithms`); the issuer; the time window (`NotBefore` / `NotOnOrAfter`, required); that there is exactly one assertion; that the assertion id was not used before (replay). An **unsigned response is always refused**; `wantAssertionsSigned` does not switch that off. Besides, `saml-guard.ts` makes the checks the better-auth sso plugin (1.6.11) does not: a body with a `DOCTYPE` or `ENTITY` declaration is refused before any XML parser sees it; the signed **Audience** must be this app's entity id; the signed **Recipient** is **required** and must be this app's ACS URL, and a response signed as a whole must carry a **Destination** equal to it; and unless `allowIdpInitiated`, the signed assertion's **InResponseTo** (not the unsigned-capable Response-level one) must answer an AuthnRequest this app issued for this provider and not yet consumed. The ACS URL and the entity id come from `BETTER_AUTH_URL`, never from the request's Host header. Without these a response the IdP signed for *another* service provider would be accepted here.
+**What is checked on a response.** The signature (of the response or of the assertion) with the IdP certificate from the metadata or the `cert` field(s); the signature and digest **algorithms** (SHA-256 and up; SHA-1 only with `allowDeprecatedAlgorithms`); the issuer; the time window (`NotBefore` / `NotOnOrAfter`, required); that there is exactly one assertion; that the assertion id was not used before (replay). An **unsigned response is always refused**; there is no option to switch that off (a provider that still lists the removed `wantAssertionsSigned` key is skipped with a content-free warning, like any unknown key). Besides, `saml-guard.ts` makes the checks the better-auth sso plugin (1.6.11) does not: a body with a `DOCTYPE` or `ENTITY` declaration is refused before any XML parser sees it; the signed **Audience** must be this app's entity id; the signed **Recipient** is **required** and must be this app's ACS URL, and a response signed as a whole must carry a **Destination** equal to it; and unless `allowIdpInitiated`, the signed assertion's **InResponseTo** (not the unsigned-capable Response-level one) must answer an AuthnRequest this app issued for this provider and not yet consumed. The ACS URL and the entity id come from `BETTER_AUTH_URL`, never from the request's Host header. Without these a response the IdP signed for *another* service provider would be accepted here.
 
 **Clocks.** The library checks `NotBefore` / `NotOnOrAfter` with **no tolerance** (the plugin's 5 minute allowance is applied after the library has already refused). A host whose clock is a few seconds behind the IdP refuses logins whose `NotBefore` is "in the future": keep the host and the IdP on NTP.
 
@@ -399,3 +397,16 @@ Read this before you promise anything to a customer.
 - **No product-specific login has been run:** not Entra ID, not Authentik, not Keycloak, not FKA, not OS2faktor. The claim and attribute names in the Entra, Authentik and Keycloak recipes are the products' **documented defaults, not observations**, and everything marked `<ASK: ...>` or UNVERIFIED in the FKA and OS2faktor recipes is exactly that. Each first installation therefore needs the check in section 8: one real login per role, the decoded token or the SAML response read against the file.
 - The dev simulation has **no Entra-shaped persona** (a `roles` array plus a `tid`, GUID group ids, an Entra `iss`). The built-in `entra` provider's tenant, issuer and audience checks are covered by unit tests only. Add such a persona to `scripts/dev-sim/oidc.ts` and `auth-config.claims.json` if you need an end-to-end proof; it was left out so as not to disturb the existing acceptance runs.
 
+
+## 12. Without a config file: the legacy variables
+
+Without `AUTH_CONFIG_FILE` the app reads the older variables (all in `.env.example`, runtime only: `docker compose up -d app` is enough, never `--build`). They give one Microsoft Entra ID provider (`MICROSOFT_*`) and one generic OIDC provider (`OIDC_*`), no SAML and **no role claims** (so not `ACCESS_SOURCE=claims`). A configured file replaces them entirely (the app warns about variables it now ignores).
+
+1. In the IdP create a **confidential** client and register the redirect URI `<BETTER_AUTH_URL>/api/auth/oauth2/callback/<OIDC_PROVIDER_ID>`.
+2. Discovery URL: Keycloak `https://<host>/realms/<realm>/.well-known/openid-configuration`; Authentik `https://<host>/application/o/<app-slug>/.well-known/openid-configuration`.
+3. Set `OIDC_PROVIDER_ID`, `OIDC_PROVIDER_NAME` (button label only), `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_DISCOVERY_URL`. The button appears as soon as the three credentials are set. Scopes are always `openid profile email`; PKCE is on unless `OIDC_PKCE=false`. `*_ENABLED` flags are kill switches, not opt-ins.
+4. To offer SSO only, set `EMAIL_PASSWORD_ENABLED=false` (this disables the e-mail/password endpoints, not just the form; it only has a meaning in local and rollekatalog mode, claims mode never has password sign-in).
+
+**Pick `OIDC_PROVIDER_ID` once.** It is the callback path segment and the key that ties people to their accounts; changing it after go-live gives returning users a new, empty account. Account linking is the rule in section 5 (both sides verified; password accounts are never linkable, deliberately: do not mark providers trusted, or anyone able to self-register at an IdP under someone else's address could take over their account and its private PostgreSQL schema).
+
+**From the Authentik-specific variables.** `AUTHENTIK_CLIENT_ID` / `_CLIENT_SECRET` / `_DISCOVERY_URL` and the `NEXT_PUBLIC_*_ENABLED` flags still work (aliases, with a deprecation warning at start); they are used only when the `OIDC_*` trio is incomplete, and the provider id then stays `authentik`, so the registered redirect URI and the existing accounts are unaffected. To migrate, copy the three values to their `OIDC_*` names and set `OIDC_PROVIDER_ID=authentik`.

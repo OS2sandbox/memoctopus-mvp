@@ -14,7 +14,7 @@ describe('audit categories', () => {
   });
 
   it('groups by prefix as documented', () => {
-    expect([...eventTypesOfCategory('login')].sort()).toEqual(['auth.login', 'auth.login_failed', 'auth.logout', 'authz.denied']);
+    expect([...eventTypesOfCategory('login')].sort()).toEqual(['auth.login', 'auth.login_failed', 'authz.denied']);
     expect([...eventTypesOfCategory('log')].sort()).toEqual(['audit.events_dropped', 'audit.export', 'audit.prune', 'integration.sync_run', 'system.config_changed']);
     expect(eventTypesOfCategory('templates').every((t) => /^(central_)?template\./.test(t))).toBe(true);
     expect([...eventTypesOfCategory('views')].sort()).toEqual(['meeting.audio_play', 'meeting.minutes_view', 'meeting.transcript_view']);

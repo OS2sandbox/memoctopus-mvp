@@ -166,17 +166,17 @@ describe('AUTH_CONFIG_FILE', () => {
     it('is strict by default: IdP-initiated login off, deprecated algorithms off', () => {
       writeConfig({ providers: [SAML] });
       expect(loadAuthConfig().providers[0]).toMatchObject({
-        wantAssertionsSigned: true,
         allowIdpInitiated: false,
         allowDeprecatedAlgorithms: false,
         authnRequestsSigned: false,
       });
     });
 
-    it('warns when the cosmetic wantAssertionsSigned is false, and when a weakening option is on', () => {
-      writeConfig({ providers: [{ ...SAML, wantAssertionsSigned: false, allowIdpInitiated: true, allowDeprecatedAlgorithms: true }] });
+    it('no longer knows wantAssertionsSigned (unsigned responses are always refused); warns when a weakening option is on', () => {
+      writeConfig({ providers: [{ ...SAML, wantAssertionsSigned: false }] });
+      expect(loadAuthConfig().providers).toEqual([]);
+      writeConfig({ providers: [{ ...SAML, allowIdpInitiated: true, allowDeprecatedAlgorithms: true }] });
       loadAuthConfig();
-      expect(warned()).toContain('wantAssertionsSigned is false');
       expect(warned()).toContain('allowIdpInitiated is on');
       expect(warned()).toContain('allowDeprecatedAlgorithms is on');
     });

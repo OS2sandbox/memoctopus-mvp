@@ -1,5 +1,4 @@
-// Read side of public.audit_events: the admin viewer, the CSV export and the
-// machine feed. All SQL is parameterised; the only interpolated text is the
+// Read side of public.audit_events: the admin viewer and the CSV export. All SQL is parameterised; the only interpolated text is the
 // table name, which is a trusted constant (overridden only by the Postgres test
 // lane, which runs in a throwaway schema, like scope.ts's orgUnitsTable).
 //
@@ -15,12 +14,10 @@ import { TABLE_RE, UUID_RE } from './record';
 
 const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 100;
-export const MAX_FEED_SIZE = 1000;
 /** Rows per round trip when exporting; the export itself is capped by the caller. */
 const EXPORT_BATCH = 500;
 
 const ID_RE = /^\d{1,18}$/;
-const BIGINT_MAX = '9223372036854775807';
 
 export interface AuditQueryEnv {
   query: (text: string, params: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
@@ -84,7 +81,7 @@ export interface AuditEventRow {
 }
 
 // An explicit column list (never SELECT *): a column added later does not
-// silently start flowing to the viewer or the feed.
+// silently start flowing to the viewer.
 const COLUMNS = `id, occurred_at, source, event_type, outcome, actor_user_id, actor_name, actor_org_unit_uuid,
   entity_type, entity_id, secondary_entity_type, secondary_entity_id, ip_address, user_agent, request_id,
   details, client_occurred_at`;
@@ -180,8 +177,7 @@ function buildWhere(
   // Rows of a type this build does not know (written by a newer or older release) are NOT hidden:
   // the viewer and the export show them as "Ukendt hændelsestype (<kode>)", so a rolling deploy
   // or a rollback never makes log rows vanish. The one exception is the removed, unreleased
-  // access.* events, which stay hidden (they stay in the table and in the SIEM feed, which
-  // does not use this filter).
+  // access.* events, which stay hidden (they stay in the table).
   add((p) => `(event_type = ANY(${p}::text[]) OR event_type NOT LIKE 'access.%')`, EVENT_TYPES);
   return where;
 }
@@ -235,62 +231,4 @@ export async function collectAuditEvents(
     if (!page.nextCursor) return { rows, truncated: false };
     cursor = page.nextCursor;
   }
-}
-
-// ─── Machine feed ──────────────────────────────────────────────────────────
-
-/**
- * bigserial ids are handed out at INSERT but become visible at COMMIT, so a
- * reader that remembers "the highest id I saw" can skip a row that commits late.
- * The feed therefore only serves the contiguous run of rows BELOW the lowest id
- * that is still younger than the delay: everything it returns is older than
- * `delaySeconds`, and a younger row (which may still be uncommitted neighbours'
- * company) holds back every later id too. occurred_at is the transaction start,
- * so a transaction that stays open longer than the delay can still be missed;
- * audit writes are single statements or short admin transactions.
- */
-const FEED_BOUND = `COALESCE(
-  (SELECT min(id) FROM %TABLE% WHERE occurred_at >= now() - make_interval(secs => $1::double precision)),
-  ${BIGINT_MAX}::bigint)`;
-
-function feedBound(table: string): string {
-  return FEED_BOUND.replace('%TABLE%', table);
-}
-
-/** Highest id the feed may serve right now (0 when there is none). */
-export async function getFeedHead(delaySeconds: number, env: AuditQueryEnv = defaultEnv()): Promise<number> {
-  const table = checkedTable(env);
-  const { rows } = await env.query(`SELECT max(id) AS head FROM ${table} WHERE id < ${feedBound(table)}`, [
-    Math.max(0, delaySeconds),
-  ]);
-  const head = rows[0]?.head;
-  return head === null || head === undefined ? 0 : Number(head);
-}
-
-interface FeedOptions {
-  /** Rows with id > offset are returned. */
-  offset: number;
-  size: number;
-  delaySeconds: number;
-}
-
-/** Rows with offset < id <= head, oldest first. `next` is the offset to ask for next time. */
-export async function getFeedPage(
-  opts: FeedOptions,
-  env: AuditQueryEnv = defaultEnv(),
-): Promise<{ rows: AuditEventRow[]; next: number }> {
-  const table = checkedTable(env);
-  if (!Number.isSafeInteger(opts.offset) || opts.offset < 0) throw new RangeError('invalid offset');
-  if (!Number.isSafeInteger(opts.size) || opts.size < 1) throw new RangeError('invalid size');
-  const size = Math.min(opts.size, MAX_FEED_SIZE);
-  const { rows } = await env.query(
-    `SELECT ${COLUMNS} FROM ${table}
-      WHERE id > $2::bigint AND id < ${feedBound(table)}
-      ORDER BY id ASC
-      LIMIT $3`,
-    [Math.max(0, opts.delaySeconds), String(opts.offset), size],
-  );
-  const mapped = rows.map(mapRow);
-  const last = mapped[mapped.length - 1];
-  return { rows: mapped, next: last ? Number(last.id) : opts.offset };
 }

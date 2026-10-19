@@ -22,7 +22,7 @@ describe('session.create.after hook', () => {
     err.mockRestore();
   });
 
-  it('audit hooks (login, logout, failed login) also resolve with the database down and log no values', async () => {
+  it('audit hooks (login, failed login) also resolve with the database down and log no values', async () => {
     vi.stubEnv('BETTER_AUTH_SECRET', 'x'.repeat(40));
     vi.stubEnv('BETTER_AUTH_URL', 'http://localhost:3004');
     vi.resetModules();
@@ -34,7 +34,6 @@ describe('session.create.after hook', () => {
     const session = { userId: 'u1', token: 'session-token-secret', ipAddress: '203.0.113.5', userAgent: 'UA' };
 
     await expect(options.databaseHooks.session.create.after(session, { path: '/sign-in/email' })).resolves.toBeUndefined();
-    await expect(options.databaseHooks.session.delete.after(session, { path: '/sign-out' })).resolves.toBeUndefined();
     const failed = await options.hooks.after({
       path: '/sign-in/email',
       body: { email: 'secret@example.dk', password: 'pw-secret' },

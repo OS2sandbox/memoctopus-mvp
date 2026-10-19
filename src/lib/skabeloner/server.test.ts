@@ -22,7 +22,7 @@ vi.mock('@/lib/db/user-schema', () => q);
 const mockSafeLog = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/audit/safe-log', () => ({ safeLogError: mockSafeLog }));
 
-import { SKABELON_VERSION_CAP, createSkabelon, listSkabelonVersions, updateSkabelonWithHistory } from './server';
+import { createSkabelon, listSkabelonVersions, updateSkabelonWithHistory } from './server';
 
 const USER = 'user-1';
 const row = {
@@ -69,21 +69,14 @@ describe('personal template changelog (own schema)', () => {
     expect(sqls).not.toContain('RELEASE SAVEPOINT skabelon_version');
   });
 
-  it('numbers a new version as MAX+1 in ONE statement, with the optional note and a snapshot of the tracked fields', async () => {
+  it('numbers a new version as MAX+1 in ONE statement, with the optional note and no copy of the prompt', async () => {
     q.tx.script = (sql) => (sql.startsWith('INSERT INTO skabeloner') ? [row] : []);
     await createSkabelon(USER, { name: 'Mit navn', prompt: 'Min prompt' });
     const version = q.tx.log.find((l) => l.sql.startsWith('INSERT INTO skabelon_versions'))!;
     expect(version.sql).toMatch(/COALESCE\(MAX\(version\), 0\) \+ 1/);
     expect(version.sql).toContain('FROM skabelon_versions WHERE skabelon_id = $1');
-    expect(JSON.parse(String(version.params[3]))).toEqual({
-      name: 'Mit navn',
-      description: '',
-      prompt: 'Min prompt',
-      includeDeltagere: false,
-      includeBeslutningspunkter: true,
-      includeDagsorden: false,
-      includeDato: false,
-    });
+    expect(version.sql).not.toContain('snapshot');
+    expect(version.params).toEqual(['sk-1', null, []]);
   });
 
   it('lists newest first and maps rows; null for a template that is not in the schema', async () => {
@@ -98,7 +91,6 @@ describe('personal template changelog (own schema)', () => {
       { version: 2, changeNote: 'Strammet op', changedFields: ['prompt'], createdAt: '2026-06-02T08:00:00.000Z' },
       { version: 1, changeNote: null, changedFields: [], createdAt: '2026-06-01T08:00:00.000Z' },
     ]);
-    // The snapshot is stored for the person but never listed.
     expect(q.queryUserSchema.mock.calls[0][1]).not.toContain('snapshot');
 
     q.queryUserSchemaOne.mockResolvedValueOnce(null);
@@ -153,29 +145,22 @@ describe('personal template changelog (own schema)', () => {
       expect(q.tx.log.some((l) => l.sql.startsWith('INSERT INTO skabelon_versions'))).toBe(false);
     });
 
-    it('creates version 1 (the state before the edit, no note) lazily, in one INSERT guarded by NOT EXISTS, before the new entry', async () => {
+    it('creates version 1 (no note, no changed fields) lazily, in one INSERT guarded by NOT EXISTS, before the new entry', async () => {
       q.tx.script = script();
       await updateSkabelonWithHistory(USER, 'sk-1', input, 'Første ændring');
       const ins = q.tx.log.filter((l) => l.sql.startsWith('INSERT INTO skabelon_versions'));
       expect(ins).toHaveLength(2);
       expect(ins[0].sql).toContain('WHERE NOT EXISTS (SELECT 1 FROM skabelon_versions WHERE skabelon_id = $1)');
-      expect(ins[0].params[0]).toBe('sk-1');
-      expect(JSON.parse(String(ins[0].params[1])).prompt).toBe('Gammel');
+      expect(ins[0].sql).not.toContain('snapshot');
+      expect(ins[0].params).toEqual(['sk-1']);
       expect(ins[1].params.slice(0, 3)).toEqual(['sk-1', 'Første ændring', ['prompt']]);
       expect(q.tx.log.some((l) => l.sql.startsWith('SELECT count(*)'))).toBe(false);
     });
 
-    it(`prunes everything older than the newest ${SKABELON_VERSION_CAP} versions, only once the cap is exceeded`, async () => {
-      q.tx.script = script(undefined, SKABELON_VERSION_CAP);
+    it('never prunes old versions: audit events still name them and the viewer looks their notes up', async () => {
+      q.tx.script = script(undefined, 250);
       await updateSkabelonWithHistory(USER, 'sk-1', input, null);
       expect(q.tx.log.some((l) => l.sql.startsWith('DELETE FROM skabelon_versions'))).toBe(false);
-
-      q.tx.log.length = 0;
-      q.tx.script = script(undefined, SKABELON_VERSION_CAP + 3);
-      await updateSkabelonWithHistory(USER, 'sk-1', input, null);
-      const del = q.tx.log.find((l) => l.sql.startsWith('DELETE FROM skabelon_versions'))!;
-      expect(del.params).toEqual(['sk-1', 3]);
-      expect(SKABELON_VERSION_CAP).toBe(100);
     });
 
     it('a failing changelog write is rolled back to its savepoint and logged, and the edit still commits', async () => {

@@ -10,14 +10,12 @@ import type { Skabelon } from '@/types';
 // ---------------------------------------------------------------------------
 
 const mockDecodeSkabelonCode = vi.fn();
-const mockExtractImportToken = vi.fn();
 
 vi.mock('@/lib/skabeloner/share-code', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/skabeloner/share-code')>();
   return {
     ...actual,
     decodeSkabelonCode: (...args: unknown[]) => mockDecodeSkabelonCode(...args),
-    extractImportToken: (...args: unknown[]) => mockExtractImportToken(...args),
   };
 });
 
@@ -63,7 +61,7 @@ function renderEditor(
     onOpenChange: vi.fn(),
     skabelon: null,
     onSaved: vi.fn(),
-    shareConfig: { code: true, link: false },
+    shareConfig: { code: true },
   };
   return render(<SkabelonEditor {...defaults} {...props} />);
 }
@@ -75,7 +73,6 @@ function renderEditor(
 beforeEach(() => {
   vi.resetAllMocks();
   mockDecodeSkabelonCode.mockReturnValue(null);
-  mockExtractImportToken.mockReturnValue(null);
   global.fetch = vi.fn();
 });
 
@@ -180,7 +177,7 @@ describe('SkabelonEditor — form reset on open', () => {
         onOpenChange={vi.fn()}
         skabelon={SAMPLE_SKABELON}
         onSaved={vi.fn()}
-        shareConfig={{ code: true, link: false }}
+        shareConfig={{ code: true }}
       />,
     );
     expect(screen.getByLabelText('Navn')).toHaveValue('Bestyrelsesmøde');
@@ -192,7 +189,7 @@ describe('SkabelonEditor — form reset on open', () => {
         onOpenChange={vi.fn()}
         skabelon={null}
         onSaved={vi.fn()}
-        shareConfig={{ code: true, link: false }}
+        shareConfig={{ code: true }}
       />,
     );
     rerender(
@@ -201,7 +198,7 @@ describe('SkabelonEditor — form reset on open', () => {
         onOpenChange={vi.fn()}
         skabelon={null}
         onSaved={vi.fn()}
-        shareConfig={{ code: true, link: false }}
+        shareConfig={{ code: true }}
       />,
     );
     expect(screen.getByLabelText('Navn')).toHaveValue('');
@@ -395,10 +392,10 @@ describe('SkabelonEditor — change note and history (edit mode)', () => {
       (global.fetch as ReturnType<typeof vi.fn>).mock.calls.find(([, init]) => init?.method === 'PUT')![1].body,
     );
 
-  it('offers an optional "Hvad ændrede du?" field only when editing, and says it stays private', () => {
+  it('offers an optional "Hvad ændrede du?" field only when editing, and says who can see it', () => {
     const { unmount } = renderEditor({ skabelon: SAMPLE_SKABELON });
     expect(screen.getByLabelText('Hvad ændrede du? (valgfri)')).toHaveValue('');
-    expect(screen.getByText(/kun i din egen historik/)).toBeInTheDocument();
+    expect(screen.getByText(/Administratorer kan se den i auditloggen/)).toBeInTheDocument();
     unmount();
     renderEditor();
     expect(screen.queryByLabelText('Hvad ændrede du? (valgfri)')).toBeNull();
@@ -651,44 +648,22 @@ describe('SkabelonEditor — category toggles', () => {
 
 describe('SkabelonEditor — paste affordance visibility', () => {
   it('shows paste input when shareConfig.code=true', () => {
-    renderEditor({ shareConfig: { code: true, link: false } });
+    renderEditor({ shareConfig: { code: true } });
     expect(screen.getByPlaceholderText('Indsæt kode…')).toBeInTheDocument();
   });
 
-  it('shows paste input when shareConfig.link=true', () => {
-    renderEditor({ shareConfig: { code: false, link: true } });
-    expect(screen.getByPlaceholderText('Indsæt link…')).toBeInTheDocument();
-  });
-
-  it('shows paste input when both code and link are enabled', () => {
-    renderEditor({ shareConfig: { code: true, link: true } });
-    expect(screen.getByPlaceholderText('Indsæt kode eller link…')).toBeInTheDocument();
-  });
-
-  it('hides paste input when both code and link are disabled', () => {
-    renderEditor({ shareConfig: { code: false, link: false } });
+  it('hides paste input when code sharing is disabled', () => {
+    renderEditor({ shareConfig: { code: false } });
     expect(screen.queryByPlaceholderText('Indsæt kode…')).toBeNull();
-    expect(screen.queryByPlaceholderText('Indsæt link…')).toBeNull();
-    expect(screen.queryByPlaceholderText('Indsæt kode eller link…')).toBeNull();
   });
 
   it('shows "Har du en kode?" label when code-only', () => {
-    renderEditor({ shareConfig: { code: true, link: false } });
+    renderEditor({ shareConfig: { code: true } });
     expect(screen.getByText('Har du en kode?')).toBeInTheDocument();
   });
 
-  it('shows "Har du et link?" label when link-only', () => {
-    renderEditor({ shareConfig: { code: false, link: true } });
-    expect(screen.getByText('Har du et link?')).toBeInTheDocument();
-  });
-
-  it('shows "Har du en kode eller et link?" label when both are enabled', () => {
-    renderEditor({ shareConfig: { code: true, link: true } });
-    expect(screen.getByText('Har du en kode eller et link?')).toBeInTheDocument();
-  });
-
   it('hides paste affordance in edit mode even when shareConfig enables it', () => {
-    renderEditor({ skabelon: SAMPLE_SKABELON, shareConfig: { code: true, link: false } });
+    renderEditor({ skabelon: SAMPLE_SKABELON, shareConfig: { code: true } });
     expect(screen.queryByPlaceholderText('Indsæt kode…')).toBeNull();
   });
 });
@@ -711,7 +686,7 @@ describe('SkabelonEditor — paste import (code)', () => {
   it('populates fields when a valid code is pasted and Indsæt clicked', async () => {
     mockDecodeSkabelonCode.mockReturnValue(SHAREABLE);
 
-    renderEditor({ shareConfig: { code: true, link: false } });
+    renderEditor({ shareConfig: { code: true } });
     fireEvent.change(screen.getByPlaceholderText('Indsæt kode…'), {
       target: { value: 'skab1_abc' },
     });
@@ -768,7 +743,7 @@ describe('SkabelonEditor — paste import (code)', () => {
   it('shows "Ugyldig kode" when decodeSkabelonCode returns null (code-only config)', async () => {
     mockDecodeSkabelonCode.mockReturnValue(null);
 
-    renderEditor({ shareConfig: { code: true, link: false } });
+    renderEditor({ shareConfig: { code: true } });
     fireEvent.change(screen.getByPlaceholderText('Indsæt kode…'), {
       target: { value: 'not-a-valid-code' },
     });
@@ -856,184 +831,6 @@ describe('SkabelonEditor — paste import (code)', () => {
     });
 
     expect(screen.queryByText('Ugyldig kode')).toBeNull();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Paste-to-import — link fetching
-// ---------------------------------------------------------------------------
-
-describe('SkabelonEditor — paste import (link)', () => {
-  const SHAREABLE = {
-    name: 'Link Imported',
-    description: '',
-    prompt: 'Via link',
-    includeDeltagere: false,
-    includeBeslutningspunkter: true,
-    includeDagsorden: false,
-    includeDato: false,
-  };
-
-  it('fetches from the API when a valid link token is pasted', async () => {
-    mockDecodeSkabelonCode.mockReturnValue(null);
-    mockExtractImportToken.mockReturnValue('tok123');
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      json: async () => ({ skabelon: SHAREABLE }),
-    });
-
-    renderEditor({ shareConfig: { code: false, link: true } });
-    fireEvent.change(screen.getByPlaceholderText('Indsæt link…'), {
-      target: { value: 'https://example.com/skabeloner/import/tok123' },
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Indsæt' }));
-    });
-
-    await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith('/api/skabeloner/import/tok123');
-    });
-  });
-
-  it('populates fields after successful link fetch', async () => {
-    mockDecodeSkabelonCode.mockReturnValue(null);
-    mockExtractImportToken.mockReturnValue('tok123');
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      json: async () => ({ skabelon: SHAREABLE }),
-    });
-
-    renderEditor({ shareConfig: { code: false, link: true } });
-    fireEvent.change(screen.getByPlaceholderText('Indsæt link…'), {
-      target: { value: 'https://example.com/skabeloner/import/tok123' },
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Indsæt' }));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Navn')).toHaveValue('Link Imported');
-    });
-  });
-
-  it('shows "Henter…" while fetching', async () => {
-    mockDecodeSkabelonCode.mockReturnValue(null);
-    mockExtractImportToken.mockReturnValue('tok123');
-    let resolveFetch!: (v: unknown) => void;
-    (global.fetch as ReturnType<typeof vi.fn>).mockReturnValueOnce(
-      new Promise((r) => { resolveFetch = r; }),
-    );
-
-    renderEditor({ shareConfig: { code: false, link: true } });
-    fireEvent.change(screen.getByPlaceholderText('Indsæt link…'), {
-      target: { value: 'https://example.com/skabeloner/import/tok123' },
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Indsæt' }));
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Henter…' })).toBeDisabled();
-    });
-
-    await act(async () => {
-      resolveFetch({ ok: true, json: async () => ({ skabelon: SHAREABLE }) });
-    });
-  });
-
-  it('shows error when link fetch fails', async () => {
-    mockDecodeSkabelonCode.mockReturnValue(null);
-    mockExtractImportToken.mockReturnValue('tok123');
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false });
-
-    renderEditor({ shareConfig: { code: false, link: true } });
-    fireEvent.change(screen.getByPlaceholderText('Indsæt link…'), {
-      target: { value: 'https://example.com/skabeloner/import/tok123' },
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Indsæt' }));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText('Kunne ikke hente skabelon fra linket')).toBeInTheDocument();
-    });
-  });
-
-  it('shows "Ugyldigt link" when link token is null (link-only config)', async () => {
-    mockDecodeSkabelonCode.mockReturnValue(null);
-    mockExtractImportToken.mockReturnValue(null);
-
-    renderEditor({ shareConfig: { code: false, link: true } });
-    fireEvent.change(screen.getByPlaceholderText('Indsæt link…'), {
-      target: { value: 'not-a-link' },
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Indsæt' }));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText('Ugyldigt link')).toBeInTheDocument();
-    });
-  });
-
-  it('shows "Ugyldig kode eller link" when both methods fail with code+link config', async () => {
-    mockDecodeSkabelonCode.mockReturnValue(null);
-    mockExtractImportToken.mockReturnValue(null);
-
-    renderEditor({ shareConfig: { code: true, link: true } });
-    fireEvent.change(screen.getByPlaceholderText('Indsæt kode eller link…'), {
-      target: { value: 'totally-invalid' },
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Indsæt' }));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText('Ugyldig kode eller link')).toBeInTheDocument();
-    });
-  });
-
-  it('does not try link fetch when link config is disabled even if extractImportToken returns a token', async () => {
-    mockDecodeSkabelonCode.mockReturnValue(null);
-    mockExtractImportToken.mockReturnValue('tok123');
-
-    renderEditor({ shareConfig: { code: true, link: false } });
-    fireEvent.change(screen.getByPlaceholderText('Indsæt kode…'), {
-      target: { value: 'https://example.com/skabeloner/import/tok123' },
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Indsæt' }));
-    });
-
-    // Should NOT have called fetch for the import endpoint
-    expect(global.fetch).not.toHaveBeenCalledWith('/api/skabeloner/import/tok123');
-  });
-
-  it('shows "Skabelon indlæst" confirmation after successful link import', async () => {
-    mockDecodeSkabelonCode.mockReturnValue(null);
-    mockExtractImportToken.mockReturnValue('tok123');
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      json: async () => ({ skabelon: SHAREABLE }),
-    });
-
-    renderEditor({ shareConfig: { code: false, link: true } });
-    fireEvent.change(screen.getByPlaceholderText('Indsæt link…'), {
-      target: { value: 'https://example.com/skabeloner/import/tok123' },
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Indsæt' }));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText('Skabelon indlæst — gennemse og gem.')).toBeInTheDocument();
-    });
   });
 });
 

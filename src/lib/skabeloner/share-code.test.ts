@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   encodeSkabelonCode,
   decodeSkabelonCode,
-  extractImportToken,
   type ShareableSkabelon,
 } from './share-code';
 
@@ -38,15 +37,5 @@ describe('skabelon share-code', () => {
     expect(decodeSkabelonCode('hello world')).toBeNull();
     expect(decodeSkabelonCode('')).toBeNull();
     expect(decodeSkabelonCode('skab1_not-valid-base64-$$$')).toBeNull();
-  });
-
-  it('extracts a token from an import link', () => {
-    expect(
-      extractImportToken('https://app.example.com/skabeloner/import/abc-123'),
-    ).toBe('abc-123');
-    expect(
-      extractImportToken('https://app.example.com/skabeloner/import/abc-123?x=1'),
-    ).toBe('abc-123');
-    expect(extractImportToken('just some text')).toBeNull();
   });
 });

@@ -32,7 +32,6 @@ interface Row {
 const ROWS: Row[] = [
   // Login and access
   { requirement: 'Login', type: 'auth.login', sample: { source: 'server', actorUserId: 'u1', details: { method: 'oidc', provider: 'oidc' } }, trust: 'server' },
-  { requirement: 'Logout', type: 'auth.logout', sample: { source: 'server', actorUserId: 'u1', details: {} }, trust: 'server' },
   { requirement: 'Failed login', type: 'auth.login_failed', sample: { source: 'server', details: { reason: 'invalid_credentials' } }, trust: 'server' },
   { requirement: 'Access denied (probing other people\'s data)', type: 'authz.denied', sample: { source: 'server', actorUserId: 'u1', details: { required: 'bot.meeting_owner', reason: 'not_owner' } }, trust: 'server' },
   // Prompts
@@ -45,13 +44,11 @@ const ROWS: Row[] = [
   // Generation, export, upload
   { requirement: 'Minutes generated (with result, and whether an instruction was supplied)', type: 'minutes.generate', sample: { ...server, details: { templateSource: 'none', userInstruction: true, durationMs: 10, segmentCount: 2 } }, trust: 'server' },
   { requirement: 'Export of minutes', type: 'export.download', sample: { ...server, details: { format: 'pdf' } }, trust: 'server' },
-  { requirement: 'Audio upload (live recording, file, batch, bot, speaker detection)', type: 'audio.upload', sample: { ...server, details: { channel: 'live', bytes: 10 } }, trust: 'server' },
+  { requirement: 'Audio upload (live recording, file, batch, bot)', type: 'audio.upload', sample: { ...server, details: { channel: 'live', bytes: 10 } }, trust: 'server' },
   // Views and playback
   { requirement: 'View minutes', type: 'meeting.minutes_view', sample: { ...client, details: {} }, trust: 'self-reported' },
   { requirement: 'View transcript', type: 'meeting.transcript_view', sample: { ...client, details: {} }, trust: 'self-reported' },
-  { requirement: 'View an earlier version of the minutes', type: 'meeting.minutes_version', sample: { ...client, details: { versionNumber: 1, action: 'view' } }, trust: 'self-reported' },
-  { requirement: 'Restore an earlier version of the minutes', type: 'meeting.minutes_version', sample: { ...client, details: { versionNumber: 1, action: 'restore' } }, trust: 'self-reported' },
-  { requirement: 'Switch back to the newest version of the minutes', type: 'meeting.minutes_version', sample: { ...client, details: { versionNumber: 3, action: 'activate' } }, trust: 'self-reported' },
+  { requirement: 'View or restore an earlier version of the minutes (the version picker does both in one step; switching to the newest version exposes no older content and logs nothing)', type: 'meeting.minutes_version', sample: { ...client, details: { versionNumber: 1, action: 'restore' } }, trust: 'self-reported' },
   { requirement: 'Audio playback', type: 'meeting.audio_play', sample: { ...client, details: {} }, trust: 'self-reported' },
   // Edits
   { requirement: 'Edit minutes', type: 'meeting.minutes_save', sample: { ...client, details: {} }, trust: 'self-reported' },
@@ -59,8 +56,8 @@ const ROWS: Row[] = [
   { requirement: 'New version of the minutes', type: 'meeting.minutes_version', sample: { ...client, details: { versionNumber: 2, action: 'snapshot' } }, trust: 'self-reported' },
   { requirement: 'Version-cap pruning of old versions', type: 'meeting.minutes_version_prune', sample: { ...client, details: { prunedCount: 1 } }, trust: 'self-reported' },
   { requirement: 'Metadata: title or date of a meeting', type: 'meeting.metadata_edit', sample: { ...client, details: { field: 'title' } }, trust: 'self-reported' },
-  { requirement: 'Metadata: participants', type: 'meeting.participants_edit', sample: { ...client, details: { participantCount: 3 } }, trust: 'self-reported' },
-  { requirement: 'Metadata: voices and speakers', type: 'meeting.speakers_edit', sample: { ...client, details: { speakerCount: 2 } }, trust: 'self-reported' },
+  { requirement: 'Metadata: participants', type: 'meeting.metadata_edit', sample: { ...client, details: { field: 'participants', count: 3 } }, trust: 'self-reported' },
+  { requirement: 'Metadata: voices and speakers', type: 'meeting.metadata_edit', sample: { ...client, details: { field: 'speakers', count: 2 } }, trust: 'self-reported' },
   // Recording
   { requirement: 'Local recording started', type: 'meeting.recording_start', sample: { ...client, details: {} }, trust: 'self-reported' },
   { requirement: 'Local recording paused', type: 'meeting.recording_pause', sample: { ...client, details: {} }, trust: 'self-reported' },
@@ -114,9 +111,8 @@ describe('client specification -> event catalogue', () => {
     const used = new Set(ROWS.map((r) => r.type));
     // Types that are supporting parts of a requirement rather than a requirement of their own.
     const supporting = new Set([
-      'template.share', 'template.import', 'central_template.create', 'central_template.restore',
+      'central_template.create', 'central_template.restore',
       'bot.session_start', 'bot.session_stop', 'bot.session_abort', 'bot.ended', 'bot.error',
-      'meeting.create', 'meeting.redact',
     ]);
     const orphans = Object.keys(EVENT_CATALOGUE).filter((t) => !used.has(t) && !supporting.has(t));
     expect(orphans).toEqual([]);

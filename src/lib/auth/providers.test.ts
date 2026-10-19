@@ -57,24 +57,28 @@ describe('claims mode is not open', () => {
     process.env.ACCESS_SOURCE = 'claims';
   });
 
-  it('email/password is OFF unless EMAIL_PASSWORD_ENABLED is explicitly "true"', () => {
+  it('email/password is hard-wired OFF in claims mode, whatever EMAIL_PASSWORD_ENABLED says', () => {
     expect(emailPasswordEnabled()).toBe(false);
-    for (const v of ['', 'yes', '1', 'false', 'TRUE ']) {
+    for (const v of ['', 'yes', '1', 'false', 'true', 'TRUE ']) {
       process.env.EMAIL_PASSWORD_ENABLED = v;
-      expect(emailPasswordEnabled(), v).toBe(v.trim().toLowerCase() === 'true');
+      expect(emailPasswordEnabled(), v).toBe(false);
     }
     delete process.env.EMAIL_PASSWORD_ENABLED;
     process.env.NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED = 'true';
-    expect(emailPasswordEnabled()).toBe(true);
+    expect(emailPasswordEnabled()).toBe(false);
   });
 
-  it('sign-up stays closed in claims mode, even with passwords enabled; other modes are unchanged', () => {
+  it('sign-up is closed in claims mode only; EMAIL_PASSWORD_ENABLED keeps its meaning in the other modes', () => {
     process.env.EMAIL_PASSWORD_ENABLED = 'true';
     expect(emailPasswordSignUpDisabled()).toBe(true);
     process.env.ACCESS_SOURCE = 'local';
     expect(emailPasswordSignUpDisabled()).toBe(false);
+    expect(emailPasswordEnabled()).toBe(true);
     process.env.ACCESS_SOURCE = 'rollekatalog';
     expect(emailPasswordSignUpDisabled()).toBe(false);
+    expect(emailPasswordEnabled()).toBe(true);
+    process.env.EMAIL_PASSWORD_ENABLED = 'false';
+    expect(emailPasswordEnabled()).toBe(false);
     delete process.env.EMAIL_PASSWORD_ENABLED;
     expect(emailPasswordEnabled()).toBe(true);
   });

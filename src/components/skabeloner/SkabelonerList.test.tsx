@@ -88,7 +88,7 @@ function makeSkabelon(overrides: Partial<Skabelon> = {}): Skabelon {
 // Default fetch mock: empty template list and default share-config.
 function setupFetch(
   skabeloner: Skabelon[] = [],
-  shareConfig = { code: true, link: false },
+  shareConfig = { code: true },
   centralSkabeloner?: CentralSkabelonSummary[],
 ) {
   vi.stubGlobal(
@@ -113,13 +113,6 @@ function setupFetch(
       // POST default
       if (typeof url === 'string' && url.includes('/default') && init?.method === 'POST') {
         return Promise.resolve({ ok: true } as Response);
-      }
-      // POST share
-      if (typeof url === 'string' && url.includes('/share') && init?.method === 'POST') {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({ token: 'abc123' }),
-        } as Response);
       }
       return Promise.resolve({ ok: false } as Response);
     }),
@@ -472,7 +465,7 @@ describe('SkabelonerList — delete flow', () => {
         if (url === '/api/skabeloner/share-config') {
           return Promise.resolve({
             ok: true,
-            json: () => Promise.resolve({ share: { code: true, link: false } }),
+            json: () => Promise.resolve({ share: { code: true } }),
           } as Response);
         }
         if (url === '/api/skabeloner/fail-del' && init?.method === 'DELETE') {
@@ -495,7 +488,7 @@ describe('SkabelonerList — delete flow', () => {
 
 describe('SkabelonerList — share (code-only mode)', () => {
   it('shows "Del" button when share is enabled', async () => {
-    setupFetch([makeSkabelon()], { code: true, link: false });
+    setupFetch([makeSkabelon()], { code: true });
     render(<SkabelonerList />);
 
     await waitFor(() => {
@@ -504,7 +497,7 @@ describe('SkabelonerList — share (code-only mode)', () => {
   });
 
   it('does not show "Del" button when share is fully disabled', async () => {
-    setupFetch([makeSkabelon()], { code: false, link: false });
+    setupFetch([makeSkabelon()], { code: false });
     render(<SkabelonerList />);
 
     await waitFor(() => screen.getByText('Test skabelon'));
@@ -521,7 +514,7 @@ describe('SkabelonerList — share (code-only mode)', () => {
     // Use fireEvent (not userEvent) to bypass userEvent's built-in clipboard interception
     const { fireEvent: fe } = await import('@testing-library/react');
     const s = makeSkabelon({ id: 'share-id' });
-    setupFetch([s], { code: true, link: false });
+    setupFetch([s], { code: true });
     render(<SkabelonerList />);
 
     await waitFor(() => screen.getByRole('button', { name: 'Del' }));
@@ -535,7 +528,7 @@ describe('SkabelonerList — share (code-only mode)', () => {
   it('shows inline copy confirmation after sharing code via clipboard', async () => {
     const user = userEvent.setup();
     const s = makeSkabelon({ id: 'share-toast' });
-    setupFetch([s], { code: true, link: false });
+    setupFetch([s], { code: true });
     render(<SkabelonerList />);
 
     await waitFor(() => screen.getByRole('button', { name: 'Del' }));
@@ -555,7 +548,7 @@ describe('SkabelonerList — share (code-only mode)', () => {
       configurable: true,
     });
     const s = makeSkabelon({ id: 'no-clip' });
-    setupFetch([s], { code: true, link: false });
+    setupFetch([s], { code: true });
     render(<SkabelonerList />);
 
     await waitFor(() => screen.getByRole('button', { name: 'Del' }));
@@ -574,7 +567,7 @@ describe('SkabelonerList — share (code-only mode)', () => {
       configurable: true,
     });
     const s = makeSkabelon({ id: 'dialog-code' });
-    setupFetch([s], { code: true, link: false });
+    setupFetch([s], { code: true });
     render(<SkabelonerList />);
 
     await waitFor(() => screen.getByRole('button', { name: 'Del' }));
@@ -583,37 +576,6 @@ describe('SkabelonerList — share (code-only mode)', () => {
     await waitFor(() => {
       // The code textarea should contain the mock-encoded value
       expect(screen.getByDisplayValue('MOCK_CODE_dialog-code')).toBeInTheDocument();
-    });
-  });
-});
-
-describe('SkabelonerList — share (both code and link)', () => {
-  it('opens share dialog immediately when both code and link are enabled', async () => {
-    const user = userEvent.setup();
-    const s = makeSkabelon({ id: 'both-share' });
-    setupFetch([s], { code: true, link: true });
-    render(<SkabelonerList />);
-
-    await waitFor(() => screen.getByRole('button', { name: 'Del' }));
-    await user.click(screen.getByRole('button', { name: 'Del' }));
-
-    await waitFor(() => {
-      expect(screen.getByText('Del skabelon')).toBeInTheDocument();
-    });
-  });
-
-  it('shows both Kode and Link sections when both are enabled', async () => {
-    const user = userEvent.setup();
-    const s = makeSkabelon({ id: 'both-share-2' });
-    setupFetch([s], { code: true, link: true });
-    render(<SkabelonerList />);
-
-    await waitFor(() => screen.getByRole('button', { name: 'Del' }));
-    await user.click(screen.getByRole('button', { name: 'Del' }));
-
-    await waitFor(() => {
-      expect(screen.getByText('Kode')).toBeInTheDocument();
-      expect(screen.getByText('Link')).toBeInTheDocument();
     });
   });
 });
@@ -674,7 +636,7 @@ describe('SkabelonerList — default template indicator', () => {
 
 describe('SkabelonerList — share config hint text', () => {
   it('shows the share hint text when share is enabled', async () => {
-    setupFetch([], { code: true, link: false });
+    setupFetch([], { code: true });
     render(<SkabelonerList />);
 
     await waitFor(() => {
@@ -683,7 +645,7 @@ describe('SkabelonerList — share config hint text', () => {
   });
 
   it('does not show share hint text when share is disabled', async () => {
-    setupFetch([], { code: false, link: false });
+    setupFetch([], { code: false });
     render(<SkabelonerList />);
 
     await waitFor(() => screen.getByText(/Skabeloner er genbrugelige prompts/));
@@ -706,7 +668,7 @@ describe('SkabelonerList — load error', () => {
         if (url === '/api/skabeloner/share-config') {
           return Promise.resolve({
             ok: true,
-            json: () => Promise.resolve({ share: { code: true, link: false } }),
+            json: () => Promise.resolve({ share: { code: true } }),
           } as Response);
         }
         return Promise.resolve({ ok: false } as Response);
@@ -731,7 +693,7 @@ describe('SkabelonerList — load error', () => {
         if (url === '/api/skabeloner/share-config') {
           return Promise.resolve({
             ok: true,
-            json: () => Promise.resolve({ share: { code: true, link: false } }),
+            json: () => Promise.resolve({ share: { code: true } }),
           } as Response);
         }
         return Promise.resolve({ ok: false } as Response);
@@ -756,7 +718,7 @@ describe('SkabelonerList — load error', () => {
         if (url === '/api/skabeloner/share-config') {
           return Promise.resolve({
             ok: true,
-            json: () => Promise.resolve({ share: { code: true, link: false } }),
+            json: () => Promise.resolve({ share: { code: true } }),
           } as Response);
         }
         return Promise.resolve({ ok: false } as Response);
@@ -787,7 +749,7 @@ describe('SkabelonerList — load error', () => {
         if (url === '/api/skabeloner/share-config') {
           return Promise.resolve({
             ok: true,
-            json: () => Promise.resolve({ share: { code: true, link: false } }),
+            json: () => Promise.resolve({ share: { code: true } }),
           } as Response);
         }
         return Promise.resolve({ ok: false } as Response);
@@ -824,7 +786,7 @@ describe('SkabelonerList — delete action error', () => {
         if (url === '/api/skabeloner/share-config') {
           return Promise.resolve({
             ok: true,
-            json: () => Promise.resolve({ share: { code: false, link: false } }),
+            json: () => Promise.resolve({ share: { code: false } }),
           } as Response);
         }
         if (url === `/api/skabeloner/${s.id}` && init?.method === 'DELETE') {
@@ -860,7 +822,7 @@ describe('SkabelonerList — delete action error', () => {
         if (url === '/api/skabeloner/share-config') {
           return Promise.resolve({
             ok: true,
-            json: () => Promise.resolve({ share: { code: false, link: false } }),
+            json: () => Promise.resolve({ share: { code: false } }),
           } as Response);
         }
         if (url === `/api/skabeloner/${s.id}` && init?.method === 'DELETE') {
@@ -897,7 +859,7 @@ describe('SkabelonerList — set-default action error', () => {
         if (url === '/api/skabeloner/share-config') {
           return Promise.resolve({
             ok: true,
-            json: () => Promise.resolve({ share: { code: false, link: false } }),
+            json: () => Promise.resolve({ share: { code: false } }),
           } as Response);
         }
         if (url === `/api/skabeloner/${s.id}/default` && init?.method === 'POST') {
@@ -932,7 +894,7 @@ describe('SkabelonerList — set-default action error', () => {
         if (url === '/api/skabeloner/share-config') {
           return Promise.resolve({
             ok: true,
-            json: () => Promise.resolve({ share: { code: false, link: false } }),
+            json: () => Promise.resolve({ share: { code: false } }),
           } as Response);
         }
         if (url === `/api/skabeloner/${s.id}/default` && init?.method === 'POST') {
@@ -971,7 +933,7 @@ function makeCentral(overrides: Partial<CentralSkabelonSummary> = {}): CentralSk
 
 describe('SkabelonerList — central templates (read-only)', () => {
   it('lists central templates in their own locked section from the same response', async () => {
-    setupFetch([makeSkabelon()], { code: true, link: true }, [makeCentral()]);
+    setupFetch([makeSkabelon()], { code: true }, [makeCentral()]);
     render(<SkabelonerList />);
 
     expect(await screen.findByText('Centrale skabeloner (låst)')).toBeInTheDocument();
@@ -989,7 +951,7 @@ describe('SkabelonerList — central templates (read-only)', () => {
   });
 
   it('offers no edit, delete, share, default or code controls on central cards', async () => {
-    setupFetch([], { code: true, link: true }, [makeCentral()]);
+    setupFetch([], { code: true }, [makeCentral()]);
     render(<SkabelonerList />);
     const card = await screen.findByTestId('central-skabelon');
 
@@ -1001,14 +963,14 @@ describe('SkabelonerList — central templates (read-only)', () => {
   });
 
   it('shows the central section even when the user has no personal templates', async () => {
-    setupFetch([], { code: true, link: false }, [makeCentral()]);
+    setupFetch([], { code: true }, [makeCentral()]);
     render(<SkabelonerList />);
     expect(await screen.findByText('Ingen skabeloner endnu.')).toBeInTheDocument();
     expect(screen.getByTestId('central-skabelon')).toBeInTheDocument();
   });
 
   it('hints when users may add their own instructions', async () => {
-    setupFetch([], { code: true, link: false }, [makeCentral({ allowUserInstruction: true })]);
+    setupFetch([], { code: true }, [makeCentral({ allowUserInstruction: true })]);
     render(<SkabelonerList />);
     expect(await screen.findByText('Du kan tilføje egne instruktioner.')).toBeInTheDocument();
   });
@@ -1020,7 +982,7 @@ describe('SkabelonerList — central templates (read-only)', () => {
     expect(screen.queryByText('Centrale skabeloner (låst)')).not.toBeInTheDocument();
     unmount();
 
-    setupFetch([makeSkabelon()], { code: true, link: false }, []);
+    setupFetch([makeSkabelon()], { code: true }, []);
     render(<SkabelonerList />);
     await screen.findByText('Test skabelon');
     expect(screen.queryByText('Centrale skabeloner (låst)')).not.toBeInTheDocument();
@@ -1033,7 +995,7 @@ describe('SkabelonerList — central templates (read-only)', () => {
         Promise.resolve({
           ok: true,
           json: () =>
-            Promise.resolve(url === '/api/skabeloner/share-config' ? { share: { code: true, link: false } } : { skabeloner: [makeSkabelon()], centralSkabeloner: [], centralError: true }),
+            Promise.resolve(url === '/api/skabeloner/share-config' ? { share: { code: true } } : { skabeloner: [makeSkabelon()], centralSkabeloner: [], centralError: true }),
         } as Response),
       ),
     );
@@ -1044,7 +1006,7 @@ describe('SkabelonerList — central templates (read-only)', () => {
 
   it('never renders a prompt, even if one slipped into the payload', async () => {
     const leaky = { ...makeCentral(), prompt: 'HEMMELIG PROMPT' } as CentralSkabelonSummary;
-    setupFetch([], { code: true, link: false }, [leaky]);
+    setupFetch([], { code: true }, [leaky]);
     render(<SkabelonerList />);
     await screen.findByTestId('central-skabelon');
     expect(document.body.textContent).not.toContain('HEMMELIG PROMPT');

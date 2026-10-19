@@ -5,9 +5,7 @@
 import type { AuditEventOf, EventType } from '@/lib/audit/events';
 import { recordServerEvent, UUID_RE } from '@/lib/audit/record';
 import type { HeaderSource } from '@/lib/audit/request-context';
-import { takeClientEventBudget } from '@/lib/audit/client-ingest';
 import { describeError } from '@/lib/audit/safe-log';
-import { noteDroppedEvents } from '@/lib/audit/dropped';
 import { createThrottle } from '@/lib/audit/throttle';
 
 /**
@@ -43,16 +41,10 @@ export function outcomeCodeOf(err: unknown): 'timeout' | 'network' | 'unknown' |
 
 /**
  * The minutes/export routes' name for recordServerEvent, which is best-effort and never throws.
- * Per-actor volume guard: the per-user fixed window of the client-event ingest (RATE_LIMIT_EVENTS,
- * 1000 events a minute, per process), in a bucket of its own so server-emitted events cannot use up
- * the browser's budget. Beyond it the event is dropped, never the request, and the drop is COUNTED
- * and reported as `audit.events_dropped` (reason actor_ceiling, see dropped.ts).
+ * Server-emitted events have no volume guard of their own: the route's own work (an LLM call, an
+ * export) is far slower than any limit would be.
  */
 export function emitAudit<T extends EventType>(req: HeaderSource, event: AuditEventOf<T>): ReturnType<typeof recordServerEvent> {
-  if (event.actorUserId && takeClientEventBudget(`server-ai:${event.actorUserId}`, 1) !== null) {
-    noteDroppedEvents(event.actorUserId, 'actor_ceiling', 1, req);
-    return Promise.resolve({ status: 'dropped', code: 'actor_rate_limited' });
-  }
   return recordServerEvent(req, event);
 }
 

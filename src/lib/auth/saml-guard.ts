@@ -78,7 +78,7 @@ function entities(p: SamlFileProvider, acsUrl: string, spEntityId: string, base:
   const sp = saml.ServiceProvider({
     entityID: spEntityId,
     assertionConsumerService: [{ Binding: 'urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST', Location: acsUrl }],
-    wantMessageSigned: p.wantAssertionsSigned,
+    wantMessageSigned: true,
   });
   return { idp, sp };
 }

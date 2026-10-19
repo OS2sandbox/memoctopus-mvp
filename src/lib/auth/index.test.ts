@@ -7,14 +7,12 @@ vi.mock('@/lib/db', () => ({ db: {}, pool: {} }));
 const runLoginHooks = vi.fn();
 const calls: string[] = [];
 const auditLogin = vi.fn();
-const auditLogout = vi.fn();
 const auditAuthFailure = vi.fn();
 const runSamlLoginHooks = vi.fn();
 vi.mock('@/lib/authz/login-hook', () => ({
   runLoginHooks: (...a: unknown[]) => runLoginHooks(...a),
   runSamlLoginHooks: (...a: unknown[]) => runSamlLoginHooks(...a),
   auditLogin: (...a: unknown[]) => auditLogin(...a),
-  auditLogout: (...a: unknown[]) => auditLogout(...a),
   auditAuthFailure: (...a: unknown[]) => auditAuthFailure(...a),
 }));
 
@@ -23,7 +21,6 @@ beforeEach(() => {
   calls.length = 0;
   runLoginHooks.mockReset().mockImplementation(async () => void calls.push('hooks'));
   auditLogin.mockReset().mockImplementation(async () => void calls.push('audit'));
-  auditLogout.mockReset().mockResolvedValue(undefined);
   auditAuthFailure.mockReset().mockResolvedValue(undefined);
   vi.stubEnv('BETTER_AUTH_SECRET', 'x'.repeat(40));
   vi.stubEnv('BETTER_AUTH_URL', 'http://localhost:3004');
@@ -50,14 +47,6 @@ describe('auth wiring', () => {
     await options.databaseHooks.session.create.after(session, ctx);
     expect(calls).toEqual(['hooks', 'audit']);
     expect(auditLogin).toHaveBeenCalledWith(session, ctx);
-  });
-
-  it('records auth.logout from session.delete.after with the hook context', async () => {
-    const options = await loadOptions();
-    const session = { userId: 'u1' };
-    const ctx = { path: '/sign-out' };
-    await options.databaseHooks.session.delete.after(session, ctx);
-    expect(auditLogout).toHaveBeenCalledWith(session, ctx);
   });
 
   it('feeds every request to the failed-login audit and never alters the response', async () => {
@@ -195,12 +184,12 @@ describe('auth wiring from the config file', () => {
       vi.spyOn(console, 'warn').mockImplementation(() => {});
     });
 
-    it('turns e-mail/password off unless it is explicitly "true", and then closes sign-up', async () => {
+    it('turns e-mail/password off and closes sign-up, even with EMAIL_PASSWORD_ENABLED=true', async () => {
       vi.stubEnv('EMAIL_PASSWORD_ENABLED', '');
       expect((await loadOptions()).emailAndPassword).toEqual({ enabled: false, disableSignUp: true });
       vi.resetModules();
       vi.stubEnv('EMAIL_PASSWORD_ENABLED', 'true');
-      expect((await loadOptions()).emailAndPassword).toEqual({ enabled: true, disableSignUp: true });
+      expect((await loadOptions()).emailAndPassword).toEqual({ enabled: false, disableSignUp: true });
     });
 
     it('leaves sign-up alone outside claims mode', async () => {
@@ -209,14 +198,14 @@ describe('auth wiring from the config file', () => {
       expect((await loadOptions()).emailAndPassword).toEqual({ enabled: true });
     });
 
-    it('warns (content-free) when roles are not required, or passwords are on', async () => {
+    it('warns (content-free) when roles are not required; no password warning, passwords are simply off', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'false');
       vi.stubEnv('EMAIL_PASSWORD_ENABLED', 'true');
       await loadOptions();
       const out = warn.mock.calls.map((c) => String(c[0])).join('\n');
       expect(out).toContain('REQUIRE_ROLE_TO_LOGIN=false');
-      expect(out).toContain('EMAIL_PASSWORD_ENABLED=true');
+      expect(out).not.toContain('EMAIL_PASSWORD_ENABLED');
     });
   });
 
@@ -238,21 +227,17 @@ describe('auth wiring from the config file', () => {
       expect(await res.json()).toEqual({ ok: true });
     });
 
-    it('claims mode: nobody can register a password account, and password sign-in is off unless explicitly enabled', async () => {
+    it('claims mode: nobody can register or sign in with a password, even with EMAIL_PASSWORD_ENABLED=true', async () => {
       vi.spyOn(console, 'warn').mockImplementation(() => {});
       vi.stubEnv('ACCESS_SOURCE', 'claims');
-      vi.stubEnv('EMAIL_PASSWORD_ENABLED', '');
-      const signUp = await call('/sign-up/email', { email: 'a@b.dk', password: 'correct horse battery', name: 'A' });
-      expect(signUp.status).toBe(400);
-      const signIn = await call('/sign-in/email', { email: 'a@b.dk', password: 'correct horse battery' });
-      expect(signIn.status).toBe(400);
-
-      vi.resetModules();
-      vi.stubEnv('EMAIL_PASSWORD_ENABLED', 'true');
-      // Enabled explicitly: sign-in is possible again, sign-up is still closed (answered before the database is touched).
-      const signUp2 = await call('/sign-up/email', { email: 'a@b.dk', password: 'correct horse battery', name: 'A' });
-      expect(signUp2.status).toBe(400);
-      expect(((await signUp2.json()) as { code?: string }).code).toMatch(/SIGN_UP_DISABLED|EMAIL_PASSWORD/);
+      for (const v of ['', 'true']) {
+        vi.resetModules();
+        vi.stubEnv('EMAIL_PASSWORD_ENABLED', v);
+        const signUp = await call('/sign-up/email', { email: 'a@b.dk', password: 'correct horse battery', name: 'A' });
+        expect(signUp.status, v).toBe(400);
+        const signIn = await call('/sign-in/email', { email: 'a@b.dk', password: 'correct horse battery' });
+        expect(signIn.status, v).toBe(400);
+      }
     });
   });
 

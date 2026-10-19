@@ -146,7 +146,7 @@ describe('GET /api/admin/audit (audit.read)', () => {
   it('passes validated filters to the query', async () => {
     await GET(
       req(
-        `?eventType=meeting.delete&eventType=meeting.create&outcome=denied&source=client&actorUserId=u9&entityId=${ENTITY}` +
+        `?eventType=meeting.delete&eventType=meeting.recording_start&outcome=denied&source=client&actorUserId=u9&entityId=${ENTITY}` +
           `&from=2026-10-01T00:00:00.000Z&to=2026-10-05T23:59:59.999Z&cursor=100`,
       ),
       NO_PARAMS,
@@ -154,7 +154,7 @@ describe('GET /api/admin/audit (audit.read)', () => {
     const call = mockList.mock.calls[0][0];
     expect(call.cursor).toBe('100');
     expect(call.filters).toEqual({
-      eventTypes: ['meeting.delete', 'meeting.create'],
+      eventTypes: ['meeting.delete', 'meeting.recording_start'],
       actorUserId: 'u9',
       entityId: ENTITY,
       outcome: 'denied',

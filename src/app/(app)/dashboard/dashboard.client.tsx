@@ -48,7 +48,6 @@ export default function OptaqPage() {
         participants: participants.length > 0 ? participants : undefined,
         source: 'local',
         status: 'recording',
-        origin: 'live',
       });
       router.push(`/meeting/${meeting.id}?autostart=1`);
     } catch (err) {
@@ -69,7 +68,6 @@ export default function OptaqPage() {
         source: 'teams',
         meetingUrl: link,
         status: 'joining',
-        origin: 'bot',
       });
       router.push(`/meeting/${meeting.id}?join=1`);
     } catch {

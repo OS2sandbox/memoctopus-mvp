@@ -12,7 +12,6 @@ function provider(over: Partial<SamlFileProvider> = {}): SamlFileProvider {
     entryPoint: 'https://idp.example/sso',
     idpEntityId: 'https://idp.example/metadata',
     cert: 'MIICcert',
-    wantAssertionsSigned: true,
     authnRequestsSigned: false,
     allowIdpInitiated: true,
     ...over,

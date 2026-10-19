@@ -109,35 +109,6 @@ describe('emitAudit', () => {
     expect(mockRecord).toHaveBeenCalledOnce();
     expect(mockRecord.mock.calls[0][0]).toBe(req);
   });
-
-  it('drops events beyond a per-actor budget, per actor, without touching the client-event bucket', async () => {
-    const { RATE_LIMIT_EVENTS, takeClientEventBudget } = await import('@/lib/audit/client-ingest');
-    const event = (u: string) => ({ type: 'export.download' as const, actorUserId: u, details: { format: 'pdf' as const } });
-    for (let i = 0; i < RATE_LIMIT_EVENTS; i++) await emitAudit(req, event('flooder'));
-    expect(mockRecord).toHaveBeenCalledTimes(RATE_LIMIT_EVENTS);
-    expect(await emitAudit(req, event('flooder'))).toEqual({ status: 'dropped', code: 'actor_rate_limited' });
-    expect(mockRecord).toHaveBeenCalledTimes(RATE_LIMIT_EVENTS);
-    // Another actor, and the same actor's client-event budget, are unaffected.
-    await emitAudit(req, event('other'));
-    expect(mockRecord).toHaveBeenCalledTimes(RATE_LIMIT_EVENTS + 1);
-    expect(takeClientEventBudget('flooder', 1)).toBeNull();
-  });
-
-  it('reports a drop as audit.events_dropped (actor_ceiling) once per window, never silently', async () => {
-    const { RATE_LIMIT_EVENTS } = await import('@/lib/audit/client-ingest');
-    const event = { type: 'export.download' as const, actorUserId: 'flooder2', details: { format: 'pdf' as const } };
-    for (let i = 0; i < RATE_LIMIT_EVENTS; i++) await emitAudit(req, event);
-    await emitAudit(req, event);
-    await emitAudit(req, event);
-    // First drop reported at once; the second is added up for the end of the window.
-    expect(mockRecordEvent).toHaveBeenCalledOnce();
-    expect(mockRecordEvent.mock.calls[0][0]).toMatchObject({
-      type: 'audit.events_dropped',
-      source: 'system',
-      actorUserId: 'flooder2',
-      details: { reason: 'actor_ceiling', count: 1 },
-    });
-  });
 });
 
 describe('emitLiveAudioUpload', () => {

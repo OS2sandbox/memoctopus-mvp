@@ -115,17 +115,16 @@ describe('catalogue structure', () => {
   it('is exactly the action set: what people did and which runs happened, never content or pipeline steps', () => {
     expect([...EVENT_TYPES].sort()).toEqual(
       [
-        'auth.login', 'auth.logout', 'auth.login_failed', 'authz.denied',
-        'template.create', 'template.update', 'template.delete', 'template.share', 'template.import',
+        'auth.login', 'auth.login_failed', 'authz.denied',
+        'template.create', 'template.update', 'template.delete',
         'central_template.create', 'central_template.update', 'central_template.retarget', 'central_template.archive', 'central_template.restore',
         'audio.upload', 'minutes.generate', 'export.download',
         'bot.session_start', 'bot.session_pause', 'bot.session_resume', 'bot.session_stop', 'bot.session_abort',
         'bot.audio_delete', 'bot.ended', 'bot.error',
-        'meeting.create', 'meeting.delete', 'meeting.redact', 'meeting.transcript_delete', 'meeting.audio_delete',
+        'meeting.delete', 'meeting.transcript_delete', 'meeting.audio_delete',
         'meeting.minutes_view', 'meeting.transcript_view', 'meeting.audio_play',
         'meeting.recording_start', 'meeting.recording_pause', 'meeting.recording_resume', 'meeting.recording_stop',
         'meeting.minutes_save', 'meeting.transcript_edit', 'meeting.metadata_edit', 'meeting.minutes_version', 'meeting.minutes_version_prune',
-        'meeting.participants_edit', 'meeting.speakers_edit',
         'system.config_changed',
         'integration.sync_run',
         'audit.export', 'audit.prune', 'audit.events_dropped',
@@ -341,14 +340,13 @@ describe('action events for access, processing, editing and deletion', () => {
       ['meeting.recording_resume', {}],
       ['meeting.recording_stop', {}],
       ['meeting.minutes_save', {}],
-      ['meeting.minutes_version', { versionNumber: 3, action: 'view' }],
-      ['meeting.minutes_version', { versionNumber: 3, action: 'activate' }],
+      ['meeting.minutes_version', { versionNumber: 3, action: 'restore' }],
       ['meeting.minutes_version', { versionNumber: 4, action: 'snapshot' }],
       ['meeting.minutes_version', { versionNumber: 5, action: 'generate' }],
       ['meeting.minutes_version_prune', { prunedCount: 1 }],
-      ['meeting.participants_edit', { participantCount: 4 }],
-      ['meeting.speakers_edit', { speakerCount: 3 }],
-      ['meeting.speakers_edit', {}],
+      ['meeting.metadata_edit', { field: 'participants', count: 4 }],
+      ['meeting.metadata_edit', { field: 'speakers', count: 3 }],
+      ['meeting.metadata_edit', { field: 'speakers' }],
       ['meeting.delete', { trigger: 'user' }],
       ['meeting.delete', { trigger: 'auto_leave' }],
       ['meeting.delete', {}],
@@ -367,10 +365,13 @@ describe('action events for access, processing, editing and deletion', () => {
     const bad: Array<[EventType, Record<string, unknown>]> = [
       ['meeting.minutes_version', { versionNumber: 3, action: 'Gendannet version' }],
       ['meeting.minutes_version', { versionNumber: 3 }],
-      ['meeting.minutes_version', { versionNumber: 'Referat v3', action: 'view' }],
+      ['meeting.minutes_version', { versionNumber: 3, action: 'view' }],
+      ['meeting.minutes_version', { versionNumber: 3, action: 'activate' }],
+      ['meeting.minutes_version', { versionNumber: 'Referat v3', action: 'restore' }],
       ['meeting.minutes_version_prune', { prunedCount: 0 }],
-      ['meeting.participants_edit', { participantCount: 2, participants: ['Jens'] }],
-      ['meeting.speakers_edit', { speakerCount: 2, names: ['Jens'] }],
+      ['meeting.metadata_edit', { field: 'participants', count: 2, participants: ['Jens'] }],
+      ['meeting.metadata_edit', { field: 'speakers', count: 2, names: ['Jens'] }],
+      ['meeting.metadata_edit', { field: 'name' }],
       ['meeting.delete', { trigger: 'because I wanted to' }],
       ['meeting.audio_delete', { trigger: 'ttl' }],
       ['meeting.minutes_view', { title: 'Budgetmøde' }],
@@ -380,20 +381,23 @@ describe('action events for access, processing, editing and deletion', () => {
     }
   });
 
-  it('audio.upload: the live and diarize channels exist next to batch, upload and bot', () => {
-    for (const channel of ['batch', 'upload', 'bot', 'live', 'diarize']) {
+  it('audio.upload: the live channel exists next to batch, upload and bot; diarize is a pipeline step, not an upload', () => {
+    for (const channel of ['batch', 'upload', 'bot', 'live']) {
       expect(validateEvent({ type: 'audio.upload', actorUserId: 'u1', details: { channel, bytes: 5 } } as unknown as AuditEventInput)).toMatchObject({ ok: true });
     }
+    expect(validateEvent({ type: 'audio.upload', actorUserId: 'u1', details: { channel: 'diarize', bytes: 5 } } as unknown as AuditEventInput).ok).toBe(false);
   });
 
   it('audit.events_dropped: a reason from a closed set and a positive count; system, or the browser for client_outbox', () => {
     const ev = (over: Record<string, unknown>) => ({ type: 'audit.events_dropped', actorUserId: 'u1', source: 'system', details: { reason: 'daily_cap', count: 3 }, ...over }) as unknown as AuditEventInput;
-    for (const reason of ['daily_cap', 'rate_limit', 'actor_ceiling', 'throttle', 'client_outbox']) {
+    for (const reason of ['daily_cap', 'rate_limit', 'client_outbox']) {
       expect(validateEvent(ev({ details: { reason, count: 1 } }))).toMatchObject({ ok: true });
     }
     expect(validateEvent(ev({ source: 'client', details: { reason: 'client_outbox', count: 2 } }))).toMatchObject({ ok: true });
     expect(validateEvent(ev({ source: 'server' })).ok).toBe(false);
     expect(validateEvent(ev({ details: { reason: 'because I felt like it', count: 1 } })).ok).toBe(false);
+    // The removed throttle and per-actor ceiling no longer exist.
+    for (const reason of ['actor_ceiling', 'throttle']) expect(validateEvent(ev({ details: { reason, count: 1 } })).ok).toBe(false);
     expect(validateEvent(ev({ details: { reason: 'daily_cap', count: 0 } })).ok).toBe(false);
     expect(validateEvent(ev({ details: { reason: 'daily_cap', count: 1, eventType: 'meeting.delete' } })).ok).toBe(false);
     expect(validateEvent(ev({ entityId: UUID_A })).ok).toBe(false);
@@ -404,7 +408,9 @@ describe('action events for access, processing, editing and deletion', () => {
     expect(validateEvent({ ...base, type: 'meeting.metadata_edit', details: { field: 'title' } } as unknown as AuditEventInput)).toMatchObject({ ok: true });
     expect(validateEvent({ ...base, type: 'meeting.metadata_edit', details: { field: 'recorded_at' } } as unknown as AuditEventInput)).toMatchObject({ ok: true });
     expect(validateEvent({ ...base, type: 'meeting.metadata_edit', details: { field: 'title', value: 'Sag om Jensen' } } as unknown as AuditEventInput).ok).toBe(false);
-    expect(validateEvent({ ...base, type: 'meeting.metadata_edit', details: { field: 'participants' } } as unknown as AuditEventInput).ok).toBe(false);
+    expect(validateEvent({ ...base, type: 'meeting.metadata_edit', details: { field: 'participants', count: 3 } } as unknown as AuditEventInput)).toMatchObject({ ok: true });
+    expect(validateEvent({ ...base, type: 'meeting.metadata_edit', details: { field: 'speakers', count: 2 } } as unknown as AuditEventInput)).toMatchObject({ ok: true });
+    expect(validateEvent({ ...base, type: 'meeting.metadata_edit', details: { field: 'participants', count: 3, names: ['Jens'] } } as unknown as AuditEventInput).ok).toBe(false);
     expect(validateEvent({ ...base, type: 'meeting.transcript_edit', details: {} } as unknown as AuditEventInput)).toMatchObject({ ok: true });
     expect(validateEvent({ ...base, type: 'meeting.transcript_edit', details: { text: 'x' } } as unknown as AuditEventInput).ok).toBe(false);
   });

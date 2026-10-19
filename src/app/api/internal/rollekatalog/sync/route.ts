@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withHandler } from '@/lib/api-handler';
-import { cronGuard } from '@/lib/audit/feed-auth';
+import { cronGuard } from '@/lib/audit/internal-auth';
 import { accessSource } from '@/lib/authz/config';
 import { rollekatalogConfigIssue } from '@/lib/rollekatalog/config';
 import { runSync } from '@/lib/rollekatalog/sync';

@@ -205,8 +205,6 @@ async function main() {
 
   // Personal template routes never accept a central id.
   want('PUT /api/skabeloner/{central id} by a recipient is refused', await bruger.put(`/api/skabeloner/${tid}`, { name: 'x', prompt: 'ændret' }), [403, 404]);
-  const share = await bruger.post(`/api/skabeloner/${tid}/share`, { mode: 'link' });
-  check('a central template cannot be shared', share.status >= 400, brief(share));
 
   // Changelog and optimistic concurrency.
   const noNote = await anne.request('PUT', `/api/admin/central-templates/${tid}`, { baseVersion: 1, name: name + ' v2' });
@@ -233,7 +231,7 @@ async function main() {
   want('archived templates stop working for recipients', await bruger.post('/api/minutes', { segments, skabelonId: tid, skabelonSource: 'central' }), 404);
 
   // ───────────────────────────────────────────────────────────────────────
-  heading('4. Audit log: scope, content, feed');
+  heading('4. Audit log: scope and content');
   const adminLog = await mette.get('/api/admin/audit?limit=100');
   want('administrator reads the whole log', adminLog, 200);
   const types = new Set((adminLog.json?.events ?? []).map((e: any) => e.eventType));
@@ -253,7 +251,7 @@ async function main() {
   check('administrator can export CSV', csv.status === 200 && /text\/csv/.test(csv.headers.get('content-type') ?? ''), brief(csv));
 
   const dump = (await db.query('select * from public.audit_events')).rows;
-  // The viewer shows the change note by reading the changelog; the stored rows, the CSV and the feed must not hold it.
+  // The viewer shows the change note by reading the changelog; the stored rows and the CSV must not hold it.
   const noteInViewer = (adminLog.json?.events ?? []).find((e: any) => e.eventType === 'central_template.update' && e.changeNote?.includes('Præciserer tonen'));
   check('the log viewer shows the change note of the update, with the template name', !!noteInViewer && noteInViewer.templateName === name, JSON.stringify(adminLog.json?.events?.slice(0, 3)));
   const createNote = (adminLog.json?.events ?? []).find((e: any) => e.eventType === 'central_template.create' && e.changeNote === NOTE);
@@ -269,16 +267,6 @@ async function main() {
     check(`audit rows and CSV export never contain ${label}`, !haystack.includes(needle));
   }
   check('audit rows exist for this run', dump.length > 10, `${dump.length} rows`);
-
-  const feedNoKey = await fetch(`${SIM.appUrl}/api/audit/feed/head`);
-  check('feed without key is refused', [401, 403, 404].includes(feedNoKey.status), `status ${feedNoKey.status}`);
-  const feedHead = await fetch(`${SIM.appUrl}/api/audit/feed/head`, { headers: { 'X-Audit-Key': SIM.feedKey } });
-  const head = await feedHead.json().catch(() => null);
-  check('feed head with key works', feedHead.status === 200 && Number(head?.head) > 0, `status ${feedHead.status} ${JSON.stringify(head)}`);
-  const feed = await fetch(`${SIM.appUrl}/api/audit/feed?offset=0&size=50`, { headers: { 'X-Audit-Key': SIM.feedKey } });
-  check('feed page with key works', feed.status === 200 && !(await feed.text()).includes(SECRET), `status ${feed.status}`);
-  const wrongKey = await fetch(`${SIM.appUrl}/api/audit/feed/head`, { headers: { 'X-Audit-Key': 'wrong' } });
-  check('feed with a wrong key is refused', [401, 403, 404].includes(wrongKey.status), `status ${wrongKey.status}`);
 
   const triedUpdate = await db.query('update public.audit_events set outcome = outcome where id = (select min(id) from public.audit_events)').then(() => 'allowed', (e) => e.message);
   check('the database refuses to change an audit row', triedUpdate !== 'allowed', String(triedUpdate));

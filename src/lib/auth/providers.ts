@@ -136,19 +136,16 @@ function credentials(prefix: 'OIDC' | 'AUTHENTIK') {
 
 /**
  * E-mail/password sign-in. In claims mode the roles come from the IdP and a password account
- * holds none, so an open sign-up form would let anybody create a (role-less) account and
- * reach whatever the baseline allows: it is OFF there unless EMAIL_PASSWORD_ENABLED is
- * EXPLICITLY "true" (and even then sign-up stays disabled, see emailPasswordSignUpDisabled).
+ * holds none, so password sign-in is hard-wired OFF there (and sign-up closed, see
+ * emailPasswordSignUpDisabled): EMAIL_PASSWORD_ENABLED means something in local and
+ * rollekatalog mode only.
  */
 export function emailPasswordEnabled(): boolean {
-  if (claimsModeConfigured()) {
-    const explicit = env('EMAIL_PASSWORD_ENABLED') ?? env(DEPRECATED_FLAGS.EMAIL_PASSWORD_ENABLED);
-    return explicit?.toLowerCase() === 'true';
-  }
+  if (claimsModeConfigured()) return false;
   return flag('EMAIL_PASSWORD_ENABLED', DEPRECATED_FLAGS.EMAIL_PASSWORD_ENABLED);
 }
 
-/** Claims mode never lets people register a password account (existing ones, if any, can still sign in). */
+/** Claims mode never lets people register a password account (and email/password is off there altogether). */
 export function emailPasswordSignUpDisabled(): boolean {
   return claimsModeConfigured();
 }

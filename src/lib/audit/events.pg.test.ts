@@ -181,7 +181,7 @@ describe.skipIf(!hasPg)('audit_events (real Postgres)', () => {
   describe('client event idempotency', () => {
     const CID = '11111111-2222-4333-8444-555555555555';
     const clientRow = (c: Client, actor: string, cid: string | null) =>
-      insert(c, { source: 'client', event_type: 'meeting.create', actor_user_id: actor, client_event_id: cid });
+      insert(c, { source: 'client', event_type: 'meeting.recording_start', actor_user_id: actor, client_event_id: cid });
 
     it('rejects a second row with the same (actor, client_event_id)', () =>
       withFreshSchema(async (c) => {
@@ -201,13 +201,13 @@ describe.skipIf(!hasPg)('audit_events (real Postgres)', () => {
     it('recordEvent stores a client event once and reports the redelivery as duplicate', () =>
       withFreshSchema(async (c, schema) => {
         const event = {
-          type: 'meeting.create',
+          type: 'meeting.recording_start',
           source: 'client',
           actorUserId: 'u1',
           entityId: '99999999-2222-4333-8444-555555555555',
           clientEventId: CID,
           clientOccurredAt: new Date('2026-10-05T09:00:00Z'),
-          details: { origin: 'live' },
+          details: {},
         } as const;
         const opts = { tx: asTx(c), table: `"${schema}".audit_events` };
         expect(await recordEvent(event, opts)).toEqual({ status: 'stored' });
@@ -216,11 +216,11 @@ describe.skipIf(!hasPg)('audit_events (real Postgres)', () => {
         expect(rows).toHaveLength(1);
         expect(rows[0]).toMatchObject({
           source: 'client',
-          event_type: 'meeting.create',
+          event_type: 'meeting.recording_start',
           actor_user_id: 'u1',
           entity_type: 'meeting',
           entity_id: '99999999-2222-4333-8444-555555555555',
-          details: { origin: 'live' },
+          details: {},
           client_event_id: CID,
         });
         expect(new Date(rows[0].client_occurred_at).toISOString()).toBe('2026-10-05T09:00:00.000Z');

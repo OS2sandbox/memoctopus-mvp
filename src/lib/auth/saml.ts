@@ -82,7 +82,8 @@ export function defaultSsoFor(p: SamlFileProvider, base = authBaseUrl()): Defaul
             singleSignOnService: [{ Binding: REDIRECT_BINDING, Location: p.entryPoint ?? '' }],
           },
       spMetadata: { entityID: entityId, ...(p.signingPrivateKey ? { privateKey: p.signingPrivateKey } : {}) },
-      wantAssertionsSigned: p.wantAssertionsSigned,
+      // Fixed: an unsigned response is refused whatever the provider says (saml.flow.test.ts).
+      wantAssertionsSigned: true,
       authnRequestsSigned: p.authnRequestsSigned,
       ...(p.signatureAlgorithm ? { signatureAlgorithm: p.signatureAlgorithm } : {}),
       ...(p.digestAlgorithm ? { digestAlgorithm: p.digestAlgorithm } : {}),

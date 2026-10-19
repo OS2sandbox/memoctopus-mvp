@@ -58,20 +58,6 @@ export function auditClientEventsDailyCap(): number {
   return Number.isSafeInteger(n) && n > 0 ? n : DEFAULT_CLIENT_EVENTS_DAILY_CAP;
 }
 
-/** Lower-case hex sha256 of the feed's service key; null disables the feed. */
-export function auditFeedKeyHash(): string | null {
-  const v = clean('AUDIT_FEED_API_KEY_HASH').toLowerCase();
-  return /^[0-9a-f]{64}$/.test(v) ? v : null;
-}
-
-/** The feed only returns rows older than this, so a bigserial id that commits late is never skipped. Default 10. */
-export function auditFeedDelaySeconds(): number {
-  const v = clean('AUDIT_FEED_DELAY_SECONDS');
-  if (!/^\d+$/.test(v)) return 10;
-  const n = Number(v);
-  return Number.isSafeInteger(n) ? n : 10;
-}
-
 /** Secret for the retention prune route; null makes the route answer 404. */
 export function internalCronSecret(): string | null {
   return clean('INTERNAL_CRON_SECRET') || null;

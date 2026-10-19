@@ -17,7 +17,6 @@ import { formatDateTime } from '@/components/admin/format';
 import { LOCAL_CHANGE_NOTE_MAX } from '@/lib/skabeloner/change-note';
 import {
   decodeSkabelonCode,
-  extractImportToken,
   type ShareableSkabelon,
 } from '@/lib/skabeloner/share-code';
 import type { ShareConfig } from '@/lib/skabeloner/share-config';
@@ -68,7 +67,7 @@ export function SkabelonEditor({
   onOpenChange,
   skabelon,
   onSaved,
-  shareConfig = { code: true, link: false },
+  shareConfig = { code: true },
 }: SkabelonEditorProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -83,7 +82,6 @@ export function SkabelonEditor({
   const [error, setError] = useState<string | null>(null);
   const [pasteValue, setPasteValue] = useState('');
   const [pasteError, setPasteError] = useState<string | null>(null);
-  const [pasting, setPasting] = useState(false);
   const [pasteApplied, setPasteApplied] = useState(false);
   // Optional note about THIS edit; kept only in the person's own changelog.
   const [changeNote, setChangeNote] = useState('');
@@ -144,9 +142,8 @@ export function SkabelonEditor({
     setPasteApplied(true);
   }
 
-  // Accept whichever sharing methods the admin enabled: a self-contained code
-  // and/or a server import link.
-  async function handleImport() {
+  // Accept a self-contained share code (nothing is looked up on the server).
+  function handleImport() {
     const raw = pasteValue.trim();
     if (!raw) return;
     setPasteError(null);
@@ -159,31 +156,7 @@ export function SkabelonEditor({
       }
     }
 
-    if (shareConfig.link) {
-      const token = extractImportToken(raw);
-      if (token) {
-        setPasting(true);
-        try {
-          const res = await fetch(`/api/skabeloner/import/${token}`);
-          if (!res.ok) throw new Error();
-          const data = (await res.json()) as { skabelon: ShareableSkabelon };
-          applyShareable(data.skabelon);
-        } catch {
-          setPasteError('Kunne ikke hente skabelon fra linket');
-        } finally {
-          setPasting(false);
-        }
-        return;
-      }
-    }
-
-    setPasteError(
-      shareConfig.code && shareConfig.link
-        ? 'Ugyldig kode eller link'
-        : shareConfig.link
-          ? 'Ugyldigt link'
-          : 'Ugyldig kode',
-    );
+    setPasteError('Ugyldig kode');
   }
 
   async function handleSave() {
@@ -221,14 +194,8 @@ export function SkabelonEditor({
     }
   }
 
-  // The paste affordance adapts to whichever sharing methods are enabled.
-  const pasteEnabled = shareConfig.code || shareConfig.link;
-  const what =
-    shareConfig.code && shareConfig.link
-      ? { label: 'Har du en kode eller et link?', placeholder: 'Indsæt kode eller link…', help: 'Indsæt en delt skabelonkode eller et link for at udfylde felterne automatisk.' }
-      : shareConfig.link
-        ? { label: 'Har du et link?', placeholder: 'Indsæt link…', help: 'Indsæt et delingslink for at udfylde felterne automatisk.' }
-        : { label: 'Har du en kode?', placeholder: 'Indsæt kode…', help: 'Indsæt en delt skabelonkode for at udfylde felterne automatisk.' };
+  const pasteEnabled = shareConfig.code;
+  const what = { label: 'Har du en kode?', placeholder: 'Indsæt kode…', help: 'Indsæt en delt skabelonkode for at udfylde felterne automatisk.' };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -270,9 +237,9 @@ export function SkabelonEditor({
                   type="button"
                   size="sm"
                   onClick={handleImport}
-                  disabled={pasting || !pasteValue.trim()}
+                  disabled={!pasteValue.trim()}
                 >
-                  {pasting ? 'Henter…' : 'Indsæt'}
+                  Indsæt
                 </Button>
               </div>
               {pasteError && <p className="text-sm text-[var(--kill)]">{pasteError}</p>}
@@ -344,7 +311,7 @@ export function SkabelonEditor({
                 placeholder="En note til dig selv om denne ændring"
               />
               <p className="text-xs text-[var(--muted)]">
-                Noten gemmes kun i din egen historik og er ikke synlig for andre.
+                Noten gemmes i din historik for skabelonen. Administratorer kan se den i auditloggen.
               </p>
             </div>
           )}

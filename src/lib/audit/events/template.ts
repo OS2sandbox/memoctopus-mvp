@@ -1,6 +1,6 @@
 // Personal templates. Template NAMES and prompt text are never logged; only the
 // opaque id and which fields changed. Ids are the per-user `gen_random_uuid()::text`.
-// A failed create/update/delete/share/import is recorded with outcome 'error' (the
+// A failed create/update/delete is recorded with outcome 'error' (the
 // route re-throws afterwards); such an event may have no id (a create that never got
 // one), so the id is not required.
 import { z } from 'zod';
@@ -15,9 +15,6 @@ const TEMPLATE_FIELDS = [
   'includeDagsorden',
   'includeDato',
 ] as const;
-
-// Only the server-side link flow is audited; the stateless share CODE is built and read client-side.
-const SHARE_KINDS = ['link'] as const;
 
 const base = { sources: ['server'] as const, entityType: 'template', entityIdRequired: false };
 
@@ -41,12 +38,4 @@ export const templateEvents = {
       .strict(),
   }),
   'template.delete': defineEvent({ ...base, details: z.object({}).strict() }),
-  'template.share': defineEvent({
-    ...base,
-    details: z.object({ kind: z.enum(SHARE_KINDS) }).strict(),
-  }),
-  'template.import': defineEvent({
-    ...base,
-    details: z.object({ kind: z.enum(SHARE_KINDS) }).strict(),
-  }),
 } as const;

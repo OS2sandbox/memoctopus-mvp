@@ -141,65 +141,7 @@ export async function remainingClientEventsToday(userId: string, runner?: SqlQue
   return Math.max(0, cap - used);
 }
 
-// Per-(user, meeting, type) throttle for repeatable "look" events: a second view or
-// play of the same meeting within a minute adds nothing the first row does not already
-// say. Edits, versions, recordings and deletes are NEVER throttled here (each is a
-// distinct action; the browser coalesces the chatty ones, see COALESCED in client.ts).
-//
-// The minute is measured in EVENT time (the clamped time the browser says the action
-// happened), not in the time the server received the batch: a browser that was offline
-// delivers hours of events in one request, and two views four hours apart are two views.
-// The route sorts a batch by event time before checking. In memory and best effort like the
-// budget above (per instance, lost on restart). Throttled events are acknowledged and
-// COUNTED in the response (`throttled`) and reported as audit.events_dropped (reason throttle).
-export const THROTTLED_TYPES: Set<string> = new Set([
-  'meeting.minutes_view',
-  'meeting.transcript_view',
-  'meeting.audio_play',
-]);
-export const THROTTLE_WINDOW_MS = 60_000;
-export const THROTTLE_MAX_ENTRIES = 5000;
-/** eventMs: event time of the last kept event; seenAt: server time it was kept (drives eviction only). */
-const lastStored = new Map<string, { eventMs: number; seenAt: number }>();
-
-const throttleKey = (userId: string, entityId: string, type: string) => `${userId}\u0000${entityId}\u0000${type}`;
-
-/**
- * True when an event of this type for this meeting was kept by this user less than 60 s away
- * in EVENT time (`eventMs`, in either direction: a late-delivered older event inside the
- * minute of a stored one is just as redundant).
- */
-export function isClientEventThrottled(userId: string, entityId: string, type: string, eventMs: number): boolean {
-  if (!THROTTLED_TYPES.has(type)) return false;
-  const t = lastStored.get(throttleKey(userId, entityId, type));
-  return t !== undefined && Math.abs(eventMs - t.eventMs) < THROTTLE_WINDOW_MS;
-}
-
-/** Remember that an event with this EVENT time was stored (call after a successful store only). Bounded: expired entries go first, then the oldest. */
-export function markClientEventStored(userId: string, entityId: string, type: string, eventMs: number, now = Date.now()): void {
-  if (!THROTTLED_TYPES.has(type)) return;
-  const key = throttleKey(userId, entityId, type);
-  lastStored.delete(key); // re-insert so Map order stays oldest-first
-  lastStored.set(key, { eventMs, seenAt: now });
-  if (lastStored.size > THROTTLE_MAX_ENTRIES) {
-    for (const [k, t] of lastStored) {
-      if (now - t.seenAt >= THROTTLE_WINDOW_MS) lastStored.delete(k);
-    }
-    // Still over: every entry is live, drop the oldest until back at the bound.
-    for (const k of lastStored.keys()) {
-      if (lastStored.size <= THROTTLE_MAX_ENTRIES) break;
-      lastStored.delete(k);
-    }
-  }
-}
-
 /** Test only. */
 export function __resetClientEventBudgets(): void {
   windows.clear();
-  lastStored.clear();
-}
-
-/** Test only. */
-export function __throttleSize(): number {
-  return lastStored.size;
 }

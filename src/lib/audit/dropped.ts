@@ -1,11 +1,10 @@
-// Makes the server's own limits visible. When the daily cap, the per-minute rate limit, the
-// per-actor ceiling on server-emitted events or the view throttle makes the log skip
-// events, the skipped events are COUNTED here and reported as `audit.events_dropped`
+// Makes the server's own limits visible. When the daily cap or the per-minute rate limit
+// makes the log skip events, the skipped events are COUNTED here and reported as `audit.events_dropped`
 // rows (source 'system', a reason and a count, never what was skipped): the first drop of a
 // (person, reason) is reported at once, further drops inside the next WINDOW_MS are added
 // up and reported once when the window ends (from an unref'd timer). Dropping is then a
 // documented, counted event, not a silent loss. The event itself is exempt from every cap
-// (it is written directly, not through emitAudit or the client-event budget).
+// (it is written directly, not through the client-event budget).
 //
 // In memory and per process, bounded: when MAX_KEYS entries are tracked the oldest is
 // reported and evicted. A crash inside a window loses that window's pending count.

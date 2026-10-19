@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withHandler } from '@/lib/api-handler';
 import { auditRetentionDays } from '@/lib/audit/config';
-import { cronGuard } from '@/lib/audit/feed-auth';
+import { cronGuard } from '@/lib/audit/internal-auth';
 import { pruneAuditEvents } from '@/lib/audit/prune';
 
 // Called by the operator's scheduler (cron, k8s CronJob) with INTERNAL_CRON_SECRET.

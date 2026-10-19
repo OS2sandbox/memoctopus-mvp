@@ -177,7 +177,7 @@ export async function runSamlLoginHooks(
   }
 }
 
-// ─── Audit events for login / logout / failed login ──────────────────────────
+// ─── Audit events for login / failed login ──────────────────────────
 // Same contract as above: NEVER throws and never waits long. An audit failure or
 // a hung database must not block, delay materially or alter a login, so every
 // write goes through bestEffort(). Details are enums and short codes only: never
@@ -257,21 +257,6 @@ export async function auditLogin(session: LoginSession, ctx: AuthHookContext | n
       context: {
         ip: session.ipAddress ?? (headers ? clientIp(headers) : null),
         userAgent: session.userAgent ?? (headers ? userAgentOf(headers) : null),
-        requestId: headers ? requestIdOf(headers) : undefined,
-      },
-    });
-  });
-}
-
-/** auth.logout: only an explicit sign-out; the delete hook also fires for expiry cleanup and revocation. */
-export async function auditLogout(session: LoginSession, ctx: AuthHookContext | null): Promise<void> {
-  if (ctx?.path !== '/sign-out') return;
-  await bestEffort('audit_logout', async () => {
-    const headers = headersOf(ctx);
-    await recordEvent({ type: 'auth.logout', actorUserId: session.userId }, {
-      context: {
-        ip: (headers ? clientIp(headers) : null) ?? session.ipAddress,
-        userAgent: (headers ? userAgentOf(headers) : null) ?? session.userAgent,
         requestId: headers ? requestIdOf(headers) : undefined,
       },
     });

@@ -35,14 +35,14 @@ describe('noteDroppedEvents', () => {
   });
 
   it('adds further drops inside the window up and reports them ONCE when the window ends', async () => {
-    noteDroppedEvents('u1', 'throttle', 1, undefined, T0);
-    noteDroppedEvents('u1', 'throttle', 2, undefined, T0 + 1_000);
-    noteDroppedEvents('u1', 'throttle', 4, undefined, T0 + 2_000);
+    noteDroppedEvents('u1', 'rate_limit', 1, undefined, T0);
+    noteDroppedEvents('u1', 'rate_limit', 2, undefined, T0 + 1_000);
+    noteDroppedEvents('u1', 'rate_limit', 4, undefined, T0 + 2_000);
     expect(recordEvent).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(DROPPED_WINDOW_MS);
     expect(events().map((e) => e.details)).toEqual([
-      { reason: 'throttle', count: 1 },
-      { reason: 'throttle', count: 6 },
+      { reason: 'rate_limit', count: 1 },
+      { reason: 'rate_limit', count: 6 },
     ]);
   });
 
@@ -55,7 +55,7 @@ describe('noteDroppedEvents', () => {
   it('keeps people and reasons apart', () => {
     noteDroppedEvents('u1', 'daily_cap', 1, undefined, T0);
     noteDroppedEvents('u2', 'daily_cap', 1, undefined, T0);
-    noteDroppedEvents('u1', 'actor_ceiling', 1, undefined, T0);
+    noteDroppedEvents('u1', 'rate_limit', 1, undefined, T0);
     expect(recordEvent).toHaveBeenCalledTimes(3);
   });
 
