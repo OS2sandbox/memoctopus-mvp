@@ -36,7 +36,25 @@ export async function saveTranscript(
     piiRemovedAt: data.piiRemovedAt ?? existing?.piiRemovedAt ?? null,
     diarizationStatus: data.diarizationStatus ?? existing?.diarizationStatus,
   };
-  await db.put('transcripts', transcript);
+  // The text going from something to nothing while the meeting stays (the redact flow) is a deletion of the
+  // transcript: reported as meeting.transcript_delete (never what it said), and as failed when the write throws.
+  const hadText = !!existing && (existing.rawText.length > 0 || (existing.segments ?? []).length > 0);
+  const cleared = hadText && data.rawText === '' && data.segments.length === 0;
+  try {
+    await db.put('transcripts', transcript);
+  } catch (err) {
+    try {
+      if (cleared) reportAuditEvent('meeting.transcript_delete', meetingId, undefined, { outcome: 'error' });
+    } catch {
+      // Reporting never changes how the write failed.
+    }
+    throw err;
+  }
+  try {
+    if (cleared) reportAuditEvent('meeting.transcript_delete', meetingId);
+  } catch {
+    // Reporting is best effort and must never turn a successful write into an error.
+  }
   return transcript;
 }
 
@@ -78,20 +96,39 @@ export async function saveTranscriptSegments(
   const existing = (await db.getAllFromIndex('transcripts', 'by-meeting', meetingId))[0];
   if (!existing) return;
   const rawText = segments.map((s) => s.text).join(' ');
-  await db.put('transcripts', {
-    ...existing,
-    segments,
-    rawText,
-    ...(diarizationStatus ? { diarizationStatus } : {}),
-  });
+  // What the write changes, worked out BEFORE it so a failed write can be reported as failed for the same
+  // things. Machine writes (a diarizationStatus) report nothing, success or failure.
+  let speakersChanged = false;
+  let textChanged = false;
   try {
     const before = existing.segments ?? [];
     if (diarizationStatus === undefined) {
-      if (speakerSequence(before) !== speakerSequence(segments)) {
-        reportAuditEvent('meeting.speakers_edit', meetingId, { speakerCount: new Set(segments.map((s) => s.speaker)).size });
-      }
-      if (textOf(before) !== textOf(segments)) reportAuditEvent('meeting.transcript_edit', meetingId);
+      speakersChanged = speakerSequence(before) !== speakerSequence(segments);
+      textChanged = textOf(before) !== textOf(segments);
     }
+  } catch {
+    // Reporting is best effort.
+  }
+  const speakerCount = new Set(segments.map((s) => s.speaker)).size;
+  try {
+    await db.put('transcripts', {
+      ...existing,
+      segments,
+      rawText,
+      ...(diarizationStatus ? { diarizationStatus } : {}),
+    });
+  } catch (err) {
+    try {
+      if (speakersChanged) reportAuditEvent('meeting.speakers_edit', meetingId, { speakerCount }, { outcome: 'error' });
+      if (textChanged) reportAuditEvent('meeting.transcript_edit', meetingId, undefined, { outcome: 'error' });
+    } catch {
+      // Reporting never changes how the write failed.
+    }
+    throw err;
+  }
+  try {
+    if (speakersChanged) reportAuditEvent('meeting.speakers_edit', meetingId, { speakerCount });
+    if (textChanged) reportAuditEvent('meeting.transcript_edit', meetingId);
   } catch {
     // Reporting is best effort and must never turn a successful write into an error.
   }

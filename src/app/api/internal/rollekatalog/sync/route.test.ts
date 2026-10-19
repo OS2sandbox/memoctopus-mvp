@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('@/lib/db', () => ({ pool: { query: vi.fn() }, db: {} }));
 vi.mock('@/lib/rollekatalog/sync', () => ({ runSync: vi.fn() }));
+const audit = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/rollekatalog/run-audit', () => ({ recordIntegrationRun: (...a: unknown[]) => audit(...a) }));
 
 import { NextRequest } from 'next/server';
 import { POST } from './route';
@@ -27,6 +29,7 @@ beforeEach(() => {
   vi.stubEnv('ROLLEKATALOG_READ_API_KEY', 'read-key');
   vi.stubEnv('ROLLEKATALOG_ORG_API_KEY', 'org-key');
   mockRun.mockReset().mockResolvedValue(result({}));
+  audit.mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -120,5 +123,19 @@ describe('POST /api/internal/rollekatalog/sync', () => {
     expect(res.status).toBe(500);
     expect(JSON.stringify(await res.json())).not.toContain('10.1.2.3');
     err.mockRestore();
+  });
+});
+
+describe('the run is audited (integration.sync_run)', () => {
+  it('records a cron org_sync with the result, and nothing when nothing ran', async () => {
+    const r = result({ status: 'aborted', errorCode: 'removal_threshold' });
+    mockRun.mockResolvedValueOnce(r);
+    await POST(post());
+    expect(audit).toHaveBeenCalledWith({ kind: 'org_sync', trigger: 'cron', result: r });
+    audit.mockClear();
+    expect((await POST(post('nope'))).status).toBe(401);
+    vi.stubEnv('ACCESS_SOURCE', 'local');
+    expect((await POST(post())).status).toBe(409);
+    expect(audit).not.toHaveBeenCalled();
   });
 });

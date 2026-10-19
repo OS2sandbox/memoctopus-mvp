@@ -8,6 +8,18 @@ function newId(): string {
 
 const MAX_VERSIONS = 50;
 
+// Writes the row; when the write throws, `fail` reports the action as failed (outcome 'error') before
+// the error goes on to the caller. A failed write is reported at most once per call and never as a success.
+async function putMinutes(minutes: StoredMinutes, fail: () => void): Promise<void> {
+  const db = await getDB();
+  try {
+    await db.put('minutes', minutes);
+  } catch (err) {
+    fail();
+    throw err;
+  }
+}
+
 // Audit reporting (ACTIONS only, never content; see lib/audit/client.ts). Reported from
 // here because every write to the minutes goes through this module. The version number
 // is the stable label, never any of the version's text.
@@ -131,7 +143,6 @@ export async function saveMinutes(
   content: MinutesContent,
   templateId?: string | null,
 ): Promise<StoredMinutes> {
-  const db = await getDB();
   const existing = await readRow(meetingId);
   const now = new Date().toISOString();
 
@@ -147,7 +158,7 @@ export async function saveMinutes(
       activeVersionId: v.id,
       versions: [v],
     };
-    await db.put('minutes', minutes);
+    await putMinutes(minutes, () => reportAuditEvent('meeting.minutes_save', meetingId, undefined, { outcome: 'error' }));
     reportAuditEvent('meeting.minutes_save', meetingId);
     return minutes;
   }
@@ -160,13 +171,14 @@ export async function saveMinutes(
     templateId: templateId !== undefined ? templateId : existing.templateId,
     versions,
   });
-  await db.put('minutes', minutes);
   // The editor also saves when it is merely left open or closed: an autosave that
-  // rewrites identical content is not an edit and reports nothing.
+  // rewrites identical content is not an edit and reports nothing (success or failure).
   const before = existing.versions.find((v) => v.id === existing.activeVersionId);
-  if (!before || JSON.stringify(before.content) !== JSON.stringify(content)) {
-    reportAuditEvent('meeting.minutes_save', meetingId);
-  }
+  const changed = !before || JSON.stringify(before.content) !== JSON.stringify(content);
+  await putMinutes(minutes, () => {
+    if (changed) reportAuditEvent('meeting.minutes_save', meetingId, undefined, { outcome: 'error' });
+  });
+  if (changed) reportAuditEvent('meeting.minutes_save', meetingId);
   return minutes;
 }
 
@@ -181,7 +193,6 @@ export async function snapshotMinutes(
   meetingId: string,
   content: MinutesContent,
 ): Promise<StoredMinutes | null> {
-  const db = await getDB();
   const existing = await readRow(meetingId);
   if (!existing) return null;
 
@@ -204,7 +215,9 @@ export async function snapshotMinutes(
   const versions = capVersions(meetingId, [...reverted, snapshot]);
 
   const minutes = withActiveMirror({ ...existing, activeVersionId: snapshot.id, versions });
-  await db.put('minutes', minutes);
+  await putMinutes(minutes, () =>
+    reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: snapshot.label, action: 'snapshot' }, { outcome: 'error' }),
+  );
   reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: snapshot.label, action: 'snapshot' });
   return minutes;
 }
@@ -219,7 +232,6 @@ export async function appendMinutesVersion(
   templateId?: string | null,
   templateRef?: MinutesTemplateRef,
 ): Promise<StoredMinutes> {
-  const db = await getDB();
   const existing = await readRow(meetingId);
   const now = new Date().toISOString();
 
@@ -236,7 +248,9 @@ export async function appendMinutesVersion(
       activeVersionId: v.id,
       versions: [v],
     };
-    await db.put('minutes', minutes);
+    await putMinutes(minutes, () =>
+      reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: 1, action: 'generate' }, { outcome: 'error' }),
+    );
     reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: 1, action: 'generate' });
     return minutes;
   }
@@ -252,7 +266,9 @@ export async function appendMinutesVersion(
     activeVersionId: fresh.id,
     versions,
   });
-  await db.put('minutes', minutes);
+  await putMinutes(minutes, () =>
+    reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: fresh.label, action: 'generate' }, { outcome: 'error' }),
+  );
   reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: fresh.label, action: 'generate' });
   return minutes;
 }
@@ -264,23 +280,21 @@ export async function setActiveMinutesVersion(
   meetingId: string,
   versionId: string,
 ): Promise<StoredMinutes | null> {
-  const db = await getDB();
   const existing = await readRow(meetingId);
   if (!existing) return null;
-  if (!existing.versions.some((v) => v.id === versionId)) return existing;
+  const target = existing.versions.find((v) => v.id === versionId);
+  if (!target) return existing;
 
+  // Switching to a version older than the newest IS a restore: the picker makes the chosen version the
+  // current one in a single step, so it is ONE row ('restore'), not a 'view' plus an 'activate'. Going
+  // back to the newest version is 'activate'. Re-selecting the active version changes nothing and reports nothing.
+  const newest = existing.versions.reduce((m, v) => Math.max(m, v.label), 0);
+  const action = target.label < newest ? 'restore' : 'activate';
+  const switching = existing.activeVersionId !== versionId;
   const minutes = withActiveMirror({ ...existing, activeVersionId: versionId });
-  await db.put('minutes', minutes);
-  if (existing.activeVersionId !== versionId) {
-    const target = existing.versions.find((v) => v.id === versionId);
-    if (target) {
-      // In this app opening an earlier version makes it the active one (the nearest thing
-      // to a restore), so a switch is reported as 'activate'; opening a version older than
-      // the newest is also an access to history, reported as 'view'.
-      const newest = existing.versions.reduce((m, v) => Math.max(m, v.label), 0);
-      if (target.label < newest) reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: target.label, action: 'view' });
-      reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: target.label, action: 'activate' });
-    }
-  }
+  await putMinutes(minutes, () => {
+    if (switching) reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: target.label, action }, { outcome: 'error' });
+  });
+  if (switching) reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: target.label, action });
   return minutes;
 }

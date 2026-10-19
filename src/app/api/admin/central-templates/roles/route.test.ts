@@ -72,6 +72,17 @@ describe('GET /api/admin/central-templates/roles (template.manage)', () => {
     expect(scoped.roles).toHaveLength(2);
   });
 
+  it('reports the access mode and why roles cannot be targeted outside claims mode', async () => {
+    const claims = await (await get()).json();
+    expect(claims.source).toBe('claims');
+    expect(claims.reason).toBeNull();
+    vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
+    const rk = await (await get()).json();
+    expect(rk.source).toBe('rollekatalog');
+    expect(rk.reason).toBe('needs_claims');
+    expect(rk.canTarget).toBe(false);
+  });
+
   it('canRefresh needs sync.run AND a configured Rollekatalog (URL and READ key)', async () => {
     expect((await (await get()).json()).canRefresh).toBe(false); // global manager without sync.run
     mockResolve.mockResolvedValueOnce(globalAdmin);

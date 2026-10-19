@@ -9,7 +9,14 @@ import type {
   CentralPrincipalTargetView,
 } from '@/lib/skabeloner/central-types';
 import { principalKey } from '@/lib/skabeloner/central-types';
-import { FLAG_TEXT, NO_HOLDERS_TEXT, holdersLabel, principalKindLabels } from './central-template-utils';
+import {
+  FLAG_TEXT,
+  NO_HOLDERS_TEXT,
+  holdersLabel,
+  principalKindLabels,
+  rolesLockedText,
+  type SharingSource,
+} from './central-template-utils';
 
 interface Props {
   /** The role/group catalogue (both sources merged). Only active entries are offered for picking. */
@@ -20,6 +27,8 @@ interface Props {
   canEdit: boolean;
   /** Why it cannot be changed: 'needs_claims' = roles only come from login claims in ACCESS_SOURCE=claims; anything else = not a global manager. */
   lockedReason?: 'needs_claims' | 'needs_global' | null;
+  /** The server's access mode, so the locked text can say which sharing route applies (units vs. roles/groups). */
+  accessSource?: SharingSource | null;
   /** Units are chosen too, so no roles is not "nobody". */
   hasOtherAudience?: boolean;
   /** Show the "nobody gets it" warning for an empty choice (the unit picker shows its own when it is on screen). */
@@ -41,6 +50,7 @@ export function PrincipalTargetPicker({
   onChange,
   canEdit,
   lockedReason = null,
+  accessSource = null,
   hasOtherAudience = false,
   warnWhenEmpty = false,
   disabled,
@@ -97,7 +107,7 @@ export function PrincipalTargetPicker({
       {!canEdit ? (
         <p className="text-[13px] text-[var(--muted)]">
           {lockedReason === 'needs_claims'
-            ? 'Roller og grupper kan kun vælges, når rollerne kommer fra brugernes login (ACCESS_SOURCE=claims). Uden login-claims har ingen en rolle, som skabelonen kan matche.'
+            ? rolesLockedText(accessSource)
             : 'Kun en bygger med tilladelse for hele organisationen kan vælge roller og grupper.'}
         </p>
       ) : catalogue.length === 0 ? (

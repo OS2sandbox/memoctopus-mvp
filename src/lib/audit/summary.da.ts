@@ -54,6 +54,15 @@ const METHOD_TEXT: Record<string, string> = {
   saml: ' via single sign-on (SAML)',
 };
 
+// Refusals of a central template write (central.ts): the reason is a closed code, never the template's content.
+const TEMPLATE_MANAGE_REFUSAL: Record<string, string> = {
+  out_of_scope: 'fik afvist en ændring af en central skabelon uden for sit område',
+  principal_targets_need_global: 'fik afvist en ændring af en central skabelon, der kræver tilladelse for hele organisationen (roller eller grupper)',
+  principal_targets_need_claims: 'fik afvist at gøre en central skabelon tilgængelig for roller eller grupper, fordi rollerne ikke kommer fra login',
+  org_wide_needs_global: 'fik afvist at oprette en central skabelon for hele organisationen',
+  version_conflict: 'fik afvist en ændring af en central skabelon, fordi den var ændret af en anden',
+};
+
 const LOGIN_FAILED_REASON: Record<string, string> = {
   invalid_credentials: 'forkerte loginoplysninger',
   oauth_error: 'fejl hos login-udbyderen',
@@ -83,11 +92,13 @@ const AUDIO_CHANNEL_TEXT: Record<string, { what: string; purpose: string }> = {
   diarize: { what: 'en optagelse', purpose: 'taleropdeling' },
 };
 
-// `activate` is an in-app version switch: the nearest thing to a restore (nothing is copied or recreated).
+// `restore` is an earlier version made the current one (nothing is copied or recreated); `activate` is the
+// newest version made current again; `view` is only on rows written before restore existed.
 const VERSION_ACTION_TEXT: Record<string, (v: string, n: number | null) => string> = {
   view: (v) => `åbnede en tidligere version af referatet${v}`,
   snapshot: (v) => `gemte en ny version af referatet${v}`,
   generate: (v) => `genererede en ny version af referatet${v}`,
+  restore: (_v, n) => `gendannede ${n === null ? 'en tidligere version' : `version ${n}`} af referatet`,
   activate: (_v, n) => `satte ${n === null ? 'en version' : `version ${n}`} som den aktive version af referatet`,
 };
 
@@ -113,6 +124,8 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
     const dropped = num(c.details.droppedCount);
     if (dropped !== null) return `${plural(dropped, 'yderligere afvisning', 'yderligere afvisninger')} af adgang for ${c.actor} blev ikke registreret enkeltvis`;
     const required = String(c.details.required);
+    const refusal = required === 'template.manage' ? TEMPLATE_MANAGE_REFUSAL[String(c.details.reason)] : undefined;
+    if (refusal) return `${c.actor} ${refusal}`;
     const label = has(capabilityLabels, required) ? capabilityLabels[required as Capability] : null;
     return `${c.actor} fik adgang nægtet${label ? ` til »${label}«` : ''}`;
   },
@@ -152,6 +165,7 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   'bot.audio_delete': (c) => {
     const transcript = c.details.object === 'transcript';
     const what = transcript ? 'en mødebot-transskription' : 'en mødebot-optagelse';
+    if (c.failed) return `Systemet kunne ikke slette ${what} på serveren`;
     return c.details.trigger === 'ttl'
       ? `Systemet slettede ${what} på serveren, som ingen havde hentet`
       : `Systemet slettede ${transcript ? 'mødebottens transskription' : 'mødebottens optagelse'} på serveren, efter at den var hentet`;
@@ -169,6 +183,7 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   },
   'meeting.delete': (c) => `${c.actor} slettede et møde med transskription, referatversioner og lyd${autoText(c.details)}`,
   'meeting.redact': (c) => `${c.actor} slørede et møde`,
+  'meeting.transcript_delete': (c) => `${c.actor} slettede transskriptionens tekst fra et møde`,
   'meeting.audio_delete': (c) => `${c.actor} slettede lyden fra et møde${autoText(c.details)}`,
   'meeting.minutes_view': (c) => `${c.actor} åbnede et referat`,
   'meeting.transcript_view': (c) => `${c.actor} åbnede en transskription`,
@@ -199,6 +214,14 @@ const SENTENCES: Record<EventType, (c: Ctx) => string> = {
   'system.config_changed': (c) =>
     c.details.changed === true ? 'Systemets konfiguration er ændret siden sidste start' : 'Systemets konfiguration blev registreret ved opstart',
 
+  'integration.sync_run': (c) => {
+    const what = c.details.kind === 'role_catalogue' ? 'rolle- og gruppekataloget fra Rollekatalog' : 'brugere og organisation fra Rollekatalog';
+    const who = c.details.trigger === 'manual' ? c.actor : 'Systemet';
+    if (c.details.status === 'aborted') return `${who} forsøgte at opdatere ${what}, men en sikkerhedsgrænse stoppede kørslen`;
+    if (c.failed) return `${who} forsøgte at opdatere ${what}, men kørslen fejlede`;
+    return `${who} opdaterede ${what}`;
+  },
+
   'audit.export': (c) => {
     const rows = num(c.details.rowCount);
     return `${c.actor} eksporterede loggen${rows === null ? '' : ` (${plural(rows, 'række', 'rækker')}${c.details.truncated === true ? ', afkortet' : ''})`}`;
@@ -227,10 +250,14 @@ export function summariseEvent(e: SummarisableEvent): string {
   const actor = actorText(e);
   if (!isEventType(e.eventType)) return `${actor}: ${eventTypeLabel(e.eventType)}`;
   const isCentral = e.eventType.startsWith('central_template.');
-  return SENTENCES[e.eventType]({
+  const failed = e.outcome !== 'success';
+  const sentence = SENTENCES[e.eventType]({
     actor,
-    failed: e.outcome !== 'success',
+    failed,
     details: e.details ?? {},
     templateName: isCentral && e.templateName ? e.templateName : null,
   });
+  // A browser-reported action (meeting.*) that the browser saw FAIL (the local write threw, the microphone
+  // would not start): the sentence describes the attempt, this says how it ended.
+  return failed && e.eventType.startsWith('meeting.') ? `${sentence} (handlingen mislykkedes)` : sentence;
 }

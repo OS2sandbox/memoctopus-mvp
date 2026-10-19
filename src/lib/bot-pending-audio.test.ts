@@ -372,9 +372,89 @@ describe('sweepPendingBotData', () => {
     );
   });
 
+  it('finds an orphan .audio (no meta) by its name and deletes and logs it once its file is older than the TTL', async () => {
+    vi.mocked(fs.readdir).mockResolvedValue([`${ID}.audio`] as never);
+    vi.mocked(fs.readFile).mockRejectedValue(enoent());
+    vi.mocked(fs.stat).mockImplementation((async () => ({ mtimeMs: Date.now() - 3 * H })) as never);
+    vi.mocked(fs.unlink).mockResolvedValue(undefined as never);
+    expect(await sweepPendingBotData()).toEqual({ audio: 1, transcripts: 0, owners: 0 });
+    expect(unlinked()).toContain(`${ID}.audio`);
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'bot.audio_delete', source: 'system', entityId: ID, details: { trigger: 'ttl' } }),
+    );
+  });
+
+  it('leaves a fresh orphan .audio alone (an upload may be mid-write) and never touches the skipped meeting', async () => {
+    vi.mocked(fs.readdir).mockResolvedValue([`${ID}.audio`] as never);
+    vi.mocked(fs.readFile).mockRejectedValue(enoent());
+    vi.mocked(fs.stat).mockImplementation((async () => ({ mtimeMs: Date.now() - 60_000 })) as never);
+    vi.mocked(fs.unlink).mockResolvedValue(undefined as never);
+    expect(await sweepPendingBotData()).toEqual({ audio: 0, transcripts: 0, owners: 0 });
+    vi.mocked(fs.stat).mockImplementation((async () => ({ mtimeMs: Date.now() - 3 * H })) as never);
+    expect(await sweepPendingBotData({ skipId: ID })).toEqual({ audio: 0, transcripts: 0, owners: 0 });
+    expect(unlinked()).toEqual([]);
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+
   it('survives a missing directory', async () => {
     vi.mocked(fs.readdir).mockRejectedValue(enoent());
     expect(await sweepPendingBotData()).toEqual({ audio: 0, transcripts: 0, owners: 0 });
+  });
+});
+
+describe('failed deletions are recorded with outcome error', () => {
+  const ID = '11111111-2222-4333-8444-555555555555';
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    recordEvent.mockReset().mockResolvedValue({ status: 'stored' });
+    vi.mocked(fs.unlink).mockReset();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('an audio file that cannot be unlinked (EACCES) is an error event and not "removed"', async () => {
+    vi.mocked(fs.unlink).mockImplementation((async (path: string) => {
+      if (String(path).endsWith('.audio')) throw Object.assign(new Error('EACCES: /secret/path'), { code: 'EACCES' });
+    }) as never);
+    expect(await deletePendingAudio(ID, { trigger: 'ttl', actorUserId: 'owner-1' })).toBe(false);
+    expect(recordEvent).toHaveBeenCalledWith({
+      type: 'bot.audio_delete',
+      source: 'system',
+      actorUserId: 'owner-1',
+      outcome: 'error',
+      entityId: ID,
+      details: { trigger: 'ttl' },
+    });
+    // Content-free log: code only, never the message or path.
+    const lines = (console.error as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
+    expect(lines.join('\n')).not.toContain('/secret/path');
+  });
+
+  it('a transcript that held text and cannot be unlinked is an error event', async () => {
+    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ status: 'ready', createdAt: 1 }) as never);
+    vi.mocked(fs.unlink).mockRejectedValue(Object.assign(new Error('x'), { code: 'EBUSY' }));
+    expect(await deletePendingTranscript(ID, { trigger: 'ttl' })).toBe(false);
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'bot.audio_delete', outcome: 'error', details: { trigger: 'ttl', object: 'transcript' } }),
+    );
+  });
+});
+
+describe('storePendingAudio when the meta write fails', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('removes the audio it just wrote and rethrows, so no orphan is left behind', async () => {
+    __resetSweepThrottle();
+    vi.mocked(fs.mkdir).mockResolvedValue(undefined as never);
+    vi.mocked(fs.readdir).mockReset().mockResolvedValue([] as never);
+    vi.mocked(fs.unlink).mockReset().mockResolvedValue(undefined as never);
+    vi.mocked(fs.writeFile)
+      .mockReset()
+      .mockImplementation((async (path: string) => {
+        if (String(path).endsWith('.meta.json')) throw Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' });
+      }) as never);
+    const meta = { mimeType: 'audio/webm', participants: [], durationSeconds: null, hasRecording: true };
+    await expect(storePendingAudio('m-orphan', Buffer.from('x'), meta)).rejects.toThrow('ENOSPC');
+    expect(vi.mocked(fs.unlink).mock.calls.map((c) => String(c[0]).split('/').pop())).toEqual(['m-orphan.audio']);
   });
 });
 

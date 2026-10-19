@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('@/lib/db', () => ({ pool: { query: vi.fn() }, db: {} }));
 vi.mock('@/lib/rollekatalog/catalogue-sync', () => ({ runCatalogueRefresh: vi.fn() }));
+const audit = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/rollekatalog/run-audit', () => ({ recordIntegrationRun: (...a: unknown[]) => audit(...a) }));
 
 import { NextRequest } from 'next/server';
 import { POST } from './route';
@@ -22,6 +24,7 @@ beforeEach(() => {
   vi.stubEnv('ROLLEKATALOG_URL', 'https://rk.example.dk');
   vi.stubEnv('ROLLEKATALOG_READ_API_KEY', 'read-key');
   mockRun.mockReset().mockResolvedValue({ status: 'success', counts, errorCode: null });
+  audit.mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -80,5 +83,19 @@ describe('POST /api/internal/rollekatalog/roles', () => {
     expect((await POST(post())).status).toBe(500);
     mockRun.mockResolvedValueOnce({ status: 'already_running', counts, errorCode: 'already_running' });
     expect((await POST(post())).status).toBe(409);
+  });
+});
+
+describe('the run is audited (integration.sync_run)', () => {
+  it('records a cron role_catalogue run with the result, and nothing when it did not run', async () => {
+    const r = { status: 'aborted' as const, counts, errorCode: 'empty_response' };
+    mockRun.mockResolvedValueOnce(r);
+    await POST(post());
+    expect(audit).toHaveBeenCalledWith({ kind: 'role_catalogue', trigger: 'cron', result: r });
+    audit.mockClear();
+    expect((await POST(post('nope'))).status).toBe(401);
+    vi.stubEnv('ROLLEKATALOG_URL', '');
+    expect((await POST(post())).status).toBe(409);
+    expect(audit).not.toHaveBeenCalled();
   });
 });

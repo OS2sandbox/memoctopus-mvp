@@ -32,6 +32,9 @@ import {
   audienceEntries,
   formatTime,
   truncateAudience,
+  emptyAudienceHint,
+  sharingModeNote,
+  type SharingSource,
   unitNameLookup,
 } from './central-template-utils';
 import { TemplateVersionHistory } from './TemplateVersionHistory';
@@ -51,6 +54,7 @@ export function CentralTemplatesAdmin() {
     canTarget: false,
     isGlobalManager: false,
     reason: null as 'needs_claims' | 'needs_global' | null,
+    source: null as SharingSource | null,
     canRefresh: false,
     lastRefreshedAt: null as string | null,
   });
@@ -101,6 +105,7 @@ export function CentralTemplatesAdmin() {
       canTarget: boolean;
       isGlobalManager?: boolean;
       reason?: 'needs_claims' | 'needs_global' | null;
+      source?: SharingSource | null;
       canRefresh: boolean;
       lastRefreshedAt: string | null;
     }>('/api/admin/central-templates/roles');
@@ -113,6 +118,7 @@ export function CentralTemplatesAdmin() {
         canTarget: roles.data.canTarget,
         isGlobalManager: roles.data.isGlobalManager ?? roles.data.canTarget,
         reason: roles.data.reason ?? null,
+        source: roles.data.source ?? null,
         canRefresh: roles.data.canRefresh,
         lastRefreshedAt: roles.data.lastRefreshedAt,
       });
@@ -178,6 +184,9 @@ export function CentralTemplatesAdmin() {
       <ErrorBanner message={meError} />
       <ErrorBanner message={loadError ?? catalogueError} onRetry={retry} />
       <ErrorBanner message={actionError} />
+      {sharingModeNote(catalogueInfo.source) && (
+        <p className="text-[13px] text-[var(--ink-2)]">{sharingModeNote(catalogueInfo.source)}</p>
+      )}
 
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="central-templates-filter">Vis</Label>
@@ -255,7 +264,7 @@ export function CentralTemplatesAdmin() {
                   </TableCell>
                   <TableCell>{t.currentVersion}</TableCell>
                   <TableCell>
-                    <Audience template={t} unitName={unitName} />
+                    <Audience template={t} unitName={unitName} source={catalogueInfo.source} />
                   </TableCell>
                   <TableCell>{t.createdByName ?? <span className="text-[var(--muted)]">Ukendt</span>}</TableCell>
                   <TableCell>
@@ -316,6 +325,7 @@ export function CentralTemplatesAdmin() {
           isGlobalManager={catalogueInfo.isGlobalManager}
           canTargetPrincipals={catalogueInfo.canTarget}
           targetLockedReason={catalogueInfo.reason}
+          accessSource={catalogueInfo.source}
           catalogueLoaded={catalogueLoaded}
           onSaved={loadList}
         />
@@ -364,9 +374,25 @@ export function CentralTemplatesAdmin() {
 }
 
 /** Who the template is made available to, by name: roles, groups and units, a few shown and "+N" for the rest. */
-function Audience({ template, unitName }: { template: CentralTemplateListItem; unitName: (uuid: string) => string }) {
+function Audience({
+  template,
+  unitName,
+  source,
+}: {
+  template: CentralTemplateListItem;
+  unitName: (uuid: string) => string;
+  source: SharingSource | null;
+}) {
   const { shown, more } = truncateAudience(audienceEntries(template, unitName));
-  if (shown.length === 0) return <Badge variant="warning">Ikke til rådighed for nogen</Badge>;
+  if (shown.length === 0) {
+    const hint = emptyAudienceHint(source);
+    return (
+      <div className="flex flex-col items-start gap-1">
+        <Badge variant="warning">Ikke til rådighed for nogen</Badge>
+        {hint && <span className="text-[13px] text-[var(--muted)]">{hint}</span>}
+      </div>
+    );
+  }
   const line = (e: (typeof shown)[number]) => (
     <li key={e.key} style={e.flagged || e.empty ? { color: 'var(--warn)' } : undefined}>
       {e.label}

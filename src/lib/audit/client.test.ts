@@ -530,3 +530,70 @@ describe('flushAuditNow (before sign-out)', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('outcome of a reported action', () => {
+  it('a success carries no outcome on the wire; a failure carries outcome error and nothing else changes', async () => {
+    c.reportAuditEvent('meeting.minutes_version', MEETING, { versionNumber: 2, action: 'snapshot' });
+    c.reportAuditEvent('meeting.minutes_version', MEETING, { versionNumber: 3, action: 'snapshot' }, { outcome: 'error' });
+    c.reportAuditEvent('meeting.recording_start', OTHER, undefined, { outcome: 'success' });
+    await vi.advanceTimersByTimeAsync(1500);
+    const sent = sentBodies().flat();
+    expect(sent).toHaveLength(3);
+    expect(sent.map((e) => e.outcome)).toEqual([undefined, 'error', undefined]);
+    expect(Object.keys(sent[1]).sort()).toEqual(['clientEventId', 'details', 'entityId', 'occurredAt', 'outcome', 'type']);
+  });
+
+  it('an error is never swallowed by a coalesced success (or the reverse): they are separate events', async () => {
+    c.reportAuditEvent('meeting.minutes_save', MEETING);
+    c.reportAuditEvent('meeting.minutes_save', MEETING, undefined, { outcome: 'error' });
+    c.reportAuditEvent('meeting.minutes_save', MEETING); // coalesces into the first success
+    c.reportAuditEvent('meeting.minutes_save', MEETING, undefined, { outcome: 'error' }); // into the first error
+    await vi.advanceTimersByTimeAsync(32_000);
+    expect(sentBodies().flat().map((e) => e.outcome).sort()).toEqual(['error', undefined]);
+  });
+
+  it('an error is not swallowed by the repeat check of a success, nor a success by an error', async () => {
+    c.reportAuditEvent('meeting.audio_delete', MEETING, { trigger: 'user' });
+    c.reportAuditEvent('meeting.audio_delete', MEETING, { trigger: 'user' }, { outcome: 'error' });
+    c.reportAuditEvent('meeting.audio_delete', MEETING, { trigger: 'user' }, { outcome: 'error' }); // repeat of the error
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(sentBodies().flat().map((e) => e.outcome)).toEqual([undefined, 'error']);
+  });
+
+  it('a retract of a failure removes that event only', async () => {
+    const retract = c.reportAuditEvent('meeting.delete', MEETING, { trigger: 'user' }, { outcome: 'error' });
+    c.reportAuditEvent('meeting.delete', OTHER, { trigger: 'user' });
+    await vi.advanceTimersByTimeAsync(0);
+    retract?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.queue.map((e) => e.entityId)).toEqual([OTHER]);
+  });
+});
+
+describe('a delete that cannot be queued is counted, not silent', () => {
+  it('counts a user delete reported before any user is known and hands the count to the user who signs in', async () => {
+    await load(null);
+    c.reportAuditEvent('meeting.delete', MEETING, { trigger: 'user' });
+    c.reportAuditEvent('meeting.audio_delete', MEETING);
+    c.reportAuditEvent('meeting.transcript_delete', MEETING);
+    c.reportAuditEvent('meeting.redact', MEETING);
+    expect(h.queue).toHaveLength(0);
+    const scope = await import('@/lib/storage/scope');
+    scope.setStorageUserId('user-2');
+    c.startAuditReporting('user-2');
+    expect(h.dropped?.count).toBe(4);
+    await vi.advanceTimersByTimeAsync(1500);
+    // The count rides along with the next request (as droppedLocally) and is cleared after the 2xx.
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).droppedLocally.count).toBe(4);
+    expect(h.dropped).toBeNull();
+  });
+
+  it('does not count automatic deletes or other event types', async () => {
+    await load(null);
+    c.reportAuditEvent('meeting.delete', MEETING, { trigger: 'auto_pagehide' });
+    c.reportAuditEvent('meeting.audio_delete', MEETING, { trigger: 'auto_leave' });
+    c.reportAuditEvent('meeting.minutes_view', MEETING);
+    c.startAuditReporting('user-1');
+    expect(h.dropped).toBeNull();
+  });
+});

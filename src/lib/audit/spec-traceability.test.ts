@@ -50,7 +50,8 @@ const ROWS: Row[] = [
   { requirement: 'View minutes', type: 'meeting.minutes_view', sample: { ...client, details: {} }, trust: 'self-reported' },
   { requirement: 'View transcript', type: 'meeting.transcript_view', sample: { ...client, details: {} }, trust: 'self-reported' },
   { requirement: 'View an earlier version of the minutes', type: 'meeting.minutes_version', sample: { ...client, details: { versionNumber: 1, action: 'view' } }, trust: 'self-reported' },
-  { requirement: 'Restore a version (an in-app version switch)', type: 'meeting.minutes_version', sample: { ...client, details: { versionNumber: 1, action: 'activate' } }, trust: 'self-reported' },
+  { requirement: 'Restore an earlier version of the minutes', type: 'meeting.minutes_version', sample: { ...client, details: { versionNumber: 1, action: 'restore' } }, trust: 'self-reported' },
+  { requirement: 'Switch back to the newest version of the minutes', type: 'meeting.minutes_version', sample: { ...client, details: { versionNumber: 3, action: 'activate' } }, trust: 'self-reported' },
   { requirement: 'Audio playback', type: 'meeting.audio_play', sample: { ...client, details: {} }, trust: 'self-reported' },
   // Edits
   { requirement: 'Edit minutes', type: 'meeting.minutes_save', sample: { ...client, details: {} }, trust: 'self-reported' },
@@ -70,10 +71,12 @@ const ROWS: Row[] = [
   // Deletion
   { requirement: 'Meeting deleted (by the person or automatically)', type: 'meeting.delete', sample: { ...client, details: { trigger: 'auto_pagehide' } }, trust: 'self-reported' },
   { requirement: 'Audio deleted (by the person or automatically)', type: 'meeting.audio_delete', sample: { ...client, details: { trigger: 'auto_generate' } }, trust: 'self-reported' },
+  { requirement: 'Transcript text deleted (redaction)', type: 'meeting.transcript_delete', sample: { ...client, details: {} }, trust: 'self-reported' },
   { requirement: 'Server-held bot recording deleted', type: 'bot.audio_delete', sample: { ...system, details: { trigger: 'ttl' } }, trust: 'system' },
   { requirement: 'Server-held bot transcript deleted', type: 'bot.audio_delete', sample: { ...system, details: { trigger: 'handoff', object: 'transcript' } }, trust: 'system' },
   // System
   { requirement: 'Change of system or integration configuration', type: 'system.config_changed', sample: { ...system, details: { fingerprint: '0123456789abcdef', changed: true, changedKeys: ['ACCESS_SOURCE'] } }, trust: 'system' },
+  { requirement: 'Integration run (Rollekatalog sync, role catalogue refresh) is logged with its result', type: 'integration.sync_run', sample: { ...system, details: { kind: 'org_sync', trigger: 'cron', status: 'aborted', code: 'removal_threshold' } }, trust: 'system' },
   // The log itself
   { requirement: 'Export of the log is logged', type: 'audit.export', sample: { source: 'server', actorUserId: 'u1', details: { rowCount: 1, format: 'csv' } }, trust: 'server' },
   { requirement: 'Retention: deletion of old log rows is logged', type: 'audit.prune', sample: { ...system, details: { deletedCount: 1, olderThanDays: 365 } }, trust: 'system' },

@@ -1471,5 +1471,32 @@ describe('TranscriptReview', () => {
       await userEvent.setup({ delay: null }).click(screen.getByRole('button', { name: /Min skabelon/ }));
       expect(screen.queryByText('Centrale skabeloner')).not.toBeInTheDocument();
     });
+
+    it('warns (without blocking personal templates) when the central lookup failed (centralError)', async () => {
+      global.fetch = vi.fn().mockImplementation((url: string) =>
+        Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve(
+              url === '/api/skabeloner' ? { skabeloner: [PERSONAL], centralSkabeloner: [], centralError: true } : { chapters: [] },
+            ),
+        }),
+      );
+      setup();
+      expect(await screen.findByText(/centrale skabeloner kunne ikke hentes/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Min skabelon/ })).toBeInTheDocument();
+    });
+
+    it('shows no central warning when the lookup succeeded', async () => {
+      global.fetch = vi.fn().mockImplementation((url: string) =>
+        Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(url === '/api/skabeloner' ? { skabeloner: [PERSONAL], centralSkabeloner: [] } : { chapters: [] }),
+        }),
+      );
+      setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Min skabelon/ })).toBeInTheDocument());
+      expect(screen.queryByText(/kunne ikke hentes/)).not.toBeInTheDocument();
+    });
   });
 });

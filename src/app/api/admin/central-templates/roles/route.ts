@@ -23,6 +23,8 @@ export const GET = withAuthz('admin/central-templates/roles GET', 'template.mana
       // The caller's template.manage covers the whole organisation (org-wide templates); independent of the mode.
       isGlobalManager: hasGlobalScope(principal, 'template.manage'),
       reason,
+      // The access mode, so the screens can say which sharing route applies (units, or roles/groups via claims).
+      source: accessSource(),
       canRefresh: hasCapability(principal, 'sync.run') && catalogueConfigIssue() === null,
       lastRefreshedAt,
     });

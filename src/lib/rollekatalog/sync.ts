@@ -23,8 +23,9 @@
 //     mirrored assignments removed, and (separately, because bruger rows dominate the
 //     total) ELEVATED assignments (every role but bruger) removed.
 //
-// Every run leaves a sync_runs row (the status panel reads it). The sync is NOT in the
-// audit log: that records what people did, not scheduled housekeeping.
+// Every run leaves a sync_runs row (the status panel reads it). The routes that start a run also
+// record one integration.sync_run audit event (run-audit.ts): that the run happened, how it ended and
+// its counts, never who got or lost which role (rights changes are not audited).
 // Failures surface as short codes, never as messages (they could echo data).
 import { createRunner, errorLabel, type SqlQueryable } from '@/lib/authz/pg-runner';
 import { createRollekatalogClient, type RollekatalogClient } from './client';

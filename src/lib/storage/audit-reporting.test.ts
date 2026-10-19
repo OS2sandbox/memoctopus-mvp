@@ -10,7 +10,13 @@ import { reportAuditEvent } from '@/lib/audit/client';
 import type { AuditEventInput } from '@/lib/audit/events';
 
 type Row = Record<string, any>;
-const h = vi.hoisted(() => ({ stores: {} as Record<string, Map<string, Row>>, report: vi.fn() }));
+const h = vi.hoisted(() => ({
+  stores: {} as Record<string, Map<string, Row>>,
+  report: vi.fn(),
+  /** Make every write / delete throw, to exercise the failure reports. */
+  failPut: false,
+  failDelete: false,
+}));
 
 const keyOf = (v: Row) => (v.id ?? v.meetingId) as string;
 
@@ -18,19 +24,27 @@ function fakeDb() {
   const s = h.stores;
   const byMeeting = (store: string, meetingId: string) => [...s[store].values()].filter((v) => v.meetingId === meetingId);
   const storeApi = (name: string) => ({
-    delete: async (k: string) => void s[name].delete(k),
+    delete: async (k: string) => {
+      if (h.failDelete) throw new Error('delete failed');
+      s[name].delete(k);
+    },
     index: () => ({ getAll: async (q: string) => byMeeting(name, q) }),
   });
   return {
     get: async (store: string, k: string) => s[store].get(k),
-    put: async (store: string, v: Row) => void s[store].set(keyOf(v), { ...v }),
+    put: async (store: string, v: Row) => {
+      if (h.failPut) throw new Error('disk full');
+      s[store].set(keyOf(v), { ...v });
+    },
     delete: async (store: string, k: string) => void s[store].delete(k),
     getAllFromIndex: async (store: string, _i: string, q: string) => byMeeting(store, q),
     // `store` is the single-store shorthand deleteAudio uses (audio only).
     transaction: () => ({
       objectStore: storeApi,
       store: { getKey: async (k: string) => (s.audio.has(k) ? k : undefined), delete: storeApi('audio').delete },
-      done: Promise.resolve(),
+      get done() {
+        return h.failDelete ? Promise.reject(new Error('delete failed')) : Promise.resolve();
+      },
     }),
   };
 }
@@ -53,7 +67,7 @@ const minutes = (text: string): MinutesContent =>
   ({ header: { title: SECRET_TITLE, date: null }, sections: [{ heading: 'Beslutninger', body: text }] }) as unknown as MinutesContent;
 const seg = (text: string, speaker = 'Taler 1'): TranscriptSegment => ({ speaker, start: 0, end: 1, text });
 
-const calls = () => h.report.mock.calls.map(([type, entityId, details]) => ({ type, entityId, details }));
+const calls = () => h.report.mock.calls.map(([type, entityId, details, opts]) => ({ type, entityId, details, outcome: opts?.outcome }));
 const types = () => calls().map((c) => c.type);
 
 /** No call may carry any of the content strings, anywhere in its arguments. */
@@ -67,6 +81,8 @@ function expectNoContent() {
 beforeEach(() => {
   h.stores = { meetings: new Map(), transcripts: new Map(), minutes: new Map(), audio: new Map() };
   h.report.mockReset();
+  h.failPut = false;
+  h.failDelete = false;
 });
 
 describe('meetings', () => {
@@ -314,15 +330,12 @@ describe('minutes', () => {
     expect(calls()).toEqual([{ type: 'meeting.minutes_version', entityId: 'm1', details: { versionNumber: 1, action: 'generate' } }]);
   });
 
-  it('switching to an earlier version reports view + activate; to the newest only activate; to the active one nothing', async () => {
+  it('switching to an earlier version is ONE restore row; back to the newest is activate; to the active one nothing', async () => {
     await appendMinutesVersion('m1', minutes('one'));
     const row = await appendMinutesVersion('m1', minutes('two'));
     h.report.mockClear();
     await setActiveMinutesVersion('m1', row.versions[0].id); // version 1 of 2
-    expect(calls().map((c) => c.details)).toEqual([
-      { versionNumber: 1, action: 'view' },
-      { versionNumber: 1, action: 'activate' },
-    ]);
+    expect(calls().map((c) => c.details)).toEqual([{ versionNumber: 1, action: 'restore' }]);
     h.report.mockClear();
     await setActiveMinutesVersion('m1', row.versions[1].id); // back to the newest
     expect(calls().map((c) => c.details)).toEqual([{ versionNumber: 2, action: 'activate' }]);
@@ -359,6 +372,7 @@ describe('contract with the server catalogue', () => {
     for (let i = 0; i < 50; i++) await appendMinutesVersion(m.id, minutes(`v${i}`));
     await saveTranscriptSegments(m.id, [seg('a', SECRET_NAME)]);
     await saveTranscriptSegments(m.id, [seg('andet', SECRET_NAME)]);
+    await saveTranscript(m.id, { rawText: '', chapters: [], piiReplacements: [], segments: [] }); // redaction blanks the text
     await updateMeeting(m.id, { recordedAt: '2026-01-01T00:00:00.000Z' });
     reportAuditEvent('meeting.metadata_edit', m.id, { field: 'title' });
     await updateMeeting(m.id, { participants: ['A', 'B', 'C'] });
@@ -378,6 +392,7 @@ describe('contract with the server catalogue', () => {
       'meeting.participants_edit',
       'meeting.redact',
       'meeting.speakers_edit',
+      'meeting.transcript_delete',
       'meeting.transcript_edit',
     ]);
     for (const c of calls()) {
@@ -387,9 +402,122 @@ describe('contract with the server catalogue', () => {
         actorUserId: 'user-1',
         entityId: '11111111-2222-4333-8444-555555555555',
         details: c.details ?? {},
+        ...(c.outcome ? { outcome: c.outcome } : {}),
       } as AuditEventInput);
       expect(result, `${c.type} ${JSON.stringify(c.details)}`).toMatchObject({ ok: true });
     }
     expectNoContent();
+  });
+});
+
+describe('failed writes are reported with outcome error', () => {
+  const failing = () => calls().filter((c) => c.outcome === 'error');
+
+  it('a failed minutes autosave is minutes_save/error (and never a success); an unchanged autosave that fails reports nothing', async () => {
+    await saveMinutes('m1', minutes('one'));
+    h.report.mockClear();
+    h.failPut = true;
+    await expect(saveMinutes('m1', minutes('two'))).rejects.toThrow('disk full');
+    expect(calls()).toEqual([{ type: 'meeting.minutes_save', entityId: 'm1', details: undefined, outcome: 'error' }]);
+    h.report.mockClear();
+    await expect(saveMinutes('m1', minutes('one'))).rejects.toThrow();
+    expect(h.report).not.toHaveBeenCalled();
+    expectNoContent();
+  });
+
+  it('a failed "Gem version", regeneration and version switch are minutes_version/error with the label', async () => {
+    await appendMinutesVersion('m1', minutes('one'));
+    const row = await appendMinutesVersion('m1', minutes('two'));
+    h.report.mockClear();
+    h.failPut = true;
+    await expect(snapshotMinutes('m1', minutes('three'))).rejects.toThrow();
+    await expect(appendMinutesVersion('m1', minutes('four'))).rejects.toThrow();
+    await expect(setActiveMinutesVersion('m1', row.versions[0].id)).rejects.toThrow();
+    expect(calls().map((c) => [c.details, c.outcome])).toEqual([
+      [{ versionNumber: 3, action: 'snapshot' }, 'error'],
+      [{ versionNumber: 3, action: 'generate' }, 'error'],
+      [{ versionNumber: 1, action: 'restore' }, 'error'],
+    ]);
+    expectNoContent();
+  });
+
+  it('a failed first generation is generate/error for version 1', async () => {
+    h.failPut = true;
+    await expect(appendMinutesVersion('m1', minutes('x'))).rejects.toThrow();
+    expect(calls()).toEqual([
+      { type: 'meeting.minutes_version', entityId: 'm1', details: { versionNumber: 1, action: 'generate' }, outcome: 'error' },
+    ]);
+  });
+
+  it('a failed transcript text / speaker edit is reported as failed; a failed machine write reports nothing', async () => {
+    await saveTranscript('m1', { rawText: 't', chapters: [], piiReplacements: [], segments: [seg('a'), seg('b', 'Taler 2')] });
+    h.report.mockClear();
+    h.failPut = true;
+    await expect(saveTranscriptSegments('m1', [seg(SECRET_TEXT, SECRET_NAME), seg('b', 'Taler 2')])).rejects.toThrow();
+    expect(calls().map((c) => [c.type, c.outcome])).toEqual([
+      ['meeting.speakers_edit', 'error'],
+      ['meeting.transcript_edit', 'error'],
+    ]);
+    expectNoContent();
+    h.report.mockClear();
+    await expect(saveTranscriptSegments('m1', [seg('z')], 'done')).rejects.toThrow();
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it('a failed meeting write reports what it would have: redact, recording date and participants as error, never the audio flag', async () => {
+    const id = (await createMeeting({ title: 'x', participants: ['A'], origin: 'live', status: 'recording' })).id;
+    h.report.mockClear();
+    h.failPut = true;
+    await expect(
+      updateMeeting(id, { status: 'redacted', audioDeleted: true, recordedAt: '2026-01-01T00:00:00.000Z', participants: ['A', 'B'] }),
+    ).rejects.toThrow();
+    expect(calls().map((c) => [c.type, c.outcome])).toEqual([
+      ['meeting.redact', 'error'],
+      ['meeting.metadata_edit', 'error'],
+      ['meeting.participants_edit', 'error'],
+    ]);
+  });
+});
+
+describe('transcript deletion (redaction)', () => {
+  it('blanking a transcript that had text reports meeting.transcript_delete once, without content; blanking an empty one reports nothing', async () => {
+    await saveTranscript('m1', { rawText: SECRET_TEXT, chapters: [], piiReplacements: [], segments: [seg(SECRET_TEXT)] });
+    h.report.mockClear();
+    await saveTranscript('m1', { rawText: '', chapters: [], piiReplacements: [], segments: [], piiRemovedAt: '2026-01-01T00:00:00.000Z' });
+    expect(calls()).toEqual([{ type: 'meeting.transcript_delete', entityId: 'm1', details: undefined, outcome: undefined }]);
+    expectNoContent();
+    h.report.mockClear();
+    await saveTranscript('m1', { rawText: '', chapters: [], piiReplacements: [], segments: [] });
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it('a failed redaction write reports transcript_delete as error', async () => {
+    await saveTranscript('m1', { rawText: 't', chapters: [], piiReplacements: [], segments: [seg('a')] });
+    h.report.mockClear();
+    h.failPut = true;
+    await expect(saveTranscript('m1', { rawText: '', chapters: [], piiReplacements: [], segments: [] })).rejects.toThrow();
+    expect(calls()).toEqual([{ type: 'meeting.transcript_delete', entityId: 'm1', details: undefined, outcome: 'error' }]);
+  });
+});
+
+describe('failed deletes', () => {
+  it('a user-asked delete that throws reports error; one that finds nothing reports nothing', async () => {
+    const id = (await createMeeting({ title: 'x', origin: 'live' })).id;
+    h.report.mockClear();
+    h.failDelete = true;
+    await expect(deleteMeeting(id)).rejects.toThrow();
+    expect(calls()).toEqual([{ type: 'meeting.delete', entityId: id, details: { trigger: 'user' }, outcome: 'error' }]);
+    h.report.mockClear();
+    h.failDelete = false;
+    await deleteMeeting('00000000-0000-4000-8000-000000000000'); // never existed
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it('an audio delete that throws reports error for the user trigger too', async () => {
+    await saveAudio('m1', new Blob(['x']), 'audio/webm');
+    h.report.mockClear();
+    h.failDelete = true;
+    await expect(deleteAudio('m1')).rejects.toThrow();
+    expect(calls()).toEqual([{ type: 'meeting.audio_delete', entityId: 'm1', details: { trigger: 'user' }, outcome: 'error' }]);
   });
 });

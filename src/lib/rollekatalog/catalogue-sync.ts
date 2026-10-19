@@ -19,8 +19,9 @@
 //     left out of the upsert and the deactivation: the config entry wins. (The reverse order, a
 //     config entry added for a key that Rollekatalog already owns, is up to the config sync in
 //     src/lib/authz/external-roles.ts, which only refreshes rows it owns.)
-// The run is not audited and leaves no sync_runs row (that is the user/org sync's status
-// panel); `external_roles.synced_at` tells when it last ran. Failures surface as short codes.
+// The run leaves no sync_runs row (that is the user/org sync's status panel); `external_roles.synced_at`
+// tells when it last ran. The ROUTES that start it record one integration.sync_run audit event (run-audit.ts:
+// counts and a code only). Failures surface as short codes.
 import { createRunner, errorLabel } from '@/lib/authz/pg-runner';
 import { principalKey } from '@/lib/skabeloner/central-types';
 import { createRollekatalogClient, type RollekatalogClient } from './client';

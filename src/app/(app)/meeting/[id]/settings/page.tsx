@@ -85,6 +85,8 @@ export default function MeetingSettingsPage() {
       setMeetingTitle(trimmed);
     } catch (err) {
       console.error('[settings] kunne ikke omdøbe møde:', err);
+      // The rename failed: reported as such (which field only, never the title).
+      reportAuditEvent('meeting.metadata_edit', id, { field: 'title' }, { outcome: 'error' });
       setRenameError('Kunne ikke gemme det nye navn — prøv igen.');
     } finally {
       setIsRenaming(false);

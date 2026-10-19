@@ -194,6 +194,24 @@ describe('AUTH_CONFIG_FILE', () => {
       expect(warned()).toContain('claims.userId is the same attribute as claims.email');
     });
 
+    it.each([
+      'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name',
+      'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress',
+      'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/upn',
+      'urn:oid:0.9.2342.19200300.100.1.3:mail',
+      'userPrincipalName',
+    ])('warns (does not skip) when the SAML userId attribute is a mutable name or address: %s', (userId) => {
+      writeConfig({ providers: [{ ...SAML, claims: { userId } }] });
+      expect(loadAuthConfig().providers).toHaveLength(1);
+      expect(warned()).toContain('claims.userId names an attribute that is usually a mutable name or address');
+    });
+
+    it('does not warn about an immutable SAML userId such as the Entra object id', () => {
+      writeConfig({ providers: [{ ...SAML, claims: { userId: 'http://schemas.microsoft.com/identity/claims/objectidentifier' } }] });
+      expect(loadAuthConfig().providers).toHaveLength(1);
+      expect(warned()).not.toContain('claims.userId');
+    });
+
     it('skips a provider whose IdP metadata has an http endpoint (outside a loopback host)', () => {
       const bad = path.join(dir, 'bad.xml');
       const good = path.join(dir, 'good.xml');

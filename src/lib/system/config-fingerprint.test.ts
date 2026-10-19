@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -46,7 +47,7 @@ describe('configFingerprint', () => {
     expect(configFingerprint({ ...env, PATH: '/usr/bin', HOME: '/root' })).toBe(configFingerprint(env));
   });
 
-  it('only registers WHETHER a secret is set: a rotated key gives the same fingerprint, a removed one does not', () => {
+  it('without a key (no BETTER_AUTH_SECRET) only registers WHETHER a secret is set: a rotated key gives the same fingerprint, a removed one does not', () => {
     expect(configFingerprint({ ...env, OPENAI_API_KEY: 'sk-secret-2' })).toBe(configFingerprint(env));
     expect(configFingerprint({ ...env, OPENAI_API_KEY: '' })).not.toBe(configFingerprint(env));
   });
@@ -55,6 +56,93 @@ describe('configFingerprint', () => {
     const a = configFingerprint({ ...env, BOT_SERVICE_URL: 'http://user:pw1@bot:3001' });
     expect(configFingerprint({ ...env, BOT_SERVICE_URL: 'http://user:pw2@bot:3001' })).toBe(a);
     expect(configFingerprint({ ...env, DATABASE_URL: 'postgres://u:p@h/db1' })).toBe(configFingerprint({ ...env, DATABASE_URL: 'postgres://u:q@h/db2' }));
+  });
+});
+
+describe('rotated secrets (keyed digests, key derived from BETTER_AUTH_SECRET)', () => {
+  const keyed = { ACCESS_SOURCE: 'local', BETTER_AUTH_SECRET: 'auth-secret-1', OPENAI_API_KEY: 'sk-secret-1', BOT_SERVICE_URL: 'http://user:pw1@bot:3001' };
+
+  it('a rotated secret changes the fingerprint; the same secret does not', () => {
+    expect(configFingerprint({ ...keyed })).toBe(configFingerprint(keyed));
+    expect(configFingerprint({ ...keyed, OPENAI_API_KEY: 'sk-secret-2' })).not.toBe(configFingerprint(keyed));
+    expect(configFingerprint({ ...keyed, BOT_SERVICE_URL: 'http://user:pw2@bot:3001' })).not.toBe(configFingerprint(keyed));
+  });
+
+  it('the readable per-setting digests still only carry set/unset for a secret', () => {
+    expect(settingDigests({ ...keyed, OPENAI_API_KEY: 'sk-secret-2' }).OPENAI_API_KEY).toBe(settingDigests(keyed).OPENAI_API_KEY);
+  });
+
+  it('the stored flag holds keyed digests: no plain sha-256 of the secret, and they depend on the key', async () => {
+    const { runner, calls } = makeFakeRunner((sql) => (sql.includes('system_flags') ? [{ inserted: true }] : []));
+    await recordConfigFingerprint(keyed, runner);
+    const swap = calls.find((c) => c.sql.includes('INSERT INTO public.system_flags'))!;
+    const secretDigests = JSON.parse(String(swap.params[3])) as Record<string, string>;
+    expect(Object.keys(secretDigests).sort()).toEqual(['BETTER_AUTH_SECRET', 'BOT_SERVICE_URL', 'OPENAI_API_KEY']);
+    const plain = createHash('sha256').update('sk-secret-1').digest('hex');
+    for (const d of Object.values(secretDigests)) expect(plain.startsWith(d)).toBe(false);
+    expect(JSON.stringify(swap.params)).not.toMatch(/sk-secret|pw1|auth-secret/);
+    // A different key gives different digests for the same value.
+    const { runner: r2, calls: c2 } = makeFakeRunner((sql) => (sql.includes('system_flags') ? [{ inserted: true }] : []));
+    await recordConfigFingerprint({ ...keyed, BETTER_AUTH_SECRET: 'auth-secret-2' }, r2);
+    const other = JSON.parse(String(c2.find((c) => c.sql.includes('INSERT INTO public.system_flags'))!.params[3])) as Record<string, string>;
+    expect(other.OPENAI_API_KEY).not.toBe(secretDigests.OPENAI_API_KEY);
+    expect(swap.params[4]).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  async function stored(env: Record<string, string>) {
+    const { runner, calls } = makeFakeRunner((sql) => (sql.includes('system_flags') ? [{ inserted: true }] : []));
+    await recordConfigFingerprint(env, runner);
+    const p = calls.find((c) => c.sql.includes('INSERT INTO public.system_flags'))!.params;
+    return { fingerprint: p[1], digests: JSON.parse(String(p[2])), secretDigests: JSON.parse(String(p[3])), keyId: p[4] };
+  }
+
+  it('a rotation is reported as the setting NAME in changedKeys, never a value or digest', async () => {
+    const before = await stored(keyed);
+    const after = { ...keyed, OPENAI_API_KEY: 'sk-rotated-9' };
+    const { runner } = makeFakeRunner((sql) => (sql.includes('system_flags') ? [{ inserted: false, value: before }] : []));
+    await recordConfigFingerprint(after, runner);
+    const event = recordEvent.mock.calls.at(-1)![0];
+    expect(event.details).toEqual({ fingerprint: configFingerprint(after), changed: true, changedKeys: ['OPENAI_API_KEY'] });
+    expect(JSON.stringify(event)).not.toMatch(/sk-|secretDigests/);
+    expect(validateEvent(event)).toMatchObject({ ok: true });
+  });
+
+  it('rotating BETTER_AUTH_SECRET names only that setting (the key changed, the other digests are not comparable)', async () => {
+    const before = await stored(keyed);
+    const { runner } = makeFakeRunner((sql) => (sql.includes('system_flags') ? [{ inserted: false, value: before }] : []));
+    await recordConfigFingerprint({ ...keyed, BETTER_AUTH_SECRET: 'auth-secret-2' }, runner);
+    expect(recordEvent.mock.calls.at(-1)![0].details.changedKeys).toEqual(['BETTER_AUTH_SECRET']);
+  });
+
+  it('a flag from before keyed digests names no secret on the first start after the upgrade', async () => {
+    const old = { fingerprint: 'old', digests: settingDigests(keyed) };
+    const { runner } = makeFakeRunner((sql) => (sql.includes('system_flags') ? [{ inserted: false, value: old }] : []));
+    await recordConfigFingerprint(keyed, runner);
+    expect(recordEvent.mock.calls.at(-1)![0].details).toEqual({ fingerprint: configFingerprint(keyed), changed: true });
+  });
+
+  it('an unchanged environment still records nothing (the fingerprint matches, so the swap returns no row)', async () => {
+    const { runner } = makeFakeRunner((sql) => (sql.includes('system_flags') ? [] : []));
+    expect(await recordConfigFingerprint(keyed, runner)).toBe('unchanged');
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('a secret that is only referenced by the auth config file (${ENV}) is covered too, with no name in the event', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'fingerprint-refs-'));
+    try {
+      const f = path.join(dir, 'auth.json');
+      writeFileSync(f, '{"providers":[{"type":"oidc","clientSecret":"${CORP_IDP_SECRET}"}]}');
+      const a = { ...keyed, AUTH_CONFIG_FILE: f, CORP_IDP_SECRET: 'one' };
+      expect(configFingerprint({ ...a, CORP_IDP_SECRET: 'two' })).not.toBe(configFingerprint(a));
+      const before = await stored(a);
+      const { runner } = makeFakeRunner((sql) => (sql.includes('system_flags') ? [{ inserted: false, value: before }] : []));
+      await recordConfigFingerprint({ ...a, CORP_IDP_SECRET: 'two' }, runner);
+      const details = recordEvent.mock.calls.at(-1)![0].details;
+      expect(details.changedKeys).toEqual(['AUTH_CONFIG_FILE_REFERENCES']);
+      expect(JSON.stringify(details)).not.toMatch(/CORP_IDP|one|two/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -104,7 +192,8 @@ describe('recordConfigFingerprint', () => {
     expect(calls[0].sql).toBe('BEGIN');
     expect(calls.at(-1)!.sql).toBe('COMMIT');
     const swap = calls.find((c) => c.sql.includes('INSERT INTO public.system_flags'))!;
-    expect(swap.params).toEqual([CONFIG_FLAG_KEY, configFingerprint(env), JSON.stringify(settingDigests(env))]);
+    // No BETTER_AUTH_SECRET: no key, so no secret digests and no key id.
+    expect(swap.params).toEqual([CONFIG_FLAG_KEY, configFingerprint(env), JSON.stringify(settingDigests(env)), '{}', null]);
     expect(swap.tx).toBe(true);
     expect(recordEvent).toHaveBeenCalledWith(
       { type: 'system.config_changed', source: 'system', details: { fingerprint: configFingerprint(env), changed: false } },
@@ -126,7 +215,7 @@ describe('recordConfigFingerprint', () => {
     const { runner } = run([{ inserted: false, value: stored }]);
     await recordConfigFingerprint(after, runner);
     const details = recordEvent.mock.calls[0][0].details;
-    // A rotated secret is not a change (only set/unset counts); the URL and the source are.
+    // Without a key a rotated secret is not a change (only set/unset counts); the URL and the source are.
     expect(details.changedKeys).toEqual(['ACCESS_SOURCE', 'ROLLEKATALOG_URL']);
     expect(JSON.stringify(recordEvent.mock.calls[0][0])).not.toMatch(/rk\.example|rollekatalog"|sk-/);
     expect(validateEvent(recordEvent.mock.calls[0][0])).toMatchObject({ ok: true });

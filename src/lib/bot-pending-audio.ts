@@ -19,6 +19,10 @@ import type { HeaderSource } from '@/lib/audit/request-context';
 // handoff | ttl, object audio | transcript). The sweep runs opportunistically when the
 // next recording is stored, and on demand from POST /api/internal/bot-audio/sweep (an
 // operator cron, see DEPLOY.md), so the TTL is provable even when no recording follows.
+// A deletion that FAILS (anything but "already gone") is recorded too, with outcome 'error'.
+// The .audio file is written before its .meta.json, so a crash or a failed meta write could
+// leave an audio file with no meta: storePendingAudio removes it again, and the sweep also finds
+// such an orphan by its file name and deletes and logs it after the TTL (by file age).
 
 const TTL_MS = 60 * 60 * 1000; // 1 hour: audio, meta and transcript
 // The owner binding (who may collect or control a meeting) outlives the data: a bot session
@@ -137,6 +141,17 @@ async function ageOf(file: string): Promise<number | null> {
   }
 }
 
+/** Age of the audio file by its modification time; null when there is none (or the platform gave no time). */
+async function audioFileAge(meetingId: string): Promise<number | null> {
+  try {
+    const stat = await fs.stat(audioPath(meetingId));
+    return typeof stat?.mtimeMs === 'number' ? Date.now() - stat.mtimeMs : null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') safeLogError('bot-pending-audio sweep: audio file not readable', err);
+    return null;
+  }
+}
+
 const SWEEP_CONCURRENCY = 8;
 /** The sweep that runs when a recording is stored goes at most this often per process (the cron route has no limit). */
 const OPPORTUNISTIC_SWEEP_INTERVAL_MS = 60_000;
@@ -154,8 +169,12 @@ async function sweepOne(id: string, result: SweepResult): Promise<void> {
     const ownerRecord = await readOwnerRecord(id);
     const owner = ownerRecord?.userId ?? null;
     const [metaAge, transcriptAge] = await Promise.all([ageOf(metaPath(id)), ageOf(transcriptPath(id))]);
+    // No meta (its write failed or the process died between the two writes): an audio file on its own is
+    // an orphan and ages by its modification time, so it cannot outlive the TTL unseen.
+    const audioAge = metaAge === null ? await audioFileAge(id) : null;
     // A no-recording marker has no audio file: it goes too, but there is nothing to log.
-    if (metaAge !== null && metaAge > TTL_MS && (await deletePendingAudio(id, { trigger: 'ttl', actorUserId: owner }))) result.audio += 1;
+    const expired = (metaAge !== null && metaAge > TTL_MS) || (audioAge !== null && audioAge > TTL_MS);
+    if (expired && (await deletePendingAudio(id, { trigger: 'ttl', actorUserId: owner }))) result.audio += 1;
     if (transcriptAge !== null && transcriptAge > TTL_MS) {
       if (await deletePendingTranscript(id, { trigger: 'ttl', actorUserId: owner })) result.transcripts += 1;
     }
@@ -184,7 +203,7 @@ export async function sweepPendingBotData(opts: { skipId?: string } = {}): Promi
     const entries = await fs.readdir(rootDir());
     const ids = new Set<string>();
     for (const f of entries) {
-      const m = /^(.+)\.(?:meta|transcript|owner)\.json$/.exec(f);
+      const m = /^(.+)\.(?:(?:meta|transcript|owner)\.json|audio)$/.exec(f);
       if (m && /^[\w-]+$/.test(m[1]) && m[1] !== opts.skipId) ids.add(m[1]);
     }
     const all = [...ids];
@@ -212,7 +231,14 @@ export async function storePendingAudio(
   }
   const full: PendingMeta = { ...meta, createdAt: Date.now() };
   await fs.writeFile(audioPath(meetingId), buffer);
-  await fs.writeFile(metaPath(meetingId), JSON.stringify(full));
+  try {
+    await fs.writeFile(metaPath(meetingId), JSON.stringify(full));
+  } catch (err) {
+    // Without its meta the audio is invisible to the client and (before the sweep learned to
+    // find orphans) to the TTL: take it back out. Best effort; the sweep catches what is left.
+    await fs.unlink(audioPath(meetingId)).catch(() => {});
+    throw err;
+  }
 }
 
 // Records that the bot finished with no usable recording (e.g. never admitted,
@@ -261,26 +287,46 @@ export interface PendingDeleteAudit {
 
 /**
  * Deletes the stashed recording and its meta. With `audit`, a bot.audio_delete event is
- * recorded (best effort, never throws) but only when an audio FILE was actually removed:
- * a no-recording marker has none. Returns whether one was.
+ * recorded (best effort, never throws) but only when an audio FILE existed: a no-recording marker
+ * has none. A file that could not be removed is recorded with outcome 'error'. Returns whether one was removed.
  */
 export async function deletePendingAudio(meetingId: string, audit?: PendingDeleteAudit): Promise<boolean> {
   assertSafeId(meetingId);
-  const [removed] = await Promise.all([
-    fs.unlink(audioPath(meetingId)).then(() => true, () => false),
+  const [state] = await Promise.all([
+    unlinkState(audioPath(meetingId)),
     fs.unlink(metaPath(meetingId)).catch(() => {}),
   ]);
-  if (removed && audit) await emitDeleted(meetingId, audit, 'audio');
-  return removed;
+  // A file that could not be removed (not merely missing) is a failed deletion, and is logged as one.
+  if (audit && state !== 'missing') await emitDeleted(meetingId, audit, 'audio', state === 'failed' ? 'error' : 'success');
+  return state === 'removed';
+}
+
+/** removed | missing (ENOENT: nothing there, nothing to log) | failed (any other error, already logged content-free). */
+async function unlinkState(file: string): Promise<'removed' | 'missing' | 'failed'> {
+  try {
+    await fs.unlink(file);
+    return 'removed';
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return 'missing';
+    safeLogError('bot-pending-audio delete failed', err);
+    return 'failed';
+  }
 }
 
 /** One bot.audio_delete (best effort, never throws): the server-held recording or transcript is gone. */
-async function emitDeleted(meetingId: string, audit: PendingDeleteAudit, object: 'audio' | 'transcript'): Promise<void> {
+async function emitDeleted(
+  meetingId: string,
+  audit: PendingDeleteAudit,
+  object: 'audio' | 'transcript',
+  outcome: 'success' | 'error' = 'success',
+): Promise<void> {
   // The id came from a URL or a file name: it is an entity only when it is a well-formed UUID.
   const event = {
     type: 'bot.audio_delete' as const,
     source: 'system' as const,
     actorUserId: audit.actorUserId ?? null,
+    // 'success' is the default and stays out, so existing callers and readers are unchanged.
+    ...(outcome === 'error' ? { outcome } : {}),
     ...(UUID_RE.test(meetingId) ? { entityId: meetingId } : {}),
     // 'audio' is the default and stays out of the details, so existing rows and readers are unchanged.
     details: object === 'audio' ? { trigger: audit.trigger } : { trigger: audit.trigger, object },
@@ -312,13 +358,14 @@ export async function readPendingTranscript(meetingId: string): Promise<PendingT
 
 /**
  * Deletes the stashed transcript. With `audit`, a bot.audio_delete (object transcript) is recorded
- * when a transcript that actually held text (status ready) was removed; a 'processing' or
- * 'failed' marker has no content, so deleting it is not logged. Returns whether a file was removed.
+ * when a transcript that actually held text (status ready) was removed (outcome 'error' when it
+ * could not be removed); a 'processing' or 'failed' marker has no content, so deleting it is not
+ * logged. Returns whether a file was removed.
  */
 export async function deletePendingTranscript(meetingId: string, audit?: PendingDeleteAudit): Promise<boolean> {
   assertSafeId(meetingId);
   const heldText = audit ? (await readPendingTranscript(meetingId))?.status === 'ready' : false;
-  const removed = await fs.unlink(transcriptPath(meetingId)).then(() => true, () => false);
-  if (removed && audit && heldText) await emitDeleted(meetingId, audit, 'transcript');
-  return removed;
+  const state = await unlinkState(transcriptPath(meetingId));
+  if (audit && heldText && state !== 'missing') await emitDeleted(meetingId, audit, 'transcript', state === 'failed' ? 'error' : 'success');
+  return state === 'removed';
 }

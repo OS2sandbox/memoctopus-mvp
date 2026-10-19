@@ -77,6 +77,8 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
       actorUserId: userId,
       entityId: e.entityId,
       details: e.details,
+      // 'success' | 'error' only (the body schema); absent means success.
+      ...(e.outcome ? { outcome: e.outcome } : {}),
       clientEventId: e.clientEventId,
       clientOccurredAt: clampClientTime(e.occurredAt, now),
     } as AuditEventInput;

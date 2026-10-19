@@ -35,6 +35,34 @@ describe('withRetractableReport', () => {
     expect(report).toHaveBeenCalledOnce();
   });
 
+  it('a delete that THROWS is reported as a failure (not silently retracted); one that found nothing is not', async () => {
+    const retract = vi.fn();
+    const fail = vi.fn();
+    await expect(
+      withRetractableReport(true, () => retract, async () => { throw new Error('boom'); }, fail),
+    ).rejects.toThrow('boom');
+    expect(retract).toHaveBeenCalledTimes(1);
+    expect(fail).toHaveBeenCalledOnce();
+
+    fail.mockClear();
+    await expect(
+      withRetractableReport(false, () => undefined, async () => { throw new Error('boom'); }, fail),
+    ).rejects.toThrow('boom');
+    expect(fail).toHaveBeenCalledOnce();
+
+    // Nothing existed (retractIfMissing was called) and then the work threw: nothing to report.
+    fail.mockClear();
+    await expect(
+      withRetractableReport(true, () => retract, async (missing) => { missing(); throw new Error('boom'); }, fail),
+    ).rejects.toThrow('boom');
+    expect(fail).not.toHaveBeenCalled();
+
+    // A failure reporter that throws never hides the real error.
+    await expect(
+      withRetractableReport(false, () => undefined, async () => { throw new Error('real'); }, () => { throw new Error('reporter'); }),
+    ).rejects.toThrow('real');
+  });
+
   it('a report that throws never fails the delete', async () => {
     const work = vi.fn(async () => true);
     await withRetractableReport(true, () => { throw new Error('report'); }, work);

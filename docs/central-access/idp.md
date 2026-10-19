@@ -108,7 +108,7 @@ All URLs (`discoveryUrl`, `issuer`, `authorizationUrl`, `tokenUrl`, `userInfoUrl
 |---|---|---|
 | `email` | `email`, then `mail`, `upn`, `preferred_username` (OIDC); SAML needs it set (else the NameID is used, which is rarely an address) | the e-mail address; only a value that looks like an address is accepted |
 | `name` | `name`, then `given_name` + `family_name`, `preferred_username`, the address (OIDC); `displayName` (SAML) | display name |
-| `userId` | `sub` (OIDC); NameID (SAML) | the stable identifier of the person at this IdP; it becomes the account id. **Changing it later detaches everybody from their account**, so settle it before go-live. For OIDC it may **not** be `email`, `mail`, `upn`, `preferred_username`, `name` or `email_verified` (an administrator can re-assign those to another person, who would then become the first person's account): such a provider is skipped. For SAML the same rule is only warned about when `userId` equals `email`, because the NameID is often the only stable value available: pick an immutable one (an employee number, an object GUID). |
+| `userId` | `sub` (OIDC); NameID (SAML) | the stable identifier of the person at this IdP; it becomes the account id. **Changing it later detaches everybody from their account**, so settle it before go-live. For OIDC it may **not** be `email`, `mail`, `upn`, `preferred_username`, `name` or `email_verified` (an administrator can re-assign those to another person, who would then become the first person's account): such a provider is skipped. For SAML the app only **warns** (the provider is kept, because the NameID is sometimes all there is): at start, when `userId` is the same attribute as `email`, or when its name is usually mutable (the last part of the name is `name`, `displayname`, `mail`, `emailaddress`, `upn`, `userprincipalname`, `preferred_username`, `givenname`, `surname`, `samaccountname` or `mailnickname`, so `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name` is flagged). Pick an immutable one (an object GUID, an employee number). A name the check does not know is **not** proof that it is stable: ask the IdP's operator whether the attribute can be edited or re-assigned. |
 | `emailVerified` | the standard `email_verified` claim (OIDC); never asserted for SAML (the plugin's trust option is off) | claim that says the address is verified (`true` or the string `"true"`). Only used to decide whether a login may be linked to an *existing* account with the same address (section 5). Never true for an address taken from a fallback claim. |
 | `firstName`, `lastName` | SAML `givenName`, `surname` | SAML only |
 | `upn`, `preferredUsername` | | SAML only: copied into the stored identity snapshot (OIDC tokens already carry them) |
@@ -207,7 +207,7 @@ What this means for offboarding: a role removed in the IdP is removed here at th
 - **Redirect URI** to register: `<BETTER_AUTH_URL>/api/auth/oauth2/callback/<id>`.
 - **User info.** Only the id token is read when it already carries `sub` and an address and every configured role/group claim. Otherwise the app also asks the userinfo endpoint (from `userInfoUrl` or the discovery document) and merges what is missing; the id token wins on a clash and a userinfo answer for a *different* `sub` is discarded. If the endpoint fails the missing claims are simply absent, which grants nothing.
 - **Account linking.** Same rule as before: an SSO login links into an existing account with the same address only when both sides are verified; password accounts are never linked. Do not mark providers "trusted".
-- **What is checked on the id token.** Before any claim is read: `aud` contains the client id, `iss` equals the configured `issuer` or the discovery document's `issuer`, and the token has not expired (a minute of tolerance). If the issuer cannot be determined (the discovery document is unreachable) the login is refused. A mismatch refuses the login: no user, no session.
+- **What is checked on the id token.** Before any claim is read: `aud` contains the client id, `iss` equals the configured `issuer` or the discovery document's `issuer`, and the token has not expired (a minute of tolerance). If the issuer cannot be determined (the discovery document is unreachable) the login is refused. A mismatch refuses the login: no user, no session. **The id token's signature is not verified** (no JWKS lookup): this is the allowance of OpenID Connect Core 3.1.3.7 for a token received **directly from the token endpoint over TLS**, which is the only way this app obtains one (authorization code flow, confidential client; it never takes a token from the browser). It holds only while the token endpoint URL is the IdP's own and https: do not point `tokenUrl` or `discoveryUrl` at anything you do not control, and do not add an implicit or hybrid flow.
 - **Tokens are not kept.** The access, refresh and id tokens better-auth stores in `accounts` are set to NULL as soon as the login hooks have read them, and the app never asks for `offline_access` itself (do not add it to `scopes`: a refresh token would be discarded anyway). The identity snapshot (`external_identities`) holds only the whitelisted identity claims, never role or group values.
 - **Sessions on shared PCs.** RP-initiated logout (`end_session_endpoint`) and back-channel logout are **not built**: signing out of the app does not sign the person out of the IdP, and with silent single sign-on the next click on the provider button signs the next person at that PC straight in as the previous one. For shared workstations set `"prompt": "login"` on the provider (the IdP then asks for credentials every time), optionally with `"maxAge": 0`, or have the IdP end its own session by other means. In claims mode the session is never extended by activity (it lasts `ROLE_CLAIMS_MAX_SECONDS` from the login, no sliding refresh). Ask the client whether this matters (question 7 of the plan).
 - **Entra ID.** Roles appear in the id token only if the app registration defines **App roles** and assigns them to users or groups (claim `roles`, an array). A `groups` claim has to be switched on under Token configuration, carries object ids, and is **not sent when the person is in too many groups** (about 200 for a JWT; "group overage", the token then has only a pointer to Microsoft Graph). The app does **not** call Graph: use app roles, or keep users in fewer groups. `tenantId` is mandatory and must be your tenant's GUID: app role values and group GUIDs are only unique inside one tenant, so a multi-tenant app would let a foreign tenant mint a role named like yours. **The account id is Entra's `sub`, which is pairwise per application registration**: registering the application again (a new client id) gives every person a new `sub`, hence a new, empty account. Keep the registration, or plan a migration.
@@ -255,11 +255,11 @@ Claim URIs Microsoft uses by default (check them in the enterprise application's
 { "type": "saml", "id": "entra", "label": "Microsoft", "idpMetadataFile": "/config/entra-metadata.xml",
   "claims": { "email": "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
               "name": "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name",
-              "userId": "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name" },
+              "userId": "http://schemas.microsoft.com/identity/claims/objectidentifier" },
   "rolesClaim": "http://schemas.microsoft.com/ws/2008/06/identity/claims/role" }
 ```
 
-(Which attribute is the stable person identifier is a choice for the municipality: *ask*.)
+`userId` is the account key, so it must be an attribute nobody can edit or re-assign. In Entra the `name` claim is the user principal name and the e-mail address can be changed, so neither is used as `userId` (the config check warns about both). The object id (`objectidentifier`, a GUID that stays with the user object for life, in this tenant) is the immutable choice; it is a claim Entra offers in a SAML app's Attributes & Claims, but **verify that it is actually in the assertion** (read the SAML response of a test login) before go-live, because the sso plugin silently falls back to the NameID when the named attribute is absent (`attributes[claims.userId] || nameID`), and Entra's default NameID is the UPN. Switching the `userId` later detaches everybody from their account. App roles arrive in the `.../claims/role` attribute (one value per role) once they are assigned under Enterprise applications → Users and groups. The names above are Microsoft's defaults as documented; **UNVERIFIED against a live tenant here** (section 11).
 
 ### Authentik (for example Hjørring)
 
@@ -277,11 +277,77 @@ with `"roles": { "groupRoleMap": { "<authentik group name>": "bruger" } }`. If t
 
 ### FKA (Fælleskommunal Adgangsstyring)
 
-*Ask the municipality / KOMBIT* which protocol (OIDC or SAML) FKA offers for this solution, the endpoints or metadata, and the exact names of the user id, e-mail, name and role attributes. Do not assume that FKA uses the same claim names as another IdP. When you know them, the file is one of the generic entries above. The point of this installation model is that those names live in the file of that one municipality, so they never have to be agreed once for everyone.
+**Status: a skeleton, not a verified recipe.** Nothing here has been run against FKA or against a KOMBIT test environment; every attribute name below that is not in the app's own config format is **UNVERIFIED** and is written as `<ASK: ...>` so it cannot be mistaken for fact.
+
+*How it is typically connected (UNVERIFIED, confirm with the municipality / KOMBIT):* FKA is a municipal federation / access-management layer. A service such as this one is normally connected to it as a **SAML 2.0 service provider** with the SP metadata of section 6 handed to the FKA operator, who returns the IdP metadata (entity id, SSO endpoint, signing certificate). Whether FKA also offers an **OIDC** front door for this solution, or whether a municipality puts its own OIDC broker (Keycloak, Authentik, Entra) in front of FKA, is the municipality's choice: use the matching skeleton below. Do not assume that FKA uses the same attribute names as another IdP.
+
+SAML skeleton (save the metadata the FKA operator gives you as `auth-config/fka-metadata.xml`):
+
+```json
+{ "type": "saml", "id": "fka", "label": "FKA",
+  "idpMetadataFile": "/config/fka-metadata.xml",
+  "claims": { "userId": "<ASK: immutable person identifier attribute>",
+              "email": "<ASK: e-mail attribute>",
+              "name": "<ASK: display-name attribute>" },
+  "rolesClaim": "<ASK: attribute that carries the role values>" }
+```
+
+OIDC skeleton (only if the municipality offers OIDC for FKA or a broker in front of it):
+
+```json
+{ "type": "oidc", "id": "fka", "label": "FKA",
+  "clientId": "<ASK>", "clientSecret": "${FKA_SECRET}",
+  "discoveryUrl": "<ASK: https://.../.well-known/openid-configuration>",
+  "scopes": ["openid", "profile", "email", "<ASK: scope that releases roles, if any>"],
+  "rolesClaim": "<ASK: claim that carries the role values>" }
+```
+
+with `"roles": { "appRoleMap": { "<ASK: the role value FKA sends for an administrator>": "admin", "...": "bygger", "...": "bruger" } }`. A skeleton with a `<ASK: ...>` left in it is not valid configuration: replace every one before you start (an unknown claim name does not fail loudly, nobody just gets a role).
+
+**What the municipality (or the FKA operator) must supply:**
+
+1. The protocol they will use for this solution (SAML 2.0 or OIDC) and, for SAML, the **metadata URL or file**; for OIDC the discovery URL, client id and secret, and the redirect URI registered (section 5) or the ACS URL and entity id registered (section 6).
+2. The **stable identifier attribute** (SAML: `claims.userId`; OIDC: `sub` unless they say otherwise) and the written confirmation that it is never re-assigned or edited by the person. Not an e-mail address, a UPN or a name (the config check warns for the common ones).
+3. The attributes for e-mail and display name.
+4. **The attribute that carries the role claims**, whether it is multi-valued (array) or one delimited string (`format: "delimited"`, `separator`), and the **complete list of role values** that mean administrator, bygger and bruger. Who may change that attribute (section 1: IdP administrators only).
+5. Whether the role values are issued per service provider (as they usually are), or from a directory group everybody sees.
+6. The signing certificate rollover routine (a new metadata file, or a second certificate in `cert`), and the IdP's clock source (section 6, Clocks).
+7. A **test person per role** and a person with no role.
+
+**Verify** (section 8): start the dev simulation's claims mode (`docs/central-access/dev-simulation.md`, "Claims mode") to see the app behave correctly end to end with the same config shape (its SAML stand-in uses attributes `uid`, `mail`, `displayName`, `roles`, `memberOf`; copy `scripts/dev-sim/auth-config.claims.json` and replace the names). That proves the app, **not FKA**. Then connect the real FKA test environment, log in once per test person, read the SAML response (browser network tab, or the IdP operator's log) and compare every attribute name with the file letter by letter, then check Administration, Brugere og roller.
 
 ### OS2faktor
 
-*Ask* the municipality: OS2faktor can act as an IdP over SAML 2.0 (and OIDC, depending on the setup); the attributes it releases to a service provider are configured per service provider in OS2faktor, so the names are theirs to state. Use `idpMetadataFile` with the metadata they export, and map `claims`, `rolesClaim`, `groupsClaim` to the attribute names they give you. If OS2rollekatalog feeds OS2faktor, the roles arrive as attributes with the values defined there; use those values as the keys of `appRoleMap`.
+**Status: a skeleton, not a verified recipe; nothing has been run against OS2faktor.** Names marked `<ASK: ...>` are UNVERIFIED.
+
+*How it is typically connected (UNVERIFIED, confirm with the municipality):* OS2faktor is an identity and login service run for or by the municipality. It acts as an **identity provider towards service providers over SAML 2.0**, and may also offer OpenID Connect depending on version and setup. A service provider is registered **per service provider** in OS2faktor, and **the attributes (and the role values) it releases to that service provider are configured there**, so the names are the municipality's to state. If OS2rollekatalog feeds OS2faktor, the roles arrive as attribute values defined in that integration; use them as the keys of the map.
+
+SAML skeleton (the usual way):
+
+```json
+{ "type": "saml", "id": "os2faktor", "label": "OS2faktor",
+  "idpMetadataFile": "/config/os2faktor-metadata.xml",
+  "claims": { "userId": "<ASK: immutable person identifier attribute>",
+              "email": "<ASK: e-mail attribute>",
+              "name": "<ASK: display-name attribute>" },
+  "rolesClaim": "<ASK: attribute that carries the role values>",
+  "groupsClaim": "<ASK: attribute that carries group values, if used>" }
+```
+
+OIDC skeleton (only if the installation offers OIDC):
+
+```json
+{ "type": "oidc", "id": "os2faktor", "label": "OS2faktor",
+  "clientId": "<ASK>", "clientSecret": "${OS2FAKTOR_SECRET}",
+  "discoveryUrl": "<ASK: https://.../.well-known/openid-configuration>",
+  "rolesClaim": "<ASK: claim that carries the role values>" }
+```
+
+with `"roles": { "appRoleMap": { "<ASK: role value for administrator>": "admin" }, "groupRoleMap": { "<ASK: group value>": "bruger" } }`; with several providers use `roles.byProvider.os2faktor` (section 3.4).
+
+**What the municipality must supply:** the same seven items as for FKA above, with these additions: (a) the **metadata** exported from their OS2faktor (URL or file) after the SP metadata of section 6 (`BASE/api/auth/sso/saml2/sp/metadata?providerId=os2faktor`) has been registered there; (b) which attributes OS2faktor is set up to release to this service provider, since a missing attribute is not an error at the IdP, only absent here; (c) whether the identifier attribute is one the person can change (a user name that can be renamed is **not** acceptable as `userId`); (d) whether OS2faktor keeps its own session (shared workstations, section 5 and 11).
+
+**Verify:** the same as for FKA: dev-sim for the app's own behaviour, then a real test login per role, the SAML response read against the file, then Brugere og roller. Common failure causes: section 8, point 6.
 
 ### Keycloak
 
@@ -313,3 +379,23 @@ or the secret is written into the file itself (then keep the file readable only 
 ## 10. Local testing
 
 `docs/central-access/dev-simulation.md` ("Claims mode") starts a simulated OIDC and a simulated SAML IdP that emit roles and groups, runs the app with a ready-made config file and checks 40 behaviours end to end. For a real SAML IdP on a laptop use Keycloak (`docker run -p 8081:8080 -e KC_BOOTSTRAP_ADMIN_USERNAME=admin -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin quay.io/keycloak/keycloak start-dev`): create a realm, a client of type SAML with the ACS URL and entity id from section 6 (sign assertions on, client signature off), download the realm's SAML IdP descriptor to `auth-config/keycloak-metadata.xml` and reference it as `idpMetadataFile`.
+
+## 11. What is not built, and what has been verified
+
+Read this before you promise anything to a customer.
+
+**Not built**
+
+- **SAML single logout (SLO)** and **OIDC RP-initiated logout** (`end_session_endpoint`) and **back-channel / front-channel logout**. Signing out of the app ends only the app's own session; the IdP session stays, and an IdP that does not ask for credentials again signs the next person straight in. **Shared workstations:** set `"prompt": "login"` (and optionally `"maxAge": 0`) on an `oidc` or `entra` provider so the IdP asks for credentials at every sign-in; SAML has no such switch in the file, so the IdP has to end its own session (or force re-authentication for this service provider, which is an IdP setting, **UNVERIFIED** per product). The app's session in claims mode ends after `ROLE_CLAIMS_MAX_SECONDS` regardless of activity. Whether this is acceptable is a question for the customer.
+- **Revocation inside a running session.** The IdP is asked only at login, so a role removed (or a person disabled) at the IdP is felt at their next login, and at the latest when `ROLE_CLAIMS_MAX_SECONDS` has passed (section 4); lower it if that is too slow.
+- **Entra group overage.** A user in too many groups (about 200 for a JWT) gets no `groups` claim in the id token, only a pointer to Microsoft Graph; the app **does not call Graph**, so such a person would silently get no group-based role. Use **app roles** (`roles` claim) instead of groups for Entra, or keep the mapped groups few. A SAML assertion has a lower limit (about 150 per Microsoft's documentation; **UNVERIFIED** here).
+- **Encrypted SAML assertions**, an HTTP-POST binding for the AuthnRequest, and certificate rotation without a metadata update (section 6).
+- **ID token signature verification** for OIDC and Entra: not done, by design (section 5: the token is received straight from the token endpoint over TLS, OIDC Core 3.1.3.7). If a customer's security review requires JWKS verification regardless, that is a code change.
+- **Provider-side group or role discovery.** The app reads what the login carries; it never looks roles up at the IdP or at Rollekatalog for this mode.
+
+**Verified, and only against these**
+
+- OIDC and SAML behaviour is verified by the unit and flow tests (`oidc.flow.test.ts`, `saml.flow.test.ts`, `config-file.test.ts`, the claims tests in `src/lib/authz/`) and by the dev simulation's claims mode (`scripts/dev-sim/`, `acceptance-claims.ts`), whose OIDC and SAML stand-ins are **generic**: they issue the claims and attributes the dev config names (`roles`, `memberOf`, `uid`, `mail`, `displayName`).
+- **No product-specific login has been run:** not Entra ID, not Authentik, not Keycloak, not FKA, not OS2faktor. The claim and attribute names in the Entra, Authentik and Keycloak recipes are the products' **documented defaults, not observations**, and everything marked `<ASK: ...>` or UNVERIFIED in the FKA and OS2faktor recipes is exactly that. Each first installation therefore needs the check in section 8: one real login per role, the decoded token or the SAML response read against the file.
+- The dev simulation has **no Entra-shaped persona** (a `roles` array plus a `tid`, GUID group ids, an Entra `iss`). The built-in `entra` provider's tenant, issuer and audience checks are covered by unit tests only. Add such a persona to `scripts/dev-sim/oidc.ts` and `auth-config.claims.json` if you need an end-to-end proof; it was left out so as not to disturb the existing acceptance runs.
+

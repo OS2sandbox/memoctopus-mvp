@@ -251,7 +251,17 @@ session. Entra: `"prompt": "login"` works the same.
 back-channel logout and SAML single logout (signing out of the app does not sign out of the
 IdP), encrypted SAML assertions, Entra group overage (use app roles instead of `groups`),
 and removing a role in the IdP taking effect inside a still-running session before
-`ROLE_CLAIMS_MAX_SECONDS` (the IdP is only asked at login).
+`ROLE_CLAIMS_MAX_SECONDS` (the IdP is only asked at login). SAML has no `prompt` switch: for
+shared workstations the IdP itself has to end its session or force re-authentication.
+OIDC id tokens are not signature-verified (they come straight from the token endpoint over
+TLS). **Verified only against the generic OIDC and SAML stand-ins of the dev simulation**:
+no Entra, Authentik, Keycloak, FKA or OS2faktor login has been run, so do one real login per
+role before go-live (`docs/central-access/idp.md` sections 8 and 11, where the FKA and
+OS2faktor recipes are skeletons with every unverified name marked).
+
+**Sharing prompts by role or group** needs `ACCESS_SOURCE=claims` (the IdP sends the roles
+with the login; OS2rollekatalog can feed the IdP). In `ACCESS_SOURCE=rollekatalog` a shared
+prompt is shared with org units instead. See `docs/central-access/rollekatalog.md` section 13.
 
 ## Central access, audit log and Rollekatalog
 

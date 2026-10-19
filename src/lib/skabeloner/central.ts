@@ -27,6 +27,13 @@
 //    serialised and the second sees the new version and gets a
 //    VersionConflictError (409); the UPDATE also filters on current_version.
 //
+// Refusals are audited too: a manager who is refused (a scoped manager touching a template out of
+//    scope or organisation-wide, role/group targets without the right or outside claims mode, a stale
+//    baseVersion, an organisation-wide create without a global right) leaves an `authz.denied` row
+//    (required 'template.manage', a closed reason, the template as entity), written AFTER the
+//    transaction has rolled back and never carrying a name, prompt or change note. The answer to the
+//    caller is unchanged (a template out of scope is the same 404 as one that does not exist).
+//
 // Reading the prompt: every function here returns it, so they must only be
 // called from manager-scoped routes. Ordinary users get the prompt-free
 // CentralSkabelonSummary from the resolver instead.
@@ -35,6 +42,7 @@
 // 'public'), so the *.pg.test.ts lane runs the same code in a throwaway schema.
 import { z } from 'zod';
 import type { AuditEventOf, EventType } from '@/lib/audit/events';
+import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 import { recordEvent } from '@/lib/audit/record';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError, VersionConflictError } from '@/lib/authz/access-errors';
 import { defaultRunner, type SqlQueryable, type SqlRunner } from '@/lib/authz/pg-runner';
@@ -119,10 +127,48 @@ const COLUMN: Record<CentralContentField, string> = {
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-async function inTx<T>(env: CentralEnv, fn: (tx: SqlQueryable) => Promise<T>): Promise<T> {
+/**
+ * "Not found" for a template (or unit) that EXISTS but is outside the manager's scope. The answer is the
+ * same 404 as for one that does not exist (same class family, message and code); the subclass only lets
+ * the service tell the two apart for the audit log.
+ */
+class OutOfScopeError extends NotFoundError {}
+
+/** The refusals the log records, by the code the service answers with; everything else is a validation or state problem. */
+const AUDITED_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  'principal_targets_need_global',
+  'principal_targets_need_claims',
+  'org_wide_needs_global',
+  'version_conflict',
+]);
+
+function refusalReason(err: unknown): string | null {
+  if (err instanceof OutOfScopeError) return 'out_of_scope';
+  if ((err instanceof ForbiddenError || err instanceof ConflictError) && AUDITED_REFUSAL_CODES.has(err.code)) return err.code;
+  return null;
+}
+
+/** Who was refused and for which template; never a name, prompt or note. */
+interface RefusalAudit {
+  principal: Principal;
+  /** The template the call was about (only when it is a well-formed uuid). */
+  entityId?: string;
+}
+
+async function inTx<T>(env: CentralEnv, fn: (tx: SqlQueryable) => Promise<T>, refusal?: RefusalAudit): Promise<T> {
   try {
     return await env.runner.transaction(fn);
   } catch (err) {
+    // The transaction has rolled back; the denial is its own best-effort write (never throws).
+    const reason = refusal ? refusalReason(err) : null;
+    if (refusal && reason) {
+      await recordAuthzDenied({
+        actorUserId: refusal.principal.userId,
+        required: 'template.manage',
+        reason,
+        ...(refusal.entityId && isUuid(refusal.entityId) ? { entityType: 'central_template', entityId: refusal.entityId.toLowerCase() } : {}),
+      });
+    }
     // A concurrent change tripped an FK / unique / check constraint after our own checks passed.
     const code = (err as { code?: unknown } | null)?.code;
     if (code === '23001' || code === '23503' || code === '23505') {
@@ -389,7 +435,7 @@ async function loadManageable(
     row.owner_org_unit_uuid === null
       ? hasGlobalScope(principal, 'template.manage')
       : await isOrgUnitWithinScope(principal, 'template.manage', row.owner_org_unit_uuid, scopeEnv(env, q));
-  if (!inScope) throw new NotFoundError(NOT_FOUND);
+  if (!inScope) throw new OutOfScopeError(NOT_FOUND);
   return row;
 }
 
@@ -516,7 +562,12 @@ export async function createCentralTemplate(
       const unit = await tx.query(`SELECT 1 FROM ${tbl(env, 'org_units')} WHERE uuid = $1::uuid FOR SHARE`, [owner]);
       const inScope =
         unit.rows.length > 0 && (await isOrgUnitWithinScope(principal, 'template.manage', owner, scopeEnv(env, tx)));
-      if (!inScope) throw new NotFoundError('Organisationsenheden findes ikke', 'org_unit_not_found');
+      if (!inScope) {
+        // A unit that exists but is out of scope is a refusal (logged); a unit that does not exist is not.
+        throw unit.rows.length > 0
+          ? new OutOfScopeError('Organisationsenheden findes ikke', 'org_unit_not_found')
+          : new NotFoundError('Organisationsenheden findes ikke', 'org_unit_not_found');
+      }
     }
 
     await assertTargetsInOwnerSubtree(env, tx, owner, targets);
@@ -564,7 +615,7 @@ export async function createCentralTemplate(
       details: { version: 1, targetCount: targets.length, principalTargetCount: principalTargets.length },
     });
     return reload(env, tx, id);
-  });
+  }, { principal });
 }
 
 // ─── Update (content and/or targets) ───────────────────────────────────────
@@ -673,7 +724,7 @@ export async function updateCentralTemplate(
           },
     );
     return reload(env, tx, row.id);
-  });
+  }, { principal, entityId: id });
 }
 
 // ─── Archive / restore ─────────────────────────────────────────────────────
@@ -731,7 +782,7 @@ async function changeStatus(
       details: { version: newVersion },
     });
     return reload(env, tx, row.id);
-  });
+  }, { principal, entityId: id });
 }
 
 export const archiveCentralTemplate = (

@@ -35,6 +35,9 @@ export function hasUnknownEventType(json: unknown): boolean {
 /** Response body for a batch with an unknown event type; the browser keys on `code`. */
 export const UNKNOWN_EVENT_TYPE_BODY = { error: 'Invalid request', code: 'unknown_event_type' } as const;
 
+export const CLIENT_OUTCOMES = ['success', 'error'] as const;
+export type ClientOutcome = (typeof CLIENT_OUTCOMES)[number];
+
 // STRICT: any other key (an `actor`, `ip`, `userId`, `source` ...) fails parsing.
 // `details` is only shape-checked here; the per-type strict schema runs in
 // validateEvent / recordEvent.
@@ -57,6 +60,10 @@ export const clientEventsBody = z
             type: z.enum(TYPES),
             entityId: z.string().uuid(),
             details: z.record(z.unknown()).default({}),
+            // How the action ended, as the browser saw it. Only these two: a local action cannot be
+            // 'denied', and any other value fails the strict parse (refused for good, counted by the
+            // browser). Absent = success. Self-reported like everything else here.
+            outcome: z.enum(CLIENT_OUTCOMES).optional(),
           })
           .strict(),
       )

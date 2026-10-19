@@ -6,6 +6,8 @@ vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
 vi.mock('@/lib/db', () => ({ pool: { query: vi.fn() }, db: {} }));
 vi.mock('@/lib/rollekatalog/catalogue-sync', () => ({ runCatalogueRefresh: vi.fn() }));
+const audit = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/rollekatalog/run-audit', () => ({ recordIntegrationRun: (...a: unknown[]) => audit(...a) }));
 
 import { NextRequest } from 'next/server';
 import { POST } from './route';
@@ -41,6 +43,7 @@ beforeEach(() => {
   mockSession.mockReset().mockResolvedValue(FAKE_SESSION as never);
   mockResolve.mockReset().mockResolvedValue(admin);
   mockRun.mockReset().mockResolvedValue({ status: 'success', counts, errorCode: null });
+  audit.mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -93,5 +96,23 @@ describe('POST /api/admin/central-templates/roles/refresh (sync.run)', () => {
     expect(body.code).toBe(errorCode);
     expect(body.error).toMatch(/[a-zæøå]/i);
     expect(body.error).not.toContain(errorCode);
+  });
+});
+
+describe('POST /api/admin/central-templates/roles/refresh is audited (integration.sync_run)', () => {
+  it('records a manual role_catalogue run with the administrator as actor and the request', async () => {
+    await post();
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'role_catalogue', trigger: 'manual', result: { status: 'success', counts, errorCode: null }, actorUserId: admin.userId, req: expect.anything() }),
+    );
+  });
+
+  it('records nothing for a caller without sync.run, or when the integration is not configured', async () => {
+    mockResolve.mockResolvedValueOnce(manager);
+    await post();
+    vi.stubEnv('ROLLEKATALOG_URL', '');
+    await post();
+    expect(audit).not.toHaveBeenCalled();
   });
 });

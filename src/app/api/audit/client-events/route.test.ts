@@ -92,6 +92,27 @@ describe('POST /api/audit/client-events', () => {
     expect((mockRecord.mock.calls[0][0] as { headers: Headers }).headers).toBeInstanceOf(Headers);
   });
 
+  it('passes a reported failure on as outcome error; an event without outcome is stored without one (success by default)', async () => {
+    const res = await send({
+      events: [
+        ev({ clientEventId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee1', type: 'meeting.minutes_save', outcome: 'error' }),
+        ev({ clientEventId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeee2', type: 'meeting.minutes_save' }),
+      ],
+    });
+    expect(res.status).toBe(200);
+    const inputs = mockRecord.mock.calls.map((c) => c[1] as unknown as Record<string, unknown>);
+    expect(inputs.map((i) => i.outcome)).toEqual(['error', undefined]);
+    // Both pass the same catalogue validation the route applies (the outcome is a real column value).
+    for (const i of inputs) expect(validateEvent(i as never).ok).toBe(true);
+  });
+
+  it('refuses a denied (or invented) outcome from the browser: 400 and nothing recorded', async () => {
+    for (const outcome of ['denied', 'forbidden', 5]) {
+      expect((await send({ events: [ev({ outcome })] })).status).toBe(400);
+    }
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+
   it('looks the actor up once per request and hands the snapshot to every write', async () => {
     const snapshot = { name: 'Anna', orgUnitUuid: null };
     vi.mocked(resolveActorSnapshot).mockClear().mockResolvedValue(snapshot);

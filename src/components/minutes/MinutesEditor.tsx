@@ -212,7 +212,13 @@ export function MinutesEditor({
         setVersions(saved.versions.map((v) => ({ id: v.id, label: v.label, content: v.content, baseline: v.baseline })));
         const nextTitle = content.header?.title ?? meetingTitle;
         if (nextTitle !== savedTitleRef.current) {
-          await updateMeeting(meetingId, { title: nextTitle });
+          try {
+            await updateMeeting(meetingId, { title: nextTitle });
+          } catch (err) {
+            // The rename did not reach the meeting record: reported as failed (never the title).
+            reportAuditEvent('meeting.metadata_edit', meetingId, { field: 'title' }, { outcome: 'error' });
+            throw err;
+          }
           // The title edited in the minutes header: which field only, never the title.
           reportAuditEvent('meeting.metadata_edit', meetingId, { field: 'title' });
           savedTitleRef.current = nextTitle;

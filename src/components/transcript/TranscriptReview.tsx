@@ -360,6 +360,8 @@ export function TranscriptReview({
   // Locked templates delegated by the organisation. The summary never carries a
   // prompt: the server applies it, the client only needs the flags and the rules.
   const [centralSkabeloner, setCentralSkabeloner] = useState<CentralSkabelonSummary[]>([]);
+  // The server could not read the shared list: say so instead of silently showing no 'Centrale skabeloner' group.
+  const [centralError, setCentralError] = useState(false);
   const [selectedSkabelonId, setSelectedSkabelonId] = useState<string>('');
   // The skabelon list loads async (and can arrive late while transcription
   // saturates the connection pool). Once the user picks a skabelon themselves,
@@ -473,19 +475,20 @@ export function TranscriptReview({
     }
   }
 
-  async function fetchSkabeloner(): Promise<{ personal: Skabelon[]; central: CentralSkabelonSummary[] }> {
+  async function fetchSkabeloner(): Promise<{ personal: Skabelon[]; central: CentralSkabelonSummary[]; centralError: boolean }> {
     const r = await fetch('/api/skabeloner');
-    const data = (r.ok ? await r.json() : {}) as { skabeloner?: Skabelon[]; centralSkabeloner?: CentralSkabelonSummary[] };
-    return { personal: data.skabeloner ?? [], central: data.centralSkabeloner ?? [] };
+    const data = (r.ok ? await r.json() : {}) as { skabeloner?: Skabelon[]; centralSkabeloner?: CentralSkabelonSummary[]; centralError?: boolean };
+    return { personal: data.skabeloner ?? [], central: data.centralSkabeloner ?? [], centralError: data.centralError === true };
   }
 
   useEffect(() => {
     let cancelled = false;
     fetchSkabeloner()
-      .then(({ personal: list, central }) => {
+      .then(({ personal: list, central, centralError: centralFailed }) => {
         if (cancelled) return;
         setSkabeloner(list);
         setCentralSkabeloner(central);
+        setCentralError(centralFailed);
         const def = defaultSkabelonOf(list);
         if (def && !skabelonTouchedRef.current) seedSkabelon(def);
       })
@@ -522,9 +525,10 @@ export function TranscriptReview({
   // generate silently use no template.
   async function refreshAfterCentralGone() {
     try {
-      const { personal, central } = await fetchSkabeloner();
+      const { personal, central, centralError: centralFailed } = await fetchSkabeloner();
       setSkabeloner(personal);
       setCentralSkabeloner(central);
+      setCentralError(centralFailed);
       if (selectedCentralId && !central.some((c) => c.id === selectedCentralId)) {
         seedSkabelon(defaultSkabelonOf(personal));
       }
@@ -1559,6 +1563,12 @@ export function TranscriptReview({
               value={selectedSkabelonId}
               onChange={selectSkabelon}
             />
+
+            {centralError && (
+              <div role="status" style={{ margin: '-6px 0 12px', fontSize: 12.5, color: 'var(--warn)', lineHeight: 1.5 }}>
+                Organisationens centrale skabeloner kunne ikke hentes lige nu. Dine egne skabeloner kan stadig bruges; prøv igen om lidt.
+              </div>
+            )}
 
             {selectedCentral && (
               <div style={{ margin: '-6px 0 12px', fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', lineHeight: 1.5 }}>

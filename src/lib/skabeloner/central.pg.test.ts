@@ -11,6 +11,8 @@ import { createRunner, type ClientLike, type SqlResult, type SqlRunner } from '@
 
 // The audit actor snapshot reads through the app's Drizzle `db`; here it is absent, which record.ts tolerates (null name).
 vi.mock('@/lib/db', () => ({ pool: {}, db: {} }));
+const recordAuthzDenied = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => undefined));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied }));
 
 import { deleteOrgUnit } from '@/lib/authz/access-admin';
 import { NotFoundError, VersionConflictError } from '@/lib/authz/access-errors';
@@ -505,6 +507,34 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         expect(versions[0]).toMatchObject({ changeType: 'update', changedByName: 'Mikkel Manager', changeNote: NOTE });
         expect(versions[0].content.name).toBe('Omdøbt');
         expect(versions[0].targets).toEqual([{ orgUnitUuid: t.a11, includeDescendants: true }]);
+        await close();
+      }));
+  });
+
+  describe('refusals leave an authz.denied row, written after the rollback', () => {
+    it('an out-of-scope or stale write is refused, rolled back and reported once each, with the template as entity', () =>
+      withFreshSchema(async (c, schema) => {
+        const { runner, close } = makeRunner(c, schema);
+        const env: CentralEnv = { schema, runner };
+        const t = await tree(c);
+        const mgrA = managerOf('a', t.a);
+        const mgrB = managerOf('b', t.b);
+        const own = await createCentralTemplate(mgrB, { ...BASE, ownerOrgUnitUuid: t.b, changeNote: NOTE }, env);
+        const before = await count(c, 'audit_events');
+        recordAuthzDenied.mockClear();
+
+        await expect(updateCentralTemplate(mgrA, own.id, { baseVersion: 1, changeNote: NOTE, name: 'X' }, env)).rejects.toBeInstanceOf(NotFoundError);
+        await expect(updateCentralTemplate(mgrB, own.id, { baseVersion: 7, changeNote: NOTE, name: 'X' }, env)).rejects.toBeInstanceOf(VersionConflictError);
+        // An id that does not exist is not a refusal.
+        await expect(archiveCentralTemplate(mgrA, '99999999-9999-4999-8999-999999999999', { baseVersion: 1, changeNote: NOTE }, env)).rejects.toBeInstanceOf(NotFoundError);
+
+        expect(recordAuthzDenied.mock.calls.map((x) => x[0])).toEqual([
+          { actorUserId: 'a', required: 'template.manage', reason: 'out_of_scope', entityType: 'central_template', entityId: own.id },
+          { actorUserId: 'b', required: 'template.manage', reason: 'version_conflict', entityType: 'central_template', entityId: own.id },
+        ]);
+        // Nothing of the refused writes was kept, and no central_template.* event was written for them.
+        expect(await count(c, 'audit_events')).toBe(before);
+        expect((await c.query('SELECT current_version FROM central_templates WHERE id = $1', [own.id])).rows[0].current_version).toBe(1);
         await close();
       }));
   });

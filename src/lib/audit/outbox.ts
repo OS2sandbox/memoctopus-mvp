@@ -23,6 +23,8 @@ export interface OutboxEvent {
   details: Record<string, unknown>;
   /** When the user action happened (ISO). The server clamps it. */
   occurredAt: string;
+  /** Set only for a failed action ('error'); absent = success. */
+  outcome?: 'error';
   /** When it entered the queue (ms); drives TTL and oldest-first eviction. */
   queuedAt: number;
   attempts: number;
@@ -163,7 +165,7 @@ export function clearDroppedLocally(userId: string, reported: number): void {
 /** Queue one event; evicts the oldest ones beyond the bound. Returns false if it could not be stored. */
 export async function addToOutbox(
   userId: string,
-  event: Pick<OutboxEvent, 'clientEventId' | 'type' | 'entityId' | 'details' | 'occurredAt'>,
+  event: Pick<OutboxEvent, 'clientEventId' | 'type' | 'entityId' | 'details' | 'occurredAt' | 'outcome'>,
   now = Date.now(),
 ): Promise<boolean> {
   if (!outboxAvailable()) return false;

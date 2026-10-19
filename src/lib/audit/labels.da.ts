@@ -38,6 +38,7 @@ export const eventTypeLabels: Record<EventType, string> = {
   'meeting.create': 'Møde oprettet',
   'meeting.delete': 'Møde slettet',
   'meeting.redact': 'Møde sløret',
+  'meeting.transcript_delete': 'Transskription slettet',
   'meeting.audio_delete': 'Lyd slettet',
   'meeting.minutes_view': 'Referat vist',
   'meeting.transcript_view': 'Transskription vist',
@@ -55,6 +56,7 @@ export const eventTypeLabels: Record<EventType, string> = {
   'meeting.speakers_edit': 'Talere ændret',
   // Systemet
   'system.config_changed': 'Systemkonfiguration ændret',
+  'integration.sync_run': 'Synkronisering med Rollekatalog kørt',
   // Loggen selv
   'audit.export': 'Log eksporteret',
   'audit.events_dropped': 'Hændelser blev ikke registreret',

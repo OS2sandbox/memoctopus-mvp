@@ -65,9 +65,19 @@ export async function updateMeeting(
   const db = await getDB();
   const existing = await db.get('meetings', id);
   if (!existing) return;
-  await db.put('meetings', { ...existing, ...patch, updatedAt: new Date().toISOString() });
   try {
-    reportMeetingChanges(existing, patch, opts);
+    await db.put('meetings', { ...existing, ...patch, updatedAt: new Date().toISOString() });
+  } catch (err) {
+    // The write failed: what it would have reported is reported as failed (outcome 'error').
+    try {
+      reportMeetingChanges(existing, patch, opts, 'error');
+    } catch {
+      // Reporting never changes how the write failed.
+    }
+    throw err;
+  }
+  try {
+    reportMeetingChanges(existing, patch, opts, 'success');
   } catch {
     // Reporting is best effort and must never turn a successful write into an error.
   }
@@ -91,17 +101,22 @@ function reportMeetingChanges(
   existing: StoredMeeting,
   patch: Partial<Omit<StoredMeeting, 'id' | 'createdAt'>>,
   opts: { automatic?: boolean; trigger?: DeleteTrigger },
+  outcome: 'success' | 'error',
 ): void {
   const id = existing.id;
-  if (patch.status === 'redacted' && existing.status !== 'redacted') reportAuditEvent('meeting.redact', id);
-  if (patch.audioDeleted === true && !existing.audioDeleted) {
+  // Success calls carry no options (success is the default); only a failed write says so.
+  const o = outcome === 'error' ? { outcome } : undefined;
+  if (patch.status === 'redacted' && existing.status !== 'redacted') reportAuditEvent('meeting.redact', id, undefined, o);
+  // The audio file itself is deleted (and reported, success or failure) by deleteAudio; this write only
+  // sets the flag, so a failure of the flag alone is not reported as a failed audio delete.
+  if (outcome === 'success' && patch.audioDeleted === true && !existing.audioDeleted) {
     reportAuditEvent('meeting.audio_delete', id, { trigger: opts.trigger ?? 'user' });
   }
   if (opts.automatic !== true && patch.recordedAt !== undefined && patch.recordedAt !== existing.recordedAt) {
-    reportAuditEvent('meeting.metadata_edit', id, { field: 'recorded_at' });
+    reportAuditEvent('meeting.metadata_edit', id, { field: 'recorded_at' }, o);
   }
   if (opts.automatic !== true && patch.participants !== undefined && !sameStrings(patch.participants, existing.participants)) {
-    reportAuditEvent('meeting.participants_edit', id, { participantCount: (patch.participants ?? []).length });
+    reportAuditEvent('meeting.participants_edit', id, { participantCount: (patch.participants ?? []).length }, o);
   }
 }
 
@@ -118,6 +133,8 @@ export async function deleteMeeting(
     trigger !== 'user',
     () => reportAuditEvent('meeting.delete', id, { trigger }),
     (retractIfMissing) => deleteMeetingRows(id, retractIfMissing),
+    // The delete itself threw: report it as failed instead of retracting it silently.
+    () => reportAuditEvent('meeting.delete', id, { trigger }, { outcome: 'error' }),
   );
 }
 

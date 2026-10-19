@@ -721,6 +721,8 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     resetLiveState();
     // Tracked outside try so the catch can release it if setup fails after getUserMedia
     let stream: MediaStream | null = null;
+    // Whether the start was reported as done: a later setup error must not turn it into a failed start.
+    let startReported = false;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: false },
@@ -815,6 +817,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       // Recording steps are reported as actions (the meeting id only); see lib/audit/client.ts.
       stopReportedRef.current = false;
       reportAuditEvent('meeting.recording_start', meetingId);
+      startReported = true;
 
       timerRef.current = setInterval(() => {
         setElapsed(Math.floor((Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000));
@@ -831,6 +834,8 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       audioContextRef.current = null;
       analyserRef.current = null;
       console.error('[startRecording]', err);
+      // The microphone or recorder could not be started: a failed start (no details, never the error text).
+      if (!startReported) reportAuditEvent('meeting.recording_start', meetingId, undefined, { outcome: 'error' });
 
       if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
         setError('Mikrofonens tilladelse er afvist. Tillad adgang i browserens adresselinje og prøv igen.');

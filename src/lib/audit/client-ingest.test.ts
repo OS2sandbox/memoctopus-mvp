@@ -52,11 +52,32 @@ describe('clientEventsBody', () => {
         'meeting.recording_start',
         'meeting.recording_stop',
         'meeting.redact',
+        'meeting.transcript_delete',
         'meeting.speakers_edit',
         'meeting.transcript_edit',
         'meeting.transcript_view',
       ].sort(),
     );
+  });
+});
+
+describe('clientEventsBody outcome', () => {
+  const base = {
+    clientEventId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    occurredAt: '2026-10-05T12:00:00.000Z',
+    type: 'meeting.delete',
+    entityId: '11111111-2222-4333-8444-555555555555',
+  };
+  const parse = (extra: Record<string, unknown>) => clientEventsBody.safeParse({ events: [{ ...base, ...extra }] });
+
+  it('accepts success and error, and no outcome at all', () => {
+    expect(parse({}).success).toBe(true);
+    expect(parse({ outcome: 'success' }).success).toBe(true);
+    expect(parse({ outcome: 'error' }).success).toBe(true);
+  });
+
+  it('refuses denied and anything else: a local action cannot be denied, and no free text gets in', () => {
+    for (const outcome of ['denied', 'ok', '', 1, null, { a: 1 }]) expect(parse({ outcome }).success).toBe(false);
   });
 });
 

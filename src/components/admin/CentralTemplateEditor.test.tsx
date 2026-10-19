@@ -552,6 +552,13 @@ describe('CentralTemplateEditor — organisation-wide templates and role/group t
     expect(screen.getByRole('option', { name: 'Hele organisationen (ingen ejerenhed)' })).toBeInTheDocument();
   });
 
+  it('the locked picker says which route applies in local and Rollekatalog mode', () => {
+    setup(null, {}, { catalogue: CATALOGUE, isGlobalManager: true, canTargetPrincipals: false, targetLockedReason: 'needs_claims', accessSource: 'local' });
+    expect(screen.getByText(/mens rollerne styres i appen/)).toBeInTheDocument();
+    expect(screen.getByText(/Her deles en skabelon med enheder/)).toBeInTheDocument();
+    expect(screen.getByText(/appen sættes til ACCESS_SOURCE=claims/)).toBeInTheDocument();
+  });
+
   it('when the catalogue failed to load, targets keep the status the server gave them (not everything "ukendt/inaktiv")', () => {
     const t = {
       ...TEMPLATE,

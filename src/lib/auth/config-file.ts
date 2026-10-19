@@ -97,6 +97,21 @@ function baseUrlProblem(): string | null {
 /** Claim names that identify a person only by something an administrator can change or re-assign. */
 const MUTABLE_USERID_CLAIMS = new Set(['email', 'mail', 'upn', 'preferred_username', 'name', 'email_verified']);
 
+/**
+ * SAML attribute names are often URIs (`http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name`):
+ * the last path segment is what tells a mutable name or address from a stable id. Matched case-insensitively.
+ */
+const MUTABLE_SAML_USERID_NAMES = new Set([
+  'email', 'emailaddress', 'mail', 'upn', 'userprincipalname', 'preferred_username', 'preferredusername',
+  'name', 'displayname', 'givenname', 'surname', 'samaccountname', 'mailnickname',
+]);
+export function isMutableUserIdAttribute(attribute: string): boolean {
+  const a = attribute.trim().toLowerCase();
+  if (MUTABLE_USERID_CLAIMS.has(a)) return true;
+  const last = a.split(/[/:#]/).filter(Boolean).pop() ?? a;
+  return MUTABLE_SAML_USERID_NAMES.has(last);
+}
+
 const nonEmpty = (max: number) => z.string().trim().min(1).max(max);
 const urlString = z.string().trim().url().max(2048);
 /** The `prompt` parameter an OIDC / Entra provider may send to the IdP. */
@@ -504,6 +519,8 @@ function parseProvider(raw: unknown, index: number, seen: Set<string>): FileProv
     }
     if (provider.claims?.userId && provider.claims.email && provider.claims.userId.trim().toLowerCase() === provider.claims.email.trim().toLowerCase()) {
       warn(`${where}: claims.userId is the same attribute as claims.email; an address can be re-assigned to another person at the IdP. Use a stable identifier.`);
+    } else if (provider.claims?.userId && isMutableUserIdAttribute(provider.claims.userId)) {
+      warn(`${where}: claims.userId names an attribute that is usually a mutable name or address (e-mail, UPN, display name, account name); a renamed person would lose their account, a re-assigned one would take over another's. Use an immutable identifier (an object GUID or employee number).`);
     }
     if (!provider.wantAssertionsSigned) {
       warn(`${where}: wantAssertionsSigned is false; it has no effect, unsigned SAML responses are always refused.`);

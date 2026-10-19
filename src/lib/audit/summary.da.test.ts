@@ -49,6 +49,7 @@ const CASES: Record<EventType, [SummarisableEvent, string]> = {
   'meeting.create': [ev('meeting.create', { source: 'client', details: { origin: 'upload' } }), `${NAME} oprettede et møde (upload)`],
   'meeting.delete': [ev('meeting.delete', { source: 'client' }), `${NAME} slettede et møde med transskription, referatversioner og lyd`],
   'meeting.redact': [ev('meeting.redact', { source: 'client' }), `${NAME} slørede et møde`],
+  'meeting.transcript_delete': [ev('meeting.transcript_delete', { source: 'client' }), `${NAME} slettede transskriptionens tekst fra et møde`],
   'meeting.audio_delete': [ev('meeting.audio_delete', { source: 'client' }), `${NAME} slettede lyden fra et møde`],
   'meeting.minutes_view': [ev('meeting.minutes_view', { source: 'client' }), `${NAME} åbnede et referat`],
   'meeting.transcript_view': [ev('meeting.transcript_view', { source: 'client' }), `${NAME} åbnede en transskription`],
@@ -76,6 +77,10 @@ const CASES: Record<EventType, [SummarisableEvent, string]> = {
   'system.config_changed': [
     ev('system.config_changed', { source: 'system', actorUserId: null, actorName: null, details: { fingerprint: '0123456789abcdef', changed: true } }),
     'Systemets konfiguration er ændret siden sidste start',
+  ],
+  'integration.sync_run': [
+    ev('integration.sync_run', { source: 'system', actorUserId: null, actorName: null, details: { kind: 'org_sync', trigger: 'cron', status: 'success', usersUpserted: 4 } }),
+    'Systemet opdaterede brugere og organisation fra Rollekatalog',
   ],
   'audit.export': [ev('audit.export', { details: { rowCount: 1200, format: 'csv' } }), `${NAME} eksporterede loggen (1.200 rækker)`],
   'audit.events_dropped': [
@@ -154,6 +159,13 @@ describe('summariseEvent', () => {
     expect(summariseEvent(ev('meeting.minutes_version', { details: { versionNumber: 1, action: 'activate' } }))).toBe(
       `${NAME} satte version 1 som den aktive version af referatet`,
     );
+    expect(summariseEvent(ev('meeting.minutes_version', { details: { versionNumber: 2, action: 'restore' } }))).toBe(
+      `${NAME} gendannede version 2 af referatet`,
+    );
+    // A browser-reported action that failed says so (a local write or the microphone failed).
+    expect(summariseEvent(ev('meeting.recording_start', { source: 'client', outcome: 'error' }))).toBe(
+      `${NAME} startede en optagelse (handlingen mislykkedes)`,
+    );
   });
 
   it('mentions an extra instruction without ever quoting it, and a burst of failed logins', () => {
@@ -185,5 +197,42 @@ describe('summariseEvent', () => {
     expect(summariseEvent(ev('bot.audio_delete', { ...sys, details: { trigger: 'ttl', object: 'transcript' } }))).toBe(
       'Systemet slettede en mødebot-transskription på serveren, som ingen havde hentet',
     );
+  });
+});
+
+describe('summariseEvent: integration.sync_run and failed bot deletions', () => {
+  const run = (details: Record<string, unknown>, over: Partial<SummarisableEvent> = {}) =>
+    summariseEvent(ev('integration.sync_run', { source: 'system', actorUserId: null, actorName: null, details, ...over }));
+
+  it('names the administrator for a manual run and says when a guard stopped or the run failed', () => {
+    expect(run({ kind: 'role_catalogue', trigger: 'manual', status: 'success' }, { source: 'server', actorUserId: 'u1', actorName: NAME })).toBe(
+      `${NAME} opdaterede rolle- og gruppekataloget fra Rollekatalog`,
+    );
+    expect(run({ kind: 'org_sync', trigger: 'cron', status: 'aborted', code: 'removal_threshold' }, { outcome: 'error' })).toBe(
+      'Systemet forsøgte at opdatere brugere og organisation fra Rollekatalog, men en sikkerhedsgrænse stoppede kørslen',
+    );
+    expect(run({ kind: 'org_sync', trigger: 'cron', status: 'error', code: 'timeout' }, { outcome: 'error' })).toBe(
+      'Systemet forsøgte at opdatere brugere og organisation fra Rollekatalog, men kørslen fejlede',
+    );
+  });
+
+  it('a failed deletion of a stashed bot recording says so', () => {
+    expect(summariseEvent(ev('bot.audio_delete', { source: 'system', outcome: 'error', details: { trigger: 'ttl' } }))).toBe(
+      'Systemet kunne ikke slette en mødebot-optagelse på serveren',
+    );
+  });
+});
+
+describe('summariseEvent: refused central template writes', () => {
+  const denied = (reason: string) => summariseEvent(ev('authz.denied', { outcome: 'denied', details: { required: 'template.manage', reason } }));
+
+  it('says what was refused, by closed reason', () => {
+    expect(denied('out_of_scope')).toBe(`${NAME} fik afvist en ændring af en central skabelon uden for sit område`);
+    expect(denied('version_conflict')).toContain('ændret af en anden');
+    expect(denied('principal_targets_need_claims')).toContain('rollerne ikke kommer fra login');
+  });
+
+  it('falls back to the capability sentence for any other reason', () => {
+    expect(denied('missing_capability')).toMatch(/^Mette Eksempelsen fik adgang nægtet/);
   });
 });

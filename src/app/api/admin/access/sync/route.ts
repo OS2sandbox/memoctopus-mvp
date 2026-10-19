@@ -3,6 +3,7 @@ import { hasCapability, requireCapability, withAuthz } from '@/lib/authz/guard';
 import { accessSource } from '@/lib/authz/config';
 import { forceBodySchema, parseWith, readOptionalJsonBody } from '@/lib/authz/access-http';
 import { itSystemId, rollekatalogConfigIssue } from '@/lib/rollekatalog/config';
+import { recordIntegrationRun } from '@/lib/rollekatalog/run-audit';
 import { runSync } from '@/lib/rollekatalog/sync';
 import { getLatestSyncRun } from '@/lib/rollekatalog/sync-run';
 import { syncResultResponse } from '@/lib/rollekatalog/sync-http';
@@ -39,5 +40,6 @@ export const POST = withAuthz('admin/access/sync POST', 'sync.run', async (req, 
   if (!parsed.ok) return parsed.response;
 
   const result = await runSync({ trigger: 'manual', force: parsed.data.force === true, actorUserId: principal.userId });
+  await recordIntegrationRun({ kind: 'org_sync', trigger: 'manual', result, actorUserId: principal.userId, req });
   return syncResultResponse(result, true);
 });

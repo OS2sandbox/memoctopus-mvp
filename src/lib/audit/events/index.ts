@@ -8,6 +8,7 @@ import { auditEvents } from './audit';
 import { authEvents } from './auth';
 import { botEvents } from './bot';
 import { centralTemplateEvents } from './central-template';
+import { integrationEvents } from './integration';
 import { meetingEvents } from './meeting';
 import { systemEvents } from './system';
 import { templateEvents } from './template';
@@ -21,6 +22,7 @@ export const EVENT_CATALOGUE = {
   ...botEvents,
   ...meetingEvents,
   ...systemEvents,
+  ...integrationEvents,
   ...auditEvents,
 } as const;
 

@@ -5,6 +5,8 @@ vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers(
 vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
 vi.mock('@/lib/rollekatalog/sync', () => ({ runSync: vi.fn() }));
+const audit = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/rollekatalog/run-audit', () => ({ recordIntegrationRun: (...a: unknown[]) => audit(...a) }));
 vi.mock('@/lib/rollekatalog/sync-run', () => ({ getLatestSyncRun: vi.fn() }));
 
 import { GET, POST } from './route';
@@ -36,6 +38,7 @@ beforeEach(() => {
   mockGetSession.mockReset().mockResolvedValue(FAKE_SESSION as never);
   mockResolve.mockReset().mockResolvedValue(FAKE_PRINCIPAL_ADMIN);
   mockRun.mockReset().mockResolvedValue(result());
+  audit.mockReset().mockResolvedValue(undefined);
   mockLatest.mockReset().mockResolvedValue(null);
 });
 
@@ -239,5 +242,23 @@ describe('GET /api/admin/access/sync', () => {
     const body = await res.json();
     expect(body.source).toBe('local');
     expect(body.itSystem).toBeNull();
+  });
+});
+
+describe('POST /api/admin/access/sync is audited (integration.sync_run)', () => {
+  it('records a manual org_sync run with the session user as actor and the request', async () => {
+    const r = result({ status: 'aborted', errorCode: 'removal_threshold' });
+    mockRun.mockResolvedValueOnce(r);
+    await POST(post(), NO_PARAMS);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ kind: 'org_sync', trigger: 'manual', result: r, actorUserId: 'admin-123', req: expect.anything() }));
+  });
+
+  it('records nothing for a caller without sync.run, or outside rollekatalog mode', async () => {
+    mockResolve.mockResolvedValueOnce(ACCESS_MANAGER);
+    await POST(post(), NO_PARAMS);
+    vi.stubEnv('ACCESS_SOURCE', 'local');
+    await POST(post(), NO_PARAMS);
+    expect(audit).not.toHaveBeenCalled();
   });
 });

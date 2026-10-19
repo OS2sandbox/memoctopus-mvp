@@ -621,7 +621,7 @@ describe('RecordingScreen — audit reporting of the recording steps', () => {
     for (const call of mockReport.mock.calls) expect(call).toHaveLength(2);
   });
 
-  it('reports no start when the microphone is refused', async () => {
+  it('reports a FAILED start (outcome error, no details) when the microphone is refused', async () => {
     (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
       new DOMException('denied', 'NotAllowedError'),
     );
@@ -630,7 +630,8 @@ describe('RecordingScreen — audit reporting of the recording steps', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
     });
     await waitFor(() => screen.getByText(/Mikrofonens tilladelse er afvist/));
-    expect(mockReport).not.toHaveBeenCalled();
+    expect(mockReport).toHaveBeenCalledTimes(1);
+    expect(mockReport).toHaveBeenCalledWith('meeting.recording_start', expect.any(String), undefined, { outcome: 'error' });
   });
 });
 

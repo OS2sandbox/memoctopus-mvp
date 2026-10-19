@@ -15,6 +15,7 @@ import { auditEvents } from './audit';
 import { authEvents } from './auth';
 import { botEvents } from './bot';
 import { centralTemplateEvents } from './central-template';
+import { integrationEvents } from './integration';
 import { meetingEvents } from './meeting';
 import { systemEvents } from './system';
 import { templateEvents } from './template';
@@ -111,7 +112,7 @@ function eventFor(type: EventType, details: unknown): AuditEventInput {
 }
 
 describe('catalogue structure', () => {
-  it('is exactly the action set: what people did, never content, pipeline steps or sync status', () => {
+  it('is exactly the action set: what people did and which runs happened, never content or pipeline steps', () => {
     expect([...EVENT_TYPES].sort()).toEqual(
       [
         'auth.login', 'auth.logout', 'auth.login_failed', 'authz.denied',
@@ -120,19 +121,20 @@ describe('catalogue structure', () => {
         'audio.upload', 'minutes.generate', 'export.download',
         'bot.session_start', 'bot.session_pause', 'bot.session_resume', 'bot.session_stop', 'bot.session_abort',
         'bot.audio_delete', 'bot.ended', 'bot.error',
-        'meeting.create', 'meeting.delete', 'meeting.redact', 'meeting.audio_delete',
+        'meeting.create', 'meeting.delete', 'meeting.redact', 'meeting.transcript_delete', 'meeting.audio_delete',
         'meeting.minutes_view', 'meeting.transcript_view', 'meeting.audio_play',
         'meeting.recording_start', 'meeting.recording_pause', 'meeting.recording_resume', 'meeting.recording_stop',
         'meeting.minutes_save', 'meeting.transcript_edit', 'meeting.metadata_edit', 'meeting.minutes_version', 'meeting.minutes_version_prune',
         'meeting.participants_edit', 'meeting.speakers_edit',
         'system.config_changed',
+        'integration.sync_run',
         'audit.export', 'audit.prune', 'audit.events_dropped',
       ].sort(),
     );
   });
 
   it('has no event type defined in two domain files (a spread would silently override)', () => {
-    const files = [authEvents, templateEvents, centralTemplateEvents, aiEvents, botEvents, meetingEvents, systemEvents, auditEvents];
+    const files = [authEvents, templateEvents, centralTemplateEvents, aiEvents, botEvents, meetingEvents, systemEvents, integrationEvents, auditEvents];
     const all = files.flatMap((f) => Object.keys(f));
     expect(new Set(all).size).toBe(all.length);
     expect(all.length).toBe(EVENT_TYPES.length);
@@ -147,6 +149,7 @@ describe('catalogue structure', () => {
     expect([...prefixes(botEvents)]).toEqual(['bot']);
     expect([...prefixes(meetingEvents)]).toEqual(['meeting']);
     expect([...prefixes(systemEvents)]).toEqual(['system']);
+    expect([...prefixes(integrationEvents)]).toEqual(['integration']);
     expect([...prefixes(auditEvents)]).toEqual(['audit']);
   });
 

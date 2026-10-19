@@ -33,9 +33,18 @@ import { withTimeout } from './with-timeout';
 
 type ClientEventType = Extract<EventType, `meeting.${string}`>;
 
-type DetailsArgs<T extends EventType> = Record<string, never> extends EventDetails<T>
-  ? [details?: EventDetails<T>]
-  : [details: EventDetails<T>];
+/**
+ * How the action ended, as the browser saw it. 'error' = the action was attempted and FAILED (a local
+ * write threw, the microphone would not start). Never 'denied': a local action cannot be refused, and
+ * the server refuses that value. Default 'success'. Self-reported like the rest.
+ */
+export interface ReportOptions {
+  outcome?: 'success' | 'error';
+}
+
+type ReportArgs<T extends EventType> = Record<string, never> extends EventDetails<T>
+  ? [details?: EventDetails<T>, options?: ReportOptions]
+  : [details: EventDetails<T>, options?: ReportOptions];
 
 const ENDPOINT = '/api/audit/client-events';
 /** Server limit is 50 events and about 32 KB per request. */
@@ -81,6 +90,28 @@ interface Pending {
   userId: string;
   event: Omit<OutboxEvent, 'queuedAt' | 'attempts' | 'nextAttemptAt'>;
   timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * Deletes that could not be reported at all because no signed-in user was known (so there was no queue
+ * to put them in). Counted here and handed to the next user the page learns (startAuditReporting), who
+ * reports it as an audit.events_dropped row (reason client_outbox): a delete may be lost to the log but
+ * never silently. In memory only: a reload before a user is known loses the count.
+ */
+const UNATTRIBUTED_COUNTED: ReadonlySet<ClientEventType> = new Set([
+  'meeting.delete',
+  'meeting.audio_delete',
+  'meeting.transcript_delete',
+  'meeting.redact',
+]);
+let unattributedLost = 0;
+
+function noteUnattributed(type: ClientEventType, details: unknown): void {
+  if (!UNATTRIBUTED_COUNTED.has(type)) return;
+  // Only what the person did: an automatic delete that cannot be reported is not a user action.
+  const trigger = (details as { trigger?: unknown } | undefined)?.trigger;
+  if (trigger !== undefined && trigger !== 'user') return;
+  unattributedLost = Math.min(unattributedLost + 1, 1_000_000);
 }
 
 const pending = new Map<string, Pending>();
@@ -219,12 +250,15 @@ async function isUnknownTypeBody(res: Response): Promise<boolean> {
   }
 }
 
-const wire = ({ clientEventId, type, entityId, details, occurredAt }: OutboxEvent) => ({
+// `outcome` is sent only when it is 'error' (success is the server's default), so a success event is
+// byte-identical to what an instance from before outcomes existed accepts.
+const wire = ({ clientEventId, type, entityId, details, occurredAt, outcome }: OutboxEvent) => ({
   clientEventId,
   type,
   entityId,
   details,
   occurredAt,
+  ...(outcome === 'error' ? { outcome } : {}),
 });
 
 /** Delivers one batch. Returns true when the queue should keep draining. */
@@ -345,6 +379,11 @@ export function startAuditReporting(userId: string): void {
   if (!hasWindow() || !outboxAvailable()) return;
   try {
     install();
+    // Deletes that happened before this page knew who was signed in (see unattributedLost).
+    if (unattributedLost > 0) {
+      addDroppedLocally(userId, unattributedLost);
+      unattributedLost = 0;
+    }
     scheduleFlush(userId);
   } catch {
     // Never break the page over reporting.
@@ -362,21 +401,32 @@ export function startAuditReporting(userId: string): void {
  * tick as the delete request because the tab may be frozen right after) calls retract() when the
  * action turns out not to have happened. Retracting removes the event from the outbox; once it
  * has been delivered (about a second later at the earliest) it is too late and the event stays.
+ *
+ * The last argument reports a FAILED action: `{ outcome: 'error' }`. An error is its own event: it
+ * never merges into a coalesced success and is not swallowed by the repeat check of a success (the
+ * outcome is part of both keys).
+ *
+ * A delete that a person asked for and that cannot be queued because no signed-in user is known is not
+ * silent: it is counted and reported as audit.events_dropped when the user becomes known.
  */
 export function reportAuditEvent<T extends ClientEventType>(
   type: T,
   entityId: string,
-  ...[details]: DetailsArgs<T>
+  ...[details, options]: ReportArgs<T>
 ): (() => void) | undefined {
   try {
     if (!hasWindow() || !outboxAvailable()) return undefined;
     const userId = getStorageUserId();
-    if (!userId) return undefined;
+    if (!userId) {
+      noteUnattributed(type, details);
+      return undefined;
+    }
     install();
+    const outcome = options?.outcome === 'error' ? 'error' : 'success';
 
     // metadata_edit is coalesced per field: renaming and re-dating inside one window are two edits.
     const field = type === 'meeting.metadata_edit' ? (details as { field?: unknown } | undefined)?.field : undefined;
-    const key = `${userId}|${type}|${entityId}${typeof field === 'string' ? `|${field}` : ''}`;
+    const key = `${userId}|${type}|${entityId}${typeof field === 'string' ? `|${field}` : ''}${outcome === 'error' ? '|error' : ''}`;
     const dedupeMs = DEDUPE_WINDOW_MS[type];
     let stamp: number | undefined;
     if (dedupeMs) {
@@ -392,6 +442,7 @@ export function reportAuditEvent<T extends ClientEventType>(
       entityId,
       details: (details ?? {}) as Record<string, unknown>,
       occurredAt: new Date().toISOString(),
+      ...(outcome === 'error' ? { outcome: 'error' as const } : {}),
     };
 
     if (COALESCED.has(type)) {
@@ -431,6 +482,7 @@ export function __resetAuditClient(): void {
   for (const p of pending.values()) clearTimeout(p.timer);
   pending.clear();
   recentlySent.clear();
+  unattributedLost = 0;
   flushing.clear();
   rerun.clear();
   for (const t of flushTimers.values()) clearTimeout(t);

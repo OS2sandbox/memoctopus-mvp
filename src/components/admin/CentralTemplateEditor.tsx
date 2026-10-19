@@ -36,6 +36,7 @@ import {
   formatTime,
   noteProblem,
   principalKindLabels,
+  type SharingSource,
   targetsEqual,
   targetsWithinOwner,
   unitNameLookup,
@@ -66,6 +67,8 @@ interface Props {
   canTargetPrincipals?: boolean;
   /** Why role/group targets cannot be changed: roles only exist in claims mode ('needs_claims'), or the caller is not global. */
   targetLockedReason?: 'needs_claims' | 'needs_global' | null;
+  /** The server's access mode; makes the locked role/group picker say which sharing route applies. */
+  accessSource?: SharingSource | null;
   onSaved: () => void;
 }
 
@@ -79,6 +82,7 @@ export function CentralTemplateEditor({
   catalogueLoaded = true,
   canTargetPrincipals,
   targetLockedReason = null,
+  accessSource = null,
   onSaved,
 }: Props) {
   // The form reports whether it holds unsaved text and whether a save is in flight. While either
@@ -116,6 +120,7 @@ export function CentralTemplateEditor({
             catalogueLoaded={catalogueLoaded}
             canTargetPrincipals={canTargetPrincipals ?? isGlobalManager}
             targetLockedReason={targetLockedReason}
+            accessSource={accessSource}
             onClose={() => onOpenChange(false)}
             onRequestClose={requestClose}
             onGuardChange={(dirty, saving) => setGuard((g) => (g.dirty === dirty && g.saving === saving ? g : { dirty, saving }))}
@@ -193,6 +198,7 @@ function EditorForm({
   catalogueLoaded,
   canTargetPrincipals,
   targetLockedReason,
+  accessSource,
   onClose,
   onRequestClose,
   onGuardChange,
@@ -205,6 +211,7 @@ function EditorForm({
   catalogueLoaded: boolean;
   canTargetPrincipals: boolean;
   targetLockedReason: 'needs_claims' | 'needs_global' | null;
+  accessSource: SharingSource | null;
   /** Closes at once (after a successful save). */
   onClose: () => void;
   /** Closes on the user's request: asks first when there is unsaved text. */
@@ -530,6 +537,7 @@ function EditorForm({
           onChange={setPrincipals}
           canEdit={canTargetPrincipals && catalogueLoaded}
           lockedReason={targetLockedReason}
+          accessSource={accessSource}
           hasOtherAudience={targets.length > 0}
           warnWhenEmpty={!unitPickerShown}
         />

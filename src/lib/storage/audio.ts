@@ -32,7 +32,8 @@ export async function deleteAudio(
       // before anything else is awaited.
       const tx = db.transaction('audio', 'readwrite');
       const keyRequest = tx.store.getKey(meetingId);
-      void tx.store.delete(meetingId);
+      // A failed delete also rejects tx.done below; this request's own rejection must not go unhandled.
+      tx.store.delete(meetingId).catch(() => undefined);
       const existed = (await keyRequest) !== undefined;
       if (!existed) retractIfMissing();
       await tx.done;
@@ -41,5 +42,7 @@ export async function deleteAudio(
       // client dedupes the pair per meeting. A call with no audio left reports nothing.
       return existed;
     },
+    // The delete itself threw: report it as failed instead of retracting it silently.
+    () => reportAuditEvent('meeting.audio_delete', meetingId, { trigger }, { outcome: 'error' }),
   );
 }

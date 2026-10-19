@@ -8,6 +8,8 @@ import { makePrincipal } from '@/test/helpers';
 vi.mock('@/lib/db', () => ({ pool: {}, db: {} }));
 const recordEvent = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => ({ status: 'stored' })));
 vi.mock('@/lib/audit/record', () => ({ recordEvent }));
+const recordAuthzDenied = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => undefined));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied }));
 const scope = vi.hoisted(() => ({
   hasGlobalScope: vi.fn(),
   isOrgUnitWithinScope: vi.fn(),
@@ -115,6 +117,7 @@ const writes = (calls: Array<{ sql: string }>) =>
 beforeEach(() => {
   recordEvent.mockClear();
   recordEvent.mockResolvedValue({ status: 'stored' });
+  recordAuthzDenied.mockClear();
   scope.hasGlobalScope.mockReset().mockReturnValue(false);
   scope.isOrgUnitWithinScope.mockReset().mockResolvedValue(true);
   scope.orgSubtreeUuids.mockReset().mockResolvedValue(new Set([OWNER, CHILD]));
@@ -791,5 +794,103 @@ describe('reads', () => {
     const none = makeFakeRunner();
     expect(await listScopeOrgUnits(makePrincipal(), { schema: 'public', runner: none.runner })).toEqual([]);
     expect(none.calls).toHaveLength(0);
+  });
+});
+
+// A refusal is an authz.denied row, written after the transaction rolled back, with the template as the
+// only entity (no name, prompt or note) and a closed reason; the answer to the caller does not change.
+describe('refusals are audited (authz.denied)', () => {
+  const ROLE = { kind: 'role' as const, identifier: 'sagsbehandler' };
+  const edit = { baseVersion: 3, changeNote: NOTE, name: 'Nyt navn' };
+  const state = { baseVersion: 3, changeNote: NOTE };
+  const denied = (reason: string, withEntity = true) => ({
+    actorUserId: 'mgr-1',
+    required: 'template.manage',
+    reason,
+    ...(withEntity ? { entityType: 'central_template', entityId: TPL } : {}),
+  });
+
+  it('a scoped manager touching a template out of scope: reason out_of_scope, and the answer is the plain 404', async () => {
+    scope.isOrgUnitWithinScope.mockResolvedValue(false);
+    const err = await updateCentralTemplate(manager, TPL, edit, setup().env).catch((e) => e);
+    expect(err).toBeInstanceOf(NotFoundError);
+    expect(err).toMatchObject({ code: 'not_found', message: 'Skabelonen findes ikke' });
+    expect(recordAuthzDenied).toHaveBeenCalledTimes(1);
+    expect(recordAuthzDenied).toHaveBeenCalledWith(denied('out_of_scope'));
+    await archiveCentralTemplate(manager, TPL, state, setup().env).catch(() => {});
+    await restoreCentralTemplate(manager, TPL, state, setup({ template: [row({ status: 'archived' })] }).env).catch(() => {});
+    expect(recordAuthzDenied).toHaveBeenCalledTimes(3);
+  });
+
+  it('an organisation-wide template is out of scope for a scoped manager (update, archive, restore)', async () => {
+    const wide = setup({ template: [row({ owner_org_unit_uuid: null })] });
+    await expect(updateCentralTemplate(manager, TPL, edit, wide.env)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(archiveCentralTemplate(manager, TPL, state, setup({ template: [row({ owner_org_unit_uuid: null })] }).env)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(restoreCentralTemplate(manager, TPL, state, setup({ template: [row({ owner_org_unit_uuid: null, status: 'archived' })] }).env)).rejects.toBeInstanceOf(NotFoundError);
+    expect(recordAuthzDenied.mock.calls.map((c) => c[0])).toEqual([denied('out_of_scope'), denied('out_of_scope'), denied('out_of_scope')]);
+  });
+
+  it('a template that does not exist (or an ill-formed id) is NOT a refusal: the 404 is identical and nothing is logged', async () => {
+    await expect(updateCentralTemplate(manager, TPL, edit, setup({ template: [] }).env)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(updateCentralTemplate(manager, 'nope', edit, setup().env)).rejects.toBeInstanceOf(NotFoundError);
+    expect(recordAuthzDenied).not.toHaveBeenCalled();
+  });
+
+  it('principal_targets_need_global: a scoped manager changing a template that has role/group targets', async () => {
+    const world = setup({ principals: [{ kind: 'group', identifier: 'g', name: 'G', active: true }] });
+    await expect(updateCentralTemplate(manager, TPL, edit, world.env)).rejects.toMatchObject({ code: 'principal_targets_need_global' });
+    await expect(archiveCentralTemplate(manager, TPL, state, setup({ principals: [{ kind: 'group', identifier: 'g', name: 'G', active: true }] }).env)).rejects.toMatchObject({
+      code: 'principal_targets_need_global',
+    });
+    expect(recordAuthzDenied.mock.calls.map((c) => c[0])).toEqual([denied('principal_targets_need_global'), denied('principal_targets_need_global')]);
+  });
+
+  it('principal_targets_need_global: a scoped manager adding role targets; principal_targets_need_claims outside claims mode', async () => {
+    await expect(updateCentralTemplate(manager, TPL, { ...edit, principalTargets: [ROLE] }, setup().env)).rejects.toMatchObject({ code: 'principal_targets_need_global' });
+    scope.hasGlobalScope.mockReturnValue(true);
+    await expect(updateCentralTemplate(manager, TPL, { ...edit, principalTargets: [ROLE] }, setup({ accessSource: 'local' }).env)).rejects.toMatchObject({
+      code: 'principal_targets_need_claims',
+    });
+    expect(recordAuthzDenied.mock.calls.map((c) => c[0])).toEqual([denied('principal_targets_need_global'), denied('principal_targets_need_claims')]);
+  });
+
+  it('version_conflict: a stale baseVersion, and a lost race on the version-filtered UPDATE', async () => {
+    await expect(updateCentralTemplate(manager, TPL, { ...edit, baseVersion: 1 }, setup().env)).rejects.toMatchObject({ code: 'version_conflict' });
+    await expect(archiveCentralTemplate(manager, TPL, { ...state, baseVersion: 1 }, setup().env)).rejects.toMatchObject({ code: 'version_conflict' });
+    const lost = setup({ updated: [] });
+    await expect(updateCentralTemplate(manager, TPL, edit, lost.env)).rejects.toMatchObject({ code: 'version_conflict' });
+    expect(recordAuthzDenied.mock.calls.map((c) => c[0])).toEqual([denied('version_conflict'), denied('version_conflict'), denied('version_conflict')]);
+  });
+
+  it('create: an organisation-wide template without a global right (403), and an owner unit out of scope; no template entity', async () => {
+    const input = { ownerOrgUnitUuid: null, name: 'Dialogmøde', description: 'x', prompt: 'Skriv et kort referat.', targets: [], changeNote: NOTE };
+    await expect(createCentralTemplate(manager, input, setup().env)).rejects.toMatchObject({ code: 'org_wide_needs_global' });
+    scope.isOrgUnitWithinScope.mockResolvedValue(false);
+    await expect(createCentralTemplate(manager, { ...input, ownerOrgUnitUuid: OTHER }, setup().env)).rejects.toMatchObject({ code: 'org_unit_not_found' });
+    expect(recordAuthzDenied.mock.calls.map((c) => c[0])).toEqual([denied('org_wide_needs_global', false), denied('out_of_scope', false)]);
+    // An owner unit that does not exist is not a refusal.
+    recordAuthzDenied.mockClear();
+    await expect(createCentralTemplate(manager, { ...input, ownerOrgUnitUuid: OTHER }, setup({ unit: [] }).env)).rejects.toMatchObject({ code: 'org_unit_not_found' });
+    expect(recordAuthzDenied).not.toHaveBeenCalled();
+  });
+
+  it('validation and state conflicts are not refusals (no_changes, template_archived, already_archived, invalid note)', async () => {
+    await expect(updateCentralTemplate(manager, TPL, { baseVersion: 3, changeNote: NOTE, name: 'Dialogmøde' }, setup().env)).rejects.toMatchObject({ code: 'no_changes' });
+    await expect(updateCentralTemplate(manager, TPL, edit, setup({ template: [row({ status: 'archived' })] }).env)).rejects.toMatchObject({ code: 'template_archived' });
+    await expect(archiveCentralTemplate(manager, TPL, state, setup({ template: [row({ status: 'archived' })] }).env)).rejects.toMatchObject({ code: 'already_archived' });
+    await expect(archiveCentralTemplate(manager, TPL, { baseVersion: 3, changeNote: 'for kort' }, setup().env)).rejects.toMatchObject({ code: 'change_note_invalid' });
+    expect(recordAuthzDenied).not.toHaveBeenCalled();
+  });
+
+  it('is written after the rollback and carries ids and codes only; a denial that cannot be recorded does not change the answer', async () => {
+    scope.isOrgUnitWithinScope.mockResolvedValue(false);
+    const { env, sqls } = setup();
+    recordAuthzDenied.mockImplementationOnce(async () => {
+      // At this point the transaction is already over.
+      expect(sqls().at(-1)).toBe('ROLLBACK');
+    });
+    await updateCentralTemplate(manager, TPL, edit, env).catch(() => {});
+    expect(JSON.stringify(recordAuthzDenied.mock.calls)).not.toMatch(/Dialogmøde|Nyt navn|Skriv et kort|Præciseret/);
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 });

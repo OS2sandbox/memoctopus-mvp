@@ -409,6 +409,25 @@ describe('CentralTemplatesAdmin — audience by role, group and unit', () => {
     const row = await rowOf([item({ targets: [], targetCount: 0, principalTargets: [] })]);
     expect(within(row).getByText('Ikke til rådighed for nogen')).toBeInTheDocument();
   });
+
+  it('the empty-audience warning names the route that applies in the current mode', async () => {
+    const withSource = (source: string) => ({
+      'GET /api/admin/central-templates/roles': () => json({ ...ROLES, source }),
+    });
+    setup(ADMIN_ME, {
+      ...withSource('rollekatalog'),
+      'GET /api/admin/central-templates?status=active': () => json({ templates: [item({ targets: [], targetCount: 0, principalTargets: [] })] }),
+    });
+    const rk = renderWithToasts(<CentralTemplatesAdmin />);
+    expect(await screen.findByText(/Vælg mindst én enhed i skabelonen/)).toBeInTheDocument();
+    rk.unmount();
+    setup(ADMIN_ME, {
+      ...withSource('claims'),
+      'GET /api/admin/central-templates?status=active': () => json({ templates: [item({ targets: [], targetCount: 0, principalTargets: [] })] }),
+    });
+    renderWithToasts(<CentralTemplatesAdmin />);
+    expect(await screen.findByText('Vælg mindst én rolle eller gruppe i skabelonen.')).toBeInTheDocument();
+  });
 });
 
 describe('CentralTemplatesAdmin — role catalogue refresh', () => {
@@ -492,6 +511,19 @@ describe('CentralTemplatesAdmin — role catalogue refresh', () => {
     expect(screen.queryByLabelText('Søg i roller og grupper')).toBeNull();
     expect(screen.getByText(/kun vælges, når rollerne kommer fra brugernes login/)).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Hele organisationen (ingen ejerenhed)' })).toBeInTheDocument();
+  });
+
+  it('in Rollekatalog mode the screen and the locked picker say that units are the route and what the municipality must do for roles', async () => {
+    setup(ADMIN_ME, {
+      'GET /api/admin/central-templates/roles': () =>
+        json({ ...ROLES, canTarget: false, isGlobalManager: true, reason: 'needs_claims', source: 'rollekatalog' }),
+    });
+    renderWithToasts(<CentralTemplatesAdmin />);
+    expect(await screen.findByText(/Her deles skabeloner med enheder\. Deling efter rolle eller gruppe er først muligt/)).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: 'Ny central skabelon' }));
+    await screen.findByRole('dialog', { name: 'Ny central skabelon' });
+    expect(screen.getByText(/mens rollerne hentes med Rollekatalog-synkroniseringen/)).toBeInTheDocument();
+    expect(screen.getByText(/identitetsudbyder \(login\) sende rollerne med/)).toBeInTheDocument();
   });
 
   it('passes the catalogue and the global-manager flag on to the editor, so a global manager can pick roles', async () => {
