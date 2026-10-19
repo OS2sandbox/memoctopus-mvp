@@ -81,12 +81,6 @@ vi.mock('./SpeakerAssignment', () => ({
   ),
 }));
 
-vi.mock('./WaveformPlayer', () => ({
-  WaveformPlayer: ({ audioUrl }: { audioUrl: string }) => (
-    <div data-testid="waveform-player">{audioUrl}</div>
-  ),
-}));
-
 // ── Test data ────────────────────────────────────────────────────────────────
 
 const SEG1: TranscriptSegment = { speaker: 'Taler 1', start: 0, end: 5, text: 'Hej alle' };

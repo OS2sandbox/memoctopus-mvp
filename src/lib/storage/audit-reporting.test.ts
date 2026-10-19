@@ -411,8 +411,6 @@ describe('contract with the server catalogue', () => {
 });
 
 describe('failed writes are reported with outcome error', () => {
-  const failing = () => calls().filter((c) => c.outcome === 'error');
-
   it('a failed minutes autosave is minutes_save/error (and never a success); an unchanged autosave that fails reports nothing', async () => {
     await saveMinutes('m1', minutes('one'));
     h.report.mockClear();

@@ -52,7 +52,7 @@ A Next.js 15 App Router application using the `(app)` route group for authentica
 
 **Meetings live in the browser, not in the database.** A meeting, its transcript, minutes (all versions) and audio are stored only in the user's IndexedDB (`src/lib/storage/`); the server holds no meeting data except the transient bot-recording stash (`src/lib/bot-pending-audio.ts`, deleted on hand-off or after a TTL). Consequently the audit events about meeting contents are reported by the browser (see the audit invariants below).
 
-**Database — per-user PostgreSQL schemas**: Each user gets their own PostgreSQL schema (`u_<userId>`), created lazily on first access via `ensureUserSchema()` in `src/lib/db/user-schema.ts`. They hold the user's personal templates (`skabeloner`); the `meetings`, `transcripts`, `minutes`, `minute_versions` and `audio_files` tables that `ensureUserSchema` still creates are unused legacy (the only reader, `src/lib/data/meeting-page.ts`, was removed). The shared `public` schema holds only auth tables (better-auth). Because Drizzle cannot target dynamic schema names, **all per-user queries use raw SQL** via `queryUserSchema()` / `queryUserSchemaOne()` helpers — not Drizzle ORM. Schema migrations are implemented as idempotent `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ADD COLUMN IF NOT EXISTS` statements inside `ensureUserSchema`. The one exception is the central tables (roles, org units, audit, central templates, below), which live in `public`.
+**Database — per-user PostgreSQL schemas**: Each user gets their own PostgreSQL schema (`u_<userId>`), created lazily on first access via `ensureUserSchema()` in `src/lib/db/user-schema.ts`. They hold the user's personal templates (`skabeloner`, `skabelon_versions`) and nothing else: `ensureUserSchema` no longer creates the old `meetings`, `transcripts`, `minutes`, `minute_versions`, `audio_files` and JSONB `templates` tables, the `meeting_status` enum or the `prune_old_versions` trigger. Schemas created by older versions may still contain them (empty, unused); they are never dropped automatically. The shared `public` schema holds only auth tables (better-auth). Because Drizzle cannot target dynamic schema names, **all per-user queries use raw SQL** via `queryUserSchema()` / `queryUserSchemaOne()` helpers — not Drizzle ORM. Schema migrations are implemented as idempotent `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ADD COLUMN IF NOT EXISTS` statements inside `ensureUserSchema`. The one exception is the central tables (roles, org units, audit, central templates, below), which live in `public`.
 
 **Auth**: Uses `better-auth`. `src/lib/auth/index.ts` builds the real instance (Drizzle adapter over the `public` schema); `src/middleware.ts` gates routes on the session cookie.
 
@@ -114,7 +114,7 @@ Bot-service authenticates all requests from the Next.js app via `Authorization: 
 **Session management**: Sessions are held in a `Map<string, BotSession>` in-process. The bot drains active sessions on `SIGTERM`/`SIGINT` (90s timeout). The active session ID is kept on the browser-held meeting record (`StoredMeeting.botSession`).
 
 ### Docker / deployment
-`docker-compose.yml` at repo root defines `db` (PostgreSQL 16), `migrate` (one-shot drizzle migrations), `app` (Next.js, container port 3000, published as `${APP_PORT:-8080}:3000`) and `bot-service` (internal only, port 3001). The bot-service container needs `shm_size: 2gb` for Chromium. Audio files are stored on a named Docker volume (`audio-storage`), path configurable via `AUDIO_STORAGE_PATH`. Scheduled work (audit prune, Rollekatalog sync) is a host or cluster cron calling the `/api/internal/*` routes with `X-Cron-Secret`; see `DEPLOY.md`.
+`docker-compose.yml` at repo root defines `db` (PostgreSQL 16), `migrate` (one-shot drizzle migrations), `app` (Next.js, container port 3000, published as `${APP_PORT:-8080}:3000`) and `bot-service` (internal only, port 3001). The bot-service container needs `shm_size: 2gb` for Chromium. The bot-recording stash lives on a named Docker volume (`audio-storage`), path configurable via `AUDIO_STORAGE_PATH`. Scheduled work (audit prune, Rollekatalog sync) is a host or cluster cron calling the `/api/internal/*` routes with `X-Cron-Secret`; see `DEPLOY.md`.
 
 ## Key env vars
 
@@ -128,7 +128,7 @@ Bot-service authenticates all requests from the Next.js app via `Authorization: 
 | `HVISKE_MODEL` | hviske model id (default `syvai/hviske-ensemble`) |
 | `ASR_LANGUAGE` | Transcription language (default `da`) |
 | `OPENAI_API_KEY` | Chapters, minutes, clarifications generation, and PII detection |
-| `AUDIO_STORAGE_PATH` | Filesystem path for audio files |
+| `AUDIO_STORAGE_PATH` | Filesystem path for the transient bot-recording stash |
 | `BETTER_AUTH_URL` / `BETTER_AUTH_SECRET` | better-auth base URL and signing secret |
 | `EMAIL_PASSWORD_ENABLED` | Kill switch for email/password (default on) |
 | `MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT_ID` | Entra ID; enables itself when the id + secret are set |

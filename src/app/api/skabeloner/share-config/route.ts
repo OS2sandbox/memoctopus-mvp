@@ -8,6 +8,5 @@ import { requireAppAccess } from '@/lib/authz/app-access';
 export const GET = withHandler('skabeloner/share-config', async () => {
   const access = await requireAppAccess();
   if (access instanceof NextResponse) return access;
-  const { session } = access;
   return NextResponse.json({ share: getShareConfig() });
 });

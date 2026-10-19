@@ -11,7 +11,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { VolumeBar } from './VolumeBar';
 import { formatDuration, formatFileSize } from '@/lib/utils';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { pickRecordingMimeType } from '@/lib/audio/recording-format';
@@ -1246,8 +1245,6 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
   const minutes = Math.floor((elapsed % 3600) / 60);
   const seconds = elapsed % 60;
   const elapsedFormatted = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-
-  const showLivePanel = recordingState === 'recording' || recordingState === 'paused' || liveSegments.length > 0;
 
   // ── Completed state (navigated back after recording) ─────────────────────────
   if (existingRecording && recordingState === 'idle') {

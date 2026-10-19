@@ -23,7 +23,7 @@ async function postHandler(req: NextRequest, ctx: { params: Promise<{ id: string
   const docDate = content.header?.date?.trim() || null;
   const markdown = normalizeMarkdown(minutesToBody(content));
 
-  if (format !== 'pdf' && format !== 'docx' && format !== 'md') {
+  if (format !== 'pdf' && format !== 'md') {
     return NextResponse.json({ error: 'Unknown format' }, { status: 400 });
   }
 
@@ -35,12 +35,7 @@ async function postHandler(req: NextRequest, ctx: { params: Promise<{ id: string
 
   let res: NextResponse;
   try {
-    res =
-      format === 'pdf'
-        ? await exportPdf(docTitle, docDate, markdown)
-        : format === 'docx'
-          ? await exportDocx(docTitle, docDate, markdown)
-          : exportMarkdown(docTitle, docDate, markdown);
+    res = format === 'pdf' ? await exportPdf(docTitle, docDate, markdown) : exportMarkdown(docTitle, docDate, markdown);
   } catch (err) {
     await audit('error');
     throw err;
@@ -172,53 +167,6 @@ async function exportPdf(title: string, date: string | null, markdown: string): 
     headers: {
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="referat.pdf"`,
-    },
-  });
-}
-
-async function exportDocx(title: string, date: string | null, markdown: string): Promise<NextResponse> {
-  const { Document, Packer, Paragraph, TextRun, HeadingLevel, BorderStyle } = await import('docx');
-
-  const children = [];
-
-  children.push(new Paragraph({ text: title, heading: HeadingLevel.HEADING_1, spacing: { after: date ? 200 : 400 } }));
-  if (date) {
-    children.push(new Paragraph({
-      children: [new TextRun({ text: date, size: 18, color: '737370' })],
-      spacing: { after: 400 },
-      border: { bottom: { style: BorderStyle.SINGLE, size: 1, color: 'E5E5E2' } },
-    }));
-  }
-
-  const lines = parseLines(markdown);
-  if (lines.length === 0) {
-    children.push(new Paragraph({
-      children: [new TextRun({ text: '(ingen indhold)', size: 22, color: '737370' })],
-    }));
-  }
-
-  for (const line of lines) {
-    if (line.kind === 'heading') {
-      children.push(new Paragraph({ text: line.text, heading: HeadingLevel.HEADING_2, spacing: { before: 300, after: 120 } }));
-    } else {
-      children.push(new Paragraph({
-        children: [new TextRun({ text: line.text, size: 22, color: '3d3d3a' })],
-        spacing: { after: 120 },
-        ...(line.kind === 'bullet' ? { bullet: { level: 0 } } : {}),
-      }));
-    }
-  }
-
-  const doc = new Document({
-    sections: [{ children }],
-    styles: { default: { document: { run: { font: 'Calibri', size: 22 } } } },
-  });
-
-  const buffer = await Packer.toBuffer(doc);
-  return new NextResponse(buffer as unknown as BodyInit, {
-    headers: {
-      'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'Content-Disposition': `attachment; filename="referat.docx"`,
     },
   });
 }

@@ -55,6 +55,7 @@ export const aiEvents = {
   }),
   'export.download': defineEvent({
     ...meetingRef,
+    // 'docx' is legacy: the export no longer offers it, but rows written by older versions must still parse.
     details: z.object({ format: z.enum(['pdf', 'docx', 'md']) }).strict(),
   }),
 } as const;

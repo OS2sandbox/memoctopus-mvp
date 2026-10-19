@@ -17,17 +17,6 @@ export interface TranscriptSegment {
   text: string;
 }
 
-export interface TemplateStructure {
-  sections: TemplateSectionDef[];
-}
-
-export interface TemplateSectionDef {
-  key: string;
-  label: string;
-  description?: string;
-  required: boolean;
-}
-
 export interface MinutesContent {
   // The referat as a single flowing markdown document. This is the canonical
   // representation; the editor renders one borderless surface over it.
@@ -82,12 +71,6 @@ export interface PiiResult {
   replacements: PiiReplacement[];
 }
 
-export interface TemplateSuggestion {
-  templateId: string | null;
-  templateName: string;
-  explanation: string;
-}
-
 export interface Meeting {
   id: string;
   title: string;
@@ -95,45 +78,4 @@ export interface Meeting {
   status: MeetingStatus;
   createdAt: Date;
   updatedAt: Date;
-}
-
-export interface AudioFile {
-  id: string;
-  meetingId: string;
-  filename: string;
-  sizeBytes: number;
-  durationSeconds: number | null;
-  deletedAt: Date | null;
-}
-
-export interface Transcript {
-  id: string;
-  meetingId: string;
-  rawText: string;
-  segments: TranscriptSegment[];
-  piiRemovedAt: Date | null;
-}
-
-export interface Minutes {
-  id: string;
-  meetingId: string;
-  templateId: string | null;
-  content: MinutesContent;
-  version: number;
-  createdAt: Date;
-}
-
-export interface Template {
-  id: string;
-  name: string;
-  description: string;
-  structure: TemplateStructure;
-  isDefault: boolean;
-}
-
-export interface User {
-  id: string;
-  email: string;
-  name: string;
-  createdAt: Date;
 }

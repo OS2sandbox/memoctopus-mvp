@@ -17,7 +17,7 @@ vi.mock('@/lib/db', () => ({ db: {}, pool: { query: dbQuery } }));
 
 import { GET } from './route';
 import { auth } from '@/lib/auth';
-import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
+import { FAKE_SESSION } from '@/test/helpers';
 
 const ROW = {
   id: '99999999-2222-4333-8444-555555555555',

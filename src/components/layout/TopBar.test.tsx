@@ -275,7 +275,6 @@ describe('TopBar — reviewMeetingId extraction', () => {
     mockHasAudio = true;
     renderTopBar();
     // DeleteAudioDialog is rendered when reviewMeetingId is set and hasAudio is true
-    const dialog = screen.queryByTestId('delete-audio-dialog');
     // Dialog is not visible yet (showConfirm=false), but clicking a nav item should open it
     const optagLink = screen.getByRole('link', { name: 'Optag' });
     fireEvent.click(optagLink);

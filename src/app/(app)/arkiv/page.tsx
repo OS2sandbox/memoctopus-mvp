@@ -30,7 +30,7 @@ export default function ArkivPage() {
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Allow deep-linking to the Skabeloner tab (e.g. from the old /templates route).
+  // Allow deep-linking to the Skabeloner tab.
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get('tab') === 'skabeloner') {
       setTab('skabeloner');

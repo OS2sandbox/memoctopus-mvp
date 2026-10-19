@@ -25,7 +25,6 @@ async function loadShared(token: string) {
 async function getHandler(_req: NextRequest, { params }: Ctx): Promise<NextResponse> {
   const access = await requireAppAccess();
   if (access instanceof NextResponse) return access;
-  const { session } = access;
   if (!getShareConfig().link) {
     return NextResponse.json({ error: 'Linkdeling er deaktiveret' }, { status: 403 });
   }

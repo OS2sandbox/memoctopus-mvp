@@ -745,11 +745,6 @@ describe('MeetingPageClient — ReviewAudio context (hasAudio)', () => {
     mockGetAudio.mockResolvedValue({ blob: mockAudioBlob, mimeType: 'audio/webm' });
 
     // ReviewAudio context — hasAudio should be false (tab is recording, not review)
-    let capturedSetHasAudio: ((v: boolean) => void) | undefined;
-    const mockSetHasAudio = vi.fn((v: boolean) => {
-      capturedSetHasAudio = mockSetHasAudio;
-    });
-
     // We test this indirectly: the useEffect sets hasAudio = (tab === 'review' && !!audioUrl)
     // Since tab is 'recording', hasAudio should never be set to true
     renderClient({ initialTab: 'recording' });

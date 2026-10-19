@@ -5,7 +5,6 @@ import {
   integer,
   boolean,
   jsonb,
-  pgEnum,
   uuid,
   primaryKey,
   unique,
@@ -472,22 +471,3 @@ export const centralTemplatePrincipalTargets = pgTable(
     index('central_template_principal_targets_role_idx').on(t.kind, t.identifier),
   ],
 );
-
-// ─── Per-user schema helpers ────────────────────────────────────────────────
-// These are the SQL strings used when building per-user schemas.
-// Drizzle cannot target dynamic schema names, so we use raw SQL in user-schema.ts.
-
-export const meetingStatusValues = [
-  'joining',
-  'recording',
-  'processing',
-  'review',
-  'minutes',
-  'done',
-  'redacted',
-] as const;
-
-export type MeetingStatusValue = (typeof meetingStatusValues)[number];
-
-// Exported only for type inference — actual tables live in per-user schemas.
-export const meetingStatusEnum = pgEnum('meeting_status', meetingStatusValues);

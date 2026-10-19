@@ -22,11 +22,10 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 }));
 
 import { POST } from './route';
-import { expectValidMetadataOnly, leakyError } from '@/app/api/meetings/ai-audit.test-utils';
+import { expectValidMetadataOnly } from '@/app/api/meetings/ai-audit.test-utils';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION, makeJsonReq, makePrincipal } from '@/test/helpers';
 import { resolvePrincipal } from '@/lib/authz/principal';
-import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 
@@ -64,6 +63,11 @@ describe('POST /api/export/[id]', () => {
     const res = await POST(makeJsonReq(BASE_URL, 'POST', { content, format: 'xls' }), PARAMS);
     expect(res.status).toBe(400);
     expect((await res.json()).error).toBe('Unknown format');
+  });
+
+  it('no longer offers docx', async () => {
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { content, format: 'docx' }), PARAMS);
+    expect(res.status).toBe(400);
   });
 
   it('exports markdown from legacy sections, dropping empty ones', async () => {
@@ -137,14 +141,6 @@ describe('POST /api/export/[id]', () => {
     expect(text).not.toContain('\\'); // no literal backslash artifacts
   });
 
-  it('exports a docx document', async () => {
-    const res = await POST(makeJsonReq(BASE_URL, 'POST', { content, format: 'docx' }), PARAMS);
-    expect(res.status).toBe(200);
-    expect(res.headers.get('Content-Type')).toContain('wordprocessingml.document');
-    expect(res.headers.get('Content-Disposition')).toContain('referat.docx');
-    expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
-  });
-
   it('returns a parseable JSON 500 when the PDF renderer throws', async () => {
     // Simulate jsPDF throwing (e.g. dynamic-import failure or internal error)
     vi.doMock('jspdf', () => { throw new Error('jsPDF unavailable'); });
@@ -166,23 +162,6 @@ describe('POST /api/export/[id]', () => {
       vi.doUnmock('jspdf');
     }
   });
-
-  it('returns a parseable JSON 500 when the docx renderer throws', async () => {
-    // Simulate docx Packer throwing
-    vi.doMock('docx', () => { throw new Error('docx unavailable'); });
-    try {
-      const res = await POST(makeJsonReq(BASE_URL, 'POST', { content, format: 'docx' }), PARAMS);
-      if (res.status === 500) {
-        expect(res.headers.get('Content-Type')).toContain('application/json');
-        const json = await res.json();
-        expect(json.error).toBeDefined();
-      } else {
-        expect(res.status).toBe(200);
-      }
-    } finally {
-      vi.doUnmock('docx');
-    }
-  });
 });
 
 describe('audit: export.download', () => {
@@ -196,7 +175,7 @@ describe('audit: export.download', () => {
 
   const SECRET = { body: 'Hemmelig beslutning om Alice', header: { title: 'Sag om Bob', date: null } };
 
-  it.each(['pdf', 'docx', 'md'] as const)('emits one export.download for %s with the meeting id and only the format', async (format) => {
+  it.each(['pdf', 'md'] as const)('emits one export.download for %s with the meeting id and only the format', async (format) => {
     const res = await POST(makeJsonReq(BASE_URL, 'POST', { title: 'Sag om Bob', content: SECRET, format }), UUID_PARAMS);
     expect(res.status).toBe(200);
 
@@ -237,13 +216,13 @@ describe('audit: export.download', () => {
   });
 
   it('records outcome error (format only) when rendering throws, and still answers 500', async () => {
-    vi.doMock('docx', () => { throw new Error('docx unavailable: Hemmelig'); });
+    vi.doMock('jspdf', () => { throw new Error('jsPDF unavailable: Hemmelig'); });
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      const res = await POST(makeJsonReq(BASE_URL, 'POST', { content: SECRET, format: 'docx' }), UUID_PARAMS);
+      const res = await POST(makeJsonReq(BASE_URL, 'POST', { content: SECRET, format: 'pdf' }), UUID_PARAMS);
       if (res.status === 500) {
         expect(events()).toHaveLength(1);
-        expect(events()[0]).toMatchObject({ outcome: 'error', entityId: MEETING, details: { format: 'docx' } });
+        expect(events()[0]).toMatchObject({ outcome: 'error', entityId: MEETING, details: { format: 'pdf' } });
         expectValidMetadataOnly(events()[0], ['Hemmelig']);
         expect(JSON.stringify(spy.mock.calls)).not.toContain('Hemmelig');
       } else {
@@ -251,7 +230,7 @@ describe('audit: export.download', () => {
       }
     } finally {
       spy.mockRestore();
-      vi.doUnmock('docx');
+      vi.doUnmock('jspdf');
     }
   });
 });

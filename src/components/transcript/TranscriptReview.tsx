@@ -4,7 +4,6 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
 import { SpeakerAssignment, type ParticipantRow } from './SpeakerAssignment';
-import { WaveformPlayer } from './WaveformPlayer';
 import { getTranscript, getAudio, saveTranscriptChapters, saveTranscriptSegments, appendMinutesVersion, deleteAudio, updateMeeting, getMeeting } from '@/lib/storage';
 import { onTranscriptUpdated } from '@/lib/transcript-events';
 import { isDiarizationInFlight, ensureDiarization, finishDiarization } from '@/lib/audio/diarize-client';
@@ -73,6 +72,10 @@ function skabelonToCats(
 }
 
 // The user's own default, or the first one when none is flagged.
+// A refused or interrupted play() (autoplay policy, a seek that aborts it) is not an error the user
+// can act on: the transport state follows the audio element's own play/pause events.
+const ignorePlayRejection = (): void => {};
+
 const defaultSkabelonOf = (list: Skabelon[]): Skabelon | undefined => list.find((s) => s.isDefault) ?? list[0];
 
 // Picker values: '' = Ingen skabelon, a bare uuid = personal template, and
@@ -538,7 +541,7 @@ export function TranscriptReview({
   }
 
   // PII checklist: all items checked by default
-  const [piiReplacements, setPiiReplacements] = useState<PiiReplacement[]>(initialPiiReplacements);
+  const [piiReplacements] = useState<PiiReplacement[]>(initialPiiReplacements);
   const [checkedPii, setCheckedPii] = useState<Set<number>>(
     () => new Set(initialPiiReplacements.map((_, i) => i)),
   );
@@ -568,7 +571,6 @@ export function TranscriptReview({
   const [playingBite, setPlayingBite] = useState<{ start: number; end: number } | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(audioDurationSeconds ?? 0);
-  const [audioError, setAudioError] = useState<string | null>(null);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -594,14 +596,12 @@ export function TranscriptReview({
     };
     const onPause = () => { setIsPlaying(false); setPlayingBite(null); };
     const onEnded = () => { setIsPlaying(false); setPlayingBite(null); };
-    const onError = () => setAudioError('Lydfilen kunne ikke indlæses');
     audio.addEventListener('timeupdate', onTime);
     audio.addEventListener('loadedmetadata', onMeta);
     audio.addEventListener('durationchange', onDurationChange);
     audio.addEventListener('play', onPlay);
     audio.addEventListener('pause', onPause);
     audio.addEventListener('ended', onEnded);
-    audio.addEventListener('error', onError);
     // Metadata may have loaded before listeners were attached (e.g. from cache)
     if (audio.readyState >= HTMLMediaElement.HAVE_METADATA && isFinite(audio.duration) && audio.duration > 0) {
       setDuration(audio.duration);
@@ -613,7 +613,6 @@ export function TranscriptReview({
       audio.removeEventListener('play', onPlay);
       audio.removeEventListener('pause', onPause);
       audio.removeEventListener('ended', onEnded);
-      audio.removeEventListener('error', onError);
     };
   // Re-run when audioUrl changes so listeners attach to any newly created audio element
   }, [audioUrl]);
@@ -644,7 +643,7 @@ export function TranscriptReview({
     setPlayingBite(null);
     audio.currentTime = time;
     setCurrentTime(time);
-    audio.play().catch(() => setAudioError('Afspilning fejlede'));
+    audio.play().catch(ignorePlayRejection);
   }, []);
 
   // Play just one speaker's soundbite, auto-pausing at its end.
@@ -655,7 +654,7 @@ export function TranscriptReview({
     audio.currentTime = start;
     setCurrentTime(start);
     setPlayingBite({ start, end });
-    audio.play().catch(() => setAudioError('Afspilning fejlede'));
+    audio.play().catch(ignorePlayRejection);
   }, []);
 
   // Play a soundbite, or pause it if it's the one already playing — so the same
@@ -678,7 +677,7 @@ export function TranscriptReview({
     if (isPlaying) {
       audio.pause();
     } else {
-      audio.play().catch(() => setAudioError('Afspilning fejlede'));
+      audio.play().catch(ignorePlayRejection);
     }
   }
 
@@ -1300,10 +1299,6 @@ export function TranscriptReview({
               const chSegs = ch.segmentIndices
                 .map((idx) => ({ seg: displaySegments[idx], idx }))
                 .filter(({ seg }) => !!seg);
-              const q = search.toLowerCase();
-              const hasMatch = !!q && chSegs.some(
-                ({ seg }) => seg.text.toLowerCase().includes(q) || seg.speaker.toLowerCase().includes(q),
-              );
               return (
                 <div
                   key={ch.id}

@@ -25,7 +25,7 @@ vi.mock('@/lib/skabeloner/server', () => ({
 
 import { POST } from './route';
 import { auth } from '@/lib/auth';
-import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
+import { FAKE_SESSION } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 

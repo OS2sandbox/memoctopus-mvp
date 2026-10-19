@@ -52,3 +52,9 @@ next-env.d.ts
 
 # Machine-local Claude Code settings (hook commands, paths)
 /.claude/settings.local.json
+
+# vendor assets generated into public/ by scripts/copy-vad-assets.js (postinstall;
+# the Dockerfile builder stage runs it too). Never commit them.
+/public/ort-wasm-simd-threaded*
+/public/silero_vad_*.onnx
+/public/vad.worklet.bundle.min.js
