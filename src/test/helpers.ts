@@ -35,7 +35,6 @@ export const FAKE_PRINCIPAL_ADMIN: Principal = makePrincipal({
   scopes: {
     'template.manage': { global: true, roots: [] },
     'audit.read': { global: true, roots: [] },
-    'directory.read': { global: true, roots: [] },
   },
   source: 'local',
 });

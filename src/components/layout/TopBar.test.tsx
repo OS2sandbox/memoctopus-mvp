@@ -168,7 +168,7 @@ describe('TopBar — Administration link', () => {
     expect(screen.queryByRole('link', { name: 'Administration' })).toBeNull();
   });
 
-  it.each([['directory.read'], ['access.manage'], ['template.manage'], ['audit.read']])(
+  it.each([['access.manage'], ['template.manage'], ['audit.read']])(
     'is shown for a user with %s',
     (cap) => {
       mockMe = { data: meWith(['template.use', cap]), loading: false, error: null, reload: () => {} };

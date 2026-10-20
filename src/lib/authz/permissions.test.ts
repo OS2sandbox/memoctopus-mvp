@@ -49,8 +49,8 @@ describe('explainDenial', () => {
   });
 
   it('pins the exact string and names the granting roles', () => {
-    expect(explainDenial(user, 'directory.read')).toBe(
-      'Du har ikke rettigheden »Se organisationen«. Rettigheden gives af: Bygger, Admin.',
+    expect(explainDenial(user, 'template.manage')).toBe(
+      'Du har ikke rettigheden »Administrere skabeloner«. Rettigheden gives af: Bygger, Admin.',
     );
   });
 

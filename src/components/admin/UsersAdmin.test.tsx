@@ -389,3 +389,101 @@ describe('UsersAdmin — roles are assigned in Rollekatalog (explanation card)',
     expect(screen.queryByRole('button', { name: 'Synkroniser nu' })).toBeNull();
   });
 });
+
+describe('UsersAdmin — Organisation section below the roles', () => {
+  const orgRegion = () => screen.findByRole('region', { name: 'Organisation' });
+
+  it('local mode: shows the tree below the users with the create/edit/delete/members actions', async () => {
+    setup();
+    renderWithToasts(<UsersAdmin />);
+    const region = await orgRegion();
+    expect(within(region).getByRole('heading', { level: 2, name: 'Organisation' })).toBeInTheDocument();
+    expect(within(region).getByText('Børn')).toBeInTheDocument();
+    expect(within(region).getByRole('button', { name: 'Opret enhed' })).toBeInTheDocument();
+    expect(within(region).getByRole('button', { name: 'Rediger Børn' })).toBeInTheDocument();
+    expect(within(region).getByRole('button', { name: 'Slet Børn' })).toBeInTheDocument();
+    expect(within(region).getByRole('button', { name: 'Rediger medlemmer i Børn' })).toBeInTheDocument();
+    // Below the role table in document order.
+    const table = screen.getByRole('table', { name: 'Brugere og deres roller' });
+    expect(table.compareDocumentPosition(region) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('reads the org units once for the section and the grant dialog together', async () => {
+    const mock = setup();
+    renderWithToasts(<UsersAdmin />);
+    await orgRegion();
+    expect(calls(mock, 'GET', '/api/admin/access/org-units')).toHaveLength(1);
+  });
+
+  it('creating a unit reloads the tree on the same page', async () => {
+    const mock = setup(ADMIN_ME, { 'POST /api/admin/access/org-units': () => json({ orgUnit: {} }, 201) });
+    renderWithToasts(<UsersAdmin />);
+    const region = await orgRegion();
+    await userEvent.click(within(region).getByRole('button', { name: 'Opret enhed' }));
+    await userEvent.type(within(screen.getByRole('dialog')).getByLabelText('Navn'), 'Ældre');
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Opret' }));
+    await waitFor(() => expect(calls(mock, 'POST', '/api/admin/access/org-units')).toHaveLength(1));
+    await waitFor(() => expect(calls(mock, 'GET', '/api/admin/access/org-units').length).toBeGreaterThan(1));
+    // The section stays mounted while it reloads.
+    expect(screen.getByRole('region', { name: 'Organisation' })).toBeInTheDocument();
+  });
+
+  it('rollekatalog mode: read-only tree, one short note, and the role explanation is not repeated', async () => {
+    setup(ROLLEKATALOG_ME);
+    renderWithToasts(<UsersAdmin />);
+    const region = await orgRegion();
+    expect(within(region).getByText('Børn')).toBeInTheDocument();
+    expect(within(region).queryByRole('button', { name: 'Opret enhed' })).toBeNull();
+    expect(within(region).getByRole('note')).toHaveTextContent('Skrivebeskyttet. Organisationen hentes fra Rollekatalog');
+    // The role card and the sync line say where the data comes from; the org section does not say it again.
+    expect(screen.getByRole('region', { name: 'Roller tildeles i Rollekatalog' })).toBeInTheDocument();
+    expect(screen.getAllByText(/Data hentes fra Rollekatalog/)).toHaveLength(1);
+    expect(screen.queryAllByText(/Roller og organisation styres af Rollekatalog/)).toHaveLength(0);
+  });
+
+  it('claims mode: no Organisation section at all', async () => {
+    setup(CLAIMS_ME, { 'GET /api/admin/access/org-units': () => json({ orgUnits: [] }) });
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    expect(screen.queryByRole('region', { name: 'Organisation' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Organisation' })).toBeNull();
+  });
+
+  it('rollekatalog mode without any units: no Organisation section', async () => {
+    setup(ROLLEKATALOG_ME, { 'GET /api/admin/access/org-units': () => json({ orgUnits: [] }) });
+    renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+    expect(screen.queryByRole('region', { name: 'Organisation' })).toBeNull();
+  });
+
+  it('local mode without any units still shows the section so the first unit can be created', async () => {
+    setup(ADMIN_ME, { 'GET /api/admin/access/org-units': () => json({ orgUnits: [] }) });
+    renderWithToasts(<UsersAdmin />);
+    const region = await orgRegion();
+    expect(within(region).getByText('Ingen organisationsenheder')).toBeInTheDocument();
+    expect(within(region).getByRole('button', { name: 'Opret enhed' })).toBeInTheDocument();
+  });
+
+  it('local mode with the kill switch off and no units: no section; with units: read-only with the note', async () => {
+    setup(LOCKED_LOCAL_ME, { 'GET /api/admin/access/org-units': () => json({ orgUnits: [] }) });
+    const { unmount } = renderWithToasts(<UsersAdmin />);
+    await screen.findByText('Bo Bruger');
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
+    expect(screen.queryByRole('region', { name: 'Organisation' })).toBeNull();
+    unmount();
+    setup(LOCKED_LOCAL_ME);
+    renderWithToasts(<UsersAdmin />);
+    const region = await orgRegion();
+    expect(within(region).getByRole('note')).toHaveTextContent('Den lokale organisationsadministration er slået fra');
+    expect(within(region).queryByRole('button', { name: 'Opret enhed' })).toBeNull();
+  });
+
+  it('shows a failed org load as an error with retry inside the section', async () => {
+    setup(ROLLEKATALOG_ME, { 'GET /api/admin/access/org-units': () => json({ error: 'x' }, 500) });
+    renderWithToasts(<UsersAdmin />);
+    const region = await orgRegion();
+    expect(within(region).getByRole('alert')).toBeInTheDocument();
+    expect(within(region).getByRole('button', { name: 'Prøv igen' })).toBeInTheDocument();
+  });
+});

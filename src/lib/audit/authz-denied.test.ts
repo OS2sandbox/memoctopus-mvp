@@ -42,7 +42,7 @@ describe('recordAuthzDenied (best-effort)', () => {
   });
 
   it('records a resource denial with the entity when it is a uuid', async () => {
-    await recordAuthzDenied({ actorUserId: 'u1', required: 'directory.read', reason: 'out_of_scope', entityType: 'org_unit', entityId: UNIT_ID });
+    await recordAuthzDenied({ actorUserId: 'u1', required: 'template.manage', reason: 'out_of_scope', entityType: 'org_unit', entityId: UNIT_ID });
     const values = h.poolQuery.mock.calls[0][1] as unknown[];
     expect(values).toEqual(expect.arrayContaining(['org_unit', UNIT_ID]));
   });

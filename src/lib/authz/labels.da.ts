@@ -13,7 +13,7 @@ export const roleLabels: Record<RoleKey, string> = {
 export const roleDescriptions: Record<RoleKey, string> = {
   'bruger': 'Kan bruge løsningen og de skabeloner, der er stillet til rådighed.',
   'bygger':
-    'Superbruger: kan oprette og udbrede centrale skabeloner og se organisationen for de enheder, rollen er tildelt. Uden enhed (fx fra login) gælder den hele organisationen.',
+    'Superbruger: kan oprette og udbrede centrale skabeloner for de enheder, rollen er tildelt. Uden enhed (fx fra login) gælder den hele organisationen.',
   'admin': 'Har alle rettigheder: administration, styring af brugere, roller og synkronisering samt log og eksport.',
 };
 
@@ -22,7 +22,6 @@ export const capabilityLabels: Record<Capability, string> = {
   'template.manage': 'Administrere skabeloner',
   'audit.read': 'Læse loggen',
   'audit.export': 'Eksportere loggen',
-  'directory.read': 'Se organisationen',
   'access.manage': 'Administrere brugere og roller',
   'sync.run': 'Starte synkronisering',
 };

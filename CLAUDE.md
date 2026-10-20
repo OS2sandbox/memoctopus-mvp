@@ -66,8 +66,8 @@ Auth config is deliberately **runtime-only**, never `NEXT_PUBLIC_*`: an operator
 
 | Role | Capabilities | Scope |
 |---|---|---|
-| `admin` (Admin) | all: `template.use`, `template.manage`, `directory.read`, `audit.read`, `audit.export`, `access.manage`, `sync.run` | always global; the only role that reads the log |
-| `bygger` (Bygger) | `template.use`, `template.manage`, `directory.read` | org units (local / Rollekatalog), or global with a NULL scope (claims) |
+| `admin` (Admin) | all: `template.use`, `template.manage`, `audit.read`, `audit.export`, `access.manage`, `sync.run` | always global; the only role that reads the log |
+| `bygger` (Bygger) | `template.use`, `template.manage` | org units (local / Rollekatalog), or global with a NULL scope (claims) |
 | `bruger` (Bruger) | `template.use` | none; no Administration tab |
 
 Invariants (do not break these):

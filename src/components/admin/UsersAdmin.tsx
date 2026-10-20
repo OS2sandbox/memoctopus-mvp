@@ -14,11 +14,12 @@ import { useMe } from '@/lib/hooks/use-me';
 import type { AccessSource } from '@/lib/authz/config';
 import { apiRequest } from './api';
 import { AdminPage } from './AdminPage';
+import { OrganisationAdmin } from './OrganisationAdmin';
 import { RoleGrantDialog } from './RoleGrantDialog';
 import { describeAssignmentScope } from './scope-text';
 import { RoleSourceCard } from './RoleSourceCard';
 import { LastSyncLine, SyncStatus, canSeeSyncRun, useSyncRun } from './SyncStatus';
-import type { TreeUnit } from './org-tree';
+import { useOrgUnits } from './useOrgUnits';
 
 // Mirrors AssignmentView / AppUserView from the access service (JSON, so dates are strings).
 interface Assignment {
@@ -59,8 +60,8 @@ export function UsersAdmin() {
   // One read of the latest sync run serves the explanation card, the "last synchronised" line and the sync panel.
   const sync = useSyncRun(!!me && canSeeSyncRun(me));
   const [users, setUsers] = useState<AppUser[]>([]);
-  const [orgUnits, setOrgUnits] = useState<TreeUnit[]>([]);
-  const [orgUnitsError, setOrgUnitsError] = useState<string | null>(null);
+  // One read of the org units serves the role-grant dialog and the Organisation section below.
+  const org = useOrgUnits();
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
@@ -92,19 +93,6 @@ export function UsersAdmin() {
   useEffect(() => {
     load(appliedQ);
   }, [load, appliedQ]);
-
-  const loadOrgUnits = useCallback(async () => {
-    const res = await apiRequest<{ orgUnits: TreeUnit[] }>('/api/admin/access/org-units');
-    if (res.ok) {
-      setOrgUnits(res.data.orgUnits);
-      setOrgUnitsError(null);
-    } else {
-      setOrgUnitsError('Kunne ikke hente organisationsenheder.');
-    }
-  }, []);
-  useEffect(() => {
-    loadOrgUnits();
-  }, [loadOrgUnits]);
 
   // Advisory only: the page gate guarantees access.manage, so this only hides controls in
   // Rollekatalog mode. The server re-checks capability, mode and row ownership on every write.
@@ -232,6 +220,11 @@ export function UsersAdmin() {
         </p>
       )}
 
+      {/* The organisation exists only where there are units (Rollekatalog, or local mode); claims mode has none. */}
+      {me && org.loaded && me.source !== 'claims' && (org.units.length > 0 || canWrite || org.error) && (
+        <OrganisationAdmin me={me} org={org} />
+      )}
+
       {me && <SyncStatus me={me} sync={sync} />}
 
       {canWrite && (
@@ -239,8 +232,8 @@ export function UsersAdmin() {
           open={grantFor !== null}
           onOpenChange={(o) => !o && setGrantFor(null)}
           user={grantFor ? { id: grantFor.id, name: grantFor.name } : null}
-          orgUnits={orgUnits}
-          orgUnitsError={orgUnitsError}
+          orgUnits={org.units}
+          orgUnitsError={org.error ? 'Kunne ikke hente organisationsenheder.' : null}
           onGranted={() => load(appliedQ)}
         />
       )}

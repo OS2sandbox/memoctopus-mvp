@@ -56,7 +56,7 @@ describe('GET /api/me', () => {
     mockResolve.mockResolvedValue(
       makePrincipal({
         roles: ['bruger', 'bygger'],
-        capabilities: ['template.use', 'template.manage', 'directory.read'],
+        capabilities: ['template.use', 'template.manage'],
         scopes: { 'template.manage': { global: false, roots: [{ orgUnitUuid: unit, includeDescendants: true }] } },
         source: 'local',
       }),

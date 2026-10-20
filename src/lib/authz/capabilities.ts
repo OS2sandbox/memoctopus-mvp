@@ -26,7 +26,7 @@ export const ROLE_DEFINITIONS: Record<RoleKey, RoleDefinition> = {
   // Rollekatalog) still work; a NULL scope from a source that cannot be global stays
   // the caller's problem, see dropStaleAssignments and the grant validation.
   'bygger': {
-    capabilities: ['template.use', 'template.manage', 'directory.read'],
+    capabilities: ['template.use', 'template.manage'],
     globalScopeAllowed: true,
   },
   'admin': {
@@ -38,7 +38,6 @@ export const ROLE_DEFINITIONS: Record<RoleKey, RoleDefinition> = {
 export const SCOPED_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   'template.manage',
   'audit.read',
-  'directory.read',
 ]);
 
 // Capabilities that cannot be narrowed to an org unit. They only take effect

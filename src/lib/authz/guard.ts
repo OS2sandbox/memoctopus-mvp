@@ -53,7 +53,7 @@ export function requireCapability(
  * capability is 403. null means the caller may proceed.
  *
  * `inScope` is the answer to isOrgUnitWithinScope for a capability whose
- * scope the caller is allowed to see (e.g. directory.read), not necessarily
+ * scope the caller is allowed to see (e.g. template.manage), not necessarily
  * the capability being checked here.
  */
 export function notFoundOrForbidden(
@@ -83,7 +83,7 @@ export function notFoundOrForbidden(
  * including from resolvePrincipal, becomes the standard JSON 500.
  * A null capability means "any signed-in user who may use the app at all".
  *
- *   export const GET = withAuthz('admin/users/GET', 'directory.read', async (req, { principal, params }) => ...);
+ *   export const GET = withAuthz('admin/users/GET', 'access.manage', async (req, { principal, params }) => ...);
  */
 export function withAuthz<P = Record<string, never>>(
   label: string,

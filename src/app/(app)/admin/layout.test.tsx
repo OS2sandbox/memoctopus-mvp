@@ -41,21 +41,20 @@ function findAll(node: unknown, type: unknown, out: El[] = []): El[] {
 }
 
 describe('(app)/admin layout — server-side gate', () => {
-  it('renders toasts and a nav limited to the visible sections for a directory reader', async () => {
-    mockPrincipal.mockResolvedValueOnce(makePrincipal({ capabilities: ['template.use', 'directory.read'] }));
+  it('renders toasts and a nav limited to the visible sections for a template manager', async () => {
+    mockPrincipal.mockResolvedValueOnce(makePrincipal({ capabilities: ['template.use', 'template.manage'] }));
     const el = await AdminLayout({ children: 'CONTENT' });
     expect((el as unknown as El).type).toBe(ToastProvider);
     const [nav] = findAll(el, AdminNav);
     expect((nav.props as unknown as { sections: Array<{ key: string }> }).sections.map((s) => s.key)).toEqual([
-      'organisation',
+      'templates',
     ]);
   });
 
   it.each([
     ['a template manager only', ['template.use', 'template.manage'], ['templates']],
     ['a log reader only', ['template.use', 'audit.read'], ['log']],
-    ['a template manager who may also read the directory', ['template.use', 'template.manage', 'directory.read'], ['organisation', 'templates']],
-    ['a log reader who may also read the directory', ['template.use', 'audit.read', 'directory.read'], ['organisation', 'log']],
+    ['an access manager only', ['template.use', 'access.manage'], ['users']],
   ] as const)('limits the nav to %s', async (_label, capabilities, expected) => {
     mockPrincipal.mockResolvedValueOnce(makePrincipal({ capabilities: [...capabilities] }));
     const el = await AdminLayout({ children: null });
@@ -69,7 +68,6 @@ describe('(app)/admin layout — server-side gate', () => {
     const [nav] = findAll(el, AdminNav);
     expect((nav.props as unknown as { sections: Array<{ key: string }> }).sections.map((s) => s.key)).toEqual([
       'users',
-      'organisation',
       'templates',
       'log',
     ]);

@@ -10,7 +10,6 @@ export const CAPABILITIES = [
   'template.manage',
   'audit.read',
   'audit.export',
-  'directory.read',
   'access.manage',
   'sync.run',
 ] as const;

@@ -3,7 +3,7 @@
 import { hasAnyCapability } from './permissions';
 import type { Capability, Principal } from './types';
 
-export type AdminSectionKey = 'users' | 'organisation' | 'templates' | 'log';
+export type AdminSectionKey = 'users' | 'templates' | 'log';
 
 export interface AdminSection {
   key: AdminSectionKey;
@@ -15,7 +15,6 @@ export interface AdminSection {
 
 export const ADMIN_SECTIONS: readonly AdminSection[] = [
   { key: 'users', href: '/admin/brugere', label: 'Brugere og roller', requiredCapability: ['access.manage'] },
-  { key: 'organisation', href: '/admin/organisation', label: 'Organisation', requiredCapability: ['directory.read'] },
   { key: 'templates', href: '/admin/skabeloner', label: 'Centrale skabeloner', requiredCapability: ['template.manage'] },
   { key: 'log', href: '/admin/log', label: 'Log', requiredCapability: ['audit.read'] },
 ];

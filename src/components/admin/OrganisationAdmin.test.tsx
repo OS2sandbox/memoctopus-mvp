@@ -2,8 +2,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { MeResponse } from '@/lib/authz/me';
 import { OrganisationAdmin } from './OrganisationAdmin';
-import { ADMIN_ME, CLAIMS_ME, LOCKED_LOCAL_ME, READER_ME, ROLLEKATALOG_ME, calls, installFetch, json, renderWithToasts } from './test-helpers';
+import { useOrgUnits } from './useOrgUnits';
+import { ADMIN_ME, LOCKED_LOCAL_ME, ROLLEKATALOG_ME, calls, installFetch, json, renderWithToasts } from './test-helpers';
 
 const ROOT = '11111111-1111-4111-8111-111111111111';
 const CHILD = '22222222-2222-4222-8222-222222222222';
@@ -19,18 +21,33 @@ const UNITS = {
 
 afterEach(() => vi.unstubAllGlobals());
 
+// The section is fed by the users page; this harness does the same with the real hook.
+let currentMe: MeResponse = ADMIN_ME;
+function OrganisationAdminHarness() {
+  const org = useOrgUnits();
+  return <OrganisationAdmin me={currentMe} org={org} />;
+}
+
 function setup(me = ADMIN_ME, extra: Parameters<typeof installFetch>[0] = {}) {
+  currentMe = me;
   return installFetch({
-    'GET /api/me': () => json(me),
     'GET /api/admin/access/org-units': () => json(UNITS),
     ...extra,
   });
 }
 
 describe('OrganisationAdmin — tree', () => {
+  it('is a section with the heading Organisation', async () => {
+    setup();
+    renderWithToasts(<OrganisationAdminHarness />);
+    await screen.findByText('Kommune');
+    expect(screen.getByRole('region', { name: 'Organisation' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Organisation' })).toBeInTheDocument();
+  });
+
   it('renders units depth-first with indentation and no source column', async () => {
     setup();
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Kommune');
     const names = screen.getAllByText(/^(Kommune|Børn|Synkroniseret)$/);
     expect(names.map((n) => n.textContent)).toEqual(['Kommune', 'Børn', 'Synkroniseret']);
@@ -41,7 +58,7 @@ describe('OrganisationAdmin — tree', () => {
 
   it('announces loading, names the table and conveys depth to screen readers', async () => {
     setup();
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     expect(screen.getByRole('status')).toHaveTextContent('Indlæser');
     await screen.findByText('Kommune');
     expect(screen.getByRole('table', { name: 'Organisationsenheder' })).toBeInTheDocument();
@@ -52,13 +69,13 @@ describe('OrganisationAdmin — tree', () => {
 
   it('shows an empty state and an error with retry', async () => {
     setup(ADMIN_ME, { 'GET /api/admin/access/org-units': () => json({ orgUnits: [] }) });
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     expect(await screen.findByText('Ingen organisationsenheder')).toBeInTheDocument();
   });
 
   it('shows a load error', async () => {
     setup(ADMIN_ME, { 'GET /api/admin/access/org-units': () => json({ error: 'Forbidden' }, 403) });
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Du har ikke adgang til denne handling.');
   });
 });
@@ -66,7 +83,7 @@ describe('OrganisationAdmin — tree', () => {
 describe('OrganisationAdmin — per role and mode', () => {
   it('offers create, edit, delete and members on local units for a local-mode manager', async () => {
     setup();
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Kommune');
     expect(screen.getByRole('button', { name: 'Opret enhed' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Rediger Børn' })).toBeInTheDocument();
@@ -76,7 +93,7 @@ describe('OrganisationAdmin — per role and mode', () => {
 
   it('never offers edit or delete on a synced unit', async () => {
     setup();
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Synkroniseret');
     expect(screen.queryByRole('button', { name: 'Rediger Synkroniseret' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Slet Synkroniseret' })).toBeNull();
@@ -85,25 +102,20 @@ describe('OrganisationAdmin — per role and mode', () => {
     expect(screen.getByText('Styres af Rollekatalog')).toBeInTheDocument();
   });
 
-  it.each([
-    ['claims', CLAIMS_ME, /identitetsudbyderen/],
-    ['local with the kill switch off', LOCKED_LOCAL_ME, /slået fra/],
-  ])('is read-only in %s mode, and the banner says why', async (_n, me, why) => {
-    setup(me);
-    renderWithToasts(<OrganisationAdmin />);
+  it('is read-only with the kill switch off, and one short note says why', async () => {
+    setup(LOCKED_LOCAL_ME);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Kommune');
-    expect(screen.getByRole('status')).toHaveTextContent('Skrivebeskyttet');
-    expect(screen.getByRole('status')).toHaveTextContent(why);
-    expect(screen.queryByText(/Rollekatalog/)).toBeNull();
+    expect(screen.getByRole('note')).toHaveTextContent('Skrivebeskyttet. Den lokale organisationsadministration er slået fra.');
     expect(screen.queryByRole('button', { name: 'Opret enhed' })).toBeNull();
     expect(screen.queryByRole('columnheader', { name: 'Handlinger' })).toBeNull();
   });
 
   it('is read-only in rollekatalog mode: banner, no create/edit/delete/actions column, members only viewable', async () => {
     setup(ROLLEKATALOG_ME);
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Kommune');
-    expect(screen.getByRole('status')).toHaveTextContent('Skrivebeskyttet');
+    expect(screen.getByRole('note')).toHaveTextContent('Skrivebeskyttet. Organisationen hentes fra Rollekatalog og kan ikke ændres her.');
     expect(screen.queryByRole('button', { name: 'Opret enhed' })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Rediger / })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Slet / })).toBeNull();
@@ -111,17 +123,6 @@ describe('OrganisationAdmin — per role and mode', () => {
     expect(screen.queryByRole('button', { name: /^Rediger medlemmer/ })).toBeNull();
     expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Enhed', 'Medlemmer']);
     expect(screen.getByRole('button', { name: 'Vis medlemmer af Børn' })).toBeInTheDocument();
-  });
-
-  it('is view-only for a directory reader without access.manage, with the reason', async () => {
-    const mock = setup(READER_ME);
-    renderWithToasts(<OrganisationAdmin />);
-    await screen.findByText('Kommune');
-    expect(screen.getByText(/Kun visning\. Du har ikke rettigheden »Administrere brugere og roller«/)).toBeInTheDocument();
-    expect(screen.queryByRole('button')).toBeNull();
-    expect(screen.queryByRole('columnheader', { name: 'Handlinger' })).toBeNull();
-    // The members endpoint needs access.manage, so a reader gets the count only and no expander.
-    expect(calls(mock, 'GET', '/api/admin/access/org-units/')).toHaveLength(0);
   });
 });
 
@@ -136,7 +137,7 @@ describe('OrganisationAdmin — member panel', () => {
 
   it('expands lazily under the row, once, with name and e-mail, and collapses again', async () => {
     const mock = setup(ROLLEKATALOG_ME, { [MEMBERS_URL(SYNCED)]: () => json(MEMBERS) });
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Synkroniseret');
     expect(calls(mock, 'GET', `/api/admin/access/org-units/${SYNCED}/members`)).toHaveLength(0);
 
@@ -173,7 +174,7 @@ describe('OrganisationAdmin — member panel', () => {
       [MEMBERS_URL(CHILD)]: () => json({ members: [] }),
       [MEMBERS_URL(ROOT)]: () => (++attempt === 1 ? json({ error: 'x' }, 500) : json(MEMBERS)),
     });
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Kommune');
 
     await userEvent.click(screen.getByRole('button', { name: 'Vis medlemmer af Synkroniseret' }));
@@ -192,15 +193,15 @@ describe('OrganisationAdmin — member panel', () => {
 
   it('says so when the API reports that the list was cut', async () => {
     setup(ROLLEKATALOG_ME, { [MEMBERS_URL(SYNCED)]: () => json({ ...MEMBERS, truncated: true }) });
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Synkroniseret');
     await userEvent.click(screen.getByRole('button', { name: 'Vis medlemmer af Synkroniseret' }));
-    expect(await screen.findByRole('note')).toHaveTextContent('Viser de første 2 medlemmer. Listen er afkortet.');
+    expect(await screen.findByText('Viser de første 2 medlemmer. Listen er afkortet.')).toBeInTheDocument();
   });
 
   it('keeps the member count column and the depth text, and the chevron is not part of the unit name', async () => {
     setup(ROLLEKATALOG_ME);
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Kommune');
     const row = screen.getByText('Børn').closest('tr')!;
     expect(row).toHaveTextContent('Niveau 2: Børn');
@@ -214,7 +215,7 @@ describe('OrganisationAdmin — member panel', () => {
       'GET /api/admin/access/users': () => json({ users: [{ id: 'u-1', name: 'Bo Bruger', email: 'bo@example.dk' }] }),
       [`PUT /api/admin/access/org-units/${CHILD}/members`]: () => json({ members: [] }),
     });
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Kommune');
     expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Enhed', 'Medlemmer', 'Handlinger']);
 
@@ -233,7 +234,7 @@ describe('OrganisationAdmin — member panel', () => {
 describe('OrganisationAdmin — create, edit, delete', () => {
   it('validates the name before creating', async () => {
     const mock = setup();
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Kommune');
     await userEvent.click(screen.getByRole('button', { name: 'Opret enhed' }));
     await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Opret' }));
@@ -245,7 +246,7 @@ describe('OrganisationAdmin — create, edit, delete', () => {
     const mock = setup(ADMIN_ME, {
       'POST /api/admin/access/org-units': () => json({ orgUnit: {} }, 201),
     });
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Kommune');
     await userEvent.click(screen.getByRole('button', { name: 'Opret enhed' }));
     const dialog = screen.getByRole('dialog');
@@ -262,7 +263,7 @@ describe('OrganisationAdmin — create, edit, delete', () => {
     const mock = setup(ADMIN_ME, {
       [`PATCH /api/admin/access/org-units/${ROOT}`]: () => json({ orgUnit: {} }),
     });
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Kommune');
     await userEvent.click(screen.getByRole('button', { name: 'Rediger Kommune' }));
     const dialog = screen.getByRole('dialog');
@@ -282,7 +283,7 @@ describe('OrganisationAdmin — create, edit, delete', () => {
       [`PATCH /api/admin/access/org-units/${CHILD}`]: () =>
         json({ error: 'Flytningen ville skabe en løkke i organisationen', code: 'cycle' }, 409),
     });
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Kommune');
     await userEvent.click(screen.getByRole('button', { name: 'Rediger Børn' }));
     const dialog = screen.getByRole('dialog');
@@ -296,7 +297,7 @@ describe('OrganisationAdmin — create, edit, delete', () => {
       [`DELETE /api/admin/access/org-units/${ROOT}`]: () =>
         json({ error: 'Enheden har underenheder og kan ikke slettes', code: 'has_children' }, 409),
     });
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Kommune');
     await userEvent.click(screen.getByRole('button', { name: 'Slet Kommune' }));
     const dialog = screen.getByRole('dialog');
@@ -309,42 +310,11 @@ describe('OrganisationAdmin — create, edit, delete', () => {
 
   it('deletes on confirm, toasts and reloads', async () => {
     const mock = setup(ADMIN_ME, { [`DELETE /api/admin/access/org-units/${CHILD}`]: () => json({ ok: true }) });
-    renderWithToasts(<OrganisationAdmin />);
+    renderWithToasts(<OrganisationAdminHarness />);
     await screen.findByText('Kommune');
     await userEvent.click(screen.getByRole('button', { name: 'Slet Børn' }));
     await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Bekræft sletning' }));
     expect(await screen.findByText('Enheden er slettet')).toBeInTheDocument();
     await waitFor(() => expect(calls(mock, 'GET', '/api/admin/access/org-units').length).toBeGreaterThan(1));
-  });
-});
-
-describe('OrganisationAdmin — Rollekatalog data and last sync', () => {
-  it('labels the data as coming from Rollekatalog with the last sync time in rollekatalog mode', async () => {
-    setup(ROLLEKATALOG_ME, {
-      'GET /api/admin/access/sync': () =>
-        json({
-          run: { id: 'r1', startedAt: '2026-10-05T10:00:00.000Z', finishedAt: '2026-10-05T10:00:03.000Z', status: 'success', counts: null, errorCode: null },
-          source: 'rollekatalog',
-          configIssue: null,
-        }),
-    });
-    renderWithToasts(<OrganisationAdmin />);
-    expect(await screen.findByText(/Data hentes fra Rollekatalog\. Sidst synkroniseret .*2026/)).toBeInTheDocument();
-  });
-
-  it('does not ask for the run in local mode', async () => {
-    const mock = setup();
-    renderWithToasts(<OrganisationAdmin />);
-    await screen.findByText('Kommune');
-    expect(screen.queryByText(/Data hentes fra Rollekatalog/)).toBeNull();
-    expect(calls(mock, 'GET', '/api/admin/access/sync')).toHaveLength(0);
-  });
-
-  it('a directory reader without access.manage or sync.run only sees the source label (no audited 403)', async () => {
-    const mock = setup({ ...READER_ME, source: 'rollekatalog', readOnly: true });
-    renderWithToasts(<OrganisationAdmin />);
-    await screen.findByText('Kommune');
-    expect(screen.getByText('Data hentes fra Rollekatalog.')).toBeInTheDocument();
-    expect(calls(mock, 'GET', '/api/admin/access/sync')).toHaveLength(0);
   });
 });

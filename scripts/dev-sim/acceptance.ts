@@ -123,7 +123,9 @@ async function main() {
   const meLars = await lars.get('/api/me');
   // lars.f is a bygger scoped to Økonomi (his constraint also names an unknown unit, which is ignored).
   check('lars.f builds for Økonomi only (unknown unit ignored)', JSON.stringify((meLars.json?.scopes?.['template.manage']?.roots ?? []).map((r: any) => r.orgUnitUuid)) === JSON.stringify([U.okonomi]) && meLars.json?.scopes?.['template.manage']?.global === false, JSON.stringify(meLars.json?.scopes));
-  check('lars.f may read the organisation but not the log, users or sync', meLars.json?.capabilities?.includes('directory.read') && !meLars.json?.capabilities?.some((c: string) => ['audit.read', 'audit.export', 'access.manage', 'sync.run'].includes(c)), JSON.stringify(meLars.json?.capabilities));
+  check('lars.f may manage templates but not read the log, users, sync or the organisation tree', JSON.stringify([...(meLars.json?.capabilities ?? [])].sort()) === JSON.stringify(['template.manage', 'template.use']), JSON.stringify(meLars.json?.capabilities));
+  const larsOrg = await lars.get('/api/admin/access/org-units');
+  check('lars.f gets 403 from the org-unit tree API (only access.manage reads it)', larsOrg.status === 403, `status ${larsOrg.status}`);
 
   for (const [who, why] of [
     ['ida.l', 'bygger without a scope (fails closed: not global by default)'],

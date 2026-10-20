@@ -83,12 +83,12 @@ The claims mode also exercises the **shared prompts by role**: the app is starte
 
 | Login as | In Rollekatalog | Expected in the app (`REQUIRE_ROLE_TO_LOGIN=true`) |
 |---|---|---|
-| `mette.e` | `admin` (with a unit constraint that is ignored: Admin is never scoped) | Everything, organisation-wide. Admin menu: users, organisation, templates, log. Sync button. |
+| `mette.e` | `admin` (with a unit constraint that is ignored: Admin is never scoped) | Everything, organisation-wide. Admin menu: Brugere og roller (with the Organisation section below the roles), Centrale skabeloner, Log. Sync button. |
 | `rune.a` | `admin`, no constraint | Same. |
-| `anne.p` | `bruger` + `bygger` for *Team Selvbetjening* and *Økonomi* (KOMBIT constraint type) | Admin menu with **Centrale skabeloner** and **Organisation** (no Log, no Brugere). Can create templates owned by those units (and their sub-units). |
+| `anne.p` | `bruger` + `bygger` for *Team Selvbetjening* and *Økonomi* (KOMBIT constraint type) | Admin menu with only **Centrale skabeloner** (no Log, no Brugere og roller, so no Organisation view either). Can create templates owned by those units (and their sub-units). |
 | `jens.t` | `bygger` for *Borgerservice* (+ a KLE constraint that must be ignored) | Manages everything under Borgerservice, so also *Team Selvbetjening*. |
 | `peter.d` | `bygger` for *Team Selvbetjening*, plus a duplicate row without scope | Only *Team Selvbetjening*; the unscoped duplicate grants nothing. |
-| `lars.f` | `bruger` + `bygger` for *Økonomi* and one unknown unit (ignored) | Admin menu with **Centrale skabeloner** and **Organisation**, limited to *Økonomi*. No Log (log access is Admin only), no Brugere. |
+| `lars.f` | `bruger` + `bygger` for *Økonomi* and one unknown unit (ignored) | Admin menu with only **Centrale skabeloner**, limited to *Økonomi*. No Log (log access is Admin only), no Brugere og roller; `GET /api/admin/access/org-units` answers 403. |
 | `ida.l` | `bygger` **without** a scope | Fails closed: no usable role, "ingen adgang" page. |
 | `ole.k` | `bygger` for a unit that does not exist, plus an unknown role | No usable role, "ingen adgang". |
 | `sofie.s` | disabled in Rollekatalog | "ingen adgang". |

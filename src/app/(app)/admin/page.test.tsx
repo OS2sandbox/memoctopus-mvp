@@ -23,14 +23,8 @@ beforeEach(() => mockPrincipal.mockReset());
 describe('/admin index redirects to the first section the principal may open', () => {
   it.each([
     ['an administrator', FAKE_PRINCIPAL_ADMIN, '/admin/brugere'],
-    ['a template manager without directory access', makePrincipal({ capabilities: ['template.use', 'template.manage'] }), '/admin/skabeloner'],
-    ['a log reader without directory access', makePrincipal({ capabilities: ['template.use', 'audit.read'] }), '/admin/log'],
-    ['a directory reader', makePrincipal({ capabilities: ['template.use', 'directory.read'] }), '/admin/organisation'],
-    [
-      'a template manager who can also read the directory',
-      makePrincipal({ capabilities: ['template.use', 'template.manage', 'directory.read'] }),
-      '/admin/organisation',
-    ],
+    ['a template manager', makePrincipal({ capabilities: ['template.use', 'template.manage'] }), '/admin/skabeloner'],
+    ['a log reader', makePrincipal({ capabilities: ['template.use', 'audit.read'] }), '/admin/log'],
   ])('%s', async (_label, principal, target) => {
     mockPrincipal.mockResolvedValue(principal);
     await expect(AdminIndexPage()).rejects.toThrow(`REDIRECT:${target}`);

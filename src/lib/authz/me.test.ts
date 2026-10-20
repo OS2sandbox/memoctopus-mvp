@@ -37,17 +37,9 @@ describe('visibleSectionsForMe', () => {
     expect(visibleSectionsForMe(base)).toEqual([]);
   });
 
-  it('shows only organisation to a directory reader', () => {
-    const me = { ...base, capabilities: ['template.use', 'directory.read'] as MeResponse['capabilities'] };
-    expect(visibleSectionsForMe(me).map((s) => s.key)).toEqual(['organisation']);
-  });
-
-  it('shows users and organisation to an access manager', () => {
-    const me = {
-      ...base,
-      capabilities: ['template.use', 'access.manage', 'directory.read'] as MeResponse['capabilities'],
-    };
-    expect(visibleSectionsForMe(me).map((s) => s.key)).toEqual(['users', 'organisation']);
+  it('shows only users to an access manager', () => {
+    const me = { ...base, capabilities: ['template.use', 'access.manage'] as MeResponse['capabilities'] };
+    expect(visibleSectionsForMe(me).map((s) => s.key)).toEqual(['users']);
   });
 
   it('shows only the templates section to a template manager', () => {

@@ -18,7 +18,7 @@ import { FAKE_PRINCIPAL_ADMIN, makePrincipal } from '@/test/helpers';
 
 const mockPrincipal = vi.mocked(getPrincipalForServerComponent);
 
-const dirReader = makePrincipal({ capabilities: ['template.use', 'directory.read'] });
+const templateManager = makePrincipal({ capabilities: ['template.use', 'template.manage'] });
 
 beforeEach(() => {
   mockPrincipal.mockReset();
@@ -40,10 +40,10 @@ describe('requireAnyAdminSection', () => {
     await expect(requireAnyAdminSection()).rejects.toThrow('NOT_FOUND');
   });
 
-  it('returns the visible sections for a directory reader', async () => {
-    mockPrincipal.mockResolvedValue(dirReader);
+  it('returns the visible sections for a template manager', async () => {
+    mockPrincipal.mockResolvedValue(templateManager);
     const { sections } = await requireAnyAdminSection();
-    expect(sections.map((s) => s.key)).toEqual(['organisation']);
+    expect(sections.map((s) => s.key)).toEqual(['templates']);
   });
 });
 
@@ -53,14 +53,14 @@ describe('requireAdminSection', () => {
     await expect(requireAdminSection('users')).rejects.toThrow('REDIRECT:/?expired=1');
   });
 
-  it('404s a directory reader on the users section', async () => {
-    mockPrincipal.mockResolvedValue(dirReader);
+  it('404s a template manager on the users section', async () => {
+    mockPrincipal.mockResolvedValue(templateManager);
     await expect(requireAdminSection('users')).rejects.toThrow('NOT_FOUND');
   });
 
-  it('lets a directory reader into the organisation section', async () => {
-    mockPrincipal.mockResolvedValue(dirReader);
-    await expect(requireAdminSection('organisation')).resolves.toBe(dirReader);
+  it('lets a template manager into the templates section', async () => {
+    mockPrincipal.mockResolvedValue(templateManager);
+    await expect(requireAdminSection('templates')).resolves.toBe(templateManager);
   });
 
   it('lets an administrator into the users section', async () => {

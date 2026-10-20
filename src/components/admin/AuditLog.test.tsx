@@ -34,7 +34,7 @@ const ev = (over: Record<string, unknown> = {}) => ({
 const LOG_READER_ME = {
   ...READER_ME,
   roles: ['bruger', 'admin'] as typeof ADMIN_ME.roles,
-  capabilities: ['template.use', 'audit.read', 'directory.read'] as typeof ADMIN_ME.capabilities,
+  capabilities: ['template.use', 'audit.read'] as typeof ADMIN_ME.capabilities,
   scopes: { 'audit.read': { global: false, roots: [] } },
 };
 

@@ -1,7 +1,7 @@
-import { OrganisationAdmin } from '@/components/admin/OrganisationAdmin';
-import { requireAdminSection } from '@/lib/authz/page-gate';
+import { redirect } from 'next/navigation';
 
-export default async function OrganisationPage() {
-  await requireAdminSection('organisation');
-  return <OrganisationAdmin />;
+// The organisation moved onto the users page. This only keeps old bookmarks working;
+// /admin/brugere gates itself, so nothing is revealed here.
+export default function OrganisationRedirectPage() {
+  redirect('/admin/brugere');
 }

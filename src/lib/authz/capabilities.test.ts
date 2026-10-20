@@ -42,19 +42,18 @@ describe('role matrix tripwire', () => {
       'template.manage',
       'audit.read',
       'audit.export',
-      'directory.read',
       'access.manage',
       'sync.run',
     ]);
     expect([...GLOBAL_ONLY_CAPABILITIES].sort()).toEqual(['access.manage', 'audit.export', 'sync.run']);
-    expect([...SCOPED_CAPABILITIES].sort()).toEqual(['audit.read', 'directory.read', 'template.manage']);
+    expect([...SCOPED_CAPABILITIES].sort()).toEqual(['audit.read', 'template.manage']);
   });
 
   it('pins the full role -> capabilities matrix', () => {
     expect(ROLE_DEFINITIONS).toEqual({
       'bruger': { capabilities: ['template.use'], globalScopeAllowed: false },
       'bygger': {
-        capabilities: ['template.use', 'template.manage', 'directory.read'],
+        capabilities: ['template.use', 'template.manage'],
         globalScopeAllowed: true,
       },
       'admin': {
@@ -63,7 +62,6 @@ describe('role matrix tripwire', () => {
           'template.manage',
           'audit.read',
           'audit.export',
-          'directory.read',
           'access.manage',
           'sync.run',
         ],
@@ -99,7 +97,6 @@ describe('buildPrincipalFromAssignments', () => {
     expect(p.capabilities).toContain('template.manage');
     expect(p.capabilities).not.toContain('access.manage');
     expect(p.scopes['template.manage']).toEqual({ global: true, roots: [] });
-    expect(p.scopes['directory.read']).toEqual({ global: true, roots: [] });
   });
 
   it('still fails closed for a role that may not be global: bruger with a NULL scope adds no scoped power', () => {
@@ -123,7 +120,6 @@ describe('buildPrincipalFromAssignments', () => {
     expect(admin.capabilities).toEqual([...CAPABILITIES]);
     expect(admin.scopes['template.manage']?.global).toBe(true);
     expect(admin.scopes['audit.read']?.global).toBe(true);
-    expect(admin.scopes['directory.read']?.global).toBe(true);
   });
 
   it('a unit-scoped admin gets NO global-only capability (no self-promotion to global admin)', () => {
@@ -210,14 +206,12 @@ describe('buildPrincipalFromAssignments', () => {
       { roleKey: 'admin' },
       { roleKey: 'bygger', scopeOrgUnitUuid: OU_A },
     ]);
-    // Both roles carry directory.read and template.manage, so the global admin grant
-    // makes them global and the unit root of the bygger grant is kept next to it.
-    for (const cap of ['directory.read', 'template.manage'] as const) {
-      expect(p.scopes[cap]).toEqual({
-        global: true,
-        roots: [{ orgUnitUuid: OU_A, includeDescendants: true }],
-      });
-    }
+    // Both roles carry template.manage, so the global admin grant makes it global and the
+    // unit root of the bygger grant is kept next to it.
+    expect(p.scopes['template.manage']).toEqual({
+      global: true,
+      roots: [{ orgUnitUuid: OU_A, includeDescendants: true }],
+    });
     // audit.read comes from the admin grant only.
     expect(p.scopes['audit.read']).toEqual({ global: true, roots: [] });
   });
@@ -228,7 +222,6 @@ describe('buildPrincipalFromAssignments', () => {
       { roleKey: 'bygger', scopeOrgUnitUuid: OU_B, includeDescendants: false },
     ]);
     expect(p.scopes['template.manage']?.global).toBe(false);
-    expect(p.scopes['directory.read']?.global).toBe(false);
     expect(p.capabilities).not.toContain('audit.read');
     expect(p.capabilities).not.toContain('access.manage');
     expect(p.scopes['audit.read']).toBeUndefined();

@@ -5,13 +5,11 @@ vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers(
 vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
 vi.mock('@/lib/authz/access-admin', () => ({ listOrgUnits: vi.fn(), createOrgUnit: vi.fn() }));
-vi.mock('@/lib/authz/scope', () => ({ orgUnitsInScope: vi.fn() }));
 
 import { GET, POST } from './route';
 import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { createOrgUnit, listOrgUnits } from '@/lib/authz/access-admin';
-import { orgUnitsInScope } from '@/lib/authz/scope';
 import { ConflictError, NotFoundError, ReadOnlyModeError } from '@/lib/authz/access-errors';
 import { FAKE_PRINCIPAL_ADMIN, FAKE_SESSION, makeJsonReq, NO_PARAMS, makePrincipal } from '@/test/helpers';
 
@@ -19,7 +17,6 @@ const mockGetSession = vi.mocked(auth.api.getSession);
 const mockResolve = vi.mocked(resolvePrincipal);
 const mockList = vi.mocked(listOrgUnits);
 const mockCreate = vi.mocked(createOrgUnit);
-const mockScope = vi.mocked(orgUnitsInScope);
 
 const URL_ = 'http://localhost/api/admin/access/org-units';
 const U1 = '11111111-1111-4111-8111-111111111111';
@@ -28,8 +25,8 @@ const VIEW = { uuid: U1, name: 'Kommune', parentUuid: null, source: 'local', mem
 
 const manager = makePrincipal({
   roles: ['bruger', 'bygger'],
-  capabilities: ['template.use', 'template.manage', 'directory.read'],
-  scopes: { 'directory.read': { global: false, roots: [{ orgUnitUuid: U2, includeDescendants: true }] } },
+  capabilities: ['template.use', 'template.manage'],
+  scopes: { 'template.manage': { global: false, roots: [{ orgUnitUuid: U2, includeDescendants: true }] } },
 });
 
 beforeEach(() => {
@@ -38,10 +35,9 @@ beforeEach(() => {
   mockResolve.mockReset().mockResolvedValue(FAKE_PRINCIPAL_ADMIN);
   mockList.mockReset().mockResolvedValue([VIEW]);
   mockCreate.mockReset().mockResolvedValue(VIEW);
-  mockScope.mockReset();
 });
 
-describe('GET /api/admin/access/org-units (access.manage, or directory.read within scope)', () => {
+describe('GET /api/admin/access/org-units (access.manage)', () => {
   const get = () => GET(makeJsonReq(URL_, 'GET'), NO_PARAMS);
 
   it('401 without a session', async () => {
@@ -49,32 +45,22 @@ describe('GET /api/admin/access/org-units (access.manage, or directory.read with
     expect((await get()).status).toBe(401);
   });
 
-  it('403 for a plain user (no directory.read)', async () => {
+  it('403 for a plain user', async () => {
     mockResolve.mockResolvedValue(makePrincipal());
     expect((await get()).status).toBe(403);
     expect(mockList).not.toHaveBeenCalled();
   });
 
-  it('an administrator gets the whole tree without a scope lookup', async () => {
+  it('403 for a template manager (they get their units from the central-templates scope route)', async () => {
+    mockResolve.mockResolvedValue(manager);
+    expect((await get()).status).toBe(403);
+    expect(mockList).not.toHaveBeenCalled();
+  });
+
+  it('an administrator gets the whole tree', async () => {
     const res = await get();
     expect(res.status).toBe(200);
     expect((await res.json()).orgUnits).toEqual([VIEW]);
-    expect(mockList).toHaveBeenCalledWith({});
-    expect(mockScope).not.toHaveBeenCalled();
-  });
-
-  it('a scoped reader only gets the units inside its scope', async () => {
-    mockResolve.mockResolvedValue(manager);
-    mockScope.mockResolvedValue({ all: false, uuids: [U2] });
-    await get();
-    expect(mockScope).toHaveBeenCalledWith(manager, 'directory.read');
-    expect(mockList).toHaveBeenCalledWith({ uuids: [U2] });
-  });
-
-  it('a global directory reader without access.manage sees everything', async () => {
-    mockResolve.mockResolvedValue(makePrincipal({ capabilities: ['template.use', 'directory.read'], scopes: { 'directory.read': { global: true, roots: [] } } }));
-    mockScope.mockResolvedValue({ all: true });
-    await get();
     expect(mockList).toHaveBeenCalledWith({});
   });
 

@@ -31,9 +31,9 @@ describe('GET /api/admin/access/users (access.manage)', () => {
     expect(mockList).not.toHaveBeenCalled();
   });
 
-  it('403 without access.manage, even for a log reader with directory.read', async () => {
+  it('403 without access.manage, even for a log reader', async () => {
     mockResolve.mockResolvedValue(
-      makePrincipal({ roles: ['bruger', 'admin'], capabilities: ['template.use', 'audit.read', 'directory.read'] }),
+      makePrincipal({ roles: ['bruger', 'admin'], capabilities: ['template.use', 'audit.read'] }),
     );
     expect((await GET(req(), NO_PARAMS)).status).toBe(403);
     expect(mockList).not.toHaveBeenCalled();

@@ -198,7 +198,7 @@ What this means for offboarding: a role removed in the IdP is removed here at th
 
 **Break-glass.** There is no administrator in the app to lock out, and no bootstrap or last-administrator rule in this mode. Keep an administrator path on the IdP side (a named, controlled account that carries the administrator claim) and document who may use it.
 
-**The admin pages** (Brugere og roller, Organisation) are read-only: "Brugere og roller" shows who holds which role as of their last login and explains where roles are assigned. The in-app grant/revoke endpoints, the org-unit and member endpoints and the first-administrator bootstrap answer 409 / do nothing (kill switch `ACCESS_LOCAL_ADMIN`; it is always off outside local mode). `ACCESS_SOURCE=local` and the local admin stay available for development and demos.
+**The admin page** Brugere og roller is read-only: it shows who holds which role as of their last login and explains where roles are assigned (there are no org units in this mode, so it has no Organisation section). The in-app grant/revoke endpoints, the org-unit and member endpoints and the first-administrator bootstrap answer 409 / do nothing (kill switch `ACCESS_LOCAL_ADMIN`; it is always off outside local mode). `ACCESS_SOURCE=local` and the local admin stay available for development and demos.
 
 ## 5. OIDC
 
