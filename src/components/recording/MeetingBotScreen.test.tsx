@@ -351,4 +351,23 @@ describe('MeetingBotScreen', () => {
 
     expect(mockFetch.mock.calls.length).toBe(callsBefore);
   });
+
+  it('stops pulling the recording when the component unmounts mid hand-off', async () => {
+    vi.useFakeTimers();
+    routeFetch({
+      status: () => jsonOk({ status: 'processing', botStatus: 'ended', participants: [], elapsed: 0 }),
+      audio: () => new Response(null, { status: 404 }), // never ready: the loop would run for two minutes
+    });
+    const { unmount } = renderBot();
+    await vi.advanceTimersByTimeAsync(2000);
+    const audioCalls = () => mockFetch.mock.calls.filter(([url]) => String(url).includes('/api/bot/audio/')).length;
+    expect(audioCalls()).toBeGreaterThan(0);
+
+    unmount();
+    await vi.advanceTimersByTimeAsync(0);
+    const before = audioCalls();
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(audioCalls()).toBe(before);
+  });
 });

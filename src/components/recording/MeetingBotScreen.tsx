@@ -44,7 +44,14 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
   const sessionIdRef = useRef<string | null>(botSession ?? null);
   const finishingRef = useRef(false);
   const stoppingRef = useRef(false);
+  const unmountedRef = useRef(false);
   statusRef.current = status;
+
+  // The hand-off loop below runs for up to two minutes; it must not outlive the screen.
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => { unmountedRef.current = true; };
+  }, []);
 
   const stopTimer = useCallback(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
@@ -74,6 +81,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
     // quantization here is dead time between "bot uploaded" and "processing starts".
     const deadline = Date.now() + 2 * 60_000;
     while (Date.now() < deadline) {
+      if (unmountedRef.current) { finishingRef.current = false; return; }
       let res: Response;
       try {
         res = await fetch(`/api/bot/audio/${meetingId}`);
@@ -81,6 +89,7 @@ export function MeetingBotScreen({ meetingId, meetingUrl, botSession }: MeetingB
         await new Promise((r) => setTimeout(r, 500));
         continue;
       }
+      if (unmountedRef.current) { finishingRef.current = false; return; }
       if (res.status === 404) {
         await new Promise((r) => setTimeout(r, 500));
         continue;
