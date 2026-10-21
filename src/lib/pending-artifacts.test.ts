@@ -4,6 +4,10 @@ import path from 'path';
 
 // Mock fs/promises so no real disk I/O happens.
 vi.mock('fs/promises');
+// What the helper would write is covered by teams/audit.test.ts; here only WHEN it is called.
+vi.mock('@/lib/teams/audit', () => ({ recordTeamsStashDelete: vi.fn().mockResolvedValue(undefined) }));
+import { recordTeamsStashDelete } from '@/lib/teams/audit';
+const mockAuditStash = vi.mocked(recordTeamsStashDelete);
 
 import {
   markNoRecording,
@@ -516,5 +520,97 @@ describe('acknowledgePendingTranscript', () => {
     await acknowledgePendingTranscript('m1');
 
     expect(unlinked()).toEqual([]);
+  });
+});
+
+describe('audit of the server-held Teams transcript (teams.stash_delete)', () => {
+  const HOUR = 60 * 60 * 1000;
+  const M = '11111111-2222-4333-8444-555555555555';
+
+  function stashOf(files: Record<string, Record<string, unknown>>) {
+    vi.mocked(fs.readdir).mockResolvedValue(Object.keys(files) as never);
+    vi.mocked(fs.readFile).mockImplementation(async (p) => {
+      const name = String(p).split('/').pop()!;
+      if (!(name in files)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return Buffer.from(JSON.stringify(files[name])) as never;
+    });
+  }
+  const enoent = () => Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+
+  beforeEach(() => {
+    vi.mocked(fs.unlink).mockReset();
+    vi.mocked(fs.unlink).mockResolvedValue(undefined as never);
+    mockAuditStash.mockClear();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('a hand-off that takes a ready transcript off the server is one handoff event for the person', async () => {
+    stashOf({ [`${M}.transcript.json`]: { status: 'ready', segments: [], createdAt: 1 } });
+
+    await acknowledgePendingTranscript(M, 'u1');
+
+    expect(mockAuditStash).toHaveBeenCalledTimes(1);
+    expect(mockAuditStash).toHaveBeenCalledWith({ trigger: 'handoff', meetingId: M, userId: 'u1', failed: false });
+  });
+
+  it('a repeated acknowledgement, a failed stash and a run in progress delete nothing worth a row', async () => {
+    // Already gone: the transcript cannot be read and the unlink finds nothing.
+    vi.mocked(fs.readFile).mockRejectedValue(enoent());
+    vi.mocked(fs.unlink).mockRejectedValue(enoent());
+    await acknowledgePendingTranscript(M, 'u1');
+
+    // A failed stash holds no transcript.
+    stashOf({ [`${M}.transcript.json`]: { status: 'failed', createdAt: 1 } });
+    vi.mocked(fs.unlink).mockResolvedValue(undefined as never);
+    await acknowledgePendingTranscript(M, 'u1');
+
+    // A re-collect under way is left alone.
+    stashOf({ [`${M}.transcript.json`]: { status: 'processing', createdAt: Date.now() } });
+    await acknowledgePendingTranscript(M, 'u1');
+
+    expect(mockAuditStash).not.toHaveBeenCalled();
+  });
+
+  it('a transcript that could not be removed is reported as a failed deletion', async () => {
+    stashOf({ [`${M}.transcript.json`]: { status: 'ready', segments: [], createdAt: 1 } });
+    vi.mocked(fs.unlink).mockImplementation(async (p) => {
+      if (String(p).endsWith('.transcript.json')) throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+    });
+
+    await acknowledgePendingTranscript(M, 'u1');
+
+    expect(mockAuditStash).toHaveBeenCalledWith({ trigger: 'handoff', meetingId: M, userId: 'u1', failed: true });
+  });
+
+  it('the TTL sweep reports a ready transcript nobody collected, with the owner read before the binding goes', async () => {
+    stashOf({
+      [`${M}.owner.json`]: { userId: 'u9', createdAt: Date.now() - 2 * HOUR },
+      [`${M}.meta.json`]: { participants: ['Mette Hansen'], durationSeconds: 60, createdAt: Date.now() - 2 * HOUR },
+      [`${M}.transcript.json`]: { status: 'ready', segments: [], createdAt: Date.now() - 2 * HOUR },
+    });
+
+    await sweepExpired();
+
+    expect(mockAuditStash).toHaveBeenCalledTimes(1);
+    expect(mockAuditStash).toHaveBeenCalledWith({ trigger: 'ttl', meetingId: M, userId: 'u9', failed: false });
+    // Only ids and booleans: neither the speaker names nor the segments reach the helper.
+    expect(JSON.stringify(mockAuditStash.mock.calls)).not.toContain('Mette');
+  });
+
+  it('the sweep reports nothing for an entry that held no transcript with content, or is still fresh', async () => {
+    stashOf({
+      'old.owner.json': { userId: 'u9', createdAt: Date.now() - 2 * HOUR },
+      'old.transcript.json': { status: 'failed', createdAt: Date.now() - 2 * HOUR },
+      'new.owner.json': { userId: 'u9', createdAt: Date.now() },
+      'new.transcript.json': { status: 'ready', segments: [], createdAt: Date.now() },
+    });
+
+    await sweepExpired();
+
+    expect(mockAuditStash).not.toHaveBeenCalled();
   });
 });

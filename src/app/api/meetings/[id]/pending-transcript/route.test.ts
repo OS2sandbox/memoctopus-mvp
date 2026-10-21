@@ -120,7 +120,7 @@ describe('DELETE /api/meetings/[id]/pending-transcript (acknowledge)', () => {
     const res = await DELETE(DEL, PARAMS);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
-    expect(mockAck).toHaveBeenCalledWith('m1');
+    expect(mockAck).toHaveBeenCalledWith('m1', 'user-123');
   });
 
   it('is idempotent: acknowledging again is still ok', async () => {

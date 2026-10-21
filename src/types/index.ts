@@ -1,8 +1,17 @@
+import type { CentralSkabelonSummary, TemplateRef } from '@/lib/skabeloner/central-types';
+
+// Central (locked) templates as offered to a recipient: never carries a prompt.
+export type { CentralSkabelonSummary, TemplateRef };
+
+// Provenance persisted with generated minutes. `name` is a client-side snapshot
+// taken from the picker so the minutes screen can name the template without a
+// round-trip; it is absent for records that predate it.
+export type MinutesTemplateRef = TemplateRef & { name?: string };
+
 // `awaiting_teams` is the Graph-era pre-meeting state: OS2taletiltekst is armed on the
 // meeting and we are waiting for Teams to hold it and produce its artifacts.
-// The removed bot's `joining` state is gone from this union. Its Postgres enum
-// value stays, since a value cannot be dropped from a Postgres enum, and an old
-// IndexedDB record may still carry it.
+// The removed bot's `joining` state is gone from this union; an old IndexedDB record
+// may still carry it.
 export type MeetingStatus =
   | 'awaiting_teams'
   | 'recording'
@@ -18,17 +27,6 @@ export interface TranscriptSegment {
   start: number;
   end: number;
   text: string;
-}
-
-export interface TemplateStructure {
-  sections: TemplateSectionDef[];
-}
-
-export interface TemplateSectionDef {
-  key: string;
-  label: string;
-  description?: string;
-  required: boolean;
 }
 
 export interface MinutesContent {
@@ -85,12 +83,6 @@ export interface PiiResult {
   replacements: PiiReplacement[];
 }
 
-export interface TemplateSuggestion {
-  templateId: string | null;
-  templateName: string;
-  explanation: string;
-}
-
 export interface Meeting {
   id: string;
   title: string;
@@ -98,45 +90,4 @@ export interface Meeting {
   status: MeetingStatus;
   createdAt: Date;
   updatedAt: Date;
-}
-
-export interface AudioFile {
-  id: string;
-  meetingId: string;
-  filename: string;
-  sizeBytes: number;
-  durationSeconds: number | null;
-  deletedAt: Date | null;
-}
-
-export interface Transcript {
-  id: string;
-  meetingId: string;
-  rawText: string;
-  segments: TranscriptSegment[];
-  piiRemovedAt: Date | null;
-}
-
-export interface Minutes {
-  id: string;
-  meetingId: string;
-  templateId: string | null;
-  content: MinutesContent;
-  version: number;
-  createdAt: Date;
-}
-
-export interface Template {
-  id: string;
-  name: string;
-  description: string;
-  structure: TemplateStructure;
-  isDefault: boolean;
-}
-
-export interface User {
-  id: string;
-  email: string;
-  name: string;
-  createdAt: Date;
 }

@@ -272,7 +272,8 @@ describe('processTeamsMeeting — recording + transcript', () => {
 
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
 
-    expect(outcome).toEqual({ status: 'failed', reason: 'netværket forsvandt' });
+    // `code` is the closed audit code, never the message.
+    expect(outcome).toEqual({ status: 'failed', reason: 'netværket forsvandt', code: 'unknown' });
     expect(mockRm).toHaveBeenCalledWith(SCRATCH, { recursive: true, force: true });
     expect(mockStorePendingTranscript).toHaveBeenLastCalledWith('meet-1', { status: 'failed' });
   });
@@ -416,7 +417,7 @@ describe('processTeamsMeeting — transcript only', () => {
     mockDownloadVtt.mockResolvedValue('WEBVTT\n\n');
 
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
-    expect(outcome).toEqual({ status: 'failed', reason: 'Transskriptionen fra Teams var tom.' });
+    expect(outcome).toEqual({ status: 'failed', reason: 'Transskriptionen fra Teams var tom.', code: 'unknown' });
     expect(mockStorePendingTranscript).toHaveBeenLastCalledWith('meet-1', { status: 'failed' });
   });
 });
@@ -641,6 +642,7 @@ describe('processTeamsMeeting — idempotency and errors', () => {
     expect(await processTeamsMeeting('u1', MEETING, AFTER_GRACE)).toEqual({
       status: 'failed',
       reason: 'ingen adgang',
+      code: 'forbidden',
     });
   });
 

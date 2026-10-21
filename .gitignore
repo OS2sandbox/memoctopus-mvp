@@ -26,6 +26,8 @@ yarn-error.log*
 
 # local env files
 .env
+# per-installation identity provider config (client secrets, SAML metadata); mounted into the app, never committed
+/auth-config/
 .env*.local
 .env.development.local
 .env.test.local
@@ -51,3 +53,12 @@ next-env.d.ts
 # Python bytecode (diarization-service)
 __pycache__/
 *.pyc
+
+# Machine-local Claude Code settings (hook commands, paths)
+/.claude/settings.local.json
+
+# vendor assets generated into public/ by scripts/copy-vad-assets.js (postinstall;
+# the Dockerfile builder stage runs it too). Never commit them.
+/public/ort-wasm-simd-threaded*
+/public/silero_vad_*.onnx
+/public/vad.worklet.bundle.min.js

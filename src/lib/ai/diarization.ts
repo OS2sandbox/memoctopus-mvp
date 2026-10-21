@@ -3,6 +3,7 @@ import { mimeTypeToExt } from './mime';
 import { Agent, FormData, fetch as undiciFetch } from 'undici';
 import { decodeToMono16k, encodeMono16kWav } from '@/lib/audio/decode-server';
 import { isEnsembleDiarization, hviskeBaseURL } from './transcription';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 // ─── Interface ────────────────────────────────────────────────────────────────
 // Speaker diarization runs as a separate acoustic pass over the full recording.
@@ -71,7 +72,7 @@ export class PyannoteProvider implements DiarizationProvider {
         buffer = encodeMono16kWav(await decodeToMono16k(audioBuffer));
         outMime = 'audio/wav';
       } catch (err) {
-        console.error('[diarize] server-side decode failed, sending original:', err);
+        safeLogError('diarize server-side decode failed, sending original', err);
       }
     }
 

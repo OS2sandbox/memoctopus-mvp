@@ -1,43 +1,293 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const queries: string[] = [];
-const client = {
-  query: vi.fn(async (sql: string) => {
-    queries.push(sql);
-    return { rows: [], rowCount: 0 };
-  }),
-  release: vi.fn(),
-};
+const { mockConnect } = vi.hoisted(() => ({ mockConnect: vi.fn() }));
 
-vi.mock('./index', () => ({
-  pool: { connect: vi.fn(async () => client) },
-}));
+vi.mock('./index', () => ({ pool: { connect: mockConnect } }));
 
-import { ensureUserSchema } from './user-schema';
+import { queryUserSchema, queryUserSchemaOne, getUserSchemaName, withUserSchemaTx } from './user-schema';
+
+const USER = '1234-abcd';
+const SCHEMA = 'u_1234_abcd';
+
+type Handler = (sql: string, params?: unknown[]) => unknown;
+
+// Fake pooled client. Every call is recorded in `events` so ordering relative
+// to release() can be asserted; `handler` can override the result per statement.
+function makeClient(handler: Handler = () => ({ rows: [] })) {
+  const events: string[] = [];
+  const client = {
+    query: vi.fn(async (sql: string, params?: unknown[]) => {
+      events.push(`query:${sql.trim().split('\n')[0]}`);
+      return handler(sql, params);
+    }),
+    release: vi.fn((arg?: unknown) => {
+      events.push(`release:${String(arg)}`);
+    }),
+  };
+  return { client, events };
+}
+
+function markInitialized(userId = USER) {
+  (globalThis as unknown as { initializedSchemas: Set<string> }).initializedSchemas.add(userId);
+}
 
 beforeEach(() => {
-  queries.length = 0;
-  client.query.mockClear();
+  mockConnect.mockReset();
+  (globalThis as unknown as { initializedSchemas: Set<string> }).initializedSchemas.clear();
+});
+
+describe('getUserSchemaName', () => {
+  it('prefixes with u_ and replaces dashes', () => {
+    expect(getUserSchemaName(USER)).toBe(SCHEMA);
+  });
+});
+
+describe('queryUserSchema', () => {
+  it('sets a quoted search_path and runs the query with its params', async () => {
+    markInitialized();
+    const { client } = makeClient((sql) =>
+      sql.startsWith('SELECT') ? { rows: [{ id: 'm1' }] } : { rows: [] },
+    );
+    mockConnect.mockResolvedValue(client);
+
+    const rows = await queryUserSchema(USER, 'SELECT * FROM meetings WHERE id = $1', ['m1']);
+
+    expect(rows).toEqual([{ id: 'm1' }]);
+    expect(client.query).toHaveBeenNthCalledWith(1, `SET search_path TO "${SCHEMA}", public`);
+    expect(client.query).toHaveBeenNthCalledWith(2, 'SELECT * FROM meetings WHERE id = $1', ['m1']);
+  });
+
+  it('resets search_path after a successful query and before release', async () => {
+    markInitialized();
+    const { client, events } = makeClient();
+    mockConnect.mockResolvedValue(client);
+
+    await queryUserSchema(USER, 'SELECT 1');
+
+    expect(events).toEqual([
+      `query:SET search_path TO "${SCHEMA}", public`,
+      'query:SELECT 1',
+      'query:RESET search_path',
+      'release:false',
+    ]);
+  });
+
+  it('resets and releases even when the query throws, and the original error propagates', async () => {
+    markInitialized();
+    const boom = new Error('query failed');
+    const { client, events } = makeClient((sql) => {
+      if (sql === 'SELECT broken') throw boom;
+      return { rows: [] };
+    });
+    mockConnect.mockResolvedValue(client);
+
+    await expect(queryUserSchema(USER, 'SELECT broken')).rejects.toBe(boom);
+
+    expect(events.slice(-2)).toEqual(['query:RESET search_path', 'release:false']);
+  });
+
+  it('destroys the connection when RESET fails, without masking the result', async () => {
+    markInitialized();
+    const { client } = makeClient((sql) => {
+      if (sql === 'RESET search_path') throw new Error('reset failed');
+      return { rows: [{ ok: true }] };
+    });
+    mockConnect.mockResolvedValue(client);
+
+    await expect(queryUserSchema(USER, 'SELECT 1')).resolves.toEqual([{ ok: true }]);
+
+    expect(client.release).toHaveBeenCalledTimes(1);
+    expect(client.release.mock.calls[0][0]).toBeTruthy();
+  });
+
+  it('destroys the connection when RESET fails, without masking the original query error', async () => {
+    markInitialized();
+    const queryErr = new Error('query failed');
+    const { client } = makeClient((sql) => {
+      if (sql === 'SELECT broken') throw queryErr;
+      if (sql === 'RESET search_path') throw new Error('reset failed');
+      return { rows: [] };
+    });
+    mockConnect.mockResolvedValue(client);
+
+    await expect(queryUserSchema(USER, 'SELECT broken')).rejects.toBe(queryErr);
+
+    expect(client.release).toHaveBeenCalledTimes(1);
+    expect(client.release.mock.calls[0][0]).toBeTruthy();
+  });
+
+  it('runs ensureUserSchema only once per user per process', async () => {
+    const clients: ReturnType<typeof makeClient>[] = [];
+    mockConnect.mockImplementation(async () => {
+      const c = makeClient(); // accepts any SQL, including all the DDL
+      clients.push(c);
+      return c.client;
+    });
+
+    await queryUserSchema(USER, 'SELECT 1');
+    const connectsAfterFirst = mockConnect.mock.calls.length;
+    const createSchemaCalls = () =>
+      clients.flatMap((c) => c.client.query.mock.calls).filter(([sql]) =>
+        String(sql).includes('CREATE SCHEMA IF NOT EXISTS'),
+      );
+    expect(createSchemaCalls()).toHaveLength(1);
+    // one connection for ensureUserSchema, one for the query itself
+    expect(connectsAfterFirst).toBe(2);
+
+    await queryUserSchema(USER, 'SELECT 2');
+    expect(createSchemaCalls()).toHaveLength(1);
+    expect(mockConnect.mock.calls.length).toBe(connectsAfterFirst + 1);
+
+    // A different user still gets their own schema created.
+    await queryUserSchema('other-user', 'SELECT 3');
+    expect(createSchemaCalls()).toHaveLength(2);
+  });
+
+  it("ensureUserSchema creates the person's own template changelog, idempotently, after the skabeloner it references", async () => {
+    const { client } = makeClient();
+    mockConnect.mockResolvedValue(client);
+    await queryUserSchema(USER, 'SELECT 1');
+
+    const ddl = client.query.mock.calls.map(([sql]) => String(sql));
+    const at = (needle: string) => ddl.findIndex((q) => q.includes(needle));
+    const versions = ddl[at(`"${SCHEMA}".skabelon_versions (`)];
+    expect(versions).toContain('CREATE TABLE IF NOT EXISTS');
+    expect(versions).toContain(`REFERENCES "${SCHEMA}".skabeloner(id) ON DELETE CASCADE`);
+    expect(versions).toContain('UNIQUE (skabelon_id, version)');
+    expect(versions).toMatch(/change_note\s+TEXT,/); // nullable: the note is optional
+    expect(at(`"${SCHEMA}".skabelon_versions (`)).toBeGreaterThan(at(`"${SCHEMA}".skabeloner (`));
+    // The prompt copy is no longer part of a new schema's table.
+    expect(versions).not.toContain('snapshot');
+  });
+
+  it('ensureUserSchema relaxes a NOT NULL snapshot column left by an older version, and does nothing otherwise', async () => {
+    const legacy = makeClient((sql) => (sql.includes('information_schema.columns') ? { rows: [{ '?column?': 1 }] } : { rows: [] }));
+    mockConnect.mockResolvedValue(legacy.client);
+    await queryUserSchema(USER, 'SELECT 1');
+    expect(legacy.client.query.mock.calls.map(([sql]) => String(sql))).toContain(
+      `ALTER TABLE "${SCHEMA}".skabelon_versions ALTER COLUMN snapshot DROP NOT NULL`,
+    );
+    expect(legacy.client.query.mock.calls.find(([sql]) => String(sql).includes('information_schema.columns'))![1]).toEqual([SCHEMA]);
+
+    (globalThis as unknown as { initializedSchemas: Set<string> }).initializedSchemas.clear();
+    const fresh = makeClient();
+    mockConnect.mockResolvedValue(fresh.client);
+    await queryUserSchema(USER, 'SELECT 1');
+    expect(fresh.client.query.mock.calls.map(([sql]) => String(sql)).some((q) => q.includes('DROP NOT NULL'))).toBe(false);
+  });
+
+  it('ensureUserSchema does not set search_path on its pooled client', async () => {
+    const { client } = makeClient();
+    mockConnect.mockResolvedValue(client);
+
+    await queryUserSchema(USER, 'SELECT 1');
+
+    // Only the query phase (SET + RESET) touches search_path; the DDL phase is
+    // schema-qualified, so nothing there can leak.
+    const searchPathStatements = client.query.mock.calls
+      .map(([sql]) => String(sql))
+      .filter((sql) => /search_path/i.test(sql));
+    expect(searchPathStatements).toEqual([
+      `SET search_path TO "${SCHEMA}", public`,
+      'RESET search_path',
+    ]);
+  });
+});
+
+describe('queryUserSchemaOne', () => {
+  it('returns the first row, or null when there are none', async () => {
+    markInitialized();
+    const { client } = makeClient((sql) =>
+      sql === 'SELECT some' ? { rows: [{ a: 1 }, { a: 2 }] } : { rows: [] },
+    );
+    mockConnect.mockResolvedValue(client);
+
+    await expect(queryUserSchemaOne(USER, 'SELECT some')).resolves.toEqual({ a: 1 });
+    await expect(queryUserSchemaOne(USER, 'SELECT none')).resolves.toBeNull();
+  });
+});
+
+describe('withUserSchemaTx', () => {
+  it('scopes the search_path to the transaction (BEGIN, then SET LOCAL) and needs no RESET', async () => {
+    markInitialized();
+    const { client, events } = makeClient();
+    mockConnect.mockResolvedValue(client);
+
+    await withUserSchemaTx(USER, async (q) => void (await q('SELECT 1')));
+
+    expect(events).toEqual([
+      'query:BEGIN',
+      `query:SET LOCAL search_path TO "${SCHEMA}", public`,
+      'query:SELECT 1',
+      'query:COMMIT',
+      'release:false',
+    ]);
+  });
+
+  it('rolls back, releases and rethrows when the callback fails; a failed ROLLBACK destroys the connection', async () => {
+    markInitialized();
+    const boom = new Error('boom');
+    const { client, events } = makeClient();
+    mockConnect.mockResolvedValue(client);
+    await expect(withUserSchemaTx(USER, async () => Promise.reject(boom))).rejects.toBe(boom);
+    expect(events.slice(-2)).toEqual(['query:ROLLBACK', 'release:false']);
+
+    const failing = makeClient((sql) => {
+      if (sql === 'ROLLBACK') throw new Error('rollback failed');
+      return { rows: [] };
+    });
+    mockConnect.mockResolvedValue(failing.client);
+    await expect(withUserSchemaTx(USER, async () => Promise.reject(boom))).rejects.toBe(boom);
+    expect(failing.events.at(-1)).toBe('release:true');
+  });
 });
 
 describe('ensureUserSchema — onboarding_progress', () => {
-  it('does not tie meeting_id to the server-side meetings table', async () => {
-    // Meetings live in the browser's IndexedDB; nothing ever inserts into the per-user
+  it('does not tie meeting_id to a server-side meetings table', async () => {
+    // Meetings live in the browser's IndexedDB; nothing ever inserts into a per-user
     // meetings table, so a foreign key there rejects every per-meeting hint.
-    await ensureUserSchema('11111111-1111-1111-1111-111111111111');
+    const { client } = makeClient();
+    mockConnect.mockResolvedValue(client);
+    await queryUserSchema(USER, 'SELECT 1');
 
-    const create = queries.find((q) => /CREATE TABLE IF NOT EXISTS\s+"[^"]+"\.onboarding_progress\s*\(/.test(q));
+    const ddl = client.query.mock.calls.map(([sql]) => String(sql));
+    const create = ddl.find((q) => /CREATE TABLE IF NOT EXISTS\s+"[^"]+"\.onboarding_progress\s*\(/.test(q));
     expect(create).toBeDefined();
     expect(create).not.toMatch(/REFERENCES/i);
   });
 
   it('drops the foreign key from databases that already created the table with it', async () => {
-    await ensureUserSchema('22222222-2222-2222-2222-222222222222');
+    const { client } = makeClient();
+    mockConnect.mockResolvedValue(client);
+    await queryUserSchema(USER, 'SELECT 1');
 
+    const ddl = client.query.mock.calls.map(([sql]) => String(sql));
     expect(
-      queries.some((q) =>
+      ddl.some((q) =>
         /ALTER TABLE\s+"[^"]+"\.onboarding_progress\s+DROP CONSTRAINT IF EXISTS\s+onboarding_progress_meeting_id_fkey/i.test(q),
       ),
     ).toBe(true);
+  });
+});
+
+describe('ensureUserSchema — Teams tables', () => {
+  it('creates the Graph-era teams_meetings and teams_meeting_snapshots tables', async () => {
+    const { client } = makeClient();
+    mockConnect.mockResolvedValue(client);
+    await queryUserSchema(USER, 'SELECT 1');
+
+    const ddl = client.query.mock.calls.map(([sql]) => String(sql));
+    expect(ddl.some((q) => q.includes(`CREATE TABLE IF NOT EXISTS "${SCHEMA}".teams_meetings (`))).toBe(true);
+    expect(ddl.some((q) => q.includes(`CREATE TABLE IF NOT EXISTS "${SCHEMA}".teams_meeting_snapshots (`))).toBe(true);
+  });
+
+  it('no longer creates the old server-side meeting tables or the meeting_status enum', async () => {
+    const { client } = makeClient();
+    mockConnect.mockResolvedValue(client);
+    await queryUserSchema(USER, 'SELECT 1');
+
+    const ddl = client.query.mock.calls.map(([sql]) => String(sql)).join('\n');
+    expect(ddl).not.toMatch(/CREATE TABLE IF NOT EXISTS\s+"[^"]+"\.(meetings|transcripts|minutes|minute_versions|audio_files|templates)\b/);
+    expect(ddl).not.toContain('meeting_status');
   });
 });

@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { runFfmpeg } from '@/lib/audio/decode-server';
 import { GraphError, classifyGraphError } from './graph-client';
+import { teamsFailureCode } from './failure-code';
 import { realDate } from './graph-dates';
 import { listArtifacts, pickArtifact, downloadTranscriptVtt, downloadRecording } from './artifacts';
 import { parseVtt, segmentsFromVtt, speakersFromVtt, type VttCue } from './vtt';
@@ -54,7 +55,8 @@ export type PipelineOutcome =
   // frigivet transskriptionen endnu" — true of nothing, and indistinguishable from
   // being stuck.
   | { status: 'pending'; transient?: true; phase?: 'waiting' | 'working' }
-  | { status: 'failed'; reason: string };
+  // `code`: the closed audit code of the failure (failure-code.ts), never the message.
+  | { status: 'failed'; reason: string; code?: string };
 
 export interface PipelineMeeting {
   id: string;
@@ -193,7 +195,7 @@ async function runPipeline(
       case 'retryable':
         return { status: 'pending', transient: true };
       case 'graph_error':
-        return { status: 'failed', reason: (err as GraphError).message };
+        return { status: 'failed', reason: (err as GraphError).message, code: teamsFailureCode(err) };
       case 'unknown':
         throw err;
     }
@@ -237,7 +239,7 @@ async function runPipeline(
     if (cls === 'retryable') return { status: 'pending', transient: true };
     const reason = err instanceof Error ? err.message : 'Ukendt fejl under hentning fra Microsoft Teams';
     console.error(`[teams-pipeline] ${meeting.id} failed:`, err);
-    return { status: 'failed', reason };
+    return { status: 'failed', reason, code: teamsFailureCode(err) };
   }
 }
 

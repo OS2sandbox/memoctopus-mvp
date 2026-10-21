@@ -70,7 +70,7 @@ export const DELETE = withHandler(
 
     const { id: meetingId } = await params;
     if (await assertMeetingOwner(meetingId, session.user.id)) {
-      await acknowledgePendingTranscript(meetingId);
+      await acknowledgePendingTranscript(meetingId, session.user.id);
     }
     return NextResponse.json({ ok: true });
   },

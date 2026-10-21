@@ -1,4 +1,5 @@
 import { getLlmClient, llmModel } from './llm-client';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 export interface ClarificationItem {
   /** A concrete clarifying question, in Danish. */
@@ -43,7 +44,8 @@ Maks 4 spørgsmål, kun de vigtigste. Hvis intet er uafklaret, returnér {"clari
     const cleaned = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
     return (JSON.parse(cleaned) as { clarifications: ClarificationItem[] }).clarifications ?? [];
   } catch (err) {
-    console.error('[clarifications] parse failed, returning empty fallback. raw:', raw, err);
+    // Never `raw` or the SyntaxError: both can quote transcript text.
+    safeLogError('clarifications parse failed', err);
     return [];
   }
 }

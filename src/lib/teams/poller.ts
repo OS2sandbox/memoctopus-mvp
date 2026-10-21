@@ -2,6 +2,8 @@ import type { PoolClient } from 'pg';
 import { pool } from '@/lib/db';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { deleteRecordingEnabled } from './artifact-mode';
+import { recordTeamsArtifactsFetch, recordTeamsRecordingDelete } from './audit';
+import { teamsFailureCode } from './failure-code';
 import { classifyGraphError, GraphError } from './graph-client';
 import { graphDate, realDate } from './graph-dates';
 import { getMeeting } from './meeting-resolver';
@@ -67,6 +69,22 @@ export interface PollOptions {
    * ever made and the same failure is shown forever.
    */
   force?: boolean;
+  /**
+   * Who started this poll, for the audit log: the background tick (default) or a person
+   * pressing "Tjek nu" / "Prøv igen" (`manual`).
+   */
+  trigger?: 'poller' | 'manual';
+}
+
+/**
+ * What one poll came to, for the audit event: a verdict only (ready, or failed for good), never a
+ * poll that found nothing yet or was throttled. Set by {@link pollMeetingInner}, reported by {@link pollMeeting}.
+ */
+interface FetchVerdict {
+  result: 'ready' | 'failed';
+  transcript: boolean;
+  recording: boolean;
+  code?: string;
 }
 
 /**
@@ -80,6 +98,25 @@ export async function pollMeeting(
   now: Date,
   options: PollOptions = {},
 ): Promise<TeamsMeetingRow> {
+  const verdict: { value?: FetchVerdict } = {};
+  const row = await pollMeetingInner(userId, id, now, options, verdict);
+  // After the row is written, and never able to fail the poll: the helper swallows its own errors.
+  if (verdict.value) {
+    await recordTeamsArtifactsFetch({ userId, meetingId: id, trigger: options.trigger ?? 'poller', ...verdict.value });
+  }
+  return row;
+}
+
+async function pollMeetingInner(
+  userId: string,
+  id: string,
+  now: Date,
+  options: PollOptions,
+  verdict: { value?: FetchVerdict },
+): Promise<TeamsMeetingRow> {
+  const failed = (code: string): void => {
+    verdict.value = { result: 'failed', transcript: false, recording: false, code };
+  };
   let row = await getTeamsMeeting(userId, id);
   if (!row) throw new Error(`Teams meeting not found: ${id}`);
 
@@ -97,7 +134,10 @@ export async function pollMeeting(
   // meeting we already collected buys nothing.
   if (!isTerminal(row.state) || options.force) {
     const refreshed = await refreshSchedule(userId, row);
-    if (refreshed.gone) return refreshed.row;
+    if (refreshed.gone) {
+      failed('meeting_gone');
+      return refreshed.row;
+    }
     row = refreshed.row;
   }
 
@@ -134,6 +174,8 @@ export async function pollMeeting(
   }
 
   if (gaveUp) {
+    // Nothing was found within the window; a row that was only waiting for a new sign-in says so.
+    failed(row.state === 'needs_reauth' ? 'reauth_required' : 'gave_up');
     return await markPollAttempt(userId, id, {
       state: 'failed',
       failureReason: row.state === 'needs_reauth' ? REAUTH_GIVE_UP_MESSAGE : GIVE_UP_MESSAGE,
@@ -173,6 +215,14 @@ export async function pollMeeting(
     );
 
     if (outcome.status === 'ready') {
+      // An idempotent hit on a stash that was already ready (no ids) fetched nothing this time.
+      if (outcome.transcriptId != null || outcome.recordingId != null) {
+        verdict.value = {
+          result: 'ready',
+          transcript: outcome.mode !== 'recording-only',
+          recording: outcome.recordingBytes != null,
+        };
+      }
       // The transcript is safely stashed, so the copy Teams left in OneDrive has
       // done its job. `pending` goes onto the row in the same write that marks it
       // ready: whatever happens to the attempt below, the next tick knows there is
@@ -190,6 +240,7 @@ export async function pollMeeting(
       return cleanUp ? await cleanUpRecording(userId, ready, now) : ready;
     }
     if (outcome.status === 'failed') {
+      failed(outcome.code ?? 'unknown');
       return await markPollAttempt(userId, id, { state: 'failed', failureReason: outcome.reason });
     }
     // A run is already downloading and transcribing this meeting (the poller and
@@ -212,11 +263,13 @@ export async function pollMeeting(
         // Graph throttles /transcripts routinely; a 429, a 503 or a timeout is "not yet".
         return await waiting('awaiting_teams', message, true);
       case 'transcripts_disabled':
+        failed('transcripts_disabled');
         return await markPollAttempt(userId, id, {
           state: 'failed',
           failureReason: TRANSCRIPTS_DISABLED_MESSAGE,
         });
       case 'graph_error':
+        failed(teamsFailureCode(err));
         return await markPollAttempt(userId, id, { state: 'failed', failureReason: message });
       case 'unknown':
         // A bug or a transient network error: keep waiting, record why.
@@ -273,6 +326,8 @@ export async function cleanUpRecording(
     console.error('[teams/poller] could not record the recording cleanup for', row.id, err);
     return row;
   }
+  // Only the final verdict: a postponed attempt returned above and is retried on the next tick.
+  await recordTeamsRecordingDelete({ userId, meetingId: row.id, status: result });
   return { ...row, recordingCleanup: result };
 }
 

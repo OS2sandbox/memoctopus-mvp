@@ -4,7 +4,29 @@ import { saveAudio, getAudio, deleteAudio } from './audio';
 // In-memory store that mimics the 'audio' object store keyed by meetingId.
 const store = new Map<string, { meetingId: string; blob: Blob; mimeType: string }>();
 
+// Order in which the transaction's requests were issued and when they settled.
+const txLog: string[] = [];
+
 const mockDb = {
+  transaction: vi.fn((_store: string, _mode: string) => ({
+    store: {
+      getKey: vi.fn((key: string) => {
+        txLog.push('getKey');
+        const existed = store.has(key);
+        // Resolves later, like a real IDB request: the delete must not wait for it.
+        return Promise.resolve().then(() => {
+          txLog.push('getKey-settled');
+          return existed ? key : undefined;
+        });
+      }),
+      delete: vi.fn((key: string) => {
+        txLog.push('delete');
+        store.delete(key);
+        return Promise.resolve();
+      }),
+    },
+    done: Promise.resolve(),
+  })),
   put: vi.fn((_store: string, value: { meetingId: string; blob: Blob; mimeType: string }) => {
     store.set(value.meetingId, value);
     return Promise.resolve();
@@ -167,6 +189,7 @@ describe('getAudio', () => {
 describe('deleteAudio', () => {
   beforeEach(() => {
     store.clear();
+    txLog.length = 0;
     vi.clearAllMocks();
   });
 
@@ -179,10 +202,19 @@ describe('deleteAudio', () => {
     expect(store.has('meeting-1')).toBe(false);
   });
 
-  it('calls db.delete with the correct store name and key', async () => {
+  it('deletes inside one readwrite transaction on the audio store', async () => {
     await deleteAudio('meeting-del');
-    expect(mockDb.delete).toHaveBeenCalledOnce();
-    expect(mockDb.delete).toHaveBeenCalledWith('audio', 'meeting-del');
+    expect(mockDb.transaction).toHaveBeenCalledOnce();
+    expect(mockDb.transaction).toHaveBeenCalledWith('audio', 'readwrite');
+    expect(mockDb.delete).not.toHaveBeenCalled();
+  });
+
+  it('issues the delete without waiting for the existence read', async () => {
+    store.set('m', { meetingId: 'm', blob: makeBlob(), mimeType: 'audio/webm' });
+    txLog.length = 0;
+    await deleteAudio('m');
+    // Both requests are queued synchronously; the read settles only afterwards.
+    expect(txLog.slice(0, 3)).toEqual(['getKey', 'delete', 'getKey-settled']);
   });
 
   it('is a no-op when the meetingId does not exist', async () => {

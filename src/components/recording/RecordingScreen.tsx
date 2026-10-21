@@ -11,7 +11,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { VolumeBar } from './VolumeBar';
 import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 import { formatDuration, formatFileSize } from '@/lib/utils';
@@ -20,6 +19,7 @@ import { pickRecordingMimeType } from '@/lib/audio/recording-format';
 import type { TranscriptSegment } from '@/types';
 import { saveAudio, saveTranscript, updateMeeting, deleteMeeting, getMeeting, getTranscript, getAudio } from '@/lib/storage';
 import { startDiarization, finishDiarization } from '@/lib/audio/diarize-client';
+import { reportAuditEvent } from '@/lib/audit/client';
 import {
   float32ToWavBlob, newVadBatchState, sealCurrentBatch,
   splitTextWithIntervals,
@@ -183,6 +183,8 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
 
   const interimTextRef = useRef('');
   const recordingActiveRef = useRef(false);
+  // The recorder failed on its own and the stop was already reported (so saving afterwards does not report a second stop).
+  const stopReportedRef = useRef(false);
   // Silero VAD instance (created in startVAD, destroyed on stop/cancel).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const vadRef = useRef<any>(null);
@@ -720,6 +722,8 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     resetLiveState();
     // Tracked outside try so the catch can release it if setup fails after getUserMedia
     let stream: MediaStream | null = null;
+    // Whether the start was reported as done: a later setup error must not turn it into a failed start.
+    let startReported = false;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: false },
@@ -786,6 +790,11 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       // corrupt or truncate the final blob.
       recorder.onerror = (e) => {
         console.error('[recorder] error:', e);
+        // The recording ended without the person pressing stop: that is still a stop of the recording.
+        if (!stopReportedRef.current) {
+          stopReportedRef.current = true;
+          reportAuditEvent('meeting.recording_stop', meetingId);
+        }
         // Stop recording cleanly and surface the fault so the user knows the
         // recording was interrupted (rather than seeing a silently empty result).
         recordingActiveRef.current = false;
@@ -806,6 +815,10 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       recordingActiveRef.current = true;
       setRecordingState('recording');
       setElapsed(0);
+      // Recording steps are reported as actions (the meeting id only); see lib/audit/client.ts.
+      stopReportedRef.current = false;
+      reportAuditEvent('meeting.recording_start', meetingId);
+      startReported = true;
 
       timerRef.current = setInterval(() => {
         setElapsed(Math.floor((Date.now() - startTimeRef.current - pausedDurationRef.current) / 1000));
@@ -822,6 +835,8 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       audioContextRef.current = null;
       analyserRef.current = null;
       console.error('[startRecording]', err);
+      // The microphone or recorder could not be started: a failed start (no details, never the error text).
+      if (!startReported) reportAuditEvent('meeting.recording_start', meetingId, undefined, { outcome: 'error' });
 
       if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError')) {
         setError('Mikrofonens tilladelse er afvist. Tillad adgang i browserens adresselinje og prøv igen.');
@@ -843,6 +858,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     stopClarifyTimer();
     setVolumeLevel(0);
     setRecordingState('paused');
+    reportAuditEvent('meeting.recording_pause', meetingId);
 
     // Pause VAD processing, flush the recorded tail, then pause the recorder.
     if (partialTimerRef.current) { clearInterval(partialTimerRef.current); partialTimerRef.current = null; }
@@ -877,6 +893,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     if (analyserRef.current) animFrameRef.current = requestAnimationFrame(pollVolume);
     startClarifyTimer();
     setRecordingState('recording');
+    reportAuditEvent('meeting.recording_resume', meetingId);
     vadRef.current?.start();
   }
 
@@ -974,6 +991,10 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     if (!mediaRecorderRef.current) return;
     const recorder = mediaRecorderRef.current;
     recordingActiveRef.current = false;
+    if (!stopReportedRef.current) {
+      stopReportedRef.current = true;
+      reportAuditEvent('meeting.recording_stop', meetingId);
+    }
     clearIntervals();
     vadRef.current?.destroy();
     vadRef.current = null;
@@ -1212,7 +1233,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
         ]);
         if (instanceMountedRef.current) return; // remounted (StrictMode) — not a real unmount
         if (m && m.status === 'recording' && !t && !a) {
-          await deleteMeeting(meetingId).catch((err) => {
+          await deleteMeeting(meetingId, { trigger: 'auto_empty' }).catch((err) => {
             console.error('[RecordingScreen] abandoned-meeting cleanup failed:', err);
           });
         }
@@ -1226,8 +1247,6 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
   const minutes = Math.floor((elapsed % 3600) / 60);
   const seconds = elapsed % 60;
   const elapsedFormatted = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-
-  const showLivePanel = recordingState === 'recording' || recordingState === 'paused' || liveSegments.length > 0;
 
   // ── Completed state (navigated back after recording) ─────────────────────────
   if (existingRecording && recordingState === 'idle') {

@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { groupIntoChapters } from '@/lib/ai/chapters';
 import { TranscriptSegment } from '@/types';
+import { withHandler } from '@/lib/api-handler';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { requireAppAccess } from '@/lib/authz/app-access';
+
+interface Params {
+  params: Promise<{ id: string }>;
+}
 
 // POST: generate chapters via AI and return them (no DB write — client stores in IndexedDB)
-export async function POST(req: NextRequest) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+async function postHandler(req: NextRequest, _ctx: Params) {
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
 
   const { segments } = (await req.json()) as { segments?: TranscriptSegment[] };
   if (!segments?.length) return NextResponse.json({ chapters: [] });
@@ -16,7 +21,10 @@ export async function POST(req: NextRequest) {
     const chapters = await groupIntoChapters(segments);
     return NextResponse.json({ chapters });
   } catch (err) {
-    console.error('[chapters route] groupIntoChapters failed, returning empty fallback:', err);
+    // Fails soft (empty result); the log line carries error name/status/code only.
+    safeLogError('chapters route', err);
     return NextResponse.json({ chapters: [] });
   }
 }
+
+export const POST = withHandler('chapters', postHandler);

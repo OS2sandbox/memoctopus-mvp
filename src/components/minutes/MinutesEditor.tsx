@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { MinutesContent } from '@/types';
+import type { MinutesContent, MinutesTemplateRef } from '@/types';
 import { Button } from '@/components/ui/button';
 import { SaveStatus, SaveState } from '@/components/layout/SaveStatus';
 import { RichEditor } from './RichEditor';
 import { saveMinutes, snapshotMinutes, setActiveMinutesVersion, updateMeeting } from '@/lib/storage';
+import { reportAuditEvent } from '@/lib/audit/client';
 import { minutesToBody } from '@/lib/minutes-format';
 import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 
@@ -23,7 +24,15 @@ interface MinutesEditorProps {
   version: number;
   activeVersionId: string | null;
   versions: VersionRecord[];
+  // Provenance of the latest generation; only a central (locked) template is noted.
+  templateRef?: MinutesTemplateRef | null;
   onSaved?: () => void;
+}
+
+// 'Skabelon: Navn (central, v3)'; the name is a snapshot and may be missing.
+function templateProvenanceText(ref: MinutesTemplateRef): string {
+  const detail = ref.version != null ? `central, v${ref.version}` : 'central';
+  return ref.name ? `Skabelon: ${ref.name} (${detail})` : `Skabelon: ${detail}`;
 }
 
 const AUTOSAVE_DELAY = 1500;
@@ -156,6 +165,7 @@ export function MinutesEditor({
   version: initialVersion,
   activeVersionId: initialActiveId,
   versions: initialVersions,
+  templateRef,
   onSaved,
 }: MinutesEditorProps) {
   const [body, setBody] = useState<string>(() => minutesToBody(initialContent));
@@ -203,7 +213,15 @@ export function MinutesEditor({
         setVersions(saved.versions.map((v) => ({ id: v.id, label: v.label, content: v.content, baseline: v.baseline })));
         const nextTitle = content.header?.title ?? meetingTitle;
         if (nextTitle !== savedTitleRef.current) {
-          await updateMeeting(meetingId, { title: nextTitle });
+          try {
+            await updateMeeting(meetingId, { title: nextTitle });
+          } catch (err) {
+            // The rename did not reach the meeting record: reported as failed (never the title).
+            reportAuditEvent('meeting.metadata_edit', meetingId, { field: 'title' }, { outcome: 'error' });
+            throw err;
+          }
+          // The title edited in the minutes header: which field only, never the title.
+          reportAuditEvent('meeting.metadata_edit', meetingId, { field: 'title' });
           savedTitleRef.current = nextTitle;
         }
         setSaveState('saved');
@@ -358,6 +376,15 @@ export function MinutesEditor({
           </svg>
           klik for at redigere · gemmes automatisk
         </div>
+
+        {templateRef?.source === 'central' && (
+          <div
+            data-testid="template-provenance"
+            style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}
+          >
+            {templateProvenanceText(templateRef)}
+          </div>
+        )}
 
         {/* Paper sheet — the document exactly as it exports: an editable header
             (title + optional date) above the body. */}

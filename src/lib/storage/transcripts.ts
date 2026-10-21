@@ -1,6 +1,7 @@
 import { getDB, StoredTranscript } from './db';
 import type { TranscriptSegment, PiiReplacement } from '@/types';
 import type { TranscriptChapter } from '@/lib/ai/chapters';
+import { reportAuditEvent } from '@/lib/audit/client';
 
 function newId(): string {
   return crypto.randomUUID();
@@ -35,10 +36,47 @@ export async function saveTranscript(
     piiRemovedAt: data.piiRemovedAt ?? existing?.piiRemovedAt ?? null,
     diarizationStatus: data.diarizationStatus ?? existing?.diarizationStatus,
   };
-  await db.put('transcripts', transcript);
+  // The text going from something to nothing while the meeting stays (the redact flow) is a deletion of the
+  // transcript: reported as meeting.transcript_delete (never what it said), and as failed when the write throws.
+  const hadText = !!existing && (existing.rawText.length > 0 || (existing.segments ?? []).length > 0);
+  const cleared = hadText && data.rawText === '' && data.segments.length === 0;
+  try {
+    await db.put('transcripts', transcript);
+  } catch (err) {
+    try {
+      if (cleared) reportAuditEvent('meeting.transcript_delete', meetingId, undefined, { outcome: 'error' });
+    } catch {
+      // Reporting never changes how the write failed.
+    }
+    throw err;
+  }
+  try {
+    if (cleared) reportAuditEvent('meeting.transcript_delete', meetingId);
+  } catch {
+    // Reporting is best effort and must never turn a successful write into an error.
+  }
   return transcript;
 }
 
+// Audit reporting (saveTranscriptSegments): a change of WHO SPOKE (a voice linked, unlinked,
+// renamed or removed) is reported as meeting.metadata_edit (field 'speakers') with the number of distinct speakers,
+// and a change of the TEXT as meeting.transcript_edit (coalesced in the browser, no details).
+// Chapters and the machine writes (the diarization pass, which passes a diarizationStatus)
+// are not reported, and a write that repeats what is stored reports nothing (so the mount
+// effect re-saving the same transcript is silent). Never the names or the text.
+
+/**
+ * The ordered sequence of speakers with consecutive repeats collapsed. Splitting or merging a
+ * segment of ONE speaker leaves it unchanged; a renamed, swapped, added or removed voice changes
+ * it, whether or not the number of segments changed.
+ */
+function speakerSequence(segments: TranscriptSegment[]): string {
+  const runs: string[] = [];
+  for (const seg of segments) if (runs[runs.length - 1] !== seg.speaker) runs.push(seg.speaker);
+  return runs.join('\u0000');
+}
+
+const textOf = (segments: TranscriptSegment[]) => segments.map((s) => s.text).join(' ');
 export async function saveTranscriptChapters(
   meetingId: string,
   chapters: TranscriptChapter[],
@@ -58,10 +96,40 @@ export async function saveTranscriptSegments(
   const existing = (await db.getAllFromIndex('transcripts', 'by-meeting', meetingId))[0];
   if (!existing) return;
   const rawText = segments.map((s) => s.text).join(' ');
-  await db.put('transcripts', {
-    ...existing,
-    segments,
-    rawText,
-    ...(diarizationStatus ? { diarizationStatus } : {}),
-  });
+  // What the write changes, worked out BEFORE it so a failed write can be reported as failed for the same
+  // things. Machine writes (a diarizationStatus) report nothing, success or failure.
+  let speakersChanged = false;
+  let textChanged = false;
+  try {
+    const before = existing.segments ?? [];
+    if (diarizationStatus === undefined) {
+      speakersChanged = speakerSequence(before) !== speakerSequence(segments);
+      textChanged = textOf(before) !== textOf(segments);
+    }
+  } catch {
+    // Reporting is best effort.
+  }
+  const speakerCount = new Set(segments.map((s) => s.speaker)).size;
+  try {
+    await db.put('transcripts', {
+      ...existing,
+      segments,
+      rawText,
+      ...(diarizationStatus ? { diarizationStatus } : {}),
+    });
+  } catch (err) {
+    try {
+      if (speakersChanged) reportAuditEvent('meeting.metadata_edit', meetingId, { field: 'speakers', count: speakerCount }, { outcome: 'error' });
+      if (textChanged) reportAuditEvent('meeting.transcript_edit', meetingId, undefined, { outcome: 'error' });
+    } catch {
+      // Reporting never changes how the write failed.
+    }
+    throw err;
+  }
+  try {
+    if (speakersChanged) reportAuditEvent('meeting.metadata_edit', meetingId, { field: 'speakers', count: speakerCount });
+    if (textChanged) reportAuditEvent('meeting.transcript_edit', meetingId);
+  } catch {
+    // Reporting is best effort and must never turn a successful write into an error.
+  }
 }
