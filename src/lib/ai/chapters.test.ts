@@ -157,10 +157,9 @@ describe('groupIntoChapters', () => {
 
     await groupIntoChapters(shortMeeting);
 
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[chapters] parse failed'),
-      expect.any(Error),
-    );
+    expect(errorSpy).toHaveBeenCalledOnce();
+    expect(errorSpy.mock.calls[0]).toHaveLength(1);
+    expect(errorSpy.mock.calls[0][0]).toContain('[chapters parse failed] name=');
     errorSpy.mockRestore();
   });
 
@@ -170,10 +169,9 @@ describe('groupIntoChapters', () => {
 
     await groupIntoChapters(shortMeeting);
 
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[chapters] parse failed'),
-      expect.any(Error),
-    );
+    expect(errorSpy).toHaveBeenCalledOnce();
+    expect(errorSpy.mock.calls[0]).toHaveLength(1);
+    expect(errorSpy.mock.calls[0][0]).toContain('[chapters parse failed] name=');
     errorSpy.mockRestore();
   });
 

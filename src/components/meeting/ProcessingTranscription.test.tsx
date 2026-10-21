@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ProcessingTranscription } from './ProcessingTranscription';
 
@@ -276,12 +276,6 @@ describe('ProcessingTranscription', () => {
 
   it('shows batch progress label (X / Y segmenter) during transcribing phase', async () => {
     mockFetch.mockResolvedValue(makeServerTranscript('none'));
-
-    let capturedHandlers: Parameters<typeof mockTranscribeBatches>[2];
-    mockTranscribeBatches.mockImplementation(async (_id, _blob, handlers?) => {
-      capturedHandlers = handlers;
-      return { segments: FAKE_SEGMENTS, totalSpeechSeconds: 10, totalBatches: 2, failedSeconds: 0, diarized: false };
-    });
 
     // Execute handlers synchronously before returning
     mockTranscribeBatches.mockImplementation(async (_id, _blob, handlers?) => {

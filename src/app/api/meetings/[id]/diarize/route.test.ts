@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// The access gate (requireAppAccess) resolves the live principal; a plain
+// bruger unless a test says otherwise.
+vi.mock('@/lib/authz/principal', async () => ({
+  resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
+}));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
+
 vi.mock('next/headers', () => ({
   headers: vi.fn().mockResolvedValue(new Headers()),
 }));
@@ -15,6 +22,12 @@ vi.mock('@/lib/ai/diarization', () => ({
 }));
 
 import { NextRequest } from 'next/server';
+const mockRecord = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
+  recordServerEvent: mockRecord,
+}));
+
 import { POST } from './route';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION } from '@/test/helpers';
@@ -117,5 +130,24 @@ describe('POST /api/meetings/[id]/diarize', () => {
       mockDiarize.mockRejectedValueOnce(new Error('network error'));
       await expect(POST(makeAudioRequest(5_000), PARAMS)).resolves.toBeDefined();
     });
+  });
+});
+
+describe('audit', () => {
+  beforeEach(() => {
+    mockRecord.mockReset().mockResolvedValue({ status: 'stored' });
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    mockDiarize.mockReset();
+  });
+
+  it('records nothing: speaker detection is a pipeline step on audio audio.upload already covers', async () => {
+    mockDiarize.mockResolvedValueOnce([{ speaker: 'SPEAKER_00', start: 0, end: 2 }]);
+    await POST(makeAudioRequest(5_000), PARAMS);
+    mockDiarize.mockRejectedValueOnce(Object.assign(new Error('down'), { status: 503 }));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await POST(makeAudioRequest(5_000), PARAMS);
+    spy.mockRestore();
+    expect(mockRecord).not.toHaveBeenCalled();
   });
 });

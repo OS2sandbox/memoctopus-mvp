@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
+import { recordTeamsUnregister } from '@/lib/teams/audit';
+import { teamsFailureCode } from '@/lib/teams/failure-code';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
 import { disarmMeeting } from '@/lib/teams/meeting-arm';
 import { pollMeeting } from '@/lib/teams/poller';
@@ -80,7 +82,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     // Node process the background poller runs in, so an unawaited promise is not
     // cut short. Its outcome lands on the row, which the screen is polling.
     let failure: unknown = null;
-    const run = pollMeeting(userId, id, new Date(), { force: true }).catch((err: unknown) => {
+    const run = pollMeeting(userId, id, new Date(), { force: true, trigger: 'manual' }).catch((err: unknown) => {
       failure = err;
       console.error('[teams/meetings] forced poll failed for', id, err);
       return null;
@@ -115,7 +117,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
  * be armed in Teams (Graph failed, or TEAMS_GRAPH_ENABLED is off and there is no
  * way to reach it from here).
  */
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -127,17 +129,21 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
 
   // A policy-blocked arm was still PATCHed, so it has options to put back too.
   let disarmed = true;
+  let failureCode: string | undefined;
   if (row.armed || row.armResult === 'policy_blocked') {
     try {
       const originalOptions = await getMeetingSnapshot(userId, row.graphMeetingId);
       await disarmMeeting(userId, row.graphMeetingId, originalOptions);
     } catch (err) {
       disarmed = false;
+      failureCode = teamsFailureCode(err);
       console.error('[teams/meetings] disarm failed for', id, '- the meeting may still be armed in Teams:', err);
     }
   }
 
   await deleteTeamsMeeting(userId, id);
+  // Disarming PATCHes the user's Teams meeting options back; `disarmed: false` says it could not be done.
+  await recordTeamsUnregister(req, { userId, meetingId: id, disarmed, ...(failureCode ? { code: failureCode } : {}) });
   return NextResponse.json({ ok: true, disarmed });
 }
 

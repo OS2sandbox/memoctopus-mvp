@@ -6,6 +6,12 @@ vi.mock('@/lib/db', () => ({ pool: { connect: (...a: unknown[]) => mockConnect(.
 // graph-client (for GraphError) pulls in better-auth, which needs a real DB.
 vi.mock('@/lib/auth', () => ({ auth: { api: {} } }));
 
+// The audit helpers are asserted on below; what they would write is covered by audit.test.ts.
+vi.mock('./audit', () => ({
+  recordTeamsArtifactsFetch: vi.fn().mockResolvedValue(undefined),
+  recordTeamsRecordingDelete: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('./pipeline', () => ({ processTeamsMeeting: vi.fn() }));
 vi.mock('./meeting-resolver', () => ({ getMeeting: vi.fn() }));
 vi.mock('./recording-cleanup', () => ({ deleteRecordingFromDrive: vi.fn() }));
@@ -43,6 +49,7 @@ import {
   RECORDING_CLEANUP_GIVE_UP_MS,
 } from './poller';
 import { GraphError } from './graph-client';
+import { recordTeamsArtifactsFetch, recordTeamsRecordingDelete } from './audit';
 import { processTeamsMeeting, type PipelineOutcome } from './pipeline';
 import { deleteRecordingFromDrive } from './recording-cleanup';
 import { getMeeting } from './meeting-resolver';
@@ -70,6 +77,8 @@ const mockRefresh = vi.mocked(refreshTeamsMeetingSchedule);
 const mockDeleteRecording = vi.mocked(deleteRecordingFromDrive);
 const mockListCleanups = vi.mocked(listPendingRecordingCleanups);
 const mockSettle = vi.mocked(settleRecordingCleanup);
+const mockAuditFetch = vi.mocked(recordTeamsArtifactsFetch);
+const mockAuditDelete = vi.mocked(recordTeamsRecordingDelete);
 
 /** What getMeeting answers by default: the same window the row already has. */
 function graphMeeting(over: Record<string, unknown> = {}) {
@@ -1006,5 +1015,145 @@ describe('deleting the recording from OneDrive', () => {
 
     expect(result).toEqual({ polled: 0 });
     expect(mockSettle).toHaveBeenCalledWith('u1', 'm1', 'deleted');
+  });
+});
+
+describe('audit events of the Teams poller', () => {
+  let warn: ReturnType<typeof vi.spyOn>;
+  let error: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockGet.mockResolvedValue(row());
+  });
+  afterEach(() => {
+    warn.mockRestore();
+    error.mockRestore();
+  });
+
+  const ready = (over: Partial<Extract<PipelineOutcome, { status: 'ready' }>> = {}): PipelineOutcome => ({
+    status: 'ready',
+    mode: 'recording+transcript',
+    speakers: ['Mette Hansen'],
+    transcriptId: 't1',
+    recordingId: 'r1',
+    recordingBytes: 4242,
+    ...over,
+  });
+
+  it('a transcript and recording fetched by the background poller is one ready event with the person as owner', async () => {
+    process.env.TEAMS_DELETE_RECORDING = 'false';
+    mockProcess.mockResolvedValueOnce(ready());
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockAuditFetch).toHaveBeenCalledTimes(1);
+    // Exactly these keys: no subject, join URL, speaker names or Graph ids can ride along.
+    expect(mockAuditFetch).toHaveBeenCalledWith({
+      userId: 'u1', meetingId: 'm1', trigger: 'poller', result: 'ready', transcript: true, recording: true,
+    });
+  });
+
+  it('a "Tjek nu" poll says manual; a transcript-only run says no recording', async () => {
+    mockProcess.mockResolvedValueOnce(ready({ mode: 'transcript-only', recordingId: null, recordingBytes: null }));
+
+    await pollMeeting('u1', 'm1', NOW, { force: true, trigger: 'manual' });
+
+    expect(mockAuditFetch).toHaveBeenCalledWith({
+      userId: 'u1', meetingId: 'm1', trigger: 'manual', result: 'ready', transcript: true, recording: false,
+    });
+  });
+
+  it('a recording-only run says no Teams transcript', async () => {
+    mockProcess.mockResolvedValueOnce(ready({ mode: 'recording-only', transcriptId: null }));
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockAuditFetch).toHaveBeenCalledWith(expect.objectContaining({ result: 'ready', transcript: false, recording: true }));
+  });
+
+  it('an already-ready stash (nothing was fetched this time) is not an event', async () => {
+    mockProcess.mockResolvedValueOnce(ready({ transcriptId: null, recordingId: null, recordingBytes: null }));
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockAuditFetch).not.toHaveBeenCalled();
+  });
+
+  it('a pipeline failure is a failed event with the closed code, never the message', async () => {
+    mockProcess.mockResolvedValueOnce({ status: 'failed', reason: 'Mødet "Lønforhandling" fejlede', code: 'http_502' });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockAuditFetch).toHaveBeenCalledWith({
+      userId: 'u1', meetingId: 'm1', trigger: 'poller', result: 'failed', transcript: false, recording: false, code: 'http_502',
+    });
+    expect(JSON.stringify(mockAuditFetch.mock.calls)).not.toContain('Lønforhandling');
+  });
+
+  it('a Graph error that fails the meeting is a failed event with the GraphError code', async () => {
+    mockProcess.mockRejectedValueOnce(new GraphError('http', 'Graph said: Kvartalsrapport', { status: 400 }));
+    await pollMeeting('u1', 'm1', NOW);
+    expect(mockAuditFetch).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'failed', code: 'http_400' }));
+
+    mockProcess.mockRejectedValueOnce(new GraphError('transcripts_disabled', 'x', { status: 403 }));
+    await pollMeeting('u1', 'm1', NOW);
+    expect(mockAuditFetch).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'failed', code: 'transcripts_disabled' }));
+    expect(JSON.stringify(mockAuditFetch.mock.calls)).not.toContain('Kvartalsrapport');
+  });
+
+  it('giving up and a meeting that is gone are failed events', async () => {
+    const end = new Date(NOW.getTime() - POLL_GIVE_UP_MS - 1000);
+    const old = { scheduledStart: null, scheduledEnd: end, createdAt: new Date(end.getTime() - 1000), lastPolledAt: new Date(NOW.getTime() - 3_600_000) };
+    mockGetMeeting.mockResolvedValue(graphMeeting({ scheduledStart: null, scheduledEnd: end.toISOString() }));
+    mockGet.mockResolvedValue(row(old));
+    await pollMeeting('u1', 'm1', NOW);
+    expect(mockAuditFetch).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'failed', code: 'gave_up' }));
+    mockGet.mockResolvedValue(row({ ...old, state: 'needs_reauth' }));
+    await pollMeeting('u1', 'm1', NOW);
+    expect(mockAuditFetch).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'failed', code: 'reauth_required' }));
+    mockGetMeeting.mockResolvedValue(graphMeeting());
+
+    mockGet.mockResolvedValue(row());
+    mockGetMeeting.mockRejectedValueOnce(new GraphError('not_found', 'weg', { status: 404 }));
+    await pollMeeting('u1', 'm1', NOW);
+    expect(mockAuditFetch).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'failed', code: 'meeting_gone' }));
+  });
+
+  it('a poll that finds nothing yet, is throttled or needs a new sign-in is not an event', async () => {
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+    await pollMeeting('u1', 'm1', NOW);
+    mockProcess.mockRejectedValueOnce(new GraphError('unavailable', 'throttled', { status: 429, retryable: true }));
+    await pollMeeting('u1', 'm1', NOW);
+    mockProcess.mockRejectedValueOnce(new GraphError('reauth_required', 'weg', { status: 401 }));
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockAuditFetch).not.toHaveBeenCalled();
+  });
+
+  it('reports the recording delete once, with its final status, and not while it is merely postponed', async () => {
+    const pending = row({ state: 'ready', lastPolledAt: new Date('2026-09-08T11:50:00Z'), recordingCleanup: 'pending', recordingBytes: 4242 });
+
+    mockDeleteRecording.mockResolvedValueOnce('recycled');
+    await cleanUpRecording('u1', pending, NOW);
+    expect(mockAuditDelete).toHaveBeenCalledTimes(1);
+    expect(mockAuditDelete).toHaveBeenCalledWith({ userId: 'u1', meetingId: 'm1', status: 'recycled' });
+
+    mockAuditDelete.mockClear();
+    mockDeleteRecording.mockResolvedValueOnce('ambiguous');
+    await cleanUpRecording('u1', pending, NOW);
+    expect(mockAuditDelete).toHaveBeenCalledWith({ userId: 'u1', meetingId: 'm1', status: 'failed' });
+
+    mockAuditDelete.mockClear();
+    mockDeleteRecording.mockRejectedValueOnce(new GraphError('unavailable', 'throttled', { status: 429, retryable: true }));
+    await cleanUpRecording('u1', pending, NOW);
+    expect(mockAuditDelete).not.toHaveBeenCalled();
+  });
+
+  it('a verdict that could not be written to the row is not reported as a delete', async () => {
+    mockDeleteRecording.mockResolvedValueOnce('deleted');
+    mockSettle.mockRejectedValueOnce(new Error('db down'));
+    await cleanUpRecording('u1', row({ state: 'ready', recordingCleanup: 'pending', recordingBytes: 4242 }), NOW);
+    expect(mockAuditDelete).not.toHaveBeenCalled();
   });
 });

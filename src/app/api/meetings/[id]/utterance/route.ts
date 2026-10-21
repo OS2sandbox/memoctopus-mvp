@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { HviskeProvider } from '@/lib/ai/transcription';
+import { withHandler } from '@/lib/api-handler';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { requireAppAccess } from '@/lib/authz/app-access';
+import { asEntityUuid, elapsedMs, emitLiveAudioUpload, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
+
+interface Params {
+  params: Promise<{ id: string }>;
+}
 
 // Reuse a single provider instance across requests — creating one per request
 // would spin up a new OpenAI client each time, losing connection pooling.
@@ -9,10 +15,6 @@ let _provider: HviskeProvider | null = null;
 function getProvider(): HviskeProvider {
   if (!_provider) _provider = new HviskeProvider();
   return _provider;
-}
-
-interface Params {
-  params: Promise<{ id: string }>;
 }
 
 // Whisper-based models hallucinate looping repetitions when given short or noisy
@@ -41,10 +43,11 @@ function isHallucinatedRepetition(text: string): boolean {
 // Stateless compute: transcribes one audio batch via Hviske and returns the text.
 // No persistence — the client accumulates segments and stores the transcript in
 // IndexedDB (see RecordingScreen / upload-confirm / ProcessingTranscription).
-export async function POST(req: NextRequest, { params }: Params) {
-  const { id: _id } = await params;
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+async function postHandler(req: NextRequest, { params }: Params) {
+  const { id } = await params;
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const formData = await req.formData();
   const audioFile = formData.get('audio') as File | null;
@@ -59,14 +62,27 @@ export async function POST(req: NextRequest, { params }: Params) {
     const { text, latencyMs } = await getProvider().transcribeRaw(buffer, audioFile.type || 'audio/wav');
     const totalMs = Date.now() - t0;
     console.log(`[utterance] ${audioBytes} bytes → ${latencyMs} ms hviske / ${totalMs} ms total`);
+    // The audio of a live recording goes up utterance by utterance: logged at most once per
+    // person and meeting per 5 minutes (see emitLiveAudioUpload), never the audio or the text.
+    emitLiveAudioUpload(req, { actorUserId: session.user.id, entityId: asEntityUuid(id), outcome: 'success', bytes: audioBytes, durationMs: elapsedMs(t0) });
     if (isHallucinatedRepetition(text)) return NextResponse.json({ text: '', latencyMs });
     return NextResponse.json({ text, latencyMs });
   } catch (err) {
     const totalMs = Date.now() - t0;
-    console.error(`[utterance] failed after ${totalMs} ms:`, err);
+    safeLogError(`utterance failed after ${totalMs} ms`, err);
+    emitLiveAudioUpload(req, {
+      actorUserId: session.user.id,
+      entityId: asEntityUuid(id),
+      outcome: 'error',
+      bytes: audioBytes,
+      durationMs: totalMs,
+      outcomeCode: outcomeCodeOf(err),
+    });
     // 502, not 200-with-empty-text: callers must be able to tell "silence" from
     // "transcription failed" so failed batches are retried instead of silently
     // dropping ~27 s of audio from the transcript.
     return NextResponse.json({ error: 'Transcription failed', latencyMs: totalMs }, { status: 502 });
   }
 }
+
+export const POST = withHandler('utterance', postHandler);

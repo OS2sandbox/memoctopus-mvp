@@ -21,6 +21,7 @@ vi.mock('@/lib/teams/store', () => ({
   claimMeetingSnapshot: vi.fn(),
   listTeamsMeetings: vi.fn(),
 }));
+vi.mock('@/lib/teams/audit', () => ({ recordTeamsRegister: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@/lib/pending-artifacts', () => ({
   getMeetingOwner: vi.fn(),
   setMeetingOwner: vi.fn(),
@@ -31,6 +32,7 @@ import { auth } from '@/lib/auth';
 import { GraphError } from '@/lib/teams/graph-client';
 import { armMeeting } from '@/lib/teams/meeting-arm';
 import { ResolveError, resolveJoinUrl } from '@/lib/teams/meeting-resolver';
+import { recordTeamsRegister } from '@/lib/teams/audit';
 import { claimMeetingSnapshot, listTeamsMeetings, upsertTeamsMeeting } from '@/lib/teams/store';
 import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
 import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
@@ -42,6 +44,7 @@ const mockUpsert = vi.mocked(upsertTeamsMeeting);
 const mockClaimSnapshot = vi.mocked(claimMeetingSnapshot);
 const mockGetOwner = vi.mocked(getMeetingOwner);
 const mockSetOwner = vi.mocked(setMeetingOwner);
+const mockAudit = vi.mocked(recordTeamsRegister);
 
 const URL_ = 'http://localhost/api/teams/meetings';
 const JOIN = 'https://teams.microsoft.com/l/meetup-join/19:meeting_abc@thread.v2/0';
@@ -373,6 +376,71 @@ describe('POST /api/teams/meetings', () => {
     const res = await post({ meetingId: 'm1', joinUrl: JOIN });
     expect(res.status).toBe(502);
     expect((await res.json()).error).toBe('graph');
+  });
+});
+
+describe('POST /api/teams/meetings: audit event', () => {
+  const UUID = '11111111-2222-4333-8444-555555555555';
+
+  it('records the registration with what the arm step came to, and nothing else', async () => {
+    mockResolve.mockResolvedValueOnce(RESOLVED);
+    mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options, previousOptions: ORIGINAL });
+
+    await post({ meetingId: UUID, joinUrl: JOIN });
+
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    const [, run] = mockAudit.mock.calls[0];
+    expect(run).toEqual({
+      userId: 'user-123', meetingId: UUID, outcome: 'success', armed: true, isOrganizer: true, armResult: 'armed',
+    });
+    // No subject, join URL or Graph meeting id reaches the audit helper.
+    expect(JSON.stringify(mockAudit.mock.calls.map((c) => c[1]))).not.toMatch(/Ugentligt|teams\.microsoft|graph-1/);
+  });
+
+  it('records an invitee as not armed, and a policy block as not armed', async () => {
+    mockResolve.mockResolvedValueOnce({ ...RESOLVED, isOrganizer: false });
+    await post({ meetingId: 'm1', joinUrl: JOIN });
+    expect(mockAudit.mock.calls.at(-1)![1]).toMatchObject({ outcome: 'success', armed: false, isOrganizer: false, armResult: 'not_organizer' });
+
+    mockResolve.mockResolvedValueOnce(RESOLVED);
+    mockArm.mockResolvedValueOnce({ result: 'policy_blocked', options: RESOLVED.options, previousOptions: ORIGINAL });
+    await post({ meetingId: 'm1', joinUrl: JOIN });
+    expect(mockAudit.mock.calls.at(-1)![1]).toMatchObject({ outcome: 'success', armed: false, armResult: 'policy_blocked' });
+  });
+
+  it('records a Graph failure as an error with the closed code, never the message', async () => {
+    mockResolve.mockRejectedValueOnce(new GraphError('http', 'Graph sagde: Lønforhandling', { status: 500 }));
+
+    const res = await post({ meetingId: 'm1', joinUrl: JOIN });
+
+    expect(res.status).toBe(502);
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toEqual({ userId: 'user-123', meetingId: 'm1', outcome: 'error', code: 'http_500' });
+    expect(JSON.stringify(mockAudit.mock.calls)).not.toContain('Lønforhandling');
+  });
+
+  it('still records an armed meeting whose row then could not be saved', async () => {
+    mockResolve.mockResolvedValueOnce(RESOLVED);
+    mockArm.mockResolvedValueOnce({ result: 'armed', options: RESOLVED.options, previousOptions: ORIGINAL });
+    mockUpsert.mockRejectedValueOnce(new Error('db down'));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await post({ meetingId: 'm1', joinUrl: JOIN });
+
+    expect(res.status).toBe(500);
+    expect(mockAudit.mock.calls[0][1]).toEqual({
+      userId: 'user-123', meetingId: 'm1', outcome: 'error', code: 'unknown', armed: true, armResult: 'armed', isOrganizer: true,
+    });
+    spy.mockRestore();
+  });
+
+  it('records nothing for a refused request', async () => {
+    mockGetSession.mockResolvedValueOnce(null as never);
+    await post({ meetingId: 'm1', joinUrl: JOIN });
+    await post({ joinUrl: JOIN });
+    mockGetOwner.mockResolvedValueOnce('someone-else');
+    await post({ meetingId: 'm1', joinUrl: JOIN });
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });
 

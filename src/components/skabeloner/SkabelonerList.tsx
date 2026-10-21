@@ -16,7 +16,7 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { SkabelonEditor } from './SkabelonEditor';
 import { encodeSkabelonCode } from '@/lib/skabeloner/share-code';
 import type { ShareConfig } from '@/lib/skabeloner/share-config';
-import type { Skabelon } from '@/types';
+import type { Skabelon, CentralSkabelonSummary } from '@/types';
 import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 
 const CATEGORY_LABELS: [keyof Skabelon, string][] = [
@@ -26,8 +26,42 @@ const CATEGORY_LABELS: [keyof Skabelon, string][] = [
   ['includeDato', 'Dato'],
 ];
 
+// The favourite heart shared by personal and central cards: filled and inert for the default.
+function DefaultHeart({ isDefault, onClick }: { isDefault: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={isDefault ? 'Standardskabelon' : 'Gør til standard'}
+      aria-pressed={isDefault}
+      aria-label={isDefault ? 'Standardskabelon' : 'Gør til standard'}
+      className="p-1 rounded-full transition-colors"
+      style={{
+        background: 'none', border: 'none', lineHeight: 0,
+        cursor: isDefault ? 'default' : 'pointer',
+        color: isDefault ? 'var(--accent)' : 'var(--muted)',
+      }}
+    >
+      <svg
+        width="20" height="20" viewBox="0 0 24 24"
+        fill={isDefault ? 'currentColor' : 'none'}
+        stroke={isDefault ? 'none' : 'currentColor'}
+        strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+        shapeRendering="geometricPrecision"
+        style={{ display: 'block' }}
+      >
+        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+      </svg>
+    </button>
+  );
+}
+
 export function SkabelonerList() {
   const [skabeloner, setSkabeloner] = useState<Skabelon[]>([]);
+  // Read-only: delegated by the organisation, no prompt, no controls.
+  const [centralSkabeloner, setCentralSkabeloner] = useState<CentralSkabelonSummary[]>([]);
+  // The server could not resolve the shared list (a failure, not an empty list).
+  const [centralError, setCentralError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<Skabelon | null>(null);
@@ -59,7 +93,11 @@ export function SkabelonerList() {
         }
         return r.json();
       })
-      .then((data: { skabeloner: Skabelon[] }) => setSkabeloner(data.skabeloner ?? []))
+      .then((data: { skabeloner: Skabelon[]; centralSkabeloner?: CentralSkabelonSummary[]; centralError?: boolean }) => {
+        setSkabeloner(data.skabeloner ?? []);
+        setCentralSkabeloner(data.centralSkabeloner ?? []);
+        setCentralError(data.centralError === true);
+      })
       .catch((err) => {
         console.error('[skabeloner] Fejl ved indlæsning af skabeloner:', err);
         setLoadError('Kunne ikke indlæse skabeloner. Prøv at genindlæse siden.');
@@ -118,20 +156,22 @@ export function SkabelonerList() {
     }
   }
 
-  async function handleSetDefault(s: Skabelon) {
-    if (s.isDefault) return;
+  // Personal and central templates share ONE default: the server clears the other
+  // kind, so mirror that locally and only the chosen card fills.
+  async function handleSetDefault(id: string, alreadyDefault: boolean | undefined) {
+    if (alreadyDefault) return;
     setActionError(null);
     try {
-      const res = await fetch(`/api/skabeloner/${s.id}/default`, { method: 'POST' });
+      const res = await fetch(`/api/skabeloner/${id}/default`, { method: 'POST' });
       if (!res.ok) {
-        console.error('[skabeloner] Kunne ikke sætte standardskabelon — HTTP', res.status, 'for skabelon', s.id);
+        console.error('[skabeloner] Kunne ikke sætte standardskabelon — HTTP', res.status, 'for skabelon', id);
         setActionError('Kunne ikke sætte standardskabelon. Prøv igen.');
         return;
       }
-      // One default per user — mirror that locally so only the chosen card fills.
-      setSkabeloner((prev) => prev.map((x) => ({ ...x, isDefault: x.id === s.id })));
+      setSkabeloner((prev) => prev.map((x) => ({ ...x, isDefault: x.id === id })));
+      setCentralSkabeloner((prev) => prev.map((x) => ({ ...x, isDefault: x.id === id })));
     } catch (err) {
-      console.error('[skabeloner] Netværksfejl ved ændring af standardskabelon', s.id, err);
+      console.error('[skabeloner] Netværksfejl ved ændring af standardskabelon', id, err);
       setActionError('Kunne ikke sætte standardskabelon. Prøv igen.');
     }
   }
@@ -283,30 +323,7 @@ export function SkabelonerList() {
                         Skabelon valgt som standard
                       </span>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => handleSetDefault(s)}
-                      title={s.isDefault ? 'Standardskabelon' : 'Gør til standard'}
-                      aria-pressed={s.isDefault}
-                      aria-label={s.isDefault ? 'Standardskabelon' : 'Gør til standard'}
-                      className="p-1 rounded-full transition-colors"
-                      style={{
-                        background: 'none', border: 'none', lineHeight: 0,
-                        cursor: s.isDefault ? 'default' : 'pointer',
-                        color: s.isDefault ? 'var(--accent)' : 'var(--muted)',
-                      }}
-                    >
-                      <svg
-                        width="20" height="20" viewBox="0 0 24 24"
-                        fill={s.isDefault ? 'currentColor' : 'none'}
-                        stroke={s.isDefault ? 'none' : 'currentColor'}
-                        strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                        shapeRendering="geometricPrecision"
-                        style={{ display: 'block' }}
-                      >
-                        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
-                      </svg>
-                    </button>
+                    <DefaultHeart isDefault={s.isDefault} onClick={() => handleSetDefault(s.id, s.isDefault)} />
                   </div>
                 </div>
                 <p className="text-sm text-[var(--muted)] mb-4">{s.description || 'Ingen beskrivelse'}</p>
@@ -349,6 +366,71 @@ export function SkabelonerList() {
             );
           })}
         </div>
+      )}
+
+      {!loading && centralError && (
+        <p role="status" className="mt-10 text-sm text-[var(--muted)]">
+          Fælles skabeloner kunne ikke hentes lige nu. Dine egne skabeloner vises som normalt. Prøv at genindlæse siden.
+        </p>
+      )}
+
+      {!loading && centralSkabeloner.length > 0 && (
+        <section className="mt-10" aria-labelledby="central-skabeloner-heading">
+          <h2 id="central-skabeloner-heading" className="text-sm font-semibold text-[var(--ink)]">
+            Centrale skabeloner (låst)
+          </h2>
+          <p className="mt-1 mb-4 text-sm text-[var(--muted)]">
+            Disse skabeloner er stillet til rådighed af din organisation. De kan bruges, når du genererer et referat,
+            men ikke redigeres, slettes eller deles, og selve prompten er skjult.
+          </p>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {centralSkabeloner.map((c) => {
+              const activeCats = CATEGORY_LABELS.filter(([key]) => c[key as keyof CentralSkabelonSummary]);
+              return (
+                <div
+                  key={c.id}
+                  data-testid="central-skabelon"
+                  className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--surface)] p-5 flex flex-col"
+                >
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <h3 className="font-semibold text-[var(--ink)]">{c.name}</h3>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {c.isDefault && (
+                        <span className="text-xs whitespace-nowrap" style={{ color: 'var(--accent)' }}>
+                          Skabelon valgt som standard
+                        </span>
+                      )}
+                      <span className="inline-flex items-center gap-1 text-xs whitespace-nowrap text-[var(--muted)]">
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                          <rect x="4" y="11" width="16" height="10" rx="2" />
+                          <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+                        </svg>
+                        Låst · v{c.version}
+                      </span>
+                      <DefaultHeart isDefault={!!c.isDefault} onClick={() => handleSetDefault(c.id, c.isDefault)} />
+                    </div>
+                  </div>
+                  <p className="text-sm text-[var(--muted)] mb-4">{c.description || 'Ingen beskrivelse'}</p>
+                  {activeCats.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {activeCats.map(([key, label]) => (
+                        <span
+                          key={key as string}
+                          className="text-xs px-2 py-0.5 rounded-full border border-[var(--line)] text-[var(--muted)]"
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {c.allowUserInstruction && (
+                    <p className="text-xs text-[var(--muted)] mt-auto pt-2">Du kan tilføje egne instruktioner.</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
       )}
 
       <SkabelonEditor

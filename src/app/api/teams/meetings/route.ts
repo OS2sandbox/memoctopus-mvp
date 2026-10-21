@@ -5,8 +5,10 @@ import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { GraphError, TEAMS_DISABLED_MESSAGE } from '@/lib/teams/graph-client';
 import { graphDate } from '@/lib/teams/graph-dates';
 import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
+import { recordTeamsRegister } from '@/lib/teams/audit';
+import { teamsFailureCode } from '@/lib/teams/failure-code';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
-import { armMeeting, isArmed } from '@/lib/teams/meeting-arm';
+import { armMeeting, isArmed, type ArmResult } from '@/lib/teams/meeting-arm';
 import { resolveJoinUrl } from '@/lib/teams/meeting-resolver';
 import { claimMeetingSnapshot, listTeamsMeetings, upsertTeamsMeeting } from '@/lib/teams/store';
 
@@ -105,8 +107,13 @@ export async function POST(req: NextRequest) {
   const occurrenceStart = toDate(graphDate(str(body.scheduledStart)));
   const occurrenceEnd = toDate(graphDate(str(body.scheduledEnd)));
 
+  // What is known of the arm step, for the audit event of a failure that comes after it.
+  let isOrganizer: boolean | undefined;
+  let armedResult: ArmResult | undefined;
+
   try {
     const resolved = await resolveJoinUrl(userId, joinUrl);
+    isOrganizer = resolved.isOrganizer;
 
     // Only the organizer may PATCH meeting options; an invitee is registered
     // anyway, because their transcript is readable if somebody starts
@@ -115,6 +122,7 @@ export async function POST(req: NextRequest) {
       ? await armMeeting(userId, resolved.graphMeetingId)
       : null;
     const armResult = outcome?.result ?? ('not_organizer' as const);
+    armedResult = armResult;
 
     // What the organizer had before we ever PATCHed this Graph meeting, for the
     // disarm to restore — claimed once per graphMeetingId, not per local id, so
@@ -141,6 +149,16 @@ export async function POST(req: NextRequest) {
       state: 'awaiting_teams',
     });
 
+    // Arming PATCHed the user's Teams meeting options on their behalf: worth a trace.
+    await recordTeamsRegister(req, {
+      userId,
+      meetingId,
+      outcome: 'success',
+      armed: row.armed,
+      isOrganizer: row.isOrganizer,
+      armResult,
+    });
+
     return NextResponse.json({
       id: row.id,
       graphMeetingId: row.graphMeetingId,
@@ -153,6 +171,15 @@ export async function POST(req: NextRequest) {
       state: row.state,
     });
   } catch (err) {
+    await recordTeamsRegister(req, {
+      userId,
+      meetingId,
+      outcome: 'error',
+      code: teamsFailureCode(err),
+      // The meeting may be armed in Teams although saving the row failed afterwards.
+      ...(armedResult !== undefined ? { armed: isArmed(armedResult), armResult: armedResult } : {}),
+      ...(isOrganizer !== undefined ? { isOrganizer } : {}),
+    });
     return teamsErrorResponse(err);
   }
 }

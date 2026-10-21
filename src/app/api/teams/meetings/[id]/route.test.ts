@@ -18,12 +18,14 @@ vi.mock('@/lib/teams/store', async (importOriginal) => ({
   setTeamsMeetingState: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@/lib/pending-artifacts', () => ({ readPendingTranscript: vi.fn() }));
+vi.mock('@/lib/teams/audit', () => ({ recordTeamsUnregister: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@/lib/teams/poller', () => ({ pollMeeting: vi.fn() }));
 vi.mock('@/lib/teams/meeting-arm', () => ({ disarmMeeting: vi.fn() }));
 
 import { GET, DELETE, POST } from './route';
 import { auth } from '@/lib/auth';
 import { GraphError } from '@/lib/teams/graph-client';
+import { recordTeamsUnregister } from '@/lib/teams/audit';
 import { disarmMeeting } from '@/lib/teams/meeting-arm';
 import { pollMeeting } from '@/lib/teams/poller';
 import {
@@ -45,6 +47,7 @@ const mockDisarm = vi.mocked(disarmMeeting);
 const mockDelete = vi.mocked(deleteTeamsMeeting);
 const mockSetState = vi.mocked(setTeamsMeetingState);
 const mockReadStash = vi.mocked(readPendingTranscript);
+const mockAudit = vi.mocked(recordTeamsUnregister);
 
 function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
   return {
@@ -154,7 +157,7 @@ describe('GET /api/teams/meetings/[id]', () => {
 
     // force: this endpoint is also the "Prøv igen" button, which must be able to
     // revive a row the poller has already written off as failed.
-    expect(mockPoll).toHaveBeenCalledWith('user-123', 'm1', expect.any(Date), { force: true });
+    expect(mockPoll).toHaveBeenCalledWith('user-123', 'm1', expect.any(Date), { force: true, trigger: 'manual' });
     expect(body.state).toBe('ready');
   });
 
@@ -303,6 +306,37 @@ describe('DELETE /api/teams/meetings/[id]', () => {
     expect(mockDelete).toHaveBeenCalledWith('user-123', 'm1');
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
+  });
+});
+
+describe('DELETE /api/teams/meetings/[id]: audit event', () => {
+  it('records the unregistration as disarmed when the options are back (or were never touched)', async () => {
+    mockGet.mockResolvedValueOnce(row({ armed: true }));
+    await DELETE(req(), { params });
+    expect(mockAudit).toHaveBeenCalledTimes(1);
+    expect(mockAudit.mock.calls[0][1]).toEqual({ userId: 'user-123', meetingId: 'm1', disarmed: true });
+
+    mockGet.mockResolvedValueOnce(row({ armed: false, armResult: 'not_organizer' }));
+    await DELETE(req(), { params });
+    expect(mockAudit.mock.calls[1][1]).toEqual({ userId: 'user-123', meetingId: 'm1', disarmed: true });
+  });
+
+  it('records disarmed false with the closed code when Teams could not be undone, without the message', async () => {
+    mockGet.mockResolvedValueOnce(row({ armed: true }));
+    mockDisarm.mockRejectedValueOnce(new GraphError('http', 'Graph sagde: Lønforhandling', { status: 503 }));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await DELETE(req(), { params });
+
+    expect(mockAudit.mock.calls[0][1]).toEqual({ userId: 'user-123', meetingId: 'm1', disarmed: false, code: 'http_503' });
+    expect(JSON.stringify(mockAudit.mock.calls)).not.toMatch(/Lønforhandling|Ugentligt|graph-1/);
+    spy.mockRestore();
+  });
+
+  it('records nothing when the meeting is not the caller’s', async () => {
+    mockGet.mockResolvedValueOnce(null);
+    await DELETE(req(), { params });
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 });
 

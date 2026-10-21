@@ -2,7 +2,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { MinutesEditor } from './MinutesEditor';
 import { renderWithOnboarding } from '@/test/onboarding';
 import type { MinutesContent } from '@/types';
@@ -807,5 +806,36 @@ describe('MinutesEditor — flush on page hide', () => {
         expect.objectContaining({ body: 'Pagehide body' }),
       ),
     );
+  });
+});
+
+describe('MinutesEditor — template provenance', () => {
+  afterEach(() => cleanup());
+
+  it('shows "Skabelon: <navn> (central, v3)" for a central template', () => {
+    render(
+      <MinutesEditor
+        {...defaultProps({ templateRef: { source: 'central', id: 'c-1', version: 3, name: 'Bestyrelsesmøde' } })}
+      />,
+    );
+    expect(screen.getByTestId('template-provenance')).toHaveTextContent('Skabelon: Bestyrelsesmøde (central, v3)');
+  });
+
+  it('falls back to the version alone when the name is unknown', () => {
+    render(<MinutesEditor {...defaultProps({ templateRef: { source: 'central', id: 'c-1', version: 3 } })} />);
+    expect(screen.getByTestId('template-provenance')).toHaveTextContent('Skabelon: central, v3');
+  });
+
+  it('shows nothing for personal, none or missing provenance', () => {
+    // Separate renders (not rerender): rerender would drop the OnboardingProvider that render() adds.
+    for (const templateRef of [
+      undefined,
+      { source: 'personal' as const, id: 'p', version: null },
+      { source: 'none' as const, id: null, version: null },
+    ]) {
+      const { unmount } = render(<MinutesEditor {...defaultProps(templateRef ? { templateRef } : undefined)} />);
+      expect(screen.queryByTestId('template-provenance')).not.toBeInTheDocument();
+      unmount();
+    }
   });
 });

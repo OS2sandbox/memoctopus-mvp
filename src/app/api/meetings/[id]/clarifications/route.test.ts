@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// The access gate (requireAppAccess) resolves the live principal; a plain
+// bruger unless a test says otherwise.
+vi.mock('@/lib/authz/principal', async () => ({
+  resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
+}));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
+
 const mockAnalyzeClarifications = vi.hoisted(() => vi.fn());
 
 vi.mock('next/headers', () => ({
@@ -12,6 +19,12 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@/lib/ai/clarifications', () => ({
   analyzeClarifications: mockAnalyzeClarifications,
+}));
+
+const mockRecord = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
+  recordServerEvent: mockRecord,
 }));
 
 import { POST } from './route';
@@ -92,5 +105,21 @@ describe('POST /api/meetings/[id]/clarifications', () => {
     await POST(makeJsonReq(BASE_URL, 'POST', { transcript: 'budgetmøde transskription' }), PARAMS);
 
     expect(mockAnalyzeClarifications).toHaveBeenCalledWith('budgetmøde transskription');
+  });
+});
+
+describe('audit', () => {
+  it('writes no audit event: pipeline steps are not audited (success, failure or rejected input)', async () => {
+    mockRecord.mockReset();
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockAnalyzeClarifications.mockResolvedValueOnce(sampleClarifications);
+    await POST(makeJsonReq(BASE_URL, 'POST', { transcript: 'Budget 2024 er uklart' }), PARAMS);
+    mockAnalyzeClarifications.mockRejectedValueOnce(new Error('down'));
+    await POST(makeJsonReq(BASE_URL, 'POST', { transcript: 'tekst' }), PARAMS);
+    await POST(makeJsonReq(BASE_URL, 'POST', { transcript: '  ' }), PARAMS);
+    spy.mockRestore();
+    expect(mockRecord).not.toHaveBeenCalled();
   });
 });

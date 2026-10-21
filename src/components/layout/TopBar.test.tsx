@@ -50,6 +50,23 @@ vi.mock('@/lib/auth-client', () => ({
   useSession: () => mockSessionData,
 }));
 
+let mockMe: { data: unknown; loading: boolean; error: string | null; reload: () => void } = {
+  data: null,
+  loading: true,
+  error: null,
+  reload: () => {},
+};
+vi.mock('@/lib/hooks/use-me', () => ({ useMe: () => mockMe }));
+
+const meWith = (capabilities: string[]) => ({
+  user: { id: 'u1', name: 'A', email: 'a@example.com' },
+  roles: ['bruger'],
+  capabilities,
+  scopes: {},
+  source: 'local',
+  readOnly: false,
+});
+
 let mockHasAudio = false;
 
 vi.mock('@/lib/review-audio-context', () => ({
@@ -100,6 +117,7 @@ beforeEach(() => {
   mockSignOut.mockReset().mockResolvedValue(undefined);
   mockSessionData = { data: null };
   mockHasAudio = false;
+  mockMe = { data: null, loading: true, error: null, reload: () => {} };
   mockPathname = '/dashboard';
   mockDeleteAudioDialogOnDeleted.mockReset();
   mockDeleteAudioDialogOnOpenChange.mockReset();
@@ -148,6 +166,66 @@ describe('TopBar — basic rendering', () => {
     renderTopBar();
     const header = screen.getByRole('banner');
     expect(header).toBeInTheDocument();
+  });
+});
+
+// ── Administration link ────────────────────────────────────────────────────
+
+describe('TopBar — Administration link', () => {
+  it('is not shown while /api/me is loading (no flash for ordinary users)', () => {
+    mockMe = { data: null, loading: true, error: null, reload: () => {} };
+    renderTopBar();
+    expect(screen.queryByRole('link', { name: 'Administration' })).toBeNull();
+  });
+
+  it('is not shown when /api/me failed', () => {
+    mockMe = { data: null, loading: false, error: 'x', reload: () => {} };
+    renderTopBar();
+    expect(screen.queryByRole('link', { name: 'Administration' })).toBeNull();
+  });
+
+  it('is not shown to an ordinary user', () => {
+    mockMe = { data: meWith(['template.use']), loading: false, error: null, reload: () => {} };
+    renderTopBar();
+    expect(screen.queryByRole('link', { name: 'Administration' })).toBeNull();
+  });
+
+  it.each([['access.manage'], ['template.manage'], ['audit.read']])(
+    'is shown for a user with %s',
+    (cap) => {
+      mockMe = { data: meWith(['template.use', cap]), loading: false, error: null, reload: () => {} };
+      renderTopBar();
+      expect(screen.getByRole('link', { name: 'Administration' })).toHaveAttribute('href', '/admin');
+    },
+  );
+
+  it('keeps the existing nav and sign-out intact next to it', () => {
+    mockMe = { data: meWith(['template.use', 'access.manage']), loading: false, error: null, reload: () => {} };
+    mockSessionData = { data: { user: { email: 'a@example.com', id: 'u1' } } };
+    renderTopBar();
+    expect(screen.getByRole('link', { name: 'Optag' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Arkiv' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'log ud' })).toBeInTheDocument();
+  });
+
+  it('is highlighted on /admin sub-pages and navigates via the router', () => {
+    mockMe = { data: meWith(['template.use', 'access.manage']), loading: false, error: null, reload: () => {} };
+    mockPathname = '/admin/brugere';
+    renderTopBar();
+    const link = screen.getByRole('link', { name: 'Administration' });
+    expect(link).toHaveStyle({ fontWeight: 500 });
+    fireEvent.click(link);
+    expect(mockPush).toHaveBeenCalledWith('/admin');
+  });
+
+  it('still prompts before leaving a review with pending audio', () => {
+    mockMe = { data: meWith(['template.use', 'access.manage']), loading: false, error: null, reload: () => {} };
+    mockPathname = '/meeting/m1/review';
+    mockHasAudio = true;
+    renderTopBar();
+    fireEvent.click(screen.getByRole('link', { name: 'Administration' }));
+    expect(screen.getByTestId('delete-audio-dialog')).toBeInTheDocument();
+    expect(mockPush).not.toHaveBeenCalled();
   });
 });
 
@@ -219,7 +297,6 @@ describe('TopBar — reviewMeetingId extraction', () => {
     mockHasAudio = true;
     renderTopBar();
     // DeleteAudioDialog is rendered when reviewMeetingId is set and hasAudio is true
-    const dialog = screen.queryByTestId('delete-audio-dialog');
     // Dialog is not visible yet (showConfirm=false), but clicking a nav item should open it
     const optagLink = screen.getByRole('link', { name: 'Optag' });
     fireEvent.click(optagLink);
