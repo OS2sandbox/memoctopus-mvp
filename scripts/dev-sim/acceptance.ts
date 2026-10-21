@@ -253,7 +253,8 @@ async function main() {
   check('administrator can export CSV', csv.status === 200 && /text\/csv/.test(csv.headers.get('content-type') ?? ''), brief(csv));
 
   const dump = (await db.query('select * from public.audit_events')).rows;
-  // The viewer shows the change note by reading the changelog; the stored rows and the CSV must not hold it.
+  // The viewer and the CSV ("Ændringsbeskrivelse") show the change note by reading the changelog at read time;
+  // the stored audit rows must never hold it.
   const noteInViewer = (adminLog.json?.events ?? []).find((e: any) => e.eventType === 'central_template.update' && e.changeNote?.includes('Præciserer tonen'));
   check('the log viewer shows the change note of the update, with the template name', !!noteInViewer && noteInViewer.templateName === name, JSON.stringify(adminLog.json?.events?.slice(0, 3)));
   const createNote = (adminLog.json?.events ?? []).find((e: any) => e.eventType === 'central_template.create' && e.changeNote === NOTE);
@@ -262,12 +263,13 @@ async function main() {
   for (const [label, needle] of [
     ['the prompt text', SECRET],
     ['the client instruction', CLIENT_INSTRUCTION],
-    ['the change note', 'Præciserer tonen'],
     ['the template name', name],
     ['transcript text', 'Vi drøftede budgettet'],
   ] as const) {
     check(`audit rows and CSV export never contain ${label}`, !haystack.includes(needle));
   }
+  check('the stored audit rows never contain the change note', !JSON.stringify(dump).includes('Præciserer tonen'));
+  check('the CSV shows the change note (read-time lookup, own column)', csv.text.includes('Præciserer tonen'));
   check('audit rows exist for this run', dump.length > 10, `${dump.length} rows`);
 
   const triedUpdate = await db.query('update public.audit_events set outcome = outcome where id = (select min(id) from public.audit_events)').then(() => 'allowed', (e) => e.message);
