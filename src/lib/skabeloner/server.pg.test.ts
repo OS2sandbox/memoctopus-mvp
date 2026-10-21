@@ -14,7 +14,7 @@ vi.mock('@/lib/db', async () => {
   return { pool: holder.pool, db: {} };
 });
 
-import { createSkabelon, updateSkabelonWithHistory } from './server';
+import { createSkabelon, updateSkabelonWithHistory, listSkabeloner, setDefaultSkabelon, getCentralDefaultId, setCentralDefault } from './server';
 
 const users: string[] = [];
 const newUser = () => {
@@ -117,5 +117,50 @@ describe.skipIf(!hasPg)('personal template changelog (real Postgres, per-user sc
     const u = newUser();
     await createSkabelon(u, { name: 'x', prompt: 'p' });
     expect(await updateSkabelonWithHistory(u, 'findes-ikke', { name: 'y' }, 'note')).toBeNull();
+  });
+});
+
+describe.skipIf(!hasPg)('the default template: one personal flag or one central choice (real Postgres, per-user schema)', () => {
+  const CENTRAL_A = '99999999-2222-4333-8444-555555555551';
+  const CENTRAL_B = '99999999-2222-4333-8444-555555555552';
+
+  it('has no central default until one is chosen, and a new person keeps the seeded personal default', async () => {
+    const u = newUser();
+    expect(await getCentralDefaultId(u)).toBeNull();
+    expect((await listSkabeloner(u)).filter((t) => t.isDefault)).toHaveLength(1);
+  });
+
+  it('choosing a central default stores it (one row, replaced by the next choice) and keeps the personal flag as the fallback', async () => {
+    const u = newUser();
+    await setCentralDefault(u, CENTRAL_A);
+    expect(await getCentralDefaultId(u)).toBe(CENTRAL_A);
+    await setCentralDefault(u, CENTRAL_B.toUpperCase());
+    expect(await getCentralDefaultId(u)).toBe(CENTRAL_B);
+    expect((await holder.pool.query(`SELECT count(*)::int AS n FROM "${schemaOf(u)}".skabelon_central_default`)).rows[0].n).toBe(1);
+    expect((await listSkabeloner(u)).filter((t) => t.isDefault)).toHaveLength(1);
+  });
+
+  it('a value that is not a uuid is not stored', async () => {
+    const u = newUser();
+    await setCentralDefault(u, "x'; DROP TABLE skabeloner; --");
+    expect(await getCentralDefaultId(u)).toBeNull();
+  });
+
+  it('choosing a personal default drops the central one and leaves exactly one personal default', async () => {
+    const u = newUser();
+    const mine = await createSkabelon(u, { name: 'Min', prompt: 'P' });
+    await setCentralDefault(u, CENTRAL_A);
+    const chosen = await setDefaultSkabelon(u, mine.id);
+    expect(chosen?.isDefault).toBe(true);
+    expect(await getCentralDefaultId(u)).toBeNull();
+    const defaults = (await listSkabeloner(u)).filter((t) => t.isDefault);
+    expect(defaults.map((t) => t.id)).toEqual([mine.id]);
+  });
+
+  it('an unknown personal id changes nothing, central default included', async () => {
+    const u = newUser();
+    await setCentralDefault(u, CENTRAL_A);
+    expect(await setDefaultSkabelon(u, 'does-not-exist')).toBeNull();
+    expect(await getCentralDefaultId(u)).toBe(CENTRAL_A);
   });
 });

@@ -76,9 +76,11 @@ Enforcement is in `POST /api/minutes`, not in the UI.
 - `customPrompt` is validated for **every** template kind (personal, default, none and central) before anything else uses it: it must be a string (anything else, `null` included, is 400 "Instruktionen skal være tekst"), is trimmed, and may be at most 2000 characters (400 "Instruktionen er for lang (højst 2000 tegn)"). A blank value counts as absent.
 - The response is `{ content, skabelonId, templateRef }`; `templateRef` is `{ source, id, version }`.
 
-The UI adds advisory behaviour: a "Centrale skabeloner" group with lock and version, toggles seeded and disabled ("Låst af din organisation") unless overrides are allowed, no instruction box and no "save as template" for central templates, and a read-only list in Arkiv > Skabeloner. After a 404 for a central template that has vanished, the review screen shows "Skabelonen er ikke længere tilgængelig. Vælg en anden skabelon.", refetches the lists and **reselects the personal default**.
+The UI adds advisory behaviour: a "Centrale skabeloner" group with lock and version, toggles seeded and disabled ("Låst af din organisation") unless overrides are allowed, no instruction box and no "save as template" for central templates, and a list in Arkiv > Skabeloner (read-only apart from the favourite heart). After a 404 for a central template that has vanished, the review screen shows "Skabelonen er ikke længere tilgængelig. Vælg en anden skabelon.", refetches the lists and **reselects the personal default**.
 
-The personal-template routes (`/api/skabeloner/[id]/**`) work on the per-user table only, so a central id is a plain 404 there (`central-isolation.test.ts`).
+The personal-template routes (`/api/skabeloner/[id]/**`) work on the per-user table only, so a central id is a plain 404 there (the one exception is `POST /api/skabeloner/[id]/default`, below) (`central-isolation.test.ts`).
+
+**Favourite / default.** A central template can be made THE default with the same heart as a personal one (Arkiv > Skabeloner, `POST /api/skabeloner/:id/default`, which accepts a personal or a central id). There is exactly one default across both lists: setting either kind clears the other, and `GET /api/skabeloner` flags it with `isDefault` on the central summary (personal `isDefault` is then false). On the review screen the dropdown lists "Centrale skabeloner" ABOVE the personal ones (the central default first; the personal group gets an "Egne skabeloner" header only when central items exist), and the initial selection is the central default if any, else the personal default, else the first personal one.
 
 ## Flags
 

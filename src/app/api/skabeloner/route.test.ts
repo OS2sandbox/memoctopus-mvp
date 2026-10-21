@@ -22,9 +22,11 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 }));
 vi.mock('@/lib/db', () => ({ db: {}, pool: {} }));
 
+const mockCentralDefaultId = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/skabeloner/server', () => ({
   listSkabeloner: vi.fn(),
   createSkabelon: vi.fn(),
+  getCentralDefaultId: mockCentralDefaultId,
 }));
 
 const mockListCentral = vi.hoisted(() => vi.fn());
@@ -65,6 +67,8 @@ describe('GET /api/skabeloner', () => {
     mockList.mockReset();
     mockListCentral.mockReset();
     mockListCentral.mockResolvedValue([]);
+    mockCentralDefaultId.mockReset();
+    mockCentralDefaultId.mockResolvedValue(null);
     mockGetSession.mockResolvedValue(FAKE_SESSION as never);
   });
 
@@ -92,9 +96,42 @@ describe('GET /api/skabeloner', () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.skabeloner).toEqual([FAKE_SKABELON]);
-    expect(json.centralSkabeloner).toEqual([central]);
+    expect(json.centralSkabeloner).toEqual([{ ...central, isDefault: false }]);
     expect(json).not.toHaveProperty('centralError');
     expect(mockListCentral).toHaveBeenCalledWith('user-123');
+  });
+
+  describe('the default is one template across both lists', () => {
+    const central = { id: CENTRAL_ID, source: 'central', name: 'Dialogmøde', locked: true, version: 3 };
+
+    it('an available central default is THE default: it is marked and the personal flags are cleared', async () => {
+      mockList.mockResolvedValue([{ ...FAKE_SKABELON, isDefault: true }]);
+      mockListCentral.mockResolvedValue([central]);
+      mockCentralDefaultId.mockResolvedValue(CENTRAL_ID);
+      const json = await (await GET()).json();
+      expect(json.centralSkabeloner).toEqual([{ ...central, isDefault: true }]);
+      expect(json.skabeloner[0].isDefault).toBe(false);
+    });
+
+    it('a central default that is no longer available is ignored: the personal default applies again', async () => {
+      mockList.mockResolvedValue([{ ...FAKE_SKABELON, isDefault: true }]);
+      mockListCentral.mockResolvedValue([]);
+      mockCentralDefaultId.mockResolvedValue(CENTRAL_ID);
+      const json = await (await GET()).json();
+      expect(json.centralSkabeloner).toEqual([]);
+      expect(json.skabeloner[0].isDefault).toBe(true);
+    });
+
+    it('a failing default lookup does not take the lists down', async () => {
+      mockList.mockResolvedValue([{ ...FAKE_SKABELON, isDefault: true }]);
+      mockListCentral.mockResolvedValue([central]);
+      mockCentralDefaultId.mockRejectedValue(new Error('db down'));
+      const res = await GET();
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.centralSkabeloner).toEqual([{ ...central, isDefault: false }]);
+      expect(json.skabeloner[0].isDefault).toBe(true);
+    });
   });
 
   it('keeps the personal list and answers an empty central list when central resolution fails', async () => {

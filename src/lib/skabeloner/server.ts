@@ -73,13 +73,43 @@ export async function getDefaultSkabelon(userId: string): Promise<Skabelon | nul
 }
 
 // Make one skabelon the user's default. Enforces the single-default invariant in
-// a single statement: every row's flag becomes (id = chosen), so the chosen row
-// turns true and all others turn false. Returns null if the id doesn't exist.
+// a single transaction: every row's flag becomes (id = chosen), so the chosen row
+// turns true and all others turn false, and a central default is dropped (the default
+// is either one personal template or one central template, never both). Returns null if
+// the id doesn't exist.
 export async function setDefaultSkabelon(userId: string, id: string): Promise<Skabelon | null> {
   const existing = await getSkabelon(userId, id);
   if (!existing) return null;
-  await queryUserSchema(userId, `UPDATE skabeloner SET is_default = (id = $1)`, [id]);
+  await withUserSchemaTx(userId, async (query) => {
+    await query(`UPDATE skabeloner SET is_default = (id = $1)`, [id]);
+    await query(`DELETE FROM skabelon_central_default`);
+  });
   return getSkabelon(userId, id);
+}
+
+// ─── The central default ────────────────────────────────────────────────────────
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The id of the person's chosen central default, or null. It may no longer be available to them: check against their list. */
+export async function getCentralDefaultId(userId: string): Promise<string | null> {
+  const row = await queryUserSchemaOne<{ template_id: string }>(userId, `SELECT template_id::text AS template_id FROM skabelon_central_default`);
+  return row?.template_id ?? null;
+}
+
+/**
+ * Makes a central template the default. The CALLER has checked that it is available to the person. The
+ * personal flags stay as they are (the fallback when the central template is withdrawn); readers treat
+ * an available central default as the one default.
+ */
+export async function setCentralDefault(userId: string, id: string): Promise<void> {
+  if (!UUID_RE.test(id)) return;
+  await queryUserSchema(
+    userId,
+    `INSERT INTO skabelon_central_default (singleton, template_id) VALUES (TRUE, $1::uuid)
+       ON CONFLICT (singleton) DO UPDATE SET template_id = EXCLUDED.template_id, set_at = NOW()`,
+    [id.toLowerCase()],
+  );
 }
 
 // ─── Own changelog (skabelon_versions, per-user schema) ─────────────────────────

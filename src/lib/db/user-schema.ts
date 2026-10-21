@@ -9,7 +9,7 @@ export async function ensureUserSchema(userId: string): Promise<void> {
   const client = await pool.connect();
 
   try {
-    // A person's schema holds skabeloner, skabelon_versions, the Microsoft Teams tables
+    // A person's schema holds skabeloner, skabelon_versions, skabelon_central_default, the Microsoft Teams tables
     // (teams_meetings, teams_meeting_snapshots) and the onboarding tables. Schemas created by older versions
     // still carry unused meetings/transcripts/minutes/minute_versions/audio_files/templates tables and a
     // meeting_status enum; they are deliberately left in place (never created, never dropped here).
@@ -116,6 +116,17 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         graph_meeting_id TEXT PRIMARY KEY,
         original_options JSONB,
         created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    // The person's default template when it is a CENTRAL one (a personal default is the flag on its row).
+    // One row at most; the id is not a foreign key (central templates live in public). It is only used
+    // while that template is still available to the person, so it can never grant anything.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".skabelon_central_default (
+        singleton   BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+        template_id UUID NOT NULL,
+        set_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { listSkabeloner, createSkabelon } from '@/lib/skabeloner/server';
+import { listSkabeloner, createSkabelon, getCentralDefaultId } from '@/lib/skabeloner/server';
 import { withHandler } from '@/lib/api-handler';
 import { recordServerEvent } from '@/lib/audit/record';
 import { safeLogError } from '@/lib/audit/safe-log';
@@ -23,7 +23,20 @@ async function getHandler(): Promise<NextResponse> {
     safeLogError('skabeloner/GET central', err);
     centralError = true;
   }
-  return NextResponse.json({ skabeloner, centralSkabeloner, ...(centralError ? { centralError: true } : {}) });
+  // The default is ONE template: the person's central choice while it is still available to them, otherwise
+  // the personal flag. An unavailable central default is simply ignored (the personal one applies again).
+  let centralDefaultId: string | null = null;
+  try {
+    centralDefaultId = await getCentralDefaultId(session.user.id);
+  } catch (err) {
+    safeLogError('skabeloner/GET central default', err);
+  }
+  const centralDefault = centralDefaultId ? centralSkabeloner.find((c) => c.id === centralDefaultId) : undefined;
+  return NextResponse.json({
+    skabeloner: centralDefault ? skabeloner.map((s) => ({ ...s, isDefault: false })) : skabeloner,
+    centralSkabeloner: centralSkabeloner.map((c) => ({ ...c, isDefault: c.id === centralDefault?.id })),
+    ...(centralError ? { centralError: true } : {}),
+  });
 }
 
 async function postHandler(req: NextRequest): Promise<NextResponse> {

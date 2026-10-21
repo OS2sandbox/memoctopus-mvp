@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor, act } from '@testing-library/react';
+import { screen, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TranscriptReview } from './TranscriptReview';
 import { renderWithOnboarding } from '@/test/onboarding';
@@ -1242,6 +1242,102 @@ describe('TranscriptReview', () => {
       const option = screen.getByRole('option', { name: /Bestyrelsesmøde/ });
       expect(option).toHaveTextContent('v3');
       expect(option.querySelector('[aria-label="låst"]')).not.toBeNull();
+    });
+
+    it('lists the central group before the personal one and labels the personal group only next to central items', async () => {
+      mockFetch({ personal: [{ ...PERSONAL, isDefault: false }], central: [CENTRAL] });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/skabeloner'));
+      await user.click(screen.getByRole('button', { name: /Ingen skabelon|Min skabelon/ }));
+
+      const names = (await screen.findAllByRole('option')).map((o) => o.textContent ?? '');
+      expect(names[0]).toContain('Ingen skabelon');
+      expect(names[1]).toContain('Bestyrelsesmøde');
+      expect(names[2]).toContain('Min skabelon');
+      const central = screen.getByRole('group', { name: 'Centrale skabeloner' });
+      const own = screen.getByRole('group', { name: 'Egne skabeloner' });
+      expect(central.compareDocumentPosition(own) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(within(own).getByText('Egne skabeloner')).toBeInTheDocument();
+    });
+
+    it('shows no "Egne skabeloner" header when there are no central templates', async () => {
+      mockFetch({ personal: [PERSONAL] });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Min skabelon/ })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Min skabelon/ }));
+
+      expect(await screen.findByRole('option', { name: /Min skabelon/ })).toBeInTheDocument();
+      expect(screen.queryByText('Egne skabeloner')).not.toBeInTheDocument();
+      expect(screen.queryByText('Centrale skabeloner')).not.toBeInTheDocument();
+    });
+
+    it('selects a central default initially, seeds its toggles and marks it with the heart', async () => {
+      mockFetch({
+        // Server contract: with a central default, no personal item is flagged.
+        personal: [{ ...PERSONAL, isDefault: false }],
+        central: [{ ...CENTRAL, isDefault: true }],
+      });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Bestyrelsesmøde/ })).toBeInTheDocument());
+
+      // Seeded from the central flags (deltagere + dagsorden), locked.
+      const pressed = (l: string) => screen.getByRole('button', { name: new RegExp(`^${l}`) }).getAttribute('aria-pressed');
+      expect([pressed('Deltagere'), pressed('Beslutningspunkter'), pressed('Dagsorden'), pressed('Dato')])
+        .toEqual(['true', 'false', 'true', 'false']);
+      expect(screen.getByRole('button', { name: /^Deltagere/ })).toBeDisabled();
+
+      await user.click(screen.getByRole('button', { name: /Bestyrelsesmøde/ }));
+      const option = await screen.findByRole('option', { name: /Bestyrelsesmøde/ });
+      expect(option).toHaveAttribute('aria-selected', 'true');
+      expect(option.querySelector('[aria-label="standard"]')).not.toBeNull();
+      expect(screen.getByRole('option', { name: /Min skabelon/ }).querySelector('[aria-label="standard"]')).toBeNull();
+    });
+
+    it('puts the central default first in its group', async () => {
+      mockFetch({
+        central: [{ ...CENTRAL, id: 'cen-a', name: 'Alfa' }, { ...CENTRAL, id: 'cen-b', name: 'Beta', isDefault: true }],
+      });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Beta/ })).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: /Beta/ }));
+
+      const names = (await screen.findAllByRole('option')).map((o) => o.textContent ?? '');
+      expect(names[1]).toContain('Beta');
+      expect(names[2]).toContain('Alfa');
+    });
+
+    it('falls back to the personal default when no central template is the default', async () => {
+      mockFetch({ personal: [PERSONAL], central: [CENTRAL] });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Min skabelon/ })).toBeInTheDocument());
+      expect(screen.getByRole('button', { name: /^Deltagere/ })).toBeEnabled();
+
+      await user.click(screen.getByRole('button', { name: /Min skabelon/ }));
+      const personal = await screen.findByRole('option', { name: /Min skabelon/ });
+      expect(personal).toHaveAttribute('aria-selected', 'true');
+      expect(personal.querySelector('[aria-label="standard"]')).not.toBeNull();
+      expect(screen.getByRole('option', { name: /Bestyrelsesmøde/ }).querySelector('[aria-label="standard"]')).toBeNull();
+    });
+
+    it('falls back to the personal default when a central default disappears after a 404', async () => {
+      mockFetch({
+        personal: [PERSONAL],
+        central: [{ ...CENTRAL, isDefault: true }],
+        refreshed: [],
+        minutes: { ok: false, status: 404, body: { error: 'Skabelonen er ikke tilgængelig' } },
+      });
+      const user = userEvent.setup({ delay: null });
+      setup();
+      await waitFor(() => expect(screen.getByRole('button', { name: /Bestyrelsesmøde/ })).toBeInTheDocument());
+      await generate(user);
+      await screen.findByText('Skabelonen er ikke længere tilgængelig. Vælg en anden skabelon.');
+      await waitFor(() => expect(screen.getByRole('button', { name: /Min skabelon/ })).toBeInTheDocument());
+      expect(screen.getByRole('button', { name: /^Deltagere/ })).toBeEnabled();
     });
 
     it('seeds the toggles from the flags and disables them when overrides are not allowed', async () => {

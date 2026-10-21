@@ -176,6 +176,8 @@ export interface CentralSkabelonSummary {
   version: number;
   allowUserInstruction: boolean;
   allowToggleOverrides: boolean;
+  /** This is the person's default template (set by `/api/skabeloner/:id/default`). Absent from the manager side. */
+  isDefault?: boolean;
 }
 
 export interface TemplateRef {
