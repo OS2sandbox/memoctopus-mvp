@@ -160,6 +160,18 @@ describe('queryUserSchema', () => {
     expect(versions).not.toContain('snapshot');
   });
 
+  it('ensureUserSchema creates the one-row table of the central default, idempotently', async () => {
+    const { client } = makeClient();
+    mockConnect.mockResolvedValue(client);
+    await queryUserSchema(USER, 'SELECT 1');
+    const ddl = client.query.mock.calls.map(([sql]) => String(sql));
+    const table = ddl.find((q) => q.includes(`"${SCHEMA}".skabelon_central_default (`))!;
+    expect(table).toContain('CREATE TABLE IF NOT EXISTS');
+    expect(table).toMatch(/singleton\s+BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK \(singleton\)/); // at most one row
+    expect(table).toMatch(/template_id UUID NOT NULL/);
+    expect(table).not.toContain('REFERENCES'); // central templates live in public, the id is only a pointer
+  });
+
   it('ensureUserSchema relaxes a NOT NULL snapshot column left by an older version, and does nothing otherwise', async () => {
     const legacy = makeClient((sql) => (sql.includes('information_schema.columns') ? { rows: [{ '?column?': 1 }] } : { rows: [] }));
     mockConnect.mockResolvedValue(legacy.client);

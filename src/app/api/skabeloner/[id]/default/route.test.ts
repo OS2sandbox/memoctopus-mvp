@@ -19,9 +19,14 @@ const mockSetDefaultSkabelon = vi.hoisted(() => vi.fn());
 const mockRecord = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/audit/record', () => ({ recordServerEvent: mockRecord }));
 
+const mockSetCentralDefault = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/skabeloner/server', () => ({
   setDefaultSkabelon: mockSetDefaultSkabelon,
+  setCentralDefault: mockSetCentralDefault,
 }));
+
+const mockListCentral = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/skabeloner/resolve', () => ({ listCentralForUser: mockListCentral }));
 
 import { POST } from './route';
 import { auth } from '@/lib/auth';
@@ -56,6 +61,9 @@ describe('POST /api/skabeloner/[id]/default', () => {
     mockSetDefaultSkabelon.mockReset();
     mockSetDefaultSkabelon.mockResolvedValue(sampleSkabelon);
     mockRecord.mockReset();
+    mockSetCentralDefault.mockReset();
+    mockListCentral.mockReset();
+    mockListCentral.mockResolvedValue([]);
   });
 
   it('returns 401 when not authenticated', async () => {
@@ -70,6 +78,42 @@ describe('POST /api/skabeloner/[id]/default', () => {
     expect(res.status).toBe(404);
     const body = await res.json();
     expect(body.error).toBe('Ikke fundet');
+  });
+
+  describe('a central template', () => {
+    const CENTRAL_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const central = { id: CENTRAL_ID, source: 'central', name: 'Test skabelon', version: 1, locked: true };
+
+    it('becomes the default when it is available to the person', async () => {
+      mockSetDefaultSkabelon.mockResolvedValueOnce(null);
+      mockListCentral.mockResolvedValueOnce([central]);
+      const res = await POST(makeReq() as never, { params: Promise.resolve({ id: CENTRAL_ID }) });
+      expect(res.status).toBe(200);
+      expect((await res.json()).centralSkabelon).toMatchObject({ id: CENTRAL_ID, isDefault: true });
+      expect(mockSetCentralDefault).toHaveBeenCalledWith('user-123', CENTRAL_ID);
+    });
+
+    it('answers the same 404 when it is not available to the person (unknown, archived, not a recipient)', async () => {
+      mockSetDefaultSkabelon.mockResolvedValueOnce(null);
+      mockListCentral.mockResolvedValueOnce([{ ...central, id: 'ffffffff-bbbb-4ccc-8ddd-eeeeeeeeeeee' }]);
+      const res = await POST(makeReq() as never, { params: Promise.resolve({ id: CENTRAL_ID }) });
+      expect(res.status).toBe(404);
+      expect((await res.json()).error).toBe('Ikke fundet');
+      expect(mockSetCentralDefault).not.toHaveBeenCalled();
+    });
+
+    it('does not look at the central list when the id is a personal template', async () => {
+      await POST(makeReq() as never, { params: Promise.resolve({ id: SK_ID }) });
+      expect(mockListCentral).not.toHaveBeenCalled();
+      expect(mockSetCentralDefault).not.toHaveBeenCalled();
+    });
+
+    it('writes no audit event either', async () => {
+      mockSetDefaultSkabelon.mockResolvedValueOnce(null);
+      mockListCentral.mockResolvedValueOnce([central]);
+      await POST(makeReq() as never, { params: Promise.resolve({ id: CENTRAL_ID }) });
+      expect(mockRecord).not.toHaveBeenCalled();
+    });
   });
 
   it('returns the updated skabelon on success', async () => {

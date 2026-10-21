@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SkabelonerList } from './SkabelonerList';
 import type { Skabelon, CentralSkabelonSummary } from '@/types';
@@ -950,16 +950,17 @@ describe('SkabelonerList — central templates (read-only)', () => {
     expect(listCalls).toHaveLength(1);
   });
 
-  it('offers no edit, delete, share, default or code controls on central cards', async () => {
+  it('offers no edit, delete, share or code controls on central cards, only the favourite heart', async () => {
     setupFetch([], { code: true }, [makeCentral()]);
     render(<SkabelonerList />);
     const card = await screen.findByTestId('central-skabelon');
 
-    expect(card.querySelectorAll('button')).toHaveLength(0);
+    const buttons = card.querySelectorAll('button');
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]).toHaveAttribute('aria-label', 'Gør til standard');
     for (const label of ['Rediger', 'Slet', 'Del']) {
       expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument();
     }
-    expect(screen.queryByRole('button', { name: /standard/i })).not.toBeInTheDocument();
   });
 
   it('shows the central section even when the user has no personal templates', async () => {
@@ -1010,5 +1011,79 @@ describe('SkabelonerList — central templates (read-only)', () => {
     render(<SkabelonerList />);
     await screen.findByTestId('central-skabelon');
     expect(document.body.textContent).not.toContain('HEMMELIG PROMPT');
+  });
+});
+
+describe('SkabelonerList — central templates as default', () => {
+  it('shows the default label and a pressed heart on a central default', async () => {
+    setupFetch([makeSkabelon()], { code: true }, [makeCentral({ isDefault: true })]);
+    render(<SkabelonerList />);
+    const card = await screen.findByTestId('central-skabelon');
+
+    expect(card).toHaveTextContent('Skabelon valgt som standard');
+    expect(within(card).getByRole('button', { name: 'Standardskabelon' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('calls POST /api/skabeloner/:id/default for a central id and leaves exactly one default', async () => {
+    const user = userEvent.setup();
+    setupFetch([makeSkabelon({ id: 'per-1', name: 'Min skabelon', isDefault: true })], { code: true }, [
+      makeCentral({ id: 'cen-9' }),
+    ]);
+    render(<SkabelonerList />);
+    const card = await screen.findByTestId('central-skabelon');
+    await user.click(within(card).getByRole('button', { name: 'Gør til standard' }));
+
+    await waitFor(() => {
+      const calls = vi.mocked(fetch).mock.calls.filter(
+        ([url, init]) => url === '/api/skabeloner/cen-9/default' && (init as RequestInit)?.method === 'POST',
+      );
+      expect(calls).toHaveLength(1);
+    });
+    // The personal default is cleared: one filled heart in total, on the central card.
+    await waitFor(() => expect(within(card).getByRole('button', { name: 'Standardskabelon' })).toBeInTheDocument());
+    expect(screen.getAllByRole('button', { name: 'Standardskabelon' })).toHaveLength(1);
+    expect(screen.getAllByText('Skabelon valgt som standard')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Gør til standard' })).toBeInTheDocument();
+  });
+
+  it('clears the central default when a personal template is made the default', async () => {
+    const user = userEvent.setup();
+    setupFetch([makeSkabelon({ id: 'per-1', isDefault: false })], { code: true }, [makeCentral({ isDefault: true })]);
+    render(<SkabelonerList />);
+    const card = await screen.findByTestId('central-skabelon');
+    expect(card).toHaveTextContent('Skabelon valgt som standard');
+
+    const personalHeart = screen.getAllByRole('button', { name: 'Gør til standard' })[0];
+    await user.click(personalHeart);
+
+    await waitFor(() => expect(card).not.toHaveTextContent('Skabelon valgt som standard'));
+    expect(within(card).getByRole('button', { name: 'Gør til standard' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Standardskabelon' })).toHaveLength(1);
+  });
+
+  it('shows the error and keeps the old default when setting a central default fails', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url === '/api/skabeloner' && !init) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ skabeloner: [makeSkabelon({ isDefault: true })], centralSkabeloner: [makeCentral()] }),
+          } as Response);
+        }
+        if (url === '/api/skabeloner/share-config') {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ share: { code: true } }) } as Response);
+        }
+        return Promise.resolve({ ok: false, status: 404 } as Response);
+      }),
+    );
+    render(<SkabelonerList />);
+    const card = await screen.findByTestId('central-skabelon');
+    await user.click(within(card).getByRole('button', { name: 'Gør til standard' }));
+
+    expect(await screen.findByText('Kunne ikke sætte standardskabelon. Prøv igen.')).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Gør til standard' })).toBeInTheDocument();
+    expect(card).not.toHaveTextContent('Skabelon valgt som standard');
   });
 });

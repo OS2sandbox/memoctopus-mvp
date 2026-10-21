@@ -131,7 +131,52 @@ function SkabelonSelect({
   const centralId = centralIdOf(value);
   const selectedCentralName = centralId ? centralSkabeloner.find((c) => c.id === centralId)?.name : undefined;
   const selectedName = selectedCentralName ?? skabeloner.find((s) => s.id === value)?.name ?? 'Ingen skabelon';
-  const options = [{ id: '', name: 'Ingen skabelon', isDefault: false }, ...skabeloner];
+  // The delegated templates come first, the default one at the top of its group.
+  const orderedCentral = [...centralSkabeloner].sort((x, y) => Number(!!y.isDefault) - Number(!!x.isDefault));
+  const groupHeaderStyle: React.CSSProperties = {
+    padding: '8px 9px 4px',
+    fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', letterSpacing: 0.4,
+  };
+
+  function renderOption(opt: { value: string; name: string; isDefault?: boolean; version?: number }) {
+    const isSel = opt.value === value;
+    return (
+      <button
+        key={opt.value || '__none__'}
+        type="button"
+        role="option"
+        aria-selected={isSel}
+        onClick={() => { onChange(opt.value); setOpen(false); }}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+          padding: '7px 9px', borderRadius: 'calc(var(--radius) - 2px)',
+          border: 'none', cursor: 'pointer', textAlign: 'left', fontSize: 13,
+          background: isSel ? 'var(--accent-wash)' : 'transparent',
+          color: isSel ? 'var(--accent)' : 'var(--ink)',
+        }}
+        onMouseEnter={(e) => { if (!isSel) e.currentTarget.style.background = 'var(--bg-2)'; }}
+        onMouseLeave={(e) => { if (!isSel) e.currentTarget.style.background = 'transparent'; }}
+      >
+        <span style={{ width: 14, flexShrink: 0, display: 'inline-flex', justifyContent: 'center', color: 'var(--accent)' }}>
+          {isSel && (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+          )}
+        </span>
+        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{opt.name}</span>
+        {opt.isDefault && (
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="var(--accent)" stroke="none" style={{ flexShrink: 0 }} aria-label="standard">
+            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+          </svg>
+        )}
+        {opt.version !== undefined && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, color: 'var(--muted)', fontFamily: 'var(--mono)', fontSize: 10.5 }}>
+            <LockIcon size={10} />
+            v{opt.version}
+          </span>
+        )}
+      </button>
+    );
+  }
 
   return (
     <div ref={ref} style={{ position: 'relative', marginBottom: 14 }}>
@@ -167,81 +212,26 @@ function SkabelonSelect({
             zIndex: 50, overflow: 'hidden', padding: 4,
           }}
         >
-          {options.map((opt) => {
-            const isSel = opt.id === value;
-            return (
-              <button
-                key={opt.id || '__none__'}
-                type="button"
-                role="option"
-                aria-selected={isSel}
-                onClick={() => { onChange(opt.id); setOpen(false); }}
-                style={{
-                  width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '7px 9px', borderRadius: 'calc(var(--radius) - 2px)',
-                  border: 'none', cursor: 'pointer', textAlign: 'left', fontSize: 13,
-                  background: isSel ? 'var(--accent-wash)' : 'transparent',
-                  color: isSel ? 'var(--accent)' : 'var(--ink)',
-                }}
-                onMouseEnter={(e) => { if (!isSel) e.currentTarget.style.background = 'var(--bg-2)'; }}
-                onMouseLeave={(e) => { if (!isSel) e.currentTarget.style.background = 'transparent'; }}
-              >
-                <span style={{ width: 14, flexShrink: 0, display: 'inline-flex', justifyContent: 'center', color: 'var(--accent)' }}>
-                  {isSel && (
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
-                  )}
-                </span>
-                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{opt.name}</span>
-                {opt.isDefault && (
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="var(--accent)" stroke="none" style={{ flexShrink: 0 }} aria-label="standard">
-                    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
-                  </svg>
-                )}
-              </button>
-            );
-          })}
+          {renderOption({ value: '', name: 'Ingen skabelon' })}
 
-          {centralSkabeloner.length > 0 && (
+          {orderedCentral.length > 0 && (
             <div role="group" aria-label="Centrale skabeloner">
-              <div style={{
-                padding: '8px 9px 4px', marginTop: 4, borderTop: '1px solid var(--line)',
-                fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', letterSpacing: 0.4,
-              }}>
+              <div style={{ ...groupHeaderStyle, marginTop: 4, borderTop: '1px solid var(--line)' }}>
                 Centrale skabeloner
               </div>
-              {centralSkabeloner.map((c) => {
-                const v = centralValue(c.id);
-                const isSel = v === value;
-                return (
-                  <button
-                    key={v}
-                    type="button"
-                    role="option"
-                    aria-selected={isSel}
-                    onClick={() => { onChange(v); setOpen(false); }}
-                    style={{
-                      width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-                      padding: '7px 9px', borderRadius: 'calc(var(--radius) - 2px)',
-                      border: 'none', cursor: 'pointer', textAlign: 'left', fontSize: 13,
-                      background: isSel ? 'var(--accent-wash)' : 'transparent',
-                      color: isSel ? 'var(--accent)' : 'var(--ink)',
-                    }}
-                    onMouseEnter={(e) => { if (!isSel) e.currentTarget.style.background = 'var(--bg-2)'; }}
-                    onMouseLeave={(e) => { if (!isSel) e.currentTarget.style.background = 'transparent'; }}
-                  >
-                    <span style={{ width: 14, flexShrink: 0, display: 'inline-flex', justifyContent: 'center', color: 'var(--accent)' }}>
-                      {isSel && (
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
-                      )}
-                    </span>
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, color: 'var(--muted)', fontFamily: 'var(--mono)', fontSize: 10.5 }}>
-                      <LockIcon size={10} />
-                      v{c.version}
-                    </span>
-                  </button>
-                );
-              })}
+              {orderedCentral.map((c) => renderOption({ value: centralValue(c.id), name: c.name, isDefault: c.isDefault, version: c.version }))}
+            </div>
+          )}
+
+          {skabeloner.length > 0 && (
+            <div role="group" aria-label="Egne skabeloner">
+              {/* The header only separates the two kinds; without a central group it would label everything. */}
+              {orderedCentral.length > 0 && (
+                <div style={{ ...groupHeaderStyle, marginTop: 4, borderTop: '1px solid var(--line)' }}>
+                  Egne skabeloner
+                </div>
+              )}
+              {skabeloner.map((s) => renderOption({ value: s.id, name: s.name, isDefault: s.isDefault }))}
             </div>
           )}
         </div>
@@ -492,8 +482,14 @@ export function TranscriptReview({
         setSkabeloner(list);
         setCentralSkabeloner(central);
         setCentralError(centralFailed);
-        const def = defaultSkabelonOf(list);
-        if (def && !skabelonTouchedRef.current) seedSkabelon(def);
+        if (skabelonTouchedRef.current) return;
+        // One default across both lists: a central default wins, else the personal one.
+        const centralDef = central.find((c) => c.isDefault);
+        if (centralDef) seedCentralSkabelon(centralDef);
+        else {
+          const def = defaultSkabelonOf(list);
+          if (def) seedSkabelon(def);
+        }
       })
       .catch((err) => { console.error('[transcript] skabeloner fetch failed:', err); });
     return () => { cancelled = true; };
@@ -503,6 +499,11 @@ export function TranscriptReview({
   function seedSkabelon(def?: Skabelon) {
     setSelectedSkabelonId(def?.id ?? '');
     setCats(skabelonToCats(def));
+  }
+
+  function seedCentralSkabelon(c: CentralSkabelonSummary) {
+    setSelectedSkabelonId(centralValue(c.id));
+    setCats(skabelonToCats(c));
   }
 
   function selectSkabelon(id: string) {

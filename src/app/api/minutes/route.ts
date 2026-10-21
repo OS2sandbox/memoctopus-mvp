@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateReferatBody, SkabelonSpec } from '@/lib/ai/minutes';
-import { getSkabelon, getDefaultSkabelon } from '@/lib/skabeloner/server';
+import { getSkabelon, getDefaultSkabelon, getCentralDefaultId } from '@/lib/skabeloner/server';
 import { resolveCentralTemplate, type ResolvedCentralTemplate } from '@/lib/skabeloner/resolve';
 import type { TemplateRef } from '@/lib/skabeloner/central-types';
 import { TranscriptChapter } from '@/lib/ai/chapters';
@@ -79,6 +79,12 @@ async function postHandler(req: NextRequest) {
   // only count when the template explicitly allows them. One identical 404 for
   // unknown, archived and not-a-recipient, so existence does not leak.
   let central: ResolvedCentralTemplate | null = null;
+  // No template named at all: the person's default applies, and it may be a central one. If that central
+  // template is no longer available the personal default below applies instead (no 404: they chose nothing).
+  if (skabelonId === undefined && skabelonSource === undefined) {
+    const defaultId = await getCentralDefaultId(userId).catch(() => null);
+    if (defaultId) central = await resolveCentralTemplate(userId, defaultId).catch(() => null);
+  }
   if (skabelonSource === 'central') {
     central = typeof skabelonId === 'string' ? await resolveCentralTemplate(userId, skabelonId) : null;
     if (!central) {

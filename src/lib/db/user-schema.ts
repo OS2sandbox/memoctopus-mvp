@@ -9,7 +9,7 @@ export async function ensureUserSchema(userId: string): Promise<void> {
   const client = await pool.connect();
 
   try {
-    // A person's schema holds only skabeloner and skabelon_versions. Schemas created by older versions
+    // A person's schema holds only skabeloner, skabelon_versions and skabelon_central_default. Schemas created by older versions
     // still carry unused meetings/transcripts/minutes/minute_versions/audio_files/templates tables and a
     // meeting_status enum; they are deliberately left in place (never created, never dropped here).
     await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
@@ -50,6 +50,17 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         changed_fields TEXT[] NOT NULL DEFAULT '{}',
         created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (skabelon_id, version)
+      )
+    `);
+
+    // The person's default template when it is a CENTRAL one (a personal default is the flag on its row).
+    // One row at most; the id is not a foreign key (central templates live in public). It is only used
+    // while that template is still available to the person, so it can never grant anything.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".skabelon_central_default (
+        singleton   BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+        template_id UUID NOT NULL,
+        set_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
 

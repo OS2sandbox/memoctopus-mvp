@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The access gate (requireAppAccess) resolves the live principal; a plain
 // bruger unless a test says otherwise.
@@ -18,6 +18,7 @@ vi.mock('@/lib/auth', () => ({
 const mockGenerateReferatBody = vi.hoisted(() => vi.fn());
 const mockGetSkabelon = vi.hoisted(() => vi.fn());
 const mockGetDefaultSkabelon = vi.hoisted(() => vi.fn());
+const mockCentralDefaultId = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 
 vi.mock('@/lib/ai/minutes', () => ({
   generateReferatBody: mockGenerateReferatBody,
@@ -26,6 +27,7 @@ vi.mock('@/lib/ai/minutes', () => ({
 vi.mock('@/lib/skabeloner/server', () => ({
   getSkabelon: mockGetSkabelon,
   getDefaultSkabelon: mockGetDefaultSkabelon,
+  getCentralDefaultId: mockCentralDefaultId,
 }));
 
 const mockResolveCentral = vi.hoisted(() => vi.fn());
@@ -342,6 +344,63 @@ describe('POST /api/minutes templateRef (non-central sources)', () => {
     expect(custom).toBe('kort');
     expect(spec.includeDagsorden).toBe(false);
     expect(spec.prompt).toBe('Lav et referat.');
+  });
+});
+
+describe('POST /api/minutes with a central DEFAULT template', () => {
+  const CENTRAL = '44444444-5555-4666-8777-888888888888';
+  const PERSONAL = '33333333-4444-4555-8666-777777777777';
+  const resolved = {
+    id: CENTRAL, version: 2, prompt: 'Central prompt.', includeDeltagere: true, includeBeslutningspunkter: false,
+    includeDagsorden: false, includeDato: false, allowUserInstruction: false, allowToggleOverrides: false,
+  };
+
+  beforeEach(() => {
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    mockGenerateReferatBody.mockReset();
+    mockGenerateReferatBody.mockResolvedValue(sampleContent);
+    mockGetSkabelon.mockReset();
+    mockGetDefaultSkabelon.mockReset();
+    mockGetDefaultSkabelon.mockResolvedValue({ ...defaultSkabelon, id: PERSONAL });
+    mockResolveCentral.mockReset();
+    mockCentralDefaultId.mockReset();
+    mockCentralDefaultId.mockResolvedValue(CENTRAL);
+    mockRecord.mockReset();
+    mockRecord.mockResolvedValue({ status: 'stored' });
+  });
+  afterEach(() => mockCentralDefaultId.mockReset().mockResolvedValue(null));
+
+  it('a request that names no template generates with the central default (server-side, stored prompt)', async () => {
+    mockResolveCentral.mockResolvedValue(resolved);
+    const body = await (await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }))).json();
+    expect(mockResolveCentral).toHaveBeenCalledWith('user-123', CENTRAL);
+    expect(body.templateRef).toEqual({ source: 'central', id: CENTRAL, version: 2 });
+    expect(mockGenerateReferatBody.mock.calls[0][1].prompt).toBe('Central prompt.');
+    expect(mockGetDefaultSkabelon).not.toHaveBeenCalled();
+  });
+
+  it('a central default that is no longer available falls back to the personal default (no 404)', async () => {
+    mockResolveCentral.mockResolvedValue(null);
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).templateRef).toEqual({ source: 'personal', id: PERSONAL, version: null });
+  });
+
+  it('a failing default lookup falls back to the personal default too', async () => {
+    mockCentralDefaultId.mockRejectedValue(new Error('db down'));
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).templateRef.source).toBe('personal');
+  });
+
+  it('never overrides an explicit choice: "Ingen skabelon" or a named personal template', async () => {
+    const none = await (await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, skabelonId: '' }))).json();
+    expect(none.templateRef.source).toBe('none');
+    mockGetSkabelon.mockResolvedValueOnce({ ...defaultSkabelon, id: PERSONAL });
+    const personal = await (await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, skabelonId: PERSONAL, skabelonSource: 'personal' }))).json();
+    expect(personal.templateRef).toEqual({ source: 'personal', id: PERSONAL, version: null });
+    expect(mockResolveCentral).not.toHaveBeenCalled();
   });
 });
 
