@@ -76,3 +76,48 @@ describe('ArkivPage — bulk delete', () => {
     expect(screen.getByText('Slet valgte (1)')).toBeInTheDocument();
   });
 });
+
+describe('ArkivPage — Teams status', () => {
+  function awaiting(id: string, title: string) {
+    return { ...stored(id, title), status: 'awaiting_teams' };
+  }
+
+  it('shows "Intet referat" for a Teams meeting the server has given up on', async () => {
+    mockGetAllMeetings.mockResolvedValue([awaiting('a', 'Teams-møde A'), awaiting('b', 'Teams-møde B')]);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        meetings: [{ id: 'a', state: 'failed' }, { id: 'b', state: 'awaiting_teams' }],
+      })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<ArkivPage />);
+
+    expect(await screen.findByText('Intet referat')).toBeInTheDocument();
+    expect(screen.getByText('Afventer Teams')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('/api/teams/meetings');
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the local status when the server cannot be asked', async () => {
+    mockGetAllMeetings.mockResolvedValue([awaiting('a', 'Teams-møde A')]);
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    render(<ArkivPage />);
+
+    expect(await screen.findByText('Afventer Teams')).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  it('does not ask the server when no meeting is waiting for Teams', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<ArkivPage />);
+
+    await screen.findByText('Teams-møde A');
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});

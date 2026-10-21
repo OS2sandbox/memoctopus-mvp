@@ -99,8 +99,12 @@ export function pollBackoffMs(attempts: number): number {
 /**
  * Pure mirror of the SQL filter in {@link listDueTeamsMeetings}. A meeting is
  * due when it is still waiting for Teams, its scheduled end has passed (or is
- * unknown), the backoff since the last poll has elapsed, and we have not yet
- * given up on it.
+ * unknown), and the backoff since the last poll has elapsed.
+ *
+ * A row past its give-up window stays due. Giving up is a write that
+ * `pollMeeting` makes, and it can only make it on a row it is handed. Leaving
+ * those rows out here meant the poll that should have marked them `failed`
+ * never came, so they sat in `awaiting_teams` for good.
  */
 export function isTeamsMeetingDue(row: TeamsMeetingRow, now: Date): boolean {
   const nowMs = now.getTime();
@@ -117,14 +121,7 @@ export function isTeamsMeetingDue(row: TeamsMeetingRow, now: Date): boolean {
   // A meeting with no schedule (ad-hoc "Mød nu", or a link whose window Graph
   // omits) is bounded by when we were asked to watch it, so it still gives up.
   const bound = giveUpAnchor(row);
-  if (bound) {
-    const boundMs = bound.getTime();
-    if (boundMs > nowMs) return false;
-    // A row we have never actually polled is never abandoned on the clock alone:
-    // the window can elapse while TEAMS_GRAPH_ENABLED is off or the instance is
-    // down, and Graph keeps artifacts far longer than our 24 h.
-    if (boundMs < nowMs - POLL_GIVE_UP_MS && row.lastPolledAt != null) return false;
-  }
+  if (bound && bound.getTime() > nowMs) return false;
   if (row.lastPolledAt && row.lastPolledAt.getTime() > nowMs - pollBackoffMs(row.attempts)) {
     return false;
   }
@@ -371,20 +368,19 @@ export async function listDueTeamsMeetings(
               state IN ('awaiting_teams', 'needs_reauth')
               OR (state = 'fetching'
                   AND COALESCE(last_polled_at, created_at)
-                      <= $1::timestamptz - ($6::int * INTERVAL '1 millisecond'))
+                      <= $1::timestamptz - ($5::int * INTERVAL '1 millisecond'))
             )
         -- GREATEST, not COALESCE: see giveUpAnchor. GREATEST skips NULLs, so a
         -- meeting with no schedule still falls back to created_at.
         AND GREATEST(scheduled_end, created_at) <= $1::timestamptz
-        AND (last_polled_at IS NULL
-             OR GREATEST(scheduled_end, created_at)
-                >= $1::timestamptz - ($2::int * INTERVAL '1 millisecond'))
+        -- No upper bound: a row past its give-up window must still reach
+        -- pollMeeting, which is what marks it failed (see isTeamsMeetingDue).
         AND (last_polled_at IS NULL
              OR last_polled_at <= $1::timestamptz
-                - (CASE WHEN attempts < $3::int THEN $4::int ELSE $5::int END)
+                - (CASE WHEN attempts < $2::int THEN $3::int ELSE $4::int END)
                   * INTERVAL '1 millisecond')
       ORDER BY GREATEST(scheduled_end, created_at) ASC`,
-    [now, POLL_GIVE_UP_MS, FAST_POLL_ATTEMPTS, FAST_POLL_MS, SLOW_POLL_MS, STALE_FETCHING_MS],
+    [now, FAST_POLL_ATTEMPTS, FAST_POLL_MS, SLOW_POLL_MS, STALE_FETCHING_MS],
   );
   return rows.map(mapRow);
 }

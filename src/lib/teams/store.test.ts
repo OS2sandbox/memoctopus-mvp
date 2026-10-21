@@ -140,18 +140,8 @@ describe('isTeamsMeetingDue', () => {
     ).toBe(true);
   });
 
-  it('gives up on a meeting with no schedule, measured from when it was created', () => {
+  it('measures the window of a meeting with no schedule from when it was created', () => {
     // An ad-hoc "Mød nu" link Graph gives no window for used to poll forever.
-    expect(
-      isTeamsMeetingDue(
-        row({
-          scheduledEnd: null,
-          createdAt: new Date(ms - POLL_GIVE_UP_MS - 1000),
-          lastPolledAt: new Date(ms - 60 * 60_000),
-        }),
-        now,
-      ),
-    ).toBe(false);
     expect(giveUpAnchor({ scheduledEnd: null, createdAt: CREATED })).toBe(CREATED);
   });
 
@@ -175,13 +165,47 @@ describe('isTeamsMeetingDue', () => {
     ).toBe(true);
   });
 
-  it('still gives up on an instant meeting once its own window has passed', () => {
+  // Giving up is pollMeeting's write, so a row past its window has to reach it.
+  // Leaving such rows out of the due list is what kept them in awaiting_teams
+  // for good: every one of them was last polled just inside the window.
+  it('keeps a polled row past its window due, so the poller can mark it failed', () => {
+    const lastPolledAt = new Date(ms - 60 * 60_000);
+    for (const state of ['awaiting_teams', 'needs_reauth'] as const) {
+      expect(
+        isTeamsMeetingDue(
+          row({
+            state,
+            scheduledEnd: new Date(ms - POLL_GIVE_UP_MS - 1000),
+            createdAt: new Date(ms - POLL_GIVE_UP_MS - 2000),
+            attempts: 101,
+            lastPolledAt,
+          }),
+          now,
+        ),
+      ).toBe(true);
+    }
+    // An instant meeting, bounded by createdAt, the same way.
     expect(
       isTeamsMeetingDue(
         row({
           scheduledEnd: new Date('0001-01-01T00:00:00Z'),
           createdAt: new Date(ms - POLL_GIVE_UP_MS - 1000),
-          lastPolledAt: new Date(ms - 60 * 60_000),
+          attempts: 101,
+          lastPolledAt,
+        }),
+        now,
+      ),
+    ).toBe(true);
+  });
+
+  it('still respects the backoff past the window', () => {
+    expect(
+      isTeamsMeetingDue(
+        row({
+          scheduledEnd: new Date(ms - POLL_GIVE_UP_MS - 1000),
+          createdAt: new Date(ms - POLL_GIVE_UP_MS - 2000),
+          attempts: 101,
+          lastPolledAt: new Date(ms - 60_000),
         }),
         now,
       ),
@@ -214,23 +238,6 @@ describe('isTeamsMeetingDue', () => {
     );
     expect(
       isTeamsMeetingDue(row({ ...base, lastPolledAt: new Date(ms - 16 * 60_000) }), now),
-    ).toBe(true);
-  });
-
-  it('gives up 24 hours after the scheduled end', () => {
-    const polled = { lastPolledAt: new Date(ms - 60 * 60_000) };
-    expect(
-      isTeamsMeetingDue(
-        row({
-          ...polled,
-          scheduledEnd: new Date(ms - POLL_GIVE_UP_MS - 1000),
-          createdAt: new Date(ms - POLL_GIVE_UP_MS - 2000),
-        }),
-        now,
-      ),
-    ).toBe(false);
-    expect(
-      isTeamsMeetingDue(row({ ...polled, scheduledEnd: new Date(ms - POLL_GIVE_UP_MS + 1000) }), now),
     ).toBe(true);
   });
 
@@ -483,7 +490,7 @@ describe('reads', () => {
 });
 
 describe('listDueTeamsMeetings', () => {
-  it('filters on state, schedule, give-up window and backoff', async () => {
+  it('filters on state, schedule and backoff', async () => {
     const now = new Date('2026-09-08T12:00:00Z');
     mockQuery.mockResolvedValue([RAW] as never);
 
@@ -495,9 +502,11 @@ describe('listDueTeamsMeetings', () => {
     expect(sql).toMatch(/state IN \('awaiting_teams', 'needs_reauth'\)/);
     expect(sql).toMatch(/state = 'fetching'/);
     expect(sql).toMatch(/GREATEST\(scheduled_end, created_at\) <= \$1::timestamptz/);
-    expect(sql).toMatch(/GREATEST\(scheduled_end, created_at\)\s*\n?\s*>= \$1::timestamptz -/);
-    expect(sql).toMatch(/CASE WHEN attempts < \$3::int THEN \$4::int ELSE \$5::int END/);
-    expect(params).toEqual([now, POLL_GIVE_UP_MS, 15, 120_000, 900_000, STALE_FETCHING_MS]);
+    // No upper bound on the window: pollMeeting has to see those rows to fail them.
+    expect(sql).not.toMatch(/GREATEST\(scheduled_end, created_at\)\s*>=/);
+    expect(sql).toMatch(/\$5::int \* INTERVAL/);
+    expect(sql).toMatch(/CASE WHEN attempts < \$2::int THEN \$3::int ELSE \$4::int END/);
+    expect(params).toEqual([now, 15, 120_000, 900_000, STALE_FETCHING_MS]);
     expect(rows).toHaveLength(1);
   });
 });

@@ -19,18 +19,19 @@ vi.mock('@/lib/teams/meeting-arm', async (importOriginal) => ({
 vi.mock('@/lib/teams/store', () => ({
   upsertTeamsMeeting: vi.fn(),
   claimMeetingSnapshot: vi.fn(),
+  listTeamsMeetings: vi.fn(),
 }));
 vi.mock('@/lib/pending-artifacts', () => ({
   getMeetingOwner: vi.fn(),
   setMeetingOwner: vi.fn(),
 }));
 
-import { POST } from './route';
+import { GET, POST } from './route';
 import { auth } from '@/lib/auth';
 import { GraphError } from '@/lib/teams/graph-client';
 import { armMeeting } from '@/lib/teams/meeting-arm';
 import { ResolveError, resolveJoinUrl } from '@/lib/teams/meeting-resolver';
-import { claimMeetingSnapshot, upsertTeamsMeeting } from '@/lib/teams/store';
+import { claimMeetingSnapshot, listTeamsMeetings, upsertTeamsMeeting } from '@/lib/teams/store';
 import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
 import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
 
@@ -372,5 +373,32 @@ describe('POST /api/teams/meetings', () => {
     const res = await post({ meetingId: 'm1', joinUrl: JOIN });
     expect(res.status).toBe(502);
     expect((await res.json()).error).toBe('graph');
+  });
+});
+
+describe('GET /api/teams/meetings', () => {
+  it('returns only id and state of each of the caller\'s rows', async () => {
+    vi.mocked(listTeamsMeetings).mockResolvedValue([
+      { id: 'm1', state: 'failed', joinUrl: JOIN, failureReason: 'x', graphMeetingId: 'g1' },
+      { id: 'm2', state: 'awaiting_teams', joinUrl: JOIN, failureReason: null, graphMeetingId: 'g2' },
+    ] as never);
+
+    const res = await GET();
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(listTeamsMeetings)).toHaveBeenCalledWith(FAKE_SESSION.user.id);
+    expect(await res.json()).toEqual({
+      meetings: [
+        { id: 'm1', state: 'failed' },
+        { id: 'm2', state: 'awaiting_teams' },
+      ],
+    });
+  });
+
+  it('is 401 without a session', async () => {
+    mockGetSession.mockResolvedValue(null as never);
+    const res = await GET();
+    expect(res.status).toBe(401);
+    expect(vi.mocked(listTeamsMeetings)).not.toHaveBeenCalled();
   });
 });
