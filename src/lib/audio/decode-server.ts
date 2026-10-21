@@ -34,6 +34,58 @@ export function encodeMono16kWav(samples: Float32Array): Buffer {
   return buf;
 }
 
+/**
+ * Runs ffmpeg with the given args, forwarding any stdout chunks to `onStdout`
+ * (omit it when ffmpeg writes its output to a file path already in `args`
+ * instead of stdout). Rejects with a message naming `context` when the ffmpeg
+ * binary itself is missing, or with ffmpeg's own stderr when it exits non-zero.
+ *
+ * Shared by every ffmpeg-invoking caller in this codebase so the
+ * spawn/ENOENT/exit-code handling is not reimplemented at each one.
+ */
+export function runFfmpeg(
+  args: string[],
+  { context, onStdout }: { context: string; onStdout?: (chunk: Buffer) => void },
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const ff = spawn('ffmpeg', args);
+
+    const errChunks: Buffer[] = [];
+    let settled = false;
+
+    if (onStdout) ff.stdout?.on('data', (chunk: Buffer) => onStdout(chunk));
+    ff.stderr?.on('data', (chunk: Buffer) => errChunks.push(Buffer.from(chunk)));
+
+    ff.on('error', (err: NodeJS.ErrnoException) => {
+      if (settled) return;
+      settled = true;
+
+      if (err.code === 'ENOENT') {
+        reject(
+          new Error(
+            `ffmpeg not found on PATH. ${context} requires ffmpeg. ` +
+              'Install it locally (macOS: `brew install ffmpeg`); the production Docker image already includes it.',
+          ),
+        );
+        return;
+      }
+
+      reject(err);
+    });
+
+    ff.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`ffmpeg exited ${code}: ${Buffer.concat(errChunks).toString().trim()}`));
+    });
+  });
+}
+
 // Decode any audio format to 16 kHz mono Float32 PCM using ffmpeg.
 //
 // Some M4A/MP4 files require seekable input. Feeding them to ffmpeg through
@@ -47,62 +99,16 @@ export async function decodeToMono16k(buffer: Buffer): Promise<Float32Array> {
   try {
     await writeFile(inputPath, buffer);
 
-    return await new Promise<Float32Array>((resolve, reject) => {
-      const ff = spawn('ffmpeg', [
-        '-loglevel',
-        'error',
-        '-nostdin',
-        '-i',
-        inputPath,
-        '-ar',
-        '16000',
-        '-ac',
-        '1',
-        '-f',
-        'f32le',
-        'pipe:1',
-      ]);
+    const outChunks: Buffer[] = [];
+    await runFfmpeg(
+      ['-loglevel', 'error', '-nostdin', '-i', inputPath, '-ar', '16000', '-ac', '1', '-f', 'f32le', 'pipe:1'],
+      { context: 'Audio decoding for transcription', onStdout: (chunk) => outChunks.push(chunk) },
+    );
 
-      const outChunks: Buffer[] = [];
-      const errChunks: Buffer[] = [];
-      let settled = false;
-
-      ff.stdout.on('data', (chunk: Buffer) => outChunks.push(chunk));
-      ff.stderr.on('data', (chunk: Buffer) => errChunks.push(chunk));
-
-      ff.on('error', (err: NodeJS.ErrnoException) => {
-        if (settled) return;
-        settled = true;
-
-        if (err.code === 'ENOENT') {
-          reject(
-            new Error(
-              'ffmpeg not found on PATH. Audio decoding for transcription requires ffmpeg. ' +
-                'Install it locally (macOS: `brew install ffmpeg`); the production Docker image already includes it.',
-            ),
-          );
-          return;
-        }
-
-        reject(err);
-      });
-
-      ff.on('close', (code) => {
-        if (settled) return;
-        settled = true;
-
-        if (code !== 0) {
-          const msg = Buffer.concat(errChunks).toString().trim();
-          reject(new Error(`ffmpeg exited ${code}: ${msg}`));
-          return;
-        }
-
-        const raw = Buffer.concat(outChunks);
-        const ab = new ArrayBuffer(raw.byteLength);
-        new Uint8Array(ab).set(raw);
-        resolve(new Float32Array(ab));
-      });
-    });
+    const raw = Buffer.concat(outChunks);
+    const ab = new ArrayBuffer(raw.byteLength);
+    new Uint8Array(ab).set(raw);
+    return new Float32Array(ab);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

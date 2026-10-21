@@ -22,6 +22,13 @@ interface TranscriptReviewProps {
   audioUrl?: string;
   audioDurationSeconds?: number | null;
   audioDeleted?: boolean;
+  /**
+   * The meeting was transcribed server-side and its audio discarded, so no audio
+   * ever reached this browser. Distinct from `audioDeleted`, which means a local
+   * copy existed and was removed. Both render as "no player", but only one of
+   * them can honestly say the audio was deleted.
+   */
+  audioDiscarded?: boolean;
   initialChapters?: TranscriptChapter[];
   participants?: string[];
   initialDiarizing?: boolean;
@@ -178,6 +185,7 @@ export function TranscriptReview({
   audioUrl: initialAudioUrl,
   audioDurationSeconds,
   audioDeleted = false,
+  audioDiscarded = false,
   initialChapters,
   participants,
   initialDiarizing = false,
@@ -1219,9 +1227,12 @@ export function TranscriptReview({
                   </div>
                   {isOpen && (
                     <div style={{ paddingBottom: 18 }}>
-                      {chSegs.map(({ seg, idx }) => {
+                      {chSegs.map(({ seg, idx }, i) => {
                         const isCurrentMatch = matchIndex >= 0 && matches[matchIndex] === idx;
                         const isAnyMatch = search.trim() && matches.includes(idx);
+                        // Runs are per chapter: the first line under a chapter
+                        // heading always names its speaker, even mid-run.
+                        const continuesSpeaker = i > 0 && chSegs[i - 1].seg.speaker === seg.speaker;
                         return (
                         <div key={idx} ref={(el) => { segmentRefs.current[idx] = el; }} style={{
                           borderRadius: 'var(--radius)',
@@ -1241,6 +1252,7 @@ export function TranscriptReview({
                             hasPii={piiSegmentIndices.has(idx)}
                             isHighlighted={highlightedSegment === idx}
                             diarizing={diarizing}
+                            continuesSpeaker={continuesSpeaker}
                           />
                         </div>
                         );
@@ -1271,6 +1283,7 @@ export function TranscriptReview({
                         hasPii={piiSegmentIndices.has(i)}
                         isHighlighted={highlightedSegment === i}
                         diarizing={diarizing}
+                        continuesSpeaker={i > 0 && displaySegments[i - 1].speaker === seg.speaker}
                       />
                     </div>
                   ))
@@ -1733,6 +1746,13 @@ export function TranscriptReview({
               <path d="M2 4h12M5 4V2.5A.5.5 0 015.5 2h5a.5.5 0 01.5.5V4M6 7v5M10 7v5M3 4l.8 9.1A.5.5 0 004.3 13.6h7.4a.5.5 0 00.5-.5L13 4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
             lydfil slettet
+          </span>
+        ) : audioDiscarded ? (
+          <span
+            title="Teams frigiver først optagelsen efter mødet, så lyden kan ikke følges live. Den transskriberes på serveren og slettes derefter."
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}
+          >
+            lyden blev slettet efter transskription
           </span>
         ) : (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}>

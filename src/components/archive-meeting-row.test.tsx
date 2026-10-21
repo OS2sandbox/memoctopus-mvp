@@ -11,11 +11,15 @@ vi.mock('next/link', () => ({
   ),
 }));
 
-// Mock @/lib/storage so tests never touch IndexedDB
+// The row deletes through the shared helper (which also unregisters a Teams
+// meeting server-side); mocking it keeps the tests off IndexedDB and the network.
+// @/lib/storage is deliberately not mocked with a deleteMeeting: a row that
+// called it directly would fail here.
 const mockDeleteMeeting = vi.fn();
-vi.mock('@/lib/storage', () => ({
-  deleteMeeting: (...args: unknown[]) => mockDeleteMeeting(...args),
+vi.mock('@/lib/teams/client-delete', () => ({
+  deleteMeetingAndUnregister: (...args: unknown[]) => mockDeleteMeeting(...args),
 }));
+vi.mock('@/lib/storage', () => ({}));
 
 // ---------------------------------------------------------------------------
 // Factories / helpers
@@ -157,6 +161,12 @@ describe('ArchiveMeetingRow — status badge', () => {
     expect(screen.getByText('Anonymiseret')).toBeInTheDocument();
   });
 
+  it('shows a Danish label for awaiting_teams, not the raw status', () => {
+    renderRow(makeRow({ status: 'awaiting_teams' }));
+    expect(screen.getByText('Afventer Teams')).toBeInTheDocument();
+    expect(screen.queryByText('awaiting_teams')).toBeNull();
+  });
+
   it('shows the raw status string for an unknown status', () => {
     renderRow(makeRow({ status: 'custom-status' }));
     expect(screen.getByText('custom-status')).toBeInTheDocument();
@@ -176,6 +186,12 @@ describe('ArchiveMeetingRow — link routing (statusHref)', () => {
 
   it('links to /meeting/:id for processing status', () => {
     renderRow(makeRow({ id: 'abc', status: 'processing' }));
+    const link = screen.getByRole('link');
+    expect(link).toHaveAttribute('href', '/meeting/abc');
+  });
+
+  it('links to /meeting/:id for awaiting_teams status', () => {
+    renderRow(makeRow({ id: 'abc', status: 'awaiting_teams' }));
     const link = screen.getByRole('link');
     expect(link).toHaveAttribute('href', '/meeting/abc');
   });

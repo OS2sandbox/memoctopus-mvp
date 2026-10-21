@@ -162,6 +162,7 @@ describe('formatDateTime', () => {
 
 describe('statusLabel', () => {
   it.each([
+    ['awaiting_teams', 'Afventer Teams'],
     ['recording', 'Optager'],
     ['processing', 'Behandler'],
     ['review', 'Til gennemsyn'],

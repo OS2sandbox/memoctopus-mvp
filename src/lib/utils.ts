@@ -43,6 +43,7 @@ export function formatDateTime(date: Date | string): string {
 
 export function statusLabel(status: string): string {
   const labels: Record<string, string> = {
+    awaiting_teams: 'Afventer Teams',
     recording: 'Optager',
     processing: 'Behandler',
     review: 'Til gennemsyn',

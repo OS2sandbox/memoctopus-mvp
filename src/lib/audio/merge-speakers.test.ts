@@ -87,3 +87,62 @@ describe('assignSpeakers', () => {
     expect(segments[0].speaker).toBe('Taler 1');
   });
 });
+
+describe('assignSpeakers with preserveNames', () => {
+  it('uses turn speaker strings verbatim when preserveNames is true', () => {
+    const segments = [seg(0, 2), seg(2, 4), seg(4, 6)];
+    const turns: SpeakerTurn[] = [
+      { speaker: 'Mette Hansen', start: 0, end: 2 },
+      { speaker: 'Søren Østergaard', start: 2, end: 4 },
+      { speaker: 'Mette Hansen', start: 4, end: 6 },
+    ];
+    const result = assignSpeakers(segments, turns, { preserveNames: true });
+    expect(result.map((s) => s.speaker)).toEqual([
+      'Mette Hansen',
+      'Søren Østergaard',
+      'Mette Hansen',
+    ]);
+  });
+
+  it('still remaps to Taler N when the option is omitted or false', () => {
+    const segments = [seg(0, 2), seg(2, 4)];
+    const turns: SpeakerTurn[] = [
+      { speaker: 'Mette Hansen', start: 0, end: 2 },
+      { speaker: 'Søren Østergaard', start: 2, end: 4 },
+    ];
+    expect(assignSpeakers(segments, turns).map((s) => s.speaker)).toEqual(['Taler 1', 'Taler 2']);
+    expect(
+      assignSpeakers(segments, turns, { preserveNames: false }).map((s) => s.speaker),
+    ).toEqual(['Taler 1', 'Taler 2']);
+  });
+
+  it('inherits the previous name across a gap with no overlapping turn', () => {
+    const segments = [seg(0, 2), seg(5, 6), seg(8, 10)];
+    const turns: SpeakerTurn[] = [
+      { speaker: 'Mette Hansen', start: 0, end: 2 },
+      { speaker: 'Søren Østergaard', start: 8, end: 10 },
+    ];
+    const result = assignSpeakers(segments, turns, { preserveNames: true });
+    expect(result.map((s) => s.speaker)).toEqual([
+      'Mette Hansen',
+      'Mette Hansen',
+      'Søren Østergaard',
+    ]);
+  });
+
+  it('returns segments unchanged when there are no turns, even with preserveNames', () => {
+    const segments = [seg(0, 2)];
+    expect(assignSpeakers(segments, [], { preserveNames: true })).toEqual(segments);
+  });
+
+  // Speech before the first turn is still somebody's, and the only name we have
+  // for it is the first one. Leaving it as 'Taler 1' put a phantom unrecognised
+  // voice at the top of every Teams transcript — which is what the doc comment
+  // always said should not happen.
+  it('names a leading no-overlap segment after the first turn', () => {
+    const segments = [seg(0, 1), seg(5, 7)];
+    const turns: SpeakerTurn[] = [{ speaker: 'Ida Bang', start: 5, end: 7 }];
+    const result = assignSpeakers(segments, turns, { preserveNames: true });
+    expect(result.map((s) => s.speaker)).toEqual(['Ida Bang', 'Ida Bang']);
+  });
+});

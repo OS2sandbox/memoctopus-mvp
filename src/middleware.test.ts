@@ -42,6 +42,28 @@ describe('middleware', () => {
       expect(res.headers.get('location')).toBe('http://localhost/dashboard');
     });
 
+    // The middleware only sees that a cookie exists; (app)/layout.tsx is what
+    // actually validates it. A cookie that outlives its session row makes the two
+    // disagree, and bouncing it to /dashboard just to be sent back here is an
+    // infinite loop that locks the user out of the login page. The layout sets
+    // this marker precisely to stop that.
+    it('renders the landing page for a rejected session instead of looping', () => {
+      const res = middleware(makeReq('/?session_expired=1', { [SESSION_COOKIE]: TOKEN }));
+      expect(res.headers.get('location')).toBeNull();
+      expect(res.status).toBe(200);
+    });
+
+    it('honours the marker for the secure cookie variant too', () => {
+      const res = middleware(makeReq('/?session_expired=1', { [SECURE_SESSION_COOKIE]: TOKEN }));
+      expect(res.headers.get('location')).toBeNull();
+    });
+
+    it('still redirects to /dashboard when the marker is absent', () => {
+      const res = middleware(makeReq('/?from=%2Fdashboard', { [SESSION_COOKIE]: TOKEN }));
+      expect(res.status).toBe(307);
+      expect(res.headers.get('location')).toBe('http://localhost/dashboard');
+    });
+
     it('redirects to /dashboard when the secure cookie variant is set', () => {
       const res = middleware(makeReq('/', { [SECURE_SESSION_COOKIE]: TOKEN }));
       expect(res.status).toBe(307);

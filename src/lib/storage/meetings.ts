@@ -26,6 +26,14 @@ export async function createMeeting(data: {
   // The audio's own recording date. Defaults to now (correct for live/Teams
   // recordings); upload flows pass the file's date so an old clip keeps its date.
   recordedAt?: string;
+  // Microsoft Graph meeting details, set when a meeting is armed from the
+  // dashboard (calendar pick or pasted link). Omitted for local recordings.
+  graphManaged?: boolean;
+  teamsArmed?: boolean;
+  teamsIsOrganizer?: boolean;
+  teamsSubject?: string;
+  scheduledStart?: string;
+  scheduledEnd?: string;
 }): Promise<StoredMeeting> {
   const db = await getDB();
   const now = new Date().toISOString();
@@ -42,8 +50,15 @@ export async function createMeeting(data: {
     audioDurationSeconds: null,
     audioSizeBytes: 0,
     audioDeleted: false,
-    botSession: null,
   };
+  // Only write the Teams fields that were actually supplied, so a local recording's
+  // record stays free of undefined keys.
+  if (data.graphManaged !== undefined) meeting.graphManaged = data.graphManaged;
+  if (data.teamsArmed !== undefined) meeting.teamsArmed = data.teamsArmed;
+  if (data.teamsIsOrganizer !== undefined) meeting.teamsIsOrganizer = data.teamsIsOrganizer;
+  if (data.teamsSubject !== undefined) meeting.teamsSubject = data.teamsSubject;
+  if (data.scheduledStart !== undefined) meeting.scheduledStart = data.scheduledStart;
+  if (data.scheduledEnd !== undefined) meeting.scheduledEnd = data.scheduledEnd;
   await db.put('meetings', meeting);
   return meeting;
 }

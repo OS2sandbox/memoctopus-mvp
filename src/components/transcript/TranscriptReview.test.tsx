@@ -48,14 +48,20 @@ vi.mock('@/lib/utils', () => ({
 
 // Mock child components to keep tests focused on TranscriptReview logic
 vi.mock('./SpeakerRow', () => ({
-  SpeakerRow: ({ segment, index, onUpdate, onAssign, diarizing }: {
+  SpeakerRow: ({ segment, index, onUpdate, onAssign, diarizing, continuesSpeaker }: {
     segment: TranscriptSegment;
     index: number;
     onUpdate: (i: number, s: TranscriptSegment) => void;
     onAssign: (from: string, to: string) => void;
     diarizing?: boolean;
+    continuesSpeaker?: boolean;
   }) => (
-    <div data-testid={`speaker-row-${index}`} data-speaker={segment.speaker} data-diarizing={String(diarizing)}>
+    <div
+      data-testid={`speaker-row-${index}`}
+      data-speaker={segment.speaker}
+      data-diarizing={String(diarizing)}
+      data-continues={String(Boolean(continuesSpeaker))}
+    >
       <span>{segment.speaker}</span>
       <span>{segment.text}</span>
       {diarizing && <span aria-label="Genkender taler">…</span>}
@@ -205,6 +211,34 @@ describe('TranscriptReview', () => {
 
   // ── Audio deleted state ────────────────────────────────────────────────────
 
+  // Run grouping is rendered by SpeakerRow, but DERIVED here — at two separate
+  // call sites (flat and chaptered). Neither had any assertion, so a regression
+  // that passed continuesSpeaker for every row, or none, would look fine.
+  describe('speaker runs', () => {
+    const RUN = [
+      { speaker: 'Mette Hansen', start: 0, end: 4, text: 'Velkommen' },
+      { speaker: 'Mette Hansen', start: 4, end: 8, text: 'Første punkt' },
+      { speaker: 'Jens Poulsen', start: 8, end: 12, text: 'Tak' },
+      { speaker: 'Mette Hansen', start: 12, end: 16, text: 'Videre' },
+    ];
+
+    it('marks only the rows that continue the previous speaker', async () => {
+      setup({ initialSegments: RUN });
+      await waitFor(() => expect(screen.getByTestId('speaker-row-3')).toBeInTheDocument());
+
+      expect(screen.getByTestId('speaker-row-0')).toHaveAttribute('data-continues', 'false');
+      expect(screen.getByTestId('speaker-row-1')).toHaveAttribute('data-continues', 'true');
+      expect(screen.getByTestId('speaker-row-2')).toHaveAttribute('data-continues', 'false');
+      expect(screen.getByTestId('speaker-row-3')).toHaveAttribute('data-continues', 'false');
+    });
+
+    it('never marks the very first row as a continuation', async () => {
+      setup({ initialSegments: [RUN[0], RUN[1]] });
+      await waitFor(() => expect(screen.getByTestId('speaker-row-0')).toBeInTheDocument());
+      expect(screen.getByTestId('speaker-row-0')).toHaveAttribute('data-continues', 'false');
+    });
+  });
+
   describe('audio deleted state', () => {
     it('shows "lydfil slettet" in the bottom bar when audioDeleted=true and no audioUrl', async () => {
       setup({ audioDeleted: true, audioUrl: undefined });
@@ -214,6 +248,21 @@ describe('TranscriptReview', () => {
     it('shows "ingen lydfil" when no audioUrl and not audioDeleted', async () => {
       setup({ audioDeleted: false, audioUrl: undefined });
       expect(screen.getByText('ingen lydfil')).toBeInTheDocument();
+    });
+
+    // Three distinct no-player states, and the copy has to tell them apart: a local
+    // copy the user deleted, a Teams meeting whose audio never reached the browser,
+    // and a meeting that simply has no audio.
+    it('explains that a Teams meeting\'s audio went after transcription', async () => {
+      setup({ audioDiscarded: true, audioDeleted: false, audioUrl: undefined });
+      expect(screen.getByText('lyden blev slettet efter transskription')).toBeInTheDocument();
+      expect(screen.queryByText('ingen lydfil')).not.toBeInTheDocument();
+    });
+
+    it('prefers "lydfil slettet" when the user deleted a local copy', async () => {
+      setup({ audioDiscarded: true, audioDeleted: true, audioUrl: undefined });
+      expect(screen.getByText('lydfil slettet')).toBeInTheDocument();
+      expect(screen.queryByText('lyden blev slettet efter transskription')).not.toBeInTheDocument();
     });
 
     it('does NOT show "lydfil slettet" when audioUrl is set', async () => {
