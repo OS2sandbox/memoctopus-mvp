@@ -35,6 +35,13 @@ import {
 export const GIVE_UP_MESSAGE =
   'Ingen transskription blev fundet. Transskription blev muligvis ikke startet i Teams.';
 
+/**
+ * Giving up on a row that was waiting for a new Microsoft sign-in. Nobody asked
+ * Graph in that time, so "no transcript was found" would be a guess.
+ */
+export const REAUTH_GIVE_UP_MESSAGE =
+  'Adgangen til Microsoft udløb, før transskriptionen kunne hentes fra Teams.';
+
 export const TRANSCRIPTS_DISABLED_MESSAGE =
   'Teams-administratoren har slået Graph-adgang til transskriptioner fra. ' +
   'Se docs/setup-microsoft-teams.md trin 3.';
@@ -127,7 +134,10 @@ export async function pollMeeting(
   }
 
   if (gaveUp) {
-    return await markPollAttempt(userId, id, { state: 'failed', failureReason: GIVE_UP_MESSAGE });
+    return await markPollAttempt(userId, id, {
+      state: 'failed',
+      failureReason: row.state === 'needs_reauth' ? REAUTH_GIVE_UP_MESSAGE : GIVE_UP_MESSAGE,
+    });
   }
 
   await setTeamsMeetingState(userId, id, 'fetching');

@@ -34,6 +34,7 @@ import {
   GIVE_UP_MESSAGE,
   MEETING_GONE_MESSAGE,
   POLL_LOCK_KEY,
+  REAUTH_GIVE_UP_MESSAGE,
   TRANSCRIPTS_DISABLED_MESSAGE,
   pollDueMeetings,
   pollMeeting,
@@ -276,6 +277,30 @@ describe('pollMeeting', () => {
     expect(mockMark).toHaveBeenCalledWith('u1', 'm1', {
       state: 'failed',
       failureReason: GIVE_UP_MESSAGE,
+    });
+  });
+
+  it('says the sign-in expired when it gives up on a row waiting for one', async () => {
+    // Nobody asked Graph while the row waited for a sign-in, so blaming Teams
+    // for not starting the transcription would be a guess.
+    const end = new Date(NOW.getTime() - POLL_GIVE_UP_MS - 1000);
+    mockGet.mockResolvedValue(
+      row({
+        state: 'needs_reauth',
+        scheduledStart: null,
+        scheduledEnd: end,
+        createdAt: new Date(end.getTime() - 1000),
+        lastPolledAt: new Date(NOW.getTime() - 60 * 60_000),
+      }),
+    );
+    mockGetMeeting.mockRejectedValue(new GraphError('reauth_required', 'udløbet', { status: 401 }));
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockProcess).not.toHaveBeenCalled();
+    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', {
+      state: 'failed',
+      failureReason: REAUTH_GIVE_UP_MESSAGE,
     });
   });
 

@@ -8,7 +8,7 @@ import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
 import { armMeeting, isArmed } from '@/lib/teams/meeting-arm';
 import { resolveJoinUrl } from '@/lib/teams/meeting-resolver';
-import { claimMeetingSnapshot, upsertTeamsMeeting } from '@/lib/teams/store';
+import { claimMeetingSnapshot, listTeamsMeetings, upsertTeamsMeeting } from '@/lib/teams/store';
 
 /** ISO string → Date, tolerating a missing or unparseable value. */
 function toDate(value: string | null | undefined): Date | null {
@@ -27,6 +27,25 @@ const SAFE_MEETING_ID = /^[\w-]+$/;
 
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+/**
+ * Where each of the caller's registered Teams meetings stands, for the Arkiv.
+ *
+ * The browser's copy of a Teams meeting keeps `awaiting_teams` until the
+ * transcript is collected, because that status is what renders the meeting's
+ * Teams screen (with "Prøv igen" and "Slet"). So the archive cannot tell from its
+ * own data that the server has given up; it asks here. Only id and state go out:
+ * the list is read from the caller's own per-user schema.
+ */
+export async function GET() {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const rows = await listTeamsMeetings(session.user.id);
+  return NextResponse.json({
+    meetings: rows.map((row) => ({ id: row.id, state: row.state })),
+  });
 }
 
 /**

@@ -23,6 +23,7 @@ type Tab = 'meetings' | 'skabeloner';
 
 export default function ArkivPage() {
   const [meetings, setMeetings] = useState<(Meeting & { durationSeconds: number | null })[]>([]);
+  const [teamsStates, setTeamsStates] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('meetings');
   const [editMode, setEditMode] = useState(false);
@@ -58,6 +59,7 @@ export default function ArkivPage() {
             durationSeconds: r.audioDurationSeconds,
           }));
         setMeetings(mapped);
+        if (mapped.some((m) => m.status === 'awaiting_teams')) void loadTeamsStates();
       })
       .catch((err) => {
         console.error('[arkiv] Kunne ikke indlæse møder fra lokalt lager:', err);
@@ -65,6 +67,20 @@ export default function ArkivPage() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  // A Teams meeting reads "Afventer Teams" locally until it is collected, also
+  // once the server has given up on it. Ask the server what became of them.
+  // Best effort: without an answer the rows keep their local status.
+  async function loadTeamsStates() {
+    try {
+      const res = await fetch('/api/teams/meetings');
+      if (!res.ok) return;
+      const body = (await res.json()) as { meetings?: { id: string; state: string }[] };
+      setTeamsStates(Object.fromEntries((body.meetings ?? []).map((m) => [m.id, m.state])));
+    } catch (err) {
+      console.warn('[arkiv] kunne ikke hente Teams-status:', err);
+    }
+  }
 
   function selectTab(next: Tab) {
     setTab(next);
@@ -242,7 +258,7 @@ export default function ArkivPage() {
               {meetings.map((m) => (
                 <ArchiveMeetingRow
                   key={m.id}
-                  meeting={m}
+                  meeting={{ ...m, teamsState: teamsStates[m.id] }}
                   selectionMode={editMode}
                   selected={selected.has(m.id)}
                   onToggleSelect={() => toggleSelect(m.id)}

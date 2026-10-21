@@ -20,7 +20,22 @@ import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
 type ArchiveMeeting = Pick<Meeting, 'id' | 'title' | 'participants' | 'status' | 'createdAt'> & {
   durationSeconds: number | null;
+  /** The server's state for a Teams meeting, when the archive could fetch it. */
+  teamsState?: string;
 };
+
+/**
+ * The badge for a row. A Teams meeting's local status stays `awaiting_teams`
+ * until its transcript is collected, so a meeting the server has given up on
+ * would read "Afventer Teams" forever. The server's state says what happened.
+ */
+function badgeFor(m: ArchiveMeeting): { label: string; variant: ReturnType<typeof statusVariant> } {
+  if (m.status === 'awaiting_teams') {
+    if (m.teamsState === 'failed') return { label: 'Intet referat', variant: 'destructive' };
+    if (m.teamsState === 'needs_reauth') return { label: 'Log ind igen', variant: 'warning' };
+  }
+  return { label: statusLabel(m.status), variant: statusVariant(m.status) };
+}
 
 function statusHref(m: ArchiveMeeting) {
   if (m.status === 'awaiting_teams' || m.status === 'recording' || m.status === 'processing') return `/meeting/${m.id}`;
@@ -61,6 +76,7 @@ export function ArchiveMeetingRow({
     }
   }
 
+  const badge = badgeFor(meeting);
   const rowBody = (
     <>
       <div className="flex-1 min-w-0">
@@ -77,9 +93,7 @@ export function ArchiveMeetingRow({
           )}
         </p>
       </div>
-      <Badge variant={statusVariant(meeting.status)}>
-        {statusLabel(meeting.status)}
-      </Badge>
+      <Badge variant={badge.variant}>{badge.label}</Badge>
     </>
   );
 
