@@ -29,6 +29,7 @@ export async function fetchDiarizationTurns(meetingId: string, audio: Blob): Pro
   try {
     const fd = new FormData();
     fd.append('audio', audio, 'recording');
+
     const res = await fetch(`/api/meetings/${meetingId}/diarize`, {
       method: 'POST',
       body: fd,
@@ -100,6 +101,7 @@ export async function finishDiarization(meetingId: string, turns: SpeakerTurn[] 
     const segments = (turns.length > 0 && current.segments.every((s) => s.speaker === DEFAULT_SPEAKER_LABEL))
       ? assignSpeakers(current.segments, turns)
       : current.segments;
+
     await saveTranscriptSegments(meetingId, segments, 'done');
     notifyTranscriptUpdated(meetingId);
   } catch (err) {

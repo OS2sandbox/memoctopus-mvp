@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
-import { mimeTypeToExt } from './mime';
 import { Agent, FormData, fetch as undiciFetch } from 'undici';
+import { mimeTypeToExt } from './mime';
 import { decodeToMono16k, encodeMono16kWav } from '@/lib/audio/decode-server';
 import { isEnsembleDiarization, hviskeBaseURL } from './transcription';
 
@@ -62,10 +62,11 @@ export class PyannoteProvider implements DiarizationProvider {
     // compressed recording (small browser/bot upload — the win), so decode anything
     // that isn't already WAV to 16 kHz mono WAV here with ffmpeg before forwarding.
     // This keeps diarization working regardless of the service version, and the
-    // app→service hop is local in production (docker-compose). Fail-soft: if the
-    // local decode fails, send the original and let the service attempt it.
+    // app→service hop is local in production. Fail-soft: if the local decode fails,
+    // send the original and let the service attempt it.
     let buffer = audioBuffer;
     let outMime = mimeType;
+
     if (!/wav/i.test(mimeType)) {
       try {
         buffer = encodeMono16kWav(await decodeToMono16k(audioBuffer));

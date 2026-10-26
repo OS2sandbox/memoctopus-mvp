@@ -64,13 +64,22 @@ async function postHandler(req: NextRequest) {
     includeDato: includeDato ?? skabelon?.includeDato ?? false,
   };
 
-  const content = await generateReferatBody(
-    segments,
-    spec,
-    participants,
-    chapters,
-    customPrompt,
-  );
+  let content;
+  try {
+    content = await generateReferatBody(
+      segments,
+      spec,
+      participants,
+      chapters,
+      customPrompt,
+    );
+  } catch (err) {
+    // Without this the handler throws, Next returns a 500 with no body, and the
+    // client's response.json() fails with "Unexpected end of JSON input" —
+    // hiding every server-side cause behind one meaningless message.
+    console.error('Minutes generation failed:', err);
+    return NextResponse.json({ error: 'Minutes generation failed' }, { status: 500 });
+  }
 
   return NextResponse.json({ content, skabelonId: skabelon?.id ?? null });
 }

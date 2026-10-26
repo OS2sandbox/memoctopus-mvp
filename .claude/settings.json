@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Read(audio-storage/**)",
+      "Edit(audio-storage/**)",
+      "Read(**/.env*)"
+    ],
+    "ask": [
+      "Bash(docker *)",
+      "Bash(docker-compose *)",
+      "Bash(npm run dev *)",
+      "Bash(npm run db:migrate *)",
+      "Bash(npm run db:push *)",
+      "Bash(npx drizzle-kit push *)",
+      "Bash(npx drizzle-kit migrate *)",
+      "Bash(npx drizzle-kit drop *)",
+      "Bash(bash scripts/diar-tunnel.sh *)",
+      "Bash(git push *)"
+    ],
+    "allow": [
+      "Bash(npm ci)",
+      "Bash(npm install *)",
+      "Bash(npm run build *)",
+      "Bash(npm run lint *)",
+      "Bash(npm test *)",
+      "Bash(npm run test:coverage *)",
+      "Bash(npm run db:generate *)",
+      "Bash(npx tsc *)",
+      "Bash(npx vitest *)",
+      "WebFetch(domain:nextjs.org)",
+      "WebFetch(domain:orm.drizzle.team)",
+      "WebFetch(domain:vitest.dev)",
+      "WebFetch(domain:better-auth.com)",
+      "WebFetch(domain:platform.openai.com)"
+    ]
+  },
+  "sandbox": {
+    "excludedCommands": [
+      "docker *",
+      "docker-compose *"
+    ],
+    "filesystem": {
+      "allowWrite": [
+        "~/.npm"
+      ]
+    },
+    "network": {
+      "allowedDomains": [
+        "registry.npmjs.org",
+        "*.npmjs.org",
+        "github.com",
+        "*.githubusercontent.com"
+      ]
+    }
+  },
+  "env": {
+    "NEXT_TELEMETRY_DISABLED": "1"
+  }
+}

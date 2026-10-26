@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  app:
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/memoctopus
+      BETTER_AUTH_SECRET: ci-secret
+      BETTER_AUTH_URL: http://localhost:3000
+      BETTER_AUTH_TRUSTED_ORIGINS: http://localhost:3000
+      OPENAI_API_KEY: no-key
+      LLM_BASE_URL: http://localhost:8000/v1
+      # LLM_MODEL must stay unset: upstream's chapters/minutes/pii tests assert the
+      # gpt-4o fallback; the env override is covered by llm-client.test.ts.
+      HVISKE_URL: http://localhost:8001/v1
+      HVISKE_API_KEY: no-key
+      HVISKE_MODEL: syvai/hviske-v5.1
+      ASR_LANGUAGE: da
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      # Match the app's Danish locale; upstream's VersionHistory date-label test
+      # renders 2024-12-31T23:59Z into 2025 only in a UTC+1 timezone.
+      TZ: Europe/Copenhagen
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Install deps
+        run: npm ci --legacy-peer-deps
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED: 'false'
+          NEXT_PUBLIC_MICROSOFT_ENABLED: 'false'
+          NEXT_PUBLIC_AUTHENTIK_ENABLED: 'true'
+          NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS: '3600000'
+
+      - name: Test
+        run: npx vitest run --pool=threads --maxWorkers=2
+        env:
+          NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED: 'true'
+          NEXT_PUBLIC_MICROSOFT_ENABLED: 'false'
+          NEXT_PUBLIC_AUTHENTIK_ENABLED: 'false'
+          NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS: '3600000'
+
+  bot-service:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: bot-service
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22.x
+          cache: npm
+          cache-dependency-path: bot-service/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build
+        run: npm run build --if-present
+
+      - name: Test
+        run: npx vitest run

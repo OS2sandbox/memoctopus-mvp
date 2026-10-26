@@ -9,8 +9,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run dev          # Start both Next.js (port 3004) and bot-service (port 3001) concurrently
 npm run build        # Production build (Next.js only)
 npm start            # Serve production build
-npm run lint         # ESLint via next lint
 ```
+
+**`npm run lint` is currently unusable.** It runs `next lint`, this repo has no ESLint config, and the command offers to scaffold one. Don't accept that: it would add dependencies and produce a first-run lint diff across code that has never been linted. Use `npx tsc --noEmit` instead, and leave the ESLint decision to its own deliberate change.
 
 ### Database (Drizzle)
 ```bash
@@ -60,10 +61,12 @@ Auth config is deliberately **runtime-only**, never `NEXT_PUBLIC_*`: an operator
 
 **AI pipeline** (after a meeting is recorded):
 1. `src/lib/ai/transcription.ts` — STT via the hviske (`syvai/hviske-ensemble`) server's OpenAI-compatible API. Used for both the per-utterance live path (`/api/meetings/[id]/utterance`) and the batch transcribe pass. Configured via `HVISKE_URL` / `HVISKE_API_KEY`. Speaker diarization (`src/lib/ai/diarization.ts`) is now co-hosted on the same server at `POST /diarize`; hviske still returns plain text only, so segment timestamps are VAD-estimated and the diarization turns are merged on by time-overlap (`src/lib/audio/merge-speakers.ts`).
-2. `src/lib/ai/pii.ts` — PII detection and replacement using OpenAI `gpt-4o`.
-3. `src/lib/ai/chapters.ts` — Chapter/topic segmentation using OpenAI.
-4. `src/lib/ai/minutes.ts` — Meeting minutes generation using OpenAI `gpt-4o`. Prompts are in Danish.
+2. `src/lib/ai/pii.ts` — PII detection and replacement using the chat model.
+3. `src/lib/ai/chapters.ts` — Chapter/topic segmentation using the chat model.
+4. `src/lib/ai/minutes.ts` — Meeting minutes generation using the chat model. Prompts are in Danish.
 5. `src/lib/ai/clarifications.ts` — Generates clarification questions about ambiguous content.
+
+Steps 2–5 all call the chat model behind `LLM_BASE_URL` / `LLM_MODEL` through the OpenAI SDK; `OPENAI_API_KEY` is the bearer token for that endpoint and is not necessarily an OpenAI key. **In production that endpoint is a self-hosted model with a 16,384-token context**, so prompt size decides whether generation succeeds at all. Size prompts against a budget derived from that number — as `minutes.ts` does — rather than against assumed headroom.
 
 **Bot API routes** (`src/app/api/bot/`): Next.js acts as an authenticated proxy to the bot-service. All bot routes require a user session. The `/api/bot/audio-upload` route is the exception — it's called by the bot-service itself, authenticated via `BOT_INTERNAL_SECRET` (not a user session).
 
@@ -86,22 +89,34 @@ Bot-service authenticates all requests from the Next.js app via `Authorization: 
 
 ## Key env vars
 
+Not every variable below has a row in `.env.example`; some are set only by the deployment that runs the app.
+
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` | Composed into `DATABASE_URL` by some deployments |
 | `BOT_INTERNAL_SECRET` | Shared secret between Next.js and bot-service |
 | `BOT_SERVICE_URL` | URL of bot-service from Next.js (e.g. `http://localhost:3001`) |
 | `HVISKE_URL` | hviske STT server (OpenAI-compatible `/v1`) |
 | `HVISKE_API_KEY` | Bearer key for the hviske STT server |
 | `HVISKE_MODEL` | hviske model id (default `syvai/hviske-ensemble`) |
 | `ASR_LANGUAGE` | Transcription language (default `da`) |
-| `OPENAI_API_KEY` | Chapters, minutes, clarifications generation, and PII detection |
+| `DIARIZATION_URL` | Diarization service base URL |
+| `DIARIZATION_TIMEOUT_MS` / `NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS` | Diarization timeout, server and client |
+| `DIARIZATION_API_KEY` | Bearer key for the diarization service |
+| `LLM_BASE_URL` | OpenAI-compatible chat endpoint |
+| `LLM_MODEL` | Chat model id |
+| `OPENAI_API_KEY` | Bearer token for `LLM_BASE_URL`: chapters, minutes, clarifications generation, and PII detection |
 | `AUDIO_STORAGE_PATH` | Filesystem path for audio files |
 | `BETTER_AUTH_URL` / `BETTER_AUTH_SECRET` | better-auth base URL and signing secret |
+| `BETTER_AUTH_TRUSTED_ORIGINS` | Trusted origins for better-auth |
+| `NEXT_PUBLIC_APP_URL` / `NEXT_APP_URL` | External and internal app URLs |
 | `EMAIL_PASSWORD_ENABLED` | Kill switch for email/password (default on) |
 | `MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT_ID` | Entra ID; enables itself when the id + secret are set |
 | `OIDC_CLIENT_ID` / `_SECRET` / `_DISCOVERY_URL` | Generic OIDC provider (Keycloak, Authentik, …) |
 | `OIDC_PROVIDER_ID` / `_NAME` | Callback path segment + account key / button label |
+| `SKABELON_SHARE_CODE` / `SKABELON_SHARE_LINK` | Skabelon sharing toggles |
+| `PORT` / `BOT_PORT` | Dev ports (default 3004 and 3001) |
 
 ## Testing conventions
 
@@ -109,3 +124,13 @@ Bot-service authenticates all requests from the Next.js app via `Authorization: 
 - Component tests (`.test.tsx` in `src/components/`) run in `jsdom`; everything else runs in `node`.
 - Test helpers: `src/test/helpers.ts` exports `FAKE_SESSION` and `makeJsonReq()`.
 - API route tests mock `@/lib/db/user-schema` and `@/lib/auth` to avoid real DB/auth dependencies.
+
+## What Claude Code can and can't do here
+
+`.claude/settings.json` in this repo sets the boundaries; `/permissions` shows the resolved rules.
+
+- **Blocked**: reading any `.env*` file, and reading or editing `audio-storage/`. Recordings and transcripts are personal data — don't read around that boundary with a script, and don't paste transcript content into commit messages, issues, or test fixtures.
+- **Prompts first**: `docker` and `docker-compose`, `npm run dev`, `db:migrate`, `db:push`, `drizzle-kit push|migrate|drop`, `scripts/diar-tunnel.sh`, `git push`.
+- **Runs freely**: build, tests, type-checking, `db:generate`, and reads or edits anywhere else in the repo.
+- Bash commands may run in a sandbox that can only write inside the working directory, so a command needing to write elsewhere or reach a new host will prompt or fail rather than silently succeed. The sandbox also masks denied files, which makes them look modified to `git`: an unscoped `git status` or `git diff` can report files that are clean outside the sandbox, and `git diff --stat` fails outright on a masked path. Path-scope git commands (`git diff -- src/`) and leave staging, committing and pushing to the developer.
+
