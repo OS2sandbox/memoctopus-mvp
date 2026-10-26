@@ -47,3 +47,6 @@ next-env.d.ts
 # audio storage
 /audio-storage
 .env.docker
+
+# Built by outlook-addin/build.mjs (npm run build / build:addin)
+/public/outlook-addin/

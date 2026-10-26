@@ -277,7 +277,13 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
   );
 
   useEffect(() => {
-    void poll(false);
+    // The first read learns the scheduled end. When the meeting is already over,
+    // the forced check follows at once rather than on the next tick: for a
+    // meeting armed from Outlook, that check is what starts the fetch at all.
+    void poll(false).then(() => {
+      const end = scheduledEndRef.current ? Date.parse(scheduledEndRef.current) : NaN;
+      if (!forcedAfterEndRef.current && !Number.isNaN(end) && end <= Date.now()) void poll(false);
+    });
   }, [poll]);
 
   useEffect(() => {

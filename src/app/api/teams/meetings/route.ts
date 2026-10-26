@@ -4,11 +4,9 @@ import { auth } from '@/lib/auth';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { GraphError, TEAMS_DISABLED_MESSAGE } from '@/lib/teams/graph-client';
 import { graphDate } from '@/lib/teams/graph-dates';
-import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
-import { armMeeting, isArmed } from '@/lib/teams/meeting-arm';
-import { resolveJoinUrl } from '@/lib/teams/meeting-resolver';
-import { claimMeetingSnapshot, listTeamsMeetings, upsertTeamsMeeting } from '@/lib/teams/store';
+import { MeetingIdTakenError, registerTeamsMeeting } from '@/lib/teams/register';
+import { isDeferred, listTeamsMeetings } from '@/lib/teams/store';
 
 /** ISO string → Date, tolerating a missing or unparseable value. */
 function toDate(value: string | null | undefined): Date | null {
@@ -30,13 +28,16 @@ function str(value: unknown): string | undefined {
 }
 
 /**
- * Where each of the caller's registered Teams meetings stands, for the Arkiv.
+ * The caller's registered Teams meetings, read from their own per-user schema.
  *
- * The browser's copy of a Teams meeting keeps `awaiting_teams` until the
- * transcript is collected, because that status is what renders the meeting's
- * Teams screen (with "Prøv igen" and "Slet"). So the archive cannot tell from its
- * own data that the server has given up; it asks here. Only id and state go out:
- * the list is read from the caller's own per-user schema.
+ * Two uses. The Arkiv reads `state`: the browser's copy of a Teams meeting keeps
+ * `awaiting_teams` until the transcript is collected, because that status is
+ * what renders the meeting's Teams screen (with "Prøv igen" and "Slet"), so the
+ * archive cannot tell from its own data that the server has given up.
+ *
+ * And the dashboard imports meetings armed from Outlook, which exist only here
+ * until a browser has seen them: those rows carry what a new local meeting needs.
+ * `deferred` says the meeting is waiting for its user to open it.
  */
 export async function GET() {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -44,7 +45,20 @@ export async function GET() {
 
   const rows = await listTeamsMeetings(session.user.id);
   return NextResponse.json({
-    meetings: rows.map((row) => ({ id: row.id, state: row.state })),
+    meetings: rows.map((row) => ({
+      id: row.id,
+      state: row.state,
+      ...(row.origin === 'outlook'
+        ? {
+            origin: row.origin,
+            deferred: isDeferred(row),
+            subject: row.subject,
+            joinUrl: row.joinUrl,
+            scheduledStart: row.scheduledStart ? row.scheduledStart.toISOString() : null,
+            createdAt: row.createdAt ? row.createdAt.toISOString() : null,
+          }
+        : {}),
+    })),
   });
 }
 
@@ -86,59 +100,19 @@ export async function POST(req: NextRequest) {
 
   const userId = session.user.id;
 
-  // The pending stash is keyed by meetingId across all users, and the pipeline
-  // will write this meeting's transcript and recording into it. Binding the id
-  // to its owner here does two things: it stops another user's browser from
-  // collecting these artifacts, and it makes the hand-off work at all — both
-  // the pending-audio and pending-transcript routes deny by default when no owner is
-  // recorded.
-  const existingOwner = await getMeetingOwner(meetingId);
-  if (existingOwner && existingOwner !== userId) {
-    return NextResponse.json({ error: 'meeting-id-taken' }, { status: 409 });
-  }
-  await setMeetingOwner(meetingId, userId);
-
   // The client knows which *occurrence* of a recurring series it armed; Graph's
-  // onlineMeeting only knows the series-level window. Prefer the occurrence, or
-  // artifacts of occurrence 2+ fall outside the pick window and are never found.
+  // onlineMeeting only knows the series-level window (see registerTeamsMeeting).
   const eventId = str(body.eventId) ?? null;
   const occurrenceStart = toDate(graphDate(str(body.scheduledStart)));
   const occurrenceEnd = toDate(graphDate(str(body.scheduledEnd)));
 
   try {
-    const resolved = await resolveJoinUrl(userId, joinUrl);
-
-    // Only the organizer may PATCH meeting options; an invitee is registered
-    // anyway, because their transcript is readable if somebody starts
-    // transcription manually.
-    const outcome = resolved.isOrganizer
-      ? await armMeeting(userId, resolved.graphMeetingId)
-      : null;
-    const armResult = outcome?.result ?? ('not_organizer' as const);
-
-    // What the organizer had before we ever PATCHed this Graph meeting, for the
-    // disarm to restore — claimed once per graphMeetingId, not per local id, so
-    // a recurring series' second+ occurrence (its own local id, same Graph
-    // meeting) gets back the true original instead of its own already-armed
-    // values. See claimMeetingSnapshot. The claimed value itself is not needed
-    // here — disarm reads it back later by graphMeetingId.
-    if (outcome && outcome.result !== 'not_organizer') {
-      await claimMeetingSnapshot(userId, resolved.graphMeetingId, outcome.previousOptions);
-    }
-
-    const row = await upsertTeamsMeeting(userId, {
-      id: meetingId,
-      graphMeetingId: resolved.graphMeetingId,
-      joinUrl: resolved.joinUrl,
-      subject: resolved.subject,
-      organizerId: resolved.organizerId,
-      isOrganizer: resolved.isOrganizer,
-      armed: isArmed(armResult),
-      armResult,
+    const { row, armResult } = await registerTeamsMeeting(userId, {
+      meetingId,
+      joinUrl,
       eventId,
-      scheduledStart: occurrenceStart ?? toDate(resolved.scheduledStart),
-      scheduledEnd: occurrenceEnd ?? toDate(resolved.scheduledEnd),
-      state: 'awaiting_teams',
+      occurrenceStart,
+      occurrenceEnd,
     });
 
     return NextResponse.json({
@@ -153,6 +127,9 @@ export async function POST(req: NextRequest) {
       state: row.state,
     });
   } catch (err) {
+    if (err instanceof MeetingIdTakenError) {
+      return NextResponse.json({ error: 'meeting-id-taken' }, { status: 409 });
+    }
     return teamsErrorResponse(err);
   }
 }

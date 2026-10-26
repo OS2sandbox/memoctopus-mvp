@@ -186,6 +186,15 @@ of the flow needs. `resolveJoinUrl()` gets subject and start/end off the
 `onlineMeeting` itself, so nothing is lost. Danish copy for the route's error codes
 lives in `src/components/dashboard/arm-error-message.ts`.
 
+**Outlook add-in** (docs/outlook-addin.md): a second entry point. The task pane
+(`outlook-addin/src/`, built into `public/outlook-addin/` by `npm run build`) reads the
+join link from the meeting body and calls `POST /api/outlook/meetings` with an NAA
+bearer token, verified in `src/lib/outlook/addin-auth.ts` and mapped to the user by
+`sub`; registration is shared with the Mødelink box (`src/lib/teams/register.ts`).
+Rows armed this way carry `origin = 'outlook'` and are **deferred**: the background
+poller leaves them until the user opens the meeting here (`opened_at`), 30 days at
+most. The dashboard/Arkiv import them from `GET /api/teams/meetings`.
+
 **Teams meeting state** (`teams_meetings.state`):
 `awaiting_teams` → `fetching` → `ready` | `failed` | `needs_reauth`. The client-side meeting
 status gains a matching `awaiting_teams`. `fetching` means a run holds this meeting's
@@ -228,6 +237,7 @@ the container. Note also that `.env.deploy.example`, not `.env.example`, is what
 | `TEAMS_GRAPH_ENABLED` | Opt-in (default off) for the Teams/Graph integration: adds the Graph scopes to the Microsoft sign-in, which need tenant-admin consent. Read at startup |
 | `OIDC_CLIENT_ID` / `_SECRET` / `_DISCOVERY_URL` | Generic OIDC provider (Keycloak, Authentik, …) |
 | `OIDC_PROVIDER_ID` / `_NAME` | Callback path segment + account key / button label |
+| `OUTLOOK_ADDIN_ENABLED` | Opt-in (default off) for the Outlook add-in at `/outlook-addin/`. Needs `TEAMS_GRAPH_ENABLED` and a tenant-specific `MICROSOFT_TENANT_ID`; see docs/outlook-addin.md |
 | `GRAPH_BASE_URL` | Microsoft Graph base URL (default `https://graph.microsoft.com/v1.0`) |
 | `TEAMS_SPOKEN_LANGUAGE` | Language Teams transcribes in (default `da-DK`) |
 | `TEAMS_ARTIFACT_MODE` | `prefer-recording` (default) or `transcript-only` (also drops the recording scope from sign-in) |

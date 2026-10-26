@@ -536,16 +536,28 @@ describe('TeamsMeetingScreen — polling behaviour', () => {
     expect(mockFetch.mock.calls.length).toBeGreaterThan(initial);
   });
 
-  it('forces ?poll=1 on the first tick after the scheduled end has passed', async () => {
+  it('forces ?poll=1 right after the first read when the scheduled end has passed', async () => {
+    // For a meeting armed from Outlook the forced check is what starts the fetch,
+    // so it must not wait for the next tick.
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-10T10:30:00.000Z'));
     renderScreen();
-    await act(async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); });
+    await act(async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); });
     expect(mockFetch.mock.calls[0][0]).toBe(`/api/teams/meetings/${MEETING_ID}`);
+    expect(mockFetch).toHaveBeenCalledWith(`/api/teams/meetings/${MEETING_ID}?poll=1`);
+    // Once only: the next tick is an ordinary read.
     mockFetch.mockClear();
     await act(async () => { vi.advanceTimersByTime(15_000); });
     await act(async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); });
-    expect(mockFetch).toHaveBeenCalledWith(`/api/teams/meetings/${MEETING_ID}?poll=1`);
+    expect(mockFetch).not.toHaveBeenCalledWith(`/api/teams/meetings/${MEETING_ID}?poll=1`);
+  });
+
+  it('does not force before the scheduled end', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-10T08:00:00.000Z'));
+    renderScreen();
+    await act(async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); });
+    expect(mockFetch).not.toHaveBeenCalledWith(`/api/teams/meetings/${MEETING_ID}?poll=1`);
   });
 
   it('stops polling once the state is failed', async () => {

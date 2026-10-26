@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { createMeeting, getAllMeetings } from '@/lib/storage';
+import { importOutlookMeetings } from '@/lib/outlook/import-meetings';
 import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
 import { setPendingUploadFile } from '@/lib/pending-upload';
 import { ErrorBanner } from '@/components/ui/error-banner';
@@ -34,7 +35,11 @@ export default function OptaqPage() {
   const [teamsStatus, setTeamsStatus] = useState<TeamsStatus | null>(null);
 
   useEffect(() => {
-    getAllMeetings()
+    // Meetings armed from Outlook exist only on the server until a browser has
+    // seen them; bring them in before counting. Best effort, like the count.
+    importOutlookMeetings()
+      .catch(() => null)
+      .then(() => getAllMeetings())
       .then((meetings) => setMeetingCount(meetings.length))
       .catch((err) => { console.warn('[dashboard] getAllMeetings failed:', err); });
   }, []);

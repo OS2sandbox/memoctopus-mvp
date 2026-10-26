@@ -761,7 +761,8 @@ describe('OptaqPage — Teams meeting link flow', () => {
     await act(async () => { fireEvent.keyDown(linkInput, { key: 'Enter' }); });
 
     await waitFor(() => {
-      const post = mockFetch.mock.calls.find((c) => c[0] === '/api/teams/meetings');
+      // The GET on mount is the Outlook import; the registration is the POST.
+      const post = mockFetch.mock.calls.find((c) => c[0] === '/api/teams/meetings' && c[1]?.method === 'POST');
       expect(post).toBeTruthy();
       expect(JSON.parse(post![1].body)).toEqual({
         meetingId: 'teams-4',

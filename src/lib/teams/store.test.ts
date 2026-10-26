@@ -29,7 +29,10 @@ import {
   userIdFromSchemaName,
   POLL_GIVE_UP_MS,
   STALE_FETCHING_MS,
+  OUTLOOK_UNOPENED_GIVE_UP_MS,
   giveUpAnchor,
+  isDeferred,
+  markTeamsMeetingOpened,
   claimMeetingSnapshot,
   getMeetingSnapshot,
   type TeamsMeetingRow,
@@ -85,6 +88,8 @@ function row(overrides: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     recordingId: null,
     recordingCleanup: null,
     recordingBytes: null,
+    origin: null,
+    openedAt: null,
     createdAt: new Date('2026-09-08T08:00:00Z'),
     ...overrides,
   };
@@ -276,6 +281,85 @@ describe('isTeamsMeetingDue', () => {
   });
 });
 
+describe('Outlook-armed meetings (storage rule)', () => {
+  const now = new Date('2026-09-08T12:00:00Z');
+  const ms = now.getTime();
+  const outlook = { origin: 'outlook' as const, scheduledEnd: new Date(ms - 60 * 60_000) };
+
+  it('is deferred until the user opens it', () => {
+    expect(isDeferred(row(outlook))).toBe(true);
+    expect(isDeferred(row({ ...outlook, openedAt: new Date(ms - 60_000) }))).toBe(false);
+    expect(isDeferred(row({ scheduledEnd: new Date(ms - 60 * 60_000) }))).toBe(false);
+  });
+
+  it('is not due for the background poller while unopened', () => {
+    expect(isTeamsMeetingDue(row({ ...outlook, createdAt: new Date(ms - 2 * 60 * 60_000) }), now)).toBe(false);
+    // Not even a week later: the user may come back any time within the cap.
+    expect(
+      isTeamsMeetingDue(
+        row({
+          ...outlook,
+          scheduledEnd: new Date(ms - 7 * 24 * 60 * 60_000),
+          createdAt: new Date(ms - 8 * 24 * 60 * 60_000),
+        }),
+        now,
+      ),
+    ).toBe(false);
+  });
+
+  it('is due once the 30-day cap has passed, so it can be settled', () => {
+    expect(
+      isTeamsMeetingDue(
+        row({
+          ...outlook,
+          scheduledEnd: new Date(ms - OUTLOOK_UNOPENED_GIVE_UP_MS - 1000),
+          createdAt: new Date(ms - OUTLOOK_UNOPENED_GIVE_UP_MS - 2000),
+        }),
+        now,
+      ),
+    ).toBe(true);
+  });
+
+  it('polls normally once opened, its window measured from the opening', () => {
+    const opened = row({
+      ...outlook,
+      scheduledEnd: new Date(ms - 10 * 24 * 60 * 60_000),
+      createdAt: new Date(ms - 11 * 24 * 60 * 60_000),
+      openedAt: new Date(ms - 60_000),
+    });
+    expect(isTeamsMeetingDue(opened, now)).toBe(true);
+    expect(giveUpAnchor(opened)).toEqual(new Date(ms - 60_000));
+  });
+
+  it('markTeamsMeetingOpened keeps the first opening', async () => {
+    mockQueryOne.mockResolvedValue({ ...RAW, origin: 'outlook', opened_at: new Date(ms) } as never);
+    const result = await markTeamsMeetingOpened(USER, 'm1');
+    const [, sql, params] = mockQueryOne.mock.calls[0];
+    expect(sql).toMatch(/opened_at = COALESCE\(opened_at, NOW\(\)\)/);
+    expect(params).toEqual(['m1']);
+    expect(result).toMatchObject({ origin: 'outlook', openedAt: new Date(ms) });
+  });
+
+  it('upsert keeps the origin a row was first armed from', async () => {
+    mockQueryOne.mockResolvedValue(RAW as never);
+    await upsertTeamsMeeting(USER, {
+      id: 'm1',
+      graphMeetingId: 'GRAPH1',
+      joinUrl: 'https://teams.microsoft.com/l/meetup-join/x',
+      subject: null,
+      organizerId: null,
+      isOrganizer: true,
+      armed: true,
+      scheduledStart: null,
+      scheduledEnd: null,
+      origin: 'outlook',
+    });
+    const [, sql, params] = mockQueryOne.mock.calls[0];
+    expect(sql).toMatch(/origin\s+= COALESCE\(teams_meetings\.origin, EXCLUDED\.origin\)/);
+    expect(params?.at(-1)).toBe('outlook');
+  });
+});
+
 describe('upsertTeamsMeeting', () => {
   it('inserts with defaults and maps the returned row', async () => {
     mockQueryOne.mockResolvedValue(RAW as never);
@@ -315,6 +399,7 @@ describe('upsertTeamsMeeting', () => {
       null,
       null,
       null,
+      null,
     ]);
 
     expect(result).toEqual({
@@ -337,6 +422,8 @@ describe('upsertTeamsMeeting', () => {
       recordingId: null,
       recordingCleanup: null,
       recordingBytes: null,
+      origin: null,
+      openedAt: null,
       createdAt: CREATED,
     });
   });
@@ -501,12 +588,15 @@ describe('listDueTeamsMeetings', () => {
     // rescued, and a row with no schedule is bounded by created_at.
     expect(sql).toMatch(/state IN \('awaiting_teams', 'needs_reauth'\)/);
     expect(sql).toMatch(/state = 'fetching'/);
-    expect(sql).toMatch(/GREATEST\(scheduled_end, created_at\) <= \$1::timestamptz/);
+    expect(sql).toMatch(/GREATEST\(scheduled_end, created_at, opened_at\) <= \$1::timestamptz/);
     // No upper bound on the window: pollMeeting has to see those rows to fail them.
-    expect(sql).not.toMatch(/GREATEST\(scheduled_end, created_at\)\s*>=/);
+    expect(sql).not.toMatch(/GREATEST\([^)]*\)\s*>=/);
     expect(sql).toMatch(/\$5::int \* INTERVAL/);
     expect(sql).toMatch(/CASE WHEN attempts < \$2::int THEN \$3::int ELSE \$4::int END/);
-    expect(params).toEqual([now, 15, 120_000, 900_000, STALE_FETCHING_MS]);
+    // Unopened Outlook meetings: only past the 30-day cap.
+    expect(sql).toMatch(/origin IS DISTINCT FROM 'outlook'\s+OR opened_at IS NOT NULL/);
+    expect(sql).toMatch(/\$6::bigint \* INTERVAL/);
+    expect(params).toEqual([now, 15, 120_000, 900_000, STALE_FETCHING_MS, OUTLOOK_UNOPENED_GIVE_UP_MS]);
     expect(rows).toHaveLength(1);
   });
 });

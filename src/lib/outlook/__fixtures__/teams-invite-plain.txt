@@ -1,0 +1,11 @@
+[SYNTHETIC fixture, modelled on the plain-text body (body.getAsync with CoercionType.Text) of a Teams invitation, where Outlook writes each link as text<url>. Fake meeting: id 399000000000001, passcode FaKeFaKeFaKe0001, tenant 11111111-…, organizer 22222222-….]
+Opfølgning på budgetudkastet.
+
+________________________________________________________________________________
+Microsoft Teams Har du brug for hjælp?<https://aka.ms/JoinTeamsMeeting?omkt=da-DK>
+Deltag i mødet nu<https://teams.microsoft.com/meet/399000000000001?p=FaKeFaKeFaKe0001>
+Møde-id: 399 000 000 000 01
+Adgangskode: FaKe02
+________________________________
+Til organisatorer: Mødeindstillinger<https://teams.microsoft.com/meetingOptions/?organizerId=22222222-2222-2222-2222-222222222222&tenantId=11111111-1111-1111-1111-111111111111&threadId=19_meeting_RkFLRV9NRUVUSU5HXzAwMDI@thread.v2&messageId=0&language=da-DK>
+________________________________________________________________________________

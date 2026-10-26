@@ -67,6 +67,29 @@ describe('validateTeamsUrl', () => {
     expect(validateTeamsUrl(null as unknown as string)).toEqual({ ok: false, reason: 'invalid-url' });
     expect(validateTeamsUrl(42 as unknown as string)).toEqual({ ok: false, reason: 'invalid-url' });
   });
+
+  // A real join link carries neither. `evil@teams.microsoft.com` reads as Teams to a
+  // person, and an explicit port is a different service to a proxy.
+  it.each([
+    ['a username', 'https://evil.example@teams.microsoft.com/l/meetup-join/abc'],
+    ['a username and password', 'https://user:pass@teams.microsoft.com/meet/12345?p=x'],
+    ['an empty username with a password', 'https://:pass@teams.live.com/meet/12345'],
+    ['a non-default port', 'https://teams.microsoft.com:8443/meet/12345?p=x'],
+    ['an explicit port 80 on https', 'https://teams.microsoft.com:80/meet/12345?p=x'],
+  ])('rejects %s with invalid-url', (_label, url) => {
+    expect(validateTeamsUrl(url)).toEqual({ ok: false, reason: 'invalid-url' });
+  });
+
+  it('accepts an explicit :443, which URL normalises away', () => {
+    expect(validateTeamsUrl('https://teams.microsoft.com:443/meet/12345?p=x')).toEqual({
+      ok: true,
+      url: 'https://teams.microsoft.com/meet/12345?p=x',
+    });
+  });
+
+  it('still rejects userinfo pointing away from Teams as wrong-host or invalid-url', () => {
+    expect(validateTeamsUrl('https://teams.microsoft.com@evil.example/meet/1').ok).toBe(false);
+  });
 });
 
 describe('validateTeamsUrl — Defender Safe Links', () => {
@@ -130,6 +153,28 @@ describe('validateTeamsUrl — Defender Safe Links', () => {
 
   it('rejects a wrapper around a non-https inner link', () => {
     expect(validateTeamsUrl(wrap('http://teams.microsoft.com/l/meetup-join/abc'))).toEqual({
+      ok: false,
+      reason: 'invalid-url',
+    });
+  });
+
+  it('rejects userinfo or a port inside the wrapper', () => {
+    expect(validateTeamsUrl(wrap('https://evil.example@teams.microsoft.com/meet/1?p=x'))).toEqual({
+      ok: false,
+      reason: 'invalid-url',
+    });
+    expect(validateTeamsUrl(wrap('https://teams.microsoft.com:8443/meet/1?p=x'))).toEqual({
+      ok: false,
+      reason: 'invalid-url',
+    });
+  });
+
+  it('rejects userinfo or a port on the wrapper itself', () => {
+    expect(validateTeamsUrl(wrap(JOIN_URL, 'x@eur03.safelinks.protection.outlook.com'))).toEqual({
+      ok: false,
+      reason: 'invalid-url',
+    });
+    expect(validateTeamsUrl(wrap(JOIN_URL, 'eur03.safelinks.protection.outlook.com:8443'))).toEqual({
       ok: false,
       reason: 'invalid-url',
     });

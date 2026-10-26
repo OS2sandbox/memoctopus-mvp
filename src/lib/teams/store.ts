@@ -29,6 +29,9 @@ export type RecordingCleanupState = 'pending' | 'deleted' | 'recycled' | 'not_fo
 /** Outcome of the one-shot arm PATCH, kept so the UI can explain itself later. */
 export type TeamsArmResult = 'armed' | 'armed_in_progress' | 'not_organizer' | 'policy_blocked';
 
+/** Where a meeting was armed from. `null` is the dashboard's "Mødelink" box. */
+export type TeamsMeetingOrigin = 'outlook';
+
 export interface TeamsMeetingRow {
   id: string;
   graphMeetingId: string;
@@ -52,6 +55,10 @@ export interface TeamsMeetingRow {
   recordingCleanup: RecordingCleanupState | null;
   /** Size of the recording we downloaded — what identifies the file in OneDrive. */
   recordingBytes: number | null;
+  /** `'outlook'` when armed from the Outlook add-in, null for the dashboard. */
+  origin: TeamsMeetingOrigin | null;
+  /** When the user first opened an Outlook-armed meeting here. See {@link isDeferred}. */
+  openedAt: Date | null;
   createdAt: Date | null;
 }
 
@@ -69,6 +76,8 @@ export type TeamsMeetingInput = Omit<
   | 'createdAt'
   | 'eventId'
   | 'armResult'
+  | 'origin'
+  | 'openedAt'
 > &
   Partial<TeamsMeetingRow>;
 
@@ -88,6 +97,26 @@ export const POLL_GIVE_UP_MS = 24 * 60 * 60 * 1000;
  * would never be re-listed, never given up on, and never surface as failed.
  */
 export const STALE_FETCHING_MS = 30 * 60 * 1000;
+
+/**
+ * How long an Outlook-armed meeting nobody has opened keeps its recording in
+ * Teams before we stop waiting. The storage rule the DPO is asked to accept: the
+ * recording stays in the organizer's OneDrive until they open the meeting in
+ * OS2taletiltekst, and never for longer than this on our account.
+ */
+export const OUTLOOK_UNOPENED_GIVE_UP_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * An Outlook-armed meeting the user has not opened here yet. The background
+ * poller leaves it alone: someone who armed it from Outlook may come back days
+ * later, and a transcript fetched now would be swept, uncollected, after an hour
+ * (pending-artifacts' TTL) while the recording it came from had already been
+ * deleted. Opening the meeting (a forced poll from its screen) is what starts the
+ * fetch, with the user there to collect it.
+ */
+export function isDeferred(row: Pick<TeamsMeetingRow, 'origin' | 'openedAt'>): boolean {
+  return row.origin === 'outlook' && row.openedAt == null;
+}
 
 /** States the poller picks up on its own (`fetching` only once it is stale). */
 const POLLABLE_STATES = ['awaiting_teams', 'needs_reauth'] as const;
@@ -118,6 +147,13 @@ export function isTeamsMeetingDue(row: TeamsMeetingRow, now: Date): boolean {
     (row.lastPolledAt ?? row.createdAt)!.getTime() <= nowMs - STALE_FETCHING_MS;
   if (!pollable && !staleFetching) return false;
 
+  // Unopened Outlook meetings are only listed to be settled once the 30-day cap
+  // has passed; pollMeeting does nothing else with them.
+  if (isDeferred(row)) {
+    const born = giveUpAnchor(row);
+    return born != null && born.getTime() <= nowMs - OUTLOOK_UNOPENED_GIVE_UP_MS;
+  }
+
   // A meeting with no schedule (ad-hoc "Mød nu", or a link whose window Graph
   // omits) is bounded by when we were asked to watch it, so it still gives up.
   const bound = giveUpAnchor(row);
@@ -130,22 +166,25 @@ export function isTeamsMeetingDue(row: TeamsMeetingRow, now: Date): boolean {
 
 /**
  * The instant the 24 h give-up window is measured from: the LATER of the meeting's
- * scheduled end and when we were asked to watch it.
+ * scheduled end, when we were asked to watch it, and (for an Outlook-armed
+ * meeting) when the user opened it. Opening is what starts the fetch for those,
+ * so their window starts there too, however long after the meeting it is.
  *
  * Not the scheduled end alone. A link pasted for a meeting that finished days ago
  * would be born outside its own window and answered `failed` before Graph was asked
  * even once — while Graph still had the transcript. Being handed a link now earns
  * the meeting a full window from now, whenever it was actually held.
  */
-export function giveUpAnchor(row: Pick<TeamsMeetingRow, 'scheduledEnd' | 'createdAt'>): Date | null {
+export function giveUpAnchor(
+  row: Pick<TeamsMeetingRow, 'scheduledEnd' | 'createdAt'> & { openedAt?: Date | null },
+): Date | null {
   // realDate, not a bare ??: rows written before the resolver filtered it carry
   // Graph's 0001-01-01 zero value, and treating that as a real scheduled end
   // makes the meeting look two thousand years overdue and abandoned on sight.
-  const end = realDate(row.scheduledEnd);
-  const created = row.createdAt ?? null;
-  if (!end) return created;
-  if (!created) return end;
-  return end.getTime() >= created.getTime() ? end : created;
+  const candidates = [realDate(row.scheduledEnd), row.createdAt ?? null, row.openedAt ?? null]
+    .filter((d): d is Date => d != null);
+  if (candidates.length === 0) return null;
+  return candidates.reduce((a, b) => (b.getTime() > a.getTime() ? b : a));
 }
 
 // ─── Row mapping ────────────────────────────────────────────────────────────
@@ -170,6 +209,8 @@ interface RawTeamsMeeting {
   recording_id: string | null;
   recording_cleanup?: string | null;
   recording_bytes?: number | string | null;
+  origin?: string | null;
+  opened_at?: Date | string | null;
   created_at?: Date | string | null;
 }
 
@@ -200,6 +241,8 @@ function mapRow(raw: RawTeamsMeeting): TeamsMeetingRow {
     recordingCleanup: (raw.recording_cleanup as RecordingCleanupState | null | undefined) ?? null,
     // BIGINT arrives as a string from pg.
     recordingBytes: raw.recording_bytes == null ? null : Number(raw.recording_bytes),
+    origin: raw.origin === 'outlook' ? 'outlook' : null,
+    openedAt: toDate(raw.opened_at ?? null),
     createdAt: toDate(raw.created_at ?? null),
   };
 }
@@ -208,7 +251,7 @@ const SELECT_COLUMNS = `
   id, graph_meeting_id, event_id, join_url, subject, organizer_id, is_organizer,
   armed, arm_result, scheduled_start, scheduled_end, state, last_polled_at,
   attempts, failure_reason, transcript_id, recording_id, recording_cleanup,
-  recording_bytes, created_at
+  recording_bytes, origin, opened_at, created_at
 `;
 
 // ─── Queries ────────────────────────────────────────────────────────────────
@@ -227,11 +270,11 @@ export async function upsertTeamsMeeting(
     `INSERT INTO teams_meetings (
        id, graph_meeting_id, event_id, join_url, subject, organizer_id, is_organizer,
        armed, arm_result, scheduled_start, scheduled_end, state, last_polled_at,
-       attempts, failure_reason, transcript_id, recording_id, updated_at
+       attempts, failure_reason, transcript_id, recording_id, origin, updated_at
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::text, 'not_organizer'), $10, $11,
        COALESCE($12::text, 'awaiting_teams'), $13::timestamptz, COALESCE($14::int, 0),
-       $15, $16, $17, NOW()
+       $15, $16, $17, $18, NOW()
      )
      ON CONFLICT (id) DO UPDATE SET
        graph_meeting_id = EXCLUDED.graph_meeting_id,
@@ -250,6 +293,9 @@ export async function upsertTeamsMeeting(
        failure_reason   = COALESCE($15, teams_meetings.failure_reason),
        transcript_id    = COALESCE($16, teams_meetings.transcript_id),
        recording_id     = COALESCE($17, teams_meetings.recording_id),
+       -- Where it was first armed from stays: re-pasting an Outlook meeting's link
+       -- in the dashboard must not lift the Outlook storage rule off it.
+       origin           = COALESCE(teams_meetings.origin, EXCLUDED.origin),
        updated_at       = NOW()
      RETURNING ${SELECT_COLUMNS}`,
     [
@@ -270,6 +316,7 @@ export async function upsertTeamsMeeting(
       row.failureReason ?? null,
       row.transcriptId ?? null,
       row.recordingId ?? null,
+      row.origin ?? null,
     ],
   );
   // RETURNING always yields a row; the null branch keeps TypeScript honest.
@@ -348,6 +395,21 @@ export async function getTeamsMeetingByGraphId(
   return raw ? mapRow(raw) : null;
 }
 
+/** Every row for one Graph meeting (a series has one onlineMeeting for all its occurrences). */
+export async function listTeamsMeetingsByGraphId(
+  userId: string,
+  graphMeetingId: string,
+): Promise<TeamsMeetingRow[]> {
+  const rows = await queryUserSchema<RawTeamsMeeting>(
+    userId,
+    `SELECT ${SELECT_COLUMNS} FROM teams_meetings
+      WHERE graph_meeting_id = $1
+      ORDER BY created_at DESC`,
+    [graphMeetingId],
+  );
+  return rows.map(mapRow);
+}
+
 export async function listTeamsMeetings(userId: string): Promise<TeamsMeetingRow[]> {
   const rows = await queryUserSchema<RawTeamsMeeting>(
     userId,
@@ -370,17 +432,23 @@ export async function listDueTeamsMeetings(
                   AND COALESCE(last_polled_at, created_at)
                       <= $1::timestamptz - ($5::int * INTERVAL '1 millisecond'))
             )
+        -- Unopened Outlook meetings only once the 30-day cap has passed, to be
+        -- settled (see isDeferred).
+        AND (origin IS DISTINCT FROM 'outlook'
+             OR opened_at IS NOT NULL
+             OR GREATEST(scheduled_end, created_at)
+                <= $1::timestamptz - ($6::bigint * INTERVAL '1 millisecond'))
         -- GREATEST, not COALESCE: see giveUpAnchor. GREATEST skips NULLs, so a
         -- meeting with no schedule still falls back to created_at.
-        AND GREATEST(scheduled_end, created_at) <= $1::timestamptz
+        AND GREATEST(scheduled_end, created_at, opened_at) <= $1::timestamptz
         -- No upper bound: a row past its give-up window must still reach
         -- pollMeeting, which is what marks it failed (see isTeamsMeetingDue).
         AND (last_polled_at IS NULL
              OR last_polled_at <= $1::timestamptz
                 - (CASE WHEN attempts < $2::int THEN $3::int ELSE $4::int END)
                   * INTERVAL '1 millisecond')
-      ORDER BY GREATEST(scheduled_end, created_at) ASC`,
-    [now, FAST_POLL_ATTEMPTS, FAST_POLL_MS, SLOW_POLL_MS, STALE_FETCHING_MS],
+      ORDER BY GREATEST(scheduled_end, created_at, opened_at) ASC`,
+    [now, FAST_POLL_ATTEMPTS, FAST_POLL_MS, SLOW_POLL_MS, STALE_FETCHING_MS, OUTLOOK_UNOPENED_GIVE_UP_MS],
   );
   return rows.map(mapRow);
 }
@@ -475,6 +543,23 @@ export async function refreshTeamsMeetingSchedule(
     [id, fields.scheduledStart, fields.scheduledEnd, fields.subject],
   );
   if (!result) throw new Error(`refreshTeamsMeetingSchedule: no such Teams meeting: ${id}`);
+  return mapRow(result);
+}
+
+/**
+ * Records that the user opened an Outlook-armed meeting here, which lifts the
+ * deferral (see {@link isDeferred}). Only the first opening counts.
+ */
+export async function markTeamsMeetingOpened(userId: string, id: string): Promise<TeamsMeetingRow> {
+  const result = await queryUserSchemaOne<RawTeamsMeeting>(
+    userId,
+    `UPDATE teams_meetings
+        SET opened_at = COALESCE(opened_at, NOW()), updated_at = NOW()
+      WHERE id = $1
+      RETURNING ${SELECT_COLUMNS}`,
+    [id],
+  );
+  if (!result) throw new Error(`markTeamsMeetingOpened: no such Teams meeting: ${id}`);
   return mapRow(result);
 }
 

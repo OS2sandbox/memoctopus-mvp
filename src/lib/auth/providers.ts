@@ -138,6 +138,26 @@ export function teamsGraphEnabled(): boolean {
   return env('TEAMS_GRAPH_ENABLED')?.toLowerCase() === 'true';
 }
 
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The Outlook add-in: a button in Outlook's meeting form that arms the meeting
+ * through the same Graph integration. Opt-in like TEAMS_GRAPH_ENABLED (only an
+ * explicit "true"), and only ever on together with it, since everything after
+ * the button is the Graph pipeline.
+ *
+ * Returns what the add-in signs in against, or null when it is off. The tenant
+ * must be a real tenant id: the add-in's tokens are accepted from that tenant
+ * alone, so `common` or `organizations` would mean any Microsoft tenant.
+ */
+export function outlookAddinConfig(): { clientId: string; tenantId: string } | null {
+  if (env('OUTLOOK_ADDIN_ENABLED')?.toLowerCase() !== 'true') return null;
+  if (!teamsGraphEnabled()) return null;
+  const microsoft = microsoftConfig();
+  if (!microsoft || !GUID_RE.test(microsoft.clientId) || !GUID_RE.test(microsoft.tenantId)) return null;
+  return { clientId: microsoft.clientId.toLowerCase(), tenantId: microsoft.tenantId.toLowerCase() };
+}
+
 /**
  * Delegated scopes the Teams integration needs in the current configuration:
  * empty while it is off; otherwise the full list, minus the recording scope in

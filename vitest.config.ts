@@ -10,7 +10,7 @@ export default defineConfig({
     // @ts-ignore — valid Vitest option, not in Next.js tsconfig types
     environmentMatchGlobs: [['src/components/**/*.test.tsx', 'jsdom']],
     setupFiles: ['./src/test/setup.ts'],
-    exclude: ['node_modules/**'],
+    exclude: ['node_modules/**', '.next/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov', 'html'],

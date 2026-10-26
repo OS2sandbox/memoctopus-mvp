@@ -8,8 +8,11 @@ import { getMeeting } from './meeting-resolver';
 import { processTeamsMeeting } from './pipeline';
 import { deleteRecordingFromDrive } from './recording-cleanup';
 import {
+  OUTLOOK_UNOPENED_GIVE_UP_MS,
   POLL_GIVE_UP_MS,
   giveUpAnchor,
+  isDeferred,
+  markTeamsMeetingOpened,
   getTeamsMeeting,
   refreshTeamsMeetingSchedule,
   listDueTeamsMeetings,
@@ -41,6 +44,10 @@ export const GIVE_UP_MESSAGE =
  */
 export const REAUTH_GIVE_UP_MESSAGE =
   'Adgangen til Microsoft udløb, før transskriptionen kunne hentes fra Teams.';
+
+/** An Outlook-armed meeting nobody opened within the 30-day cap. */
+export const NOT_OPENED_MESSAGE =
+  'Mødet blev ikke åbnet i OS2taletiltekst inden for 30 dage, så transskriptionen blev ikke hentet.';
 
 export const TRANSCRIPTS_DISABLED_MESSAGE =
   'Teams-administratoren har slået Graph-adgang til transskriptioner fra. ' +
@@ -88,6 +95,22 @@ export async function pollMeeting(
   // sign-in that cannot help. Leave the row as it is; it resumes if the flag is
   // switched on later.
   if (!teamsGraphEnabled()) return row;
+
+  // An Outlook-armed meeting waits for its user (see isDeferred). Only the user
+  // opening it, once it has begun, starts the fetch; the background poller only
+  // ever settles one that was never opened, and asks Graph nothing about it.
+  //
+  // The 30-day cap is final: past it nothing is fetched, opened or not, and
+  // "Prøv igen" cannot revive the row. That is the rule the user was told.
+  if (isDeferred(row)) {
+    const born = giveUpAnchor(row);
+    if (born && born.getTime() <= now.getTime() - OUTLOOK_UNOPENED_GIVE_UP_MS) {
+      if (row.state === 'failed') return row;
+      return await markPollAttempt(userId, id, { state: 'failed', failureReason: NOT_OPENED_MESSAGE });
+    }
+    if (!(options.force && hasStarted(row, now))) return row;
+    row = await markTeamsMeetingOpened(userId, id);
+  }
 
   // What Graph says about the meeting NOW, before any decision keyed on its window.
   // Organizers move, rename and shorten meetings after the link was pasted, and the

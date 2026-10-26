@@ -16,7 +16,8 @@ vi.mock('@/lib/teams/meeting-arm', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/teams/meeting-arm')>()),
   armMeeting: vi.fn(),
 }));
-vi.mock('@/lib/teams/store', () => ({
+vi.mock('@/lib/teams/store', async (importOriginal) => ({
+  isDeferred: (await importOriginal<typeof import('@/lib/teams/store')>()).isDeferred,
   upsertTeamsMeeting: vi.fn(),
   claimMeetingSnapshot: vi.fn(),
   listTeamsMeetings: vi.fn(),
@@ -89,6 +90,8 @@ beforeEach(() => {
     recordingId: null,
     recordingCleanup: null,
     recordingBytes: null,
+    origin: null,
+    openedAt: null,
     state: 'awaiting_teams' as const,
     eventId: null,
     armResult: 'not_organizer' as const,
@@ -400,5 +403,30 @@ describe('GET /api/teams/meetings', () => {
     const res = await GET();
     expect(res.status).toBe(401);
     expect(vi.mocked(listTeamsMeetings)).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/teams/meetings — Outlook meetings', () => {
+  it('hands over what the dashboard needs to import an Outlook-armed meeting', async () => {
+    vi.mocked(listTeamsMeetings).mockResolvedValue([
+      {
+        id: 'ol-1', state: 'awaiting_teams', origin: 'outlook', openedAt: null,
+        subject: 'Styregruppe', joinUrl: JOIN,
+        scheduledStart: new Date('2026-10-27T09:00:00Z'), createdAt: new Date('2026-10-26T08:00:00Z'),
+      },
+      { id: 'd-1', state: 'ready', origin: null, openedAt: null, subject: 'Hemmeligt', joinUrl: JOIN },
+    ] as never);
+
+    const body = await (await GET()).json();
+
+    expect(body.meetings).toEqual([
+      {
+        id: 'ol-1', state: 'awaiting_teams', origin: 'outlook', deferred: true,
+        subject: 'Styregruppe', joinUrl: JOIN,
+        scheduledStart: '2026-10-27T09:00:00.000Z', createdAt: '2026-10-26T08:00:00.000Z',
+      },
+      // A dashboard meeting already lives in the browser: id and state only.
+      { id: 'd-1', state: 'ready' },
+    ]);
   });
 });

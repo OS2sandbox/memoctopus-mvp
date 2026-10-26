@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { getAllMeetings, StoredMeeting } from '@/lib/storage';
 import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
+import { importOutlookMeetings, type ServerTeamsMeeting } from '@/lib/outlook/import-meetings';
 import { ArchiveMeetingRow } from '@/components/archive-meeting-row';
 import { SkabelonerList } from '@/components/skabeloner/SkabelonerList';
 import { Button } from '@/components/ui/button';
@@ -19,6 +20,17 @@ import {
 import { Meeting } from '@/types';
 
 type Tab = 'meetings' | 'skabeloner';
+
+/**
+ * What the row badge should say about a Teams meeting, from the server's view.
+ * A Teams meeting reads "Afventer Teams" locally until it is collected, also once
+ * the server has given up on it. And an Outlook-armed meeting that has begun but
+ * was never opened is waiting for the user, not for Teams: `deferred`.
+ */
+function serverBadgeState(m: ServerTeamsMeeting): string {
+  const started = m.scheduledStart ? Date.parse(m.scheduledStart) <= Date.now() : true;
+  return m.deferred && started ? 'deferred' : m.state;
+}
 
 export default function ArkivPage() {
   const [meetings, setMeetings] = useState<(Meeting & { durationSeconds: number | null })[]>([]);
@@ -40,7 +52,16 @@ export default function ArkivPage() {
   }, []);
 
   useEffect(() => {
-    getAllMeetings()
+    // Meetings armed from Outlook exist only on the server until a browser has
+    // seen them, so they are brought in first. The same answer carries the
+    // server's state of every Teams meeting (see serverBadgeState). Best effort:
+    // without it the page shows what this browser has, with its local status.
+    importOutlookMeetings()
+      .catch(() => null)
+      .then((server) => {
+        if (server) setTeamsStates(Object.fromEntries(server.map((m) => [m.id, serverBadgeState(m)])));
+        return getAllMeetings();
+      })
       .then((rows) => {
         const mapped = rows
           // Hide meetings that never got off the ground: an abandoned local recording, or an
@@ -58,7 +79,6 @@ export default function ArkivPage() {
             durationSeconds: r.audioDurationSeconds,
           }));
         setMeetings(mapped);
-        if (mapped.some((m) => m.status === 'awaiting_teams')) void loadTeamsStates();
       })
       .catch((err) => {
         console.error('[arkiv] Kunne ikke indlæse møder fra lokalt lager:', err);
@@ -66,20 +86,6 @@ export default function ArkivPage() {
       })
       .finally(() => setLoading(false));
   }, []);
-
-  // A Teams meeting reads "Afventer Teams" locally until it is collected, also
-  // once the server has given up on it. Ask the server what became of them.
-  // Best effort: without an answer the rows keep their local status.
-  async function loadTeamsStates() {
-    try {
-      const res = await fetch('/api/teams/meetings');
-      if (!res.ok) return;
-      const body = (await res.json()) as { meetings?: { id: string; state: string }[] };
-      setTeamsStates(Object.fromEntries((body.meetings ?? []).map((m) => [m.id, m.state])));
-    } catch (err) {
-      console.warn('[arkiv] kunne ikke hente Teams-status:', err);
-    }
-  }
 
   function selectTab(next: Tab) {
     setTab(next);
