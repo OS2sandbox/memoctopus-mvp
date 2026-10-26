@@ -120,6 +120,10 @@ services:
       # granted it makes EVERY Microsoft sign-in fail with "Need admin approval".
       # Read once at startup, so changing it needs `up -d app` (a restart).
       - TEAMS_GRAPH_ENABLED=${TEAMS_GRAPH_ENABLED:-}
+      # The Outlook add-in (served at /outlook-addin/). Only "true" turns it on,
+      # and only together with TEAMS_GRAPH_ENABLED and a tenant-specific
+      # MICROSOFT_TENANT_ID. Read per request: a restart is enough.
+      - OUTLOOK_ADDIN_ENABLED=${OUTLOOK_ADDIN_ENABLED:-}
       - GRAPH_BASE_URL=${GRAPH_BASE_URL:-}
       - TEAMS_SPOKEN_LANGUAGE=${TEAMS_SPOKEN_LANGUAGE:-}
       # prefer-recording (default) re-transcribes Teams' recording with hviske and

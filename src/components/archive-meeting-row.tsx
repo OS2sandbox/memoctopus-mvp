@@ -33,6 +33,8 @@ function badgeFor(m: ArchiveMeeting): { label: string; variant: ReturnType<typeo
   if (m.status === 'awaiting_teams') {
     if (m.teamsState === 'failed') return { label: 'Intet referat', variant: 'destructive' };
     if (m.teamsState === 'needs_reauth') return { label: 'Log ind igen', variant: 'warning' };
+    // Armed from Outlook and over, but never opened: opening it starts the fetch.
+    if (m.teamsState === 'deferred') return { label: 'Åbn for at hente', variant: 'default' };
   }
   return { label: statusLabel(m.status), variant: statusVariant(m.status) };
 }

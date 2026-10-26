@@ -18,6 +18,8 @@ export async function getMeeting(id: string): Promise<StoredMeeting | null> {
 }
 
 export async function createMeeting(data: {
+  /** A fixed id, for a meeting that already exists on the server (armed from Outlook). */
+  id?: string;
   title: string;
   participants?: string[];
   source?: 'local' | 'teams';
@@ -38,7 +40,7 @@ export async function createMeeting(data: {
   const db = await getDB();
   const now = new Date().toISOString();
   const meeting: StoredMeeting = {
-    id: newId(),
+    id: data.id ?? newId(),
     title: data.title,
     participants: data.participants ?? [],
     status: data.status ?? 'recording',

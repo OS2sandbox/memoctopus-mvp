@@ -27,12 +27,14 @@ vi.mock('./store', async (importOriginal) => {
     refreshTeamsMeetingSchedule: vi.fn(),
     listPendingRecordingCleanups: vi.fn().mockResolvedValue([]),
     settleRecordingCleanup: vi.fn().mockResolvedValue(undefined),
+    markTeamsMeetingOpened: vi.fn(),
   };
 });
 
 import {
   GIVE_UP_MESSAGE,
   MEETING_GONE_MESSAGE,
+  NOT_OPENED_MESSAGE,
   POLL_LOCK_KEY,
   REAUTH_GIVE_UP_MESSAGE,
   TRANSCRIPTS_DISABLED_MESSAGE,
@@ -56,6 +58,8 @@ import {
   refreshTeamsMeetingSchedule,
   listPendingRecordingCleanups,
   settleRecordingCleanup,
+  markTeamsMeetingOpened,
+  OUTLOOK_UNOPENED_GIVE_UP_MS,
   type TeamsMeetingRow,
 } from './store';
 
@@ -70,6 +74,7 @@ const mockRefresh = vi.mocked(refreshTeamsMeetingSchedule);
 const mockDeleteRecording = vi.mocked(deleteRecordingFromDrive);
 const mockListCleanups = vi.mocked(listPendingRecordingCleanups);
 const mockSettle = vi.mocked(settleRecordingCleanup);
+const mockMarkOpened = vi.mocked(markTeamsMeetingOpened);
 
 /** What getMeeting answers by default: the same window the row already has. */
 function graphMeeting(over: Record<string, unknown> = {}) {
@@ -111,6 +116,8 @@ function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     recordingId: null,
     recordingCleanup: null,
     recordingBytes: null,
+    origin: null,
+    openedAt: null,
     eventId: null,
     armResult: 'armed',
     createdAt: new Date('2026-09-08T09:00:00Z'),
@@ -1006,5 +1013,116 @@ describe('deleting the recording from OneDrive', () => {
 
     expect(result).toEqual({ polled: 0 });
     expect(mockSettle).toHaveBeenCalledWith('u1', 'm1', 'deleted');
+  });
+});
+
+describe('pollMeeting — Outlook-armed meetings', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.TEAMS_GRAPH_ENABLED = 'true';
+    mockGetMeeting.mockResolvedValue(graphMeeting());
+  });
+
+  const unopened = (over: Partial<TeamsMeetingRow> = {}) =>
+    row({ origin: 'outlook', openedAt: null, ...over });
+
+  it('leaves an unopened meeting alone in the background, and asks Graph nothing', async () => {
+    mockGet.mockResolvedValue(unopened());
+
+    const result = await pollMeeting('u1', 'm1', NOW);
+
+    expect(result.state).toBe('awaiting_teams');
+    expect(mockGetMeeting).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+    expect(mockMark).not.toHaveBeenCalled();
+    expect(mockMarkOpened).not.toHaveBeenCalled();
+  });
+
+  it('settles an unopened meeting after 30 days', async () => {
+    mockGet.mockResolvedValue(
+      unopened({
+        scheduledStart: null,
+        scheduledEnd: new Date(NOW.getTime() - OUTLOOK_UNOPENED_GIVE_UP_MS - 1000),
+        createdAt: new Date(NOW.getTime() - OUTLOOK_UNOPENED_GIVE_UP_MS - 2000),
+      }),
+    );
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', { state: 'failed', failureReason: NOT_OPENED_MESSAGE });
+    expect(mockGetMeeting).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('does not fetch a meeting opened after the 30-day cap, and does not revive it', async () => {
+    const old = {
+      scheduledStart: null,
+      scheduledEnd: new Date(NOW.getTime() - OUTLOOK_UNOPENED_GIVE_UP_MS - 1000),
+      createdAt: new Date(NOW.getTime() - OUTLOOK_UNOPENED_GIVE_UP_MS - 2000),
+    };
+    mockGet.mockResolvedValue(unopened(old));
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', { state: 'failed', failureReason: NOT_OPENED_MESSAGE });
+    expect(mockMarkOpened).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+
+    // Already failed: "Prøv igen" leaves it failed.
+    vi.clearAllMocks();
+    mockGet.mockResolvedValue(unopened({ ...old, state: 'failed', failureReason: NOT_OPENED_MESSAGE }));
+    const result = await pollMeeting('u1', 'm1', NOW, { force: true });
+    expect(result.state).toBe('failed');
+    expect(mockSetState).not.toHaveBeenCalled();
+    expect(mockMark).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('starts the fetch when the user opens it after the meeting', async () => {
+    // Opened a week after the meeting: the window starts at the opening.
+    const end = new Date(NOW.getTime() - 7 * 24 * 60 * 60_000);
+    const before = unopened({
+      scheduledStart: new Date(end.getTime() - 60 * 60_000),
+      scheduledEnd: end,
+      createdAt: new Date(end.getTime() - 2 * 24 * 60 * 60_000),
+      lastPolledAt: null,
+    });
+    mockGet.mockResolvedValue(before);
+    mockMarkOpened.mockResolvedValue({ ...before, openedAt: NOW });
+    mockGetMeeting.mockResolvedValue(
+      graphMeeting({
+        scheduledStart: before.scheduledStart!.toISOString(),
+        scheduledEnd: end.toISOString(),
+      }),
+    );
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expect(mockMarkOpened).toHaveBeenCalledWith('u1', 'm1');
+    expect(mockProcess).toHaveBeenCalled();
+    expect(mockMark).not.toHaveBeenCalledWith('u1', 'm1', expect.objectContaining({ state: 'failed' }));
+  });
+
+  it('does not count opening before the meeting has begun', async () => {
+    mockGet.mockResolvedValue(
+      unopened({
+        scheduledStart: new Date(NOW.getTime() + 60 * 60_000),
+        scheduledEnd: new Date(NOW.getTime() + 2 * 60 * 60_000),
+      }),
+    );
+
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expect(mockMarkOpened).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('polls an opened meeting like any other', async () => {
+    mockGet.mockResolvedValue(row({ origin: 'outlook', openedAt: new Date(NOW.getTime() - 60_000) }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockProcess).toHaveBeenCalled();
+    expect(mockMarkOpened).not.toHaveBeenCalled();
   });
 });

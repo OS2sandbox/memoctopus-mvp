@@ -16,8 +16,12 @@ vi.mock('next/link', () => ({
 vi.mock('@/components/skabeloner/SkabelonerList', () => ({ SkabelonerList: () => null }));
 
 const mockGetAllMeetings = vi.fn();
+const mockGetMeeting = vi.fn();
+const mockCreateMeeting = vi.fn();
 vi.mock('@/lib/storage', () => ({
   getAllMeetings: (...args: unknown[]) => mockGetAllMeetings(...args),
+  getMeeting: (...args: unknown[]) => mockGetMeeting(...args),
+  createMeeting: (...args: unknown[]) => mockCreateMeeting(...args),
 }));
 
 // Bulk delete goes through the shared helper; @/lib/storage has no deleteMeeting
@@ -117,14 +121,56 @@ describe('ArkivPage — Teams status', () => {
     vi.unstubAllGlobals();
   });
 
-  it('does not ask the server when no meeting is waiting for Teams', async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
+  it('says "Åbn for at hente" for an Outlook meeting that is over but never opened', async () => {
+    mockGetAllMeetings.mockResolvedValue([awaiting('ol-1', 'Styregruppe')]);
+    mockGetMeeting.mockResolvedValue({ id: 'ol-1' });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        meetings: [{
+          id: 'ol-1', state: 'awaiting_teams', origin: 'outlook', deferred: true,
+          subject: 'Styregruppe', joinUrl: 'https://teams.microsoft.com/l/meetup-join/x',
+          scheduledStart: '2026-01-01T09:00:00.000Z', createdAt: '2025-12-31T09:00:00.000Z',
+        }],
+      })),
+    ));
 
     render(<ArkivPage />);
 
-    await screen.findByText('Teams-møde A');
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await screen.findByText('Åbn for at hente')).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  it('imports an Outlook meeting this browser has not seen, under the server id', async () => {
+    mockGetMeeting.mockResolvedValue(null);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        meetings: [
+          {
+            id: 'ol-2', state: 'awaiting_teams', origin: 'outlook', deferred: true,
+            subject: 'Budgetmøde', joinUrl: 'https://teams.microsoft.com/l/meetup-join/y',
+            scheduledStart: '2026-11-03T09:00:00.000Z', createdAt: '2026-10-26T09:00:00.000Z',
+          },
+          // Collected in another browser: nothing left to show here.
+          { id: 'ol-3', state: 'ready', origin: 'outlook', joinUrl: 'https://teams.microsoft.com/l/meetup-join/z' },
+          // A dashboard meeting lives in its own browser already.
+          { id: 'd-1', state: 'awaiting_teams' },
+        ],
+      })),
+    ));
+
+    render(<ArkivPage />);
+
+    await waitFor(() => expect(mockCreateMeeting).toHaveBeenCalledTimes(1));
+    expect(mockCreateMeeting).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'ol-2',
+      title: 'Budgetmøde',
+      source: 'teams',
+      graphManaged: true,
+      meetingUrl: 'https://teams.microsoft.com/l/meetup-join/y',
+      status: 'awaiting_teams',
+    }));
+    // Listed after the import, so the new meeting is on the page.
+    await waitFor(() => expect(mockGetAllMeetings).toHaveBeenCalled());
     vi.unstubAllGlobals();
   });
 });

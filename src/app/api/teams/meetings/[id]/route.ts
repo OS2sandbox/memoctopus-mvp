@@ -3,13 +3,11 @@ import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
-import { disarmMeeting } from '@/lib/teams/meeting-arm';
 import { pollMeeting } from '@/lib/teams/poller';
+import { unregisterTeamsMeeting } from '@/lib/teams/register';
 import { readPendingTranscript } from '@/lib/pending-artifacts';
 import {
   POLL_GIVE_UP_MS,
-  deleteTeamsMeeting,
-  getMeetingSnapshot,
   getTeamsMeeting,
   giveUpAnchor,
   setTeamsMeetingState,
@@ -125,19 +123,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const row = await getTeamsMeeting(userId, id);
   if (!row) return NextResponse.json({ error: 'not_found' }, { status: 404 });
 
-  // A policy-blocked arm was still PATCHed, so it has options to put back too.
-  let disarmed = true;
-  if (row.armed || row.armResult === 'policy_blocked') {
-    try {
-      const originalOptions = await getMeetingSnapshot(userId, row.graphMeetingId);
-      await disarmMeeting(userId, row.graphMeetingId, originalOptions);
-    } catch (err) {
-      disarmed = false;
-      console.error('[teams/meetings] disarm failed for', id, '- the meeting may still be armed in Teams:', err);
-    }
-  }
-
-  await deleteTeamsMeeting(userId, id);
+  const { disarmed } = await unregisterTeamsMeeting(userId, row);
   return NextResponse.json({ ok: true, disarmed });
 }
 

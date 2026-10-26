@@ -270,6 +270,11 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         ADD COLUMN IF NOT EXISTS recording_id  TEXT,
         ADD COLUMN IF NOT EXISTS recording_cleanup TEXT,
         ADD COLUMN IF NOT EXISTS recording_bytes   BIGINT,
+        -- 'outlook' when armed from the Outlook add-in; NULL for the dashboard.
+        ADD COLUMN IF NOT EXISTS origin        TEXT,
+        -- When the user first opened an Outlook-armed meeting in OS2taletiltekst.
+        -- Until then its recording is left in Teams (see the poller).
+        ADD COLUMN IF NOT EXISTS opened_at     TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         ADD COLUMN IF NOT EXISTS updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     `);
