@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { needsInteraction, parseConfig } from './auth';
+import { needsInteraction, parseConfig, signInErrorCode } from './auth';
 import { armedMessage, noLinkMessage, readArmedId, writeArmedId } from './meeting';
 import type { AsyncResult, CustomProperties, OfficeApi, OrganizerItem } from './office';
 
@@ -30,6 +30,22 @@ describe('needsInteraction', () => {
   it('does not pop up for anything else', () => {
     expect(needsInteraction({ errorCode: 'network_error' })).toBe(false);
     expect(needsInteraction(null)).toBe(false);
+  });
+});
+
+describe('signInErrorCode', () => {
+  const msg = 'invalid_client: Error(s): 700046 - Description: AADSTS700046: Invalid Reply Address. Trace ID: 4094';
+  it('names the AADSTS code an admin can look up', () => {
+    expect(signInErrorCode({ errorCode: 'invalid_client', errorMessage: msg })).toBe('AADSTS700046');
+    expect(signInErrorCode({ message: msg })).toBe('AADSTS700046');
+  });
+  it('falls back to the MSAL error code', () => {
+    expect(signInErrorCode({ errorCode: 'user_cancelled', errorMessage: 'User cancelled the flow.' })).toBe('user_cancelled');
+  });
+  it('gives nothing it cannot vouch for', () => {
+    expect(signInErrorCode(null)).toBeNull();
+    expect(signInErrorCode({ errorCode: '<img src=x>' })).toBeNull();
+    expect(signInErrorCode(new Error('boom'))).toBeNull();
   });
 });
 

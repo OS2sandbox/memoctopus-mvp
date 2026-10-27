@@ -51,7 +51,7 @@ On the **existing** app registration the dashboard signs in with (the one in
 
 | Where | What |
 |---|---|
-| Authentication → Add a platform → Single-page application | Redirect URI `brk-multihub://<this host>`, e.g. `brk-multihub://taletiltekst.example.dk` |
+| Authentication → Add a platform → Single-page application | Two redirect URIs, both under *Single-page application* (not *Web*): `brk-multihub://<this host>` and `brk-9199bf20-a13f-4107-85dc-02114787ef48://<this host>`, e.g. `brk-multihub://taletiltekst.example.dk`. The host only: no `https://`, no path. The second is Outlook on the web's own broker; without it sign-in there fails with AADSTS700046 |
 | Expose an API | Application ID URI `api://<client-id>`; add scope `access_as_user` (who can consent: admins and users; enabled) |
 | API permissions → Add → My APIs → this app | Delegated `access_as_user`, then **Grant admin consent** |
 | Manifest | `"requestedAccessTokenVersion": 2` (v2 tokens; v1 is accepted too) |
@@ -75,6 +75,28 @@ group. It can take up to 24 hours before the button appears in Outlook.
 When `src/lib/outlook/manifest.ts` changes, bump `ADDIN_VERSION` and upload the new
 file: the admin center keeps the file it was given. Changes to the pane itself
 (`outlook-addin/src/`) need only a deploy.
+
+## When it does not work
+
+**"Mødet har endnu intet Teams-link."** In new Outlook and Outlook on the web the
+Teams link only lands in the meeting text once the meeting is saved or sent, and the
+pane reads the text when it opens. Save the meeting, open it again from the
+calendar, and press the button.
+
+**"Microsoft-login mislykkedes … Fejlkode: …"** The pane shows the code Entra or
+MSAL gave. The full error is in the browser console (F12), on the line starting
+`[os2taletiltekst]`; its Correlation ID finds the attempt in Entra's sign-in logs.
+
+| Code | Cause | Fix (app registration) |
+|---|---|---|
+| `AADSTS700046` "Reply Address must have scheme brk-…://" | The redirect URI for that Outlook's broker is missing, or registered as *Web* | Add the URI the message names, `brk-<id>://<this host>`, under *Single-page application* |
+| `AADSTS50011` | Redirect URI does not match the host | Check the host in both `brk-…://` URIs is exactly the one the add-in loads from |
+| `AADSTS500011` "resource principal … not found" | Application ID URI is not `api://<client-id>` | Expose an API → set it to `api://<client-id>` |
+| `AADSTS65001` | No consent for `access_as_user` | API permissions → Grant admin consent |
+| `AADSTS53003` | Conditional Access blocks the sign-in | An exception for the app, or for NAA |
+
+Lines in the console from Outlook itself (`owa.*.js`, `[Violation] … unload is not
+allowed`) are Outlook's own and unrelated.
 
 ## Limits
 
