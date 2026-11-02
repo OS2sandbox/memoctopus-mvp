@@ -91,6 +91,7 @@ beforeEach(() => {
     recordingCleanup: null,
     recordingCleanupAt: null,
     recordingBytes: null,
+    recordingSizes: [],
     origin: null,
     openedAt: null,
     recollectedAt: null,

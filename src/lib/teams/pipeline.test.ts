@@ -11,6 +11,7 @@ const mockStorePendingMeta = vi.hoisted(() => vi.fn());
 const mockTranscribeRecording = vi.hoisted(() => vi.fn());
 const mockTranscribeAlongCues = vi.hoisted(() => vi.fn());
 const mockSetOwner = vi.hoisted(() => vi.fn());
+const mockDeletePendingTranscript = vi.hoisted(() => vi.fn());
 const mockMkdir = vi.hoisted(() => vi.fn());
 const mockMkdtemp = vi.hoisted(() => vi.fn());
 const mockReadFile = vi.hoisted(() => vi.fn());
@@ -20,6 +21,7 @@ vi.mock('./artifacts', async () => {
   const actual = await vi.importActual<typeof import('./artifacts')>('./artifacts');
   return {
     pickArtifact: actual.pickArtifact,
+    selectArtifacts: actual.selectArtifacts,
     listArtifacts: mockListArtifacts,
     downloadTranscriptVtt: mockDownloadVtt,
     downloadRecording: mockDownloadRecording,
@@ -43,6 +45,7 @@ vi.mock('@/lib/pending-artifacts', () => ({
   readPendingTranscript: mockReadPendingTranscript,
   storePendingMeta: mockStorePendingMeta,
   setMeetingOwner: mockSetOwner,
+  deletePendingTranscript: mockDeletePendingTranscript,
 }));
 
 vi.mock('@/lib/transcribe-recording', () => ({ transcribeRecording: mockTranscribeRecording }));
@@ -118,6 +121,7 @@ beforeEach(() => {
   mockMkdir.mockReset().mockResolvedValue(undefined);
   mockMkdtemp.mockReset().mockImplementation(async (prefix: string) => `${prefix}abc123`);
   mockSetOwner.mockReset().mockResolvedValue(undefined);
+  mockDeletePendingTranscript.mockReset().mockResolvedValue(undefined);
   mockReadFile.mockReset().mockResolvedValue(WAV);
   mockRm.mockReset().mockResolvedValue(undefined);
   // hviske hears the meeting at least as fully as Teams did — the normal case,
@@ -197,6 +201,7 @@ describe('processTeamsMeeting — recording + transcript', () => {
       transcriptId: 't1',
       recordingId: 'r1',
       recordingBytes: 1234,
+      recordingSizes: [1234],
     });
 
     // mp4 lands under AUDIO_STORAGE_PATH, never in the repo.
@@ -328,6 +333,7 @@ describe('processTeamsMeeting — transcript only', () => {
       transcriptId: 't1',
       recordingId: null,
       recordingBytes: null,
+      recordingSizes: [],
     });
     expect(mockDownloadRecording).not.toHaveBeenCalled();
     expect(mockSpawn).not.toHaveBeenCalled();
@@ -478,6 +484,7 @@ describe('processTeamsMeeting — recording only', () => {
       transcriptId: null,
       recordingId: 'r1',
       recordingBytes: 1234,
+      recordingSizes: [1234],
     });
     expect(mockDownloadVtt).not.toHaveBeenCalled();
     // No turns injected — transcribe-recording runs its own diarization pass.
@@ -585,6 +592,168 @@ describe('processTeamsMeeting — no mode hands raw audio to the browser', () =>
 // MIN_COVERAGE_RATIO decides when hviske's pass is treated as having lost the
 // meeting. It is exported but was never imported by a test, so the threshold
 // could be changed to anything without failing the suite.
+describe('processTeamsMeeting — recording stopped and started again', () => {
+  // One meeting, several stretches: Graph holds one recording (and usually one
+  // transcript) per stretch. Every stretch belongs in the referat.
+  const at = (hhmmss: string) => `2026-09-08T${hhmmss}Z`;
+  const ref = (id: string, from: string, to: string) => ({ id, createdDateTime: at(from), endDateTime: at(to) });
+  const vtt = (...cues: [number, number, string, string][]) =>
+    ['WEBVTT', '', ...cues.flatMap(([a, b, who, text]) => [`${clock(a)} --> ${clock(b)}`, `<v ${who}>${text}</v>`, ''])].join('\n');
+  const clock = (sec: number) => `00:${String(Math.floor(sec / 60)).padStart(2, '0')}:${(sec % 60).toFixed(3).padStart(6, '0')}`;
+  /** A wav of `seconds` of 16 kHz mono 16-bit audio, as transcodeToWav leaves it. */
+  const wav = (seconds: number) => Buffer.alloc(44 + seconds * 32000);
+
+  const VTTS: Record<string, string> = {
+    t1: vtt([0, 4, 'Mette Hansen', 'Velkommen alle sammen.'], [50, 55, 'Jens Poulsen', 'Lad os holde pause.']),
+    t2: vtt([1, 5, 'Mette Hansen', 'Så er vi tilbage igen.']),
+  };
+  const SIZES: Record<string, number> = { r1: 1111, r2: 2222 };
+
+  beforeEach(() => {
+    mockDownloadVtt.mockImplementation(async (_u: string, _g: string, id: string) => VTTS[id]);
+    mockDownloadRecording.mockImplementation(async (_u: string, _g: string, id: string) => ({ bytes: SIZES[id] }));
+    mockReadFile.mockResolvedValue(wav(60));
+    // hviske hears what Teams heard, in its own words.
+    mockTranscribeAlongCues.mockImplementation(async (_wav: Buffer, cues: { start: number; end: number; text: string; speaker: string }[]) => ({
+      segments: cues.map((c) => ({ start: c.start, end: c.end, text: `hviske: ${c.text}`, speaker: c.speaker })),
+      batches: cues.length,
+      emptyBatches: 0,
+    }));
+  });
+
+  function stashed() {
+    const ready = mockStorePendingTranscript.mock.calls.filter(([, body]) => body.status === 'ready');
+    expect(ready).toHaveLength(1);
+    expect(ready[0][0]).toBe('meet-1');
+    return ready[0][1].segments as { start: number; end: number; text: string; speaker: string }[];
+  }
+
+  it('transcribes every recording along its own cues and joins them in order', async () => {
+    mockListArtifacts.mockResolvedValue({
+      transcripts: [ref('t2', '10:05:00', '10:06:00'), ref('t1', '10:00:00', '10:01:00')],
+      recordings: [ref('r1', '10:00:00', '10:01:00'), ref('r2', '10:05:00', '10:06:00')],
+    });
+
+    const outcome = await processTeamsMeeting('u1', MEETING, JUST_AFTER_END);
+
+    expect(outcome).toMatchObject({ status: 'ready', mode: 'recording+transcript', recordingSizes: [1111, 2222] });
+    expect(mockTranscribeAlongCues).toHaveBeenCalledTimes(2);
+    expect(stashed().map((s) => [s.start, s.text])).toEqual([
+      [0, 'hviske: Velkommen alle sammen.'],
+      [50, 'hviske: Lad os holde pause.'],
+      [301, 'hviske: Så er vi tilbage igen.'],
+    ]);
+    expect(mockStorePendingMeta).toHaveBeenCalledWith('meet-1', {
+      participants: ['Mette Hansen', 'Jens Poulsen'],
+      durationSeconds: 305,
+    });
+  });
+
+  it("uses a restarted transcription's cues for the recording that kept running", async () => {
+    // One recording, transcription stopped and started again inside it.
+    mockReadFile.mockResolvedValue(wav(400));
+    mockListArtifacts.mockResolvedValue({
+      transcripts: [ref('t1', '10:00:00', '10:01:00'), ref('t2', '10:05:00', '10:06:00')],
+      recordings: [ref('r1', '10:00:00', '10:06:40')],
+    });
+
+    await processTeamsMeeting('u1', MEETING, JUST_AFTER_END);
+
+    expect(mockTranscribeAlongCues).toHaveBeenCalledTimes(1);
+    const [, cues] = mockTranscribeAlongCues.mock.calls[0];
+    expect(cues.map((c: { start: number }) => c.start)).toEqual([0, 50, 301]);
+  });
+
+  it("keeps Teams' text for a stretch that was transcribed but not recorded", async () => {
+    mockListArtifacts.mockResolvedValue({
+      transcripts: [ref('t1', '10:00:00', '10:01:00'), ref('t2', '10:05:00', '10:06:00')],
+      recordings: [ref('r1', '10:00:00', '10:01:00')],
+    });
+
+    const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
+
+    expect(outcome).toMatchObject({ status: 'ready', recordingSizes: [1111] });
+    expect(stashed().map((s) => s.text)).toEqual([
+      'hviske: Velkommen alle sammen.',
+      'hviske: Lad os holde pause.',
+      'Så er vi tilbage igen.',
+    ]);
+  });
+
+  it('still waits for the recording of a stretch Teams has only published the transcript of', async () => {
+    mockListArtifacts.mockResolvedValue({
+      transcripts: [ref('t1', '10:00:00', '10:01:00'), ref('t2', '10:05:00', '10:06:00')],
+      recordings: [ref('r1', '10:00:00', '10:01:00')],
+    });
+
+    expect(await processTeamsMeeting('u1', MEETING, JUST_AFTER_END)).toEqual({ status: 'pending' });
+    expect(mockDownloadRecording).not.toHaveBeenCalled();
+  });
+
+  it('diarizes a recording no transcript covers, without ever stashing it as the meeting', async () => {
+    mockListArtifacts.mockResolvedValue({
+      transcripts: [ref('t1', '10:00:00', '10:01:00')],
+      recordings: [ref('r1', '10:00:00', '10:01:00'), ref('r2', '10:05:00', '10:06:00')],
+    });
+    mockTranscribeRecording.mockImplementation(async () => {
+      mockReadPendingTranscript.mockResolvedValue({
+        status: 'ready',
+        segments: [{ start: 2, end: 6, text: 'Uden transskription.', speaker: 'Taler 1' }],
+        createdAt: 1,
+      });
+    });
+
+    const outcome = await processTeamsMeeting('u1', MEETING, JUST_AFTER_END);
+
+    expect(mockTranscribeRecording).toHaveBeenCalledWith('meet-1-del2', expect.any(Buffer), 'audio/wav');
+    expect(mockDeletePendingTranscript).toHaveBeenCalledWith('meet-1-del2');
+    expect(outcome).toMatchObject({ status: 'ready', recordingSizes: [1111, 2222] });
+    expect(stashed().map((s) => [s.start, s.speaker, s.text])).toEqual([
+      [0, 'Mette Hansen', 'hviske: Velkommen alle sammen.'],
+      [50, 'Jens Poulsen', 'hviske: Lad os holde pause.'],
+      [302, 'Taler 1', 'Uden transskription.'],
+    ]);
+  });
+
+  it('tells apart the anonymous speakers of two separately diarized recordings', async () => {
+    mockListArtifacts.mockResolvedValue({
+      transcripts: [],
+      recordings: [ref('r1', '10:00:00', '10:01:00'), ref('r2', '10:05:00', '10:06:00')],
+    });
+    mockTranscribeRecording.mockImplementation(async () => {
+      mockReadPendingTranscript.mockResolvedValue({
+        status: 'ready',
+        segments: [{ start: 0, end: 1, text: 'Hej.', speaker: 'Taler 1' }],
+        createdAt: 1,
+      });
+    });
+
+    await processTeamsMeeting('u1', MEETING, JUST_AFTER_END);
+
+    expect(stashed().map((s) => s.speaker)).toEqual(['Taler 1', 'Taler 1 (del 2)']);
+  });
+
+  it("does not delete a recording whose stretch fell back to Teams' text", async () => {
+    mockListArtifacts.mockResolvedValue({
+      transcripts: [ref('t1', '10:00:00', '10:01:00'), ref('t2', '10:05:00', '10:06:00')],
+      recordings: [ref('r1', '10:00:00', '10:01:00'), ref('r2', '10:05:00', '10:06:00')],
+    });
+    // hviske loses the second stretch.
+    mockTranscribeAlongCues
+      .mockImplementationOnce(async (_wav: Buffer, cues: { start: number; end: number; text: string; speaker: string }[]) => ({
+        segments: cues.map((c) => ({ ...c, text: `hviske: ${c.text}` })),
+        batches: 1,
+        emptyBatches: 0,
+      }))
+      .mockResolvedValueOnce({ segments: [], batches: 1, emptyBatches: 1 });
+
+    const outcome = await processTeamsMeeting('u1', MEETING, JUST_AFTER_END);
+
+    expect(outcome).toMatchObject({ status: 'ready', recordingSizes: [1111], recordingBytes: 1111 });
+    expect(stashed().at(-1)!.text).toBe('Så er vi tilbage igen.');
+  });
+});
+
 describe('coversMeeting', () => {
   const s = (text: string) => ({ speaker: 'A', start: 0, end: 1, text });
 

@@ -157,7 +157,8 @@ dead end and offers the saved transcript or a delete.
   `/me/drive/special/recordings` by the **exact byte count we downloaded** and
   removed with `permanentDelete` (falling back to an ordinary delete when the tenant
   refuses). Never match on file name or time: that could delete a recording this
-  run never fetched. More than one file of that size deletes nothing. The poller
+  run never fetched. More than one file of that size deletes nothing; a meeting recorded
+  in stretches deletes each of its sizes (`recording_sizes`). The poller
   owns the orchestration (`cleanUpRecording()`): `recording_cleanup = 'pending'` is
   written in the same UPDATE that marks the row `ready`, retried every tick for a
   day, and never changes the meeting's state. A row whose recording is gone passes
@@ -192,6 +193,17 @@ dead end and offers the saved transcript or a delete.
   what it published". `coversMeeting()` is the safety net: when hviske comes back with
   less than `MIN_COVERAGE_RATIO` of the words Teams itself heard, Teams' own transcript
   (already downloaded) ships instead.
+  **A meeting recorded in stretches** (recording or transcription stopped and started
+  again) has one artifact per stretch. `selectArtifacts()` takes all of them — everything
+  in the window, or without one the newest sitting (`SESSION_GAP_MS`) — and
+  `runStretches()` places each on the meeting's clock by its Graph span (`timeline.ts`),
+  transcribes every recording along the cues inside it (or diarizes it under a scratch
+  stash id when no cue is), keeps Teams' text for transcribed-only stretches, and joins
+  the parts. One recording and one transcript still take the original single-pair path.
+  Every recording we transcribed is listed in `recording_sizes` and deleted. The recording
+  grace is measured from when Teams' transcript ended, not by attempts.
+  Stretches Teams publishes after the meeting was collected are not in it; "Hent igen"
+  collects again from everything Graph then holds.
 - `store.ts` — raw-SQL CRUD over the per-user `teams_meetings` table (same per-user schema
   rules as everything else), plus the polling-due predicate and backoff.
 - `poller.ts` — `pollMeeting()` / `pollDueMeetings()`; started from `src/instrumentation.ts`

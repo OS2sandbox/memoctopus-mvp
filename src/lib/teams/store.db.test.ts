@@ -264,6 +264,21 @@ describe('listDueTeamsMeetings', () => {
       expect(await queueRecordingCleanup(USER, 'm1')).toBe(false);
     });
 
+    it('keeps every recording of a meeting recorded in stretches, and queues them together', async () => {
+      await insert({ id: 'm2', state: 'fetching' });
+      await markPollAttempt(USER, 'm2', { state: 'ready', recordingBytes: 1111, recordingSizes: [1111, 9_000_000_000] });
+
+      expect(await queueRecordingCleanup(USER, 'm2')).toBe(true);
+      const [row] = await listPendingRecordingCleanups(USER);
+      expect(row).toMatchObject({ recordingBytes: 1111, recordingSizes: [1111, 9_000_000_000] });
+    });
+
+    it('reads a row from before recording_sizes as its one recording', async () => {
+      await collected('old', 'recording_bytes = 4242');
+
+      expect((await getTeamsMeeting(USER, 'old'))?.recordingSizes).toEqual([4242]);
+    });
+
     it('queues nothing without a recording of ours behind the transcript, or before it is collected', async () => {
       await collected('vtt', 'recording_bytes = NULL');
       await insert({ id: 'waiting' });

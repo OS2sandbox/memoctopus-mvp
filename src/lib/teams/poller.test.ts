@@ -42,6 +42,7 @@ import {
   pollMeeting,
   startPoller,
   cleanUpRecording,
+  combineCleanup,
   RECORDING_CLEANUP_GIVE_UP_MS,
   RECORDING_STALL_LIMIT,
 } from './poller';
@@ -119,6 +120,7 @@ function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     recordingCleanup: null,
     recordingCleanupAt: null,
     recordingBytes: null,
+    recordingSizes: [],
     origin: null,
     openedAt: null,
     recollectedAt: null,
@@ -324,6 +326,7 @@ describe('pollMeeting', () => {
       transcriptId: 't1',
       recordingId: 'r1',
       recordingBytes: null,
+      recordingSizes: [],
     });
 
     await pollMeeting('u1', 'm1', NOW);
@@ -348,6 +351,7 @@ describe('pollMeeting', () => {
       transcriptId: 't1',
       recordingId: 'r1',
       recordingBytes: null,
+      recordingSizes: [],
     });
   });
 
@@ -522,6 +526,7 @@ describe('pollMeeting', () => {
       transcriptId: 't1',
       recordingId: null,
       recordingBytes: null,
+      recordingSizes: [],
     });
 
     await pollMeeting('u1', 'm1', NOW, { force: true });
@@ -593,7 +598,7 @@ describe('pollMeeting', () => {
     mockGet.mockResolvedValueOnce(row());
     mockMark.mockResolvedValueOnce(after);
     mockProcess.mockResolvedValueOnce({
-      status: 'ready', mode: 'transcript-only', transcriptId: null, recordingId: null, recordingBytes: null,
+      status: 'ready', mode: 'transcript-only', transcriptId: null, recordingId: null, recordingBytes: null, recordingSizes: [],
     });
 
     expect(await pollMeeting('u1', 'm1', NOW)).toBe(after);
@@ -1048,6 +1053,7 @@ describe('deleting the recording from OneDrive', () => {
     transcriptId: 't1',
     recordingId: 'r1',
     recordingBytes,
+    recordingSizes: recordingBytes == null ? [] : [recordingBytes],
   });
 
   let warn: ReturnType<typeof vi.spyOn>;
@@ -1079,6 +1085,7 @@ describe('deleting the recording from OneDrive', () => {
       transcriptId: 't1',
       recordingId: 'r1',
       recordingBytes: 4242,
+      recordingSizes: [4242],
     });
     expect(mockDeleteRecording).not.toHaveBeenCalled();
     expect(mockSettle).not.toHaveBeenCalled();
@@ -1135,6 +1142,37 @@ describe('deleting the recording from OneDrive', () => {
 
     expect(mockSettle).toHaveBeenCalledWith('u1', 'm1', stored);
     expect(result.recordingCleanup).toBe(stored);
+  });
+
+  it('deletes every recording of a meeting that was recorded in stretches', async () => {
+    mockDeleteRecording.mockResolvedValueOnce('deleted').mockResolvedValueOnce('deleted');
+
+    const result = await cleanUpRecording('u1', pending({ recordingBytes: 1111, recordingSizes: [1111, 2222] }), NOW);
+
+    expect(mockDeleteRecording.mock.calls.map((c) => c[1])).toEqual([1111, 2222]);
+    expect(mockSettle).toHaveBeenCalledWith('u1', 'm1', 'deleted');
+    expect(result.recordingCleanup).toBe('deleted');
+  });
+
+  it('falls back to the single size on a row from before recording_sizes', async () => {
+    mockDeleteRecording.mockResolvedValueOnce('deleted');
+
+    await cleanUpRecording('u1', pending({ recordingBytes: 4242, recordingSizes: [] }), NOW);
+
+    expect(mockDeleteRecording.mock.calls.map((c) => c[1])).toEqual([4242]);
+  });
+
+  it('retries the whole set when one delete is throttled, and counts the ones already gone as done', async () => {
+    mockDeleteRecording
+      .mockResolvedValueOnce('deleted')
+      .mockRejectedValueOnce(new GraphError('http', 'throttled', { status: 429 }));
+    const row1 = pending({ recordingBytes: 1111, recordingSizes: [1111, 2222] });
+
+    expect((await cleanUpRecording('u1', row1, NOW)).recordingCleanup).toBe('pending');
+    expect(mockSettle).not.toHaveBeenCalled();
+
+    mockDeleteRecording.mockResolvedValueOnce('not_found').mockResolvedValueOnce('deleted');
+    expect((await cleanUpRecording('u1', row1, NOW)).recordingCleanup).toBe('deleted');
   });
 
   it('waits for the user to sign in again when the files scope is missing', async () => {
@@ -1315,5 +1353,15 @@ describe('pollMeeting — Outlook-armed meetings', () => {
 
     expect(mockProcess).toHaveBeenCalled();
     expect(mockMarkOpened).not.toHaveBeenCalled();
+  });
+});
+
+describe('combineCleanup', () => {
+  it('is as weak as the weakest delete', () => {
+    expect(combineCleanup(['deleted', 'deleted'])).toBe('deleted');
+    expect(combineCleanup(['deleted', 'not_found'])).toBe('deleted');
+    expect(combineCleanup(['deleted', 'recycled'])).toBe('recycled');
+    expect(combineCleanup(['deleted', 'ambiguous'])).toBe('failed');
+    expect(combineCleanup(['not_found', 'not_found'])).toBe('not_found');
   });
 });

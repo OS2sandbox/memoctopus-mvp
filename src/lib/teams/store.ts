@@ -70,6 +70,12 @@ export interface TeamsMeetingRow {
    * the file in OneDrive. Null when the transcript did not come from one.
    */
   recordingBytes: number | null;
+  /**
+   * Every recording to delete — more than one when recording was stopped and
+   * started again. Rows from before this column hold only `recordingBytes`, so
+   * reads fall back to that.
+   */
+  recordingSizes: number[];
   /** `'outlook'` when armed from the Outlook add-in, null for the dashboard. */
   origin: TeamsMeetingOrigin | null;
   /** When the user first opened an Outlook-armed meeting here. See {@link isDeferred}. */
@@ -96,6 +102,7 @@ export type TeamsMeetingInput = Omit<
   | 'recordingCleanup'
   | 'recordingCleanupAt'
   | 'recordingBytes'
+  | 'recordingSizes'
   | 'createdAt'
   | 'eventId'
   | 'armResult'
@@ -216,6 +223,7 @@ interface RawTeamsMeeting {
   recording_cleanup?: string | null;
   recording_cleanup_at?: Date | string | null;
   recording_bytes?: number | string | null;
+  recording_sizes?: (number | string)[] | null;
   origin?: string | null;
   opened_at?: Date | string | null;
   recollected_at?: Date | string | null;
@@ -252,6 +260,9 @@ function mapRow(raw: RawTeamsMeeting): TeamsMeetingRow {
     recordingCleanupAt: toDate(raw.recording_cleanup_at ?? null),
     // BIGINT arrives as a string from pg.
     recordingBytes: raw.recording_bytes == null ? null : Number(raw.recording_bytes),
+    recordingSizes: raw.recording_sizes?.length
+      ? raw.recording_sizes.map(Number)
+      : raw.recording_bytes == null ? [] : [Number(raw.recording_bytes)],
     origin: raw.origin === 'outlook' ? 'outlook' : null,
     openedAt: toDate(raw.opened_at ?? null),
     recollectedAt: toDate(raw.recollected_at ?? null),
@@ -271,7 +282,7 @@ const SELECT_COLUMNS = `
   id, graph_meeting_id, event_id, join_url, subject, organizer_id, is_organizer,
   armed, arm_result, scheduled_start, scheduled_end, occurrence_window, state,
   last_polled_at, attempts, failure_reason, transcript_id, recording_id,
-  recording_cleanup, recording_cleanup_at, recording_bytes, origin, opened_at,
+  recording_cleanup, recording_cleanup_at, recording_bytes, recording_sizes, origin, opened_at,
   recollected_at, recording_stalls, created_at
 `;
 
@@ -482,6 +493,7 @@ export interface TeamsMeetingPatch {
   recordingId?: string | null;
   recordingCleanup?: RecordingCleanupState | null;
   recordingBytes?: number | null;
+  recordingSizes?: number[] | null;
 }
 
 const PATCH_COLUMNS: Record<keyof TeamsMeetingPatch, string> = {
@@ -491,6 +503,7 @@ const PATCH_COLUMNS: Record<keyof TeamsMeetingPatch, string> = {
   recordingId: 'recording_id',
   recordingCleanup: 'recording_cleanup',
   recordingBytes: 'recording_bytes',
+  recordingSizes: 'recording_sizes',
 };
 
 export interface MarkPollOptions {

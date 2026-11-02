@@ -3,12 +3,20 @@ import path from 'path';
 import { runFfmpeg } from '@/lib/audio/decode-server';
 import { GraphError, classifyGraphError } from './graph-client';
 import { graphDate, realDate } from './graph-dates';
-import { listArtifacts, pickArtifact, downloadTranscriptVtt, downloadRecording } from './artifacts';
+import {
+  listArtifacts,
+  pickArtifact,
+  selectArtifacts,
+  downloadTranscriptVtt,
+  downloadRecording,
+  type ArtifactRef,
+} from './artifacts';
 import { parseVtt, segmentsFromVtt, speakersFromVtt, type VttCue } from './vtt';
 import {
   storePendingTranscript,
   readPendingTranscript,
   storePendingMeta,
+  deletePendingTranscript,
   setMeetingOwner,
   type PendingTranscript,
 } from '@/lib/pending-artifacts';
@@ -19,6 +27,18 @@ import { withMeetingLock } from './meeting-lock';
 import { assertSafeMeetingId } from './meeting-id';
 import { teamsScratchRoot } from './scratch';
 import { artifactMode } from './artifact-mode';
+import {
+  SAME_START_TOLERANCE_MS,
+  artifactSpan,
+  joinPieces,
+  labelPart,
+  leftoverCues,
+  placeTranscript,
+  startOf,
+  takeCuesFor,
+  type PlacedTranscript,
+  type TimedPiece,
+} from './timeline';
 
 // One meeting's worth of work: ask Graph what artifacts exist, decide which of the
 // three processing modes applies, and land the result in the pending stash the
@@ -44,6 +64,12 @@ export type PipelineOutcome =
        * recording then stays, for a later run to try again.
        */
       recordingBytes: number | null;
+      /**
+       * Every recording our own transcription was made from, by size — more than
+       * one when recording was stopped and started again. `recordingBytes` is the
+       * first of them. Empty when there is nothing of ours to delete.
+       */
+      recordingSizes: number[];
     }
   // `transient`: pending because Graph was throttled or unreachable, not because
   // Teams has nothing yet. Such a poll must not count toward RECORDING_GRACE_ATTEMPTS.
@@ -174,6 +200,7 @@ async function runPipeline(
       transcriptId: null,
       recordingId: null,
       recordingBytes: null,
+      recordingSizes: [],
     };
   }
   if (existing?.status === 'processing') {
@@ -221,12 +248,15 @@ async function runPipeline(
   const windowStart = realDate(meeting.scheduledStart);
   const windowEnd = realDate(meeting.scheduledEnd);
   const window = windowStart && windowEnd ? { start: windowStart, end: windowEnd } : undefined;
-  const transcript = pickArtifact(artifacts.transcripts, window);
   const skipRecording =
     artifactMode() === 'transcript-only'
     || meeting.recordingDeleted === true
     || meeting.recordingUnreachable === true;
-  const recording = skipRecording ? null : pickArtifact(artifacts.recordings, window);
+  // Every stretch of the meeting, not only the newest: recording that was stopped
+  // and started again leaves one artifact per stretch.
+  const selected = selectArtifacts(artifacts.transcripts, skipRecording ? [] : artifacts.recordings, window);
+  const transcript = selected.transcripts.at(-1) ?? null;
+  const recording = selected.recordings.at(-1) ?? null;
 
   if (!transcript && meeting.recordingUnreachable && pickArtifact(artifacts.recordings, window)) {
     return { status: 'failed', reason: RECORDING_UNREACHABLE_MESSAGE };
@@ -236,14 +266,21 @@ async function runPipeline(
   // Teams publishes the transcript first and the recording minutes later. Taking
   // the transcript-only branch the moment it appears would permanently lock a
   // prefer-recording deployment out of hviske (the run is idempotent), so hold
-  // out for the recording until the grace period is spent.
-  if (transcript && !recording && !skipRecording && !graceElapsed(meeting, transcript, now)) {
-    return { status: 'pending' };
+  // out for the recording until the grace period is spent — for every
+  // transcript that no recording covers yet.
+  if (!skipRecording) {
+    const waiting = selected.transcripts.some(
+      (t) => !coveredByRecording(t, selected.recordings) && !graceElapsed(meeting, t, now),
+    );
+    if (waiting) return { status: 'pending' };
   }
 
   await storePendingTranscript(meeting.id, { status: 'processing' });
 
   try {
+    if (selected.transcripts.length > 1 || selected.recordings.length > 1) {
+      return await runStretches(userId, meeting, selected.transcripts, selected.recordings);
+    }
     if (transcript && recording) {
       return await runRecordingWithTranscript(userId, meeting, transcript.id, recording.id);
     }
@@ -261,6 +298,24 @@ async function runPipeline(
     console.error(`[teams-pipeline] ${meeting.id} failed:`, err);
     return { status: 'failed', reason };
   }
+}
+
+/**
+ * Does some recording span this transcript? Then it is not waiting for one. With
+ * no times to compare, any recording counts — the single-pair case as it always
+ * was.
+ */
+function coveredByRecording(transcript: ArtifactRef, recordings: ArtifactRef[]): boolean {
+  if (recordings.length === 0) return false;
+  const t = artifactSpan(transcript);
+  if (t.start == null) return true;
+  const tEnd = t.end ?? t.start;
+  return recordings.some((r) => {
+    const span = artifactSpan(r);
+    if (span.start == null) return true;
+    const rEnd = span.end ?? span.start;
+    return span.start <= tEnd + SAME_START_TOLERANCE_MS && rEnd >= t.start! - SAME_START_TOLERANCE_MS;
+  });
 }
 
 /** A Graph timestamp as a Date, or null when it is missing or Graph's year-1 zero. */
@@ -358,7 +413,14 @@ async function runRecordingWithTranscript(
   // user gets. After a fall back to Teams' text it is what a later "Hent igen"
   // needs to try again, so it is not offered up for deletion.
   const ours = mode === 'recording+transcript';
-  return { status: 'ready', mode, transcriptId, recordingId, recordingBytes: ours ? bytes : null };
+  return {
+    status: 'ready',
+    mode,
+    transcriptId,
+    recordingId,
+    recordingBytes: ours ? bytes : null,
+    recordingSizes: ours ? [bytes] : [],
+  };
 }
 
 /**
@@ -410,6 +472,7 @@ async function runTranscriptOnly(
     transcriptId,
     recordingId: null,
     recordingBytes: null,
+    recordingSizes: [],
   };
 }
 
@@ -436,6 +499,133 @@ async function runRecordingOnly(
     transcriptId: null,
     recordingId,
     recordingBytes: bytes,
+    recordingSizes: [bytes],
+  };
+}
+
+/** Seconds of 16 kHz mono 16-bit audio in a wav from {@link transcodeToWav}. */
+function wavSeconds(wav: Buffer): number {
+  return Math.max(0, wav.length - 44) / (16000 * 2);
+}
+
+/**
+ * One meeting, several stretches: recording (and/or transcription) was stopped
+ * and started again, so Graph holds more than one recording or transcript.
+ *
+ * Every artifact is placed on the meeting's clock by the span Graph reports for
+ * it. Each recording is then transcribed like a meeting of its own — along the
+ * Teams cues that fall inside it (mode 1), or with diarization when no cue does
+ * (mode 3) — and the cues no recording covers are used as Teams wrote them
+ * (mode 2). The parts are laid end to end on one transcript.
+ *
+ * Recordings are fetched one at a time, so only one is ever held in memory.
+ */
+async function runStretches(
+  userId: string,
+  meeting: PipelineMeeting,
+  transcriptRefs: ArtifactRef[],
+  recordingRefs: ArtifactRef[],
+): Promise<PipelineOutcome> {
+  const placed: PlacedTranscript[] = [];
+  const allCues: VttCue[] = [];
+  for (const ref of transcriptRefs) {
+    const cues = parseVtt(await downloadTranscriptVtt(userId, meeting.graphMeetingId, ref.id));
+    const start = startOf(artifactSpan(ref), durationFromCues(cues));
+    if (start == null) {
+      // Cannot be placed. Its text is still the meeting, so it is not dropped:
+      // it goes at the end, after everything that could be placed.
+      console.warn(`[teams-pipeline] ${meeting.id}: transcript ${ref.id} has no usable times`);
+    }
+    placed.push(placeTranscript(start ?? Number.MAX_SAFE_INTEGER, cues));
+    allCues.push(...cues);
+  }
+  const named = new Set(speakersFromVtt(allCues));
+
+  const pieces: TimedPiece[] = [];
+  const ourSizes: number[] = [];
+  let anonymousParts = 0;
+  const modes = new Set<ProcessingMode>();
+
+  for (const [index, ref] of recordingRefs.entries()) {
+    const { wav, bytes } = await fetchRecordingAsWav(userId, meeting, ref.id);
+    const seconds = wavSeconds(wav);
+    const start = startOf(artifactSpan(ref), seconds);
+    if (start == null) {
+      console.warn(`[teams-pipeline] ${meeting.id}: recording ${ref.id} has no usable times, skipped`);
+      continue;
+    }
+    const cues = takeCuesFor(placed, { start, end: start + seconds * 1000 });
+
+    if (cues.length > 0) {
+      const fromTeams = segmentsFromVtt(cues);
+      let heard: TranscriptSegment[] = [];
+      try {
+        heard = (await transcribeAlongCues(wav, cues)).segments;
+      } catch (err) {
+        console.error(`[teams-pipeline] ${meeting.id} cue transcription of ${ref.id} failed:`, err);
+      }
+      if (coversMeeting(heard, fromTeams)) {
+        pieces.push({ start, segments: heard });
+        ourSizes.push(bytes);
+        modes.add('recording+transcript');
+      } else {
+        // Teams' text for this stretch, and the recording is kept for a re-run.
+        pieces.push({ start, segments: fromTeams });
+        modes.add('transcript-only');
+      }
+      continue;
+    }
+
+    // No cue inside this recording: diarize it, under a scratch id nobody can
+    // collect, so the meeting's own stash never holds just one stretch.
+    const scratchId = `${meeting.id}-del${index + 1}`;
+    try {
+      await transcribeRecording(scratchId, wav, 'audio/wav');
+      const stash = await readPendingTranscript(scratchId);
+      const segments = stash?.status === 'ready' ? stash.segments ?? [] : [];
+      if (segments.length > 0) {
+        anonymousParts += 1;
+        pieces.push({ start, segments: labelPart(segments, anonymousParts, named) });
+        ourSizes.push(bytes);
+        modes.add('recording-only');
+      }
+    } finally {
+      await deletePendingTranscript(scratchId).catch(() => {});
+    }
+  }
+
+  // What Teams transcribed while nothing was being recorded.
+  for (const t of placed) {
+    const rest = leftoverCues(t);
+    if (rest.length === 0) continue;
+    pieces.push({ start: t.start, segments: segmentsFromVtt(rest) });
+    modes.add('transcript-only');
+  }
+
+  const { segments, durationSeconds } = joinPieces(pieces);
+  if (segments.length === 0) {
+    await storePendingTranscript(meeting.id, { status: 'failed' });
+    throw new Error("Hverken optagelserne eller Teams' transskriptioner fra mødet indeholdt tale.");
+  }
+
+  await storePendingTranscript(meeting.id, { status: 'ready', segments, diarized: true });
+  await storePendingMeta(meeting.id, { participants: speakersFromVtt(allCues), durationSeconds });
+
+  // The mode only reaches the logs; name the best that went into the transcript.
+  const mode: ProcessingMode = modes.has('recording+transcript')
+    ? 'recording+transcript'
+    : modes.has('recording-only') ? 'recording-only' : 'transcript-only';
+  console.log(
+    `[teams-pipeline] ${meeting.id}: ${recordingRefs.length} recordings and ${transcriptRefs.length}`
+    + ` transcripts joined into ${segments.length} segments (${[...modes].join(', ')})`,
+  );
+  return {
+    status: 'ready',
+    mode,
+    transcriptId: transcriptRefs.at(-1)?.id ?? null,
+    recordingId: recordingRefs.at(-1)?.id ?? null,
+    recordingBytes: ourSizes[0] ?? null,
+    recordingSizes: ourSizes,
   };
 }
 

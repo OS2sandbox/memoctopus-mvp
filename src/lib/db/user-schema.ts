@@ -270,6 +270,9 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         ADD COLUMN IF NOT EXISTS recording_id  TEXT,
         ADD COLUMN IF NOT EXISTS recording_cleanup TEXT,
         ADD COLUMN IF NOT EXISTS recording_bytes   BIGINT,
+        -- Every recording to delete, when recording was stopped and started again;
+        -- recording_bytes is the first of them. NULL on rows from before it.
+        ADD COLUMN IF NOT EXISTS recording_sizes   BIGINT[],
         -- When the delete was queued: once the browser had saved the transcript.
         ADD COLUMN IF NOT EXISTS recording_cleanup_at TIMESTAMPTZ,
         -- 'outlook' when armed from the Outlook add-in; NULL for the dashboard.

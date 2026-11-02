@@ -6,7 +6,7 @@ import { classifyGraphError, GraphError } from './graph-client';
 import { parseGraphDate } from './graph-dates';
 import { getMeeting } from './meeting-resolver';
 import { processTeamsMeeting } from './pipeline';
-import { deleteRecordingFromDrive } from './recording-cleanup';
+import { deleteRecordingFromDrive, type RecordingCleanupResult } from './recording-cleanup';
 import {
   OUTLOOK_UNOPENED_GIVE_UP_MS,
   POLL_GIVE_UP_MS,
@@ -227,7 +227,9 @@ export async function pollMeeting(
         failureReason: null,
         transcriptId: outcome.transcriptId,
         recordingId: outcome.recordingId,
-        ...(row.recordingCleanup == null ? { recordingBytes: outcome.recordingBytes } : {}),
+        ...(row.recordingCleanup == null
+          ? { recordingBytes: outcome.recordingBytes, recordingSizes: outcome.recordingSizes }
+          : {}),
       });
     }
     if (outcome.status === 'failed') {
@@ -284,14 +286,22 @@ export async function cleanUpRecording(
   row: TeamsMeetingRow,
   now: Date,
 ): Promise<TeamsMeetingRow> {
-  if (row.recordingCleanup !== 'pending' || row.recordingBytes == null) return row;
+  const sizes = row.recordingSizes.length > 0
+    ? row.recordingSizes
+    : row.recordingBytes == null ? [] : [row.recordingBytes];
+  if (row.recordingCleanup !== 'pending' || sizes.length === 0) return row;
 
   let result: Exclude<RecordingCleanupState, 'pending'>;
   try {
-    const outcome = await deleteRecordingFromDrive(userId, row.recordingBytes);
-    result = outcome === 'ambiguous' ? 'failed' : outcome;
-    if (outcome !== 'deleted') {
-      console.warn(`[teams/poller] ${row.id}: recording not deleted from OneDrive (${outcome})`);
+    // One file per recording. A retry after a postponed run finds the ones it
+    // already deleted gone (not_found), which is not a failure.
+    const outcomes: RecordingCleanupResult[] = [];
+    for (const bytes of sizes) outcomes.push(await deleteRecordingFromDrive(userId, bytes));
+    result = combineCleanup(outcomes);
+    for (const outcome of outcomes) {
+      if (outcome !== 'deleted') {
+        console.warn(`[teams/poller] ${row.id}: recording not deleted from OneDrive (${outcome})`);
+      }
     }
   } catch (err) {
     const kind = classifyGraphError(err);
@@ -318,6 +328,20 @@ export async function cleanUpRecording(
     return row;
   }
   return { ...row, recordingCleanup: result };
+}
+
+/**
+ * One verdict for a meeting's recordings, as weak as the weakest of them: any we
+ * could not tell apart from another file is a failure, any only moved to the
+ * recycle bin makes it `recycled`, and it is `not_found` only when none was there.
+ */
+export function combineCleanup(
+  outcomes: RecordingCleanupResult[],
+): Exclude<RecordingCleanupState, 'pending'> {
+  if (outcomes.some((o) => o === 'ambiguous')) return 'failed';
+  if (outcomes.some((o) => o === 'recycled')) return 'recycled';
+  if (outcomes.some((o) => o === 'deleted')) return 'deleted';
+  return 'not_found';
 }
 
 /** Danish, user-safe: the row can outlive the meeting it was created for. */
