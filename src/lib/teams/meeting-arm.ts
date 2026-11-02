@@ -10,9 +10,12 @@ import { getMeeting, type ResolvedMeeting } from '@/lib/teams/meeting-resolver';
  * No bot joins, and for a scheduled meeting nobody has to press
  * anything during it.
  *
- * A meeting Graph gives no window for is the exception, reported as
- * `armed_in_progress`: see {@link isInstantMeeting} for what we can and cannot
- * tell about such a meeting.
+ * Two exceptions, both because Teams only acts on `recordAutomatically` when a
+ * meeting starts. A meeting Graph gives no window for is reported as
+ * `armed_in_progress` (see {@link isInstantMeeting}), and one switched on at or
+ * after its booked start as `armed_late` (see {@link isLateArm}). Either may
+ * already be running, and then someone has to start the recording by hand; what
+ * they record is collected afterwards exactly as an automatic one would be.
  *
  * Only the organizer may update meeting options. An invitee gets 403 and we
  * report `not_organizer` so the UI can show the copy-paste sentence to send to
@@ -29,7 +32,7 @@ export const ARM_OPTIONS = {
   meetingSpokenLanguageTag: DEFAULT_SPOKEN_LANGUAGE,
 } as const;
 
-export type ArmResult = 'armed' | 'armed_in_progress' | 'not_organizer' | 'policy_blocked';
+export type ArmResult = 'armed' | 'armed_in_progress' | 'armed_late' | 'not_organizer' | 'policy_blocked';
 
 /**
  * Teams acts on `recordAutomatically` when a meeting *starts*, so a meeting that
@@ -50,9 +53,11 @@ export type ArmResult = 'armed' | 'armed_in_progress' | 'not_organizer' | 'polic
  * the result is reported separately and the screen offers the manual start as a
  * condition ("var mødet begyndt, inden du indsatte linket…") rather than a fact.
  *
- * A scheduled meeting is left alone even when its start has passed: Teams starts
- * transcribing on the first join, not at the scheduled time, so arming a meeting
- * five minutes late still works and must not be warned about.
+ * A scheduled meeting is never "instant", even when its start has passed. Whether
+ * people may already be in it is a separate question, answered by
+ * {@link isLateArm}: Teams starts recording on the first join, not at the booked
+ * time, so a late arm still works when nobody has joined yet — but not when they
+ * have.
  */
 export function isInstantMeeting(
   scheduledStart: string | null,
@@ -66,11 +71,34 @@ export function isInstantMeeting(
 }
 
 /**
- * Both arming outcomes leave the meeting armed and worth polling — they differ
- * only in what we may promise the user about who starts the transcription.
+ * People join a Teams meeting before its booked start, and a meeting that is
+ * already running ignores `recordAutomatically`. So "late" starts a little before
+ * the start, not at it.
+ */
+export const LATE_ARM_LEAD_MS = 15 * 60 * 1000;
+
+/**
+ * Switched on so close to (or after) the booked start that people may already be
+ * in the meeting. Delegated Graph has no roster and no in-progress flag, so this
+ * is a "maybe": the organizer may simply be running late, in which case
+ * `recordAutomatically` still works. The screen therefore states the manual start
+ * as a condition, and states it at once — the poller does not look at a scheduled
+ * meeting before its end, so waiting for empty polls (as for a meeting with no
+ * window) would only show the hint once the meeting is over.
+ */
+export function isLateArm(scheduledStart: string | null, now: Date): boolean {
+  if (scheduledStart === null) return false;
+  const start = Date.parse(scheduledStart);
+  if (!Number.isFinite(start)) return false;
+  return now.getTime() >= start - LATE_ARM_LEAD_MS;
+}
+
+/**
+ * Every arming outcome leaves the meeting armed and worth polling — they differ
+ * only in what we may promise the user about who starts the recording.
  */
 export function isArmed(result: ArmResult): boolean {
-  return result === 'armed' || result === 'armed_in_progress';
+  return result === 'armed' || result === 'armed_in_progress' || result === 'armed_late';
 }
 
 export interface ArmOutcome {
@@ -135,7 +163,11 @@ function isNotOrganizer(error: unknown): boolean {
  * The options are read once BEFORE the PATCH: it overwrites them, and
  * {@link disarmMeeting} can only give the organizer back what we saw here.
  */
-export async function armMeeting(userId: string, graphMeetingId: string): Promise<ArmOutcome> {
+export async function armMeeting(
+  userId: string,
+  graphMeetingId: string,
+  now: Date = new Date(),
+): Promise<ArmOutcome> {
   const previousOptions = await readOptions(userId, graphMeetingId);
 
   try {
@@ -157,7 +189,9 @@ export async function armMeeting(userId: string, graphMeetingId: string): Promis
     ? 'policy_blocked'
     : isInstantMeeting(after.scheduledStart, after.scheduledEnd)
       ? 'armed_in_progress'
-      : 'armed';
+      : isLateArm(after.scheduledStart, now)
+        ? 'armed_late'
+        : 'armed';
   return { result, options: after.options, previousOptions };
 }
 

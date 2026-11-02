@@ -64,8 +64,9 @@ export function armedMessage(armResult: string, alreadyRegistered: boolean): { t
         tone: 'ok',
       };
     case 'armed_in_progress':
+    case 'armed_late':
       return {
-        text: `${prefix}OS2taletiltekst er slået til. Hvis mødet allerede er i gang, så start transskription i Teams.`,
+        text: `${prefix}OS2taletiltekst er slået til. Er mødet allerede i gang, så start optagelsen i Teams (Flere handlinger → Optag og transskriber → Start optagelse). Det, der optages, hentes efter mødet.`,
         tone: 'ok',
       };
     case 'not_organizer':

@@ -113,6 +113,10 @@ describe('messages', () => {
     expect(armedMessage('armed', true).text).toMatch(/^OS2taletiltekst var allerede slået til/);
     expect(armedMessage('not_organizer', false)).toMatchObject({ tone: 'warn', text: expect.stringMatching(/arrangør/) });
     expect(armedMessage('policy_blocked', false).tone).toBe('warn');
+    // Switched on after the start, or with no window: the manual start is a condition.
+    for (const late of ['armed_late', 'armed_in_progress']) {
+      expect(armedMessage(late, false).text).toMatch(/Er mødet allerede i gang, så start optagelsen i Teams/);
+    }
   });
 });
 

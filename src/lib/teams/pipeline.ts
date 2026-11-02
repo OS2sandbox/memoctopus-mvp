@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { runFfmpeg } from '@/lib/audio/decode-server';
 import { GraphError, classifyGraphError } from './graph-client';
-import { realDate } from './graph-dates';
+import { graphDate, realDate } from './graph-dates';
 import { listArtifacts, pickArtifact, downloadTranscriptVtt, downloadRecording } from './artifacts';
 import { parseVtt, segmentsFromVtt, speakersFromVtt, type VttCue } from './vtt';
 import {
@@ -108,7 +108,7 @@ function isStall(err: unknown): err is GraphError {
  */
 export const RECORDING_GRACE_MS = 30 * 60 * 1000;
 
-/** …and the same escape by attempt count, for meetings with no schedule. */
+/** …and the same escape by attempt count, for when there is no time to measure from. */
 export const RECORDING_GRACE_ATTEMPTS = 15;
 
 /**
@@ -237,7 +237,7 @@ async function runPipeline(
   // the transcript-only branch the moment it appears would permanently lock a
   // prefer-recording deployment out of hviske (the run is idempotent), so hold
   // out for the recording until the grace period is spent.
-  if (transcript && !recording && !skipRecording && !graceElapsed(meeting, now)) {
+  if (transcript && !recording && !skipRecording && !graceElapsed(meeting, transcript, now)) {
     return { status: 'pending' };
   }
 
@@ -263,15 +263,41 @@ async function runPipeline(
   }
 }
 
-/** True once waiting any longer for Teams to publish the recording is futile. */
-function graceElapsed(meeting: PipelineMeeting, now: Date): boolean {
-  if ((meeting.attempts ?? 0) >= RECORDING_GRACE_ATTEMPTS) return true;
-  // Same sentinel guard: a year-1 end would make the grace look long spent, so a
-  // prefer-recording run would settle for the transcript before Teams has had any
+/** A Graph timestamp as a Date, or null when it is missing or Graph's year-1 zero. */
+function artifactDate(value: string | null | undefined): Date | null {
+  const date = graphDate(value);
+  return date ? new Date(date) : null;
+}
+
+/**
+ * True once waiting any longer for Teams to publish the recording is futile.
+ *
+ * Measured from the later of the booked end and the moment Teams' transcript
+ * ended, because the recording follows the transcript, not the booking. A meeting
+ * with no window is polled from the moment its link is pasted, and a booked one
+ * from its end even when it runs over, so by the time such a meeting is really
+ * over the attempt counter can be long past RECORDING_GRACE_ATTEMPTS — and
+ * counting attempts then settled for Teams' transcript the instant it appeared,
+ * minutes before the recording our own transcription is made from.
+ *
+ * The attempt count remains the escape only when there is no time to measure from.
+ */
+function graceElapsed(
+  meeting: PipelineMeeting,
+  transcript: { createdDateTime: string | null; endDateTime?: string | null },
+  now: Date,
+): boolean {
+  // realDate is the sentinel guard: a year-1 end would make the grace look long
+  // spent, and the run would settle for the transcript before Teams had any
   // chance to publish the recording.
-  const end = realDate(meeting.scheduledEnd);
-  if (!end) return false;
-  return now.getTime() >= end.getTime() + RECORDING_GRACE_MS;
+  const marks = [
+    realDate(meeting.scheduledEnd),
+    artifactDate(transcript.endDateTime),
+    artifactDate(transcript.createdDateTime),
+  ].filter((d): d is Date => d !== null);
+  if (marks.length === 0) return (meeting.attempts ?? 0) >= RECORDING_GRACE_ATTEMPTS;
+  const from = Math.max(...marks.map((d) => d.getTime()));
+  return now.getTime() >= from + RECORDING_GRACE_MS;
 }
 
 // Mode 1 — the target: Teams' recording transcribed by hviske (good Danish), with

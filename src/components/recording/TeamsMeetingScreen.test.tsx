@@ -391,7 +391,7 @@ describe('TeamsMeetingScreen — a meeting Graph gives no window for', () => {
     await screen.findByText(/OS2taletiltekst er slået til for mødet/);
     expect(screen.queryByTestId('manual-start-hint')).toBeNull();
     expect(
-      screen.queryByText(/Flere handlinger → Optag og transskriber → Start transskription/),
+      screen.queryByText(/Flere handlinger → Optag og transskriber → Start optagelse/),
     ).not.toBeInTheDocument();
   });
 
@@ -404,7 +404,7 @@ describe('TeamsMeetingScreen — a meeting Graph gives no window for', () => {
 
     expect(await screen.findByTestId('manual-start-hint')).toBeInTheDocument();
     expect(
-      screen.getByText(/Flere handlinger → Optag og transskriber → Start transskription/),
+      screen.getByText(/Flere handlinger → Optag og transskriber → Start optagelse/),
     ).toBeInTheDocument();
   });
 
@@ -428,6 +428,57 @@ describe('TeamsMeetingScreen — a meeting Graph gives no window for', () => {
 
     expect(await screen.findByText(/OS2taletiltekst er slået til for mødet/)).toBeInTheDocument();
     expect(screen.queryByText(/ikke organisator/)).not.toBeInTheDocument();
+  });
+});
+
+describe('TeamsMeetingScreen — switched on after the booked start', () => {
+  // `armed_late`: people may already be in the meeting, and a running meeting
+  // ignores recordAutomatically. The poller does not look at a booked meeting
+  // before its end, so there are no empty polls to wait for: the manual start has
+  // to be offered at once, while it can still be acted on.
+  function lateBody(overrides: Status = {}): Status {
+    const now = Date.now();
+    return statusBody({
+      armed: true,
+      armResult: 'armed_late',
+      attempts: 0,
+      scheduledStart: new Date(now - 5 * 60_000).toISOString(),
+      scheduledEnd: new Date(now + 55 * 60_000).toISOString(),
+      ...overrides,
+    });
+  }
+
+  it('offers the manual start straight away, as a condition', async () => {
+    respondWith(lateBody());
+    renderScreen();
+
+    const hint = await screen.findByTestId('manual-start-hint');
+    expect(hint).toHaveTextContent(/Er I allerede i mødet/);
+    expect(hint).toHaveTextContent(/Flere handlinger → Optag og transskriber → Start optagelse/);
+  });
+
+  it('says that a recording started partway is still collected', async () => {
+    respondWith(lateBody());
+    renderScreen();
+
+    expect(await screen.findByTestId('manual-start-hint')).toHaveTextContent(/også når optagelsen først startes undervejs/);
+  });
+
+  it('does not promise that Teams records it by itself', async () => {
+    respondWith(lateBody());
+    renderScreen();
+
+    expect(await screen.findByText(/OS2taletiltekst er slået til for mødet/)).toBeInTheDocument();
+    expect(screen.queryByText(/optages og transskriberes automatisk/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('armed-badge')).toHaveTextContent('OS2taletiltekst er slået til');
+  });
+
+  it('drops the instruction once the meeting is over', async () => {
+    respondWith(statusBody({ armed: true, armResult: 'armed_late' }));
+    renderScreen();
+
+    expect(await screen.findByText(/Mødet er slut/)).toBeInTheDocument();
+    expect(screen.queryByTestId('manual-start-hint')).toBeNull();
   });
 });
 

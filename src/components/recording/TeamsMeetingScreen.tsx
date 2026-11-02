@@ -188,22 +188,34 @@ function fmtRange(start: string | null, end: string | null): string | null {
 const HINT_STYLE: React.CSSProperties = { marginTop: 12, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 };
 
 /**
- * What the screen says while a meeting is `awaiting_teams`. Which of four things
+ * What the screen says while a meeting is `awaiting_teams`. Which of five things
  * is true decides everything shown, so it is decided once, here:
  *
  * - `armed`: OS2taletiltekst switched on automatic recording for the meeting.
  * - `armed_no_window`: armed, but Graph gives the meeting no scheduled window, so
  *   there is no end to wait for (see MANUAL_START_HINT_ATTEMPTS).
+ * - `armed_late`: armed so close to the booked start that people may already be
+ *   in the meeting, where Teams does not start recording by itself.
  * - `policy_blocked`: the user is the organizer, but the tenant forbids it.
  * - `invitee`: the user is not the organizer, so nothing could be switched on.
  */
-type WaitCase = 'armed' | 'armed_no_window' | 'policy_blocked' | 'invitee';
+type WaitCase = 'armed' | 'armed_no_window' | 'armed_late' | 'policy_blocked' | 'invitee';
 
 function waitCaseOf(status: TeamsMeetingStatus): WaitCase {
   if (status.armResult === 'policy_blocked') return 'policy_blocked';
   if (status.armResult === 'armed_in_progress') return 'armed_no_window';
+  if (status.armResult === 'armed_late') return 'armed_late';
   return status.armed ? 'armed' : 'invitee';
 }
+
+/**
+ * Where the manual start is in Teams. Recording rather than transcription alone:
+ * starting a recording starts Teams' transcript with it, and the recording is
+ * what our own (better) Danish transcription is made from.
+ */
+const MANUAL_START_PATH = (
+  <strong>Flere handlinger → Optag og transskriber → Start optagelse</strong>
+);
 
 const STILL_COLLECTED =
   'Transskriptionen hentes stadig automatisk, hvis nogen starter transskription undervejs i mødet.';
@@ -218,6 +230,21 @@ interface WaitCopy {
 
 function waitCopy(waitCase: WaitCase, meetingOver: boolean): WaitCopy {
   switch (waitCase) {
+    case 'armed_late':
+      if (!meetingOver) {
+        return {
+          lead: 'OS2taletiltekst er slået til for mødet. Referatet er klar et par minutter efter, I er færdige.',
+          working: 'Venter på mødet…',
+          hint: (
+            <>
+              Tryk <strong>Mødet er slut – hent nu</strong>, når I er færdige, så henter vi
+              referatet med det samme.
+            </>
+          ),
+        };
+      }
+      // Once it is over, what was recorded is collected like any armed meeting.
+      return waitCopy('armed', meetingOver);
     case 'armed':
       // Before the scheduled end we are waiting for the meeting; after it, for
       // Microsoft to publish. "Venter på mødet…" for both told the user their
@@ -640,8 +667,20 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
             {waitCase === 'armed_no_window' && (status?.attempts ?? 0) >= MANUAL_START_HINT_ATTEMPTS && (
               <p data-testid="manual-start-hint" style={HINT_STYLE}>
                 Vi har ikke hørt noget fra Teams endnu. Var mødet allerede i gang, da du indsatte
-                linket, starter Teams ikke transskriptionen af sig selv — så skal den startes i mødet:{' '}
-                <strong>Flere handlinger → Optag og transskriber → Start transskription</strong>.
+                linket, starter Teams ikke optagelsen af sig selv — så skal den startes i mødet:{' '}
+                {MANUAL_START_PATH}.
+              </p>
+            )}
+
+            {/* Switched on at or after the booked start. The poller does not look at
+                a scheduled meeting before its end, so there are no empty polls to
+                wait for here: the condition is stated at once, while it can still
+                be acted on. */}
+            {waitCase === 'armed_late' && !meetingOver && (
+              <p data-testid="manual-start-hint" style={HINT_STYLE}>
+                Er I allerede i mødet, starter Teams ikke optagelsen af sig selv. Start den i
+                mødet: {MANUAL_START_PATH}. Det, der bliver optaget, henter OS2taletiltekst
+                automatisk efter mødet, også når optagelsen først startes undervejs.
               </p>
             )}
 

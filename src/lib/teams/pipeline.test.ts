@@ -357,16 +357,57 @@ describe('processTeamsMeeting — transcript only', () => {
     expect(mockStorePendingTranscript).not.toHaveBeenCalled();
   });
 
-  it('gives up on the recording once enough attempts have been spent', async () => {
-    // A meeting with no schedule has no grace deadline; the attempt count is the
+  it('gives up on the recording by attempt count only when there is no time to measure from', async () => {
+    // No schedule and no timestamps on the transcript: the attempt count is the
     // only escape from waiting forever.
-    mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [] });
+    const undated = { ...TRANSCRIPT_REF, createdDateTime: null, endDateTime: null };
+    mockListArtifacts.mockResolvedValue({ transcripts: [undated], recordings: [] });
     const noSchedule = { ...MEETING, scheduledStart: null, scheduledEnd: null };
 
     expect(await processTeamsMeeting('u1', noSchedule, JUST_AFTER_END)).toEqual({ status: 'pending' });
     expect(
       await processTeamsMeeting('u1', { ...noSchedule, attempts: 15 }, JUST_AFTER_END),
     ).toMatchObject({ status: 'ready', mode: 'transcript-only' });
+  });
+
+  it('measures the grace from the transcript, not the attempt count, for a meeting with no window', async () => {
+    // A "Mød nu" meeting is polled from the moment its link is pasted, so after an
+    // hour-long meeting the attempt count is long spent. The transcript has only
+    // just appeared, and the recording follows it by minutes.
+    const ended = { ...TRANSCRIPT_REF, createdDateTime: '2026-09-08T10:05:00Z', endDateTime: '2026-09-08T11:05:00Z' };
+    mockListArtifacts.mockResolvedValue({ transcripts: [ended], recordings: [] });
+    const longInstant = { ...MEETING, scheduledStart: null, scheduledEnd: null, attempts: 40 };
+
+    expect(await processTeamsMeeting('u1', longInstant, new Date('2026-09-08T11:10:00Z'))).toEqual({
+      status: 'pending',
+    });
+    expect(await processTeamsMeeting('u1', longInstant, new Date('2026-09-08T11:36:00Z'))).toMatchObject({
+      status: 'ready',
+      mode: 'transcript-only',
+    });
+  });
+
+  it('measures the grace from the transcript when a booked meeting ran over', async () => {
+    // Booked 10–11, held until 13: the poller has been asking since 11.
+    const overrun = { ...TRANSCRIPT_REF, createdDateTime: '2026-09-08T10:00:00Z', endDateTime: '2026-09-08T13:00:00Z' };
+    mockListArtifacts.mockResolvedValue({ transcripts: [overrun], recordings: [] });
+
+    expect(
+      await processTeamsMeeting('u1', { ...MEETING, attempts: 60 }, new Date('2026-09-08T13:05:00Z')),
+    ).toEqual({ status: 'pending' });
+  });
+
+  it('collects a recording that was started partway through the meeting', async () => {
+    // Armed after people had joined, so Teams did not start by itself; someone
+    // pressed "Start optagelse" 40 minutes in. What was recorded is the meeting.
+    mockListArtifacts.mockResolvedValue({
+      transcripts: [{ id: 't1', createdDateTime: '2026-09-08T10:40:00Z', endDateTime: '2026-09-08T11:00:00Z' }],
+      recordings: [{ id: 'r1', createdDateTime: '2026-09-08T10:40:00Z', endDateTime: '2026-09-08T11:00:00Z' }],
+    });
+
+    const outcome = await processTeamsMeeting('u1', MEETING, JUST_AFTER_END);
+
+    expect(outcome).toMatchObject({ status: 'ready', mode: 'recording+transcript', recordingId: 'r1' });
   });
 
   it('does not wait for a recording it will never fetch in transcript-only mode', async () => {
