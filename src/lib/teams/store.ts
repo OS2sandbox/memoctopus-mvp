@@ -138,6 +138,15 @@ export function isDeferred(row: Pick<TeamsMeetingRow, 'origin' | 'openedAt'>): b
 }
 
 /**
+ * Has the meeting begun? A meeting Graph gives no start for is an instant one,
+ * which by definition already has.
+ */
+export function hasStarted(row: Pick<TeamsMeetingRow, 'scheduledStart'>, now: Date): boolean {
+  const start = realDate(row.scheduledStart);
+  return start == null || start.getTime() <= now.getTime();
+}
+
+/**
  * How long after a meeting a collected one may be collected again ("Hent igen")
  * while its recording is still in OneDrive — the same bound an unopened Outlook
  * meeting is kept for. Once the recording has been deleted only Teams' own

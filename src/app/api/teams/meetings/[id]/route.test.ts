@@ -148,6 +148,41 @@ describe('GET /api/teams/meetings/[id]', () => {
     expect(mockPoll).not.toHaveBeenCalled();
   });
 
+  // An Outlook-armed meeting waits for its user to open it before anything is
+  // fetched. Opening the screen during the meeting did not count — only the
+  // forced poll after its end did — so a user who looked in mid-meeting and
+  // closed the tab, as the screen tells them they may, never got a referat.
+  describe('opening an Outlook-armed meeting', () => {
+    const past = new Date(Date.now() - 30 * 60_000);
+    const future = new Date(Date.now() + 30 * 60_000);
+    const outlook = (over: Partial<TeamsMeetingRow> = {}) =>
+      row({ origin: 'outlook', openedAt: null, scheduledStart: past, scheduledEnd: future, ...over });
+
+    it('counts as opened once the meeting has started', async () => {
+      mockGet.mockResolvedValueOnce(outlook());
+      mockMarkOpened.mockResolvedValueOnce(outlook({ openedAt: new Date() }));
+
+      const res = await GET(req(), { params });
+
+      expect(res.status).toBe(200);
+      expect(mockMarkOpened).toHaveBeenCalledWith('user-123', 'm1');
+    });
+
+    it('does not count before the meeting has started', async () => {
+      mockGet.mockResolvedValueOnce(outlook({ scheduledStart: future }));
+      await GET(req(), { params });
+      expect(mockMarkOpened).not.toHaveBeenCalled();
+    });
+
+    it('leaves a meeting already opened, or registered in the dashboard, alone', async () => {
+      mockGet.mockResolvedValueOnce(outlook({ openedAt: past }));
+      await GET(req(), { params });
+      mockGet.mockResolvedValueOnce(row({ scheduledStart: past }));
+      await GET(req(), { params });
+      expect(mockMarkOpened).not.toHaveBeenCalled();
+    });
+  });
+
   // The screen says "vi er i gang med mødet" off this flag, instead of reporting a
   // run that is downloading and transcribing as "Teams har ikke frigivet noget".
   it('reports working while a run holds the meeting', async () => {

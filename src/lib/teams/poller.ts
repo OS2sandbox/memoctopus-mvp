@@ -3,7 +3,7 @@ import { pool } from '@/lib/db';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { deleteRecordingEnabled } from './artifact-mode';
 import { classifyGraphError, GraphError } from './graph-client';
-import { graphDate, realDate } from './graph-dates';
+import { graphDate } from './graph-dates';
 import { getMeeting } from './meeting-resolver';
 import { processTeamsMeeting } from './pipeline';
 import { deleteRecordingFromDrive } from './recording-cleanup';
@@ -11,6 +11,7 @@ import {
   OUTLOOK_UNOPENED_GIVE_UP_MS,
   POLL_GIVE_UP_MS,
   giveUpAnchor,
+  hasStarted,
   isDeferred,
   markTeamsMeetingOpened,
   getTeamsMeeting,
@@ -304,15 +305,6 @@ export async function cleanUpRecording(
     return row;
   }
   return { ...row, recordingCleanup: result };
-}
-
-/**
- * Has the meeting begun? A meeting Graph gives no start for is an instant one,
- * which by definition already has.
- */
-function hasStarted(row: TeamsMeetingRow, now: Date): boolean {
-  const start = realDate(row.scheduledStart);
-  return start == null || start.getTime() <= now.getTime();
 }
 
 /** Danish, user-safe: the row can outlive the meeting it was created for. */

@@ -11,6 +11,9 @@ import {
   RECOLLECT_WINDOW_MS,
   getTeamsMeeting,
   giveUpAnchor,
+  hasStarted,
+  isDeferred,
+  markTeamsMeetingOpened,
   requestRecollect,
   type TeamsMeetingRow,
 } from '@/lib/teams/store';
@@ -70,6 +73,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
   let row = await getTeamsMeeting(userId, id);
   if (!row) return NextResponse.json({ error: 'not_found' }, { status: 404 });
+
+  // Its owner looking at an Outlook-armed meeting once it has begun is what lifts
+  // the deferral (isDeferred), so the background poller collects it even if the
+  // tab is closed before the meeting ends — as the screen says it may be.
+  if (isDeferred(row) && hasStarted(row, new Date())) {
+    row = await markTeamsMeetingOpened(userId, id);
+  }
 
   if (req.nextUrl.searchParams.get('poll') === '1') {
     // A forced poll is also the "Prøv igen" button, so it has to be able to
