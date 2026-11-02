@@ -57,6 +57,7 @@ function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     armed: true,
     scheduledStart: new Date('2026-09-08T10:00:00Z'),
     scheduledEnd: new Date('2026-09-08T11:00:00Z'),
+    occurrenceWindow: false,
     state: 'awaiting_teams',
     lastPolledAt: null,
     attempts: 0,

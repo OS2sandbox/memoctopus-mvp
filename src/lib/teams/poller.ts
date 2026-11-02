@@ -345,8 +345,11 @@ async function refreshSchedule(
     return { row, gone: false };
   }
 
-  const start = toDate(graphDate(fresh.scheduledStart));
-  const end = toDate(graphDate(fresh.scheduledEnd));
+  // A window registered for one occurrence of a series is kept: Graph's
+  // onlineMeeting only knows the series' window, and the pipeline would look for
+  // that occurrence's artifacts in the wrong week. The subject is still Graph's.
+  const start = row.occurrenceWindow ? row.scheduledStart : toDate(graphDate(fresh.scheduledStart));
+  const end = row.occurrenceWindow ? row.scheduledEnd : toDate(graphDate(fresh.scheduledEnd));
   const unchanged =
     sameInstant(start, row.scheduledStart)
     && sameInstant(end, row.scheduledEnd)

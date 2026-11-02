@@ -108,6 +108,7 @@ function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     armed: true,
     scheduledStart: new Date('2026-09-08T10:00:00Z'),
     scheduledEnd: new Date('2026-09-08T11:00:00Z'),
+    occurrenceWindow: false,
     state: 'awaiting_teams',
     lastPolledAt: null,
     attempts: 0,
@@ -741,6 +742,64 @@ describe('pollMeeting — re-reading the meeting from Graph', () => {
       scheduledStart: new Date('2026-09-08T14:00:00Z'),
       scheduledEnd: new Date('2026-09-08T15:00:00Z'),
       subject: 'Flyttet møde',
+    });
+  });
+
+  // Occurrence 3 of a weekly series: Outlook registered that day's window, Graph's
+  // onlineMeeting only knows the series'. Overwriting the one with the other made
+  // the pipeline look for artifacts in the wrong week, and the meeting failed.
+  it("keeps a window registered for one occurrence of a series, but takes Graph's new subject", async () => {
+    const occurrence = {
+      occurrenceWindow: true,
+      scheduledStart: new Date('2026-09-08T10:00:00Z'),
+      scheduledEnd: new Date('2026-09-08T11:00:00Z'),
+    };
+    mockGet.mockResolvedValue(row(occurrence));
+    mockGetMeeting.mockResolvedValue(graphMeeting({
+      scheduledStart: '2026-08-25T10:00:00Z',
+      scheduledEnd: '2026-08-25T11:00:00Z',
+      subject: 'Nyt navn',
+    }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockRefresh).toHaveBeenCalledWith('u1', 'm1', {
+      scheduledStart: occurrence.scheduledStart,
+      scheduledEnd: occurrence.scheduledEnd,
+      subject: 'Nyt navn',
+    });
+    expect(mockProcess).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({
+        scheduledStart: occurrence.scheduledStart,
+        scheduledEnd: occurrence.scheduledEnd,
+      }),
+      NOW,
+    );
+  });
+
+  it('writes nothing for an occurrence when only the series window differs', async () => {
+    mockGet.mockResolvedValue(row({ occurrenceWindow: true }));
+    mockGetMeeting.mockResolvedValue(graphMeeting({
+      scheduledStart: '2026-08-25T10:00:00Z',
+      scheduledEnd: '2026-08-25T11:00:00Z',
+    }));
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  it('still fails an occurrence whose meeting Graph no longer has', async () => {
+    mockGet.mockResolvedValue(row({ occurrenceWindow: true }));
+    mockGetMeeting.mockRejectedValue(new GraphError('not_found', 'væk', { status: 404 }));
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', {
+      state: 'failed',
+      failureReason: MEETING_GONE_MESSAGE,
     });
   });
 

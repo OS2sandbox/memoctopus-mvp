@@ -9,7 +9,9 @@ import {
   OUTLOOK_UNOPENED_GIVE_UP_MS,
   POLL_GIVE_UP_MS,
   STALE_FETCHING_MS,
+  getTeamsMeeting,
   listDueTeamsMeetings,
+  upsertTeamsMeeting,
   type TeamsMeetingState,
 } from './store';
 
@@ -174,6 +176,26 @@ describe('listDueTeamsMeetings', () => {
     const newer = await insert({ scheduledEnd: new Date(ms - 10 * MIN) });
     const older = await insert({ scheduledEnd: new Date(ms - 50 * MIN) });
     expect(await due()).toEqual([older, newer]);
+  });
+
+  describe('upsertTeamsMeeting', () => {
+    const input = {
+      id: 'occ-1',
+      graphMeetingId: 'graph-1',
+      joinUrl: 'https://teams.microsoft.com/l/meetup-join/x',
+      subject: 'Ugentligt møde',
+      organizerId: null,
+      isOrganizer: true,
+      armed: true,
+      scheduledStart: new Date('2026-09-15T10:00:00Z'),
+      scheduledEnd: new Date('2026-09-15T11:00:00Z'),
+    };
+
+    it('stores whether the window belongs to one occurrence, and lets a re-registration change it', async () => {
+      expect((await upsertTeamsMeeting(USER, { ...input, occurrenceWindow: true })).occurrenceWindow).toBe(true);
+      expect((await getTeamsMeeting(USER, 'occ-1'))?.occurrenceWindow).toBe(true);
+      expect((await upsertTeamsMeeting(USER, input)).occurrenceWindow).toBe(false);
+    });
   });
 
   describe('Outlook-armed meetings (storage rule)', () => {

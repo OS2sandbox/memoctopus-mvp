@@ -45,6 +45,12 @@ export interface TeamsMeetingRow {
   armResult: TeamsArmResult;
   scheduledStart: Date | null;
   scheduledEnd: Date | null;
+  /**
+   * The window was registered for one occurrence of a recurring series (by the
+   * Outlook add-in or the calendar), not read from Graph. Graph's onlineMeeting
+   * only knows the series' window, so the poller must not overwrite this one.
+   */
+  occurrenceWindow: boolean;
   state: TeamsMeetingState;
   lastPolledAt: Date | null;
   attempts: number;
@@ -78,6 +84,7 @@ export type TeamsMeetingInput = Omit<
   | 'armResult'
   | 'origin'
   | 'openedAt'
+  | 'occurrenceWindow'
 > &
   Partial<TeamsMeetingRow>;
 
@@ -155,6 +162,7 @@ interface RawTeamsMeeting {
   arm_result: string | null;
   scheduled_start: Date | string | null;
   scheduled_end: Date | string | null;
+  occurrence_window?: boolean | null;
   state: string;
   last_polled_at: Date | string | null;
   attempts: number | string;
@@ -186,6 +194,7 @@ function mapRow(raw: RawTeamsMeeting): TeamsMeetingRow {
     armResult: (raw.arm_result as TeamsArmResult | null) ?? (raw.armed ? 'armed' : 'not_organizer'),
     scheduledStart: toDate(raw.scheduled_start),
     scheduledEnd: toDate(raw.scheduled_end),
+    occurrenceWindow: Boolean(raw.occurrence_window),
     state: raw.state as TeamsMeetingState,
     lastPolledAt: toDate(raw.last_polled_at),
     attempts: Number(raw.attempts ?? 0),
@@ -203,9 +212,9 @@ function mapRow(raw: RawTeamsMeeting): TeamsMeetingRow {
 
 const SELECT_COLUMNS = `
   id, graph_meeting_id, event_id, join_url, subject, organizer_id, is_organizer,
-  armed, arm_result, scheduled_start, scheduled_end, state, last_polled_at,
-  attempts, failure_reason, transcript_id, recording_id, recording_cleanup,
-  recording_bytes, origin, opened_at, created_at
+  armed, arm_result, scheduled_start, scheduled_end, occurrence_window, state,
+  last_polled_at, attempts, failure_reason, transcript_id, recording_id,
+  recording_cleanup, recording_bytes, origin, opened_at, created_at
 `;
 
 // ─── Queries ────────────────────────────────────────────────────────────────
@@ -224,11 +233,12 @@ export async function upsertTeamsMeeting(
     `INSERT INTO teams_meetings (
        id, graph_meeting_id, event_id, join_url, subject, organizer_id, is_organizer,
        armed, arm_result, scheduled_start, scheduled_end, state, last_polled_at,
-       attempts, failure_reason, transcript_id, recording_id, origin, updated_at
+       attempts, failure_reason, transcript_id, recording_id, origin, occurrence_window,
+       updated_at
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::text, 'not_organizer'), $10, $11,
        COALESCE($12::text, 'awaiting_teams'), $13::timestamptz, COALESCE($14::int, 0),
-       $15, $16, $17, $18, NOW()
+       $15, $16, $17, $18, $19, NOW()
      )
      ON CONFLICT (id) DO UPDATE SET
        graph_meeting_id = EXCLUDED.graph_meeting_id,
@@ -241,6 +251,7 @@ export async function upsertTeamsMeeting(
        arm_result       = COALESCE($9::text, teams_meetings.arm_result),
        scheduled_start  = EXCLUDED.scheduled_start,
        scheduled_end    = EXCLUDED.scheduled_end,
+       occurrence_window = EXCLUDED.occurrence_window,
        state            = COALESCE($12::text, teams_meetings.state),
        last_polled_at   = COALESCE($13::timestamptz, teams_meetings.last_polled_at),
        attempts         = COALESCE($14::int, teams_meetings.attempts),
@@ -271,6 +282,7 @@ export async function upsertTeamsMeeting(
       row.transcriptId ?? null,
       row.recordingId ?? null,
       row.origin ?? null,
+      row.occurrenceWindow ?? false,
     ],
   );
   // RETURNING always yields a row; the null branch keeps TypeScript honest.

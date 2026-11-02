@@ -100,6 +100,8 @@ export async function registerTeamsMeeting(userId: string, input: RegisterInput)
     // artifacts of occurrence 2+ fall outside the pick window and are never found.
     scheduledStart: input.occurrenceStart ?? toDate(resolved.scheduledStart),
     scheduledEnd: input.occurrenceEnd ?? toDate(resolved.scheduledEnd),
+    // …and the poller, which re-reads the window from Graph, must keep it.
+    occurrenceWindow: input.occurrenceStart != null || input.occurrenceEnd != null,
     // Omitted, the upsert keeps the row's state; a new row starts awaiting_teams.
     ...(input.keepState ? {} : { state: 'awaiting_teams' as const }),
     origin: input.origin ?? null,

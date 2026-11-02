@@ -75,6 +75,7 @@ function row(overrides: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     armResult: 'armed',
     scheduledStart: null,
     scheduledEnd: null,
+    occurrenceWindow: false,
     state: 'awaiting_teams',
     lastPolledAt: null,
     attempts: 0,
@@ -170,7 +171,7 @@ describe('Outlook-armed meetings (storage rule)', () => {
     });
     const [, sql, params] = mockQueryOne.mock.calls[0];
     expect(sql).toMatch(/origin\s+= COALESCE\(teams_meetings\.origin, EXCLUDED\.origin\)/);
-    expect(params?.at(-1)).toBe('outlook');
+    expect(params).toContain('outlook');
   });
 });
 
@@ -214,6 +215,7 @@ describe('upsertTeamsMeeting', () => {
       null,
       null,
       null,
+      false,
     ]);
 
     expect(result).toEqual({
@@ -228,6 +230,7 @@ describe('upsertTeamsMeeting', () => {
       armResult: 'armed',
       scheduledStart: new Date('2026-09-08T09:00:00Z'),
       scheduledEnd: new Date('2026-09-08T10:00:00Z'),
+      occurrenceWindow: false,
       state: 'awaiting_teams',
       lastPolledAt: null,
       attempts: 3,
