@@ -20,16 +20,21 @@ export interface ResolvedMeetingOptions {
   meetingSpokenLanguageTag: string | null;
 }
 
-export interface ResolvedMeeting {
+/** A meeting as Graph describes it, whoever is asking. */
+export interface MeetingDetails {
   graphMeetingId: string;
   joinUrl: string;
   subject: string | null;
   organizerId: string | null;
-  isOrganizer: boolean;
   scheduledStart: string | null;
   scheduledEnd: string | null;
   meetingType: string | null;
   options: ResolvedMeetingOptions;
+}
+
+/** …and whether the signed-in user organises it. */
+export interface ResolvedMeeting extends MeetingDetails {
+  isOrganizer: boolean;
 }
 
 export type ResolveErrorCode = 'invalid-url' | 'wrong-host' | 'not_invited';
@@ -97,16 +102,12 @@ function organizerIdOf(meeting: GraphOnlineMeeting): string | null {
   return meeting.participants?.organizer?.identity?.user?.id ?? null;
 }
 
-function toResolved(meeting: GraphOnlineMeeting, meId: string | null): ResolvedMeeting {
-  const organizerId = organizerIdOf(meeting);
+function toDetails(meeting: GraphOnlineMeeting): MeetingDetails {
   return {
     graphMeetingId: meeting.id ?? '',
     joinUrl: meeting.joinWebUrl ?? meeting.joinUrl ?? '',
     subject: meeting.subject ?? null,
-    organizerId,
-    // Never "true by default": a missing organizer id must not let an invitee
-    // believe they can arm the meeting.
-    isOrganizer: Boolean(organizerId && meId && organizerId === meId),
+    organizerId: organizerIdOf(meeting),
     // Not `?? null`: Graph sends 0001-01-01T00:00:00Z rather than omitting the
     // field when a meeting has no schedule, which is every instant meeting.
     scheduledStart: graphDate(meeting.startDateTime),
@@ -119,6 +120,14 @@ function toResolved(meeting: GraphOnlineMeeting, meId: string | null): ResolvedM
       meetingSpokenLanguageTag: meeting.meetingSpokenLanguageTag ?? null,
     },
   };
+}
+
+function toResolved(meeting: GraphOnlineMeeting, meId: string | null): ResolvedMeeting {
+  const details = toDetails(meeting);
+  // Never "true by default": a missing organizer id must not let an invitee
+  // believe they can arm the meeting.
+  const isOrganizer = Boolean(details.organizerId && meId && details.organizerId === meId);
+  return { ...details, isOrganizer };
 }
 
 /**
@@ -154,14 +163,14 @@ export async function resolveJoinUrl(userId: string, joinUrl: string): Promise<R
   return resolved;
 }
 
-/** Re-read a meeting we already know the Graph id of (arming read-back, poller). */
-export async function getMeeting(userId: string, graphMeetingId: string): Promise<ResolvedMeeting> {
-  const [me, meeting] = await Promise.all([
-    getGraphMe(userId),
-    graphJson<GraphOnlineMeeting>(
-      userId,
-      `/me/onlineMeetings/${encodeURIComponent(graphMeetingId)}`,
-    ),
-  ]);
-  return toResolved(meeting ?? {}, me.id);
+/**
+ * Re-read a meeting we already know the Graph id of (arming read-back, poller).
+ * Who organises it was settled when the link was resolved, so `/me` is not asked.
+ */
+export async function getMeeting(userId: string, graphMeetingId: string): Promise<MeetingDetails> {
+  const meeting = await graphJson<GraphOnlineMeeting>(
+    userId,
+    `/me/onlineMeetings/${encodeURIComponent(graphMeetingId)}`,
+  );
+  return toDetails(meeting ?? {});
 }
