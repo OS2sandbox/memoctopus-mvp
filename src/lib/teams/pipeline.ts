@@ -18,6 +18,7 @@ import type { TranscriptSegment } from '@/types';
 import { transcribeAlongCues } from './transcribe-cues';
 import { withMeetingLock } from './meeting-lock';
 import { assertSafeMeetingId } from './meeting-id';
+import { teamsScratchRoot } from './scratch';
 import { artifactMode } from './artifact-mode';
 
 export { artifactMode };
@@ -91,11 +92,6 @@ export const RECORDING_GRACE_ATTEMPTS = 15;
  * permanent "pending" that no later run can ever get past.
  */
 export const PROCESSING_STALE_MS = 30 * 60 * 1000;
-
-function tmpRoot(): string {
-  const base = process.env.AUDIO_STORAGE_PATH?.trim() || path.join(process.cwd(), 'audio-storage');
-  return path.join(base, 'teams-tmp');
-}
 
 /** Duration of the meeting according to the transcript: the last cue's end. */
 function durationFromCues(cues: VttCue[]): number | null {
@@ -423,7 +419,7 @@ async function fetchRecordingAsWav(
   recordingId: string,
 ): Promise<{ wav: Buffer; bytes: number }> {
   assertSafeMeetingId(meeting.id);
-  const root = tmpRoot();
+  const root = teamsScratchRoot();
   await fs.mkdir(root, { recursive: true });
   // A scratch directory per run, never a path derived from the meeting id alone:
   // two runs of the same meeting must not delete each other's files mid-transcode.
