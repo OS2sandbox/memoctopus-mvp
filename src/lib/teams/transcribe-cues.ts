@@ -1,7 +1,8 @@
 import { HviskeProvider } from '@/lib/ai/transcription';
 import { decodeToMono16k, encodeMono16kWav } from '@/lib/audio/decode-server';
 import { cleanTranscribedText } from '@/lib/audio/hallucinations';
-import { splitTextWithIntervals, type VadInterval } from '@/lib/audio/vad-batch';
+import { runWithConcurrency, splitTextWithIntervals, type VadInterval } from '@/lib/audio/vad-batch';
+import { hviskeBatchConcurrency } from '@/lib/audio/vad-batch-server';
 import { DEFAULT_SPEAKER_LABEL } from '@/lib/audio/speaker-labels';
 import type { TranscriptSegment } from '@/types';
 import { planCueBatches, type CueBatch } from './cue-batches';
@@ -28,24 +29,6 @@ function getProvider(): HviskeProvider {
 /** Test seam — the pipeline test swaps in a provider that never leaves the process. */
 export function setCueTranscriptionProvider(provider: HviskeProvider | null): void {
   _provider = provider;
-}
-
-function concurrency(taskCount: number): number {
-  const env = Number(process.env.HVISKE_BATCH_CONCURRENCY);
-  return Number.isFinite(env) && env > 0 ? Math.min(env, taskCount) : taskCount;
-}
-
-async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
-  const results: T[] = new Array(tasks.length);
-  const queue = tasks.map((task, i) => ({ task, i }));
-  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
-    let item: typeof queue[0] | undefined;
-    while ((item = queue.shift()) !== undefined) {
-      results[item.i] = await item.task();
-    }
-  });
-  await Promise.all(workers);
-  return results;
 }
 
 /**
@@ -163,7 +146,7 @@ export async function transcribeAlongCues(
         failed.push(i);
       }
     }),
-    concurrency(batches.length),
+    hviskeBatchConcurrency(batches.length),
   );
 
   await Promise.all(

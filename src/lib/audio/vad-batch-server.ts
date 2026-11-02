@@ -3,6 +3,7 @@ import { energyVAD } from '@/lib/audio/vad-client';
 import {
   BATCH_DURATION_S,
   newVadBatchState,
+  runWithConcurrency,
   sealCurrentBatch,
   splitTextWithIntervals,
   type ReadyBatch,
@@ -32,26 +33,20 @@ export async function transcribeEnsemble(buffer: Buffer, mimeType: string): Prom
   return getProvider().transcribeEnsemble(buffer, mimeType);
 }
 
-// How many batch requests to keep in flight at once. Defaults to "all of them" —
-// Node's undici has no per-origin connection cap (unlike the browser's ~6 on
-// HTTP/1.1), and the hviske server queues internally. Set HVISKE_BATCH_CONCURRENCY
-// as backpressure if the GPU box degrades under unbounded fan-out.
-function batchConcurrency(taskCount: number): number {
-  const env = Number(process.env.HVISKE_BATCH_CONCURRENCY);
-  return Number.isFinite(env) && env > 0 ? Math.min(env, taskCount) : taskCount;
-}
+/** Requests kept in flight to hviske when HVISKE_BATCH_CONCURRENCY is not set. */
+export const DEFAULT_HVISKE_BATCH_CONCURRENCY = 8;
 
-async function runWithConcurrencyServer<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
-  const results: T[] = new Array(tasks.length);
-  const queue = tasks.map((task, i) => ({ task, i }));
-  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
-    let item: typeof queue[0] | undefined;
-    while ((item = queue.shift()) !== undefined) {
-      results[item.i] = await item.task();
-    }
-  });
-  await Promise.all(workers);
-  return results;
+/**
+ * How many batch requests to keep in flight to hviske at once, for `taskCount`
+ * tasks. Node's undici has no per-origin connection cap (unlike the browser's ~6
+ * on HTTP/1.1), so without a bound an hour-long meeting sends well over a hundred
+ * requests to the GPU box at the same moment. HVISKE_BATCH_CONCURRENCY overrides
+ * the default. Shared by every server-side fan-out (VAD batches, Teams cue slices).
+ */
+export function hviskeBatchConcurrency(taskCount: number): number {
+  const env = Number(process.env.HVISKE_BATCH_CONCURRENCY);
+  const limit = Number.isFinite(env) && env > 0 ? env : DEFAULT_HVISKE_BATCH_CONCURRENCY;
+  return Math.max(1, Math.min(limit, taskCount));
 }
 
 export interface BatchEvent {
@@ -136,7 +131,7 @@ export async function transcribeVadBatches(
     });
   });
 
-  await runWithConcurrencyServer(tasks, batchConcurrency(tasks.length));
+  await runWithConcurrency(tasks, hviskeBatchConcurrency(tasks.length));
 
   // Second pass: one application-level retry of everything that failed.
   let failedSeconds = 0;
