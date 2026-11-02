@@ -593,7 +593,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
             <WorkingIndicator label="Behandler mødet…" />
             <p style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
               Du behøver ikke blive på siden. Gennemgangen åbner af sig selv, når den er klar,
-              og mødet ligger også på forsiden bagefter.
+              og mødet ligger også i arkivet bagefter.
             </p>
             {lastCheck && (
               <p

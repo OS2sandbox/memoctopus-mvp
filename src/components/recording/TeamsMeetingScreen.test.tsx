@@ -208,6 +208,14 @@ describe('TeamsMeetingScreen — fetching state', () => {
     renderScreen();
     expect(await screen.findByText(/Du behøver ikke blive på siden/)).toBeInTheDocument();
   });
+
+  // The dashboard lists no meetings; the Arkiv does.
+  it('says where to find the meeting afterwards', async () => {
+    respondWith(statusBody({ state: 'fetching' }));
+    renderScreen();
+    expect(await screen.findByText(/ligger også i arkivet bagefter/)).toBeInTheDocument();
+    expect(screen.queryByText(/på forsiden/)).toBeNull();
+  });
 });
 
 describe('TeamsMeetingScreen — ready', () => {
