@@ -67,6 +67,7 @@ function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     transcriptId: null,
     recordingId: null,
     recordingCleanup: null,
+    recordingCleanupAt: null,
     recordingBytes: null,
     origin: null,
     openedAt: null,

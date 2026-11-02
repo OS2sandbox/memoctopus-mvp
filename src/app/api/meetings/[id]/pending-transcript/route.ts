@@ -8,6 +8,8 @@ import {
   assertMeetingOwner,
 } from '@/lib/pending-artifacts';
 import { withHandler } from '@/lib/api-handler';
+import { deleteRecordingEnabled } from '@/lib/teams/artifact-mode';
+import { queueRecordingCleanup } from '@/lib/teams/store';
 
 // Client collects the server-side transcription of a Teams-bot recording
 // (kicked off by the Graph pipeline as soon as it has the recording).
@@ -60,6 +62,13 @@ export async function GET(
 // The browser has saved the transcript into IndexedDB: drop the server copy. The
 // only thing that deletes a ready transcript, apart from the TTL sweep.
 //
+// It is also the one moment the recording the transcript was made from may leave
+// the organizer's OneDrive: until now the transcript existed only in a server copy
+// that expires, and the recording is what a re-collect transcribes again. The
+// delete is queued in the caller's own schema, so it can only touch their own
+// meeting, and the poller carries it out on its next tick. It is queued even when
+// the server copy has already expired: the browser saved it all the same.
+//
 // Idempotent, and answers { ok: true } for a stranger's meetingId too, so nothing
 // tells a non-owner whether a run exists (they simply delete nothing).
 export const DELETE = withHandler(
@@ -69,8 +78,13 @@ export const DELETE = withHandler(
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { id: meetingId } = await params;
-    if (await assertMeetingOwner(meetingId, session.user.id)) {
-      await acknowledgePendingTranscript(meetingId);
+    const userId = session.user.id;
+    // False only for a stale acknowledgement while a re-collect is running.
+    const acknowledged = (await assertMeetingOwner(meetingId, userId))
+      ? await acknowledgePendingTranscript(meetingId)
+      : true;
+    if (acknowledged && deleteRecordingEnabled()) {
+      await queueRecordingCleanup(userId, meetingId);
     }
     return NextResponse.json({ ok: true });
   },

@@ -11,6 +11,8 @@ import {
   STALE_FETCHING_MS,
   getTeamsMeeting,
   listDueTeamsMeetings,
+  listPendingRecordingCleanups,
+  queueRecordingCleanup,
   upsertTeamsMeeting,
   type TeamsMeetingState,
 } from './store';
@@ -195,6 +197,37 @@ describe('listDueTeamsMeetings', () => {
       expect((await upsertTeamsMeeting(USER, { ...input, occurrenceWindow: true })).occurrenceWindow).toBe(true);
       expect((await getTeamsMeeting(USER, 'occ-1'))?.occurrenceWindow).toBe(true);
       expect((await upsertTeamsMeeting(USER, input)).occurrenceWindow).toBe(false);
+    });
+  });
+
+  describe('queueRecordingCleanup', () => {
+    async function collected(id: string, set: string) {
+      await insert({ id, state: 'ready' });
+      await queryUserSchema(USER, `UPDATE teams_meetings SET ${set} WHERE id = $1`, [id]);
+    }
+
+    it("queues the delete of a collected meeting's recording, once, and stamps when", async () => {
+      await collected('m1', 'recording_bytes = 4242');
+
+      expect(await queueRecordingCleanup(USER, 'm1')).toBe(true);
+      const [row] = await listPendingRecordingCleanups(USER);
+      expect(row).toMatchObject({ id: 'm1', recordingCleanup: 'pending', recordingBytes: 4242 });
+      expect(row.recordingCleanupAt).toBeInstanceOf(Date);
+
+      // A second acknowledgement does not restart the day of retries.
+      expect(await queueRecordingCleanup(USER, 'm1')).toBe(false);
+    });
+
+    it('queues nothing without a recording of ours behind the transcript, or before it is collected', async () => {
+      await collected('vtt', 'recording_bytes = NULL');
+      await insert({ id: 'waiting' });
+      await queryUserSchema(USER, `UPDATE teams_meetings SET recording_bytes = 1 WHERE id = 'waiting'`);
+      await collected('done', `recording_bytes = 7, recording_cleanup = 'deleted'`);
+
+      for (const id of ['vtt', 'waiting', 'done', 'nonexistent']) {
+        expect(await queueRecordingCleanup(USER, id)).toBe(false);
+      }
+      expect(await listPendingRecordingCleanups(USER)).toEqual([]);
     });
   });
 

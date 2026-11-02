@@ -496,7 +496,7 @@ describe('acknowledgePendingTranscript', () => {
       Buffer.from(JSON.stringify({ status: 'ready', segments: [], createdAt: 1 })) as never,
     );
 
-    await acknowledgePendingTranscript('m1');
+    expect(await acknowledgePendingTranscript('m1')).toBe(true);
 
     expect(unlinked().sort()).toEqual(['m1.meta.json', 'm1.owner.json', 'm1.transcript.json']);
   });
@@ -505,15 +505,15 @@ describe('acknowledgePendingTranscript', () => {
     vi.mocked(fs.readFile).mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
     vi.mocked(fs.unlink).mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
 
-    await expect(acknowledgePendingTranscript('m1')).resolves.toBeUndefined();
+    await expect(acknowledgePendingTranscript('m1')).resolves.toBe(true);
   });
 
-  it('never removes a run that is in progress', async () => {
+  it('never removes a run that is in progress, and says the acknowledgement was stale', async () => {
     vi.mocked(fs.readFile).mockResolvedValue(
       Buffer.from(JSON.stringify({ status: 'processing', createdAt: Date.now() })) as never,
     );
 
-    await acknowledgePendingTranscript('m1');
+    expect(await acknowledgePendingTranscript('m1')).toBe(false);
 
     expect(unlinked()).toEqual([]);
   });

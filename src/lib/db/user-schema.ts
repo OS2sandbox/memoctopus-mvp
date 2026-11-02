@@ -270,6 +270,8 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         ADD COLUMN IF NOT EXISTS recording_id  TEXT,
         ADD COLUMN IF NOT EXISTS recording_cleanup TEXT,
         ADD COLUMN IF NOT EXISTS recording_bytes   BIGINT,
+        -- When the delete was queued: once the browser had saved the transcript.
+        ADD COLUMN IF NOT EXISTS recording_cleanup_at TIMESTAMPTZ,
         -- 'outlook' when armed from the Outlook add-in; NULL for the dashboard.
         ADD COLUMN IF NOT EXISTS origin        TEXT,
         -- When the user first opened an Outlook-armed meeting in OS2taletiltekst.

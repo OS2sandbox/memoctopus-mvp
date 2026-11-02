@@ -116,6 +116,7 @@ function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     transcriptId: null,
     recordingId: null,
     recordingCleanup: null,
+    recordingCleanupAt: null,
     recordingBytes: null,
     origin: null,
     openedAt: null,
@@ -343,6 +344,7 @@ describe('pollMeeting', () => {
       failureReason: null,
       transcriptId: 't1',
       recordingId: 'r1',
+      recordingBytes: null,
     });
   });
 
@@ -948,9 +950,19 @@ describe('pollMeeting — "Mødet er slut – hent nu" before the booked end', (
 });
 
 describe('deleting the recording from OneDrive', () => {
-  const READY_AT = new Date('2026-09-08T11:50:00Z');
+  /** When the meeting turned ready: a week before the browser collected it. */
+  const READY_AT = new Date('2026-09-01T11:50:00Z');
+  /** When the browser acknowledged the transcript, and the delete was queued. */
+  const QUEUED_AT = new Date('2026-09-08T11:50:00Z');
   const pending = (over: Partial<TeamsMeetingRow> = {}) =>
-    row({ state: 'ready', lastPolledAt: READY_AT, recordingCleanup: 'pending', recordingBytes: 4242, ...over });
+    row({
+      state: 'ready',
+      lastPolledAt: READY_AT,
+      recordingCleanup: 'pending',
+      recordingCleanupAt: QUEUED_AT,
+      recordingBytes: 4242,
+      ...over,
+    });
   const transcribed = (recordingBytes: number | null = 4242): PipelineOutcome => ({
     status: 'ready',
     mode: 'recording+transcript',
@@ -971,11 +983,15 @@ describe('deleting the recording from OneDrive', () => {
     error.mockRestore();
   });
 
-  it('queues the delete in the write that marks the meeting ready, then deletes', async () => {
+  // Ready means stashed on the server, not saved by the user: the stash expires
+  // after an hour, and an uncollected meeting is re-collected from Teams. Deleting
+  // the recording here made that re-collection fall back to Teams' own transcript,
+  // or find nothing. The delete is queued when the browser acknowledges the
+  // transcript (pending-transcript DELETE), and the poller's tick carries it out.
+  it('remembers which recording to delete, but deletes nothing when the meeting turns ready', async () => {
     mockGet.mockResolvedValue(row());
     mockProcess.mockResolvedValueOnce(transcribed());
-    mockMark.mockResolvedValueOnce(pending());
-    mockDeleteRecording.mockResolvedValueOnce('deleted');
+    mockMark.mockResolvedValueOnce(row({ state: 'ready', recordingBytes: 4242 }));
 
     const result = await pollMeeting('u1', 'm1', NOW);
 
@@ -984,13 +1000,12 @@ describe('deleting the recording from OneDrive', () => {
       failureReason: null,
       transcriptId: 't1',
       recordingId: 'r1',
-      recordingCleanup: 'pending',
       recordingBytes: 4242,
     });
-    expect(mockDeleteRecording).toHaveBeenCalledWith('u1', 4242);
-    expect(mockSettle).toHaveBeenCalledWith('u1', 'm1', 'deleted');
+    expect(mockDeleteRecording).not.toHaveBeenCalled();
+    expect(mockSettle).not.toHaveBeenCalled();
     expect(result.state).toBe('ready');
-    expect(result.recordingCleanup).toBe('deleted');
+    expect(result.recordingCleanup).toBeNull();
   });
 
   it('does not delete while the meeting is not ready', async () => {
@@ -1002,36 +1017,31 @@ describe('deleting the recording from OneDrive', () => {
     expect(mockDeleteRecording).not.toHaveBeenCalled();
   });
 
-  it('leaves OneDrive alone when no recording was downloaded', async () => {
-    mockGet.mockResolvedValue(row());
+  it('records that no recording of ours stands behind the transcript', async () => {
+    mockGet.mockResolvedValue(row({ recordingBytes: 4242 }));
     mockProcess.mockResolvedValueOnce(transcribed(null));
 
     await pollMeeting('u1', 'm1', NOW);
 
-    expect(mockDeleteRecording).not.toHaveBeenCalled();
+    expect(mockMark.mock.calls[0][2]).toMatchObject({ recordingBytes: null });
     expect(mockMark.mock.calls[0][2]).not.toHaveProperty('recordingCleanup');
   });
 
-  it('leaves OneDrive alone when TEAMS_DELETE_RECORDING=false', async () => {
-    process.env.TEAMS_DELETE_RECORDING = 'false';
-    mockGet.mockResolvedValue(row());
-    mockProcess.mockResolvedValueOnce(transcribed());
+  // Those bytes name the file a queued or finished delete is about.
+  it('leaves the recorded size alone once a delete has been queued', async () => {
+    mockGet.mockResolvedValue(row({ recordingCleanup: 'deleted', recordingBytes: 4242 }));
+    mockProcess.mockResolvedValueOnce(transcribed(null));
 
     await pollMeeting('u1', 'm1', NOW);
 
-    expect(mockDeleteRecording).not.toHaveBeenCalled();
-    expect(mockMark.mock.calls[0][2]).not.toHaveProperty('recordingCleanup');
+    expect(mockMark.mock.calls[0][2]).not.toHaveProperty('recordingBytes');
   });
 
-  it('keeps the meeting ready and the delete pending when Graph is throttled', async () => {
-    mockGet.mockResolvedValue(row());
-    mockProcess.mockResolvedValueOnce(transcribed());
-    mockMark.mockResolvedValueOnce(pending());
+  it('keeps the delete pending when Graph is throttled', async () => {
     mockDeleteRecording.mockRejectedValueOnce(new GraphError('unavailable', 'throttled', { status: 429 }));
 
-    const result = await pollMeeting('u1', 'm1', NOW);
+    const result = await cleanUpRecording('u1', pending(), NOW);
 
-    expect(result.state).toBe('ready');
     expect(result.recordingCleanup).toBe('pending');
     expect(mockSettle).not.toHaveBeenCalled();
   });
@@ -1068,12 +1078,14 @@ describe('deleting the recording from OneDrive', () => {
     expect(mockSettle).toHaveBeenCalledWith('u1', 'm1', 'failed');
   });
 
-  it('gives up on an unreachable Graph after a day', async () => {
-    mockDeleteRecording.mockRejectedValueOnce(new GraphError('unavailable', 'nede'));
-    const later = new Date(READY_AT.getTime() + RECORDING_CLEANUP_GIVE_UP_MS + 1);
+  it('gives up on an unreachable Graph a day after the delete was queued', async () => {
+    mockDeleteRecording.mockRejectedValue(new GraphError('unavailable', 'nede'));
 
-    await cleanUpRecording('u1', pending(), later);
+    // A week after the meeting turned ready, but only an hour after it was queued.
+    await cleanUpRecording('u1', pending(), new Date(QUEUED_AT.getTime() + 60 * 60_000));
+    expect(mockSettle).not.toHaveBeenCalled();
 
+    await cleanUpRecording('u1', pending(), new Date(QUEUED_AT.getTime() + RECORDING_CLEANUP_GIVE_UP_MS + 1));
     expect(mockSettle).toHaveBeenCalledWith('u1', 'm1', 'failed');
   });
 
@@ -1086,8 +1098,10 @@ describe('deleting the recording from OneDrive', () => {
   it.each([
     ['deleted', true],
     ['recycled', true],
+    // Queued for deletion: not ours to download again.
+    ['pending', true],
     ['not_found', false],
-    ['pending', false],
+    ['failed', false],
   ] as const)('a re-run after cleanup %s skips the recording: %s', async (recordingCleanup, skipped) => {
     mockGet.mockResolvedValue(row({ recordingCleanup }));
     mockProcess.mockResolvedValueOnce({ status: 'pending' });

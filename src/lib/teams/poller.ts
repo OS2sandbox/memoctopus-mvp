@@ -192,27 +192,29 @@ export async function pollMeeting(
         scheduledStart: row.scheduledStart,
         scheduledEnd: row.scheduledEnd,
         attempts: row.attempts,
-        recordingDeleted: row.recordingCleanup === 'deleted' || row.recordingCleanup === 'recycled',
+        // Deleted, or queued to be: not ours to download again.
+        recordingDeleted:
+          row.recordingCleanup === 'pending'
+          || row.recordingCleanup === 'deleted'
+          || row.recordingCleanup === 'recycled',
       },
       now,
     );
 
     if (outcome.status === 'ready') {
-      // The transcript is safely stashed, so the copy Teams left in OneDrive has
-      // done its job. `pending` goes onto the row in the same write that marks it
-      // ready: whatever happens to the attempt below, the next tick knows there is
-      // a recording still to delete.
-      const cleanUp = outcome.recordingBytes != null && deleteRecordingEnabled();
-      const ready = await markPollAttempt(userId, id, {
+      // Stashed, not yet saved by the user: the stash expires after an hour, and
+      // an uncollected meeting is then re-collected from the recording. So the
+      // recording is not deleted here. The row only remembers which file it was;
+      // the delete is queued when the browser acknowledges the transcript
+      // (queueRecordingCleanup). A size already behind a queued or finished delete
+      // stays: it names the file that delete is about.
+      return await markPollAttempt(userId, id, {
         state: 'ready',
         failureReason: null,
         transcriptId: outcome.transcriptId,
         recordingId: outcome.recordingId,
-        ...(cleanUp
-          ? { recordingCleanup: 'pending' as const, recordingBytes: outcome.recordingBytes }
-          : {}),
+        ...(row.recordingCleanup == null ? { recordingBytes: outcome.recordingBytes } : {}),
       });
-      return cleanUp ? await cleanUpRecording(userId, ready, now) : ready;
     }
     if (outcome.status === 'failed') {
       return await markPollAttempt(userId, id, { state: 'failed', failureReason: outcome.reason });
@@ -255,9 +257,10 @@ export async function pollMeeting(
 export const RECORDING_CLEANUP_GIVE_UP_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Deletes a transcribed meeting's recording from the organizer's OneDrive and
- * writes the verdict to the row. Never throws, and never changes the meeting's
- * state: the referat is ready whether or not the file could be removed.
+ * Deletes a collected meeting's recording from the organizer's OneDrive (queued
+ * by queueRecordingCleanup once the browser has saved the transcript) and writes
+ * the verdict to the row. Never throws, and never changes the meeting's state:
+ * the referat is ready whether or not the file could be removed.
  *
  * A throttle, an outage or an expired sign-in leaves the row `pending`, and
  * {@link pollDueMeetings} comes back to it on every tick for a day.
@@ -282,8 +285,10 @@ export async function cleanUpRecording(
     // one) is cured by the next sign-in, which the dashboard is already asking
     // for — worth the same day's patience.
     const final = kind === 'graph_error' || kind === 'transcripts_disabled';
-    // `ready` was stamped when the cleanup was queued, so this is its age.
-    const age = now.getTime() - (row.lastPolledAt ?? now).getTime();
+    // Rows queued before recording_cleanup_at existed were queued in the write
+    // that marked them ready, which stamped last_polled_at.
+    const queuedAt = row.recordingCleanupAt ?? row.lastPolledAt ?? now;
+    const age = now.getTime() - queuedAt.getTime();
     if (!final && age < RECORDING_CLEANUP_GIVE_UP_MS) {
       console.warn(`[teams/poller] ${row.id}: deleting the recording from OneDrive postponed:`, err);
       return row;

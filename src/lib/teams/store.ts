@@ -57,9 +57,18 @@ export interface TeamsMeetingRow {
   failureReason: string | null;
   transcriptId: string | null;
   recordingId: string | null;
-  /** Where deleting the recording from the organizer's OneDrive stands; null when there was none to delete. */
+  /**
+   * Where deleting the recording from the organizer's OneDrive stands; null while
+   * nothing has been queued — no recording of ours, or the user has not collected
+   * the transcript yet (see {@link queueRecordingCleanup}).
+   */
   recordingCleanup: RecordingCleanupState | null;
-  /** Size of the recording we downloaded — what identifies the file in OneDrive. */
+  /** When the delete was queued. The cleanup's day of retries is measured from it. */
+  recordingCleanupAt: Date | null;
+  /**
+   * Size of the recording our own transcription was made from — what identifies
+   * the file in OneDrive. Null when the transcript did not come from one.
+   */
   recordingBytes: number | null;
   /** `'outlook'` when armed from the Outlook add-in, null for the dashboard. */
   origin: TeamsMeetingOrigin | null;
@@ -78,6 +87,7 @@ export type TeamsMeetingInput = Omit<
   | 'transcriptId'
   | 'recordingId'
   | 'recordingCleanup'
+  | 'recordingCleanupAt'
   | 'recordingBytes'
   | 'createdAt'
   | 'eventId'
@@ -116,10 +126,9 @@ export const OUTLOOK_UNOPENED_GIVE_UP_MS = 30 * 24 * 60 * 60 * 1000;
 /**
  * An Outlook-armed meeting the user has not opened here yet. The background
  * poller leaves it alone: someone who armed it from Outlook may come back days
- * later, and a transcript fetched now would be swept, uncollected, after an hour
- * (pending-artifacts' TTL) while the recording it came from had already been
- * deleted. Opening the meeting (a forced poll from its screen) is what starts the
- * fetch, with the user there to collect it.
+ * later, and a transcript fetched now would only sit on our server, uncollected,
+ * until the hour-long TTL swept it. Opening the meeting (its screen, at or after
+ * the scheduled start) is what starts the fetch, with the user there to collect it.
  */
 export function isDeferred(row: Pick<TeamsMeetingRow, 'origin' | 'openedAt'>): boolean {
   return row.origin === 'outlook' && row.openedAt == null;
@@ -170,6 +179,7 @@ interface RawTeamsMeeting {
   transcript_id: string | null;
   recording_id: string | null;
   recording_cleanup?: string | null;
+  recording_cleanup_at?: Date | string | null;
   recording_bytes?: number | string | null;
   origin?: string | null;
   opened_at?: Date | string | null;
@@ -202,6 +212,7 @@ function mapRow(raw: RawTeamsMeeting): TeamsMeetingRow {
     transcriptId: raw.transcript_id ?? null,
     recordingId: raw.recording_id ?? null,
     recordingCleanup: (raw.recording_cleanup as RecordingCleanupState | null | undefined) ?? null,
+    recordingCleanupAt: toDate(raw.recording_cleanup_at ?? null),
     // BIGINT arrives as a string from pg.
     recordingBytes: raw.recording_bytes == null ? null : Number(raw.recording_bytes),
     origin: raw.origin === 'outlook' ? 'outlook' : null,
@@ -221,7 +232,7 @@ const SELECT_COLUMNS = `
   id, graph_meeting_id, event_id, join_url, subject, organizer_id, is_organizer,
   armed, arm_result, scheduled_start, scheduled_end, occurrence_window, state,
   last_polled_at, attempts, failure_reason, transcript_id, recording_id,
-  recording_cleanup, recording_bytes, origin, opened_at, created_at
+  recording_cleanup, recording_cleanup_at, recording_bytes, origin, opened_at, created_at
 `;
 
 // ─── Queries ────────────────────────────────────────────────────────────────
@@ -566,6 +577,29 @@ export async function setTeamsMeetingState(
   );
   if (!result) throw new Error(`setTeamsMeetingState: no such Teams meeting: ${id}`);
   return mapRow(result);
+}
+
+/**
+ * The browser has saved this meeting's transcript, so the recording it was made
+ * from can go: queue its delete from OneDrive. Not before — until then the
+ * recording is what a re-collect transcribes again (the server's copy of the
+ * transcript expires after an hour).
+ *
+ * Only a collected meeting whose transcript came from our own transcription of
+ * a recording, and only once; anything else is left as it is. Returns whether a
+ * delete was queued.
+ */
+export async function queueRecordingCleanup(userId: string, id: string): Promise<boolean> {
+  const rows = await queryUserSchema<{ id: string }>(
+    userId,
+    `UPDATE teams_meetings
+        SET recording_cleanup = 'pending', recording_cleanup_at = NOW(), updated_at = NOW()
+      WHERE id = $1 AND state = 'ready' AND recording_bytes IS NOT NULL
+        AND recording_cleanup IS NULL AND ${REGISTERED}
+      RETURNING id`,
+    [id],
+  );
+  return rows.length > 0;
 }
 
 /** Rows whose recording is still waiting to be deleted from OneDrive. */

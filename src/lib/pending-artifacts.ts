@@ -190,14 +190,16 @@ export async function sweepExpired(exceptId?: string): Promise<void> {
  * The browser has saved the transcript into IndexedDB: the server copy (and the
  * meta record and owner binding that go with it) has done its job and is removed.
  * Idempotent, and it leaves a run in progress alone, so a stale acknowledgement can
- * never delete the result of a re-collect that is under way.
+ * never delete the result of a re-collect that is under way. Returns false for
+ * such a stale acknowledgement, true otherwise.
  */
-export async function acknowledgePendingTranscript(meetingId: string): Promise<void> {
+export async function acknowledgePendingTranscript(meetingId: string): Promise<boolean> {
   assertSafeId(meetingId);
-  if ((await readPendingTranscript(meetingId))?.status === 'processing') return;
+  if ((await readPendingTranscript(meetingId))?.status === 'processing') return false;
   await deletePendingMeta(meetingId);
   await deletePendingTranscript(meetingId);
   await fs.unlink(ownerPath(meetingId)).catch(() => {});
+  return true;
 }
 
 
