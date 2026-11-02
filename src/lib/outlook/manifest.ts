@@ -44,7 +44,7 @@ function xmlEscape(value: string): string {
 
 /**
  * `origin` must be the https origin the add-in is served from, e.g.
- * https://taletiltekst.syddjurs.dk. Throws on anything else: Outlook loads
+ * https://taletiltekst.example.dk. Throws on anything else: Outlook loads
  * add-ins over https only, and a path or query would end up in every URL.
  */
 export function buildManifest(origin: string, id: string = addinId()): string {
