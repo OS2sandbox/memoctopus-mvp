@@ -14,6 +14,10 @@ type IconEntry = { url: string; type?: string; sizes?: string };
 const icons = metadata.icons as { icon: IconEntry[]; apple: IconEntry[] };
 
 describe('root metadata — name and icons', () => {
+  it('names the product, nothing more', () => {
+    expect(metadata.title).toBe('OS2taletiltekst');
+  });
+
   it('has a single favicon, and it exists', () => {
     expect(icons.icon).toHaveLength(1);
     expect(existsSync(path.join(PUBLIC, icons.icon[0].url))).toBe(true);

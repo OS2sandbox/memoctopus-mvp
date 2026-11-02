@@ -7,7 +7,7 @@ const geistSans = GeistSans;
 const geistMono = GeistMono;
 
 export const metadata: Metadata = {
-  title: 'OS2taletiltekst Referat',
+  title: 'OS2taletiltekst',
   description: 'Opret og administrér mødereferater med automatisk transskribering',
   // Declared here rather than as app/icon.* files: in Next 15, icons set in
   // metadata replace the file-convention ones, so keep a single source.
