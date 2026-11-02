@@ -101,12 +101,33 @@ describe('GET /api/meetings/[id]/pending-transcript', () => {
     expect(mockAck).not.toHaveBeenCalled();
   });
 
-  it("returns status 'failed' and deletes the stash so the client falls back", async () => {
+  // Deleted on read, the verdict was gone by the time the user pressed "Prøv igen":
+  // the retry then read "no server-side run" and went looking for local audio a
+  // Teams meeting never has. The sweeper bounds how long it stays.
+  it("returns status 'failed' and keeps the stash, so a retry reads the same verdict", async () => {
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    mockRead.mockResolvedValue({ status: 'failed', createdAt: 1 });
+
+    expect((await (await GET(REQ, PARAMS)).json()).status).toBe('failed');
+    expect((await (await GET(REQ, PARAMS)).json()).status).toBe('failed');
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it('answers an invalid meeting id with JSON, not an HTML error page', async () => {
     mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-    mockRead.mockResolvedValueOnce({ status: 'failed', createdAt: 1 });
+    const res = await GET(REQ, { params: Promise.resolve({ id: '../etc/passwd' }) });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid-meeting-id' });
+    expect(mockAssertOwner).not.toHaveBeenCalled();
+  });
+
+  it('answers JSON when reading the stash throws', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockRead.mockRejectedValueOnce(new Error('EACCES'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await GET(REQ, PARAMS);
-    expect((await res.json()).status).toBe('failed');
-    expect(mockDelete).toHaveBeenCalledWith('m1');
+    expect(res.status).toBe(500);
+    expect(await res.json()).toHaveProperty('error');
   });
 });
 
