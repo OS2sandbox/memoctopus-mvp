@@ -8,9 +8,10 @@ import { unregisterTeamsMeeting } from '@/lib/teams/register';
 import { readPendingTranscript } from '@/lib/pending-artifacts';
 import {
   POLL_GIVE_UP_MS,
+  RECOLLECT_WINDOW_MS,
   getTeamsMeeting,
   giveUpAnchor,
-  setTeamsMeetingState,
+  requestRecollect,
   type TeamsMeetingRow,
 } from '@/lib/teams/store';
 
@@ -132,12 +133,13 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
  * `{ action: 'recollect' }`: the row says `ready` but the transcript it stands for
  * is no longer on the server (nobody collected it within the pending-artifacts TTL
  * and the sweep removed it). Graph still holds the artifacts, so the row is put back
- * into `awaiting_teams`; the caller then forces a poll (the same `?poll=1` that
- * "Prøv igen" uses) and the pipeline runs again. No new state.
+ * into `awaiting_teams` with a fresh give-up window; the caller then forces a poll
+ * (the same `?poll=1` that "Prøv igen" uses) and the pipeline runs again.
  *
- * Refused (409) for a row that is not `ready`, and once the poller would give up on
- * the meeting anyway: pollMeeting would otherwise mark the revived row `failed` and
- * the ready state would be lost for good.
+ * The recording stays in OneDrive until the user has the transcript, so this is
+ * allowed for RECOLLECT_WINDOW_MS (30 days) after the meeting. Once the recording
+ * has been deleted only Teams' own transcript is left, and the old 24 h bound
+ * applies. Refused (409) for a row that is not `ready`, or outside that window.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -163,11 +165,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // The stash is still there: nothing is missing, the browser just has not collected it.
   if (await readPendingTranscript(id)) return NextResponse.json(serialize(row));
 
-  const anchor = giveUpAnchor(row);
-  if (anchor && anchor.getTime() < Date.now() - POLL_GIVE_UP_MS) {
+  // Measured from the meeting itself (or from when we were handed it), not from an
+  // earlier "Hent igen": asking again must not stretch the bound for ever.
+  const born = giveUpAnchor({ scheduledEnd: row.scheduledEnd, createdAt: row.createdAt });
+  const recordingGone =
+    row.recordingCleanup === 'pending' || row.recordingCleanup === 'deleted' || row.recordingCleanup === 'recycled';
+  const windowMs = recordingGone ? POLL_GIVE_UP_MS : RECOLLECT_WINDOW_MS;
+  if (born && born.getTime() < Date.now() - windowMs) {
     return NextResponse.json({ error: 'window_closed' }, { status: 409 });
   }
 
-  await setTeamsMeetingState(userId, id, 'awaiting_teams', null);
-  return NextResponse.json(serialize((await getTeamsMeeting(userId, id)) ?? row));
+  const revived = await requestRecollect(userId, id);
+  return NextResponse.json(serialize(revived ?? row));
 }

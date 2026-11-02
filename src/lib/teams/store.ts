@@ -74,6 +74,8 @@ export interface TeamsMeetingRow {
   origin: TeamsMeetingOrigin | null;
   /** When the user first opened an Outlook-armed meeting here. See {@link isDeferred}. */
   openedAt: Date | null;
+  /** When the user last asked for this collected meeting again. See {@link requestRecollect}. */
+  recollectedAt: Date | null;
   createdAt: Date | null;
 }
 
@@ -94,6 +96,7 @@ export type TeamsMeetingInput = Omit<
   | 'armResult'
   | 'origin'
   | 'openedAt'
+  | 'recollectedAt'
   | 'occurrenceWindow'
 > &
   Partial<TeamsMeetingRow>;
@@ -135,10 +138,19 @@ export function isDeferred(row: Pick<TeamsMeetingRow, 'origin' | 'openedAt'>): b
 }
 
 /**
+ * How long after a meeting a collected one may be collected again ("Hent igen")
+ * while its recording is still in OneDrive — the same bound an unopened Outlook
+ * meeting is kept for. Once the recording has been deleted only Teams' own
+ * transcript is left, and the poller's 24 h window applies instead.
+ */
+export const RECOLLECT_WINDOW_MS = OUTLOOK_UNOPENED_GIVE_UP_MS;
+
+/**
  * The instant the 24 h give-up window is measured from: the LATER of the meeting's
- * scheduled end, when we were asked to watch it, and (for an Outlook-armed
- * meeting) when the user opened it. Opening is what starts the fetch for those,
- * so their window starts there too, however long after the meeting it is.
+ * scheduled end, when we were asked to watch it, (for an Outlook-armed meeting)
+ * when the user opened it, and when the user asked for a collected meeting again.
+ * Opening and asking again are what start those fetches, so their window starts
+ * there too, however long after the meeting it is.
  *
  * Not the scheduled end alone. A link pasted for a meeting that finished days ago
  * would be born outside its own window and answered `failed` before Graph was asked
@@ -146,12 +158,20 @@ export function isDeferred(row: Pick<TeamsMeetingRow, 'origin' | 'openedAt'>): b
  * the meeting a full window from now, whenever it was actually held.
  */
 export function giveUpAnchor(
-  row: Pick<TeamsMeetingRow, 'scheduledEnd' | 'createdAt'> & { openedAt?: Date | null },
+  row: Pick<TeamsMeetingRow, 'scheduledEnd' | 'createdAt'> & {
+    openedAt?: Date | null;
+    recollectedAt?: Date | null;
+  },
 ): Date | null {
   // realDate, not a bare ??: rows written before the resolver filtered it carry
   // Graph's 0001-01-01 zero value, and treating that as a real scheduled end
   // makes the meeting look two thousand years overdue and abandoned on sight.
-  const candidates = [realDate(row.scheduledEnd), row.createdAt ?? null, row.openedAt ?? null]
+  const candidates = [
+    realDate(row.scheduledEnd),
+    row.createdAt ?? null,
+    row.openedAt ?? null,
+    row.recollectedAt ?? null,
+  ]
     .filter((d): d is Date => d != null);
   if (candidates.length === 0) return null;
   return candidates.reduce((a, b) => (b.getTime() > a.getTime() ? b : a));
@@ -183,6 +203,7 @@ interface RawTeamsMeeting {
   recording_bytes?: number | string | null;
   origin?: string | null;
   opened_at?: Date | string | null;
+  recollected_at?: Date | string | null;
   created_at?: Date | string | null;
 }
 
@@ -217,6 +238,7 @@ function mapRow(raw: RawTeamsMeeting): TeamsMeetingRow {
     recordingBytes: raw.recording_bytes == null ? null : Number(raw.recording_bytes),
     origin: raw.origin === 'outlook' ? 'outlook' : null,
     openedAt: toDate(raw.opened_at ?? null),
+    recollectedAt: toDate(raw.recollected_at ?? null),
     createdAt: toDate(raw.created_at ?? null),
   };
 }
@@ -232,7 +254,8 @@ const SELECT_COLUMNS = `
   id, graph_meeting_id, event_id, join_url, subject, organizer_id, is_organizer,
   armed, arm_result, scheduled_start, scheduled_end, occurrence_window, state,
   last_polled_at, attempts, failure_reason, transcript_id, recording_id,
-  recording_cleanup, recording_cleanup_at, recording_bytes, origin, opened_at, created_at
+  recording_cleanup, recording_cleanup_at, recording_bytes, origin, opened_at,
+  recollected_at, created_at
 `;
 
 // ─── Queries ────────────────────────────────────────────────────────────────
@@ -436,7 +459,7 @@ export async function listDueTeamsMeetings(
                 <= $1::timestamptz - ($6::bigint * INTERVAL '1 millisecond'))
         -- GREATEST, not COALESCE: see giveUpAnchor. GREATEST skips NULLs, so a
         -- meeting with no schedule still falls back to created_at.
-        AND GREATEST(scheduled_end, created_at, opened_at) <= $1::timestamptz
+        AND GREATEST(scheduled_end, created_at, opened_at, recollected_at) <= $1::timestamptz
         -- No upper bound: a row past its give-up window must still reach
         -- pollMeeting, which is what marks it failed.
         AND (last_polled_at IS NULL
@@ -444,7 +467,7 @@ export async function listDueTeamsMeetings(
                 - (CASE WHEN attempts < $2::int THEN $3::int ELSE $4::int END)
                   * INTERVAL '1 millisecond')
         AND ${REGISTERED}
-      ORDER BY GREATEST(scheduled_end, created_at, opened_at) ASC`,
+      ORDER BY GREATEST(scheduled_end, created_at, opened_at, recollected_at) ASC`,
     [now, FAST_POLL_ATTEMPTS, FAST_POLL_MS, SLOW_POLL_MS, STALE_FETCHING_MS, OUTLOOK_UNOPENED_GIVE_UP_MS],
   );
   return rows.map(mapRow);
@@ -558,6 +581,23 @@ export async function markTeamsMeetingOpened(userId: string, id: string): Promis
   );
   if (!result) throw new Error(`markTeamsMeetingOpened: no such Teams meeting: ${id}`);
   return mapRow(result);
+}
+
+/**
+ * "Hent igen": a collected meeting whose transcript the user never got goes back
+ * to waiting for Teams, and earns a full give-up window from now (see
+ * {@link giveUpAnchor}). Only a `ready` row moves; anything else returns null.
+ */
+export async function requestRecollect(userId: string, id: string): Promise<TeamsMeetingRow | null> {
+  const result = await queryUserSchemaOne<RawTeamsMeeting>(
+    userId,
+    `UPDATE teams_meetings
+        SET state = 'awaiting_teams', failure_reason = NULL, recollected_at = NOW(), updated_at = NOW()
+      WHERE id = $1 AND state = 'ready' AND ${REGISTERED}
+      RETURNING ${SELECT_COLUMNS}`,
+    [id],
+  );
+  return result ? mapRow(result) : null;
 }
 
 /** Returns the updated row via `RETURNING`, for the same reason as {@link markPollAttempt}. */

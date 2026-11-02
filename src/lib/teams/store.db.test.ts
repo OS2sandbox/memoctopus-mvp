@@ -13,6 +13,7 @@ import {
   listDueTeamsMeetings,
   listPendingRecordingCleanups,
   queueRecordingCleanup,
+  requestRecollect,
   upsertTeamsMeeting,
   type TeamsMeetingState,
 } from './store';
@@ -197,6 +198,31 @@ describe('listDueTeamsMeetings', () => {
       expect((await upsertTeamsMeeting(USER, { ...input, occurrenceWindow: true })).occurrenceWindow).toBe(true);
       expect((await getTeamsMeeting(USER, 'occ-1'))?.occurrenceWindow).toBe(true);
       expect((await upsertTeamsMeeting(USER, input)).occurrenceWindow).toBe(false);
+    });
+  });
+
+  describe('requestRecollect', () => {
+    it('sends a collected meeting back to Teams, due at once with a fresh window', async () => {
+      const id = await insert({
+        state: 'ready',
+        scheduledEnd: new Date(ms - 5 * DAY),
+        createdAt: new Date(ms - 6 * DAY),
+        attempts: 40,
+        lastPolledAt: new Date(ms - 5 * DAY),
+      });
+
+      const row = await requestRecollect(USER, id);
+
+      expect(row).toMatchObject({ id, state: 'awaiting_teams', failureReason: null });
+      expect(row!.recollectedAt).toBeInstanceOf(Date);
+      // Due now, and listed by when it was asked for.
+      expect(await due(new Date(Date.now() + MIN))).toEqual([id]);
+    });
+
+    it('moves nothing but a collected meeting', async () => {
+      const id = await insert({ state: 'failed' });
+      expect(await requestRecollect(USER, id)).toBeNull();
+      expect(await requestRecollect(USER, 'nonexistent')).toBeNull();
     });
   });
 

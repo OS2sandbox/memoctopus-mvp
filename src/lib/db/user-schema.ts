@@ -277,6 +277,8 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         -- When the user first opened an Outlook-armed meeting in OS2taletiltekst.
         -- Until then its recording is left in Teams (see the poller).
         ADD COLUMN IF NOT EXISTS opened_at     TIMESTAMPTZ,
+        -- When the user last asked for a collected meeting to be collected again.
+        ADD COLUMN IF NOT EXISTS recollected_at TIMESTAMPTZ,
         -- TRUE when scheduled_start/_end were registered for one occurrence of a
         -- series rather than read from Graph, which only knows the series' window.
         ADD COLUMN IF NOT EXISTS occurrence_window BOOLEAN NOT NULL DEFAULT FALSE,

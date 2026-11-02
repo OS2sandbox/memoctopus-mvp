@@ -10,12 +10,13 @@ vi.mock('@/lib/db/user-schema', () => ({
   ensureUserSchema: vi.fn(),
 }));
 vi.mock('@/lib/teams/store', async (importOriginal) => ({
-  // The real POLL_GIVE_UP_MS / giveUpAnchor, so the re-collect window is the poller's.
+  // The real windows and giveUpAnchor, so the re-collect window is the poller's.
   ...(await importOriginal<typeof import('@/lib/teams/store')>()),
   getTeamsMeeting: vi.fn(),
   getMeetingSnapshot: vi.fn(),
   deleteTeamsMeeting: vi.fn().mockResolvedValue(undefined),
-  setTeamsMeetingState: vi.fn().mockResolvedValue(undefined),
+  requestRecollect: vi.fn(),
+  markTeamsMeetingOpened: vi.fn(),
   // No other occurrence of the same series is registered (register.test.ts covers those).
   listTeamsMeetingsByGraphId: vi.fn().mockResolvedValue([]),
 }));
@@ -29,11 +30,13 @@ import { GraphError } from '@/lib/teams/graph-client';
 import { disarmMeeting } from '@/lib/teams/meeting-arm';
 import { pollMeeting } from '@/lib/teams/poller';
 import {
+  OUTLOOK_UNOPENED_GIVE_UP_MS,
   POLL_GIVE_UP_MS,
   deleteTeamsMeeting,
   getMeetingSnapshot,
   getTeamsMeeting,
-  setTeamsMeetingState,
+  markTeamsMeetingOpened,
+  requestRecollect,
   type TeamsMeetingRow,
 } from '@/lib/teams/store';
 import { readPendingTranscript } from '@/lib/pending-artifacts';
@@ -45,7 +48,8 @@ const mockGetSnapshot = vi.mocked(getMeetingSnapshot);
 const mockPoll = vi.mocked(pollMeeting);
 const mockDisarm = vi.mocked(disarmMeeting);
 const mockDelete = vi.mocked(deleteTeamsMeeting);
-const mockSetState = vi.mocked(setTeamsMeetingState);
+const mockRecollect = vi.mocked(requestRecollect);
+const mockMarkOpened = vi.mocked(markTeamsMeetingOpened);
 const mockReadStash = vi.mocked(readPendingTranscript);
 
 function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
@@ -71,6 +75,7 @@ function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     recordingBytes: null,
     origin: null,
     openedAt: null,
+    recollectedAt: null,
     eventId: null,
     armResult: 'armed',
     createdAt: new Date('2026-09-08T09:00:00Z'),
@@ -326,7 +331,7 @@ describe('POST /api/teams/meetings/[id] — recollect', () => {
   const recentlyEnded = () => new Date(Date.now() - 2 * 60 * 60 * 1000);
 
   beforeEach(() => {
-    mockSetState.mockResolvedValue(row());
+    mockRecollect.mockResolvedValue(row({ state: 'awaiting_teams' }));
     mockReadStash.mockResolvedValue(null);
   });
 
@@ -338,13 +343,13 @@ describe('POST /api/teams/meetings/[id] — recollect', () => {
   it('returns 404 for a meeting the caller does not own', async () => {
     mockGet.mockResolvedValueOnce(null);
     expect((await POST(post(), { params })).status).toBe(404);
-    expect(mockSetState).not.toHaveBeenCalled();
+    expect(mockRecollect).not.toHaveBeenCalled();
   });
 
   it('rejects an unknown action', async () => {
     mockGet.mockResolvedValueOnce(row({ state: 'ready' }));
     expect((await POST(post({ action: 'nope' }), { params })).status).toBe(400);
-    expect(mockSetState).not.toHaveBeenCalled();
+    expect(mockRecollect).not.toHaveBeenCalled();
   });
 
   it('refuses with 403 while the Teams integration is off, and moves nothing', async () => {
@@ -357,18 +362,17 @@ describe('POST /api/teams/meetings/[id] — recollect', () => {
 
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: 'disabled' });
-    expect(mockSetState).not.toHaveBeenCalled();
+    expect(mockRecollect).not.toHaveBeenCalled();
   });
 
   it('puts a ready row whose stash is gone back to awaiting_teams', async () => {
-    mockGet
-      .mockResolvedValueOnce(row({ state: 'ready', scheduledEnd: recentlyEnded() }))
-      .mockResolvedValueOnce(row({ state: 'awaiting_teams', scheduledEnd: recentlyEnded() }));
+    mockGet.mockResolvedValueOnce(row({ state: 'ready', scheduledEnd: recentlyEnded() }));
+    mockRecollect.mockResolvedValueOnce(row({ state: 'awaiting_teams', scheduledEnd: recentlyEnded() }));
 
     const res = await POST(post(), { params });
 
     expect(res.status).toBe(200);
-    expect(mockSetState).toHaveBeenCalledWith('user-123', 'm1', 'awaiting_teams', null);
+    expect(mockRecollect).toHaveBeenCalledWith('user-123', 'm1');
     expect((await res.json()).state).toBe('awaiting_teams');
   });
 
@@ -380,7 +384,7 @@ describe('POST /api/teams/meetings/[id] — recollect', () => {
 
     expect(res.status).toBe(200);
     expect((await res.json()).state).toBe('ready');
-    expect(mockSetState).not.toHaveBeenCalled();
+    expect(mockRecollect).not.toHaveBeenCalled();
   });
 
   it.each(['awaiting_teams', 'fetching', 'failed', 'needs_reauth'] as const)(
@@ -389,20 +393,47 @@ describe('POST /api/teams/meetings/[id] — recollect', () => {
       mockGet.mockResolvedValueOnce(row({ state }));
       const res = await POST(post(), { params });
       expect(res.status).toBe(409);
-      expect(mockSetState).not.toHaveBeenCalled();
+      expect(mockRecollect).not.toHaveBeenCalled();
     },
   );
 
-  // pollMeeting gives up on a row 24 h after the meeting and would then mark the
-  // revived row failed, losing the ready state for good. So refuse beforehand.
-  it('refuses once the poller would give up on the meeting anyway, and leaves the row untouched', async () => {
-    const tooOld = new Date(Date.now() - POLL_GIVE_UP_MS - 60_000);
-    mockGet.mockResolvedValueOnce(row({ state: 'ready', scheduledEnd: tooOld }));
+  // The recording stays in OneDrive until the user has the transcript, so a
+  // meeting nobody collected within the stash's hour can still be transcribed
+  // again days later. Refusing after 24 h lost it for good.
+  it('re-collects a meeting days later while its recording is still in OneDrive', async () => {
+    const daysAgo = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+    mockGet.mockResolvedValueOnce(row({ state: 'ready', scheduledEnd: daysAgo, createdAt: daysAgo }));
+
+    const res = await POST(post(), { params });
+
+    expect(res.status).toBe(200);
+    expect(mockRecollect).toHaveBeenCalledWith('user-123', 'm1');
+  });
+
+  it('refuses after the same 30 days an unopened Outlook meeting is kept for', async () => {
+    const tooOld = new Date(Date.now() - OUTLOOK_UNOPENED_GIVE_UP_MS - 60_000);
+    mockGet.mockResolvedValueOnce(row({ state: 'ready', scheduledEnd: tooOld, createdAt: tooOld }));
 
     const res = await POST(post(), { params });
 
     expect(res.status).toBe(409);
     expect((await res.json()).error).toBe('window_closed');
-    expect(mockSetState).not.toHaveBeenCalled();
+    expect(mockRecollect).not.toHaveBeenCalled();
   });
+
+  // Teams' own transcript is all a re-run could still collect then, and the old
+  // 24 h bound stands for that.
+  it.each(['pending', 'deleted', 'recycled'] as const)(
+    'refuses after 24 h once the recording is %s',
+    async (recordingCleanup) => {
+      const old = new Date(Date.now() - POLL_GIVE_UP_MS - 60_000);
+      mockGet.mockResolvedValueOnce(row({ state: 'ready', scheduledEnd: old, createdAt: old, recordingCleanup }));
+
+      const res = await POST(post(), { params });
+
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toBe('window_closed');
+      expect(mockRecollect).not.toHaveBeenCalled();
+    },
+  );
 });

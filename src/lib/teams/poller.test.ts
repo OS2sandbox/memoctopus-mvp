@@ -120,6 +120,7 @@ function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     recordingBytes: null,
     origin: null,
     openedAt: null,
+    recollectedAt: null,
     eventId: null,
     armResult: 'armed',
     createdAt: new Date('2026-09-08T09:00:00Z'),
@@ -863,6 +864,30 @@ describe('pollMeeting — re-reading the meeting from Graph', () => {
   // The screen forces a poll whenever it opens after the meeting's end, so a
   // collected meeting gets forced polls too. Re-reading it then turned a meeting
   // since deleted in Teams from `ready` into `failed`, and its referat was lost.
+  // "Hent igen" days after the meeting: a full window from the request, like a
+  // link pasted for a meeting long over. Measured from the meeting instead, the
+  // revived row was failed on its first poll and the referat lost for good.
+  it('gives a re-collected meeting a full window from when it was asked for', async () => {
+    const days = (n: number) => new Date(NOW.getTime() - n * 24 * 60 * 60 * 1000);
+    mockGet.mockResolvedValue(row({
+      scheduledStart: days(5),
+      scheduledEnd: days(5),
+      createdAt: days(6),
+      lastPolledAt: days(5),
+      recollectedAt: new Date(NOW.getTime() - 60_000),
+    }));
+    mockGetMeeting.mockResolvedValue(graphMeeting({
+      scheduledStart: days(5).toISOString(),
+      scheduledEnd: days(5).toISOString(),
+    }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending', transient: true });
+
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expect(mockProcess).toHaveBeenCalled();
+    expect(mockMark).not.toHaveBeenCalledWith('u1', 'm1', expect.objectContaining({ state: 'failed' }));
+  });
+
   it('keeps a collected meeting ready under a forced poll, even if Teams has since deleted it', async () => {
     mockGet.mockResolvedValue(row({ state: 'ready' }));
     mockGetMeeting.mockRejectedValue(new GraphError('not_found', 'væk', { status: 404 }));

@@ -93,6 +93,7 @@ beforeEach(() => {
     recordingBytes: null,
     origin: null,
     openedAt: null,
+    recollectedAt: null,
     state: 'awaiting_teams' as const,
     eventId: null,
     armResult: 'not_organizer' as const,
