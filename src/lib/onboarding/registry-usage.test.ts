@@ -79,4 +79,17 @@ describe('onboarding registry ↔ call sites', () => {
     );
     expect(mismatched.map((u) => `${u.file}: <${u.component} stepId="${u.stepId}">`)).toEqual([]);
   });
+
+  // OnboardingHint ignores a meetingId at a global step, so passing one only
+  // suggests a per-meeting behaviour the step does not have.
+  it('passes a meetingId only to per-meeting steps', () => {
+    const misleading = all.filter(
+      (u) =>
+        u.component === 'OnboardingHint' &&
+        /\bmeetingId=/.test(u.attrs) &&
+        u.stepId &&
+        ONBOARDING_STEPS[u.stepId]?.scope !== 'per-meeting',
+    );
+    expect(misleading.map((u) => `${u.file}: ${u.stepId}`)).toEqual([]);
+  });
 });

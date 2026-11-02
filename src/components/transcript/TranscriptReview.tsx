@@ -1319,7 +1319,7 @@ export function TranscriptReview({
           </div>
 
           {piiReplacements.length > 0 && (
-            <OnboardingHint stepId="review.pii-checkboxes" meetingId={meetingId}>
+            <OnboardingHint stepId="review.pii-checkboxes">
             <div style={{ marginTop: 18 }}>
               {piiReplacements.map((r, i) => (
                 <div
@@ -1418,7 +1418,7 @@ export function TranscriptReview({
           </div>
 
           {/* Skabelon, kategorier & ekstra instruktioner */}
-          <OnboardingHint stepId="review.skabelon-panel" meetingId={meetingId}>
+          <OnboardingHint stepId="review.skabelon-panel">
           <div style={{ marginTop: 28 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>skabelon</div>
 
@@ -1639,7 +1639,7 @@ export function TranscriptReview({
           </div>
 
           {/* Generate button */}
-          <OnboardingHint stepId="review.generate-button" meetingId={meetingId}>
+          <OnboardingHint stepId="review.generate-button">
             <div style={{ display: 'inline-block', width: '100%' }}>
               <button
                 onClick={proceedToMinutes}
