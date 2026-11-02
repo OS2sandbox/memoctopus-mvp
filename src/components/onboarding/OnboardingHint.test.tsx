@@ -1,0 +1,263 @@
+// @vitest-environment jsdom
+import React from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, cleanup, fireEvent, act } from '@testing-library/react';
+import { OnboardingProvider } from '@/lib/onboarding/context';
+import { OnboardingHint } from './OnboardingHint';
+import { getStep } from '@/lib/onboarding/steps';
+
+const fetchMock = vi.fn();
+
+beforeEach(() => {
+  fetchMock.mockReset();
+  fetchMock.mockResolvedValue({ ok: true, status: 200 });
+  vi.stubGlobal('fetch', fetchMock);
+  // Radix Popper measures its content with ResizeObserver, which jsdom lacks.
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+});
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+
+// getByText collapses whitespace in the DOM text but not in a string matcher,
+// so multi-paragraph copy (blank-line separated) has to be collapsed the same way.
+const copyOf = (id: string) => getStep(id).copy.replace(/\s+/g, ' ');
+
+const fresh = { tourSkipped: true, tourCompleted: false, seen: [] };
+
+function Provider({ children }: { children: React.ReactNode }) {
+  return <OnboardingProvider initial={fresh}>{children}</OnboardingProvider>;
+}
+
+// Bodies of every /api/onboarding/step save, in call order.
+function saves(): Array<{ stepId: string; meetingId: string | null }> {
+  return fetchMock.mock.calls.map(([, init]) => JSON.parse((init as RequestInit).body as string));
+}
+
+const A = 'topbar.arkiv-explainer';
+const B = 'topbar.unsaved-audio';
+const C = 'dashboard.record-button';
+
+describe('OnboardingHint — dismissal saves once', () => {
+  it('saves exactly once when dismissed with the button', async () => {
+    render(
+      <Provider>
+        <OnboardingHint stepId={A}>
+          <span>anchor</span>
+        </OnboardingHint>
+      </Provider>,
+    );
+    expect(screen.getByText(copyOf(A))).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('forstået'));
+    });
+
+    expect(screen.queryByText(copyOf(A))).toBeNull();
+    expect(saves()).toEqual([{ stepId: A, meetingId: null }]);
+  });
+
+  it('saves exactly once when dismissed with Escape', async () => {
+    render(
+      <Provider>
+        <OnboardingHint stepId={A}>
+          <span>anchor</span>
+        </OnboardingHint>
+      </Provider>,
+    );
+    expect(screen.getByText(copyOf(A))).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: 'Escape' });
+    });
+
+    expect(screen.queryByText(copyOf(A))).toBeNull();
+    expect(saves()).toEqual([{ stepId: A, meetingId: null }]);
+  });
+
+  it('still marks a shown hint seen once when it unmounts undismissed', () => {
+    const { unmount } = render(
+      <Provider>
+        <OnboardingHint stepId={A}>
+          <span>anchor</span>
+        </OnboardingHint>
+      </Provider>,
+    );
+    unmount();
+    expect(saves()).toEqual([{ stepId: A, meetingId: null }]);
+  });
+});
+
+describe('OnboardingHint — one instance reused for different steps', () => {
+  function Bar({ step, meetingId }: { step: string; meetingId: string | null }) {
+    return (
+      <Provider>
+        <OnboardingHint key="/arkiv" stepId={step} meetingId={meetingId}>
+          <span>anchor</span>
+        </OnboardingHint>
+      </Provider>
+    );
+  }
+
+  it('does not mark the new step seen when it was only queued, never shown', () => {
+    // C mounts first and holds the slot; the reused instance shows A, then is
+    // re-pointed at B while C is still ahead of it in the queue.
+    function Tree({ step, meetingId }: { step: string; meetingId: string | null }) {
+      return (
+        <Provider>
+          <OnboardingHint stepId={step} meetingId={meetingId}>
+            <span>anchor</span>
+          </OnboardingHint>
+          <OnboardingHint stepId={C}>
+            <span>other</span>
+          </OnboardingHint>
+        </Provider>
+      );
+    }
+    const { rerender, unmount } = render(<Tree step={A} meetingId={null} />);
+    expect(screen.getByText(copyOf(A))).toBeTruthy();
+
+    rerender(<Tree step={B} meetingId="m-1" />);
+    // A was shown, so leaving it counts as seen; B is queued behind C.
+    expect(saves()).toEqual([{ stepId: A, meetingId: null }]);
+    expect(screen.queryByText(copyOf(B))).toBeNull();
+
+    unmount();
+    // B was never on screen: it must not be recorded as seen.
+    expect(saves().some((s) => s.stepId === B)).toBe(false);
+  });
+
+  it('does mark the new step seen when it was shown', () => {
+    const { rerender, unmount } = render(<Bar step={A} meetingId={null} />);
+    rerender(<Bar step={B} meetingId="m-1" />);
+    expect(screen.getByText(copyOf(B))).toBeTruthy();
+    unmount();
+    expect(saves()).toEqual([
+      { stepId: A, meetingId: null },
+      { stepId: B, meetingId: 'm-1' },
+    ]);
+  });
+});
+
+describe('OnboardingHint — repeated step', () => {
+  it('lets the next instance show when the owning instance unmounts', () => {
+    const D = 'review.speaker-assign';
+    function Rows({ rows }: { rows: string[] }) {
+      return (
+        <Provider>
+          {/* C is ahead in the queue, so no row's hint is open yet. */}
+          <OnboardingHint stepId={C}>
+            <span>first</span>
+          </OnboardingHint>
+          {rows.map((r) => (
+            <OnboardingHint key={r} stepId={D}>
+              <span>{r}</span>
+            </OnboardingHint>
+          ))}
+        </Provider>
+      );
+    }
+    const { rerender } = render(<Rows rows={['row-1', 'row-2', 'row-3']} />);
+    expect(screen.queryByText(copyOf(D))).toBeNull();
+
+    // The row that owns the slot goes away while still queued (never shown).
+    rerender(<Rows rows={['row-2', 'row-3']} />);
+    // Dismiss C: the step must now show on a remaining row, once.
+    fireEvent.click(screen.getByText('forstået'));
+    expect(screen.getAllByText(copyOf(D))).toHaveLength(1);
+  });
+});
+
+describe('OnboardingHint — unknown stepId', () => {
+  it('renders children plainly and never opens a hint, instead of crashing', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(
+      <Provider>
+        <OnboardingHint stepId="not.a.real.step">
+          <span>anchor content</span>
+        </OnboardingHint>
+      </Provider>,
+    );
+
+    expect(screen.getByText('anchor content')).toBeTruthy();
+    expect(screen.queryByText('forstået')).toBeNull();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('not.a.real.step'));
+    spy.mockRestore();
+  });
+});
+
+// The reported bug: "Optagelsen gemmes kun lokalt i din browser" came back at
+// the start of every single recording. The step is a product explainer, but it
+// was declared `scope: 'per-meeting'` AND handed a meetingId, so its seen-key
+// carried the meeting and no two recordings ever shared one.
+describe('OnboardingHint — scope decides what the seen-key remembers', () => {
+  const GLOBAL = 'recording.audio-lifecycle'; // scope: 'global'
+  const PER_MEETING = 'topbar.unsaved-audio'; // scope: 'per-meeting'
+
+  function show(stepId: string, meetingId: string | null) {
+    return render(
+      <Provider>
+        <OnboardingHint stepId={stepId} meetingId={meetingId}>
+          <span>anchor</span>
+        </OnboardingHint>
+      </Provider>,
+    );
+  }
+
+  it('saves a global step without a meeting, even when the call site passes one', async () => {
+    show(GLOBAL, 'meeting-1');
+    await act(async () => { fireEvent.click(screen.getByText('forstået')); });
+
+    expect(saves()).toEqual([{ stepId: GLOBAL, meetingId: null }]);
+  });
+
+  it('does not show a dismissed global hint again in the next meeting', () => {
+    render(
+      <OnboardingProvider
+        initial={{ tourSkipped: true, tourCompleted: false, seen: [{ stepId: GLOBAL, meetingId: null }] }}
+      >
+        {/* A brand new recording — a meeting id this hint has never seen. */}
+        <OnboardingHint stepId={GLOBAL} meetingId="a-later-meeting">
+          <span>anchor</span>
+        </OnboardingHint>
+      </OnboardingProvider>,
+    );
+
+    expect(screen.getByText('anchor')).toBeTruthy();
+    expect(screen.queryByText(copyOf(GLOBAL))).toBeNull();
+  });
+
+  it('still remembers a per-meeting step per meeting', async () => {
+    show(PER_MEETING, 'meeting-1');
+    await act(async () => { fireEvent.click(screen.getByText('forstået')); });
+
+    expect(saves()).toEqual([{ stepId: PER_MEETING, meetingId: 'meeting-1' }]);
+  });
+
+  it('shows a per-meeting step again for a different meeting', () => {
+    render(
+      <OnboardingProvider
+        initial={{
+          tourSkipped: true,
+          tourCompleted: false,
+          seen: [{ stepId: PER_MEETING, meetingId: 'meeting-1' }],
+        }}
+      >
+        <OnboardingHint stepId={PER_MEETING} meetingId="meeting-2">
+          <span>anchor</span>
+        </OnboardingHint>
+      </OnboardingProvider>,
+    );
+
+    expect(screen.getByText(copyOf(PER_MEETING))).toBeTruthy();
+  });
+});

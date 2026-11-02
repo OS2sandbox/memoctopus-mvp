@@ -148,6 +148,45 @@ describe('createMeeting', () => {
     expect(m.source).toBe('teams');
   });
 
+  it('accepts the "awaiting_teams" status', async () => {
+    const m = await createMeeting({ title: 'Test', source: 'teams', status: 'awaiting_teams' });
+    expect(m.status).toBe('awaiting_teams');
+  });
+
+  it('stores the Microsoft Graph meeting details when supplied', async () => {
+    const m = await createMeeting({
+      title: 'Ugentligt statusmøde',
+      source: 'teams',
+      status: 'awaiting_teams',
+      teamsArmed: true,
+      teamsIsOrganizer: true,
+      teamsSubject: 'Ugentligt statusmøde',
+      scheduledStart: '2026-09-09T08:00:00.000Z',
+      scheduledEnd: '2026-09-09T09:00:00.000Z',
+    });
+    expect(m).toMatchObject({
+      teamsArmed: true,
+      teamsIsOrganizer: true,
+      teamsSubject: 'Ugentligt statusmøde',
+      scheduledStart: '2026-09-09T08:00:00.000Z',
+      scheduledEnd: '2026-09-09T09:00:00.000Z',
+    });
+    expect(await getMeeting(m.id)).toMatchObject({ teamsArmed: true });
+  });
+
+  it('stores the Graph marker when supplied and persists it', async () => {
+    const m = await createMeeting({ title: 'Teams', source: 'teams', status: 'awaiting_teams', graphManaged: true });
+    expect(m.graphManaged).toBe(true);
+    expect(await getMeeting(m.id)).toMatchObject({ graphManaged: true });
+  });
+
+  it('leaves the Teams fields off a local recording entirely', async () => {
+    const m = await createMeeting({ title: 'Diktat' });
+    expect('graphManaged' in m).toBe(false);
+    expect('teamsArmed' in m).toBe(false);
+    expect('scheduledStart' in m).toBe(false);
+  });
+
   it('defaults participants to an empty array', async () => {
     const m = await createMeeting({ title: 'Test' });
     expect(m.participants).toEqual([]);
@@ -202,10 +241,6 @@ describe('createMeeting', () => {
     expect(m.audioDeleted).toBe(false);
   });
 
-  it('initialises botSession to null', async () => {
-    const m = await createMeeting({ title: 'Test' });
-    expect(m.botSession).toBeNull();
-  });
 
   it('persists the meeting so getMeeting can retrieve it', async () => {
     const m = await createMeeting({ title: 'Persisted' });

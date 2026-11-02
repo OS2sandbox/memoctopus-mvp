@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { getDiarizationProvider } from '@/lib/ai/diarization';
+import { withHandler } from '@/lib/api-handler';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
 interface Params {
   params: Promise<{ id: string }>;
@@ -13,10 +14,10 @@ interface Params {
 // onto its transcript segments (see merge-speakers.ts) and stores the result in
 // IndexedDB. Diarization must run over the WHOLE recording in one pass because
 // speaker identity is global, so this is a single request, not per-utterance.
-export async function POST(req: NextRequest, { params }: Params) {
-  const { id: _id } = await params;
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+// Not audited: it is a pipeline step on audio that audio.upload already covers.
+async function postHandler(req: NextRequest, _ctx: Params) {
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
 
   const formData = await req.formData();
   const audioFile = formData.get('audio') as File | null;
@@ -32,7 +33,9 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ turns });
   } catch (err) {
     // Non-fatal: the client falls back to single-speaker labels when turns is empty.
-    console.error(`[diarize] failed after ${Date.now() - t0} ms:`, err);
+    safeLogError(`diarize failed after ${Date.now() - t0} ms`, err);
     return NextResponse.json({ turns: [] });
   }
 }
+
+export const POST = withHandler('diarize', postHandler);

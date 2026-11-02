@@ -193,6 +193,19 @@ describe('PyannoteProvider.diarize', () => {
 
     expect(file.type).toBe('audio/webm');
   });
+
+  it('logs only the error class when the server-side decode fails', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockDecode.mockRejectedValueOnce(new Error('ffmpeg: /tmp/Budget-2024.webm hemmeligt'));
+    mockUndiciFetch.mockResolvedValueOnce(jsonResponse({ turns: [] }));
+
+    await new PyannoteProvider().diarize(buf, 'audio/webm');
+
+    expect(spy).toHaveBeenCalledOnce();
+    expect(spy.mock.calls[0]).toHaveLength(1);
+    expect(JSON.stringify(spy.mock.calls)).not.toMatch(/Budget|hemmeligt/);
+    spy.mockRestore();
+  });
 });
 
 describe('getDiarizationProvider / setDiarizationProvider', () => {

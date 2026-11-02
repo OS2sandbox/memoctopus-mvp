@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickRecordingMimeType, extensionForMimeType } from './recording-format';
+import { pickRecordingMimeType } from './recording-format';
 
 describe('pickRecordingMimeType', () => {
   it('prefers webm/opus on desktop Chrome (everything supported)', () => {
@@ -18,21 +18,5 @@ describe('pickRecordingMimeType', () => {
 
   it("returns '' when nothing is supported so the browser picks a default", () => {
     expect(pickRecordingMimeType(() => false)).toBe('');
-  });
-});
-
-describe('extensionForMimeType', () => {
-  it('maps mp4/m4a to m4a', () => {
-    expect(extensionForMimeType('audio/mp4')).toBe('m4a');
-    expect(extensionForMimeType('audio/mp4;codecs=mp4a.40.2')).toBe('m4a');
-  });
-
-  it('maps ogg to ogg', () => {
-    expect(extensionForMimeType('audio/ogg;codecs=opus')).toBe('ogg');
-  });
-
-  it('defaults to webm', () => {
-    expect(extensionForMimeType('audio/webm;codecs=opus')).toBe('webm');
-    expect(extensionForMimeType('')).toBe('webm');
   });
 });

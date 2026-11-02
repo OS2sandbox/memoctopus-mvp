@@ -14,15 +14,31 @@ import {
 } from '@/components/ui/dialog';
 import { formatDate, formatDuration, statusLabel, statusVariant } from '@/lib/utils';
 import { Meeting } from '@/types';
-import { deleteMeeting } from '@/lib/storage';
+import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
 type ArchiveMeeting = Pick<Meeting, 'id' | 'title' | 'participants' | 'status' | 'createdAt'> & {
   durationSeconds: number | null;
+  /** The server's state for a Teams meeting, when the archive could fetch it. */
+  teamsState?: string;
 };
 
+/**
+ * The badge for a row. A Teams meeting's local status stays `awaiting_teams`
+ * until its transcript is collected, so a meeting the server has given up on
+ * would read "Afventer Teams" forever. The server's state says what happened.
+ */
+function badgeFor(m: ArchiveMeeting): { label: string; variant: ReturnType<typeof statusVariant> } {
+  if (m.status === 'awaiting_teams') {
+    if (m.teamsState === 'failed') return { label: 'Intet referat', variant: 'destructive' };
+    if (m.teamsState === 'needs_reauth') return { label: 'Log ind igen', variant: 'warning' };
+  }
+  return { label: statusLabel(m.status), variant: statusVariant(m.status) };
+}
+
 function statusHref(m: ArchiveMeeting) {
-  if (m.status === 'recording' || m.status === 'processing') return `/meeting/${m.id}`;
+  if (m.status === 'awaiting_teams' || m.status === 'recording' || m.status === 'processing') return `/meeting/${m.id}`;
   if (m.status === 'review') return `/meeting/${m.id}/review`;
   return `/meeting/${m.id}/minutes`;
 }
@@ -42,7 +58,6 @@ export function ArchiveMeetingRow({
   selected?: boolean;
   onToggleSelect?: () => void;
 }) {
-  const [hovered, setHovered] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -51,7 +66,7 @@ export function ArchiveMeetingRow({
     setIsDeleting(true);
     setDeleteError(null);
     try {
-      await deleteMeeting(meeting.id);
+      await deleteMeetingAndUnregister(meeting.id);
       setDeleteOpen(false);
       onDeleted?.();
     } catch (err) {
@@ -61,6 +76,7 @@ export function ArchiveMeetingRow({
     }
   }
 
+  const badge = badgeFor(meeting);
   const rowBody = (
     <>
       <div className="flex-1 min-w-0">
@@ -77,9 +93,7 @@ export function ArchiveMeetingRow({
           )}
         </p>
       </div>
-      <Badge variant={statusVariant(meeting.status)}>
-        {statusLabel(meeting.status)}
-      </Badge>
+      <Badge variant={badge.variant}>{badge.label}</Badge>
     </>
   );
 
@@ -107,33 +121,30 @@ export function ArchiveMeetingRow({
 
   return (
     <>
-      <div
-        className="relative flex items-center gap-4 px-5 py-4 hover:bg-[var(--surface-2)] transition-colors"
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-      >
+      <div className="group relative flex items-center gap-4 px-5 py-4 hover:bg-[var(--surface-2)] transition-colors">
         <Link href={statusHref(meeting)} className="flex flex-1 min-w-0 items-center gap-4">
           {rowBody}
         </Link>
 
-        <button
-          onClick={(e) => {
-            e.preventDefault();
-            setDeleteError(null);
-            setDeleteOpen(true);
-          }}
-          className="ml-1 p-1.5 rounded text-[var(--muted)] hover:text-red-500 hover:bg-red-50 transition-colors"
-          style={{ opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none' }}
-          aria-label="Slet møde"
-        >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="3 6 5 6 21 6" />
-            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-            <path d="M10 11v6" />
-            <path d="M14 11v6" />
-            <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-          </svg>
-        </button>
+        <OnboardingTooltip stepId="arkiv.delete-button-touch">
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              setDeleteError(null);
+              setDeleteOpen(true);
+            }}
+            className="ml-1 p-1.5 rounded text-[var(--muted)] hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus:opacity-100 focus:pointer-events-auto"
+            aria-label="Slet møde"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+              <path d="M10 11v6" />
+              <path d="M14 11v6" />
+              <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+            </svg>
+          </button>
+        </OnboardingTooltip>
       </div>
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>

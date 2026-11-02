@@ -13,8 +13,11 @@ import {
 } from '@/components/ui/dialog';
 import { ProcessStrip } from '@/components/layout/ProcessStrip';
 import { RedactDialog } from '@/components/compliance/RedactDialog';
-import { getMeeting, updateMeeting, deleteMeeting, deleteAudio, getTranscript, saveTranscript } from '@/lib/storage';
+import { getMeeting, updateMeeting, deleteAudio, getTranscript, saveTranscript } from '@/lib/storage';
+import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
+import { reportAuditEvent } from '@/lib/audit/client';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 
 export default function MeetingSettingsPage() {
   const params = useParams();
@@ -79,9 +82,13 @@ export default function MeetingSettingsPage() {
     setRenameError(null);
     try {
       await updateMeeting(id, { title: trimmed });
+      // A rename by the person: which field only, never the title (coalesced in the browser).
+      reportAuditEvent('meeting.metadata_edit', id, { field: 'title' });
       setMeetingTitle(trimmed);
     } catch (err) {
       console.error('[settings] kunne ikke omdøbe møde:', err);
+      // The rename failed: reported as such (which field only, never the title).
+      reportAuditEvent('meeting.metadata_edit', id, { field: 'title' }, { outcome: 'error' });
       setRenameError('Kunne ikke gemme det nye navn — prøv igen.');
     } finally {
       setIsRenaming(false);
@@ -117,7 +124,7 @@ export default function MeetingSettingsPage() {
     setIsDeleting(true);
     setDeleteError(null);
     try {
-      await deleteMeeting(id);
+      await deleteMeetingAndUnregister(id);
       router.push('/arkiv');
     } catch (err) {
       console.error('[settings] kunne ikke slette møde:', err);
@@ -128,7 +135,11 @@ export default function MeetingSettingsPage() {
 
   return (
     <div>
-      <ProcessStrip meetingId={id} activePhase="export" />
+      <OnboardingHint stepId="meeting-settings.processstrip-export" meetingId={id}>
+        <div>
+          <ProcessStrip meetingId={id} activePhase="export" />
+        </div>
+      </OnboardingHint>
       <div className="mx-auto max-w-[720px] px-6 py-12">
         <h1
           style={{ fontSize: 'var(--t-h1)', fontWeight: 300, color: 'var(--ink)', margin: '0 0 32px' }}
@@ -168,14 +179,16 @@ export default function MeetingSettingsPage() {
             {/* Disabled when title hasn't loaded: an empty meetingTitle bypasses the
                 RedactDialog type-to-confirm guard ('' === '' passes), so we block
                 opening until the title is confirmed. */}
-            <Button
-              variant="danger-ghost"
-              size="sm"
-              onClick={() => setRedactOpen(true)}
-              disabled={!titleLoaded}
-            >
-              Slet følsomt indhold
-            </Button>
+            <OnboardingHint stepId="meeting-settings.redact-purpose" meetingId={id}>
+              <Button
+                variant="danger-ghost"
+                size="sm"
+                onClick={() => setRedactOpen(true)}
+                disabled={!titleLoaded}
+              >
+                Slet følsomt indhold
+              </Button>
+            </OnboardingHint>
           </SettingRow>
 
           {/* Delete entire meeting */}

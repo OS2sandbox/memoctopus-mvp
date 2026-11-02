@@ -5,9 +5,14 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
 import { useIsMobile } from '@/lib/use-is-mobile';
-import { signOut, useSession } from '@/lib/auth-client';
+import { useSession } from '@/lib/auth-client';
+import { signOutAfterFlush } from '@/lib/sign-out';
 import { clearPendingUploads } from '@/lib/pending-upload';
 import { useReviewAudio } from '@/lib/review-audio-context';
+import { useOnboarding } from '@/lib/onboarding/context';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
+import { useMe } from '@/lib/hooks/use-me';
+import { visibleSectionsForMe } from '@/lib/authz/me';
 
 export function TopBar() {
   const pathname = usePathname();
@@ -18,10 +23,18 @@ export function TopBar() {
   const { data: session } = useSession();
   const { hasAudio } = useReviewAudio();
   const [isPending, startTransition] = useTransition();
+  const { openWelcome } = useOnboarding();
+
+  // Advisory: the link is only a shortcut. /admin is gated server-side, and
+  // while /api/me is loading (or failed) `me` is null, so ordinary users never
+  // see the link flash.
+  const { data: me } = useMe();
+  const showAdmin = me !== null && visibleSectionsForMe(me).length > 0;
 
   const nav = [
     { href: '/dashboard', label: 'Optag', exact: true },
     { href: '/arkiv', label: 'Arkiv' },
+    ...(showAdmin ? [{ href: '/admin', label: 'Administration', exact: false }] : []),
   ];
 
   const reviewMeetingId = useMemo(
@@ -81,16 +94,24 @@ export function TopBar() {
             fontFamily: 'var(--mono)', fontWeight: 500, fontSize: 14,
             letterSpacing: '-0.03em', color: 'var(--ink)',
             textDecoration: 'none', flexShrink: 0,
+            display: 'flex', alignItems: 'center',
           }}
         >
-          memoctopus<span style={{ color: 'var(--accent)', padding: '0 5px' }}>·</span>referat
+          {/* The official OS2 lockup, and nothing beside it. A plain <img> rather
+              than next/image: it is a static SVG in public/, and next/image would
+              need dangerouslyAllowSVG to serve it at all. */}
+          <img
+            src="/brand/os2taletiltekst.svg"
+            alt="OS2taletiltekst"
+            style={{ height: 22, width: 'auto', display: 'block' }}
+          />
         </Link>
 
         {/* Nav */}
         <nav style={{ display: 'flex', gap: isMobile ? 16 : 22, marginLeft: isMobile ? 0 : 28 }}>
           {nav.map((item) => {
             const active = isActive(item.href, item.exact);
-            return (
+            const link = (
               <Link
                 key={item.href}
                 href={item.href}
@@ -107,12 +128,41 @@ export function TopBar() {
                 {item.label}
               </Link>
             );
+            if (item.href === '/arkiv') {
+              if (reviewMeetingId && hasAudio) {
+                return (
+                  <OnboardingHint key={item.href} stepId="topbar.unsaved-audio" meetingId={reviewMeetingId}>
+                    {link}
+                  </OnboardingHint>
+                );
+              }
+              return (
+                <OnboardingHint key={item.href} stepId="topbar.arkiv-explainer">
+                  {link}
+                </OnboardingHint>
+              );
+            }
+            return link;
           })}
         </nav>
 
         {/* User / sign-out */}
         {session?.user && (
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button
+              type="button"
+              onClick={openWelcome}
+              title="Se en hurtig gennemgang af Referat"
+              aria-label="Se en hurtig gennemgang af Referat"
+              style={{
+                fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)',
+                background: 'none', border: '1px solid var(--line)', borderRadius: 4,
+                width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                cursor: 'pointer', flexShrink: 0,
+              }}
+            >
+              ?
+            </button>
             {!isMobile && (
               <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)' }}>
                 {session.user.email}
@@ -124,12 +174,7 @@ export function TopBar() {
                 // Drop any in-memory upload picked by this user before the next one
                 // signs in (these module singletons survive an SPA sign-out).
                 clearPendingUploads();
-                signOut()
-                  .then(() => router.push('/'))
-                  .catch((err) => {
-                    console.error('signOut failed', err);
-                    router.push('/');
-                  });
+                void signOutAfterFlush().then(() => router.push('/'));
               }}
               style={{
                 fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)',

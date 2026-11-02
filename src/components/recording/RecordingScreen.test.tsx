@@ -1,8 +1,34 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { tabTo } from '@/test/keyboard';
+import { getStep } from '@/lib/onboarding/steps';
 import { RecordingScreen } from './RecordingScreen';
+import { renderWithOnboarding } from '@/test/onboarding';
+
+// Onboarding hints wrap the start button, stop button, clarify panel, and
+// audio-lifecycle caption; mark them already-seen (for the "meeting-abc" id
+// used throughout this suite) so the popovers don't render and DOM queries
+// keep targeting the underlying controls (mirrors the real app, which mounts
+// RecordingScreen under the app-level OnboardingProvider).
+function render(ui: React.ReactElement) {
+  return renderWithOnboarding(ui, {
+    tourSkipped: true,
+    tourCompleted: true,
+    // These four are `scope: 'global'` — remembered once, not once per meeting —
+    // so they are seeded without a meetingId. Seeding them per meeting left them
+    // unseen, and the popover that then opened swallowed the Escape key the
+    // signal-bars tooltip test presses.
+    seen: [
+      { stepId: 'recording.start-button', meetingId: null },
+      { stepId: 'recording.stop-save-continue', meetingId: null },
+      { stepId: 'recording.clarify-panel', meetingId: null },
+      { stepId: 'recording.audio-lifecycle', meetingId: null },
+    ],
+  });
+}
 
 // ── Next.js navigation mocks ───────────────────────────────────────────────
 
@@ -24,6 +50,8 @@ const mockDeleteMeeting = vi.fn().mockResolvedValue(undefined);
 const mockGetMeeting = vi.fn().mockResolvedValue(null);
 const mockGetTranscript = vi.fn().mockResolvedValue(null);
 const mockGetAudio = vi.fn().mockResolvedValue(null);
+const mockReport = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audit/client', () => ({ reportAuditEvent: mockReport }));
 
 vi.mock('@/lib/storage', () => ({
   saveAudio: (...args: unknown[]) => mockSaveAudio(...args),
@@ -583,6 +611,57 @@ describe('RecordingScreen — cancel / discard flow', () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════
+// 5b. Audit: recording steps are reported as actions (the meeting id only)
+// ══════════════════════════════════════════════════════════════════════════
+
+describe('RecordingScreen — audit reporting of the recording steps', () => {
+  const MEETING_ID = 'meeting-abc';
+  const steps = () => mockReport.mock.calls.map((c) => c.slice(0, 2));
+
+  beforeEach(() => mockReport.mockClear());
+
+  it('reports start, pause, resume and stop, in order, with only the meeting id', async () => {
+    renderScreen();
+    expect(mockReport).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
+    });
+    await waitFor(() => screen.getByRole('button', { name: 'Pause' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+    });
+    await waitFor(() => screen.getByRole('button', { name: 'Fortsæt' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Fortsæt' }));
+    });
+    await waitFor(() => screen.getByRole('button', { name: 'Pause' }));
+    await act(async () => {
+      fireEvent.click(screen.getByText(/gem.*fortsæt/i));
+    });
+    expect(steps()).toEqual([
+      ['meeting.recording_start', MEETING_ID],
+      ['meeting.recording_pause', MEETING_ID],
+      ['meeting.recording_resume', MEETING_ID],
+      ['meeting.recording_stop', MEETING_ID],
+    ]);
+    for (const call of mockReport.mock.calls) expect(call).toHaveLength(2);
+  });
+
+  it('reports a FAILED start (outcome error, no details) when the microphone is refused', async () => {
+    (navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new DOMException('denied', 'NotAllowedError'),
+    );
+    renderScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
+    });
+    await waitFor(() => screen.getByText(/Mikrofonens tilladelse er afvist/));
+    expect(mockReport).toHaveBeenCalledTimes(1);
+    expect(mockReport).toHaveBeenCalledWith('meeting.recording_start', expect.any(String), undefined, { outcome: 'error' });
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
 // 6. Stop and save
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -1004,6 +1083,20 @@ describe('RecordingScreen — recorder.onerror surfaces to the UI (HIGH)', () =>
     });
   });
 
+  it('reports a recording stop when the recorder fails on its own, and only once', async () => {
+    mockReport.mockClear();
+    renderScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
+    });
+    await waitFor(() => screen.getByRole('button', { name: 'Pause' }));
+    await act(async () => {
+      latestRecorder?.onerror?.({ type: 'error' });
+    });
+    latestRecorder?.onerror?.({ type: 'error' });
+    expect(mockReport.mock.calls.filter((c) => c[0] === 'meeting.recording_stop')).toEqual([['meeting.recording_stop', 'meeting-abc']]);
+  });
+
   it('logs the error via console.error when recorder fires onerror', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     renderScreen();
@@ -1065,5 +1158,19 @@ describe('RecordingScreen — archivePromise failure surfaced to user (MEDIUM)',
       expect(screen.getByText(/lydfilen kunne ikke gemmes lokalt/)).toBeInTheDocument();
     }, { timeout: 5000 });
     expect(mockPush).not.toHaveBeenCalledWith('/meeting/meeting-abc/review');
+  });
+});
+
+describe('RecordingScreen — signal bars tooltip', () => {
+  it('opens when Tab reaches the signal bars and closes on Escape', async () => {
+    // Fake timers would stall userEvent's internal delays.
+    const user = userEvent.setup();
+    renderScreen();
+
+    await tabTo(user, screen.getByText('signal').parentElement as HTMLElement);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(getStep('recording.signal-bars').copy);
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
   });
 });

@@ -1,5 +1,6 @@
 import { TranscriptSegment } from '@/types';
 import { getLlmClient, llmModel } from './llm-client';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 export interface TranscriptChapter {
   id: string;
@@ -102,7 +103,7 @@ Regler:
 
     return chapters;
   } catch (err) {
-    console.error('[chapters] parse failed, using fallback:', err);
+    safeLogError('chapters parse failed', err);
     return [
       {
         id: 'ch-0',

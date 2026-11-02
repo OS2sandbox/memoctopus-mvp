@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
 import { MinutesContent } from '@/types';
 import { minutesToBody } from '@/lib/minutes-format';
 import { withHandler } from '@/lib/api-handler';
+import { asEntityUuid, emitAudit } from '@/app/api/meetings/ai-audit';
+import { requireAppAccess } from '@/lib/authz/app-access';
 
-async function postHandler(req: NextRequest): Promise<NextResponse> {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+async function postHandler(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const body = await req.json() as { title?: string; content?: MinutesContent; format?: string };
   const { title = 'Referat', content, format = 'pdf' } = body;
@@ -22,15 +23,25 @@ async function postHandler(req: NextRequest): Promise<NextResponse> {
   const docDate = content.header?.date?.trim() || null;
   const markdown = normalizeMarkdown(minutesToBody(content));
 
-  if (format === 'pdf') {
-    return exportPdf(docTitle, docDate, markdown);
-  } else if (format === 'docx') {
-    return exportDocx(docTitle, docDate, markdown);
-  } else if (format === 'md') {
-    return exportMarkdown(docTitle, docDate, markdown);
+  if (format !== 'pdf' && format !== 'md') {
+    return NextResponse.json({ error: 'Unknown format' }, { status: 400 });
   }
 
-  return NextResponse.json({ error: 'Unknown format' }, { status: 400 });
+  // The id in the URL is never verified against a meeting, so it becomes an audit
+  // entity only when it is a UUID. Title and content are never logged.
+  const meetingId = asEntityUuid((await ctx.params).id);
+  const audit = (outcome: 'success' | 'error') =>
+    emitAudit(req, { type: 'export.download', actorUserId: session.user.id, outcome, entityId: meetingId, details: { format } });
+
+  let res: NextResponse;
+  try {
+    res = format === 'pdf' ? await exportPdf(docTitle, docDate, markdown) : exportMarkdown(docTitle, docDate, markdown);
+  } catch (err) {
+    await audit('error');
+    throw err;
+  }
+  await audit('success');
+  return res;
 }
 
 export const POST = withHandler('export', postHandler);
@@ -156,53 +167,6 @@ async function exportPdf(title: string, date: string | null, markdown: string): 
     headers: {
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="referat.pdf"`,
-    },
-  });
-}
-
-async function exportDocx(title: string, date: string | null, markdown: string): Promise<NextResponse> {
-  const { Document, Packer, Paragraph, TextRun, HeadingLevel, BorderStyle } = await import('docx');
-
-  const children = [];
-
-  children.push(new Paragraph({ text: title, heading: HeadingLevel.HEADING_1, spacing: { after: date ? 200 : 400 } }));
-  if (date) {
-    children.push(new Paragraph({
-      children: [new TextRun({ text: date, size: 18, color: '737370' })],
-      spacing: { after: 400 },
-      border: { bottom: { style: BorderStyle.SINGLE, size: 1, color: 'E5E5E2' } },
-    }));
-  }
-
-  const lines = parseLines(markdown);
-  if (lines.length === 0) {
-    children.push(new Paragraph({
-      children: [new TextRun({ text: '(ingen indhold)', size: 22, color: '737370' })],
-    }));
-  }
-
-  for (const line of lines) {
-    if (line.kind === 'heading') {
-      children.push(new Paragraph({ text: line.text, heading: HeadingLevel.HEADING_2, spacing: { before: 300, after: 120 } }));
-    } else {
-      children.push(new Paragraph({
-        children: [new TextRun({ text: line.text, size: 22, color: '3d3d3a' })],
-        spacing: { after: 120 },
-        ...(line.kind === 'bullet' ? { bullet: { level: 0 } } : {}),
-      }));
-    }
-  }
-
-  const doc = new Document({
-    sections: [{ children }],
-    styles: { default: { document: { run: { font: 'Calibri', size: 22 } } } },
-  });
-
-  const buffer = await Packer.toBuffer(doc);
-  return new NextResponse(buffer as unknown as BodyInit, {
-    headers: {
-      'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'Content-Disposition': `attachment; filename="referat.docx"`,
     },
   });
 }

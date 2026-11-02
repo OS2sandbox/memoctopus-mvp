@@ -6,7 +6,7 @@ clone repo → edit `.env` → `compose up`).
 
 | File | Contains | Needs a GPU? |
 |---|---|---|
-| `docker-compose.yml` | **base ("small")**: app, bot-service, Postgres, migrate | no |
+| `docker-compose.yml` | **base ("small")**: app, Postgres, migrate | no |
 | `docker-compose.ai.yml` | **AI overlay**: hviske (vLLM STT) + diarization, and repoints the app at them | yes |
 
 The overlay is **not standalone** — it's always merged on top of the base.
@@ -22,14 +22,16 @@ git clone <repo> referat && cd referat
 ./scripts/bootstrap-host.sh --small    # app stack only (no GPU toolkit)
 ./scripts/bootstrap-host.sh --no-up    # install + verify, don't start
 ```
-On first run with no `.env` it creates one from the template and stops so you can
+On first run with no `.env` it creates one from `.env.deploy.example` and stops so you can
 fill in secrets; re-run to bring the stack up. It assumes the NVIDIA *driver* is
 already installed (`nvidia-smi` works) — it does not install kernel drivers.
 
 ## Two deploy modes
 
 ```bash
-cp .env.deploy.example .env        # then fill in the values
+cp .env.deploy.example .env   # then fill in the values
+# .env.example is the complete reference of every variable (its "COMPOSE / DEPLOYMENT ONLY"
+# block is the compose-side part); .env.deploy.example is the ready-to-edit server subset.
 ```
 
 ### "small" — app only (AI runs on another host)
@@ -107,68 +109,241 @@ Models used: `syvai/hviske-ensemble` (public, no token) and
 `pyannote/speaker-diarization-community-1` (gated — needs an `HF_TOKEN` whose
 account accepted the terms once; access is auto-granted).
 
-## Single sign-on (OIDC)
+## Microsoft login and Teams referater
 
-Memoctopus can sign users in against any standards-compliant OIDC provider —
-Keycloak, Authentik, Entra ID via OIDC, and so on. There is no provider-specific
-code: you supply a discovery URL, a client id and a client secret.
+Microsoft Entra ID is configured separately from the generic OIDC providers (see
+`docs/central-access/idp.md`), because it does double duty: it signs users in **and** it is how Memoctopus reaches
+Microsoft Graph to collect Teams transcripts. Like all auth configuration it is read
+at runtime — `docker compose up -d app` is enough, no `--build`.
 
-**Auth configuration is read at runtime.** Change it and `docker compose up -d app`
-is enough — you never need `--build` for a login-method change.
+Microsoft login enables itself as soon as `MICROSOFT_CLIENT_ID` and
+`MICROSOFT_CLIENT_SECRET` are set; `MICROSOFT_ENABLED=false` is a kill switch. With an
+`AUTH_CONFIG_FILE` (below) the Entra entry of that file replaces the `MICROSOFT_*`
+variables; the Teams/Graph switches (`TEAMS_GRAPH_ENABLED`, `TEAMS_*`) stay environment
+variables either way.
 
-1. In your IdP, create a **confidential** client (client id + secret) and register
-   this redirect URI, substituting your own values:
+1. In **Entra admin center → App registrations**, register this redirect URI as
+   type *Web*:
 
    ```
-   <BETTER_AUTH_URL>/api/auth/oauth2/callback/<OIDC_PROVIDER_ID>
+   <BETTER_AUTH_URL>/api/auth/callback/microsoft
    ```
 
-2. Find the discovery document:
+   Entra permits plain `http` only for `localhost`, so a real deployment must be
+   on https. `BETTER_AUTH_URL` is the single source of truth for the app's own
+   URLs — nothing is derived from request headers, so a mismatch here breaks
+   OAuth silently.
 
-   | IdP | Discovery URL |
-   |---|---|
-   | Keycloak | `https://<host>/realms/<realm>/.well-known/openid-configuration` |
-   | Authentik | `https://<host>/application/o/<app-slug>/.well-known/openid-configuration` |
-
-3. Fill in `.env`:
+2. Fill in `.env`:
 
    ```bash
-   OIDC_PROVIDER_ID=keycloak            # also the callback path segment
-   OIDC_PROVIDER_NAME=Kommune Login     # button label: "Fortsæt med Kommune Login"
-   OIDC_CLIENT_ID=...
-   OIDC_CLIENT_SECRET=...
-   OIDC_DISCOVERY_URL=https://.../.well-known/openid-configuration
+   MICROSOFT_CLIENT_ID=...
+   MICROSOFT_CLIENT_SECRET=...
+   MICROSOFT_TENANT_ID=...        # the customer's real tenant id
    ```
 
-4. `docker compose up -d app`, then load the sign-in page — the button appears as
-   soon as all three credentials are set. Scopes are always `openid profile email`;
-   PKCE is on unless you set `OIDC_PKCE=false`.
+   **⚠️ Set the real tenant id.** Left blank it falls back to `common`
+   (multi-tenant): sign-in then accepts users from any tenant. Admin consent is
+   granted per tenant and covers only that tenant's users, so a blank id does not
+   make it "not apply" — it just leaves users from other tenants unconsented.
 
-To offer SSO only, set `EMAIL_PASSWORD_ENABLED=false`; that disables the
-email/password endpoints, not just the form.
+3. Teams referater are **off by default**. To use them, first give the same app
+   registration these **delegated** Microsoft Graph permissions with **admin
+   consent granted** for the organisation, and only then set
+   `TEAMS_GRAPH_ENABLED=true` (see the warning below). All three are scoped to individual meetings the user is already
+   party to — no calendar or mailbox access is requested:
 
-**⚠️ Pick `OIDC_PROVIDER_ID` once.** It is both the callback path segment and the
-key linking users to their accounts. Changing it after go-live means returning
-users no longer match their existing account and are given a new, empty one.
+   | Permission | Used for |
+   |---|---|
+   | `OnlineMeetings.ReadWrite` | Turning on automatic transcription per meeting |
+   | `OnlineMeetingTranscript.Read.All` | Fetching the transcript afterwards |
+   | `OnlineMeetingRecording.Read.All` | Fetching the recording afterwards |
+   | `Files.ReadWrite` | Deleting that recording from the organizer's OneDrive once it is transcribed |
+   | `User.Read`, `offline_access` | Identity, and refreshing access without re-login |
 
-**Account linking.** An SSO login links into an existing account with the same
-email only when **both** sides are verified: your IdP must assert `email_verified`
-for the incoming login, and the existing account must already be verified. This
-app sends no verification emails, so accounts created with email/password are
-never linkable — if such a user later signs in via SSO they get "account not
-linked". Have them sign in the way they registered, or remove the password
-account first.
+   `OnlineMeetingRecording.Read.All` is the widest of the three (the video of every
+   meeting the user can reach). With `TEAMS_ARTIFACT_MODE=transcript-only` it is
+   neither requested nor needed, so leave it out of the registration.
 
-This is deliberate and should not be relaxed by marking providers trusted: that
-would drop the check on the *incoming* IdP, so anyone able to self-register at a
-configured IdP under someone else's address could take over their account — and
-each account owns a private PostgreSQL schema.
+   `Files.ReadWrite` is there for one call: Graph cannot delete a meeting
+   recording, so the app deletes the file from the signed-in user's OneDrive
+   instead, and the drive API has no narrower delegated permission than the user's
+   own files. It is only ever used on the Recordings folder. Set
+   `TEAMS_DELETE_RECORDING=false` (or use `transcript-only`) and it is neither
+   requested nor needed.
 
-**Upgrading from the Authentik-specific setup.** `AUTHENTIK_CLIENT_ID`,
-`AUTHENTIK_CLIENT_SECRET` and `AUTHENTIK_DISCOVERY_URL` still work and log a
-deprecation warning; on that path the provider id stays `authentik`, so your
-registered redirect URI and existing accounts are unaffected. To migrate, copy the
-three values to their `OIDC_*` names and set `OIDC_PROVIDER_ID=authentik`.
+   Delegated means the app never sees more than the signed-in user can see — only
+   that user's own meetings. Without admin consent each user is prompted
+   individually, which most municipal users cannot approve themselves.
+
+4. In **Teams admin center → Meetings → Meeting policies**, set *Transcription*
+   and *Meeting recording* to **On**. Both are required; without them Graph
+   accepts the request but Teams ignores it, and the app reports
+   `policy_blocked`. Allow up to an hour for the policy to propagate.
+
+The full admin guide, written in Danish for the customer's own IT department, ships
+with the app at `public/docs/setup-microsoft-teams.md` and is linked from the error
+screens.
+
+**⚠️ Grant admin consent before you set `TEAMS_GRAPH_ENABLED=true`.** The flag makes
+every Microsoft sign-in request the Graph permissions above. The two `*.Read.All`
+ones need tenant-admin consent; a tenant that has not granted it answers *"Need
+admin approval"* to the whole sign-in, so **no one** in that tenant can log in with
+Microsoft, for any feature. Consent is **per tenant**: granting it in one tenant
+does nothing for another. If the tenant's admin-consent request workflow is off,
+there is not even a way for users to ask. With the flag unset (the default) sign-in
+asks for nothing beyond the normal login scopes and the Teams features stay hidden.
+
+The flag is read once at startup, so **restart** the app after changing it
+(`docker compose up -d app` is enough, no `--build`). `TEAMS_ARTIFACT_MODE` and
+`TEAMS_DELETE_RECORDING` are read the same way for the sign-in scopes, so restart
+after changing those too.
+
+**Upgrading a deployment that already has Teams on:** `Files.ReadWrite` is new.
+Add it to the app registration and grant admin consent again *before* deploying,
+or set `TEAMS_DELETE_RECORDING=false`. Otherwise the tenant answers *"Need admin
+approval"* to every Microsoft sign-in, exactly as above.
+
+**Existing users must sign in again.** Consented scopes are stored per account at
+login, so users who signed in before step 3 keep a token with the old scope list.
+The dashboard shows them a "Giv adgang igen" button until they re-authenticate;
+this is expected, not a fault.
+
+**OAuth tokens are encrypted at rest.** The access and refresh tokens in the
+`accounts` table are encrypted with `BETTER_AUTH_SECRET` (once Teams is on, the
+refresh token reaches meeting transcripts and recordings). Rows written before this
+keep working and are encrypted the next time the user signs in or a token is
+refreshed. **Rotating `BETTER_AUTH_SECRET` makes the stored tokens unreadable**:
+those users have to sign in with Microsoft again.
+
+Behaviour is tuned with the `TEAMS_*` variables in `.env.deploy.example`. The one
+worth a deliberate decision is `TEAMS_ARTIFACT_MODE`: `prefer-recording` (default)
+downloads the Teams recording and re-transcribes it locally with hviske, while
+`transcript-only` uses Teams' own text transcript, never downloads audio and never
+asks for the recording permission — the right choice for a customer who does not
+want meeting audio at rest here.
+
+In `prefer-recording` the recording does not stay in Microsoft 365 either: once it
+has been transcribed, the app permanently deletes the file from the organizer's
+OneDrive (`TEAMS_DELETE_RECORDING`, on by default). It finds the file in the
+Recordings folder by its exact byte size and deletes nothing if that does not
+single out one file. A throttled or unreachable Graph is retried on every poll for
+a day. If the tenant refuses a permanent delete (a retention policy or hold), the
+file goes to the recycle bin instead and the tenant's own retention rules take
+over. Not covered: a recording stored in someone else's OneDrive (the user is an
+invitee, not the organizer) and a channel meeting's recording in the team's
+SharePoint site.
+
+Teams' own transcript needs no separate delete, and Graph offers none: it is not a
+file of its own but is embedded in the recording's mp4, so it goes when the
+recording does. Two cases are left. In `transcript-only` the app never downloads
+the mp4, cannot identify it, and so deletes neither. And tenants that recorded
+before Microsoft stopped doing so in 2025 may hold a second copy of old
+transcripts in the organizer's Exchange mailbox, which only deleting from the
+Teams client removes.
+
+**Retention of collected transcripts.** The recording is transcribed and dropped, but
+the finished transcript sits as a file under `AUDIO_STORAGE_PATH/pending-artifacts`
+until the user's browser has saved it to IndexedDB and acknowledged that. Reading it
+does not delete it. Anything not acknowledged is removed after one hour by a sweep
+that runs every five minutes from the app's start-up hook, independent of other
+meetings, so an uncollected transcript stays at most about an hour plus five minutes
+(the leftovers of a run that died mid-way are reaped after six hours; a run that is
+still working is never touched).
+The sweep runs even with `TEAMS_GRAPH_ENABLED` off, so leftovers do not linger. If
+the user returns after that, the meeting screen offers "Hent igen", which collects it
+from Teams again while the meeting is less than 24 hours old.
+
+## Login, roles and audit: where the facts live
+
+Nothing about login methods, roles or the audit log is repeated here. Each fact has one home:
+
+| Topic | Single source |
+|---|---|
+| Every environment variable and its default | `.env.example` (the complete reference, development and compose). `.env.deploy.example` is the server template that `scripts/bootstrap-host.sh` copies; its last block holds the central-access, audit and Rollekatalog variables with safe blank defaults |
+| Identity providers (OIDC, Entra, SAML), `AUTH_CONFIG_FILE`, roles from claims, `ROLE_CLAIMS_MAX_SECONDS`, break-glass, shared workstations, what is not built, the legacy `OIDC_*` / `AUTHENTIK_*` variables | `docs/central-access/idp.md` |
+| Rollekatalog connection, sync, role catalogue | `docs/central-access/rollekatalog.md` |
+| Audit log, retention, client IP trust | `docs/central-access/audit.md` |
+| Architecture, role table, the three `ACCESS_SOURCE` modes | `docs/central-access/README.md` |
+| Central templates | `docs/central-access/templates.md` |
+
+What a deployment has to set (all in `.env`, runtime only: edit, then `docker compose up -d app`, never `--build`):
+
+- **`ACCESS_SOURCE`**: `local` (default; development and demos), `rollekatalog` or `claims` (the municipal setup). A typo makes access control answer 503; it never means `local`.
+- **`AUTH_CONFIG_FILE=/config/auth.json`** for any real identity provider. The file lives in `AUTH_CONFIG_DIR` (default `./auth-config`, git-ignored, mounted read-only at `/config`); a `${NAME}` in it needs that variable forwarded to the `app` service in a `docker-compose.override.yml` (`idp.md` section 9). Register with the IdP using `BETTER_AUTH_URL` as the public URL (`idp.md` sections 5 and 6); in production it must be the **https** URL.
+- **`BETTER_AUTH_URL`**, `BETTER_AUTH_SECRET` and the compose `DATABASE_URL`.
+- **`INTERNAL_CRON_SECRET`** for the scheduled routes below.
+- Claims mode is closed by default: password sign-in is always off there, and `REQUIRE_ROLE_TO_LOGIN` must stay **blank** (unset means "no mapped role, no access"). Do not give either a default in a compose override.
+- `BOOTSTRAP_ADMIN_EMAILS` (local mode only; one-shot first administrator) and `AUDIT_RETENTION_DAYS` (default 365 days).
+- Rollekatalog variables are needed for `ACCESS_SOURCE=rollekatalog`; the optional role catalogue needs only `ROLLEKATALOG_URL` and `ROLLEKATALOG_READ_API_KEY`, in any mode.
+
+**PostgreSQL 15 or newer** is required (the migrations use `NULLS NOT DISTINCT`); the compose file runs `postgres:16-alpine`. Migrations run in the `migrate` service.
+
+## Scheduling
+
+Nothing in the app runs timers. Call the routes from a host or cluster cron with `X-Cron-Secret`; all answer 404 until `INTERNAL_CRON_SECRET` is set, and the Rollekatalog sync answers 409 unless `ACCESS_SOURCE=rollekatalog` and the integration is configured (`8080` is the default `APP_PORT`):
+
+```
+15 3 * * *    curl -fsS -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/audit/prune -o /dev/null
+*/15 * * * *  curl -fsS -m 600 -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/rollekatalog/sync -o /dev/null
+30 3 * * *    curl -fsS -m 120 -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/rollekatalog/roles -o /dev/null
+```
+
+- `audit/prune` applies the retention (`audit.md`).
+- `rollekatalog/sync` (only in `rollekatalog` mode): keep the interval well below `ROLE_STALE_MAX_SECONDS` (24 h by default).
+- `rollekatalog/roles` refreshes the optional role catalogue (any `ACCESS_SOURCE`; 409 without a URL and READ key). It only ever deactivates entries; a refresh that would withdraw an unusually large share is refused (`removal_threshold`) and has to be forced from the admin button.
+
+## Reverse proxy, client IP and the `X-Forwarded-For` header
+
+The client IP stored in the audit log and used by the failed-login throttle is the **first** entry of `X-Forwarded-For` (`AUTH_IP_HEADERS`, default `x-forwarded-for`). The app trusts it as sent, so whatever sits in front must **overwrite** it with the real peer address; the shipped `nginx/nginx.conf` and `nginx-init.conf` set it to `$remote_addr`, and any other proxy must do the same.
+
+- **The app port is published on all host interfaces** (`${APP_PORT:-8080}:3000`): anyone who can reach it directly can skip the proxy and send any `X-Forwarded-For`, forging the audit IP and sidestepping the per-IP failed-login cap. Whenever a proxy is in use, bind the app to loopback with a compose override (do not edit the default in `docker-compose.yml`):
+
+  ```yaml
+  # docker-compose.override.yml
+  services:
+    app:
+      ports: !override
+        - "127.0.0.1:${APP_PORT:-8080}:3000"
+  ```
+
+  (`!override` needs Docker Compose 2.24 or newer; on older versions list the port in a separate overlay that replaces the `ports` key, or remove the publish and let the proxy reach `app:3000` over the Docker network), or firewall `APP_PORT` so only the proxy can reach it. The cron examples above keep working with the loopback binding, because they run on the host. With no proxy in front at all, the stored IP is simply whatever the client sends.
+- **Behind another load balancer or WAF.** The bundled nginx overwrites `X-Forwarded-For` with the address it sees (right for an edge proxy). If another proxy sits in front of it, nginx sees only that proxy, so the audit log and the throttle would record the proxy's address for everybody. Tell nginx to trust it: in `nginx/nginx.conf` add `set_real_ip_from <the load balancer's CIDR>;` and `real_ip_header X-Forwarded-For;` in the `server` block (see the comment there). Never trust a range you do not control.
+
+## Long meetings: diarization timeout
+
+Diarization requests are cut off after 5 minutes by default. For long recordings
+(or CPU diarization) raise both values in `.env`, keeping them equal:
+
+```bash
+DIARIZATION_TIMEOUT_MS=3600000              # server → diarization service
+NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS=3600000  # browser → app
+```
+
+`DIARIZATION_TIMEOUT_MS` is read at runtime. `NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS` is
+compiled into the browser bundle, so after changing it run
+`docker compose up -d --build app`; a plain restart keeps the old value.
+
+## Long meetings: LLM context window
+
+Minutes generation sizes its prompt from the chat model's context window. A transcript
+that fits goes to the model in one call; a longer one is summarised in parts and the
+referat is written from the summaries, so a long meeting never overflows the window or
+comes back cut off. If even that is not possible the user sees a clear error instead of
+an incomplete referat.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LLM_CONTEXT_TOKENS` | `128000` for hosted OpenAI, `32768` otherwise | The model's context window in tokens |
+| `LLM_MAX_OUTPUT_TOKENS` | `16384` for hosted OpenAI, `8192` otherwise | Longest referat the model may write |
+
+With the bundled vLLM, `LLM_CONTEXT_TOKENS` follows `VLLM_CHAT_MAX_MODEL_LEN` automatically,
+so changing the vLLM window changes the app too. If you point `LLM_BASE_URL` at your own
+model, set `LLM_CONTEXT_TOKENS` to that model's real window; the default is deliberately
+conservative because the app cannot know it. With a window below about 16k tokens, also lower
+`LLM_MAX_OUTPUT_TOKENS`: the output allowance is reserved out of the window, and too little is
+left for the transcript otherwise (the app then reports a configuration error). Both are read at runtime: change them and run
+`docker compose up -d app`, no rebuild.
 
 ## Day-2 operations
 
@@ -195,7 +370,7 @@ docker compose -f docker-compose.yml -f docker-compose.ai.yml down
 4. From inside the app container, the AI services resolve:
    `docker compose exec app wget -qO- http://hviske:8000/v1/models`
    `docker compose exec app wget -qO- http://diarization-service:5000/health`
-5. Auth + DB roundtrip: sign up a user, confirm it lands in Postgres
+5. Auth + DB roundtrip: sign in (in `local` / `rollekatalog` mode with e-mail/password you can sign up a test user; in claims mode use the IdP), confirm the user lands in Postgres
    (`docker compose exec db psql -U referat -d referat -c 'select email from public.users;'`).
 
 ## Prerequisite: a Docker-capable GPU host

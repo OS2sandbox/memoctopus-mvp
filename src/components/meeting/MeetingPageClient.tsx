@@ -4,7 +4,8 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { ProcessStrip, ProcessPhase } from '@/components/layout/ProcessStrip';
 import { RecordingScreen } from '@/components/recording/RecordingScreen';
-import { MeetingBotScreen } from '@/components/recording/MeetingBotScreen';
+import { LegacyBotMeetingScreen } from '@/components/recording/LegacyBotMeetingScreen';
+import { TeamsMeetingScreen } from '@/components/recording/TeamsMeetingScreen';
 import { TranscriptReview } from '@/components/transcript/TranscriptReview';
 import { MinutesEditor } from '@/components/minutes/MinutesEditor';
 import { ExportTab } from '@/components/meeting/ExportTab';
@@ -12,6 +13,7 @@ import { DeleteAudioDialog } from '@/components/meeting/DeleteAudioDialog';
 import { ProcessingTranscription } from '@/components/meeting/ProcessingTranscription';
 import { useReviewAudio } from '@/lib/review-audio-context';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { reportAuditEvent } from '@/lib/audit/client';
 import {
   getMeeting,
   getTranscript,
@@ -27,6 +29,13 @@ import {
 interface MeetingPageClientProps {
   meetingId: string;
   initialTab: ProcessPhase;
+}
+
+// Where a Graph meeting's recording tab hands over to. It has no recording of its
+// own to show once Teams has been collected, so it lands on the stage it reached.
+function graphStageTab(status: StoredMeeting['status']): ProcessPhase {
+  if (status === 'minutes' || status === 'done' || status === 'redacted') return 'minutes';
+  return 'review';
 }
 
 export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientProps) {
@@ -110,6 +119,18 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
     };
   }, [loadData]);
 
+  // Access log: opening the minutes or the transcript is reported as an action (the id
+  // only, never content). The audit client swallows repeats within a minute, so tab
+  // switches and the data reloads after a save do not flood the log.
+  const viewingMinutes = activeTab === 'minutes' && !!minutes;
+  const viewingTranscript = activeTab === 'review' && !!transcript;
+  useEffect(() => {
+    if (viewingMinutes) reportAuditEvent('meeting.minutes_view', meetingId);
+  }, [viewingMinutes, meetingId]);
+  useEffect(() => {
+    if (viewingTranscript) reportAuditEvent('meeting.transcript_view', meetingId);
+  }, [viewingTranscript, meetingId]);
+
   useEffect(() => {
     const hasAudio = activeTab === 'review' && !!audioUrl;
     setHasAudio(hasAudio);
@@ -130,8 +151,8 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
     return () => {
       if (activeRecorderRef.current) return;
       if (!audioDeletableRef.current) return;
-      void deleteAudio(meetingId).catch((err) => { console.error('[MeetingPageClient] deleteAudio (unmount) fejlede:', err); });
-      void updateMeeting(meetingId, { audioDeleted: true }).catch((err) => { console.error('[MeetingPageClient] updateMeeting (unmount) fejlede:', err); });
+      void deleteAudio(meetingId, { trigger: 'auto_leave' }).catch((err) => { console.error('[MeetingPageClient] deleteAudio (unmount) fejlede:', err); });
+      void updateMeeting(meetingId, { audioDeleted: true }, { trigger: 'auto_leave' }).catch((err) => { console.error('[MeetingPageClient] updateMeeting (unmount) fejlede:', err); });
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meetingId]);
@@ -142,7 +163,7 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
     if (!audioUrl) return;
     const purge = () => {
       if (activeRecorderRef.current || !audioDeletableRef.current) return;
-      void deleteAudio(meetingId).catch((err) => { console.error('[MeetingPageClient] deleteAudio (pagehide) fejlede:', err); });
+      void deleteAudio(meetingId, { trigger: 'auto_pagehide' }).catch((err) => { console.error('[MeetingPageClient] deleteAudio (pagehide) fejlede:', err); });
     };
     window.addEventListener('pagehide', purge);
     return () => window.removeEventListener('pagehide', purge);
@@ -164,6 +185,13 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
     },
     [meetingId, activeTab, audioUrl],
   );
+  // A collected Graph meeting reopened from the Arkiv opens the recording tab, which
+  // only has something to say while it is awaiting Teams. Hand over to its stage.
+  useEffect(() => {
+    if (!meeting || activeTab !== 'recording') return;
+    if (meeting.source !== 'teams' || !meeting.graphManaged || meeting.status === 'awaiting_teams') return;
+    switchTab(graphStageTab(meeting.status));
+  }, [meeting, activeTab, switchTab]);
 
   if (loading) {
     return (
@@ -207,6 +235,8 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
 
   const isCompleted = meeting.status !== 'recording' && meeting.status !== 'processing';
   const isTeamsMeeting = meeting.source === 'teams';
+  // Only the removed Playwright bot made a Teams meeting without the Graph marker.
+  const isLegacyBotMeeting = isTeamsMeeting && !meeting.graphManaged;
   const audioFile = !meeting.audioDeleted && audioUrl
     ? { durationSeconds: meeting.audioDurationSeconds, sizeBytes: meeting.audioSizeBytes }
     : null;
@@ -239,11 +269,22 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
         onTabChange={switchTab}
       />
 
-      {activeTab === 'recording' && isTeamsMeeting && (
-        <MeetingBotScreen
+      {activeTab === 'recording' && isTeamsMeeting && !isLegacyBotMeeting && meeting.status === 'awaiting_teams' && (
+        <TeamsMeetingScreen
           meetingId={meetingId}
           meetingUrl={meeting.meetingUrl ?? ''}
-          botSession={meeting.botSession ?? null}
+        />
+      )}
+
+      {/* Teams meetings from before the Graph integration (no `graphManaged`
+          marker), left behind in this browser's IndexedDB by the removed Playwright
+          bot. Nothing can finish them, so the screen explains that and offers the
+          transcript or a delete rather than rendering an empty recording view. */}
+      {activeTab === 'recording' && isLegacyBotMeeting && (
+        <LegacyBotMeetingScreen
+          meetingId={meetingId}
+          hasTranscript={Boolean(transcript)}
+          onOpenReview={() => switchTab('review')}
         />
       )}
 
@@ -269,6 +310,9 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
           audioUrl={audioUrl}
           audioDurationSeconds={audioFile?.durationSeconds}
           audioDeleted={meeting.audioDeleted && meeting.status !== 'recording' && meeting.status !== 'processing'}
+          // A Teams meeting's audio is transcribed on the server and discarded, so
+          // none was ever stored here. `audioDeleted` would be the wrong word for it.
+          audioDiscarded={isTeamsMeeting && !meeting.audioDeleted}
           initialChapters={transcript.chapters}
           participants={meeting.participants}
           initialDiarizing={transcript.diarizationStatus === 'pending'}
@@ -316,6 +360,7 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
           version={minutes.version}
           activeVersionId={minutes.activeVersionId}
           versions={minutes.versions}
+          templateRef={minutes.templateRef}
           onSaved={loadData}
         />
       )}

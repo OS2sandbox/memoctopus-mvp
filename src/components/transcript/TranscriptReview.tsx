@@ -4,16 +4,18 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { TranscriptSegment, PiiReplacement } from '@/types';
 import { SpeakerRow } from './SpeakerRow';
 import { SpeakerAssignment, type ParticipantRow } from './SpeakerAssignment';
-import { WaveformPlayer } from './WaveformPlayer';
 import { getTranscript, getAudio, saveTranscriptChapters, saveTranscriptSegments, appendMinutesVersion, deleteAudio, updateMeeting, getMeeting } from '@/lib/storage';
 import { onTranscriptUpdated } from '@/lib/transcript-events';
 import { isDiarizationInFlight, ensureDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import { getStorageUserId } from '@/lib/storage/scope';
+import { reportAuditEvent } from '@/lib/audit/client';
 import { isDefaultSpeakerLabel, nextAvailableSpeakerLabel } from '@/lib/audio/speaker-labels';
-import type { MinutesContent, Skabelon } from '@/types';
+import type { MinutesContent, Skabelon, CentralSkabelonSummary, MinutesTemplateRef } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { formatDate } from '@/lib/utils';
 import { SaveStatus, type SaveState } from '@/components/layout/SaveStatus';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
+import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
 interface TranscriptReviewProps {
   meetingId: string;
@@ -22,6 +24,13 @@ interface TranscriptReviewProps {
   audioUrl?: string;
   audioDurationSeconds?: number | null;
   audioDeleted?: boolean;
+  /**
+   * The meeting was transcribed server-side and its audio discarded, so no audio
+   * ever reached this browser. Distinct from `audioDeleted`, which means a local
+   * copy existed and was removed. Both render as "no player", but only one of
+   * them can honestly say the audio was deleted.
+   */
+  audioDiscarded?: boolean;
   initialChapters?: TranscriptChapter[];
   participants?: string[];
   initialDiarizing?: boolean;
@@ -60,7 +69,9 @@ function applySelectedPiiReplacements(
 
 // The category toggles seeded from a Skabelon's include* flags. No skabelon
 // (undefined) is a blank template with every category off.
-function skabelonToCats(s?: Skabelon | null) {
+function skabelonToCats(
+  s?: Pick<Skabelon, 'includeDeltagere' | 'includeBeslutningspunkter' | 'includeDagsorden' | 'includeDato'> | null,
+) {
   return {
     deltagere: s?.includeDeltagere ?? false,
     beslutningspunkter: s?.includeBeslutningspunkter ?? false,
@@ -69,15 +80,43 @@ function skabelonToCats(s?: Skabelon | null) {
   };
 }
 
+// The user's own default, or the first one when none is flagged.
+// A refused or interrupted play() (autoplay policy, a seek that aborts it) is not an error the user
+// can act on: the transport state follows the audio element's own play/pause events.
+const ignorePlayRejection = (): void => {};
+
+const defaultSkabelonOf = (list: Skabelon[]): Skabelon | undefined => list.find((s) => s.isDefault) ?? list[0];
+
+// Picker values: '' = Ingen skabelon, a bare uuid = personal template, and
+// 'central:<id>' = a locked central template. The prefix keeps the two id
+// spaces apart without changing the personal values the rest of the screen uses.
+const CENTRAL_PREFIX = 'central:';
+const centralValue = (id: string) => CENTRAL_PREFIX + id;
+const centralIdOf = (value: string) => (value.startsWith(CENTRAL_PREFIX) ? value.slice(CENTRAL_PREFIX.length) : null);
+
+const LOCKED_MESSAGE = 'Låst af din organisation';
+const CENTRAL_UNAVAILABLE_MESSAGE = 'Skabelonen er ikke længere tilgængelig. Vælg en anden skabelon.';
+
+function LockIcon({ size = 11 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="låst" style={{ flexShrink: 0 }}>
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
+  );
+}
+
 // Styled skabelon picker — a native <select> can't be themed or show the
 // favorite heart, so this mirrors the app's surface/line/accent tokens, marks
-// the current choice, and flags the user's default with a small blue heart.
+// the current choice, and flags the user's default with a small green heart.
 function SkabelonSelect({
   skabeloner,
+  centralSkabeloner,
   value,
   onChange,
 }: {
   skabeloner: Skabelon[];
+  centralSkabeloner: CentralSkabelonSummary[];
   value: string;
   onChange: (id: string) => void;
 }) {
@@ -98,8 +137,55 @@ function SkabelonSelect({
     };
   }, [open]);
 
-  const selectedName = skabeloner.find((s) => s.id === value)?.name ?? 'Ingen skabelon';
-  const options = [{ id: '', name: 'Ingen skabelon', isDefault: false }, ...skabeloner];
+  const centralId = centralIdOf(value);
+  const selectedCentralName = centralId ? centralSkabeloner.find((c) => c.id === centralId)?.name : undefined;
+  const selectedName = selectedCentralName ?? skabeloner.find((s) => s.id === value)?.name ?? 'Ingen skabelon';
+  // The delegated templates come first, the default one at the top of its group.
+  const orderedCentral = [...centralSkabeloner].sort((x, y) => Number(!!y.isDefault) - Number(!!x.isDefault));
+  const groupHeaderStyle: React.CSSProperties = {
+    padding: '8px 9px 4px',
+    fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', letterSpacing: 0.4,
+  };
+
+  function renderOption(opt: { value: string; name: string; isDefault?: boolean; version?: number }) {
+    const isSel = opt.value === value;
+    return (
+      <button
+        key={opt.value || '__none__'}
+        type="button"
+        role="option"
+        aria-selected={isSel}
+        onClick={() => { onChange(opt.value); setOpen(false); }}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+          padding: '7px 9px', borderRadius: 'calc(var(--radius) - 2px)',
+          border: 'none', cursor: 'pointer', textAlign: 'left', fontSize: 13,
+          background: isSel ? 'var(--accent-wash)' : 'transparent',
+          color: isSel ? 'var(--accent)' : 'var(--ink)',
+        }}
+        onMouseEnter={(e) => { if (!isSel) e.currentTarget.style.background = 'var(--bg-2)'; }}
+        onMouseLeave={(e) => { if (!isSel) e.currentTarget.style.background = 'transparent'; }}
+      >
+        <span style={{ width: 14, flexShrink: 0, display: 'inline-flex', justifyContent: 'center', color: 'var(--accent)' }}>
+          {isSel && (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+          )}
+        </span>
+        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{opt.name}</span>
+        {opt.isDefault && (
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="var(--accent)" stroke="none" style={{ flexShrink: 0 }} aria-label="standard">
+            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+          </svg>
+        )}
+        {opt.version !== undefined && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, color: 'var(--muted)', fontFamily: 'var(--mono)', fontSize: 10.5 }}>
+            <LockIcon size={10} />
+            v{opt.version}
+          </span>
+        )}
+      </button>
+    );
+  }
 
   return (
     <div ref={ref} style={{ position: 'relative', marginBottom: 14 }}>
@@ -116,7 +202,10 @@ function SkabelonSelect({
           fontSize: 13, cursor: 'pointer', textAlign: 'left', transition: 'border-color 120ms',
         }}
       >
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedName}</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          {selectedCentralName && <LockIcon />}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedName}</span>
+        </span>
         <svg width="10" height="10" viewBox="0 0 10 10" style={{ flexShrink: 0, color: 'var(--muted)', transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : undefined }}>
           <path d="M1 3l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -132,39 +221,28 @@ function SkabelonSelect({
             zIndex: 50, overflow: 'hidden', padding: 4,
           }}
         >
-          {options.map((opt) => {
-            const isSel = opt.id === value;
-            return (
-              <button
-                key={opt.id || '__none__'}
-                type="button"
-                role="option"
-                aria-selected={isSel}
-                onClick={() => { onChange(opt.id); setOpen(false); }}
-                style={{
-                  width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-                  padding: '7px 9px', borderRadius: 'calc(var(--radius) - 2px)',
-                  border: 'none', cursor: 'pointer', textAlign: 'left', fontSize: 13,
-                  background: isSel ? 'var(--accent-wash)' : 'transparent',
-                  color: isSel ? 'var(--accent)' : 'var(--ink)',
-                }}
-                onMouseEnter={(e) => { if (!isSel) e.currentTarget.style.background = 'var(--bg-2)'; }}
-                onMouseLeave={(e) => { if (!isSel) e.currentTarget.style.background = 'transparent'; }}
-              >
-                <span style={{ width: 14, flexShrink: 0, display: 'inline-flex', justifyContent: 'center', color: 'var(--accent)' }}>
-                  {isSel && (
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
-                  )}
-                </span>
-                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{opt.name}</span>
-                {opt.isDefault && (
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="var(--accent)" stroke="none" style={{ flexShrink: 0 }} aria-label="standard">
-                    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
-                  </svg>
-                )}
-              </button>
-            );
-          })}
+          {renderOption({ value: '', name: 'Ingen skabelon' })}
+
+          {orderedCentral.length > 0 && (
+            <div role="group" aria-label="Centrale skabeloner">
+              <div style={{ ...groupHeaderStyle, marginTop: 4, borderTop: '1px solid var(--line)' }}>
+                Centrale skabeloner
+              </div>
+              {orderedCentral.map((c) => renderOption({ value: centralValue(c.id), name: c.name, isDefault: c.isDefault, version: c.version }))}
+            </div>
+          )}
+
+          {skabeloner.length > 0 && (
+            <div role="group" aria-label="Egne skabeloner">
+              {/* The header only separates the two kinds; without a central group it would label everything. */}
+              {orderedCentral.length > 0 && (
+                <div style={{ ...groupHeaderStyle, marginTop: 4, borderTop: '1px solid var(--line)' }}>
+                  Egne skabeloner
+                </div>
+              )}
+              {skabeloner.map((s) => renderOption({ value: s.id, name: s.name, isDefault: s.isDefault }))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -178,6 +256,7 @@ export function TranscriptReview({
   audioUrl: initialAudioUrl,
   audioDurationSeconds,
   audioDeleted = false,
+  audioDiscarded = false,
   initialChapters,
   participants,
   initialDiarizing = false,
@@ -281,6 +360,11 @@ export function TranscriptReview({
   // injections (Deltagere / Beslutningspunkter / Dagsorden), seeded from the
   // selected Skabelon but overridable here in gennemgang.
   const [skabeloner, setSkabeloner] = useState<Skabelon[]>([]);
+  // Locked templates delegated by the organisation. The summary never carries a
+  // prompt: the server applies it, the client only needs the flags and the rules.
+  const [centralSkabeloner, setCentralSkabeloner] = useState<CentralSkabelonSummary[]>([]);
+  // The server could not read the shared list: say so instead of silently showing no 'Centrale skabeloner' group.
+  const [centralError, setCentralError] = useState(false);
   const [selectedSkabelonId, setSelectedSkabelonId] = useState<string>('');
   // The skabelon list loads async (and can arrive late while transcription
   // saturates the connection pool). Once the user picks a skabelon themselves,
@@ -303,7 +387,15 @@ export function TranscriptReview({
   // skabelon); this becomes the box's placeholder to explain where it went.
   const [savedHint, setSavedHint] = useState<string | null>(null);
 
-  const selectedSkabelon = skabeloner.find((s) => s.id === selectedSkabelonId) ?? null;
+  const selectedCentralId = centralIdOf(selectedSkabelonId);
+  const selectedCentral = selectedCentralId
+    ? centralSkabeloner.find((c) => c.id === selectedCentralId) ?? null
+    : null;
+  // Personal-only machinery (save-as-template, effective prompt) never sees a
+  // central selection.
+  const selectedSkabelon = selectedCentralId ? null : skabeloner.find((s) => s.id === selectedSkabelonId) ?? null;
+  const togglesLocked = !!selectedCentral && !selectedCentral.allowToggleOverrides;
+  const instructionAllowed = !selectedCentral || selectedCentral.allowUserInstruction;
   // The actual step to render: 'update' is only valid while a skabelon is
   // selected, so deselecting it mid-form falls back to 'new'.
   const templateStep = selectedSkabelon ? templateMode : 'new';
@@ -386,35 +478,81 @@ export function TranscriptReview({
     }
   }
 
+  async function fetchSkabeloner(): Promise<{ personal: Skabelon[]; central: CentralSkabelonSummary[]; centralError: boolean }> {
+    const r = await fetch('/api/skabeloner');
+    const data = (r.ok ? await r.json() : {}) as { skabeloner?: Skabelon[]; centralSkabeloner?: CentralSkabelonSummary[]; centralError?: boolean };
+    return { personal: data.skabeloner ?? [], central: data.centralSkabeloner ?? [], centralError: data.centralError === true };
+  }
+
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/skabeloner')
-      .then((r) => (r.ok ? r.json() : { skabeloner: [] }))
-      .then((data: { skabeloner: Skabelon[] }) => {
+    fetchSkabeloner()
+      .then(({ personal: list, central, centralError: centralFailed }) => {
         if (cancelled) return;
-        const list = data.skabeloner ?? [];
         setSkabeloner(list);
-        const def = list.find((s) => s.isDefault) ?? list[0];
-        if (def && !skabelonTouchedRef.current) {
-          setSelectedSkabelonId(def.id);
-          setCats(skabelonToCats(def));
+        setCentralSkabeloner(central);
+        setCentralError(centralFailed);
+        if (skabelonTouchedRef.current) return;
+        // One default across both lists: a central default wins, else the personal one.
+        const centralDef = central.find((c) => c.isDefault);
+        if (centralDef) seedCentralSkabelon(centralDef);
+        else {
+          const def = defaultSkabelonOf(list);
+          if (def) seedSkabelon(def);
         }
       })
       .catch((err) => { console.error('[transcript] skabeloner fetch failed:', err); });
     return () => { cancelled = true; };
   }, []);
 
+  // Selection and category toggles always move together; no skabelon means "Ingen skabelon".
+  function seedSkabelon(def?: Skabelon) {
+    setSelectedSkabelonId(def?.id ?? '');
+    setCats(skabelonToCats(def));
+  }
+
+  function seedCentralSkabelon(c: CentralSkabelonSummary) {
+    setSelectedSkabelonId(centralValue(c.id));
+    setCats(skabelonToCats(c));
+  }
+
   function selectSkabelon(id: string) {
     skabelonTouchedRef.current = true;
     setSelectedSkabelonId(id);
     setSavedHint(null);
+    const centralId = centralIdOf(id);
+    if (centralId) {
+      // Seed from the delegated flags; the form for saving a personal template
+      // has no meaning for a prompt this client never holds.
+      closeTemplateForm();
+      setCats(skabelonToCats(centralSkabeloner.find((c) => c.id === centralId)));
+      return;
+    }
     const s = skabeloner.find((x) => x.id === id);
     // "Ingen skabelon" (empty id) is a blank template: clear every category.
     setCats(skabelonToCats(s));
   }
 
+  // A central template can be archived or un-delegated while the review screen
+  // is open. Refresh the list and replace a selection that no longer resolves with the
+  // personal default, as on first load: an empty selection would make the next
+  // generate silently use no template.
+  async function refreshAfterCentralGone() {
+    try {
+      const { personal, central, centralError: centralFailed } = await fetchSkabeloner();
+      setSkabeloner(personal);
+      setCentralSkabeloner(central);
+      setCentralError(centralFailed);
+      if (selectedCentralId && !central.some((c) => c.id === selectedCentralId)) {
+        seedSkabelon(defaultSkabelonOf(personal));
+      }
+    } catch (err) {
+      console.error('[transcript] skabeloner refresh failed:', err);
+    }
+  }
+
   // PII checklist: all items checked by default
-  const [piiReplacements, setPiiReplacements] = useState<PiiReplacement[]>(initialPiiReplacements);
+  const [piiReplacements] = useState<PiiReplacement[]>(initialPiiReplacements);
   const [checkedPii, setCheckedPii] = useState<Set<number>>(
     () => new Set(initialPiiReplacements.map((_, i) => i)),
   );
@@ -444,7 +582,6 @@ export function TranscriptReview({
   const [playingBite, setPlayingBite] = useState<{ start: number; end: number } | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(audioDurationSeconds ?? 0);
-  const [audioError, setAudioError] = useState<string | null>(null);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -462,17 +599,20 @@ export function TranscriptReview({
     const onDurationChange = () => {
       if (isFinite(audio.duration) && audio.duration > 0) setDuration(audio.duration);
     };
-    const onPlay = () => setIsPlaying(true);
+    // Every way of starting playback (waveform, a segment, a speaker soundbite) fires 'play'.
+    // Reported as an action only (repeats within a minute are deduped by the audit client).
+    const onPlay = () => {
+      setIsPlaying(true);
+      reportAuditEvent('meeting.audio_play', meetingId);
+    };
     const onPause = () => { setIsPlaying(false); setPlayingBite(null); };
     const onEnded = () => { setIsPlaying(false); setPlayingBite(null); };
-    const onError = () => setAudioError('Lydfilen kunne ikke indlæses');
     audio.addEventListener('timeupdate', onTime);
     audio.addEventListener('loadedmetadata', onMeta);
     audio.addEventListener('durationchange', onDurationChange);
     audio.addEventListener('play', onPlay);
     audio.addEventListener('pause', onPause);
     audio.addEventListener('ended', onEnded);
-    audio.addEventListener('error', onError);
     // Metadata may have loaded before listeners were attached (e.g. from cache)
     if (audio.readyState >= HTMLMediaElement.HAVE_METADATA && isFinite(audio.duration) && audio.duration > 0) {
       setDuration(audio.duration);
@@ -484,7 +624,6 @@ export function TranscriptReview({
       audio.removeEventListener('play', onPlay);
       audio.removeEventListener('pause', onPause);
       audio.removeEventListener('ended', onEnded);
-      audio.removeEventListener('error', onError);
     };
   // Re-run when audioUrl changes so listeners attach to any newly created audio element
   }, [audioUrl]);
@@ -515,7 +654,7 @@ export function TranscriptReview({
     setPlayingBite(null);
     audio.currentTime = time;
     setCurrentTime(time);
-    audio.play().catch(() => setAudioError('Afspilning fejlede'));
+    audio.play().catch(ignorePlayRejection);
   }, []);
 
   // Play just one speaker's soundbite, auto-pausing at its end.
@@ -526,7 +665,7 @@ export function TranscriptReview({
     audio.currentTime = start;
     setCurrentTime(start);
     setPlayingBite({ start, end });
-    audio.play().catch(() => setAudioError('Afspilning fejlede'));
+    audio.play().catch(ignorePlayRejection);
   }, []);
 
   // Play a soundbite, or pause it if it's the one already playing — so the same
@@ -549,7 +688,7 @@ export function TranscriptReview({
     if (isPlaying) {
       audio.pause();
     } else {
-      audio.play().catch(() => setAudioError('Afspilning fejlede'));
+      audio.play().catch(ignorePlayRejection);
     }
   }
 
@@ -854,6 +993,11 @@ export function TranscriptReview({
     setError(null);
     try {
       const processedSegments = displaySegments;
+      // Locked categories are the delegated flags, not whatever the toggles hold.
+      const sentCats = selectedCentral && togglesLocked ? skabelonToCats(selectedCentral) : cats;
+      // The free-text box is hidden for a central template that forbids it; never
+      // send text the user could not see.
+      const sentCustomPrompt = instructionAllowed ? customText.trim() || undefined : undefined;
       // The recording date — used when the "Dato" category is enabled. Prefer the
       // audio's own date (recordedAt); fall back to createdAt for legacy meetings.
       const meeting = await getMeeting(meetingId);
@@ -866,17 +1010,20 @@ export function TranscriptReview({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            // Opaque id only: lets the audit log tie minutes.generate to the meeting.
+            meetingId,
             segments: processedSegments,
             participants: editableParticipants.filter(Boolean),
             // Send the literal selection — '' ("Ingen skabelon") must reach the
             // server as an explicit "no skabelon", not collapse to the default.
-            skabelonId: selectedSkabelonId,
-            includeDeltagere: cats.deltagere,
-            includeBeslutningspunkter: cats.beslutningspunkter,
-            includeDagsorden: cats.dagsorden,
-            includeDato: cats.dato,
+            skabelonId: selectedCentralId ?? selectedSkabelonId,
+            skabelonSource: selectedCentralId ? 'central' : 'personal',
+            includeDeltagere: sentCats.deltagere,
+            includeBeslutningspunkter: sentCats.beslutningspunkter,
+            includeDagsorden: sentCats.dagsorden,
+            includeDato: sentCats.dato,
             meetingDate: meetingDate ?? undefined,
-            customPrompt: customText.trim() || undefined,
+            customPrompt: sentCustomPrompt,
           }),
           signal: abort.signal,
         });
@@ -884,22 +1031,40 @@ export function TranscriptReview({
         clearTimeout(timeout);
       }
       if (!res.ok) {
+        if (res.status === 404 && selectedCentralId) {
+          void refreshAfterCentralGone();
+          throw new Error(CENTRAL_UNAVAILABLE_MESSAGE);
+        }
         const data = await res.json();
         throw new Error(data.error ?? 'Kunne ikke generere referat');
       }
-      const data = await res.json() as { content: MinutesContent; skabelonId?: string | null };
+      const data = await res.json() as {
+        content: MinutesContent;
+        skabelonId?: string | null;
+        templateRef?: MinutesTemplateRef | null;
+      };
       // Build the editable document header: the title always, the date only when
       // the "Dato" tag is on (otherwise it would appear both here and in the body).
       const content: MinutesContent = {
         ...data.content,
         header: {
           title: meeting?.title ?? 'Referat',
-          date: cats.dato && meetingDate ? formatDate(meetingDate) : null,
+          date: sentCats.dato && meetingDate ? formatDate(meetingDate) : null,
         },
       };
-      await appendMinutesVersion(meetingId, content, data.skabelonId ?? null);
-      await deleteAudio(meetingId);
-      await updateMeeting(meetingId, { status: 'minutes', audioDeleted: true });
+      // Provenance from the server's answer; the name is a picker-side snapshot.
+      const templateRef: MinutesTemplateRef | undefined = data.templateRef
+        ? {
+            source: data.templateRef.source,
+            id: data.templateRef.id,
+            version: data.templateRef.version,
+            ...(data.templateRef.source === 'central' && selectedCentral ? { name: selectedCentral.name } : {}),
+          }
+        : undefined;
+      await appendMinutesVersion(meetingId, content, data.skabelonId ?? null, templateRef);
+      // The app deletes the recording once the minutes exist (privacy); logged as automatic.
+      await deleteAudio(meetingId, { trigger: 'auto_generate' });
+      await updateMeeting(meetingId, { status: 'minutes', audioDeleted: true }, { trigger: 'auto_generate' });
       onDataChange?.();
       window.location.href = `/meeting/${meetingId}/minutes`;
     } catch (err) {
@@ -1145,10 +1310,6 @@ export function TranscriptReview({
               const chSegs = ch.segmentIndices
                 .map((idx) => ({ seg: displaySegments[idx], idx }))
                 .filter(({ seg }) => !!seg);
-              const q = search.toLowerCase();
-              const hasMatch = !!q && chSegs.some(
-                ({ seg }) => seg.text.toLowerCase().includes(q) || seg.speaker.toLowerCase().includes(q),
-              );
               return (
                 <div
                   key={ch.id}
@@ -1182,34 +1343,36 @@ export function TranscriptReview({
                       {fmtTime(ch.startTime)} — {fmtTime(ch.endTime)}
                     </span>
                     <div>
-                      <div
-                        contentEditable
-                        suppressContentEditableWarning
-                        onClick={(e) => e.stopPropagation()}
-                        onBlur={(e) => {
-                          const t = e.currentTarget.textContent?.trim() ?? '';
-                          if (t && t !== ch.title) {
-                            const updated = (chapters ?? []).map((c) => c.id === ch.id ? { ...c, title: t } : c);
-                            setChapters(updated);
-                            saveChapters(updated);
-                          } else if (!t) {
-                            e.currentTarget.textContent = ch.title;
-                          }
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
-                          if (e.key === 'Escape') { e.currentTarget.textContent = ch.title; e.currentTarget.blur(); }
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.borderBottomColor = 'var(--line-2)'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.borderBottomColor = 'transparent'; }}
-                        style={{
-                          fontSize: 17, color: 'var(--ink)', fontWeight: 500, letterSpacing: '-0.005em',
-                          outline: 'none', cursor: 'text', display: 'inline-block',
-                          borderBottom: '1px dashed transparent',
-                        }}
-                      >
-                        {ch.title}
-                      </div>
+                      <OnboardingTooltip stepId="review.chapter-title-edit">
+                        <div
+                          contentEditable
+                          suppressContentEditableWarning
+                          onClick={(e) => e.stopPropagation()}
+                          onBlur={(e) => {
+                            const t = e.currentTarget.textContent?.trim() ?? '';
+                            if (t && t !== ch.title) {
+                              const updated = (chapters ?? []).map((c) => c.id === ch.id ? { ...c, title: t } : c);
+                              setChapters(updated);
+                              saveChapters(updated);
+                            } else if (!t) {
+                              e.currentTarget.textContent = ch.title;
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
+                            if (e.key === 'Escape') { e.currentTarget.textContent = ch.title; e.currentTarget.blur(); }
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.borderBottomColor = 'var(--line-2)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.borderBottomColor = 'transparent'; }}
+                          style={{
+                            fontSize: 17, color: 'var(--ink)', fontWeight: 500, letterSpacing: '-0.005em',
+                            outline: 'none', cursor: 'text', display: 'inline-block',
+                            borderBottom: '1px dashed transparent',
+                          }}
+                        >
+                          {ch.title}
+                        </div>
+                      </OnboardingTooltip>
                       {!isOpen && (
                         <div style={{ marginTop: 6, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: '60ch' }}>
                           {ch.summary}
@@ -1219,9 +1382,12 @@ export function TranscriptReview({
                   </div>
                   {isOpen && (
                     <div style={{ paddingBottom: 18 }}>
-                      {chSegs.map(({ seg, idx }) => {
+                      {chSegs.map(({ seg, idx }, i) => {
                         const isCurrentMatch = matchIndex >= 0 && matches[matchIndex] === idx;
                         const isAnyMatch = search.trim() && matches.includes(idx);
+                        // Runs are per chapter: the first line under a chapter
+                        // heading always names its speaker, even mid-run.
+                        const continuesSpeaker = i > 0 && chSegs[i - 1].seg.speaker === seg.speaker;
                         return (
                         <div key={idx} ref={(el) => { segmentRefs.current[idx] = el; }} style={{
                           borderRadius: 'var(--radius)',
@@ -1241,6 +1407,7 @@ export function TranscriptReview({
                             hasPii={piiSegmentIndices.has(idx)}
                             isHighlighted={highlightedSegment === idx}
                             diarizing={diarizing}
+                            continuesSpeaker={continuesSpeaker}
                           />
                         </div>
                         );
@@ -1271,6 +1438,7 @@ export function TranscriptReview({
                         hasPii={piiSegmentIndices.has(i)}
                         isHighlighted={highlightedSegment === i}
                         diarizing={diarizing}
+                        continuesSpeaker={i > 0 && displaySegments[i - 1].speaker === seg.speaker}
                       />
                     </div>
                   ))
@@ -1302,6 +1470,7 @@ export function TranscriptReview({
           </div>
 
           {piiReplacements.length > 0 && (
+            <OnboardingHint stepId="review.pii-checkboxes" meetingId={meetingId}>
             <div style={{ marginTop: 18 }}>
               {piiReplacements.map((r, i) => (
                 <div
@@ -1363,6 +1532,7 @@ export function TranscriptReview({
                 <span style={{ marginLeft: 'auto' }}>{checkedPii.size}/{piiReplacements.length}</span>
               </div>
             </div>
+            </OnboardingHint>
           )}
 
           {/* Talere & deltagere — one participant-first list that connects each
@@ -1370,6 +1540,7 @@ export function TranscriptReview({
               matcher shows a recognising state but keeps the roster editable. */}
           <div style={{ marginTop: 28 }}>
             <SpeakerAssignment
+              meetingId={meetingId}
               rows={participantRows}
               voices={unassignedSpeakers}
               voicelessParticipants={voicelessParticipants}
@@ -1398,15 +1569,31 @@ export function TranscriptReview({
           </div>
 
           {/* Skabelon, kategorier & ekstra instruktioner */}
+          <OnboardingHint stepId="review.skabelon-panel" meetingId={meetingId}>
           <div style={{ marginTop: 28 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>skabelon</div>
 
             {/* Skabelon selector */}
             <SkabelonSelect
               skabeloner={skabeloner}
+              centralSkabeloner={centralSkabeloner}
               value={selectedSkabelonId}
               onChange={selectSkabelon}
             />
+
+            {centralError && (
+              <div role="status" style={{ margin: '-6px 0 12px', fontSize: 12.5, color: 'var(--warn)', lineHeight: 1.5 }}>
+                Organisationens centrale skabeloner kunne ikke hentes lige nu. Dine egne skabeloner kan stadig bruges; prøv igen om lidt.
+              </div>
+            )}
+
+            {selectedCentral && (
+              <div style={{ margin: '-6px 0 12px', fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', lineHeight: 1.5 }}>
+                {selectedCentral.allowUserInstruction
+                  ? 'Prompten er låst af din organisation. Du kan tilføje egne instruktioner nedenfor.'
+                  : 'Prompten er låst af din organisation og kan ikke ændres eller udvides.'}
+              </div>
+            )}
 
             {/* Optional category injections */}
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 8 }}>kategorier</div>
@@ -1421,6 +1608,9 @@ export function TranscriptReview({
                 return (
                   <button
                     key={key}
+                    disabled={togglesLocked}
+                    aria-pressed={active}
+                    title={togglesLocked ? LOCKED_MESSAGE : undefined}
                     onClick={() => {
                       // Mark as touched so a late-arriving default skabelon fetch
                       // doesn't overwrite the user's manual category choices.
@@ -1434,19 +1624,28 @@ export function TranscriptReview({
                       background: active ? 'var(--accent-wash)' : 'transparent',
                       fontFamily: 'var(--mono)', fontSize: 11.5,
                       color: active ? 'var(--accent)' : 'var(--ink-2)',
-                      cursor: 'pointer',
+                      cursor: togglesLocked ? 'not-allowed' : 'pointer',
+                      opacity: togglesLocked ? 0.7 : 1,
                       display: 'flex', alignItems: 'center', gap: 5,
                       transition: 'border-color 120ms, color 120ms',
                     }}
                   >
                     {label}
-                    {active && <span style={{ fontSize: 13, lineHeight: 1, opacity: 0.7 }}>×</span>}
+                    {active && !togglesLocked && <span style={{ fontSize: 13, lineHeight: 1, opacity: 0.7 }}>×</span>}
                   </button>
                 );
               })}
             </div>
 
-            {/* Extra ad-hoc instructions */}
+            {togglesLocked && (
+              <div style={{ margin: '-6px 0 12px', display: 'flex', alignItems: 'center', gap: 5, fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)' }}>
+                <LockIcon size={10} />
+                {LOCKED_MESSAGE}
+              </div>
+            )}
+
+            {/* Extra ad-hoc instructions — hidden when a central template forbids them */}
+            {instructionAllowed && (
             <div style={{
               border: '1px solid var(--line-2)',
               borderRadius: 'var(--radius)',
@@ -1455,7 +1654,7 @@ export function TranscriptReview({
               <textarea
                 value={customText}
                 onChange={(e) => { setCustomText(e.target.value); if (savedHint) setSavedHint(null); }}
-                placeholder={savedHint ?? 'Tilføj instruktioner…'}
+                placeholder={selectedCentral ? 'Tilføj instruktioner til den låste skabelon…' : savedHint ?? 'Tilføj instruktioner…'}
                 rows={2}
                 style={{
                   width: '100%', minHeight: 60,
@@ -1468,8 +1667,11 @@ export function TranscriptReview({
                 }}
               />
             </div>
+            )}
 
-            {/* Gem prompt som skabelon — one cycleable step (opdater / ny) */}
+            {/* Gem prompt som skabelon — one cycleable step (opdater / ny). Not
+                offered for a central template: the client never holds its prompt. */}
+            {!selectedCentral && (
             <div style={{ marginTop: 10 }}>
               {!savingTemplate ? (
                 <button
@@ -1596,7 +1798,9 @@ export function TranscriptReview({
                 </div>
               )}
             </div>
+            )}
           </div>
+          </OnboardingHint>
 
           {/* Compliance */}
           <div style={{
@@ -1617,20 +1821,24 @@ export function TranscriptReview({
           </div>
 
           {/* Generate button */}
-          <button
-            onClick={proceedToMinutes}
-            disabled={isGenerating || segments.length === 0}
-            style={{
-              marginTop: 12, width: '100%', padding: '12px 16px',
-              background: 'var(--accent)', color: '#fff',
-              border: '1px solid var(--accent)', borderRadius: 'var(--radius)',
-              fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
-              cursor: isGenerating || segments.length === 0 ? 'not-allowed' : 'pointer',
-              opacity: isGenerating || segments.length === 0 ? 0.5 : 1,
-            }}
-          >
-            {isGenerating ? 'genererer…' : 'generér referat →'}
-          </button>
+          <OnboardingHint stepId="review.generate-button" meetingId={meetingId}>
+            <div style={{ display: 'inline-block', width: '100%' }}>
+              <button
+                onClick={proceedToMinutes}
+                disabled={isGenerating || segments.length === 0}
+                style={{
+                  marginTop: 12, width: '100%', padding: '12px 16px',
+                  background: 'var(--accent)', color: '#fff',
+                  border: '1px solid var(--accent)', borderRadius: 'var(--radius)',
+                  fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
+                  cursor: isGenerating || segments.length === 0 ? 'not-allowed' : 'pointer',
+                  opacity: isGenerating || segments.length === 0 ? 0.5 : 1,
+                }}
+              >
+                {isGenerating ? 'genererer…' : 'generér referat →'}
+              </button>
+            </div>
+          </OnboardingHint>
           <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', textAlign: 'center' }}>
             transkription kan stadig redigeres efter
           </div>
@@ -1733,6 +1941,13 @@ export function TranscriptReview({
               <path d="M2 4h12M5 4V2.5A.5.5 0 015.5 2h5a.5.5 0 01.5.5V4M6 7v5M10 7v5M3 4l.8 9.1A.5.5 0 004.3 13.6h7.4a.5.5 0 00.5-.5L13 4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
             lydfil slettet
+          </span>
+        ) : audioDiscarded ? (
+          <span
+            title="Teams frigiver først optagelsen efter mødet, så lyden kan ikke følges live. Den transskriberes på serveren og slettes derefter."
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}
+          >
+            lyden blev slettet efter transskription
           </span>
         ) : (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}>

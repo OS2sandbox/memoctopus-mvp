@@ -793,3 +793,65 @@ describe('setActiveMinutesVersion', () => {
     expect(result!.versions[1].content).toEqual(makeContent('v2'));
   });
 });
+
+// ─── templateRef provenance ───────────────────────────────────────────────────
+
+describe('minutes templateRef provenance', () => {
+  beforeEach(resetStores);
+
+  const CENTRAL_REF = { source: 'central' as const, id: 'c-1', version: 3, name: 'Månedsmøde' };
+
+  it('round-trips templateRef on first generation', async () => {
+    await appendMinutesVersion('brand-new', makeContent('x'), 'c-1', CENTRAL_REF);
+    const read = await getMinutes('brand-new');
+    expect(read!.templateRef).toEqual(CENTRAL_REF);
+  });
+
+  it('leaves templateRef absent when none is given (no stray undefined key)', async () => {
+    const result = await appendMinutesVersion('brand-new', makeContent('x'));
+    expect('templateRef' in result).toBe(false);
+  });
+
+  it('records the ref on a regeneration and replaces an older one', async () => {
+    seedMinutesRow(makeStoredMinutes({ templateRef: { source: 'personal', id: 'p-1', version: null } }));
+    const result = await appendMinutesVersion('meet-1', makeContent('gen 2'), 'c-1', CENTRAL_REF);
+    expect(result.templateRef).toEqual(CENTRAL_REF);
+    expect((await getMinutes('meet-1'))!.templateRef).toEqual(CENTRAL_REF);
+  });
+
+  it('keeps the previous ref when a regeneration passes none', async () => {
+    seedMinutesRow(makeStoredMinutes({ templateRef: CENTRAL_REF }));
+    const result = await appendMinutesVersion('meet-1', makeContent('gen 2'));
+    expect(result.templateRef).toEqual(CENTRAL_REF);
+  });
+
+  it('survives autosave, snapshot and version switching', async () => {
+    seedMinutesRow(makeStoredMinutes({ templateRef: CENTRAL_REF }));
+    expect((await saveMinutes('meet-1', makeContent('edited')))!.templateRef).toEqual(CENTRAL_REF);
+    expect((await snapshotMinutes('meet-1', makeContent('edited 2')))!.templateRef).toEqual(CENTRAL_REF);
+    expect((await setActiveMinutesVersion('meet-1', 'v1'))!.templateRef).toEqual(CENTRAL_REF);
+  });
+
+  it('reads records written before templateRef existed (back-compat)', async () => {
+    seedMinutesRow(makeStoredMinutes());
+    const read = await getMinutes('meet-1');
+    expect(read).not.toBeNull();
+    expect(read!.templateRef).toBeUndefined();
+  });
+
+  it('keeps templateRef through the legacy (unlabelled) row rebuild', async () => {
+    const now = new Date().toISOString();
+    stores.minutes.set('legacy-ref', {
+      id: 'legacy-ref',
+      meetingId: 'meet-legacy-ref',
+      templateId: null,
+      templateRef: CENTRAL_REF,
+      content: makeContent('live'),
+      version: 1,
+      createdAt: now,
+      versions: [],
+    });
+    const result = await getMinutes('meet-legacy-ref');
+    expect(result!.templateRef).toEqual(CENTRAL_REF);
+  });
+});

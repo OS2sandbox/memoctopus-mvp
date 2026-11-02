@@ -107,6 +107,18 @@ describe('transcribeVadBatches', () => {
     expect(failedSeconds).toBe(27);
   });
 
+  it('logs only the error class for failed batches, never the message', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockTranscribeRaw.mockRejectedValue(Object.assign(new Error('body: Budget 2024 hemmeligt'), { status: 503 }));
+
+    await transcribeVadBatches([makeBatch(0)]);
+
+    expect(spy).toHaveBeenCalledTimes(2); // first wave + permanent failure
+    for (const call of spy.mock.calls) expect(call).toHaveLength(1);
+    expect(JSON.stringify(spy.mock.calls)).not.toMatch(/Budget|hemmeligt/);
+    spy.mockRestore();
+  });
+
   it('emits one progress event per batch with running counts', async () => {
     mockTranscribeRaw.mockResolvedValue({ text: 'hej', latencyMs: 1 });
     const events: BatchEvent[] = [];
@@ -120,6 +132,34 @@ describe('transcribeVadBatches', () => {
 
   it('filters hallucinated repetitions to empty segments', async () => {
     mockTranscribeRaw.mockResolvedValue({ text: 'ja ja ja ja ja ja', latencyMs: 1 });
+    const { segments } = await transcribeVadBatches([makeBatch(0)]);
+    expect(segments).toEqual([]);
+  });
+
+  // The old guard answered a boolean and this path dropped the WHOLE batch, so a
+  // window that transcribed correctly for eight seconds and then span out
+  // contributed nothing at all. A pure-loop batch is empty either way, which is
+  // why that case alone did not pin the change.
+  it('keeps the real words a degenerating batch produced before the loop', async () => {
+    mockTranscribeRaw.mockResolvedValue({
+      text: 'Vi tager budgettet på næste møde. ' + 'det er fastet. '.repeat(20),
+      latencyMs: 1,
+    });
+
+    const { segments } = await transcribeVadBatches([makeBatch(0)]);
+
+    const text = segments.map((s) => s.text).join(' ');
+    expect(text).toContain('Vi tager budgettet på næste møde.');
+    expect(text.match(/fastet/g)?.length ?? 0).toBeLessThanOrEqual(1);
+  });
+
+  // Subtitle credits are not repetitive, so the repetition guard never saw them
+  // and they reached the referat as if somebody had said them.
+  it('drops a subtitle credit emitted over near-silence', async () => {
+    mockTranscribeRaw.mockResolvedValue({
+      text: 'Danske tekster af Jesper Buhl Scandinavian Text Service 2018',
+      latencyMs: 1,
+    });
     const { segments } = await transcribeVadBatches([makeBatch(0)]);
     expect(segments).toEqual([]);
   });

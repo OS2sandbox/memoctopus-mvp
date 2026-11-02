@@ -9,7 +9,9 @@ import {
   type VadInterval,
 } from '@/lib/audio/vad-batch';
 import { decodeToMono16k } from '@/lib/audio/decode-server';
+import { cleanTranscribedText } from '@/lib/audio/hallucinations';
 import type { TranscriptSegment } from '@/types';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 const SAMPLE_RATE = 16_000;
 // Per-request timeout for batch transcription. Longer than the live-caption 20 s
@@ -29,20 +31,6 @@ export { isEnsembleDiarization };
 // HVISKE_DIARIZE=true (platform.syv.ai). See HviskeProvider.transcribeEnsemble.
 export async function transcribeEnsemble(buffer: Buffer, mimeType: string): Promise<TranscriptSegment[]> {
   return getProvider().transcribeEnsemble(buffer, mimeType);
-}
-
-// Mirror of the hallucination guard in /api/meetings/[id]/utterance.
-function isHallucinatedRepetition(text: string): boolean {
-  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length < 4) return false;
-  const freq: Record<string, number> = {};
-  for (const w of words) freq[w] = (freq[w] ?? 0) + 1;
-  if (Math.max(...Object.values(freq)) / words.length > 0.5) return true;
-  let streak = 1;
-  for (let i = 1; i < words.length; i++) {
-    if (words[i] === words[i - 1]) { if (++streak >= 3) return true; } else streak = 1;
-  }
-  return false;
 }
 
 // How many batch requests to keep in flight at once. Defaults to "all of them" —
@@ -107,8 +95,11 @@ export async function prepareVadBatches(buffer: Buffer): Promise<ReadyBatch[]> {
 async function transcribeOneBatch(batch: ReadyBatch): Promise<TranscriptSegment[]> {
   const wavBuf = Buffer.from(await batch.wav.arrayBuffer());
   const { text } = await getProvider().transcribeRaw(wavBuf, 'audio/wav', { timeoutMs: BATCH_TIMEOUT_MS });
-  if (!text || isHallucinatedRepetition(text)) return [];
-  return splitTextWithIntervals(text, batch.intervals, batch.totalWavDuration);
+  // Keeps the real words a degenerating window produced before it span out; the
+  // old guard dropped the whole batch and lost them with the loop.
+  const cleaned = cleanTranscribedText(text ?? '');
+  if (!cleaned) return [];
+  return splitTextWithIntervals(cleaned, batch.intervals, batch.totalWavDuration);
 }
 
 // Server-side equivalent of the VAD batch pipeline in upload-confirm.client.tsx.
@@ -133,7 +124,7 @@ export async function transcribeVadBatches(
     try {
       perBatch[i] = await transcribeOneBatch(batch);
     } catch (err) {
-      console.error(`[vad-batch-server] batch ${i} failed (will retry):`, err);
+      safeLogError(`vad-batch-server batch ${i} failed (will retry)`, err);
       failedIndices.push(i);
       return;
     }
@@ -155,7 +146,7 @@ export async function transcribeVadBatches(
     try {
       perBatch[i] = await transcribeOneBatch(batches[i]);
     } catch (err) {
-      console.error(`[vad-batch-server] batch ${i} failed permanently:`, err);
+      safeLogError(`vad-batch-server batch ${i} failed permanently`, err);
       perBatch[i] = [];
       failedSeconds += batches[i].totalWavDuration;
       failed = true;

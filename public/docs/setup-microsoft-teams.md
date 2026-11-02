@@ -1,0 +1,207 @@
+# Opsætning af Teams-referater
+
+Denne guide er til IT-administratoren i kommunen. Den skal kun følges én gang.
+
+OS2taletiltekst henter ikke længere lyd ved at sende en robot ind i mødet. I stedet beder
+appen Microsoft Teams om selv at transskribere mødet, og henter bagefter Teams'
+egen transskription (og eventuelt optagelsen) via Microsoft Graph. Brugerne skal derfor ikke gøre
+noget nyt i Teams, og der kommer ingen ekstra deltager i mødet.
+
+Opsætningen består af to trin i Microsoft-portalerne. Regn med 15 minutter, plus op
+til en times ventetid på, at Teams-politikken slår igennem.
+
+**Teams-referater er slået fra som standard.** Driften slår dem til ved at sætte
+`TEAMS_GRAPH_ENABLED=true` i OS2taletiltekst' miljøvariabler og genstarte appen, og det
+skal først ske, **når trin 1 er gennemført**. Se rammen under trin 1.
+
+## Trin 1. Giv appen adgang til møderne
+
+Foretages i **Entra admin center** ([entra.microsoft.com](https://entra.microsoft.com))
+af en bruger med rollen *Global administrator* eller *Privileged role administrator*.
+
+1. Åbn under **Identity / Applications / App registrations** den app-registrering,
+   der i dag bruges til Microsoft-login i OS2taletiltekst.
+2. Vælg **API permissions / Add a permission / Microsoft Graph / Delegated
+   permissions** og sæt flueben ved:
+
+   | Tilladelse | Hvad den bruges til |
+   |---|---|
+   | `OnlineMeetings.ReadWrite` | Slå automatisk transskription til på det enkelte møde |
+   | `OnlineMeetingTranscript.Read.All` | Hente mødets transskription bagefter |
+   | `OnlineMeetingRecording.Read.All` | Hente mødets optagelse bagefter (kan udelades ved `TEAMS_ARTIFACT_MODE=transcript-only`) |
+   | `Files.ReadWrite` | Slette optagelsen fra arrangørens OneDrive, når den er transskriberet (kan udelades ved `TEAMS_DELETE_RECORDING=false` eller `TEAMS_ARTIFACT_MODE=transcript-only`) |
+   | `User.Read` | Læse brugerens eget navn og e-mail (findes typisk allerede) |
+   | `offline_access` | Fornye adgangen, så brugeren ikke skal logge ind igen hver time |
+
+   Alle er **delegerede** tilladelser. Appen får ikke videre adgang end den
+   indloggede medarbejder og kan alene se møder med medarbejderen som inviteret.
+   Der bliver **ikke** bedt om adgang til kalender eller postkasse.
+
+3. Tryk **Grant admin consent for \<organisation\>**. Uden dette trin bliver hver
+   enkelt bruger mødt af en samtykke-dialog, som de typisk ikke selv har
+   rettigheder til at godkende.
+4. Kontrollér under **Authentication**, at denne redirect-URI står på listen som
+   type *Web*:
+
+   ```
+   https://<jeres-referat-adresse>/api/auth/callback/microsoft
+   ```
+
+5. Bekræft, at OS2taletiltekst' `MICROSOFT_TENANT_ID` er sat til organisationens
+   rigtige tenant-id. Står feltet tomt, bruger appen `common`, og så kan brugere
+   fra alle tenants logge ind. Administrator-samtykket gælder fortsat i jeres
+   tenant, men det gælder kun jeres tenant: samtykke gives **pr. tenant**, og det
+   følger ikke med brugere fra andre organisationer.
+
+> **Vigtigt: giv samtykke, før Teams slås til i OS2taletiltekst.** Når driften sætter
+> `TEAMS_GRAPH_ENABLED=true`, beder Microsoft-login om de tilladelser, der står
+> ovenfor. `OnlineMeetingTranscript.Read.All` og `OnlineMeetingRecording.Read.All`
+> kræver administrator-samtykke. Har tenanten ikke givet det, svarer Microsoft
+> *"Need admin approval"* på selve login-forsøget, og **ingen** kan så logge ind med
+> Microsoft, heller ikke til andet end Teams. Er tenantens arbejdsgang til
+> samtykke-anmodninger slået fra, kan brugerne heller ikke bede om det.
+> Indstillingen læses ved opstart, så appen skal genstartes efter en ændring.
+> Med `TEAMS_ARTIFACT_MODE=transcript-only` bliver optagelses-tilladelsen slet
+> ikke bedt om. `Files.ReadWrite` bliver heller ikke bedt om dér, og heller ikke
+> med `TEAMS_DELETE_RECORDING=false`.
+>
+> **Ved opgradering:** `Files.ReadWrite` er ny. Har I allerede givet samtykke til de
+> øvrige tilladelser, skal den tilføjes og samtykket gives igen, før den nye version
+> tages i brug. Ellers rammer alle Microsoft-logins samme *"Need admin approval"*.
+
+## Trin 2. Tillad optagelse og transskription i Teams
+
+Foretages i **Teams admin center** ([admin.teams.microsoft.com](https://admin.teams.microsoft.com)).
+
+1. Gå til **Meetings / Meeting policies** og åbn brugernes mødepolitik
+   (typisk **Global (Org-wide default)**).
+2. Under **Recording & transcription** skal begge disse stå til **On**:
+   - *Transcription*
+   - *Meeting recording*
+3. Gem. **Ændringen kan være op til en time om at slå igennem.** Indtil da vil
+   OS2taletiltekst melde, at mødet ikke kunne forberedes.
+
+Begge indstillinger skal være tilladt af politikken. Ellers accepterer Microsoft
+Graph godt nok anmodningen om automatisk transskription, men Teams ignorerer den
+i praksis. OS2taletiltekst viser i det tilfælde fejlen *"Jeres Teams-politik tillader
+ikke optagelse eller transskription"*.
+
+## Trin 3. Kontrollér at Graph må læse transskriptioner
+
+Nogle organisationer har slået API-adgang til transskriptioner fra. Findes i
+**Teams admin center / Meetings / Meeting settings** under indstillingerne for
+adgang til transskription og optagelse via API.
+
+Er den slået fra, kan OS2taletiltekst ikke hente transskriptionen, og viser fejlen
+*"Jeres organisation har slået Graph-adgang til transskriptioner fra"*. Der er
+ingen anden vej rundt om det end at slå indstillingen til.
+
+---
+
+## Sådan bruger medarbejderne det bagefter
+
+1. Log ind i OS2taletiltekst med Microsoft. **Brugere, der loggede ind, før Teams blev
+   slået til, skal logge ud og ind igen**, så den nye adgang bliver gemt. Indtil
+   de gør det, viser forsiden en knap *"Giv adgang igen"*.
+2. Planlæg mødet i Outlook eller Teams som altid.
+3. Kopiér mødelinket, altså det samme "Deltag i Teams-møde"-link som deltagerne
+   får i indkaldelsen, og indsæt det i **Mødelink**-feltet i OS2taletiltekst. Linket kan
+   kopieres både fra mødeindkaldelsen i Outlook og med "Kopiér link til deltagelse"
+   i Teams. Har organisationen Defender Safe Links slået til, bliver links i mails
+   skrevet om til en `safelinks.protection.outlook.com`-adresse. Det er i orden,
+   fordi OS2taletiltekst selv finder det rigtige mødelink inde i den.
+4. Hold mødet. **Ingen skal trykke på noget i Teams undervejs**, og der kommer
+   ingen ekstra deltager ind i mødet. OS2taletiltekst beder Teams om selv at
+   transskribere.
+5. Et par minutter efter mødet er referatet klar i OS2taletiltekst.
+
+OS2taletiltekst kan ikke slå transskription til på møder med en anden arrangør. I de
+tilfælde vises en sætning, der kan sendes videre til arrangøren.
+
+## Fejlsøgning
+
+| Det brugeren ser | Årsag | Løsning |
+|---|---|---|
+| "Teams-referater kræver, at du logger ind med Microsoft" | Brugeren er logget ind med e-mail/adgangskode eller en anden udbyder | Log ind med Microsoft |
+| Ingen mulighed for at indsætte et mødelink, eller "Teams-integrationen er ikke slået til" | `TEAMS_GRAPH_ENABLED` er ikke sat til `true`, eller appen er ikke genstartet efter ændringen | Sæt den, når trin 1 er gennemført, og genstart |
+| Microsoft-login svarer "Need admin approval" | `TEAMS_GRAPH_ENABLED=true`, men administrator-samtykket i trin 1 er ikke givet i brugerens tenant | Giv samtykket, eller sæt `TEAMS_GRAPH_ENABLED` tilbage og genstart |
+| Knappen "Giv adgang igen" | Brugeren loggede ind, før tilladelserne i trin 1 blev givet | Log ud og ind igen |
+| "Jeres Teams-politik tillader ikke optagelse eller transskription" | Trin 2 mangler, eller er endnu ikke slået igennem | Gennemgå trin 2, vent op til en time |
+| "Jeres organisation har slået Graph-adgang til transskriptioner fra" | Indstillingen i trin 3 | Gennemgå trin 3 |
+| "Du skal være inviteret til mødet" | Mødet ligger ikke i brugerens kalender — fx et ad hoc "Mød nu", eller et link videresendt fra en anden | Brug et møde, brugeren selv er inviteret til |
+| "Mødelinket er ikke et gyldigt Teams-link" | Der er indsat noget andet end et Teams-mødelink | Kopiér linket fra mødeindkaldelsen igen |
+| Mødet står i "Venter på Teams" længe efter mødet | Microsoft er nogle gange et stykke tid om at frigive transskriptionen | Tryk **Tjek nu**. OS2taletiltekst prøver selv i op til 24 timer |
+
+Kommer der ingen transskription, kan forholdet kontrolleres i
+[Graph Explorer](https://developer.microsoft.com/graph/graph-explorer) som den
+samme bruger:
+
+```
+GET /me/onlineMeetings?$filter=JoinWebUrl eq '<mødelink>'
+GET /me/onlineMeetings/<id>/transcripts
+```
+
+Ligger transskriptionen der, men ikke i OS2taletiltekst, er det en fejl i OS2taletiltekst.
+Ligger den ikke der, kom Teams aldrig i gang med at transskribere, og så mangler
+trin 2 eller trin 3.
+
+## Hvor ligger data?
+
+Teams gemmer selv optagelsen i arrangørens OneDrive og transskriptionen på
+mødet. Det er Microsofts standardopførsel.
+
+OS2taletiltekst henter en kopi af optagelsen, transskriberer den og sletter derefter
+lyden. Selve lydoptagelsen bliver aldrig gemt i OS2taletiltekst og bliver aldrig sendt
+til medarbejderens browser.
+
+Når transskriptionen er færdig, sletter OS2taletiltekst også optagelsen i arrangørens
+OneDrive. Filen slettes permanent og lægges ikke i papirkurven. Det er det,
+tilladelsen `Files.ReadWrite` bruges til, og kun til det: Microsoft Graph har
+ingen funktion til at slette en mødeoptagelse, så filen må slettes som en fil i
+medarbejderens OneDrive. OS2taletiltekst finder den i mappen *Optagelser* på dens
+præcise størrelse i bytes og sletter intet, hvis det ikke udpeger netop én fil.
+
+Teams' egen tekst-transskription ligger ikke som en selvstændig fil. Den er
+indlejret i optagelsens mp4-fil og forsvinder derfor sammen med den. Microsoft
+Graph har ingen funktion til at slette en transskription for sig.
+
+Der er fire ting, sletningen ikke dækker:
+
+- Har organisationen en opbevaringspolitik eller et retskrav (hold), som forbyder
+  permanent sletning, lægges filen i papirkurven i stedet, og herefter gælder
+  organisationens egne regler.
+- Er medarbejderen kun inviteret til mødet, ligger optagelsen i arrangørens
+  OneDrive, som OS2taletiltekst ikke har adgang til. Den bliver liggende.
+- Optagelser af kanalmøder ligger i teamets SharePoint-site og bliver liggende.
+- Med `TEAMS_ARTIFACT_MODE=transcript-only` henter OS2taletiltekst aldrig optagelsen og
+  kan derfor ikke genkende filen. Både optagelse og transskription bliver
+  liggende, og arrangøren må selv slette dem i Teams.
+
+Kan Microsoft ikke nås, når optagelsen skal slettes, prøver OS2taletiltekst igen hvert
+par minutter i op til et døgn.
+
+Ønsker kommunen at beholde optagelserne i OneDrive, kan driften sætte
+`TEAMS_DELETE_RECORDING=false`. Så bliver `Files.ReadWrite` heller ikke bedt om.
+
+Transskriptionen lægges midlertidigt som en fil på serverens lagerplads
+(`AUDIO_STORAGE_PATH`), indtil medarbejderens browser har hentet den og gemt den.
+Først når browseren har bekræftet, at den er gemt, slettes filen; at browseren
+henter den, er ikke nok, så en lukket fane midt i hentningen ikke koster
+transskriptionen. Bliver den aldrig hentet (fx fordi fanen blev lukket), slettes
+filen senest cirka en time efter, at den blev lagt, af en oprydning der kører
+hvert femte minut uanset om andre møder bliver behandlet. Er filen væk, når
+medarbejderen kommer tilbage, tilbyder skærmen "Hent igen", som henter
+transskriptionen fra Teams på ny, så længe mødet er under et døgn gammelt. Er
+optagelsen på det tidspunkt slettet fra OneDrive, er det Teams' egen
+tekst-transskription, der hentes.
+Herefter ligger transskriptionen og referatet kun i medarbejderens browser
+(IndexedDB), ikke i en central database.
+
+Baggrunden er, at Teams først frigiver optagelsen efter mødet. Et Teams-møde kan
+derfor ikke følges live i OS2taletiltekst, og så er der heller ingen grund til at
+opbevare lyden bagefter.
+
+Ønsker kommunen, at OS2taletiltekst slet ikke downloader lyd, kan driften sætte
+`TEAMS_ARTIFACT_MODE=transcript-only`. Så bruges alene Teams' egen
+tekst-transskription. Referatkvaliteten bliver typisk lidt lavere, fordi
+OS2taletiltekst ellers transskriberer med sin egen danske model.

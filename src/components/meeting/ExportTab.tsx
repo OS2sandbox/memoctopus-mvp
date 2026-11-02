@@ -4,6 +4,8 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { getMeeting, getMinutes } from '@/lib/storage';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
+import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
 type ExportFormat = 'pdf' | 'md';
 
@@ -57,7 +59,9 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
       <div style={{ maxWidth: 780, margin: '0 auto' }}>
 
         {/* Header */}
-        <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>04 · eksport</div>
+        <OnboardingHint stepId="share.terminology-bridge" meetingId={meetingId}>
+          <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>04 · eksport</div>
+        </OnboardingHint>
         <h1 style={{ fontWeight: 300, fontSize: isMobile ? 32 : 42, lineHeight: 1.04, letterSpacing: '-0.025em', margin: '8px 0 0' }}>
           Klar til <em style={{ fontStyle: 'italic' }}>aflevering</em>.
         </h1>
@@ -143,10 +147,9 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
         <div style={{
           marginTop: 32, paddingTop: 20, borderTop: '1px solid var(--line)',
           fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
-          display: 'flex', justifyContent: 'space-between',
+          display: 'flex', justifyContent: 'flex-end',
           flexWrap: 'wrap', gap: 12,
         }}>
-          <span>indeholder ingen rå tale, lyd eller personoplysninger</span>
           <Link
             href={`/meeting/${meetingId}/review`}
             style={{
@@ -179,6 +182,19 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
                 referatet ligger i arkivet
               </div>
             </div>
+            <OnboardingTooltip stepId="export.post-download-link">
+              <Link
+                href="/arkiv"
+                style={{
+                  fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
+                  padding: '8px 14px', borderRadius: 'var(--radius)',
+                  border: '1px solid var(--line-2)', background: 'transparent',
+                  color: 'var(--ink)', textDecoration: 'none',
+                }}
+              >
+                se i arkivet
+              </Link>
+            </OnboardingTooltip>
             <Link
               href="/dashboard"
               style={{

@@ -1,0 +1,213 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/lib/db', () => ({ pool: { query: vi.fn() } }));
+
+import { MAX_ORG_DEPTH } from '@/lib/authz/scope';
+import { listCentralForUser, resolveCentralTemplate, type ResolveEnv } from './resolve';
+
+const ID = '44444444-5555-4666-8777-888888888888';
+const SECRET = 'HEMMELIG-PROMPT-TEKST';
+
+const row = (over: Record<string, unknown> = {}) => ({
+  id: ID,
+  name: 'Dialogmøde',
+  description: 'Til dialogmøder',
+  include_deltagere: true,
+  include_beslutningspunkter: false,
+  include_dagsorden: true,
+  include_dato: false,
+  allow_user_instruction: true,
+  allow_toggle_overrides: false,
+  current_version: 3,
+  ...over,
+});
+
+afterEach(() => vi.unstubAllEnvs());
+
+// claimsMaxSeconds is pinned (null = role/group branch off) unless a test is about the default.
+function fakeEnv(rows: Array<Record<string, unknown>>, schema = 'public', claimsMaxSeconds: number | null = null) {
+  const query = vi.fn(async (_t: string, _p: unknown[]) => ({ rows }));
+  const env: ResolveEnv = { schema, query, claimsMaxSeconds };
+  return { env, query };
+}
+
+describe('listCentralForUser', () => {
+  it('maps rows to prompt-free summaries in ONE parameterised, schema-qualified query', async () => {
+    const { env, query } = fakeEnv([row()]);
+    const out = await listCentralForUser('user-1', env);
+
+    expect(out).toEqual([
+      {
+        id: ID,
+        source: 'central',
+        name: 'Dialogmøde',
+        description: 'Til dialogmøder',
+        includeDeltagere: true,
+        includeBeslutningspunkter: false,
+        includeDagsorden: true,
+        includeDato: false,
+        locked: true,
+        version: 3,
+        allowUserInstruction: true,
+        allowToggleOverrides: false,
+      },
+    ]);
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, params] = query.mock.calls[0];
+    expect(params).toEqual(['user-1', MAX_ORG_DEPTH, null]);
+    expect(sql).not.toContain('user-1');
+    for (const t of [
+      'directory_users',
+      'org_unit_members',
+      'org_units',
+      'central_templates',
+      'central_template_targets',
+      'central_template_principal_targets',
+      'user_external_roles',
+      'external_roles',
+    ]) {
+      expect(sql).toContain(`"public".${t}`);
+    }
+    expect(sql).not.toMatch(/\bprompt\b/);
+    expect(sql).toMatch(/d\.disabled = false/);
+    expect(sql).toMatch(/ct\.status = 'active'/);
+    // Cycle safety: UNION (not UNION ALL) plus a depth cap.
+    expect(sql).toMatch(/\bUNION\b(?!\s+ALL)/);
+    expect(sql).toMatch(/depth < \$2::int/);
+    // Owner-subtree re-check at read time: an upward walk from each candidate target to the owner unit.
+    expect(sql).toMatch(/owner_org_unit_uuid/);
+    expect(sql).toMatch(/walk\(template_id, target_uuid, owner_uuid, cur_uuid, depth\)/);
+    expect(sql).toMatch(/w\.cur_uuid = w\.owner_uuid/);
+    expect(sql).toMatch(/w\.depth < \$2::int/);
+    // The walk starts only from targets the user matches, in the same single statement.
+    expect(sql).toMatch(/cand\(template_id, target_uuid, owner_uuid\)/);
+    expect(sql).not.toMatch(/ct\.id = \$4/);
+  });
+
+  it('has a second, role/group branch: a fresh claim row, an active catalogue entry and a non-disabled linked user', async () => {
+    const { env, query } = fakeEnv([row()], 'public', 28800);
+    await listCentralForUser('user-1', env);
+    const [sql, params] = query.mock.calls[0];
+    expect(params).toEqual(['user-1', MAX_ORG_DEPTH, 28800]);
+    // The branches are alternatives (OR): a template reaches the user through either.
+    expect(sql).toMatch(/w\.cur_uuid = w\.owner_uuid\)\s+OR ct\.id IN \(SELECT c\.template_id FROM cand c WHERE c\.owner_uuid IS NULL\)\s+OR ct\.id IN \(/);
+    expect(sql).toMatch(/ur\.user_id = \$1/);
+    expect(sql).toMatch(/ur\.seen_at > now\(\) - make_interval\(secs => \$3::int\)/);
+    expect(sql).toMatch(/er\.active/);
+    expect(sql).toMatch(/d\.app_user_id = \$1 AND d\.disabled = false/);
+    // The branch is switched off by a NULL freshness, not by different SQL.
+    expect(sql).toMatch(/\$3::int IS NOT NULL/);
+    // Org-wide templates (no owner) keep their unit targets without the owner walk.
+    expect(sql).toMatch(/c\.owner_uuid IS NULL/);
+  });
+
+  it('the role/group branch follows ACCESS_SOURCE: on (with ROLE_CLAIMS_MAX_SECONDS) in claims mode, off otherwise', async () => {
+    const run = async () => {
+      const query = vi.fn(async (_t: string, _p: unknown[]) => ({ rows: [] }));
+      await listCentralForUser('u', { schema: 'public', query });
+      return query.mock.calls[0][1][2];
+    };
+    vi.stubEnv('ACCESS_SOURCE', 'claims');
+    expect(await run()).toBe(28800);
+    vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', '600');
+    expect(await run()).toBe(600);
+    for (const mode of ['local', 'rollekatalog', '']) {
+      vi.stubEnv('ACCESS_SOURCE', mode);
+      expect(await run()).toBeNull();
+    }
+  });
+
+  it('never exposes the creator or last editor (manager-side data) even if a row carried them', async () => {
+    const { env, query } = fakeEnv([
+      row({ created_by_name: 'Anne Admin', last_edited_by_name: 'Bo Beslutter', last_edited_at: new Date() }),
+    ]);
+    const out = await listCentralForUser('user-1', env);
+    for (const k of ['createdByName', 'lastEditedByName', 'lastEditedAt', 'createdAt', 'updatedAt', 'ownerOrgUnitUuid']) {
+      expect(out[0]).not.toHaveProperty(k);
+    }
+    expect(JSON.stringify(out)).not.toMatch(/Anne Admin|Bo Beslutter/);
+    // The user-facing query does not even read the changelog.
+    expect(query.mock.calls[0][0]).not.toMatch(/central_template_versions|changed_by/);
+  });
+
+  it('never exposes a prompt even if a row somehow carried one', async () => {
+    const { env } = fakeEnv([row({ prompt: SECRET })]);
+    const out = await listCentralForUser('user-1', env);
+    expect(JSON.stringify(out)).not.toContain(SECRET);
+    expect(out[0]).not.toHaveProperty('prompt');
+  });
+
+  it('returns an empty list without querying for an empty user id', async () => {
+    const { env, query } = fakeEnv([row()]);
+    expect(await listCentralForUser('', env)).toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('uses the injected schema, quoted, and rejects a malformed schema name', async () => {
+    const { env, query } = fakeEnv([], 't_abc');
+    await listCentralForUser('u', env);
+    expect(query.mock.calls[0][0]).toContain('"t_abc".central_templates');
+    await expect(listCentralForUser('u', fakeEnv([], 'x"; DROP TABLE y; --').env)).rejects.toThrow('invalid schema name');
+  });
+
+  it('propagates a database error (the route decides how to degrade)', async () => {
+    const env: ResolveEnv = { schema: 'public', query: vi.fn().mockRejectedValue(new Error('boom')) };
+    await expect(listCentralForUser('u', env)).rejects.toThrow('boom');
+  });
+});
+
+describe('resolveCentralTemplate', () => {
+  it('returns the internal shape with the prompt, version and flags', async () => {
+    const { env, query } = fakeEnv([row({ prompt: SECRET })]);
+    const out = await resolveCentralTemplate('user-1', ID.toUpperCase(), env);
+    expect(out).toEqual({
+      id: ID,
+      version: 3,
+      prompt: SECRET,
+      includeDeltagere: true,
+      includeBeslutningspunkter: false,
+      includeDagsorden: true,
+      includeDato: false,
+      allowUserInstruction: true,
+      allowToggleOverrides: false,
+    });
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, params] = query.mock.calls[0];
+    expect(params).toEqual(['user-1', MAX_ORG_DEPTH, null, ID]);
+    expect(sql).toContain('ct.id = $4::uuid');
+    // The id filter is pushed into the candidate step so only this template's targets are walked.
+    expect(sql).toMatch(/ct\.status = 'active' AND ct\.id = \$4::uuid/);
+    expect(sql).toMatch(/w\.cur_uuid = w\.owner_uuid/);
+    expect(sql).toMatch(/d\.disabled = false/);
+    expect(sql).toMatch(/ct\.status = 'active'/);
+  });
+
+  it('uses the very same recipient predicate as the list (a non-recipient gets the identical null)', async () => {
+    const list = fakeEnv([row()], 'public', 600);
+    await listCentralForUser('user-1', list.env);
+    const one = fakeEnv([row({ prompt: SECRET })], 'public', 600);
+    await resolveCentralTemplate('user-1', ID, one.env);
+    const where = (sql: string) => sql.slice(sql.indexOf("ct.status = 'active'\n        AND ("), sql.indexOf('ORDER BY') > 0 ? sql.indexOf('ORDER BY') : undefined).trim();
+    expect(where(one.query.mock.calls[0][0])).toBe(where(list.query.mock.calls[0][0]));
+    expect(one.query.mock.calls[0][1]).toEqual(['user-1', MAX_ORG_DEPTH, 600, ID]);
+  });
+
+  it('returns null when nothing matches (unknown, archived, not a recipient look the same)', async () => {
+    expect(await resolveCentralTemplate('user-1', ID, fakeEnv([]).env)).toBeNull();
+  });
+
+  it.each(['', 'not-a-uuid', "' OR 1=1 --", `${ID}x`, 42 as unknown as string])(
+    'rejects %j before any query',
+    async (bad) => {
+      const { env, query } = fakeEnv([row({ prompt: SECRET })]);
+      expect(await resolveCentralTemplate('user-1', bad, env)).toBeNull();
+      expect(query).not.toHaveBeenCalled();
+    },
+  );
+
+  it('returns null for an empty user id without querying', async () => {
+    const { env, query } = fakeEnv([row({ prompt: SECRET })]);
+    expect(await resolveCentralTemplate('', ID, env)).toBeNull();
+    expect(query).not.toHaveBeenCalled();
+  });
+});

@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { ArchiveMeetingRow } from './archive-meeting-row';
+import { renderWithOnboarding, FRESH_ONBOARDING } from '@/test/onboarding';
 
 // Mock next/link to render a simple anchor so we can inspect href
 vi.mock('next/link', () => ({
@@ -11,11 +12,15 @@ vi.mock('next/link', () => ({
   ),
 }));
 
-// Mock @/lib/storage so tests never touch IndexedDB
+// The row deletes through the shared helper (which also unregisters a Teams
+// meeting server-side); mocking it keeps the tests off IndexedDB and the network.
+// @/lib/storage is deliberately not mocked with a deleteMeeting: a row that
+// called it directly would fail here.
 const mockDeleteMeeting = vi.fn();
-vi.mock('@/lib/storage', () => ({
-  deleteMeeting: (...args: unknown[]) => mockDeleteMeeting(...args),
+vi.mock('@/lib/teams/client-delete', () => ({
+  deleteMeetingAndUnregister: (...args: unknown[]) => mockDeleteMeeting(...args),
 }));
+vi.mock('@/lib/storage', () => ({}));
 
 // ---------------------------------------------------------------------------
 // Factories / helpers
@@ -51,8 +56,9 @@ function renderRow(
     onToggleSelect?: () => void;
   } = {},
 ) {
-  return render(
+  return renderWithOnboarding(
     <ArchiveMeetingRow meeting={meeting as never} {...props} />,
+    { tourSkipped: true, tourCompleted: true, seen: FRESH_ONBOARDING.seen },
   );
 }
 
@@ -89,9 +95,8 @@ describe('ArchiveMeetingRow — basic rendering', () => {
   });
 
   it('does not render duration separator when durationSeconds is null', () => {
-    const { container } = renderRow(makeRow({ durationSeconds: null }));
+    renderRow(makeRow({ durationSeconds: null }));
     // The · separator only appears between date and duration
-    const meta = container.querySelector('p.mt-0\\.5, p[style*="mono"]');
     // durationSeconds is null so no duration text at all — just check absence of time pattern
     expect(screen.queryByText(/\d{2}:\d{2}/)).toBeNull();
   });
@@ -119,6 +124,16 @@ describe('ArchiveMeetingRow — basic rendering', () => {
   it('renders the delete button (aria-label "Slet møde")', () => {
     renderRow(makeRow());
     expect(screen.getByRole('button', { name: 'Slet møde' })).toBeInTheDocument();
+  });
+
+  it('reveals the delete button on keyboard focus, not just mouse hover', () => {
+    renderRow(makeRow());
+    const deleteBtn = screen.getByRole('button', { name: 'Slet møde' });
+    // Visibility is CSS-driven (group-hover / group-focus-within), so a keyboard
+    // user tabbing to the button must not be left with an invisible target.
+    expect(deleteBtn.className).toMatch(/opacity-0/);
+    expect(deleteBtn.className).toMatch(/group-focus-within:opacity-100/);
+    expect(deleteBtn.className).toMatch(/focus:opacity-100/);
   });
 });
 
@@ -157,6 +172,12 @@ describe('ArchiveMeetingRow — status badge', () => {
     expect(screen.getByText('Anonymiseret')).toBeInTheDocument();
   });
 
+  it('shows a Danish label for awaiting_teams, not the raw status', () => {
+    renderRow(makeRow({ status: 'awaiting_teams' }));
+    expect(screen.getByText('Afventer Teams')).toBeInTheDocument();
+    expect(screen.queryByText('awaiting_teams')).toBeNull();
+  });
+
   it('shows the raw status string for an unknown status', () => {
     renderRow(makeRow({ status: 'custom-status' }));
     expect(screen.getByText('custom-status')).toBeInTheDocument();
@@ -176,6 +197,12 @@ describe('ArchiveMeetingRow — link routing (statusHref)', () => {
 
   it('links to /meeting/:id for processing status', () => {
     renderRow(makeRow({ id: 'abc', status: 'processing' }));
+    const link = screen.getByRole('link');
+    expect(link).toHaveAttribute('href', '/meeting/abc');
+  });
+
+  it('links to /meeting/:id for awaiting_teams status', () => {
+    renderRow(makeRow({ id: 'abc', status: 'awaiting_teams' }));
     const link = screen.getByRole('link');
     expect(link).toHaveAttribute('href', '/meeting/abc');
   });

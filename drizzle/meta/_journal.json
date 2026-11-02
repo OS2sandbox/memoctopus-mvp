@@ -8,6 +8,48 @@
       "when": 1781616696550,
       "tag": "0000_past_shooting_star",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791202473377,
+      "tag": "0001_central_access",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791205659820,
+      "tag": "0002_audit_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791211893532,
+      "tag": "0003_central_templates",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791376640098,
+      "tag": "0004_claims_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791380000000,
+      "tag": "0005_shared_prompt_targets",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791390000000,
+      "tag": "0006_three_roles",
+      "breakpoints": true
     }
   ]
 }
