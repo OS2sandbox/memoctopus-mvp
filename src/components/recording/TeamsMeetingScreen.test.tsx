@@ -579,8 +579,74 @@ describe('TeamsMeetingScreen — manual check and disarm', () => {
   });
 });
 
+describe('TeamsMeetingScreen — polling cadence', () => {
+  // The default status body: 09:00–10:00 on 10 September.
+  const statusReads = () =>
+    mockFetch.mock.calls.filter(([u]) => String(u).startsWith(`/api/teams/meetings/${MEETING_ID}`));
+
+  function setVisibility(state: 'visible' | 'hidden') {
+    Object.defineProperty(document, 'visibilityState', { value: state, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }
+
+  afterEach(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+  });
+
+  it('only checks now and then until shortly before the meeting starts', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-10T07:00:00.000Z'));
+    renderScreen();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(statusReads()).toHaveLength(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(4 * 60_000); });
+    expect(statusReads()).toHaveLength(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(statusReads()).toHaveLength(2);
+  });
+
+  it('checks every minute from five minutes before the start until the end', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-10T08:56:00.000Z'));
+    renderScreen();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(statusReads()).toHaveLength(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(statusReads()).toHaveLength(2);
+  });
+
+  it('still answers "Mødet er slut – hent nu" at once while idle', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-10T07:00:00.000Z'));
+    renderScreen();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Mødet er slut – hent nu/ })); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(mockFetch).toHaveBeenCalledWith(`/api/teams/meetings/${MEETING_ID}?poll=1`);
+  });
+
+  it('pauses while the tab is hidden, and checks at once when it is shown again', async () => {
+    vi.useFakeTimers();
+    renderScreen();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { setVisibility('hidden'); });
+    const before = statusReads().length;
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
+    expect(statusReads()).toHaveLength(before);
+
+    await act(async () => { setVisibility('visible'); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(statusReads()).toHaveLength(before + 1);
+  });
+});
+
 describe('TeamsMeetingScreen — polling behaviour', () => {
-  it('re-polls every 15 seconds while awaiting', async () => {
+  it('re-polls every 15 seconds once the meeting is over', async () => {
     vi.useFakeTimers();
     renderScreen();
     await act(async () => { await Promise.resolve(); });

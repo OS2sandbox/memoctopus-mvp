@@ -54,9 +54,41 @@ const META_COLLECT_RETRY_MS = 500;
  */
 const MANUAL_START_HINT_ATTEMPTS = 3;
 
+/**
+ * How often the screen asks. Nothing can come out of a meeting before it has
+ * ended, and the server's own poller collects it whether or not anyone is
+ * watching, so the screen only needs to be quick where someone is likely to be
+ * waiting for it: after the end.
+ *
+ * - Until five minutes before the start: a quiet check every five minutes.
+ * - From then until the scheduled end: every minute (a meeting can end early).
+ * - After the end, or with no window known: every 15 s, easing to every minute
+ *   after an hour on the screen.
+ *
+ * Nothing is asked while the tab is hidden. "Tjek nu" asks at any time.
+ */
+const IDLE_POLL_MS = 5 * 60_000;
+const IDLE_UNTIL_BEFORE_START_MS = 5 * 60_000;
+const DURING_POLL_MS = 60_000;
 const FAST_POLL_MS = 15_000;
 const SLOW_POLL_MS = 60_000;
 const SLOWDOWN_AFTER_MS = 60 * 60_000;
+
+function pollDelay(
+  meeting: { scheduledStart: string | null; scheduledEnd: string | null } | null,
+  now: number,
+  slowedDown: boolean,
+): number {
+  const start = meeting?.scheduledStart ? Date.parse(meeting.scheduledStart) : NaN;
+  const end = meeting?.scheduledEnd ? Date.parse(meeting.scheduledEnd) : NaN;
+  if (!Number.isNaN(start) && now < start - IDLE_UNTIL_BEFORE_START_MS) return IDLE_POLL_MS;
+  if (!Number.isNaN(end) && now < end) return DURING_POLL_MS;
+  return slowedDown ? SLOW_POLL_MS : FAST_POLL_MS;
+}
+
+function tabVisible(): boolean {
+  return typeof document === 'undefined' || document.visibilityState !== 'hidden';
+}
 
 // The sentence the invitee can hand to the organizer verbatim.
 export const ORGANIZER_REQUEST =
@@ -284,7 +316,8 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
   /** Result of the last hand-pressed check, so pressing the button is never silent. */
   const [lastCheck, setLastCheck] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [intervalMs, setIntervalMs] = useState(FAST_POLL_MS);
+  const [slowedDown, setSlowedDown] = useState(false);
+  const [visible, setVisible] = useState(tabVisible);
   // The row is ready but the server no longer holds its transcript.
   const [copyGone, setCopyGone] = useState(false);
   // Answers that asking again cannot change: the server does not know the meeting
@@ -415,7 +448,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
   }, [poll]);
 
   useEffect(() => {
-    const t = setTimeout(() => setIntervalMs(SLOW_POLL_MS), SLOWDOWN_AFTER_MS);
+    const t = setTimeout(() => setSlowedDown(true), SLOWDOWN_AFTER_MS);
     return () => clearTimeout(t);
   }, []);
 
@@ -430,11 +463,29 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
     status?.scheduledEnd != null && Date.parse(status.scheduledEnd) <= Date.now();
   const stopped = off || halt !== null || state === 'ready' || state === 'failed' || state === 'needs_reauth';
 
+  // Recomputed on every render, and every poll renders (a fresh status), so the
+  // pace moves on by itself as the start and the end come and go.
+  const intervalMs = pollDelay(status, Date.now(), slowedDown);
+
   useEffect(() => {
-    if (stopped) return;
+    if (stopped || !visible) return;
     const id = setInterval(() => { void poll(false); }, intervalMs);
     return () => clearInterval(id);
-  }, [poll, intervalMs, stopped]);
+  }, [poll, intervalMs, stopped, visible]);
+
+  // Paused while the tab is hidden; on coming back, one check at once, so the
+  // screen is current when it is looked at rather than a tick later.
+  const stoppedRef = useRef(stopped);
+  stoppedRef.current = stopped;
+  useEffect(() => {
+    const onChange = () => {
+      const shown = tabVisible();
+      setVisible(shown);
+      if (shown && !stoppedRef.current) void poll(false);
+    };
+    document.addEventListener('visibilitychange', onChange);
+    return () => document.removeEventListener('visibilitychange', onChange);
+  }, [poll]);
 
   // Puts the ready-but-gone row back into a pollable state, then polls it with
   // force, exactly as "Prøv igen" does for a failed one.
