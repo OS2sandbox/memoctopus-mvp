@@ -254,6 +254,31 @@ describe('TranscriptReview', () => {
       await waitFor(() => expect(screen.getByTestId('speaker-row-0')).toBeInTheDocument());
       expect(screen.getByTestId('speaker-row-0')).toHaveAttribute('data-continues', 'false');
     });
+    // Under a chapter heading the first line always names its speaker, even when
+    // the previous chapter ended mid-run with the same person: the reader opens a
+    // chapter on its own, and a nameless first line there belongs to nobody.
+    it('starts a new run at every chapter heading', async () => {
+      const user = userEvent.setup({ delay: null });
+      const segments = [
+        { speaker: 'Mette Hansen', start: 0, end: 4, text: 'Velkommen' },
+        { speaker: 'Jens Poulsen', start: 4, end: 8, text: 'Tak' },
+        { speaker: 'Jens Poulsen', start: 8, end: 12, text: 'Budgettet' },
+        { speaker: 'Jens Poulsen', start: 12, end: 16, text: 'Og så personalet' },
+      ];
+      const chapters = [
+        { id: 'ch-1', title: 'Velkomst', summary: 'Velkomst', startTime: 0, endTime: 8, segmentIndices: [0, 1] },
+        { id: 'ch-2', title: 'Budget', summary: 'Budget', startTime: 8, endTime: 16, segmentIndices: [2, 3] },
+      ];
+      setup({ initialSegments: segments, initialChapters: chapters });
+
+      await user.click(await screen.findByText(/00:08 — 00:16/));
+      await waitFor(() => expect(screen.getByTestId('speaker-row-3')).toBeInTheDocument());
+
+      // Row 1 (Jens, end of chapter 1) precedes row 2 in the transcript, but not
+      // under this heading.
+      expect(screen.getByTestId('speaker-row-2')).toHaveAttribute('data-continues', 'false');
+      expect(screen.getByTestId('speaker-row-3')).toHaveAttribute('data-continues', 'true');
+    });
   });
 
   describe('audio deleted state', () => {
