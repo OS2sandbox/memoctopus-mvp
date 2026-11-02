@@ -104,6 +104,24 @@ export async function readTimes(office: OfficeApi, item: OrganizerItem): Promise
   return start && end && end > start ? { start, end } : null;
 }
 
+/**
+ * Whether the appointment is a recurring series or an occurrence of one. Needs
+ * Mailbox 1.7; an older Outlook, or a failed read, counts as not recurring.
+ */
+export function readIsRecurring(office: OfficeApi, item: OrganizerItem): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      if (item.seriesId) return resolve(true);
+      if (!item.recurrence) return resolve(false);
+      item.recurrence.getAsync((res) =>
+        resolve(res.status === office.AsyncResultStatus.Succeeded && res.value != null),
+      );
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
 // --- The add-in's note on the appointment ---------------------------------------
 //
 // Which OS2taletiltekst meeting this appointment was armed as, so reopening the

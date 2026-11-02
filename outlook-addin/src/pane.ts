@@ -8,7 +8,15 @@
 
 import { ApiError, armMeeting, disarmMeeting } from './api';
 import { getAccessToken, loadConfig, type AddinConfig } from './auth';
-import { armedMessage, noLinkMessage, readArmedId, readJoinLink, readTimes, writeArmedId } from './meeting';
+import {
+  armedMessage,
+  noLinkMessage,
+  readArmedId,
+  readIsRecurring,
+  readJoinLink,
+  readTimes,
+  writeArmedId,
+} from './meeting';
 import { getOffice, type OfficeApi, type OrganizerItem } from './office';
 
 type Tone = 'ok' | 'warn' | 'error' | 'info';
@@ -149,9 +157,10 @@ export async function start(): Promise<void> {
   $('disarm').addEventListener('click', () => void disarm(state));
 
   try {
-    const [link, times, config] = await Promise.all([
+    const [link, times, recurring, config] = await Promise.all([
       readJoinLink(office, item),
       readTimes(office, item),
+      readIsRecurring(office, item),
       // Here only for the note. A failure is reported when a button needs the
       // config and loads it again.
       loadConfig().catch(() => null),
@@ -160,6 +169,9 @@ export async function start(): Promise<void> {
     renderRecordingNote(config);
     if (link.ok) {
       state.joinUrl = link.url;
+      // Arming sets automatic recording on the one Teams meeting a series shares,
+      // so Teams records every occurrence. Said up front, not refused.
+      show('series', recurring);
       const armedId = await readArmedId(office, item, { joinUrl: link.url, start: times?.start ?? null });
       state.armedId = armedId;
       say(

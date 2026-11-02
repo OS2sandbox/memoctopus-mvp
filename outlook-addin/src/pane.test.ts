@@ -32,8 +32,16 @@ const main = /<main>[\s\S]*<\/main>/.exec(html)![0];
 const text = (id: string) => document.getElementById(id)!.textContent ?? '';
 const visible = (id: string) => !document.getElementById(id)!.hidden;
 
-/** An appointment in Outlook's organizer form, with working custom properties. */
-function fakeOutlook({ body = `<a href="${JOIN}">Deltag</a>`, props: initial = {} as Record<string, unknown> } = {}) {
+/**
+ * An appointment in Outlook's organizer form, with working custom properties.
+ * `series`: a recurring series itself, or one of its occurrences; `legacy` is an
+ * Outlook without Mailbox 1.7, where neither can be read.
+ */
+function fakeOutlook({
+  body = `<a href="${JOIN}">Deltag</a>`,
+  props: initial = {} as Record<string, unknown>,
+  series = 'none' as 'none' | 'series' | 'occurrence' | 'legacy',
+} = {}) {
   const store: Record<string, unknown> = { ...initial };
   const ok = <T>(value: T): AsyncResult<T> => ({ status: 'succeeded', value });
   const props: CustomProperties = {
@@ -47,6 +55,15 @@ function fakeOutlook({ body = `<a href="${JOIN}">Deltag</a>`, props: initial = {
     end: { getAsync: (cb: (r: AsyncResult<Date>) => void) => cb(ok(END)) },
     body: { getAsync: (_coercion: string, cb: (r: AsyncResult<string>) => void) => cb(ok(body)) },
     loadCustomPropertiesAsync: (cb: (r: AsyncResult<CustomProperties>) => void) => cb(ok(props)),
+    ...(series === 'legacy'
+      ? {}
+      : {
+          seriesId: series === 'occurrence' ? 'AAMkSERIES' : null,
+          recurrence: {
+            getAsync: (cb: (r: AsyncResult<unknown>) => void) =>
+              cb(ok(series === 'none' ? null : { recurrenceType: 'weekly' })),
+          },
+        }),
   } as unknown as OrganizerItem;
   const office = {
     onReady: async () => ({ host: 'Outlook', platform: 'OfficeOnline' }),
@@ -241,6 +258,27 @@ describe('start', () => {
 
     expect(text('status')).toMatch(/send invitationen/);
     expect(visible('arm')).toBe(false);
+  });
+
+  // Arming sets recordAutomatically on the one Teams meeting a series shares, so
+  // Teams records every occurrence. Said up front; arming is not blocked.
+  it.each(['series', 'occurrence'] as const)('warns that Teams records the whole series (%s)', async (series) => {
+    (globalThis as { Office?: unknown }).Office = fakeOutlook({ series }).office;
+
+    await start();
+
+    expect(visible('series')).toBe(true);
+    expect(text('series')).toMatch(/del af en serie\.\s+Teams optager alle møder i serien/);
+    expect(visible('arm')).toBe(true);
+  });
+
+  it.each(['none', 'legacy'] as const)('says nothing about a series for a single meeting (%s)', async (series) => {
+    (globalThis as { Office?: unknown }).Office = fakeOutlook({ series }).office;
+
+    await start();
+
+    expect(visible('series')).toBe(false);
+    expect(visible('arm')).toBe(true);
   });
 
   it('needs Outlook', async () => {
