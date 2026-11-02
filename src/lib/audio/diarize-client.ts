@@ -117,8 +117,8 @@ export async function finishDiarization(meetingId: string, turns: SpeakerTurn[] 
   }
 }
 
-// Convenience for callers that start and finish in one place.
-export async function diarizeAndApply(meetingId: string, audio: Blob): Promise<void> {
+// Start and finish in one place (the safety net below).
+async function diarizeAndApply(meetingId: string, audio: Blob): Promise<void> {
   await finishDiarization(meetingId, await startDiarization(meetingId, audio));
 }
 
