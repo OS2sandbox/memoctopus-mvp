@@ -1,9 +1,32 @@
 'use client';
 
-import React, { useEffect, useId, useRef } from 'react';
+import React, { useEffect, useId, useReducer, useRef } from 'react';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 import { seenKey, useOnboarding } from '@/lib/onboarding/context';
 import { findStep } from '@/lib/onboarding/steps';
+
+// Below dialogs and their overlay (z-50 in components/ui/dialog.tsx), above the
+// sticky top bar (40). Above a modal, the bubble could be read but not dismissed.
+const HINT_Z_INDEX = 45;
+
+/**
+ * Whether a modal (a Radix Dialog or AlertDialog, a modal menu) has the rest of the
+ * page blocked. Radix marks that by setting `pointer-events: none` on <body>, so a
+ * hint underneath could not be dismissed and Escape meant for the modal would
+ * dismiss the hint as well, unread. Read straight from the DOM on each render; the
+ * observer only re-renders when it changes, and only runs while `watch` is set, so
+ * just the one hint that is due to show pays for it.
+ */
+function usePageBlockedByModal(watch: boolean): boolean {
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    if (!watch) return;
+    const observer = new MutationObserver(rerender);
+    observer.observe(document.body, { attributes: true, attributeFilter: ['style'] });
+    return () => observer.disconnect();
+  }, [watch]);
+  return watch && typeof document !== 'undefined' && document.body.style.pointerEvents === 'none';
+}
 
 /**
  * Wraps a target element and, the first time this step hasn't been seen,
@@ -54,7 +77,10 @@ export function OnboardingHint({
 
   // Never overlap the welcome dialog — it should be the only thing on screen
   // until the user closes/skips it, after which the hint queue can take over.
-  const open = !showWelcome && pending && isActive(key, instanceId);
+  const due = !showWelcome && pending && isActive(key, instanceId);
+  // Nor any other modal: wait it out and come back when it closes.
+  const blockedByModal = usePageBlockedByModal(due);
+  const open = due && !blockedByModal;
 
   // A hint should be visible at most once: if the user navigates away while
   // it's showing (instead of clicking "forstået"), the unmount below would
@@ -106,7 +132,7 @@ export function OnboardingHint({
             onOpenAutoFocus={(e) => e.preventDefault()}
             onEscapeKeyDown={dismiss}
             style={{
-              zIndex: 60,
+              zIndex: HINT_Z_INDEX,
               maxWidth: 280,
               background: 'var(--accent-ink)',
               color: '#fff',

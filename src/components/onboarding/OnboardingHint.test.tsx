@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import React from 'react';
+import React, { useState } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, fireEvent, act } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react';
 import { OnboardingProvider } from '@/lib/onboarding/context';
 import { OnboardingHint } from './OnboardingHint';
 import { getStep } from '@/lib/onboarding/steps';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 
 const fetchMock = vi.fn();
 
@@ -214,6 +215,51 @@ describe('OnboardingHint — queue across different steps', () => {
 
     fireEvent.click(screen.getByText('forstået'));
     expect(screen.getByText(copyOf(C))).toBeTruthy();
+  });
+});
+
+// A modal dialog (z-50) blocks the rest of the page with pointer-events: none on
+// <body>. A hint drawn above it could be read but not dismissed, and Escape meant
+// for the dialog dismissed the hint too, unread.
+describe('OnboardingHint — modal dialogs', () => {
+  function Page() {
+    const [open, setOpen] = useState(false);
+    return (
+      <Provider>
+        <OnboardingHint stepId={A}>
+          <span>anchor</span>
+        </OnboardingHint>
+        <button onClick={() => setOpen(true)}>åbn dialog</button>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogContent>
+            <DialogTitle>En dialog</DialogTitle>
+          </DialogContent>
+        </Dialog>
+      </Provider>
+    );
+  }
+
+  it('draws the bubble below dialogs', () => {
+    render(<Page />);
+    const wrapper = screen.getByText(copyOf(A)).closest('[data-radix-popper-content-wrapper]') as HTMLElement;
+    expect(Number(wrapper.style.zIndex)).toBeLessThan(50);
+  });
+
+  it('steps aside while a modal dialog is open and comes back, unread, when it closes', async () => {
+    render(<Page />);
+    expect(screen.getByText(copyOf(A))).toBeTruthy();
+
+    fireEvent.click(screen.getByText('åbn dialog'));
+    expect(screen.getByRole('dialog', { name: 'En dialog' })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(copyOf(A))).toBeNull());
+
+    await act(async () => {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'En dialog' })).toBeNull());
+
+    await waitFor(() => expect(screen.getByText(copyOf(A))).toBeTruthy());
+    expect(saves()).toEqual([]);
   });
 });
 
