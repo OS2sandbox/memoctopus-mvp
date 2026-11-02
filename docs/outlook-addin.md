@@ -60,6 +60,7 @@ On the **existing** app registration the dashboard signs in with (the one in
 
 ```bash
 OUTLOOK_ADDIN_ENABLED=true   # needs TEAMS_GRAPH_ENABLED=true and a tenant-id MICROSOFT_TENANT_ID
+OUTLOOK_ADDIN_ALLOWED_USERS=someone@example.dk   # optional: only these users; empty = everyone
 docker compose … up -d app   # a restart is enough; the add-in is built into the image
 ```
 

@@ -25,7 +25,7 @@ import { outlookAddinConfig } from '@/lib/auth/providers';
 
 export const ADDIN_SCOPE = 'access_as_user';
 
-export type AddinAuthErrorCode = 'disabled' | 'missing_token' | 'invalid_token' | 'no_account';
+export type AddinAuthErrorCode = 'disabled' | 'missing_token' | 'invalid_token' | 'no_account' | 'not_allowed';
 
 /** Danish, user-safe: shown in the add-in's pane. */
 const MESSAGES: Record<AddinAuthErrorCode, string> = {
@@ -34,6 +34,7 @@ const MESSAGES: Record<AddinAuthErrorCode, string> = {
   invalid_token: 'Dit Microsoft-login kunne ikke godkendes. Luk ruden og prøv igen.',
   no_account:
     'Du skal logge ind på OS2taletiltekst med Microsoft én gang, før du kan bruge knappen i Outlook.',
+  not_allowed: 'Outlook-tilføjelsesprogrammet er ikke slået til for dig endnu. Kontakt jeres IT-administrator.',
 };
 
 const STATUS: Record<AddinAuthErrorCode, number> = {
@@ -41,7 +42,21 @@ const STATUS: Record<AddinAuthErrorCode, number> = {
   missing_token: 401,
   invalid_token: 401,
   no_account: 403,
+  not_allowed: 403,
 };
+
+/**
+ * OUTLOOK_ADDIN_ALLOWED_USERS: comma-separated e-mail addresses that may use the
+ * add-in, matched case-insensitively against the user's OS2taletiltekst e-mail.
+ * Unset or empty: everyone. Set to anything else, it fails closed (a list that
+ * parses to no addresses lets nobody in). For trying the add-in out on a live
+ * server, on top of whatever the admin assigned in Outlook and Entra.
+ */
+export function addinAllowedEmails(): Set<string> | null {
+  const raw = process.env.OUTLOOK_ADDIN_ALLOWED_USERS?.trim();
+  if (!raw) return null;
+  return new Set(raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
+}
 
 export class AddinAuthError extends Error {
   readonly code: AddinAuthErrorCode;
@@ -143,9 +158,21 @@ export async function userIdForClaims(claims: AddinClaims): Promise<string> {
   return result.rows[0].user_id;
 }
 
+/** Throws not_allowed unless the user is on OUTLOOK_ADDIN_ALLOWED_USERS (when it is set). */
+export async function assertAddinAllowed(userId: string): Promise<void> {
+  const allowed = addinAllowedEmails();
+  if (!allowed) return;
+  const result = await pool.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId]);
+  const email = result.rows[0]?.email?.trim().toLowerCase();
+  if (!email || !allowed.has(email)) {
+    throw new AddinAuthError('not_allowed', `user ${userId} is not on OUTLOOK_ADDIN_ALLOWED_USERS`);
+  }
+}
+
 /**
  * The whole gate for an add-in request: the feature is on, a bearer token is
- * present and valid, and it belongs to a known user. Returns that user's id.
+ * present and valid, it belongs to a known user, and that user is allowed.
+ * Returns that user's id.
  */
 export async function authenticateAddinRequest(headers: Headers): Promise<string> {
   const config = outlookAddinConfig();
@@ -153,5 +180,7 @@ export async function authenticateAddinRequest(headers: Headers): Promise<string
   const token = bearerToken(headers.get('authorization'));
   if (!token) throw new AddinAuthError('missing_token');
   const claims = await verifyAddinToken(token, config);
-  return userIdForClaims(claims);
+  const userId = await userIdForClaims(claims);
+  await assertAddinAllowed(userId);
+  return userId;
 }
