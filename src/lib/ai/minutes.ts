@@ -2,7 +2,7 @@ import type OpenAI from 'openai';
 import type { ChatCompletion } from 'openai/resources/chat/completions';
 import { TranscriptSegment } from '@/types';
 import { TranscriptChapter } from '@/lib/ai/chapters';
-import { getLlmClient, llmModel } from './llm-client';
+import { bundledVllmChatParams, getLlmClient, llmModel } from './llm-client';
 import {
   charsPerToken,
   countTokens,
@@ -116,7 +116,7 @@ type ChatParams = OpenAI.Chat.ChatCompletionCreateParamsNonStreaming;
 // still overflow it: the user then gets the "too long" message, not a generic server error.
 async function complete(params: ChatParams): Promise<ChatCompletion> {
   try {
-    return await getLlmClient().chat.completions.create(params);
+    return await getLlmClient().chat.completions.create({ ...params, ...bundledVllmChatParams() });
   } catch (err) {
     if (isContextLengthError(err)) {
       throw new MinutesTooLongError(
@@ -180,12 +180,22 @@ async function _summarizePart(text: string, title: string): Promise<string> {
     messages: [{ role: 'user', content: buildSummaryPrompt(text, title) }],
   });
 
+  const finishReason = response.choices[0]?.finish_reason;
+  const summary = response.choices[0]?.message?.content?.trim();
+  // Nothing at all is not a summary: written up as an empty section, that part of the
+  // meeting would silently vanish from the referat. Typically a reasoning model that spent
+  // its whole cap thinking (finish_reason "length").
+  if (!summary) {
+    throw new Error(
+      `[minutes] the model returned an empty summary for "${title}" (finish_reason=${finishReason ?? 'none'})`,
+    );
+  }
   // A summary cut off at its cap is still a usable (slightly shorter) bullet list, and it
   // is only an input to the referat — failing the whole meeting over it would be worse.
-  if (response.choices[0]?.finish_reason === 'length') {
+  if (finishReason === 'length') {
     console.warn(`[minutes] summary of "${title}" hit its ${SUMMARY_MAX_OUTPUT_TOKENS}-token cap`);
   }
-  return response.choices[0]?.message?.content?.trim() ?? '';
+  return summary;
 }
 
 // A stretch of the meeting to summarise: a chapter, or the whole transcript.

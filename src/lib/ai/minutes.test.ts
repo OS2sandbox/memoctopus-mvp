@@ -137,6 +137,48 @@ describe('generateReferatBody', () => {
   });
 });
 
+// ─── backend-specific request fields ─────────────────────────────────────────
+
+describe('generateReferatBody — thinking mode', () => {
+  const ENV = process.env;
+
+  beforeEach(() => {
+    process.env = { ...ENV };
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.LLM_BASE_URL;
+    delete process.env.LLM_MODEL;
+    mockComplete.mockReset();
+    mockComplete.mockResolvedValue(openaiResponse('referat'));
+    // No tokenizer: the bundled vLLM is not running in a unit test.
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false })));
+  });
+
+  afterEach(() => {
+    process.env = ENV;
+    vi.unstubAllGlobals();
+  });
+
+  // A reasoning model spends max_tokens on its hidden thinking first and can come back
+  // with nothing. The bundled vLLM's chat template takes a switch for that.
+  it('switches thinking off on the bundled vLLM', async () => {
+    await generateReferatBody(sampleSegments, baseSpec);
+
+    expect(mockComplete.mock.calls[0][0].chat_template_kwargs).toEqual({ enable_thinking: false });
+  });
+
+  // OpenAI rejects unknown request fields, and a custom endpoint may be anything.
+  it.each([
+    ['hosted OpenAI', { OPENAI_API_KEY: 'sk-test' }],
+    ['a custom LLM_BASE_URL', { LLM_BASE_URL: 'http://my-llm:8000/v1' }],
+  ])('sends no chat_template_kwargs to %s', async (_label, env) => {
+    Object.assign(process.env, env);
+
+    await generateReferatBody(sampleSegments, baseSpec);
+
+    expect(mockComplete.mock.calls[0][0]).not.toHaveProperty('chat_template_kwargs');
+  });
+});
+
 // ─── context budget ───────────────────────────────────────────────────────────
 
 // Limits: 8000-token window, 1000 output tokens → a transcript budget of roughly 16k chars
@@ -354,6 +396,41 @@ describe('generateReferatBody — context budget', () => {
     expect(lastContent(calls[0])).toContain('"Kapitel A"');
     expect(lastContent(calls[1])).toContain('"Kapitel B"');
     expect(isSummaryCall(calls[2])).toBe(false);
+  });
+
+  it('writes the referat from a second summary round when the first is still too long', async () => {
+    // First-round summaries together overflow the 8000-token window; the second round
+    // condenses them, and the referat is written from that.
+    mockComplete.mockImplementation(async (req: { messages: { content: string }[] }) => {
+      const prompt = lastContent(req);
+      if (!isSummaryCall(req)) return openaiResponse('REFERAT');
+      return openaiResponse(prompt.includes('"Opsummering') ? '- ANDEN-RUNDE' : `- ${'y'.repeat(6_000)}`);
+    });
+
+    const result = await generateReferatBody(longTranscript(40, 1000), baseSpec);
+
+    expect(result.body).toBe('REFERAT');
+    const calls = mockComplete.mock.calls.map((c) => c[0]);
+    expect(calls.some((c) => isSummaryCall(c) && lastContent(c).includes('"Opsummering'))).toBe(true);
+    const referatCall = calls[calls.length - 1];
+    expect(lastContent(referatCall)).toContain('ANDEN-RUNDE');
+    expect(lastContent(referatCall)).not.toContain('yyyy');
+  });
+
+  it.each([
+    ['empty', { content: '' }],
+    ['null', { content: null }],
+    ['whitespace', { content: '  \n ' }],
+  ])('fails instead of dropping a chapter when a summary comes back %s', async (_label, message) => {
+    mockComplete.mockImplementation(async (req: { messages: { content: string }[] }) =>
+      isSummaryCall(req)
+        ? { choices: [{ message, finish_reason: 'length' }] }
+        : openaiResponse('REFERAT'),
+    );
+
+    await expect(generateReferatBody(longTranscript(40, 1000), baseSpec)).rejects.toThrow(
+      /empty summary/,
+    );
   });
 
   it('throws MinutesTruncatedError when the model hits its output limit', async () => {

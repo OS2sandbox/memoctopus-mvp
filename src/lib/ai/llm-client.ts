@@ -31,6 +31,15 @@ export function usingHostedOpenAI(): boolean {
   return hasOpenAIKey() && !process.env.LLM_BASE_URL?.trim();
 }
 
+// Extra request fields for the bundled vLLM only: switch the chat template's thinking mode
+// off. A reasoning model (Qwen3 and the like) otherwise spends max_tokens on a hidden
+// thinking block first and can come back with an empty answer. Hosted OpenAI rejects
+// unknown request fields, and a custom LLM_BASE_URL may be any server, so neither gets it.
+// Templates without the switch ignore it.
+export function bundledVllmChatParams(): { chat_template_kwargs?: { enable_thinking: boolean } } {
+  return usingHostedApi() ? {} : { chat_template_kwargs: { enable_thinking: false } };
+}
+
 function llmBaseURL(): string {
   const explicit = process.env.LLM_BASE_URL?.trim();
   if (explicit) return explicit.replace(/\/+$/, '');
