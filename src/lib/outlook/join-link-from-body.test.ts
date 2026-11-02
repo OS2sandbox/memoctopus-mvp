@@ -507,10 +507,14 @@ describe('extractJoinLinkFromBody — size and time', () => {
     ['entity starts', fill('&a')],
     ['a URL ending in many closing brackets', `https://teams.microsoft.com/meet/1?p=x${')'.repeat(KB400)}`],
     ['nested %25', `https://eur02.safelinks.protection.outlook.com/?url=${'%25'.repeat(KB400 / 3)}teams.microsoft.com/meet/1/`],
-  ])('finishes a 400 KB pathological body (%s) in under 200 ms', (_label, body) => {
+  ])('finishes a 400 KB pathological body (%s) in under a second', (_label, body) => {
+    // Guards against super-linear regex backtracking, which turns a body this size
+    // into seconds or minutes. Alone this runs in well under 200 ms; the budget is
+    // wide because the full suite runs files in parallel and a tight wall-clock
+    // limit then fails on CPU contention, not on the code.
     extractJoinLinkFromBody(body.slice(0, 1000)); // warm the JIT
     const started = performance.now();
     extractJoinLinkFromBody(body);
-    expect(performance.now() - started).toBeLessThan(200);
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });
