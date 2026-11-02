@@ -4,7 +4,8 @@ import { buildManifest } from '@/lib/outlook/manifest';
 
 /**
  * The add-in's manifest, for the admin to upload in Integrated Apps. Built from
- * BETTER_AUTH_URL, the public URL this server already answers sign-ins on. Only
+ * BETTER_AUTH_URL, the public URL this server already answers sign-ins on, and
+ * OUTLOOK_ADDIN_ID when a second deployment shares the tenant. Only
  * served while the add-in is switched on, so a deployment without it does not
  * hand out a manifest for a button that would only fail.
  */

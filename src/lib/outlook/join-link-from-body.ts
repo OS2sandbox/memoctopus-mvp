@@ -3,9 +3,8 @@
  *
  * The Outlook add-in has nothing else to go on: AppointmentCompose exposes no
  * online-meeting or join-URL property, so the invitation body Teams writes into
- * the meeting is the only source (plan §3 F1). The same function is meant to run
- * in the add-in's task pane and, later, on the server (package 6), so it is plain
- * string work with no DOM.
+ * the meeting is the only source. It runs in the add-in's task pane and in the
+ * Node tests alike, so it is plain string work with no DOM.
  *
  * What it accepts:
  *   - an HTML body (`body.getAsync(Html)`) or a plain-text one (`Text`), or a
@@ -23,9 +22,11 @@
  * scan can know (classes, `font-size:0`, off-screen positioning) — and it cannot
  * catch the remaining case at all: the organizer deletes their own Teams block and
  * pastes another meeting's whole block in its place. That body is indistinguishable
- * from a genuine one. The only defence is on the server: the add-in sends the item's
- * start and end along with the link, and the server MUST refuse when they differ
- * from the start and end Graph returns for the resolved meeting (packages 3 and 6).
+ * from a genuine one, and the server does not catch it either: Graph knows only the
+ * series' window for a recurring meeting, so the appointment's own times cannot be
+ * checked against it. What bounds it is that the server treats the link exactly
+ * like one pasted into the dashboard: Graph resolves only a meeting the signed-in
+ * user is invited to, and only its organizer can switch recording on.
  *
  * Validation and Safe Links unwrapping are not done here: every candidate goes
  * through `validateTeamsUrl()` from `src/lib/teams/url.ts`, so a link accepted
@@ -45,17 +46,19 @@
 
 import { extractJoinContext, isAllowedTeamsHost, isSafeLinksHost, validateTeamsUrl } from '@/lib/teams/url';
 
-/** Where the winning link was found, best first. */
-export type JoinLinkSource = 'invite-block' | 'href' | 'text';
+/** Where a link was found, best first. Decides which of two spellings of one
+ *  meeting's link is kept, and lets Microsoft's invitation block outrank links the
+ *  organizer typed. Internal: the pane needs only the link. */
+type JoinLinkSource = 'invite-block' | 'href' | 'text';
 
 /** Bodies above this are refused unread. A Teams invitation is a few KB; Outlook
  *  references inline images by `cid:` rather than embedding them. */
 export const MAX_BODY_LENGTH = 1_000_000;
 
 export type JoinLinkFromBody =
-  | { ok: true; url: string; source: JoinLinkSource }
+  | { ok: true; url: string }
   /** Nothing that looks like a Teams join link. In new Outlook / on the web, this is
-   *  what an appointment looks like before it has been sent (plan §3 F1). */
+   *  what an appointment looks like before it has been sent. */
   | { ok: false; reason: 'none' }
   /** Something looks like a Teams join link but fails validation: `http:`, userinfo
    *  or a port, a broken or too deeply nested Safe Links wrapper, a link cut off
@@ -70,8 +73,6 @@ export type JoinLinkFromBody =
   | { ok: false; reason: 'multiple_distinct'; urls: string[] }
   /** Longer than `MAX_BODY_LENGTH`. */
   | { ok: false; reason: 'too_large' };
-
-export type JoinLinkFailureReason = Extract<JoinLinkFromBody, { ok: false }>['reason'];
 
 const SOURCE_RANK: Record<JoinLinkSource, number> = { 'invite-block': 0, href: 1, text: 2 };
 
@@ -92,7 +93,7 @@ const NAMED_ENTITIES: Record<string, string> = {
 
 /** Decodes the HTML entities a mail body realistically carries. Single pass, so
  *  `&amp;lt;` becomes `&lt;`, not `<`. Unknown or out-of-range entities are kept. */
-export function decodeHtmlEntities(input: string): string {
+function decodeHtmlEntities(input: string): string {
   return input.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, (match, entity: string) => {
     if (entity[0] === '#') {
       const code =
@@ -467,7 +468,7 @@ export function extractJoinLinkFromBody(body: string): JoinLinkFromBody {
 
   if (byMeeting.size === 1) {
     const [only] = byMeeting.values();
-    return { ok: true, url: only.url, source: only.source };
+    return { ok: true, url: only.url };
   }
   if (byMeeting.size > 1) {
     return { ok: false, reason: 'multiple_distinct', urls: [...byMeeting.values()].map((h) => h.url) };

@@ -18,6 +18,8 @@ function enable() {
   process.env.MICROSOFT_CLIENT_ID = CLIENT;
   process.env.MICROSOFT_CLIENT_SECRET = 'not-sent-anywhere';
   process.env.MICROSOFT_TENANT_ID = TENANT;
+  delete process.env.TEAMS_DELETE_RECORDING;
+  delete process.env.TEAMS_ARTIFACT_MODE;
 }
 
 describe('GET /api/outlook/config', () => {
@@ -36,7 +38,22 @@ describe('GET /api/outlook/config', () => {
       clientId: CLIENT,
       tenantId: TENANT,
       scopes: [`api://${CLIENT}/access_as_user`],
+      deletesRecording: true,
     });
     expect(text).not.toContain('not-sent-anywhere');
+  });
+
+  // The pane tells the user what happens to the recording, so it must not promise
+  // a deletion this deployment does not do.
+  it('says the recording is kept when TEAMS_DELETE_RECORDING=false', async () => {
+    enable();
+    process.env.TEAMS_DELETE_RECORDING = 'false';
+    expect(await (await GET()).json()).toMatchObject({ deletesRecording: false });
+  });
+
+  it('says the recording is kept in transcript-only mode', async () => {
+    enable();
+    process.env.TEAMS_ARTIFACT_MODE = 'transcript-only';
+    expect(await (await GET()).json()).toMatchObject({ deletesRecording: false });
   });
 });

@@ -104,14 +104,70 @@ export async function readTimes(office: OfficeApi, item: OrganizerItem): Promise
   return start && end && end > start ? { start, end } : null;
 }
 
+/**
+ * Whether the appointment is a recurring series or an occurrence of one. Needs
+ * Mailbox 1.7; an older Outlook, or a failed read, counts as not recurring.
+ */
+export function readIsRecurring(office: OfficeApi, item: OrganizerItem): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      if (item.seriesId) return resolve(true);
+      if (!item.recurrence) return resolve(false);
+      item.recurrence.getAsync((res) =>
+        resolve(res.status === office.AsyncResultStatus.Succeeded && res.value != null),
+      );
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
 // --- The add-in's note on the appointment ---------------------------------------
 //
 // Which OS2taletiltekst meeting this appointment was armed as, so reopening the
 // pane can say "slået til" and offer "Slå fra". Custom properties are private to
-// this add-in and travel with the appointment. Best effort throughout: without
-// them the pane just offers "Slå til" again, which is idempotent on the server.
+// this add-in and travel with the appointment, which is also their danger: the
+// organizer can swap the Teams link, copy an armed appointment, or open an
+// occurrence that inherited the series' properties. So the note records the link
+// and start it was written for, and is trusted only while both still match;
+// otherwise "Slå fra" would switch off a different meeting.
+//
+// Best effort throughout: without a trusted note the pane offers "Slå til" again,
+// which is idempotent on the server (it finds the meeting's row and re-arms it).
 
-const MEETING_ID_KEY = 'os2taletiltekstMeetingId';
+/** The property's name, unchanged from when it held a bare meeting id. */
+const NOTE_KEY = 'os2taletiltekstMeetingId';
+
+const MEETING_ID_RE = /^[\w-]{1,80}$/;
+
+/** The appointment as the pane reads it now. */
+export interface MeetingNow {
+  joinUrl: string;
+  start: Date | null;
+}
+
+/** What the note says, stored as JSON. */
+interface ArmedNote {
+  id: string;
+  joinUrl: string;
+  start: string;
+}
+
+/** The note, or null for anything else: nothing, garbage, or a bare id an earlier
+ *  version wrote, which says nothing about which meeting it was for. */
+function parseNote(value: unknown): ArmedNote | null {
+  if (typeof value !== 'string') return null;
+  let note: unknown;
+  try {
+    note = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  const { id, joinUrl, start } = (note ?? {}) as Record<string, unknown>;
+  if (typeof id !== 'string' || !MEETING_ID_RE.test(id)) return null;
+  if (typeof joinUrl !== 'string' || typeof start !== 'string') return null;
+  return { id, joinUrl, start };
+}
 
 function loadProps(office: OfficeApi, item: OrganizerItem): Promise<CustomProperties | null> {
   return new Promise((resolve) => {
@@ -135,16 +191,30 @@ function save(office: OfficeApi, props: CustomProperties): Promise<void> {
   });
 }
 
-export async function readArmedId(office: OfficeApi, item: OrganizerItem): Promise<string | null> {
-  const props = await loadProps(office, item);
-  const value = props?.get(MEETING_ID_KEY);
-  return typeof value === 'string' && /^[\w-]{1,80}$/.test(value) ? value : null;
+/**
+ * The OS2taletiltekst meeting this appointment was armed as, if the note was
+ * written for this very link and start. A start that cannot be read matches
+ * nothing: it is what tells the occurrences of a series apart.
+ */
+export async function readArmedId(office: OfficeApi, item: OrganizerItem, now: MeetingNow): Promise<string | null> {
+  const note = parseNote((await loadProps(office, item))?.get(NOTE_KEY));
+  if (!note || !now.start) return null;
+  return note.joinUrl === now.joinUrl && note.start === now.start.toISOString() ? note.id : null;
 }
 
-export async function writeArmedId(office: OfficeApi, item: OrganizerItem, id: string | null): Promise<void> {
+/** Notes the armed meeting with the link and start it was armed for, or removes the note. */
+export async function writeArmedId(
+  office: OfficeApi,
+  item: OrganizerItem,
+  armed: { id: string; joinUrl: string; start: Date } | null,
+): Promise<void> {
   const props = await loadProps(office, item);
   if (!props) return;
-  if (id) props.set(MEETING_ID_KEY, id);
-  else props.remove(MEETING_ID_KEY);
+  if (armed) {
+    const note: ArmedNote = { id: armed.id, joinUrl: armed.joinUrl, start: armed.start.toISOString() };
+    props.set(NOTE_KEY, JSON.stringify(note));
+  } else {
+    props.remove(NOTE_KEY);
+  }
   await save(office, props);
 }
