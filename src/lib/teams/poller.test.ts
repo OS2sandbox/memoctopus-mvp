@@ -509,6 +509,22 @@ describe('pollMeeting', () => {
     );
   });
 
+  it('waits for a new sign-in, instead of failing the meeting, when a scope is missing', async () => {
+    mockGet.mockResolvedValue(row());
+    mockProcess.mockRejectedValueOnce(
+      new GraphError('consent_required', 'Log ind med Microsoft igen.', { status: 403 }),
+    );
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockMark).toHaveBeenCalledWith(
+      'u1',
+      'm1',
+      { state: 'needs_reauth', failureReason: 'Log ind med Microsoft igen.' },
+      { incrementAttempts: true },
+    );
+  });
+
   it('maps transcripts_disabled to failed with the admin-guide message', async () => {
     mockGet.mockResolvedValue(row());
     mockProcess.mockRejectedValueOnce(new GraphError('transcripts_disabled', 'nej'));

@@ -464,6 +464,14 @@ describe('classifyGraphError', () => {
     ).toBe('transcripts_disabled');
   });
 
+  // A sign-in that lacks a scope is cured by signing in again, exactly like an
+  // expired one. As `graph_error` it failed the meeting for good instead.
+  it('names consent_required as reauth_required', () => {
+    expect(
+      classifyGraphError(new GraphError('consent_required', 'x', { status: 403, missingScopes: ['a'] })),
+    ).toBe('reauth_required');
+  });
+
   it('names a retryable GraphError of any other code as retryable', () => {
     expect(classifyGraphError(new GraphError('unavailable', 'x', { status: 503 }))).toBe('retryable');
     expect(classifyGraphError(new GraphError('http', 'x', { status: 429 }))).toBe('retryable');

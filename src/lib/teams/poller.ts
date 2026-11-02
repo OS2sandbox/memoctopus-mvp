@@ -276,10 +276,10 @@ export async function cleanUpRecording(
     }
   } catch (err) {
     const kind = classifyGraphError(err);
-    // A sign-in that predates the files scope is cured by the next sign-in, which
-    // the dashboard is already asking for — worth the same day's patience.
-    const needsSignIn = err instanceof GraphError && err.code === 'consent_required';
-    const final = (kind === 'graph_error' && !needsSignIn) || kind === 'transcripts_disabled';
+    // A sign-in that predates the files scope (reauth_required, like an expired
+    // one) is cured by the next sign-in, which the dashboard is already asking
+    // for — worth the same day's patience.
+    const final = kind === 'graph_error' || kind === 'transcripts_disabled';
     // `ready` was stamped when the cleanup was queued, so this is its age.
     const age = now.getTime() - (row.lastPolledAt ?? now).getTime();
     if (!final && age < RECORDING_CLEANUP_GIVE_UP_MS) {

@@ -101,7 +101,9 @@ export type GraphErrorKind =
 
 export function classifyGraphError(err: unknown): GraphErrorKind {
   if (!(err instanceof GraphError)) return 'unknown';
-  if (err.code === 'reauth_required') return 'reauth_required';
+  // A missing scope is cured the same way as an expired sign-in: by signing in
+  // again, which the dashboard asks for. It is not this meeting's failure.
+  if (err.code === 'reauth_required' || err.code === 'consent_required') return 'reauth_required';
   if (err.code === 'transcripts_disabled') return 'transcripts_disabled';
   if (err.retryable) return 'retryable';
   return 'graph_error';
