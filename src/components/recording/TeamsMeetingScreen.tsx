@@ -68,6 +68,15 @@ const SLOWDOWN_AFTER_MS = 60 * 60_000;
 export const ORGANIZER_REQUEST =
   'Kan du slå "Optag og transskriber automatisk" til i mødeindstillingerne for dette møde? Så laver OS2taletiltekst referatet automatisk.';
 
+/** Resolves after `ms`, or at once when `signal` aborts. */
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+  });
+}
+
 /**
  * Fill in what the server-side run produced before Gennemgang opens: the speaker
  * names Teams gave us, and the meeting duration.
@@ -80,19 +89,23 @@ export const ORGANIZER_REQUEST =
  * Two answers: 404 (the run has not finished — keep asking) or the meta record.
  * Anything else (401, 500 …) throws, so the screen can say so instead of carrying
  * on to a review with an empty participant list.
+ *
+ * Returns false when `signal` aborted (the screen went away) before anything was
+ * written, so the caller knows not to navigate.
  */
-export async function collectTeamsArtifacts(meetingId: string): Promise<void> {
+async function collectTeamsArtifacts(meetingId: string, signal: AbortSignal): Promise<boolean> {
   const deadline = Date.now() + META_COLLECT_DEADLINE_MS;
-  while (Date.now() < deadline) {
+  while (!signal.aborted && Date.now() < deadline) {
     let res: Response;
     try {
       res = await fetch(`/api/meetings/${meetingId}/pending-meta`);
     } catch {
-      await new Promise((r) => setTimeout(r, META_COLLECT_RETRY_MS));
+      await pause(META_COLLECT_RETRY_MS, signal);
       continue;
     }
+    if (signal.aborted) return false;
     if (res.status === 404) {
-      await new Promise((r) => setTimeout(r, META_COLLECT_RETRY_MS));
+      await pause(META_COLLECT_RETRY_MS, signal);
       continue;
     }
     if (!res.ok) throw new Error(`pending-meta svarede ${res.status}`);
@@ -101,16 +114,19 @@ export async function collectTeamsArtifacts(meetingId: string): Promise<void> {
       participants?: string[];
       durationSeconds?: number | null;
     };
+    if (signal.aborted) return false;
     await updateMeeting(meetingId, {
       status: 'processing',
       audioDurationSeconds: body.durationSeconds ?? null,
       ...(body.participants?.length ? { participants: body.participants } : {}),
     });
-    return;
+    return true;
   }
+  if (signal.aborted) return false;
   // Nothing to collect within the deadline: the server-side transcript may still
   // be all there is, so continue to the review screen rather than dead-ending.
   await updateMeeting(meetingId, { status: 'processing' });
+  return true;
 }
 
 /**
@@ -201,9 +217,22 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
 
   const scheduledEndRef = useRef<string | null>(null);
 
+  // One controller per mount, aborted on unmount. A poll in flight — above all the
+  // pending-meta loop of a `ready` meeting, which can run for minutes — checks it
+  // after every await, so it stops asking and never pulls a user who has already
+  // left back to the review. Declared before the effect that starts polling, so
+  // it exists by the time the first poll reads it.
+  const lifeRef = useRef<AbortController>(new AbortController());
+  useEffect(() => {
+    const life = new AbortController();
+    lifeRef.current = life;
+    return () => life.abort();
+  }, []);
+
   const poll = useCallback(
     async (explicitForce: boolean) => {
       if (inFlightRef.current) return;
+      const { signal } = lifeRef.current;
       // The first tick after the meeting's scheduled end asks the server to
       // actually talk to Graph, so artifacts are picked up without waiting for
       // the background poller.
@@ -219,6 +248,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
       if (force) setChecking(true);
       try {
         const res = await fetch(`/api/teams/meetings/${meetingId}${force ? '?poll=1' : ''}`);
+        if (signal.aborted) return;
         if (res.status === 404) {
           setError('Mødet er ikke registreret hos Teams. Prøv at tilføje mødelinket igen.');
           return;
@@ -228,6 +258,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
           return;
         }
         const data = (await res.json()) as TeamsMeetingStatus;
+        if (signal.aborted) return;
         setError(null);
         if (explicitForce && data.state === 'fetching') {
           setLastCheck(
@@ -249,20 +280,24 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
         if (data.state === 'ready' && !routedRef.current) {
           routedRef.current = true;
           // Checked first: with the copy gone there is nothing to open a review on.
-          if (await serverCopyGone(meetingId)) {
+          const gone = await serverCopyGone(meetingId);
+          if (signal.aborted) return;
+          if (gone) {
             routedRef.current = false;
             setCopyGone(true);
             return;
           }
           try {
-            await collectTeamsArtifacts(meetingId);
+            if (!(await collectTeamsArtifacts(meetingId, signal))) return;
           } catch (err) {
+            if (signal.aborted) return;
             console.error('[TeamsMeetingScreen] kunne ikke hente transskriptionen:', err);
             // "Tjek nu" polls again, and a ready row then takes this path afresh.
             routedRef.current = false;
             setError('Kunne ikke hente transskriptionen fra serveren. Tryk "Tjek nu" for at prøve igen.');
             return;
           }
+          if (signal.aborted) return;
           routerRef.current.push(`/meeting/${meetingId}/review`);
         }
       } catch (err) {

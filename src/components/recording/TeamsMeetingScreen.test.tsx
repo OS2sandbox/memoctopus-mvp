@@ -630,6 +630,42 @@ describe('TeamsMeetingScreen — the hand-off of the collected transcript', () =
     expect(mockPush).not.toHaveBeenCalled();
   });
 
+  // The removed bot screen had the same guard ("stops pulling the recording when
+  // the screen unmounts"). Without it, a user who had already left was pulled
+  // back to the review the moment the run finished.
+  it('stops collecting, and does not navigate, once the screen unmounts', async () => {
+    vi.useFakeTimers();
+    metaResponse = failing(404);
+    respondWith(statusBody({ state: 'ready' }));
+    const { unmount } = renderScreen();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+    expect(calls((u) => u.endsWith('/pending-meta')).length).toBeGreaterThan(0);
+
+    unmount();
+    const before = calls((u) => u.endsWith('/pending-meta')).length;
+    metaResponse = jsonMeta({ status: 'no-recording', participants: ['Mette Hansen'], durationSeconds: 60 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+
+    expect(calls((u) => u.endsWith('/pending-meta')).length).toBe(before);
+    expect(mockUpdateMeeting).not.toHaveBeenCalled();
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('does not navigate when the screen unmounts while the copy check is in flight', async () => {
+    let answer!: (v: unknown) => void;
+    transcriptResponse = new Promise((r) => { answer = r; });
+    respondWith(statusBody({ state: 'ready' }));
+    const { unmount } = renderScreen();
+    await waitFor(() => expect(calls((u) => u.endsWith('/pending-transcript')).length).toBe(1));
+
+    unmount();
+    await act(async () => { answer(jsonMeta({ status: 'ready', segments: [], diarized: true })); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+
+    expect(calls((u) => u.endsWith('/pending-meta'))).toHaveLength(0);
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
   it('leaves the server copy alone: acknowledging it is the job of whoever saves it', async () => {
     respondWith(statusBody({ state: 'ready' }));
     renderScreen();
