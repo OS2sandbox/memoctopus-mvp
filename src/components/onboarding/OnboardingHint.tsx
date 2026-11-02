@@ -114,9 +114,16 @@ export function OnboardingHint({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, key, instanceId]);
 
+  // The bubble is portaled to the end of <body> and deliberately takes no focus,
+  // so screen readers need telling: the copy is a polite live region, and the
+  // anchor points at it while it is open.
+  const copyId = `${instanceId}-copy`;
+
   return (
     <PopoverPrimitive.Root open={open}>
-      <PopoverPrimitive.Anchor asChild>{children}</PopoverPrimitive.Anchor>
+      <PopoverPrimitive.Anchor asChild aria-describedby={open ? copyId : undefined}>
+        {children}
+      </PopoverPrimitive.Anchor>
       {open && step && (
         <PopoverPrimitive.Portal>
           <PopoverPrimitive.Content
@@ -147,7 +154,9 @@ export function OnboardingHint({
             }}
           >
             {/* pre-line: longer copy separates its paragraphs with blank lines */}
-            <span style={{ whiteSpace: 'pre-line' }}>{step.copy}</span>
+            <span id={copyId} role="status" aria-live="polite" style={{ whiteSpace: 'pre-line' }}>
+              {step.copy}
+            </span>
             <button
               type="button"
               onClick={dismiss}

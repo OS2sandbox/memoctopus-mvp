@@ -218,6 +218,29 @@ describe('OnboardingHint — queue across different steps', () => {
   });
 });
 
+// The bubble is portaled to the end of <body> and focus stays put, so without
+// these a screen-reader user never hears that a hint appeared.
+describe('OnboardingHint — screen readers', () => {
+  it('announces the copy politely and ties it to the anchor while open', async () => {
+    render(
+      <Provider>
+        <OnboardingHint stepId={A}>
+          <button>arkiv</button>
+        </OnboardingHint>
+      </Provider>,
+    );
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent(copyOf(A));
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(screen.getByRole('button', { name: 'arkiv' })).toHaveAttribute('aria-describedby', status.id);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('forstået'));
+    });
+    expect(screen.getByRole('button', { name: 'arkiv' })).not.toHaveAttribute('aria-describedby');
+  });
+});
+
 // A modal dialog (z-50) blocks the rest of the page with pointer-events: none on
 // <body>. A hint drawn above it could be read but not dismissed, and Escape meant
 // for the dialog dismissed the hint too, unread.
