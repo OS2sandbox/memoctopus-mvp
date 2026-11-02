@@ -12,6 +12,7 @@ import {
   oidcConfig,
   warnDeprecatedAuthEnv,
 } from './providers';
+import { entraUserInfoOverrides } from './entra-user-info';
 
 // Resolved in ./providers so the sign-in page renders exactly what is
 // registered here.
@@ -63,7 +64,12 @@ export const auth = betterAuth({
   // it matches the account on the provider's subject claim, so a user whose mail attribute
   // or display name later changes keeps the address they first signed up with. That
   // happened here: an account created under one address kept showing it after the user
-  // moved to a syddjurs.dk mailbox, which reads as being logged in as the wrong person.
+  // moved to a new mailbox, which reads as being logged in as the wrong person.
+  //
+  // mapProfileToUser vets the claims before better-auth writes them: an email another user
+  // already holds is not taken over (it would break the UNIQUE constraint and lock this
+  // user out of Microsoft sign-in), and a verified user is not downgraded. See
+  // entra-user-info.ts.
   //
   // Only for one named tenant (MICROSOFT_TENANT_ID). There the tenant admin controls the
   // `email` claim. Under the multi-tenant authorities (blank, common, organizations,
@@ -86,7 +92,11 @@ export const auth = betterAuth({
     ? {
         microsoft: {
           ...microsoft,
-          ...(microsoftSingleTenant() && { overrideUserInfoOnSignIn: true }),
+          ...(microsoftSingleTenant() && {
+            overrideUserInfoOnSignIn: true,
+            mapProfileToUser: (profile: { sub?: unknown; email?: unknown }) =>
+              entraUserInfoOverrides(profile),
+          }),
           ...(graphScopes.length > 0 && { scope: graphScopes }),
         },
       }

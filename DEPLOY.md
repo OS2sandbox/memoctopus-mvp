@@ -1,4 +1,4 @@
-# Deploying Referat
+# Deploying OS2taletiltekst
 
 The deployment is **two compose files** so the app and the GPU services have
 independent lifecycles and the whole thing is portable across servers (move =
@@ -7,7 +7,7 @@ clone repo → edit `.env` → `compose up`).
 | File | Contains | Needs a GPU? |
 |---|---|---|
 | `docker-compose.yml` | **base ("small")**: app, Postgres, migrate | no |
-| `docker-compose.ai.yml` | **AI overlay**: hviske (vLLM STT) + diarization, and repoints the app at them | yes |
+| `docker-compose.ai.yml` | **AI overlay**: hviske (vLLM STT), the diarization service and the vLLM chat model, and repoints the app at them | yes |
 
 The overlay is **not standalone** — it's always merged on top of the base.
 
@@ -110,7 +110,7 @@ account accepted the terms once; access is auto-granted).
 ## Microsoft login and Teams referater
 
 Microsoft Entra ID is configured separately from the generic OIDC provider below,
-because it does double duty: it signs users in **and** it is how Memoctopus reaches
+because it does double duty: it signs users in **and** it is how OS2taletiltekst reaches
 Microsoft Graph to collect Teams transcripts. Like all auth configuration it is read
 at runtime — `docker compose up -d app` is enough, no `--build`.
 
@@ -145,8 +145,10 @@ Microsoft login enables itself as soon as `MICROSOFT_CLIENT_ID` and
 3. Teams referater are **off by default**. To use them, first give the same app
    registration these **delegated** Microsoft Graph permissions with **admin
    consent granted** for the organisation, and only then set
-   `TEAMS_GRAPH_ENABLED=true` (see the warning below). All three are scoped to individual meetings the user is already
-   party to — no calendar or mailbox access is requested:
+   `TEAMS_GRAPH_ENABLED=true` (see the warning below). The three `OnlineMeeting*`
+   permissions are scoped to meetings the user is party to. `Files.ReadWrite` is not:
+   it reaches the signed-in user's whole OneDrive, although the app only ever uses it
+   on the Recordings folder (see below). No calendar or mailbox access is requested:
 
    | Permission | Used for |
    |---|---|
@@ -156,8 +158,8 @@ Microsoft login enables itself as soon as `MICROSOFT_CLIENT_ID` and
    | `Files.ReadWrite` | Deleting that recording from the organizer's OneDrive once it is transcribed |
    | `User.Read`, `offline_access` | Identity, and refreshing access without re-login |
 
-   `OnlineMeetingRecording.Read.All` is the widest of the three (the video of every
-   meeting the user can reach). With `TEAMS_ARTIFACT_MODE=transcript-only` it is
+   Of the meeting permissions, `OnlineMeetingRecording.Read.All` is the widest (the
+   video of every meeting the user can reach). With `TEAMS_ARTIFACT_MODE=transcript-only` it is
    neither requested nor needed, so leave it out of the registration.
 
    `Files.ReadWrite` is there for one call: Graph cannot delete a meeting
@@ -315,16 +317,23 @@ three values to their `OIDC_*` names and set `OIDC_PROVIDER_ID=authentik`.
 ## Long meetings: diarization timeout
 
 Diarization requests are cut off after 5 minutes by default. For long recordings
-(or CPU diarization) raise both values in `.env`, keeping them equal:
+(or CPU diarization) raise the limit in `.env`:
 
 ```bash
-DIARIZATION_TIMEOUT_MS=3600000              # server → diarization service
-NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS=3600000  # browser → app
+DIARIZATION_TIMEOUT_MS=3600000   # 1 hour
 ```
 
-`DIARIZATION_TIMEOUT_MS` is read at runtime. `NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS` is
-compiled into the browser bundle, so after changing it run
-`docker compose up -d --build app`; a plain restart keeps the old value.
+It is read at runtime, so `docker compose up -d app` is enough. It is the only limit
+the app sets: the browser waits for the app, and the app gives up on the diarization
+service after this long.
+
+A reverse proxy in front of the app must allow at least as long, because the diarize
+request returns nothing until the whole recording has been processed. The bundled
+`nginx/nginx.conf` gives `/api/meetings/<id>/diarize` a `proxy_read_timeout` of
+`3600s` (everything else keeps 300 s), so with a higher `DIARIZATION_TIMEOUT_MS` raise
+that too. Behind a different proxy or load balancer, set its idle/read timeout for that
+route the same way; otherwise it cuts the request off first and the user sees speaker
+recognition as failed.
 
 ## Long meetings: LLM context window
 
@@ -333,6 +342,11 @@ that fits goes to the model in one call; a longer one is summarised in parts and
 referat is written from the summaries, so a long meeting never overflows the window or
 comes back cut off. If even that is not possible the user sees a clear error instead of
 an incomplete referat.
+
+Against vLLM (bundled or a compatible `LLM_BASE_URL`) the app counts tokens exactly with
+the model's own tokenizer (`POST /tokenize`), checks every part it sends, and keeps room
+for the chat template. Against hosted OpenAI, which has no tokenizer endpoint, it
+estimates pessimistically.
 
 | Variable | Default | Meaning |
 |---|---|---|

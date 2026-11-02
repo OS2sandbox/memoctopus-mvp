@@ -1,15 +1,18 @@
-# Referat
+# OS2taletiltekst
 
-Next.js app for recording meetings, generating transcripts, and producing
-summaries (referater). Uses hviske-ensemble for speech-to-text and OpenAI for
-chapter, topic, minutes generation, and PII detection.
+Next.js app for recording meetings, transcribing them and writing Danish referater
+(meeting minutes). Speech-to-text is hviske-ensemble with pyannote speaker
+diarization; chapters, PII detection and the referat itself come from a chat model —
+hosted OpenAI, a self-hosted vLLM (the `docker-compose.ai.yml` overlay) or any
+OpenAI-compatible endpoint. See DEPLOY.md for running it.
 
 ## Setup
 
 1. `cp .env.example .env` and fill in the values.
 2. `npm install`
 3. `npm run db:migrate`
-4. `npm run dev`
+4. `npm run dev` — Next.js on port 3004, plus an SSH tunnel to a remote diarization
+   service when `DIARIZATION_SSH` is set in `.env` (`scripts/diar-tunnel.sh`).
 
 ## Microsoft Teams (via Microsoft Graph)
 

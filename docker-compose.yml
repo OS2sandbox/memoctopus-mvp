@@ -1,6 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# BASE STACK ("small"): the CPU-only application — Next.js app, Teams bot,
-# Postgres. Self-contained; talks to hviske/diarization hosted ELSEWHERE
+# BASE STACK ("small"): the CPU-only application — the Next.js app (which also
+# polls Microsoft Graph for Teams meetings) and Postgres. Self-contained; talks to
+# hviske/diarization hosted ELSEWHERE
 # (set HVISKE_URL / DIARIZATION_URL in .env to the remote box):
 #
 #     docker compose up -d
@@ -62,9 +63,6 @@ services:
       # not here on purpose — it is runtime-only, see `environment` below.
       args:
         NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:8080}
-        # Browser-side diarization timeout. Build-time only: set it → rebuild.
-        # Keep it equal to DIARIZATION_TIMEOUT_MS below.
-        NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS: ${NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS:-300000}
     ports:
       - "${APP_PORT:-8080}:3000"
     # Lets the container reach services on the Docker host (e.g. an SSH tunnel to a
@@ -83,6 +81,10 @@ services:
       # (vllm-chat). LLM_BASE_URL / LLM_MODEL override the endpoint + model explicitly.
       - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_MODEL=${LLM_MODEL:-}
+      # The model the bundled vllm-chat serves (docker-compose.ai.yml --model). The app
+      # requests the same one on that backend unless LLM_MODEL says otherwise; blank =
+      # the overlay's default, which the app knows too (DEFAULT_VLLM_MODEL).
+      - VLLM_MODEL=${VLLM_MODEL:-}
       # Context window and output cap of the chat model; minutes generation sizes its
       # prompt from them. The app itself falls back to VLLM_CHAT_MAX_MODEL_LEN when
       # LLM_CONTEXT_TOKENS is unset, so one number configures both vLLM and the app —
@@ -98,13 +100,20 @@ services:
       - HVISKE_API_KEY=${HVISKE_API_KEY}
       - HVISKE_MODEL=${HVISKE_MODEL:-syvai/hviske-ensemble}
       - HVISKE_DIARIZE=${HVISKE_DIARIZE:-false}
+      # Cap on batch requests in flight to hviske per recording (default: all at once).
+      - HVISKE_BATCH_CONCURRENCY=${HVISKE_BATCH_CONCURRENCY:-}
       - ASR_LANGUAGE=${ASR_LANGUAGE:-da}
       - DIARIZATION_URL=${DIARIZATION_URL}
       - DIARIZATION_API_KEY=${DIARIZATION_API_KEY}
-      # Server-side diarization timeout (app → diarization service). Runtime: change
-      # it and `up -d app` is enough. Pair with NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS.
+      # How long a diarization request may run (app → diarization service). The only
+      # limit: the browser waits for the app. Runtime: change it and `up -d app` is
+      # enough. A reverse proxy in front must allow as long (nginx/nginx.conf).
       - DIARIZATION_TIMEOUT_MS=${DIARIZATION_TIMEOUT_MS:-300000}
       - AUDIO_STORAGE_PATH=/audio-storage
+      # Skabelon sharing: the copy/paste code is on unless "false"; the import link
+      # is off unless "true". Read per request.
+      - SKABELON_SHARE_CODE=${SKABELON_SHARE_CODE:-}
+      - SKABELON_SHARE_LINK=${SKABELON_SHARE_LINK:-}
       - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:8080}
       # Auth. All read at runtime — change these and `up -d app` is enough, no rebuild.
       - EMAIL_PASSWORD_ENABLED=${EMAIL_PASSWORD_ENABLED:-}
@@ -124,6 +133,9 @@ services:
       # and only together with TEAMS_GRAPH_ENABLED and a tenant-specific
       # MICROSOFT_TENANT_ID. Read per request: a restart is enough.
       - OUTLOOK_ADDIN_ENABLED=${OUTLOOK_ADDIN_ENABLED:-}
+      # The add-in's manifest id (a GUID). Only for a second deployment in the same
+      # tenant, which needs an id of its own; see docs/outlook-addin.md.
+      - OUTLOOK_ADDIN_ID=${OUTLOOK_ADDIN_ID:-}
       - GRAPH_BASE_URL=${GRAPH_BASE_URL:-}
       - TEAMS_SPOKEN_LANGUAGE=${TEAMS_SPOKEN_LANGUAGE:-}
       # prefer-recording (default) re-transcribes Teams' recording with hviske and

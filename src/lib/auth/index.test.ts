@@ -84,7 +84,7 @@ describe('auth config — Graph scopes and token storage', () => {
     ]);
   });
 
-  // The Syddjurs tenant has not granted admin consent for the *.Read.All scopes,
+  // A tenant may not have granted admin consent for the *.Read.All scopes,
   // and Entra answers "Need admin approval" to any authorize request that names
   // them, so requesting them unconditionally locks every Microsoft user out.
   it('requests no scope beyond better-auth\'s defaults while Teams is disabled', async () => {

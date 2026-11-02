@@ -76,6 +76,14 @@ describe('Microsoft: stored name and email follow Entra', () => {
     // guarantee it is verified or unchanged.
     const microsoft = await microsoftOptions(env);
     expect(microsoft).not.toHaveProperty('overrideUserInfoOnSignIn');
+    expect(microsoft).not.toHaveProperty('mapProfileToUser');
+  });
+
+  // Never a blind overwrite: an email another user holds would break users.email's
+  // UNIQUE constraint and lock this user out of Microsoft sign-in (entra-user-info.ts).
+  it('vets the claims before they are written', async () => {
+    const microsoft = await microsoftOptions({ MICROSOFT_TENANT_ID: '11111111-2222-3333-4444-555555555555' });
+    expect(microsoft.mapProfileToUser).toBeTypeOf('function');
   });
 
   it('leaves the rest of the provider config alone', async () => {
