@@ -241,7 +241,9 @@ describe('processTeamsMeeting — recording + transcript', () => {
 
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
 
-    expect(outcome).toMatchObject({ status: 'ready', mode: 'transcript-only' });
+    // No recordingBytes: the recording is what a later "Hent igen" needs to try
+    // our own transcription again, so it must not be queued for deletion.
+    expect(outcome).toMatchObject({ status: 'ready', mode: 'transcript-only', recordingBytes: null });
     expect(mockStorePendingTranscript).toHaveBeenCalledWith('meet-1', {
       status: 'ready',
       diarized: true,
@@ -258,7 +260,7 @@ describe('processTeamsMeeting — recording + transcript', () => {
 
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
 
-    expect(outcome).toMatchObject({ status: 'ready', mode: 'transcript-only' });
+    expect(outcome).toMatchObject({ status: 'ready', mode: 'transcript-only', recordingBytes: null });
     expect(mockMarkNoRecording).toHaveBeenCalled();
   });
 

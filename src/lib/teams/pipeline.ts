@@ -38,9 +38,11 @@ export type PipelineOutcome =
       transcriptId: string | null;
       recordingId: string | null;
       /**
-       * Size of the recording this run downloaded, or null when it downloaded
-       * none. It is how the poller finds the same file in the organizer's OneDrive
-       * to delete it (recording-cleanup.ts).
+       * Size of the recording our own transcription was made from — what finds
+       * the same file in the organizer's OneDrive to delete it once the user has
+       * the transcript (recording-cleanup.ts). Null when no recording was
+       * transcribed, or when the run fell back to Teams' own transcript: the
+       * recording then stays, for a later run to try again.
        */
       recordingBytes: number | null;
     }
@@ -307,7 +309,11 @@ async function runRecordingWithTranscript(
     durationSeconds: durationFromCues(cues),
   });
 
-  return { status: 'ready', mode, speakers, transcriptId, recordingId, recordingBytes: bytes };
+  // The recording is only done with once our own transcription of it is what the
+  // user gets. After a fall back to Teams' text it is what a later "Hent igen"
+  // needs to try again, so it is not offered up for deletion.
+  const ours = mode === 'recording+transcript';
+  return { status: 'ready', mode, speakers, transcriptId, recordingId, recordingBytes: ours ? bytes : null };
 }
 
 /**
