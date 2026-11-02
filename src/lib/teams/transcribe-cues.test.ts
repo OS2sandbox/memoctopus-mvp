@@ -48,6 +48,33 @@ beforeEach(() => {
 });
 
 describe('transcribeAlongCues', () => {
+  // An hour-long meeting is well over a hundred slices. With no limit set, every
+  // one of them went to the GPU box at once.
+  it('keeps at most 8 slices in flight when HVISKE_BATCH_CONCURRENCY is unset', async () => {
+    delete process.env.HVISKE_BATCH_CONCURRENCY;
+    // 30 cues a minute apart: 30 slices of a 30-minute recording.
+    const cues = Array.from({ length: 30 }, (_, i) => ({
+      speaker: 'Mette Hansen',
+      start: i * 60 + 1,
+      end: i * 60 + 5,
+      text: 'Hej.',
+    }));
+    mockDecode.mockResolvedValue(new Float32Array(30 * 60 * SAMPLE_RATE));
+    let inFlight = 0;
+    let maxInFlight = 0;
+    mockTranscribeRaw.mockImplementation(async () => {
+      maxInFlight = Math.max(maxInFlight, ++inFlight);
+      await new Promise((r) => setTimeout(r, 2));
+      inFlight--;
+      return { text: 'Hej.', latencyMs: 2 };
+    });
+
+    const result = await transcribeAlongCues(Buffer.from('mp4'), cues);
+
+    expect(result.batches).toBe(30);
+    expect(maxInFlight).toBe(8);
+  });
+
   it('sends one request per cue slice, not one per cue', async () => {
     const result = await transcribeAlongCues(Buffer.from('mp4'), CUES);
 

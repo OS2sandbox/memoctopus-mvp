@@ -26,6 +26,12 @@ export function graphDate(value: string | null | undefined): string | null {
   return isPlausible(Date.parse(value)) ? value : null;
 }
 
+/** {@link graphDate} as a Date: null when missing, unparseable or the zero sentinel. */
+export function parseGraphDate(value: string | null | undefined): Date | null {
+  const date = graphDate(value);
+  return date === null ? null : new Date(date);
+}
+
 /** A stored Date, or null when it is the zero sentinel a past release wrote. */
 export function realDate(value: Date | null | undefined): Date | null {
   if (!value) return null;

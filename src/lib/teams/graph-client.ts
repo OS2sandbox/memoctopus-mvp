@@ -1,7 +1,6 @@
 import { auth } from '@/lib/auth';
 import {
   FILES_SCOPE,
-  GRAPH_DELEGATED_SCOPES,
   teamsGraphEnabled,
   teamsGraphScopes,
 } from '@/lib/auth/providers';
@@ -12,10 +11,7 @@ import {
 // every Graph call here rides on the user's own consent. That is what lets a
 // customer set this up with one "Grant admin consent" click instead of the
 // per-user `New-CsApplicationAccessPolicy` PowerShell dance that application
-// permissions require. See docs/plans/2026-09-08-microsoft-graph-teams-integration.md §1.
-
-/** Delegated scopes the Teams integration needs. Requested at sign-in (auth/index.ts). */
-export const GRAPH_SCOPES = GRAPH_DELEGATED_SCOPES;
+// permissions require.
 
 /** Scopes an OIDC login gives us for free — never part of a consent gap. */
 const OIDC_SCOPES = new Set(['openid', 'profile', 'email', 'offline_access']);
@@ -101,7 +97,9 @@ export type GraphErrorKind =
 
 export function classifyGraphError(err: unknown): GraphErrorKind {
   if (!(err instanceof GraphError)) return 'unknown';
-  if (err.code === 'reauth_required') return 'reauth_required';
+  // A missing scope is cured the same way as an expired sign-in: by signing in
+  // again, which the dashboard asks for. It is not this meeting's failure.
+  if (err.code === 'reauth_required' || err.code === 'consent_required') return 'reauth_required';
   if (err.code === 'transcripts_disabled') return 'transcripts_disabled';
   if (err.retryable) return 'retryable';
   return 'graph_error';
@@ -144,15 +142,53 @@ const RETRY_AFTER_BUDGET_MS = 30_000;
 const UNAVAILABLE_MESSAGE = 'Microsoft er midlertidigt utilgængelig. Prøv igen om lidt.';
 const TIMEOUT_MESSAGE = 'Microsoft svarede ikke i tide. Prøv igen om lidt.';
 
+const DEFAULT_GRAPH_BASE_URL = 'https://graph.microsoft.com/v1.0';
+
+/** Microsoft Graph's hosts: the public cloud, US Government (GCC High, DoD), and 21Vianet. */
+const GRAPH_HOSTS = new Set([
+  'graph.microsoft.com',
+  'graph.microsoft.us',
+  'dod-graph.microsoft.us',
+  'microsoftgraph.chinacloudapi.cn',
+]);
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1']);
+
+/**
+ * Every Graph call carries the user's bearer token to this origin, so it may only
+ * name a Microsoft Graph cloud over https, or a local mock (scripts/mock-graph).
+ */
+function isAllowedGraphBase(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.protocol === 'https:' && GRAPH_HOSTS.has(url.hostname)) return true;
+  return (url.protocol === 'https:' || url.protocol === 'http:') && LOCAL_HOSTS.has(url.hostname);
+}
+
+let warnedAbout: string | null = null;
+
 /**
  * Graph base URL. `||` not `??` — docker-compose passes unset variables through
- * as empty strings (same hazard documented in src/lib/ai/diarization.ts).
+ * as empty strings (same hazard documented in src/lib/ai/diarization.ts). A value
+ * outside {@link isAllowedGraphBase} is ignored, with one warning.
  */
 export function graphOrigin(): string {
-  return (process.env.GRAPH_BASE_URL?.trim() || 'https://graph.microsoft.com/v1.0').replace(
-    /\/+$/,
-    '',
-  );
+  const configured = process.env.GRAPH_BASE_URL?.trim();
+  if (!configured) return DEFAULT_GRAPH_BASE_URL;
+  if (!isAllowedGraphBase(configured)) {
+    if (warnedAbout !== configured) {
+      warnedAbout = configured;
+      console.warn(
+        `[teams] GRAPH_BASE_URL=${configured} is not a Microsoft Graph endpoint or a local mock; `
+        + `using ${DEFAULT_GRAPH_BASE_URL}`,
+      );
+    }
+    return DEFAULT_GRAPH_BASE_URL;
+  }
+  return configured.replace(/\/+$/, '');
 }
 
 // Entra returns scopes space-delimited; better-auth persists them comma-joined.

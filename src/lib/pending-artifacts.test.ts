@@ -6,7 +6,7 @@ import path from 'path';
 vi.mock('fs/promises');
 
 import {
-  markNoRecording,
+  storePendingMeta,
   readPendingMeta,
   readPendingTranscript,
   storePendingTranscript,
@@ -192,9 +192,9 @@ describe('bot meeting ownership', () => {
   });
 });
 
-// ─── markNoRecording ──────────────────────────────────────────────────────────
+// ─── storePendingMeta ──────────────────────────────────────────────────────────
 
-describe('markNoRecording', () => {
+describe('storePendingMeta', () => {
   beforeEach(() => {
     vi.mocked(fs.mkdir).mockResolvedValue(undefined as never);
     vi.mocked(fs.writeFile).mockResolvedValue(undefined as never);
@@ -205,7 +205,7 @@ describe('markNoRecording', () => {
   });
 
   it('writes an empty meta by default', async () => {
-    await markNoRecording('m1');
+    await storePendingMeta('m1');
     const [, payload] = vi.mocked(fs.writeFile).mock.calls.at(-1)!;
     expect(JSON.parse(payload as string)).toMatchObject({
       participants: [],
@@ -216,7 +216,7 @@ describe('markNoRecording', () => {
   it('keeps the speaker names of a transcript-only meeting', async () => {
     // No mode stashes audio, but Teams' transcript still names every speaker, and
     // that is what pre-fills the participant list in Gennemgang.
-    await markNoRecording('m1', {
+    await storePendingMeta('m1', {
       participants: ['Mette Hansen', 'Jens Poulsen'],
       durationSeconds: 540,
     });
@@ -496,7 +496,7 @@ describe('acknowledgePendingTranscript', () => {
       Buffer.from(JSON.stringify({ status: 'ready', segments: [], createdAt: 1 })) as never,
     );
 
-    await acknowledgePendingTranscript('m1');
+    expect(await acknowledgePendingTranscript('m1')).toBe(true);
 
     expect(unlinked().sort()).toEqual(['m1.meta.json', 'm1.owner.json', 'm1.transcript.json']);
   });
@@ -505,15 +505,15 @@ describe('acknowledgePendingTranscript', () => {
     vi.mocked(fs.readFile).mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
     vi.mocked(fs.unlink).mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
 
-    await expect(acknowledgePendingTranscript('m1')).resolves.toBeUndefined();
+    await expect(acknowledgePendingTranscript('m1')).resolves.toBe(true);
   });
 
-  it('never removes a run that is in progress', async () => {
+  it('never removes a run that is in progress, and says the acknowledgement was stale', async () => {
     vi.mocked(fs.readFile).mockResolvedValue(
       Buffer.from(JSON.stringify({ status: 'processing', createdAt: Date.now() })) as never,
     );
 
-    await acknowledgePendingTranscript('m1');
+    expect(await acknowledgePendingTranscript('m1')).toBe(false);
 
     expect(unlinked()).toEqual([]);
   });

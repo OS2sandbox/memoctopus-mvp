@@ -39,7 +39,7 @@ describe('transcribeVadBatches', () => {
     expect(result).toEqual({ segments: [], totalBatches: 0, totalSpeechSeconds: 0, failedSeconds: 0 });
   });
 
-  it('dispatches ALL batches simultaneously by default', async () => {
+  it('keeps at most 8 batches in flight by default', async () => {
     let inFlight = 0;
     let maxInFlight = 0;
     mockTranscribeRaw.mockImplementation(async () => {
@@ -52,7 +52,7 @@ describe('transcribeVadBatches', () => {
 
     const batches = Array.from({ length: 30 }, (_, i) => makeBatch(i * 27));
     await transcribeVadBatches(batches);
-    expect(maxInFlight).toBe(30);
+    expect(maxInFlight).toBe(8);
   });
 
   it('respects HVISKE_BATCH_CONCURRENCY as backpressure', async () => {

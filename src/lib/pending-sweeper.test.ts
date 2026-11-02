@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('@/lib/pending-artifacts', () => ({ sweepExpired: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@/lib/teams/scratch', () => ({ clearStaleScratch: vi.fn().mockResolvedValue(undefined) }));
 
 import { sweepExpired } from '@/lib/pending-artifacts';
+import { clearStaleScratch } from '@/lib/teams/scratch';
 import { startPendingSweeper, SWEEP_INTERVAL_MS } from './pending-sweeper';
 
 const mockSweep = vi.mocked(sweepExpired);
+const mockClearScratch = vi.mocked(clearStaleScratch);
 
 /** The sweeper is off under Vitest, like the poller; these tests act as production. */
 function asProduction() {
@@ -59,6 +62,16 @@ describe('startPendingSweeper', () => {
     start();
     await vi.advanceTimersByTimeAsync(0);
     expect(mockSweep).toHaveBeenCalledTimes(1);
+  });
+
+  // A run that died mid-download left its mp4/wav behind for good.
+  it("clears scratch audio left by runs that died, once at start-up", async () => {
+    vi.useFakeTimers();
+    asProduction();
+    mockClearScratch.mockClear();
+    start();
+    await vi.advanceTimersByTimeAsync(SWEEP_INTERVAL_MS * 2);
+    expect(mockClearScratch).toHaveBeenCalledTimes(1);
   });
 
   it('starts once: a second call neither adds a second timer nor a second sweep loop', async () => {

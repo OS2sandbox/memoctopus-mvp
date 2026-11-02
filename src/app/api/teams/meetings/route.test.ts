@@ -89,14 +89,18 @@ beforeEach(() => {
     transcriptId: null,
     recordingId: null,
     recordingCleanup: null,
+    recordingCleanupAt: null,
     recordingBytes: null,
     origin: null,
     openedAt: null,
+    recollectedAt: null,
+    recordingStalls: 0,
     state: 'awaiting_teams' as const,
     eventId: null,
     armResult: 'not_organizer' as const,
     createdAt: new Date('2026-09-08T09:00:00Z'),
     ...row,
+    occurrenceWindow: row.occurrenceWindow ?? false,
   }));
 });
 
@@ -195,6 +199,8 @@ describe('POST /api/teams/meetings', () => {
         eventId: 'evt-2',
         scheduledStart: new Date('2026-09-15T10:00:00.000Z'),
         scheduledEnd: new Date('2026-09-15T11:00:00.000Z'),
+        // …and marks it, so the poller does not put the series' window back.
+        occurrenceWindow: true,
       }),
     );
   });
@@ -234,6 +240,7 @@ describe('POST /api/teams/meetings', () => {
       expect.objectContaining({
         eventId: null,
         scheduledEnd: new Date('2026-09-08T11:00:00.000Z'),
+        occurrenceWindow: false,
       }),
     );
   });

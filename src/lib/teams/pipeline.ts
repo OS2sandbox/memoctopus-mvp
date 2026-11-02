@@ -8,8 +8,7 @@ import { parseVtt, segmentsFromVtt, speakersFromVtt, type VttCue } from './vtt';
 import {
   storePendingTranscript,
   readPendingTranscript,
-  readPendingMeta,
-  markNoRecording,
+  storePendingMeta,
   setMeetingOwner,
   type PendingTranscript,
 } from '@/lib/pending-artifacts';
@@ -17,13 +16,13 @@ import { transcribeRecording } from '@/lib/transcribe-recording';
 import type { TranscriptSegment } from '@/types';
 import { transcribeAlongCues } from './transcribe-cues';
 import { withMeetingLock } from './meeting-lock';
+import { assertSafeMeetingId } from './meeting-id';
+import { teamsScratchRoot } from './scratch';
 import { artifactMode } from './artifact-mode';
-
-export { artifactMode };
 
 // One meeting's worth of work: ask Graph what artifacts exist, decide which of the
 // three processing modes applies, and land the result in the pending stash the
-// client already knows how to collect (/api/meetings/[id]/pending-audio + /pending-transcript).
+// client collects (/api/meetings/[id]/pending-meta + /pending-transcript).
 //
 // Idempotent: a meeting whose stash is already 'ready' is not reprocessed, and a
 // run in flight reports 'pending' rather than starting a second download.
@@ -33,14 +32,16 @@ export type ProcessingMode = 'recording+transcript' | 'transcript-only' | 'recor
 export type PipelineOutcome =
   | {
       status: 'ready';
+      /** Which of the three modes produced the transcript. */
       mode: ProcessingMode;
-      speakers: string[];
       transcriptId: string | null;
       recordingId: string | null;
       /**
-       * Size of the recording this run downloaded, or null when it downloaded
-       * none. It is how the poller finds the same file in the organizer's OneDrive
-       * to delete it (recording-cleanup.ts).
+       * Size of the recording our own transcription was made from — what finds
+       * the same file in the organizer's OneDrive to delete it once the user has
+       * the transcript (recording-cleanup.ts). Null when no recording was
+       * transcribed, or when the run fell back to Teams' own transcript: the
+       * recording then stays, for a later run to try again.
        */
       recordingBytes: number | null;
     }
@@ -53,7 +54,11 @@ export type PipelineOutcome =
   // was why pressing "Tjek nu" during a ten-minute download answered "Teams har ikke
   // frigivet transskriptionen endnu" — true of nothing, and indistinguishable from
   // being stuck.
-  | { status: 'pending'; transient?: true; phase?: 'waiting' | 'working' }
+  //
+  // `recordingStalled`: the recording itself timed out or was cut off mid-download.
+  // Transient too, but counted apart (see PipelineMeeting.recordingUnreachable):
+  // Teams has published it, so waiting for Teams will not help.
+  | { status: 'pending'; transient?: true; phase?: 'waiting' | 'working'; recordingStalled?: true }
   | { status: 'failed'; reason: string };
 
 export interface PipelineMeeting {
@@ -69,6 +74,30 @@ export interface PipelineMeeting {
    * Graph may still list: Teams' own transcript is all that is left to collect.
    */
   recordingDeleted?: boolean;
+  /**
+   * The recording's download has stalled too often. Teams' own transcript is then
+   * collected as it is, without waiting out the grace for a recording we already
+   * have but cannot fetch.
+   */
+  recordingUnreachable?: boolean;
+}
+
+/** Why a meeting with nothing but an unreachable recording failed. */
+export const RECORDING_UNREACHABLE_MESSAGE =
+  'Optagelsen fra Teams kunne ikke hentes: overførslen fra Microsoft gik i stå gentagne gange.';
+
+/**
+ * A recording download that timed out or was cut off. Not a 429 or a 503 — those
+ * are Graph saying "not now", which says nothing about this recording.
+ */
+class RecordingStalled extends GraphError {
+  constructor(cause: GraphError) {
+    super('unavailable', cause.message, { cause });
+  }
+}
+
+function isStall(err: unknown): err is GraphError {
+  return err instanceof GraphError && err.retryable && err.status === 0;
 }
 
 /**
@@ -88,18 +117,6 @@ export const RECORDING_GRACE_ATTEMPTS = 15;
  * permanent "pending" that no later run can ever get past.
  */
 export const PROCESSING_STALE_MS = 30 * 60 * 1000;
-
-/** Same rule as the pending stash: ids become file names, so keep them inert. */
-export function assertSafeMeetingId(meetingId: string): void {
-  if (!/^[\w-]+$/.test(meetingId)) {
-    throw new Error(`Invalid meetingId: ${meetingId}`);
-  }
-}
-
-function tmpRoot(): string {
-  const base = process.env.AUDIO_STORAGE_PATH?.trim() || path.join(process.cwd(), 'audio-storage');
-  return path.join(base, 'teams-tmp');
-}
 
 /** Duration of the meeting according to the transcript: the last cue's end. */
 function durationFromCues(cues: VttCue[]): number | null {
@@ -149,13 +166,11 @@ async function runPipeline(
   // in-memory state does not.
   const existing = await readPendingTranscript(meeting.id);
   if (existing?.status === 'ready') {
-    const meta = await readPendingMeta(meeting.id);
     return {
       status: 'ready',
       // The stash does not record which mode produced it, so this reports what the
-      // current configuration would run. Nothing consumes `mode` beyond logging.
+      // current configuration would run.
       mode: artifactMode() === 'transcript-only' ? 'transcript-only' : 'recording+transcript',
-      speakers: meta?.participants ?? [],
       transcriptId: null,
       recordingId: null,
       recordingBytes: null,
@@ -169,9 +184,9 @@ async function runPipeline(
   }
 
   // Bind the stash to its owner BEFORE anything is written into it. Both
-  // hand-off routes (pending-audio, pending-transcript) deny by default when
+  // hand-off routes (pending-meta, pending-transcript) deny by default when
   // no owner file exists, so without this the meeting's real owner is answered
-  // 404 / { status: 'none' } and the hand-off can never complete.
+  // 404 and the hand-off can never complete.
   await setMeetingOwner(meeting.id, userId);
 
   let artifacts;
@@ -207,9 +222,15 @@ async function runPipeline(
   const windowEnd = realDate(meeting.scheduledEnd);
   const window = windowStart && windowEnd ? { start: windowStart, end: windowEnd } : undefined;
   const transcript = pickArtifact(artifacts.transcripts, window);
-  const skipRecording = artifactMode() === 'transcript-only' || meeting.recordingDeleted === true;
+  const skipRecording =
+    artifactMode() === 'transcript-only'
+    || meeting.recordingDeleted === true
+    || meeting.recordingUnreachable === true;
   const recording = skipRecording ? null : pickArtifact(artifacts.recordings, window);
 
+  if (!transcript && meeting.recordingUnreachable && pickArtifact(artifacts.recordings, window)) {
+    return { status: 'failed', reason: RECORDING_UNREACHABLE_MESSAGE };
+  }
   if (!transcript && !recording) return { status: 'pending' };
 
   // Teams publishes the transcript first and the recording minutes later. Taking
@@ -234,6 +255,7 @@ async function runPipeline(
     await storePendingTranscript(meeting.id, { status: 'failed' }).catch(() => {});
     const cls = classifyGraphError(err);
     if (cls === 'reauth_required' || cls === 'transcripts_disabled') throw err;
+    if (err instanceof RecordingStalled) return { status: 'pending', transient: true, recordingStalled: true };
     if (cls === 'retryable') return { status: 'pending', transient: true };
     const reason = err instanceof Error ? err.message : 'Ukendt fejl under hentning fra Microsoft Teams';
     console.error(`[teams-pipeline] ${meeting.id} failed:`, err);
@@ -269,7 +291,6 @@ async function runRecordingWithTranscript(
   recordingId: string,
 ): Promise<PipelineOutcome> {
   const cues = parseVtt(await downloadTranscriptVtt(userId, meeting.graphMeetingId, transcriptId));
-  const speakers = speakersFromVtt(cues);
   const fromTeams = segmentsFromVtt(cues);
   const { wav, bytes } = await fetchRecordingAsWav(userId, meeting, recordingId);
 
@@ -302,12 +323,16 @@ async function runRecordingWithTranscript(
 
   // After the verdict, so a run that failed transcription never advertises itself
   // as finished-with-no-audio to a client that would then stop waiting.
-  await markNoRecording(meeting.id, {
-    participants: speakers,
+  await storePendingMeta(meeting.id, {
+    participants: speakersFromVtt(cues),
     durationSeconds: durationFromCues(cues),
   });
 
-  return { status: 'ready', mode, speakers, transcriptId, recordingId, recordingBytes: bytes };
+  // The recording is only done with once our own transcription of it is what the
+  // user gets. After a fall back to Teams' text it is what a later "Hent igen"
+  // needs to try again, so it is not offered up for deletion.
+  const ours = mode === 'recording+transcript';
+  return { status: 'ready', mode, transcriptId, recordingId, recordingBytes: ours ? bytes : null };
 }
 
 /**
@@ -345,13 +370,10 @@ async function runTranscriptOnly(
     throw new Error('Transskriptionen fra Teams var tom.');
   }
 
-  // The audio route needs a meta record, or the client polls 404 forever. This is
-  // the existing "finished with nothing to transcribe" marker, so the pending-audio route
-  // answers { status: 'no-recording' } and the client goes straight to the
-  // transcript hand-off instead of waiting for a blob.
-  const speakers = speakersFromVtt(cues);
-  await markNoRecording(meeting.id, {
-    participants: speakers,
+  // The meta record is what tells the client the run has finished; without it
+  // pending-meta answers 404 until the client gives up.
+  await storePendingMeta(meeting.id, {
+    participants: speakersFromVtt(cues),
     durationSeconds: durationFromCues(cues),
   });
   await storePendingTranscript(meeting.id, { status: 'ready', segments, diarized: true });
@@ -359,7 +381,6 @@ async function runTranscriptOnly(
   return {
     status: 'ready',
     mode: 'transcript-only',
-    speakers,
     transcriptId,
     recordingId: null,
     recordingBytes: null,
@@ -381,12 +402,11 @@ async function runRecordingOnly(
     await storePendingTranscript(meeting.id, { status: 'failed' });
     throw new Error('Optagelsen fra Teams indeholdt ingen tale.');
   }
-  await markNoRecording(meeting.id, { participants: [], durationSeconds: null });
+  await storePendingMeta(meeting.id, { participants: [], durationSeconds: null });
 
   return {
     status: 'ready',
     mode: 'recording-only',
-    speakers: [],
     transcriptId: null,
     recordingId,
     recordingBytes: bytes,
@@ -423,7 +443,7 @@ async function fetchRecordingAsWav(
   recordingId: string,
 ): Promise<{ wav: Buffer; bytes: number }> {
   assertSafeMeetingId(meeting.id);
-  const root = tmpRoot();
+  const root = teamsScratchRoot();
   await fs.mkdir(root, { recursive: true });
   // A scratch directory per run, never a path derived from the meeting id alone:
   // two runs of the same meeting must not delete each other's files mid-transcode.
@@ -432,7 +452,11 @@ async function fetchRecordingAsWav(
   const wavPath = path.join(dir, 'recording.wav');
 
   try {
-    const { bytes } = await downloadRecording(userId, meeting.graphMeetingId, recordingId, mp4Path);
+    const { bytes } = await downloadRecording(userId, meeting.graphMeetingId, recordingId, mp4Path).catch(
+      (err: unknown) => {
+        throw isStall(err) ? new RecordingStalled(err) : err;
+      },
+    );
     await transcodeToWav(mp4Path, wavPath);
     return { wav: await fs.readFile(wavPath), bytes };
   } finally {

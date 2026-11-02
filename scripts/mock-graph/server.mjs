@@ -2,12 +2,12 @@
 // Mock Microsoft Graph for local testing of the Teams integration.
 //
 // Serves just enough of https://graph.microsoft.com/v1.0 for src/lib/teams/*:
-// /me, /me/calendarView, /me/onlineMeetings (filter by JoinWebUrl, get, PATCH),
+// /me, /me/onlineMeetings (filter by JoinWebUrl, get, PATCH),
 // transcripts (VTT) and recordings (302 to an off-origin blob, like real Graph).
 // Zero dependencies. Point the app at it with GRAPH_BASE_URL=http://localhost:4010/v1.0
 // and link the signed-in user to a fake Microsoft account with seed-account.mjs.
 //
-// Control endpoints (no auth):
+// Control endpoints (no auth, so the mock listens on 127.0.0.1 only):
 //   GET  /__mock/state                        everything the mock knows
 //   POST /__mock/meetings/:id/end             { transcribed?: bool, recorded?: bool } — end now
 //   POST /__mock/meetings/:id/reset           back to "not started"
@@ -84,7 +84,6 @@ function baseMeeting(id, subject, organizer, startMs, endMs, extra = {}) {
     // mock-only bookkeeping (stripped before serialising)
     _organizer: organizer,
     _ended: null, // { at, transcribed, recorded } once the meeting is over
-    _recurring: false,
     ...extra,
   };
 }
@@ -100,7 +99,6 @@ function freshState() {
     baseMeeting('mtginvitee', 'Møde hvor du kun er inviteret', OTHER, 60 * MIN, 90 * MIN),
     baseMeeting('mtgweekly', 'Ugentligt afdelingsmøde', ME, 24 * 60 * MIN, 24 * 60 * MIN + 30 * MIN, {
       meetingType: 'recurring',
-      _recurring: true,
     }),
   ];
   return {
@@ -265,33 +263,6 @@ async function readJson(req) {
   return raw ? JSON.parse(raw) : {};
 }
 
-function calendarEvents(url) {
-  const from = new Date(url.searchParams.get('startDateTime') || 0).getTime();
-  const to = new Date(url.searchParams.get('endDateTime') || 8.64e15).getTime();
-  const events = [];
-  for (const m of Object.values(state.meetings)) {
-    const occurrences = m._recurring ? [0, 7, 14].map((d) => d * 24 * 60 * MIN) : [0];
-    for (const [i, offset] of occurrences.entries()) {
-      const start = new Date(m.startDateTime).getTime() + offset;
-      const end = new Date(m.endDateTime).getTime() + offset;
-      if (end < from || start > to) continue;
-      events.push({
-        id: m._recurring ? `evt-${m.id}-occ${i}` : `evt-${m.id}`,
-        subject: m.subject,
-        start: { dateTime: new Date(start).toISOString().replace('Z', '0000'), timeZone: 'UTC' },
-        end: { dateTime: new Date(end).toISOString().replace('Z', '0000'), timeZone: 'UTC' },
-        isOnlineMeeting: true,
-        onlineMeeting: { joinUrl: m.joinWebUrl },
-        organizer: { emailAddress: { name: m._organizer.displayName, address: m._organizer.mail } },
-        seriesMasterId: m._recurring ? `series-${m.id}` : null,
-        type: m._recurring ? 'occurrence' : 'singleInstance',
-      });
-    }
-  }
-  events.sort((a, b) => a.start.dateTime.localeCompare(b.start.dateTime));
-  return events;
-}
-
 function findByJoinUrl(filter) {
   // $filter=JoinWebUrl eq '<url>' — single quotes doubled inside the literal.
   const m = /JoinWebUrl\s+eq\s+'((?:[^']|'')*)'/i.exec(filter || '');
@@ -343,7 +314,6 @@ const server = http.createServer(async (req, res) => {
     const g = p.slice('/v1.0'.length);
 
     if (g === '/me' && req.method === 'GET') return send(res, 200, ME);
-    if (g === '/me/calendarView' && req.method === 'GET') return send(res, 200, { value: calendarEvents(url) });
 
     if (g === '/me/onlineMeetings' && req.method === 'GET') {
       const m = findByJoinUrl(url.searchParams.get('$filter'));
@@ -434,7 +404,8 @@ const server = http.createServer(async (req, res) => {
 });
 
 prepareMedia();
-server.listen(PORT, () => {
+// Loopback only: the control endpoints above take no credentials.
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`[mock-graph] listening on ${ORIGIN}/v1.0  (media: ${media.how}, ${media.durationSec.toFixed(1)}s)`);
   console.log(`[mock-graph] app env: GRAPH_BASE_URL=${ORIGIN}/v1.0`);
   console.log('[mock-graph] meetings:');

@@ -1,5 +1,4 @@
 import type { TranscriptSegment } from '@/types';
-import type { SpeakerTurn } from '@/lib/ai/diarization';
 import { DEFAULT_SPEAKER_LABEL } from '@/lib/audio/speaker-labels';
 import { fillSpeakerNames } from './name-speakers';
 
@@ -13,9 +12,9 @@ import { fillSpeakerNames } from './name-speakers';
 //   00:00:03.120 --> 00:00:07.480
 //   <v Mette Hansen>Godmorgen, skal vi tage r&#39;undt om bordet?</v>
 //
-// That name is the whole point of the Graph integration (see the plan's
-// "Speaker names in Gennemgang"): hviske gives us the Danish text, Microsoft
-// gives us who said it. This module is pure — no I/O, no env — so the parsing
+// That name is the whole point of the Graph integration — it is what names the
+// speakers in Gennemgang: hviske gives us the Danish text, Microsoft gives us
+// who said it. This module is pure — no I/O, no env — so the parsing
 // rules can be pinned down by tests.
 
 export interface VttCue {
@@ -24,9 +23,6 @@ export interface VttCue {
   end: number; // seconds
   text: string; // tag-free, entity-decoded, multi-line payloads joined with a space
 }
-
-// Cues from the same speaker separated by less than this are one turn.
-const TURN_MERGE_GAP_SECONDS = 0.5;
 
 // HH:MM:SS.mmm, MM:SS.mmm, and (tolerated) a comma decimal separator from
 // SRT-flavoured exporters. Returns NaN for anything unparseable so the caller
@@ -115,25 +111,6 @@ export function parseVtt(vtt: string): VttCue[] {
   }
 
   return cues;
-}
-
-// Speaker timeline in the shape `assignSpeakers()` consumes — but with human
-// names instead of pyannote's SPEAKER_00. Cues without a voice span carry no
-// speaker information and are dropped; consecutive cues from the same person
-// separated by a breath (< 0.5 s) become one turn, so the merge onto hviske
-// segments isn't fragmented by Teams' per-sentence cue splitting.
-export function turnsFromVtt(cues: VttCue[]): SpeakerTurn[] {
-  const turns: SpeakerTurn[] = [];
-  for (const cue of cues) {
-    if (!cue.speaker) continue;
-    const last = turns[turns.length - 1];
-    if (last && last.speaker === cue.speaker && cue.start - last.end < TURN_MERGE_GAP_SECONDS) {
-      last.end = Math.max(last.end, cue.end);
-      continue;
-    }
-    turns.push({ speaker: cue.speaker, start: cue.start, end: cue.end });
-  }
-  return turns;
 }
 
 // Transcript-only mode: Teams' own text becomes the transcript directly, with no
