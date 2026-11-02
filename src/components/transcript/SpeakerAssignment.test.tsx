@@ -227,3 +227,24 @@ describe('SpeakerAssignment panel', () => {
     });
   });
 });
+
+// Teams' transcript names every speaker, so such a meeting has no unknown voice
+// and must never show a "Taler N" anywhere in the matcher.
+describe('SpeakerAssignment — a transcript Teams has named', () => {
+  it('lists no "Taler N" voice', () => {
+    setup({
+      rows: [
+        { name: 'Mette Hansen', kind: 'recognized', start: 0, end: 4 },
+        { name: 'Jens Poulsen', kind: 'recognized', start: 4, end: 8 },
+      ],
+      voices: [],
+      voicelessParticipants: [],
+      recognizedCount: 2,
+      totalVoices: 2,
+    });
+
+    expect(screen.getByText('2 / 2 stemmer genkendt')).toBeInTheDocument();
+    expect(screen.queryByText(/Taler \d/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ukendte stemmer/)).not.toBeInTheDocument();
+  });
+});

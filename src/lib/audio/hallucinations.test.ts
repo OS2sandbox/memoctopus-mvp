@@ -20,6 +20,21 @@ describe('cleanTranscribedText — subtitle credits', () => {
       'Tak skal I have for de tal, vi kigger på dem i morgen.',
     );
   });
+
+  // The credit patterns are matched on the whole text the model returned, which
+  // is a 27 s window or a Teams cue group — so an open-ended pattern dropped real
+  // speech that merely opened with the word.
+  it('keeps real speech that opens with "undertekster"', () => {
+    const text = 'Undertekster på kommunens videoer skal vi have styr på inden mødet i næste uge.';
+    expect(cleanTranscribedText(text)).toBe(text);
+  });
+
+  it('keeps a long window that opens like a credit', () => {
+    const text =
+      'Tekster af frivillige har vi talt om længe, og vi skal finde en løsning på det, '
+      + 'inden budgettet bliver lagt fast i næste måned.';
+    expect(cleanTranscribedText(text)).toBe(text);
+  });
 });
 
 describe('cleanTranscribedText — repetition loops', () => {
@@ -87,5 +102,24 @@ describe('degenerationStart', () => {
   it('points at the first echo of a repeated phrase', () => {
     const words = 'der er noget der er noget der er noget der er noget'.split(' ');
     expect(degenerationStart(words)).toBe(3);
+  });
+
+  // A word loop later in the window used to be returned before the phrase check
+  // ran, so the phrase loop in front of it was kept.
+  it('cuts at a phrase loop that comes before a later word loop', () => {
+    const words = ('vi taler om sagen og ' + 'det er fastet '.repeat(5) + 'ja ja ja ja').trim().split(' ');
+    expect(degenerationStart(words)).toBe(8);
+  });
+
+  it('cuts at the earliest loop whatever its phrase length', () => {
+    const words = ('nu ' + 'det er fastet '.repeat(4) + 'og så '.repeat(4)).trim().split(' ');
+    expect(degenerationStart(words)).toBe(4);
+  });
+});
+
+describe('cleanTranscribedText — the earliest loop wins', () => {
+  it('drops a phrase loop that a later word loop used to hide', () => {
+    const text = 'Vi taler om sagen og ' + 'det er fastet '.repeat(5) + 'ja ja ja ja';
+    expect(cleanTranscribedText(text)).toBe('Vi taler om sagen og det er fastet');
   });
 });

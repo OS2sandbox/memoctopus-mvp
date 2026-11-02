@@ -42,11 +42,13 @@ vi.mock('next/link', () => ({
 
 const mockGetAllMeetings = vi.fn();
 const mockCreateMeeting = vi.fn();
+const mockUpdateMeeting = vi.fn();
 const mockDeleteMeeting = vi.fn();
 
 vi.mock('@/lib/storage', () => ({
   getAllMeetings: (...args: unknown[]) => mockGetAllMeetings(...args),
   createMeeting: (...args: unknown[]) => mockCreateMeeting(...args),
+  updateMeeting: (...args: unknown[]) => mockUpdateMeeting(...args),
 }));
 
 // The orphan cleanup goes through the shared helper, which also unregisters the
@@ -95,6 +97,8 @@ beforeEach(() => {
   mockPush.mockReset();
   mockGetAllMeetings.mockReset();
   mockCreateMeeting.mockReset();
+  mockUpdateMeeting.mockReset();
+  mockUpdateMeeting.mockResolvedValue(undefined);
   mockSetPendingUploadFile.mockReset();
   mockDeleteMeeting.mockReset();
   mockDeleteMeeting.mockResolvedValue(undefined);
@@ -677,7 +681,7 @@ describe('OptaqPage — Teams meeting link flow', () => {
     });
   });
 
-  it('shows linkError when joinMeeting throws', async () => {
+  it('shows linkError when registering the link throws', async () => {
     mockCreateMeeting.mockRejectedValue(new Error('network error'));
     renderPage();
 
@@ -807,6 +811,87 @@ describe('OptaqPage — Teams meeting link flow', () => {
     expect(mockPush).not.toHaveBeenCalled();
   });
 
+  // The registration answers with what Teams knows about the meeting. It used to
+  // be thrown away, so every Teams meeting in the Arkiv and in exports was called
+  // "Teams-møde · <dato>", and what the user typed under mødedetaljer was ignored.
+  describe('what the meeting is called and who is in it', () => {
+    const ARMED = {
+      armed: true,
+      armResult: 'armed',
+      isOrganizer: true,
+      subject: 'Ugentligt statusmøde',
+      scheduledStart: '2026-11-04T09:00:00.000Z',
+      scheduledEnd: '2026-11-04T10:00:00.000Z',
+    };
+
+    async function pasteLink() {
+      const linkInput = screen.getByPlaceholderText('Indsæt mødelink…');
+      fireEvent.change(linkInput, { target: { value: 'https://teams.microsoft.com/abc' } });
+      await act(async () => { fireEvent.keyDown(linkInput, { key: 'Enter' }); });
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/meeting/teams-7'));
+    }
+
+    beforeEach(() => {
+      mockCreateMeeting.mockResolvedValue({ id: 'teams-7' });
+      routeFetch({ arm: () => ({ ok: true, status: 200, json: async () => ARMED }) });
+    });
+
+    it('takes the title and date from Teams when none was typed', async () => {
+      renderPage();
+      await pasteLink();
+
+      expect(mockUpdateMeeting).toHaveBeenCalledWith('teams-7', {
+        title: 'Ugentligt statusmøde',
+        recordedAt: '2026-11-04T09:00:00.000Z',
+      });
+    });
+
+    it('keeps the title the user typed', async () => {
+      renderPage();
+      fireEvent.change(screen.getByPlaceholderText('Navngiv mødet…'), { target: { value: 'Bestyrelsesmøde' } });
+      await pasteLink();
+
+      expect(mockCreateMeeting).toHaveBeenCalledWith(expect.objectContaining({ title: 'Bestyrelsesmøde' }));
+      expect(mockUpdateMeeting).not.toHaveBeenCalledWith('teams-7', expect.objectContaining({ title: expect.anything() }));
+    });
+
+    it('passes the participants typed under mødedetaljer', async () => {
+      renderPage();
+      const adding = screen.getByPlaceholderText('+ tilføj');
+      fireEvent.change(adding, { target: { value: 'Mette Hansen' } });
+      fireEvent.keyDown(adding, { key: 'Enter' });
+      await pasteLink();
+
+      expect(mockCreateMeeting).toHaveBeenCalledWith(expect.objectContaining({ participants: ['Mette Hansen'] }));
+    });
+
+    it('still opens the meeting when the title cannot be stored', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mockUpdateMeeting.mockRejectedValue(new Error('idb'));
+      renderPage();
+      await pasteLink();
+    });
+  });
+
+  it("shows the server's own message for an error the dashboard has no copy for", async () => {
+    mockCreateMeeting.mockResolvedValue({ id: 'teams-8' });
+    routeFetch({
+      arm: () => ({
+        ok: false,
+        status: 503,
+        json: async () => ({ error: 'unavailable', message: 'Microsoft svarer ikke lige nu. Prøv igen om lidt.' }),
+      }),
+    });
+    renderPage();
+
+    const linkInput = screen.getByPlaceholderText('Indsæt mødelink…');
+    fireEvent.change(linkInput, { target: { value: 'https://teams.microsoft.com/abc' } });
+    await act(async () => { fireEvent.keyDown(linkInput, { key: 'Enter' }); });
+
+    expect(await screen.findByText('Microsoft svarer ikke lige nu. Prøv igen om lidt.')).toBeInTheDocument();
+    expect(mockDeleteMeeting).toHaveBeenCalledWith('teams-8');
+  });
+
   it('also unregisters through the helper when the request itself fails (the POST may have landed)', async () => {
     mockCreateMeeting.mockResolvedValue({ id: 'teams-6' });
     routeFetch({ arm: () => { throw new TypeError('Failed to fetch'); } });
@@ -862,7 +947,7 @@ describe('OptaqPage — Teams section', () => {
       routeDisabled();
       renderPage();
       await waitFor(() => expect(screen.queryByPlaceholderText('Indsæt mødelink…')).toBeNull());
-      expect(screen.queryByText('eller deltag i et møde')).toBeNull();
+      expect(screen.queryByText('eller tag referat af et Teams-møde')).toBeNull();
     });
 
     it('shows neither the Microsoft-login hint nor "Giv adgang igen"', async () => {
@@ -916,14 +1001,40 @@ describe('OptaqPage — static content', () => {
 
   it('renders the data processing compliance text', () => {
     renderPage();
-    expect(screen.getByText(/lyden gemmes lokalt på din enhed/)).toBeInTheDocument();
+    expect(screen.getByText(/lyden fra browseroptagelser gemmes lokalt på din enhed/)).toBeInTheDocument();
     expect(screen.getByText(/slettes automatisk når referatet er genereret/)).toBeInTheDocument();
     expect(screen.getByText(/personoplysninger fjernes inden referat/)).toBeInTheDocument();
   });
 
-  it('renders the "eller deltag i et møde" label', () => {
+  // A Teams meeting is fetched and transcribed by the server, so the promises
+  // made for a recording in the browser do not hold for it — and must not be
+  // made for it.
+  it('limits the "stays on your machine" claims to recordings in the browser', () => {
     renderPage();
-    expect(screen.getByText('eller deltag i et møde')).toBeInTheDocument();
+    expect(screen.queryByText(/Ingen data forlader din maskine/)).toBeNull();
+    expect(screen.getByText(/Optagelser i browseren gemmes kun på din maskine/)).toBeInTheDocument();
+  });
+
+  it('says plainly what happens to a Teams meeting', async () => {
+    renderPage();
+    const line = await screen.findByText(/teams-møder: serveren henter Teams' optagelse/);
+    expect(line).toHaveTextContent(/transskriberer den/);
+    expect(line).toHaveTextContent(/teksten ligger kun på serveren, til din browser har gemt den/);
+    expect(line).toHaveTextContent(/transskriberer den og sletter den så i OneDrive/);
+  });
+
+  it('leaves the Teams line out when the integration is switched off', async () => {
+    routeFetch({ status: () => ({ ok: true, status: 200, json: async () => ({ enabled: false, microsoftLinked: false, scopesOk: false, missing: [] }) }) });
+    renderPage();
+    await waitFor(() => expect(screen.queryByPlaceholderText('Indsæt mødelink…')).toBeNull());
+    expect(screen.queryByText(/teams-møder: serveren henter/)).toBeNull();
+  });
+
+  // Nothing joins the meeting any more: the link switches on a referat for it.
+  it('labels the link box for what it does now', () => {
+    renderPage();
+    expect(screen.getByText('eller tag referat af et Teams-møde')).toBeInTheDocument();
+    expect(screen.queryByText(/deltag i et møde/)).toBeNull();
   });
 
   it('renders the "mødedetaljer" label', () => {

@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { transcribeBatchesOnServer } from '@/lib/audio/transcribe-batches-client';
 import { startDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import { getAudio, saveTranscript, updateMeeting } from '@/lib/storage';
@@ -9,12 +10,19 @@ import type { TranscriptSegment } from '@/types';
 interface Props {
   meetingId: string;
   onComplete?: () => void;
+  /**
+   * A meeting collected from Teams through Microsoft Graph. It has no local audio
+   * by design, so when the server no longer holds its transcript the remedy is the
+   * Teams screen's "Hent igen", not the client-side fallback.
+   */
+  graphManaged?: boolean;
 }
 
 type Phase = 'downloading' | 'analyzing' | 'transcribing' | 'saving' | 'error';
 
-// How long to wait for the server-side bot transcription (started the moment the
-// bot uploaded) before falling back to driving transcription from the client.
+// How long to wait for a server-side transcription still being written before
+// falling back to driving transcription from the client (or, without local audio,
+// reporting that the server could not be reached).
 const SERVER_TRANSCRIPT_DEADLINE_MS = 5 * 60_000;
 const SERVER_TRANSCRIPT_POLL_MS = 1_000;
 
@@ -25,7 +33,7 @@ interface ServerTranscript {
 }
 
 /**
- * What the server-side run amounted to. A bare `null` used to cover four very
+ * What the server-side run amounted to. A bare `null` used to cover several very
  * different situations, and the caller could only turn all of them into "no local
  * audio" — so a Teams meeting the server had already given up on was reported as
  * a missing audio file, which is true but tells the user nothing.
@@ -37,12 +45,14 @@ type ServerOutcome =
   | { kind: 'empty' }
   /** The run failed server-side; the reason is on the meeting row, not here. */
   | { kind: 'failed' }
-  /** No server-side run for this meeting — the client transcribes it itself. */
-  | { kind: 'none' };
+  /** The server holds nothing for this meeting. */
+  | { kind: 'none' }
+  /** No answer: a network error, a non-ok response, or still running at the deadline. */
+  | { kind: 'unavailable' };
 
-// Collect the transcript the server began producing when it stashed the recording.
-// `none` covers a local recording, an unreachable server, and the deadline passing:
-// in all three the client's own transcription is the right next step.
+// Collect the transcript the server produced from the Teams recording. With local
+// audio in hand, `none` and `unavailable` both lead to the client's own
+// transcription; without it they mean different things (see run()).
 async function collectServerTranscript(
   meetingId: string,
   isCancelled: () => boolean,
@@ -52,10 +62,10 @@ async function collectServerTranscript(
     let data: ServerTranscript;
     try {
       const res = await fetch(`/api/meetings/${meetingId}/pending-transcript`);
-      if (!res.ok) return { kind: 'none' };
+      if (!res.ok) return { kind: 'unavailable' };
       data = await res.json() as ServerTranscript;
     } catch {
-      return { kind: 'none' };
+      return { kind: 'unavailable' };
     }
     if (data.status === 'ready') {
       return data.segments?.length ? { kind: 'ready', transcript: data } : { kind: 'empty' };
@@ -64,7 +74,7 @@ async function collectServerTranscript(
     if (data.status !== 'processing') return { kind: 'none' };
     await new Promise((r) => setTimeout(r, SERVER_TRANSCRIPT_POLL_MS));
   }
-  return { kind: 'none' };
+  return { kind: 'unavailable' };
 }
 
 // Tell the server the transcript is safely in IndexedDB, so it can drop its copy.
@@ -86,7 +96,11 @@ interface BatchProgress {
   totalSeconds: number;
 }
 
-export function ProcessingTranscription({ meetingId, onComplete }: Props) {
+export function ProcessingTranscription({ meetingId, onComplete, graphManaged = false }: Props) {
+  const router = useRouter();
+  // Kept in a ref so a re-created router object can never restart the pipeline.
+  const routerRef = useRef(router);
+  routerRef.current = router;
   const [phase, setPhase] = useState<Phase>('downloading');
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -115,9 +129,9 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
         const blob = audioEntry?.blob ?? null;
         if (cancelled) return;
 
-        // 2. Server-side runs (Teams bot, or the Microsoft Graph pipeline) started
-        // transcription + diarization before the user got here. Collect it instead
-        // of re-doing the work.
+        // 2. A Teams meeting was transcribed on the server (the Microsoft Graph
+        // pipeline) before the user got here. Collect that instead of re-doing it.
+        // For a local recording the server holds nothing and answers `none`.
         setPhase('analyzing');
         const outcome = await collectServerTranscript(meetingId, () => cancelled);
         if (cancelled) return;
@@ -137,6 +151,21 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
           throw new Error(
             'Transskriptionen på serveren fejlede. Prøv igen — mødet ligger stadig hos Teams.',
           );
+        }
+        // Without local audio an unanswered request is the server being out of
+        // reach for now, not a missing file: worth retrying as it stands.
+        if (outcome.kind === 'unavailable' && !blob) {
+          throw new Error('Kunne ikke hente transskriptionen fra serveren. Prøv igen om lidt.');
+        }
+        // A Teams meeting whose transcript is no longer on the server: Teams still
+        // holds the meeting, and its own screen is the one that can fetch it again
+        // ("Hent igen"). That screen renders for `awaiting_teams`, so the status
+        // goes back first.
+        if (outcome.kind === 'none' && !blob && graphManaged) {
+          await updateMeeting(meetingId, { status: 'awaiting_teams' });
+          if (cancelled) return;
+          routerRef.current.push(`/meeting/${meetingId}`);
+          return;
         }
 
         const serverTranscript = outcome.kind === 'ready' ? outcome.transcript : null;
@@ -160,8 +189,8 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
 
         // Nothing server-side and nothing local: there is no work left to do here
         // and no way to do it — say so rather than crashing on a null blob. This is
-        // now only reachable for a meeting that never had a server-side run, so the
-        // message is about the audio the client expected to find.
+        // only reachable for a local meeting, which never had a server-side run, so
+        // the message is about the audio the client expected to find.
         if (!blob) throw new Error('Lydfil ikke fundet');
 
         // 3. Fallback: drive transcription from here. One upload of the original
@@ -224,14 +253,16 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
     }
 
     return () => { cancelled = true; };
-  }, [meetingId, retryCount]);
+  }, [meetingId, retryCount, graphManaged]);
 
   const pct = batchProgress && batchProgress.totalSeconds > 0
     ? Math.min(100, Math.round((batchProgress.completedSeconds / batchProgress.totalSeconds) * 100))
     : 0;
 
+  // A Teams meeting has no audio in this browser: all that happens here is that
+  // the server's transcript is fetched and saved.
   const phaseLabels: Record<Phase, string> = {
-    downloading: 'henter lydfil…',
+    downloading: graphManaged ? 'henter transskription…' : 'henter lydfil…',
     analyzing: 'henter transskription…',
     transcribing: batchProgress && batchProgress.total > 0
       ? `transskriberer ${batchProgress.completed} / ${batchProgress.total} segmenter…`
@@ -270,7 +301,9 @@ export function ProcessingTranscription({ meetingId, onComplete }: Props) {
         <h1 className="text-xl font-semibold text-[var(--ink)]">Transskription er i gang…</h1>
       </div>
       <p className="mt-2 text-sm text-[var(--muted)]">
-        Lydfilen analyseres og transskriberes. Vent venligst.
+        {graphManaged
+          ? 'Transskriptionen fra Teams hentes og gemmes i din browser. Vent venligst.'
+          : 'Lydfilen analyseres og transskriberes. Vent venligst.'}
       </p>
       <div style={{ marginTop: 20, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>

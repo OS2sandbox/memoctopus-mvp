@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { HviskeProvider } from '@/lib/ai/transcription';
+import { cleanTranscribedText } from '@/lib/audio/hallucinations';
 
 // Reuse a single provider instance across requests — creating one per request
 // would spin up a new OpenAI client each time, losing connection pooling.
@@ -13,28 +14,6 @@ function getProvider(): HviskeProvider {
 
 interface Params {
   params: Promise<{ id: string }>;
-}
-
-// Whisper-based models hallucinate looping repetitions when given short or noisy
-// audio. Detect this by checking if a single word dominates the output (>50% of
-// all words) or if the same word appears 3+ times consecutively.
-function isHallucinatedRepetition(text: string): boolean {
-  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length < 4) return false;
-
-  const freq: Record<string, number> = {};
-  for (const w of words) freq[w] = (freq[w] ?? 0) + 1;
-  if (Math.max(...Object.values(freq)) / words.length > 0.5) return true;
-
-  let streak = 1;
-  for (let i = 1; i < words.length; i++) {
-    if (words[i] === words[i - 1]) {
-      if (++streak >= 3) return true;
-    } else {
-      streak = 1;
-    }
-  }
-  return false;
 }
 
 // Per-utterance transcription for the VAD-based recording/upload path.
@@ -59,8 +38,10 @@ export async function POST(req: NextRequest, { params }: Params) {
     const { text, latencyMs } = await getProvider().transcribeRaw(buffer, audioFile.type || 'audio/wav');
     const totalMs = Date.now() - t0;
     console.log(`[utterance] ${audioBytes} bytes → ${latencyMs} ms hviske / ${totalMs} ms total`);
-    if (isHallucinatedRepetition(text)) return NextResponse.json({ text: '', latencyMs });
-    return NextResponse.json({ text, latencyMs });
+    // The same cleaning as the batch path (vad-batch-server), so a live recording
+    // and an upload of the same audio keep the same words: a repetition loop is
+    // cut off after the real speech before it, and a subtitle credit is dropped.
+    return NextResponse.json({ text: cleanTranscribedText(text ?? ''), latencyMs });
   } catch (err) {
     const totalMs = Date.now() - t0;
     console.error(`[utterance] failed after ${totalMs} ms:`, err);

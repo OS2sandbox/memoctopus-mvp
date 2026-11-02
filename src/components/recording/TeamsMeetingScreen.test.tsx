@@ -156,6 +156,29 @@ describe('TeamsMeetingScreen — invitee (not armed)', () => {
     ).toBeInTheDocument();
   });
 
+  // Nothing was switched on for an invitee, so there is nothing to switch off.
+  it('offers to remove the meeting, not to switch OS2taletiltekst off', async () => {
+    renderScreen();
+    const btn = await screen.findByRole('button', { name: 'Fjern mødet' });
+    expect(screen.queryByText('Slå OS2taletiltekst fra')).toBeNull();
+
+    await act(async () => { fireEvent.click(btn); });
+    await waitFor(() => {
+      expect(mockDeleteMeeting).toHaveBeenCalledWith(MEETING_ID);
+      expect(mockPush).toHaveBeenCalledWith('/dashboard');
+    });
+  });
+
+  it('says the meeting could not be removed when that fails', async () => {
+    mockDeleteMeeting.mockRejectedValueOnce(new Error('offline'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderScreen();
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Fjern mødet' })); });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Kunne ikke fjerne mødet');
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
   it('copies the sentence to the clipboard', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
@@ -184,6 +207,14 @@ describe('TeamsMeetingScreen — fetching state', () => {
     respondWith(statusBody({ state: 'fetching' }));
     renderScreen();
     expect(await screen.findByText(/Du behøver ikke blive på siden/)).toBeInTheDocument();
+  });
+
+  // The dashboard lists no meetings; the Arkiv does.
+  it('says where to find the meeting afterwards', async () => {
+    respondWith(statusBody({ state: 'fetching' }));
+    renderScreen();
+    expect(await screen.findByText(/ligger også i arkivet bagefter/)).toBeInTheDocument();
+    expect(screen.queryByText(/på forsiden/)).toBeNull();
   });
 });
 
@@ -296,6 +327,21 @@ describe('TeamsMeetingScreen — pressing the button is never silent', () => {
       /Teams har ikke frigivet transskriptionen endnu/,
     );
   });
+  // The invitee and blocked-tenant copy used to have no place for the answer.
+  it.each([
+    ['an invitee', { armed: false, armResult: 'not_organizer' }],
+    ['a blocked tenant', { armed: false, armResult: 'policy_blocked' }],
+  ])('answers a hand-pressed check for %s too', async (_label, overrides) => {
+    respondWith(statusBody({ ...overrides, scheduledEnd: new Date(Date.now() - 10 * 60_000).toISOString() }));
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Tjek nu' }));
+
+    expect(await screen.findByTestId('last-check')).toHaveTextContent(
+      /Teams har ikke frigivet transskriptionen endnu/,
+    );
+    expect(screen.getAllByTestId('last-check')).toHaveLength(1);
+  });
 });
 
 describe('TeamsMeetingScreen — ending a meeting before its booked end', () => {
@@ -405,6 +451,13 @@ describe('TeamsMeetingScreen — blocked by tenant policy', () => {
     renderScreen();
     expect(await screen.findByText(/ikke organisator/)).toBeInTheDocument();
   });
+
+  it('offers to remove the meeting, since nothing could be switched on', async () => {
+    respondWith(statusBody({ armed: false, armResult: 'policy_blocked' }));
+    renderScreen();
+    expect(await screen.findByRole('button', { name: 'Fjern mødet' })).toBeInTheDocument();
+    expect(screen.queryByText('Slå OS2taletiltekst fra')).toBeNull();
+  });
 });
 
 describe('TeamsMeetingScreen — failed', () => {
@@ -417,10 +470,10 @@ describe('TeamsMeetingScreen — failed', () => {
     expect(await screen.findByText('Transskriptionen blev aldrig startet i Teams.')).toBeInTheDocument();
   });
 
-  it('offers "Prøv igen" and "Slet"', async () => {
+  it('offers "Prøv igen" and "Fjern mødet"', async () => {
     renderScreen();
     expect(await screen.findByText('Prøv igen')).toBeInTheDocument();
-    expect(screen.getByText('Slet')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Fjern mødet' })).toBeInTheDocument();
   });
 
   it('"Prøv igen" forces a poll with ?poll=1', async () => {
@@ -526,8 +579,74 @@ describe('TeamsMeetingScreen — manual check and disarm', () => {
   });
 });
 
+describe('TeamsMeetingScreen — polling cadence', () => {
+  // The default status body: 09:00–10:00 on 10 September.
+  const statusReads = () =>
+    mockFetch.mock.calls.filter(([u]) => String(u).startsWith(`/api/teams/meetings/${MEETING_ID}`));
+
+  function setVisibility(state: 'visible' | 'hidden') {
+    Object.defineProperty(document, 'visibilityState', { value: state, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }
+
+  afterEach(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+  });
+
+  it('only checks now and then until shortly before the meeting starts', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-10T07:00:00.000Z'));
+    renderScreen();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(statusReads()).toHaveLength(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(4 * 60_000); });
+    expect(statusReads()).toHaveLength(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(statusReads()).toHaveLength(2);
+  });
+
+  it('checks every minute from five minutes before the start until the end', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-10T08:56:00.000Z'));
+    renderScreen();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(statusReads()).toHaveLength(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(statusReads()).toHaveLength(2);
+  });
+
+  it('still answers "Mødet er slut – hent nu" at once while idle', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-10T07:00:00.000Z'));
+    renderScreen();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Mødet er slut – hent nu/ })); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(mockFetch).toHaveBeenCalledWith(`/api/teams/meetings/${MEETING_ID}?poll=1`);
+  });
+
+  it('pauses while the tab is hidden, and checks at once when it is shown again', async () => {
+    vi.useFakeTimers();
+    renderScreen();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { setVisibility('hidden'); });
+    const before = statusReads().length;
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
+    expect(statusReads()).toHaveLength(before);
+
+    await act(async () => { setVisibility('visible'); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(statusReads()).toHaveLength(before + 1);
+  });
+});
+
 describe('TeamsMeetingScreen — polling behaviour', () => {
-  it('re-polls every 15 seconds while awaiting', async () => {
+  it('re-polls every 15 seconds once the meeting is over', async () => {
     vi.useFakeTimers();
     renderScreen();
     await act(async () => { await Promise.resolve(); });
@@ -575,7 +694,47 @@ describe('TeamsMeetingScreen — error handling', () => {
   it('shows a Danish message when the meeting is unknown server-side', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 404, json: async () => ({}) });
     renderScreen();
-    expect(await screen.findByRole('alert')).toHaveTextContent(/ikke registreret hos Teams/);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/ikke registreret hos OS2taletiltekst/);
+  });
+
+  // A meeting the server does not know will not become known by asking again.
+  it('stops polling a meeting the server does not know, and offers to remove it', async () => {
+    vi.useFakeTimers();
+    mockFetch.mockResolvedValue({ ok: false, status: 404, json: async () => ({ error: 'not_found' }) });
+    renderScreen();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    mockFetch.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60_000); });
+    expect(mockFetch).not.toHaveBeenCalled();
+    vi.useRealTimers();
+
+    expect(screen.queryByText('Tjek nu')).toBeNull();
+    const btn = screen.getByRole('button', { name: 'Fjern mødet' });
+    await act(async () => { fireEvent.click(btn); });
+    await waitFor(() => {
+      expect(mockDeleteMeeting).toHaveBeenCalledWith(MEETING_ID);
+      expect(mockPush).toHaveBeenCalledWith('/dashboard');
+    });
+  });
+
+  it('asks the user to log in again when the session has expired, and stops polling', async () => {
+    vi.useFakeTimers();
+    mockFetch.mockResolvedValue({ ok: false, status: 401, json: async () => ({ error: 'Unauthorized' }) });
+    renderScreen();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    mockFetch.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60_000); });
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/ikke logget ind/);
+    // Back to this meeting after the sign-in; the marker stops a stale cookie from
+    // bouncing the login page straight back here.
+    expect(screen.getByRole('link', { name: 'Log ind igen' })).toHaveAttribute(
+      'href',
+      `/?session_expired=1&from=${encodeURIComponent(`/meeting/${MEETING_ID}`)}`,
+    );
+    expect(screen.queryByText('Tjek nu')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Fjern mødet|Slå OS2taletiltekst fra/ })).toBeNull();
   });
 
   it('shows a Danish message when the status request fails', async () => {
@@ -627,6 +786,42 @@ describe('TeamsMeetingScreen — the hand-off of the collected transcript', () =
     await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
     expect(calls((u) => u.endsWith('/pending-meta')).length).toBeGreaterThan(2);
     expect(screen.queryByRole('alert')).toBeNull();
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  // The removed bot screen had the same guard ("stops pulling the recording when
+  // the screen unmounts"). Without it, a user who had already left was pulled
+  // back to the review the moment the run finished.
+  it('stops collecting, and does not navigate, once the screen unmounts', async () => {
+    vi.useFakeTimers();
+    metaResponse = failing(404);
+    respondWith(statusBody({ state: 'ready' }));
+    const { unmount } = renderScreen();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
+    expect(calls((u) => u.endsWith('/pending-meta')).length).toBeGreaterThan(0);
+
+    unmount();
+    const before = calls((u) => u.endsWith('/pending-meta')).length;
+    metaResponse = jsonMeta({ status: 'no-recording', participants: ['Mette Hansen'], durationSeconds: 60 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+
+    expect(calls((u) => u.endsWith('/pending-meta')).length).toBe(before);
+    expect(mockUpdateMeeting).not.toHaveBeenCalled();
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  it('does not navigate when the screen unmounts while the copy check is in flight', async () => {
+    let answer!: (v: unknown) => void;
+    transcriptResponse = new Promise((r) => { answer = r; });
+    respondWith(statusBody({ state: 'ready' }));
+    const { unmount } = renderScreen();
+    await waitFor(() => expect(calls((u) => u.endsWith('/pending-transcript')).length).toBe(1));
+
+    unmount();
+    await act(async () => { answer(jsonMeta({ status: 'ready', segments: [], diarized: true })); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+
+    expect(calls((u) => u.endsWith('/pending-meta'))).toHaveLength(0);
     expect(mockPush).not.toHaveBeenCalled();
   });
 

@@ -5,35 +5,29 @@ import { useRouter } from 'next/navigation';
 import { signIn } from '@/lib/auth-client';
 import { updateMeeting } from '@/lib/storage';
 import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
+// Types only: erased at build time, so none of the store's database code reaches
+// the browser.
+import type { TeamsArmResult, TeamsMeetingState } from '@/lib/teams/store';
 
-export interface TeamsMeetingScreenProps {
+interface TeamsMeetingScreenProps {
   meetingId: string;
   meetingUrl: string;
 }
 
-export type TeamsState = 'awaiting_teams' | 'fetching' | 'ready' | 'failed' | 'needs_reauth';
-
+/** What GET /api/teams/meetings/[id] answers with — the parts this screen reads. */
 interface TeamsMeetingStatus {
-  id: string;
-  state: TeamsState;
+  state: TeamsMeetingState;
   armed: boolean;
-  isOrganizer: boolean;
   subject: string | null;
   scheduledStart: string | null;
   scheduledEnd: string | null;
   failureReason: string | null;
-  lastPolledAt: string | null;
-  armResult?: TeamsArmResult;
-  mode?: string;
+  armResult?: TeamsArmResult | null;
   /** False when the server has TEAMS_GRAPH_ENABLED off. Absent means on. */
   enabled?: boolean;
-  /** A run holds this meeting's artifacts and is downloading/transcribing them. */
-  working?: boolean;
   /** Polls that found nothing yet — see MANUAL_START_HINT_ATTEMPTS. */
   attempts?: number;
 }
-
-export type TeamsArmResult = 'armed' | 'armed_in_progress' | 'not_organizer' | 'policy_blocked';
 
 const ADMIN_GUIDE = '/docs/setup-microsoft-teams.md';
 
@@ -60,13 +54,54 @@ const META_COLLECT_RETRY_MS = 500;
  */
 const MANUAL_START_HINT_ATTEMPTS = 3;
 
+/**
+ * How often the screen asks. Nothing can come out of a meeting before it has
+ * ended, and the server's own poller collects it whether or not anyone is
+ * watching, so the screen only needs to be quick where someone is likely to be
+ * waiting for it: after the end.
+ *
+ * - Until five minutes before the start: a quiet check every five minutes.
+ * - From then until the scheduled end: every minute (a meeting can end early).
+ * - After the end, or with no window known: every 15 s, easing to every minute
+ *   after an hour on the screen.
+ *
+ * Nothing is asked while the tab is hidden. "Tjek nu" asks at any time.
+ */
+const IDLE_POLL_MS = 5 * 60_000;
+const IDLE_UNTIL_BEFORE_START_MS = 5 * 60_000;
+const DURING_POLL_MS = 60_000;
 const FAST_POLL_MS = 15_000;
 const SLOW_POLL_MS = 60_000;
 const SLOWDOWN_AFTER_MS = 60 * 60_000;
 
+function pollDelay(
+  meeting: { scheduledStart: string | null; scheduledEnd: string | null } | null,
+  now: number,
+  slowedDown: boolean,
+): number {
+  const start = meeting?.scheduledStart ? Date.parse(meeting.scheduledStart) : NaN;
+  const end = meeting?.scheduledEnd ? Date.parse(meeting.scheduledEnd) : NaN;
+  if (!Number.isNaN(start) && now < start - IDLE_UNTIL_BEFORE_START_MS) return IDLE_POLL_MS;
+  if (!Number.isNaN(end) && now < end) return DURING_POLL_MS;
+  return slowedDown ? SLOW_POLL_MS : FAST_POLL_MS;
+}
+
+function tabVisible(): boolean {
+  return typeof document === 'undefined' || document.visibilityState !== 'hidden';
+}
+
 // The sentence the invitee can hand to the organizer verbatim.
 export const ORGANIZER_REQUEST =
   'Kan du slå "Optag og transskriber automatisk" til i mødeindstillingerne for dette møde? Så laver OS2taletiltekst referatet automatisk.';
+
+/** Resolves after `ms`, or at once when `signal` aborts. */
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+  });
+}
 
 /**
  * Fill in what the server-side run produced before Gennemgang opens: the speaker
@@ -80,19 +115,23 @@ export const ORGANIZER_REQUEST =
  * Two answers: 404 (the run has not finished — keep asking) or the meta record.
  * Anything else (401, 500 …) throws, so the screen can say so instead of carrying
  * on to a review with an empty participant list.
+ *
+ * Returns false when `signal` aborted (the screen went away) before anything was
+ * written, so the caller knows not to navigate.
  */
-export async function collectTeamsArtifacts(meetingId: string): Promise<void> {
+async function collectTeamsArtifacts(meetingId: string, signal: AbortSignal): Promise<boolean> {
   const deadline = Date.now() + META_COLLECT_DEADLINE_MS;
-  while (Date.now() < deadline) {
+  while (!signal.aborted && Date.now() < deadline) {
     let res: Response;
     try {
       res = await fetch(`/api/meetings/${meetingId}/pending-meta`);
     } catch {
-      await new Promise((r) => setTimeout(r, META_COLLECT_RETRY_MS));
+      await pause(META_COLLECT_RETRY_MS, signal);
       continue;
     }
+    if (signal.aborted) return false;
     if (res.status === 404) {
-      await new Promise((r) => setTimeout(r, META_COLLECT_RETRY_MS));
+      await pause(META_COLLECT_RETRY_MS, signal);
       continue;
     }
     if (!res.ok) throw new Error(`pending-meta svarede ${res.status}`);
@@ -101,16 +140,19 @@ export async function collectTeamsArtifacts(meetingId: string): Promise<void> {
       participants?: string[];
       durationSeconds?: number | null;
     };
+    if (signal.aborted) return false;
     await updateMeeting(meetingId, {
       status: 'processing',
       audioDurationSeconds: body.durationSeconds ?? null,
       ...(body.participants?.length ? { participants: body.participants } : {}),
     });
-    return;
+    return true;
   }
+  if (signal.aborted) return false;
   // Nothing to collect within the deadline: the server-side transcript may still
   // be all there is, so continue to the review screen rather than dead-ending.
   await updateMeeting(meetingId, { status: 'processing' });
+  return true;
 }
 
 /**
@@ -141,6 +183,91 @@ function fmtRange(start: string | null, end: string | null): string | null {
     ? new Intl.DateTimeFormat('da', { hour: '2-digit', minute: '2-digit' }).format(e)
     : null;
   return endTime ? `${day} · ${time}–${endTime}` : `${day} · ${time}`;
+}
+
+const HINT_STYLE: React.CSSProperties = { marginTop: 12, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 };
+
+/**
+ * What the screen says while a meeting is `awaiting_teams`. Which of four things
+ * is true decides everything shown, so it is decided once, here:
+ *
+ * - `armed`: OS2taletiltekst switched on automatic recording for the meeting.
+ * - `armed_no_window`: armed, but Graph gives the meeting no scheduled window, so
+ *   there is no end to wait for (see MANUAL_START_HINT_ATTEMPTS).
+ * - `policy_blocked`: the user is the organizer, but the tenant forbids it.
+ * - `invitee`: the user is not the organizer, so nothing could be switched on.
+ */
+type WaitCase = 'armed' | 'armed_no_window' | 'policy_blocked' | 'invitee';
+
+function waitCaseOf(status: TeamsMeetingStatus): WaitCase {
+  if (status.armResult === 'policy_blocked') return 'policy_blocked';
+  if (status.armResult === 'armed_in_progress') return 'armed_no_window';
+  return status.armed ? 'armed' : 'invitee';
+}
+
+const STILL_COLLECTED =
+  'Transskriptionen hentes stadig automatisk, hvis nogen starter transskription undervejs i mødet.';
+
+interface WaitCopy {
+  lead: React.ReactNode;
+  /** Label of the moving line, when something is under way. */
+  working?: string;
+  /** The line under it, replaced by the answer to a hand-pressed check. */
+  hint?: React.ReactNode;
+}
+
+function waitCopy(waitCase: WaitCase, meetingOver: boolean): WaitCopy {
+  switch (waitCase) {
+    case 'armed':
+      // Before the scheduled end we are waiting for the meeting; after it, for
+      // Microsoft to publish. "Venter på mødet…" for both told the user their
+      // finished meeting had not started yet.
+      return meetingOver
+        ? {
+            lead: 'Mødet er slut. OS2taletiltekst henter transskriptionen fra Teams, så snart Microsoft frigiver den — det tager typisk et par minutter, men kan tage længere.',
+            working: 'Spørger Teams…',
+          }
+        : {
+            lead: 'Mødet optages og transskriberes automatisk. Referatet er klar automatisk et par minutter efter mødet.',
+            working: 'Venter på mødet…',
+            hint: (
+              <>
+                OS2taletiltekst venter til mødet er planlagt til at slutte. Sluttede I før tid,
+                så tryk <strong>Mødet er slut – hent nu</strong>, så henter vi den med det samme.
+              </>
+            ),
+          };
+    // `armed_in_progress` says only that the meeting has no window — not that it
+    // is running. The link to an instant meeting can be pasted long before anyone
+    // joins it, so the copy leads with what we did, not with an instruction.
+    case 'armed_no_window':
+      return {
+        lead: 'OS2taletiltekst er slået til for mødet. Teams begynder at transskribere, når mødet går i gang, og referatet er klar et par minutter efter, I er færdige.',
+        working: 'Venter på mødet…',
+        hint: (
+          <>
+            Tryk <strong>Mødet er slut – hent nu</strong>, når I er færdige, så henter vi
+            referatet med det samme.
+          </>
+        ),
+      };
+    case 'policy_blocked':
+      return {
+        lead: (
+          <>
+            Jeres Teams-politik blokerer automatisk optagelse og transskription, så OS2taletiltekst
+            kunne ikke slå det til for mødet. Bed jeres IT-administrator følge trin 2 i{' '}
+            <a href={ADMIN_GUIDE} style={{ color: 'var(--ink-2)' }}>opsætningsguiden</a>.
+          </>
+        ),
+        hint: STILL_COLLECTED,
+      };
+    case 'invitee':
+      return {
+        lead: 'Du er inviteret til mødet, men ikke organisator, så OS2taletiltekst kan ikke slå optagelse til for dig. Bed organisatoren om at slå automatisk optagelse og transskription til:',
+        hint: STILL_COLLECTED,
+      };
+  }
 }
 
 /**
@@ -189,9 +316,13 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
   /** Result of the last hand-pressed check, so pressing the button is never silent. */
   const [lastCheck, setLastCheck] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [intervalMs, setIntervalMs] = useState(FAST_POLL_MS);
+  const [slowedDown, setSlowedDown] = useState(false);
+  const [visible, setVisible] = useState(tabVisible);
   // The row is ready but the server no longer holds its transcript.
   const [copyGone, setCopyGone] = useState(false);
+  // Answers that asking again cannot change: the server does not know the meeting
+  // (404), or the session has expired (401). Polling stops on either.
+  const [halt, setHalt] = useState<'not_found' | 'signed_out' | null>(null);
 
   // Guards so an effect re-run never fires a second forced poll or a second
   // navigation to the review page.
@@ -201,9 +332,22 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
 
   const scheduledEndRef = useRef<string | null>(null);
 
+  // One controller per mount, aborted on unmount. A poll in flight — above all the
+  // pending-meta loop of a `ready` meeting, which can run for minutes — checks it
+  // after every await, so it stops asking and never pulls a user who has already
+  // left back to the review. Declared before the effect that starts polling, so
+  // it exists by the time the first poll reads it.
+  const lifeRef = useRef<AbortController>(new AbortController());
+  useEffect(() => {
+    const life = new AbortController();
+    lifeRef.current = life;
+    return () => life.abort();
+  }, []);
+
   const poll = useCallback(
     async (explicitForce: boolean) => {
       if (inFlightRef.current) return;
+      const { signal } = lifeRef.current;
       // The first tick after the meeting's scheduled end asks the server to
       // actually talk to Graph, so artifacts are picked up without waiting for
       // the background poller.
@@ -219,8 +363,20 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
       if (force) setChecking(true);
       try {
         const res = await fetch(`/api/teams/meetings/${meetingId}${force ? '?poll=1' : ''}`);
+        if (signal.aborted) return;
         if (res.status === 404) {
-          setError('Mødet er ikke registreret hos Teams. Prøv at tilføje mødelinket igen.');
+          const body = (await res.json().catch(() => ({}))) as { message?: string };
+          setHalt('not_found');
+          setError(
+            body.message
+              ?? 'Mødet er ikke registreret hos OS2taletiltekst længere, så der hentes intet referat fra Teams. '
+                + 'Du kan fjerne det her.',
+          );
+          return;
+        }
+        if (res.status === 401) {
+          setHalt('signed_out');
+          setError('Du er ikke logget ind længere. Log ind igen for at følge mødet.');
           return;
         }
         if (!res.ok) {
@@ -228,6 +384,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
           return;
         }
         const data = (await res.json()) as TeamsMeetingStatus;
+        if (signal.aborted) return;
         setError(null);
         if (explicitForce && data.state === 'fetching') {
           setLastCheck(
@@ -249,20 +406,24 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
         if (data.state === 'ready' && !routedRef.current) {
           routedRef.current = true;
           // Checked first: with the copy gone there is nothing to open a review on.
-          if (await serverCopyGone(meetingId)) {
+          const gone = await serverCopyGone(meetingId);
+          if (signal.aborted) return;
+          if (gone) {
             routedRef.current = false;
             setCopyGone(true);
             return;
           }
           try {
-            await collectTeamsArtifacts(meetingId);
+            if (!(await collectTeamsArtifacts(meetingId, signal))) return;
           } catch (err) {
+            if (signal.aborted) return;
             console.error('[TeamsMeetingScreen] kunne ikke hente transskriptionen:', err);
             // "Tjek nu" polls again, and a ready row then takes this path afresh.
             routedRef.current = false;
             setError('Kunne ikke hente transskriptionen fra serveren. Tryk "Tjek nu" for at prøve igen.');
             return;
           }
+          if (signal.aborted) return;
           routerRef.current.push(`/meeting/${meetingId}/review`);
         }
       } catch (err) {
@@ -287,7 +448,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
   }, [poll]);
 
   useEffect(() => {
-    const t = setTimeout(() => setIntervalMs(SLOW_POLL_MS), SLOWDOWN_AFTER_MS);
+    const t = setTimeout(() => setSlowedDown(true), SLOWDOWN_AFTER_MS);
     return () => clearTimeout(t);
   }, []);
 
@@ -297,19 +458,34 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
   const off = status?.enabled === false && status.state !== 'ready';
   const state = off ? undefined : status?.state;
 
-  // Before the scheduled end we are waiting for the meeting; after it we are
-  // waiting for Microsoft to publish. Saying "Venter på mødet…" for both told
-  // the user their finished meeting had not started yet.
-  // Re-evaluated on every status poll, so it flips on its own without a reload.
+  // Re-evaluated on every status poll, so the copy flips on its own at the end.
   const meetingOver =
     status?.scheduledEnd != null && Date.parse(status.scheduledEnd) <= Date.now();
-  const stopped = off || state === 'ready' || state === 'failed' || state === 'needs_reauth';
+  const stopped = off || halt !== null || state === 'ready' || state === 'failed' || state === 'needs_reauth';
+
+  // Recomputed on every render, and every poll renders (a fresh status), so the
+  // pace moves on by itself as the start and the end come and go.
+  const intervalMs = pollDelay(status, Date.now(), slowedDown);
 
   useEffect(() => {
-    if (stopped) return;
+    if (stopped || !visible) return;
     const id = setInterval(() => { void poll(false); }, intervalMs);
     return () => clearInterval(id);
-  }, [poll, intervalMs, stopped]);
+  }, [poll, intervalMs, stopped, visible]);
+
+  // Paused while the tab is hidden; on coming back, one check at once, so the
+  // screen is current when it is looked at rather than a tick later.
+  const stoppedRef = useRef(stopped);
+  stoppedRef.current = stopped;
+  useEffect(() => {
+    const onChange = () => {
+      const shown = tabVisible();
+      setVisible(shown);
+      if (shown && !stoppedRef.current) void poll(false);
+    };
+    document.addEventListener('visibilitychange', onChange);
+    return () => document.removeEventListener('visibilitychange', onChange);
+  }, [poll]);
 
   // Puts the ready-but-gone row back into a pollable state, then polls it with
   // force, exactly as "Prøv igen" does for a failed one.
@@ -339,18 +515,25 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
     void poll(true);
   }, [meetingId, poll]);
 
+  // What the remove button does depends on what was done for this user: where
+  // OS2taletiltekst armed the meeting, removing it switches that off again; where
+  // nothing was switched on (an invitee, a blocked tenant, a meeting that has
+  // already failed), "switch off" would describe something that never happened.
+  const switchedOn = status?.armed === true && status.state !== 'failed' && halt !== 'not_found';
+  const removeLabel = switchedOn ? 'Slå OS2taletiltekst fra' : 'Fjern mødet';
+
   // Stay on the screen when the server could not be told: leaving would strand a
   // meeting that keeps being collected, with nothing left to press.
-  const disarm = useCallback(async () => {
+  const remove = useCallback(async () => {
     try {
       await deleteMeetingAndUnregister(meetingId);
     } catch (err) {
-      console.error('[TeamsMeetingScreen] kunne ikke slå OS2taletiltekst fra:', err);
-      setError('Kunne ikke slå OS2taletiltekst fra. Prøv igen.');
+      console.error('[TeamsMeetingScreen] kunne ikke fjerne mødet:', err);
+      setError(switchedOn ? 'Kunne ikke slå OS2taletiltekst fra. Prøv igen.' : 'Kunne ikke fjerne mødet. Prøv igen.');
       return;
     }
     routerRef.current.push('/dashboard');
-  }, [meetingId]);
+  }, [meetingId, switchedOn]);
 
   const reauth = useCallback(() => {
     void signIn.social({ provider: 'microsoft', callbackURL: `/meeting/${meetingId}` });
@@ -364,6 +547,8 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
   }, []);
 
   const when = fmtRange(status?.scheduledStart ?? null, status?.scheduledEnd ?? null);
+  const waitCase = state === 'awaiting_teams' && status ? waitCaseOf(status) : null;
+  const wait = waitCase ? waitCopy(waitCase, meetingOver) : null;
 
   return (
     <div style={{ padding: '48px 24px', maxWidth: 640, margin: '0 auto' }}>
@@ -418,112 +603,49 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
           </p>
         )}
 
-        {state === 'awaiting_teams' && status?.armed && status.armResult !== 'armed_in_progress' && (
+        {state === 'awaiting_teams' && wait && (
           <>
-            <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
-              {meetingOver
-                ? 'Mødet er slut. OS2taletiltekst henter transskriptionen fra Teams, så snart Microsoft frigiver den — det tager typisk et par minutter, men kan tage længere.'
-                : 'Mødet optages og transskriberes automatisk. Referatet er klar automatisk et par minutter efter mødet.'}
-            </p>
-            <WorkingIndicator label={meetingOver ? 'Spørger Teams…' : 'Venter på mødet…'} />
-            {!meetingOver && !lastCheck && (
-              <p style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-                OS2taletiltekst venter til mødet er planlagt til at slutte. Sluttede I før tid,
-                så tryk <strong>Mødet er slut – hent nu</strong>, så henter vi den med det samme.
-              </p>
-            )}
-            {lastCheck && (
-              <p
-                data-testid="last-check"
-                style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}
-              >
-                {lastCheck}
-              </p>
-            )}
-          </>
-        )}
+            <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>{wait.lead}</p>
+            {wait.working && <WorkingIndicator label={wait.working} />}
 
-        {/* A meeting Graph gives no window for. `armed_in_progress` says only that —
-            not that the meeting is running. The link to an instant meeting can be
-            pasted here long before anyone joins it, and telling that user the
-            meeting "er allerede i gang", under a green badge demanding they start
-            what we just switched on, described neither the meeting nor our state. */}
-        {state === 'awaiting_teams' && status?.armResult === 'armed_in_progress' && (
-          <>
-            <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
-              OS2taletiltekst er slået til for mødet. Teams begynder at transskribere, når mødet går i gang,
-              og referatet er klar et par minutter efter, I er færdige.
-            </p>
-            <WorkingIndicator label="Venter på mødet…" />
-            {(status.attempts ?? 0) >= MANUAL_START_HINT_ATTEMPTS && (
-              <p
-                data-testid="manual-start-hint"
-                style={{ marginTop: 12, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}
-              >
+            {waitCase === 'invitee' && (
+              <>
+                <blockquote
+                  style={{
+                    margin: '14px 0 0', padding: '12px 14px', borderRadius: 8,
+                    background: 'var(--bg-2)', border: '1px solid var(--line)',
+                    fontSize: 13.5, lineHeight: 1.6, color: 'var(--ink-2)',
+                  }}
+                >
+                  {ORGANIZER_REQUEST}
+                </blockquote>
+                <button
+                  type="button"
+                  onClick={copyRequest}
+                  style={{
+                    marginTop: 10, padding: '6px 12px', borderRadius: 999, fontSize: 12.5,
+                    border: '1px solid var(--line-2)', background: 'transparent',
+                    color: 'var(--ink-2)', cursor: 'pointer',
+                  }}
+                >
+                  {copied ? 'Kopieret' : 'Kopiér beskeden'}
+                </button>
+              </>
+            )}
+
+            {/* We cannot see whether a meeting with no window is running, so the
+                manual start cannot be dropped — but it is only offered once Teams has
+                had several polls and produced nothing, when "it was never started"
+                has become the likely explanation. */}
+            {waitCase === 'armed_no_window' && (status?.attempts ?? 0) >= MANUAL_START_HINT_ATTEMPTS && (
+              <p data-testid="manual-start-hint" style={HINT_STYLE}>
                 Vi har ikke hørt noget fra Teams endnu. Var mødet allerede i gang, da du indsatte
                 linket, starter Teams ikke transskriptionen af sig selv — så skal den startes i mødet:{' '}
                 <strong>Flere handlinger → Optag og transskriber → Start transskription</strong>.
               </p>
             )}
-            {lastCheck ? (
-              <p
-                data-testid="last-check"
-                style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}
-              >
-                {lastCheck}
-              </p>
-            ) : (
-              <p style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-                Tryk <strong>Mødet er slut – hent nu</strong>, når I er færdige, så henter vi
-                referatet med det samme.
-              </p>
-            )}
-          </>
-        )}
 
-        {state === 'awaiting_teams' && status?.armResult === 'policy_blocked' && (
-          <>
-            <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
-              Jeres Teams-politik blokerer automatisk optagelse og transskription, så OS2taletiltekst
-              kunne ikke slå det til for mødet. Bed jeres IT-administrator følge trin 2 i{' '}
-              <a href={ADMIN_GUIDE} style={{ color: 'var(--ink-2)' }}>opsætningsguiden</a>.
-            </p>
-            <p style={{ marginTop: 14, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-              Transskriptionen hentes stadig automatisk, hvis nogen starter transskription undervejs i mødet.
-            </p>
-          </>
-        )}
-
-        {state === 'awaiting_teams' && status && !status.armed
-          && status.armResult !== 'policy_blocked' && (
-          <>
-            <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6 }}>
-              Du er inviteret til mødet, men ikke organisator, så OS2taletiltekst kan ikke slå optagelse til for dig.
-              Bed organisatoren om at slå automatisk optagelse og transskription til:
-            </p>
-            <blockquote
-              style={{
-                margin: '14px 0 0', padding: '12px 14px', borderRadius: 8,
-                background: 'var(--bg-2)', border: '1px solid var(--line)',
-                fontSize: 13.5, lineHeight: 1.6, color: 'var(--ink-2)',
-              }}
-            >
-              {ORGANIZER_REQUEST}
-            </blockquote>
-            <button
-              type="button"
-              onClick={copyRequest}
-              style={{
-                marginTop: 10, padding: '6px 12px', borderRadius: 999, fontSize: 12.5,
-                border: '1px solid var(--line-2)', background: 'transparent',
-                color: 'var(--ink-2)', cursor: 'pointer',
-              }}
-            >
-              {copied ? 'Kopieret' : 'Kopiér beskeden'}
-            </button>
-            <p style={{ marginTop: 14, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
-              Transskriptionen hentes stadig automatisk, hvis nogen starter transskription undervejs i mødet.
-            </p>
+            {!lastCheck && wait.hint && <p style={HINT_STYLE}>{wait.hint}</p>}
           </>
         )}
 
@@ -537,17 +659,14 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
             <WorkingIndicator label="Behandler mødet…" />
             <p style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}>
               Du behøver ikke blive på siden. Gennemgangen åbner af sig selv, når den er klar,
-              og mødet ligger også på forsiden bagefter.
+              og mødet ligger også i arkivet bagefter.
             </p>
-            {lastCheck && (
-              <p
-                data-testid="last-check"
-                style={{ marginTop: 10, fontSize: 13, color: 'var(--muted)', lineHeight: 1.6 }}
-              >
-                {lastCheck}
-              </p>
-            )}
           </div>
+        )}
+
+        {/* The answer to a hand-pressed check, so pressing the button is never silent. */}
+        {lastCheck && (state === 'awaiting_teams' || state === 'fetching') && (
+          <p data-testid="last-check" style={HINT_STYLE}>{lastCheck}</p>
         )}
 
         {state === 'ready' && !copyGone && (
@@ -609,10 +728,22 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
         {error && (
           <p role="alert" style={{ marginTop: 14, fontSize: 13, color: 'var(--error, #e05252)' }}>{error}</p>
         )}
+
+        {halt === 'signed_out' && (
+          <a
+            href={`/?session_expired=1&from=${encodeURIComponent(`/meeting/${meetingId}`)}`}
+            style={{
+              display: 'inline-block', marginTop: 14, padding: '9px 16px', borderRadius: 8, fontSize: 13,
+              background: 'var(--ink)', color: 'var(--bg)', textDecoration: 'none',
+            }}
+          >
+            Log ind igen
+          </a>
+        )}
       </div>
 
       <div style={{ marginTop: 28, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        {!off && (
+        {!off && !halt && (
           <button
             type="button"
             onClick={() => { void poll(true); }}
@@ -632,17 +763,20 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
                   : 'Tjek nu'}
           </button>
         )}
-        <button
-          type="button"
-          onClick={() => { void disarm(); }}
-          style={{
-            padding: '9px 16px', borderRadius: 8, fontSize: 13,
-            border: '1px solid var(--line-2)', background: 'transparent',
-            color: 'var(--muted)', cursor: 'pointer',
-          }}
-        >
-          {status?.state === 'failed' ? 'Slet' : 'Slå OS2taletiltekst fra'}
-        </button>
+        {/* Without a session the server cannot be told, so removing would only fail. */}
+        {halt !== 'signed_out' && (
+          <button
+            type="button"
+            onClick={() => { void remove(); }}
+            style={{
+              padding: '9px 16px', borderRadius: 8, fontSize: 13,
+              border: '1px solid var(--line-2)', background: 'transparent',
+              color: 'var(--muted)', cursor: 'pointer',
+            }}
+          >
+            {removeLabel}
+          </button>
+        )}
       </div>
     </div>
   );

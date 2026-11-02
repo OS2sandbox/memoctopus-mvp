@@ -36,13 +36,22 @@ function badgeFor(m: ArchiveMeeting): { label: string; variant: ReturnType<typeo
     // Armed from Outlook and over, but never opened: opening it starts the fetch.
     if (m.teamsState === 'deferred') return { label: 'Åbn for at hente', variant: 'default' };
   }
+  // The removed Playwright bot's state, no longer in MeetingStatus but still on
+  // meetings it left in IndexedDB. It never finished joining, so nothing was
+  // recorded by it after that — the meeting page explains this.
+  if ((m.status as string) === 'joining') return { label: 'Afbrudt', variant: 'secondary' };
   return { label: statusLabel(m.status), variant: statusVariant(m.status) };
 }
 
+/**
+ * Only a meeting that has reached Gennemgang or a referat has a page of its own to
+ * open on. Every other status — the live ones, a failed one, the old bot's
+ * `joining` — opens the meeting page, which knows what to show for it.
+ */
 function statusHref(m: ArchiveMeeting) {
-  if (m.status === 'awaiting_teams' || m.status === 'recording' || m.status === 'processing') return `/meeting/${m.id}`;
   if (m.status === 'review') return `/meeting/${m.id}/review`;
-  return `/meeting/${m.id}/minutes`;
+  if (m.status === 'minutes' || m.status === 'done' || m.status === 'redacted') return `/meeting/${m.id}/minutes`;
+  return `/meeting/${m.id}`;
 }
 
 export function ArchiveMeetingRow({

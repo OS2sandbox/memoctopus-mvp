@@ -158,20 +158,14 @@ describe('createMeeting', () => {
       title: 'Ugentligt statusmøde',
       source: 'teams',
       status: 'awaiting_teams',
-      teamsArmed: true,
-      teamsIsOrganizer: true,
       teamsSubject: 'Ugentligt statusmøde',
       scheduledStart: '2026-09-09T08:00:00.000Z',
-      scheduledEnd: '2026-09-09T09:00:00.000Z',
     });
     expect(m).toMatchObject({
-      teamsArmed: true,
-      teamsIsOrganizer: true,
       teamsSubject: 'Ugentligt statusmøde',
       scheduledStart: '2026-09-09T08:00:00.000Z',
-      scheduledEnd: '2026-09-09T09:00:00.000Z',
     });
-    expect(await getMeeting(m.id)).toMatchObject({ teamsArmed: true });
+    expect(await getMeeting(m.id)).toMatchObject({ teamsSubject: 'Ugentligt statusmøde' });
   });
 
   it('stores the Graph marker when supplied and persists it', async () => {
@@ -183,7 +177,7 @@ describe('createMeeting', () => {
   it('leaves the Teams fields off a local recording entirely', async () => {
     const m = await createMeeting({ title: 'Diktat' });
     expect('graphManaged' in m).toBe(false);
-    expect('teamsArmed' in m).toBe(false);
+    expect('teamsSubject' in m).toBe(false);
     expect('scheduledStart' in m).toBe(false);
   });
 
