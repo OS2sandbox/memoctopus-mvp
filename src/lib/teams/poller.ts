@@ -116,9 +116,11 @@ export async function pollMeeting(
   // Organizers move, rename and shorten meetings after the link was pasted, and the
   // stale booking decides both when we may poll and which artifact we accept.
   //
-  // A settled row is left alone unless the user is retrying it by hand: re-reading a
-  // meeting we already collected buys nothing.
-  if (!isTerminal(row.state) || options.force) {
+  // A settled row is left alone unless the user is retrying a failed one by hand.
+  // A collected (`ready`) one stays ready even under a forced poll — the screen
+  // forces one whenever it opens after the meeting — or a meeting deleted in Teams
+  // since would turn from `ready` into `failed` here and lose its referat.
+  if (!isTerminal(row.state) || (options.force && row.state === 'failed')) {
     const refreshed = await refreshSchedule(userId, row);
     if (refreshed.gone) return refreshed.row;
     row = refreshed.row;

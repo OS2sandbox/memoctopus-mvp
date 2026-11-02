@@ -798,6 +798,30 @@ describe('pollMeeting — re-reading the meeting from Graph', () => {
 
     expect(mockGetMeeting).not.toHaveBeenCalled();
   });
+
+  // The screen forces a poll whenever it opens after the meeting's end, so a
+  // collected meeting gets forced polls too. Re-reading it then turned a meeting
+  // since deleted in Teams from `ready` into `failed`, and its referat was lost.
+  it('keeps a collected meeting ready under a forced poll, even if Teams has since deleted it', async () => {
+    mockGet.mockResolvedValue(row({ state: 'ready' }));
+    mockGetMeeting.mockRejectedValue(new GraphError('not_found', 'væk', { status: 404 }));
+
+    const result = await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expect(mockGetMeeting).not.toHaveBeenCalled();
+    expect(mockMark).not.toHaveBeenCalled();
+    expect(mockSetState).not.toHaveBeenCalled();
+    expect(result.state).toBe('ready');
+  });
+
+  it('still re-reads a failed meeting the user retries', async () => {
+    mockGet.mockResolvedValue(row({ state: 'failed', failureReason: 'Ingen lyd' }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expect(mockGetMeeting).toHaveBeenCalledWith('u1', 'graph-1');
+  });
 });
 
 describe('pollMeeting — "Mødet er slut – hent nu" before the booked end', () => {
