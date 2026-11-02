@@ -26,7 +26,6 @@ export interface ComposeTime {
 }
 
 export interface OrganizerItem {
-  itemType: string;
   start: ComposeTime;
   end: ComposeTime;
   /** Mailbox 1.7: the series an occurrence belongs to; null for a single appointment or a series itself. */
@@ -55,10 +54,8 @@ export function getOffice(): OfficeApi | undefined {
 
 // --- MSAL (UMD build, global `msal`) ---------------------------------------
 
-export interface MsalAccount {
-  username?: string;
-  tenantId?: string;
-}
+/** Opaque here: only handed back to MSAL. */
+export type MsalAccount = Record<string, unknown>;
 
 export interface MsalAuthResult {
   accessToken: string;
