@@ -208,6 +208,9 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
   const [intervalMs, setIntervalMs] = useState(FAST_POLL_MS);
   // The row is ready but the server no longer holds its transcript.
   const [copyGone, setCopyGone] = useState(false);
+  // Answers that asking again cannot change: the server does not know the meeting
+  // (404), or the session has expired (401). Polling stops on either.
+  const [halt, setHalt] = useState<'not_found' | 'signed_out' | null>(null);
 
   // Guards so an effect re-run never fires a second forced poll or a second
   // navigation to the review page.
@@ -250,7 +253,18 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
         const res = await fetch(`/api/teams/meetings/${meetingId}${force ? '?poll=1' : ''}`);
         if (signal.aborted) return;
         if (res.status === 404) {
-          setError('Mødet er ikke registreret hos Teams. Prøv at tilføje mødelinket igen.');
+          const body = (await res.json().catch(() => ({}))) as { message?: string };
+          setHalt('not_found');
+          setError(
+            body.message
+              ?? 'Mødet er ikke registreret hos OS2taletiltekst længere, så der hentes intet referat fra Teams. '
+                + 'Du kan fjerne det her.',
+          );
+          return;
+        }
+        if (res.status === 401) {
+          setHalt('signed_out');
+          setError('Du er ikke logget ind længere. Log ind igen for at følge mødet.');
           return;
         }
         if (!res.ok) {
@@ -338,7 +352,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
   // Re-evaluated on every status poll, so it flips on its own without a reload.
   const meetingOver =
     status?.scheduledEnd != null && Date.parse(status.scheduledEnd) <= Date.now();
-  const stopped = off || state === 'ready' || state === 'failed' || state === 'needs_reauth';
+  const stopped = off || halt !== null || state === 'ready' || state === 'failed' || state === 'needs_reauth';
 
   useEffect(() => {
     if (stopped) return;
@@ -378,7 +392,7 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
   // OS2taletiltekst armed the meeting, removing it switches that off again; where
   // nothing was switched on (an invitee, a blocked tenant, a meeting that has
   // already failed), "switch off" would describe something that never happened.
-  const switchedOn = status?.armed === true && status.state !== 'failed';
+  const switchedOn = status?.armed === true && status.state !== 'failed' && halt !== 'not_found';
   const removeLabel = switchedOn ? 'Slå OS2taletiltekst fra' : 'Fjern mødet';
 
   // Stay on the screen when the server could not be told: leaving would strand a
@@ -651,10 +665,22 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
         {error && (
           <p role="alert" style={{ marginTop: 14, fontSize: 13, color: 'var(--error, #e05252)' }}>{error}</p>
         )}
+
+        {halt === 'signed_out' && (
+          <a
+            href={`/?session_expired=1&from=${encodeURIComponent(`/meeting/${meetingId}`)}`}
+            style={{
+              display: 'inline-block', marginTop: 14, padding: '9px 16px', borderRadius: 8, fontSize: 13,
+              background: 'var(--ink)', color: 'var(--bg)', textDecoration: 'none',
+            }}
+          >
+            Log ind igen
+          </a>
+        )}
       </div>
 
       <div style={{ marginTop: 28, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        {!off && (
+        {!off && !halt && (
           <button
             type="button"
             onClick={() => { void poll(true); }}
@@ -674,17 +700,20 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
                   : 'Tjek nu'}
           </button>
         )}
-        <button
-          type="button"
-          onClick={() => { void remove(); }}
-          style={{
-            padding: '9px 16px', borderRadius: 8, fontSize: 13,
-            border: '1px solid var(--line-2)', background: 'transparent',
-            color: 'var(--muted)', cursor: 'pointer',
-          }}
-        >
-          {removeLabel}
-        </button>
+        {/* Without a session the server cannot be told, so removing would only fail. */}
+        {halt !== 'signed_out' && (
+          <button
+            type="button"
+            onClick={() => { void remove(); }}
+            style={{
+              padding: '9px 16px', borderRadius: 8, fontSize: 13,
+              border: '1px solid var(--line-2)', background: 'transparent',
+              color: 'var(--muted)', cursor: 'pointer',
+            }}
+          >
+            {removeLabel}
+          </button>
+        )}
       </div>
     </div>
   );

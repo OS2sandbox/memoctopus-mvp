@@ -605,7 +605,47 @@ describe('TeamsMeetingScreen — error handling', () => {
   it('shows a Danish message when the meeting is unknown server-side', async () => {
     mockFetch.mockResolvedValue({ ok: false, status: 404, json: async () => ({}) });
     renderScreen();
-    expect(await screen.findByRole('alert')).toHaveTextContent(/ikke registreret hos Teams/);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/ikke registreret hos OS2taletiltekst/);
+  });
+
+  // A meeting the server does not know will not become known by asking again.
+  it('stops polling a meeting the server does not know, and offers to remove it', async () => {
+    vi.useFakeTimers();
+    mockFetch.mockResolvedValue({ ok: false, status: 404, json: async () => ({ error: 'not_found' }) });
+    renderScreen();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    mockFetch.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60_000); });
+    expect(mockFetch).not.toHaveBeenCalled();
+    vi.useRealTimers();
+
+    expect(screen.queryByText('Tjek nu')).toBeNull();
+    const btn = screen.getByRole('button', { name: 'Fjern mødet' });
+    await act(async () => { fireEvent.click(btn); });
+    await waitFor(() => {
+      expect(mockDeleteMeeting).toHaveBeenCalledWith(MEETING_ID);
+      expect(mockPush).toHaveBeenCalledWith('/dashboard');
+    });
+  });
+
+  it('asks the user to log in again when the session has expired, and stops polling', async () => {
+    vi.useFakeTimers();
+    mockFetch.mockResolvedValue({ ok: false, status: 401, json: async () => ({ error: 'Unauthorized' }) });
+    renderScreen();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    mockFetch.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60_000); });
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/ikke logget ind/);
+    // Back to this meeting after the sign-in; the marker stops a stale cookie from
+    // bouncing the login page straight back here.
+    expect(screen.getByRole('link', { name: 'Log ind igen' })).toHaveAttribute(
+      'href',
+      `/?session_expired=1&from=${encodeURIComponent(`/meeting/${MEETING_ID}`)}`,
+    );
+    expect(screen.queryByText('Tjek nu')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Fjern mødet|Slå OS2taletiltekst fra/ })).toBeNull();
   });
 
   it('shows a Danish message when the status request fails', async () => {
