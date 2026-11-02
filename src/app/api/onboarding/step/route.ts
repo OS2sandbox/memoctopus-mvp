@@ -37,6 +37,11 @@ async function postHandler(req: NextRequest): Promise<NextResponse> {
   if (!Object.prototype.hasOwnProperty.call(ONBOARDING_STEPS, stepId)) {
     return NextResponse.json({ error: 'Ukendt stepId' }, { status: 400 });
   }
+  const step = ONBOARDING_STEPS[stepId];
+  // Tooltip steps show on every hover and are never remembered, so there is nothing to store.
+  if (step.engine !== 'popover') {
+    return NextResponse.json({ error: 'stepId gemmes ikke' }, { status: 400 });
+  }
 
   const rawMeetingId = body.meetingId;
   if (rawMeetingId != null) {
@@ -44,7 +49,9 @@ async function postHandler(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: 'Ugyldigt meetingId' }, { status: 400 });
     }
   }
-  const meetingId = typeof rawMeetingId === 'string' ? rawMeetingId : null;
+  // The registry decides the scope, not the caller (same rule as OnboardingHint): a global
+  // step stored under a meeting would never match the global key the client reads back.
+  const meetingId = step.scope === 'per-meeting' && typeof rawMeetingId === 'string' ? rawMeetingId : null;
 
   await markStepSeen(session.user.id, stepId, meetingId);
   return NextResponse.json({ ok: true });
