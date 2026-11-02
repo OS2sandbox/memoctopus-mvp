@@ -920,15 +920,19 @@ describe('MeetingPageClient — pagehide cleanup', () => {
     mockGetMeeting.mockResolvedValue(makeMeeting({ audioDeleted: false }));
     mockGetAudio.mockResolvedValue({ blob: mockAudioBlob, mimeType: 'audio/webm' });
 
-    const { unmount } = renderClient({ initialTab: 'recording' });
-    await waitFor(() => screen.getByTestId('recording-screen'));
+    try {
+      const { unmount } = renderClient({ initialTab: 'recording' });
+      await waitFor(() => screen.getByTestId('recording-screen'));
 
-    expect(addSpy).toHaveBeenCalledWith('pagehide', expect.any(Function));
+      // The screen renders as soon as the meeting is loaded; the listener only
+      // follows once the audio has loaded too, a few ticks later.
+      await waitFor(() => expect(addSpy).toHaveBeenCalledWith('pagehide', expect.any(Function)));
 
-    unmount();
-    expect(removeSpy).toHaveBeenCalledWith('pagehide', expect.any(Function));
-
-    addSpy.mockRestore();
-    removeSpy.mockRestore();
+      unmount();
+      expect(removeSpy).toHaveBeenCalledWith('pagehide', expect.any(Function));
+    } finally {
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
+    }
   });
 });
