@@ -8,7 +8,15 @@
 import { runSendProbe } from './send-probe';
 
 type Associate = (name: string, handler: (event: never) => void) => void;
-const office = (globalThis as { Office?: { actions?: { associate?: Associate } } }).Office;
+const office = (globalThis as {
+  Office?: { actions?: { associate?: Associate }; onReady?: () => Promise<unknown> };
+}).Office;
+
+console.info('[os2taletiltekst] commands.js loaded; Office.actions:', Boolean(office?.actions));
+
+// As in Microsoft's own command pages: tell Office the page is up. The web
+// runtime may otherwise never deliver the event.
+void office?.onReady?.();
 
 // The name must match FunctionName on the manifest's LaunchEvent.
 office?.actions?.associate?.('onAppointmentSendProbe', (event) => {

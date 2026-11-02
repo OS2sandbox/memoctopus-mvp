@@ -17,9 +17,23 @@ import { extractJoinLinkFromBody } from '../../src/lib/outlook/join-link-from-bo
 import { getAccessTokenSilently, loadConfig, signInErrorCode } from './auth';
 import type { AsyncResult } from './office';
 
-/** How long to wait before reading the body a second time. Short: past five
- *  seconds Outlook shows its "taking longer than expected" dialog. */
-export const SECOND_READ_DELAY_MS = 2000;
+/** How long to wait before reading the body a second time. Every step has a
+ *  deadline, and together they stay under the five seconds after which Outlook
+ *  shows its "taking longer than expected" dialog. */
+export const SECOND_READ_DELAY_MS = 1500;
+export const BODY_READ_TIMEOUT_MS = 1000;
+export const TOKEN_TIMEOUT_MS = 3000;
+
+/** `promise`, or `fallback` once `ms` have passed without an answer. */
+export function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      () => { clearTimeout(timer); resolve(fallback); },
+    );
+  });
+}
 
 export interface BodyLook {
   /** The extractor's verdict, as the real arming code would see it. */
@@ -31,7 +45,12 @@ export interface BodyLook {
 
 export type BodyRead = BodyLook | { error: string };
 
-export type TokenCheck = { ok: true } | { ok: false; code: string | null } | { skipped: string };
+export type TokenCheck =
+  | { ok: true }
+  | { ok: false; code: string | null }
+  | { skipped: string }
+  /** No answer before TOKEN_TIMEOUT_MS; `step` is how far it got. */
+  | { timedOut: string };
 
 export interface ProbeResult {
   host: string;
@@ -58,6 +77,7 @@ function describeRead(read: BodyRead): string {
 
 function describeToken(token: TokenCheck): string {
   if ('skipped' in token) return `ikke prøvet (${token.skipped})`;
+  if ('timedOut' in token) return `intet svar inden ${TOKEN_TIMEOUT_MS / 1000} sek. (nåede til: ${token.timedOut})`;
   return token.ok ? 'OK' : `fejlede${token.code ? ` (${token.code})` : ''}`;
 }
 
@@ -97,6 +117,12 @@ interface ProbeOffice {
 }
 
 function readHtml(office: ProbeOffice): Promise<BodyRead> {
+  return withTimeout(readHtmlUnbounded(office), BODY_READ_TIMEOUT_MS, {
+    error: `intet svar inden ${BODY_READ_TIMEOUT_MS / 1000} sek.`,
+  });
+}
+
+function readHtmlUnbounded(office: ProbeOffice): Promise<BodyRead> {
   return new Promise((resolve) => {
     const item = office.context.mailbox.item;
     if (!item) return resolve({ error: 'intet møde' });
@@ -111,42 +137,66 @@ function readHtml(office: ProbeOffice): Promise<BodyRead> {
   });
 }
 
-async function checkToken(office: ProbeOffice): Promise<TokenCheck> {
+function checkToken(office: ProbeOffice): Promise<TokenCheck> {
   // Classic Outlook on Windows runs the handler in a JavaScript-only runtime: no
   // DOM to load MSAL into, and no page origin for the config fetch.
-  if (typeof document === 'undefined') return { skipped: 'ingen browser-runtime' };
-  if (!office.context.requirements.isSetSupported('NestedAppAuth', '1.1')) return { skipped: 'NAA mangler' };
-  try {
-    await getAccessTokenSilently(await loadConfig());
-    return { ok: true };
-  } catch (err) {
-    console.warn('[os2taletiltekst] send probe: silent sign-in failed:', err);
-    return { ok: false, code: signInErrorCode(err) };
+  if (typeof document === 'undefined') return Promise.resolve({ skipped: 'ingen browser-runtime' });
+  if (!office.context.requirements.isSetSupported('NestedAppAuth', '1.1')) {
+    return Promise.resolve({ skipped: 'NAA mangler' });
   }
+  // Where it got to, for the report when it never answers.
+  const progress = { step: 'henter opsætning' };
+  const attempt = (async (): Promise<TokenCheck> => {
+    try {
+      const config = await loadConfig();
+      progress.step = 'henter token';
+      await getAccessTokenSilently(config);
+      return { ok: true };
+    } catch (err) {
+      console.warn('[os2taletiltekst] send probe: silent sign-in failed:', err);
+      return { ok: false, code: signInErrorCode(err) };
+    }
+  })();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ timedOut: progress.step }), TOKEN_TIMEOUT_MS);
+    void attempt.then((value) => { clearTimeout(timer); resolve(value); });
+  });
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** event.completed, falling back to plain text where the Markdown option is refused. */
+function complete(event: SendEvent, text: string, markdown?: string): void {
+  try {
+    event.completed(markdown ? { allowEvent: false, errorMessage: text, errorMessageMarkdown: markdown } : { allowEvent: false, errorMessage: text });
+  } catch (err) {
+    console.warn('[os2taletiltekst] send probe: completed() refused the options, retrying plain:', err);
+    event.completed({ allowEvent: false, errorMessage: text });
+  }
+}
+
 export async function runSendProbe(office: ProbeOffice, event: SendEvent): Promise<void> {
   const started = Date.now();
+  console.info('[os2taletiltekst] send probe: started');
   let result: ProbeResult;
   try {
     const diag = office.context.mailbox.diagnostics;
     const host = `${diag?.hostName ?? '?'} ${diag?.hostVersion ?? ''}`.trim();
     const tokenCheck = checkToken(office);
     const first = await readHtml(office);
+    console.info('[os2taletiltekst] send probe: first read', first);
     const second = 'error' in first || first.link !== 'found'
       ? await sleep(SECOND_READ_DELAY_MS).then(() => readHtml(office))
       : null;
     result = { host, first, second, token: await tokenCheck, elapsedMs: Date.now() - started };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    event.completed({ allowEvent: false, errorMessage: `TEST af OS2taletiltekst fejlede: ${message}`.slice(0, 500) });
+    complete(event, `TEST af OS2taletiltekst fejlede: ${message}`.slice(0, 500));
     return;
   }
   console.info('[os2taletiltekst] send probe:', result);
   const report = probeReport(result);
   // allowEvent false is what makes Outlook show the dialog; PromptUser lets the
   // user send anyway. The real handler will always allow the send.
-  event.completed({ allowEvent: false, errorMessage: report.text, errorMessageMarkdown: report.markdown });
+  complete(event, report.text, report.markdown);
 }
