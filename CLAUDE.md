@@ -277,6 +277,7 @@ the container. Note also that `.env.deploy.example`, not `.env.example`, is what
 | `OIDC_CLIENT_ID` / `_SECRET` / `_DISCOVERY_URL` | Generic OIDC provider (Keycloak, Authentik, …) |
 | `OIDC_PROVIDER_ID` / `_NAME` | Callback path segment + account key / button label |
 | `OUTLOOK_ADDIN_ENABLED` | Opt-in (default off) for the Outlook add-in at `/outlook-addin/`. Needs `TEAMS_GRAPH_ENABLED` and a tenant-specific `MICROSOFT_TENANT_ID`; see docs/outlook-addin.md |
+| `OUTLOOK_ADDIN_ID` | Optional GUID for the add-in in the manifest (default: a fixed GUID). Set it only when two installs share one tenant |
 | `GRAPH_BASE_URL` | Microsoft Graph base URL (default `https://graph.microsoft.com/v1.0`) |
 | `TEAMS_SPOKEN_LANGUAGE` | Language Teams transcribes in (default `da-DK`) |
 | `TEAMS_ARTIFACT_MODE` | `prefer-recording` (default) or `transcript-only` (also drops the recording scope from sign-in) |

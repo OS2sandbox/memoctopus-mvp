@@ -22,18 +22,8 @@ export interface StoredMeeting {
   // Set on every meeting created for the Graph integration (the dashboard's link
   // flow, and meetings armed from Outlook). A `source: 'teams'` meeting without it
   // was left behind by the removed Playwright bot. Not derivable from `status`: a
-  // Graph meeting moves on to processing, review, minutes and done like any other,
-  // and `teamsSubject` / `scheduledStart` are absent for instant meetings.
+  // Graph meeting moves on to processing, review, minutes and done like any other.
   graphManaged?: boolean;
-  // Written when a meeting armed from Outlook is imported (see
-  // src/lib/outlook/import-meetings.ts). Nothing reads them yet: the Teams screen
-  // asks the server, which holds the live values. Optional — a local recording,
-  // and a meeting from before this existed, simply don't carry them.
-  //
-  // The meeting's subject as Teams knows it (may differ from our `title`).
-  teamsSubject?: string;
-  // Scheduled start, ISO 8601.
-  scheduledStart?: string;
 }
 
 export interface StoredTranscript {

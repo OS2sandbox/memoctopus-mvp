@@ -9,7 +9,8 @@ export default defineConfig({
     // Component tests opt into jsdom per file with a `// @vitest-environment jsdom` docblock.
     environment: 'node',
     setupFiles: ['./src/test/setup.ts'],
-    exclude: ['node_modules/**', '.next/**'],
+    // .claude/ holds Claude Code worktrees: full checkouts whose tests must not run here.
+    exclude: ['node_modules/**', '.next/**', '.claude/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov', 'html'],
