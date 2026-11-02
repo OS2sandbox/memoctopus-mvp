@@ -74,6 +74,13 @@ describe('WelcomeTour', () => {
     expect(screen.getByRole('dialog', { name: 'Sådan fungerer OS2taletiltekst' })).toBeTruthy();
   });
 
+  // The dialog is app-wide, but the Teams link box is hidden where Teams is off.
+  it('offers the Teams link only as a maybe', () => {
+    setupFirstVisit();
+    const dialog = screen.getByRole('dialog', { name: 'Sådan fungerer OS2taletiltekst' });
+    expect(dialog).toHaveTextContent('hvis Teams er slået til');
+  });
+
   it('keeps every hint closed while the welcome dialog is showing', () => {
     setupFirstVisit();
     expect(screen.getByRole('dialog', { name: 'Sådan fungerer OS2taletiltekst' })).toBeTruthy();
