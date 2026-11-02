@@ -315,16 +315,23 @@ three values to their `OIDC_*` names and set `OIDC_PROVIDER_ID=authentik`.
 ## Long meetings: diarization timeout
 
 Diarization requests are cut off after 5 minutes by default. For long recordings
-(or CPU diarization) raise both values in `.env`, keeping them equal:
+(or CPU diarization) raise the limit in `.env`:
 
 ```bash
-DIARIZATION_TIMEOUT_MS=3600000              # server → diarization service
-NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS=3600000  # browser → app
+DIARIZATION_TIMEOUT_MS=3600000   # 1 hour
 ```
 
-`DIARIZATION_TIMEOUT_MS` is read at runtime. `NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS` is
-compiled into the browser bundle, so after changing it run
-`docker compose up -d --build app`; a plain restart keeps the old value.
+It is read at runtime, so `docker compose up -d app` is enough. It is the only limit
+the app sets: the browser waits for the app, and the app gives up on the diarization
+service after this long.
+
+A reverse proxy in front of the app must allow at least as long, because the diarize
+request returns nothing until the whole recording has been processed. The bundled
+`nginx/nginx.conf` gives `/api/meetings/<id>/diarize` a `proxy_read_timeout` of
+`3600s` (everything else keeps 300 s), so with a higher `DIARIZATION_TIMEOUT_MS` raise
+that too. Behind a different proxy or load balancer, set its idle/read timeout for that
+route the same way; otherwise it cuts the request off first and the user sees speaker
+recognition as failed.
 
 ## Long meetings: LLM context window
 

@@ -22,9 +22,7 @@ RUN node scripts/copy-vad-assets.js
 # providers server-side per request (src/lib/auth/providers.ts), so operators can
 # change login methods with a restart instead of an image rebuild.
 ARG NEXT_PUBLIC_APP_URL=http://localhost:8080
-ARG NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS=300000
-ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL \
-    NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS=$NEXT_PUBLIC_DIARIZATION_TIMEOUT_MS
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 RUN npm run build
 
 # Lightweight stage for the one-shot `migrate` compose service: it only needs
