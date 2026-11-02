@@ -17,6 +17,7 @@ import { transcribeRecording } from '@/lib/transcribe-recording';
 import type { TranscriptSegment } from '@/types';
 import { transcribeAlongCues } from './transcribe-cues';
 import { withMeetingLock } from './meeting-lock';
+import { assertSafeMeetingId } from './meeting-id';
 import { artifactMode } from './artifact-mode';
 
 export { artifactMode };
@@ -90,13 +91,6 @@ export const RECORDING_GRACE_ATTEMPTS = 15;
  * permanent "pending" that no later run can ever get past.
  */
 export const PROCESSING_STALE_MS = 30 * 60 * 1000;
-
-/** Same rule as the pending stash: ids become file names, so keep them inert. */
-export function assertSafeMeetingId(meetingId: string): void {
-  if (!/^[\w-]+$/.test(meetingId)) {
-    throw new Error(`Invalid meetingId: ${meetingId}`);
-  }
-}
 
 function tmpRoot(): string {
   const base = process.env.AUDIO_STORAGE_PATH?.trim() || path.join(process.cwd(), 'audio-storage');

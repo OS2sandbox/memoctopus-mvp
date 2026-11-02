@@ -21,7 +21,7 @@ import { withHandler } from '@/lib/api-handler';
 // when the browser acknowledges that one (DELETE on pending-transcript), or by the
 // TTL sweep. So a reload after this read finds the names again.
 //
-// Wrapped in withHandler so that assertSafeId throwing on an invalid meetingId
+// Wrapped in withHandler so that assertSafeMeetingId throwing on an invalid meetingId
 // returns a parseable JSON 500 instead of a bare HTML error page.
 export const GET = withHandler(
   'meetings/pending-meta',

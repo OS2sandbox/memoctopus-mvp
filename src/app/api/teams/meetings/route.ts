@@ -5,6 +5,7 @@ import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { GraphError, TEAMS_DISABLED_MESSAGE } from '@/lib/teams/graph-client';
 import { graphDate } from '@/lib/teams/graph-dates';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
+import { isSafeMeetingId } from '@/lib/teams/meeting-id';
 import { MeetingIdTakenError, registerTeamsMeeting } from '@/lib/teams/register';
 import { isDeferred, listTeamsMeetings } from '@/lib/teams/store';
 
@@ -14,14 +15,6 @@ function toDate(value: string | null | undefined): Date | null {
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
 }
-
-/**
- * The meeting id is the client's own IndexedDB id, and it ends up as a file
- * name in the pending stash and in the pipeline's scratch directory. Anything
- * outside this alphabet (`../…`) is rejected at the boundary rather than
- * relying on a downstream call happening to validate first.
- */
-const SAFE_MEETING_ID = /^[\w-]+$/;
 
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -93,7 +86,7 @@ export async function POST(req: NextRequest) {
   const meetingId = typeof body.meetingId === 'string' ? body.meetingId.trim() : '';
   const joinUrl = typeof body.joinUrl === 'string' ? body.joinUrl : '';
   if (!meetingId) return NextResponse.json({ error: 'missing-meeting-id' }, { status: 400 });
-  if (!SAFE_MEETING_ID.test(meetingId)) {
+  if (!isSafeMeetingId(meetingId)) {
     return NextResponse.json({ error: 'invalid-meeting-id' }, { status: 400 });
   }
   if (!joinUrl) return NextResponse.json({ error: 'invalid-url' }, { status: 400 });
