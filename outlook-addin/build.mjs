@@ -17,7 +17,11 @@ await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
 
 await build({
-  entryPoints: { taskpane: join(here, 'src', 'taskpane.ts') },
+  entryPoints: {
+    taskpane: join(here, 'src', 'taskpane.ts'),
+    // The test add-in's send event (manifest-test.xml) only.
+    commands: join(here, 'src', 'commands.ts'),
+  },
   outdir: out,
   bundle: true,
   minify: true,
@@ -29,9 +33,11 @@ await build({
   logLevel: 'warning',
 });
 
-// The build id busts Outlook's cache of taskpane.js after a deploy.
-const html = (await readFile(join(here, 'src', 'taskpane.html'), 'utf8')).replaceAll('__BUILD_ID__', buildId);
-await writeFile(join(out, 'taskpane.html'), html);
+// The build id busts Outlook's cache of the scripts after a deploy.
+for (const page of ['taskpane.html', 'commands.html']) {
+  const html = (await readFile(join(here, 'src', page), 'utf8')).replaceAll('__BUILD_ID__', buildId);
+  await writeFile(join(out, page), html);
+}
 await cp(join(here, 'assets'), join(out, 'assets'), { recursive: true });
 
 console.log(`Outlook add-in built into public/outlook-addin/ (${buildId})`);

@@ -91,22 +91,54 @@ export function needsInteraction(err: unknown): boolean {
     .includes(e.errorCode ?? '');
 }
 
-export async function getAccessToken(config: AddinConfig): Promise<string> {
-  const app = await pca(config);
+/**
+ * The code to show next to a failed sign-in, so the user can pass it on and the
+ * admin can look it up: the AADSTS code from Entra when there is one, else MSAL's
+ * own error code. Null when there is neither, or it does not look like a code.
+ */
+export function signInErrorCode(err: unknown): string | null {
+  const e = err as { errorCode?: unknown; errorMessage?: unknown; message?: unknown } | null;
+  if (!e) return null;
+  for (const text of [e.errorMessage, e.message]) {
+    const aadsts = typeof text === 'string' ? /\bAADSTS\d{4,8}\b/.exec(text) : null;
+    if (aadsts) return aadsts[0];
+  }
+  return typeof e.errorCode === 'string' && /^[a-z0-9_]{1,60}$/i.test(e.errorCode) ? e.errorCode : null;
+}
+
+function withCode(text: string, err: unknown): string {
+  const code = signInErrorCode(err);
+  return code ? `${text} Fejlkode: ${code}.` : text;
+}
+
+function silentToken(app: MsalNestablePca, config: AddinConfig): Promise<string> {
   const account = app.getActiveAccount() ?? app.getAllAccounts()[0];
   const request = account ? { scopes: config.scopes, account } : { scopes: config.scopes };
+  return app.acquireTokenSilent(request).then((res) => res.accessToken);
+}
+
+/**
+ * A token without any pop-up, for where Outlook allows none (a send event).
+ * Throws MSAL's own error, so the caller can read its code.
+ */
+export async function getAccessTokenSilently(config: AddinConfig): Promise<string> {
+  return silentToken(await pca(config), config);
+}
+
+export async function getAccessToken(config: AddinConfig): Promise<string> {
+  const app = await pca(config);
   try {
-    return (await app.acquireTokenSilent(request)).accessToken;
+    return await silentToken(app, config);
   } catch (err) {
     if (!needsInteraction(err)) {
       console.warn('[os2taletiltekst] silent sign-in failed:', err);
-      throw new Error('Microsoft-login mislykkedes. Prøv igen, eller kontakt jeres IT-administrator.');
+      throw new Error(withCode('Microsoft-login mislykkedes. Prøv igen, eller kontakt jeres IT-administrator og oplys fejlkoden.', err));
     }
   }
   try {
     return (await app.acquireTokenPopup({ scopes: config.scopes })).accessToken;
   } catch (err) {
     console.warn('[os2taletiltekst] sign-in pop-up failed:', err);
-    throw new Error('Microsoft-login blev ikke gennemført. Tillad pop-up-vinduet, og prøv igen.');
+    throw new Error(withCode('Microsoft-login blev ikke gennemført. Tillad pop-up-vinduet, og prøv igen.', err));
   }
 }

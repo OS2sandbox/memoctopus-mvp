@@ -13,6 +13,8 @@ vi.mock('@/lib/db', () => ({ pool: { query: (...args: unknown[]) => mockQuery(..
 
 import {
   AddinAuthError,
+  addinAllowedEmails,
+  assertAddinAllowed,
   authenticateAddinRequest,
   bearerToken,
   userIdForClaims,
@@ -172,6 +174,47 @@ describe('userIdForClaims', () => {
   it('refuses to guess when two users share an account id', async () => {
     mockQuery.mockResolvedValue({ rows: [{ user_id: 'a' }, { user_id: 'b' }] });
     expect((await refusal(userIdForClaims({ sub: 'x', oid: null, tid: TENANT }))).code).toBe('no_account');
+  });
+});
+
+describe('OUTLOOK_ADDIN_ALLOWED_USERS', () => {
+  const saved = process.env.OUTLOOK_ADDIN_ALLOWED_USERS;
+  beforeEach(() => mockQuery.mockReset());
+  afterEach(() => {
+    if (saved === undefined) delete process.env.OUTLOOK_ADDIN_ALLOWED_USERS;
+    else process.env.OUTLOOK_ADDIN_ALLOWED_USERS = saved;
+  });
+
+  it('lets everyone in while unset or blank, without a query', async () => {
+    for (const value of [undefined, '', '   ']) {
+      if (value === undefined) delete process.env.OUTLOOK_ADDIN_ALLOWED_USERS;
+      else process.env.OUTLOOK_ADDIN_ALLOWED_USERS = value;
+      expect(addinAllowedEmails()).toBeNull();
+      await expect(assertAddinAllowed('user-1')).resolves.toBeUndefined();
+    }
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it('lets a listed user in, whatever the case or spacing', async () => {
+    process.env.OUTLOOK_ADDIN_ALLOWED_USERS = ' Someone@Example.dk , other@example.dk';
+    mockQuery.mockResolvedValue({ rows: [{ email: 'someone@example.DK' }] });
+    await expect(assertAddinAllowed('user-1')).resolves.toBeUndefined();
+    expect(mockQuery.mock.calls[0][1]).toEqual(['user-1']);
+  });
+
+  it('refuses anyone else, and fails closed on a list with no addresses', async () => {
+    process.env.OUTLOOK_ADDIN_ALLOWED_USERS = 'someone@example.dk';
+    mockQuery.mockResolvedValue({ rows: [{ email: 'colleague@example.dk' }] });
+    const err = await refusal(assertAddinAllowed('user-2'));
+    expect(err.code).toBe('not_allowed');
+    expect(err.status).toBe(403);
+
+    mockQuery.mockResolvedValue({ rows: [] });
+    expect((await refusal(assertAddinAllowed('ghost'))).code).toBe('not_allowed');
+
+    process.env.OUTLOOK_ADDIN_ALLOWED_USERS = ' , ';
+    mockQuery.mockResolvedValue({ rows: [{ email: 'someone@example.dk' }] });
+    expect((await refusal(assertAddinAllowed('user-1'))).code).toBe('not_allowed');
   });
 });
 

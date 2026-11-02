@@ -124,6 +124,7 @@ services:
       # and only together with TEAMS_GRAPH_ENABLED and a tenant-specific
       # MICROSOFT_TENANT_ID. Read per request: a restart is enough.
       - OUTLOOK_ADDIN_ENABLED=${OUTLOOK_ADDIN_ENABLED:-}
+      - OUTLOOK_ADDIN_ALLOWED_USERS=${OUTLOOK_ADDIN_ALLOWED_USERS:-}
       - GRAPH_BASE_URL=${GRAPH_BASE_URL:-}
       - TEAMS_SPOKEN_LANGUAGE=${TEAMS_SPOKEN_LANGUAGE:-}
       # prefer-recording (default) re-transcribes Teams' recording with hviske and
