@@ -4,7 +4,7 @@ import React, { useState, useEffect, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useIsMobile } from '@/lib/use-is-mobile';
-import { createMeeting, getAllMeetings } from '@/lib/storage';
+import { createMeeting, getAllMeetings, updateMeeting } from '@/lib/storage';
 import { importOutlookMeetings } from '@/lib/outlook/import-meetings';
 import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
 import { setPendingUploadFile } from '@/lib/pending-upload';
@@ -13,6 +13,12 @@ import { armErrorMessage } from '@/components/dashboard/arm-error-message';
 import { signIn } from '@/lib/auth-client';
 import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
+
+/** The parts of POST /api/teams/meetings' answer the dashboard keeps. */
+interface RegisteredTeamsMeeting {
+  subject?: string | null;
+  scheduledStart?: string | null;
+}
 
 interface TeamsStatus {
   /** False when the server has TEAMS_GRAPH_ENABLED off. Absent means on. */
@@ -102,10 +108,14 @@ export default function OptaqPage() {
     setLinkLoading(true);
     setLinkError('');
     let localId: string | null = null;
+    // What the user typed under mødedetaljer applies to a pasted link as much as
+    // to a recording.
+    const typedTitle = title.trim();
     try {
       const dateStr = new Intl.DateTimeFormat('da', { day: 'numeric', month: 'long' }).format(new Date());
       const meeting = await createMeeting({
-        title: `Teams-møde · ${dateStr}`,
+        title: typedTitle || `Teams-møde · ${dateStr}`,
+        participants: participants.length > 0 ? participants : undefined,
         source: 'teams',
         graphManaged: true,
         meetingUrl: link,
@@ -124,6 +134,20 @@ export default function OptaqPage() {
         await deleteMeetingAndUnregister(meeting.id).catch(() => {});
         setLinkLoading(false);
         return;
+      }
+      // Teams knows the meeting's name and when it is. Its name becomes the title
+      // in the Arkiv and in exports unless the user typed one, and its start is the
+      // referat's date. Best effort: the meeting works without either.
+      const registered = (await res.json().catch(() => ({}))) as RegisteredTeamsMeeting;
+      const subject = registered.subject?.trim();
+      const patch = {
+        ...(!typedTitle && subject ? { title: subject } : {}),
+        ...(registered.scheduledStart ? { recordedAt: registered.scheduledStart } : {}),
+      };
+      if (Object.keys(patch).length > 0) {
+        await updateMeeting(meeting.id, patch).catch((err) => {
+          console.warn('[dashboard] kunne ikke gemme mødets navn fra Teams:', err);
+        });
       }
       router.push(`/meeting/${meeting.id}`);
     } catch {

@@ -42,11 +42,13 @@ vi.mock('next/link', () => ({
 
 const mockGetAllMeetings = vi.fn();
 const mockCreateMeeting = vi.fn();
+const mockUpdateMeeting = vi.fn();
 const mockDeleteMeeting = vi.fn();
 
 vi.mock('@/lib/storage', () => ({
   getAllMeetings: (...args: unknown[]) => mockGetAllMeetings(...args),
   createMeeting: (...args: unknown[]) => mockCreateMeeting(...args),
+  updateMeeting: (...args: unknown[]) => mockUpdateMeeting(...args),
 }));
 
 // The orphan cleanup goes through the shared helper, which also unregisters the
@@ -95,6 +97,8 @@ beforeEach(() => {
   mockPush.mockReset();
   mockGetAllMeetings.mockReset();
   mockCreateMeeting.mockReset();
+  mockUpdateMeeting.mockReset();
+  mockUpdateMeeting.mockResolvedValue(undefined);
   mockSetPendingUploadFile.mockReset();
   mockDeleteMeeting.mockReset();
   mockDeleteMeeting.mockResolvedValue(undefined);
@@ -805,6 +809,68 @@ describe('OptaqPage — Teams meeting link flow', () => {
       expect(mockDeleteMeeting).toHaveBeenCalledWith('teams-5');
     });
     expect(mockPush).not.toHaveBeenCalled();
+  });
+
+  // The registration answers with what Teams knows about the meeting. It used to
+  // be thrown away, so every Teams meeting in the Arkiv and in exports was called
+  // "Teams-møde · <dato>", and what the user typed under mødedetaljer was ignored.
+  describe('what the meeting is called and who is in it', () => {
+    const ARMED = {
+      armed: true,
+      armResult: 'armed',
+      isOrganizer: true,
+      subject: 'Ugentligt statusmøde',
+      scheduledStart: '2026-11-04T09:00:00.000Z',
+      scheduledEnd: '2026-11-04T10:00:00.000Z',
+    };
+
+    async function pasteLink() {
+      const linkInput = screen.getByPlaceholderText('Indsæt mødelink…');
+      fireEvent.change(linkInput, { target: { value: 'https://teams.microsoft.com/abc' } });
+      await act(async () => { fireEvent.keyDown(linkInput, { key: 'Enter' }); });
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('/meeting/teams-7'));
+    }
+
+    beforeEach(() => {
+      mockCreateMeeting.mockResolvedValue({ id: 'teams-7' });
+      routeFetch({ arm: () => ({ ok: true, status: 200, json: async () => ARMED }) });
+    });
+
+    it('takes the title and date from Teams when none was typed', async () => {
+      renderPage();
+      await pasteLink();
+
+      expect(mockUpdateMeeting).toHaveBeenCalledWith('teams-7', {
+        title: 'Ugentligt statusmøde',
+        recordedAt: '2026-11-04T09:00:00.000Z',
+      });
+    });
+
+    it('keeps the title the user typed', async () => {
+      renderPage();
+      fireEvent.change(screen.getByPlaceholderText('Navngiv mødet…'), { target: { value: 'Bestyrelsesmøde' } });
+      await pasteLink();
+
+      expect(mockCreateMeeting).toHaveBeenCalledWith(expect.objectContaining({ title: 'Bestyrelsesmøde' }));
+      expect(mockUpdateMeeting).not.toHaveBeenCalledWith('teams-7', expect.objectContaining({ title: expect.anything() }));
+    });
+
+    it('passes the participants typed under mødedetaljer', async () => {
+      renderPage();
+      const adding = screen.getByPlaceholderText('+ tilføj');
+      fireEvent.change(adding, { target: { value: 'Mette Hansen' } });
+      fireEvent.keyDown(adding, { key: 'Enter' });
+      await pasteLink();
+
+      expect(mockCreateMeeting).toHaveBeenCalledWith(expect.objectContaining({ participants: ['Mette Hansen'] }));
+    });
+
+    it('still opens the meeting when the title cannot be stored', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mockUpdateMeeting.mockRejectedValue(new Error('idb'));
+      renderPage();
+      await pasteLink();
+    });
   });
 
   it('also unregisters through the helper when the request itself fails (the POST may have landed)', async () => {
