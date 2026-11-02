@@ -294,3 +294,25 @@ the container. Note also that `.env.deploy.example`, not `.env.example`, is what
   that `docker-compose.yml` does not pass to the app.
 - Test helpers: `src/test/helpers.ts` exports `FAKE_SESSION` and `makeJsonReq()`.
 - API route tests mock `@/lib/db/user-schema` and `@/lib/auth` to avoid real DB/auth dependencies.
+- **Real SQL without a database server:** `src/test/pglite.ts` backs `@/lib/db` with an
+  in-process Postgres (PGlite), so `ensureUserSchema` and the real queries run inside
+  `npm test`. Use it for anything whose correctness lives in SQL (filters, upserts,
+  migrations); name those files `*.db.test.ts`:
+  ```ts
+  vi.mock('@/lib/db', async () => (await import('@/test/pglite')).pgliteDbModule());
+  import { usePgliteDb, pgliteSql } from '@/test/pglite';
+  usePgliteDb(); // one database per file, user tables emptied before each test
+  ```
+  It is a single connection, so locking between two sessions (`withMeetingLock`) is
+  still mocked.
+- **Regression tests:** every bug fix comes with a test that fails when the fix is
+  reverted; check it by reverting before you commit.
+- **Guard tests** that fail when two things drift apart:
+  - `src/compose-environment.test.ts`: env vars read by server code vs `docker-compose.yml`.
+  - `src/lib/onboarding/registry-usage.test.ts`: onboarding step ids in the registry vs the
+    components that render them.
+  - `src/lib/outlook/manifest.test.ts`: the Outlook manifest output vs `ADDIN_VERSION`
+    (bump the version when the manifest changes; the admin must re-upload it).
+  - `src/lib/ai/llm-limits.test.ts` / `llm-client.test.ts`: the app's model and context
+    defaults vs `docker-compose.ai.yml`.
+- Vitest ignores `.claude/` (Claude Code worktrees live there).
