@@ -35,8 +35,9 @@ Do it in this order:
 > these permissions. A tenant that hasn't granted admin consent answers "Need
 > admin approval", and then nobody in it can sign in with Microsoft at all.
 
-By default, a meeting's recording is deleted from the organizer's OneDrive once it
-has been transcribed. Set `TEAMS_DELETE_RECORDING=false` to keep it (then
+By default, a meeting's recording is deleted from the organizer's OneDrive once the
+user's browser has saved the transcript. It is kept if the app had to fall back to
+Teams' own transcript. Set `TEAMS_DELETE_RECORDING=false` to always keep it (then
 `Files.ReadWrite` isn't needed).
 
 More detail:

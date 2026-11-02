@@ -155,7 +155,7 @@ Microsoft login enables itself as soon as `MICROSOFT_CLIENT_ID` and
    | `OnlineMeetings.ReadWrite` | Turning on automatic transcription per meeting |
    | `OnlineMeetingTranscript.Read.All` | Fetching the transcript afterwards |
    | `OnlineMeetingRecording.Read.All` | Fetching the recording afterwards |
-   | `Files.ReadWrite` | Deleting that recording from the organizer's OneDrive once it is transcribed |
+   | `Files.ReadWrite` | Deleting that recording from the organizer's OneDrive once the user's browser has saved the transcript |
    | `User.Read`, `offline_access` | Identity, and refreshing access without re-login |
 
    Of the meeting permissions, `OnlineMeetingRecording.Read.All` is the widest (the
@@ -249,7 +249,10 @@ meetings, so an uncollected transcript stays at most about an hour plus five min
 still working is never touched).
 The sweep runs even with `TEAMS_GRAPH_ENABLED` off, so leftovers do not linger. If
 the user returns after that, the meeting screen offers "Hent igen", which collects it
-from Teams again while the meeting is less than 24 hours old.
+from Teams again: for up to 30 days after the meeting while the recording is still in
+OneDrive, and for 24 hours once it has been deleted. The OneDrive delete is queued only
+when the browser acknowledges the transcript, and never when the app fell back to
+Teams' own transcript, so a failed or abandoned hand-off never costs the recording.
 
 ## Single sign-on (OIDC)
 
