@@ -37,7 +37,7 @@ export function OnboardingHint({
   children: React.ReactNode;
 }) {
   const step = findStep(stepId);
-  const { isStepSeen, markSeen, showWelcome, claim, release, isActive } = useOnboarding();
+  const { isStepSeen, markSeen, showWelcome, claim, release, isActive, shown } = useOnboarding();
 
   // The registry decides whether a hint is remembered once or once per meeting —
   // not the call site. Passing meetingId at a `global` step used to scope its
@@ -65,8 +65,10 @@ export function OnboardingHint({
   // saves, so it clears the ref to keep the cleanup from saving a second time.
   const shownKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (open) shownKeyRef.current = key;
-  }, [open, key]);
+    if (!open) return;
+    shownKeyRef.current = key;
+    shown(key);
+  }, [open, key, shown]);
 
   const dismiss = () => {
     shownKeyRef.current = null;
@@ -74,8 +76,8 @@ export function OnboardingHint({
   };
 
   useEffect(() => {
-    if (!pending) return;
-    claim(key, instanceId);
+    if (!pending || !step) return;
+    claim(key, instanceId, step.severity);
     return () => {
       release(key, instanceId);
       if (shownKeyRef.current === key) {

@@ -108,8 +108,9 @@ describe('OnboardingHint — one instance reused for different steps', () => {
   }
 
   it('does not mark the new step seen when it was only queued, never shown', () => {
-    // C mounts first and holds the slot; the reused instance shows A, then is
-    // re-pointed at B while C is still ahead of it in the queue.
+    // The reused instance shows H first (same severity as C, mounted earlier),
+    // then is re-pointed at B, which queues behind C.
+    const H = 'review.generate-button';
     function Tree({ step, meetingId }: { step: string; meetingId: string | null }) {
       return (
         <Provider>
@@ -122,12 +123,12 @@ describe('OnboardingHint — one instance reused for different steps', () => {
         </Provider>
       );
     }
-    const { rerender, unmount } = render(<Tree step={A} meetingId={null} />);
-    expect(screen.getByText(copyOf(A))).toBeTruthy();
+    const { rerender, unmount } = render(<Tree step={H} meetingId={null} />);
+    expect(screen.getByText(copyOf(H))).toBeTruthy();
 
     rerender(<Tree step={B} meetingId="m-1" />);
-    // A was shown, so leaving it counts as seen; B is queued behind C.
-    expect(saves()).toEqual([{ stepId: A, meetingId: null }]);
+    // H was shown, so leaving it counts as seen; B is queued behind C.
+    expect(saves()).toEqual([{ stepId: H, meetingId: null }]);
     expect(screen.queryByText(copyOf(B))).toBeNull();
 
     unmount();
@@ -144,6 +145,75 @@ describe('OnboardingHint — one instance reused for different steps', () => {
       { stepId: A, meetingId: null },
       { stepId: B, meetingId: 'm-1' },
     ]);
+  });
+});
+
+// One bubble at a time, and the important one first: a new user should meet
+// "optag" before the Arkiv explainer, whatever order the page mounts them in.
+describe('OnboardingHint — queue across different steps', () => {
+  it('opens the higher-severity step first, then the next when it is dismissed', async () => {
+    expect(getStep(A).severity).toBe('low');
+    expect(getStep(C).severity).toBe('high');
+    render(
+      <Provider>
+        <OnboardingHint stepId={A}>
+          <span>arkiv</span>
+        </OnboardingHint>
+        <OnboardingHint stepId={C}>
+          <span>optag</span>
+        </OnboardingHint>
+      </Provider>,
+    );
+    expect(screen.getByText(copyOf(C))).toBeTruthy();
+    expect(screen.queryByText(copyOf(A))).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('forstået'));
+    });
+    expect(screen.queryByText(copyOf(C))).toBeNull();
+    expect(screen.getByText(copyOf(A))).toBeTruthy();
+  });
+
+  it('keeps steps of equal severity in mount order', () => {
+    const H = 'review.generate-button'; // high, like C
+    render(
+      <Provider>
+        <OnboardingHint stepId={H}>
+          <span>first</span>
+        </OnboardingHint>
+        <OnboardingHint stepId={C}>
+          <span>second</span>
+        </OnboardingHint>
+      </Provider>,
+    );
+    expect(screen.getByText(copyOf(H))).toBeTruthy();
+    expect(screen.queryByText(copyOf(C))).toBeNull();
+  });
+
+  it('does not pull an open bubble away when a more important one mounts later', () => {
+    function Page({ loaded }: { loaded: boolean }) {
+      return (
+        <Provider>
+          <OnboardingHint stepId={A}>
+            <span>arkiv</span>
+          </OnboardingHint>
+          {loaded && (
+            <OnboardingHint stepId={C}>
+              <span>optag</span>
+            </OnboardingHint>
+          )}
+        </Provider>
+      );
+    }
+    const { rerender } = render(<Page loaded={false} />);
+    expect(screen.getByText(copyOf(A))).toBeTruthy();
+
+    rerender(<Page loaded />);
+    expect(screen.getByText(copyOf(A))).toBeTruthy();
+    expect(screen.queryByText(copyOf(C))).toBeNull();
+
+    fireEvent.click(screen.getByText('forstået'));
+    expect(screen.getByText(copyOf(C))).toBeTruthy();
   });
 });
 

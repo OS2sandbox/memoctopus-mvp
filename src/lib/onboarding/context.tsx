@@ -2,7 +2,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
-import { ONE_TIME_HINT_IDS } from './steps';
+import { ONE_TIME_HINT_IDS, type OnboardingStep } from './steps';
 
 type SeenStep = { stepId: string; meetingId: string | null };
 
@@ -17,19 +17,28 @@ type OnboardingContextValue = {
   startTour: () => void;
   /**
    * One hint at a time, app-wide, so a page never shows several onboarding
-   * bubbles at once. `claim` registers a step as pending (FIFO — first
-   * mounted, first shown) and returns whether THIS instance owns the slot:
-   * the same step id can wrap several DOM elements (e.g. a "Del" button
+   * bubbles at once. `claim` registers a step as pending; the one shown next is
+   * the highest-severity pending step, first claimed among equals, so a new
+   * user meets "optag" before the Arkiv explainer. A bubble already on screen
+   * (reported with `shown`) keeps the slot until it is dismissed or unmounted,
+   * even if a more important step mounts meanwhile: it never jumps away mid-read.
+   *
+   * The same step id can wrap several DOM elements (e.g. a "Del" button
    * repeated once per card in a list), but only one instance owns the slot
    * at a time, so only one bubble renders for that step no matter how many
    * elements reference it. The other instances wait behind the owner and the
    * next one takes over (keeping the step's place in the queue) when the
    * owner releases.
    */
-  claim: (key: string, instanceId: string) => boolean;
+  claim: (key: string, instanceId: string, severity: OnboardingStep['severity']) => void;
   release: (key: string, instanceId: string) => void;
   isActive: (key: string, instanceId: string) => boolean;
+  shown: (key: string) => void;
 };
+
+const SEVERITY_RANK: Record<OnboardingStep['severity'], number> = { high: 3, medium: 2, low: 1 };
+
+type Pending = { key: string; rank: number };
 
 const OnboardingContext = createContext<OnboardingContextValue | null>(null);
 
@@ -92,6 +101,18 @@ export function OnboardingProvider({
   const [fetched, setFetched] = useState<OnboardingInitialState | null>(null);
   const current = initial ?? fetched ?? LOADING_STATE;
 
+  // Seeded from `initial` when the caller has it synchronously (tests, or a caller
+  // that already fetched); otherwise starts empty and is seeded by the fetch below
+  // when it resolves. Independent state from then on — markSeen/startTour mutate it
+  // locally, ahead of the save reaching the server.
+  const [seen, setSeen] = useState<Set<string>>(
+    () => new Set((initial ?? LOADING_STATE).seen.map((s) => seenKey(s.stepId, s.meetingId))),
+  );
+  // Mirrors `seen`, but as a ref: markSeen reads this synchronously to decide whether to
+  // POST, and React 18 batches setState updaters (their timing relative to the rest of
+  // the call is not guaranteed), so that decision cannot be made inside setSeen's updater.
+  const postedRef = useRef<Set<string>>(new Set(seen));
+
   useEffect(() => {
     if (initial !== undefined) return; // caller already has the state
     let cancelled = false;
@@ -100,7 +121,13 @@ export function OnboardingProvider({
         const res = await fetch('/api/onboarding/state');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as OnboardingInitialState;
-        if (!cancelled) setFetched(data);
+        if (cancelled) return;
+        // Seed `seen` in the same batch as `fetched`, so no render ever has the
+        // loaded state with the still-empty seen set (every hint unseen).
+        const keys = new Set(data.seen.map((s) => seenKey(s.stepId, s.meetingId)));
+        postedRef.current = new Set(keys);
+        setSeen(keys);
+        setFetched(data);
       } catch (err) {
         console.error('[onboarding] could not load state; continuing without onboarding', err);
         if (!cancelled) setFetched({ tourSkipped: false, tourCompleted: false, seen: [], unavailable: true });
@@ -112,25 +139,6 @@ export function OnboardingProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Seeded from `initial` when the caller has it synchronously (tests, or a caller
-  // that already fetched); otherwise starts empty and is re-seeded once by the effect
-  // below when the fetch resolves. Independent state from then on — markSeen/startTour
-  // mutate it locally, ahead of the save reaching the server.
-  const [seen, setSeen] = useState<Set<string>>(
-    () => new Set((initial ?? LOADING_STATE).seen.map((s) => seenKey(s.stepId, s.meetingId))),
-  );
-  // Mirrors `seen`, but as a ref: markSeen reads this synchronously to decide whether to
-  // POST, and React 18 batches setState updaters (their timing relative to the rest of
-  // the call is not guaranteed), so that decision cannot be made inside setSeen's updater.
-  const postedRef = useRef<Set<string>>(new Set(seen));
-  useEffect(() => {
-    if (fetched) {
-      const keys = new Set(fetched.seen.map((s) => seenKey(s.stepId, s.meetingId)));
-      setSeen(keys);
-      postedRef.current = new Set(keys);
-    }
-  }, [fetched]);
-
   const unavailable = current.unavailable === true;
   const isFirstTimeUser =
     !unavailable && !current.tourSkipped && !current.tourCompleted && current.seen.length === 0;
@@ -139,14 +147,15 @@ export function OnboardingProvider({
     if (isFirstTimeUser) setShowWelcome(true);
   }, [isFirstTimeUser]);
 
-  // FIFO queue of pending (unseen, mounted) hint keys and the component
-  // instances waiting on each one (the first is the owner). Not reactive
-  // state on its own — `queueVersion` is bumped to force a re-render whenever
-  // the queue changes, since the queue/claimants themselves live in refs to
-  // avoid tearing between the many OnboardingHint instances that read and
-  // mutate them during render/effects.
-  const queueRef = useRef<string[]>([]);
+  // Pending (unseen, mounted) hint keys in claim order, the component instances
+  // waiting on each one (the first is the owner), and the key whose bubble is on
+  // screen. Not reactive state on its own — `queueVersion` is bumped to force a
+  // re-render whenever the queue changes, since these live in refs to avoid
+  // tearing between the many OnboardingHint instances that read and mutate them
+  // during render/effects.
+  const queueRef = useRef<Pending[]>([]);
   const claimantsRef = useRef<Map<string, string[]>>(new Map());
+  const shownRef = useRef<string | null>(null);
   const [queueVersion, setQueueVersion] = useState(0);
 
   const isStepSeen = useCallback(
@@ -155,65 +164,80 @@ export function OnboardingProvider({
     [seen, unavailable],
   );
 
-  const claim = useCallback((key: string, instanceId: string): boolean => {
-    const claimants = claimantsRef.current;
-    const waiting = claimants.get(key);
-    if (!waiting) {
-      claimants.set(key, [instanceId]);
-      queueRef.current = [...queueRef.current, key];
-      setQueueVersion((v) => v + 1);
-      return true;
-    }
-    if (!waiting.includes(instanceId)) waiting.push(instanceId);
-    return waiting[0] === instanceId;
-  }, []);
-
-  const release = useCallback((key: string, instanceId: string) => {
-    const claimants = claimantsRef.current;
-    const waiting = claimants.get(key);
-    if (!waiting?.includes(instanceId)) return;
-    const rest = waiting.filter((id) => id !== instanceId);
-    if (rest.length > 0) {
-      // Another instance of the same step is still mounted: it inherits the slot
-      // (and the step's place in the queue) instead of the hint silently vanishing.
-      claimants.set(key, rest);
-    } else {
-      claimants.delete(key);
-      queueRef.current = queueRef.current.filter((k) => k !== key);
-    }
+  const dropFromQueue = useCallback((key: string) => {
+    claimantsRef.current.delete(key);
+    queueRef.current = queueRef.current.filter((p) => p.key !== key);
+    if (shownRef.current === key) shownRef.current = null;
     setQueueVersion((v) => v + 1);
   }, []);
+
+  const claim = useCallback((key: string, instanceId: string, severity: OnboardingStep['severity']) => {
+    const waiting = claimantsRef.current.get(key);
+    if (waiting) {
+      if (!waiting.includes(instanceId)) waiting.push(instanceId);
+      return;
+    }
+    claimantsRef.current.set(key, [instanceId]);
+    queueRef.current = [...queueRef.current, { key, rank: SEVERITY_RANK[severity] }];
+    setQueueVersion((v) => v + 1);
+  }, []);
+
+  const release = useCallback(
+    (key: string, instanceId: string) => {
+      const waiting = claimantsRef.current.get(key);
+      if (!waiting?.includes(instanceId)) return;
+      const rest = waiting.filter((id) => id !== instanceId);
+      if (rest.length === 0) {
+        dropFromQueue(key);
+        return;
+      }
+      // Another instance of the same step is still mounted: it inherits the slot
+      // (and the step's place in the queue) instead of the hint silently vanishing.
+      claimantsRef.current.set(key, rest);
+      setQueueVersion((v) => v + 1);
+    },
+    [dropFromQueue],
+  );
 
   const isActive = useCallback(
     (key: string, instanceId: string): boolean => {
       void queueVersion; // subscribe to queue changes
       if (claimantsRef.current.get(key)?.[0] !== instanceId) return false;
-      return queueRef.current[0] === key;
+      const queue = queueRef.current;
+      const onScreen = shownRef.current;
+      if (onScreen && queue.some((p) => p.key === onScreen)) return onScreen === key;
+      // Highest severity first; `>` rather than `>=` keeps the first claimed among equals.
+      let head: Pending | undefined;
+      for (const p of queue) if (!head || p.rank > head.rank) head = p;
+      return head?.key === key;
     },
     [queueVersion],
   );
 
-  const markSeen = useCallback((stepId: string, meetingId: string | null = null) => {
-    const key = seenKey(stepId, meetingId);
-    setSeen((prev) => {
-      if (prev.has(key)) return prev;
-      const next = new Set(prev);
-      next.add(key);
-      return next;
-    });
-    if (claimantsRef.current.has(key)) {
-      claimantsRef.current.delete(key);
-      queueRef.current = queueRef.current.filter((k) => k !== key);
-      setQueueVersion((v) => v + 1);
-    }
-    // postedRef, not `seen`/the updater above: an already-seen step (from `initial`,
-    // a prior call this session, or a duplicate call arriving before the matching
-    // setSeen has committed) must not re-POST.
-    if (!postedRef.current.has(key)) {
-      postedRef.current.add(key);
-      void postStep({ stepId, meetingId });
-    }
+  const shown = useCallback((key: string) => {
+    shownRef.current = key;
   }, []);
+
+  const markSeen = useCallback(
+    (stepId: string, meetingId: string | null = null) => {
+      const key = seenKey(stepId, meetingId);
+      setSeen((prev) => {
+        if (prev.has(key)) return prev;
+        const next = new Set(prev);
+        next.add(key);
+        return next;
+      });
+      if (claimantsRef.current.has(key)) dropFromQueue(key);
+      // postedRef, not `seen`/the updater above: an already-seen step (from `initial`,
+      // a prior call this session, or a duplicate call arriving before the matching
+      // setSeen has committed) must not re-POST.
+      if (!postedRef.current.has(key)) {
+        postedRef.current.add(key);
+        void postStep({ stepId, meetingId });
+      }
+    },
+    [dropFromQueue],
+  );
 
   const openWelcome = useCallback(() => setShowWelcome(true), []);
 
@@ -247,8 +271,9 @@ export function OnboardingProvider({
       claim,
       release,
       isActive,
+      shown,
     }),
-    [isStepSeen, markSeen, isFirstTimeUser, showWelcome, openWelcome, closeWelcome, startTour, claim, release, isActive],
+    [isStepSeen, markSeen, isFirstTimeUser, showWelcome, openWelcome, closeWelcome, startTour, claim, release, isActive, shown],
   );
 
   return (
