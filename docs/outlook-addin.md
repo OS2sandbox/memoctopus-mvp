@@ -68,6 +68,8 @@ docker compose … up -d app   # a restart is enough; the add-in is built into t
 ```
 
 The manifest is then served at `https://<this host>/outlook-addin/manifest.xml`.
+If it answers 404 although the flag is set, the server log says why, once per
+start (`[outlook] OUTLOOK_ADDIN_ENABLED=true, but the add-in stays off: …`).
 
 Outlook and the admin center tell add-ins apart by the manifest's id. Every
 deployment uses the same one unless told otherwise, so when two deployments share
@@ -92,11 +94,25 @@ file: the admin center keeps the file it was given. `manifest.test.ts` pins a ha
 of the output to the version, so a change without a bump fails the tests. Changes
 to the pane itself (`outlook-addin/src/`) need only a deploy.
 
+### Working on the pane
+
+`npm run build` builds the pane into `public/outlook-addin/` before `next build`,
+but `npm run dev` does not build it at all. Run `npm run build:addin` once before
+`npm run dev`, and again after every change under `outlook-addin/src/`, then
+reload the pane. `public/outlook-addin/` is build output, not checked in.
+
 ## Limits
 
 - Outlook must reach this host: on the municipality's network or VPN.
-- Only the organizer can switch recording on; an invitee gets the meeting registered
-  and is told the organizer must start transcription.
+- The button is only on the organizer's meeting form (the manifest declares
+  `AppointmentOrganizerCommandSurface` alone): an invitee never sees it. Someone
+  who organizes the appointment in Outlook but not the Teams meeting behind its
+  link (a pasted link, a delegate) gets the meeting registered, and the pane says
+  the Teams organizer must start transcription.
+- A recurring series is one Teams meeting. Switching OS2taletiltekst on for any
+  occurrence sets automatic recording on that meeting, so Teams records every
+  occurrence; only the ones switched on are fetched, and the other recordings stay
+  in Teams. The pane says so on a recurring appointment, but does not refuse.
 - Classic Outlook older than build 2409 and Office LTSC have no NAA; the pane says
   so, and the Mødelink box still works.
 - A Conditional Access rule "Require approved client app" blocks NAA for its users.
