@@ -117,14 +117,6 @@ function silentToken(app: MsalNestablePca, config: AddinConfig): Promise<string>
   return app.acquireTokenSilent(request).then((res) => res.accessToken);
 }
 
-/**
- * A token without any pop-up, for where Outlook allows none (a send event).
- * Throws MSAL's own error, so the caller can read its code.
- */
-export async function getAccessTokenSilently(config: AddinConfig): Promise<string> {
-  return silentToken(await pca(config), config);
-}
-
 export async function getAccessToken(config: AddinConfig): Promise<string> {
   const app = await pca(config);
   try {

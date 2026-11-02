@@ -35,6 +35,23 @@ export interface OrganizerItem {
   loadCustomPropertiesAsync(callback: (result: AsyncResult<CustomProperties>) => void): void;
 }
 
+/** What the meeting-provider function writes too (ReadWriteItem, test add-in only). */
+export interface ProviderItem extends OrganizerItem {
+  subject: { getAsync(callback: (result: AsyncResult<string>) => void): void };
+  body: OrganizerItem['body'] & {
+    setAsync(data: string, options: { coercionType: string }, callback: (result: AsyncResult<void>) => void): void;
+  };
+  notificationMessages: {
+    replaceAsync(
+      key: string,
+      message:
+        | { type: 'progressIndicator' | 'errorMessage'; message: string }
+        | { type: 'informationalMessage'; message: string; icon: string; persistent: boolean },
+      callback?: (result: AsyncResult<void>) => void,
+    ): void;
+  };
+}
+
 export interface OfficeApi {
   onReady(): Promise<{ host: string | null; platform: string | null }>;
   CoercionType: { Html: string; Text: string };
