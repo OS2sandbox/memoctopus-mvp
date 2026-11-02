@@ -39,17 +39,22 @@ describe('buildManifest, test variant', () => {
     expect(xml).toContain('<DisplayName DefaultValue="OS2taletiltekst (test)"/>');
   });
 
-  it('adds the send event, in a 1.12 override, that never blocks a send outright', () => {
+  it('is an online-meeting provider: one function command on the organizer form', () => {
     expect(xml).toContain('xsi:type="VersionOverridesV1_1"');
-    expect(xml).toContain('<bt:Sets DefaultMinVersion="1.12">');
-    expect(xml).toContain('<LaunchEvent Type="OnAppointmentSend" FunctionName="onAppointmentSendProbe" SendMode="PromptUser"/>');
+    expect(xml.match(/xsi:type="ExecuteFunction"/g)).toHaveLength(1);
+    expect(xml).toContain('<FunctionName>insertOs2Meeting</FunctionName>');
+    expect(xml).toContain('<FunctionFile resid="Commands.Url"/>');
     expect(xml).toContain('DefaultValue="https://taletiltekst.example.dk/outlook-addin/commands.html"');
-    expect(xml).toContain('DefaultValue="https://taletiltekst.example.dk/outlook-addin/commands.js"');
-    expect(xml).toContain('<Permissions>ReadItem</Permissions>');
+    expect(xml).not.toContain('LaunchEvent');
+  });
+
+  it('may write to the item (the join link goes in the invitation); production may not', () => {
+    expect(xml).toContain('<Permissions>ReadWriteItem</Permissions>');
+    expect(prod).toContain('<Permissions>ReadItem</Permissions>');
   });
 
   it('leaves the production manifest without any of it', () => {
-    expect(prod).not.toContain('LaunchEvent');
+    expect(prod).not.toContain('ExecuteFunction');
     expect(prod).not.toContain('VersionOverridesV1_1');
     expect(prod).not.toContain('commands.');
   });

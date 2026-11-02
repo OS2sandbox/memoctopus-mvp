@@ -77,46 +77,63 @@ When `src/lib/outlook/manifest.ts` changes, bump `ADDIN_VERSION` and upload the 
 file: the admin center keeps the file it was given. Changes to the pane itself
 (`outlook-addin/src/`) need only a deploy.
 
-## Test add-in: arming on Send
+## Why not just use the Teams toggle?
 
-A spike for arming a meeting when the organizer presses **Send**, so nobody has to
-reopen the meeting once Outlook has put the Teams link in. Before building it, the
-test add-in answers whether it can work: does Outlook run the send event for this
-meeting form, is the Teams link in the body by then, and does sign-in work without a
-pop-up inside the event.
+With Outlook's own **Teams-møde** toggle, the join link only exists once the meeting
+is saved or sent. The add-in reads the invitation, so it has to be reopened after
+that: save, reopen, press the button. Two ways round that were tried:
+
+- **Arming on Send** (`OnAppointmentSend`, tested 2026-11-02 in Outlook on the web,
+  Syddjurs tenant): Outlook does run the send event from the ordinary meeting form,
+  but the Teams link is **not** in the body at Send, nor 1.5 s later. Outlook adds it
+  after the send, to the stored item; the form the add-in reads never gets it. Dead
+  end without reading the calendar (`Calendars.Read`), which we do not want.
+- **Detecting the toggle**: Office.js has no API for it.
+
+## Test add-in: OS2taletiltekst as the meeting provider
+
+So the test add-in makes the Teams meeting itself. It is an *online-meeting
+provider* (Microsoft's "Create an Outlook add-in for an online-meeting provider",
+the add-in type Zoom and Webex use). Microsoft documents that Outlook then shows the
+provider **in place of its Teams toggle** on a new meeting. Switching ours on runs
+`insertOs2Meeting` (`outlook-addin/src/provider.ts`), which:
+
+1. refuses if the invitation already has a Teams link (so never two meetings),
+2. calls `POST /api/outlook/online-meetings`: the server creates a Teams meeting
+   for the subject and times (`POST /me/onlineMeetings`, the
+   `OnlineMeetings.ReadWrite` scope we already have), then arms and registers it
+   exactly like a link read from the invitation (`src/lib/outlook/arm-from-outlook.ts`),
+3. appends the join link to the invitation, with a line saying the meeting is
+   recorded and transcribed,
+4. notes the meeting id on the appointment, so the pane can switch it off.
 
 It is a separate add-in, *OS2taletiltekst (test)*, with its own id
 (`TEST_ADDIN_ID`), served at `https://<this host>/outlook-addin/manifest-test.xml`.
-It has the same pane button as the real one, plus an `OnAppointmentSend` handler
-(`outlook-addin/src/send-probe.ts`) that arms **nothing**: it reports what it saw in
-Outlook's own dialog and offers **Send anyway**.
+It needs `ReadWriteItem` (it writes the link into the invitation); the production
+manifest keeps `ReadItem`.
 
-**Rights.** Sideloading needs the Exchange role *My Custom Apps* on your mailbox's
-role assignment policy. Best for one person only: a copy of *Default Role
-Assignment Policy* with that role ticked, assigned with
-`Set-Mailbox -Identity <you> -RoleAssignmentPolicy "<policy>"`. It can take an hour.
+**It must be admin-installed.** Microsoft: "Only admin-installed add-ins will appear
+on the meeting compose screen, replacing the default Teams or Skype option.
+User-installed add-ins won't activate." The admin uploads `manifest-test.xml` under
+Integrated Apps and assigns it **to the tester only**. Remove any sideloaded copy
+of the test add-in first (same id). With `OUTLOOK_ADDIN_ALLOWED_USERS` set, the
+server refuses everyone else regardless.
 
-**Load it.** Download the manifest file. In Outlook on the web: a new mail → **Apps**
-→ **Get Add-ins** → **My add-ins** → **Add a custom add-in** → **Add from file**.
+**Try it**, once the admin has installed it (it can take a while to appear):
 
-**Try it.** Both `brk-…://` redirect URIs must be in place first (see the setup
-table), or *Login uden pop-up* reports `AADSTS700046`. The event can only sign in
-silently; with admin consent for `access_as_user` that needs no earlier pop-up. If
-it reports `interaction_required` or `consent_required`, arm one throwaway meeting
-from the pane once and try again. Then send three meetings, each with
-**Teams-møde** on and one attendee (yourself is fine):
+1. New event. Does Outlook show *OS2taletiltekst* where the Teams toggle was, or
+   both, or only a button in the ribbon?
+2. Turn ours on (or press the ribbon button). A bar at the top of the form says
+   what happened; the invitation gets a *Microsoft Teams-møde* block.
+3. Add an attendee and send. Join the meeting from the link: it should record and
+   transcribe by itself.
+4. Also note: what happens when you switch ours off again, and whether the
+   municipality's default (Teams on for every new meeting) still turns Teams on.
 
-1. from the form as it opens (the embedded form);
-2. from a popped-out window (the arrow at the top right of the form);
-3. in new Outlook for Windows, if you have it.
+## The send test (removed)
 
-For each, note whether a dialog appeared, and what it says on *Teams-link ved Send*,
-*Efter 2 sek.* and *Login uden pop-up*. **No dialog** means Outlook did not run the
-send event for that form: Microsoft documents that on the web and in new Outlook it
-runs only for meetings sent from a separate window. An appointment with no attendees
-has no Send button and never triggers it.
-
-Remove the test add-in again under **My add-ins** when done.
+The `OnAppointmentSend` probe that answered "is the link there at Send?" is gone
+from the code; the answer is above.
 
 ## When it does not work
 
