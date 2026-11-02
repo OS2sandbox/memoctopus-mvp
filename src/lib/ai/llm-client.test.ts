@@ -11,7 +11,13 @@ vi.mock('openai', () => ({
   },
 }));
 
-import { llmModel, getLlmClient, resetLlmClient, usingHostedOpenAI } from './llm-client';
+import {
+  countTokensExact,
+  getLlmClient,
+  llmModel,
+  resetLlmClient,
+  usingHostedOpenAI,
+} from './llm-client';
 
 const ENV = process.env;
 
@@ -26,6 +32,8 @@ beforeEach(() => {
 
 afterEach(() => {
   process.env = ENV;
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('llmModel (backend selection)', () => {
@@ -103,5 +111,75 @@ describe('usingHostedOpenAI', () => {
   it('treats a blank key as no key', () => {
     process.env.OPENAI_API_KEY = '   ';
     expect(usingHostedOpenAI()).toBe(false);
+  });
+});
+
+describe('countTokensExact (vLLM /tokenize)', () => {
+  function stubTokenize(respond: () => unknown) {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
+      ok: true,
+      json: async () => respond(),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('posts { model, prompt } to /tokenize at the server root, not under /v1', async () => {
+    process.env.LLM_BASE_URL = 'http://my-llm:8000/v1/';
+    process.env.LLM_MODEL = 'my-model';
+    const fetchMock = stubTokenize(() => ({ count: 42 }));
+
+    expect(await countTokensExact('hej med dig')).toBe(42);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://my-llm:8000/tokenize');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ model: 'my-model', prompt: 'hej med dig' });
+  });
+
+  it('targets the bundled vLLM when nothing is configured', async () => {
+    const fetchMock = stubTokenize(() => ({ count: 1 }));
+
+    await countTokensExact('x');
+
+    expect(fetchMock.mock.calls[0][0]).toBe('http://vllm-chat:8000/tokenize');
+  });
+
+  it.each([[{ count: '42' }], [{ tokens: [1, 2] }], [null]])(
+    'returns null for a response without a numeric count: %j',
+    async (body) => {
+      stubTokenize(() => body);
+      expect(await countTokensExact('x')).toBeNull();
+    },
+  );
+
+  it('returns null without calling out on hosted OpenAI', async () => {
+    process.env.OPENAI_API_KEY = 'sk-x';
+    const fetchMock = stubTokenize(() => ({ count: 1 }));
+
+    expect(await countTokensExact('x')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('gives up after 10 s and returns null, so a hung tokenizer cannot stall minutes', async () => {
+    // Stand in for the 10 s timer with a signal that has already fired.
+    const timeout = vi
+      .spyOn(AbortSignal, 'timeout')
+      .mockReturnValue(AbortSignal.abort(new DOMException('timed out', 'TimeoutError')));
+    // A tokenizer that never answers, except by honouring the abort signal.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            const signal = init.signal;
+            if (signal?.aborted) reject(signal.reason);
+            signal?.addEventListener('abort', () => reject(signal.reason));
+          }),
+      ),
+    );
+
+    expect(await countTokensExact('x')).toBeNull();
+    expect(timeout).toHaveBeenCalledWith(10_000);
   });
 });
