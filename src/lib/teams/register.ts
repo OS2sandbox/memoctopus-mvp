@@ -1,5 +1,6 @@
 import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
 import { deleteRecordingEnabled } from './artifact-mode';
+import { parseGraphDate } from './graph-dates';
 import { armMeeting, disarmMeeting, isArmed } from './meeting-arm';
 import { resolveJoinUrl, type ResolvedMeeting } from './meeting-resolver';
 import { cleanUpRecording } from './poller';
@@ -52,12 +53,6 @@ export interface RegisterResult {
   armResult: TeamsArmResult;
 }
 
-function toDate(value: string | null | undefined): Date | null {
-  if (!value) return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
 export async function registerTeamsMeeting(userId: string, input: RegisterInput): Promise<RegisterResult> {
   const { meetingId } = input;
 
@@ -102,8 +97,8 @@ export async function registerTeamsMeeting(userId: string, input: RegisterInput)
     // The client knows which *occurrence* of a recurring series it armed; Graph's
     // onlineMeeting only knows the series-level window. Prefer the occurrence, or
     // artifacts of occurrence 2+ fall outside the pick window and are never found.
-    scheduledStart: input.occurrenceStart ?? toDate(resolved.scheduledStart),
-    scheduledEnd: input.occurrenceEnd ?? toDate(resolved.scheduledEnd),
+    scheduledStart: input.occurrenceStart ?? parseGraphDate(resolved.scheduledStart),
+    scheduledEnd: input.occurrenceEnd ?? parseGraphDate(resolved.scheduledEnd),
     // …and the poller, which re-reads the window from Graph, must keep it.
     occurrenceWindow: input.occurrenceStart != null || input.occurrenceEnd != null,
     // Omitted, the upsert keeps the row's state; a new row starts awaiting_teams.

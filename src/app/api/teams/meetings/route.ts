@@ -3,18 +3,11 @@ import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { GraphError, TEAMS_DISABLED_MESSAGE } from '@/lib/teams/graph-client';
-import { graphDate } from '@/lib/teams/graph-dates';
+import { parseGraphDate } from '@/lib/teams/graph-dates';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
 import { isSafeMeetingId } from '@/lib/teams/meeting-id';
 import { MeetingIdTakenError, registerTeamsMeeting } from '@/lib/teams/register';
 import { isDeferred, listTeamsMeetings } from '@/lib/teams/store';
-
-/** ISO string → Date, tolerating a missing or unparseable value. */
-function toDate(value: string | null | undefined): Date | null {
-  if (!value) return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
 
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -96,8 +89,8 @@ export async function POST(req: NextRequest) {
   // The client knows which *occurrence* of a recurring series it armed; Graph's
   // onlineMeeting only knows the series-level window (see registerTeamsMeeting).
   const eventId = str(body.eventId) ?? null;
-  const occurrenceStart = toDate(graphDate(str(body.scheduledStart)));
-  const occurrenceEnd = toDate(graphDate(str(body.scheduledEnd)));
+  const occurrenceStart = parseGraphDate(str(body.scheduledStart));
+  const occurrenceEnd = parseGraphDate(str(body.scheduledEnd));
 
   try {
     const { row, armResult } = await registerTeamsMeeting(userId, {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { graphDate, realDate } from './graph-dates';
+import { graphDate, parseGraphDate, realDate } from './graph-dates';
 
 // The value that started this: Microsoft Graph returns 0001-01-01T00:00:00Z for
 // an onlineMeeting with no schedule rather than omitting the field, so every
@@ -44,5 +44,17 @@ describe('realDate', () => {
   // way a "missing" date shows up, and is never a real Teams meeting.
   it('drops the unix epoch', () => {
     expect(realDate(new Date(0))).toBeNull();
+  });
+});
+
+describe('parseGraphDate', () => {
+  it('turns a real Graph date into a Date', () => {
+    expect(parseGraphDate('2026-09-18T10:55:03.818Z')).toEqual(new Date('2026-09-18T10:55:03.818Z'));
+  });
+
+  it('is null wherever graphDate is', () => {
+    for (const value of [GRAPH_ZERO, null, undefined, '   ', 'not a date']) {
+      expect(parseGraphDate(value)).toBeNull();
+    }
   });
 });

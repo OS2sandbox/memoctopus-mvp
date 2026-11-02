@@ -3,7 +3,7 @@ import { pool } from '@/lib/db';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { deleteRecordingEnabled } from './artifact-mode';
 import { classifyGraphError, GraphError } from './graph-client';
-import { graphDate } from './graph-dates';
+import { parseGraphDate } from './graph-dates';
 import { getMeeting } from './meeting-resolver';
 import { processTeamsMeeting } from './pipeline';
 import { deleteRecordingFromDrive } from './recording-cleanup';
@@ -358,8 +358,8 @@ async function refreshSchedule(
   // A window registered for one occurrence of a series is kept: Graph's
   // onlineMeeting only knows the series' window, and the pipeline would look for
   // that occurrence's artifacts in the wrong week. The subject is still Graph's.
-  const start = row.occurrenceWindow ? row.scheduledStart : toDate(graphDate(fresh.scheduledStart));
-  const end = row.occurrenceWindow ? row.scheduledEnd : toDate(graphDate(fresh.scheduledEnd));
+  const start = row.occurrenceWindow ? row.scheduledStart : parseGraphDate(fresh.scheduledStart);
+  const end = row.occurrenceWindow ? row.scheduledEnd : parseGraphDate(fresh.scheduledEnd);
   const unchanged =
     sameInstant(start, row.scheduledStart)
     && sameInstant(end, row.scheduledEnd)
@@ -383,10 +383,6 @@ async function refreshSchedule(
 function sameInstant(a: Date | null, b: Date | null): boolean {
   if (a == null || b == null) return a === b;
   return a.getTime() === b.getTime();
-}
-
-function toDate(value: string | null): Date | null {
-  return value ? new Date(value) : null;
 }
 
 async function pollUser(userId: string, now: Date): Promise<number> {
