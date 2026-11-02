@@ -27,6 +27,11 @@ function usingHostedApi(): boolean {
   return !!process.env.LLM_BASE_URL?.trim() || hasOpenAIKey();
 }
 
+// True when the app talks to the bundled vLLM (vllm-chat in docker-compose.ai.yml).
+export function usingBundledVllm(): boolean {
+  return !usingHostedApi();
+}
+
 // True only for the real OpenAI API: a key is set and no custom base URL redirects it.
 // Distinct from usingHostedApi(), which is also true for any custom LLM_BASE_URL.
 export function usingHostedOpenAI(): boolean {
@@ -39,7 +44,7 @@ export function usingHostedOpenAI(): boolean {
 // unknown request fields, and a custom LLM_BASE_URL may be any server, so neither gets it.
 // Templates without the switch ignore it.
 export function bundledVllmChatParams(): { chat_template_kwargs?: { enable_thinking: boolean } } {
-  return usingHostedApi() ? {} : { chat_template_kwargs: { enable_thinking: false } };
+  return usingBundledVllm() ? { chat_template_kwargs: { enable_thinking: false } } : {};
 }
 
 function llmBaseURL(): string {

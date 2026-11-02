@@ -1,4 +1,4 @@
-import { usingHostedOpenAI, countTokensExact } from './llm-client';
+import { usingBundledVllm, usingHostedOpenAI, countTokensExact } from './llm-client';
 
 // Context-window budgeting for chat-LLM calls (minutes generation).
 //
@@ -31,10 +31,11 @@ export function getLlmLimits(): LlmLimits {
     // VLLM_CHAT_MAX_MODEL_LEN also sets the bundled vLLM's own --max-model-len (see
     // docker-compose.ai.yml), so one number configures both it and this fallback — the
     // app reads both env vars itself rather than relying on Compose to resolve a
-    // ${VAR:-${VAR2:-}} nested substitution, which not every Compose version does.
+    // ${VAR:-${VAR2:-}} nested substitution, which not every Compose version does. It
+    // describes the bundled vLLM only, so any other backend ignores it.
     contextTokens:
       positiveInt(process.env.LLM_CONTEXT_TOKENS) ??
-      positiveInt(process.env.VLLM_CHAT_MAX_MODEL_LEN) ??
+      (usingBundledVllm() ? positiveInt(process.env.VLLM_CHAT_MAX_MODEL_LEN) : null) ??
       (hosted ? 128_000 : 32_768),
     maxOutputTokens: positiveInt(process.env.LLM_MAX_OUTPUT_TOKENS) ?? (hosted ? 16_384 : 8_192),
   };

@@ -267,7 +267,7 @@ the container. Note also that `.env.deploy.example`, not `.env.example`, is what
 | `LLM_BASE_URL` / `LLM_MODEL` | Any OpenAI-compatible chat endpoint, and the model to request (overrides the backend choice) |
 | `VLLM_MODEL` | The model the bundled vLLM serves; the app requests it on that backend (default `google/gemma-4-12b-it`) |
 | `LLM_CONTEXT_TOKENS` / `LLM_MAX_OUTPUT_TOKENS` | Chat model's context window and referat output cap (default 128000/16384 on OpenAI, 32768/8192 otherwise) |
-| `VLLM_CHAT_MAX_MODEL_LEN` | The bundled vLLM's `--max-model-len`; also the app's window when `LLM_CONTEXT_TOKENS` is unset |
+| `VLLM_CHAT_MAX_MODEL_LEN` | The bundled vLLM's `--max-model-len`; also the app's window on that backend when `LLM_CONTEXT_TOKENS` is unset |
 | `AUDIO_STORAGE_PATH` | Filesystem path for audio files and collected Teams transcripts |
 | `SKABELON_SHARE_CODE` / `_LINK` | Skabelon sharing: copy/paste code (on unless `false`) / import link (off unless `true`) |
 | `BETTER_AUTH_URL` / `BETTER_AUTH_SECRET` | better-auth base URL and signing secret |

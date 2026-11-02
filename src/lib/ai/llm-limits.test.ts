@@ -64,6 +64,16 @@ describe('getLlmLimits overrides', () => {
     expect(getLlmLimits()).toEqual({ contextTokens: 65_536, maxOutputTokens: 8_192 });
   });
 
+  // VLLM_CHAT_MAX_MODEL_LEN describes the bundled vLLM, and compose passes it whether or
+  // not that is the backend in use.
+  it.each([
+    ['hosted OpenAI', { OPENAI_API_KEY: 'sk-x' }, 128_000],
+    ['a custom LLM_BASE_URL', { LLM_BASE_URL: 'http://my-llm:8000/v1' }, 32_768],
+  ])('ignores VLLM_CHAT_MAX_MODEL_LEN on %s', (_label, env, expected) => {
+    Object.assign(process.env, env, { VLLM_CHAT_MAX_MODEL_LEN: '65536' });
+    expect(getLlmLimits().contextTokens).toBe(expected);
+  });
+
   it('prefers an explicit LLM_CONTEXT_TOKENS over VLLM_CHAT_MAX_MODEL_LEN', () => {
     process.env.LLM_CONTEXT_TOKENS = '16384';
     process.env.VLLM_CHAT_MAX_MODEL_LEN = '65536';
