@@ -446,6 +446,21 @@ describe('processTeamsMeeting — recording only', () => {
       durationSeconds: null,
     });
   });
+
+  // hviske can answer `ready` with nothing in it. Passed on, the browser found no
+  // segments and told the user "Lydfil ikke fundet" about a meeting Teams held.
+  it('fails when the recording held no speech, rather than handing over an empty transcript', async () => {
+    mockListArtifacts.mockResolvedValue({ transcripts: [], recordings: [RECORDING_REF] });
+    mockTranscribeRecording.mockImplementation(async () => {
+      mockReadPendingTranscript.mockResolvedValue({ status: 'ready', segments: [], createdAt: 1 });
+    });
+
+    const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
+
+    expect(outcome).toEqual({ status: 'failed', reason: 'Optagelsen fra Teams indeholdt ingen tale.' });
+    expect(mockStorePendingTranscript).toHaveBeenLastCalledWith('meet-1', { status: 'failed' });
+    expect(mockStorePendingMeta).not.toHaveBeenCalled();
+  });
 });
 
 // The product requirement behind this: Graph publishes nothing until a meeting has
