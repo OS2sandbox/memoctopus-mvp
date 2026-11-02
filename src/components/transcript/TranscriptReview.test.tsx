@@ -77,10 +77,18 @@ vi.mock('./SpeakerRow', () => ({
 }));
 
 vi.mock('./SpeakerAssignment', () => ({
-  SpeakerAssignment: ({ diarizing, rows }: { diarizing?: boolean; rows: unknown[] }) => (
+  SpeakerAssignment: ({ diarizing, rows, voices, totalVoices }: {
+    diarizing?: boolean;
+    rows: { name: string; kind: string }[];
+    voices: { speaker: string }[];
+    totalVoices: number;
+  }) => (
     <div data-testid="speaker-assignment" data-diarizing={String(diarizing)}>
       {diarizing && <span>genkender stemmer…</span>}
       <span data-testid="row-count">{rows.length}</span>
+      <span data-testid="row-kinds">{rows.map((r) => `${r.name}:${r.kind}`).join('|')}</span>
+      <span data-testid="voices">{voices.map((v) => v.speaker).join('|')}</span>
+      <span data-testid="total-voices">{totalVoices}</span>
     </div>
   ),
 }));
@@ -278,6 +286,37 @@ describe('TranscriptReview', () => {
       // under this heading.
       expect(screen.getByTestId('speaker-row-2')).toHaveAttribute('data-continues', 'false');
       expect(screen.getByTestId('speaker-row-3')).toHaveAttribute('data-continues', 'true');
+    });
+  });
+
+  // Teams' transcript names every speaker, and those names arrive as the
+  // participants. Such a meeting must never offer a "Taler 1" to be matched —
+  // there is no unknown voice in it.
+  describe('a transcript Teams has named', () => {
+    const NAMED = [
+      { speaker: 'Mette Hansen', start: 0, end: 4, text: 'Velkommen' },
+      { speaker: 'Jens Poulsen', start: 4, end: 8, text: 'Tak' },
+      { speaker: 'Mette Hansen', start: 8, end: 12, text: 'Videre' },
+    ];
+
+    it('hands the speaker matcher no "Taler N" voice', async () => {
+      setup({ initialSegments: NAMED, participants: ['Mette Hansen', 'Jens Poulsen'] });
+
+      await waitFor(() => expect(screen.getByTestId('speaker-assignment')).toBeInTheDocument());
+      expect(screen.getByTestId('voices')).toHaveTextContent(/^$/);
+      expect(screen.getByTestId('speaker-assignment')).not.toHaveTextContent(/Taler \d/);
+      expect(screen.getByTestId('total-voices')).toHaveTextContent('2');
+      expect(screen.getByTestId('row-kinds')).toHaveTextContent('Mette Hansen:recognized|Jens Poulsen:recognized');
+    });
+
+    // The control: an unnamed voice in the same transcript is still offered.
+    it('still offers a voice Teams could not name', async () => {
+      setup({
+        initialSegments: [...NAMED, { speaker: 'Taler 3', start: 12, end: 16, text: 'Hallo?' }],
+        participants: ['Mette Hansen', 'Jens Poulsen'],
+      });
+
+      await waitFor(() => expect(screen.getByTestId('voices')).toHaveTextContent('Taler 3'));
     });
   });
 
