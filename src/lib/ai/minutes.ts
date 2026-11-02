@@ -26,9 +26,6 @@ Brugerens instruktioner og de ønskede afsnit er styrende: følg dem nøje — o
 
 Du skriver referatet som ét sammenhængende dokument i markdown.`;
 
-// Transcript char length above which per-chapter summarisation is used (~30–60 min meeting)
-const CHAPTER_SPLIT_THRESHOLD = 20_000;
-
 // At most this many summarise passes (the first counts as pass 1) before giving up.
 const MAX_SUMMARY_ROUNDS = 3;
 
@@ -127,12 +124,17 @@ async function complete(params: ChatParams): Promise<ChatCompletion> {
   }
 }
 
+// The chapter titles, as a hint for a referat written straight from a chaptered transcript.
+function chapterTopics(chapters: TranscriptChapter[]): string {
+  return `Transskriptionen er inddelt i disse emner, i rækkefølge: ${chapters.map((ch) => `"${ch.title}"`).join(', ')}.`;
+}
+
 // Keep the transcript last: also called with '' to measure the fixed part of the prompt.
-function buildBodyPrompt(transcriptText: string, instruction: string): string {
+function buildBodyPrompt(transcriptText: string, instruction: string, topics = ''): string {
   return `Udarbejd et mødereferat baseret på denne transskription.
 ${instruction ? `\n${instruction}\n` : ''}
 Følg instruktionerne ovenfor nøje — herunder ønsket længde og hvilke afsnit der skal med. Skriv referatet som ét sammenhængende dokument i markdown. Brug overskrifter (##) til afsnit og punktlister hvor det er relevant. Returner KUN selve referatet — ingen forklaringer, ingen JSON og ingen code blocks.
-
+${topics ? `\n${topics}\n` : ''}
 Transskription:
 ${transcriptText}`;
 }
@@ -141,13 +143,14 @@ async function _generateBody(
   transcriptText: string,
   instruction: string,
   maxOutputTokens: number,
+  topics = '',
 ): Promise<string> {
   const response = await complete({
     model: llmModel('gpt-4o'),
     max_tokens: maxOutputTokens,
     messages: [
       { role: 'system', content: MINUTES_SYSTEM_PROMPT },
-      { role: 'user', content: buildBodyPrompt(transcriptText, instruction) },
+      { role: 'user', content: buildBodyPrompt(transcriptText, instruction, topics) },
     ],
   });
 
@@ -286,9 +289,11 @@ async function _summarizeUnits(units: Unit[], budget: SummaryBudget): Promise<st
  * The transcript is merged into speaker turns and measured in tokens against the model's
  * context window (LLM_CONTEXT_TOKENS / LLM_MAX_OUTPUT_TOKENS) — counted with the model's
  * own tokenizer where the backend has one (vLLM), estimated otherwise. If it fits, one
- * call writes the referat. Otherwise the transcript is summarised in parts and the
- * referat is written from those summaries, so a long meeting never overflows the window
- * or comes back cut off.
+ * call writes the referat from the transcript itself, with the chapter titles (if any) as
+ * a hint: summarising first would only lose detail. Otherwise the transcript is
+ * summarised in parts — one chapter per unit where there are chapters — and the referat
+ * is written from those summaries, so a long meeting never overflows the window or comes
+ * back cut off.
  */
 export async function generateReferatBody(
   transcript: TranscriptSegment[],
@@ -303,12 +308,14 @@ export async function generateReferatBody(
   const limits = getLlmLimits();
   const turns = mergeSpeakerTurns(transcript);
   const transcriptText = renderTurns(turns);
+  const chapterList = chapters && chapters.length > 1 ? chapters : null;
+  const topics = chapterList ? chapterTopics(chapterList) : '';
 
   // The transcript is tokenised once: its count decides whether it fits in one call, and
   // its chars/token ratio sizes the parts when it does not.
   const [transcriptTokens, bodyFixedTokens, summaryFixedTokens] = await Promise.all([
     countTokens(transcriptText),
-    countTokens(`${MINUTES_SYSTEM_PROMPT}\n${buildBodyPrompt('', instruction)}`),
+    countTokens(`${MINUTES_SYSTEM_PROMPT}\n${buildBodyPrompt('', instruction, topics)}`),
     countTokens(buildSummaryPrompt('', '')),
   ]);
   const ratio = charsPerToken(transcriptText, transcriptTokens);
@@ -338,17 +345,13 @@ export async function generateReferatBody(
     );
   }
 
-  const chapterList = chapters && chapters.length > 1 ? chapters : null;
   const log = (mode: string, rounds: number) =>
     console.log(
       `[minutes] chars=${transcriptText.length} tokens=${transcriptTokens} room=${bodyRoom} mode=${mode} rounds=${rounds} ms=${Date.now() - t0}`,
     );
 
-  if (
-    transcriptTokens <= bodyRoom &&
-    !(chapterList !== null && transcriptText.length > CHAPTER_SPLIT_THRESHOLD)
-  ) {
-    const body = await _generateBody(transcriptText, instruction, limits.maxOutputTokens);
+  if (transcriptTokens <= bodyRoom) {
+    const body = await _generateBody(transcriptText, instruction, limits.maxOutputTokens, topics);
     log('single', 0);
     return { body };
   }

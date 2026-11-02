@@ -373,11 +373,13 @@ describe('generateReferatBody — context budget', () => {
     expect(summaryCalls.some((c) => lastContent(c).includes('"Andet"'))).toBe(false);
   });
 
-  it('keeps the per-chapter path for chaptered transcripts over the 20k-character threshold', async () => {
+  // Summarising first loses detail, so a chaptered meeting that fits the window is written
+  // from the transcript itself, however long, with the chapter titles as a hint.
+  it('writes a chaptered meeting that fits from the transcript, naming its chapters', async () => {
     delete process.env.LLM_CONTEXT_TOKENS; // hosted defaults: 128k window, plenty of budget
     delete process.env.LLM_MAX_OUTPUT_TOKENS;
     answerSummariesAndReferat();
-    const transcript = longTranscript(30, 1000); // ~31k chars, over 20k
+    const transcript = longTranscript(30, 1000); // ~31k chars
     const chapters: TranscriptChapter[] = [
       {
         id: 'ch-0', title: 'Kapitel A', summary: '', startTime: 0, endTime: 140,
@@ -389,13 +391,22 @@ describe('generateReferatBody — context budget', () => {
       },
     ];
 
-    await generateReferatBody(transcript, baseSpec, undefined, chapters);
+    const result = await generateReferatBody(transcript, baseSpec, undefined, chapters);
 
-    const calls = mockComplete.mock.calls.map((c) => c[0]);
-    expect(calls.filter(isSummaryCall)).toHaveLength(2);
-    expect(lastContent(calls[0])).toContain('"Kapitel A"');
-    expect(lastContent(calls[1])).toContain('"Kapitel B"');
-    expect(isSummaryCall(calls[2])).toBe(false);
+    expect(result.body).toBe('REFERAT');
+    expect(mockComplete).toHaveBeenCalledTimes(1);
+    const prompt = lastContent(mockComplete.mock.calls[0][0]);
+    expect(prompt).toContain('LINE-0000');
+    expect(prompt).toContain('LINE-0029');
+    expect(prompt).toMatch(/"Kapitel A", "Kapitel B"/);
+  });
+
+  it('gives no chapter hint for a meeting without chapters', async () => {
+    mockComplete.mockResolvedValueOnce(openaiResponse('referat'));
+
+    await generateReferatBody(sampleSegments, baseSpec);
+
+    expect(lastContent(mockComplete.mock.calls[0][0])).not.toContain('emner');
   });
 
   it('writes the referat from a second summary round when the first is still too long', async () => {
