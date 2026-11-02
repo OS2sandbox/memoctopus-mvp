@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
-import { markStepSeen, skipTour, completeTour, resetHints } from '@/lib/onboarding/store';
+import { markStepSeen, skipTour, resetHints } from '@/lib/onboarding/store';
 import { withHandler } from '@/lib/api-handler';
 import { ONBOARDING_STEPS } from '@/lib/onboarding/steps';
 
@@ -16,7 +16,7 @@ async function postHandler(req: NextRequest): Promise<NextResponse> {
   // `null`, arrays and primitives are valid JSON but not something we can read fields from.
   const body: Record<string, unknown> =
     parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
-  const action = body.action as 'seen' | 'skip-tour' | 'complete-tour' | 'reset-hints' | undefined;
+  const action = body.action as 'seen' | 'skip-tour' | 'reset-hints' | undefined;
 
   if (action === 'skip-tour') {
     await skipTour(session.user.id);
@@ -24,10 +24,6 @@ async function postHandler(req: NextRequest): Promise<NextResponse> {
   }
   if (action === 'reset-hints') {
     await resetHints(session.user.id);
-    return NextResponse.json({ ok: true });
-  }
-  if (action === 'complete-tour') {
-    await completeTour(session.user.id);
     return NextResponse.json({ ok: true });
   }
 

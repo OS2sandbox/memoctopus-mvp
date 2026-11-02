@@ -6,7 +6,6 @@ vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 const store = vi.hoisted(() => ({
   markStepSeen: vi.fn(),
   skipTour: vi.fn(),
-  completeTour: vi.fn(),
   resetHints: vi.fn(),
 }));
 vi.mock('@/lib/onboarding/store', () => store);
@@ -80,7 +79,6 @@ describe('POST /api/onboarding/step', () => {
 
   it.each([
     ['skip-tour', 'skipTour'],
-    ['complete-tour', 'completeTour'],
     ['reset-hints', 'resetHints'],
   ] as const)('runs the %s action', async (action, fn) => {
     const res = await POST(makeJsonReq(URL, 'POST', { action }));

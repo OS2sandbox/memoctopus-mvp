@@ -64,15 +64,6 @@ export async function skipTour(userId: string): Promise<void> {
   );
 }
 
-export async function completeTour(userId: string): Promise<void> {
-  await queryUserSchema(
-    userId,
-    `INSERT INTO onboarding_state (id, tour_completed_at, updated_at)
-     VALUES ('singleton', NOW(), NOW())
-     ON CONFLICT (id) DO UPDATE SET tour_completed_at = NOW(), updated_at = NOW()`,
-  );
-}
-
 /**
  * Replay: forget every seen hint so they all show again, and mark the tour
  * as completed so an empty progress table isn't mistaken for a first-time
