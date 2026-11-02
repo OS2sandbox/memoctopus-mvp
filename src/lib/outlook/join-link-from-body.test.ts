@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { decodeHtmlEntities, extractJoinLinkFromBody, MAX_BODY_LENGTH } from './join-link-from-body';
+import { extractJoinLinkFromBody, MAX_BODY_LENGTH } from './join-link-from-body';
 import { extractJoinContext } from '@/lib/teams/url';
 
 // All ids below are fake: tenant 11111111-…, organizer 22222222-…, thread ids are
@@ -32,7 +32,7 @@ const inviteBlock = (href: string) =>
 describe('extractJoinLinkFromBody — realistic invitation bodies', () => {
   it('finds the /l/meetup-join/ link in the older invitation layout', () => {
     const result = extractJoinLinkFromBody(fixture('teams-invite-meetup-join.html'));
-    expect(result).toEqual({ ok: true, url: MEETUP_JOIN, source: 'invite-block' });
+    expect(result).toEqual({ ok: true, url: MEETUP_JOIN });
   });
 
   it('returns a URL whose join context still names the meeting (what S2 looks up)', () => {
@@ -47,17 +47,17 @@ describe('extractJoinLinkFromBody — realistic invitation bodies', () => {
 
   it('finds the /meet/ short link in the current layout and ignores Mødeindstillinger', () => {
     const result = extractJoinLinkFromBody(fixture('teams-invite-meet-short.html'));
-    expect(result).toEqual({ ok: true, url: SHORT, source: 'invite-block' });
+    expect(result).toEqual({ ok: true, url: SHORT });
   });
 
   it('unwraps a Safe Links href to the byte-identical original link', () => {
     const result = extractJoinLinkFromBody(fixture('teams-invite-safelinks.html'));
-    expect(result).toEqual({ ok: true, url: MEETUP_JOIN, source: 'invite-block' });
+    expect(result).toEqual({ ok: true, url: MEETUP_JOIN });
   });
 
   it('reads a plain-text body, where Outlook writes links as text<url>', () => {
     const result = extractJoinLinkFromBody(fixture('teams-invite-plain.txt'));
-    expect(result).toEqual({ ok: true, url: SHORT, source: 'text' });
+    expect(result).toEqual({ ok: true, url: SHORT });
   });
 
   it.each([
@@ -84,7 +84,7 @@ describe('extractJoinLinkFromBody — realistic invitation bodies', () => {
       '<a href="https://teams.microsoft.com/l/chat/0/0?users=x@example.invalid">Chat</a> ' +
       '<a href="https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fl%2Fmeetup-join%2F">Launcher</a> ' +
       `<a href="${SHORT}">Deltag</a>`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT, source: 'href' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT });
   });
 
   it('the fixtures carry only fake ids', () => {
@@ -105,17 +105,17 @@ describe('extractJoinLinkFromBody — realistic invitation bodies', () => {
 describe('extractJoinLinkFromBody — encodings and placements', () => {
   it('decodes &amp; in a Safe Links href outside the invitation block', () => {
     const body = `<p><a href="${safeLink(SHORT).replace(/&/g, '&amp;')}">mødet</a></p>`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT, source: 'href' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT });
   });
 
   it('finds a link that is only in visible text, dropping trailing punctuation', () => {
     const body = `<p>Linket er ${SHORT}.</p>`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT, source: 'text' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT });
   });
 
   it('decodes numeric entities in visible text', () => {
     const body = '<p>https&#58;&#x2F;&#47;teams.microsoft.com/meet/399000000000001?p=FaKeFaKeFaKe0001</p>';
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT, source: 'text' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT });
   });
 
   it('accepts single-quoted and unquoted href attributes', () => {
@@ -125,13 +125,13 @@ describe('extractJoinLinkFromBody — encodings and placements', () => {
 
   it('accepts teams.live.com short links', () => {
     const url = 'https://teams.live.com/meet/9300000000001?p=FaKe';
-    expect(extractJoinLinkFromBody(`<a href="${url}">x</a>`)).toEqual({ ok: true, url, source: 'href' });
+    expect(extractJoinLinkFromBody(`<a href="${url}">x</a>`)).toEqual({ ok: true, url });
   });
 
   it('treats the same meeting written twice (wrapped, unwrapped, %3A vs %3a) as one', () => {
     const upper = MEETUP_JOIN.replace('%3ameeting', '%3Ameeting');
     const body = `<a href="${safeLink(MEETUP_JOIN).replace(/&/g, '&amp;')}">a</a> ${MEETUP_JOIN} ${upper}`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: MEETUP_JOIN, source: 'href' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: MEETUP_JOIN });
   });
 });
 
@@ -215,7 +215,7 @@ describe('extractJoinLinkFromBody — spoofs', () => {
 
   it('still unwraps a nest of three (red team 03b)', () => {
     const body = `<a href="${safeLink(safeLink(safeLink(MEETUP_JOIN))).replace(/&/g, '&amp;')}">x</a>`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: MEETUP_JOIN, source: 'href' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: MEETUP_JOIN });
   });
 
   it('returns invalid for a lookalike Safe Links host', () => {
@@ -225,7 +225,7 @@ describe('extractJoinLinkFromBody — spoofs', () => {
 
   it('ignores a spoof when the body also holds the real link', () => {
     const body = `<p>https://teams.microsoft.com.evil.example/meet/1?p=x</p>${inviteBlock(SHORT)}`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT, source: 'invite-block' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT });
   });
 });
 
@@ -248,7 +248,7 @@ describe('extractJoinLinkFromBody — several meetings', () => {
     const body =
       `<p>Forrige møde var her: <a href="${OTHER_MEETUP_JOIN.replace(/&/g, '&amp;')}">link</a></p>` +
       fixture('teams-invite-meet-short.html');
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT, source: 'invite-block' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT });
   });
 
   it('returns multiple_distinct when two invitation blocks point at different meetings', () => {
@@ -261,13 +261,18 @@ describe('extractJoinLinkFromBody — several meetings', () => {
   });
 });
 
-describe('decodeHtmlEntities', () => {
-  it('decodes named and numeric entities in a single pass', () => {
-    expect(decodeHtmlEntities('a&amp;b &lt;x&gt; &#58;&#x2f; &amp;lt;')).toBe('a&b <x> :/ &lt;');
+describe('extractJoinLinkFromBody — HTML entities', () => {
+  it('decodes named and numeric entities in an href', () => {
+    const body = '<a href="https&#58;&#x2F;&#47;teams.microsoft.com/meet/399000000000001?p=FaKeFaKeFaKe0001&amp;x=1">x</a>';
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: `${SHORT}&x=1` });
   });
 
-  it('keeps unknown and out-of-range entities as they are', () => {
-    expect(decodeHtmlEntities('&bogus; &#0; &#x110000;')).toBe('&bogus; &#0; &#x110000;');
+  it('decodes in a single pass, so &amp;amp; stays &amp;', () => {
+    expect(extractJoinLinkFromBody(`<p>${SHORT}&amp;amp;x=1</p>`)).toEqual({ ok: true, url: `${SHORT}&amp;x=1` });
+  });
+
+  it('keeps an unknown entity as it is', () => {
+    expect(extractJoinLinkFromBody(`<p>${SHORT}&bogus;x</p>`)).toEqual({ ok: true, url: `${SHORT}&bogus;x` });
   });
 });
 
@@ -287,17 +292,17 @@ const wholeBlock = (href: string) =>
 describe('extractJoinLinkFromBody — content the organizer cannot see', () => {
   it("ignores another meeting's invitation block inside a comment (04)", () => {
     const body = `<!-- ${wholeBlock(B)} --><p><a href="${amp(A)}">Deltag</a></p>`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A, source: 'href' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A });
   });
 
   it('ignores a commented-out link next to the real block (04b)', () => {
     const body = `<!-- <a href="${amp(B)}">gammelt</a> -->${wholeBlock(A)}`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A, source: 'invite-block' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A });
   });
 
   it('ignores Outlook conditional comments', () => {
     const body = `<!--[if mso]>${wholeBlock(B)}<![endif]-->${wholeBlock(A)}`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A, source: 'invite-block' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A });
   });
 
   it('treats an unterminated comment as running to the end of the body', () => {
@@ -311,7 +316,7 @@ describe('extractJoinLinkFromBody — content the organizer cannot see', () => {
     ['<head> without </head>', `<head><title>${B}</title><body>`],
   ])('ignores a link inside %s (04c)', (_label, prefix) => {
     const body = `${prefix}<p><a href="${amp(A)}">x</a></p>`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A, source: 'href' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A });
   });
 
   it.each([
@@ -322,58 +327,56 @@ describe('extractJoinLinkFromBody — content the organizer cannot see', () => {
     ['an entity-encoded style', '<div style="display&#58;none">'],
   ])("ignores another meeting's invitation block hidden by %s (04d)", (_label, open) => {
     const body = `${open}${wholeBlock(B)}</div><p><a href="${amp(A)}">x</a></p>`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A, source: 'href' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A });
   });
 
   it('ignores a hidden link, and hidden visible-text copies of it, next to the real block (04e)', () => {
     const body = `<div style="display:none"><a href="${amp(B)}">x</a> ${B}</div>${wholeBlock(A)}`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A, source: 'invite-block' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A });
   });
 
   it('ignores a hidden anchor even when the anchor itself carries the hiding style', () => {
     const body =
       `<a id="meet_invite_block.action.join_link" style="display:none" href="${amp(B)}">x</a>` +
       `<p><a href="${amp(A)}">x</a></p>`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A, source: 'href' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A });
   });
 
   it('keeps the hidden region to its element: nested tags and a sloppy unclosed <p> inside', () => {
     const body =
       `<div style="display:none"><div><p>${wholeBlock(B)}<p>mere</div></div>` +
       `<div><span>synligt</span>${wholeBlock(A)}</div>`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A, source: 'invite-block' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A });
   });
 
   it('does not end a hidden region at a stray end tag of another name', () => {
     const body = `<div style="display:none"></span></p>${wholeBlock(B)}</div>${wholeBlock(A)}`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A, source: 'invite-block' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A });
   });
 
   it('a hidden element left open hides the rest of the body', () => {
     const body = `<p><a href="${amp(A)}">x</a></p><div style="display:none">${wholeBlock(B)}`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A, source: 'href' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A });
   });
 
   it('a hidden void element hides only itself', () => {
     const body = `<img hidden src="${amp(B)}">${wholeBlock(A)}`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A, source: 'invite-block' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A });
   });
 
   it('does not read plain-text <url> or <name@example> as tags that could hide anything', () => {
     const body = `Fra: Peter <peter@example.invalid>\nDeltag<${SHORT}&hidden=1>`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: `${SHORT}&hidden=1`, source: 'text' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: `${SHORT}&hidden=1` });
   });
 
   // 07c cannot be solved here: with the organizer's own block deleted and another
   // meeting's whole block pasted in, the body is indistinguishable from a genuine
-  // invitation for B. The add-in therefore sends the item's start and end, and the
-  // server MUST refuse when they differ from Graph's for the resolved meeting
-  // (packages 3 and 6). This test pins the limitation so nobody mistakes it for a fix.
-  it("cannot tell a pasted foreign block from the meeting's own (07c): the server's start/end check must", () => {
+  // invitation for B, and the server has no check that catches it either. This test
+  // pins the limitation so nobody mistakes it for a fix.
+  it("cannot tell a pasted foreign block from the meeting's own (07c)", () => {
     expect(extractJoinLinkFromBody(`<p>Dagsorden</p>${wholeBlock(B)}`)).toEqual({
       ok: true,
       url: B,
-      source: 'invite-block',
     });
   });
 
@@ -401,7 +404,7 @@ describe('extractJoinLinkFromBody — channel meetings', () => {
   it('still treats one channel meeting written twice as one', () => {
     const one = channel('1700000000001');
     const body = `<a href="${amp(one)}">x</a> ${one.replace('%3a', '%3A')}`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: one, source: 'href' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: one });
   });
 
   it('keys an already-decoded thread segment like its encoded twin (05c)', () => {
@@ -409,7 +412,6 @@ describe('extractJoinLinkFromBody — channel meetings', () => {
     expect(extractJoinLinkFromBody(`<a href="${amp(A)}">x</a> ${decoded}`)).toEqual({
       ok: true,
       url: A,
-      source: 'href',
     });
   });
 });
@@ -417,17 +419,17 @@ describe('extractJoinLinkFromBody — channel meetings', () => {
 describe('extractJoinLinkFromBody — truncated and wrapped plain-text links', () => {
   it('joins a <url> that Outlook wrapped over two lines (09)', () => {
     const body = `Deltag i mødet nu<${A.slice(0, 60)}\n${A.slice(60)}>`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A, source: 'text' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A });
   });
 
   it('joins a <url> wrapped inside the meetup-join thread id, with CRLF and indentation (09b)', () => {
     const body = `Deltag<${A.slice(0, 59)}\r\n   ${A.slice(59)}>`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A, source: 'text' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A });
   });
 
   it('joins a /meet/ <url> wrapped before ?p= (09c)', () => {
     const body = `Deltag<https://teams.microsoft.com/meet/399000000000001\n?p=FaKeFaKeFaKe0001>`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT, source: 'text' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT });
   });
 
   it('never returns a bare link cut off inside a % escape (09, no brackets)', () => {
@@ -472,7 +474,7 @@ describe('extractJoinLinkFromBody — documented safe refusals', () => {
 
   it('never returns the double-encoded copy next to the valid link (05b)', () => {
     const body = `<a href="${amp(A)}">x</a> ${A.replace(/%/g, '%25')}`;
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A, source: 'href' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: A });
   });
 });
 
@@ -485,7 +487,7 @@ describe('extractJoinLinkFromBody — size and time', () => {
   it('reads a body of exactly MAX_BODY_LENGTH', () => {
     const block = inviteBlock(SHORT);
     const body = block + ' '.repeat(MAX_BODY_LENGTH - block.length);
-    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT, source: 'invite-block' });
+    expect(extractJoinLinkFromBody(body)).toEqual({ ok: true, url: SHORT });
   });
 
   const KB400 = 400_000;
