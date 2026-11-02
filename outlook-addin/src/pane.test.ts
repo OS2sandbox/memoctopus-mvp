@@ -183,6 +183,47 @@ describe('disarm', () => {
 });
 
 describe('start', () => {
+  it('says "slået til" and offers "Slå fra" when reopened on the meeting it armed', async () => {
+    const o = fakeOutlook();
+    vi.mocked(armMeeting).mockResolvedValue(armResponse());
+    await arm(stateFor(o));
+    document.body.innerHTML = main;
+    (globalThis as { Office?: unknown }).Office = o.office;
+
+    await start();
+
+    expect(text('status')).toBe('OS2taletiltekst er slået til for mødet.');
+    expect(visible('disarm')).toBe(true);
+    expect(visible('arm')).toBe(false);
+  });
+
+  it('does not offer to switch off another meeting when the Teams link was swapped', async () => {
+    const OTHER = 'https://teams.microsoft.com/meet/399000000000002?p=FaKeFaKeFaKe0002';
+    const armed = fakeOutlook();
+    vi.mocked(armMeeting).mockResolvedValue(armResponse());
+    await arm(stateFor(armed));
+    // The same appointment, its note intact, now with another meeting's link.
+    const swapped = fakeOutlook({ body: `<a href="${OTHER}">Deltag</a>`, props: armed.store });
+    document.body.innerHTML = main;
+    (globalThis as { Office?: unknown }).Office = swapped.office;
+
+    await start();
+
+    expect(text('status')).toMatch(/Mødet har et Teams-link/);
+    expect(visible('disarm')).toBe(false);
+    expect(visible('arm')).toBe(true);
+  });
+
+  it('treats a bare id noted by an earlier version as unverified: "Slå til" re-arms it', async () => {
+    const o = fakeOutlook({ props: { os2taletiltekstMeetingId: 'ol-1' } });
+    (globalThis as { Office?: unknown }).Office = o.office;
+
+    await start();
+
+    expect(visible('arm')).toBe(true);
+    expect(visible('disarm')).toBe(false);
+  });
+
   it('offers "Slå til" for a meeting with a Teams link', async () => {
     (globalThis as { Office?: unknown }).Office = fakeOutlook().office;
 

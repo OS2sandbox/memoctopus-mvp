@@ -134,26 +134,70 @@ function fakeOutlook(initial: Record<string, unknown> = {}) {
 }
 
 describe('the note on the appointment', () => {
-  it('remembers and forgets the armed meeting id', async () => {
+  const JOIN = 'https://teams.microsoft.com/meet/399000000000001?p=FaKeFaKeFaKe0001';
+  const OTHER_JOIN = 'https://teams.microsoft.com/meet/399000000000002?p=FaKeFaKeFaKe0002';
+  const START = new Date('2026-11-03T09:00:00.000Z');
+  const NEXT_WEEK = new Date('2026-11-10T09:00:00.000Z');
+  const here = { joinUrl: JOIN, start: START };
+
+  it('remembers and forgets the armed meeting', async () => {
     const o = fakeOutlook();
-    expect(await readArmedId(o.office, o.item)).toBeNull();
-    await writeArmedId(o.office, o.item, 'ol-123');
-    expect(await readArmedId(o.office, o.item)).toBe('ol-123');
+    expect(await readArmedId(o.office, o.item, here)).toBeNull();
+    await writeArmedId(o.office, o.item, { id: 'ol-123', ...here });
+    expect(await readArmedId(o.office, o.item, here)).toBe('ol-123');
     await writeArmedId(o.office, o.item, null);
-    expect(await readArmedId(o.office, o.item)).toBeNull();
+    expect(await readArmedId(o.office, o.item, here)).toBeNull();
     expect(o.saves()).toBe(2);
   });
-  it('ignores a value that is not one of our ids', async () => {
-    const o = fakeOutlook({ os2taletiltekstMeetingId: '../../etc' });
-    expect(await readArmedId(o.office, o.item)).toBeNull();
+
+  // The note travels with the appointment: a swapped Teams link, a copy of an
+  // armed appointment, or an occurrence inheriting the series' note must not make
+  // the pane say "slået til" and offer to switch off a different meeting.
+  it('does not trust a note for another Teams link', async () => {
+    const o = fakeOutlook();
+    await writeArmedId(o.office, o.item, { id: 'ol-123', ...here });
+    expect(await readArmedId(o.office, o.item, { joinUrl: OTHER_JOIN, start: START })).toBeNull();
   });
+
+  it('does not trust a note for another start (another occurrence, a moved copy)', async () => {
+    const o = fakeOutlook();
+    await writeArmedId(o.office, o.item, { id: 'ol-123', ...here });
+    expect(await readArmedId(o.office, o.item, { joinUrl: JOIN, start: NEXT_WEEK })).toBeNull();
+  });
+
+  it('does not trust a note when the start cannot be read', async () => {
+    const o = fakeOutlook();
+    await writeArmedId(o.office, o.item, { id: 'ol-123', ...here });
+    expect(await readArmedId(o.office, o.item, { joinUrl: JOIN, start: null })).toBeNull();
+  });
+
+  it('does not trust a bare id from before the note carried link and start', async () => {
+    const o = fakeOutlook({ os2taletiltekstMeetingId: 'ol-123' });
+    expect(await readArmedId(o.office, o.item, here)).toBeNull();
+  });
+
+  it('ignores a value that is not one of our notes', async () => {
+    for (const value of [
+      '../../etc',
+      JSON.stringify({ id: '../../etc', joinUrl: JOIN, start: START.toISOString() }),
+      JSON.stringify({ id: 'ol-1', joinUrl: JOIN }),
+      JSON.stringify(['ol-1', JOIN]),
+      '{',
+      42,
+      null,
+    ]) {
+      const o = fakeOutlook({ os2taletiltekstMeetingId: value });
+      expect(await readArmedId(o.office, o.item, here)).toBeNull();
+    }
+  });
+
   it('carries on when custom properties cannot be loaded', async () => {
     const office = { AsyncResultStatus: { Succeeded: 'succeeded' } } as unknown as OfficeApi;
     const item = {
       loadCustomPropertiesAsync: (cb: (r: AsyncResult<CustomProperties>) => void) =>
         cb({ status: 'failed', value: null as never, error: { name: 'x', message: 'x', code: 1 } }),
     } as unknown as OrganizerItem;
-    expect(await readArmedId(office, item)).toBeNull();
-    await expect(writeArmedId(office, item, 'ol-1')).resolves.toBeUndefined();
+    expect(await readArmedId(office, item, here)).toBeNull();
+    await expect(writeArmedId(office, item, { id: 'ol-1', ...here })).resolves.toBeUndefined();
   });
 });

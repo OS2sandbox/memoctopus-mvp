@@ -69,7 +69,9 @@ export async function arm(state: State): Promise<void> {
   try {
     state.config ??= await loadConfig();
     const token = await getAccessToken(state.config);
-    const result = await armMeeting(state.joinUrl, await readTimes(state.office, state.item), token);
+    const joinUrl = state.joinUrl;
+    const times = await readTimes(state.office, state.item);
+    const result = await armMeeting(joinUrl, times, token);
     if (result.managedInDashboard) {
       // Not ours to switch off: it was registered in the dashboard and lives there.
       say('OS2taletiltekst er allerede slået til for mødet fra OS2taletiltekst. Slå det fra der, hvis det skal.', 'ok');
@@ -79,7 +81,9 @@ export async function arm(state: State): Promise<void> {
     say(message.text, message.tone);
     if (result.armed || result.armResult === 'not_organizer' || result.armResult === 'policy_blocked') {
       state.armedId = result.id;
-      await writeArmedId(state.office, state.item, result.id);
+      // Without a start the note could not be told apart from another occurrence's,
+      // so none is kept: reopening the pane then offers "Slå til" again.
+      await writeArmedId(state.office, state.item, times ? { id: result.id, joinUrl, start: times.start } : null);
     }
   } catch (err) {
     say(errorText(err), 'error');
@@ -145,18 +149,19 @@ export async function start(): Promise<void> {
   $('disarm').addEventListener('click', () => void disarm(state));
 
   try {
-    const [link, armedId, config] = await Promise.all([
+    const [link, times, config] = await Promise.all([
       readJoinLink(office, item),
-      readArmedId(office, item),
+      readTimes(office, item),
       // Here only for the note. A failure is reported when a button needs the
       // config and loads it again.
       loadConfig().catch(() => null),
     ]);
     state.config = config;
     renderRecordingNote(config);
-    state.armedId = armedId;
     if (link.ok) {
       state.joinUrl = link.url;
+      const armedId = await readArmedId(office, item, { joinUrl: link.url, start: times?.start ?? null });
+      state.armedId = armedId;
       say(
         armedId
           ? 'OS2taletiltekst er slået til for mødet.'
