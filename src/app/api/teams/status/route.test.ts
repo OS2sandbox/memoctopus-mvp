@@ -24,6 +24,8 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.TEAMS_GRAPH_ENABLED;
+  delete process.env.TEAMS_ARTIFACT_MODE;
+  delete process.env.TEAMS_DELETE_RECORDING;
 });
 
 describe('GET /api/teams/status', () => {
@@ -60,6 +62,8 @@ describe('GET /api/teams/status', () => {
       microsoftLinked: true,
       scopesOk: true,
       missing: [],
+      recordingFetched: true,
+      recordingDeleted: true,
     });
     expect(mockScopes).toHaveBeenCalledWith('user-123');
   });
@@ -71,6 +75,8 @@ describe('GET /api/teams/status', () => {
       microsoftLinked: true,
       scopesOk: false,
       missing: ['OnlineMeetings.ReadWrite'],
+      recordingFetched: true,
+      recordingDeleted: true,
     });
   });
 
@@ -81,6 +87,8 @@ describe('GET /api/teams/status', () => {
       microsoftLinked: false,
       scopesOk: false,
       missing: [],
+      recordingFetched: true,
+      recordingDeleted: true,
     });
   });
 
@@ -91,5 +99,26 @@ describe('GET /api/teams/status', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).microsoftLinked).toBe(false);
     spy.mockRestore();
+  });
+});
+
+// The dashboard tells the user what happens to a Teams meeting's data. It can only
+// say it truthfully if the server reports how it is actually configured.
+describe('GET /api/teams/status — data handling', () => {
+  it('reports that the recording is fetched and deleted by default', async () => {
+    mockScopes.mockResolvedValueOnce({ ok: true, missing: [] });
+    expect(await (await GET()).json()).toMatchObject({ recordingFetched: true, recordingDeleted: true });
+  });
+
+  it('reports a recording that is fetched but kept when deletion is switched off', async () => {
+    process.env.TEAMS_DELETE_RECORDING = 'false';
+    mockScopes.mockResolvedValueOnce({ ok: true, missing: [] });
+    expect(await (await GET()).json()).toMatchObject({ recordingFetched: true, recordingDeleted: false });
+  });
+
+  it('reports that nothing is fetched or deleted in transcript-only mode', async () => {
+    process.env.TEAMS_ARTIFACT_MODE = 'transcript-only';
+    mockScopes.mockResolvedValueOnce({ ok: true, missing: [] });
+    expect(await (await GET()).json()).toMatchObject({ recordingFetched: false, recordingDeleted: false });
   });
 });

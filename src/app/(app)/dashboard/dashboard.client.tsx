@@ -26,6 +26,26 @@ interface TeamsStatus {
   microsoftLinked: boolean;
   scopesOk: boolean;
   missing: string[];
+  /** What this server does with a Teams recording. Absent means the defaults (true). */
+  recordingFetched?: boolean;
+  recordingDeleted?: boolean;
+}
+
+/**
+ * The line that says what happens to a Teams meeting's data, true for how this
+ * deployment is configured. Before the status has loaded it assumes the server's
+ * defaults: the recording is fetched, transcribed and then deleted.
+ */
+function teamsDataLine(status: TeamsStatus | null): string {
+  const fetched = status?.recordingFetched ?? true;
+  const deleted = status?.recordingDeleted ?? true;
+  const kept = 'teksten ligger kun på serveren, til din browser har gemt den.';
+  if (!fetched) {
+    return `teams-møder: serveren henter Teams' egen tekst-transskription, ingen lyd. ${kept} optagelsen bliver liggende i OneDrive.`;
+  }
+  return `teams-møder: serveren henter Teams' optagelse og transskriberer den. ${kept} ${
+    deleted ? 'derefter slettes optagelsen i din OneDrive, når det er dit eget møde.' : 'optagelsen bliver liggende i OneDrive.'
+  }`;
 }
 
 export default function OptaqPage() {
@@ -494,8 +514,7 @@ export default function OptaqPage() {
                   marginTop: 10, fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
                   lineHeight: 1.8, letterSpacing: 0.2,
                 }}>
-                  teams-møder: serveren henter Teams' optagelse, transskriberer den og sletter
-                  den så i OneDrive. teksten ligger kun på serveren, til din browser har gemt den.
+                  {teamsDataLine(teamsStatus)}
                 </div>
               )}
             </div>

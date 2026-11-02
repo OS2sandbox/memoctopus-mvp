@@ -1020,7 +1020,31 @@ describe('OptaqPage — static content', () => {
     const line = await screen.findByText(/teams-møder: serveren henter Teams' optagelse/);
     expect(line).toHaveTextContent(/transskriberer den/);
     expect(line).toHaveTextContent(/teksten ligger kun på serveren, til din browser har gemt den/);
-    expect(line).toHaveTextContent(/transskriberer den og sletter den så i OneDrive/);
+    expect(line).toHaveTextContent(/derefter slettes optagelsen i din OneDrive, når det er dit eget møde/);
+  });
+
+  // The server reports how it is configured; the line must not promise a deletion
+  // or a download this deployment does not do.
+  it('does not promise the OneDrive deletion when the server keeps recordings', async () => {
+    routeFetch({ status: () => ({ ok: true, status: 200, json: async () => ({
+      enabled: true, microsoftLinked: true, scopesOk: true, missing: [],
+      recordingFetched: true, recordingDeleted: false,
+    }) }) });
+    renderPage();
+    const line = await screen.findByText(/teams-møder: serveren henter Teams' optagelse/);
+    await waitFor(() => expect(line).toHaveTextContent(/optagelsen bliver liggende i OneDrive/));
+    expect(line).not.toHaveTextContent(/slettes/);
+  });
+
+  it('says only the text is fetched in transcript-only mode', async () => {
+    routeFetch({ status: () => ({ ok: true, status: 200, json: async () => ({
+      enabled: true, microsoftLinked: true, scopesOk: true, missing: [],
+      recordingFetched: false, recordingDeleted: false,
+    }) }) });
+    renderPage();
+    const line = await screen.findByText(/teams-møder: serveren henter Teams' egen tekst-transskription/);
+    expect(line).not.toHaveTextContent(/optagelse og transskriberer/);
+    expect(line).not.toHaveTextContent(/slettes/);
   });
 
   it('leaves the Teams line out when the integration is switched off', async () => {
