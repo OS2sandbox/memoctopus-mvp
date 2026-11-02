@@ -14,6 +14,22 @@ til en times ventetid på, at Teams-politikken slår igennem.
 `TEAMS_GRAPH_ENABLED=true` i OS2taletiltekst' miljøvariabler og genstarte appen, og det
 skal først ske, **når trin 1 er gennemført**. Se rammen under trin 1.
 
+## Kort version
+
+1. **Entra admin center:** giv app-registreringen de delegerede Graph-tilladelser
+   `OnlineMeetings.ReadWrite`, `OnlineMeetingTranscript.Read.All`,
+   `OnlineMeetingRecording.Read.All`, `Files.ReadWrite`, `User.Read` og
+   `offline_access`, og tryk **Grant admin consent**.
+2. **Teams admin center:** slå *Transcription* og *Meeting recording* til i
+   mødepolitikken. Det kan tage op til en time at slå igennem.
+3. **Teams admin center:** kontrollér, at API-adgang til transskriptioner ikke er
+   slået fra.
+4. **Driften:** sæt `TEAMS_GRAPH_ENABLED=true` og genstart appen. **Først efter
+   trin 1**, ellers kan ingen logge ind med Microsoft.
+5. **Medarbejderne:** log ud og ind igen med Microsoft.
+
+Resten af guiden forklarer hvert trin, fejlbeskederne og hvor data ligger.
+
 ## Trin 1. Giv appen adgang til møderne
 
 Foretages i **Entra admin center** ([entra.microsoft.com](https://entra.microsoft.com))
