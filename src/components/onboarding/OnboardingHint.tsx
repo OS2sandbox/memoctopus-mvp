@@ -31,13 +31,14 @@ function usePageBlockedByModal(watch: boolean): boolean {
 /**
  * Wraps a target element and, the first time this step hasn't been seen,
  * shows a small dismissible bubble with onboarding copy anchored to it.
- * It's visible at most once ever: being shown counts as "seen" even if the
- * user navigates away instead of clicking "forstået" (state lives in
- * onboarding_progress).
+ * Once seen, it stays hidden until the user replays the tour with the "?"
+ * button (or, for a `per-meeting` step, until the next meeting): being shown
+ * counts as "seen" even if the user navigates away instead of clicking
+ * "forstået" (state lives in onboarding_progress).
  *
  * Only one hint is ever open at a time, app-wide, so a page never shows
- * several bubbles at once — pending hints queue in mount order and are
- * revealed one by one as each is dismissed. A step id can also wrap more
+ * several bubbles at once — pending hints queue by severity (mount order
+ * among equals) and are revealed one by one as each is dismissed. A step id can also wrap more
  * than one DOM element (e.g. the same "Del" button repeated once per card
  * in a list); only one instance owns the slot at a time (the next mounted
  * one takes over if the owner unmounts), so the bubble renders exactly once
