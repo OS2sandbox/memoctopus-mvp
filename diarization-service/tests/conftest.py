@@ -3,7 +3,7 @@
 The metrics and auth logic live at module level in app.py, so the tests import the real
 module. torch and pyannote are replaced by tiny stubs (they are only needed for inference,
 which the tests fake), and every test gets a fresh import so environment variables such
-as DIARIZATION_METRICS_REQUIRE_AUTH take effect.
+as DIARIZATION_METRICS_PUBLIC take effect.
 
 Needs Python 3.10+ (app.py uses `X | None` annotations at runtime):
 
@@ -55,7 +55,7 @@ def load_app(monkeypatch):
         monkeypatch.syspath_prepend(SERVICE_DIR)
 
     def _load(**env: str):
-        for key in ("DIARIZATION_API_KEY", "DIARIZATION_METRICS_REQUIRE_AUTH"):
+        for key in ("DIARIZATION_API_KEY", "DIARIZATION_METRICS_PUBLIC"):
             monkeypatch.delenv(key, raising=False)
         for key, value in env.items():
             monkeypatch.setenv(key, value)

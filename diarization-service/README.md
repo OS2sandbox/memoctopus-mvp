@@ -35,8 +35,8 @@ torchcodec/ffmpeg audio backend.
   - `memoctopus_diarization_queue_wait_seconds` — time spent waiting for the inference
     lock. The pipeline is not concurrency-safe, so requests serialise; when this grows
     the service needs another replica, not a faster GPU.
-  - Unauthenticated by default; see `DIARIZATION_METRICS_REQUIRE_AUTH` and
-    "Reaching `/metrics`" below.
+  - Takes the same bearer token as `/diarize` whenever `DIARIZATION_API_KEY` is set;
+    see `DIARIZATION_METRICS_PUBLIC` and "Reaching `/metrics`" below.
 
   What `memoctopus_diarization_jobs_total` does **not** count, so it will not reconcile
   exactly with `http_requests_total{handler="/diarize"}`:
@@ -59,28 +59,30 @@ torchcodec/ffmpeg audio backend.
 - `DIARIZATION_SEGMENTATION_BATCH_SIZE` / `DIARIZATION_EMBEDDING_BATCH_SIZE` —
   sub-model batch sizes (default 32). Larger values cut GPU inference wall time on
   long recordings; lower them if VRAM is tight.
-- `DIARIZATION_METRICS_REQUIRE_AUTH` — `1`, `true` or `yes` to require the same bearer
-  token on `/metrics` as on `/diarize`. Off by default: the service is not publicly exposed, and
-  a scraper that suddenly needs a credential fails silently (the series just stop). Turn
-  it on where the service is reachable from outside the internal network. Like
-  `/diarize`, it has no effect unless `DIARIZATION_API_KEY` is also set — with no key
-  configured there is nothing to check and `/metrics` stays open (the service logs a
-  warning at startup when the flag is set without a key).
+- `DIARIZATION_METRICS_PUBLIC` — `1`, `true` or `yes` to serve `/metrics` without the
+  bearer token. By default `/metrics` requires the same token as `/diarize` whenever
+  `DIARIZATION_API_KEY` is set; opt out only for a scraper that cannot send a token, and
+  keep the port off public interfaces then. With no key configured nothing is
+  authenticated, `/metrics` included. (`DIARIZATION_METRICS_REQUIRE_AUTH` from earlier
+  versions is no longer read: requiring the token is now the default.)
 - `HF_TOKEN` — only needed the first time, to download the gated weights (cached after).
 
 ## Reaching `/metrics`
 
 Who can read `/metrics` depends on how the service is deployed:
 
+With `DIARIZATION_API_KEY` set, the scraper needs the bearer token (Prometheus:
+`authorization: { credentials: <key> }` in the scrape config). Where it can reach the
+service depends on how the service is deployed:
+
 - **Deploy A** binds `127.0.0.1:5000`, so `/metrics` is reachable only from the box itself
   or through the SSH tunnel the app already uses. To scrape it, run Prometheus (or the
   Grafana Agent) on the box, or forward the port: `ssh -L 5000:localhost:5000 <box>` and
-  scrape `localhost:5000/metrics`. No extra setting is needed.
-- **Deploy B and `deploy.sh`** publish port 5000 on every interface (`-p 5000:5000`). There
-  `/metrics` is as open as `/health` and `/docs`: it exposes request counts, latencies and
-  job outcomes, but no filenames, sizes or audio. Either publish on loopback
-  (`-p 127.0.0.1:5000:5000`) or set `DIARIZATION_API_KEY` together with
-  `DIARIZATION_METRICS_REQUIRE_AUTH=true` and give the scraper the bearer token.
+  scrape `localhost:5000/metrics`.
+- **Deploy B and `deploy.sh`** publish port 5000 on every interface (`-p 5000:5000`). The
+  token keeps `/metrics` (request counts, latencies and job outcomes; no filenames, sizes
+  or audio) to the scraper. If you set `DIARIZATION_METRICS_PUBLIC=true`, publish on
+  loopback instead (`-p 127.0.0.1:5000:5000`).
 
 ## Deploy A — directly on the GPU box (what production uses)
 
