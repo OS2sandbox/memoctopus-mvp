@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { needsInteraction, parseConfig } from './auth';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { getAccessToken, needsInteraction, parseConfig } from './auth';
 import { armedMessage, noLinkMessage, readArmedId, writeArmedId } from './meeting';
 import type { AsyncResult, CustomProperties, OfficeApi, OrganizerItem } from './office';
 
@@ -30,6 +30,67 @@ describe('needsInteraction', () => {
   it('does not pop up for anything else', () => {
     expect(needsInteraction({ errorCode: 'network_error' })).toBe(false);
     expect(needsInteraction(null)).toBe(false);
+  });
+});
+
+describe('getAccessToken', () => {
+  // MSAL as the pinned CDN build exposes it; already "loaded", so no script tag.
+  const app = {
+    getActiveAccount: vi.fn(),
+    getAllAccounts: vi.fn(),
+    acquireTokenSilent: vi.fn(),
+    acquireTokenPopup: vi.fn(),
+  };
+  const createApp = vi.fn(async () => app);
+  const config = { clientId: CLIENT, tenantId: TENANT, scopes: [`api://${CLIENT}/access_as_user`] };
+  const interactionRequired = Object.assign(new Error('AADSTS65001'), { name: 'InteractionRequiredAuthError' });
+
+  beforeEach(() => {
+    (globalThis as { msal?: unknown }).msal = { createNestablePublicClientApplication: createApp };
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const fn of Object.values(app)) fn.mockReset();
+    app.getActiveAccount.mockReturnValue(null);
+    app.getAllAccounts.mockReturnValue([]);
+  });
+  afterAll(() => {
+    delete (globalThis as { msal?: unknown }).msal;
+    vi.restoreAllMocks();
+  });
+
+  it('signs in silently when it can, pinned to our tenant', async () => {
+    const account = { username: 'a@kommune.dk' };
+    app.getAllAccounts.mockReturnValue([account]);
+    app.acquireTokenSilent.mockResolvedValue({ accessToken: 'silent-token' });
+
+    await expect(getAccessToken(config)).resolves.toBe('silent-token');
+
+    expect(app.acquireTokenSilent).toHaveBeenCalledWith({ scopes: config.scopes, account });
+    expect(app.acquireTokenPopup).not.toHaveBeenCalled();
+    expect(createApp).toHaveBeenCalledWith({
+      auth: { clientId: CLIENT, authority: `https://login.microsoftonline.com/${TENANT}` },
+    });
+  });
+
+  it('falls back to the Microsoft pop-up when consent or a new sign-in is needed', async () => {
+    app.acquireTokenSilent.mockRejectedValue(interactionRequired);
+    app.acquireTokenPopup.mockResolvedValue({ accessToken: 'popup-token' });
+
+    await expect(getAccessToken(config)).resolves.toBe('popup-token');
+    expect(app.acquireTokenPopup).toHaveBeenCalledWith({ scopes: config.scopes });
+  });
+
+  it('does not pop up for a failure a pop-up cannot fix', async () => {
+    app.acquireTokenSilent.mockRejectedValue(Object.assign(new Error('offline'), { errorCode: 'network_error' }));
+
+    await expect(getAccessToken(config)).rejects.toThrow(/Microsoft-login mislykkedes/);
+    expect(app.acquireTokenPopup).not.toHaveBeenCalled();
+  });
+
+  it('says so when the pop-up does not complete either', async () => {
+    app.acquireTokenSilent.mockRejectedValue(interactionRequired);
+    app.acquireTokenPopup.mockRejectedValue(Object.assign(new Error('popup_window_error'), { errorCode: 'popup_window_error' }));
+
+    await expect(getAccessToken(config)).rejects.toThrow(/Tillad pop-up-vinduet/);
   });
 });
 
