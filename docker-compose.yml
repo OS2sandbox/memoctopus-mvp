@@ -1,6 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# BASE STACK ("small"): the CPU-only application — Next.js app, Teams bot,
-# Postgres. Self-contained; talks to hviske/diarization hosted ELSEWHERE
+# BASE STACK ("small"): the CPU-only application — the Next.js app (which also
+# polls Microsoft Graph for Teams meetings) and Postgres. Self-contained; talks to
+# hviske/diarization hosted ELSEWHERE
 # (set HVISKE_URL / DIARIZATION_URL in .env to the remote box):
 #
 #     docker compose up -d
