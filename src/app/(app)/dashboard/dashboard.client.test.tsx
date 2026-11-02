@@ -873,6 +873,25 @@ describe('OptaqPage — Teams meeting link flow', () => {
     });
   });
 
+  it("shows the server's own message for an error the dashboard has no copy for", async () => {
+    mockCreateMeeting.mockResolvedValue({ id: 'teams-8' });
+    routeFetch({
+      arm: () => ({
+        ok: false,
+        status: 503,
+        json: async () => ({ error: 'unavailable', message: 'Microsoft svarer ikke lige nu. Prøv igen om lidt.' }),
+      }),
+    });
+    renderPage();
+
+    const linkInput = screen.getByPlaceholderText('Indsæt mødelink…');
+    fireEvent.change(linkInput, { target: { value: 'https://teams.microsoft.com/abc' } });
+    await act(async () => { fireEvent.keyDown(linkInput, { key: 'Enter' }); });
+
+    expect(await screen.findByText('Microsoft svarer ikke lige nu. Prøv igen om lidt.')).toBeInTheDocument();
+    expect(mockDeleteMeeting).toHaveBeenCalledWith('teams-8');
+  });
+
   it('also unregisters through the helper when the request itself fails (the POST may have landed)', async () => {
     mockCreateMeeting.mockResolvedValue({ id: 'teams-6' });
     routeFetch({ arm: () => { throw new TypeError('Failed to fetch'); } });

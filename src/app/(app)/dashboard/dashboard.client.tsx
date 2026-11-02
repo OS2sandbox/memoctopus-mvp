@@ -130,7 +130,7 @@ export default function OptaqPage() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setLinkError(armErrorMessage(res.status, (body as { error?: string }).error));
+        setLinkError(armErrorMessage(res.status, body as { error?: string; message?: string }));
         await deleteMeetingAndUnregister(meeting.id).catch(() => {});
         setLinkLoading(false);
         return;
