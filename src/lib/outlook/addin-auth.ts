@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose';
+import { createRemoteJWKSet, errors, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose';
 import { pool } from '@/lib/db';
 import { outlookAddinConfig } from '@/lib/auth/providers';
 
@@ -25,7 +25,7 @@ import { outlookAddinConfig } from '@/lib/auth/providers';
 
 export const ADDIN_SCOPE = 'access_as_user';
 
-export type AddinAuthErrorCode = 'disabled' | 'missing_token' | 'invalid_token' | 'no_account';
+export type AddinAuthErrorCode = 'disabled' | 'missing_token' | 'invalid_token' | 'no_account' | 'unavailable';
 
 /** Danish, user-safe: shown in the add-in's pane. */
 const MESSAGES: Record<AddinAuthErrorCode, string> = {
@@ -34,6 +34,7 @@ const MESSAGES: Record<AddinAuthErrorCode, string> = {
   invalid_token: 'Dit Microsoft-login kunne ikke godkendes. Luk ruden og prøv igen.',
   no_account:
     'Du skal logge ind på OS2taletiltekst med Microsoft én gang, før du kan bruge knappen i Outlook.',
+  unavailable: 'OS2taletiltekst kan ikke tjekke dit Microsoft-login lige nu. Prøv igen om lidt.',
 };
 
 const STATUS: Record<AddinAuthErrorCode, number> = {
@@ -41,6 +42,7 @@ const STATUS: Record<AddinAuthErrorCode, number> = {
   missing_token: 401,
   invalid_token: 401,
   no_account: 403,
+  unavailable: 503,
 };
 
 export class AddinAuthError extends Error {
@@ -56,10 +58,9 @@ export class AddinAuthError extends Error {
   }
 }
 
+/** What a verified token says about its user: the Microsoft account id. */
 export interface AddinClaims {
   sub: string;
-  oid: string | null;
-  tid: string;
 }
 
 /** One key set per tenant; jose caches the keys and refetches on an unknown `kid`. */
@@ -80,6 +81,20 @@ export function bearerToken(header: string | null): string | null {
   if (!header) return null;
   const match = /^Bearer\s+([A-Za-z0-9._-]+)$/.exec(header.trim());
   return match ? match[1] : null;
+}
+
+/**
+ * A failure to get the tenant's signing keys, as opposed to a bad token: jose's
+ * timeout, its bare JOSEError for a non-200 or non-JSON answer, a malformed key
+ * set, and fetch's own network errors, which are not JOSE errors at all. The
+ * user's login may be fine; the server just could not check it. A key id the
+ * tenant does not publish (JWKSNoMatchingKey) is the token's problem, not ours.
+ */
+function keysUnavailable(err: unknown): boolean {
+  if (!(err instanceof errors.JOSEError)) return true;
+  return err instanceof errors.JWKSTimeout
+    || err instanceof errors.JWKSInvalid
+    || err.code === errors.JOSEError.code;
 }
 
 function claimString(payload: JWTPayload, name: string): string | null {
@@ -111,9 +126,12 @@ export async function verifyAddinToken(
       clockTolerance: 60,
     }));
   } catch (err) {
-    throw new AddinAuthError('invalid_token', err instanceof Error ? err.message : String(err));
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new AddinAuthError(keysUnavailable(err) ? 'unavailable' : 'invalid_token', detail);
   }
 
+  // Compared case-insensitively: a GUID's case carries no meaning, and the issuer,
+  // matched exactly above, already names the tenant.
   const tid = claimString(payload, 'tid')?.toLowerCase();
   if (tid !== config.tenantId) throw new AddinAuthError('invalid_token', 'tid is not our tenant');
 
@@ -126,7 +144,7 @@ export async function verifyAddinToken(
 
   const sub = claimString(payload, 'sub');
   if (!sub) throw new AddinAuthError('invalid_token', 'no sub');
-  return { sub, oid: claimString(payload, 'oid'), tid };
+  return { sub };
 }
 
 /** The better-auth user behind a verified token, by its Microsoft account. */
