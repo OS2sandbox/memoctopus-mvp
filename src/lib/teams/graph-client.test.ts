@@ -100,6 +100,37 @@ describe('graphOrigin', () => {
     process.env.GRAPH_BASE_URL = '   ';
     expect(graphOrigin()).toBe('https://graph.microsoft.com/v1.0');
   });
+
+  it.each([
+    'https://graph.microsoft.com/beta',
+    'https://graph.microsoft.us/v1.0',
+    'https://dod-graph.microsoft.us/v1.0',
+    'https://microsoftgraph.chinacloudapi.cn/v1.0',
+    'http://127.0.0.1:4010/v1.0',
+    'https://localhost:4010/v1.0',
+  ])('accepts a Microsoft cloud or a local mock: %s', (url) => {
+    process.env.GRAPH_BASE_URL = url;
+    expect(graphOrigin()).toBe(url);
+  });
+
+  // Every Graph call carries the user's bearer token to this origin. A typo or a
+  // planted value must not send it anywhere else.
+  it.each([
+    'https://graph.example.com/v1.0',
+    'https://graph.microsoft.com.evil.example/v1.0',
+    'http://graph.microsoft.com/v1.0',
+    'ftp://localhost/v1.0',
+    'not a url',
+  ])('refuses any other origin and falls back to Microsoft Graph: %s', (url) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env.GRAPH_BASE_URL = url;
+
+    expect(graphOrigin()).toBe('https://graph.microsoft.com/v1.0');
+    graphOrigin();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('GRAPH_BASE_URL');
+  });
 });
 
 describe('getGraphAccessToken', () => {
