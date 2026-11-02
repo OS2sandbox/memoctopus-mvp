@@ -15,7 +15,7 @@ import { usingHostedOpenAI, countTokensExact } from './llm-client';
 // costs the whole request.
 const CHARS_PER_TOKEN_FALLBACK = 2.5;
 
-interface LlmLimits {
+export interface LlmLimits {
   contextTokens: number;
   maxOutputTokens: number;
 }
@@ -40,34 +40,41 @@ export function getLlmLimits(): LlmLimits {
   };
 }
 
-// Exact token count for `text` against the configured model, via vLLM's /tokenize. Falls
-// back to the pessimistic chars/token estimate when no tokenizer endpoint is available.
-async function countTokens(text: string): Promise<number> {
+// Tokens the chat template wraps around the messages (role markers, BOS, the generation
+// prompt) that /tokenize on a bare prompt does not see. A handful per message on the
+// models we ship; generous, because some templates inject a default preamble too.
+export const CHAT_TEMPLATE_TOKENS = 128;
+
+// Share of the room held back when turning a token budget into a character budget for
+// splitting. The chars/token ratio is the whole transcript's; a stretch of short turns
+// (a speaker header every few words) tokenises denser than that, so a part cut to the
+// average would overflow. The parts are still checked exactly afterwards; this keeps
+// the re-splitting rare.
+const SPLIT_SAFETY = 0.1;
+
+// Token count for `text` against the configured model: exact via vLLM's /tokenize, or
+// the pessimistic chars/token estimate when no tokenizer endpoint is available.
+export async function countTokens(text: string): Promise<number> {
   if (!text) return 0;
   const exact = await countTokensExact(text);
   return exact ?? Math.ceil(text.length / CHARS_PER_TOKEN_FALLBACK);
 }
 
-// Characters of transcript that fit in one call, given the fixed part of the prompt (system
-// prompt, instruction, wrapper text) and a sample of the transcript itself.
-//
-// `fixedPromptText` and `transcriptSample` are both tokenised exactly via the model's own
-// tokenizer where available (vLLM), rather than guessed from a fixed chars/token constant.
-// The sample's measured chars/token ratio — exact for this transcript's actual text, not a
-// hardcoded average — is what converts the remaining token budget back to a character count
-// for the splitting logic downstream, which still operates on characters. May be negative
-// for a misconfigured (too small) context.
-export async function transcriptBudgetChars(
-  fixedPromptText: string,
-  transcriptSample: string,
-  limits: LlmLimits,
-): Promise<number> {
-  const { contextTokens, maxOutputTokens } = limits;
-  const [fixedTokens, sampleTokens] = await Promise.all([
-    countTokens(fixedPromptText),
-    countTokens(transcriptSample),
-  ]);
-  const charsPerToken =
-    sampleTokens > 0 ? transcriptSample.length / sampleTokens : CHARS_PER_TOKEN_FALLBACK;
-  return Math.floor((contextTokens - maxOutputTokens - fixedTokens) * charsPerToken);
+// Characters per token of `text`, given its token count (from countTokens). Converts a
+// token budget into the character budget the splitter works in.
+export function charsPerToken(text: string, tokens: number): number {
+  return tokens > 0 ? text.length / tokens : CHARS_PER_TOKEN_FALLBACK;
+}
+
+// Tokens left for transcript text in one call, after the output reservation, the fixed
+// part of the prompt (system prompt, instruction, wrapper text) and the chat template.
+// May be negative for a misconfigured (too small) context.
+export function promptRoomTokens(fixedTokens: number, limits: LlmLimits): number {
+  return limits.contextTokens - limits.maxOutputTokens - fixedTokens - CHAT_TEMPLATE_TOKENS;
+}
+
+// Characters of transcript to aim for in a call with `roomTokens` of space, at the
+// transcript's measured `charsPerToken`, less a safety margin. Pure; may be negative.
+export function transcriptBudgetChars(roomTokens: number, charsPerTokenRatio: number): number {
+  return Math.floor(roomTokens * charsPerTokenRatio * (1 - SPLIT_SAFETY));
 }

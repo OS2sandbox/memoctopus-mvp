@@ -1,10 +1,18 @@
+import type OpenAI from 'openai';
+import type { ChatCompletion } from 'openai/resources/chat/completions';
 import { TranscriptSegment } from '@/types';
 import { TranscriptChapter } from '@/lib/ai/chapters';
 import { getLlmClient, llmModel } from './llm-client';
-import { getLlmLimits, transcriptBudgetChars } from './llm-limits';
+import {
+  charsPerToken,
+  countTokens,
+  getLlmLimits,
+  promptRoomTokens,
+  transcriptBudgetChars,
+} from './llm-limits';
 import { mapWithLimit } from './map-with-limit';
 import { MinutesConfigError, MinutesTooLongError, MinutesTruncatedError } from './minutes-errors';
-import { mergeSpeakerTurns, renderTurns, splitTurns, type Turn } from './transcript-text';
+import { mergeSpeakerTurns, packTurns, renderTurns, type Turn } from './transcript-text';
 
 const MINUTES_SYSTEM_PROMPT = `Du er en dansk mødesekretær der udarbejder professionelle mødereferater.
 
@@ -26,6 +34,9 @@ const MAX_SUMMARY_ROUNDS = 3;
 
 // Concurrent summary calls. The bundled vLLM runs with --max-num-seqs 4.
 const SUMMARY_CONCURRENCY = 3;
+
+// Concurrent /tokenize calls when checking parts. Cheap next to a completion.
+const TOKENIZE_CONCURRENCY = 8;
 
 // Output cap for a per-part summary (max 8 bullet points).
 const SUMMARY_MAX_OUTPUT_TOKENS = 1_024;
@@ -84,6 +95,38 @@ export function buildSkabelonInstruction(
 
 // ─── Generation ───────────────────────────────────────────────────────────────
 
+// A 400 from the model saying the request does not fit its window. vLLM and OpenAI both
+// word it "maximum context length" (vLLM's engine-level check says "maximum model
+// length"); OpenAI also sets code context_length_exceeded. Matched on the error's shape
+// rather than the SDK's error class, so it holds across SDK versions and a mocked client.
+function isContextLengthError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const { status, code, message } = err as { status?: unknown; code?: unknown; message?: unknown };
+  if (status !== 400) return false;
+  return (
+    code === 'context_length_exceeded' ||
+    /maximum context length|maximum model length/i.test(String(message ?? ''))
+  );
+}
+
+type ChatParams = OpenAI.Chat.ChatCompletionCreateParamsNonStreaming;
+
+// Every chat call minutes generation makes. The budgeting below keeps requests inside the
+// window, but a misconfigured LLM_CONTEXT_TOKENS (larger than the model's real window) can
+// still overflow it: the user then gets the "too long" message, not a generic server error.
+async function complete(params: ChatParams): Promise<ChatCompletion> {
+  try {
+    return await getLlmClient().chat.completions.create(params);
+  } catch (err) {
+    if (isContextLengthError(err)) {
+      throw new MinutesTooLongError(
+        `The model rejected the request as longer than its context window: ${(err as Error).message}`,
+      );
+    }
+    throw err;
+  }
+}
+
 // Keep the transcript last: also called with '' to measure the fixed part of the prompt.
 function buildBodyPrompt(transcriptText: string, instruction: string): string {
   return `Udarbejd et mødereferat baseret på denne transskription.
@@ -99,7 +142,7 @@ async function _generateBody(
   instruction: string,
   maxOutputTokens: number,
 ): Promise<string> {
-  const response = await getLlmClient().chat.completions.create({
+  const response = await complete({
     model: llmModel('gpt-4o'),
     max_tokens: maxOutputTokens,
     messages: [
@@ -131,7 +174,7 @@ Returner kun en punktliste.`;
 }
 
 async function _summarizePart(text: string, title: string): Promise<string> {
-  const response = await getLlmClient().chat.completions.create({
+  const response = await complete({
     model: llmModel('gpt-4o'),
     max_tokens: SUMMARY_MAX_OUTPUT_TOKENS,
     messages: [{ role: 'user', content: buildSummaryPrompt(text, title) }],
@@ -151,17 +194,73 @@ interface Unit {
   turns: Turn[];
 }
 
-// Summarise every unit, splitting any unit larger than `budget` into parts. Returns one
-// markdown section per part, in meeting order. A unit with no turns (an agenda topic
-// nothing was assigned to) still gets its heading, with an empty body — every chapter
-// appears in the condensed text, even one nothing was said under.
-async function _summarizeUnits(units: Unit[], budget: number): Promise<string> {
-  const jobs = units.flatMap((unit) => {
-    const parts = splitTurns(unit.turns, budget);
+// How much one summary call may hold. `budgetChars` is the first guess at a part's size,
+// from the transcript's average chars/token; `promptTokens` is the hard limit every
+// summary prompt is checked against.
+interface SummaryBudget {
+  budgetChars: number;
+  promptTokens: number;
+}
+
+const partHeading = (title: string, i: number, n: number) =>
+  n > 1 ? `${title} (del ${i + 1}/${n})` : title;
+
+// The token check uses the widest "(del i/n)" suffix: the real one is not known until the
+// unit's parts are final, and it must not tip a checked part over the limit.
+const WIDEST_PART_SUFFIX = ' (del 999/999)';
+
+// Re-pack a part this many times at most before giving up on it.
+const MAX_REPACKS = 5;
+
+// Pack turns into parts whose summary prompt — title included — fits the window, counted
+// with the model's own tokenizer where there is one. The character budget is only a guess
+// from the transcript's average chars/token, so a part denser than average (a run of short
+// turns, each with its speaker header) is packed again with a budget scaled by how far
+// over it came out.
+async function packToFit(
+  turns: Turn[],
+  title: string,
+  budgetChars: number,
+  promptTokens: number,
+  depth = 0,
+): Promise<Turn[][]> {
+  const sized = await mapWithLimit(packTurns(turns, budgetChars), TOKENIZE_CONCURRENCY, async (part) => {
+    const text = renderTurns(part);
+    const tokens = await countTokens(buildSummaryPrompt(text, title + WIDEST_PART_SUFFIX));
+    return { part, chars: text.length, tokens };
+  });
+
+  const fitted: Turn[][] = [];
+  for (const { part, chars, tokens } of sized) {
+    if (tokens <= promptTokens) {
+      fitted.push(part);
+      continue;
+    }
+    const smaller = Math.floor(chars * (promptTokens / tokens) * 0.95);
+    if (depth >= MAX_REPACKS || smaller < 1) {
+      throw new MinutesTooLongError(
+        `A summary prompt is ${tokens} tokens against a limit of ${promptTokens} after ${depth} re-packs`,
+      );
+    }
+    fitted.push(...(await packToFit(part, title, smaller, promptTokens, depth + 1)));
+  }
+  return fitted;
+}
+
+// Summarise every unit, splitting any unit too large for one summary call into parts.
+// Returns one markdown section per part, in meeting order. A unit with no turns (an agenda
+// topic nothing was assigned to) still gets its heading, with an empty body — every
+// chapter appears in the condensed text, even one nothing was said under.
+async function _summarizeUnits(units: Unit[], budget: SummaryBudget): Promise<string> {
+  const packed = await Promise.all(
+    units.map((unit) => packToFit(unit.turns, unit.title, budget.budgetChars, budget.promptTokens)),
+  );
+  const jobs = units.flatMap((unit, u) => {
+    const parts = packed[u];
     if (parts.length === 0) return [{ heading: unit.title, text: '' }];
-    return parts.map((text, i) => ({
-      heading: parts.length > 1 ? `${unit.title} (del ${i + 1}/${parts.length})` : unit.title,
-      text,
+    return parts.map((part, i) => ({
+      heading: partHeading(unit.title, i, parts.length),
+      text: renderTurns(part),
     }));
   });
 
@@ -174,11 +273,12 @@ async function _summarizeUnits(units: Unit[], budget: number): Promise<string> {
 /**
  * Generate a referat as a single markdown document, driven by a Skabelon.
  *
- * The transcript is merged into speaker turns and measured against a character budget
- * derived from the model's context window (LLM_CONTEXT_TOKENS / LLM_MAX_OUTPUT_TOKENS).
- * If it fits, one call writes the referat. Otherwise the transcript is summarised in
- * parts and the referat is written from those summaries, so a long meeting never
- * overflows the window or comes back cut off.
+ * The transcript is merged into speaker turns and measured in tokens against the model's
+ * context window (LLM_CONTEXT_TOKENS / LLM_MAX_OUTPUT_TOKENS) — counted with the model's
+ * own tokenizer where the backend has one (vLLM), estimated otherwise. If it fits, one
+ * call writes the referat. Otherwise the transcript is summarised in parts and the
+ * referat is written from those summaries, so a long meeting never overflows the window
+ * or comes back cut off.
  */
 export async function generateReferatBody(
   transcript: TranscriptSegment[],
@@ -193,8 +293,18 @@ export async function generateReferatBody(
   const limits = getLlmLimits();
   const turns = mergeSpeakerTurns(transcript);
   const transcriptText = renderTurns(turns);
-  const fixedPromptText = MINUTES_SYSTEM_PROMPT + buildBodyPrompt('', instruction);
-  const budget = await transcriptBudgetChars(fixedPromptText, transcriptText, limits);
+
+  // The transcript is tokenised once: its count decides whether it fits in one call, and
+  // its chars/token ratio sizes the parts when it does not.
+  const [transcriptTokens, bodyFixedTokens, summaryFixedTokens] = await Promise.all([
+    countTokens(transcriptText),
+    countTokens(`${MINUTES_SYSTEM_PROMPT}\n${buildBodyPrompt('', instruction)}`),
+    countTokens(buildSummaryPrompt('', '')),
+  ]);
+  const ratio = charsPerToken(transcriptText, transcriptTokens);
+
+  const bodyRoom = promptRoomTokens(bodyFixedTokens, limits);
+  const budget = transcriptBudgetChars(bodyRoom, ratio);
   if (budget < MIN_TRANSCRIPT_BUDGET_CHARS) {
     throw new MinutesConfigError(
       `LLM_CONTEXT_TOKENS=${limits.contextTokens} leaves ${Math.max(budget, 0)} characters for the ` +
@@ -204,15 +314,14 @@ export async function generateReferatBody(
   }
 
   // _summarizePart always requests SUMMARY_MAX_OUTPUT_TOKENS, not limits.maxOutputTokens
-  // (a summary needs far less room than the final referat) — so the parts it is fed have
-  // to be sized against that smaller reservation, not `budget`, or the prompt plus the
-  // summary's own output can together exceed the real context window.
-  const summaryFixedText = buildSummaryPrompt('', '');
-  const summaryBudget = await transcriptBudgetChars(summaryFixedText, transcriptText, {
-    contextTokens: limits.contextTokens,
-    maxOutputTokens: SUMMARY_MAX_OUTPUT_TOKENS,
-  });
-  if (summaryBudget < MIN_TRANSCRIPT_BUDGET_CHARS) {
+  // (a summary needs far less room than the final referat) — so the parts it is fed are
+  // sized against that smaller reservation, not the referat's.
+  const summaryLimits = { contextTokens: limits.contextTokens, maxOutputTokens: SUMMARY_MAX_OUTPUT_TOKENS };
+  const summaryBudget: SummaryBudget = {
+    budgetChars: transcriptBudgetChars(promptRoomTokens(summaryFixedTokens, summaryLimits), ratio),
+    promptTokens: promptRoomTokens(0, summaryLimits),
+  };
+  if (summaryBudget.budgetChars < MIN_TRANSCRIPT_BUDGET_CHARS) {
     throw new MinutesConfigError(
       `LLM_CONTEXT_TOKENS=${limits.contextTokens} leaves too little room for even a part-summary ` +
         `call (reserving ${SUMMARY_MAX_OUTPUT_TOKENS} output tokens). Raise LLM_CONTEXT_TOKENS.`,
@@ -222,11 +331,11 @@ export async function generateReferatBody(
   const chapterList = chapters && chapters.length > 1 ? chapters : null;
   const log = (mode: string, rounds: number) =>
     console.log(
-      `[minutes] chars=${transcriptText.length} budget=${budget} mode=${mode} rounds=${rounds} ms=${Date.now() - t0}`,
+      `[minutes] chars=${transcriptText.length} tokens=${transcriptTokens} room=${bodyRoom} mode=${mode} rounds=${rounds} ms=${Date.now() - t0}`,
     );
 
   if (
-    transcriptText.length <= budget &&
+    transcriptTokens <= bodyRoom &&
     !(chapterList !== null && transcriptText.length > CHAPTER_SPLIT_THRESHOLD)
   ) {
     const body = await _generateBody(transcriptText, instruction, limits.maxOutputTokens);
@@ -243,10 +352,11 @@ export async function generateReferatBody(
 
   let rounds = 1;
   let condensed = await _summarizeUnits(units, summaryBudget);
-  while (condensed.length > budget) {
+  let condensedTokens = await countTokens(condensed);
+  while (condensedTokens > bodyRoom) {
     if (rounds >= MAX_SUMMARY_ROUNDS) {
       throw new MinutesTooLongError(
-        `Still ${condensed.length} characters (budget ${budget}) after ${rounds} summarise rounds`,
+        `Still ${condensedTokens} tokens (room ${bodyRoom}) after ${rounds} summarise rounds`,
       );
     }
     rounds++;
@@ -254,6 +364,7 @@ export async function generateReferatBody(
       [{ title: 'Opsummering', turns: [{ speaker: 'Resumé', start: 0, text: condensed }] }],
       summaryBudget,
     );
+    condensedTokens = await countTokens(condensed);
   }
 
   const body = await _generateBody(condensed, instruction, limits.maxOutputTokens);

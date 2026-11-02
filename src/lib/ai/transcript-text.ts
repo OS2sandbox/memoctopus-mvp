@@ -55,30 +55,32 @@ function splitLongTurn(turn: Turn, budgetChars: number): Turn[] {
   return pieces;
 }
 
-// Pack consecutive turns into rendered parts that each fit in `budgetChars`, splitting
-// at turn boundaries. Every character of every turn lands in exactly one part, in order
-// (only the whitespace at an in-turn split point is dropped).
-export function splitTurns(turns: Turn[], budgetChars: number): string[] {
-  const parts: string[] = [];
-  let lines: string[] = [];
+// Pack consecutive turns into parts whose rendering fits in `budgetChars`, splitting at
+// turn boundaries. Every character of every turn lands in exactly one part, in order
+// (only the whitespace at an in-turn split point is dropped). Returns the turns, so a
+// part that turns out too large in tokens can be packed again with a smaller budget.
+export function packTurns(turns: Turn[], budgetChars: number): Turn[][] {
+  const parts: Turn[][] = [];
+  let part: Turn[] = [];
   let size = 0;
-
-  const flush = () => {
-    if (lines.length > 0) {
-      parts.push(lines.join('\n'));
-      lines = [];
-      size = 0;
-    }
-  };
 
   for (const turn of turns) {
     for (const piece of splitLongTurn(turn, budgetChars)) {
-      const line = renderTurn(piece);
-      if (lines.length > 0 && size + 1 + line.length > budgetChars) flush();
-      size += (lines.length > 0 ? 1 : 0) + line.length;
-      lines.push(line);
+      const length = renderTurn(piece).length;
+      if (part.length > 0 && size + 1 + length > budgetChars) {
+        parts.push(part);
+        part = [];
+        size = 0;
+      }
+      size += (part.length > 0 ? 1 : 0) + length;
+      part.push(piece);
     }
   }
-  flush();
+  if (part.length > 0) parts.push(part);
   return parts;
+}
+
+// packTurns, rendered: one string per part.
+export function splitTurns(turns: Turn[], budgetChars: number): string[] {
+  return packTurns(turns, budgetChars).map(renderTurns);
 }
