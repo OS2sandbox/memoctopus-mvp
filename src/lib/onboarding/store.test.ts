@@ -6,7 +6,8 @@ const db = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/db/user-schema', () => db);
 
-import { getSeenSteps, markStepSeen, resetHints } from './store';
+import { getSeenSteps, markStepSeen, resetHints, skipTour } from './store';
+import { ONBOARDING_STEPS } from './steps';
 
 beforeEach(() => {
   db.queryUserSchema.mockReset();
@@ -71,5 +72,33 @@ describe('resetHints', () => {
     expect(sql).toMatch(/tour_completed_at = NOW\(\)/);
     expect(sql).toMatch(/tour_skipped_at = NULL/);
     expect(sql).not.toMatch(/last_step_id/);
+  });
+});
+
+describe('skipTour', () => {
+  it('marks every one-time hint seen and the tour skipped, in one statement', async () => {
+    await skipTour('user-1');
+
+    // "spring over" means no hints: one statement, so the hints and the flag land together.
+    expect(db.queryUserSchema).toHaveBeenCalledTimes(1);
+    const [userId, sql, params] = db.queryUserSchema.mock.calls[0];
+    expect(userId).toBe('user-1');
+    expect(sql).toMatch(/INSERT INTO onboarding_progress/);
+    expect(sql).toMatch(/ON CONFLICT ON CONSTRAINT onboarding_progress_step_meeting_unique DO NOTHING/);
+    expect(sql).toMatch(/tour_skipped_at = NOW\(\)/);
+
+    const expected = Object.values(ONBOARDING_STEPS)
+      .filter((s) => s.engine === 'popover' && s.scope === 'global')
+      .map((s) => s.id);
+    expect(expected.length).toBeGreaterThan(0);
+    expect([...params[0]].sort()).toEqual([...expected].sort());
+  });
+
+  it('leaves tooltips and the per-meeting data-loss warning alone', async () => {
+    await skipTour('user-1');
+
+    const ids: string[] = db.queryUserSchema.mock.calls[0][2][0];
+    expect(ids).not.toContain('dashboard.keyboard-shortcuts'); // tooltip
+    expect(ids).not.toContain('topbar.unsaved-audio'); // per-meeting
   });
 });

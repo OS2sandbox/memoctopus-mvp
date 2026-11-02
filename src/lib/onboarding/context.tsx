@@ -2,6 +2,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import * as TooltipPrimitive from '@radix-ui/react-tooltip';
+import { ONE_TIME_HINT_IDS } from './steps';
 
 type SeenStep = { stepId: string; meetingId: string | null };
 
@@ -218,7 +219,13 @@ export function OnboardingProvider({
 
   const closeWelcome = useCallback((skip?: boolean) => {
     setShowWelcome(false);
-    if (skip) void postStep({ action: 'skip-tour' });
+    if (!skip) return;
+    // Mirrors the server's skip-tour, which marks every one-time hint seen, so none
+    // of them pops up for the rest of this visit either.
+    const keys = ONE_TIME_HINT_IDS.map((id) => seenKey(id, null));
+    setSeen((prev) => new Set([...prev, ...keys]));
+    keys.forEach((k) => postedRef.current.add(k));
+    void postStep({ action: 'skip-tour' });
   }, []);
 
   const startTour = useCallback(() => {

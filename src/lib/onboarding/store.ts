@@ -1,4 +1,5 @@
 import { queryUserSchema, queryUserSchemaOne } from '@/lib/db/user-schema';
+import { ONE_TIME_HINT_IDS } from './steps';
 
 export type OnboardingStateRow = {
   tourSkipped: boolean;
@@ -44,12 +45,23 @@ export async function markStepSeen(userId: string, stepId: string, meetingId: st
   );
 }
 
+/**
+ * "spring over": no hints at all, not just no welcome dialog. Marks every one-time
+ * hint seen in the same statement as the skip flag (see resetHints for why one
+ * statement). The "?" button replays them via resetHints.
+ */
 export async function skipTour(userId: string): Promise<void> {
   await queryUserSchema(
     userId,
-    `INSERT INTO onboarding_state (id, tour_skipped_at, updated_at)
+    `WITH hints AS (
+       INSERT INTO onboarding_progress (step_id, meeting_id, status)
+       SELECT step_id, '', 'seen' FROM unnest($1::text[]) AS t(step_id)
+       ON CONFLICT ON CONSTRAINT onboarding_progress_step_meeting_unique DO NOTHING
+     )
+     INSERT INTO onboarding_state (id, tour_skipped_at, updated_at)
      VALUES ('singleton', NOW(), NOW())
      ON CONFLICT (id) DO UPDATE SET tour_skipped_at = NOW(), updated_at = NOW()`,
+    [ONE_TIME_HINT_IDS],
   );
 }
 

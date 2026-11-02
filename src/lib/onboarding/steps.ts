@@ -385,6 +385,15 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
 };
 
+/**
+ * Every popover step remembered once per user: what "spring over" in the welcome
+ * dialog marks seen. The per-meeting warning is left out on purpose — it is about
+ * losing this meeting's audio, not about learning the product.
+ */
+export const ONE_TIME_HINT_IDS: readonly string[] = Object.values(ONBOARDING_STEPS)
+  .filter((s) => s.engine === 'popover' && s.scope === 'global')
+  .map((s) => s.id);
+
 export function getStep(id: string): OnboardingStep {
   // Own keys only: 'constructor', 'toString' etc. are inherited from Object.prototype,
   // not real steps, and would otherwise resolve here instead of failing loudly.
