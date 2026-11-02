@@ -491,9 +491,13 @@ function pollerDisabled(): boolean {
   return Boolean(process.env.VITEST);
 }
 
+let stopCurrent: (() => void) | null = null;
+
 /**
  * Starts the interval. Returns a stop function; calling it twice is harmless.
- * Wired from `src/instrumentation.ts` on the nodejs runtime only.
+ * Calling startPoller while it is already running returns the running poller's
+ * stop function instead of adding a second timer. Wired from
+ * `src/instrumentation.ts` on the nodejs runtime only.
  */
 export function startPoller(): () => void {
   // Off unless the operator opted in: without the Graph scopes there is nothing
@@ -506,6 +510,7 @@ export function startPoller(): () => void {
     console.log('[teams/poller] disabled, not starting');
     return () => {};
   }
+  if (stopCurrent) return stopCurrent;
   console.log(`[teams/poller] started, polling Graph every ${pollIntervalMs()} ms`);
 
   let running = false;
@@ -524,5 +529,10 @@ export function startPoller(): () => void {
   // Do not hold the process open for the sake of the timer.
   (timer as unknown as { unref?: () => void }).unref?.();
 
-  return () => clearInterval(timer);
+  const stop = () => {
+    clearInterval(timer);
+    if (stopCurrent === stop) stopCurrent = null;
+  };
+  stopCurrent = stop;
+  return stop;
 }

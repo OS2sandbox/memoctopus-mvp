@@ -719,6 +719,30 @@ describe('startPoller', () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect(mockConnect).toHaveBeenCalledTimes(2);
   });
+
+  // register() can run more than once in a process (dev reloads); a second poller
+  // would double every Graph call and race the first for each meeting.
+  it('starts once: a second call adds no second timer, and either stop function stops it', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('VITEST', '');
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('TEAMS_POLL_INTERVAL_MS', '1000');
+    const c = { query: vi.fn().mockResolvedValue({ rows: [{ locked: false }] }), release: vi.fn() };
+    mockConnect.mockResolvedValue(c);
+    const spy = vi.spyOn(global, 'setInterval');
+
+    startPoller();
+    const stop = startPoller();
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    stop();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(mockConnect).not.toHaveBeenCalled();
+
+    startPoller()();
+    expect(spy).toHaveBeenCalledTimes(2);
+    spy.mockRestore();
+  });
 });
 
 describe('pollMeeting — a meeting whose window has already gone', () => {
