@@ -179,6 +179,13 @@ describe('ArchiveMeetingRow — status badge', () => {
     expect(screen.queryByText('awaiting_teams')).toBeNull();
   });
 
+  // Left in IndexedDB by the removed Playwright bot, which never finished joining.
+  it('shows a Danish label for a meeting the old bot never finished joining', () => {
+    renderRow(makeRow({ status: 'joining' }));
+    expect(screen.getByText('Afbrudt')).toBeInTheDocument();
+    expect(screen.queryByText('joining')).toBeNull();
+  });
+
   it('shows the raw status string for an unknown status', () => {
     renderRow(makeRow({ status: 'custom-status' }));
     expect(screen.getByText('custom-status')).toBeInTheDocument();
@@ -232,10 +239,13 @@ describe('ArchiveMeetingRow — link routing (statusHref)', () => {
     expect(link).toHaveAttribute('href', '/meeting/abc/minutes');
   });
 
-  it('links to /meeting/:id/minutes for an unknown status', () => {
-    renderRow(makeRow({ id: 'abc', status: 'unknown-status' }));
+  // The meeting page knows what to do with any status; the referat page only with
+  // a meeting that has one. A bot meeting stuck in `joining` linked to /minutes,
+  // which is a dead end — /meeting/:id shows the legacy notice with its transcript.
+  it.each(['joining', 'failed', 'unknown-status'])('links to /meeting/:id for %s', (status) => {
+    renderRow(makeRow({ id: 'abc', status }));
     const link = screen.getByRole('link');
-    expect(link).toHaveAttribute('href', '/meeting/abc/minutes');
+    expect(link).toHaveAttribute('href', '/meeting/abc');
   });
 });
 
