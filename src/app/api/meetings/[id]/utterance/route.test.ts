@@ -113,16 +113,40 @@ describe('POST /api/meetings/[id]/utterance', () => {
       expect(mimeType).toBe('audio/wav');
     });
 
-    it('returns text as-is (trimming happens client-side)', async () => {
+    it('returns the text trimmed', async () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
       mockTranscribeRaw.mockResolvedValueOnce({ text: '  Hej  ', latencyMs: 0 });
 
       const res = await POST(makeAudioRequest(5_000), PARAMS);
-      expect((await res.json()).text).toBe('  Hej  ');
+      expect((await res.json()).text).toBe('Hej');
     });
   });
 
+  // The live path cleans text with the same function as the batch path
+  // (vad-batch-server), so a recording and an upload of it read the same.
   describe('hallucination filter', () => {
+    it('keeps the real words before a repetition loop', async () => {
+      mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+      mockTranscribeRaw.mockResolvedValueOnce({
+        text: 'Jeg har kigget på budgettet. ' + 'Det er det. '.repeat(10),
+        latencyMs: 0,
+      });
+
+      const res = await POST(makeAudioRequest(5_000), PARAMS);
+      expect((await res.json()).text).toBe('Jeg har kigget på budgettet. Det er det.');
+    });
+
+    it('drops a subtitle credit emitted over silence', async () => {
+      mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+      mockTranscribeRaw.mockResolvedValueOnce({
+        text: 'Danske tekster af Jesper Buhl Scandinavian Text Service 2018',
+        latencyMs: 0,
+      });
+
+      const res = await POST(makeAudioRequest(5_000), PARAMS);
+      expect((await res.json()).text).toBe('');
+    });
+
     it('returns empty text when a single word dominates output (>50%)', async () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
       // 5 of 6 words are the same — clearly a hallucination loop
@@ -132,17 +156,16 @@ describe('POST /api/meetings/[id]/utterance', () => {
       expect((await res.json()).text).toBe('');
     });
 
-    it('returns empty text when the same word repeats 3+ times consecutively', async () => {
+    it('returns empty text when the window opens with a word repeated 4+ times', async () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-      mockTranscribeRaw.mockResolvedValueOnce({ text: 'hej hej hej verden', latencyMs: 0 });
+      mockTranscribeRaw.mockResolvedValueOnce({ text: 'hej hej hej hej verden', latencyMs: 0 });
 
       const res = await POST(makeAudioRequest(5_000), PARAMS);
       expect((await res.json()).text).toBe('');
     });
 
-    it('passes through short output (under 4 words) even if repetitive', async () => {
+    it('tolerates a word said three times, as people do', async () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
-      // 3 words — filter is skipped for short utterances
       mockTranscribeRaw.mockResolvedValueOnce({ text: 'ja ja ja', latencyMs: 0 });
 
       const res = await POST(makeAudioRequest(5_000), PARAMS);
