@@ -53,6 +53,15 @@ function render(state: State): void {
   show('disarm', state.armedId != null);
 }
 
+/** What happens to the recording, as this server is set up. Nothing until it is known. */
+function renderRecordingNote(config: AddinConfig | null): void {
+  $('recording-note').textContent = !config
+    ? ''
+    : config.deletesRecording
+      ? 'Optagelsen slettes i Teams, når du har åbnet mødet i OS2taletiltekst, og transskriptionen er gemt.'
+      : 'OS2taletiltekst sletter ikke optagelsen. Den bliver i Teams efter jeres egne regler for optagelser.';
+}
+
 export async function arm(state: State): Promise<void> {
   if (!state.joinUrl) return;
   busy(true);
@@ -136,7 +145,15 @@ export async function start(): Promise<void> {
   $('disarm').addEventListener('click', () => void disarm(state));
 
   try {
-    const [link, armedId] = await Promise.all([readJoinLink(office, item), readArmedId(office, item)]);
+    const [link, armedId, config] = await Promise.all([
+      readJoinLink(office, item),
+      readArmedId(office, item),
+      // Here only for the note. A failure is reported when a button needs the
+      // config and loads it again.
+      loadConfig().catch(() => null),
+    ]);
+    state.config = config;
+    renderRecordingNote(config);
     state.armedId = armedId;
     if (link.ok) {
       state.joinUrl = link.url;

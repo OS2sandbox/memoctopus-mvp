@@ -8,8 +8,14 @@ const TENANT = '11111111-1111-1111-1111-111111111111';
 
 describe('parseConfig', () => {
   it('accepts the server config', () => {
-    expect(parseConfig({ enabled: true, clientId: CLIENT, tenantId: TENANT, scopes: [`api://${CLIENT}/access_as_user`] }))
-      .toEqual({ clientId: CLIENT, tenantId: TENANT, scopes: [`api://${CLIENT}/access_as_user`] });
+    expect(parseConfig({ enabled: true, clientId: CLIENT, tenantId: TENANT, scopes: [`api://${CLIENT}/access_as_user`], deletesRecording: true }))
+      .toEqual({ clientId: CLIENT, tenantId: TENANT, scopes: [`api://${CLIENT}/access_as_user`], deletesRecording: true });
+  });
+  it('promises no deletion unless the server says it deletes the recording', () => {
+    const base = { enabled: true, clientId: CLIENT, tenantId: TENANT, scopes: ['x'] };
+    expect(parseConfig({ ...base, deletesRecording: false }).deletesRecording).toBe(false);
+    expect(parseConfig(base).deletesRecording).toBe(false);
+    expect(parseConfig({ ...base, deletesRecording: 'true' }).deletesRecording).toBe(false);
   });
   it('says the add-in is off when the server says so', () => {
     expect(() => parseConfig({ enabled: false })).toThrow(/ikke slået til/);
@@ -42,7 +48,7 @@ describe('getAccessToken', () => {
     acquireTokenPopup: vi.fn(),
   };
   const createApp = vi.fn(async () => app);
-  const config = { clientId: CLIENT, tenantId: TENANT, scopes: [`api://${CLIENT}/access_as_user`] };
+  const config = { clientId: CLIENT, tenantId: TENANT, scopes: [`api://${CLIENT}/access_as_user`], deletesRecording: true };
   const interactionRequired = Object.assign(new Error('AADSTS65001'), { name: 'InteractionRequiredAuthError' });
 
   beforeEach(() => {

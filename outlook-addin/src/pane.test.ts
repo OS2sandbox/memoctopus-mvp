@@ -57,7 +57,7 @@ function fakeOutlook({ body = `<a href="${JOIN}">Deltag</a>`, props: initial = {
   return { office, item, store };
 }
 
-const CONFIG = { clientId: CLIENT, tenantId: TENANT, scopes: [`api://${CLIENT}/access_as_user`] };
+const CONFIG = { clientId: CLIENT, tenantId: TENANT, scopes: [`api://${CLIENT}/access_as_user`], deletesRecording: true };
 
 function armResponse(overrides: Partial<ArmResponse> = {}): ArmResponse {
   return {
@@ -205,5 +205,37 @@ describe('start', () => {
   it('needs Outlook', async () => {
     await start();
     expect(text('status')).toMatch(/åbnes fra Outlook/);
+  });
+
+  // The note must not promise a deletion the deployment does not do
+  // (TEAMS_DELETE_RECORDING=false, or transcript-only mode).
+  it('says the recording is deleted once the transcript is saved, when the server deletes it', async () => {
+    vi.mocked(loadConfig).mockResolvedValue({ ...CONFIG, deletesRecording: true });
+    (globalThis as { Office?: unknown }).Office = fakeOutlook().office;
+
+    await start();
+
+    expect(text('recording-note')).toMatch(/slettes.*når du har åbnet mødet i OS2taletiltekst/);
+  });
+
+  it('says the recording stays in Teams when the server does not delete it', async () => {
+    vi.mocked(loadConfig).mockResolvedValue({ ...CONFIG, deletesRecording: false });
+    (globalThis as { Office?: unknown }).Office = fakeOutlook().office;
+
+    await start();
+
+    expect(text('recording-note')).toMatch(/sletter ikke optagelsen/);
+    expect(text('recording-note')).not.toMatch(/slettes/);
+  });
+
+  it('promises nothing about the recording when the server cannot be asked', async () => {
+    vi.mocked(loadConfig).mockRejectedValue(new Error('Kunne ikke få forbindelse til OS2taletiltekst.'));
+    (globalThis as { Office?: unknown }).Office = fakeOutlook().office;
+
+    await start();
+
+    expect(text('recording-note')).toBe('');
+    expect(document.querySelector('.note')!.textContent).not.toMatch(/slet/);
+    expect(visible('arm')).toBe(true);
   });
 });

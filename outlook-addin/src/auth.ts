@@ -20,6 +20,8 @@ export interface AddinConfig {
   clientId: string;
   tenantId: string;
   scopes: string[];
+  /** Whether the server deletes the recording from Teams once the transcript is saved. */
+  deletesRecording: boolean;
 }
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -38,7 +40,8 @@ export function parseConfig(raw: unknown): AddinConfig {
   ) {
     throw new Error('Serverens opsætning af Outlook-tilføjelsesprogrammet er ufuldstændig.');
   }
-  return { clientId, tenantId, scopes: scopes as string[] };
+  // Anything but an explicit true promises no deletion.
+  return { clientId, tenantId, scopes: scopes as string[], deletesRecording: value.deletesRecording === true };
 }
 
 export async function loadConfig(): Promise<AddinConfig> {

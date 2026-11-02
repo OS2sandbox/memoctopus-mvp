@@ -35,12 +35,16 @@ Someone who arms a meeting from Outlook comes back later, maybe days later. So f
 `origin = 'outlook'` rows the background poller does nothing until the user **opens
 the meeting** in OS2taletiltekst (the screen's forced poll sets `opened_at`). Until
 then the recording stays where Teams put it, in the organizer's OneDrive. Opening it
-starts the fetch with the user there to collect the transcript, and the recording is
-deleted from OneDrive once transcribed, as for any Teams meeting. A meeting nobody
-opens within 30 days (`OUTLOOK_UNOPENED_GIVE_UP_MS`) is marked failed and is never
-fetched, even if it is opened later. Its recording is not deleted by us (nothing was
-downloaded to identify it by); it stays under the tenant's own Teams retention.
-See `isDeferred()` in `src/lib/teams/store.ts` and the top of `pollMeeting()`.
+starts the fetch with the user there to collect the transcript. As for any Teams
+meeting, the recording is then deleted from OneDrive once the user's browser has
+saved the transcript, unless `TEAMS_DELETE_RECORDING=false` or
+`TEAMS_ARTIFACT_MODE=transcript-only`, where it is never deleted. The pane's note
+says which applies (`deletesRecording` from `GET /api/outlook/config`). A meeting
+nobody opens within 30 days (`OUTLOOK_UNOPENED_GIVE_UP_MS`) is marked failed and is
+never fetched, even if it is opened later. Its recording is not deleted by us
+(nothing was downloaded to identify it by); it stays under the tenant's own Teams
+retention. See `isDeferred()` in `src/lib/teams/store.ts` and the top of
+`pollMeeting()`.
 
 ## Turning it on
 
