@@ -16,6 +16,8 @@ vi.mock('@/lib/teams/store', async (importOriginal) => ({
   getMeetingSnapshot: vi.fn(),
   deleteTeamsMeeting: vi.fn().mockResolvedValue(undefined),
   setTeamsMeetingState: vi.fn().mockResolvedValue(undefined),
+  // No other occurrence of the same series is registered (register.test.ts covers those).
+  listTeamsMeetingsByGraphId: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('@/lib/pending-artifacts', () => ({ readPendingTranscript: vi.fn() }));
 vi.mock('@/lib/teams/poller', () => ({ pollMeeting: vi.fn() }));
@@ -242,7 +244,7 @@ describe('DELETE /api/teams/meetings/[id]', () => {
 
     const res = await DELETE(req(), { params });
 
-    expect(await res.json()).toEqual({ ok: true, disarmed: true });
+    expect(await res.json()).toEqual({ ok: true, disarmed: true, keptForOtherOccurrences: false });
     expect(mockDisarm).toHaveBeenCalledWith('user-123', 'graph-1', null);
     expect(mockDelete).toHaveBeenCalledWith('user-123', 'm1');
   });
@@ -276,7 +278,7 @@ describe('DELETE /api/teams/meetings/[id]', () => {
     const res = await DELETE(req(), { params });
     expect(mockDisarm).not.toHaveBeenCalled();
     expect(mockDelete).toHaveBeenCalled();
-    expect(await res.json()).toEqual({ ok: true, disarmed: true });
+    expect(await res.json()).toEqual({ ok: true, disarmed: true, keptForOtherOccurrences: false });
   });
 
   it('still deletes when disarming fails', async () => {
@@ -286,7 +288,7 @@ describe('DELETE /api/teams/meetings/[id]', () => {
 
     const res = await DELETE(req(), { params });
 
-    expect(await res.json()).toEqual({ ok: true, disarmed: false });
+    expect(await res.json()).toEqual({ ok: true, disarmed: false, keptForOtherOccurrences: false });
     expect(mockDelete).toHaveBeenCalled();
     spy.mockRestore();
   });
@@ -302,7 +304,7 @@ describe('DELETE /api/teams/meetings/[id]', () => {
     const res = await DELETE(req(), { params });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, disarmed: false });
+    expect(await res.json()).toEqual({ ok: true, disarmed: false, keptForOtherOccurrences: false });
     expect(mockDelete).toHaveBeenCalledWith('user-123', 'm1');
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();

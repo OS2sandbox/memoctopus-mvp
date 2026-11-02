@@ -108,10 +108,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 /**
  * Turns OS2taletiltekst off for a meeting: un-arm it (if we armed it) and forget it.
  *
- * The row is deleted even when the Graph side could not be undone — the user
- * asked us to stop collecting — but `disarmed: false` says the meeting may still
- * be armed in Teams (Graph failed, or TEAMS_GRAPH_ENABLED is off and there is no
- * way to reach it from here).
+ * Answers `{ ok, disarmed, keptForOtherOccurrences }`, see unregisterTeamsMeeting.
+ * `disarmed: false` says the meeting may still be armed in Teams although it
+ * should not be (Graph failed, or TEAMS_GRAPH_ENABLED is off and there is no way
+ * to reach it from here); `keptForOtherOccurrences` that it was left armed on
+ * purpose, for other occurrences of the same series that are still registered.
  */
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -123,8 +124,8 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const row = await getTeamsMeeting(userId, id);
   if (!row) return NextResponse.json({ error: 'not_found' }, { status: 404 });
 
-  const { disarmed } = await unregisterTeamsMeeting(userId, row);
-  return NextResponse.json({ ok: true, disarmed });
+  const result = await unregisterTeamsMeeting(userId, row);
+  return NextResponse.json({ ok: true, ...result });
 }
 
 /**

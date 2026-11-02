@@ -210,6 +210,13 @@ function mapRow(raw: RawTeamsMeeting): TeamsMeetingRow {
   };
 }
 
+/**
+ * Every read the app makes leaves out a meeting the user has switched off. Such a
+ * row exists only while its recording is still to be deleted from OneDrive (see
+ * {@link markTeamsMeetingUnregistered}); the cleanup reads it directly.
+ */
+const REGISTERED = 'unregistered_at IS NULL';
+
 const SELECT_COLUMNS = `
   id, graph_meeting_id, event_id, join_url, subject, organizer_id, is_organizer,
   armed, arm_result, scheduled_start, scheduled_end, occurrence_window, state,
@@ -261,6 +268,7 @@ export async function upsertTeamsMeeting(
        -- Where it was first armed from stays: re-pasting an Outlook meeting's link
        -- in the dashboard must not lift the Outlook storage rule off it.
        origin           = COALESCE(teams_meetings.origin, EXCLUDED.origin),
+       unregistered_at  = NULL,
        updated_at       = NOW()
      RETURNING ${SELECT_COLUMNS}`,
     [
@@ -340,7 +348,7 @@ export async function getTeamsMeeting(
 ): Promise<TeamsMeetingRow | null> {
   const raw = await queryUserSchemaOne<RawTeamsMeeting>(
     userId,
-    `SELECT ${SELECT_COLUMNS} FROM teams_meetings WHERE id = $1`,
+    `SELECT ${SELECT_COLUMNS} FROM teams_meetings WHERE id = $1 AND ${REGISTERED}`,
     [id],
   );
   return raw ? mapRow(raw) : null;
@@ -369,7 +377,7 @@ export async function listTeamsMeetingsByGraphId(
   const rows = await queryUserSchema<RawTeamsMeeting>(
     userId,
     `SELECT ${SELECT_COLUMNS} FROM teams_meetings
-      WHERE graph_meeting_id = $1
+      WHERE graph_meeting_id = $1 AND ${REGISTERED}
       ORDER BY created_at DESC`,
     [graphMeetingId],
   );
@@ -379,7 +387,7 @@ export async function listTeamsMeetingsByGraphId(
 export async function listTeamsMeetings(userId: string): Promise<TeamsMeetingRow[]> {
   const rows = await queryUserSchema<RawTeamsMeeting>(
     userId,
-    `SELECT ${SELECT_COLUMNS} FROM teams_meetings ORDER BY created_at DESC`,
+    `SELECT ${SELECT_COLUMNS} FROM teams_meetings WHERE ${REGISTERED} ORDER BY created_at DESC`,
   );
   return rows.map(mapRow);
 }
@@ -424,6 +432,7 @@ export async function listDueTeamsMeetings(
              OR last_polled_at <= $1::timestamptz
                 - (CASE WHEN attempts < $2::int THEN $3::int ELSE $4::int END)
                   * INTERVAL '1 millisecond')
+        AND ${REGISTERED}
       ORDER BY GREATEST(scheduled_end, created_at, opened_at) ASC`,
     [now, FAST_POLL_ATTEMPTS, FAST_POLL_MS, SLOW_POLL_MS, STALE_FETCHING_MS, OUTLOOK_UNOPENED_GIVE_UP_MS],
   );
@@ -574,6 +583,8 @@ export async function listPendingRecordingCleanups(userId: string): Promise<Team
  * Settles a pending cleanup. Only a row still `pending` is written, so of two runs
  * racing on the same recording the first verdict stands — the second finds the
  * file gone and would otherwise overwrite `deleted` with `not_found`.
+ *
+ * A row the user has switched off was only kept for this delete, so it goes now.
  */
 export async function settleRecordingCleanup(
   userId: string,
@@ -585,6 +596,25 @@ export async function settleRecordingCleanup(
     `UPDATE teams_meetings SET recording_cleanup = $2, updated_at = NOW()
       WHERE id = $1 AND recording_cleanup = 'pending'`,
     [id, result],
+  );
+  await queryUserSchema(
+    userId,
+    `DELETE FROM teams_meetings
+      WHERE id = $1 AND unregistered_at IS NOT NULL AND recording_cleanup IS DISTINCT FROM 'pending'`,
+    [id],
+  );
+}
+
+/**
+ * Switches a meeting off without losing the delete still queued for its recording:
+ * the row disappears from every read the app makes, and only the cleanup sees it
+ * until {@link settleRecordingCleanup} removes it.
+ */
+export async function markTeamsMeetingUnregistered(userId: string, id: string): Promise<void> {
+  await queryUserSchema(
+    userId,
+    `UPDATE teams_meetings SET unregistered_at = NOW(), updated_at = NOW() WHERE id = $1`,
+    [id],
   );
 }
 

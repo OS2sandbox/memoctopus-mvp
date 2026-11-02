@@ -1,10 +1,14 @@
 import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
+import { deleteRecordingEnabled } from './artifact-mode';
 import { armMeeting, disarmMeeting, isArmed } from './meeting-arm';
 import { resolveJoinUrl, type ResolvedMeeting } from './meeting-resolver';
+import { cleanUpRecording } from './poller';
 import {
   claimMeetingSnapshot,
   deleteTeamsMeeting,
   getMeetingSnapshot,
+  listTeamsMeetingsByGraphId,
+  markTeamsMeetingUnregistered,
   upsertTeamsMeeting,
   type TeamsArmResult,
   type TeamsMeetingOrigin,
@@ -110,29 +114,68 @@ export async function registerTeamsMeeting(userId: string, input: RegisterInput)
   return { row, armResult };
 }
 
+export interface UnregisterResult {
+  /**
+   * False when the meeting may still be armed in Teams although it should not be:
+   * Graph failed, or TEAMS_GRAPH_ENABLED is off and there is no way to reach it.
+   */
+  disarmed: boolean;
+  /**
+   * The Teams meeting was left armed on purpose: other occurrences of the same
+   * series are still registered and waiting for Teams to record them. Teams arms
+   * a series as a whole, so it records this occurrence too, but nothing collects it.
+   * Always set by unregisterTeamsMeeting; optional only so callers' test doubles
+   * written before it existed still type-check.
+   */
+  keptForOtherOccurrences?: boolean;
+}
+
 /**
  * Turns OS2taletiltekst off for a meeting: un-arm it (if we armed it) and forget it.
  *
- * The row is deleted even when the Graph side could not be undone — the user
- * asked us to stop collecting — but `disarmed: false` says the meeting may still
- * be armed in Teams (Graph failed, or TEAMS_GRAPH_ENABLED is off and there is no
- * way to reach it from here).
+ * The row goes even when the Graph side could not be undone — the user asked us
+ * to stop collecting. One exception: a recording still queued for deletion from
+ * OneDrive is deleted first, and if that cannot happen now the row is kept, out
+ * of sight, until the poller has done it. The row is the only record of which
+ * file to delete.
  */
 export async function unregisterTeamsMeeting(
   userId: string,
   row: TeamsMeetingRow,
-): Promise<{ disarmed: boolean }> {
-  // A policy-blocked arm was still PATCHed, so it has options to put back too.
+  now: Date = new Date(),
+): Promise<UnregisterResult> {
   let disarmed = true;
+  let keptForOtherOccurrences = false;
+  // A policy-blocked arm was still PATCHed, so it has options to put back too.
   if (row.armed || row.armResult === 'policy_blocked') {
-    try {
-      const originalOptions = await getMeetingSnapshot(userId, row.graphMeetingId);
-      await disarmMeeting(userId, row.graphMeetingId, originalOptions);
-    } catch (err) {
-      disarmed = false;
-      console.error('[teams] disarm failed for', row.id, '- the meeting may still be armed in Teams:', err);
+    // A series is ONE onlineMeeting with one set of options, shared by every
+    // occurrence registered here. Disarming it for this one would stop Teams
+    // recording the occurrences still waiting.
+    const siblings = await listTeamsMeetingsByGraphId(userId, row.graphMeetingId);
+    keptForOtherOccurrences = siblings.some((s) => s.id !== row.id && !isSettled(s.state));
+    if (!keptForOtherOccurrences) {
+      try {
+        const originalOptions = await getMeetingSnapshot(userId, row.graphMeetingId);
+        await disarmMeeting(userId, row.graphMeetingId, originalOptions);
+      } catch (err) {
+        disarmed = false;
+        console.error('[teams] disarm failed for', row.id, '- the meeting may still be armed in Teams:', err);
+      }
+    }
+  }
+
+  if (row.recordingCleanup === 'pending' && deleteRecordingEnabled()) {
+    const after = await cleanUpRecording(userId, row, now);
+    if (after.recordingCleanup === 'pending') {
+      await markTeamsMeetingUnregistered(userId, row.id);
+      return { disarmed, keptForOtherOccurrences };
     }
   }
   await deleteTeamsMeeting(userId, row.id);
-  return { disarmed };
+  return { disarmed, keptForOtherOccurrences };
+}
+
+/** Collected or given up on: Teams has nothing more to record for it. */
+function isSettled(state: TeamsMeetingRow['state']): boolean {
+  return state === 'ready' || state === 'failed';
 }

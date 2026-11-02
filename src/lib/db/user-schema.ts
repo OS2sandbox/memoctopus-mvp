@@ -278,6 +278,10 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         -- TRUE when scheduled_start/_end were registered for one occurrence of a
         -- series rather than read from Graph, which only knows the series' window.
         ADD COLUMN IF NOT EXISTS occurrence_window BOOLEAN NOT NULL DEFAULT FALSE,
+        -- Set when the user switched the meeting off while its recording was still
+        -- to be deleted from OneDrive: the row is hidden and kept only for that
+        -- delete, then removed.
+        ADD COLUMN IF NOT EXISTS unregistered_at TIMESTAMPTZ,
         ADD COLUMN IF NOT EXISTS created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         ADD COLUMN IF NOT EXISTS updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     `);
