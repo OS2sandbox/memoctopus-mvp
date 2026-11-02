@@ -20,28 +20,20 @@ export interface StoredMeeting {
   audioSizeBytes: number;
   audioDeleted: boolean;
   // Set on every meeting created for the Graph integration (the dashboard's link
-  // flow). A `source: 'teams'` meeting without it was left behind by the removed
-  // Playwright bot. Not derivable from `status`: a Graph meeting moves on to
-  // processing, review, minutes and done like any other. `teamsArmed` can't serve,
-  // since it is false for an invitee, and `teamsSubject` / `scheduledStart` are
-  // absent for instant meetings.
+  // flow, and meetings armed from Outlook). A `source: 'teams'` meeting without it
+  // was left behind by the removed Playwright bot. Not derivable from `status`: a
+  // Graph meeting moves on to processing, review, minutes and done like any other,
+  // and `teamsSubject` / `scheduledStart` are absent for instant meetings.
   graphManaged?: boolean;
-  // Microsoft Graph ("OS2taletiltekst slået til") state, mirrored from the server-side
-  // teams_meetings row so the meeting list and the awaiting screen can render
-  // without a round-trip. All optional — meetings created before this existed, and
-  // every local recording, simply don't carry them.
+  // Written when a meeting armed from Outlook is imported (see
+  // src/lib/outlook/import-meetings.ts). Nothing reads them yet: the Teams screen
+  // asks the server, which holds the live values. Optional — a local recording,
+  // and a meeting from before this existed, simply don't carry them.
   //
-  // `teamsArmed` is true when we successfully PATCHed the meeting's options so
-  // Teams records and transcribes it by itself; false means the user is an invitee
-  // and the organizer still has to switch it on.
-  teamsArmed?: boolean;
-  teamsIsOrganizer?: boolean;
   // The meeting's subject as Teams knows it (may differ from our `title`).
   teamsSubject?: string;
-  // Scheduled window, ISO 8601. Used to say when the referat is expected and to
-  // decide when polling for artifacts should start.
+  // Scheduled start, ISO 8601.
   scheduledStart?: string;
-  scheduledEnd?: string;
 }
 
 export interface StoredTranscript {
