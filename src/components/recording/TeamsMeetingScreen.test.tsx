@@ -327,6 +327,21 @@ describe('TeamsMeetingScreen — pressing the button is never silent', () => {
       /Teams har ikke frigivet transskriptionen endnu/,
     );
   });
+  // The invitee and blocked-tenant copy used to have no place for the answer.
+  it.each([
+    ['an invitee', { armed: false, armResult: 'not_organizer' }],
+    ['a blocked tenant', { armed: false, armResult: 'policy_blocked' }],
+  ])('answers a hand-pressed check for %s too', async (_label, overrides) => {
+    respondWith(statusBody({ ...overrides, scheduledEnd: new Date(Date.now() - 10 * 60_000).toISOString() }));
+    renderScreen();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Tjek nu' }));
+
+    expect(await screen.findByTestId('last-check')).toHaveTextContent(
+      /Teams har ikke frigivet transskriptionen endnu/,
+    );
+    expect(screen.getAllByTestId('last-check')).toHaveLength(1);
+  });
 });
 
 describe('TeamsMeetingScreen — ending a meeting before its booked end', () => {
