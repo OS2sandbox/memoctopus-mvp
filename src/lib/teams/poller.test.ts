@@ -321,7 +321,6 @@ describe('pollMeeting', () => {
     mockProcess.mockResolvedValueOnce({
       status: 'ready',
       mode: 'recording+transcript',
-      speakers: ['Mette Hansen'],
       transcriptId: 't1',
       recordingId: 'r1',
       recordingBytes: null,
@@ -520,7 +519,6 @@ describe('pollMeeting', () => {
     mockProcess.mockResolvedValueOnce({
       status: 'ready',
       mode: 'transcript-only',
-      speakers: [],
       transcriptId: 't1',
       recordingId: null,
       recordingBytes: null,
@@ -595,7 +593,7 @@ describe('pollMeeting', () => {
     mockGet.mockResolvedValueOnce(row());
     mockMark.mockResolvedValueOnce(after);
     mockProcess.mockResolvedValueOnce({
-      status: 'ready', mode: 'transcript-only', speakers: [], transcriptId: null, recordingId: null, recordingBytes: null,
+      status: 'ready', mode: 'transcript-only', transcriptId: null, recordingId: null, recordingBytes: null,
     });
 
     expect(await pollMeeting('u1', 'm1', NOW)).toBe(after);
@@ -1023,7 +1021,6 @@ describe('deleting the recording from OneDrive', () => {
   const transcribed = (recordingBytes: number | null = 4242): PipelineOutcome => ({
     status: 'ready',
     mode: 'recording+transcript',
-    speakers: [],
     transcriptId: 't1',
     recordingId: 'r1',
     recordingBytes,

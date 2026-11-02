@@ -6,7 +6,7 @@ import path from 'path';
 vi.mock('fs/promises');
 
 import {
-  markNoRecording,
+  storePendingMeta,
   readPendingMeta,
   readPendingTranscript,
   storePendingTranscript,
@@ -192,9 +192,9 @@ describe('bot meeting ownership', () => {
   });
 });
 
-// ─── markNoRecording ──────────────────────────────────────────────────────────
+// ─── storePendingMeta ──────────────────────────────────────────────────────────
 
-describe('markNoRecording', () => {
+describe('storePendingMeta', () => {
   beforeEach(() => {
     vi.mocked(fs.mkdir).mockResolvedValue(undefined as never);
     vi.mocked(fs.writeFile).mockResolvedValue(undefined as never);
@@ -205,7 +205,7 @@ describe('markNoRecording', () => {
   });
 
   it('writes an empty meta by default', async () => {
-    await markNoRecording('m1');
+    await storePendingMeta('m1');
     const [, payload] = vi.mocked(fs.writeFile).mock.calls.at(-1)!;
     expect(JSON.parse(payload as string)).toMatchObject({
       participants: [],
@@ -216,7 +216,7 @@ describe('markNoRecording', () => {
   it('keeps the speaker names of a transcript-only meeting', async () => {
     // No mode stashes audio, but Teams' transcript still names every speaker, and
     // that is what pre-fills the participant list in Gennemgang.
-    await markNoRecording('m1', {
+    await storePendingMeta('m1', {
       participants: ['Mette Hansen', 'Jens Poulsen'],
       durationSeconds: 540,
     });

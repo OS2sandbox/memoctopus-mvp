@@ -6,7 +6,7 @@ import { graphDate } from '@/lib/teams/graph-dates';
  * Turning a join link (or a Graph meeting id) into everything the rest of the
  * Teams integration needs: the `onlineMeeting` id we poll artifacts from, the
  * scheduled window the poller waits for, and whether the signed-in user is the
- * organizer — because only the organizer may arm the meeting (plan §3).
+ * organizer — because only the organizer may arm the meeting.
  *
  * Delegated auth means `/me/onlineMeetings` only ever returns meetings the
  * signed-in user is invited to, so "no match" genuinely means "not invited"

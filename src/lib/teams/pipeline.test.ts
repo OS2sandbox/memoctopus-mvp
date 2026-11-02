@@ -7,8 +7,7 @@ const mockDownloadRecording = vi.hoisted(() => vi.fn());
 const mockSpawn = vi.hoisted(() => vi.fn());
 const mockStorePendingTranscript = vi.hoisted(() => vi.fn());
 const mockReadPendingTranscript = vi.hoisted(() => vi.fn());
-const mockReadPendingMeta = vi.hoisted(() => vi.fn());
-const mockMarkNoRecording = vi.hoisted(() => vi.fn());
+const mockStorePendingMeta = vi.hoisted(() => vi.fn());
 const mockTranscribeRecording = vi.hoisted(() => vi.fn());
 const mockTranscribeAlongCues = vi.hoisted(() => vi.fn());
 const mockSetOwner = vi.hoisted(() => vi.fn());
@@ -42,8 +41,7 @@ vi.mock('./meeting-lock', () => ({
 vi.mock('@/lib/pending-artifacts', () => ({
   storePendingTranscript: mockStorePendingTranscript,
   readPendingTranscript: mockReadPendingTranscript,
-  readPendingMeta: mockReadPendingMeta,
-  markNoRecording: mockMarkNoRecording,
+  storePendingMeta: mockStorePendingMeta,
   setMeetingOwner: mockSetOwner,
 }));
 
@@ -54,8 +52,8 @@ vi.mock('@/lib/transcribe-recording', () => ({ transcribeRecording: mockTranscri
 vi.mock('./transcribe-cues', () => ({ transcribeAlongCues: mockTranscribeAlongCues }));
 
 import { GraphError } from './graph-client';
+import { artifactMode } from './artifact-mode';
 import {
-  artifactMode,
   processTeamsMeeting,
   transcodeToWav,
   coversMeeting,
@@ -116,8 +114,7 @@ beforeEach(() => {
   mockSpawn.mockReset().mockImplementation(() => fakeFfmpeg(0));
   mockStorePendingTranscript.mockReset().mockResolvedValue(undefined);
   mockReadPendingTranscript.mockReset().mockResolvedValue(null);
-  mockReadPendingMeta.mockReset().mockResolvedValue(null);
-  mockMarkNoRecording.mockReset().mockResolvedValue(undefined);
+  mockStorePendingMeta.mockReset().mockResolvedValue(undefined);
   mockMkdir.mockReset().mockResolvedValue(undefined);
   mockMkdtemp.mockReset().mockImplementation(async (prefix: string) => `${prefix}abc123`);
   mockSetOwner.mockReset().mockResolvedValue(undefined);
@@ -197,7 +194,6 @@ describe('processTeamsMeeting — recording + transcript', () => {
     expect(outcome).toEqual({
       status: 'ready',
       mode: 'recording+transcript',
-      speakers: ['Mette Hansen', 'Jens Poulsen'],
       transcriptId: 't1',
       recordingId: 'r1',
       recordingBytes: 1234,
@@ -214,7 +210,7 @@ describe('processTeamsMeeting — recording + transcript', () => {
     // The stash carries the real names and the VTT duration, and no audio: a Graph
     // meeting cannot be followed live, so the raw recording is transcribed and
     // dropped rather than handed to the browser.
-    expect(mockMarkNoRecording).toHaveBeenCalledWith('meet-1', {
+    expect(mockStorePendingMeta).toHaveBeenCalledWith('meet-1', {
       participants: ['Mette Hansen', 'Jens Poulsen'],
       durationSeconds: 9,
     });
@@ -268,7 +264,7 @@ describe('processTeamsMeeting — recording + transcript', () => {
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
 
     expect(outcome).toMatchObject({ status: 'ready', mode: 'transcript-only', recordingBytes: null });
-    expect(mockMarkNoRecording).toHaveBeenCalled();
+    expect(mockStorePendingMeta).toHaveBeenCalled();
   });
 
   it('marks the run in flight so a concurrent poll does not start a second download', async () => {
@@ -329,7 +325,6 @@ describe('processTeamsMeeting — transcript only', () => {
     expect(outcome).toEqual({
       status: 'ready',
       mode: 'transcript-only',
-      speakers: ['Mette Hansen', 'Jens Poulsen'],
       transcriptId: 't1',
       recordingId: null,
       recordingBytes: null,
@@ -338,7 +333,7 @@ describe('processTeamsMeeting — transcript only', () => {
     expect(mockSpawn).not.toHaveBeenCalled();
     // The audio route needs a meta record or the client polls 404 forever — and
     // it carries the VTT speaker names, which pre-fill participants in Gennemgang.
-    expect(mockMarkNoRecording).toHaveBeenCalledWith('meet-1', {
+    expect(mockStorePendingMeta).toHaveBeenCalledWith('meet-1', {
       participants: ['Mette Hansen', 'Jens Poulsen'],
       durationSeconds: 9,
     });
@@ -439,7 +434,6 @@ describe('processTeamsMeeting — recording only', () => {
     expect(outcome).toEqual({
       status: 'ready',
       mode: 'recording-only',
-      speakers: [],
       transcriptId: null,
       recordingId: 'r1',
       recordingBytes: 1234,
@@ -447,7 +441,7 @@ describe('processTeamsMeeting — recording only', () => {
     expect(mockDownloadVtt).not.toHaveBeenCalled();
     // No turns injected — transcribe-recording runs its own diarization pass.
     expect(mockTranscribeRecording).toHaveBeenCalledWith('meet-1', WAV, 'audio/wav');
-    expect(mockMarkNoRecording).toHaveBeenCalledWith('meet-1', {
+    expect(mockStorePendingMeta).toHaveBeenCalledWith('meet-1', {
       participants: [],
       durationSeconds: null,
     });
@@ -466,7 +460,7 @@ describe('processTeamsMeeting — recording only', () => {
 // have, so a mode that starts writing audio through any of them fails here.
 const STASH_WRITERS = () => ({
   storePendingTranscript: mockStorePendingTranscript.mock.calls.length,
-  markNoRecording: mockMarkNoRecording.mock.calls.length,
+  storePendingMeta: mockStorePendingMeta.mock.calls.length,
   setMeetingOwner: mockSetOwner.mock.calls.length,
 });
 
@@ -476,7 +470,7 @@ describe('processTeamsMeeting — no mode hands raw audio to the browser', () =>
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
     expect(outcome).toMatchObject({ status: 'ready', mode: 'recording+transcript' });
     // Everything written to the stash, and none of it audio.
-    expect(mockMarkNoRecording).toHaveBeenCalled();
+    expect(mockStorePendingMeta).toHaveBeenCalled();
     for (const [, payload] of mockStorePendingTranscript.mock.calls) {
       expect(payload).not.toHaveProperty('audio');
       expect(payload).not.toHaveProperty('mimeType');
@@ -488,7 +482,7 @@ describe('processTeamsMeeting — no mode hands raw audio to the browser', () =>
     mockListArtifacts.mockResolvedValue({ transcripts: [], recordings: [RECORDING_REF] });
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
     expect(outcome).toMatchObject({ status: 'ready', mode: 'recording-only' });
-    expect(mockMarkNoRecording).toHaveBeenCalledWith('meet-1', { participants: [], durationSeconds: null });
+    expect(mockStorePendingMeta).toHaveBeenCalledWith('meet-1', { participants: [], durationSeconds: null });
     for (const [, payload] of mockStorePendingTranscript.mock.calls) {
       expect(payload).not.toHaveProperty('audio');
     }
@@ -510,7 +504,7 @@ describe('processTeamsMeeting — no mode hands raw audio to the browser', () =>
   it('still hands over the transcript and the speaker names', async () => {
     mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [RECORDING_REF] });
     await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
-    expect(mockMarkNoRecording).toHaveBeenCalledWith('meet-1', {
+    expect(mockStorePendingMeta).toHaveBeenCalledWith('meet-1', {
       participants: ['Mette Hansen', 'Jens Poulsen'],
       durationSeconds: 9,
     });
@@ -528,7 +522,7 @@ describe('processTeamsMeeting — no mode hands raw audio to the browser', () =>
 
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
     expect(outcome).toMatchObject({ status: 'failed' });
-    expect(mockMarkNoRecording).not.toHaveBeenCalled();
+    expect(mockStorePendingMeta).not.toHaveBeenCalled();
   });
 });
 
@@ -557,13 +551,10 @@ describe('coversMeeting', () => {
 describe('processTeamsMeeting — idempotency and errors', () => {
   it('does not reprocess a meeting whose stash is already ready', async () => {
     mockReadPendingTranscript.mockResolvedValue({ status: 'ready', segments: [], createdAt: 1 });
-    mockReadPendingMeta.mockResolvedValue({
-      hasRecording: true, participants: ['Mette Hansen'], mimeType: 'audio/wav', durationSeconds: 9, createdAt: 1,
-    });
 
     const outcome = await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
 
-    expect(outcome).toMatchObject({ status: 'ready', mode: 'recording+transcript', speakers: ['Mette Hansen'] });
+    expect(outcome).toMatchObject({ status: 'ready', mode: 'recording+transcript' });
     expect(mockListArtifacts).not.toHaveBeenCalled();
     expect(mockDownloadRecording).not.toHaveBeenCalled();
   });
@@ -603,7 +594,7 @@ describe('processTeamsMeeting — idempotency and errors', () => {
     expect(mockSetOwner).toHaveBeenCalledWith('meet-1', 'u1');
     const ownerOrder = mockSetOwner.mock.invocationCallOrder[0];
     expect(ownerOrder).toBeLessThan(mockStorePendingTranscript.mock.invocationCallOrder[0]);
-    expect(ownerOrder).toBeLessThan(mockMarkNoRecording.mock.invocationCallOrder[0]);
+    expect(ownerOrder).toBeLessThan(mockStorePendingMeta.mock.invocationCallOrder[0]);
   });
 
   it('binds the owner for the recording modes too', async () => {
@@ -611,7 +602,7 @@ describe('processTeamsMeeting — idempotency and errors', () => {
     await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
     expect(mockSetOwner).toHaveBeenCalledWith('meet-1', 'u1');
     expect(mockSetOwner.mock.invocationCallOrder[0])
-      .toBeLessThan(mockMarkNoRecording.mock.invocationCallOrder[0]);
+      .toBeLessThan(mockStorePendingMeta.mock.invocationCallOrder[0]);
   });
 
   it('rejects a meeting id that would escape the stash directory', async () => {

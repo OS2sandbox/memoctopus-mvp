@@ -6,8 +6,8 @@ import { getMeeting, type ResolvedMeeting } from '@/lib/teams/meeting-resolver';
  *
  * Arming is a single PATCH of the meeting's own options — exactly what the
  * organizer would tick in Teams' meeting options — so Teams records and
- * transcribes the meeting itself and we only collect the artifacts afterwards
- * (plan §3). No bot joins, and for a scheduled meeting nobody has to press
+ * transcribes the meeting itself and we only collect the artifacts afterwards.
+ * No bot joins, and for a scheduled meeting nobody has to press
  * anything during it.
  *
  * A meeting Graph gives no window for is the exception, reported as

@@ -49,11 +49,12 @@ function ownerPath(meetingId: string): string {
   return path.join(rootDir(), `${meetingId}.owner.json`);
 }
 
-// Ownership binding for a bot recording. Meetings live in the client's IndexedDB
+// Ownership binding for a meeting's stash. Meetings live in the client's IndexedDB
 // (no server meetings table), so the only server-side record of WHO owns a meetingId
-// is written here at session-create time. Every client-facing bot route checks it so
-// one authenticated user can't pull down (or control) another user's recording by
-// supplying their meetingId. Without this the stash is keyed by meetingId alone.
+// is written here when the meeting is registered with the Teams integration. Every
+// hand-off route checks it so one authenticated user can't pull down another
+// user's transcript by supplying their meetingId. Without this the stash is keyed
+// by meetingId alone.
 export async function setMeetingOwner(meetingId: string, userId: string): Promise<void> {
   assertSafeMeetingId(meetingId);
   await fs.mkdir(rootDir(), { recursive: true });
@@ -198,14 +199,11 @@ export async function acknowledgePendingTranscript(meetingId: string): Promise<b
 }
 
 
-// Records that the run finished with no usable recording: either the meeting was
-// transcript-only, or Teams produced no recording at all. The client polls and
-// gets `{ status: 'no-recording' }`.
-//
-// `meta` still matters when there is no audio: Teams' transcript names every
-// speaker, and those names are what pre-fills the participant list in
-// Gennemgang. Dropping them here would narrow that to the recording modes.
-export async function markNoRecording(
+// What a finished run knows about the meeting beyond its transcript: the speakers
+// Teams' transcript names, which pre-fill the participant list in Gennemgang, and
+// the duration. Its presence is also what tells the client (via pending-meta) that
+// the run has finished.
+export async function storePendingMeta(
   meetingId: string,
   meta: Partial<Pick<PendingMeta, 'participants' | 'durationSeconds'>> = {},
 ): Promise<void> {

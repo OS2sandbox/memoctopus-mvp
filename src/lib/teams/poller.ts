@@ -35,7 +35,7 @@ import {
  * otherwise take down the interval for every user.
  */
 
-/** Plan mode 4: nothing ever arrived. */
+/** Teams never published anything for the meeting. */
 export const GIVE_UP_MESSAGE =
   'Ingen transskription blev fundet. Transskription blev muligvis ikke startet i Teams.';
 

@@ -11,7 +11,7 @@ import { withHandler } from '@/lib/api-handler';
 // followed the meeting live anyway.
 //
 //   404 → the run has not finished yet — keep polling
-//   200 → { status: 'no-recording', participants, durationSeconds }
+//   200 → { participants, durationSeconds }
 //
 // `participants` is the payload that matters. Teams' transcript names every
 // speaker, and those names pre-fill the participant list in Gennemgang. The
@@ -44,7 +44,6 @@ export const GET = withHandler(
     if (!meta) return NextResponse.json({ status: 'pending' }, { status: 404 });
 
     return NextResponse.json({
-      status: 'no-recording',
       participants: meta.participants ?? [],
       durationSeconds: meta.durationSeconds ?? null,
     });
