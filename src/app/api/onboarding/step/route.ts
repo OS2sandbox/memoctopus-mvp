@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { headers } from 'next/headers';
 import { auth } from '@/lib/auth';
-import { markStepSeen, skipTour, completeTour, resetHints } from '@/lib/onboarding/store';
+import { markStepSeen, skipTour, resetHints } from '@/lib/onboarding/store';
 import { withHandler } from '@/lib/api-handler';
 import { ONBOARDING_STEPS } from '@/lib/onboarding/steps';
 
@@ -16,7 +16,7 @@ async function postHandler(req: NextRequest): Promise<NextResponse> {
   // `null`, arrays and primitives are valid JSON but not something we can read fields from.
   const body: Record<string, unknown> =
     parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
-  const action = body.action as 'seen' | 'skip-tour' | 'complete-tour' | 'reset-hints' | undefined;
+  const action = body.action as 'seen' | 'skip-tour' | 'reset-hints' | undefined;
 
   if (action === 'skip-tour') {
     await skipTour(session.user.id);
@@ -26,16 +26,17 @@ async function postHandler(req: NextRequest): Promise<NextResponse> {
     await resetHints(session.user.id);
     return NextResponse.json({ ok: true });
   }
-  if (action === 'complete-tour') {
-    await completeTour(session.user.id);
-    return NextResponse.json({ ok: true });
-  }
 
   const stepId = typeof body.stepId === 'string' ? body.stepId : '';
   if (!stepId) return NextResponse.json({ error: 'stepId er påkrævet' }, { status: 400 });
   // Only steps that exist in the registry are stored (own keys only: 'constructor' is not a step).
   if (!Object.prototype.hasOwnProperty.call(ONBOARDING_STEPS, stepId)) {
     return NextResponse.json({ error: 'Ukendt stepId' }, { status: 400 });
+  }
+  const step = ONBOARDING_STEPS[stepId];
+  // Tooltip steps show on every hover and are never remembered, so there is nothing to store.
+  if (step.engine !== 'popover') {
+    return NextResponse.json({ error: 'stepId gemmes ikke' }, { status: 400 });
   }
 
   const rawMeetingId = body.meetingId;
@@ -44,7 +45,9 @@ async function postHandler(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: 'Ugyldigt meetingId' }, { status: 400 });
     }
   }
-  const meetingId = typeof rawMeetingId === 'string' ? rawMeetingId : null;
+  // The registry decides the scope, not the caller (same rule as OnboardingHint): a global
+  // step stored under a meeting would never match the global key the client reads back.
+  const meetingId = step.scope === 'per-meeting' && typeof rawMeetingId === 'string' ? rawMeetingId : null;
 
   await markStepSeen(session.user.id, stepId, meetingId);
   return NextResponse.json({ ok: true });

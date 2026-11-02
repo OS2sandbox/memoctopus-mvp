@@ -1,20 +1,44 @@
 'use client';
 
-import React, { useEffect, useId, useRef } from 'react';
+import React, { useEffect, useId, useReducer, useRef } from 'react';
 import * as PopoverPrimitive from '@radix-ui/react-popover';
 import { seenKey, useOnboarding } from '@/lib/onboarding/context';
 import { findStep } from '@/lib/onboarding/steps';
 
+// Below dialogs and their overlay (z-50 in components/ui/dialog.tsx), above the
+// sticky top bar (40). Above a modal, the bubble could be read but not dismissed.
+const HINT_Z_INDEX = 45;
+
+/**
+ * Whether a modal (a Radix Dialog or AlertDialog, a modal menu) has the rest of the
+ * page blocked. Radix marks that by setting `pointer-events: none` on <body>, so a
+ * hint underneath could not be dismissed and Escape meant for the modal would
+ * dismiss the hint as well, unread. Read straight from the DOM on each render; the
+ * observer only re-renders when it changes, and only runs while `watch` is set, so
+ * just the one hint that is due to show pays for it.
+ */
+function usePageBlockedByModal(watch: boolean): boolean {
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    if (!watch) return;
+    const observer = new MutationObserver(rerender);
+    observer.observe(document.body, { attributes: true, attributeFilter: ['style'] });
+    return () => observer.disconnect();
+  }, [watch]);
+  return watch && typeof document !== 'undefined' && document.body.style.pointerEvents === 'none';
+}
+
 /**
  * Wraps a target element and, the first time this step hasn't been seen,
  * shows a small dismissible bubble with onboarding copy anchored to it.
- * It's visible at most once ever: being shown counts as "seen" even if the
- * user navigates away instead of clicking "forstået" (state lives in
- * onboarding_progress).
+ * Once seen, it stays hidden until the user replays the tour with the "?"
+ * button (or, for a `per-meeting` step, until the next meeting): being shown
+ * counts as "seen" even if the user navigates away instead of clicking
+ * "forstået" (state lives in onboarding_progress).
  *
  * Only one hint is ever open at a time, app-wide, so a page never shows
- * several bubbles at once — pending hints queue in mount order and are
- * revealed one by one as each is dismissed. A step id can also wrap more
+ * several bubbles at once — pending hints queue by severity (mount order
+ * among equals) and are revealed one by one as each is dismissed. A step id can also wrap more
  * than one DOM element (e.g. the same "Del" button repeated once per card
  * in a list); only one instance owns the slot at a time (the next mounted
  * one takes over if the owner unmounts), so the bubble renders exactly once
@@ -37,7 +61,7 @@ export function OnboardingHint({
   children: React.ReactNode;
 }) {
   const step = findStep(stepId);
-  const { isStepSeen, markSeen, showWelcome, claim, release, isActive } = useOnboarding();
+  const { isStepSeen, markSeen, showWelcome, claim, release, isActive, shown } = useOnboarding();
 
   // The registry decides whether a hint is remembered once or once per meeting —
   // not the call site. Passing meetingId at a `global` step used to scope its
@@ -54,7 +78,10 @@ export function OnboardingHint({
 
   // Never overlap the welcome dialog — it should be the only thing on screen
   // until the user closes/skips it, after which the hint queue can take over.
-  const open = !showWelcome && pending && isActive(key, instanceId);
+  const due = !showWelcome && pending && isActive(key, instanceId);
+  // Nor any other modal: wait it out and come back when it closes.
+  const blockedByModal = usePageBlockedByModal(due);
+  const open = due && !blockedByModal;
 
   // A hint should be visible at most once: if the user navigates away while
   // it's showing (instead of clicking "forstået"), the unmount below would
@@ -65,8 +92,10 @@ export function OnboardingHint({
   // saves, so it clears the ref to keep the cleanup from saving a second time.
   const shownKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (open) shownKeyRef.current = key;
-  }, [open, key]);
+    if (!open) return;
+    shownKeyRef.current = key;
+    shown(key);
+  }, [open, key, shown]);
 
   const dismiss = () => {
     shownKeyRef.current = null;
@@ -74,8 +103,8 @@ export function OnboardingHint({
   };
 
   useEffect(() => {
-    if (!pending) return;
-    claim(key, instanceId);
+    if (!pending || !step) return;
+    claim(key, instanceId, step.severity);
     return () => {
       release(key, instanceId);
       if (shownKeyRef.current === key) {
@@ -86,9 +115,16 @@ export function OnboardingHint({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, key, instanceId]);
 
+  // The bubble is portaled to the end of <body> and deliberately takes no focus,
+  // so screen readers need telling: the copy is a polite live region, and the
+  // anchor points at it while it is open.
+  const copyId = `${instanceId}-copy`;
+
   return (
     <PopoverPrimitive.Root open={open}>
-      <PopoverPrimitive.Anchor asChild>{children}</PopoverPrimitive.Anchor>
+      <PopoverPrimitive.Anchor asChild aria-describedby={open ? copyId : undefined}>
+        {children}
+      </PopoverPrimitive.Anchor>
       {open && step && (
         <PopoverPrimitive.Portal>
           <PopoverPrimitive.Content
@@ -104,7 +140,7 @@ export function OnboardingHint({
             onOpenAutoFocus={(e) => e.preventDefault()}
             onEscapeKeyDown={dismiss}
             style={{
-              zIndex: 60,
+              zIndex: HINT_Z_INDEX,
               maxWidth: 280,
               background: 'var(--accent-ink)',
               color: '#fff',
@@ -119,7 +155,9 @@ export function OnboardingHint({
             }}
           >
             {/* pre-line: longer copy separates its paragraphs with blank lines */}
-            <span style={{ whiteSpace: 'pre-line' }}>{step.copy}</span>
+            <span id={copyId} role="status" aria-live="polite" style={{ whiteSpace: 'pre-line' }}>
+              {step.copy}
+            </span>
             <button
               type="button"
               onClick={dismiss}

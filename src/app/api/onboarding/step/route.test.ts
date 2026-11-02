@@ -6,7 +6,6 @@ vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 const store = vi.hoisted(() => ({
   markStepSeen: vi.fn(),
   skipTour: vi.fn(),
-  completeTour: vi.fn(),
   resetHints: vi.fn(),
 }));
 vi.mock('@/lib/onboarding/store', () => store);
@@ -41,10 +40,20 @@ describe('POST /api/onboarding/step', () => {
 
   it('records a per-meeting hint with the meeting id', async () => {
     const res = await POST(
+      makeJsonReq(URL, 'POST', { stepId: 'topbar.unsaved-audio', meetingId: 'm-1' }),
+    );
+    expect(res.status).toBe(200);
+    expect(store.markStepSeen).toHaveBeenCalledWith('user-123', 'topbar.unsaved-audio', 'm-1');
+  });
+
+  // The registry decides the scope, not the caller: a global step stored under a
+  // meeting would never match the global seen-key the client looks it up by.
+  it('stores a global hint without the meeting id a caller sent along', async () => {
+    const res = await POST(
       makeJsonReq(URL, 'POST', { stepId: 'recording.audio-lifecycle', meetingId: 'm-1' }),
     );
     expect(res.status).toBe(200);
-    expect(store.markStepSeen).toHaveBeenCalledWith('user-123', 'recording.audio-lifecycle', 'm-1');
+    expect(store.markStepSeen).toHaveBeenCalledWith('user-123', 'recording.audio-lifecycle', null);
   });
 
   it.each([
@@ -52,6 +61,8 @@ describe('POST /api/onboarding/step', () => {
     ['an unknown stepId', { stepId: 'not.a.real.step' }],
     ['a non-string stepId', { stepId: 42 }],
     ['an inherited object key as stepId', { stepId: 'constructor' }],
+    // Tooltip steps are shown on every hover and never persisted.
+    ['a tooltip step', { stepId: 'dashboard.keyboard-shortcuts' }],
     ['a meetingId that is not a string', { stepId: 'dashboard.record-button', meetingId: 42 }],
     ['an over-long meetingId', { stepId: 'dashboard.record-button', meetingId: 'x'.repeat(101) }],
     ['an empty meetingId', { stepId: 'dashboard.record-button', meetingId: '' }],
@@ -68,7 +79,6 @@ describe('POST /api/onboarding/step', () => {
 
   it.each([
     ['skip-tour', 'skipTour'],
-    ['complete-tour', 'completeTour'],
     ['reset-hints', 'resetHints'],
   ] as const)('runs the %s action', async (action, fn) => {
     const res = await POST(makeJsonReq(URL, 'POST', { action }));

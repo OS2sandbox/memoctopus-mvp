@@ -129,6 +129,25 @@ describe('OnboardingProvider — client-side fetch (no `initial` prop)', () => {
     await waitFor(() => expect(screen.getByTestId('first').textContent).toBe('true'));
   });
 
+  it('never renders a step the server already has as unseen, not even for one render', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ tourSkipped: true, tourCompleted: false, seen: [{ stepId: 'some.step', meetingId: null }] }),
+    });
+    const observed: boolean[] = [];
+
+    render(
+      <OnboardingProvider>
+        <Probe onReady={(c) => observed.push(c.isStepSeen('some.step'))} />
+      </OnboardingProvider>,
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    await act(async () => {});
+
+    // An unseen render would let that step's hint claim the slot for a moment.
+    expect(observed).not.toContain(false);
+  });
+
   it('treats a fetch failure the same as the server-side "could not load" fallback', async () => {
     fetchMock.mockResolvedValueOnce({ ok: false, status: 500 });
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});

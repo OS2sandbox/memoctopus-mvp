@@ -463,7 +463,9 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       DROP INDEX IF EXISTS "${schema}".onboarding_progress_global_step_unique
     `);
 
-    // onboarding_state — single-row per-user flags for the guided tour as a whole
+    // onboarding_state — single-row per-user flags for the guided tour as a whole.
+    // last_step_id is no longer written or read; it stays so new and existing
+    // schemas keep the same shape.
     await client.query(`
       CREATE TABLE IF NOT EXISTS "${schema}".onboarding_state (
         id                 TEXT PRIMARY KEY DEFAULT 'singleton',
