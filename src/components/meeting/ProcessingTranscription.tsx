@@ -20,8 +20,9 @@ interface Props {
 
 type Phase = 'downloading' | 'analyzing' | 'transcribing' | 'saving' | 'error';
 
-// How long to wait for the server-side bot transcription (started the moment the
-// bot uploaded) before falling back to driving transcription from the client.
+// How long to wait for a server-side transcription still being written before
+// falling back to driving transcription from the client (or, without local audio,
+// reporting that the server could not be reached).
 const SERVER_TRANSCRIPT_DEADLINE_MS = 5 * 60_000;
 const SERVER_TRANSCRIPT_POLL_MS = 1_000;
 
@@ -128,9 +129,9 @@ export function ProcessingTranscription({ meetingId, onComplete, graphManaged = 
         const blob = audioEntry?.blob ?? null;
         if (cancelled) return;
 
-        // 2. Server-side runs (Teams bot, or the Microsoft Graph pipeline) started
-        // transcription + diarization before the user got here. Collect it instead
-        // of re-doing the work.
+        // 2. A Teams meeting was transcribed on the server (the Microsoft Graph
+        // pipeline) before the user got here. Collect that instead of re-doing it.
+        // For a local recording the server holds nothing and answers `none`.
         setPhase('analyzing');
         const outcome = await collectServerTranscript(meetingId, () => cancelled);
         if (cancelled) return;
@@ -258,8 +259,10 @@ export function ProcessingTranscription({ meetingId, onComplete, graphManaged = 
     ? Math.min(100, Math.round((batchProgress.completedSeconds / batchProgress.totalSeconds) * 100))
     : 0;
 
+  // A Teams meeting has no audio in this browser: all that happens here is that
+  // the server's transcript is fetched and saved.
   const phaseLabels: Record<Phase, string> = {
-    downloading: 'henter lydfil…',
+    downloading: graphManaged ? 'henter transskription…' : 'henter lydfil…',
     analyzing: 'henter transskription…',
     transcribing: batchProgress && batchProgress.total > 0
       ? `transskriberer ${batchProgress.completed} / ${batchProgress.total} segmenter…`
@@ -298,7 +301,9 @@ export function ProcessingTranscription({ meetingId, onComplete, graphManaged = 
         <h1 className="text-xl font-semibold text-[var(--ink)]">Transskription er i gang…</h1>
       </div>
       <p className="mt-2 text-sm text-[var(--muted)]">
-        Lydfilen analyseres og transskriberes. Vent venligst.
+        {graphManaged
+          ? 'Transskriptionen fra Teams hentes og gemmes i din browser. Vent venligst.'
+          : 'Lydfilen analyseres og transskriberes. Vent venligst.'}
       </p>
       <div style={{ marginTop: 20, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>

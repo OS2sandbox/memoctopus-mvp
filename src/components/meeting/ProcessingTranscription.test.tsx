@@ -127,6 +127,17 @@ describe('ProcessingTranscription', () => {
     expect(screen.getByText(/Lydfilen analyseres og transskriberes/i)).toBeInTheDocument();
   });
 
+  // A Teams meeting has no audio file in this browser: nothing is downloaded or
+  // analysed here, only the transcript fetched from the server.
+  it('talks about the transcript, not an audio file, for a Teams meeting', () => {
+    mockGetAudio.mockReturnValue(new Promise(() => {}));
+    renderComponent({ graphManaged: true });
+    expect(screen.getByText(/Transskriptionen fra Teams hentes/)).toBeInTheDocument();
+    expect(screen.queryByText(/Lydfilen/)).not.toBeInTheDocument();
+    expect(screen.queryByText('henter lydfil…')).not.toBeInTheDocument();
+    expect(screen.getByText('henter transskription…')).toBeInTheDocument();
+  });
+
   it('starts in downloading phase showing correct label', () => {
     // Stall the getAudio call to keep phase at 'downloading'
     let resolve: () => void;

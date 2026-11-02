@@ -103,7 +103,7 @@ export default function OptaqPage() {
   // The local meeting is created first because its id is what registers the
   // meeting server-side. If Graph rejects the link, the orphan is removed again
   // so the Arkiv never fills with meetings that can never produce a referat.
-  async function joinMeeting(link: string) {
+  async function addTeamsMeeting(link: string) {
     if (linkLoading) return;
     setLinkLoading(true);
     setLinkError('');
@@ -354,7 +354,7 @@ export default function OptaqPage() {
                 <div style={{
                   fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
                   letterSpacing: 0.4, marginBottom: 10,
-                }}>eller deltag i et møde</div>
+                }}>eller tag referat af et Teams-møde</div>
                 <OnboardingHint stepId="dashboard.teams-link">
                 <div
                   style={{
@@ -373,7 +373,7 @@ export default function OptaqPage() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && meetingLink.trim()) {
                         e.preventDefault();
-                        joinMeeting(meetingLink.trim());
+                        addTeamsMeeting(meetingLink.trim());
                       }
                     }}
                     placeholder="Indsæt mødelink…"
@@ -385,7 +385,7 @@ export default function OptaqPage() {
                   />
                   <button
                     type="button"
-                    onClick={() => meetingLink.trim() && joinMeeting(meetingLink.trim())}
+                    onClick={() => meetingLink.trim() && addTeamsMeeting(meetingLink.trim())}
                     disabled={!meetingLink.trim() || linkLoading}
                     style={{
                       width: 30, height: 30, borderRadius: 999, flexShrink: 0,

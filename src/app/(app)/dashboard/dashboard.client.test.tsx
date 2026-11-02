@@ -681,7 +681,7 @@ describe('OptaqPage — Teams meeting link flow', () => {
     });
   });
 
-  it('shows linkError when joinMeeting throws', async () => {
+  it('shows linkError when registering the link throws', async () => {
     mockCreateMeeting.mockRejectedValue(new Error('network error'));
     renderPage();
 
@@ -947,7 +947,7 @@ describe('OptaqPage — Teams section', () => {
       routeDisabled();
       renderPage();
       await waitFor(() => expect(screen.queryByPlaceholderText('Indsæt mødelink…')).toBeNull());
-      expect(screen.queryByText('eller deltag i et møde')).toBeNull();
+      expect(screen.queryByText('eller tag referat af et Teams-møde')).toBeNull();
     });
 
     it('shows neither the Microsoft-login hint nor "Giv adgang igen"', async () => {
@@ -1006,9 +1006,11 @@ describe('OptaqPage — static content', () => {
     expect(screen.getByText(/personoplysninger fjernes inden referat/)).toBeInTheDocument();
   });
 
-  it('renders the "eller deltag i et møde" label', () => {
+  // Nothing joins the meeting any more: the link switches on a referat for it.
+  it('labels the link box for what it does now', () => {
     renderPage();
-    expect(screen.getByText('eller deltag i et møde')).toBeInTheDocument();
+    expect(screen.getByText('eller tag referat af et Teams-møde')).toBeInTheDocument();
+    expect(screen.queryByText(/deltag i et møde/)).toBeNull();
   });
 
   it('renders the "mødedetaljer" label', () => {
