@@ -14,7 +14,6 @@ import { queryUserSchema, queryUserSchemaOne } from '@/lib/db/user-schema';
 import {
   upsertTeamsMeeting,
   getTeamsMeeting,
-  getTeamsMeetingByGraphId,
   listTeamsMeetings,
   markPollAttempt,
   setTeamsMeetingState,
@@ -379,16 +378,6 @@ describe('reads', () => {
     const found = await getTeamsMeeting(USER, 'm1');
     expect(found?.graphMeetingId).toBe('GRAPH1');
     expect(found?.attempts).toBe(3);
-  });
-
-  it('getTeamsMeetingByGraphId selects the newest row for a graph id', async () => {
-    mockQueryOne.mockResolvedValue(RAW as never);
-    const found = await getTeamsMeetingByGraphId(USER, 'GRAPH1');
-    const [, sql, params] = mockQueryOne.mock.calls[0];
-    expect(sql).toMatch(/WHERE graph_meeting_id = \$1/);
-    expect(sql).toMatch(/ORDER BY created_at DESC/);
-    expect(params).toEqual(['GRAPH1']);
-    expect(found?.id).toBe('m1');
   });
 
   it('listTeamsMeetings maps every row', async () => {

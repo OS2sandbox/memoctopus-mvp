@@ -405,21 +405,6 @@ export async function getTeamsMeeting(
   return raw ? mapRow(raw) : null;
 }
 
-export async function getTeamsMeetingByGraphId(
-  userId: string,
-  graphMeetingId: string,
-): Promise<TeamsMeetingRow | null> {
-  const raw = await queryUserSchemaOne<RawTeamsMeeting>(
-    userId,
-    `SELECT ${SELECT_COLUMNS} FROM teams_meetings
-      WHERE graph_meeting_id = $1
-      ORDER BY created_at DESC
-      LIMIT 1`,
-    [graphMeetingId],
-  );
-  return raw ? mapRow(raw) : null;
-}
-
 /** Every row for one Graph meeting (a series has one onlineMeeting for all its occurrences). */
 export async function listTeamsMeetingsByGraphId(
   userId: string,

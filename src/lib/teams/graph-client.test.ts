@@ -14,7 +14,6 @@ vi.mock('@/lib/auth', () => ({
 
 import {
   GRAPH_DOWNLOAD_TIMEOUT_MS,
-  GRAPH_SCOPES,
   GRAPH_TIMEOUT_MS,
   GraphError,
   classifyGraphError,
@@ -26,6 +25,7 @@ import {
   isRetryableStatus,
   parseRetryAfter,
 } from './graph-client';
+import { GRAPH_DELEGATED_SCOPES as GRAPH_SCOPES } from '@/lib/auth/providers';
 
 const ALL_SCOPES = GRAPH_SCOPES.join(' ');
 

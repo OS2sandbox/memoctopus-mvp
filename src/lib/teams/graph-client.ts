@@ -1,7 +1,6 @@
 import { auth } from '@/lib/auth';
 import {
   FILES_SCOPE,
-  GRAPH_DELEGATED_SCOPES,
   teamsGraphEnabled,
   teamsGraphScopes,
 } from '@/lib/auth/providers';
@@ -12,10 +11,7 @@ import {
 // every Graph call here rides on the user's own consent. That is what lets a
 // customer set this up with one "Grant admin consent" click instead of the
 // per-user `New-CsApplicationAccessPolicy` PowerShell dance that application
-// permissions require. See docs/plans/2026-09-08-microsoft-graph-teams-integration.md §1.
-
-/** Delegated scopes the Teams integration needs. Requested at sign-in (auth/index.ts). */
-export const GRAPH_SCOPES = GRAPH_DELEGATED_SCOPES;
+// permissions require.
 
 /** Scopes an OIDC login gives us for free — never part of a consent gap. */
 const OIDC_SCOPES = new Set(['openid', 'profile', 'email', 'offline_access']);
