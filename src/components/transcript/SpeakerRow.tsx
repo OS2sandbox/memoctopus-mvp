@@ -175,11 +175,14 @@ export const SpeakerRow = React.memo(function SpeakerRow({
 
       {/* Text block */}
       <div className="flex-1">
+        {/* Named for screen readers: a line that continues a run shows no
+            speaker, so the box itself says whose words these are, and when. */}
         <textarea
           value={segment.text}
           onChange={(e) => handleTextChange(e.target.value)}
           ref={textRef}
           rows={1}
+          aria-label={`${diarizing ? 'Ukendt taler' : segment.speaker}, ${formatDuration(segment.start)}`}
           style={{
             width: '100%',
             resize: 'none',
