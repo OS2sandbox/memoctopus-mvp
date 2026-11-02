@@ -14,16 +14,15 @@ beforeEach(() => {
 });
 
 describe('markStepSeen', () => {
-  it('runs as a single statement so an in-flight resetHints cannot interleave', async () => {
+  it('is a single insert into onboarding_progress and nothing else', async () => {
     await markStepSeen('user-1', 'some.step', null);
 
-    // Two statements on two pooled connections were not atomic with resetHints.
     expect(db.queryUserSchema).toHaveBeenCalledTimes(1);
     const [userId, sql] = db.queryUserSchema.mock.calls[0];
     expect(userId).toBe('user-1');
     expect(sql).toMatch(/INSERT INTO onboarding_progress/);
-    expect(sql).toMatch(/INSERT INTO onboarding_state/);
-    expect(sql).toMatch(/last_step_id = EXCLUDED\.last_step_id/);
+    // last_step_id was written on every save and never read anywhere.
+    expect(sql).not.toMatch(/onboarding_state|last_step_id/);
   });
 
   it('stores the sentinel (not a literal NULL) for a global step', async () => {
@@ -71,6 +70,6 @@ describe('resetHints', () => {
     expect(sql).toMatch(/INSERT INTO onboarding_state/);
     expect(sql).toMatch(/tour_completed_at = NOW\(\)/);
     expect(sql).toMatch(/tour_skipped_at = NULL/);
-    expect(sql).toMatch(/last_step_id = NULL/);
+    expect(sql).not.toMatch(/last_step_id/);
   });
 });
