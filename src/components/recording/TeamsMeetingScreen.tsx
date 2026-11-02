@@ -374,18 +374,25 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
     void poll(true);
   }, [meetingId, poll]);
 
+  // What the remove button does depends on what was done for this user: where
+  // OS2taletiltekst armed the meeting, removing it switches that off again; where
+  // nothing was switched on (an invitee, a blocked tenant, a meeting that has
+  // already failed), "switch off" would describe something that never happened.
+  const switchedOn = status?.armed === true && status.state !== 'failed';
+  const removeLabel = switchedOn ? 'Slå OS2taletiltekst fra' : 'Fjern mødet';
+
   // Stay on the screen when the server could not be told: leaving would strand a
   // meeting that keeps being collected, with nothing left to press.
-  const disarm = useCallback(async () => {
+  const remove = useCallback(async () => {
     try {
       await deleteMeetingAndUnregister(meetingId);
     } catch (err) {
-      console.error('[TeamsMeetingScreen] kunne ikke slå OS2taletiltekst fra:', err);
-      setError('Kunne ikke slå OS2taletiltekst fra. Prøv igen.');
+      console.error('[TeamsMeetingScreen] kunne ikke fjerne mødet:', err);
+      setError(switchedOn ? 'Kunne ikke slå OS2taletiltekst fra. Prøv igen.' : 'Kunne ikke fjerne mødet. Prøv igen.');
       return;
     }
     routerRef.current.push('/dashboard');
-  }, [meetingId]);
+  }, [meetingId, switchedOn]);
 
   const reauth = useCallback(() => {
     void signIn.social({ provider: 'microsoft', callbackURL: `/meeting/${meetingId}` });
@@ -669,14 +676,14 @@ export function TeamsMeetingScreen({ meetingId, meetingUrl }: TeamsMeetingScreen
         )}
         <button
           type="button"
-          onClick={() => { void disarm(); }}
+          onClick={() => { void remove(); }}
           style={{
             padding: '9px 16px', borderRadius: 8, fontSize: 13,
             border: '1px solid var(--line-2)', background: 'transparent',
             color: 'var(--muted)', cursor: 'pointer',
           }}
         >
-          {status?.state === 'failed' ? 'Slet' : 'Slå OS2taletiltekst fra'}
+          {removeLabel}
         </button>
       </div>
     </div>

@@ -156,6 +156,29 @@ describe('TeamsMeetingScreen — invitee (not armed)', () => {
     ).toBeInTheDocument();
   });
 
+  // Nothing was switched on for an invitee, so there is nothing to switch off.
+  it('offers to remove the meeting, not to switch OS2taletiltekst off', async () => {
+    renderScreen();
+    const btn = await screen.findByRole('button', { name: 'Fjern mødet' });
+    expect(screen.queryByText('Slå OS2taletiltekst fra')).toBeNull();
+
+    await act(async () => { fireEvent.click(btn); });
+    await waitFor(() => {
+      expect(mockDeleteMeeting).toHaveBeenCalledWith(MEETING_ID);
+      expect(mockPush).toHaveBeenCalledWith('/dashboard');
+    });
+  });
+
+  it('says the meeting could not be removed when that fails', async () => {
+    mockDeleteMeeting.mockRejectedValueOnce(new Error('offline'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderScreen();
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Fjern mødet' })); });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Kunne ikke fjerne mødet');
+    expect(mockPush).not.toHaveBeenCalled();
+  });
+
   it('copies the sentence to the clipboard', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
@@ -405,6 +428,13 @@ describe('TeamsMeetingScreen — blocked by tenant policy', () => {
     renderScreen();
     expect(await screen.findByText(/ikke organisator/)).toBeInTheDocument();
   });
+
+  it('offers to remove the meeting, since nothing could be switched on', async () => {
+    respondWith(statusBody({ armed: false, armResult: 'policy_blocked' }));
+    renderScreen();
+    expect(await screen.findByRole('button', { name: 'Fjern mødet' })).toBeInTheDocument();
+    expect(screen.queryByText('Slå OS2taletiltekst fra')).toBeNull();
+  });
 });
 
 describe('TeamsMeetingScreen — failed', () => {
@@ -417,10 +447,10 @@ describe('TeamsMeetingScreen — failed', () => {
     expect(await screen.findByText('Transskriptionen blev aldrig startet i Teams.')).toBeInTheDocument();
   });
 
-  it('offers "Prøv igen" and "Slet"', async () => {
+  it('offers "Prøv igen" and "Fjern mødet"', async () => {
     renderScreen();
     expect(await screen.findByText('Prøv igen')).toBeInTheDocument();
-    expect(screen.getByText('Slet')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Fjern mødet' })).toBeInTheDocument();
   });
 
   it('"Prøv igen" forces a poll with ?poll=1', async () => {
