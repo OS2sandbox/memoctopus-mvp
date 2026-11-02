@@ -195,7 +195,9 @@ export default function OptaqPage() {
             maxWidth: 520, margin: '18px auto 0',
           }}>
             Dansk AI — kørt lokalt, frigivet åbent.<br />
-            Ingen data forlader din maskine.
+            {/* Only true of a recording made here: a Teams meeting is fetched and
+                transcribed by the server (see § databehandling). */}
+            Optagelser i browseren gemmes kun på din maskine.
           </div>
         </div>
 
@@ -481,10 +483,21 @@ export default function OptaqPage() {
                 fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
                 lineHeight: 1.8, letterSpacing: 0.2,
               }}>
-                lyden gemmes lokalt på din enhed<br />
+                lyden fra browseroptagelser gemmes lokalt på din enhed<br />
                 slettes automatisk når referatet er genereret<br />
                 personoplysninger fjernes inden referat
               </div>
+              {/* A Teams meeting does not stay on the device: say what the server
+                  does with it instead of letting the lines above stand for it. */}
+              {!teamsOff && (
+                <div style={{
+                  marginTop: 10, fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
+                  lineHeight: 1.8, letterSpacing: 0.2,
+                }}>
+                  teams-møder: serveren henter Teams' optagelse, transskriberer den og sletter
+                  den så i OneDrive. teksten ligger kun på serveren, til din browser har gemt den.
+                </div>
+              )}
             </div>
           </div>
         </div>

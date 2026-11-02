@@ -1001,9 +1001,33 @@ describe('OptaqPage — static content', () => {
 
   it('renders the data processing compliance text', () => {
     renderPage();
-    expect(screen.getByText(/lyden gemmes lokalt på din enhed/)).toBeInTheDocument();
+    expect(screen.getByText(/lyden fra browseroptagelser gemmes lokalt på din enhed/)).toBeInTheDocument();
     expect(screen.getByText(/slettes automatisk når referatet er genereret/)).toBeInTheDocument();
     expect(screen.getByText(/personoplysninger fjernes inden referat/)).toBeInTheDocument();
+  });
+
+  // A Teams meeting is fetched and transcribed by the server, so the promises
+  // made for a recording in the browser do not hold for it — and must not be
+  // made for it.
+  it('limits the "stays on your machine" claims to recordings in the browser', () => {
+    renderPage();
+    expect(screen.queryByText(/Ingen data forlader din maskine/)).toBeNull();
+    expect(screen.getByText(/Optagelser i browseren gemmes kun på din maskine/)).toBeInTheDocument();
+  });
+
+  it('says plainly what happens to a Teams meeting', async () => {
+    renderPage();
+    const line = await screen.findByText(/teams-møder: serveren henter Teams' optagelse/);
+    expect(line).toHaveTextContent(/transskriberer den/);
+    expect(line).toHaveTextContent(/teksten ligger kun på serveren, til din browser har gemt den/);
+    expect(line).toHaveTextContent(/transskriberer den og sletter den så i OneDrive/);
+  });
+
+  it('leaves the Teams line out when the integration is switched off', async () => {
+    routeFetch({ status: () => ({ ok: true, status: 200, json: async () => ({ enabled: false, microsoftLinked: false, scopesOk: false, missing: [] }) }) });
+    renderPage();
+    await waitFor(() => expect(screen.queryByPlaceholderText('Indsæt mødelink…')).toBeNull());
+    expect(screen.queryByText(/teams-møder: serveren henter/)).toBeNull();
   });
 
   // Nothing joins the meeting any more: the link switches on a referat for it.
