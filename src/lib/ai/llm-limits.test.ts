@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
   CHAT_TEMPLATE_TOKENS,
   charsPerToken,
@@ -66,6 +68,11 @@ describe('getLlmLimits overrides', () => {
     process.env.LLM_CONTEXT_TOKENS = '16384';
     process.env.VLLM_CHAT_MAX_MODEL_LEN = '65536';
     expect(getLlmLimits().contextTokens).toBe(16_384);
+  });
+
+  it("keeps its self-hosted default window in step with docker-compose.ai.yml's", () => {
+    const compose = readFileSync(path.join(process.cwd(), 'docker-compose.ai.yml'), 'utf8');
+    expect(compose).toContain(`--max-model-len=\${VLLM_CHAT_MAX_MODEL_LEN:-${getLlmLimits().contextTokens}}`);
   });
 
   it('falls back past an invalid VLLM_CHAT_MAX_MODEL_LEN to the default', () => {
