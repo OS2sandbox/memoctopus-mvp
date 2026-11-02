@@ -270,16 +270,19 @@ describe('TranscriptReview', () => {
     // Three distinct no-player states, and the copy has to tell them apart: a local
     // copy the user deleted, a Teams meeting whose audio never reached the browser,
     // and a meeting that simply has no audio.
-    it('explains that a Teams meeting\'s audio went after transcription', async () => {
+    // Worded to be true also for a meeting Teams kept no recording of at all
+    // (transcript-only), where no audio ever existed to be deleted.
+    it('explains that a Teams meeting\'s audio never reaches the browser', async () => {
       setup({ audioDiscarded: true, audioDeleted: false, audioUrl: undefined });
-      expect(screen.getByText('lyden blev slettet efter transskription')).toBeInTheDocument();
+      expect(screen.getByText('ingen lyd — Teams-møder gemmes kun som tekst')).toBeInTheDocument();
       expect(screen.queryByText('ingen lydfil')).not.toBeInTheDocument();
+      expect(screen.queryByText(/slettet efter transskription/)).not.toBeInTheDocument();
     });
 
     it('prefers "lydfil slettet" when the user deleted a local copy', async () => {
       setup({ audioDiscarded: true, audioDeleted: true, audioUrl: undefined });
       expect(screen.getByText('lydfil slettet')).toBeInTheDocument();
-      expect(screen.queryByText('lyden blev slettet efter transskription')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Teams-møder gemmes kun som tekst/)).not.toBeInTheDocument();
     });
 
     it('does NOT show "lydfil slettet" when audioUrl is set', async () => {

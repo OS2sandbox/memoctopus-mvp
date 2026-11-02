@@ -297,9 +297,10 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
           audioUrl={audioUrl}
           audioDurationSeconds={audioFile?.durationSeconds}
           audioDeleted={meeting.audioDeleted && meeting.status !== 'recording' && meeting.status !== 'processing'}
-          // A Teams meeting's audio is transcribed on the server and discarded, so
-          // none was ever stored here. `audioDeleted` would be the wrong word for it.
-          audioDiscarded={isTeamsMeeting && !meeting.audioDeleted}
+          // A meeting collected through Graph is transcribed on the server and its
+          // audio never stored here, so `audioDeleted` would be the wrong word for
+          // it. Not the old bot's meetings: it uploaded its recording to the browser.
+          audioDiscarded={!!meeting.graphManaged && !meeting.audioDeleted}
           initialChapters={transcript.chapters}
           participants={meeting.participants}
           initialDiarizing={transcript.diarizationStatus === 'pending'}

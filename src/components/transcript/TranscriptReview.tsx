@@ -1762,10 +1762,10 @@ export function TranscriptReview({
           </span>
         ) : audioDiscarded ? (
           <span
-            title="Teams frigiver først optagelsen efter mødet, så lyden kan ikke følges live. Den transskriberes på serveren og slettes derefter."
+            title="Lyden fra et Teams-møde når aldrig din browser. Er mødet optaget, transskriberes optagelsen på serveren, og lyden gemmes ikke."
             style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}
           >
-            lyden blev slettet efter transskription
+            ingen lyd — Teams-møder gemmes kun som tekst
           </span>
         ) : (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}>

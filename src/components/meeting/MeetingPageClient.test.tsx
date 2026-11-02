@@ -65,8 +65,14 @@ vi.mock('@/components/recording/TeamsMeetingScreen', () => ({
 }));
 
 vi.mock('@/components/transcript/TranscriptReview', () => ({
-  TranscriptReview: (props: { meetingId: string }) => (
-    <div data-testid="transcript-review" data-meeting-id={props.meetingId}>TranscriptReview</div>
+  TranscriptReview: (props: { meetingId: string; audioDiscarded?: boolean }) => (
+    <div
+      data-testid="transcript-review"
+      data-meeting-id={props.meetingId}
+      data-audio-discarded={String(Boolean(props.audioDiscarded))}
+    >
+      TranscriptReview
+    </div>
   ),
 }));
 
@@ -461,6 +467,21 @@ describe('MeetingPageClient — recording tab (teams source)', () => {
 // ─── Review tab — with transcript ────────────────────────────────────────────
 
 describe('MeetingPageClient — review tab', () => {
+  // Only a meeting collected through Microsoft Graph has its audio transcribed on
+  // the server and never stored here. The old bot uploaded its recording to the
+  // browser, so a bot meeting without audio has simply lost it.
+  it.each([
+    ['a Graph meeting', { source: 'teams', graphManaged: true }, 'true'],
+    ['an old bot meeting', { source: 'teams' }, 'false'],
+    ['a local recording', { source: 'local' }, 'false'],
+  ] as const)('says whether the audio was discarded for %s', async (_label, overrides, expected) => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({ status: 'review', ...overrides }));
+    mockGetTranscript.mockResolvedValue(makeTranscript());
+
+    renderClient({ initialTab: 'review' });
+    expect(await screen.findByTestId('transcript-review')).toHaveAttribute('data-audio-discarded', expected);
+  });
+
   it('renders TranscriptReview when review tab is active and transcript exists', async () => {
     mockGetMeeting.mockResolvedValue(makeMeeting({ status: 'review' }));
     mockGetTranscript.mockResolvedValue(makeTranscript());
