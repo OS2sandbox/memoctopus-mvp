@@ -83,8 +83,14 @@ vi.mock('@/components/meeting/ExportTab', () => ({
 }));
 
 vi.mock('@/components/meeting/ProcessingTranscription', () => ({
-  ProcessingTranscription: (props: { meetingId: string }) => (
-    <div data-testid="processing-transcription" data-meeting-id={props.meetingId}>ProcessingTranscription</div>
+  ProcessingTranscription: (props: { meetingId: string; graphManaged?: boolean }) => (
+    <div
+      data-testid="processing-transcription"
+      data-meeting-id={props.meetingId}
+      data-graph-managed={String(Boolean(props.graphManaged))}
+    >
+      ProcessingTranscription
+    </div>
   ),
 }));
 
@@ -473,6 +479,17 @@ describe('MeetingPageClient — review tab', () => {
     await waitFor(() => {
       expect(screen.getByTestId('processing-transcription')).toBeInTheDocument();
     });
+    expect(screen.getByTestId('processing-transcription')).toHaveAttribute('data-graph-managed', 'false');
+  });
+
+  // So it can send a Graph meeting whose server copy is gone back to the Teams
+  // screen ("Hent igen") instead of reporting a missing audio file.
+  it('tells ProcessingTranscription when the meeting is collected from Teams', async () => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({ source: 'teams', graphManaged: true, status: 'processing' }));
+    mockGetTranscript.mockResolvedValue(null);
+
+    renderClient({ initialTab: 'review' });
+    expect(await screen.findByTestId('processing-transcription')).toHaveAttribute('data-graph-managed', 'true');
   });
 
   it('shows transcription failed message when status is failed and no transcript', async () => {

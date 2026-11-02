@@ -308,7 +308,11 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
       )}
 
       {activeTab === 'review' && !transcript && meeting.status === 'processing' && (
-        <ProcessingTranscription meetingId={meetingId} onComplete={loadData} />
+        <ProcessingTranscription
+          meetingId={meetingId}
+          onComplete={loadData}
+          graphManaged={isTeamsMeeting && !isLegacyBotMeeting}
+        />
       )}
 
       {activeTab === 'review' && !transcript && meeting.status === 'failed' && (
