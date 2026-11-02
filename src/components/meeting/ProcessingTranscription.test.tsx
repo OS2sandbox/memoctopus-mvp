@@ -837,6 +837,27 @@ describe('ProcessingTranscription — no local audio, nothing usable from the se
     expect(screen.queryByText('Lydfil ikke fundet')).not.toBeInTheDocument();
   });
 
+  // The server keeps a failed copy until it expires, so re-reading it here only
+  // repeats the error. The Teams screen shows the meeting's real state and has its
+  // own way to fetch again; the user is sent there when they ask, never in a loop.
+  it('sends a Graph meeting whose server run failed back to its Teams screen when the user retries', async () => {
+    const user = userEvent.setup();
+    mockFetch.mockResolvedValue(makeServerTranscript('failed'));
+    renderComponent({ graphManaged: true });
+
+    expect(await screen.findByText(/Transskriptionen på serveren fejlede/)).toBeInTheDocument();
+    expect(mockPush).not.toHaveBeenCalled();
+    const fetchesBefore = mockFetch.mock.calls.length;
+
+    await user.click(screen.getByRole('button', { name: 'Prøv igen' }));
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/meeting/${MEETING_ID}`));
+    expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, { status: 'awaiting_teams' });
+    expect(mockUpdateMeeting.mock.invocationCallOrder[0])
+      .toBeLessThan(mockPush.mock.invocationCallOrder[0]);
+    expect(mockFetch.mock.calls.length).toBe(fetchesBefore);
+  });
+
   it('still says the file is missing for a local meeting with no audio', async () => {
     mockFetch.mockResolvedValue(makeServerTranscript('none'));
     renderComponent();

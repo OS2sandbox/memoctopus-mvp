@@ -105,6 +105,9 @@ export function ProcessingTranscription({ meetingId, onComplete, graphManaged = 
   const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+  // Set when a Graph meeting's server run failed: re-reading the server copy would
+  // only repeat the error, so "Prøv igen" goes to the Teams screen instead.
+  const [retryOnTeamsScreen, setRetryOnTeamsScreen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -148,6 +151,7 @@ export function ProcessingTranscription({ meetingId, onComplete, graphManaged = 
           );
         }
         if (outcome.kind === 'failed' && !blob) {
+          if (graphManaged) setRetryOnTeamsScreen(true);
           throw new Error(
             'Transskriptionen på serveren fejlede. Prøv igen — mødet ligger stadig hos Teams.',
           );
@@ -278,7 +282,15 @@ export function ProcessingTranscription({ meetingId, onComplete, graphManaged = 
         <h1 className="text-xl font-semibold text-[var(--ink)]">Transskription fejlede</h1>
         <p className="mt-2 text-sm text-[var(--muted)]">{error}</p>
         <button
-          onClick={() => { setPhase('downloading'); setError(null); setBatchProgress(null); setRetryCount(c => c + 1); }}
+          onClick={async () => {
+            if (retryOnTeamsScreen) {
+              // The Teams screen renders for `awaiting_teams`, so the status goes first.
+              await updateMeeting(meetingId, { status: 'awaiting_teams' });
+              router.push(`/meeting/${meetingId}`);
+              return;
+            }
+            setPhase('downloading'); setError(null); setBatchProgress(null); setRetryCount(c => c + 1);
+          }}
           style={{
             marginTop: 16, padding: '8px 16px', borderRadius: 8,
             background: 'var(--ink)', color: 'var(--bg)', border: 'none',
