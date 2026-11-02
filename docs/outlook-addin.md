@@ -65,6 +65,17 @@ docker compose … up -d app   # a restart is enough; the add-in is built into t
 
 The manifest is then served at `https://<this host>/outlook-addin/manifest.xml`.
 
+Outlook and the admin center tell add-ins apart by the manifest's id. Every
+deployment uses the same one unless told otherwise, so when two deployments share
+a tenant (staging and production), give all but one its own:
+
+```bash
+OUTLOOK_ADDIN_ID=<a new GUID>   # e.g. from `uuidgen`; must be a GUID, or the manifest is refused
+```
+
+Leave it unset on the deployment users already have: changing the id makes a new
+add-in, which the admin uploads and assigns again (and removes the old one).
+
 ### 3. Deploying the add-in (Exchange or Global admin)
 
 Microsoft 365 admin center → **Settings → Integrated apps → Upload custom apps** →
@@ -73,8 +84,9 @@ server to be reachable from Microsoft's cloud). Assign it to specific users or a
 group. It can take up to 24 hours before the button appears in Outlook.
 
 When `src/lib/outlook/manifest.ts` changes, bump `ADDIN_VERSION` and upload the new
-file: the admin center keeps the file it was given. Changes to the pane itself
-(`outlook-addin/src/`) need only a deploy.
+file: the admin center keeps the file it was given. `manifest.test.ts` pins a hash
+of the output to the version, so a change without a bump fails the tests. Changes
+to the pane itself (`outlook-addin/src/`) need only a deploy.
 
 ## Limits
 
