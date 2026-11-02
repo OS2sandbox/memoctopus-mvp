@@ -168,15 +168,22 @@ export function usePgliteDb(): void {
 }
 
 /**
- * Drops every per-user schema and forgets that any was initialised, so the next
- * `queryUserSchema` call runs `ensureUserSchema` from scratch.
+ * Empties every per-user schema and forgets that any was initialised, so the next
+ * `queryUserSchema` call runs `ensureUserSchema` again (which re-seeds the default
+ * templates). Tables are truncated rather than dropped because creating a schema
+ * from nothing is several times slower; pass `dropSchemas` for a test about schema
+ * creation itself.
  */
-export async function resetPgliteDb(): Promise<void> {
-  const schemas = await pgliteSql<{ nspname: string }>(
-    `SELECT nspname FROM pg_namespace WHERE nspname LIKE 'u\\_%'`,
+export async function resetPgliteDb({ dropSchemas = false }: { dropSchemas?: boolean } = {}): Promise<void> {
+  const tables = await pgliteSql<{ schemaname: string; tablename: string }>(
+    `SELECT schemaname, tablename FROM pg_tables WHERE schemaname LIKE 'u\\_%'`,
   );
-  for (const { nspname } of schemas) {
-    await pgliteSql(`DROP SCHEMA "${nspname}" CASCADE`);
+  if (dropSchemas) {
+    for (const schema of new Set(tables.map((t) => t.schemaname))) {
+      await pgliteSql(`DROP SCHEMA "${schema}" CASCADE`);
+    }
+  } else if (tables.length > 0) {
+    await pgliteSql(`TRUNCATE ${tables.map((t) => `"${t.schemaname}"."${t.tablename}"`).join(', ')} CASCADE`);
   }
   // user-schema.ts caches which schemas it has ensured on globalThis.
   (globalThis as { initializedSchemas?: Set<string> }).initializedSchemas?.clear();

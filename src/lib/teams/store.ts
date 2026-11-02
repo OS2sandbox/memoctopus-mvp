@@ -118,52 +118,6 @@ export function isDeferred(row: Pick<TeamsMeetingRow, 'origin' | 'openedAt'>): b
   return row.origin === 'outlook' && row.openedAt == null;
 }
 
-/** States the poller picks up on its own (`fetching` only once it is stale). */
-const POLLABLE_STATES = ['awaiting_teams', 'needs_reauth'] as const;
-
-export function pollBackoffMs(attempts: number): number {
-  return attempts < FAST_POLL_ATTEMPTS ? FAST_POLL_MS : SLOW_POLL_MS;
-}
-
-/**
- * Pure mirror of the SQL filter in {@link listDueTeamsMeetings}. A meeting is
- * due when it is still waiting for Teams, its scheduled end has passed (or is
- * unknown), and the backoff since the last poll has elapsed.
- *
- * A row past its give-up window stays due. Giving up is a write that
- * `pollMeeting` makes, and it can only make it on a row it is handed. Leaving
- * those rows out here meant the poll that should have marked them `failed`
- * never came, so they sat in `awaiting_teams` for good.
- */
-export function isTeamsMeetingDue(row: TeamsMeetingRow, now: Date): boolean {
-  const nowMs = now.getTime();
-
-  // `needs_reauth` is pollable: the user re-consents in another tab and the very
-  // next backoff tick has to pick the meeting back up on its own.
-  const pollable = (POLLABLE_STATES as readonly string[]).includes(row.state);
-  const staleFetching =
-    row.state === 'fetching' &&
-    (row.lastPolledAt ?? row.createdAt) != null &&
-    (row.lastPolledAt ?? row.createdAt)!.getTime() <= nowMs - STALE_FETCHING_MS;
-  if (!pollable && !staleFetching) return false;
-
-  // Unopened Outlook meetings are only listed to be settled once the 30-day cap
-  // has passed; pollMeeting does nothing else with them.
-  if (isDeferred(row)) {
-    const born = giveUpAnchor(row);
-    return born != null && born.getTime() <= nowMs - OUTLOOK_UNOPENED_GIVE_UP_MS;
-  }
-
-  // A meeting with no schedule (ad-hoc "Mød nu", or a link whose window Graph
-  // omits) is bounded by when we were asked to watch it, so it still gives up.
-  const bound = giveUpAnchor(row);
-  if (bound && bound.getTime() > nowMs) return false;
-  if (row.lastPolledAt && row.lastPolledAt.getTime() > nowMs - pollBackoffMs(row.attempts)) {
-    return false;
-  }
-  return true;
-}
-
 /**
  * The instant the 24 h give-up window is measured from: the LATER of the meeting's
  * scheduled end, when we were asked to watch it, and (for an Outlook-armed
@@ -418,7 +372,18 @@ export async function listTeamsMeetings(userId: string): Promise<TeamsMeetingRow
   return rows.map(mapRow);
 }
 
-/** Meetings whose artifacts should be fetched now. See {@link isTeamsMeetingDue}. */
+/**
+ * Meetings whose artifacts should be fetched now: still waiting for Teams (or a
+ * `fetching` row abandoned mid-download), past their scheduled end (or, with no
+ * schedule, past when we were asked to watch them), and out of the backoff since
+ * the last poll — every 2 minutes for the first {@link FAST_POLL_ATTEMPTS} polls,
+ * then every 15. `needs_reauth` is listed too: the user signs in again in another
+ * tab, and the next tick has to pick the meeting back up on its own.
+ *
+ * A row past its give-up window stays listed. Giving up is a write `pollMeeting`
+ * makes, and it can only make it on a row it is handed; leaving such rows out
+ * kept them in `awaiting_teams` for good.
+ */
 export async function listDueTeamsMeetings(
   userId: string,
   now: Date,
@@ -442,7 +407,7 @@ export async function listDueTeamsMeetings(
         -- meeting with no schedule still falls back to created_at.
         AND GREATEST(scheduled_end, created_at, opened_at) <= $1::timestamptz
         -- No upper bound: a row past its give-up window must still reach
-        -- pollMeeting, which is what marks it failed (see isTeamsMeetingDue).
+        -- pollMeeting, which is what marks it failed.
         AND (last_polled_at IS NULL
              OR last_polled_at <= $1::timestamptz
                 - (CASE WHEN attempts < $2::int THEN $3::int ELSE $4::int END)

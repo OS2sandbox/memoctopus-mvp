@@ -9,6 +9,7 @@ usePgliteDb();
 
 describe('the PGlite test database', () => {
   it('runs ensureUserSchema for real, twice (it has to be idempotent)', async () => {
+    await resetPgliteDb({ dropSchemas: true });
     await ensureUserSchema('user-1');
     await ensureUserSchema('user-1');
     const tables = await pgliteSql<{ table_name: string }>(
@@ -36,10 +37,11 @@ describe('the PGlite test database', () => {
     expect(row).toEqual({ big: '12345', at: new Date('2026-09-08T10:00:00Z'), doc: { a: 1 } });
   });
 
-  it('starts from a clean slate after a reset', async () => {
+  it('starts from a clean, freshly seeded slate after a reset', async () => {
     await queryUserSchema('user-1', `INSERT INTO templates (name) VALUES ('x')`);
     await resetPgliteDb();
-    const rows = await queryUserSchema('user-1', `SELECT 1 FROM templates WHERE name = 'x'`);
-    expect(rows).toHaveLength(0);
+    expect(await queryUserSchema('user-1', `SELECT 1 FROM templates WHERE name = 'x'`)).toHaveLength(0);
+    // ensureUserSchema ran again and put the default templates back.
+    expect((await queryUserSchema('user-1', `SELECT 1 FROM templates`)).length).toBeGreaterThan(0);
   });
 });
