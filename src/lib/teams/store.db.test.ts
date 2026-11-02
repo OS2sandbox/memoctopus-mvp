@@ -12,6 +12,7 @@ import {
   getTeamsMeeting,
   listDueTeamsMeetings,
   listPendingRecordingCleanups,
+  markPollAttempt,
   queueRecordingCleanup,
   requestRecollect,
   upsertTeamsMeeting,
@@ -219,10 +220,29 @@ describe('listDueTeamsMeetings', () => {
       expect(await due(new Date(Date.now() + MIN))).toEqual([id]);
     });
 
+    it('lets the next run try the recording again, however often it stalled before', async () => {
+      const id = await insert({ state: 'ready' });
+      await queryUserSchema(USER, 'UPDATE teams_meetings SET recording_stalls = 3 WHERE id = $1', [id]);
+
+      expect((await requestRecollect(USER, id))!.recordingStalls).toBe(0);
+    });
+
     it('moves nothing but a collected meeting', async () => {
       const id = await insert({ state: 'failed' });
       expect(await requestRecollect(USER, id)).toBeNull();
       expect(await requestRecollect(USER, 'nonexistent')).toBeNull();
+    });
+  });
+
+  describe('markPollAttempt', () => {
+    it('counts a stalled recording download apart from the attempts', async () => {
+      const id = await insert({ attempts: 2 });
+
+      await markPollAttempt(USER, id, {}, { incrementAttempts: false, countRecordingStall: true });
+      const row = await markPollAttempt(USER, id, {}, { incrementAttempts: false, countRecordingStall: true });
+
+      expect(row).toMatchObject({ attempts: 2, recordingStalls: 2 });
+      expect((await markPollAttempt(USER, id)).recordingStalls).toBe(2);
     });
   });
 

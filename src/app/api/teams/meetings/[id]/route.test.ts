@@ -76,6 +76,7 @@ function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     origin: null,
     openedAt: null,
     recollectedAt: null,
+    recordingStalls: 0,
     eventId: null,
     armResult: 'armed',
     createdAt: new Date('2026-09-08T09:00:00Z'),

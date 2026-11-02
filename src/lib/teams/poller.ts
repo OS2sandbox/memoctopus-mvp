@@ -54,6 +54,14 @@ export const TRANSCRIPTS_DISABLED_MESSAGE =
   'Teams-administratoren har slået Graph-adgang til transskriptioner fra. ' +
   'Se docs/setup-microsoft-teams.md trin 3.';
 
+/**
+ * Stalled recording downloads before the recording is given up on and Teams' own
+ * transcript collected instead. A stall is not counted as an attempt, so without
+ * this a recording too big for the download timeout was fetched again on every
+ * poll until the give-up window closed.
+ */
+export const RECORDING_STALL_LIMIT = 3;
+
 const DEFAULT_POLL_INTERVAL_MS = 120_000;
 
 /** Constant key for pg_try_advisory_lock, so only one instance polls at a time. */
@@ -176,12 +184,16 @@ export async function pollMeeting(
     state: TeamsMeetingState,
     failureReason: string | null,
     transient = false,
+    recordingStalled = false,
   ): Promise<TeamsMeetingRow> =>
     markPollAttempt(
       userId,
       id,
       { state, failureReason },
-      { incrementAttempts: !(transient || options.force) },
+      {
+        incrementAttempts: !(transient || options.force),
+        ...(recordingStalled ? { countRecordingStall: true } : {}),
+      },
     );
 
   try {
@@ -198,6 +210,7 @@ export async function pollMeeting(
           row.recordingCleanup === 'pending'
           || row.recordingCleanup === 'deleted'
           || row.recordingCleanup === 'recycled',
+        recordingUnreachable: row.recordingStalls >= RECORDING_STALL_LIMIT,
       },
       now,
     );
@@ -230,7 +243,7 @@ export async function pollMeeting(
       return await markPollAttempt(userId, id, { state: 'fetching', failureReason: null }, { incrementAttempts: false });
     }
     // Nothing yet — back to waiting, and try again after the backoff.
-    return await waiting('awaiting_teams', null, outcome.transient);
+    return await waiting('awaiting_teams', null, outcome.transient, outcome.recordingStalled);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     switch (classifyGraphError(err)) {

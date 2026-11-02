@@ -43,6 +43,7 @@ import {
   startPoller,
   cleanUpRecording,
   RECORDING_CLEANUP_GIVE_UP_MS,
+  RECORDING_STALL_LIMIT,
 } from './poller';
 import { GraphError } from './graph-client';
 import { processTeamsMeeting, type PipelineOutcome } from './pipeline';
@@ -121,6 +122,7 @@ function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     origin: null,
     openedAt: null,
     recollectedAt: null,
+    recordingStalls: 0,
     eventId: null,
     armResult: 'armed',
     createdAt: new Date('2026-09-08T09:00:00Z'),
@@ -337,6 +339,7 @@ describe('pollMeeting', () => {
         scheduledEnd: new Date('2026-09-08T11:00:00Z'),
         attempts: 0,
         recordingDeleted: false,
+        recordingUnreachable: false,
       },
       NOW,
     );
@@ -463,6 +466,35 @@ describe('pollMeeting', () => {
       { incrementAttempts: true },
     );
     expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  // A recording that times out mid-download every time is not "Teams has nothing
+  // yet". Counted nowhere, it was fetched again for a day and then given up on as
+  // if Teams had never published anything.
+  it('counts a stalled recording download as a stall, not as an attempt', async () => {
+    mockGet.mockResolvedValue(row({ attempts: 3 }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending', transient: true, recordingStalled: true });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockMark).toHaveBeenCalledWith(
+      'u1',
+      'm1',
+      { state: 'awaiting_teams', failureReason: null },
+      { incrementAttempts: false, countRecordingStall: true },
+    );
+  });
+
+  it.each([
+    [RECORDING_STALL_LIMIT - 1, false],
+    [RECORDING_STALL_LIMIT, true],
+  ])('after %i stalled downloads, stops asking for the recording: %s', async (stalls, unreachable) => {
+    mockGet.mockResolvedValue(row({ recordingStalls: stalls }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockProcess.mock.calls[0][1].recordingUnreachable).toBe(unreachable);
   });
 
   it('does not count a forced poll ("Tjek nu") that finds nothing yet', async () => {

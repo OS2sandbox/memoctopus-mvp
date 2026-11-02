@@ -94,6 +94,7 @@ beforeEach(() => {
     origin: null,
     openedAt: null,
     recollectedAt: null,
+    recordingStalls: 0,
     state: 'awaiting_teams' as const,
     eventId: null,
     armResult: 'not_organizer' as const,

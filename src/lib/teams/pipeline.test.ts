@@ -54,7 +54,14 @@ vi.mock('@/lib/transcribe-recording', () => ({ transcribeRecording: mockTranscri
 vi.mock('./transcribe-cues', () => ({ transcribeAlongCues: mockTranscribeAlongCues }));
 
 import { GraphError } from './graph-client';
-import { artifactMode, processTeamsMeeting, transcodeToWav, coversMeeting, MIN_COVERAGE_RATIO } from './pipeline';
+import {
+  artifactMode,
+  processTeamsMeeting,
+  transcodeToWav,
+  coversMeeting,
+  MIN_COVERAGE_RATIO,
+  RECORDING_UNREACHABLE_MESSAGE,
+} from './pipeline';
 
 const VTT = [
   'WEBVTT',
@@ -636,6 +643,49 @@ describe('processTeamsMeeting — idempotency and errors', () => {
       status: 'pending',
       transient: true,
     });
+  });
+
+  // Every other "not yet" is free; a recording that never downloads is not "not
+  // yet". Uncounted, it was fetched again every two minutes for a day and then
+  // reported as "Teams never started the transcription".
+  it('says so when the recording itself timed out or was cut off mid-download', async () => {
+    mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [RECORDING_REF] });
+    for (const stall of [
+      new GraphError('unavailable', 'Microsoft svarede ikke i tide.'),
+      new GraphError('unavailable', 'Microsoft er midlertidigt utilgængelig.', { cause: new TypeError('terminated') }),
+    ]) {
+      mockDownloadRecording.mockRejectedValueOnce(stall);
+      expect(await processTeamsMeeting('u1', MEETING, AFTER_GRACE)).toEqual({
+        status: 'pending',
+        transient: true,
+        recordingStalled: true,
+      });
+    }
+  });
+
+  it('does not count a throttled recording download as a stall', async () => {
+    mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [RECORDING_REF] });
+    mockDownloadRecording.mockRejectedValueOnce(new GraphError('unavailable', 'Microsoft Graph svarede 429', { status: 429 }));
+    expect(await processTeamsMeeting('u1', MEETING, AFTER_GRACE)).toEqual({ status: 'pending', transient: true });
+  });
+
+  it("falls back to Teams' transcript once the recording has proved unreachable", async () => {
+    mockListArtifacts.mockResolvedValue({ transcripts: [TRANSCRIPT_REF], recordings: [RECORDING_REF] });
+
+    // Within the grace period, too: there is no point waiting for it.
+    const outcome = await processTeamsMeeting('u1', { ...MEETING, recordingUnreachable: true }, JUST_AFTER_END);
+
+    expect(outcome).toMatchObject({ status: 'ready', mode: 'transcript-only', recordingBytes: null });
+    expect(mockDownloadRecording).not.toHaveBeenCalled();
+  });
+
+  it('fails, saying why, when an unreachable recording is all there is', async () => {
+    mockListArtifacts.mockResolvedValue({ transcripts: [], recordings: [RECORDING_REF] });
+
+    const outcome = await processTeamsMeeting('u1', { ...MEETING, recordingUnreachable: true }, AFTER_GRACE);
+
+    expect(outcome).toEqual({ status: 'failed', reason: RECORDING_UNREACHABLE_MESSAGE });
+    expect(mockDownloadRecording).not.toHaveBeenCalled();
   });
 
   it('still fails for a non-retryable Graph error', async () => {

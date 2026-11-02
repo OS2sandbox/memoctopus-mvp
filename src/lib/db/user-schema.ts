@@ -286,6 +286,9 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         -- to be deleted from OneDrive: the row is hidden and kept only for that
         -- delete, then removed.
         ADD COLUMN IF NOT EXISTS unregistered_at TIMESTAMPTZ,
+        -- Downloads of the recording that timed out or were cut off. Past a few,
+        -- the transcript Teams wrote is collected instead.
+        ADD COLUMN IF NOT EXISTS recording_stalls INTEGER NOT NULL DEFAULT 0,
         ADD COLUMN IF NOT EXISTS created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         ADD COLUMN IF NOT EXISTS updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     `);

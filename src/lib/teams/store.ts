@@ -76,6 +76,11 @@ export interface TeamsMeetingRow {
   openedAt: Date | null;
   /** When the user last asked for this collected meeting again. See {@link requestRecollect}. */
   recollectedAt: Date | null;
+  /**
+   * Downloads of the recording that timed out or were cut off. Unlike `attempts`
+   * these say nothing about Teams: the recording is there, we just cannot get it.
+   */
+  recordingStalls: number;
   createdAt: Date | null;
 }
 
@@ -97,6 +102,7 @@ export type TeamsMeetingInput = Omit<
   | 'origin'
   | 'openedAt'
   | 'recollectedAt'
+  | 'recordingStalls'
   | 'occurrenceWindow'
 > &
   Partial<TeamsMeetingRow>;
@@ -213,6 +219,7 @@ interface RawTeamsMeeting {
   origin?: string | null;
   opened_at?: Date | string | null;
   recollected_at?: Date | string | null;
+  recording_stalls?: number | string | null;
   created_at?: Date | string | null;
 }
 
@@ -248,6 +255,7 @@ function mapRow(raw: RawTeamsMeeting): TeamsMeetingRow {
     origin: raw.origin === 'outlook' ? 'outlook' : null,
     openedAt: toDate(raw.opened_at ?? null),
     recollectedAt: toDate(raw.recollected_at ?? null),
+    recordingStalls: Number(raw.recording_stalls ?? 0),
     createdAt: toDate(raw.created_at ?? null),
   };
 }
@@ -264,7 +272,7 @@ const SELECT_COLUMNS = `
   armed, arm_result, scheduled_start, scheduled_end, occurrence_window, state,
   last_polled_at, attempts, failure_reason, transcript_id, recording_id,
   recording_cleanup, recording_cleanup_at, recording_bytes, origin, opened_at,
-  recollected_at, created_at
+  recollected_at, recording_stalls, created_at
 `;
 
 // ─── Queries ────────────────────────────────────────────────────────────────
@@ -509,6 +517,8 @@ export interface MarkPollOptions {
    * way, or a throttled meeting would be due again on the very next tick.
    */
   incrementAttempts?: boolean;
+  /** Count a recording download that timed out or was cut off (`recording_stalls`). */
+  countRecordingStall?: boolean;
 }
 
 /**
@@ -520,10 +530,11 @@ export async function markPollAttempt(
   userId: string,
   id: string,
   patch: TeamsMeetingPatch = {},
-  { incrementAttempts = true }: MarkPollOptions = {},
+  { incrementAttempts = true, countRecordingStall = false }: MarkPollOptions = {},
 ): Promise<TeamsMeetingRow> {
   const sets = [
     ...(incrementAttempts ? ['attempts = attempts + 1'] : []),
+    ...(countRecordingStall ? ['recording_stalls = recording_stalls + 1'] : []),
     'last_polled_at = NOW()',
     'updated_at = NOW()',
   ];
@@ -595,13 +606,15 @@ export async function markTeamsMeetingOpened(userId: string, id: string): Promis
 /**
  * "Hent igen": a collected meeting whose transcript the user never got goes back
  * to waiting for Teams, and earns a full give-up window from now (see
- * {@link giveUpAnchor}). Only a `ready` row moves; anything else returns null.
+ * {@link giveUpAnchor}). Its recording gets another chance, too, however often it
+ * stalled before. Only a `ready` row moves; anything else returns null.
  */
 export async function requestRecollect(userId: string, id: string): Promise<TeamsMeetingRow | null> {
   const result = await queryUserSchemaOne<RawTeamsMeeting>(
     userId,
     `UPDATE teams_meetings
-        SET state = 'awaiting_teams', failure_reason = NULL, recollected_at = NOW(), updated_at = NOW()
+        SET state = 'awaiting_teams', failure_reason = NULL, recollected_at = NOW(),
+            recording_stalls = 0, updated_at = NOW()
       WHERE id = $1 AND state = 'ready' AND ${REGISTERED}
       RETURNING ${SELECT_COLUMNS}`,
     [id],

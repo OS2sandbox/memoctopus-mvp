@@ -57,7 +57,11 @@ export type PipelineOutcome =
   // was why pressing "Tjek nu" during a ten-minute download answered "Teams har ikke
   // frigivet transskriptionen endnu" — true of nothing, and indistinguishable from
   // being stuck.
-  | { status: 'pending'; transient?: true; phase?: 'waiting' | 'working' }
+  //
+  // `recordingStalled`: the recording itself timed out or was cut off mid-download.
+  // Transient too, but counted apart (see PipelineMeeting.recordingUnreachable):
+  // Teams has published it, so waiting for Teams will not help.
+  | { status: 'pending'; transient?: true; phase?: 'waiting' | 'working'; recordingStalled?: true }
   | { status: 'failed'; reason: string };
 
 export interface PipelineMeeting {
@@ -73,6 +77,30 @@ export interface PipelineMeeting {
    * Graph may still list: Teams' own transcript is all that is left to collect.
    */
   recordingDeleted?: boolean;
+  /**
+   * The recording's download has stalled too often. Teams' own transcript is then
+   * collected as it is, without waiting out the grace for a recording we already
+   * have but cannot fetch.
+   */
+  recordingUnreachable?: boolean;
+}
+
+/** Why a meeting with nothing but an unreachable recording failed. */
+export const RECORDING_UNREACHABLE_MESSAGE =
+  'Optagelsen fra Teams kunne ikke hentes: overførslen fra Microsoft gik i stå gentagne gange.';
+
+/**
+ * A recording download that timed out or was cut off. Not a 429 or a 503 — those
+ * are Graph saying "not now", which says nothing about this recording.
+ */
+class RecordingStalled extends GraphError {
+  constructor(cause: GraphError) {
+    super('unavailable', cause.message, { cause });
+  }
+}
+
+function isStall(err: unknown): err is GraphError {
+  return err instanceof GraphError && err.retryable && err.status === 0;
 }
 
 /**
@@ -199,9 +227,15 @@ async function runPipeline(
   const windowEnd = realDate(meeting.scheduledEnd);
   const window = windowStart && windowEnd ? { start: windowStart, end: windowEnd } : undefined;
   const transcript = pickArtifact(artifacts.transcripts, window);
-  const skipRecording = artifactMode() === 'transcript-only' || meeting.recordingDeleted === true;
+  const skipRecording =
+    artifactMode() === 'transcript-only'
+    || meeting.recordingDeleted === true
+    || meeting.recordingUnreachable === true;
   const recording = skipRecording ? null : pickArtifact(artifacts.recordings, window);
 
+  if (!transcript && meeting.recordingUnreachable && pickArtifact(artifacts.recordings, window)) {
+    return { status: 'failed', reason: RECORDING_UNREACHABLE_MESSAGE };
+  }
   if (!transcript && !recording) return { status: 'pending' };
 
   // Teams publishes the transcript first and the recording minutes later. Taking
@@ -226,6 +260,7 @@ async function runPipeline(
     await storePendingTranscript(meeting.id, { status: 'failed' }).catch(() => {});
     const cls = classifyGraphError(err);
     if (cls === 'reauth_required' || cls === 'transcripts_disabled') throw err;
+    if (err instanceof RecordingStalled) return { status: 'pending', transient: true, recordingStalled: true };
     if (cls === 'retryable') return { status: 'pending', transient: true };
     const reason = err instanceof Error ? err.message : 'Ukendt fejl under hentning fra Microsoft Teams';
     console.error(`[teams-pipeline] ${meeting.id} failed:`, err);
@@ -428,7 +463,11 @@ async function fetchRecordingAsWav(
   const wavPath = path.join(dir, 'recording.wav');
 
   try {
-    const { bytes } = await downloadRecording(userId, meeting.graphMeetingId, recordingId, mp4Path);
+    const { bytes } = await downloadRecording(userId, meeting.graphMeetingId, recordingId, mp4Path).catch(
+      (err: unknown) => {
+        throw isStall(err) ? new RecordingStalled(err) : err;
+      },
+    );
     await transcodeToWav(mp4Path, wavPath);
     return { wav: await fs.readFile(wavPath), bytes };
   } finally {

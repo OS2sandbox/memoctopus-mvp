@@ -88,6 +88,7 @@ function row(overrides: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     origin: null,
     openedAt: null,
     recollectedAt: null,
+    recordingStalls: 0,
     createdAt: new Date('2026-09-08T08:00:00Z'),
     ...overrides,
   };
@@ -245,6 +246,7 @@ describe('upsertTeamsMeeting', () => {
       origin: null,
       openedAt: null,
       recollectedAt: null,
+      recordingStalls: 0,
       createdAt: CREATED,
     });
   });
