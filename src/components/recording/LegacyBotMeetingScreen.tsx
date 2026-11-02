@@ -28,14 +28,18 @@ export function LegacyBotMeetingScreen({
 }) {
   const router = useRouter();
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   async function remove() {
     setDeleting(true);
+    setDeleteError(null);
     try {
       await deleteMeeting(meetingId);
       router.push('/dashboard');
-    } catch {
+    } catch (err) {
+      console.error('[LegacyBotMeetingScreen] kunne ikke slette mødet', meetingId, err);
       setDeleting(false);
+      setDeleteError('Mødet kunne ikke slettes — prøv igen.');
     }
   }
 
@@ -91,6 +95,11 @@ export function LegacyBotMeetingScreen({
           {deleting ? 'Sletter…' : 'Slet mødet'}
         </button>
       </div>
+      {deleteError && (
+        <p role="alert" style={{ fontSize: 13, color: 'var(--error, #e05252)', marginTop: 16 }}>
+          {deleteError}
+        </p>
+      )}
       <p style={{ fontSize: 12.5, lineHeight: 1.6, color: 'var(--muted)', marginTop: 32 }}>
         Nye Teams-møder tilføjes ved at indsætte mødelinket på forsiden.
       </p>
