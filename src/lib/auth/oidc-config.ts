@@ -81,7 +81,8 @@ export function mapOidcProfile(p: OidcProviderConfig, profile: Profile): { id?: 
   }
 
   // Hand the role/group claims over, keyed the way better-auth keys the account: provider + id.
-  if (p.rolesClaim || p.groupsClaim) {
+  // Only in claims mode: elsewhere the login hook never takes the entry, so it would just sit in memory.
+  if (claimsModeConfigured() && (p.rolesClaim || p.groupsClaim)) {
     const stashId = out.id ?? str(profile.id) ?? str(profile.sub);
     if (stashId) stashLoginClaims(p.providerId, stashId, claimSubset(profile, p));
   }

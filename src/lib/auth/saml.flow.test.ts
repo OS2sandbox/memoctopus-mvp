@@ -219,6 +219,26 @@ describe.skipIf(!run)('SAML login through the sso plugin', () => {
     expect(onLogin).not.toHaveBeenCalled();
   });
 
+  it('refuses a response that lacks the configured userId attribute (the plugin would key the account by the NameID), or carries several', async () => {
+    const { uid: _uid, ...withoutUid } = attrs;
+    for (const attributes of [withoutUid, { ...attrs, uid: '' }, { ...attrs, uid: ['ola01', 'ola02'] }]) {
+      const req = await startLogin();
+      expect(hasSession(await acs(response({ inResponseTo: req.id, attributes }), req.relayState))).toBe(false);
+    }
+    expect(onLogin).not.toHaveBeenCalled();
+    expect(db.user).toHaveLength(0);
+    // A one-element list is the same value.
+    const req = await startLogin();
+    expect(hasSession(await acs(response({ inResponseTo: req.id, attributes: { ...attrs, uid: ['ola01'] } }), req.relayState))).toBe(true);
+  });
+
+  it('without a configured userId the NameID still keys the account', async () => {
+    auth = makeAuth(provider({ claims: { email: 'mail', name: 'displayName' } }));
+    const req = await startLogin();
+    const { uid: _uid, ...withoutUid } = attrs;
+    expect(hasSession(await acs(response({ inResponseTo: req.id, attributes: withoutUid }), req.relayState))).toBe(true);
+  });
+
   it('rejects a replay of an already used response', async () => {
     const req = await startLogin();
     const r = response({ inResponseTo: req.id, assertionId: '_assertion-1' });

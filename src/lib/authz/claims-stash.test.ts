@@ -22,6 +22,14 @@ describe('login claims hand-over', () => {
     expect(takeLoginClaims('oidc', 'a1')).toBeNull();
   });
 
+  it('drops an entry nobody took on the next stash, long before the map is full', () => {
+    stashLoginClaims('oidc', 'a1', { roles: ['x'] });
+    vi.advanceTimersByTime(60_001);
+    stashLoginClaims('oidc', 'a2', { roles: ['y'] });
+    vi.setSystemTime(Date.now() - 120_000); // look at a1 as if still within a fresh window
+    expect(takeLoginClaims('oidc', 'a1')).toBeNull();
+  });
+
   it('cannot be confused by a separator in the ids', () => {
     stashLoginClaims('a', 'b:c', { r: 1 });
     expect(takeLoginClaims('a:b', 'c')).toBeNull();

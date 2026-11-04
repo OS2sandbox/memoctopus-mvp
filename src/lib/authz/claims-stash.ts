@@ -24,7 +24,7 @@ function sweep(now: number): void {
 
 export function stashLoginClaims(providerId: string, accountId: string, claims: Record<string, unknown>): void {
   const now = Date.now();
-  if (stash.size >= MAX_ENTRIES) sweep(now);
+  sweep(now); // an entry nobody takes (a login that failed after the mapper ran) must not outlive its minute
   stash.set(keyOf(providerId, accountId), { claims, expiresAt: now + TTL_MS });
 }
 

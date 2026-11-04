@@ -24,12 +24,24 @@ function provider(over: Partial<OidcProviderConfig> = {}): OidcProviderConfig {
 const jwt = (payload: Record<string, unknown>) =>
   `h.${Buffer.from(JSON.stringify({ iss: ISS, aud: 'cid', ...payload })).toString('base64url')}.s`;
 
+afterEach(() => vi.unstubAllEnvs());
+
 beforeEach(() => {
   clearLoginClaimsStash();
   resetOidcDiscoveryCache();
 });
 
 describe('mapOidcProfile', () => {
+  it('stashes the role/group claims for the login hook in claims mode only', () => {
+    const p = provider({ rolesClaim: { name: 'roles', format: 'array', separator: ',' } });
+    vi.stubEnv('ACCESS_SOURCE', 'local');
+    mapOidcProfile(p, { sub: 's1', roles: ['x'] });
+    expect(takeLoginClaims('fka', 's1')).toBeNull();
+    vi.stubEnv('ACCESS_SOURCE', 'claims');
+    mapOidcProfile(p, { sub: 's1', roles: ['x'] });
+    expect(takeLoginClaims('fka', 's1')).toEqual({ roles: ['x'] });
+  });
+
   it('takes the standard claims by default', () => {
     expect(mapOidcProfile(provider(), { sub: 's1', email: 'Ola@Kommune.dk', name: 'Ola Olsen' })).toEqual({
       email: 'ola@kommune.dk',
@@ -81,6 +93,7 @@ describe('mapOidcProfile', () => {
 
   it('hands ONLY the role and group claims over to the login hook, keyed by provider and account', () => {
     const p = provider({ rolesClaim: { name: 'roles', format: 'array', separator: ',' }, groupsClaim: { name: 'a.b', format: 'array', separator: ',' } });
+    vi.stubEnv('ACCESS_SOURCE', 'claims');
     mapOidcProfile(p, { id: 'acct-1', sub: 'acct-1', email: 'a@k.dk', roles: ['x'], a: { b: ['g'] }, secret: 'not-handed-over' });
     expect(takeLoginClaims('fka', 'acct-1')).toEqual({ roles: ['x'], a: { b: ['g'] } });
     expect(takeLoginClaims('fka', 'acct-1')).toBeNull(); // taken once
@@ -93,6 +106,7 @@ describe('mapOidcProfile', () => {
 
   it('keys the hand-over by the mapped id when a user id claim is configured', () => {
     const p = provider({ claims: { userId: 'employeeId' }, rolesClaim: { name: 'roles', format: 'array', separator: ',' } });
+    vi.stubEnv('ACCESS_SOURCE', 'claims');
     mapOidcProfile(p, { id: 'sub-1', employeeId: 'e1', email: 'a@k.dk', roles: ['x'] });
     expect(takeLoginClaims('fka', 'e1')).toEqual({ roles: ['x'] });
   });

@@ -7,6 +7,7 @@
 //   - InResponseTo is never bound to an AuthnRequest this app issued: the plugin reads
 //     `extract.inResponseTo`, which samlify does not produce (it nests it as
 //     `extract.response.inResponseTo`), so its own check never runs.
+//   - a response that lacks the attribute named by claims.userId is refused (the plugin would key the account by the NameID);
 //   - a response that carries a DOCTYPE or ENTITY declaration is refused before any XML parser sees it;
 //   - the Recipient is REQUIRED (not just compared when present), and so is the Destination of a
 //     response that is signed as a whole;
@@ -41,7 +42,7 @@ export interface VerificationStore {
   remove(identifier: string): Promise<unknown>;
 }
 
-export type GuardResult = { ok: true } | { ok: false; code: 'unparsable' | 'audience' | 'recipient' | 'destination' | 'unknown_request' | 'unsolicited' | 'algorithm' };
+export type GuardResult = { ok: true } | { ok: false; code: 'unparsable' | 'audience' | 'recipient' | 'destination' | 'unknown_request' | 'unsolicited' | 'algorithm' | 'identity' };
 
 // The plugin validates the signature algorithm only from the redirect binding's SigAlg parameter, which a POST
 // response (the only binding used here) never has, so its `algorithms.onDeprecated` option never fires for a
@@ -136,6 +137,15 @@ export async function checkSamlResponseBinding(opts: {
 
   // The signed Audience must name us.
   if (!asList(extract.audience).includes(spEntityId)) return { ok: false, code: 'audience' };
+
+  // The plugin keys the account by `attributes[claims.userId] || NameID`: an assertion that omits the configured
+  // attribute would create a second identity for the person (account_not_linked later). Refuse it, as OIDC does.
+  const userIdAttr = provider.claims?.userId;
+  if (userIdAttr) {
+    const value = (extract.attributes as Record<string, unknown> | undefined)?.[userIdAttr];
+    const single = Array.isArray(value) && value.length === 1 ? value[0] : value;
+    if (typeof single !== 'string' || single.trim() === '') return { ok: false, code: 'identity' };
+  }
 
   const algorithms = signatureAlgorithmsOf(samlContent);
   const deprecatedOk = provider.allowDeprecatedAlgorithms === true;

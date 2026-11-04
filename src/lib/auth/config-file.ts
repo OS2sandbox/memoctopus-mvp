@@ -542,7 +542,10 @@ function parseProvider(raw: unknown, index: number, seen: Set<string>): FileProv
   return provider;
 }
 
-function parseRoles(raw: unknown, providerIds: readonly string[]): RolesConfig {
+function parseRoles(raw: unknown, providerIds: readonly string[], entryCount: number): RolesConfig {
+  // The global maps mean "the file's one provider": judged by the entries LISTED, not by the ones that survived
+  // validation, or a skipped / disabled provider A would hand its maps to a guest IdP B.
+  const providerCount = Math.max(entryCount, providerIds.length);
   if (raw === undefined) return { state: 'unset' };
   const missing = new Set<string>();
   const expanded = expandEnv(raw, missing);
@@ -566,10 +569,10 @@ function parseRoles(raw: unknown, providerIds: readonly string[]): RolesConfig {
     byProvider.set(id, { appRoleMap: toMap(maps.appRoleMap), groupRoleMap: toMap(maps.groupRoleMap) });
   }
   const globalMaps = { appRoleMap: toMap(parsed.data.appRoleMap), groupRoleMap: toMap(parsed.data.groupRoleMap) };
-  if (providerIds.length > 1 && (globalMaps.appRoleMap.size > 0 || globalMaps.groupRoleMap.size > 0)) {
+  if (providerCount > 1 && (globalMaps.appRoleMap.size > 0 || globalMaps.groupRoleMap.size > 0)) {
     warn('roles.appRoleMap / groupRoleMap apply to a single provider only; with several providers use roles.byProvider.<id>. A provider without its own map grants no roles.');
   }
-  return { state: 'ok', ...globalMaps, byProvider, providerCount: providerIds.length };
+  return { state: 'ok', ...globalMaps, byProvider, providerCount };
 }
 
 function parseCatalogue(raw: unknown): { entries: CatalogueEntry[]; state: CatalogueState } {
@@ -606,6 +609,7 @@ function loadFile(path: string): LoadedAuthConfig {
   }
 
   const providers: FileProvider[] = [];
+  const entryCount = Array.isArray(top.providers) ? top.providers.length : 0;
   if (top.providers !== undefined) {
     if (!Array.isArray(top.providers)) {
       warn('AUTH_CONFIG_FILE "providers" must be an array; no providers from it.');
@@ -621,7 +625,7 @@ function loadFile(path: string): LoadedAuthConfig {
   const roles: RolesConfig =
     unknownKeys.length > 0
       ? { state: 'invalid' }
-      : parseRoles(top.roles, providers.map((p) => p.id));
+      : parseRoles(top.roles, providers.map((p) => p.id), entryCount);
   const catalogue = parseCatalogue(top.catalogue);
   return { configured: true, providers, roles, catalogue: catalogue.entries, catalogueState: catalogue.state };
 }

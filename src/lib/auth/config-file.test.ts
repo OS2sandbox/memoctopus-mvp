@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { roleMapsFor } from '@/lib/authz/claims-roles';
 import { authConfigFilePath, loadAuthConfig, resetAuthConfigCache } from './config-file';
 
 let dir: string;
@@ -432,6 +433,26 @@ describe('AUTH_CONFIG_FILE', () => {
       expect([...(roles.byProvider?.get('fka')?.groupRoleMap.keys() ?? [])]).toEqual(['x']);
       expect(roles.byProvider?.has('b')).toBe(false);
       expect(warned()).toContain('roles.byProvider');
+    });
+
+    it('the global maps follow the entries LISTED: a skipped or disabled provider does not hand them to the other one', () => {
+      const roles = { appRoleMap: { admin: 'admin' } };
+      for (const other of [{ type: 'oidc', id: 'a' }, { ...OIDC, id: 'a', enabled: false }]) {
+        writeConfig({ providers: [other, { ...OIDC, id: 'b' }], roles });
+        const cfg = loadAuthConfig();
+        expect(cfg.providers.map((p) => p.id)).toEqual(['b']);
+        if (cfg.roles.state !== 'ok') throw new Error('expected ok');
+        expect(cfg.roles.providerCount).toBe(2);
+        expect(roleMapsFor(cfg.roles, 'b')).toBeNull();
+      }
+    });
+
+    it('a single listed provider still uses the global maps', () => {
+      writeConfig({ providers: [OIDC], roles: { appRoleMap: { admin: 'admin' } } });
+      const { roles } = loadAuthConfig();
+      if (roles.state !== 'ok') throw new Error('expected ok');
+      expect(roles.providerCount).toBe(1);
+      expect([...(roleMapsFor(roles, 'fka')?.appRoleMap.keys() ?? [])]).toEqual(['admin']);
     });
 
     it('a byProvider entry for an unknown provider id is kept but unused (warned); a bad id or entry fails closed', () => {
