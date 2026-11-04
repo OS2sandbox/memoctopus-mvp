@@ -73,7 +73,6 @@ export function defaultSsoFor(p: SamlFileProvider, base = authBaseUrl()): Defaul
       // Empty: the plugin then uses its own ACS route for the metadata and the sign-in
       // return trip, and RelayState carries the page to land on.
       callbackUrl: '',
-      ...(p.audience ? { audience: p.audience } : {}),
       idpMetadata: p.idpMetadata
         ? { metadata: p.idpMetadata }
         : {

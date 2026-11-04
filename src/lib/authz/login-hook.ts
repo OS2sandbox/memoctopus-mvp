@@ -7,6 +7,7 @@ import { asHeaderSource, clientIp, requestIdOf, userAgentOf, type HeaderSource }
 import { CODE_RE } from '@/lib/audit/events/types';
 import { createThrottle } from '@/lib/audit/throttle';
 import { withTimeout } from '@/lib/audit/with-timeout';
+import { scrubMicrosoftIdToken } from './account-tokens';
 import { maybeBootstrapAdmin } from './bootstrap';
 import { enabledAuthProviders, teamsGraphEnabled } from '@/lib/auth/providers';
 import { applyClaimsLoginSafely, clearClaimsRoles } from './claims-roles';
@@ -38,6 +39,8 @@ export async function runLoginHooks(userId: string, ctx?: AuthHookContext | null
  * user, long after the login, with the Microsoft access token and refreshes it with the refresh token
  * (src/lib/teams/graph-client.ts). For the 'microsoft' account those two tokens (and their expiries) are therefore
  * kept, encrypted at rest by better-auth (`account.encryptOAuthTokens`); its id token is scrubbed like every other.
+ * A refresh by better-auth stores a fresh id token again, so the Graph token calls scrub it after each fetch too
+ * (`scrubMicrosoftIdToken`); it is in the database only for the moment between a refresh's write and that scrub.
  * Every other provider (OIDC, SAML) is scrubbed in full whatever the flag says.
  */
 export async function scrubAccountTokens(userId: string, runner: SqlRunner = defaultRunner()): Promise<void> {
@@ -51,13 +54,7 @@ export async function scrubAccountTokens(userId: string, runner: SqlRunner = def
           AND (id_token IS NOT NULL OR access_token IS NOT NULL OR refresh_token IS NOT NULL)`,
       [userId],
     );
-    if (keepMicrosoftGraphTokens) {
-      await runner.query(
-        `UPDATE public.accounts SET id_token = NULL
-          WHERE user_id = $1 AND provider_id = 'microsoft' AND id_token IS NOT NULL`,
-        [userId],
-      );
-    }
+    if (keepMicrosoftGraphTokens) await scrubMicrosoftIdToken(userId, runner);
   } catch (err) {
     console.error(`[authz] login step failed: scrub_tokens (${errorLabel(err)})`);
   }

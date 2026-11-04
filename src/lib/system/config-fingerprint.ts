@@ -36,6 +36,8 @@ export const SETTING_NAMES = [
   'BETTER_AUTH_URL', 'BETTER_AUTH_TRUSTED_ORIGINS', 'BETTER_AUTH_SECRET',
   'NEXT_PUBLIC_APP_URL', 'NEXT_APP_URL', 'DATABASE_URL', 'AUDIO_STORAGE_PATH',
   'EMAIL_PASSWORD_ENABLED', 'MICROSOFT_ENABLED', 'OIDC_ENABLED',
+  // Deprecated aliases that providers.ts still honours when the canonical flag is unset (MICROSOFT's is ignored on purpose).
+  'NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED', 'NEXT_PUBLIC_AUTHENTIK_ENABLED',
   'MICROSOFT_CLIENT_ID', 'MICROSOFT_CLIENT_SECRET', 'MICROSOFT_TENANT_ID',
   'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_DISCOVERY_URL', 'OIDC_PKCE', 'OIDC_PROVIDER_ID', 'OIDC_PROVIDER_NAME',
   'AUTHENTIK_CLIENT_ID', 'AUTHENTIK_CLIENT_SECRET', 'AUTHENTIK_DISCOVERY_URL',
@@ -94,6 +96,9 @@ const sha = (text: string) => createHash('sha256').update(text).digest('hex');
 /** The pseudo-setting that covers secrets a config file pulls in by ${ENV} reference (names in the file are arbitrary). */
 const AUTH_FILE_REFERENCES = 'AUTH_CONFIG_FILE_REFERENCES';
 
+/** The pseudo-setting that covers the SAML IdP metadata files the auth config points at (the trust anchor lives there, not in the JSON). */
+const AUTH_FILE_METADATA = 'AUTH_CONFIG_FILE_METADATA';
+
 interface SettingLine {
   name: string;
   /** The readable line: `NAME=value`, a secret's value replaced by `<set>` / `<unset>`. */
@@ -120,13 +125,36 @@ function referencedValues(path: string, env: Record<string, string | undefined>)
 }
 
 /**
+ * A combined digest of the `idpMetadataFile` contents the auth config file names, or null when it names none.
+ * Tolerant on purpose: the file is read as plain JSON (the real validation lives in config-file.ts), `${NAME}`
+ * in a path is expanded from env, and an unreadable file is its own state (see fileDigest).
+ */
+function referencedMetadataDigest(path: string, env: Record<string, string | undefined>): string | null {
+  let providers: unknown;
+  try {
+    providers = (JSON.parse(readFileSync(path, 'utf8')) as { providers?: unknown } | null)?.providers;
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(providers)) return null;
+  const paths = new Set<string>();
+  for (const p of providers) {
+    const file = (p as { idpMetadataFile?: unknown } | null)?.idpMetadataFile;
+    if (typeof file === 'string' && file) paths.add(file.replace(ENV_REF, (_, name: string) => (env[name] ?? '').trim()));
+  }
+  if (paths.size === 0) return null;
+  return sha([...paths].sort().map((f) => `${f}=${fileDigest(f)}`).join('\n')).slice(0, 16);
+}
+
+/**
  * One line per setting, `NAME=value`, with a secret's value replaced by `<set>` / `<unset>` (plus a keyed
  * digest of its value when a key exists, see the header).
  * The auth config file contributes a digest of its bytes as the pseudo-setting AUTH_CONFIG_FILE_CONTENT:
  * it holds the identity providers and the role mapping, so a change to its CONTENT is a configuration
  * change too. Only a digest enters (the file carries secrets by ${ENV} reference, never in clear, but it
  * is not ours to echo), and an unreadable file is its own state. The values its ${ENV} references
- * resolve to are covered by AUTH_CONFIG_FILE_REFERENCES (keyed digest, only with a key).
+ * resolve to are covered by AUTH_CONFIG_FILE_REFERENCES (keyed digest, only with a key), and the SAML
+ * metadata files it points at (idpMetadataFile) by AUTH_CONFIG_FILE_METADATA (a digest of their bytes).
  */
 function settingLines(env: Record<string, string | undefined>): Settings {
   const key = deriveKey(env);
@@ -138,6 +166,8 @@ function settingLines(env: Record<string, string | undefined>): Settings {
   const authFile = (env.AUTH_CONFIG_FILE ?? '').trim();
   if (authFile) {
     lines.push({ name: 'AUTH_CONFIG_FILE_CONTENT', line: `AUTH_CONFIG_FILE_CONTENT=${fileDigest(authFile)}` });
+    const metadata = referencedMetadataDigest(authFile, env);
+    if (metadata) lines.push({ name: AUTH_FILE_METADATA, line: `${AUTH_FILE_METADATA}=${metadata}` });
     const referenced = key ? referencedValues(authFile, env) : null;
     if (key && referenced !== null) {
       lines.push({ name: AUTH_FILE_REFERENCES, line: `${AUTH_FILE_REFERENCES}=<set>`, keyed: keyedDigest(key, AUTH_FILE_REFERENCES, referenced) });

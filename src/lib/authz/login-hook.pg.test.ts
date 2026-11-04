@@ -5,6 +5,7 @@ import { addUser, hasPg, schemaRunner, withFreshSchema } from '@/test/pg';
 
 vi.mock('@/lib/db', () => ({ pool: {} }));
 
+import { scrubMicrosoftIdToken } from './account-tokens';
 import { scrubAccountTokens } from './login-hook';
 
 const account = (id: string, userId: string, provider: string): [string, unknown[]] =>
@@ -54,9 +55,27 @@ describe.skipIf(!hasPg)('scrubAccountTokens (real Postgres)', () => {
       }
     }));
 
+  it('scrubMicrosoftIdToken nulls only the Microsoft id token (a refresh stored a fresh one), leaving its access/refresh tokens', () =>
+    withFreshSchema(async (c, schema) => {
+      const { runner, close } = schemaRunner(c, schema);
+      await addUser(c, 'u1');
+      await addUser(c, 'u2');
+      for (const [id, user, provider] of [['a1', 'u1', 'microsoft'], ['a2', 'u1', 'oidc'], ['a3', 'u2', 'microsoft']] as const) {
+        await c.query(...account(id, user, provider));
+      }
+      await scrubMicrosoftIdToken('u1', runner);
+      const rows = (await c.query('SELECT id, access_token, refresh_token, id_token FROM accounts ORDER BY id')).rows;
+      const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+      expect(byId.a1).toMatchObject({ access_token: 'at', refresh_token: 'rt', id_token: null });
+      expect(byId.a2).toMatchObject({ id_token: 'idt' }); // not this helper's business
+      expect(byId.a3).toMatchObject({ id_token: 'idt' }); // another person
+      await close();
+    }));
+
   it('swallows a database error (never blocks a login)', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const broken = { query: async () => { throw new Error('boom'); }, transaction: async () => { throw new Error('boom'); } };
     await expect(scrubAccountTokens('u1', broken as never)).resolves.toBeUndefined();
+    await expect(scrubMicrosoftIdToken('u1', broken as never)).resolves.toBeUndefined();
   });
 });

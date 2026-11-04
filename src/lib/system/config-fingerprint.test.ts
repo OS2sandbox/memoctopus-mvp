@@ -176,6 +176,35 @@ describe('configFingerprint and the auth config file', () => {
     expect(configFingerprint({ AUTH_CONFIG_FILE: gone })).not.toBe(configFingerprint({}));
   });
 
+  describe('files the config points at', () => {
+    const withMetadata = (xml: string) => {
+      writeFileSync(path.join(dir, 'idp.xml'), xml);
+      return file(JSON.stringify({ providers: [{ type: 'saml', id: 'corp', idpMetadataFile: path.join(dir, 'idp.xml') }] }));
+    };
+
+    it('changes when a referenced idpMetadataFile is replaced, and names it as AUTH_CONFIG_FILE_METADATA', () => {
+      const f = withMetadata('<EntityDescriptor>1</EntityDescriptor>');
+      const before = settingDigests({ AUTH_CONFIG_FILE: f });
+      const fp = configFingerprint({ AUTH_CONFIG_FILE: f });
+      writeFileSync(path.join(dir, 'idp.xml'), '<EntityDescriptor>2</EntityDescriptor>');
+      expect(configFingerprint({ AUTH_CONFIG_FILE: f })).not.toBe(fp);
+      expect(changedSettingNames(before, settingDigests({ AUTH_CONFIG_FILE: f }))).toEqual(['AUTH_CONFIG_FILE_METADATA']);
+    });
+
+    it('expands ${ENV} in the path, and treats an unreadable metadata file as its own state', () => {
+      const f = file('{"providers":[{"type":"saml","id":"corp","idpMetadataFile":"${IDP_DIR}/idp.xml"}]}');
+      writeFileSync(path.join(dir, 'idp.xml'), 'a');
+      const env = { AUTH_CONFIG_FILE: f, IDP_DIR: dir };
+      const ok = configFingerprint(env);
+      expect(configFingerprint({ ...env, IDP_DIR: path.join(dir, 'gone') })).not.toBe(ok);
+    });
+
+    it('adds nothing without a metadata file (and survives a config that is not JSON)', () => {
+      expect(settingDigests({ AUTH_CONFIG_FILE: file('{"providers":[]}') })).not.toHaveProperty('AUTH_CONFIG_FILE_METADATA');
+      expect(settingDigests({ AUTH_CONFIG_FILE: file('not json') })).not.toHaveProperty('AUTH_CONFIG_FILE_METADATA');
+    });
+  });
+
   it('sees the new access settings', () => {
     expect(configFingerprint({ ACCESS_LOCAL_ADMIN: 'false' })).not.toBe(configFingerprint({}));
     expect(configFingerprint({ ROLE_CLAIMS_MAX_SECONDS: '3600' })).not.toBe(configFingerprint({}));
@@ -357,6 +386,15 @@ describe('SETTING_NAMES covers every setting the app reads', () => {
   it('the exclusion list names nothing that is also a setting, and every setting is read somewhere or documented', () => {
     for (const name of EXCLUDED) expect(SETTING_NAMES as readonly string[]).not.toContain(name);
     expect(new Set(SETTING_NAMES).size).toBe(SETTING_NAMES.length);
+  });
+
+  it('every deprecated alias providers.ts still reads is in SETTING_NAMES, except the one it deliberately ignores', async () => {
+    const { DEPRECATED_FLAGS } = await import('@/lib/auth/providers');
+    const ignored = new Set(['NEXT_PUBLIC_MICROSOFT_ENABLED']); // microsoftConfig() does not honour it
+    for (const alias of Object.values(DEPRECATED_FLAGS)) {
+      if (ignored.has(alias)) expect(SETTING_NAMES as readonly string[]).not.toContain(alias);
+      else expect(SETTING_NAMES as readonly string[]).toContain(alias);
+    }
   });
 
   it('the settings the review found missing are covered', () => {

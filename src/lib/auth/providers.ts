@@ -91,7 +91,7 @@ const LEGACY_PROVIDER_ID = 'authentik';
 // Pre-generic-OIDC names. One registry so the resolvers below and the startup
 // warning can never drift apart. Not all of these are still honoured — see
 // microsoftConfig() — but every one of them is worth warning about.
-const DEPRECATED_FLAGS = {
+export const DEPRECATED_FLAGS = {
   EMAIL_PASSWORD_ENABLED: 'NEXT_PUBLIC_EMAIL_PASSWORD_ENABLED',
   MICROSOFT_ENABLED: 'NEXT_PUBLIC_MICROSOFT_ENABLED',
   OIDC_ENABLED: 'NEXT_PUBLIC_AUTHENTIK_ENABLED',

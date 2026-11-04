@@ -1,4 +1,5 @@
 import { auth } from '@/lib/auth';
+import { scrubMicrosoftIdToken } from '@/lib/authz/account-tokens';
 import {
   FILES_SCOPE,
   GRAPH_DELEGATED_SCOPES,
@@ -276,6 +277,8 @@ async function fetchToken(userId: string): Promise<TokenResult> {
     } catch (cause) {
       throw tokenFailure(cause);
     }
+    // A refresh stores a fresh id token in plaintext; none is kept after the login.
+    await scrubMicrosoftIdToken(userId);
 
     if (!result?.accessToken) {
       throw new GraphError(
@@ -300,6 +303,7 @@ function forceRefreshToken(userId: string): Promise<string> {
       const result = (await auth.api.refreshToken({
         body: { providerId: 'microsoft', userId },
       })) as { accessToken?: string | null };
+      await scrubMicrosoftIdToken(userId);
       if (result?.accessToken) return result.accessToken;
     } catch (cause) {
       throw tokenFailure(cause);

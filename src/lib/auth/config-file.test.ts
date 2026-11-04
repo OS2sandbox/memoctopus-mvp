@@ -181,6 +181,13 @@ describe('AUTH_CONFIG_FILE', () => {
       expect(warned()).toContain('allowDeprecatedAlgorithms is on');
     });
 
+    it('has no `audience` option (the plugin never reads one): the provider is skipped, spEntityId is the knob', () => {
+      writeConfig({ providers: [{ ...SAML, audience: 'urn:municipality:referat' }] });
+      expect(loadAuthConfig().providers).toEqual([]);
+      writeConfig({ providers: [{ ...SAML, spEntityId: 'urn:municipality:referat' }] });
+      expect(loadAuthConfig().providers[0]).toMatchObject({ spEntityId: 'urn:municipality:referat' });
+    });
+
     it('accepts one certificate or a list (a rollover), nothing else', () => {
       writeConfig({ providers: [{ ...SAML, cert: ['MIIC1', 'MIIC2'] }, { ...SAML, id: 'two', cert: 7 }] });
       const cfg = loadAuthConfig();

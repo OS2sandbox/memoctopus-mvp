@@ -247,9 +247,12 @@ const samlSchema = z
     idpEntityId: nonEmpty(1024).optional(),
     /** PEM signing certificate; a list during a certificate rollover (any of them verifies). */
     cert: z.union([z.string().trim().min(1).max(20_000), z.array(z.string().trim().min(1).max(20_000)).min(1).max(5)]).optional(),
-    /** Our entity id (SP); default: the metadata URL of this installation for this provider. */
+    /**
+     * Our entity id (SP); default: the metadata URL of this installation for this provider. The response's
+     * Audience must equal it (saml-guard), so this is the setting to change when the IdP requires another value.
+     * There is deliberately no separate `audience` option: the plugin never reads one.
+     */
     spEntityId: nonEmpty(1024).optional(),
-    audience: nonEmpty(1024).optional(),
     authnRequestsSigned: z.boolean().default(false),
     /**
      * Accept a response that answers no AuthnRequest of ours (login started at the IdP's portal). Default FALSE:
