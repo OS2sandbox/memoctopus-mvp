@@ -39,7 +39,7 @@ describe('transcribeVadBatches', () => {
     expect(result).toEqual({ segments: [], totalBatches: 0, totalSpeechSeconds: 0, failedSeconds: 0 });
   });
 
-  it('dispatches ALL batches simultaneously by default', async () => {
+  it('keeps at most 8 batches in flight by default', async () => {
     let inFlight = 0;
     let maxInFlight = 0;
     mockTranscribeRaw.mockImplementation(async () => {
@@ -52,7 +52,7 @@ describe('transcribeVadBatches', () => {
 
     const batches = Array.from({ length: 30 }, (_, i) => makeBatch(i * 27));
     await transcribeVadBatches(batches);
-    expect(maxInFlight).toBe(30);
+    expect(maxInFlight).toBe(8);
   });
 
   it('respects HVISKE_BATCH_CONCURRENCY as backpressure', async () => {
@@ -120,6 +120,34 @@ describe('transcribeVadBatches', () => {
 
   it('filters hallucinated repetitions to empty segments', async () => {
     mockTranscribeRaw.mockResolvedValue({ text: 'ja ja ja ja ja ja', latencyMs: 1 });
+    const { segments } = await transcribeVadBatches([makeBatch(0)]);
+    expect(segments).toEqual([]);
+  });
+
+  // The old guard answered a boolean and this path dropped the WHOLE batch, so a
+  // window that transcribed correctly for eight seconds and then span out
+  // contributed nothing at all. A pure-loop batch is empty either way, which is
+  // why that case alone did not pin the change.
+  it('keeps the real words a degenerating batch produced before the loop', async () => {
+    mockTranscribeRaw.mockResolvedValue({
+      text: 'Vi tager budgettet på næste møde. ' + 'det er fastet. '.repeat(20),
+      latencyMs: 1,
+    });
+
+    const { segments } = await transcribeVadBatches([makeBatch(0)]);
+
+    const text = segments.map((s) => s.text).join(' ');
+    expect(text).toContain('Vi tager budgettet på næste møde.');
+    expect(text.match(/fastet/g)?.length ?? 0).toBeLessThanOrEqual(1);
+  });
+
+  // Subtitle credits are not repetitive, so the repetition guard never saw them
+  // and they reached the referat as if somebody had said them.
+  it('drops a subtitle credit emitted over near-silence', async () => {
+    mockTranscribeRaw.mockResolvedValue({
+      text: 'Danske tekster af Jesper Buhl Scandinavian Text Service 2018',
+      latencyMs: 1,
+    });
     const { segments } = await transcribeVadBatches([makeBatch(0)]);
     expect(segments).toEqual([]);
   });

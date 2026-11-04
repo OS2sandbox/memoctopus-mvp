@@ -4,6 +4,9 @@ import { TopBar } from '@/components/layout/TopBar';
 import { ReviewAudioProvider } from '@/lib/review-audio-context';
 import { StorageScope } from '@/components/providers/StorageScope';
 import { auth } from '@/lib/auth';
+import { SESSION_EXPIRED_PARAM } from '@/middleware';
+import { OnboardingProvider } from '@/lib/onboarding/context';
+import { WelcomeTour } from '@/components/onboarding/WelcomeTour';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   // Authoritative auth gate for EVERY route under (app). The middleware only
@@ -12,17 +15,28 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Validating the actual token server-side here — before any authenticated UI
   // is sent — closes that bypass and cannot be defeated from the client.
   const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) redirect('/');
+  // The marker tells the middleware not to bounce this request straight back
+  // here on the strength of the same cookie we just rejected — see
+  // SESSION_EXPIRED_PARAM.
+  if (!session) redirect(`/?${SESSION_EXPIRED_PARAM}=1`);
 
   // Bind client-side storage to this user so a different user on the same browser
   // never reads their meetings from the shared origin database.
+  //
+  // OnboardingProvider fetches its own state client-side (GET /api/onboarding/state)
+  // rather than this server component awaiting the same DB round trip on every
+  // authenticated page load, including the recording screen, for a feature that is
+  // purely a client-interactive nicety.
   return (
     <StorageScope userId={session.user.id}>
       <ReviewAudioProvider>
-        <div className="min-h-screen bg-[var(--bg)]">
-          <TopBar />
-          <main>{children}</main>
-        </div>
+        <OnboardingProvider>
+          <div className="min-h-screen bg-[var(--bg)]">
+            <TopBar />
+            <main>{children}</main>
+            <WelcomeTour />
+          </div>
+        </OnboardingProvider>
       </ReviewAudioProvider>
     </StorageScope>
   );

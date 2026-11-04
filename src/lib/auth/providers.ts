@@ -14,6 +14,8 @@
 //
 // Server-only: must not import @/lib/db (it opens a pg.Pool at module scope).
 
+import { artifactMode, deleteRecordingEnabled } from '../teams/artifact-mode';
+
 /** Crosses the server→client boundary as a prop — must carry no secrets. */
 export type AuthProvider =
   | { kind: 'social'; id: 'microsoft'; label: string }
@@ -81,6 +83,129 @@ function credentials(prefix: 'OIDC' | 'AUTHENTIK') {
   return clientId && clientSecret && discoveryUrl ? { clientId, clientSecret, discoveryUrl } : null;
 }
 
+// ─── Microsoft Graph scopes ───────────────────────────────────────────────────
+// Delegated Graph access rides on the login token, so the scopes have to be
+// requested at sign-in time. Kept here (env-free, dependency-free) rather than in
+// src/lib/teams/graph-client.ts because auth/index.ts needs them, and graph-client
+// imports auth — the constant would close the cycle.
+
+/** Delegated scopes the Teams/Graph integration is built on. */
+export const GRAPH_DELEGATED_SCOPES = [
+  'openid',
+  'profile',
+  'email',
+  'offline_access',
+  'OnlineMeetings.ReadWrite',
+  'OnlineMeetingTranscript.Read.All',
+  'OnlineMeetingRecording.Read.All',
+  'Files.ReadWrite',
+] as const;
+
+// better-auth's microsoft provider always asks for these (see
+// node_modules/@better-auth/core/dist/social-providers/microsoft-entra-id.mjs),
+// including offline_access — which is what gets us a refresh token — and appends
+// `options.scope` to them. Listing them again would only duplicate them in the
+// authorize URL.
+const MICROSOFT_BUILTIN_SCOPES: readonly string[] = [
+  'openid',
+  'profile',
+  'email',
+  'User.Read',
+  'offline_access',
+];
+
+const RECORDING_SCOPE = 'OnlineMeetingRecording.Read.All';
+
+// Graph has no "delete this recording" call, so removing it from the organizer's
+// OneDrive afterwards (src/lib/teams/recording-cleanup.ts) goes through the drive
+// API, and its narrowest delegated permission is the user's own files, read/write.
+export const FILES_SCOPE = 'Files.ReadWrite';
+
+/**
+ * Whether the Teams/Graph integration is on. Opt-in and OFF by default: the
+ * transcript and recording scopes are `*.Read.All`, which need tenant-admin
+ * consent, and Entra refuses the whole authorize request ("Need admin approval")
+ * when a tenant has not granted it. Requesting them at sign-in would then lock
+ * out every Microsoft user, for every feature, not just Teams.
+ *
+ * Only an explicit "true" turns it on — deliberately not flag(), which treats
+ * anything but "false" as on. That is right for a kill switch and wrong here: a
+ * stray "1" or "yes" must not be able to break sign-in for the whole tenant.
+ * Read at request time like the rest of this file; the better-auth instance
+ * captures it once at startup, so changing it needs a restart.
+ */
+export function teamsGraphEnabled(): boolean {
+  return env('TEAMS_GRAPH_ENABLED')?.toLowerCase() === 'true';
+}
+
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The Outlook add-in: a button in Outlook's meeting form that arms the meeting
+ * through the same Graph integration. Opt-in like TEAMS_GRAPH_ENABLED (only an
+ * explicit "true"), and only ever on together with it, since everything after
+ * the button is the Graph pipeline.
+ *
+ * Returns what the add-in signs in against, or null when it is off. The tenant
+ * must be a real tenant id: the add-in's tokens are accepted from that tenant
+ * alone, so `common` or `organizations` would mean any Microsoft tenant.
+ *
+ * When the flag is set but the rest is not, the add-in stays off and the only
+ * symptom is a 404 on its manifest, so the reason is logged, once per process.
+ */
+export function outlookAddinConfig(): { clientId: string; tenantId: string } | null {
+  if (env('OUTLOOK_ADDIN_ENABLED')?.toLowerCase() !== 'true') return null;
+  if (!teamsGraphEnabled()) return outlookAddinOff('it needs TEAMS_GRAPH_ENABLED=true');
+  const microsoft = microsoftConfig();
+  if (!microsoft) {
+    return outlookAddinOff(
+      'it needs Microsoft sign-in (MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET set, MICROSOFT_ENABLED not "false")',
+    );
+  }
+  if (!GUID_RE.test(microsoft.clientId)) {
+    return outlookAddinOff("MICROSOFT_CLIENT_ID must be the app registration's client id, a GUID");
+  }
+  if (!GUID_RE.test(microsoft.tenantId)) {
+    return outlookAddinOff(
+      `MICROSOFT_TENANT_ID must be the tenant id, a GUID, not "${microsoft.tenantId}": ` +
+        "the add-in's tokens are checked against that one tenant id",
+    );
+  }
+  return { clientId: microsoft.clientId.toLowerCase(), tenantId: microsoft.tenantId.toLowerCase() };
+}
+
+let outlookAddinOffLogged = false;
+
+function outlookAddinOff(reason: string): null {
+  if (!outlookAddinOffLogged) {
+    outlookAddinOffLogged = true;
+    console.warn(`[outlook] OUTLOOK_ADDIN_ENABLED=true, but the add-in stays off: ${reason}. See docs/outlook-addin.md.`);
+  }
+  return null;
+}
+
+/**
+ * Delegated scopes the Teams integration needs in the current configuration:
+ * empty while it is off; otherwise the full list, minus the recording scope in
+ * transcript-only mode — the widest grant there is (video of every meeting the
+ * user can reach), so it is never asked for when no recording is ever fetched.
+ * The files scope follows the same rule: asked for only while recordings are
+ * deleted from OneDrive after transcription (TEAMS_DELETE_RECORDING).
+ */
+export function teamsGraphScopes(): string[] {
+  if (!teamsGraphEnabled()) return [];
+  return GRAPH_DELEGATED_SCOPES.filter((s) => {
+    if (s === RECORDING_SCOPE) return artifactMode() !== 'transcript-only';
+    if (s === FILES_SCOPE) return deleteRecordingEnabled();
+    return true;
+  });
+}
+
+/** The Graph scopes to pass as `scope` on the microsoft social provider. */
+export function microsoftGraphScopes(): string[] {
+  return teamsGraphScopes().filter((s) => !MICROSOFT_BUILTIN_SCOPES.includes(s));
+}
+
 export function emailPasswordEnabled(): boolean {
   return flag('EMAIL_PASSWORD_ENABLED', DEPRECATED_FLAGS.EMAIL_PASSWORD_ENABLED);
 }
@@ -102,6 +227,20 @@ export function microsoftConfig() {
   if (!flag('MICROSOFT_ENABLED')) return null;
 
   return { clientId, clientSecret, tenantId: env('MICROSOFT_TENANT_ID') || 'common' };
+}
+
+// The multi-tenant authorities: any tenant's users may sign in, so nothing they assert
+// about themselves is vouched for by *our* tenant.
+const MULTI_TENANT_AUTHORITIES = ['common', 'organizations', 'consumers'];
+
+/**
+ * True when MICROSOFT_TENANT_ID names one specific tenant, false for the multi-tenant
+ * authorities (blank, common, organizations, consumers) and when Microsoft login is off.
+ * Only in a single tenant does its admin control the `email` claim.
+ */
+export function microsoftSingleTenant(): boolean {
+  const tenant = microsoftConfig()?.tenantId.toLowerCase();
+  return !!tenant && !MULTI_TENANT_AUTHORITIES.includes(tenant);
 }
 
 /**

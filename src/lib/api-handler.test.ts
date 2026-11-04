@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextResponse } from 'next/server';
 import { withHandler } from './api-handler';
+import { UserFacingError } from './user-facing-error';
 
 describe('withHandler', () => {
   beforeEach(() => {
@@ -34,6 +35,20 @@ describe('withHandler', () => {
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: 'Internal server error' });
     expect(spy).toHaveBeenCalledWith('[minutes]', boom);
+  });
+
+  it('returns a UserFacingError as its own status and message, and logs it', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const err = new UserFacingError('internal detail', 422, 'Vis dette til brugeren');
+    const handler = withHandler('minutes', async () => {
+      throw err;
+    });
+
+    const res = await handler();
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({ error: 'Vis dette til brugeren' });
+    expect(spy).toHaveBeenCalledWith('[minutes]', err);
   });
 
   it('catches synchronous throws too', async () => {

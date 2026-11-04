@@ -2,7 +2,9 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { getAllMeetings, deleteMeeting, StoredMeeting } from '@/lib/storage';
+import { getAllMeetings, StoredMeeting } from '@/lib/storage';
+import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
+import { importOutlookMeetings, type ServerTeamsMeeting } from '@/lib/outlook/import-meetings';
 import { ArchiveMeetingRow } from '@/components/archive-meeting-row';
 import { SkabelonerList } from '@/components/skabeloner/SkabelonerList';
 import { Button } from '@/components/ui/button';
@@ -16,11 +18,24 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Meeting } from '@/types';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 
 type Tab = 'meetings' | 'skabeloner';
 
+/**
+ * What the row badge should say about a Teams meeting, from the server's view.
+ * A Teams meeting reads "Afventer Teams" locally until it is collected, also once
+ * the server has given up on it. And an Outlook-armed meeting that has begun but
+ * was never opened is waiting for the user, not for Teams: `deferred`.
+ */
+function serverBadgeState(m: ServerTeamsMeeting): string {
+  const started = m.scheduledStart ? Date.parse(m.scheduledStart) <= Date.now() : true;
+  return m.deferred && started ? 'deferred' : m.state;
+}
+
 export default function ArkivPage() {
   const [meetings, setMeetings] = useState<(Meeting & { durationSeconds: number | null })[]>([]);
+  const [teamsStates, setTeamsStates] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('meetings');
   const [editMode, setEditMode] = useState(false);
@@ -38,14 +53,22 @@ export default function ArkivPage() {
   }, []);
 
   useEffect(() => {
-    getAllMeetings()
+    // Meetings armed from Outlook exist only on the server until a browser has
+    // seen them, so they are brought in first. The same answer carries the
+    // server's state of every Teams meeting (see serverBadgeState). Best effort:
+    // without it the page shows what this browser has, with its local status.
+    importOutlookMeetings()
+      .catch(() => null)
+      .then((server) => {
+        if (server) setTeamsStates(Object.fromEntries(server.map((m) => [m.id, serverBadgeState(m)])));
+        return getAllMeetings();
+      })
       .then((rows) => {
         const mapped = rows
-          // Hide meetings that never got off the ground: a bot still joining, or an
+          // Hide meetings that never got off the ground: an abandoned local recording, or an
           // abandoned recording that produced nothing (still 'recording', no saved
           // audio). RecordingScreen deletes these on unmount; this also covers the
           // navigation race and orphans left by a crash or closed tab.
-          .filter((r) => r.status !== 'joining')
           .filter((r) => !(r.status === 'recording' && r.audioSizeBytes === 0))
           .map((r: StoredMeeting) => ({
             id: r.id,
@@ -99,18 +122,22 @@ export default function ArkivPage() {
     const ids = [...selected];
     // Each delete removes the meeting plus its transcript, referat and audio.
     // Only drop rows that actually deleted, so a failure can't make data silently
-    // vanish from the list while it survives in storage.
-    const results = await Promise.allSettled(ids.map((id) => deleteMeeting(id)));
+    // vanish from the list while it survives in storage. A Teams meeting is also
+    // unregistered server-side first, which can fail on its own (offline).
+    const results = await Promise.allSettled(ids.map((id) => deleteMeetingAndUnregister(id)));
     const deleted = new Set(ids.filter((_, i) => results[i].status === 'fulfilled'));
     setMeetings((prev) => prev.filter((m) => !deleted.has(m.id)));
     setBulkDeleteOpen(false);
     setIsBulkDeleting(false);
 
-    const failed = ids.length - deleted.size;
+    const failedIds = ids.filter((id) => !deleted.has(id));
+    const failed = failedIds.length;
     if (failed > 0) {
       // Keep the failed ones selected and stay in edit mode so the user can retry.
-      setSelected(new Set(ids.filter((id) => !deleted.has(id))));
-      setBulkError(`Kunne ikke slette ${failed} ${failed === 1 ? 'møde' : 'møder'}. Prøv igen.`);
+      setSelected(new Set(failedIds));
+      // Name them, so the user can see which ones are still there.
+      const titles = failedIds.map((id) => meetings.find((m) => m.id === id)?.title ?? id).join(', ');
+      setBulkError(`Kunne ikke slette ${failed} ${failed === 1 ? 'møde' : 'møder'}: ${titles}. Prøv igen.`);
     } else {
       exitEditMode();
     }
@@ -144,9 +171,11 @@ export default function ArkivPage() {
         </div>
 
         {tab === 'meetings' && !loading && meetings.length > 0 && !editMode && (
-          <Button variant="outline" size="sm" onClick={() => setEditMode(true)}>
-            Rediger arkiv
-          </Button>
+          <OnboardingHint stepId="arkiv.bulk-edit-button">
+            <Button variant="outline" size="sm" onClick={() => setEditMode(true)}>
+              Rediger arkiv
+            </Button>
+          </OnboardingHint>
         )}
       </div>
 
@@ -235,7 +264,7 @@ export default function ArkivPage() {
               {meetings.map((m) => (
                 <ArchiveMeetingRow
                   key={m.id}
-                  meeting={m}
+                  meeting={{ ...m, teamsState: teamsStates[m.id] }}
                   selectionMode={editMode}
                   selected={selected.has(m.id)}
                   onToggleSelect={() => toggleSelect(m.id)}

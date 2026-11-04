@@ -7,6 +7,11 @@ import { ProcessingTranscription } from './ProcessingTranscription';
 
 // ─── Mock external dependencies ──────────────────────────────────────────────
 
+const mockPush = vi.fn();
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: mockPush }),
+}));
+
 vi.mock('@/lib/audio/transcribe-batches-client', () => ({
   transcribeBatchesOnServer: vi.fn(),
 }));
@@ -61,12 +66,15 @@ function makeServerTranscript(status: 'none' | 'processing' | 'failed' | 'ready'
   };
 }
 
-function renderComponent(props: Partial<{ meetingId: string; onComplete: () => void }> = {}) {
+function renderComponent(
+  props: Partial<{ meetingId: string; onComplete: () => void; graphManaged: boolean }> = {},
+) {
   const onComplete = props.onComplete ?? vi.fn();
   return render(
     <ProcessingTranscription
       meetingId={props.meetingId ?? MEETING_ID}
       onComplete={onComplete}
+      graphManaged={props.graphManaged}
     />,
   );
 }
@@ -117,6 +125,17 @@ describe('ProcessingTranscription', () => {
   it('renders the description text', () => {
     renderComponent();
     expect(screen.getByText(/Lydfilen analyseres og transskriberes/i)).toBeInTheDocument();
+  });
+
+  // A Teams meeting has no audio file in this browser: nothing is downloaded or
+  // analysed here, only the transcript fetched from the server.
+  it('talks about the transcript, not an audio file, for a Teams meeting', () => {
+    mockGetAudio.mockReturnValue(new Promise(() => {}));
+    renderComponent({ graphManaged: true });
+    expect(screen.getByText(/Transskriptionen fra Teams hentes/)).toBeInTheDocument();
+    expect(screen.queryByText(/Lydfilen/)).not.toBeInTheDocument();
+    expect(screen.queryByText('henter lydfil…')).not.toBeInTheDocument();
+    expect(screen.getByText('henter transskription…')).toBeInTheDocument();
   });
 
   it('starts in downloading phase showing correct label', () => {
@@ -387,6 +406,41 @@ describe('ProcessingTranscription', () => {
     expect(screen.getByText('Lydfil ikke fundet')).toBeInTheDocument();
   });
 
+  it('uses a ready server transcript even when there is no local audio', async () => {
+    // Teams transcript-only meetings never produce an audio file, and a Graph
+    // meeting the server already transcribed does not need one either.
+    mockGetAudio.mockResolvedValue(null as any);
+    mockFetch.mockResolvedValue(makeServerTranscript('ready', true));
+
+    renderComponent();
+
+    await waitFor(() => {
+      expect(mockSaveTranscript).toHaveBeenCalledWith(
+        MEETING_ID,
+        expect.objectContaining({ segments: FAKE_SEGMENTS, diarizationStatus: 'done' }),
+      );
+    });
+    expect(screen.queryByText('Lydfil ikke fundet')).not.toBeInTheDocument();
+    expect(mockStartDiarization).not.toHaveBeenCalled();
+  });
+
+  it('keeps the server labels when the transcript is undiarized but no audio exists', async () => {
+    // There is nothing to diarize from, so the labels stand as final rather than
+    // leaving the transcript stuck in the "pending" uncertainty state.
+    mockGetAudio.mockResolvedValue(null as any);
+    mockFetch.mockResolvedValue(makeServerTranscript('ready', false));
+
+    renderComponent();
+
+    await waitFor(() => {
+      expect(mockSaveTranscript).toHaveBeenCalledWith(
+        MEETING_ID,
+        expect.objectContaining({ diarizationStatus: 'done' }),
+      );
+    });
+    expect(mockStartDiarization).not.toHaveBeenCalled();
+  });
+
   it('enters error phase when transcribeBatchesOnServer throws', async () => {
     mockFetch.mockResolvedValue(makeServerTranscript('none'));
     mockTranscribeBatches.mockRejectedValue(new Error('hviske er nede'));
@@ -608,7 +662,7 @@ describe('ProcessingTranscription', () => {
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
 
     const url = mockFetch.mock.calls[0][0] as string;
-    expect(url).toBe(`/api/bot/transcript/${MEETING_ID}`);
+    expect(url).toBe(`/api/meetings/${MEETING_ID}/pending-transcript`);
   });
 
   // ─── Server transcript with empty segments falls back ────────────────────────
@@ -635,5 +689,181 @@ describe('ProcessingTranscription', () => {
     expect(() => render(<ProcessingTranscription meetingId={MEETING_ID} />)).not.toThrow();
 
     await waitFor(() => expect(mockSaveTranscript).toHaveBeenCalled());
+  });
+});
+
+// The server keeps its copy of the transcript until the browser says it has saved
+// it, so nothing is lost when the tab dies or the save fails half way.
+describe('ProcessingTranscription — acknowledging the server copy', () => {
+  const PENDING_URL = `/api/meetings/${MEETING_ID}/pending-transcript`;
+  const acks = () => mockFetch.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'DELETE');
+
+  it('acknowledges only after the transcript is saved and the meeting moved on', async () => {
+    const events: string[] = [];
+    mockFetch.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') { events.push('ack'); return { ok: true, json: async () => ({ ok: true }) }; }
+      return makeServerTranscript('ready', true);
+    });
+    mockSaveTranscript.mockImplementation(async () => { events.push('saveTranscript'); return {} as never; });
+    mockUpdateMeeting.mockImplementation(async () => { events.push('updateMeeting'); });
+
+    const onComplete = vi.fn();
+    renderComponent({ onComplete });
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+
+    expect(events).toEqual(['saveTranscript', 'updateMeeting', 'ack']);
+    expect(acks()[0][0]).toBe(PENDING_URL);
+  });
+
+  it('does not acknowledge, and so does not lose the server copy, when the save fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFetch.mockResolvedValue(makeServerTranscript('ready', true));
+    mockSaveTranscript.mockRejectedValueOnce(new Error('QuotaExceededError'));
+
+    renderComponent();
+
+    expect(await screen.findByText('Transskription fejlede')).toBeInTheDocument();
+    expect(acks()).toHaveLength(0);
+
+    // "Prøv igen" fetches the same transcript again and this time it sticks.
+    const onGetsBefore = mockFetch.mock.calls.length;
+    await userEvent.click(screen.getByText('Prøv igen'));
+    await waitFor(() => expect(acks()).toHaveLength(1));
+    expect(mockFetch.mock.calls.length).toBeGreaterThan(onGetsBefore);
+    expect(mockSaveTranscript).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not acknowledge when moving the meeting to review fails after the transcript was saved', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFetch.mockResolvedValue(makeServerTranscript('ready', true));
+    mockUpdateMeeting.mockRejectedValueOnce(new Error('idb closed'));
+
+    renderComponent();
+
+    expect(await screen.findByText('Transskription fejlede')).toBeInTheDocument();
+    expect(acks()).toHaveLength(0);
+  });
+
+  it('a failed acknowledgement does not fail the hand-off: the TTL sweep cleans up', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockFetch.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') throw new Error('offline');
+      return makeServerTranscript('ready', true);
+    });
+
+    const onComplete = vi.fn();
+    renderComponent({ onComplete });
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+  });
+
+  it('sends no acknowledgement when there was no server-side transcript to collect', async () => {
+    mockFetch.mockResolvedValue(makeServerTranscript('none'));
+    const onComplete = vi.fn();
+    renderComponent({ onComplete });
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(acks()).toHaveLength(0);
+  });
+});
+
+describe('ProcessingTranscription — a server-side run that produced nothing', () => {
+  it('says the meeting had no speech, not that a file is missing', async () => {
+    // A Teams meeting has no local audio by design, so "Lydfil ikke fundet" told
+    // the user about the fallback failing rather than about their meeting.
+    mockGetAudio.mockResolvedValue(null);
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'ready', segments: [], diarized: true }),
+    });
+    renderComponent();
+
+    expect(await screen.findByText(/Der blev ikke fundet tale i mødet/)).toBeInTheDocument();
+    expect(screen.queryByText('Lydfil ikke fundet')).not.toBeInTheDocument();
+  });
+
+  it('says the server run failed, and invites a retry', async () => {
+    mockGetAudio.mockResolvedValue(null);
+    mockFetch.mockResolvedValue(makeServerTranscript('failed'));
+    renderComponent();
+
+    expect(await screen.findByText(/Transskriptionen på serveren fejlede/)).toBeInTheDocument();
+  });
+});
+
+// A Graph meeting has no local audio, so the server copy is all there is. Every
+// way of not getting it used to end on "Lydfil ikke fundet", and the only screen
+// that can fetch it again ("Hent igen") renders for `awaiting_teams` alone.
+describe('ProcessingTranscription — no local audio, nothing usable from the server', () => {
+  beforeEach(() => {
+    mockGetAudio.mockResolvedValue(null);
+  });
+
+  it('treats a thrown fetch as worth retrying, not as a missing file', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFetch.mockRejectedValue(new Error('offline'));
+    renderComponent({ graphManaged: true });
+
+    expect(await screen.findByText(/Kunne ikke hente transskriptionen fra serveren/)).toBeInTheDocument();
+    expect(screen.queryByText('Lydfil ikke fundet')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Prøv igen' })).toBeInTheDocument();
+  });
+
+  it('treats a non-ok answer as worth retrying, and a retry collects the transcript', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const user = userEvent.setup();
+    mockFetch.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
+    const onComplete = vi.fn();
+    renderComponent({ graphManaged: true, onComplete });
+
+    expect(await screen.findByText(/Kunne ikke hente transskriptionen fra serveren/)).toBeInTheDocument();
+    expect(screen.queryByText('Lydfil ikke fundet')).not.toBeInTheDocument();
+
+    mockFetch.mockResolvedValue(makeServerTranscript('ready', true));
+    await user.click(screen.getByRole('button', { name: 'Prøv igen' }));
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalled());
+    expect(mockSaveTranscript).toHaveBeenCalledWith(MEETING_ID, expect.objectContaining({ segments: FAKE_SEGMENTS }));
+  });
+
+  it('sends a Graph meeting whose server copy is gone back to its Teams screen', async () => {
+    mockFetch.mockResolvedValue(makeServerTranscript('none'));
+    renderComponent({ graphManaged: true });
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/meeting/${MEETING_ID}`));
+    expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, { status: 'awaiting_teams' });
+    // The status is written before the screen that reads it is opened.
+    expect(mockUpdateMeeting.mock.invocationCallOrder[0])
+      .toBeLessThan(mockPush.mock.invocationCallOrder[0]);
+    expect(screen.queryByText('Lydfil ikke fundet')).not.toBeInTheDocument();
+  });
+
+  // The server keeps a failed copy until it expires, so re-reading it here only
+  // repeats the error. The Teams screen shows the meeting's real state and has its
+  // own way to fetch again; the user is sent there when they ask, never in a loop.
+  it('sends a Graph meeting whose server run failed back to its Teams screen when the user retries', async () => {
+    const user = userEvent.setup();
+    mockFetch.mockResolvedValue(makeServerTranscript('failed'));
+    renderComponent({ graphManaged: true });
+
+    expect(await screen.findByText(/Transskriptionen på serveren fejlede/)).toBeInTheDocument();
+    expect(mockPush).not.toHaveBeenCalled();
+    const fetchesBefore = mockFetch.mock.calls.length;
+
+    await user.click(screen.getByRole('button', { name: 'Prøv igen' }));
+
+    await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/meeting/${MEETING_ID}`));
+    expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, { status: 'awaiting_teams' });
+    expect(mockUpdateMeeting.mock.invocationCallOrder[0])
+      .toBeLessThan(mockPush.mock.invocationCallOrder[0]);
+    expect(mockFetch.mock.calls.length).toBe(fetchesBefore);
+  });
+
+  it('still says the file is missing for a local meeting with no audio', async () => {
+    mockFetch.mockResolvedValue(makeServerTranscript('none'));
+    renderComponent();
+
+    expect(await screen.findByText('Lydfil ikke fundet')).toBeInTheDocument();
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(mockUpdateMeeting).not.toHaveBeenCalled();
   });
 });

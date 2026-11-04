@@ -19,8 +19,11 @@ export interface StoredMeeting {
   audioDurationSeconds: number | null;
   audioSizeBytes: number;
   audioDeleted: boolean;
-  // Active Teams bot-service session id (null when not a bot meeting / not joined).
-  botSession?: string | null;
+  // Set on every meeting created for the Graph integration (the dashboard's link
+  // flow, and meetings armed from Outlook). A `source: 'teams'` meeting without it
+  // was left behind by the removed Playwright bot. Not derivable from `status`: a
+  // Graph meeting moves on to processing, review, minutes and done like any other.
+  graphManaged?: boolean;
 }
 
 export interface StoredTranscript {

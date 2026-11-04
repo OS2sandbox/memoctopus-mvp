@@ -6,12 +6,11 @@ export default defineConfig({
   plugins: [react()],
   test: {
     globals: true,
+    // Component tests opt into jsdom per file with a `// @vitest-environment jsdom` docblock.
     environment: 'node',
-    // @ts-ignore — valid Vitest option, not in Next.js tsconfig types
-    environmentMatchGlobs: [['src/components/**/*.test.tsx', 'jsdom']],
     setupFiles: ['./src/test/setup.ts'],
-    // bot-service uses @playwright/test — excluded to avoid Vitest/Playwright runner conflicts
-    exclude: ['node_modules/**', 'bot-service/**'],
+    // .claude/ holds Claude Code worktrees: full checkouts whose tests must not run here.
+    exclude: ['node_modules/**', '.next/**', '.claude/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov', 'html'],

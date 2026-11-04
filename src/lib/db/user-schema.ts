@@ -43,6 +43,14 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       ALTER TYPE "${schema}".meeting_status ADD VALUE IF NOT EXISTS 'cancelled'
     `);
 
+    // Microsoft Graph / Teams: a meeting is armed and waits for Teams to finish
+    // recording + transcribing it. This replaced the removed bot's 'joining'.
+    // That value stays in the enum because Postgres cannot drop one, and an
+    // existing database already carries it. Nothing writes it any more.
+    await client.query(`
+      ALTER TYPE "${schema}".meeting_status ADD VALUE IF NOT EXISTS 'awaiting_teams'
+    `);
+
     await client.query('BEGIN');
 
     // templates
@@ -225,6 +233,93 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       $$
     `);
 
+    // teams_meetings — server-side record of a Teams meeting armed via Microsoft
+    // Graph, so the poller knows what to fetch artifacts for.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".teams_meetings (
+        id               TEXT PRIMARY KEY,
+        graph_meeting_id TEXT NOT NULL,
+        join_url         TEXT NOT NULL,
+        subject          TEXT,
+        organizer_id     TEXT,
+        event_id         TEXT,
+        is_organizer     BOOLEAN NOT NULL DEFAULT FALSE,
+        armed            BOOLEAN NOT NULL DEFAULT FALSE,
+        arm_result       TEXT NOT NULL DEFAULT 'not_organizer',
+        scheduled_start  TIMESTAMPTZ,
+        scheduled_end    TIMESTAMPTZ,
+        state            TEXT NOT NULL DEFAULT 'awaiting_teams',
+        last_polled_at   TIMESTAMPTZ,
+        attempts         INTEGER NOT NULL DEFAULT 0,
+        failure_reason   TEXT,
+        transcript_id    TEXT,
+        recording_id     TEXT,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      ALTER TABLE "${schema}".teams_meetings
+        ADD COLUMN IF NOT EXISTS organizer_id  TEXT,
+        ADD COLUMN IF NOT EXISTS is_organizer  BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS armed         BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS arm_result    TEXT NOT NULL DEFAULT 'not_organizer',
+        ADD COLUMN IF NOT EXISTS event_id      TEXT,
+        ADD COLUMN IF NOT EXISTS transcript_id TEXT,
+        ADD COLUMN IF NOT EXISTS recording_id  TEXT,
+        ADD COLUMN IF NOT EXISTS recording_cleanup TEXT,
+        ADD COLUMN IF NOT EXISTS recording_bytes   BIGINT,
+        -- Every recording to delete, when recording was stopped and started again;
+        -- recording_bytes is the first of them. NULL on rows from before it.
+        ADD COLUMN IF NOT EXISTS recording_sizes   BIGINT[],
+        -- When the delete was queued: once the browser had saved the transcript.
+        ADD COLUMN IF NOT EXISTS recording_cleanup_at TIMESTAMPTZ,
+        -- 'outlook' when armed from the Outlook add-in; NULL for the dashboard.
+        ADD COLUMN IF NOT EXISTS origin        TEXT,
+        -- When the user first opened an Outlook-armed meeting in OS2taletiltekst.
+        -- Until then its recording is left in Teams (see the poller).
+        ADD COLUMN IF NOT EXISTS opened_at     TIMESTAMPTZ,
+        -- When the user last asked for a collected meeting to be collected again.
+        ADD COLUMN IF NOT EXISTS recollected_at TIMESTAMPTZ,
+        -- TRUE when scheduled_start/_end were registered for one occurrence of a
+        -- series rather than read from Graph, which only knows the series' window.
+        ADD COLUMN IF NOT EXISTS occurrence_window BOOLEAN NOT NULL DEFAULT FALSE,
+        -- Set when the user switched the meeting off while its recording was still
+        -- to be deleted from OneDrive: the row is hidden and kept only for that
+        -- delete, then removed.
+        ADD COLUMN IF NOT EXISTS unregistered_at TIMESTAMPTZ,
+        -- Downloads of the recording that timed out or were cut off. Past a few,
+        -- the transcript Teams wrote is collected instead.
+        ADD COLUMN IF NOT EXISTS recording_stalls INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        ADD COLUMN IF NOT EXISTS updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS teams_meetings_graph_meeting_id_idx
+        ON "${schema}".teams_meetings (graph_meeting_id)
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS teams_meetings_state_idx
+        ON "${schema}".teams_meetings (state, scheduled_end)
+    `);
+
+    // teams_meeting_snapshots — the organizer's meeting options as they were
+    // before we ever armed the meeting, one row per Graph meeting (not per local
+    // id). A recurring series shares ONE onlineMeeting but mints a new local id
+    // per pasted link, so the snapshot cannot live on teams_meetings without a
+    // multi-row "which sibling holds the real one?" lookup; keying it on
+    // graph_meeting_id directly makes there only ever be one to find.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".teams_meeting_snapshots (
+        graph_meeting_id TEXT PRIMARY KEY,
+        original_options JSONB,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
     // Seed default templates if none exist
     await client.query(`
       INSERT INTO "${schema}".templates (name, description, structure, is_default)
@@ -315,6 +410,89 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       WHERE NOT EXISTS (SELECT 1 FROM "${schema}".skabeloner LIMIT 1)
     `);
 
+    // onboarding_progress — which onboarding hints this user has seen/dismissed.
+    // meeting_id is NOT NULL with '' standing in for "global, not tied to a
+    // meeting" (store.ts converts null <-> '' at the boundary): Postgres treats
+    // every NULL as distinct under a UNIQUE constraint, which would otherwise
+    // need a second partial index just to dedupe the global steps.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".onboarding_progress (
+        id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+        step_id     TEXT NOT NULL,
+        meeting_id  TEXT NOT NULL DEFAULT '',
+        status      TEXT NOT NULL DEFAULT 'seen',
+        seen_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    // meeting_id is a plain id, NOT a foreign key: meetings live in the browser's IndexedDB
+    // and nothing inserts into this schema's meetings table, so a REFERENCES there rejects
+    // every per-meeting hint. Databases that already created the table with the constraint
+    // lose it here (idempotent).
+    await client.query(`
+      ALTER TABLE "${schema}".onboarding_progress
+        DROP CONSTRAINT IF EXISTS onboarding_progress_meeting_id_fkey
+    `);
+
+    // Legacy rows may carry duplicate (step_id, COALESCE(meeting_id, '')) pairs
+    // (real NULLs alongside an existing '' row, or duplicate NULLs themselves).
+    // Collapse each group to its most recently seen row before folding NULLs
+    // into the sentinel, or the UPDATE/constraint below fails on the dupes.
+    await client.query(`
+      DELETE FROM "${schema}".onboarding_progress a
+      USING "${schema}".onboarding_progress b
+      WHERE a.step_id = b.step_id
+        AND COALESCE(a.meeting_id, '') = COALESCE(b.meeting_id, '')
+        AND (a.seen_at, a.id) < (b.seen_at, b.id)
+    `);
+
+    // A database created before meeting_id became NOT NULL still has real NULLs;
+    // fold them into the sentinel so the unique constraint below covers every row.
+    await client.query(`
+      UPDATE "${schema}".onboarding_progress SET meeting_id = '' WHERE meeting_id IS NULL
+    `);
+    await client.query(`
+      ALTER TABLE "${schema}".onboarding_progress
+        ALTER COLUMN meeting_id SET DEFAULT '',
+        ALTER COLUMN meeting_id SET NOT NULL
+    `);
+
+    await client.query(`
+      DO $body$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint c
+          JOIN pg_class cl ON cl.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = cl.relnamespace
+          WHERE c.conname = 'onboarding_progress_step_meeting_unique'
+            AND n.nspname = '${schema}'
+        ) THEN
+          ALTER TABLE "${schema}".onboarding_progress
+            ADD CONSTRAINT onboarding_progress_step_meeting_unique UNIQUE (step_id, meeting_id);
+        END IF;
+      END
+      $body$
+    `);
+
+    // Databases from before the sentinel change may still carry the old partial
+    // index; it is redundant now that the constraint above covers every row.
+    await client.query(`
+      DROP INDEX IF EXISTS "${schema}".onboarding_progress_global_step_unique
+    `);
+
+    // onboarding_state — single-row per-user flags for the guided tour as a whole.
+    // last_step_id is no longer written or read; it stays so new and existing
+    // schemas keep the same shape.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS "${schema}".onboarding_state (
+        id                 TEXT PRIMARY KEY DEFAULT 'singleton',
+        tour_skipped_at    TIMESTAMPTZ,
+        tour_completed_at  TIMESTAMPTZ,
+        last_step_id       TEXT,
+        updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -330,9 +508,20 @@ export function getUserSchemaName(userId: string): string {
 
 // ─── Per-user query helpers ─────────────────────────────────────────────────
 
-const globalForSchema = globalThis as unknown as { initializedSchemas: Set<string> | undefined };
+const globalForSchema = globalThis as unknown as {
+  initializedSchemas: Set<string> | undefined;
+  ensuringSchemas: Map<string, Promise<void>> | undefined;
+};
 if (!globalForSchema.initializedSchemas) globalForSchema.initializedSchemas = new Set<string>();
+if (!globalForSchema.ensuringSchemas) globalForSchema.ensuringSchemas = new Map<string, Promise<void>>();
 const initializedSchemas = globalForSchema.initializedSchemas;
+// Tracks in-flight ensureUserSchema() calls per user so concurrent callers
+// (e.g. two queryUserSchema calls fired in the same Promise.all) await the
+// SAME run instead of each racing their own — two racing CREATE TYPE ...
+// IF NOT EXISTS statements can both pass the "not exists" check before
+// either commits, and the second one's CREATE then fails with a unique
+// constraint violation.
+const ensuringSchemas = globalForSchema.ensuringSchemas;
 
 export async function queryUserSchema<T = Record<string, unknown>>(
   userId: string,
@@ -340,7 +529,12 @@ export async function queryUserSchema<T = Record<string, unknown>>(
   params: unknown[] = [],
 ): Promise<T[]> {
   if (!initializedSchemas.has(userId)) {
-    await ensureUserSchema(userId);
+    let ensuring = ensuringSchemas.get(userId);
+    if (!ensuring) {
+      ensuring = ensureUserSchema(userId).finally(() => ensuringSchemas.delete(userId));
+      ensuringSchemas.set(userId, ensuring);
+    }
+    await ensuring;
     initializedSchemas.add(userId);
   }
   const client = await pool.connect();

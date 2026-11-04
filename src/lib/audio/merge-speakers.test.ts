@@ -59,12 +59,13 @@ describe('assignSpeakers', () => {
     expect(result.map((s) => s.speaker)).toEqual(['Taler 1', 'Taler 1', 'Taler 2']);
   });
 
-  it('leaves a leading no-overlap segment untouched when there is no prior speaker', () => {
-    const segments = [seg(0, 1) /* before any turn */, seg(5, 7)];
+  // Speech before the first turn is still somebody's, and the only speaker we have
+  // for it is the first one.
+  it('names a leading no-overlap segment after the first turn', () => {
+    const segments = [{ ...seg(0, 1), speaker: 'Taler 9' } /* before any turn */, seg(5, 7)];
     const turns: SpeakerTurn[] = [{ speaker: 'SPEAKER_00', start: 5, end: 7 }];
     const result = assignSpeakers(segments, turns);
-    expect(result[0].speaker).toBe('Taler 1'); // unchanged default
-    expect(result[1].speaker).toBe('Taler 1'); // first mapped speaker
+    expect(result.map((s) => s.speaker)).toEqual(['Taler 1', 'Taler 1']);
   });
 
   it('keeps speaker labels stable when a speaker recurs later in the meeting', () => {

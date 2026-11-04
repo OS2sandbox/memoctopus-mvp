@@ -20,7 +20,7 @@ export type TranscribeBatchesEvent =
   | { type: 'done'; segments: TranscriptSegment[]; failedSeconds: number; diarized?: boolean }
   | { type: 'error'; message: string };
 
-// Batch transcription for the upload and bot-recording paths. The client uploads
+// Batch transcription for uploads and finished recordings. The client uploads
 // the ORIGINAL compressed recording once; the server decodes it with ffmpeg, runs
 // VAD, and dispatches all 27 s batches to hviske simultaneously (Node has no
 // browser-style per-origin connection cap, so the fan-out is bounded by hviske

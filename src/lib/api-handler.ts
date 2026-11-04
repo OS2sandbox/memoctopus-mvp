@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { UserFacingError } from '@/lib/user-facing-error';
 
 /**
  * Wraps a route handler so any uncaught error is logged with a stable label and
@@ -17,6 +18,9 @@ export function withHandler<TArgs extends unknown[]>(
       return await handler(...args);
     } catch (err) {
       console.error(`[${label}]`, err);
+      if (err instanceof UserFacingError) {
+        return NextResponse.json({ error: err.userMessage }, { status: err.status });
+      }
       return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
     }
   };

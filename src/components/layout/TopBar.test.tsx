@@ -1,8 +1,30 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { screen, fireEvent, waitFor, act, within, cleanup, render as rtlRender } from '@testing-library/react';
 import { TopBar } from './TopBar';
+import { renderWithOnboarding } from '@/test/onboarding';
+import { OnboardingProvider } from '@/lib/onboarding/context';
+import { getStep } from '@/lib/onboarding/steps';
+import { WelcomeTour } from '@/components/onboarding/WelcomeTour';
+
+// Onboarding hints wrap the Arkiv nav link and, on a review page with unsaved
+// audio, the nav links themselves; mark them already-seen (for every meeting
+// id this suite's mockPathname uses) so the popovers don't render and DOM
+// queries keep targeting the underlying nav links/dialog (mirrors the real
+// app, which mounts TopBar under the app-level OnboardingProvider).
+function render(ui: React.ReactElement) {
+  return renderWithOnboarding(ui, {
+    tourSkipped: true,
+    tourCompleted: true,
+    seen: [
+      { stepId: 'topbar.arkiv-explainer', meetingId: null },
+      { stepId: 'topbar.unsaved-audio', meetingId: 'abc-123' },
+      { stepId: 'topbar.unsaved-audio', meetingId: 'abc' },
+      { stepId: 'topbar.unsaved-audio', meetingId: 'meeting-id-42' },
+    ],
+  });
+}
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
@@ -91,11 +113,14 @@ beforeEach(() => {
 describe('TopBar — basic rendering', () => {
   it('renders the wordmark', () => {
     renderTopBar();
-    // The wordmark link contains "memoctopus · referat" across text nodes
-    const wordmarkLink = screen.getByRole('link', { name: /memoctopus/ });
+    // The wordmark is the official SVG lockup on its own — no type beside it —
+    // so it reaches the accessible name through the image's alt text.
+    const wordmarkLink = screen.getByRole('link', { name: /OS2taletiltekst/ });
     expect(wordmarkLink).toBeInTheDocument();
-    expect(wordmarkLink.textContent).toContain('memoctopus');
-    expect(wordmarkLink.textContent).toContain('referat');
+    expect(wordmarkLink.textContent).toBe('');
+
+    const logo = within(wordmarkLink).getByAltText('OS2taletiltekst');
+    expect(logo).toHaveAttribute('src', '/brand/os2taletiltekst.svg');
   });
 
   it('renders both nav items', () => {
@@ -261,7 +286,7 @@ describe('TopBar — navigation without pending audio', () => {
     mockPathname = '/arkiv';
     mockHasAudio = false;
     renderTopBar();
-    const wordmarkLink = screen.getByRole('link', { name: /memoctopus/ });
+    const wordmarkLink = screen.getByRole('link', { name: /OS2taletiltekst/ });
     fireEvent.click(wordmarkLink);
     expect(mockPush).toHaveBeenCalledWith('/dashboard');
   });
@@ -424,7 +449,80 @@ describe('TopBar — sign-out action', () => {
 describe('TopBar — wordmark link', () => {
   it('wordmark link points to /dashboard', () => {
     renderTopBar();
-    const link = screen.getByRole('link', { name: /memoctopus/ });
+    const link = screen.getByRole('link', { name: /OS2taletiltekst/ });
     expect(link).toHaveAttribute('href', '/dashboard');
+  });
+});
+
+// ── Onboarding ─────────────────────────────────────────────────────────────
+
+describe('TopBar — onboarding', () => {
+  const EXPLAINER = 'topbar.arkiv-explainer';
+  const UNSAVED = 'topbar.unsaved-audio';
+  const copyOf = (id: string) => getStep(id).copy.replace(/\s+/g, ' ');
+  const fetchMock = vi.fn();
+  const savedStepIds = () =>
+    fetchMock.mock.calls.map(([, init]) => JSON.parse((init as RequestInit).body as string).stepId);
+
+  // Every hint unseen, welcome dialog already dealt with.
+  const noneSeen = { tourSkipped: true, tourCompleted: true, seen: [] };
+  const withProvider = (ui: React.ReactElement) => (
+    <OnboardingProvider initial={noneSeen}>{ui}</OnboardingProvider>
+  );
+
+  beforeEach(() => {
+    fetchMock.mockReset().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal('fetch', fetchMock);
+    // Radix Popper measures its content with ResizeObserver, which jsdom lacks.
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('"?" opens the welcome dialog', () => {
+    mockSessionData = { data: { user: { email: 'alice@example.com', id: 'u1' } } };
+    rtlRender(
+      withProvider(
+        <>
+          <TopBar />
+          <WelcomeTour />
+        </>,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Se en hurtig gennemgang af OS2taletiltekst' }));
+
+    expect(screen.getByRole('dialog', { name: 'Sådan fungerer OS2taletiltekst' })).toBeInTheDocument();
+  });
+
+  it('shows the Arkiv explainer away from a review page', () => {
+    rtlRender(withProvider(<TopBar />));
+    expect(screen.getByText(copyOf(EXPLAINER))).toBeInTheDocument();
+  });
+
+  // The review page's audio loads from IndexedDB a moment after the first render.
+  // The explainer used to open in that moment, get swapped for the unsaved-audio
+  // warning in the same bubble, and be saved as seen without having been read.
+  it('never opens the Arkiv explainer on a review page, so the audio warning cannot use it up', () => {
+    mockPathname = '/meeting/abc/review';
+    mockHasAudio = false;
+    const { rerender, unmount } = rtlRender(withProvider(<TopBar />));
+    expect(screen.queryByText(copyOf(EXPLAINER))).toBeNull();
+
+    mockHasAudio = true;
+    rerender(withProvider(<TopBar />));
+    expect(screen.getByText(copyOf(UNSAVED))).toBeInTheDocument();
+
+    unmount();
+    expect(savedStepIds()).toEqual([UNSAVED]);
   });
 });

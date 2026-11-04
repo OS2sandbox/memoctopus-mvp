@@ -18,6 +18,8 @@ export async function getMeeting(id: string): Promise<StoredMeeting | null> {
 }
 
 export async function createMeeting(data: {
+  /** A fixed id, for a meeting that already exists on the server (armed from Outlook). */
+  id?: string;
   title: string;
   participants?: string[];
   source?: 'local' | 'teams';
@@ -26,11 +28,15 @@ export async function createMeeting(data: {
   // The audio's own recording date. Defaults to now (correct for live/Teams
   // recordings); upload flows pass the file's date so an old clip keeps its date.
   recordedAt?: string;
+  // Set for a Teams meeting (a pasted link, or one armed from Outlook). Omitted for
+  // local recordings. The subject becomes the title and the scheduled start the
+  // recordedAt; the live values stay on the server.
+  graphManaged?: boolean;
 }): Promise<StoredMeeting> {
   const db = await getDB();
   const now = new Date().toISOString();
   const meeting: StoredMeeting = {
-    id: newId(),
+    id: data.id ?? newId(),
     title: data.title,
     participants: data.participants ?? [],
     status: data.status ?? 'recording',
@@ -42,8 +48,10 @@ export async function createMeeting(data: {
     audioDurationSeconds: null,
     audioSizeBytes: 0,
     audioDeleted: false,
-    botSession: null,
   };
+  // Only write the Teams fields that were actually supplied, so a local recording's
+  // record stays free of undefined keys.
+  if (data.graphManaged !== undefined) meeting.graphManaged = data.graphManaged;
   await db.put('meetings', meeting);
   return meeting;
 }

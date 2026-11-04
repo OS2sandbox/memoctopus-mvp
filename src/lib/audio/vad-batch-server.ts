@@ -3,12 +3,14 @@ import { energyVAD } from '@/lib/audio/vad-client';
 import {
   BATCH_DURATION_S,
   newVadBatchState,
+  runWithConcurrency,
   sealCurrentBatch,
   splitTextWithIntervals,
   type ReadyBatch,
   type VadInterval,
 } from '@/lib/audio/vad-batch';
 import { decodeToMono16k } from '@/lib/audio/decode-server';
+import { cleanTranscribedText } from '@/lib/audio/hallucinations';
 import type { TranscriptSegment } from '@/types';
 
 const SAMPLE_RATE = 16_000;
@@ -31,40 +33,20 @@ export async function transcribeEnsemble(buffer: Buffer, mimeType: string): Prom
   return getProvider().transcribeEnsemble(buffer, mimeType);
 }
 
-// Mirror of the hallucination guard in /api/meetings/[id]/utterance.
-function isHallucinatedRepetition(text: string): boolean {
-  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length < 4) return false;
-  const freq: Record<string, number> = {};
-  for (const w of words) freq[w] = (freq[w] ?? 0) + 1;
-  if (Math.max(...Object.values(freq)) / words.length > 0.5) return true;
-  let streak = 1;
-  for (let i = 1; i < words.length; i++) {
-    if (words[i] === words[i - 1]) { if (++streak >= 3) return true; } else streak = 1;
-  }
-  return false;
-}
+/** Requests kept in flight to hviske when HVISKE_BATCH_CONCURRENCY is not set. */
+export const DEFAULT_HVISKE_BATCH_CONCURRENCY = 8;
 
-// How many batch requests to keep in flight at once. Defaults to "all of them" —
-// Node's undici has no per-origin connection cap (unlike the browser's ~6 on
-// HTTP/1.1), and the hviske server queues internally. Set HVISKE_BATCH_CONCURRENCY
-// as backpressure if the GPU box degrades under unbounded fan-out.
-function batchConcurrency(taskCount: number): number {
+/**
+ * How many batch requests to keep in flight to hviske at once, for `taskCount`
+ * tasks. Node's undici has no per-origin connection cap (unlike the browser's ~6
+ * on HTTP/1.1), so without a bound an hour-long meeting sends well over a hundred
+ * requests to the GPU box at the same moment. HVISKE_BATCH_CONCURRENCY overrides
+ * the default. Shared by every server-side fan-out (VAD batches, Teams cue slices).
+ */
+export function hviskeBatchConcurrency(taskCount: number): number {
   const env = Number(process.env.HVISKE_BATCH_CONCURRENCY);
-  return Number.isFinite(env) && env > 0 ? Math.min(env, taskCount) : taskCount;
-}
-
-async function runWithConcurrencyServer<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
-  const results: T[] = new Array(tasks.length);
-  const queue = tasks.map((task, i) => ({ task, i }));
-  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
-    let item: typeof queue[0] | undefined;
-    while ((item = queue.shift()) !== undefined) {
-      results[item.i] = await item.task();
-    }
-  });
-  await Promise.all(workers);
-  return results;
+  const limit = Number.isFinite(env) && env > 0 ? env : DEFAULT_HVISKE_BATCH_CONCURRENCY;
+  return Math.max(1, Math.min(limit, taskCount));
 }
 
 export interface BatchEvent {
@@ -107,8 +89,11 @@ export async function prepareVadBatches(buffer: Buffer): Promise<ReadyBatch[]> {
 async function transcribeOneBatch(batch: ReadyBatch): Promise<TranscriptSegment[]> {
   const wavBuf = Buffer.from(await batch.wav.arrayBuffer());
   const { text } = await getProvider().transcribeRaw(wavBuf, 'audio/wav', { timeoutMs: BATCH_TIMEOUT_MS });
-  if (!text || isHallucinatedRepetition(text)) return [];
-  return splitTextWithIntervals(text, batch.intervals, batch.totalWavDuration);
+  // Keeps the real words a degenerating window produced before it span out; the
+  // old guard dropped the whole batch and lost them with the loop.
+  const cleaned = cleanTranscribedText(text ?? '');
+  if (!cleaned) return [];
+  return splitTextWithIntervals(cleaned, batch.intervals, batch.totalWavDuration);
 }
 
 // Server-side equivalent of the VAD batch pipeline in upload-confirm.client.tsx.
@@ -146,7 +131,7 @@ export async function transcribeVadBatches(
     });
   });
 
-  await runWithConcurrencyServer(tasks, batchConcurrency(tasks.length));
+  await runWithConcurrency(tasks, hviskeBatchConcurrency(tasks.length));
 
   // Second pass: one application-level retry of everything that failed.
   let failedSeconds = 0;

@@ -7,14 +7,18 @@ import { users, sessions, accounts, verifications } from '@/lib/db/schema';
 import {
   emailPasswordEnabled,
   microsoftConfig,
+  microsoftGraphScopes,
+  microsoftSingleTenant,
   oidcConfig,
   warnDeprecatedAuthEnv,
 } from './providers';
+import { entraUserInfoOverrides } from './entra-user-info';
 
 // Resolved in ./providers so the sign-in page renders exactly what is
 // registered here.
 const microsoft = microsoftConfig();
 const oidc = oidcConfig();
+const graphScopes = microsoftGraphScopes();
 
 warnDeprecatedAuthEnv();
 
@@ -55,7 +59,56 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: emailPasswordEnabled(),
   },
-  socialProviders: microsoft ? { microsoft } : {},
+  // overrideUserInfoOnSignIn keeps the stored name and email in step with Entra on every
+  // sign-in. Without it better-auth writes them once, at account creation, and never again:
+  // it matches the account on the provider's subject claim, so a user whose mail attribute
+  // or display name later changes keeps the address they first signed up with. That
+  // happened here: an account created under one address kept showing it after the user
+  // moved to a new mailbox, which reads as being logged in as the wrong person.
+  //
+  // mapProfileToUser vets the claims before better-auth writes them: an email another user
+  // already holds is not taken over (it would break the UNIQUE constraint and lock this
+  // user out of Microsoft sign-in), and a verified user is not downgraded. See
+  // entra-user-info.ts.
+  //
+  // Only for one named tenant (MICROSOFT_TENANT_ID). There the tenant admin controls the
+  // `email` claim. Under the multi-tenant authorities (blank, common, organizations,
+  // consumers) it comes from whichever tenant the user signs in from, and Entra does not
+  // guarantee it is verified or unchanged, so it must not overwrite what we store.
+  //
+  // The Teams integration reads Graph as the signed-in user (delegated), so the
+  // Graph scopes must be consented to at login — but only when TEAMS_GRAPH_ENABLED
+  // is set: two of them need tenant-admin consent, and a tenant that has not
+  // granted it rejects the whole sign-in. With the flag off no `scope` is passed
+  // at all and sign-in is exactly what it was before the integration existed.
+  // better-auth's microsoft provider already requests
+  // openid/profile/email/User.Read/offline_access and appends `scope` to them —
+  // offline_access is what yields the refresh token that
+  // auth.api.getAccessToken() later trades for a fresh access token.
+  // Users who signed in before these scopes existed keep a token without them;
+  // hasGraphScopes() in src/lib/teams/graph-client.ts detects that and the UI
+  // asks them to sign in again.
+  socialProviders: microsoft
+    ? {
+        microsoft: {
+          ...microsoft,
+          ...(microsoftSingleTenant() && {
+            overrideUserInfoOnSignIn: true,
+            mapProfileToUser: (profile: { sub?: unknown; email?: unknown }) =>
+              entraUserInfoOverrides(profile),
+          }),
+          ...(graphScopes.length > 0 && { scope: graphScopes }),
+        },
+      }
+    : {},
+  // OAuth access and refresh tokens are encrypted at rest with BETTER_AUTH_SECRET. Once
+  // Teams is enabled the refresh token gives about 90 days of offline access to meeting
+  // transcripts and recordings, so a database dump or backup must not hand it out. Rows
+  // written before this stay readable: better-auth returns a token that does not look
+  // encrypted unchanged and encrypts it the next time the account is written (a sign-in
+  // or a token refresh). Rotating BETTER_AUTH_SECRET makes the stored tokens undecryptable;
+  // the affected users then sign in again.
+  account: { encryptOAuthTokens: true },
   // No `account.accountLinking` override on purpose. Adding providers to
   // `trustedProviders` would drop better-auth's requirement that the *incoming*
   // IdP asserted email_verified (see dist/oauth2/link-account.mjs) — an attacker

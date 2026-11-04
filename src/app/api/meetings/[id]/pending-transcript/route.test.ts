@@ -1,0 +1,202 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('next/headers', () => ({
+  headers: vi.fn().mockResolvedValue(new Headers()),
+}));
+
+vi.mock('@/lib/auth', () => ({
+  auth: { api: { getSession: vi.fn() } },
+}));
+
+vi.mock('@/lib/pending-artifacts', () => ({
+  readPendingTranscript: vi.fn(),
+  deletePendingTranscript: vi.fn().mockResolvedValue(undefined),
+  acknowledgePendingTranscript: vi.fn().mockResolvedValue(true),
+  assertMeetingOwner: vi.fn(),
+}));
+vi.mock('@/lib/teams/store', () => ({ queueRecordingCleanup: vi.fn().mockResolvedValue(true) }));
+
+import { NextRequest } from 'next/server';
+import { GET, DELETE } from './route';
+import { auth } from '@/lib/auth';
+import {
+  readPendingTranscript,
+  deletePendingTranscript,
+  acknowledgePendingTranscript,
+  assertMeetingOwner,
+} from '@/lib/pending-artifacts';
+import { queueRecordingCleanup } from '@/lib/teams/store';
+import { FAKE_SESSION } from '@/test/helpers';
+
+const mockGetSession = vi.mocked(auth.api.getSession);
+const mockRead = vi.mocked(readPendingTranscript);
+const mockDelete = vi.mocked(deletePendingTranscript);
+const mockAck = vi.mocked(acknowledgePendingTranscript);
+const mockAssertOwner = vi.mocked(assertMeetingOwner);
+const mockQueueCleanup = vi.mocked(queueRecordingCleanup);
+
+const PARAMS = { params: Promise.resolve({ id: 'm1' }) };
+const REQ = new NextRequest('http://localhost/api/meetings/m1/pending-transcript');
+
+const SEGMENTS = [{ speaker: 'Taler 1', start: 0, end: 3, text: 'hej' }];
+
+beforeEach(() => {
+  mockGetSession.mockReset();
+  mockRead.mockReset();
+  mockDelete.mockReset().mockResolvedValue(undefined);
+  mockAck.mockReset().mockResolvedValue(true);
+  mockAssertOwner.mockReset();
+  mockAssertOwner.mockResolvedValue(true);
+  mockQueueCleanup.mockReset().mockResolvedValue(true);
+  delete process.env.TEAMS_DELETE_RECORDING;
+});
+
+describe('GET /api/meetings/[id]/pending-transcript', () => {
+  it('returns 401 when no session exists', async () => {
+    mockGetSession.mockResolvedValueOnce(null as never);
+    const res = await GET(REQ, PARAMS);
+    expect(res.status).toBe(401);
+  });
+
+  it("returns status 'none' when no server-side run exists", async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockRead.mockResolvedValueOnce(null);
+    const res = await GET(REQ, PARAMS);
+    expect((await res.json()).status).toBe('none');
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it("returns 'none' (never the transcript) when the meeting belongs to another user", async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockAssertOwner.mockResolvedValueOnce(false);
+    mockRead.mockResolvedValueOnce({ status: 'ready', segments: SEGMENTS, diarized: true, createdAt: 1 });
+    const res = await GET(REQ, PARAMS);
+    expect((await res.json()).status).toBe('none');
+    // Must never read or delete a non-owner's transcript stash.
+    expect(mockRead).not.toHaveBeenCalled();
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it("returns status 'processing' without deleting the stash", async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockRead.mockResolvedValueOnce({ status: 'processing', createdAt: 1 });
+    const res = await GET(REQ, PARAMS);
+    expect((await res.json()).status).toBe('processing');
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  // Reading must not consume the transcript: the browser copy in IndexedDB is the
+  // only durable one, and a reload or a lost response between this read and the
+  // save would otherwise lose the transcript for good.
+  it('hands off a ready transcript WITHOUT deleting it, so it can be fetched again', async () => {
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    mockRead.mockResolvedValue({ status: 'ready', segments: SEGMENTS, diarized: true, createdAt: 1 });
+
+    const first = await (await GET(REQ, PARAMS)).json();
+    const second = await (await GET(REQ, PARAMS)).json();
+
+    expect(first).toMatchObject({ status: 'ready', segments: SEGMENTS, diarized: true });
+    expect(second).toEqual(first);
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(mockAck).not.toHaveBeenCalled();
+  });
+
+  // Deleted on read, the verdict was gone by the time the user pressed "Prøv igen":
+  // the retry then read "no server-side run" and went looking for local audio a
+  // Teams meeting never has. The sweeper bounds how long it stays.
+  it("returns status 'failed' and keeps the stash, so a retry reads the same verdict", async () => {
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    mockRead.mockResolvedValue({ status: 'failed', createdAt: 1 });
+
+    expect((await (await GET(REQ, PARAMS)).json()).status).toBe('failed');
+    expect((await (await GET(REQ, PARAMS)).json()).status).toBe('failed');
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  it('answers an invalid meeting id with JSON, not an HTML error page', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    const res = await GET(REQ, { params: Promise.resolve({ id: '../etc/passwd' }) });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid-meeting-id' });
+    expect(mockAssertOwner).not.toHaveBeenCalled();
+  });
+
+  it('answers JSON when reading the stash throws', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockRead.mockRejectedValueOnce(new Error('EACCES'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await GET(REQ, PARAMS);
+    expect(res.status).toBe(500);
+    expect(await res.json()).toHaveProperty('error');
+  });
+});
+
+describe('DELETE /api/meetings/[id]/pending-transcript (acknowledge)', () => {
+  const DEL = new NextRequest('http://localhost/api/meetings/m1/pending-transcript', { method: 'DELETE' });
+
+  it('returns 401 when no session exists', async () => {
+    mockGetSession.mockResolvedValueOnce(null as never);
+    const res = await DELETE(DEL, PARAMS);
+    expect(res.status).toBe(401);
+    expect(mockAck).not.toHaveBeenCalled();
+  });
+
+  it('deletes the stash once the browser has saved the transcript', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    const res = await DELETE(DEL, PARAMS);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(mockAck).toHaveBeenCalledWith('m1');
+  });
+
+  it('is idempotent: acknowledging again is still ok', async () => {
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    expect((await DELETE(DEL, PARAMS)).status).toBe(200);
+    expect((await DELETE(DEL, PARAMS)).status).toBe(200);
+  });
+
+  it('does nothing, and says nothing, for a meeting that belongs to another user', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockAssertOwner.mockResolvedValueOnce(false);
+    const res = await DELETE(DEL, PARAMS);
+    expect(res.status).toBe(200);
+    expect(mockAck).not.toHaveBeenCalled();
+  });
+
+  // Only now does the user have the transcript, so only now may the recording it
+  // was made from leave OneDrive. Deleting it when the meeting turned ready lost
+  // the meeting whenever the transcript was not collected within the hour.
+  it("queues the delete of the meeting's recording, in the caller's own schema", async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    await DELETE(DEL, PARAMS);
+    expect(mockQueueCleanup).toHaveBeenCalledWith('user-123', 'm1');
+  });
+
+  it('queues it even once the server copy has expired: the browser saved it all the same', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockAssertOwner.mockResolvedValueOnce(false); // swept with the stash
+    await DELETE(DEL, PARAMS);
+    expect(mockQueueCleanup).toHaveBeenCalledWith('user-123', 'm1');
+  });
+
+  it('queues nothing for a stale acknowledgement while a re-collect is running', async () => {
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    mockAck.mockResolvedValueOnce(false);
+    await DELETE(DEL, PARAMS);
+    expect(mockQueueCleanup).not.toHaveBeenCalled();
+  });
+
+  it('queues nothing when this deployment keeps recordings', async () => {
+    process.env.TEAMS_DELETE_RECORDING = 'false';
+    mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+    await DELETE(DEL, PARAMS);
+    expect(mockQueueCleanup).not.toHaveBeenCalled();
+  });
+
+  it('after the acknowledgement a missing stash still reads as "none"', async () => {
+    mockGetSession.mockResolvedValue(FAKE_SESSION as never);
+    await DELETE(DEL, PARAMS);
+    mockRead.mockResolvedValueOnce(null);
+    expect((await (await GET(REQ, PARAMS)).json()).status).toBe('none');
+  });
+});

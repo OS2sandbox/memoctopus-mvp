@@ -51,8 +51,10 @@ export function assignSpeakers(
       }
     }
 
-    const rawSpeaker = bestTurn?.speaker ?? lastSpeaker;
-    if (rawSpeaker === null) return segment; // no overlap and no prior speaker — leave as-is
+    // No overlap: the previous segment's speaker, or for the very first such
+    // segment the first speaker, as the doc above promises.
+    const rawSpeaker = bestTurn?.speaker ?? lastSpeaker ?? turns[0]?.speaker ?? null;
+    if (rawSpeaker === null) return segment; // nothing to name it after
     lastSpeaker = rawSpeaker;
     return { ...segment, speaker: labelFor(rawSpeaker) };
   });

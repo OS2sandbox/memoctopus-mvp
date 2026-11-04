@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { tabTo } from '@/test/keyboard';
+import { getStep } from '@/lib/onboarding/steps';
+import { renderWithOnboarding } from '@/test/onboarding';
 import { RedactDialog } from './RedactDialog';
 
 const MEETING_TITLE = 'Bestyrelsesmøde Q4';
@@ -14,7 +18,7 @@ function renderDialog(overrides: Partial<React.ComponentProps<typeof RedactDialo
     onConfirm: vi.fn().mockResolvedValue(undefined),
   };
   const props = { ...defaults, ...overrides };
-  return { ...render(<RedactDialog {...props} />), props };
+  return { ...renderWithOnboarding(<RedactDialog {...props} />), props };
 }
 
 beforeEach(() => {
@@ -426,5 +430,47 @@ describe('RedactDialog — cancel button', () => {
 
     // handleClose also calls onOpenChange(false)
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Keyboard access to the redirect tooltip
+// ---------------------------------------------------------------------------
+
+describe('RedactDialog — redirect tooltip is reachable by keyboard', () => {
+  const copy = getStep('meeting-settings.redact-redirect').copy;
+
+  it('opens on focus of the disabled confirm button\'s wrapper', async () => {
+    const user = userEvent.setup();
+    const { props } = renderDialog();
+    const button = screen.getByRole('button', { name: 'Slet permanent' });
+    expect(button).toBeDisabled();
+    const wrapper = button.parentElement as HTMLElement;
+
+    await tabTo(user, wrapper);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(copy);
+
+    // Regression: the dialog and the tooltip used to resolve to two copies of
+    // @radix-ui/react-dismissable-layer, so the dialog claimed Escape first and the
+    // whole dialog closed. With one copy (package.json `overrides`) the layers stack:
+    // the first Escape closes only the tooltip, the second closes the dialog.
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+    expect(props.onOpenChange).not.toHaveBeenCalled();
+
+    await user.keyboard('{Escape}');
+    expect(props.onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('keeps a single tab stop once the button is enabled, and the tooltip still opens', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    fireEvent.change(screen.getByPlaceholderText(MEETING_TITLE), { target: { value: MEETING_TITLE } });
+    const button = screen.getByRole('button', { name: 'Slet permanent' });
+    expect(button).toBeEnabled();
+    expect(button.parentElement).not.toHaveAttribute('tabindex');
+
+    await tabTo(user, button);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(copy);
   });
 });

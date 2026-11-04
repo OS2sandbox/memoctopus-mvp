@@ -1,0 +1,562 @@
+import type { PoolClient } from 'pg';
+import { pool } from '@/lib/db';
+import { teamsGraphEnabled } from '@/lib/auth/providers';
+import { deleteRecordingEnabled } from './artifact-mode';
+import { classifyGraphError, GraphError } from './graph-client';
+import { parseGraphDate } from './graph-dates';
+import { getMeeting } from './meeting-resolver';
+import { processTeamsMeeting } from './pipeline';
+import { deleteRecordingFromDrive, type RecordingCleanupResult } from './recording-cleanup';
+import {
+  OUTLOOK_UNOPENED_GIVE_UP_MS,
+  POLL_GIVE_UP_MS,
+  giveUpAnchor,
+  hasStarted,
+  isDeferred,
+  markTeamsMeetingOpened,
+  getTeamsMeeting,
+  refreshTeamsMeetingSchedule,
+  listDueTeamsMeetings,
+  listPendingRecordingCleanups,
+  listUserSchemaIds,
+  markPollAttempt,
+  setTeamsMeetingState,
+  settleRecordingCleanup,
+  type RecordingCleanupState,
+  type TeamsMeetingRow,
+  type TeamsMeetingState,
+} from './store';
+
+/**
+ * The background half of the Teams integration: after a meeting's scheduled end
+ * we ask Graph for its transcript/recording until they show up (or we give up).
+ *
+ * Everything here is failure-tolerant by design — a poll that throws would
+ * otherwise take down the interval for every user.
+ */
+
+/** Teams never published anything for the meeting. */
+export const GIVE_UP_MESSAGE =
+  'Ingen transskription blev fundet. Transskription blev muligvis ikke startet i Teams.';
+
+/**
+ * Giving up on a row that was waiting for a new Microsoft sign-in. Nobody asked
+ * Graph in that time, so "no transcript was found" would be a guess.
+ */
+export const REAUTH_GIVE_UP_MESSAGE =
+  'Adgangen til Microsoft udløb, før transskriptionen kunne hentes fra Teams.';
+
+/** An Outlook-armed meeting nobody opened within the 30-day cap. */
+export const NOT_OPENED_MESSAGE =
+  'Mødet blev ikke åbnet i OS2taletiltekst inden for 30 dage, så transskriptionen blev ikke hentet.';
+
+export const TRANSCRIPTS_DISABLED_MESSAGE =
+  'Teams-administratoren har slået Graph-adgang til transskriptioner fra. ' +
+  'Se docs/setup-microsoft-teams.md trin 3.';
+
+/**
+ * Stalled recording downloads before the recording is given up on and Teams' own
+ * transcript collected instead. A stall is not counted as an attempt, so without
+ * this a recording too big for the download timeout was fetched again on every
+ * poll until the give-up window closed.
+ */
+export const RECORDING_STALL_LIMIT = 3;
+
+const DEFAULT_POLL_INTERVAL_MS = 120_000;
+
+/** Constant key for pg_try_advisory_lock, so only one instance polls at a time. */
+export const POLL_LOCK_KEY = 728_411_903;
+
+/** Users polled in parallel; each user's own meetings are polled in sequence. */
+const USER_CONCURRENCY = 3;
+
+/** States that will never change again on their own. */
+function isTerminal(state: TeamsMeetingRow['state']): boolean {
+  return state === 'ready' || state === 'failed';
+}
+
+export interface PollOptions {
+  /**
+   * The user pressed "Prøv igen": a `failed` row is put back into
+   * `awaiting_teams` and re-run, instead of being treated as settled. Without
+   * this the retry button is inert — `failed` is terminal, so no Graph call is
+   * ever made and the same failure is shown forever.
+   */
+  force?: boolean;
+}
+
+/**
+ * Polls one meeting. Never throws for a Graph/pipeline failure — the outcome is
+ * written to the row instead. (It does throw if `id` is not a row of `userId`,
+ * which is a programming error: callers own the row.)
+ */
+export async function pollMeeting(
+  userId: string,
+  id: string,
+  now: Date,
+  options: PollOptions = {},
+): Promise<TeamsMeetingRow> {
+  let row = await getTeamsMeeting(userId, id);
+  if (!row) throw new Error(`Teams meeting not found: ${id}`);
+
+  // The Graph scopes were never requested, so a poll can only fail — as
+  // reauth_required, which would park the row in needs_reauth and ask for a
+  // sign-in that cannot help. Leave the row as it is; it resumes if the flag is
+  // switched on later.
+  if (!teamsGraphEnabled()) return row;
+
+  // An Outlook-armed meeting waits for its user (see isDeferred). Only the user
+  // opening it, once it has begun, starts the fetch; the background poller only
+  // ever settles one that was never opened, and asks Graph nothing about it.
+  //
+  // The 30-day cap is final: past it nothing is fetched, opened or not, and
+  // "Prøv igen" cannot revive the row. That is the rule the user was told.
+  if (isDeferred(row)) {
+    const born = giveUpAnchor(row);
+    if (born && born.getTime() <= now.getTime() - OUTLOOK_UNOPENED_GIVE_UP_MS) {
+      if (row.state === 'failed') return row;
+      return await markPollAttempt(userId, id, { state: 'failed', failureReason: NOT_OPENED_MESSAGE });
+    }
+    if (!(options.force && hasStarted(row, now))) return row;
+    row = await markTeamsMeetingOpened(userId, id);
+  }
+
+  // What Graph says about the meeting NOW, before any decision keyed on its window.
+  // Organizers move, rename and shorten meetings after the link was pasted, and the
+  // stale booking decides both when we may poll and which artifact we accept.
+  //
+  // A settled row is left alone unless the user is retrying a failed one by hand.
+  // A collected (`ready`) one stays ready even under a forced poll — the screen
+  // forces one whenever it opens after the meeting — or a meeting deleted in Teams
+  // since would turn from `ready` into `failed` here and lose its referat.
+  if (!isTerminal(row.state) || (options.force && row.state === 'failed')) {
+    const refreshed = await refreshSchedule(userId, row);
+    if (refreshed.gone) return refreshed.row;
+    row = refreshed.row;
+  }
+
+  // The give-up window is measured from the (now refreshed) scheduled end, or — for
+  // an ad-hoc meeting Graph gave us no window for — from when we were asked to watch
+  // it. Without the fallback such a row polls Graph forever and never gives up.
+  const anchor = giveUpAnchor(row);
+  // Never declare a meeting hopeless without having asked Graph about it even once.
+  // The window can elapse while TEAMS_GRAPH_ENABLED is off, or while this instance
+  // is down, and Graph keeps artifacts far longer than our 24 h — so the clock alone
+  // must not turn a meeting nobody ever looked for into "Teams never started".
+  const gaveUp =
+    anchor != null
+    && anchor.getTime() < now.getTime() - POLL_GIVE_UP_MS
+    && row.lastPolledAt != null;
+
+  if (options.force && row.state === 'failed' && !gaveUp) {
+    row = await setTeamsMeetingState(userId, id, 'awaiting_teams', null);
+  }
+
+  // Already settled: do not touch Graph and do not burn an attempt.
+  if (isTerminal(row.state)) return row;
+
+  // The meeting has not happened yet — with one exception. "Tjek nu" is a person
+  // telling us the meeting is over, which is the one liveness signal delegated
+  // Graph will not give us: there is no roster and no in-progress flag, only the
+  // booked window, and meetings routinely end long before it. Refusing to look
+  // until the booked end makes the button useless exactly when it is wanted.
+  //
+  // It still cannot help before the meeting has begun: Teams has nothing to
+  // publish, so that stays a no-op rather than a wasted Graph call.
+  if (anchor && anchor.getTime() > now.getTime() && !(options.force && hasStarted(row, now))) {
+    return row;
+  }
+
+  if (gaveUp) {
+    return await markPollAttempt(userId, id, {
+      state: 'failed',
+      failureReason: row.state === 'needs_reauth' ? REAUTH_GIVE_UP_MESSAGE : GIVE_UP_MESSAGE,
+    });
+  }
+
+  await setTeamsMeetingState(userId, id, 'fetching');
+
+  // Writes a poll that leaves the meeting waiting (or asks for a new sign-in).
+  // It counts as an attempt unless Graph was merely throttled or unreachable
+  // (`transient`) or the user forced it: neither says anything about how long
+  // Teams has had to publish.
+  const waiting = (
+    state: TeamsMeetingState,
+    failureReason: string | null,
+    transient = false,
+    recordingStalled = false,
+  ): Promise<TeamsMeetingRow> =>
+    markPollAttempt(
+      userId,
+      id,
+      { state, failureReason },
+      {
+        incrementAttempts: !(transient || options.force),
+        ...(recordingStalled ? { countRecordingStall: true } : {}),
+      },
+    );
+
+  try {
+    const outcome = await processTeamsMeeting(
+      userId,
+      {
+        id: row.id,
+        graphMeetingId: row.graphMeetingId,
+        scheduledStart: row.scheduledStart,
+        scheduledEnd: row.scheduledEnd,
+        attempts: row.attempts,
+        // Deleted, or queued to be: not ours to download again.
+        recordingDeleted:
+          row.recordingCleanup === 'pending'
+          || row.recordingCleanup === 'deleted'
+          || row.recordingCleanup === 'recycled',
+        recordingUnreachable: row.recordingStalls >= RECORDING_STALL_LIMIT,
+      },
+      now,
+    );
+
+    if (outcome.status === 'ready') {
+      // Stashed, not yet saved by the user: the stash expires after an hour, and
+      // an uncollected meeting is then re-collected from the recording. So the
+      // recording is not deleted here. The row only remembers which file it was;
+      // the delete is queued when the browser acknowledges the transcript
+      // (queueRecordingCleanup). A size already behind a queued or finished delete
+      // stays: it names the file that delete is about.
+      return await markPollAttempt(userId, id, {
+        state: 'ready',
+        failureReason: null,
+        transcriptId: outcome.transcriptId,
+        recordingId: outcome.recordingId,
+        ...(row.recordingCleanup == null
+          ? { recordingBytes: outcome.recordingBytes, recordingSizes: outcome.recordingSizes }
+          : {}),
+      });
+    }
+    if (outcome.status === 'failed') {
+      return await markPollAttempt(userId, id, { state: 'failed', failureReason: outcome.reason });
+    }
+    // A run is already downloading and transcribing this meeting (the poller and
+    // "Tjek nu" both land here, and the pipeline serialises them). Leaving the row
+    // in `fetching` is what lets the screen say so; writing `awaiting_teams` back
+    // told the user Teams had published nothing while we were busy with what it
+    // had published. It is not an attempt either: it says nothing about how long
+    // Teams has had.
+    if (outcome.phase === 'working') {
+      return await markPollAttempt(userId, id, { state: 'fetching', failureReason: null }, { incrementAttempts: false });
+    }
+    // Nothing yet — back to waiting, and try again after the backoff.
+    return await waiting('awaiting_teams', null, outcome.transient, outcome.recordingStalled);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    switch (classifyGraphError(err)) {
+      case 'reauth_required':
+        return await waiting('needs_reauth', message);
+      case 'retryable':
+        // Graph throttles /transcripts routinely; a 429, a 503 or a timeout is "not yet".
+        return await waiting('awaiting_teams', message, true);
+      case 'transcripts_disabled':
+        return await markPollAttempt(userId, id, {
+          state: 'failed',
+          failureReason: TRANSCRIPTS_DISABLED_MESSAGE,
+        });
+      case 'graph_error':
+        return await markPollAttempt(userId, id, { state: 'failed', failureReason: message });
+      case 'unknown':
+        // A bug or a transient network error: keep waiting, record why.
+        console.error('[teams/poller] unexpected error polling', id, err);
+        return await waiting('awaiting_teams', message);
+    }
+  }
+}
+
+/** How long a recording we could not reach Graph about is retried before it is given up on. */
+export const RECORDING_CLEANUP_GIVE_UP_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Deletes a collected meeting's recording from the organizer's OneDrive (queued
+ * by queueRecordingCleanup once the browser has saved the transcript) and writes
+ * the verdict to the row. Never throws, and never changes the meeting's state:
+ * the referat is ready whether or not the file could be removed.
+ *
+ * A throttle, an outage or an expired sign-in leaves the row `pending`, and
+ * {@link pollDueMeetings} comes back to it on every tick for a day.
+ */
+export async function cleanUpRecording(
+  userId: string,
+  row: TeamsMeetingRow,
+  now: Date,
+): Promise<TeamsMeetingRow> {
+  const sizes = row.recordingSizes.length > 0
+    ? row.recordingSizes
+    : row.recordingBytes == null ? [] : [row.recordingBytes];
+  if (row.recordingCleanup !== 'pending' || sizes.length === 0) return row;
+
+  let result: Exclude<RecordingCleanupState, 'pending'>;
+  try {
+    // One file per recording. A retry after a postponed run finds the ones it
+    // already deleted gone (not_found), which is not a failure.
+    const outcomes: RecordingCleanupResult[] = [];
+    for (const bytes of sizes) outcomes.push(await deleteRecordingFromDrive(userId, bytes));
+    result = combineCleanup(outcomes);
+    for (const outcome of outcomes) {
+      if (outcome !== 'deleted') {
+        console.warn(`[teams/poller] ${row.id}: recording not deleted from OneDrive (${outcome})`);
+      }
+    }
+  } catch (err) {
+    const kind = classifyGraphError(err);
+    // A sign-in that predates the files scope (reauth_required, like an expired
+    // one) is cured by the next sign-in, which the dashboard is already asking
+    // for — worth the same day's patience.
+    const final = kind === 'graph_error' || kind === 'transcripts_disabled';
+    // Rows queued before recording_cleanup_at existed were queued in the write
+    // that marked them ready, which stamped last_polled_at.
+    const queuedAt = row.recordingCleanupAt ?? row.lastPolledAt ?? now;
+    const age = now.getTime() - queuedAt.getTime();
+    if (!final && age < RECORDING_CLEANUP_GIVE_UP_MS) {
+      console.warn(`[teams/poller] ${row.id}: deleting the recording from OneDrive postponed:`, err);
+      return row;
+    }
+    console.error(`[teams/poller] ${row.id}: could not delete the recording from OneDrive:`, err);
+    result = 'failed';
+  }
+
+  try {
+    await settleRecordingCleanup(userId, row.id, result);
+  } catch (err) {
+    console.error('[teams/poller] could not record the recording cleanup for', row.id, err);
+    return row;
+  }
+  return { ...row, recordingCleanup: result };
+}
+
+/**
+ * One verdict for a meeting's recordings, as weak as the weakest of them: any we
+ * could not tell apart from another file is a failure, any only moved to the
+ * recycle bin makes it `recycled`, and it is `not_found` only when none was there.
+ */
+export function combineCleanup(
+  outcomes: RecordingCleanupResult[],
+): Exclude<RecordingCleanupState, 'pending'> {
+  if (outcomes.some((o) => o === 'ambiguous')) return 'failed';
+  if (outcomes.some((o) => o === 'recycled')) return 'recycled';
+  if (outcomes.some((o) => o === 'deleted')) return 'deleted';
+  return 'not_found';
+}
+
+/** Danish, user-safe: the row can outlive the meeting it was created for. */
+export const MEETING_GONE_MESSAGE =
+  'Mødet findes ikke længere i Teams. Det er sandsynligvis aflyst eller slettet.';
+
+/**
+ * Re-reads the meeting from Graph and writes its current window and subject back.
+ *
+ * A 404 means the meeting is gone — cancelled or deleted. Without this the row
+ * polls into 404s for a whole day and is then reported as "Teams never started the
+ * transcription", blaming the admin for a meeting that never happened.
+ *
+ * Every other Graph failure is swallowed: a throttle or a blip must not stop the
+ * poll it precedes, which has its own error handling and is the call that matters.
+ * The stale window is then used for one more round, exactly as before.
+ */
+async function refreshSchedule(
+  userId: string,
+  row: TeamsMeetingRow,
+): Promise<{ row: TeamsMeetingRow; gone: boolean }> {
+  let fresh;
+  try {
+    fresh = await getMeeting(userId, row.graphMeetingId);
+  } catch (err) {
+    if (err instanceof GraphError && err.code === 'not_found') {
+      return {
+        row: await markPollAttempt(userId, row.id, {
+          state: 'failed',
+          failureReason: MEETING_GONE_MESSAGE,
+        }),
+        gone: true,
+      };
+    }
+    return { row, gone: false };
+  }
+
+  // A window registered for one occurrence of a series is kept: Graph's
+  // onlineMeeting only knows the series' window, and the pipeline would look for
+  // that occurrence's artifacts in the wrong week. The subject is still Graph's.
+  const start = row.occurrenceWindow ? row.scheduledStart : parseGraphDate(fresh.scheduledStart);
+  const end = row.occurrenceWindow ? row.scheduledEnd : parseGraphDate(fresh.scheduledEnd);
+  const unchanged =
+    sameInstant(start, row.scheduledStart)
+    && sameInstant(end, row.scheduledEnd)
+    && (fresh.subject ?? null) === row.subject;
+  if (unchanged) return { row, gone: false };
+
+  console.log(
+    `[teams/poller] ${row.id}: Graph window moved to ${start ? start.toISOString() : 'none'}`
+    + ` – ${end ? end.toISOString() : 'none'}`,
+  );
+  return {
+    row: await refreshTeamsMeetingSchedule(userId, row.id, {
+      scheduledStart: start,
+      scheduledEnd: end,
+      subject: fresh.subject ?? null,
+    }),
+    gone: false,
+  };
+}
+
+function sameInstant(a: Date | null, b: Date | null): boolean {
+  if (a == null || b == null) return a === b;
+  return a.getTime() === b.getTime();
+}
+
+async function pollUser(userId: string, now: Date): Promise<number> {
+  let polled = 0;
+  let due: TeamsMeetingRow[];
+  try {
+    due = await listDueTeamsMeetings(userId, now);
+  } catch (err) {
+    console.error('[teams/poller] could not list due meetings for', userId, err);
+    return 0;
+  }
+
+  for (const row of due) {
+    try {
+      await pollMeeting(userId, row.id, now);
+    } catch (err) {
+      console.error('[teams/poller] poll failed for', userId, row.id, err);
+    }
+    polled += 1;
+  }
+
+  // Recordings whose delete has not had a definite answer yet. Not counted as
+  // polls, and a failure here must not cost the user their meeting polls above.
+  if (deleteRecordingEnabled()) {
+    try {
+      for (const row of await listPendingRecordingCleanups(userId)) {
+        await cleanUpRecording(userId, row, now);
+      }
+    } catch (err) {
+      console.error('[teams/poller] recording cleanup failed for', userId, err);
+    }
+  }
+  return polled;
+}
+
+/** Runs `workers` tasks at a time over `items`, in order. */
+async function mapConcurrent<T>(
+  items: T[],
+  workers: number,
+  fn: (item: T) => Promise<number>,
+): Promise<number> {
+  let index = 0;
+  let total = 0;
+  const run = async () => {
+    for (;;) {
+      const i = index++;
+      if (i >= items.length) return;
+      // Read-modify-write must happen after the await, or concurrent workers
+      // clobber each other's increments.
+      const n = await fn(items[i]);
+      total += n;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(workers, items.length) }, run));
+  return total;
+}
+
+/**
+ * Polls every due meeting of every user. Guarded by a Postgres advisory lock so
+ * that running several app instances does not mean polling Graph N times.
+ */
+export async function pollDueMeetings(now: Date): Promise<{ polled: number }> {
+  if (!teamsGraphEnabled()) return { polled: 0 };
+
+  let client: PoolClient;
+  try {
+    client = await pool.connect();
+  } catch (err) {
+    console.error('[teams/poller] could not acquire a connection:', err);
+    return { polled: 0 };
+  }
+
+  try {
+    const locked = await client.query<{ locked: boolean }>(
+      'SELECT pg_try_advisory_lock($1) AS locked',
+      [POLL_LOCK_KEY],
+    );
+    if (!locked.rows[0]?.locked) return { polled: 0 };
+
+    try {
+      const userIds = await listUserSchemaIds();
+      const polled = await mapConcurrent(userIds, USER_CONCURRENCY, (userId) =>
+        pollUser(userId, now),
+      );
+      return { polled };
+    } finally {
+      await client.query('SELECT pg_advisory_unlock($1)', [POLL_LOCK_KEY]);
+    }
+  } catch (err) {
+    console.error('[teams/poller] run failed:', err);
+    return { polled: 0 };
+  } finally {
+    client.release();
+  }
+}
+
+function pollIntervalMs(): number {
+  const raw = process.env.TEAMS_POLL_INTERVAL_MS?.trim() || undefined;
+  const parsed = raw ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_POLL_INTERVAL_MS;
+}
+
+function pollerDisabled(): boolean {
+  if (process.env.TEAMS_POLLER_DISABLED?.trim() === 'true') return true;
+  if (process.env.NODE_ENV === 'test') return true;
+  return Boolean(process.env.VITEST);
+}
+
+let stopCurrent: (() => void) | null = null;
+
+/**
+ * Starts the interval. Returns a stop function; calling it twice is harmless.
+ * Calling startPoller while it is already running returns the running poller's
+ * stop function instead of adding a second timer. Wired from
+ * `src/instrumentation.ts` on the nodejs runtime only.
+ */
+export function startPoller(): () => void {
+  // Off unless the operator opted in: without the Graph scopes there is nothing
+  // to collect, and the scan would only open a connection every interval.
+  if (!teamsGraphEnabled()) {
+    console.log('[teams/poller] TEAMS_GRAPH_ENABLED is not set, not starting');
+    return () => {};
+  }
+  if (pollerDisabled()) {
+    console.log('[teams/poller] disabled, not starting');
+    return () => {};
+  }
+  if (stopCurrent) return stopCurrent;
+  console.log(`[teams/poller] started, polling Graph every ${pollIntervalMs()} ms`);
+
+  let running = false;
+  const timer = setInterval(async () => {
+    if (running) return; // a slow run must not overlap with the next tick
+    running = true;
+    try {
+      await pollDueMeetings(new Date());
+    } catch (err) {
+      console.error('[teams/poller] tick failed:', err);
+    } finally {
+      running = false;
+    }
+  }, pollIntervalMs());
+
+  // Do not hold the process open for the sake of the timer.
+  (timer as unknown as { unref?: () => void }).unref?.();
+
+  const stop = () => {
+    clearInterval(timer);
+    if (stopCurrent === stop) stopCurrent = null;
+  };
+  stopCurrent = stop;
+  return stop;
+}

@@ -14,6 +14,8 @@ import type { MinutesContent, Skabelon } from '@/types';
 import { useIsMobile } from '@/lib/use-is-mobile';
 import { formatDate } from '@/lib/utils';
 import { SaveStatus, type SaveState } from '@/components/layout/SaveStatus';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
+import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
 interface TranscriptReviewProps {
   meetingId: string;
@@ -22,6 +24,13 @@ interface TranscriptReviewProps {
   audioUrl?: string;
   audioDurationSeconds?: number | null;
   audioDeleted?: boolean;
+  /**
+   * The meeting was transcribed server-side and its audio discarded, so no audio
+   * ever reached this browser. Distinct from `audioDeleted`, which means a local
+   * copy existed and was removed. Both render as "no player", but only one of
+   * them can honestly say the audio was deleted.
+   */
+  audioDiscarded?: boolean;
   initialChapters?: TranscriptChapter[];
   participants?: string[];
   initialDiarizing?: boolean;
@@ -71,7 +80,7 @@ function skabelonToCats(s?: Skabelon | null) {
 
 // Styled skabelon picker — a native <select> can't be themed or show the
 // favorite heart, so this mirrors the app's surface/line/accent tokens, marks
-// the current choice, and flags the user's default with a small blue heart.
+// the current choice, and flags the user's default with a small green heart.
 function SkabelonSelect({
   skabeloner,
   value,
@@ -178,6 +187,7 @@ export function TranscriptReview({
   audioUrl: initialAudioUrl,
   audioDurationSeconds,
   audioDeleted = false,
+  audioDiscarded = false,
   initialChapters,
   participants,
   initialDiarizing = false,
@@ -1182,34 +1192,36 @@ export function TranscriptReview({
                       {fmtTime(ch.startTime)} — {fmtTime(ch.endTime)}
                     </span>
                     <div>
-                      <div
-                        contentEditable
-                        suppressContentEditableWarning
-                        onClick={(e) => e.stopPropagation()}
-                        onBlur={(e) => {
-                          const t = e.currentTarget.textContent?.trim() ?? '';
-                          if (t && t !== ch.title) {
-                            const updated = (chapters ?? []).map((c) => c.id === ch.id ? { ...c, title: t } : c);
-                            setChapters(updated);
-                            saveChapters(updated);
-                          } else if (!t) {
-                            e.currentTarget.textContent = ch.title;
-                          }
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
-                          if (e.key === 'Escape') { e.currentTarget.textContent = ch.title; e.currentTarget.blur(); }
-                        }}
-                        onMouseEnter={(e) => { e.currentTarget.style.borderBottomColor = 'var(--line-2)'; }}
-                        onMouseLeave={(e) => { e.currentTarget.style.borderBottomColor = 'transparent'; }}
-                        style={{
-                          fontSize: 17, color: 'var(--ink)', fontWeight: 500, letterSpacing: '-0.005em',
-                          outline: 'none', cursor: 'text', display: 'inline-block',
-                          borderBottom: '1px dashed transparent',
-                        }}
-                      >
-                        {ch.title}
-                      </div>
+                      <OnboardingTooltip stepId="review.chapter-title-edit">
+                        <div
+                          contentEditable
+                          suppressContentEditableWarning
+                          onClick={(e) => e.stopPropagation()}
+                          onBlur={(e) => {
+                            const t = e.currentTarget.textContent?.trim() ?? '';
+                            if (t && t !== ch.title) {
+                              const updated = (chapters ?? []).map((c) => c.id === ch.id ? { ...c, title: t } : c);
+                              setChapters(updated);
+                              saveChapters(updated);
+                            } else if (!t) {
+                              e.currentTarget.textContent = ch.title;
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
+                            if (e.key === 'Escape') { e.currentTarget.textContent = ch.title; e.currentTarget.blur(); }
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.borderBottomColor = 'var(--line-2)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.borderBottomColor = 'transparent'; }}
+                          style={{
+                            fontSize: 17, color: 'var(--ink)', fontWeight: 500, letterSpacing: '-0.005em',
+                            outline: 'none', cursor: 'text', display: 'inline-block',
+                            borderBottom: '1px dashed transparent',
+                          }}
+                        >
+                          {ch.title}
+                        </div>
+                      </OnboardingTooltip>
                       {!isOpen && (
                         <div style={{ marginTop: 6, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.55, maxWidth: '60ch' }}>
                           {ch.summary}
@@ -1219,9 +1231,12 @@ export function TranscriptReview({
                   </div>
                   {isOpen && (
                     <div style={{ paddingBottom: 18 }}>
-                      {chSegs.map(({ seg, idx }) => {
+                      {chSegs.map(({ seg, idx }, i) => {
                         const isCurrentMatch = matchIndex >= 0 && matches[matchIndex] === idx;
                         const isAnyMatch = search.trim() && matches.includes(idx);
+                        // Runs are per chapter: the first line under a chapter
+                        // heading always names its speaker, even mid-run.
+                        const continuesSpeaker = i > 0 && chSegs[i - 1].seg.speaker === seg.speaker;
                         return (
                         <div key={idx} ref={(el) => { segmentRefs.current[idx] = el; }} style={{
                           borderRadius: 'var(--radius)',
@@ -1241,6 +1256,7 @@ export function TranscriptReview({
                             hasPii={piiSegmentIndices.has(idx)}
                             isHighlighted={highlightedSegment === idx}
                             diarizing={diarizing}
+                            continuesSpeaker={continuesSpeaker}
                           />
                         </div>
                         );
@@ -1271,6 +1287,7 @@ export function TranscriptReview({
                         hasPii={piiSegmentIndices.has(i)}
                         isHighlighted={highlightedSegment === i}
                         diarizing={diarizing}
+                        continuesSpeaker={i > 0 && displaySegments[i - 1].speaker === seg.speaker}
                       />
                     </div>
                   ))
@@ -1302,6 +1319,7 @@ export function TranscriptReview({
           </div>
 
           {piiReplacements.length > 0 && (
+            <OnboardingHint stepId="review.pii-checkboxes">
             <div style={{ marginTop: 18 }}>
               {piiReplacements.map((r, i) => (
                 <div
@@ -1363,6 +1381,7 @@ export function TranscriptReview({
                 <span style={{ marginLeft: 'auto' }}>{checkedPii.size}/{piiReplacements.length}</span>
               </div>
             </div>
+            </OnboardingHint>
           )}
 
           {/* Talere & deltagere — one participant-first list that connects each
@@ -1370,6 +1389,7 @@ export function TranscriptReview({
               matcher shows a recognising state but keeps the roster editable. */}
           <div style={{ marginTop: 28 }}>
             <SpeakerAssignment
+              meetingId={meetingId}
               rows={participantRows}
               voices={unassignedSpeakers}
               voicelessParticipants={voicelessParticipants}
@@ -1398,6 +1418,7 @@ export function TranscriptReview({
           </div>
 
           {/* Skabelon, kategorier & ekstra instruktioner */}
+          <OnboardingHint stepId="review.skabelon-panel">
           <div style={{ marginTop: 28 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>skabelon</div>
 
@@ -1597,6 +1618,7 @@ export function TranscriptReview({
               )}
             </div>
           </div>
+          </OnboardingHint>
 
           {/* Compliance */}
           <div style={{
@@ -1617,20 +1639,24 @@ export function TranscriptReview({
           </div>
 
           {/* Generate button */}
-          <button
-            onClick={proceedToMinutes}
-            disabled={isGenerating || segments.length === 0}
-            style={{
-              marginTop: 12, width: '100%', padding: '12px 16px',
-              background: 'var(--accent)', color: '#fff',
-              border: '1px solid var(--accent)', borderRadius: 'var(--radius)',
-              fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
-              cursor: isGenerating || segments.length === 0 ? 'not-allowed' : 'pointer',
-              opacity: isGenerating || segments.length === 0 ? 0.5 : 1,
-            }}
-          >
-            {isGenerating ? 'genererer…' : 'generér referat →'}
-          </button>
+          <OnboardingHint stepId="review.generate-button">
+            <div style={{ display: 'inline-block', width: '100%' }}>
+              <button
+                onClick={proceedToMinutes}
+                disabled={isGenerating || segments.length === 0}
+                style={{
+                  marginTop: 12, width: '100%', padding: '12px 16px',
+                  background: 'var(--accent)', color: '#fff',
+                  border: '1px solid var(--accent)', borderRadius: 'var(--radius)',
+                  fontFamily: 'var(--mono)', fontSize: 13.5, fontWeight: 500,
+                  cursor: isGenerating || segments.length === 0 ? 'not-allowed' : 'pointer',
+                  opacity: isGenerating || segments.length === 0 ? 0.5 : 1,
+                }}
+              >
+                {isGenerating ? 'genererer…' : 'generér referat →'}
+              </button>
+            </div>
+          </OnboardingHint>
           <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--muted)', textAlign: 'center' }}>
             transkription kan stadig redigeres efter
           </div>
@@ -1733,6 +1759,13 @@ export function TranscriptReview({
               <path d="M2 4h12M5 4V2.5A.5.5 0 015.5 2h5a.5.5 0 01.5.5V4M6 7v5M10 7v5M3 4l.8 9.1A.5.5 0 004.3 13.6h7.4a.5.5 0 00.5-.5L13 4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
             lydfil slettet
+          </span>
+        ) : audioDiscarded ? (
+          <span
+            title="Lyden fra et Teams-møde når aldrig din browser. Er mødet optaget, transskriberes optagelsen på serveren, og lyden gemmes ikke."
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}
+          >
+            ingen lyd — Teams-møder gemmes kun som tekst
           </span>
         ) : (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}>

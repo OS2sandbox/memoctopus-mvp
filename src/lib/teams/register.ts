@@ -1,0 +1,176 @@
+import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
+import { deleteRecordingEnabled } from './artifact-mode';
+import { parseGraphDate } from './graph-dates';
+import { armMeeting, disarmMeeting, isArmed } from './meeting-arm';
+import { resolveJoinUrl, type ResolvedMeeting } from './meeting-resolver';
+import { cleanUpRecording } from './poller';
+import {
+  claimMeetingSnapshot,
+  deleteTeamsMeeting,
+  getMeetingSnapshot,
+  listTeamsMeetingsByGraphId,
+  markTeamsMeetingUnregistered,
+  upsertTeamsMeeting,
+  type TeamsArmResult,
+  type TeamsMeetingOrigin,
+  type TeamsMeetingRow,
+} from './store';
+
+/**
+ * Registering a Teams meeting for automatic minutes: resolve the join URL to a
+ * Graph onlineMeeting, arm it when the user is its organizer, and store the row
+ * the poller works from. Shared by the dashboard's "Mødelink" box
+ * (POST /api/teams/meetings) and the Outlook add-in (POST /api/outlook/meetings),
+ * so the two cannot drift apart.
+ *
+ * Throws `GraphError` / `ResolveError` for the callers' error mapping, and
+ * {@link MeetingIdTakenError} when the id belongs to someone else.
+ */
+
+export class MeetingIdTakenError extends Error {
+  constructor() {
+    super('meeting-id-taken');
+    this.name = 'MeetingIdTakenError';
+  }
+}
+
+export interface RegisterInput {
+  /** Our own meeting id: the browser's IndexedDB id, or one minted for Outlook. */
+  meetingId: string;
+  joinUrl: string;
+  /** Already resolved by the caller, to save a second Graph call. */
+  resolved?: ResolvedMeeting;
+  eventId?: string | null;
+  occurrenceStart?: Date | null;
+  occurrenceEnd?: Date | null;
+  origin?: TeamsMeetingOrigin | null;
+  /** Re-arming an existing row: keep its state (it may be `fetching` right now). */
+  keepState?: boolean;
+}
+
+export interface RegisterResult {
+  row: TeamsMeetingRow;
+  armResult: TeamsArmResult;
+}
+
+export async function registerTeamsMeeting(userId: string, input: RegisterInput): Promise<RegisterResult> {
+  const { meetingId } = input;
+
+  // The pending stash is keyed by meetingId across all users, and the pipeline
+  // will write this meeting's transcript and recording into it. Binding the id
+  // to its owner here does two things: it stops another user's browser from
+  // collecting these artifacts, and it makes the hand-off work at all — both
+  // the pending-meta and pending-transcript routes deny by default when no owner is
+  // recorded.
+  const existingOwner = await getMeetingOwner(meetingId);
+  if (existingOwner && existingOwner !== userId) throw new MeetingIdTakenError();
+  await setMeetingOwner(meetingId, userId);
+
+  const resolved = input.resolved ?? (await resolveJoinUrl(userId, input.joinUrl));
+
+  // Only the organizer may PATCH meeting options; an invitee is registered
+  // anyway, because their transcript is readable if somebody starts
+  // transcription manually.
+  const outcome = resolved.isOrganizer ? await armMeeting(userId, resolved.graphMeetingId) : null;
+  const armResult = outcome?.result ?? ('not_organizer' as const);
+
+  // What the organizer had before we ever PATCHed this Graph meeting, for the
+  // disarm to restore — claimed once per graphMeetingId, not per local id, so
+  // a recurring series' second+ occurrence (its own local id, same Graph
+  // meeting) gets back the true original instead of its own already-armed
+  // values. See claimMeetingSnapshot. The claimed value itself is not needed
+  // here — disarm reads it back later by graphMeetingId.
+  if (outcome && outcome.result !== 'not_organizer') {
+    await claimMeetingSnapshot(userId, resolved.graphMeetingId, outcome.previousOptions);
+  }
+
+  const row = await upsertTeamsMeeting(userId, {
+    id: meetingId,
+    graphMeetingId: resolved.graphMeetingId,
+    joinUrl: resolved.joinUrl,
+    subject: resolved.subject,
+    organizerId: resolved.organizerId,
+    isOrganizer: resolved.isOrganizer,
+    armed: isArmed(armResult),
+    armResult,
+    eventId: input.eventId ?? null,
+    // The client knows which *occurrence* of a recurring series it armed; Graph's
+    // onlineMeeting only knows the series-level window. Prefer the occurrence, or
+    // artifacts of occurrence 2+ fall outside the pick window and are never found.
+    scheduledStart: input.occurrenceStart ?? parseGraphDate(resolved.scheduledStart),
+    scheduledEnd: input.occurrenceEnd ?? parseGraphDate(resolved.scheduledEnd),
+    // …and the poller, which re-reads the window from Graph, must keep it.
+    occurrenceWindow: input.occurrenceStart != null || input.occurrenceEnd != null,
+    // Omitted, the upsert keeps the row's state; a new row starts awaiting_teams.
+    ...(input.keepState ? {} : { state: 'awaiting_teams' as const }),
+    origin: input.origin ?? null,
+  });
+
+  return { row, armResult };
+}
+
+export interface UnregisterResult {
+  /**
+   * False when the meeting may still be armed in Teams although it should not be:
+   * Graph failed, or TEAMS_GRAPH_ENABLED is off and there is no way to reach it.
+   */
+  disarmed: boolean;
+  /**
+   * The Teams meeting was left armed on purpose: other occurrences of the same
+   * series are still registered and waiting for Teams to record them. Teams arms
+   * a series as a whole, so it records this occurrence too, but nothing collects it.
+   * Always set by unregisterTeamsMeeting; optional only so callers' test doubles
+   * written before it existed still type-check.
+   */
+  keptForOtherOccurrences?: boolean;
+}
+
+/**
+ * Turns OS2taletiltekst off for a meeting: un-arm it (if we armed it) and forget it.
+ *
+ * The row goes even when the Graph side could not be undone — the user asked us
+ * to stop collecting. One exception: a recording still queued for deletion from
+ * OneDrive is deleted first, and if that cannot happen now the row is kept, out
+ * of sight, until the poller has done it. The row is the only record of which
+ * file to delete.
+ */
+export async function unregisterTeamsMeeting(
+  userId: string,
+  row: TeamsMeetingRow,
+  now: Date = new Date(),
+): Promise<UnregisterResult> {
+  let disarmed = true;
+  let keptForOtherOccurrences = false;
+  // A policy-blocked arm was still PATCHed, so it has options to put back too.
+  if (row.armed || row.armResult === 'policy_blocked') {
+    // A series is ONE onlineMeeting with one set of options, shared by every
+    // occurrence registered here. Disarming it for this one would stop Teams
+    // recording the occurrences still waiting.
+    const siblings = await listTeamsMeetingsByGraphId(userId, row.graphMeetingId);
+    keptForOtherOccurrences = siblings.some((s) => s.id !== row.id && !isSettled(s.state));
+    if (!keptForOtherOccurrences) {
+      try {
+        const originalOptions = await getMeetingSnapshot(userId, row.graphMeetingId);
+        await disarmMeeting(userId, row.graphMeetingId, originalOptions);
+      } catch (err) {
+        disarmed = false;
+        console.error('[teams] disarm failed for', row.id, '- the meeting may still be armed in Teams:', err);
+      }
+    }
+  }
+
+  if (row.recordingCleanup === 'pending' && deleteRecordingEnabled()) {
+    const after = await cleanUpRecording(userId, row, now);
+    if (after.recordingCleanup === 'pending') {
+      await markTeamsMeetingUnregistered(userId, row.id);
+      return { disarmed, keptForOtherOccurrences };
+    }
+  }
+  await deleteTeamsMeeting(userId, row.id);
+  return { disarmed, keptForOtherOccurrences };
+}
+
+/** Collected or given up on: Teams has nothing more to record for it. */
+function isSettled(state: TeamsMeetingRow['state']): boolean {
+  return state === 'ready' || state === 'failed';
+}

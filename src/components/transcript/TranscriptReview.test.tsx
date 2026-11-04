@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TranscriptReview } from './TranscriptReview';
+import { renderWithOnboarding } from '@/test/onboarding';
 import type { TranscriptSegment, PiiReplacement } from '@/types';
 
 // ── Mock all external dependencies ──────────────────────────────────────────
@@ -48,14 +49,20 @@ vi.mock('@/lib/utils', () => ({
 
 // Mock child components to keep tests focused on TranscriptReview logic
 vi.mock('./SpeakerRow', () => ({
-  SpeakerRow: ({ segment, index, onUpdate, onAssign, diarizing }: {
+  SpeakerRow: ({ segment, index, onUpdate, onAssign, diarizing, continuesSpeaker }: {
     segment: TranscriptSegment;
     index: number;
     onUpdate: (i: number, s: TranscriptSegment) => void;
     onAssign: (from: string, to: string) => void;
     diarizing?: boolean;
+    continuesSpeaker?: boolean;
   }) => (
-    <div data-testid={`speaker-row-${index}`} data-speaker={segment.speaker} data-diarizing={String(diarizing)}>
+    <div
+      data-testid={`speaker-row-${index}`}
+      data-speaker={segment.speaker}
+      data-diarizing={String(diarizing)}
+      data-continues={String(Boolean(continuesSpeaker))}
+    >
       <span>{segment.speaker}</span>
       <span>{segment.text}</span>
       {diarizing && <span aria-label="Genkender taler">…</span>}
@@ -70,10 +77,18 @@ vi.mock('./SpeakerRow', () => ({
 }));
 
 vi.mock('./SpeakerAssignment', () => ({
-  SpeakerAssignment: ({ diarizing, rows }: { diarizing?: boolean; rows: unknown[] }) => (
+  SpeakerAssignment: ({ diarizing, rows, voices, totalVoices }: {
+    diarizing?: boolean;
+    rows: { name: string; kind: string }[];
+    voices: { speaker: string }[];
+    totalVoices: number;
+  }) => (
     <div data-testid="speaker-assignment" data-diarizing={String(diarizing)}>
       {diarizing && <span>genkender stemmer…</span>}
       <span data-testid="row-count">{rows.length}</span>
+      <span data-testid="row-kinds">{rows.map((r) => `${r.name}:${r.kind}`).join('|')}</span>
+      <span data-testid="voices">{voices.map((v) => v.speaker).join('|')}</span>
+      <span data-testid="total-voices">{totalVoices}</span>
     </div>
   ),
 }));
@@ -97,10 +112,26 @@ const DEFAULT_PROPS = {
 };
 
 // Helper
+// Onboarding hints wrap several elements exercised by these tests; mark them
+// already-seen so the hint popovers don't render (they're covered separately)
+// and this suite's DOM queries keep targeting the underlying controls.
+const ONBOARDING_INITIAL = {
+  tourSkipped: true,
+  tourCompleted: true,
+  seen: [
+    { stepId: 'review.pii-checkboxes', meetingId: 'meeting-abc' },
+    { stepId: 'review.skabelon-panel', meetingId: 'meeting-abc' },
+    { stepId: 'review.generate-button', meetingId: 'meeting-abc' },
+    { stepId: 'review.speaker-assign', meetingId: 'meeting-abc' },
+    { stepId: 'review.unknown-voices', meetingId: 'meeting-abc' },
+  ],
+};
+
 function setup(overrides: Partial<React.ComponentProps<typeof TranscriptReview>> = {}) {
   const onDataChange = vi.fn();
-  const utils = render(
+  const utils = renderWithOnboarding(
     <TranscriptReview {...DEFAULT_PROPS} onDataChange={onDataChange} {...overrides} />,
+    ONBOARDING_INITIAL,
   );
   return { onDataChange, ...utils };
 }
@@ -205,6 +236,90 @@ describe('TranscriptReview', () => {
 
   // ── Audio deleted state ────────────────────────────────────────────────────
 
+  // Run grouping is rendered by SpeakerRow, but DERIVED here — at two separate
+  // call sites (flat and chaptered). Neither had any assertion, so a regression
+  // that passed continuesSpeaker for every row, or none, would look fine.
+  describe('speaker runs', () => {
+    const RUN = [
+      { speaker: 'Mette Hansen', start: 0, end: 4, text: 'Velkommen' },
+      { speaker: 'Mette Hansen', start: 4, end: 8, text: 'Første punkt' },
+      { speaker: 'Jens Poulsen', start: 8, end: 12, text: 'Tak' },
+      { speaker: 'Mette Hansen', start: 12, end: 16, text: 'Videre' },
+    ];
+
+    it('marks only the rows that continue the previous speaker', async () => {
+      setup({ initialSegments: RUN });
+      await waitFor(() => expect(screen.getByTestId('speaker-row-3')).toBeInTheDocument());
+
+      expect(screen.getByTestId('speaker-row-0')).toHaveAttribute('data-continues', 'false');
+      expect(screen.getByTestId('speaker-row-1')).toHaveAttribute('data-continues', 'true');
+      expect(screen.getByTestId('speaker-row-2')).toHaveAttribute('data-continues', 'false');
+      expect(screen.getByTestId('speaker-row-3')).toHaveAttribute('data-continues', 'false');
+    });
+
+    it('never marks the very first row as a continuation', async () => {
+      setup({ initialSegments: [RUN[0], RUN[1]] });
+      await waitFor(() => expect(screen.getByTestId('speaker-row-0')).toBeInTheDocument());
+      expect(screen.getByTestId('speaker-row-0')).toHaveAttribute('data-continues', 'false');
+    });
+    // Under a chapter heading the first line always names its speaker, even when
+    // the previous chapter ended mid-run with the same person: the reader opens a
+    // chapter on its own, and a nameless first line there belongs to nobody.
+    it('starts a new run at every chapter heading', async () => {
+      const user = userEvent.setup({ delay: null });
+      const segments = [
+        { speaker: 'Mette Hansen', start: 0, end: 4, text: 'Velkommen' },
+        { speaker: 'Jens Poulsen', start: 4, end: 8, text: 'Tak' },
+        { speaker: 'Jens Poulsen', start: 8, end: 12, text: 'Budgettet' },
+        { speaker: 'Jens Poulsen', start: 12, end: 16, text: 'Og så personalet' },
+      ];
+      const chapters = [
+        { id: 'ch-1', title: 'Velkomst', summary: 'Velkomst', startTime: 0, endTime: 8, segmentIndices: [0, 1] },
+        { id: 'ch-2', title: 'Budget', summary: 'Budget', startTime: 8, endTime: 16, segmentIndices: [2, 3] },
+      ];
+      setup({ initialSegments: segments, initialChapters: chapters });
+
+      await user.click(await screen.findByText(/00:08 — 00:16/));
+      await waitFor(() => expect(screen.getByTestId('speaker-row-3')).toBeInTheDocument());
+
+      // Row 1 (Jens, end of chapter 1) precedes row 2 in the transcript, but not
+      // under this heading.
+      expect(screen.getByTestId('speaker-row-2')).toHaveAttribute('data-continues', 'false');
+      expect(screen.getByTestId('speaker-row-3')).toHaveAttribute('data-continues', 'true');
+    });
+  });
+
+  // Teams' transcript names every speaker, and those names arrive as the
+  // participants. Such a meeting must never offer a "Taler 1" to be matched —
+  // there is no unknown voice in it.
+  describe('a transcript Teams has named', () => {
+    const NAMED = [
+      { speaker: 'Mette Hansen', start: 0, end: 4, text: 'Velkommen' },
+      { speaker: 'Jens Poulsen', start: 4, end: 8, text: 'Tak' },
+      { speaker: 'Mette Hansen', start: 8, end: 12, text: 'Videre' },
+    ];
+
+    it('hands the speaker matcher no "Taler N" voice', async () => {
+      setup({ initialSegments: NAMED, participants: ['Mette Hansen', 'Jens Poulsen'] });
+
+      await waitFor(() => expect(screen.getByTestId('speaker-assignment')).toBeInTheDocument());
+      expect(screen.getByTestId('voices')).toHaveTextContent(/^$/);
+      expect(screen.getByTestId('speaker-assignment')).not.toHaveTextContent(/Taler \d/);
+      expect(screen.getByTestId('total-voices')).toHaveTextContent('2');
+      expect(screen.getByTestId('row-kinds')).toHaveTextContent('Mette Hansen:recognized|Jens Poulsen:recognized');
+    });
+
+    // The control: an unnamed voice in the same transcript is still offered.
+    it('still offers a voice Teams could not name', async () => {
+      setup({
+        initialSegments: [...NAMED, { speaker: 'Taler 3', start: 12, end: 16, text: 'Hallo?' }],
+        participants: ['Mette Hansen', 'Jens Poulsen'],
+      });
+
+      await waitFor(() => expect(screen.getByTestId('voices')).toHaveTextContent('Taler 3'));
+    });
+  });
+
   describe('audio deleted state', () => {
     it('shows "lydfil slettet" in the bottom bar when audioDeleted=true and no audioUrl', async () => {
       setup({ audioDeleted: true, audioUrl: undefined });
@@ -214,6 +329,24 @@ describe('TranscriptReview', () => {
     it('shows "ingen lydfil" when no audioUrl and not audioDeleted', async () => {
       setup({ audioDeleted: false, audioUrl: undefined });
       expect(screen.getByText('ingen lydfil')).toBeInTheDocument();
+    });
+
+    // Three distinct no-player states, and the copy has to tell them apart: a local
+    // copy the user deleted, a Teams meeting whose audio never reached the browser,
+    // and a meeting that simply has no audio.
+    // Worded to be true also for a meeting Teams kept no recording of at all
+    // (transcript-only), where no audio ever existed to be deleted.
+    it('explains that a Teams meeting\'s audio never reaches the browser', async () => {
+      setup({ audioDiscarded: true, audioDeleted: false, audioUrl: undefined });
+      expect(screen.getByText('ingen lyd — Teams-møder gemmes kun som tekst')).toBeInTheDocument();
+      expect(screen.queryByText('ingen lydfil')).not.toBeInTheDocument();
+      expect(screen.queryByText(/slettet efter transskription/)).not.toBeInTheDocument();
+    });
+
+    it('prefers "lydfil slettet" when the user deleted a local copy', async () => {
+      setup({ audioDiscarded: true, audioDeleted: true, audioUrl: undefined });
+      expect(screen.getByText('lydfil slettet')).toBeInTheDocument();
+      expect(screen.queryByText(/Teams-møder gemmes kun som tekst/)).not.toBeInTheDocument();
     });
 
     it('does NOT show "lydfil slettet" when audioUrl is set', async () => {
