@@ -7,8 +7,8 @@ import { runSync } from '@/lib/rollekatalog/sync';
 import { recordIntegrationRun } from '@/lib/rollekatalog/run-audit';
 import { syncResultResponse } from '@/lib/rollekatalog/sync-http';
 
-// Called by the operator's scheduler with INTERNAL_CRON_SECRET (the app has no
-// in-process timers: they break with several replicas). The sync records its own
+// Called by the operator's scheduler with INTERNAL_CRON_SECRET (the sync is
+// cron-driven, not an in-process timer, because that would run once per replica). The sync records its own
 // sync_runs row, and the run is one integration.sync_run audit event (counts and a code only). Never forced: only the admin
 // button may bypass the removal threshold. A scheduler that outlives its setup
 // (local mode, or no URL/keys) gets 409 and leaves no sync_runs row.

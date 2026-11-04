@@ -2,6 +2,7 @@
 // sync.ts so the routes can read the latest run without pulling in the engine.
 // All SQL here is schema-qualified through SyncEnv.schema (a trusted constant),
 // so the gated Postgres lane can run the very same code in a throwaway schema.
+import { safeLogError } from '@/lib/audit/safe-log';
 import type { ClientLike, SqlResult } from '@/lib/authz/pg-runner';
 import { pool } from '@/lib/db';
 import { SYNC_COUNT_KEYS, emptySyncCounts, type SyncCounts, type SyncRunSummary } from './types';
@@ -20,10 +21,23 @@ export function defaultSyncEnv(): SyncEnv {
     schema: 'public',
     connect: async () => {
       const client = await pool.connect();
+      // pg-pool drops its own 'error' listener while a client is checked out, and the lock
+      // connection sits idle through the HTTP fetches: without this a dropped connection
+      // (restart, failover, proxy timeout) is an uncaught exception that kills the server.
+      // The session lock went with the connection, so a lost client is destroyed, never pooled.
+      let lost = false;
+      const onError = (err: Error) => {
+        lost = true;
+        safeLogError('rollekatalog/lock-connection: connection error', err);
+      };
+      client.on('error', onError);
       return {
         query: (text, params) =>
           client.query(text, params as unknown[] | undefined) as unknown as Promise<SqlResult<never>>,
-        release: (destroy) => client.release(destroy),
+        release: (destroy) => {
+          client.removeListener('error', onError);
+          client.release(destroy || lost || undefined);
+        },
       };
     },
   };

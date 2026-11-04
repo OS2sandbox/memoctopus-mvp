@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AuditLog } from './AuditLog';
 import { ADMIN_ME, READER_ME, calls, installFetch, json } from './test-helpers';
@@ -325,6 +325,15 @@ describe('AuditLog', () => {
       await userEvent.type(screen.getByLabelText('Til dato'), '2026-10-01');
       expect(await screen.findByRole('alert')).toHaveTextContent('Fra-datoen');
       expect(auditCalls(m)).toHaveLength(2);
+    });
+
+    it('rejects a date with a 5-digit year without calling the API', async () => {
+      const m = await loaded();
+      await userEvent.click(screen.getByText(/Flere filtre/));
+      fireEvent.change(screen.getByLabelText('Fra dato'), { target: { value: '20255-11-04' } });
+      expect(await screen.findByRole('alert')).toHaveTextContent('Ugyldig dato');
+      expect(auditCalls(m)).toHaveLength(1);
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
     });
 
     it('Nulstil clears everything back to the defaults', async () => {

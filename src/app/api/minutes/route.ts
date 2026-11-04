@@ -9,6 +9,7 @@ import { withHandler } from '@/lib/api-handler';
 import { asEntityUuid, elapsedMs, emitAudit, emitTemplateDenied, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
 import { sanitizeChapters, sanitizeParticipants, redactPromptEchoDeep } from '@/lib/ai/prompt-echo';
 import { requireAppAccess } from '@/lib/authz/app-access';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 export const maxDuration = 120;
 
@@ -82,8 +83,16 @@ async function postHandler(req: NextRequest) {
   // No template named at all: the person's default applies, and it may be a central one. If that central
   // template is no longer available the personal default below applies instead (no 404: they chose nothing).
   if (skabelonId === undefined && skabelonSource === undefined) {
-    const defaultId = await getCentralDefaultId(userId).catch(() => null);
-    if (defaultId) central = await resolveCentralTemplate(userId, defaultId).catch(() => null);
+    // Only "not available" (a null from the resolver) downgrades to the personal default. The pointer read is
+    // fail-soft like GET /api/skabeloner, but logged; a resolver error is not swallowed (500, as for an explicit
+    // central choice), so an infrastructure failure never silently drops the shared prompt.
+    let defaultId: string | null = null;
+    try {
+      defaultId = await getCentralDefaultId(userId);
+    } catch (err) {
+      safeLogError('minutes central default', err);
+    }
+    if (defaultId) central = await resolveCentralTemplate(userId, defaultId);
   }
   if (skabelonSource === 'central') {
     central = typeof skabelonId === 'string' ? await resolveCentralTemplate(userId, skabelonId) : null;

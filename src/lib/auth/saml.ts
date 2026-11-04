@@ -45,7 +45,8 @@ function extraFields(p: SamlFileProvider): Record<string, string> {
 /** The sso plugin's `defaultSSO` entry for one SAML provider. */
 export function defaultSsoFor(p: SamlFileProvider, base = authBaseUrl()): DefaultSso | null {
   const entityId = spEntityIdFor(p, base);
-  // Without BETTER_AUTH_URL there is no stable SP entity id to give the IdP.
+  // Without BETTER_AUTH_URL and without `spEntityId` there is no SP entity id to give the IdP
+  // (`ssoPluginOptions` skips every provider without a base anyway: there is no ACS URL).
   if (!entityId) return null;
   const c = p.claims ?? {};
   const mapping = {

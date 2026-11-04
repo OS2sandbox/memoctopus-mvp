@@ -422,6 +422,14 @@ describe('POST /api/minutes with a central DEFAULT template', () => {
     expect((await res.json()).templateRef.source).toBe('personal');
   });
 
+  it('a failing resolver is not a silent downgrade: 500, no generation with the personal default', async () => {
+    mockResolveCentral.mockRejectedValue(new Error('db down'));
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments }));
+    expect(res.status).toBe(500);
+    expect(mockGenerateReferatBody).not.toHaveBeenCalled();
+    expect(mockGetDefaultSkabelon).not.toHaveBeenCalled();
+  });
+
   it('never overrides an explicit choice: "Ingen skabelon" or a named personal template', async () => {
     const none = await (await POST(makeJsonReq(BASE_URL, 'POST', { segments: sampleSegments, skabelonId: '' }))).json();
     expect(none.templateRef.source).toBe('none');

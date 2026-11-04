@@ -98,6 +98,9 @@ function filterQuery(f: Filters, now: Date = new Date()): URLSearchParams {
   return p;
 }
 
+/** A day the browser let through can still be unparseable (a 5-digit year): toISOString() would throw. */
+const isValidDay = (d: string) => !d || !Number.isNaN(new Date(`${d}T00:00:00`).getTime());
+
 const isDefault = (f: Filters) => JSON.stringify(f) === JSON.stringify(DEFAULT_FILTERS);
 
 const formatTime = (iso: string) => formatDateTime(iso, { dateStyle: 'medium', timeStyle: 'short' });
@@ -236,7 +239,15 @@ export function AuditLog() {
 
   const fetchPage = useCallback(async (filters: Filters, cursor: string | null) => {
     const seq = ++requestSeq.current;
-    const p = filterQuery(filters);
+    let p: URLSearchParams;
+    try {
+      p = filterQuery(filters);
+    } catch {
+      setLoadError('Filteret er ugyldigt.');
+      setLoading(false);
+      setLoadingMore(false);
+      return;
+    }
     p.set('limit', String(PAGE_SIZE));
     if (cursor) p.set('cursor', cursor);
     const res = await apiRequest<{ events: AuditEventView[]; nextCursor: string | null }>(`/api/admin/audit?${p.toString()}`);
@@ -311,6 +322,10 @@ export function AuditLog() {
     };
     if (next.entityId && !UUID_RE.test(next.entityId)) {
       setFilterError('Objekt-id skal være et gyldigt id (UUID).');
+      return;
+    }
+    if (!isValidDay(next.from) || !isValidDay(next.to)) {
+      setFilterError('Ugyldig dato.');
       return;
     }
     if (next.from && next.to && next.from > next.to) {
@@ -434,6 +449,7 @@ export function AuditLog() {
               <Input
                 id="audit-from"
                 type="date"
+                max="9999-12-31"
                 value={draft.from}
                 onChange={(e) => {
                   setDraft((d) => ({ ...d, from: e.target.value }));
@@ -446,6 +462,7 @@ export function AuditLog() {
               <Input
                 id="audit-to"
                 type="date"
+                max="9999-12-31"
                 value={draft.to}
                 onChange={(e) => {
                   setDraft((d) => ({ ...d, to: e.target.value }));

@@ -527,10 +527,11 @@ export async function pollDueMeetings(now: Date): Promise<{ polled: number }> {
   // The session lock goes with the connection, so only log, and discard the
   // client instead of returning it to the pool.
   let connectionLost = false;
-  client.on('error', (err) => {
+  const onError = (err: Error) => {
     connectionLost = true;
     safeLogError('teams/poller: lock connection error', err);
-  });
+  };
+  client.on('error', onError);
 
   try {
     const locked = await client.query<{ locked: boolean }>(
@@ -552,6 +553,9 @@ export async function pollDueMeetings(now: Date): Promise<{ polled: number }> {
     safeLogError('teams/poller: run failed', err);
     return { polled: 0 };
   } finally {
+    // Remove our listener before release: pg-pool only manages its own, so ours
+    // would otherwise pile up on a reused client.
+    client.removeListener('error', onError);
     client.release(connectionLost ? true : undefined);
   }
 }

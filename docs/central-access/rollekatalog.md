@@ -128,7 +128,7 @@ The elevated check exists because one `bruger` row per user dominates the overal
 
 ## 6. Scheduling
 
-The app has no in-process timers (they would run once per replica). Call the route from a host or cluster cron:
+The Rollekatalog sync, the role catalogue refresh and the audit prune are not scheduled by the app, so call the route from a host or cluster cron. The only in-process timers are the Teams poller and the TTL sweep of the server-held Teams transcripts; they are unrelated to Rollekatalog and run in every instance (the poller serialised by an advisory lock; see `DEPLOY.md`; `TEAMS_POLLER_DISABLED` stops the poller on an instance):
 
 ```
 */15 * * * * curl -fsS -m 600 -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" https://app.example.dk/api/internal/rollekatalog/sync -o /dev/null
