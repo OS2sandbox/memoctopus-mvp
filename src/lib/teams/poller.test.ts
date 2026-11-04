@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockConnect = vi.fn();
-vi.mock('@/lib/db', () => ({ pool: { connect: (...a: unknown[]) => mockConnect(...a) }, db: {} }));
+const mockPoolQuery = vi.fn();
+vi.mock('@/lib/db', () => ({
+  pool: { connect: (...a: unknown[]) => mockConnect(...a), query: (...a: unknown[]) => mockPoolQuery(...a) },
+  db: {},
+}));
 
 // graph-client (for GraphError) pulls in better-auth, which needs a real DB.
 vi.mock('@/lib/auth', () => ({ auth: { api: {} } }));
@@ -135,6 +139,7 @@ beforeEach(() => {
   mockRefresh.mockImplementation(async (_u, _id, f) =>
     row({ scheduledStart: f.scheduledStart, scheduledEnd: f.scheduledEnd, subject: f.subject }));
   mockQuery.mockResolvedValue([]);
+  mockPoolQuery.mockResolvedValue({ rows: [], rowCount: 0 });
   mockSetState.mockResolvedValue(row());
   mockListCleanups.mockResolvedValue([]);
 });
@@ -617,6 +622,55 @@ describe('pollDueMeetings', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(await pollDueMeetings(NOW)).toEqual({ polled: 0 });
     spy.mockRestore();
+  });
+
+  describe('a disabled directory user', () => {
+    function lockedClient() {
+      mockConnect.mockResolvedValue({
+        query: vi.fn().mockResolvedValue({ rows: [{ locked: true }] }),
+        release: vi.fn(),
+      });
+    }
+
+    it('gets no Graph call, no poll and no recording cleanup', async () => {
+      lockedClient();
+      mockListUsers.mockResolvedValue(['u1']);
+      mockPoolQuery.mockResolvedValue({ rows: [{ '?column?': 1 }], rowCount: 1 });
+      mockListDue.mockResolvedValue([row()]);
+      mockListCleanups.mockResolvedValue([row({ recordingCleanup: 'pending' })]);
+
+      expect(await pollDueMeetings(NOW)).toEqual({ polled: 0 });
+
+      expect(mockPoolQuery).toHaveBeenCalledWith(expect.stringContaining('public.directory_users'), ['u1']);
+      expect(mockListDue).not.toHaveBeenCalled();
+      expect(mockListCleanups).not.toHaveBeenCalled();
+      expect(mockProcess).not.toHaveBeenCalled();
+      expect(mockGetMeeting).not.toHaveBeenCalled();
+      expect(mockDeleteRecording).not.toHaveBeenCalled();
+    });
+
+    it('is not assumed for a user with no directory row', async () => {
+      lockedClient();
+      mockListUsers.mockResolvedValue(['u1']);
+      mockListDue.mockResolvedValue([row()]);
+      mockGet.mockResolvedValue(row());
+      mockProcess.mockResolvedValue({ status: 'pending' });
+
+      expect(await pollDueMeetings(NOW)).toEqual({ polled: 1 });
+    });
+
+    it('is skipped for the tick when the lookup fails', async () => {
+      lockedClient();
+      mockListUsers.mockResolvedValue(['u1']);
+      mockPoolQuery.mockRejectedValue(new Error('db down'));
+      mockListDue.mockResolvedValue([row()]);
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      expect(await pollDueMeetings(NOW)).toEqual({ polled: 0 });
+      expect(mockListDue).not.toHaveBeenCalled();
+      expect(mockProcess).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
   });
 });
 

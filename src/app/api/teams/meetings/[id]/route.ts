@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAppAccess } from '@/lib/authz/app-access';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
+import { safeLogError } from '@/lib/audit/safe-log';
+import { deleteRecordingEnabled } from '@/lib/teams/artifact-mode';
 import { recordTeamsUnregister } from '@/lib/teams/audit';
 import { teamsFailureCode } from '@/lib/teams/failure-code';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
 import { disarmMeeting } from '@/lib/teams/meeting-arm';
-import { pollMeeting } from '@/lib/teams/poller';
-import { readPendingTranscript } from '@/lib/pending-artifacts';
+import { cleanUpRecording, pollMeeting } from '@/lib/teams/poller';
+import { acknowledgePendingTranscript, readPendingTranscript } from '@/lib/pending-artifacts';
 import {
   POLL_GIVE_UP_MS,
   deleteTeamsMeeting,
@@ -55,6 +57,9 @@ function serialize(row: TeamsMeetingRow) {
  */
 const FORCED_POLL_BUDGET_MS = 8_000;
 
+/** How long deleting a meeting waits for one last OneDrive-recording delete before it goes on without it. */
+const UNREGISTER_CLEANUP_BUDGET_MS = 5_000;
+
 /**
  * Status of one registered Teams meeting. `?poll=1` runs the poller for it
  * first (the "Tjek nu" button); the poller itself is a no-op while the meeting
@@ -84,7 +89,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     let failure: unknown = null;
     const run = pollMeeting(userId, id, new Date(), { force: true, trigger: 'manual' }).catch((err: unknown) => {
       failure = err;
-      console.error('[teams/meetings] forced poll failed for', id, err);
+      safeLogError(`teams/meetings ${id}: forced poll failed`, err);
       return null;
     });
 
@@ -138,11 +143,31 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     } catch (err) {
       disarmed = false;
       failureCode = teamsFailureCode(err);
-      console.error('[teams/meetings] disarm failed for', id, '- the meeting may still be armed in Teams:', err);
+      safeLogError(`teams/meetings ${id}: disarm failed, the meeting may still be armed in Teams`, err);
     }
   }
 
+  // The row is the only thing that makes the poller retry a postponed OneDrive
+  // delete, so one last attempt is made before it goes. It never throws and writes
+  // its own verdict and event; the budget keeps a slow Graph from holding the
+  // delete. A still-postponed attempt is the residual loss: the recording stays in
+  // the organizer's OneDrive.
+  if (row.recordingCleanup === 'pending' && teamsGraphEnabled() && deleteRecordingEnabled()) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const budget = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, UNREGISTER_CLEANUP_BUDGET_MS);
+    });
+    await Promise.race([cleanUpRecording(userId, row, new Date()).catch(() => null), budget]);
+    clearTimeout(timer);
+  }
+
   await deleteTeamsMeeting(userId, id);
+  // The transcript (with real speaker names) the browser has not collected must not outlive the meeting.
+  try {
+    await acknowledgePendingTranscript(id, userId);
+  } catch (err) {
+    safeLogError(`teams/meetings ${id}: could not remove the server-held transcript`, err);
+  }
   // Disarming PATCHes the user's Teams meeting options back; `disarmed: false` says it could not be done.
   await recordTeamsUnregister(req, { userId, meetingId: id, disarmed, ...(failureCode ? { code: failureCode } : {}) });
   return NextResponse.json({ ok: true, disarmed });

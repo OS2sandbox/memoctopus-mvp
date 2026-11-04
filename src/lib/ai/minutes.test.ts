@@ -283,6 +283,35 @@ describe('generateReferatBody — context budget', () => {
     expect(result.body).toBe('REFERAT');
   });
 
+  it('does not write the chapter title to the log when a summary hits its cap', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      mockComplete.mockImplementation(async (req: { messages: { content: string }[] }) =>
+        isSummaryCall(req)
+          ? { choices: [{ message: { content: '- punkt' }, finish_reason: 'length' }] }
+          : openaiResponse('REFERAT'),
+      );
+      const chapters: TranscriptChapter[] = [
+        {
+          id: 'ch-0',
+          title: 'Personalesag: Hemmeligtnavn',
+          summary: '',
+          startTime: 0,
+          endTime: 390,
+          segmentIndices: Array.from({ length: 40 }, (_, i) => i),
+        },
+      ];
+
+      await generateReferatBody(longTranscript(40, 1000), baseSpec, undefined, chapters);
+
+      const lines = warn.mock.calls.map((c) => c.join(' '));
+      expect(lines.some((l) => l.includes('token cap'))).toBe(true);
+      expect(lines.join('\n')).not.toContain('Hemmeligtnavn');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('runs at most 3 summary calls at a time', async () => {
     let inFlight = 0;
     let peak = 0;

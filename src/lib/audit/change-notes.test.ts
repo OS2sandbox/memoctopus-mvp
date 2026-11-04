@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 vi.mock('@/lib/db', () => ({ pool: { query: vi.fn() }, db: {} }));
+import { pool } from '@/lib/db';
 import { changeNotesFor } from './change-notes';
 import type { AuditEventRow } from './query';
 
@@ -112,6 +113,24 @@ describe('changeNotesFor', () => {
       const personal = vi.fn().mockResolvedValue([{ skabelon_id: P1, version: 9, change_note: 'Anden version.' }, { skabelon_id: P1, version: 3, change_note: null }]);
       const notes = await changeNotesFor([personalRow({ id: '30' })], { query: vi.fn(), personal });
       expect(notes.size).toBe(0);
+    });
+
+    describe('default personal lookup (own schema)', () => {
+      const poolQuery = vi.mocked(pool.query) as unknown as ReturnType<typeof vi.fn>;
+      const rows = () => [personalRow({ id: '40' })];
+
+      it('has no notes for a person without a schema or history table (3F000, 42P01)', async () => {
+        for (const code of ['3F000', '42P01']) {
+          poolQuery.mockRejectedValueOnce(Object.assign(new Error('missing'), { code }));
+          const notes = await changeNotesFor(rows());
+          expect(notes.size).toBe(0);
+        }
+      });
+
+      it('rethrows any other failure, so the export is refused instead of leaving silent gaps', async () => {
+        poolQuery.mockRejectedValueOnce(Object.assign(new Error('reset'), { code: 'ECONNRESET' }));
+        await expect(changeNotesFor(rows())).rejects.toThrow('reset');
+      });
     });
 
     it('does the central lookup and the personal lookup side by side', async () => {

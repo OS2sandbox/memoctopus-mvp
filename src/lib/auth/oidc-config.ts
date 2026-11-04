@@ -46,6 +46,13 @@ function pickName(profile: Profile, p: OidcProviderConfig, email: string | undef
   );
 }
 
+/** The value of the configured `claims.userId` (a non-empty string or number), or undefined when none is configured or it is absent. */
+function configuredUserId(profile: Profile, p: OidcProviderConfig): string | undefined {
+  if (!p.claims.userId) return undefined;
+  const raw = readClaim(profile, p.claims.userId);
+  return (typeof raw === 'string' || typeof raw === 'number') && String(raw).trim() !== '' ? String(raw).trim() : undefined;
+}
+
 /**
  * better-auth's `mapProfileToUser`: identity fields from the configured claim names, with
  * the usual fallbacks, and — as a side effect — the hand-over of this login's role/group
@@ -63,11 +70,8 @@ export function mapOidcProfile(p: OidcProviderConfig, profile: Profile): { id?: 
   const name = pickName(profile, p, picked?.email);
   if (name) out.name = name;
 
-  const idClaim = p.claims.userId;
-  const rawId = idClaim ? readClaim(profile, idClaim) : undefined;
-  if (idClaim && (typeof rawId === 'string' || typeof rawId === 'number') && String(rawId).trim() !== '') {
-    out.id = String(rawId).trim();
-  }
+  const accountId = configuredUserId(profile, p);
+  if (accountId) out.id = accountId;
 
   if (p.claims.emailVerified) {
     const v = readClaim(profile, p.claims.emailVerified);
@@ -78,8 +82,8 @@ export function mapOidcProfile(p: OidcProviderConfig, profile: Profile): { id?: 
 
   // Hand the role/group claims over, keyed the way better-auth keys the account: provider + id.
   if (p.rolesClaim || p.groupsClaim) {
-    const accountId = out.id ?? str(profile.id) ?? str(profile.sub);
-    if (accountId) stashLoginClaims(p.providerId, accountId, claimSubset(profile, p));
+    const stashId = out.id ?? str(profile.id) ?? str(profile.sub);
+    if (stashId) stashLoginClaims(p.providerId, stashId, claimSubset(profile, p));
   }
   return out;
 }
@@ -190,9 +194,11 @@ export async function loadOidcProfile(
   const wanted = [p.rolesClaim, p.groupsClaim].flatMap((s) => (s ? [s.name] : []));
   const missingClaim = wanted.some((name) => !fromToken || readClaim(fromToken, name) === undefined);
   const needsEmail = !fromToken || !pickEmail(fromToken, p);
+  // A configured userId claim is the account key; it may live only at the userinfo endpoint.
+  const missingId = !!p.claims.userId && (!fromToken || !configuredUserId(fromToken, p));
 
   let merged: Profile = { ...(fromToken ?? {}) };
-  if ((missingClaim || needsEmail) && tokens.accessToken) {
+  if ((missingClaim || needsEmail || missingId) && tokens.accessToken) {
     const url = await userInfoUrlOf(p, fetchFn);
     const info = url ? await fetchJson(fetchFn, url, { Authorization: `Bearer ${tokens.accessToken}`, Accept: 'application/json' }) : null;
     // The userinfo answer must name the same person (OIDC Core 5.3.2); without an id token there is nothing to compare.
@@ -206,6 +212,12 @@ export async function loadOidcProfile(
   // refusing the login. Refuse here instead, with a line that names the provider only.
   if (!pickEmail(merged, p)) {
     console.warn(`[auth] login refused: no e-mail address in the profile from provider ${p.providerId}`);
+    return null;
+  }
+  // The configured userId claim keys the account. Falling back to `sub` would key this login differently
+  // from one where the claim is present and split one person across two accounts: refuse instead.
+  if (p.claims.userId && !configuredUserId(merged, p)) {
+    console.warn(`[auth] login refused: userId claim missing in the profile from provider ${p.providerId}`);
     return null;
   }
   return { ...merged, id: sub, emailVerified: merged.email_verified === true, image: merged.picture };

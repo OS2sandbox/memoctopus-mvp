@@ -1020,7 +1020,9 @@ describe('SkabelonerList — central templates (read-only)', () => {
   it('shows the central section even when the user has no personal templates', async () => {
     setupFetch([], { code: true, link: false }, [makeCentral()]);
     render(<SkabelonerList />);
-    expect(await screen.findByText('Ingen skabeloner endnu.')).toBeInTheDocument();
+    expect(await screen.findByText(/Du har ingen egne skabeloner endnu\./)).toBeInTheDocument();
+    expect(screen.queryByText('Ingen skabeloner endnu.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '+ Opret en egen skabelon' })).toBeInTheDocument();
     expect(screen.getByTestId('central-skabelon')).toBeInTheDocument();
   });
 

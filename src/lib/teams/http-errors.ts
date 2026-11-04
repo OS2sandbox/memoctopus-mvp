@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { safeLogError } from '@/lib/audit/safe-log';
 import { GraphError } from './graph-client';
 import { ResolveError } from './meeting-resolver';
 
@@ -38,7 +39,7 @@ export function teamsErrorResponse(err: unknown): NextResponse {
     }
   }
 
-  console.error('[api/teams] unexpected error:', err);
+  safeLogError('api/teams: unexpected error', err);
   return NextResponse.json(
     { error: 'internal', message: 'Der opstod en uventet fejl. Prøv igen.' },
     { status: 500 },

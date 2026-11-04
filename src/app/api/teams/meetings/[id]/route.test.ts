@@ -24,9 +24,12 @@ vi.mock('@/lib/teams/store', async (importOriginal) => ({
   deleteTeamsMeeting: vi.fn().mockResolvedValue(undefined),
   setTeamsMeetingState: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock('@/lib/pending-artifacts', () => ({ readPendingTranscript: vi.fn() }));
+vi.mock('@/lib/pending-artifacts', () => ({
+  readPendingTranscript: vi.fn(),
+  acknowledgePendingTranscript: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('@/lib/teams/audit', () => ({ recordTeamsUnregister: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@/lib/teams/poller', () => ({ pollMeeting: vi.fn() }));
+vi.mock('@/lib/teams/poller', () => ({ pollMeeting: vi.fn(), cleanUpRecording: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@/lib/teams/meeting-arm', () => ({ disarmMeeting: vi.fn() }));
 
 import { GET, DELETE, POST } from './route';
@@ -34,7 +37,7 @@ import { auth } from '@/lib/auth';
 import { GraphError } from '@/lib/teams/graph-client';
 import { recordTeamsUnregister } from '@/lib/teams/audit';
 import { disarmMeeting } from '@/lib/teams/meeting-arm';
-import { pollMeeting } from '@/lib/teams/poller';
+import { cleanUpRecording, pollMeeting } from '@/lib/teams/poller';
 import {
   POLL_GIVE_UP_MS,
   deleteTeamsMeeting,
@@ -43,7 +46,7 @@ import {
   setTeamsMeetingState,
   type TeamsMeetingRow,
 } from '@/lib/teams/store';
-import { readPendingTranscript } from '@/lib/pending-artifacts';
+import { acknowledgePendingTranscript, readPendingTranscript } from '@/lib/pending-artifacts';
 import { FAKE_SESSION } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
@@ -55,6 +58,8 @@ const mockDelete = vi.mocked(deleteTeamsMeeting);
 const mockSetState = vi.mocked(setTeamsMeetingState);
 const mockReadStash = vi.mocked(readPendingTranscript);
 const mockAudit = vi.mocked(recordTeamsUnregister);
+const mockCleanUp = vi.mocked(cleanUpRecording);
+const mockAck = vi.mocked(acknowledgePendingTranscript);
 
 function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
   return {
@@ -312,6 +317,57 @@ describe('DELETE /api/teams/meetings/[id]', () => {
     expect(await res.json()).toEqual({ ok: true, disarmed: false });
     expect(mockDelete).toHaveBeenCalledWith('user-123', 'm1');
     expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});
+
+describe('DELETE /api/teams/meetings/[id]: what must not outlive the row', () => {
+  it('makes one last attempt at a pending OneDrive recording delete before the row goes', async () => {
+    const pending = row({ state: 'ready', armed: false, recordingCleanup: 'pending', recordingBytes: 1234 });
+    mockGet.mockResolvedValueOnce(pending);
+    const order: string[] = [];
+    mockCleanUp.mockImplementationOnce(async () => { order.push('cleanup'); return pending; });
+    mockDelete.mockImplementationOnce(async () => { order.push('delete'); });
+
+    expect((await DELETE(req(), { params })).status).toBe(200);
+
+    expect(mockCleanUp).toHaveBeenCalledWith('user-123', pending, expect.any(Date));
+    expect(order).toEqual(['cleanup', 'delete']);
+  });
+
+  it('does not touch OneDrive when no recording delete is pending', async () => {
+    mockGet.mockResolvedValueOnce(row({ state: 'ready', recordingCleanup: 'deleted' }));
+    await DELETE(req(), { params });
+    expect(mockCleanUp).not.toHaveBeenCalled();
+  });
+
+  it('does not let a slow Graph hold the delete', async () => {
+    vi.useFakeTimers();
+    try {
+      mockGet.mockResolvedValueOnce(row({ state: 'ready', armed: false, recordingCleanup: 'pending', recordingBytes: 1 }));
+      mockCleanUp.mockImplementationOnce(() => new Promise(() => {}));
+      const res = DELETE(req(), { params });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect((await res).status).toBe(200);
+      expect(mockDelete).toHaveBeenCalledWith('user-123', 'm1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('removes the server-held transcript stash with the row', async () => {
+    mockGet.mockResolvedValueOnce(row({ state: 'ready', armed: false }));
+    await DELETE(req(), { params });
+    expect(mockAck).toHaveBeenCalledWith('m1', 'user-123');
+  });
+
+  it('still answers ok when the stash cannot be removed', async () => {
+    mockGet.mockResolvedValueOnce(row({ armed: false }));
+    mockAck.mockRejectedValueOnce(new Error('EACCES'));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await DELETE(req(), { params });
+    expect(res.status).toBe(200);
+    expect(spy).toHaveBeenCalledWith(expect.not.stringContaining('EACCES'));
     spy.mockRestore();
   });
 });

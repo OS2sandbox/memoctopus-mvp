@@ -53,11 +53,13 @@ async function personalNotes(userId: string, templateIds: string[], versions: nu
     );
     return res.rows as Array<Record<string, unknown>>;
   } catch (err) {
-    // A person without a schema or history table simply has no notes to show (3F000, 42P01); anything
-    // else is logged without content and only costs that person's notes.
+    // A person without a schema or history table simply has no notes to show (3F000, 42P01). Any other
+    // failure is logged without content and rethrown: the viewer degrades to no notes, the export is
+    // refused, so a file never goes out with silent gaps.
     const code = (err as { code?: string } | null)?.code;
-    if (code !== '3F000' && code !== '42P01') safeLogError('audit personal change notes', err);
-    return [];
+    if (code === '3F000' || code === '42P01') return [];
+    safeLogError('audit personal change notes', err);
+    throw err;
   }
 }
 

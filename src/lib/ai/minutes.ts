@@ -187,7 +187,8 @@ async function _summarizePart(text: string, title: string, confidential: boolean
   // A summary cut off at its cap is still a usable (slightly shorter) bullet list, and it
   // is only an input to the referat — failing the whole meeting over it would be worse.
   if (response.choices[0]?.finish_reason === 'length') {
-    console.warn(`[minutes] summary of "${title}" hit its ${SUMMARY_MAX_OUTPUT_TOKENS}-token cap`);
+    // No title here: it is a chapter/agenda heading, i.e. meeting content, and log lines carry none.
+    console.warn(`[minutes] a part summary hit its ${SUMMARY_MAX_OUTPUT_TOKENS}-token cap`);
   }
   return response.choices[0]?.message?.content?.trim() ?? '';
 }

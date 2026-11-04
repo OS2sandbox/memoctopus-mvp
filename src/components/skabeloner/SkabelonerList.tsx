@@ -306,8 +306,14 @@ export function SkabelonerList() {
         </div>
       ) : !loadError && skabeloner.length === 0 ? (
         <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--surface)] px-8 py-12 text-center">
-          <p className="text-sm text-[var(--muted)]">Ingen skabeloner endnu.</p>
-          <Button size="sm" className="mt-4" onClick={openNew}>+ Opret din første skabelon</Button>
+          <p className="text-sm text-[var(--muted)]">
+            {centralSkabeloner.length > 0
+              ? 'Du har ingen egne skabeloner endnu. Du kan bruge de centrale skabeloner nedenfor, eller oprette din egen.'
+              : 'Ingen skabeloner endnu.'}
+          </p>
+          <Button size="sm" className="mt-4" onClick={openNew}>
+            {centralSkabeloner.length > 0 ? '+ Opret en egen skabelon' : '+ Opret din første skabelon'}
+          </Button>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

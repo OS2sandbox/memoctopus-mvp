@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAppAccess } from '@/lib/authz/app-access';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
+import { safeLogError } from '@/lib/audit/safe-log';
 import { GraphError, hasGraphScopes } from '@/lib/teams/graph-client';
 
 /**
@@ -31,7 +32,7 @@ export async function GET() {
     if (err instanceof GraphError && err.code === 'reauth_required') {
       return NextResponse.json({ enabled: true, microsoftLinked: false, scopesOk: false, missing: [] });
     }
-    console.error('[teams/status] scope check failed:', err);
+    safeLogError('teams/status: scope check failed', err);
     return NextResponse.json({ enabled: true, microsoftLinked: false, scopesOk: false, missing: [] });
   }
 }

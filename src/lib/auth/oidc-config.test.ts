@@ -122,6 +122,43 @@ describe('loadOidcProfile', () => {
     expect(fetchFn.mock.calls.filter((c) => String(c[0]).includes('openid-configuration'))).toHaveLength(1);
   });
 
+  describe('a configured userId claim (the account key)', () => {
+    const idP = () => provider({ discoveryUrl: undefined, userInfoUrl: 'https://idp.example/ui', claims: { userId: 'employeeId' } });
+
+    it('refuses the login when the claim is absent everywhere, never falling back to sub', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const fetchFn = vi.fn(async () => reply({ sub: 's1' }));
+      expect(await loadOidcProfile(idP(), { idToken: jwt({ sub: 's1', email: 'a@k.dk' }), accessToken: 'at' }, fetchFn as never)).toBeNull();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('userId claim missing'));
+      warn.mockRestore();
+    });
+
+    it('asks userinfo for the claim even when the id_token has the e-mail and roles', async () => {
+      const fetchFn = vi.fn(async () => reply({ sub: 's1', employeeId: 'E7' }));
+      const p = { ...idP(), rolesClaim: { name: 'roles', format: 'array' as const, separator: ',' } };
+      const out = await loadOidcProfile(p, { idToken: jwt({ sub: 's1', email: 'a@k.dk', roles: ['bruger'] }), accessToken: 'at' }, fetchFn as never);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(out).toMatchObject({ employeeId: 'E7' });
+      expect(mapOidcProfile(p, out!).id).toBe('E7');
+    });
+
+    it('does not call userinfo when the id_token already carries the claim', async () => {
+      const fetchFn = vi.fn();
+      const out = await loadOidcProfile(idP(), { idToken: jwt({ sub: 's1', email: 'a@k.dk', employeeId: 'E7' }), accessToken: 'at' }, fetchFn as never);
+      expect(fetchFn).not.toHaveBeenCalled();
+      expect(out).toMatchObject({ employeeId: 'E7' });
+    });
+
+    it('refuses the login when userinfo fails and the id_token lacks the claim', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const fetchFn = vi.fn(async () => {
+        throw new Error('network');
+      });
+      expect(await loadOidcProfile(idP(), { idToken: jwt({ sub: 's1', email: 'a@k.dk' }), accessToken: 'at' }, fetchFn as never)).toBeNull();
+      warn.mockRestore();
+    });
+  });
+
   it('uses an explicit userInfoUrl without discovery', async () => {
     const fetchFn = vi.fn(async (_url: string, _init?: unknown) => reply({ sub: 's1', roles: ['r'] }));
     const p = provider({ discoveryUrl: undefined, userInfoUrl: 'https://idp.example/ui', rolesClaim: { name: 'roles', format: 'array', separator: ',' } });

@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
 import { pool } from '@/lib/db';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
+import { safeLogError } from '@/lib/audit/safe-log';
 import { deleteRecordingEnabled } from './artifact-mode';
 import { recordTeamsArtifactsFetch, recordTeamsRecordingDelete } from './audit';
 import { teamsFailureCode } from './failure-code';
@@ -273,7 +274,7 @@ async function pollMeetingInner(
         return await markPollAttempt(userId, id, { state: 'failed', failureReason: message });
       case 'unknown':
         // A bug or a transient network error: keep waiting, record why.
-        console.error('[teams/poller] unexpected error polling', id, err);
+        safeLogError(`teams/poller ${id}: unexpected error polling`, err);
         return await waiting('awaiting_teams', message);
     }
   }
@@ -313,17 +314,17 @@ export async function cleanUpRecording(
     // `ready` was stamped when the cleanup was queued, so this is its age.
     const age = now.getTime() - (row.lastPolledAt ?? now).getTime();
     if (!final && age < RECORDING_CLEANUP_GIVE_UP_MS) {
-      console.warn(`[teams/poller] ${row.id}: deleting the recording from OneDrive postponed:`, err);
+      safeLogError(`teams/poller ${row.id}: deleting the recording from OneDrive postponed`, err);
       return row;
     }
-    console.error(`[teams/poller] ${row.id}: could not delete the recording from OneDrive:`, err);
+    safeLogError(`teams/poller ${row.id}: could not delete the recording from OneDrive`, err);
     result = 'failed';
   }
 
   try {
     await settleRecordingCleanup(userId, row.id, result);
   } catch (err) {
-    console.error('[teams/poller] could not record the recording cleanup for', row.id, err);
+    safeLogError(`teams/poller ${row.id}: could not record the recording cleanup`, err);
     return row;
   }
   // Only the final verdict: a postponed attempt returned above and is retried on the next tick.
@@ -406,13 +407,37 @@ function toDate(value: string | null): Date | null {
   return value ? new Date(value) : null;
 }
 
+/**
+ * True when the person's directory user is disabled (left the organisation).
+ * The stored Microsoft token outlives that, and the poller acts without a
+ * session, so it must check the flag itself. Deliberately not `loginRefusal`:
+ * claims-mode role snapshots lapse by design and that would stop collection for
+ * people who merely have not logged in lately. No directory row (password or
+ * claims-only user) is not disabled.
+ */
+async function directoryUserDisabled(userId: string): Promise<boolean> {
+  const res = await pool.query(
+    'SELECT 1 FROM public.directory_users WHERE app_user_id = $1 AND disabled = true LIMIT 1',
+    [userId],
+  );
+  return (res.rowCount ?? res.rows.length) > 0;
+}
+
 async function pollUser(userId: string, now: Date): Promise<number> {
+  try {
+    if (await directoryUserDisabled(userId)) return 0;
+  } catch (err) {
+    // Fail closed: skip this person for this tick.
+    safeLogError(`teams/poller ${userId}: could not check the directory user`, err);
+    return 0;
+  }
+
   let polled = 0;
   let due: TeamsMeetingRow[];
   try {
     due = await listDueTeamsMeetings(userId, now);
   } catch (err) {
-    console.error('[teams/poller] could not list due meetings for', userId, err);
+    safeLogError(`teams/poller ${userId}: could not list due meetings`, err);
     return 0;
   }
 
@@ -420,7 +445,7 @@ async function pollUser(userId: string, now: Date): Promise<number> {
     try {
       await pollMeeting(userId, row.id, now);
     } catch (err) {
-      console.error('[teams/poller] poll failed for', userId, row.id, err);
+      safeLogError(`teams/poller ${userId} ${row.id}: poll failed`, err);
     }
     polled += 1;
   }
@@ -433,7 +458,7 @@ async function pollUser(userId: string, now: Date): Promise<number> {
         await cleanUpRecording(userId, row, now);
       }
     } catch (err) {
-      console.error('[teams/poller] recording cleanup failed for', userId, err);
+      safeLogError(`teams/poller ${userId}: recording cleanup failed`, err);
     }
   }
   return polled;
@@ -472,7 +497,7 @@ export async function pollDueMeetings(now: Date): Promise<{ polled: number }> {
   try {
     client = await pool.connect();
   } catch (err) {
-    console.error('[teams/poller] could not acquire a connection:', err);
+    safeLogError('teams/poller: could not acquire a connection', err);
     return { polled: 0 };
   }
 
@@ -493,7 +518,7 @@ export async function pollDueMeetings(now: Date): Promise<{ polled: number }> {
       await client.query('SELECT pg_advisory_unlock($1)', [POLL_LOCK_KEY]);
     }
   } catch (err) {
-    console.error('[teams/poller] run failed:', err);
+    safeLogError('teams/poller: run failed', err);
     return { polled: 0 };
   } finally {
     client.release();
@@ -536,7 +561,7 @@ export function startPoller(): () => void {
     try {
       await pollDueMeetings(new Date());
     } catch (err) {
-      console.error('[teams/poller] tick failed:', err);
+      safeLogError('teams/poller: tick failed', err);
     } finally {
       running = false;
     }

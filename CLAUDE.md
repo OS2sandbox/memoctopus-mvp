@@ -171,7 +171,7 @@ dead end and offers the saved transcript or a delete.
   run never fetched. More than one file of that size deletes nothing. The poller
   owns the orchestration (`cleanUpRecording()`): `recording_cleanup = 'pending'` is
   written in the same UPDATE that marks the row `ready`, retried every tick for a
-  day, and never changes the meeting's state. A row whose recording is gone passes
+  day, and never changes the meeting's state. Deleting a meeting (`DELETE /api/teams/meetings/[id]`) makes one last, time-boxed attempt while the row is still `pending` (the row is what the retry hangs on; a still-postponed attempt leaves the file in OneDrive) and removes the stash via `acknowledgePendingTranscript`. A row whose recording is gone passes
   `recordingDeleted` to the pipeline, so "Hent igen" goes straight to Teams' own
   transcript. Needs `Files.ReadWrite`; off with `TEAMS_DELETE_RECORDING=false`.
   Teams' transcript has no delete in Graph either, and needs none: it is embedded
@@ -208,7 +208,10 @@ dead end and offers the saved transcript or a delete.
 - `poller.ts` — `pollMeeting()` / `pollDueMeetings()`; started from `src/instrumentation.ts`
   inside the Next.js server process and serialised across instances by a Postgres advisory
   lock. Off unless `TEAMS_GRAPH_ENABLED=true`; also disabled under test and via
-  `TEAMS_POLLER_DISABLED`.
+  `TEAMS_POLLER_DISABLED`. It acts without a session on the stored Microsoft token, so
+  `pollUser` first skips every person whose `directory_users` row is `disabled` (no
+  Graph call, poll or recording cleanup; a failing lookup skips the person for the tick;
+  no row means not disabled; never `loginRefusal`, since claims snapshots lapse by design).
 - `http-errors.ts` — maps `GraphError` / `ResolveError` onto status codes and Danish
   messages for the API routes.
 
