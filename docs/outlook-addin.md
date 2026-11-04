@@ -90,9 +90,9 @@ that: save, reopen, press the button. Two ways round that were tried:
   end without reading the calendar (`Calendars.Read`), which we do not want.
 - **Detecting the toggle**: Office.js has no API for it.
 
-## Test add-in: OS2taletiltekst as the meeting provider
+## Manifest 1.1: OS2taletiltekst as the meeting provider
 
-So the test add-in makes the Teams meeting itself. It is an *online-meeting
+So since manifest 1.1 the add-in can make the Teams meeting itself. It is an *online-meeting
 provider* (Microsoft's "Create an Outlook add-in for an online-meeting provider",
 the add-in type Zoom and Webex use). Microsoft documents that Outlook then shows the
 provider **in place of its Teams toggle** on a new meeting. Switching ours on runs
@@ -107,19 +107,19 @@ provider **in place of its Teams toggle** on a new meeting. Switching ours on ru
    recorded and transcribed,
 4. notes the meeting id on the appointment, so the pane can switch it off.
 
-It is a separate add-in, *OS2taletiltekst (test)*, with its own id
-(`TEST_ADDIN_ID`), served at `https://<this host>/outlook-addin/manifest-test.xml`.
-It needs `ReadWriteItem` (it writes the link into the invitation); the production
-manifest keeps `ReadItem`.
+It is the same add-in (same id), version 1.1.0.0; the pane button stays. It needs
+`ReadWriteItem` (it writes the link into the invitation); 1.0 had `ReadItem`.
 
 **It must be admin-installed.** Microsoft: "Only admin-installed add-ins will appear
 on the meeting compose screen, replacing the default Teams or Skype option.
-User-installed add-ins won't activate." The admin uploads `manifest-test.xml` under
-Integrated Apps and assigns it **to the tester only**. Remove any sideloaded copy
-of the test add-in first (same id). With `OUTLOOK_ADDIN_ALLOWED_USERS` set, the
-server refuses everyone else regardless.
+User-installed add-ins won't activate." Moving from 1.0: Integrated Apps →
+*OS2taletiltekst* → update it with the new `manifest.xml`. With
+`OUTLOOK_ADDIN_ALLOWED_USERS` set, the server refuses everyone else regardless.
 
-**Try it**, once the admin has installed it (it can take a while to appear):
+**Rolling back** to 1.0 = updating it with a 1.0 manifest again: `buildManifest()`
+as of commit `98fd3ab`, for this host.
+
+**Try it**, once the admin has updated it (it can take a while to appear):
 
 1. New event. Does Outlook show *OS2taletiltekst* where the Teams toggle was, or
    both, or only a button in the ribbon?
@@ -129,11 +129,6 @@ server refuses everyone else regardless.
    transcribe by itself.
 4. Also note: what happens when you switch ours off again, and whether the
    municipality's default (Teams on for every new meeting) still turns Teams on.
-
-## The send test (removed)
-
-The `OnAppointmentSend` probe that answered "is the link there at Send?" is gone
-from the code; the answer is above.
 
 ## When it does not work
 

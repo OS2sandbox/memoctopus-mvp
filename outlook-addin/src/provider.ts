@@ -1,7 +1,7 @@
 /**
- * TEST ONLY: the meeting-provider button (manifest-test.xml). Outlook shows an
- * admin-installed provider add-in in place of its own Teams toggle on a new
- * meeting; switching it on runs this function, which:
+ * The meeting-provider button (manifest 1.1). Outlook shows an admin-installed
+ * provider add-in in place of its own Teams toggle on a new meeting; switching
+ * it on runs this function, which:
  *
  *   1. checks the invitation has no Teams link yet (Outlook's own, or ours),
  *   2. asks OS2taletiltekst to create a Teams meeting for the appointment's
