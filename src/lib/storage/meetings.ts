@@ -70,7 +70,7 @@ export async function updateMeeting(
   patch: Partial<Omit<StoredMeeting, 'id' | 'createdAt'>>,
   // Machine writes (the Teams bot's roster poll) pass `automatic: true`: a roster that
   // changed because people joined or left is not a user edit, so it is not reported as one.
-  opts: { automatic?: boolean; trigger?: DeleteTrigger } = {},
+  opts: { automatic?: boolean } = {},
 ): Promise<void> {
   const db = await getDB();
   const existing = await db.get('meetings', id);
@@ -102,25 +102,22 @@ const sameStrings = (a: string[] | undefined, b: string[] | undefined) => {
 
 // Audit reporting is derived from what actually changed against the stored row, so
 // a write that repeats the current value (the participants effect re-saving on
-// mount) reports nothing. Reported here: audio deletion, a change of the
-// participant list and of the recording date (redaction is its two deletes, not an event of its own). Status changes are not audited, and neither is the
+// mount) reports nothing. Reported here: a change of the participant list and of the
+// recording date. Audio deletion is NOT reported here: deleteAudio is its only reporter (it knows
+// whether audio existed; a Teams meeting never holds any, and the audioDeleted flag alone says
+// nothing about a file). Redaction is its two deletes, not an event of its own. Status changes are not audited, and neither is the
 // title here: pipeline steps also write it, so a RENAME by the person is reported where the person
 // makes it (settings page, minutes header) as meeting.metadata_edit. Only the opaque
 // meeting id and a participant COUNT leave here, never a name or the title.
 function reportMeetingChanges(
   existing: StoredMeeting,
   patch: Partial<Omit<StoredMeeting, 'id' | 'createdAt'>>,
-  opts: { automatic?: boolean; trigger?: DeleteTrigger },
+  opts: { automatic?: boolean },
   outcome: 'success' | 'error',
 ): void {
   const id = existing.id;
   // Success calls carry no options (success is the default); only a failed write says so.
   const o = outcome === 'error' ? { outcome } : undefined;
-  // The audio file itself is deleted (and reported, success or failure) by deleteAudio; this write only
-  // sets the flag, so a failure of the flag alone is not reported as a failed audio delete.
-  if (outcome === 'success' && patch.audioDeleted === true && !existing.audioDeleted) {
-    reportAuditEvent('meeting.audio_delete', id, { trigger: opts.trigger ?? 'user' });
-  }
   if (opts.automatic !== true && patch.recordedAt !== undefined && patch.recordedAt !== existing.recordedAt) {
     reportAuditEvent('meeting.metadata_edit', id, { field: 'recorded_at' }, o);
   }

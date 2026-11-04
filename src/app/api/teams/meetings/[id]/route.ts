@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
+import { requireAppAccess } from '@/lib/authz/app-access';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { recordTeamsUnregister } from '@/lib/teams/audit';
 import { teamsFailureCode } from '@/lib/teams/failure-code';
@@ -65,8 +64,9 @@ const FORCED_POLL_BUDGET_MS = 8_000;
  * is not theirs simply does not exist → 404.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const { id } = await params;
   const userId = session.user.id;
@@ -118,8 +118,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
  * way to reach it from here).
  */
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const { id } = await params;
   const userId = session.user.id;
@@ -159,8 +160,9 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
  * the ready state would be lost for good.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const { id } = await params;
   const userId = session.user.id;

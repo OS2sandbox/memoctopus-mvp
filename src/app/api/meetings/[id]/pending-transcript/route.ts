@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
+import { requireAppAccess } from '@/lib/authz/app-access';
 import {
   readPendingTranscript,
   deletePendingTranscript,
@@ -27,8 +26,9 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const { id: meetingId } = await params;
 
@@ -65,8 +65,9 @@ export async function GET(
 export const DELETE = withHandler(
   'meetings/pending-transcript',
   async (_req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
-    const session = await auth.api.getSession({ headers: await headers() });
-    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const access = await requireAppAccess();
+    if (access instanceof NextResponse) return access;
+    const { session } = access;
 
     const { id: meetingId } = await params;
     if (await assertMeetingOwner(meetingId, session.user.id)) {

@@ -23,12 +23,16 @@ async function putMinutes(minutes: StoredMinutes, fail: () => void): Promise<voi
 // Audit reporting (ACTIONS only, never content; see lib/audit/client.ts). Reported from
 // here because every write to the minutes goes through this module. The version number
 // is the stable label, never any of the version's text.
-function capVersions(meetingId: string, versions: StoredMinutesVersion[]): StoredMinutesVersion[] {
-  if (versions.length <= MAX_VERSIONS) return versions;
+// Pure: the prune event is reported by the caller once the write that performs it has succeeded.
+function capVersions(versions: StoredMinutesVersion[]): { versions: StoredMinutesVersion[]; prunedCount: number } {
+  if (versions.length <= MAX_VERSIONS) return { versions, prunedCount: 0 };
   // Keep the highest labels (the active snapshot is always among them).
   const kept = [...versions].sort((a, b) => a.label - b.label).slice(versions.length - MAX_VERSIONS);
-  reportAuditEvent('meeting.minutes_version_prune', meetingId, { prunedCount: versions.length - kept.length });
-  return kept;
+  return { versions: kept, prunedCount: versions.length - kept.length };
+}
+
+function reportPrune(meetingId: string, prunedCount: number): void {
+  if (prunedCount > 0) reportAuditEvent('meeting.minutes_version_prune', meetingId, { prunedCount });
 }
 
 // A stored row as it may exist on disk, including rows written before stable
@@ -212,13 +216,14 @@ export async function snapshotMinutes(
     updatedAt: now,
   };
 
-  const versions = capVersions(meetingId, [...reverted, snapshot]);
+  const { versions, prunedCount } = capVersions([...reverted, snapshot]);
 
   const minutes = withActiveMirror({ ...existing, activeVersionId: snapshot.id, versions });
   await putMinutes(minutes, () =>
     reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: snapshot.label, action: 'snapshot' }, { outcome: 'error' }),
   );
   reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: snapshot.label, action: 'snapshot' });
+  reportPrune(meetingId, prunedCount);
   return minutes;
 }
 
@@ -257,7 +262,7 @@ export async function appendMinutesVersion(
 
   const nextLabel = existing.versions.reduce((m, v) => Math.max(m, v.label), 0) + 1;
   const fresh: StoredMinutesVersion = { id: newId(), label: nextLabel, content, baseline: content, createdAt: now, updatedAt: now };
-  const versions = capVersions(meetingId, [...existing.versions, fresh]);
+  const { versions, prunedCount } = capVersions([...existing.versions, fresh]);
   const minutes = withActiveMirror({
     ...existing,
     templateId: templateId !== undefined ? templateId : existing.templateId,
@@ -270,6 +275,7 @@ export async function appendMinutesVersion(
     reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: fresh.label, action: 'generate' }, { outcome: 'error' }),
   );
   reportAuditEvent('meeting.minutes_version', meetingId, { versionNumber: fresh.label, action: 'generate' });
+  reportPrune(meetingId, prunedCount);
   return minutes;
 }
 

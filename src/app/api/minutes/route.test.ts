@@ -34,6 +34,9 @@ const mockResolveCentral = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/skabeloner/resolve', () => ({ resolveCentralTemplate: mockResolveCentral }));
 
 const mockRecord = vi.hoisted(() => vi.fn());
+const mockNoteDropped = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/audit/dropped', () => ({ noteDroppedEvents: mockNoteDropped }));
+
 vi.mock('@/lib/audit/record', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/audit/record')>()),
   recordServerEvent: mockRecord,
@@ -41,6 +44,7 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 
 import { POST } from './route';
 import { expectValidMetadataOnly, leakyError } from '@/app/api/meetings/ai-audit.test-utils';
+import { __resetTemplateDenied } from '@/app/api/meetings/ai-audit';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION, makeJsonReq, makePrincipal } from '@/test/helpers';
 import { resolvePrincipal } from '@/lib/authz/principal';
@@ -80,6 +84,8 @@ describe('POST /api/minutes', () => {
     mockGetDefaultSkabelon.mockResolvedValue(defaultSkabelon);
     mockGenerateReferatBody.mockResolvedValue(sampleContent);
     mockResolveCentral.mockReset();
+    mockNoteDropped.mockReset();
+    __resetTemplateDenied();
   });
 
   it('returns 401 when not authenticated', async () => {
@@ -554,6 +560,27 @@ describe('POST /api/minutes with a central template', () => {
     // A client cannot fall through to a personal/default template instead.
     expect(mockGetSkabelon).not.toHaveBeenCalled();
     expect(mockGetDefaultSkabelon).not.toHaveBeenCalled();
+  });
+
+  it('caps refused central generations per person and counts the excess as dropped, still answering 404 every time', async () => {
+    __resetTemplateDenied();
+    mockNoteDropped.mockReset();
+    mockRecord.mockClear();
+    vi.useFakeTimers();
+    try {
+      mockResolveCentral.mockResolvedValue(null);
+      for (let i = 0; i < 15; i++) {
+        const res = await send({ skabelonId: CENTRAL });
+        expect(res.status).toBe(404);
+      }
+      expect(events().filter((e) => e.type === 'minutes.generate')).toHaveLength(10);
+      expect(mockNoteDropped).not.toHaveBeenCalled();
+      // The window ends: the 5 refused rows that were not written are reported as a count.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockNoteDropped).toHaveBeenCalledWith(FAKE_SESSION.user.id, 'rate_limit', 5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not treat a resolver outage as "not available": it is a 500', async () => {

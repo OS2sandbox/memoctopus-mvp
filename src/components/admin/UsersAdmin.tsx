@@ -159,7 +159,9 @@ export function UsersAdmin() {
                   </TableCell>
                   <TableCell className="align-top">
                     {user.roles.length === 0 ? (
-                      <span className="text-[var(--muted)]">Ingen roller (standardrettighed)</span>
+                      <span className="text-[var(--muted)]">
+                        {me?.requireRoleToLogin ? 'Ingen roller (ingen adgang)' : 'Ingen roller (standardrettighed)'}
+                      </span>
                     ) : (
                       <ul className="flex flex-col gap-2">
                         {user.roles.map((a) => (

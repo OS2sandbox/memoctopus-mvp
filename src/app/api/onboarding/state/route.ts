@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
+import { requireAppAccess } from '@/lib/authz/app-access';
 import { getOnboardingState, getSeenSteps } from '@/lib/onboarding/store';
 import { withHandler } from '@/lib/api-handler';
 
 async function getHandler(): Promise<NextResponse> {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const [state, seen] = await Promise.all([
     getOnboardingState(session.user.id),

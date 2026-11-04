@@ -225,7 +225,7 @@ const entraSchema = z
       .trim()
       .refine(isGuid, { message: 'tenant_guid_required' })
       .transform((v) => v.toLowerCase()),
-    /** Extra scopes. openid, profile and email are always requested; offline_access is never (no refresh token is kept). */
+    /** Extra scopes. openid, profile and email are always requested; offline_access only with TEAMS_GRAPH_ENABLED (otherwise no refresh token is requested or kept). */
     scopes: scopes.optional(),
     prompt: z.enum(IDP_PROMPTS).optional(),
     rolesClaim: claimList,

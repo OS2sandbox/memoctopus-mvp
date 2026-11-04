@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
+import { requireAppAccess } from '@/lib/authz/app-access';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { GraphError, hasGraphScopes } from '@/lib/teams/graph-client';
 
@@ -15,8 +14,9 @@ import { GraphError, hasGraphScopes } from '@/lib/teams/graph-client';
  * not ask anyone to sign in again. Answered before any token is looked at.
  */
 export async function GET() {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   if (!teamsGraphEnabled()) {
     return NextResponse.json({ enabled: false, microsoftLinked: false, scopesOk: false, missing: [] });

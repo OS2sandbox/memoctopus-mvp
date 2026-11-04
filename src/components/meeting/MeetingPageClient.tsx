@@ -152,7 +152,7 @@ export function MeetingPageClient({ meetingId, initialTab }: MeetingPageClientPr
       if (activeRecorderRef.current) return;
       if (!audioDeletableRef.current) return;
       void deleteAudio(meetingId, { trigger: 'auto_leave' }).catch((err) => { console.error('[MeetingPageClient] deleteAudio (unmount) fejlede:', err); });
-      void updateMeeting(meetingId, { audioDeleted: true }, { trigger: 'auto_leave' }).catch((err) => { console.error('[MeetingPageClient] updateMeeting (unmount) fejlede:', err); });
+      void updateMeeting(meetingId, { audioDeleted: true }).catch((err) => { console.error('[MeetingPageClient] updateMeeting (unmount) fejlede:', err); });
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meetingId]);

@@ -71,8 +71,8 @@ export const COALESCED: Set<ClientEventType> = new Set([
 ]);
 
 /**
- * One user action can reach several storage functions (the redact flow calls
- * deleteAudio and then updateMeeting({audioDeleted: true})), and a screen can render
+ * One user action can reach the same report twice (unmount cleanup and the pagehide
+ * purge both call deleteAudio), and a screen can render
  * the same view again (switching tabs and back, pressing play twice). Events here are
  * queued at once but a repeat for the same meeting inside the window is swallowed.
  */

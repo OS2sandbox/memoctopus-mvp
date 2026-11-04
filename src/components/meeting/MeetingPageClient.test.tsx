@@ -934,6 +934,6 @@ describe('MeetingPageClient — audit reporting', () => {
     mockDeleteAudio.mockClear();
     unmount();
     expect(mockDeleteAudio).toHaveBeenCalledWith(MEETING_ID, { trigger: 'auto_leave' });
-    expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, { audioDeleted: true }, { trigger: 'auto_leave' });
+    expect(mockUpdateMeeting).toHaveBeenCalledWith(MEETING_ID, { audioDeleted: true });
   });
 });

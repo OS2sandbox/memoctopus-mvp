@@ -457,7 +457,9 @@ export function TranscriptReview({
         const d = await res.json().catch(() => ({}));
         throw new Error(d.error ?? (mode === 'update' ? 'Kunne ikke opdatere skabelon' : 'Kunne ikke gemme skabelon'));
       }
-      const { skabelon } = (await res.json()) as { skabelon: Skabelon };
+      const { skabelon: saved } = (await res.json()) as { skabelon: Skabelon };
+      // The raw row keeps a stale personal default while a central one is the default.
+      const skabelon = { ...saved, isDefault: saved.isDefault && !centralSkabeloner.some((c) => c.isDefault) };
       if (mode === 'update') {
         setSkabeloner((prev) => prev.map((s) => (s.id === skabelon.id ? skabelon : s)));
       } else {
@@ -1064,7 +1066,7 @@ export function TranscriptReview({
       await appendMinutesVersion(meetingId, content, data.skabelonId ?? null, templateRef);
       // The app deletes the recording once the minutes exist (privacy); logged as automatic.
       await deleteAudio(meetingId, { trigger: 'auto_generate' });
-      await updateMeeting(meetingId, { status: 'minutes', audioDeleted: true }, { trigger: 'auto_generate' });
+      await updateMeeting(meetingId, { status: 'minutes', audioDeleted: true });
       onDataChange?.();
       window.location.href = `/meeting/${meetingId}/minutes`;
     } catch (err) {

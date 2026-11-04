@@ -48,6 +48,7 @@ describe('GET /api/me', () => {
       scopes: {},
       source: 'local',
       readOnly: false,
+      requireRoleToLogin: false,
     });
   });
 
@@ -72,6 +73,12 @@ describe('GET /api/me', () => {
     const json = await (await GET(req(), NO_PARAMS)).json();
     expect(json.source).toBe('rollekatalog');
     expect(json.readOnly).toBe(true);
+  });
+
+  it('reports whether a person without a role is refused at login', async () => {
+    expect((await (await GET(req(), NO_PARAMS)).json()).requireRoleToLogin).toBe(false);
+    vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'true');
+    expect((await (await GET(req(), NO_PARAMS)).json()).requireRoleToLogin).toBe(true);
   });
 
   it('claims mode: source claims, read-only', async () => {

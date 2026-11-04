@@ -122,7 +122,10 @@ export function SkabelonerList() {
 
   const shareEnabled = shareConfig.code || shareConfig.link;
 
-  function handleSaved(saved: Skabelon) {
+  // PUT/POST return the raw row, whose is_default is left untouched while a central
+  // template is the default (GET masks it); mask it the same way so only one card fills.
+  function handleSaved(raw: Skabelon) {
+    const saved = { ...raw, isDefault: raw.isDefault && !centralSkabeloner.some((c) => c.isDefault) };
     setSkabeloner((prev) => {
       const exists = prev.some((s) => s.id === saved.id);
       return exists ? prev.map((s) => (s.id === saved.id ? saved : s)) : [saved, ...prev];

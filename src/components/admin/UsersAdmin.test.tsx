@@ -63,6 +63,14 @@ describe('UsersAdmin — rendering', () => {
     expect(screen.getByText('Deaktiveret')).toBeInTheDocument();
   });
 
+  it('says "ingen adgang" for a person without roles when a role is required to log in', async () => {
+    setup({ ...ADMIN_ME, requireRoleToLogin: true });
+    renderWithToasts(<UsersAdmin />);
+    const carla = (await screen.findByText('Carla Ny')).closest('tr')!;
+    expect(within(carla).getByText('Ingen roller (ingen adgang)')).toBeInTheDocument();
+    expect(screen.queryByText('Ingen roller (standardrettighed)')).not.toBeInTheDocument();
+  });
+
   it('flags an expired assignment', async () => {
     setup(ADMIN_ME, {
       'GET /api/admin/access/users': () =>

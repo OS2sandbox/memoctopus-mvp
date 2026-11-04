@@ -128,8 +128,13 @@ describe('auth wiring from the config file', () => {
     useConfig({ providers: [OIDC('fka')] });
     const options = await loadOptions();
     expect(names(options)).not.toContain('sso');
-    expect(options.disabledPaths).toBeUndefined();
+    expect(options.disabledPaths).not.toContain('/sso/register');
     expect(options.hooks.before).toBeUndefined();
+  });
+
+  it('closes the account-link endpoints without SAML (they would keep provider tokens past scrubAccountTokens)', async () => {
+    useConfig({ providers: [OIDC('fka')] });
+    expect((await loadOptions()).disabledPaths).toEqual(expect.arrayContaining(['/oauth2/link', '/link-social', '/unlink-account']));
   });
 
   it('registers the sso plugin for a SAML provider, closes its provider-management endpoints and guards unknown providers', async () => {
@@ -140,7 +145,7 @@ describe('auth wiring from the config file', () => {
     const sso = plugin(options, 'sso').options;
     expect(sso).toMatchObject({ providersLimit: 0, trustEmailVerified: false, provisionUserOnEveryLogin: true });
     expect(sso.defaultSSO.map((d: any) => d.providerId)).toEqual(['kommune']);
-    expect(options.disabledPaths).toEqual(expect.arrayContaining(['/sso/register', '/sso/update-provider', '/sso/delete-provider']));
+    expect(options.disabledPaths).toEqual(expect.arrayContaining(['/sso/register', '/sso/update-provider', '/sso/delete-provider', '/oauth2/link', '/link-social']));
     expect(typeof options.hooks.before).toBe('function');
   });
 

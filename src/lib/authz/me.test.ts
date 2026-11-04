@@ -8,6 +8,7 @@ const base: MeResponse = {
   scopes: {},
   source: 'local',
   readOnly: false,
+  requireRoleToLogin: false,
 };
 
 describe('isMeResponse', () => {

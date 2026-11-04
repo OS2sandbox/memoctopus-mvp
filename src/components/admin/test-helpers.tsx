@@ -18,6 +18,7 @@ export const ADMIN_ME: MeResponse = {
   },
   source: 'local',
   readOnly: false,
+  requireRoleToLogin: false,
 };
 
 export const ROLLEKATALOG_ME: MeResponse = { ...ADMIN_ME, source: 'rollekatalog', readOnly: true };

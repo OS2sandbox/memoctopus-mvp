@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// The access gate (requireAppAccess) resolves the live principal; a plain
+// bruger unless a test says otherwise.
+vi.mock('@/lib/authz/principal', async () => ({
+  resolvePrincipal: vi.fn(async () => (await import('@/test/helpers')).makePrincipal()),
+}));
+vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied: vi.fn() }));
+
 vi.mock('next/headers', () => ({ headers: vi.fn().mockResolvedValue(new Headers()) }));
 vi.mock('@/lib/auth', () => ({ auth: { api: { getSession: vi.fn() } } }));
 vi.mock('@/lib/db', () => ({ pool: {}, db: {} }));
@@ -35,7 +42,8 @@ import { ResolveError, resolveJoinUrl } from '@/lib/teams/meeting-resolver';
 import { recordTeamsRegister } from '@/lib/teams/audit';
 import { claimMeetingSnapshot, listTeamsMeetings, upsertTeamsMeeting } from '@/lib/teams/store';
 import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
-import { FAKE_SESSION, makeJsonReq } from '@/test/helpers';
+import { resolvePrincipal } from '@/lib/authz/principal';
+import { FAKE_SESSION, makePrincipal, makeJsonReq } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockResolve = vi.mocked(resolveJoinUrl);
@@ -101,10 +109,32 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   delete process.env.TEAMS_GRAPH_ENABLED;
 });
 
 const post = (body: unknown) => POST(makeJsonReq(URL_, 'POST', body));
+
+describe('access gate', () => {
+  it.each([
+    ['a disabled person', { disabled: true }],
+    ['a person without a role while REQUIRE_ROLE_TO_LOGIN is on', { roles: [] }],
+  ])('refuses %s with 403 and registers nothing', async (_label, override) => {
+    vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'true');
+    vi.mocked(resolvePrincipal).mockResolvedValueOnce(makePrincipal(override));
+    const res = await post({ meetingId: 'm1', joinUrl: JOIN });
+    expect(res.status).toBe(403);
+    expect(mockResolve).not.toHaveBeenCalled();
+    expect(mockSetOwner).not.toHaveBeenCalled();
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
+  });
+
+  it('refuses the list with 403 too', async () => {
+    vi.mocked(resolvePrincipal).mockResolvedValueOnce(makePrincipal({ disabled: true }));
+    expect((await GET()).status).toBe(403);
+  });
+});
 
 describe('POST /api/teams/meetings', () => {
   it('refuses with 403 disabled, and registers nothing, while the integration is off', async () => {

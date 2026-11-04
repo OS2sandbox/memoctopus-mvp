@@ -19,6 +19,7 @@ import type { TranscriptSegment } from '@/types';
 import { transcribeAlongCues } from './transcribe-cues';
 import { withMeetingLock } from './meeting-lock';
 import { artifactMode } from './artifact-mode';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 export { artifactMode };
 
@@ -238,7 +239,7 @@ async function runPipeline(
     if (cls === 'reauth_required' || cls === 'transcripts_disabled') throw err;
     if (cls === 'retryable') return { status: 'pending', transient: true };
     const reason = err instanceof Error ? err.message : 'Ukendt fejl under hentning fra Microsoft Teams';
-    console.error(`[teams-pipeline] ${meeting.id} failed:`, err);
+    safeLogError(`teams-pipeline ${meeting.id} failed`, err);
     return { status: 'failed', reason, code: teamsFailureCode(err) };
   }
 }
@@ -286,7 +287,7 @@ async function runRecordingWithTranscript(
   } catch (err) {
     // Not fatal while Teams' own transcript is in hand: losing hviske's Danish
     // costs quality, shipping nothing costs the meeting.
-    console.error(`[teams-pipeline] ${meeting.id} cue transcription failed:`, err);
+    safeLogError(`teams-pipeline ${meeting.id} cue transcription failed`, err);
   }
 
   let segments = heard;

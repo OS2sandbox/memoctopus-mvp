@@ -37,9 +37,9 @@ export async function deleteAudio(
       const existed = (await keyRequest) !== undefined;
       if (!existed) retractIfMissing();
       await tx.done;
-      // Standalone deletion (review flow, unmount cleanup). The flows that follow up with
-      // updateMeeting({ audioDeleted: true }) report the same action there too; the
-      // client dedupes the pair per meeting. A call with no audio left reports nothing.
+      // The only reporter of meeting.audio_delete: the flows that follow up with
+      // updateMeeting({ audioDeleted: true }) only set the flag and report nothing about audio.
+      // A call with no audio (a Teams meeting never holds any) reports nothing.
       return existed;
     },
     // The delete itself threw: report it as failed instead of retracting it silently.

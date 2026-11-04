@@ -489,10 +489,10 @@ describe('TranscriptReview', () => {
       });
       // The recording is deleted by the app once the minutes exist: logged as an automatic delete.
       expect(deleteAudio).toHaveBeenCalledWith('meeting-abc', { trigger: 'auto_generate' });
+      // deleteAudio is the only reporter of meeting.audio_delete; the flag write carries no trigger.
       expect(updateMeeting).toHaveBeenCalledWith(
         'meeting-abc',
         expect.objectContaining({ audioDeleted: true }),
-        { trigger: 'auto_generate' },
       );
 
       Object.defineProperty(window, 'location', { value: originalLocation, configurable: true });

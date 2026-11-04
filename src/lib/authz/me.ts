@@ -13,6 +13,8 @@ export interface MeResponse {
   source: AccessSource;
   /** True when the in-app role/org administration is unavailable (kill switch off, or roles owned elsewhere). */
   readOnly: boolean;
+  /** True when a person with no active role is refused at login; false means they hold the implicit bruger role. */
+  requireRoleToLogin: boolean;
 }
 
 /** Shape check for an untrusted JSON body; false means "treat as no data". */

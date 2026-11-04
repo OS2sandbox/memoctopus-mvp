@@ -7,6 +7,7 @@ import type { TranscriptSegment } from '@/types';
 import { planCueBatches, type CueBatch } from './cue-batches';
 import { fillSpeakerNames } from './name-speakers';
 import type { VttCue } from './vtt';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 // Transcribes a Teams recording along Microsoft's own transcript cues — see
 // cue-batches.ts for why the generic spliced-VAD path loses most of a Teams
@@ -159,7 +160,7 @@ export async function transcribeAlongCues(
       try {
         perBatch[i] = await transcribeOne(batch);
       } catch (err) {
-        console.error(`[teams/transcribe-cues] slice ${i} failed (will retry):`, err);
+        safeLogError(`teams/transcribe-cues slice ${i} failed (will retry)`, err);
         failed.push(i);
       }
     }),
@@ -171,7 +172,7 @@ export async function transcribeAlongCues(
       try {
         perBatch[i] = await transcribeOne(batches[i]);
       } catch (err) {
-        console.error(`[teams/transcribe-cues] slice ${i} failed permanently:`, err);
+        safeLogError(`teams/transcribe-cues slice ${i} failed permanently`, err);
         perBatch[i] = [];
       }
     }),

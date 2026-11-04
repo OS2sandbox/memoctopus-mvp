@@ -6,7 +6,7 @@ import type { TemplateRef } from '@/lib/skabeloner/central-types';
 import { TranscriptChapter } from '@/lib/ai/chapters';
 import { TranscriptSegment, Skabelon } from '@/types';
 import { withHandler } from '@/lib/api-handler';
-import { asEntityUuid, elapsedMs, emitAudit, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
+import { asEntityUuid, elapsedMs, emitAudit, emitTemplateDenied, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
 import { sanitizeChapters, sanitizeParticipants, redactPromptEchoDeep } from '@/lib/ai/prompt-echo';
 import { requireAppAccess } from '@/lib/authz/app-access';
 
@@ -90,7 +90,7 @@ async function postHandler(req: NextRequest) {
     if (!central) {
       // The response is the same 404 for every cause; the log says that a generation was refused
       // because the central template was not available (unknown, archived or not for this person).
-      await emitAudit(req, {
+      await emitTemplateDenied(req, {
         type: 'minutes.generate',
         actorUserId: userId,
         outcome: 'denied',

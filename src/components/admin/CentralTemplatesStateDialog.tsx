@@ -39,7 +39,7 @@ const COPY = {
   },
   restore: {
     title: 'Gendan skabelon',
-    description: 'Skabelonen bliver igen til rådighed for de valgte enheder.',
+    description: 'Skabelonen bliver igen til rådighed for dem, den er delt med.',
     confirm: 'Gendan',
     busy: 'Gendanner …',
     toast: 'Skabelonen er gendannet',

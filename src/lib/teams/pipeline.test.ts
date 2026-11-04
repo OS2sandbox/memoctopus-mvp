@@ -262,6 +262,17 @@ describe('processTeamsMeeting — recording + transcript', () => {
     expect(mockMarkNoRecording).toHaveBeenCalled();
   });
 
+  it('logs failures without the error message, which can echo transcript text', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockTranscribeAlongCues.mockRejectedValue(new Error('SECRET transcript text'));
+    await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
+    mockDownloadRecording.mockRejectedValue(new Error('SECRET transcript text'));
+    await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
+
+    expect(spy).toHaveBeenCalled();
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('SECRET');
+  });
+
   it('marks the run in flight so a concurrent poll does not start a second download', async () => {
     await processTeamsMeeting('u1', MEETING, AFTER_GRACE);
     expect(mockStorePendingTranscript).toHaveBeenCalledWith('meet-1', { status: 'processing' });

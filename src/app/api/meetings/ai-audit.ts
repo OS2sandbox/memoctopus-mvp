@@ -3,6 +3,7 @@
 // the user's request. Metadata only: the helpers here never see transcript text,
 // titles or error messages.
 import type { AuditEventOf, EventType } from '@/lib/audit/events';
+import { noteDroppedEvents } from '@/lib/audit/dropped';
 import { recordServerEvent, UUID_RE } from '@/lib/audit/record';
 import type { HeaderSource } from '@/lib/audit/request-context';
 import { describeError } from '@/lib/audit/safe-log';
@@ -42,10 +43,32 @@ export function outcomeCodeOf(err: unknown): 'timeout' | 'network' | 'unknown' |
 /**
  * The minutes/export routes' name for recordServerEvent, which is best-effort and never throws.
  * Server-emitted events have no volume guard of their own: the route's own work (an LLM call, an
- * export) is far slower than any limit would be.
+ * export) is far slower than any limit would be. A refusal BEFORE that work is the exception: it
+ * costs nothing, so it goes through a throttle (emitTemplateDenied below).
  */
 export function emitAudit<T extends EventType>(req: HeaderSource, event: AuditEventOf<T>): ReturnType<typeof recordServerEvent> {
   return recordServerEvent(req, event);
+}
+
+// ─── refused central template ────────────────────────────────────────────────
+
+/**
+ * A refused central generation returns before any LLM call, so nothing slows a loop of them down.
+ * The log keeps the first rows per person and window; the excess is counted and reported as an
+ * audit.events_dropped row (reason rate_limit), so a flood is never silent and never unbounded.
+ */
+const templateDeniedThrottle = createThrottle({
+  limit: 10,
+  windowMs: 60_000,
+  maxKeys: 5_000,
+  now: () => Date.now(),
+  onSummary: (actorUserId, dropped) => noteDroppedEvents(actorUserId, 'rate_limit', dropped),
+});
+
+/** minutes.generate with outcome denied (template_unavailable), capped per person and minute and counted beyond that. */
+export function emitTemplateDenied(req: HeaderSource, event: AuditEventOf<'minutes.generate'>): void | ReturnType<typeof recordServerEvent> {
+  if (!event.actorUserId || !templateDeniedThrottle.allow(event.actorUserId)) return;
+  return emitAudit(req, event);
 }
 
 // ─── live audio ──────────────────────────────────────────────────────────────
@@ -82,4 +105,9 @@ export function emitLiveAudioUpload(
 /** Test only. */
 export function __resetLiveAudio(): void {
   liveAudioThrottle.reset();
+}
+
+/** Test only. */
+export function __resetTemplateDenied(): void {
+  templateDeniedThrottle.reset();
 }

@@ -162,9 +162,14 @@ export const auth = betterAuth({
     ...(emailPasswordSignUpDisabled() ? { disableSignUp: true } : {}),
   },
   ...claimsSession(),
+  // Always closed: the account-link endpoints (nothing here calls them). Their callback writes
+  // the provider's access/id/refresh tokens onto the account row without creating a session,
+  // so scrubAccountTokens (a session.create hook) never runs and the role claims in the id
+  // token would be kept; it can also add a second account row at the same provider, which the
+  // claims login hook could then mistake for the person's own.
   // The sso plugin can also manage identity providers in a database table; this app configures
-  // them in AUTH_CONFIG_FILE only, so those endpoints must not exist.
-  ...(ssoOptions ? { disabledPaths: SSO_DISABLED_PATHS } : {}),
+  // them in AUTH_CONFIG_FILE only, so those endpoints must not exist either.
+  disabledPaths: ['/link-social', '/oauth2/link', '/unlink-account', ...(ssoOptions ? SSO_DISABLED_PATHS : [])],
   ...(ipAddressHeaders ? { advanced: { ipAddress: { ipAddressHeaders } } } : {}),
   // Identity capture / first-admin bootstrap / directory link. Fires after the
   // session row is committed; runLoginHooks never throws, so it cannot block a

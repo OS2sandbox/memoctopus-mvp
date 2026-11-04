@@ -121,11 +121,9 @@ describe('meetings', () => {
       expect(h.report).not.toHaveBeenCalled();
     });
 
-    it('status becoming redacted reports only the audio delete when the audio went too (the transcript text is its own event), no redact and no status_change', async () => {
+    it('status becoming redacted reports nothing from the meeting write (the audio delete is deleteAudio\'s, the transcript text its own event), no redact and no status_change', async () => {
       await updateMeeting(id, { status: 'redacted', audioDeleted: true });
-      expect(calls()).toEqual([{ type: 'meeting.audio_delete', entityId: id, details: { trigger: 'user' } }]);
-      expectNoContent();
-      h.report.mockClear();
+      expect(h.report).not.toHaveBeenCalled();
       await updateMeeting(id, { status: 'redacted' });
       expect(h.report).not.toHaveBeenCalled();
     });
@@ -163,16 +161,30 @@ describe('meetings', () => {
       h.report.mockReset();
     });
 
-    it('audioDeleted false -> true reports audio_delete once; true -> true reports nothing', async () => {
+    it('setting audioDeleted never reports audio_delete: that is deleteAudio\'s alone', async () => {
       await updateMeeting(id, { audioDeleted: true });
-      expect(types()).toEqual(['meeting.audio_delete']);
       await updateMeeting(id, { audioDeleted: true });
-      expect(types()).toEqual(['meeting.audio_delete']);
+      expect(h.report).not.toHaveBeenCalled();
     });
 
-    it('passes an automatic trigger through to audio_delete', async () => {
-      await updateMeeting(id, { audioDeleted: true }, { trigger: 'auto_leave' });
-      expect(calls()).toEqual([{ type: 'meeting.audio_delete', entityId: id, details: { trigger: 'auto_leave' } }]);
+    it.each(['user', 'auto_generate'] as const)(
+      'a meeting that never held audio (Teams) reports no audio_delete for the %s delete + flag sequence',
+      async (trigger) => {
+        // The automatic delete reports first and retracts itself when it finds no audio.
+        const retract = vi.fn();
+        h.report.mockReturnValue(retract);
+        await deleteAudio(id, trigger === 'user' ? {} : { trigger });
+        await updateMeeting(id, { status: 'minutes', audioDeleted: true });
+        const audioReports = types().filter((t) => t === 'meeting.audio_delete').length;
+        expect(audioReports - retract.mock.calls.length).toBe(0);
+      },
+    );
+
+    it('with audio present the delete + flag sequence reports exactly one audio_delete', async () => {
+      await saveAudio(id, new Blob(['x']), 'audio/webm');
+      await deleteAudio(id, { trigger: 'auto_generate' });
+      await updateMeeting(id, { audioDeleted: true });
+      expect(calls()).toEqual([{ type: 'meeting.audio_delete', entityId: id, details: { trigger: 'auto_generate' } }]);
     });
 
     it('a missing meeting reports nothing', async () => {
@@ -329,6 +341,22 @@ describe('minutes', () => {
     await setActiveMinutesVersion('m1', row.versions[1].id); // already active
     await setActiveMinutesVersion('m1', 'not-a-version');
     expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it('reports no minutes_version_prune when the write that would prune fails, and reports it after the version event on success', async () => {
+    for (let i = 0; i < 50; i++) await appendMinutesVersion('m1', minutes(`v${i}`));
+    h.report.mockClear();
+    h.failPut = true;
+    await expect(appendMinutesVersion('m1', minutes('51'))).rejects.toThrow();
+    await expect(snapshotMinutes('m1', minutes('52'))).rejects.toThrow();
+    expect(calls().map((c) => [c.type, c.outcome])).toEqual([
+      ['meeting.minutes_version', 'error'],
+      ['meeting.minutes_version', 'error'],
+    ]);
+    h.report.mockClear();
+    h.failPut = false;
+    await appendMinutesVersion('m1', minutes('51'));
+    expect(types()).toEqual(['meeting.minutes_version', 'meeting.minutes_version_prune']);
   });
 
   it('reports minutes_version_prune with the number of versions the 50-version cap removed', async () => {

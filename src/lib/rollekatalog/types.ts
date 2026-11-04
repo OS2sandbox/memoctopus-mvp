@@ -17,7 +17,7 @@ export interface SyncCounts {
   orgUnitCyclesBroken: number;
   assignmentsUpserted: number;
   assignmentsRemoved: number;
-  /** Assignments whose roleIdentifier is not one of our four roles. */
+  /** Assignments whose roleIdentifier is not one of our three roles. */
   assignmentsIgnoredRole: number;
   /** Assignments for a user that is not in the mirror. */
   assignmentsSkippedUnknownUser: number;
@@ -86,7 +86,7 @@ export interface RunSyncOptions {
   trigger: 'cron' | 'manual';
   /** Bypass the removal threshold (admin button; the route requires sync.run). The empty-response guard still applies. */
   force?: boolean;
-  /** The admin for a manual run (audit actor); null/absent for cron. */
+  /** The admin for a manual run. runSync ignores it: the audit actor is recorded only by recordIntegrationRun (run-audit.ts). */
   actorUserId?: string | null;
 }
 

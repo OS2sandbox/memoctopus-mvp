@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { headers } from 'next/headers';
-import { auth } from '@/lib/auth';
+import { requireAppAccess } from '@/lib/authz/app-access';
 import { markStepSeen, skipTour, completeTour, resetHints } from '@/lib/onboarding/store';
 import { withHandler } from '@/lib/api-handler';
 import { ONBOARDING_STEPS } from '@/lib/onboarding/steps';
@@ -9,8 +8,9 @@ import { ONBOARDING_STEPS } from '@/lib/onboarding/steps';
 const MAX_MEETING_ID_LENGTH = 100;
 
 async function postHandler(req: NextRequest): Promise<NextResponse> {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  const access = await requireAppAccess();
+  if (access instanceof NextResponse) return access;
+  const { session } = access;
 
   const parsed = await req.json().catch(() => null);
   // `null`, arrays and primitives are valid JSON but not something we can read fields from.
