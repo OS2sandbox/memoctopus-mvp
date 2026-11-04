@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
   // will write this meeting's transcript and recording into it. Binding the id
   // to its owner here does two things: it stops another user's browser from
   // collecting these artifacts, and it makes the hand-off work at all — both
-  // the pending-audio and pending-transcript routes deny by default when no owner is
+  // the pending-meta and pending-transcript routes deny by default when no owner is
   // recorded.
   const existingOwner = await getMeetingOwner(meetingId);
   if (existingOwner && existingOwner !== userId) {

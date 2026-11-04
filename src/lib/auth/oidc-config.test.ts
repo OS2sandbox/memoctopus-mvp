@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('@/lib/db', () => ({ db: {} }));
+
+import { entraUserInfoOverrides, type UserLookups } from './entra-user-info';
 import { clearLoginClaimsStash, takeLoginClaims } from '@/lib/authz/claims-stash';
 import { checkEntraIdToken, checkIdTokenClaims, entraSocialConfig, genericOAuthConfigFor, loadOidcProfile, mapOidcProfile, resetOidcDiscoveryCache } from './oidc-config';
 import type { OidcProviderConfig } from './providers';
@@ -365,5 +368,41 @@ describe('Microsoft Entra ID (built-in provider)', () => {
     expect(await cfg.getUserInfo({ idToken: token({ tid: 'other' }) })).toBeNull();
     expect(await cfg.getUserInfo({ idToken: token({ sub: undefined }) })).toBeNull();
     expect(await cfg.getUserInfo({})).toBeNull();
+  });
+
+  // better-auth only calls a provider's mapProfileToUser inside its default getUserInfo, which entraSocialConfig
+  // replaces, so the vetting of email and emailVerified (entra-user-info.ts) has to run inside getUserInfo.
+  describe('getUserInfo with the stored-user overrides (overrideUserInfoOnSignIn)', () => {
+    const stored = { id: 'user-me', email: 'old@k.dk', emailVerified: true };
+    const lookups = (holders: Record<string, string> = {}): UserLookups => ({
+      userForMicrosoftAccount: vi.fn(async (sub: string) => (sub === 'oid-1' ? stored : null)),
+      userIdForEmail: vi.fn(async (email: string) => holders[email] ?? null),
+    });
+    const wired = (l: UserLookups) => entraSocialConfig(m, (p) => entraUserInfoOverrides(p, l));
+
+    it('keeps the stored email when the new one belongs to another user, and keeps a verified user verified', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const out = await wired(lookups({ 'a@k.dk': 'user-other' })).getUserInfo({ idToken: token({ email_verified: false }) });
+      expect(out?.user).toMatchObject({ id: 'oid-1', email: 'old@k.dk', emailVerified: true });
+    });
+
+    it('lets a free new email through but still does not downgrade a verified user', async () => {
+      const out = await wired(lookups()).getUserInfo({ idToken: token({}) });
+      expect(out?.user).toMatchObject({ email: 'a@k.dk', emailVerified: true });
+    });
+
+    it('leaves a first sign-in (no stored user) as the claims state it, and does nothing without overrides', async () => {
+      const first = await wired(lookups()).getUserInfo({ idToken: token({ sub: 'oid-new' }) });
+      expect(first?.user).toMatchObject({ email: 'a@k.dk', emailVerified: false });
+      const plain = await entraSocialConfig(m).getUserInfo({ idToken: token({}) });
+      expect(plain?.user).toMatchObject({ email: 'a@k.dk', emailVerified: false });
+    });
+
+    it('does not run the overrides for a token that fails the checks', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const l = lookups();
+      expect(await wired(l).getUserInfo({ idToken: token({ aud: 'x' }) })).toBeNull();
+      expect(l.userForMicrosoftAccount).not.toHaveBeenCalled();
+    });
   });
 });

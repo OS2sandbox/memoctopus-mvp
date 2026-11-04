@@ -88,6 +88,16 @@ describe('syncConfigCatalogue', () => {
 });
 
 describe('syncConfigCatalogueOnce', () => {
+  it('does nothing during `next build` (no start: an absent catalogue there must not deactivate the stored one)', async () => {
+    vi.stubEnv('NEXT_PHASE', 'phase-production-build');
+    try {
+      expect(await syncConfigCatalogueOnce()).toBe('skipped');
+      expect(catalogueState).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('never throws: a failure is one content-free warning per attempt, and is retried (a database blip at boot must not stick)', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     // The default runner needs a real pool; with the pool mocked as {} the call fails, which is the point.

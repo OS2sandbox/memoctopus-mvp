@@ -355,6 +355,18 @@ describe('Microsoft login and the Teams / Graph integration', () => {
     expect((await microsoft()).overrideUserInfoOnSignIn).toBeUndefined();
   });
 
+  it('wires the stored-user overrides into the provider\'s own getUserInfo (better-auth never calls mapProfileToUser then)', async () => {
+    const TENANT_ID = '11111111-2222-3333-4444-555555555555';
+    const m = await microsoft();
+    expect(m).not.toHaveProperty('mapProfileToUser');
+    const claims = { iss: `https://login.microsoftonline.com/${TENANT_ID}/v2.0`, aud: 'client-id', tid: TENANT_ID, sub: 'oid-1', email: 'a@k.dk' };
+    const idToken = `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`;
+    // The mocked db is `{}`: the lookup fails, which entraUserInfoOverrides answers with {} (better-auth's behaviour).
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect((await m.getUserInfo({ idToken })).user).toMatchObject({ id: 'oid-1', email: 'a@k.dk' });
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('could not check the Entra user info'), expect.anything());
+  });
+
   // The refresh token gives about 90 days of offline access to meeting transcripts and recordings once Teams is
   // enabled, so it must not sit in the database (or a backup of it) in the clear.
   it('encrypts stored OAuth tokens at rest', async () => {

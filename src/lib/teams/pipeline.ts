@@ -25,7 +25,7 @@ export { artifactMode };
 
 // One meeting's worth of work: ask Graph what artifacts exist, decide which of the
 // three processing modes applies, and land the result in the pending stash the
-// client already knows how to collect (/api/meetings/[id]/pending-audio + /pending-transcript).
+// client already knows how to collect (/api/meetings/[id]/pending-meta + /pending-transcript).
 //
 // Idempotent: a meeting whose stash is already 'ready' is not reprocessed, and a
 // run in flight reports 'pending' rather than starting a second download.
@@ -172,7 +172,7 @@ async function runPipeline(
   }
 
   // Bind the stash to its owner BEFORE anything is written into it. Both
-  // hand-off routes (pending-audio, pending-transcript) deny by default when
+  // hand-off routes (pending-meta, pending-transcript) deny by default when
   // no owner file exists, so without this the meeting's real owner is answered
   // 404 / { status: 'none' } and the hand-off can never complete.
   await setMeetingOwner(meeting.id, userId);
@@ -348,10 +348,10 @@ async function runTranscriptOnly(
     throw new Error('Transskriptionen fra Teams var tom.');
   }
 
-  // The audio route needs a meta record, or the client polls 404 forever. This is
-  // the existing "finished with nothing to transcribe" marker, so the pending-audio route
-  // answers { status: 'no-recording' } and the client goes straight to the
-  // transcript hand-off instead of waiting for a blob.
+  // The pending-meta route needs a record, or the client polls 404 forever. This is
+  // the existing "finished with nothing to transcribe" marker: the client reads the
+  // speaker names and duration from it and goes straight to the transcript
+  // hand-off. No audio is ever held for the browser.
   const speakers = speakersFromVtt(cues);
   await markNoRecording(meeting.id, {
     participants: speakers,

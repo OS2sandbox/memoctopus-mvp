@@ -339,7 +339,7 @@ describe('processTeamsMeeting — transcript only', () => {
     });
     expect(mockDownloadRecording).not.toHaveBeenCalled();
     expect(mockSpawn).not.toHaveBeenCalled();
-    // The audio route needs a meta record or the client polls 404 forever — and
+    // The pending-meta route needs a record or the client polls 404 forever — and
     // it carries the VTT speaker names, which pre-fill participants in Gennemgang.
     expect(mockMarkNoRecording).toHaveBeenCalledWith('meet-1', {
       participants: ['Mette Hansen', 'Jens Poulsen'],

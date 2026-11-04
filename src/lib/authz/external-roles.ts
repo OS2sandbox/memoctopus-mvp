@@ -95,6 +95,9 @@ function scheduleRetry(): void {
  * (a database that is not up yet at boot must not leave the catalogue unsynced until the next restart).
  */
 export async function syncConfigCatalogueOnce(): Promise<CatalogueSyncResult | 'failed' | 'skipped'> {
+  // `next build` runs register() too, possibly with a database but without the runtime's AUTH_CONFIG_FILE: an
+  // 'absent' catalogue would then deactivate every stored config entry. Same guard as checkConfigOnce.
+  if (process.env.NEXT_PHASE === 'phase-production-build') return 'skipped';
   if (synced) return 'skipped';
   synced = true;
   try {

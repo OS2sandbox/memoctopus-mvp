@@ -45,6 +45,15 @@ describe('register()', () => {
     expect(startPoller).toHaveBeenCalledTimes(1);
   });
 
+  it('still loads the role catalogue when the fingerprint step throws', async () => {
+    vi.stubEnv('NEXT_RUNTIME', 'nodejs');
+    vi.mocked(checkConfigOnce).mockImplementationOnce(() => {
+      throw new Error('db down');
+    });
+    await register();
+    expect(syncConfigCatalogueOnce).toHaveBeenCalledTimes(1);
+  });
+
   it('starts nothing on the edge runtime', async () => {
     vi.stubEnv('NEXT_RUNTIME', 'edge');
     await register();

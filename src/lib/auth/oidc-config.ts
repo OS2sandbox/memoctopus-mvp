@@ -283,9 +283,15 @@ export function checkEntraIdToken(claims: Profile, m: Pick<EntraProviderConfig, 
  *  - `getUserInfo` reads the id token from the token endpoint like the default does, but first checks audience,
  *    issuer and tenant, hands the role/group claims to the login hook, and never touches Graph;
  *  - a token that fails the checks refuses the login (better-auth answers unable_to_get_user_info);
- *  - `disableIdTokenSignIn`: a token posted by a client to /sign-in/social is refused (verifyIdToken answers false).
+ *  - `disableIdTokenSignIn`: a token posted by a client to /sign-in/social is refused (verifyIdToken answers false);
+ *  - `overrides` (only wired with overrideUserInfoOnSignIn, see auth/index.ts) vets the email and emailVerified before
+ *    better-auth writes them over the stored user. better-auth calls its own `mapProfileToUser` option only inside its
+ *    default getUserInfo, which this config replaces, so the hook is applied here.
  */
-export function entraSocialConfig(m: EntraProviderConfig) {
+export function entraSocialConfig(
+  m: EntraProviderConfig,
+  overrides?: (profile: { sub: string; email?: string }) => Promise<{ email?: string; emailVerified?: boolean }>,
+) {
   const extra = (m.scopes ?? []).filter((s) => s !== 'offline_access');
   return {
     clientId: m.clientId,
@@ -314,16 +320,15 @@ export function entraSocialConfig(m: EntraProviderConfig) {
         });
       }
       const email = str(claims.email);
-      return {
-        user: {
-          id: claims.sub,
-          name: str(claims.name),
-          email: email?.toLowerCase(),
-          image: undefined,
-          emailVerified: claims.email_verified === true,
-        },
-        data: claims,
+      const user: { id: string; name: string | undefined; email: string | undefined; image: undefined; emailVerified: boolean } = {
+        id: claims.sub,
+        name: str(claims.name),
+        email: email?.toLowerCase(),
+        image: undefined,
+        emailVerified: claims.email_verified === true,
       };
+      if (overrides) Object.assign(user, await overrides({ sub: claims.sub, email: user.email }));
+      return { user, data: claims };
     },
   };
 }

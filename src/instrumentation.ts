@@ -22,15 +22,19 @@ export async function register(): Promise<void> {
     const { startPendingSweeper } = await import('@/lib/pending-sweeper');
     startPendingSweeper();
 
-    // Fire-and-forget: neither step throws or delays startup.
+    // Fire-and-forget: neither step throws or delays startup, and one failing must not skip the other.
+    // Both skip `next build` (NEXT_PHASE): not a start, so nothing is recorded or deactivated.
     try {
       const { checkConfigOnce } = await import('@/lib/system/config-fingerprint');
-      // checkConfigOnce skips `next build` (NEXT_PHASE): no database, not a start, so it records nothing.
       void checkConfigOnce();
+    } catch {
+      // Startup must never depend on the audit trail.
+    }
+    try {
       const { syncConfigCatalogueOnce } = await import('@/lib/authz/external-roles');
       void syncConfigCatalogueOnce();
     } catch {
-      // Startup must never depend on the audit trail.
+      // Nor on the catalogue.
     }
   }
 }

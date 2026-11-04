@@ -152,7 +152,7 @@ The client asked for the "change of local templates including a possible changel
 ## Known limitations
 
 - Personal templates are still allowed; there is no "central templates only" policy per org unit and no manager-set default (each person chooses their own, which can be a central template).
-- The share code and "save as personal template" are not offered for central templates; the share code is client-side and unaudited.
+- The share code and "save as personal template" are not offered for central templates; the share code is client-side and unaudited, and publishing a personal template as a share link (`SKABELON_SHARE_LINK=true`) is not logged either (`audit.md`, known limitations).
 - Provenance in the browser is partial (latest generation only, lost with the browser data); minutes made before central templates have no `templateRef`.
 - Role and group audiences are only as fresh as the person's last IdP login (`ROLE_CLAIMS_MAX_SECONDS`), and the catalogue only as fresh as its last refresh. Whether the role identifiers in the IdP's claims equal the catalogue's identifiers is an open question for the client (`rollekatalog.md`); the audience only works where they match.
 - Recipient membership is only as fresh as the last sync. Targets that drifted out of the owner subtree stop delivering without any notice, and the admin list does not flag them yet.

@@ -16,18 +16,18 @@ export interface TranscribeRecordingOptions {
 }
 
 // Server-side processing of a Teams recording, kicked off the moment the audio
-// lands — NOT when the user's browser eventually polls the audio down. The server
-// already holds the audio, so the old stash → poll → download → browser-decode →
-// re-upload chain is pure dead time on the critical path.
+// lands. The server already holds the audio, so transcribing it here keeps the
+// browser out of the critical path.
 //
 // Transcription (ffmpeg decode + VAD + simultaneous hviske fan-out) and diarization
-// run in parallel; the merged transcript is stashed next to the pending audio for
-// the client to collect into IndexedDB. Everything is fail-soft: on failure the
-// stash is marked 'failed' and the client falls back to driving transcription
-// itself via /api/meetings/[id]/transcribe-batches.
+// run in parallel; the merged transcript is stashed with storePendingTranscript for
+// the browser to collect through /pending-meta and /pending-transcript into
+// IndexedDB. No audio is held for the browser. Everything is fail-soft: on failure
+// the stash is marked 'failed'.
 //
 // When `opts.turns` is supplied the diarization pass is skipped entirely: the
-// caller already knows who spoke when (Graph pipeline → VTT).
+// caller already knows who spoke when (a VTT's turns). The only caller today
+// (Graph pipeline mode 3) passes no options.
 export async function transcribeRecording(
   meetingId: string,
   buffer: Buffer,

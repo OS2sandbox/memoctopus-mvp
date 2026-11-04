@@ -26,6 +26,7 @@ import {
   warnDeprecatedAuthEnv,
 } from './providers';
 import { authIpHeaders } from './ip-headers';
+import { entraUserInfoOverrides } from './entra-user-info';
 import { entraSocialConfig, genericOAuthConfigFor } from './oidc-config';
 import { SSO_DISABLED_PATHS, ssoPluginOptions } from './saml';
 import { samlBeforeHook } from './saml-guard';
@@ -102,6 +103,11 @@ function claimsSession(): { session: { expiresIn: number; updateAge: number; dis
 // consumers) it comes from whichever tenant the user signs in from, and Entra does not guarantee it is
 // verified or unchanged, so it must not overwrite what we store.
 //
+// With it, the claims are vetted first (entra-user-info.ts): an email another user already holds is not taken
+// over (UNIQUE(users.email) would lock this user out of Microsoft sign-in), and a verified user is not
+// downgraded. entraSocialConfig applies that itself, because better-auth never calls mapProfileToUser when the
+// provider has its own getUserInfo.
+//
 // The Teams integration reads Graph as the signed-in user (delegated), so the Graph scopes must be consented
 // to at login, but only when TEAMS_GRAPH_ENABLED is set: two of them need tenant-admin consent, and a tenant
 // that has not granted it rejects the whole sign-in. With the flag off the scopes are exactly those of
@@ -112,10 +118,11 @@ function claimsSession(): { session: { expiresIn: number; updateAge: number; dis
 // without them; hasGraphScopes() in src/lib/teams/graph-client.ts detects that and the UI asks them to sign in
 // again.
 function microsoftSocial(m: NonNullable<typeof microsoft>) {
-  const base = entraSocialConfig(m);
+  const singleTenant = microsoftSingleTenant();
+  const base = entraSocialConfig(m, singleTenant ? entraUserInfoOverrides : undefined);
   return {
     ...base,
-    ...(microsoftSingleTenant() && { overrideUserInfoOnSignIn: true }),
+    ...(singleTenant && { overrideUserInfoOnSignIn: true }),
     ...(graphScopes.length > 0 && {
       scope: [...new Set([...base.scope, 'User.Read', 'offline_access', ...graphScopes])],
     }),
