@@ -358,6 +358,22 @@ describe('AUTH_CONFIG_FILE', () => {
       expect([...roles.groupRoleMap.keys()]).toEqual(['g-1']);
     });
 
+    it('never logs a claim value (a role map key) when the section is invalid', () => {
+      writeConfig({
+        providers: [OIDC],
+        roles: {
+          appRoleMap: { 'Referat-Secret-Role': 'superadmin' },
+          byProvider: { fka: { groupRoleMap: { 'G-Hemmelig': 'nope' } } },
+        },
+      });
+      expect(loadAuthConfig().roles.state).not.toBe('ok');
+      const out = warned();
+      expect(out).not.toContain('Referat-Secret-Role');
+      expect(out).not.toContain('G-Hemmelig');
+      expect(out).toContain('appRoleMap');
+      expect(out).toContain('groupRoleMap');
+    });
+
     it('is "unset" when the section is absent', () => {
       writeConfig({ providers: [OIDC] });
       expect(loadAuthConfig().roles).toEqual({ state: 'unset' });

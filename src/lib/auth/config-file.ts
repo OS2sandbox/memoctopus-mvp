@@ -32,7 +32,8 @@
 //  - ACCESS_SOURCE=claims: an OIDC provider may not use a multi-tenant authority and must
 //    give a discoveryUrl or issuer (the id token's `iss` is checked against it);
 //  - `claims.userId` may not be a mutable, re-assignable attribute (e-mail, upn, name ...).
-// Warnings name the section, the provider id or index and the field path, never a value.
+// Warnings name the section, the provider id or index and the field path, never a value
+// (the keys of a role map are claim values and are redacted too).
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import { ROLE_KEYS, type RoleKey } from '@/lib/authz/types';
@@ -421,11 +422,21 @@ function expandEnv(value: unknown, missing: Set<string>): unknown {
   return value;
 }
 
-/** Zod issues as `path:code` pairs: never the offending value (it may be a secret). */
+/**
+ * Zod issues as `path:code` pairs: never the offending value (it may be a secret). The key
+ * of a role map IS a claim value (a role or group name), so it is redacted to `*` too.
+ */
 function issueSummary(err: z.ZodError): string {
   return err.issues
     .slice(0, 5)
-    .map((i) => `${i.path.join('.') || '(root)'}:${i.code}`)
+    .map((i) => {
+      const path = i.path
+        .map((seg, idx, all) =>
+          idx > 0 && (all[idx - 1] === 'appRoleMap' || all[idx - 1] === 'groupRoleMap') ? '*' : String(seg),
+        )
+        .join('.');
+      return `${path || '(root)'}:${i.code}`;
+    })
     .join(', ');
 }
 

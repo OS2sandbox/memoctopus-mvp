@@ -342,12 +342,15 @@ export async function cleanUpRecording(
     result = 'failed';
   }
 
+  let settled: boolean;
   try {
-    await settleRecordingCleanup(userId, row.id, result);
+    settled = await settleRecordingCleanup(userId, row.id, result);
   } catch (err) {
     safeLogError(`teams/poller ${row.id}: could not record the recording cleanup`, err);
     return row;
   }
+  // A concurrent run settled it first and wrote the event: one verdict, one event.
+  if (!settled) return row;
   // Only the final verdict: a postponed attempt returned above and is retried on the next tick.
   await recordTeamsRecordingDelete({ userId, meetingId: row.id, status: result });
   return { ...row, recordingCleanup: result };

@@ -37,7 +37,7 @@ vi.mock('./store', async (importOriginal) => {
     setTeamsMeetingState: vi.fn().mockResolvedValue(undefined),
     refreshTeamsMeetingSchedule: vi.fn(),
     listPendingRecordingCleanups: vi.fn().mockResolvedValue([]),
-    settleRecordingCleanup: vi.fn().mockResolvedValue(undefined),
+    settleRecordingCleanup: vi.fn().mockResolvedValue(true),
   };
 });
 
@@ -1285,5 +1285,16 @@ describe('audit events of the Teams poller', () => {
     mockSettle.mockRejectedValueOnce(new Error('db down'));
     await cleanUpRecording('u1', row({ state: 'ready', recordingCleanup: 'pending', recordingBytes: 4242 }), NOW);
     expect(mockAuditDelete).not.toHaveBeenCalled();
+  });
+
+  it('a verdict another run already settled is not reported a second time', async () => {
+    mockDeleteRecording.mockResolvedValueOnce('not_found');
+    mockSettle.mockResolvedValueOnce(false);
+    const pending = row({ state: 'ready', recordingCleanup: 'pending', recordingBytes: 4242 });
+
+    const result = await cleanUpRecording('u1', pending, NOW);
+
+    expect(mockAuditDelete).not.toHaveBeenCalled();
+    expect(result).toBe(pending);
   });
 });

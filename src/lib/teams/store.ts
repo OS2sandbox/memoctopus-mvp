@@ -511,19 +511,22 @@ export async function listPendingRecordingCleanups(userId: string): Promise<Team
 /**
  * Settles a pending cleanup. Only a row still `pending` is written, so of two runs
  * racing on the same recording the first verdict stands — the second finds the
- * file gone and would otherwise overwrite `deleted` with `not_found`.
+ * file gone and would otherwise overwrite `deleted` with `not_found`. Returns whether
+ * this call settled the row, so only the run that did writes the audit event.
  */
 export async function settleRecordingCleanup(
   userId: string,
   id: string,
   result: Exclude<RecordingCleanupState, 'pending'>,
-): Promise<void> {
-  await queryUserSchema(
+): Promise<boolean> {
+  const rows = await queryUserSchema<{ id: string }>(
     userId,
     `UPDATE teams_meetings SET recording_cleanup = $2, updated_at = NOW()
-      WHERE id = $1 AND recording_cleanup = 'pending'`,
+      WHERE id = $1 AND recording_cleanup = 'pending'
+      RETURNING id`,
     [id, result],
   );
+  return rows.length > 0;
 }
 
 export async function deleteTeamsMeeting(userId: string, id: string): Promise<void> {
