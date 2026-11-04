@@ -468,13 +468,39 @@ describe('events the browser lost (droppedLocally)', () => {
     expect(mockRecord).toHaveBeenCalledTimes(1);
   });
 
-  it('is exempt from the daily cap (it says that events are missing)', async () => {
+  it('counts as one event against the daily cap: beyond it the report is dropped, counted and acknowledged', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     alreadyStored(20000);
     const res = await send({ events: [ev()], droppedLocally: lost() });
-    expect(await res.json()).toMatchObject({ accepted: 0, capped: true });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ accepted: 0, capped: true, refused: 2 });
+    expect(mockRecord).not.toHaveBeenCalled();
+    expect(noteDroppedEvents).toHaveBeenCalledWith('user-123', 'daily_cap', 1, expect.anything());
+  });
+
+  it('a report alone is also refused beyond the daily cap, with 200 so the outbox does not retry', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    alreadyStored(20000);
+    const res = await send({ events: [], droppedLocally: lost() });
+    expect(res.status).toBe(200);
+    expect(mockRecord).not.toHaveBeenCalled();
+    expect(noteDroppedEvents).toHaveBeenCalledWith('user-123', 'daily_cap', 1, expect.anything());
+  });
+
+  it('takes the last slot of the daily cap when the events before it leave one', async () => {
+    alreadyStored(19999);
+    const res = await send({ events: [], droppedLocally: lost() });
+    expect(await res.json()).toEqual({ accepted: 0 });
     expect(mockRecord).toHaveBeenCalledTimes(1);
-    expect(mockRecord.mock.calls[0][1]).toMatchObject({ type: 'audit.events_dropped' });
+  });
+
+  it('a flood of reports with fresh ids is rate limited (429) like any other event', async () => {
+    const fresh = (i: number) => ({ count: 1, clientEventId: `cccccccc-bbbb-4ccc-8ddd-${String(i).padStart(12, '0')}` });
+    for (let i = 0; i < RATE_LIMIT_EVENTS; i += 1) expect((await send({ events: [], droppedLocally: fresh(i) })).status).toBe(200);
+    const res = await send({ events: [], droppedLocally: fresh(RATE_LIMIT_EVENTS) });
+    expect(res.status).toBe(429);
+    expect(mockRecord).toHaveBeenCalledTimes(RATE_LIMIT_EVENTS);
+    expect(noteDroppedEvents).toHaveBeenCalledWith('user-123', 'rate_limit', 1, expect.anything());
   });
 
   it('stays strict: no extra keys, count must be a positive integer, id a uuid, and nothing else is accepted as a type', async () => {

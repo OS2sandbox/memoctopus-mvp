@@ -56,6 +56,22 @@ describe.skipIf(!hasPg)('mode-switch relink (real Postgres)', () => {
       await close();
     }));
 
+  it('moves a link from a leftover source=claims row to the matching rollekatalog row', () =>
+    withFreshSchema(async (c, schema) => {
+      const { runner, close } = schemaRunner(c, schema);
+      await addUser(c, 'u1');
+      await c.query("INSERT INTO directory_users (name, source, app_user_id) VALUES ('Claims', 'claims', 'u1')");
+      await c.query("INSERT INTO directory_users (name, ext_user_id, source) VALUES ('Rk', 'abc123', 'rollekatalog')");
+
+      expect((await matchDirectoryUser(identity('u1'), 'userid-claim', runner)).status).toBe('linked');
+      expect(await links(c)).toEqual([
+        { source: 'claims', app_user_id: null },
+        { source: 'rollekatalog', app_user_id: 'u1' },
+      ]);
+      expect((await matchDirectoryUser(identity('u1'), 'userid-claim', runner)).status).toBe('already_linked');
+      await close();
+    }));
+
   it('matches a UPN claim with DIRECTORY_USERID_TRANSFORM=strip-upn-domain', () =>
     withFreshSchema(async (c, schema) => {
       vi.stubEnv('DIRECTORY_USERID_TRANSFORM', 'strip-upn-domain');

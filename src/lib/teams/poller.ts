@@ -522,6 +522,16 @@ export async function pollDueMeetings(now: Date): Promise<{ polled: number }> {
     return { polled: 0 };
   }
 
+  // A checked-out client has no pool listener; a connection dropped during a
+  // long pass would otherwise be an uncaught 'error' that kills the process.
+  // The session lock goes with the connection, so only log, and discard the
+  // client instead of returning it to the pool.
+  let connectionLost = false;
+  client.on('error', (err) => {
+    connectionLost = true;
+    safeLogError('teams/poller: lock connection error', err);
+  });
+
   try {
     const locked = await client.query<{ locked: boolean }>(
       'SELECT pg_try_advisory_lock($1) AS locked',
@@ -542,7 +552,7 @@ export async function pollDueMeetings(now: Date): Promise<{ polled: number }> {
     safeLogError('teams/poller: run failed', err);
     return { polled: 0 };
   } finally {
-    client.release();
+    client.release(connectionLost ? true : undefined);
   }
 }
 

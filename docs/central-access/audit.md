@@ -140,13 +140,13 @@ Meetings, transcripts, minutes versions and audio live only in the browser (Inde
 
 ### Dropped events are counted (`audit.events_dropped`)
 
-Dropping is a defect for a documentation requirement, so no limit is silent. Every skipped event is counted and reported as an `audit.events_dropped` row with a closed `reason` and a `count` (never what was skipped). The server's own limits are reported by `src/lib/audit/dropped.ts`: the first drop of a person and reason at once, further ones added up and written once per 10 minutes (source `system`, bounded in memory, itself exempt from every cap):
+Dropping is a defect for a documentation requirement, so no limit is silent. Every skipped event is counted and reported as an `audit.events_dropped` row with a closed `reason` and a `count` (never what was skipped). The server's own limits are reported by `src/lib/audit/dropped.ts`: the first drop of a person and reason at once, further ones added up and written once per 10 minutes (source `system`, bounded in memory, those rows are exempt from every cap):
 
 | `reason` | What was skipped |
 |---|---|
 | `daily_cap` | client events beyond `AUDIT_CLIENT_EVENTS_DAILY_CAP` in 24 h |
 | `rate_limit` | a batch refused with 429 (the browser retries it, so the count is refused deliveries, not lost events), or refused central generations (`minutes.generate` denied) beyond the per-person cap |
-| `client_outbox` | **self-reported by the browser**: events its outbox lost before delivery (evicted when over 1000, expired after 7 days, refused for good by the server, or never queued because storage failed, or a user's delete that was reported before any user was known). Sent as `droppedLocally: {count, clientEventId}` with the next successful flush (or alone when nothing else is queued), source `client`, idempotent on the id |
+| `client_outbox` | **self-reported by the browser**: events its outbox lost before delivery (evicted when over 1000, expired after 7 days, refused for good by the server, or never queued because storage failed, or a user's delete that was reported before any user was known). Sent as `droppedLocally: {count, clientEventId}` with the next successful flush (or alone when nothing else is queued), source `client`, idempotent on the id. Unlike the server's own rows it is client-controlled, so it is **not** exempt: it costs one unit of the per-minute rate limit (a report alone is refused with 429 like any batch) and counts as one event against the daily cap, beyond which it is dropped, counted as `daily_cap` and acknowledged |
 
 The in-memory pieces are per process: a crash inside a window loses that window's pending count.
 

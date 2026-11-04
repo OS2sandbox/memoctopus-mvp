@@ -118,12 +118,19 @@ async function applyOidcLoginClaims(userId: string, method: LoginMethod, provide
       await clearClaimsRoles(userId);
       return;
     }
+    // A person can hold more than one account at the provider (better-auth links a new account id to the
+    // existing user on a verified e-mail, e.g. after the IdP's `userId` claim changed), and nothing says which row
+    // this login used. The mapper stashed the claims under the account id of THIS login, so try every id (taking
+    // also removes the stale entries) and use the first hit: no ordering assumption.
     const res = await defaultRunner().query<{ account_id: string }>(
-      'SELECT account_id FROM public.accounts WHERE user_id = $1 AND provider_id = $2 LIMIT 1',
+      'SELECT account_id FROM public.accounts WHERE user_id = $1 AND provider_id = $2',
       [userId, provider],
     );
-    const account = res.rows[0];
-    let claims = account ? takeLoginClaims(provider, account.account_id) : null;
+    let claims: Record<string, unknown> | null = null;
+    for (const { account_id } of res.rows) {
+      const taken = takeLoginClaims(provider, account_id);
+      if (taken && !claims) claims = taken;
+    }
     if (claims && method === 'microsoft') {
       // Only ever one tenant in claims mode: a token of another tenant (or one without `tid`) grants nothing.
       const tenant = singleTenantId();

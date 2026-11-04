@@ -17,7 +17,8 @@ export const auditEvents = {
     details: z.object({ rowCount: count(), format: z.enum(['csv']), truncated: z.boolean().optional() }).strict(),
   }),
   // A limit made the log skip events. A count and a reason, never what was skipped.
-  // Itself exempt from every cap, so a flood cannot hide that it happened.
+  // The server's own rows (source 'system') are exempt from every cap, so a flood cannot hide that it
+  // happened; the browser's client_outbox report is client-controlled and counts as one client event.
   'audit.events_dropped': defineEvent({
     sources: ['system', 'client'],
     entityType: null,

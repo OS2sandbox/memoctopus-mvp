@@ -601,7 +601,7 @@ describe('pollDueMeetings', () => {
       if (sql.includes('pg_try_advisory_lock')) return { rows: [{ locked }] };
       return { rows: [] };
     });
-    return { query, release: vi.fn() };
+    return { query, release: vi.fn(), on: vi.fn() };
   }
 
   it('skips the run when another instance holds the advisory lock', async () => {
@@ -614,6 +614,31 @@ describe('pollDueMeetings', () => {
       POLL_LOCK_KEY,
     ]);
     expect(c.release).toHaveBeenCalled();
+  });
+
+  it('survives an error event on the held connection and discards that client', async () => {
+    // pg emits 'error' on a checked-out client whose socket dies; with no
+    // listener that is an uncaught exception that kills the server.
+    const handlers: Array<(err: Error) => void> = [];
+    const c = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('pg_try_advisory_lock')) return { rows: [{ locked: true }] };
+        return { rows: [] };
+      }),
+      release: vi.fn(),
+      on: vi.fn((event: string, h: (err: Error) => void) => {
+        if (event === 'error') handlers.push(h);
+      }),
+    };
+    mockConnect.mockResolvedValue(c);
+    mockListUsers.mockImplementation(async () => {
+      expect(handlers).toHaveLength(1);
+      expect(() => handlers[0](new Error('terminated'))).not.toThrow();
+      return [];
+    });
+
+    expect(await pollDueMeetings(NOW)).toEqual({ polled: 0 });
+    expect(c.release).toHaveBeenCalledWith(true);
   });
 
   it('polls every due meeting of every user and releases the lock', async () => {
@@ -659,6 +684,7 @@ describe('pollDueMeetings', () => {
       mockConnect.mockResolvedValue({
         query: vi.fn().mockResolvedValue({ rows: [{ locked: true }] }),
         release: vi.fn(),
+        on: vi.fn(),
       });
     }
 
@@ -744,7 +770,7 @@ describe('startPoller', () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('TEAMS_POLL_INTERVAL_MS', '1000');
 
-    const c = { query: vi.fn().mockResolvedValue({ rows: [{ locked: false }] }), release: vi.fn() };
+    const c = { query: vi.fn().mockResolvedValue({ rows: [{ locked: false }] }), release: vi.fn(), on: vi.fn() };
     mockConnect.mockResolvedValue(c);
 
     const stop = startPoller();
@@ -1089,6 +1115,7 @@ describe('deleting the recording from OneDrive', () => {
     mockConnect.mockResolvedValue({
       query: vi.fn().mockResolvedValue({ rows: [{ locked: true }] }),
       release,
+      on: vi.fn(),
     });
     mockListUsers.mockResolvedValue(['u1']);
     mockListDue.mockResolvedValue([]);

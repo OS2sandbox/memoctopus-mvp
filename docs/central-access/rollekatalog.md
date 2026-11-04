@@ -142,6 +142,8 @@ It answers 404 while `INTERNAL_CRON_SECRET` is unset and 401 on a wrong secret. 
 
 **local to rollekatalog.** Complete the checklist, including a first sync and a login of the administrator. From then on local role and org-unit writes answer 409, local assignments are ignored, and a user linked to a local row is moved to the matching Rollekatalog row at the next login.
 
+**claims to rollekatalog.** Same checklist. The `source='claims'` directory row that claims logins left behind is released and the person is linked to the matching Rollekatalog row at the next login (claims role rows are ignored in this mode).
+
 **rollekatalog to local** (also the way out of a lock-out): set `ACCESS_SOURCE=local` and restart. Local assignments apply again and `source='rollekatalog'` assignments are ignored. A user who was moved to a Rollekatalog row has no local link until an administrator links them again, and a linked Rollekatalog row keeps its `disabled` flag. `BOOTSTRAP_ADMIN_EMAILS` is one-shot: if it was already used, recover with `DELETE FROM system_flags WHERE key = 'bootstrap_admin_done';` (`README.md`).
 
 **A typo is not local.** `ACCESS_SOURCE` must be `local`, `rollekatalog` or `claims` (or empty, meaning `local`). Any other value makes access control answer 503 "Adgangskontrol er midlertidigt utilgængelig" and the pages show the retry screen until it is fixed.

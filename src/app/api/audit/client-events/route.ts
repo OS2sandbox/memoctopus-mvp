@@ -87,18 +87,22 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
   // events that happened first.
   inputs.sort((a, b) => (a.clientOccurredAt as Date).getTime() - (b.clientOccurredAt as Date).getTime());
 
-  const wait = takeClientEventBudget(userId, inputs.length);
+  // The browser's report of what it lost is one more row, so it costs one unit like any event:
+  // a request carrying only that report cannot be repeated without limit.
+  const lost = parsed.data.droppedLocally;
+  const cost = inputs.length + (lost ? 1 : 0);
+  const wait = takeClientEventBudget(userId, cost);
   if (wait !== null) {
     // Refused as a whole and retried by the browser (Retry-After), so nothing is lost; counted
     // all the same, so a client that keeps hitting the limit is visible in the log.
-    noteDroppedEvents(userId, 'rate_limit', inputs.length, req);
+    noteDroppedEvents(userId, 'rate_limit', cost, req);
     return NextResponse.json({ error: 'Too many requests' }, { status: 429, headers: { 'Retry-After': String(wait) } });
   }
 
   // Daily cap per user, from the database. Self-reported telemetry: when the count
   // cannot be read, store nothing and let the client retry (503), never guess.
   let remaining = 0;
-  if (inputs.length > 0) {
+  if (cost > 0) {
     try {
       remaining = await remainingClientEventsToday(userId);
     } catch {
@@ -108,7 +112,6 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
   }
 
   // The same person for every event of the request: look the actor up once, not per event.
-  const lost = parsed.data.droppedLocally;
   const actor = inputs.length > 0 || lost ? await resolveActorSnapshot(userId) : undefined;
   let accepted = 0;
   let capped = 0;
@@ -128,9 +131,15 @@ export const POST = withAuthz('audit/client-events/POST', null, async (req, { se
     accepted += 1;
   }
 
-  // What the browser lost before it could deliver (self-reported). Exempt from the caps above: it
-  // says that events are missing. Idempotent on (actor, clientEventId), so a retry does not double it.
-  if (lost) {
+  // What the browser lost before it could deliver (self-reported). It counts as one event against
+  // the rate limit and the daily cap like the rest (it is client-controlled, so it cannot be
+  // exempt); beyond the cap it is dropped, counted and acknowledged. Idempotent on
+  // (actor, clientEventId), so a retry does not double it.
+  if (lost && accepted >= remaining) {
+    console.warn('[audit] client event cap reached, refused=1');
+    noteDroppedEvents(userId, 'daily_cap', 1, req);
+    capped += 1;
+  } else if (lost) {
     const result = await recordServerEvent(req, {
       type: 'audit.events_dropped',
       source: 'client',

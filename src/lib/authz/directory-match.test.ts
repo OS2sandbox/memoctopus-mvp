@@ -387,8 +387,34 @@ describe('mode-switch relink (local row -> rollekatalog row)', () => {
     expect(release).toBeGreaterThan(-1);
     expect(link).toBeGreaterThan(release);
     expect(calls[release]!.params).toEqual(['old-local', 'u1']);
-    expect(calls[release]!.sql).toContain("source = 'local'");
+    expect(calls[release]!.sql).toContain("source IN ('local', 'claims')");
     expect(calls[link]!.params).toEqual(['u1', 'd1']);
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('releases a leftover source=claims row (claims -> rollekatalog switch) and links the Rollekatalog row', async () => {
+    const { runner, calls } = db([D1], [{ uuid: 'old-claims', source: 'claims', disabled: false }]);
+    const res = await matchDirectoryUser(identity(), 'userid-claim', runner);
+    expect(res).toEqual({ status: 'linked', directoryUserUuid: 'd1' });
+    const release = calls.findIndex((c) => c.sql.includes('SET app_user_id = NULL'));
+    const link = calls.findIndex((c) => c.sql.includes('SET app_user_id = $1'));
+    expect(release).toBeGreaterThan(-1);
+    expect(link).toBeGreaterThan(release);
+    expect(calls[release]!.params).toEqual(['old-claims', 'u1']);
+    expect(calls[release]!.sql).toContain("source IN ('local', 'claims')");
+    expect(calls[link]!.params).toEqual(['u1', 'd1']);
+    expect(recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('is a conflict when a claims row changed concurrently (the guarded release finds nothing)', async () => {
+    const { runner, calls } = makeFakeRunner((sql) => {
+      if (sql.includes('FOR UPDATE')) return [D1];
+      if (sql.includes('WHERE app_user_id = $1')) return [{ uuid: 'old-claims', source: 'claims', disabled: false }];
+      if (sql.includes('SET app_user_id = NULL')) return [];
+      return [{ uuid: 'd1' }];
+    });
+    expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('conflict');
+    expect(calls.some((c) => c.sql.includes('SET app_user_id = $1'))).toBe(false);
     expect(recordEvent).not.toHaveBeenCalled();
   });
 

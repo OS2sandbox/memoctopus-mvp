@@ -574,6 +574,16 @@ describe('runLoginHooks in claims mode', () => {
     });
   });
 
+  it.each([
+    ['newer account second', ['acct-old', 'acct-new']],
+    ['newer account first', ['acct-new', 'acct-old']],
+  ])('finds the claims when the person holds two accounts at the provider and only the newer one is stashed (%s)', async (_n, ids) => {
+    accountQuery.mockResolvedValue({ rows: ids.map((account_id) => ({ account_id })) });
+    stashLoginClaims('keycloak', 'acct-new', { roles: ['admin'] });
+    await runLoginHooks('u1', oidcCtx);
+    expect(applyClaims).toHaveBeenCalledWith({ userId: 'u1', providerId: 'keycloak', claims: { roles: ['admin'] } });
+  });
+
   it('applies "no claims" (which clears) when there is no hand-over', async () => {
     accountQuery.mockResolvedValue({ rows: [{ account_id: 'acct-1' }] });
     await runLoginHooks('u1', oidcCtx);

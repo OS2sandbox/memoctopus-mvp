@@ -281,7 +281,7 @@ What a deployment has to set (all in `.env`, runtime only: edit, then `docker co
 
 ## Scheduling
 
-Nothing in the app runs timers. Call the routes from a host or cluster cron with `X-Cron-Secret`; all answer 404 until `INTERNAL_CRON_SECRET` is set, and the Rollekatalog sync answers 409 unless `ACCESS_SOURCE=rollekatalog` and the integration is configured (`8080` is the default `APP_PORT`):
+The audit prune and the Rollekatalog sync and role catalogue are not scheduled by the app. Call the routes from a host or cluster cron with `X-Cron-Secret`; all answer 404 until `INTERNAL_CRON_SECRET` is set, and the Rollekatalog sync answers 409 unless `ACCESS_SOURCE=rollekatalog` and the integration is configured (`8080` is the default `APP_PORT`):
 
 ```
 15 3 * * *    curl -fsS -X POST -H "X-Cron-Secret: $INTERNAL_CRON_SECRET" http://localhost:8080/api/internal/audit/prune -o /dev/null
@@ -292,6 +292,8 @@ Nothing in the app runs timers. Call the routes from a host or cluster cron with
 - `audit/prune` applies the retention (`audit.md`).
 - `rollekatalog/sync` (only in `rollekatalog` mode): keep the interval well below `ROLE_STALE_MAX_SECONDS` (24 h by default).
 - `rollekatalog/roles` refreshes the optional role catalogue (any `ACCESS_SOURCE`; 409 without a URL and READ key). It only ever deactivates entries; a refresh that would withdraw an unusually large share is refused (`removal_threshold`) and has to be forced from the admin button.
+
+The only in-process timers are the Teams poller (`TEAMS_GRAPH_ENABLED=true`) and the sweep of the server-held Teams transcripts (TTL). The poller runs inside every app instance, serialised by a Postgres advisory lock; set `TEAMS_POLLER_DISABLED=true` on an instance that must not poll Graph. That setting does not stop the TTL sweep.
 
 ## Reverse proxy, client IP and the `X-Forwarded-For` header
 

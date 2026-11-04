@@ -110,8 +110,8 @@ export async function matchDirectoryUser(
 
       // app_user_id is unique, so a user can hold one link only. Two existing
       // links are stale and are moved to the target in this one transaction:
-      // a source='local' row (a leftover from before the switch to rollekatalog
-      // mode, ignored there) and a DISABLED source='rollekatalog' row (the person
+      // a source='local' or source='claims' row (a leftover from before the switch
+      // to rollekatalog mode, ignored there) and a DISABLED source='rollekatalog' row (the person
       // was deleted and re-created in Rollekatalog, so the sync disabled the old
       // row and added a new one). A link to an enabled row, or to one we cannot
       // classify, is never touched.
@@ -121,7 +121,10 @@ export async function matchDirectoryUser(
       );
       const ownRow = own.rows[0];
       if (ownRow) {
-        const releasable = ownRow.source === 'local' || (ownRow.source === 'rollekatalog' && ownRow.disabled === true);
+        const releasable =
+          ownRow.source === 'local' ||
+          ownRow.source === 'claims' ||
+          (ownRow.source === 'rollekatalog' && ownRow.disabled === true);
         if (!releasable) return conflict('user_linked_to_other_entry');
         // The guard repeats the ownership and staleness check on the row lock, so a
         // concurrent login that already moved this link (or a re-enabled row) makes
@@ -129,7 +132,7 @@ export async function matchDirectoryUser(
         const released = await tx.query(
           `UPDATE public.directory_users SET app_user_id = NULL, updated_at = now()
             WHERE uuid = $1 AND app_user_id = $2
-              AND (source = 'local' OR (source = 'rollekatalog' AND disabled = true))
+              AND (source IN ('local', 'claims') OR (source = 'rollekatalog' AND disabled = true))
             RETURNING uuid`,
           [ownRow.uuid, identity.userId],
         );
