@@ -1,6 +1,6 @@
 /**
- * Function commands for the TEST add-in (manifest-test.xml), loaded by
- * commands.html: the meeting-provider button that stands in for Outlook's Teams
+ * The add-in's function command, loaded by commands.html (the manifest's
+ * FunctionFile): the meeting-provider button that stands in for Outlook's Teams
  * toggle. Nothing here may touch the page at load.
  */
 

@@ -35,7 +35,7 @@ export interface OrganizerItem {
   loadCustomPropertiesAsync(callback: (result: AsyncResult<CustomProperties>) => void): void;
 }
 
-/** What the meeting-provider function writes too (ReadWriteItem, test add-in only). */
+/** What the meeting-provider function writes too (ReadWriteItem, manifest 1.1). */
 export interface ProviderItem extends OrganizerItem {
   subject: { getAsync(callback: (result: AsyncResult<string>) => void): void };
   body: OrganizerItem['body'] & {
