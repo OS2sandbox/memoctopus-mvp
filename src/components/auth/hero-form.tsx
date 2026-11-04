@@ -67,7 +67,9 @@ export function HeroForm({ providers, emailPasswordEnabled }: HeroFormProps) {
   const [showPassword, setShowPassword] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
-  const from = searchParams.get('from') || '/dashboard';
+  // Only a same-origin path is a valid return target: '//evil.example' and '/\\evil.example' are not.
+  const rawFrom = searchParams.get('from');
+  const from = rawFrom && /^\/(?![/\\])/.test(rawFrom) ? rawFrom : '/dashboard';
   const { isLoading, mode, email, password, name, error } = state;
   const isSignUp = mode === AuthMode.SignUp;
 

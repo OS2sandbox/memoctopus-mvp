@@ -237,6 +237,26 @@ describe('HeroForm — sign-up submit', () => {
     expect(mockPush).toHaveBeenCalledWith('/meeting/abc');
   });
 
+  it.each(['https://evil.example', '//evil.example', '/\\evil.example', 'javascript:alert(1)'])(
+    'ignores the off-site "from" param %s after sign-up',
+    async (from) => {
+      mockSearchParamsGet.mockReturnValue(from);
+      mockSignUpEmail.mockResolvedValueOnce({ error: null });
+      mockSignInEmail.mockResolvedValueOnce({ error: null });
+
+      renderForm();
+      fireEvent.change(screen.getByLabelText('Navn'), { target: { value: 'Jane' } });
+      fireEvent.change(screen.getByLabelText('E-mail'), { target: { value: 'jane@example.com' } });
+      fireEvent.change(screen.getByLabelText('Adgangskode'), { target: { value: 'pw' } });
+
+      await act(async () => {
+        fireEvent.submit(screen.getByRole('button', { name: 'Opret konto' }).closest('form')!);
+      });
+
+      expect(mockPush).toHaveBeenCalledWith('/dashboard');
+    },
+  );
+
   it('shows error when signUp.email fails', async () => {
     mockSignUpEmail.mockResolvedValueOnce({ error: { message: 'email taken' } });
 
