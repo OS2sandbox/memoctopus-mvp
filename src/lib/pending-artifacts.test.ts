@@ -50,11 +50,9 @@ describe('readPendingMeta', () => {
 
     expect(result).toBeNull();
     expect(console.error).toHaveBeenCalledOnce();
-    const [label, id, err] = (console.error as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(label).toContain('[pending-artifacts]');
-    expect(label).toContain('readPendingMeta');
-    expect(id).toBe('meeting-456');
-    expect(err).toBe(eacces);
+    const [line] = (console.error as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(line).toContain('pending-artifacts readPendingMeta meeting-456');
+    expect(line).toContain('code=EACCES');
   });
 
   it('returns null AND logs console.error when the file contains invalid JSON (SyntaxError)', async () => {
@@ -64,10 +62,23 @@ describe('readPendingMeta', () => {
 
     expect(result).toBeNull();
     expect(console.error).toHaveBeenCalledOnce();
-    const [label, id, err] = (console.error as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(label).toContain('[pending-artifacts]');
-    expect(id).toBe('meeting-789');
-    expect(err).toBeInstanceOf(SyntaxError);
+    const [line] = (console.error as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(line).toContain('pending-artifacts readPendingMeta meeting-789');
+    expect(line).toContain('name=SyntaxError');
+  });
+
+  it('never logs file content: a SyntaxError that quotes the input is reduced to its class name', async () => {
+    const quoting = new SyntaxError('Unexpected token, "Mette Hansen sagde hemmelig-tekst" is not valid JSON');
+    vi.mocked(fs.readFile).mockResolvedValueOnce(Buffer.from('x'));
+    const parse = vi.spyOn(JSON, 'parse').mockImplementationOnce(() => { throw quoting; });
+
+    expect(await readPendingMeta('meeting-leak')).toBeNull();
+    parse.mockRestore();
+
+    expect(console.error).toHaveBeenCalledOnce();
+    const printed = JSON.stringify((console.error as ReturnType<typeof vi.fn>).mock.calls);
+    expect(printed).not.toContain('hemmelig-tekst');
+    expect(printed).not.toContain('Mette');
   });
 
   it('returns the parsed meta when the file is valid', async () => {
@@ -118,11 +129,9 @@ describe('readPendingTranscript', () => {
 
     expect(result).toBeNull();
     expect(console.error).toHaveBeenCalledOnce();
-    const [label, id, err] = (console.error as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(label).toContain('[pending-artifacts]');
-    expect(label).toContain('readPendingTranscript');
-    expect(id).toBe('meeting-456');
-    expect(err).toBe(eacces);
+    const [line] = (console.error as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(line).toContain('pending-artifacts readPendingTranscript meeting-456');
+    expect(line).toContain('code=EACCES');
   });
 
   it('returns null AND logs for invalid JSON', async () => {
@@ -132,6 +141,15 @@ describe('readPendingTranscript', () => {
 
     expect(result).toBeNull();
     expect(console.error).toHaveBeenCalledOnce();
+  });
+
+  it('never logs transcript text from a malformed file', async () => {
+    vi.mocked(fs.readFile).mockResolvedValueOnce(Buffer.from('{"segments":[{"text":"hemmelig-tekst"'));
+
+    expect(await readPendingTranscript('meeting-leak')).toBeNull();
+
+    expect(console.error).toHaveBeenCalledOnce();
+    expect(JSON.stringify((console.error as ReturnType<typeof vi.fn>).mock.calls)).not.toContain('hemmelig-tekst');
   });
 
   it('returns parsed transcript when the file is valid', async () => {

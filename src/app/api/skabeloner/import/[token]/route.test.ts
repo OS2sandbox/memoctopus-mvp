@@ -19,6 +19,12 @@ const mockEnsureSharedSkabelonerTable = vi.hoisted(() => vi.fn().mockResolvedVal
 const mockDbSelect = vi.hoisted(() => vi.fn());
 const mockCreateSkabelon = vi.hoisted(() => vi.fn());
 const mockGetShareConfig = vi.hoisted(() => vi.fn());
+const mockRecord = vi.hoisted(() => vi.fn());
+
+vi.mock('@/lib/audit/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/audit/record')>()),
+  recordServerEvent: mockRecord,
+}));
 
 vi.mock('@/lib/skabeloner/shared-table', () => ({
   ensureSharedSkabelonerTable: mockEnsureSharedSkabelonerTable,
@@ -130,6 +136,34 @@ describe('POST /api/skabeloner/import/[token]', () => {
     setupDbReturning([sharedRow]);
     mockCreateSkabelon.mockReset();
     mockCreateSkabelon.mockResolvedValue({ ...sharedRow, id: 'sk-new' });
+    mockRecord.mockReset();
+    mockRecord.mockResolvedValue({ status: 'stored' });
+  });
+
+  it('records template.create for an import, without the token, name or prompt', async () => {
+    const res = await POST(makeJsonReq(BASE_URL, 'POST'), makeCtx());
+    expect(res.status).toBe(201);
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(mockRecord.mock.calls[0][1]).toEqual({
+      type: 'template.create',
+      actorUserId: 'user-123',
+      entityId: 'sk-new',
+      details: { hasPrompt: true },
+    });
+    expect(JSON.stringify(mockRecord.mock.calls)).not.toMatch(/abc123|Bestyrelsesm|Lav et referat/);
+  });
+
+  it('records a failed import as template.create with outcome error and still answers 500', async () => {
+    mockCreateSkabelon.mockRejectedValueOnce(new Error('DB write failed'));
+    const res = await POST(makeJsonReq(BASE_URL, 'POST'), makeCtx());
+    expect(res.status).toBe(500);
+    expect(mockRecord).toHaveBeenCalledTimes(1);
+    expect(mockRecord.mock.calls[0][1]).toEqual({
+      type: 'template.create',
+      outcome: 'error',
+      actorUserId: 'user-123',
+      details: {},
+    });
   });
 
   it('returns 401 when not authenticated', async () => {

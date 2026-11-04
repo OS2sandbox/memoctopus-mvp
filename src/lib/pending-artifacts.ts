@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import type { TranscriptSegment } from '@/types';
 import { recordTeamsStashDelete } from '@/lib/teams/audit';
+import { safeLogError } from '@/lib/audit/safe-log';
 
 // Transient server-side hand-off for artifacts produced without a browser present.
 //
@@ -73,7 +74,7 @@ export async function getMeetingOwner(meetingId: string): Promise<string | null>
     return userId ?? null;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('[pending-artifacts] readOwner failed for', meetingId, err);
+      safeLogError(`pending-artifacts readOwner ${meetingId}`, err);
     }
     return null;
   }
@@ -180,7 +181,7 @@ export async function sweepExpired(exceptId?: string): Promise<void> {
             // ENOENT: the file went away between readdir and read. Anything else
             // (half-written, malformed) is aged by its modification time below.
             if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-              console.error('[pending-artifacts] sweep: unreadable file, aging it by mtime', f, err);
+              safeLogError(`pending-artifacts sweep ${id}: unreadable stash file, aging it by mtime`, err);
             }
           }
           const at = await fileTime(file, rec);
@@ -255,7 +256,7 @@ export async function readPendingMeta(meetingId: string): Promise<PendingMeta | 
     return JSON.parse(await fs.readFile(metaPath(meetingId), 'utf8')) as PendingMeta;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('[pending-artifacts] readPendingMeta failed for', meetingId, err);
+      safeLogError(`pending-artifacts readPendingMeta ${meetingId}`, err);
     }
     return null;
   }
@@ -287,7 +288,7 @@ export async function readPendingTranscript(meetingId: string): Promise<PendingT
     return JSON.parse(await fs.readFile(transcriptPath(meetingId), 'utf8')) as PendingTranscript;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.error('[pending-artifacts] readPendingTranscript failed for', meetingId, err);
+      safeLogError(`pending-artifacts readPendingTranscript ${meetingId}`, err);
     }
     return null;
   }

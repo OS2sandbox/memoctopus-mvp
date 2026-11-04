@@ -281,7 +281,8 @@ export function checkEntraIdToken(claims: Profile, m: Pick<EntraProviderConfig, 
  *  - scopes are explicit and never include offline_access (no refresh token is wanted) or User.Read (no Graph call);
  *  - `getUserInfo` reads the id token from the token endpoint like the default does, but first checks audience,
  *    issuer and tenant, hands the role/group claims to the login hook, and never touches Graph;
- *  - a token that fails the checks refuses the login (better-auth answers unable_to_get_user_info).
+ *  - a token that fails the checks refuses the login (better-auth answers unable_to_get_user_info);
+ *  - `disableIdTokenSignIn`: a token posted by a client to /sign-in/social is refused (verifyIdToken answers false).
  */
 export function entraSocialConfig(m: EntraProviderConfig) {
   const extra = (m.scopes ?? []).filter((s) => s !== 'offline_access');
@@ -293,6 +294,9 @@ export function entraSocialConfig(m: EntraProviderConfig) {
     scope: [...new Set(['openid', 'profile', 'email', ...extra])],
     ...(m.prompt ? { prompt: m.prompt } : {}),
     disableProfilePhoto: true,
+    // The id token only ever comes from the token endpoint (code flow). Without this, POST /sign-in/social
+    // would accept a caller-supplied id token (and access token) and skip state, PKCE and the claims hand-off.
+    disableIdTokenSignIn: true,
     getUserInfo: async (token: { idToken?: string }) => {
       const claims = token.idToken ? decodeJwtPayload(token.idToken) : null;
       if (!claims || typeof claims.sub !== 'string' || claims.sub === '') return null;

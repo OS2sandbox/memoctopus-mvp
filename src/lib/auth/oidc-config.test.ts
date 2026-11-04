@@ -324,6 +324,10 @@ describe('Microsoft Entra ID (built-in provider)', () => {
     expect(entraSocialConfig(m)).not.toHaveProperty('prompt');
   });
 
+  it('refuses sign-in with a client-supplied id token (only the code flow may deliver one)', () => {
+    expect(entraSocialConfig(m).disableIdTokenSignIn).toBe(true);
+  });
+
   it('getUserInfo builds the login from the id token and stashes the claims for the hook in claims mode only', async () => {
     const take = takeLoginClaims;
     vi.stubEnv('ACCESS_SOURCE', 'claims');

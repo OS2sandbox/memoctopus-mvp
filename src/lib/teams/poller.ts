@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { pool } from '@/lib/db';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { safeLogError } from '@/lib/audit/safe-log';
+import { acknowledgePendingTranscript } from '@/lib/pending-artifacts';
 import { deleteRecordingEnabled } from './artifact-mode';
 import { recordTeamsArtifactsFetch, recordTeamsRecordingDelete } from './audit';
 import { teamsFailureCode } from './failure-code';
@@ -256,6 +257,17 @@ async function pollMeetingInner(
     // Nothing yet — back to waiting, and try again after the backoff.
     return await waiting('awaiting_teams', null, outcome.transient);
   } catch (err) {
+    // The person deleted the meeting while this run was working on it: their DELETE
+    // could not remove the stash (a run in progress is spared), and the run has just
+    // written its result to a row that is gone. Nobody will collect it, so remove it now.
+    if (await rowVanished(userId, id)) {
+      try {
+        await acknowledgePendingTranscript(id, userId);
+      } catch (ackErr) {
+        safeLogError(`teams/poller ${id}: could not remove the server-held transcript of a deleted meeting`, ackErr);
+      }
+      return row;
+    }
     const message = err instanceof Error ? err.message : String(err);
     switch (classifyGraphError(err)) {
       case 'reauth_required':
@@ -277,6 +289,15 @@ async function pollMeetingInner(
         safeLogError(`teams/poller ${id}: unexpected error polling`, err);
         return await waiting('awaiting_teams', message);
     }
+  }
+}
+
+/** True only when the row is confirmed gone; a failing lookup is not an answer. */
+async function rowVanished(userId: string, id: string): Promise<boolean> {
+  try {
+    return (await getTeamsMeeting(userId, id)) == null;
+  } catch {
+    return false;
   }
 }
 

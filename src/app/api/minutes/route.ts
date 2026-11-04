@@ -90,13 +90,15 @@ async function postHandler(req: NextRequest) {
     if (!central) {
       // The response is the same 404 for every cause; the log says that a generation was refused
       // because the central template was not available (unknown, archived or not for this person).
+      // The template is named only when the id is a UUID: an event with a secondary type but no
+      // usable id is invalid and would be dropped, which is exactly the malformed-id probing case.
+      const requestedId = asEntityUuid(skabelonId);
       await emitTemplateDenied(req, {
         type: 'minutes.generate',
         actorUserId: userId,
         outcome: 'denied',
         entityId: asEntityUuid(meetingId),
-        secondaryEntityId: asEntityUuid(skabelonId),
-        secondaryEntityType: 'central_template',
+        ...(requestedId ? { secondaryEntityId: requestedId, secondaryEntityType: 'central_template' as const } : {}),
         details: {
           templateSource: 'central',
           userInstruction: userInstruction !== undefined,

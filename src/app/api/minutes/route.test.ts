@@ -45,6 +45,7 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 import { POST } from './route';
 import { expectValidMetadataOnly, leakyError } from '@/app/api/meetings/ai-audit.test-utils';
 import { __resetTemplateDenied } from '@/app/api/meetings/ai-audit';
+import { validateEvent } from '@/lib/audit/record';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION, makeJsonReq, makePrincipal } from '@/test/helpers';
 import { resolvePrincipal } from '@/lib/authz/principal';
@@ -560,6 +561,28 @@ describe('POST /api/minutes with a central template', () => {
     // A client cannot fall through to a personal/default template instead.
     expect(mockGetSkabelon).not.toHaveBeenCalled();
     expect(mockGetDefaultSkabelon).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a missing skabelonId', { skabelonId: undefined }],
+    ['a non-string skabelonId', { skabelonId: 42 }],
+    ['a non-UUID skabelonId', { skabelonId: 'ikke-et-uuid' }],
+  ])('writes a denied row without a secondary entity for %s, one the audit layer accepts', async (_n, extra) => {
+    mockResolveCentral.mockResolvedValue(null);
+    await send(extra);
+    expect(events()).toHaveLength(1);
+    const e = events()[0];
+    expect(e).toMatchObject({ type: 'minutes.generate', outcome: 'denied' });
+    expect(e).not.toHaveProperty('secondaryEntityId');
+    expect(e).not.toHaveProperty('secondaryEntityType');
+    expect(validateEvent(e).ok).toBe(true);
+  });
+
+  it('names a well-formed but unavailable central template as secondary entity, and that validates too', async () => {
+    mockResolveCentral.mockResolvedValue(null);
+    await send({ skabelonId: CENTRAL });
+    expect(events()[0]).toMatchObject({ secondaryEntityId: CENTRAL, secondaryEntityType: 'central_template' });
+    expect(validateEvent(events()[0]).ok).toBe(true);
   });
 
   it('caps refused central generations per person and counts the excess as dropped, still answering 404 every time', async () => {

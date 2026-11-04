@@ -16,6 +16,7 @@ vi.mock('./audit', () => ({
   recordTeamsRecordingDelete: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('@/lib/pending-artifacts', () => ({ acknowledgePendingTranscript: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./pipeline', () => ({ processTeamsMeeting: vi.fn() }));
 vi.mock('./meeting-resolver', () => ({ getMeeting: vi.fn() }));
 vi.mock('./recording-cleanup', () => ({ deleteRecordingFromDrive: vi.fn() }));
@@ -53,6 +54,7 @@ import {
   RECORDING_CLEANUP_GIVE_UP_MS,
 } from './poller';
 import { GraphError } from './graph-client';
+import { acknowledgePendingTranscript } from '@/lib/pending-artifacts';
 import { recordTeamsArtifactsFetch, recordTeamsRecordingDelete } from './audit';
 import { processTeamsMeeting, type PipelineOutcome } from './pipeline';
 import { deleteRecordingFromDrive } from './recording-cleanup';
@@ -542,6 +544,34 @@ describe('pollMeeting', () => {
       { state: 'awaiting_teams', failureReason: 'socket hang up' },
       { incrementAttempts: true },
     );
+    spy.mockRestore();
+  });
+
+  it('removes the stash when the person deleted the meeting while the run was working', async () => {
+    const live = row();
+    // The row exists when the poll starts and is gone when the run has finished.
+    mockGet.mockResolvedValueOnce(live).mockResolvedValue(null);
+    mockProcess.mockResolvedValueOnce({
+      status: 'ready', mode: 'recording+transcript', speakers: ['Mette Hansen'],
+      transcriptId: 't1', recordingId: 'r1', recordingBytes: null,
+    });
+    mockMark.mockRejectedValue(new Error('markPollAttempt: no such Teams meeting: m1'));
+
+    await expect(pollMeeting('u1', 'm1', NOW)).resolves.toBe(live);
+
+    expect(vi.mocked(acknowledgePendingTranscript)).toHaveBeenCalledWith('m1', 'u1');
+    // Only the one attempt to write the result: no second write for a row that is gone.
+    expect(mockMark).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not touch the stash when a failing poll finds its row still there', async () => {
+    mockGet.mockResolvedValue(row());
+    mockProcess.mockRejectedValueOnce(new Error('socket hang up'));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(vi.mocked(acknowledgePendingTranscript)).not.toHaveBeenCalled();
     spy.mockRestore();
   });
 

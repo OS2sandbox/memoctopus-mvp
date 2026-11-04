@@ -274,6 +274,20 @@ describe('OIDC login through the real plugins', () => {
       expect(db.account[0]).toMatchObject({ providerId: 'microsoft', accountId: 'oid-1' });
     });
 
+    it('refuses an id token posted straight to /sign-in/social: no user, no session, no stored access token', async () => {
+      const res = await auth.handler(new Request('http://localhost:3004/api/auth/sign-in/social', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'microsoft', idToken: { token: entraToken(), accessToken: 'attacker-graph-token' } }),
+      }));
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(hasSession(res)).toBe(false);
+      expect(db.user).toHaveLength(0);
+      expect(db.account).toHaveLength(0);
+      expect(db.session).toHaveLength(0);
+      expect(logins).toEqual([]);
+    });
+
     it.each([
       ['another tenant (tid)', { tid: '99999999-2222-3333-4444-555555555555' }],
       ['another tenant (issuer)', { iss: 'https://login.microsoftonline.com/99999999-2222-3333-4444-555555555555/v2.0' }],
