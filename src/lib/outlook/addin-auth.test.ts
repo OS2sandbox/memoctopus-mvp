@@ -11,6 +11,13 @@ import {
 const mockQuery = vi.fn();
 vi.mock('@/lib/db', () => ({ pool: { query: (...args: unknown[]) => mockQuery(...args) } }));
 
+// The tenant's published keys, swapped for the test key pair (set in beforeAll).
+let keys: JWTVerifyGetKey;
+vi.mock('jose', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('jose')>()),
+  createRemoteJWKSet: () => ((...args: Parameters<JWTVerifyGetKey>) => keys(...args)) as JWTVerifyGetKey,
+}));
+
 import {
   AddinAuthError,
   addinAllowedEmails,
@@ -18,6 +25,7 @@ import {
   authenticateAddinRequest,
   bearerToken,
   userIdForClaims,
+  verifyAddinIdToken,
   verifyAddinToken,
 } from './addin-auth';
 
@@ -28,7 +36,6 @@ const CONFIG = { clientId: CLIENT, tenantId: TENANT };
 
 let privateKey: CryptoKey;
 let strangerKey: CryptoKey;
-let keys: JWTVerifyGetKey;
 
 beforeAll(async () => {
   const pair = await generateKeyPair('RS256');
@@ -140,6 +147,58 @@ describe('verifyAddinToken', () => {
   });
 });
 
+describe('verifyAddinIdToken (OUTLOOK_ADDIN_CLIENT_ID)', () => {
+  const ADDIN_CLIENT = 'dbdbdbdb-5555-4444-a121-fb0d3041449e';
+  const ID_CONFIG = { clientId: ADDIN_CLIENT, tenantId: TENANT };
+  const OID = '22222222-2222-2222-2222-222222222222';
+
+  /** A v2 ID token as Entra issues it to the add-in's own app. */
+  function idToken(overrides: JWTPayload = {}, opts?: { key?: CryptoKey; expiresIn?: string }) {
+    return token({
+      aud: ADDIN_CLIENT,
+      azp: undefined,
+      scp: undefined,
+      sub: 'pairwise-sub-of-the-addin-app',
+      oid: OID.toUpperCase(),
+      preferred_username: 'someone@example.dk',
+      ...overrides,
+    }, opts);
+  }
+
+  it('accepts an ID token for the add-in app from our tenant, and lowercases the oid', async () => {
+    await expect(verifyAddinIdToken(await idToken(), ID_CONFIG, keys)).resolves.toEqual({
+      sub: 'pairwise-sub-of-the-addin-app',
+      oid: OID,
+      tid: TENANT,
+    });
+  });
+
+  const refused: [string, JWTPayload][] = [
+    ['issued by another tenant', { iss: `https://login.microsoftonline.com/${OTHER_TENANT}/v2.0` }],
+    ['from the v1 endpoint', { iss: `https://sts.windows.net/${TENANT}/` }],
+    ['carrying another tenant id', { tid: OTHER_TENANT }],
+    ['for the dashboard app instead', { aud: CLIENT }],
+    ['for our API (an access token)', { aud: `api://${ADDIN_CLIENT}` }],
+    ['with scopes (an access token)', { scp: 'User.Read' }],
+    ['with roles (app-only)', { roles: ['x'] }],
+    ['marked app-only', { idtyp: 'app' }],
+    ['without an object id', { oid: undefined }],
+    ['with an object id that is not a GUID', { oid: 'someone' }],
+    ['without a subject', { sub: undefined }],
+  ];
+  it.each(refused)('refuses a token %s', async (_name, overrides) => {
+    const err = await refusal(verifyAddinIdToken(await idToken(overrides), ID_CONFIG, keys));
+    expect(err.code).toBe('invalid_token');
+  });
+
+  it('refuses an expired one, and one not signed by the tenant', async () => {
+    expect((await refusal(verifyAddinIdToken(await idToken({}, { expiresIn: '-10 minutes' }), ID_CONFIG, keys))).code)
+      .toBe('invalid_token');
+    expect((await refusal(verifyAddinIdToken(await idToken({}, { key: strangerKey }), ID_CONFIG, keys))).code)
+      .toBe('invalid_token');
+  });
+});
+
 describe('bearerToken', () => {
   it('reads a bearer token', () => {
     expect(bearerToken('Bearer abc.def.ghi')).toBe('abc.def.ghi');
@@ -174,6 +233,61 @@ describe('userIdForClaims', () => {
   it('refuses to guess when two users share an account id', async () => {
     mockQuery.mockResolvedValue({ rows: [{ user_id: 'a' }, { user_id: 'b' }] });
     expect((await refusal(userIdForClaims({ sub: 'x', oid: null, tid: TENANT }))).code).toBe('no_account');
+  });
+});
+
+describe('userIdForClaims in id mode (by object id)', () => {
+  const OID = '22222222-2222-2222-2222-222222222222';
+  /** An ID token as better-auth stored it at dashboard sign-in; unsigned is fine, it is only read. */
+  const stored = (claims: Record<string, unknown>) =>
+    `${Buffer.from('{"alg":"RS256"}').toString('base64url')}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.sig`;
+  const claims = { sub: 'pairwise-sub-of-the-addin-app', oid: OID, tid: TENANT };
+
+  beforeEach(() => mockQuery.mockReset());
+
+  it('finds the user whose stored dashboard ID token has the same oid and tenant', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [
+        { user_id: 'user-other', id_token: stored({ oid: '77777777-7777-7777-7777-777777777777', tid: TENANT }) },
+        { user_id: 'user-1', id_token: stored({ sub: 'dashboard-sub', oid: OID.toUpperCase(), tid: TENANT.toUpperCase() }) },
+        { user_id: 'user-junk', id_token: 'not-a-jwt' },
+      ],
+    });
+    await expect(userIdForClaims(claims, 'id')).resolves.toBe('user-1');
+    expect(mockQuery.mock.calls[0][0]).toMatch(/provider_id = 'microsoft' AND id_token IS NOT NULL/);
+  });
+
+  it('does not match the same oid in another tenant', async () => {
+    mockQuery.mockResolvedValue({ rows: [{ user_id: 'user-1', id_token: stored({ oid: OID, tid: OTHER_TENANT }) }] });
+    expect((await refusal(userIdForClaims(claims, 'id'))).code).toBe('no_account');
+  });
+
+  it('refuses when nobody matches, and when two users do', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    expect((await refusal(userIdForClaims(claims, 'id'))).code).toBe('no_account');
+
+    mockQuery.mockResolvedValue({
+      rows: [
+        { user_id: 'a', id_token: stored({ oid: OID, tid: TENANT }) },
+        { user_id: 'b', id_token: stored({ oid: OID, tid: TENANT }) },
+      ],
+    });
+    expect((await refusal(userIdForClaims(claims, 'id'))).code).toBe('no_account');
+  });
+
+  it('accepts one user with two account rows for the same oid', async () => {
+    mockQuery.mockResolvedValue({
+      rows: [
+        { user_id: 'user-1', id_token: stored({ oid: OID, tid: TENANT }) },
+        { user_id: 'user-1', id_token: stored({ oid: OID, tid: TENANT }) },
+      ],
+    });
+    await expect(userIdForClaims(claims, 'id')).resolves.toBe('user-1');
+  });
+
+  it('never matches without an oid', async () => {
+    expect((await refusal(userIdForClaims({ ...claims, oid: null }, 'id'))).code).toBe('no_account');
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 });
 
@@ -255,6 +369,39 @@ describe('authenticateAddinRequest', () => {
     process.env.MICROSOFT_TENANT_ID = TENANT;
     const err = await refusal(authenticateAddinRequest(new Headers({ authorization: 'Bearer a.b.c' })));
     expect(err.code).toBe('disabled');
+  });
+
+  function enable(addinClient?: string) {
+    process.env.OUTLOOK_ADDIN_ENABLED = 'true';
+    process.env.TEAMS_GRAPH_ENABLED = 'true';
+    process.env.MICROSOFT_CLIENT_ID = CLIENT;
+    process.env.MICROSOFT_CLIENT_SECRET = 'secret';
+    process.env.MICROSOFT_TENANT_ID = TENANT;
+    delete process.env.OUTLOOK_ADDIN_ALLOWED_USERS;
+    if (addinClient) process.env.OUTLOOK_ADDIN_CLIENT_ID = addinClient;
+    else delete process.env.OUTLOOK_ADDIN_CLIENT_ID;
+  }
+  const bearer = (t: string) => new Headers({ authorization: `Bearer ${t}` });
+
+  it('end to end, api mode: an access token for our API finds the user by sub', async () => {
+    enable();
+    mockQuery.mockReset().mockResolvedValue({ rows: [{ user_id: 'user-1' }] });
+    await expect(authenticateAddinRequest(bearer(await token()))).resolves.toBe('user-1');
+    expect(mockQuery.mock.calls[0][1]).toEqual(['pairwise-sub-1']);
+  });
+
+  it('end to end, id mode: the add-in app\'s ID token finds the user by oid, and an API token is refused', async () => {
+    const addinClient = 'dbdbdbdb-5555-4444-a121-fb0d3041449e';
+    const oid = '22222222-2222-2222-2222-222222222222';
+    enable(addinClient);
+    const storedPayload = Buffer.from(JSON.stringify({ oid, tid: TENANT })).toString('base64url');
+    mockQuery.mockReset().mockResolvedValue({ rows: [{ user_id: 'user-1', id_token: `e30.${storedPayload}.sig` }] });
+
+    const id = await token({ aud: addinClient, azp: undefined, scp: undefined, sub: 'addin-sub', oid });
+    await expect(authenticateAddinRequest(bearer(id))).resolves.toBe('user-1');
+
+    // The api-mode token no longer gets in once the add-in has its own app.
+    expect((await refusal(authenticateAddinRequest(bearer(await token())))).code).toBe('invalid_token');
   });
 
   it('asks for a token when none is sent', async () => {

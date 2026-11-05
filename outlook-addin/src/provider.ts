@@ -15,7 +15,7 @@
 
 import { extractJoinLinkFromBody } from '../../src/lib/outlook/join-link-from-body';
 import { ApiError, createMeeting, type CreatedMeetingResponse } from './api';
-import { getAccessToken, loadConfig } from './auth';
+import { getBearerToken, loadConfig } from './auth';
 import { readArmedId, readTimes, writeArmedId } from './meeting';
 import type { AsyncResult, OfficeApi, ProviderItem } from './office';
 
@@ -113,7 +113,7 @@ export async function insertMeeting(office: OfficeApi, item: ProviderItem): Prom
     if (!times) throw new Error('Mødets start og slut kunne ikke læses.');
     const subject = await promised<string>((cb) => item.subject.getAsync(cb), office).catch(() => '');
 
-    const token = await getAccessToken(await loadConfig());
+    const token = await getBearerToken(await loadConfig());
     const created = await createMeeting(subject, times, token);
 
     await promised<void>(

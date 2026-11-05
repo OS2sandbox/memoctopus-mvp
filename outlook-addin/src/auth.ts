@@ -1,12 +1,13 @@
 /**
  * Sign-in for the add-in: nested app authentication (NAA). Outlook brokers an
- * Entra access token for OS2taletiltekst's own API, silently when it can, with a
- * Microsoft pop-up the first time consent or a fresh sign-in is needed. The token
- * goes to our server only, in an Authorization header, and is never stored or
- * logged here.
+ * Entra token, silently when it can, with a Microsoft pop-up the first time
+ * consent or a fresh sign-in is needed: an access token for OS2taletiltekst's own
+ * API, or, when the server names a separate sign-in app, that app's ID token.
+ * The token goes to our server only, in an Authorization header, and is never
+ * stored or logged here.
  */
 
-import { getMsal, type MsalGlobal, type MsalNestablePca } from './office';
+import { getMsal, type MsalAuthResult, type MsalGlobal, type MsalNestablePca } from './office';
 
 /**
  * Pinned MSAL build, loaded from a CDN with a subresource-integrity hash, so a
@@ -20,6 +21,8 @@ export interface AddinConfig {
   clientId: string;
   tenantId: string;
   scopes: string[];
+  /** Which token goes to the server: `api` the access token, `id` the ID token. */
+  token: 'api' | 'id';
 }
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -31,14 +34,17 @@ export function parseConfig(raw: unknown): AddinConfig {
     throw new Error('OS2taletiltekst er ikke slået til for Outlook endnu. Kontakt jeres IT-administrator.');
   }
   const { clientId, tenantId, scopes } = value;
+  // A server from before the `id` mode sends no `token`; it means `api`.
+  const token = value.token ?? 'api';
   if (
     typeof clientId !== 'string' || !GUID_RE.test(clientId)
     || typeof tenantId !== 'string' || !GUID_RE.test(tenantId)
     || !Array.isArray(scopes) || !scopes.every((s) => typeof s === 'string' && s)
+    || (token !== 'api' && token !== 'id')
   ) {
     throw new Error('Serverens opsætning af Outlook-tilføjelsesprogrammet er ufuldstændig.');
   }
-  return { clientId, tenantId, scopes: scopes as string[] };
+  return { clientId, tenantId, scopes: scopes as string[], token };
 }
 
 export async function loadConfig(): Promise<AddinConfig> {
@@ -111,13 +117,39 @@ function withCode(text: string, err: unknown): string {
   return code ? `${text} Fejlkode: ${code}.` : text;
 }
 
-function silentToken(app: MsalNestablePca, config: AddinConfig): Promise<string> {
-  const account = app.getActiveAccount() ?? app.getAllAccounts()[0];
-  const request = account ? { scopes: config.scopes, account } : { scopes: config.scopes };
-  return app.acquireTokenSilent(request).then((res) => res.accessToken);
+/** Seconds until a JWT's `exp`; 0 when it cannot be read. Reads, never verifies. */
+export function secondsLeft(jwt: string, nowMs = Date.now()): number {
+  try {
+    const part = jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const exp = (JSON.parse(atob(part)) as { exp?: unknown }).exp;
+    return typeof exp === 'number' ? exp - nowMs / 1000 : 0;
+  } catch {
+    return 0;
+  }
 }
 
-export async function getAccessToken(config: AddinConfig): Promise<string> {
+/** The token the server asked for, out of an MSAL result. */
+export function pickToken(res: MsalAuthResult, config: AddinConfig): string {
+  const token = config.token === 'id' ? res.idToken : res.accessToken;
+  if (!token) throw new Error('Microsoft-login gav ikke noget login tilbage. Prøv igen.');
+  return token;
+}
+
+async function silentToken(app: MsalNestablePca, config: AddinConfig): Promise<string> {
+  const account = app.getActiveAccount() ?? app.getAllAccounts()[0];
+  const request = account ? { scopes: config.scopes, account } : { scopes: config.scopes };
+  const res = await app.acquireTokenSilent(request);
+  // An access token is renewed by MSAL before it expires; a cached ID token can
+  // come back close to (or past) expiry, and the server would refuse it.
+  if (config.token !== 'id' || secondsLeft(res.idToken ?? '') > 300) return pickToken(res, config);
+  return pickToken(await app.acquireTokenSilent({ ...request, forceRefresh: true }), config);
+}
+
+/**
+ * The bearer token for our server: an access token for our API, or the sign-in
+ * app's ID token, as /api/outlook/config says (AddinConfig.token).
+ */
+export async function getBearerToken(config: AddinConfig): Promise<string> {
   const app = await pca(config);
   try {
     return await silentToken(app, config);
@@ -128,7 +160,7 @@ export async function getAccessToken(config: AddinConfig): Promise<string> {
     }
   }
   try {
-    return (await app.acquireTokenPopup({ scopes: config.scopes })).accessToken;
+    return pickToken(await app.acquireTokenPopup({ scopes: config.scopes }), config);
   } catch (err) {
     console.warn('[os2taletiltekst] sign-in pop-up failed:', err);
     throw new Error(withCode('Microsoft-login blev ikke gennemført. Tillad pop-up-vinduet, og prøv igen.', err));

@@ -75,11 +75,13 @@ export interface MsalAccount {
 
 export interface MsalAuthResult {
   accessToken: string;
+  idToken: string;
 }
 
 export interface MsalTokenRequest {
   scopes: string[];
   account?: MsalAccount;
+  forceRefresh?: boolean;
 }
 
 export interface MsalNestablePca {

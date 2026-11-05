@@ -56,11 +56,33 @@ On the **existing** app registration the dashboard signs in with (the one in
 | API permissions → Add → My APIs → this app | Delegated `access_as_user`, then **Grant admin consent** |
 | Manifest | `"requestedAccessTokenVersion": 2` (v2 tokens; v1 is accepted too) |
 
+#### Alternative: the add-in's own app registration (`OUTLOOK_ADDIN_CLIENT_ID`)
+
+When the Microsoft 365 admin center deploys the add-in, it creates a second app
+registration of its own, usually with the add-in's name (created by "Office 365
+Portal", with the add-in listed under `addIns` in its manifest). If the dashboard's
+registration cannot be changed, the add-in can sign in with that one instead:
+
+| Where (on the add-in's registration) | What |
+|---|---|
+| Authentication → Single-page application | The same two `brk-…://<this host>` redirect URIs as above. If the page refuses them, the *Microsoft Graph App Manifest* tab takes them under `"spa"` → `"redirectUris"` |
+| API permissions | Nothing to add. If the tenant does not let users consent, **Grant admin consent** for sign-in (`openid`, `profile`) when the pop-up asks for approval |
+
+Then set `OUTLOOK_ADDIN_CLIENT_ID=<that app's client id>` on the server. The add-in
+asks for that app's **ID token** instead of an access token, and the server
+(`verifyAddinIdToken()`) checks its signature, issuer and `tid` (our tenant), audience
+(that app), that it is an ID token, and that it carries an `oid`. `sub` differs per
+app registration, so the user is found by **object id** instead: the `oid` in the ID
+token better-auth stored at their dashboard sign-in. Nothing about Graph changes;
+every Graph call still uses the user's dashboard grant. Leave the variable empty to go
+back to the dashboard's registration.
+
 ### 2. The server
 
 ```bash
 OUTLOOK_ADDIN_ENABLED=true   # needs TEAMS_GRAPH_ENABLED=true and a tenant-id MICROSOFT_TENANT_ID
 OUTLOOK_ADDIN_ALLOWED_USERS=someone@example.dk   # optional: only these users; empty = everyone
+OUTLOOK_ADDIN_CLIENT_ID=     # optional: the add-in's own app registration (see above)
 docker compose … up -d app   # a restart is enough; the add-in is built into the image
 ```
 

@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose';
+import { createRemoteJWKSet, decodeJwt, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose';
 import { pool } from '@/lib/db';
 import { outlookAddinConfig } from '@/lib/auth/providers';
 
@@ -21,9 +21,15 @@ import { outlookAddinConfig } from '@/lib/auth/providers';
  * and app registration, and both tokens come from the same registration, so the
  * two match. Someone who has never signed in to the dashboard with Microsoft has
  * no account row, no stored Graph token, and cannot arm anything.
+ *
+ * That is the `api` mode. With OUTLOOK_ADDIN_CLIENT_ID the add-in signs in with
+ * a second app registration instead and sends its ID token (`id` mode,
+ * verifyAddinIdToken() and userIdForObjectId() below).
  */
 
 export const ADDIN_SCOPE = 'access_as_user';
+
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export type AddinAuthErrorCode = 'disabled' | 'missing_token' | 'invalid_token' | 'no_account' | 'not_allowed';
 
@@ -144,8 +150,93 @@ export async function verifyAddinToken(
   return { sub, oid: claimString(payload, 'oid'), tid };
 }
 
-/** The better-auth user behind a verified token, by its Microsoft account. */
-export async function userIdForClaims(claims: AddinClaims): Promise<string> {
+/**
+ * The `id` sign-in mode: an ID token issued to the add-in's own app
+ * registration (OUTLOOK_ADDIN_CLIENT_ID). It proves who the user is and nothing
+ * else, which is all the add-in's calls need: every Graph call is made with the
+ * user's stored dashboard grant, never with anything the add-in sends.
+ *
+ *  - signed by Entra (tenant JWKS, RS256 only), v2 issuer of OUR tenant, `tid` ours,
+ *  - for the add-in's app (`aud`), not expired,
+ *  - an ID token, not an access token: no `scp`, no `roles`, not `idtyp: app`,
+ *  - with an `oid`, the user's object id, which unlike `sub` is the same in
+ *    every app registration of the tenant.
+ */
+export async function verifyAddinIdToken(
+  token: string,
+  config: { clientId: string; tenantId: string },
+  keys: JWTVerifyGetKey = tenantKeys(config.tenantId),
+): Promise<AddinClaims> {
+  let payload: JWTPayload;
+  try {
+    ({ payload } = await jwtVerify(token, keys, {
+      algorithms: ['RS256'],
+      issuer: `https://login.microsoftonline.com/${config.tenantId}/v2.0`,
+      audience: config.clientId,
+      requiredClaims: ['exp', 'sub', 'tid', 'oid'],
+      clockTolerance: 60,
+    }));
+  } catch (err) {
+    throw new AddinAuthError('invalid_token', err instanceof Error ? err.message : String(err));
+  }
+
+  const tid = claimString(payload, 'tid')?.toLowerCase();
+  if (tid !== config.tenantId) throw new AddinAuthError('invalid_token', 'tid is not our tenant');
+  if (payload.scp !== undefined || payload.roles !== undefined || payload.idtyp === 'app') {
+    throw new AddinAuthError('invalid_token', 'an access token, not an ID token');
+  }
+  const oid = claimString(payload, 'oid')?.toLowerCase();
+  if (!oid || !GUID_RE.test(oid)) throw new AddinAuthError('invalid_token', 'no object id');
+  const sub = claimString(payload, 'sub');
+  if (!sub) throw new AddinAuthError('invalid_token', 'no sub');
+  return { sub, oid, tid };
+}
+
+/** `oid` and `tid` from an ID token better-auth stored at sign-in; null if unreadable. */
+function storedIdTokenClaims(idToken: string): { oid: string; tid: string } | null {
+  try {
+    const claims = decodeJwt(idToken);
+    const oid = typeof claims.oid === 'string' ? claims.oid.toLowerCase() : null;
+    const tid = typeof claims.tid === 'string' ? claims.tid.toLowerCase() : null;
+    return oid && tid ? { oid, tid } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The better-auth user with this Entra object id, for the `id` sign-in mode.
+ * better-auth keys the Microsoft account on the dashboard app's pairwise `sub`,
+ * which an ID token from another app registration does not share, so the
+ * match is on the `oid` and `tid` in the ID token stored at dashboard sign-in.
+ * That token is not re-verified: better-auth wrote it after its own code
+ * exchange with Entra, and it is only read here, never trusted as a bearer.
+ * Microsoft accounts are scanned in full; fine for one municipality's users.
+ */
+async function userIdForObjectId(oid: string, tid: string): Promise<string> {
+  const result = await pool.query<{ user_id: string; id_token: string }>(
+    `SELECT user_id, id_token FROM accounts WHERE provider_id = 'microsoft' AND id_token IS NOT NULL`,
+  );
+  const users = new Set<string>();
+  for (const row of result.rows) {
+    const stored = storedIdTokenClaims(row.id_token);
+    if (stored && stored.oid === oid && stored.tid === tid) users.add(row.user_id);
+  }
+  // Exactly one, for the same reason as by sub: never guess between two users.
+  if (users.size !== 1) throw new AddinAuthError('no_account', `matched ${users.size} users by oid`);
+  return [...users][0];
+}
+
+/**
+ * The better-auth user behind a verified token, by its Microsoft account: by
+ * `sub` for an access token from the dashboard's own app (`api`), by object id
+ * for an ID token from the add-in's app (`id`).
+ */
+export async function userIdForClaims(claims: AddinClaims, mode: 'api' | 'id' = 'api'): Promise<string> {
+  if (mode === 'id') {
+    if (!claims.oid) throw new AddinAuthError('no_account', 'no object id');
+    return userIdForObjectId(claims.oid, claims.tid);
+  }
   const result = await pool.query<{ user_id: string }>(
     `SELECT user_id FROM accounts WHERE provider_id = 'microsoft' AND account_id = $1 LIMIT 2`,
     [claims.sub],
@@ -179,8 +270,10 @@ export async function authenticateAddinRequest(headers: Headers): Promise<string
   if (!config) throw new AddinAuthError('disabled');
   const token = bearerToken(headers.get('authorization'));
   if (!token) throw new AddinAuthError('missing_token');
-  const claims = await verifyAddinToken(token, config);
-  const userId = await userIdForClaims(claims);
+  const claims = config.token === 'id'
+    ? await verifyAddinIdToken(token, config)
+    : await verifyAddinToken(token, config);
+  const userId = await userIdForClaims(claims, config.token);
   await assertAddinAllowed(userId);
   return userId;
 }

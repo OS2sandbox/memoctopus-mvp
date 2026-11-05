@@ -9,7 +9,7 @@
  */
 
 import { ApiError, armMeeting, disarmMeeting } from './api';
-import { getAccessToken, loadConfig, type AddinConfig } from './auth';
+import { getBearerToken, loadConfig, type AddinConfig } from './auth';
 import { armedMessage, noLinkMessage, readArmedId, readJoinLink, readTimes, writeArmedId } from './meeting';
 import { getOffice, type OfficeApi, type OrganizerItem } from './office';
 
@@ -61,7 +61,7 @@ async function arm(state: State): Promise<void> {
   say('Slår OS2taletiltekst til …', 'info');
   try {
     state.config ??= await loadConfig();
-    const token = await getAccessToken(state.config);
+    const token = await getBearerToken(state.config);
     const result = await armMeeting(state.joinUrl, await readTimes(state.office, state.item), token);
     if (result.managedInDashboard) {
       // Not ours to switch off: it was registered in the dashboard and lives there.
@@ -88,7 +88,7 @@ async function disarm(state: State): Promise<void> {
   say('Slår OS2taletiltekst fra …', 'info');
   try {
     state.config ??= await loadConfig();
-    const token = await getAccessToken(state.config);
+    const token = await getBearerToken(state.config);
     try {
       const result = await disarmMeeting(state.armedId, token);
       say(

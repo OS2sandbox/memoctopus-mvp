@@ -190,7 +190,8 @@ lives in `src/components/dashboard/arm-error-message.ts`.
 (`outlook-addin/src/`, built into `public/outlook-addin/` by `npm run build`) reads the
 join link from the meeting body and calls `POST /api/outlook/meetings` with an NAA
 bearer token, verified in `src/lib/outlook/addin-auth.ts` and mapped to the user by
-`sub`; registration is shared with the Mødelink box (`src/lib/teams/register.ts`).
+`sub` (or, with `OUTLOOK_ADDIN_CLIENT_ID`, an ID token of the add-in's own app
+registration, mapped by `oid` via the ID token stored at dashboard sign-in); registration is shared with the Mødelink box (`src/lib/teams/register.ts`).
 Rows armed this way carry `origin = 'outlook'` and are **deferred**: the background
 poller leaves them until the user opens the meeting here (`opened_at`), 30 days at
 most. The dashboard/Arkiv import them from `GET /api/teams/meetings`.
@@ -239,6 +240,7 @@ the container. Note also that `.env.deploy.example`, not `.env.example`, is what
 | `OIDC_PROVIDER_ID` / `_NAME` | Callback path segment + account key / button label |
 | `OUTLOOK_ADDIN_ENABLED` | Opt-in (default off) for the Outlook add-in at `/outlook-addin/`. Needs `TEAMS_GRAPH_ENABLED` and a tenant-specific `MICROSOFT_TENANT_ID`; see docs/outlook-addin.md |
 | `OUTLOOK_ADDIN_ALLOWED_USERS` | Optional comma-separated e-mails; when set, the add-in's API refuses every other user (403 `not_allowed`). Empty = everyone |
+| `OUTLOOK_ADDIN_CLIENT_ID` | Optional second app registration for the add-in's sign-in (e.g. the one the admin center creates). Then the add-in sends that app's ID token and the user is matched by Entra object id. Empty = `MICROSOFT_CLIENT_ID` and its `access_as_user` API |
 | `GRAPH_BASE_URL` | Microsoft Graph base URL (default `https://graph.microsoft.com/v1.0`) |
 | `TEAMS_SPOKEN_LANGUAGE` | Language Teams transcribes in (default `da-DK`) |
 | `TEAMS_ARTIFACT_MODE` | `prefer-recording` (default) or `transcript-only` (also drops the recording scope from sign-in) |

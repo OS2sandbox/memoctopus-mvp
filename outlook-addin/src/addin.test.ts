@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { needsInteraction, parseConfig, signInErrorCode } from './auth';
+import { needsInteraction, parseConfig, pickToken, secondsLeft, signInErrorCode } from './auth';
 import { armedMessage, noLinkMessage, readArmedId, writeArmedId } from './meeting';
 import type { AsyncResult, CustomProperties, OfficeApi, OrganizerItem } from './office';
 
@@ -7,9 +7,17 @@ const CLIENT = '33333333-3333-3333-3333-333333333333';
 const TENANT = '11111111-1111-1111-1111-111111111111';
 
 describe('parseConfig', () => {
-  it('accepts the server config', () => {
+  it('accepts the server config, defaulting to the access token', () => {
     expect(parseConfig({ enabled: true, clientId: CLIENT, tenantId: TENANT, scopes: [`api://${CLIENT}/access_as_user`] }))
-      .toEqual({ clientId: CLIENT, tenantId: TENANT, scopes: [`api://${CLIENT}/access_as_user`] });
+      .toEqual({ clientId: CLIENT, tenantId: TENANT, scopes: [`api://${CLIENT}/access_as_user`], token: 'api' });
+  });
+  it('accepts the ID-token mode', () => {
+    expect(parseConfig({ enabled: true, clientId: CLIENT, tenantId: TENANT, scopes: ['openid', 'profile'], token: 'id' }))
+      .toMatchObject({ token: 'id', scopes: ['openid', 'profile'] });
+  });
+  it('refuses a token mode it does not know', () => {
+    expect(() => parseConfig({ enabled: true, clientId: CLIENT, tenantId: TENANT, scopes: ['x'], token: 'saml' }))
+      .toThrow(/ufuldstændig/);
   });
   it('says the add-in is off when the server says so', () => {
     expect(() => parseConfig({ enabled: false })).toThrow(/ikke slået til/);
@@ -18,6 +26,25 @@ describe('parseConfig', () => {
   it('refuses a tenant that is not one tenant id', () => {
     expect(() => parseConfig({ enabled: true, clientId: CLIENT, tenantId: 'organizations', scopes: ['x'] }))
       .toThrow(/ufuldstændig/);
+  });
+});
+
+describe('pickToken and secondsLeft', () => {
+  const base = { clientId: CLIENT, tenantId: TENANT, scopes: ['x'] };
+  const res = { accessToken: 'the-access-token', idToken: 'the-id-token' };
+
+  it('sends the token the server asked for', () => {
+    expect(pickToken(res, { ...base, token: 'api' })).toBe('the-access-token');
+    expect(pickToken(res, { ...base, token: 'id' })).toBe('the-id-token');
+  });
+  it('fails plainly when MSAL gave none back', () => {
+    expect(() => pickToken({ accessToken: 'a', idToken: '' }, { ...base, token: 'id' })).toThrow(/Microsoft-login/);
+  });
+  it('reads how long a token has left', () => {
+    const jwt = (claims: object) => `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.sig`;
+    expect(secondsLeft(jwt({ exp: 1_000_600 }), 1_000_000_000)).toBe(600);
+    expect(secondsLeft(jwt({}), 0)).toBe(0);
+    expect(secondsLeft('garbage')).toBe(0);
   });
 });
 
