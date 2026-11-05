@@ -16,7 +16,15 @@ vi.mock('@/lib/teams/graph-client', () => ({
 }));
 
 import { graphFetch, graphJson, GraphError } from '@/lib/teams/graph-client';
-import { armMeeting, disarmMeeting, isArmed, isInstantMeeting, ARM_OPTIONS } from './meeting-arm';
+import {
+  armMeeting,
+  disarmMeeting,
+  isArmed,
+  isInstantMeeting,
+  isLateArm,
+  ARM_OPTIONS,
+  LATE_ARM_LEAD_MS,
+} from './meeting-arm';
 
 const mockFetch = vi.mocked(graphFetch);
 const mockJson = vi.mocked(graphJson);
@@ -49,13 +57,19 @@ const ARMED = {
   meetingSpokenLanguageTag: 'da-DK',
 };
 
+/** An hour before SCHEDULED starts: comfortably early, so arming is plain `armed`. */
+const EARLY = new Date('2026-09-23T08:00:00Z');
+
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(EARLY);
   mockFetch.mockResolvedValue(new Response(null, { status: 200 }));
   readBack(ARMED);
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   delete process.env.TEAMS_SPOKEN_LANGUAGE;
 });
 
@@ -341,12 +355,47 @@ describe('armMeeting on a meeting that is already under way', () => {
     expect(JSON.parse(patchCall().init.body as string)).toMatchObject({ allowTranscription: true });
   });
 
-  it('leaves a scheduled meeting whose start has passed as armed', async () => {
-    // Teams starts transcribing on the first join, not at the scheduled time,
-    // so arming five minutes late still works and must not be warned about.
+  it('reports armed for a scheduled meeting switched on well before its start', async () => {
     readBack({ ...ARMED, ...SCHEDULED });
 
-    expect((await armMeeting(USER, ID)).result).toBe('armed');
+    expect((await armMeeting(USER, ID, EARLY)).result).toBe('armed');
+  });
+
+  it('reports armed_late for a scheduled meeting switched on after its start', async () => {
+    // People may be in it already, and a running meeting ignores
+    // recordAutomatically: the user has to be told to start it by hand.
+    readBack({ ...ARMED, ...SCHEDULED });
+
+    const outcome = await armMeeting(USER, ID, new Date('2026-09-23T09:05:00Z'));
+
+    expect(outcome.result).toBe('armed_late');
+    expect(isArmed(outcome.result)).toBe(true);
+  });
+
+  it('reports armed_late just before the start too, when people may have joined early', async () => {
+    readBack({ ...ARMED, ...SCHEDULED });
+
+    expect((await armMeeting(USER, ID, new Date('2026-09-23T08:50:00Z'))).result).toBe('armed_late');
+  });
+
+  it('still PATCHes recordAutomatically on a late arm: the organizer may just be running late', async () => {
+    readBack({ ...ARMED, ...SCHEDULED });
+
+    await armMeeting(USER, ID, new Date('2026-09-23T09:05:00Z'));
+
+    expect(JSON.parse(patchCall().init.body as string)).toMatchObject({ recordAutomatically: true });
+  });
+
+  it('lets a blocking policy win over a late arm', async () => {
+    readBack({ ...ARMED, ...SCHEDULED, recordAutomatically: false });
+
+    expect((await armMeeting(USER, ID, new Date('2026-09-23T09:05:00Z'))).result).toBe('policy_blocked');
+  });
+
+  it('keeps armed_in_progress for an instant meeting however late it is armed', async () => {
+    readBack({ ...ARMED, startDateTime: '2026-09-23T09:11:21Z', endDateTime: '2026-09-23T09:11:21Z' });
+
+    expect((await armMeeting(USER, ID, new Date('2026-09-23T10:00:00Z'))).result).toBe('armed_in_progress');
   });
 
   it('lets a blocking policy win over an instant meeting', async () => {
@@ -369,5 +418,23 @@ describe('isInstantMeeting', () => {
 
   it('does not guess when only the end is missing', () => {
     expect(isInstantMeeting('2026-09-23T09:00:00Z', null)).toBe(false);
+  });
+});
+
+describe('isLateArm', () => {
+  const START = '2026-09-23T09:00:00Z';
+
+  it('is false until the lead before the start', () => {
+    expect(isLateArm(START, new Date(Date.parse(START) - LATE_ARM_LEAD_MS - 1))).toBe(false);
+  });
+
+  it('is true from the lead before the start onwards', () => {
+    expect(isLateArm(START, new Date(Date.parse(START) - LATE_ARM_LEAD_MS))).toBe(true);
+    expect(isLateArm(START, new Date('2026-09-23T12:00:00Z'))).toBe(true);
+  });
+
+  it('is false without a usable start', () => {
+    expect(isLateArm(null, new Date())).toBe(false);
+    expect(isLateArm('not a date', new Date())).toBe(false);
   });
 });

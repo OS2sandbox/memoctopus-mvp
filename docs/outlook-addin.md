@@ -35,12 +35,16 @@ Someone who arms a meeting from Outlook comes back later, maybe days later. So f
 `origin = 'outlook'` rows the background poller does nothing until the user **opens
 the meeting** in OS2taletiltekst (the screen's forced poll sets `opened_at`). Until
 then the recording stays where Teams put it, in the organizer's OneDrive. Opening it
-starts the fetch with the user there to collect the transcript, and the recording is
-deleted from OneDrive once transcribed, as for any Teams meeting. A meeting nobody
-opens within 30 days (`OUTLOOK_UNOPENED_GIVE_UP_MS`) is marked failed and is never
-fetched, even if it is opened later. Its recording is not deleted by us (nothing was
-downloaded to identify it by); it stays under the tenant's own Teams retention.
-See `isDeferred()` in `src/lib/teams/store.ts` and the top of `pollMeeting()`.
+starts the fetch with the user there to collect the transcript. As for any Teams
+meeting, the recording is then deleted from OneDrive once the user's browser has
+saved the transcript, unless `TEAMS_DELETE_RECORDING=false` or
+`TEAMS_ARTIFACT_MODE=transcript-only`, where it is never deleted. The pane's note
+says which applies (`deletesRecording` from `GET /api/outlook/config`). A meeting
+nobody opens within 30 days (`OUTLOOK_UNOPENED_GIVE_UP_MS`) is marked failed and is
+never fetched, even if it is opened later. Its recording is not deleted by us
+(nothing was downloaded to identify it by); it stays under the tenant's own Teams
+retention. See `isDeferred()` in `src/lib/teams/store.ts` and the top of
+`pollMeeting()`.
 
 ## Turning it on
 
@@ -56,15 +60,50 @@ On the **existing** app registration the dashboard signs in with (the one in
 | API permissions → Add → My APIs → this app | Delegated `access_as_user`, then **Grant admin consent** |
 | Manifest | `"requestedAccessTokenVersion": 2` (v2 tokens; v1 is accepted too) |
 
+#### Alternative: the add-in's own app registration (`OUTLOOK_ADDIN_CLIENT_ID`)
+
+When the Microsoft 365 admin center deploys the add-in, it creates a second app
+registration of its own, usually with the add-in's name (created by "Office 365
+Portal", with the add-in listed under `addIns` in its manifest). If the dashboard's
+registration cannot be changed, the add-in can sign in with that one instead:
+
+| Where (on the add-in's registration) | What |
+|---|---|
+| Authentication → Single-page application | The same two `brk-…://<this host>` redirect URIs as above. If the page refuses them, the *Microsoft Graph App Manifest* tab takes them under `"spa"` → `"redirectUris"` |
+| API permissions | Nothing to add. If the tenant does not let users consent, **Grant admin consent** for sign-in (`openid`, `profile`) when the pop-up asks for approval |
+
+Then set `OUTLOOK_ADDIN_CLIENT_ID=<that app's client id>` on the server. The add-in
+asks for that app's **ID token** instead of an access token, and the server
+(`verifyAddinIdToken()`) checks its signature, issuer and `tid` (our tenant), audience
+(that app), that it is an ID token, and that it carries an `oid`. `sub` differs per
+app registration, so the user is found by **object id** instead: the `oid` in the ID
+token better-auth stored at their dashboard sign-in. Nothing about Graph changes;
+every Graph call still uses the user's dashboard grant. Leave the variable empty to go
+back to the dashboard's registration.
+
 ### 2. The server
 
 ```bash
 OUTLOOK_ADDIN_ENABLED=true   # needs TEAMS_GRAPH_ENABLED=true and a tenant-id MICROSOFT_TENANT_ID
 OUTLOOK_ADDIN_ALLOWED_USERS=someone@example.dk   # optional: only these users; empty = everyone
+OUTLOOK_ADDIN_CLIENT_ID=     # optional: the add-in's own app registration (see above)
 docker compose … up -d app   # a restart is enough; the add-in is built into the image
 ```
 
 The manifest is then served at `https://<this host>/outlook-addin/manifest.xml`.
+If it answers 404 although the flag is set, the server log says why, once per
+start (`[outlook] OUTLOOK_ADDIN_ENABLED=true, but the add-in stays off: …`).
+
+Outlook and the admin center tell add-ins apart by the manifest's id. Every
+deployment uses the same one unless told otherwise, so when two deployments share
+a tenant (staging and production), give all but one its own:
+
+```bash
+OUTLOOK_ADDIN_ID=<a new GUID>   # e.g. from `uuidgen`; must be a GUID, or the manifest is refused
+```
+
+Leave it unset on the deployment users already have: changing the id makes a new
+add-in, which the admin uploads and assigns again (and removes the old one).
 
 ### 3. Deploying the add-in (Exchange or Global admin)
 
@@ -74,8 +113,16 @@ server to be reachable from Microsoft's cloud). Assign it to specific users or a
 group. It can take up to 24 hours before the button appears in Outlook.
 
 When `src/lib/outlook/manifest.ts` changes, bump `ADDIN_VERSION` and upload the new
-file: the admin center keeps the file it was given. Changes to the pane itself
-(`outlook-addin/src/`) need only a deploy.
+file: the admin center keeps the file it was given. `manifest.test.ts` pins a hash
+of the output to the version, so a change without a bump fails the tests. Changes
+to the pane itself (`outlook-addin/src/`) need only a deploy.
+
+### Working on the pane
+
+`npm run build` builds the pane into `public/outlook-addin/` before `next build`,
+but `npm run dev` does not build it at all. Run `npm run build:addin` once before
+`npm run dev`, and again after every change under `outlook-addin/src/`, then
+reload the pane. `public/outlook-addin/` is build output, not checked in.
 
 ## Why not just use the Teams toggle?
 
@@ -155,8 +202,15 @@ allowed`) are Outlook's own and unrelated.
 ## Limits
 
 - Outlook must reach this host: on the municipality's network or VPN.
-- Only the organizer can switch recording on; an invitee gets the meeting registered
-  and is told the organizer must start transcription.
+- The button is only on the organizer's meeting form (the manifest declares
+  `AppointmentOrganizerCommandSurface` alone): an invitee never sees it. Someone
+  who organizes the appointment in Outlook but not the Teams meeting behind its
+  link (a pasted link, a delegate) gets the meeting registered, and the pane says
+  the Teams organizer must start transcription.
+- A recurring series is one Teams meeting. Switching OS2taletiltekst on for any
+  occurrence sets automatic recording on that meeting, so Teams records every
+  occurrence; only the ones switched on are fetched, and the other recordings stay
+  in Teams. The pane says so on a recurring appointment, but does not refuse.
 - Classic Outlook older than build 2409 and Office LTSC have no NAA; the pane says
   so, and the Mødelink box still works.
 - A Conditional Access rule "Require approved client app" blocks NAA for its users.

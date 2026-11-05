@@ -270,11 +270,28 @@ export async function ensureUserSchema(userId: string): Promise<void> {
         ADD COLUMN IF NOT EXISTS recording_id  TEXT,
         ADD COLUMN IF NOT EXISTS recording_cleanup TEXT,
         ADD COLUMN IF NOT EXISTS recording_bytes   BIGINT,
+        -- Every recording to delete, when recording was stopped and started again;
+        -- recording_bytes is the first of them. NULL on rows from before it.
+        ADD COLUMN IF NOT EXISTS recording_sizes   BIGINT[],
+        -- When the delete was queued: once the browser had saved the transcript.
+        ADD COLUMN IF NOT EXISTS recording_cleanup_at TIMESTAMPTZ,
         -- 'outlook' when armed from the Outlook add-in; NULL for the dashboard.
         ADD COLUMN IF NOT EXISTS origin        TEXT,
         -- When the user first opened an Outlook-armed meeting in OS2taletiltekst.
         -- Until then its recording is left in Teams (see the poller).
         ADD COLUMN IF NOT EXISTS opened_at     TIMESTAMPTZ,
+        -- When the user last asked for a collected meeting to be collected again.
+        ADD COLUMN IF NOT EXISTS recollected_at TIMESTAMPTZ,
+        -- TRUE when scheduled_start/_end were registered for one occurrence of a
+        -- series rather than read from Graph, which only knows the series' window.
+        ADD COLUMN IF NOT EXISTS occurrence_window BOOLEAN NOT NULL DEFAULT FALSE,
+        -- Set when the user switched the meeting off while its recording was still
+        -- to be deleted from OneDrive: the row is hidden and kept only for that
+        -- delete, then removed.
+        ADD COLUMN IF NOT EXISTS unregistered_at TIMESTAMPTZ,
+        -- Downloads of the recording that timed out or were cut off. Past a few,
+        -- the transcript Teams wrote is collected instead.
+        ADD COLUMN IF NOT EXISTS recording_stalls INTEGER NOT NULL DEFAULT 0,
         ADD COLUMN IF NOT EXISTS created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         ADD COLUMN IF NOT EXISTS updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     `);
@@ -463,7 +480,9 @@ export async function ensureUserSchema(userId: string): Promise<void> {
       DROP INDEX IF EXISTS "${schema}".onboarding_progress_global_step_unique
     `);
 
-    // onboarding_state — single-row per-user flags for the guided tour as a whole
+    // onboarding_state — single-row per-user flags for the guided tour as a whole.
+    // last_step_id is no longer written or read; it stays so new and existing
+    // schemas keep the same shape.
     await client.query(`
       CREATE TABLE IF NOT EXISTS "${schema}".onboarding_state (
         id                 TEXT PRIMARY KEY DEFAULT 'singleton',

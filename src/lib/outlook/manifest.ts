@@ -6,7 +6,8 @@
  * Built from the server's own public URL, so every deployment hands out a
  * manifest that points at itself. The admin center keeps the file it was given,
  * so a change here reaches users only when the admin uploads the new file: bump
- * ADDIN_VERSION whenever the output changes.
+ * ADDIN_VERSION whenever the output changes (manifest.test.ts pins the output's
+ * hash to the version, so a change without a bump fails the tests).
  *
  * 1.1: the add-in is also an online-meeting provider (outlook-addin/src/provider.ts).
  * Its one function command creates and arms the Teams meeting itself, and Outlook
@@ -16,9 +17,26 @@
  * buildManifest() as of commit 98fd3ab.
  */
 
-/** Fixed for the life of the add-in: Outlook and the admin center key it on this. */
-export const ADDIN_ID = '3b8720fe-bdc3-4a89-ab8b-f35412c768bd';
+/** The add-in's id unless OUTLOOK_ADDIN_ID says otherwise: the one it first shipped with. */
+export const DEFAULT_ADDIN_ID = '3b8720fe-bdc3-4a89-ab8b-f35412c768bd';
 export const ADDIN_VERSION = '1.1.0.0';
+
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Outlook and the admin center key the add-in on its id, so two deployments in
+ * one tenant (staging and production) need different ones: OUTLOOK_ADDIN_ID.
+ * Fixed for the life of a deployment, since a new id is a new add-in that the
+ * admin uploads and assigns again. A value that is not a GUID throws rather
+ * than fall back to the default, which would collide with the other deployment.
+ * Read per call, like the auth config: a restart is enough.
+ */
+export function addinId(): string {
+  const raw = process.env.OUTLOOK_ADDIN_ID?.trim();
+  if (!raw) return DEFAULT_ADDIN_ID;
+  if (!GUID_RE.test(raw)) throw new Error(`OUTLOOK_ADDIN_ID must be a GUID, got "${raw}"`);
+  return raw.toLowerCase();
+}
 
 /** The URL path the add-in's pages are served under (public/outlook-addin/). */
 export const ADDIN_PATH = '/outlook-addin';
@@ -98,10 +116,10 @@ function resources(page: (name: string) => string, provider: boolean): string {
 
 /**
  * `origin` must be the https origin the add-in is served from, e.g.
- * https://taletiltekst.syddjurs.dk. Throws on anything else: Outlook loads
+ * https://taletiltekst.example.dk. Throws on anything else: Outlook loads
  * add-ins over https only, and a path or query would end up in every URL.
  */
-export function buildManifest(origin: string): string {
+export function buildManifest(origin: string, id: string = addinId()): string {
   const url = new URL(origin);
   if (url.protocol !== 'https:' || url.pathname !== '/' || url.search || url.hash) {
     throw new Error(`The add-in needs a bare https origin, got ${origin}`);
@@ -123,7 +141,7 @@ export function buildManifest(origin: string): string {
   xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
   xmlns:mailappor="http://schemas.microsoft.com/office/mailappversionoverrides/1.0"
   xsi:type="MailApp">
-  <Id>${ADDIN_ID}</Id>
+  <Id>${xmlEscape(id)}</Id>
   <Version>${ADDIN_VERSION}</Version>
   <ProviderName>OS2taletiltekst</ProviderName>
   <DefaultLocale>da-DK</DefaultLocale>

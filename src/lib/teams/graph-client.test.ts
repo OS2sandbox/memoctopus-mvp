@@ -14,7 +14,6 @@ vi.mock('@/lib/auth', () => ({
 
 import {
   GRAPH_DOWNLOAD_TIMEOUT_MS,
-  GRAPH_SCOPES,
   GRAPH_TIMEOUT_MS,
   GraphError,
   classifyGraphError,
@@ -26,6 +25,7 @@ import {
   isRetryableStatus,
   parseRetryAfter,
 } from './graph-client';
+import { GRAPH_DELEGATED_SCOPES as GRAPH_SCOPES } from '@/lib/auth/providers';
 
 const ALL_SCOPES = GRAPH_SCOPES.join(' ');
 
@@ -99,6 +99,37 @@ describe('graphOrigin', () => {
   it('treats an empty GRAPH_BASE_URL as unset (docker-compose passes ${VAR:-})', () => {
     process.env.GRAPH_BASE_URL = '   ';
     expect(graphOrigin()).toBe('https://graph.microsoft.com/v1.0');
+  });
+
+  it.each([
+    'https://graph.microsoft.com/beta',
+    'https://graph.microsoft.us/v1.0',
+    'https://dod-graph.microsoft.us/v1.0',
+    'https://microsoftgraph.chinacloudapi.cn/v1.0',
+    'http://127.0.0.1:4010/v1.0',
+    'https://localhost:4010/v1.0',
+  ])('accepts a Microsoft cloud or a local mock: %s', (url) => {
+    process.env.GRAPH_BASE_URL = url;
+    expect(graphOrigin()).toBe(url);
+  });
+
+  // Every Graph call carries the user's bearer token to this origin. A typo or a
+  // planted value must not send it anywhere else.
+  it.each([
+    'https://graph.example.com/v1.0',
+    'https://graph.microsoft.com.evil.example/v1.0',
+    'http://graph.microsoft.com/v1.0',
+    'ftp://localhost/v1.0',
+    'not a url',
+  ])('refuses any other origin and falls back to Microsoft Graph: %s', (url) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env.GRAPH_BASE_URL = url;
+
+    expect(graphOrigin()).toBe('https://graph.microsoft.com/v1.0');
+    graphOrigin();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('GRAPH_BASE_URL');
   });
 });
 
@@ -462,6 +493,14 @@ describe('classifyGraphError', () => {
     expect(
       classifyGraphError(new GraphError('transcripts_disabled', 'x', { status: 403, retryable: true })),
     ).toBe('transcripts_disabled');
+  });
+
+  // A sign-in that lacks a scope is cured by signing in again, exactly like an
+  // expired one. As `graph_error` it failed the meeting for good instead.
+  it('names consent_required as reauth_required', () => {
+    expect(
+      classifyGraphError(new GraphError('consent_required', 'x', { status: 403, missingScopes: ['a'] })),
+    ).toBe('reauth_required');
   });
 
   it('names a retryable GraphError of any other code as retryable', () => {

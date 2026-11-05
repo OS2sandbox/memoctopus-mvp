@@ -119,15 +119,19 @@ export function TopBar() {
               </Link>
             );
             if (item.href === '/arkiv') {
+              // Separate keys, so the two steps never share one hint instance.
               if (reviewMeetingId && hasAudio) {
                 return (
-                  <OnboardingHint key={item.href} stepId="topbar.unsaved-audio" meetingId={reviewMeetingId}>
+                  <OnboardingHint key="unsaved-audio" stepId="topbar.unsaved-audio" meetingId={reviewMeetingId}>
                     {link}
                   </OnboardingHint>
                 );
               }
+              // Not on a review page: its audio loads from IndexedDB a moment after
+              // the first render, so the explainer would open, be replaced by the
+              // unsaved-audio warning, and count as seen without being read.
               return (
-                <OnboardingHint key={item.href} stepId="topbar.arkiv-explainer">
+                <OnboardingHint key="arkiv-explainer" stepId="topbar.arkiv-explainer" condition={!reviewMeetingId}>
                   {link}
                 </OnboardingHint>
               );
@@ -142,8 +146,8 @@ export function TopBar() {
             <button
               type="button"
               onClick={openWelcome}
-              title="Se en hurtig gennemgang af Referat"
-              aria-label="Se en hurtig gennemgang af Referat"
+              title="Se en hurtig gennemgang af OS2taletiltekst"
+              aria-label="Se en hurtig gennemgang af OS2taletiltekst"
               style={{
                 fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)',
                 background: 'none', border: '1px solid var(--line)', borderRadius: 4,

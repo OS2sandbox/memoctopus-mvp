@@ -57,8 +57,7 @@ export async function importOutlookMeetings(): Promise<ServerTeamsMeeting[] | nu
         graphManaged: true,
         meetingUrl: m.joinUrl,
         status: 'awaiting_teams',
-        ...(m.subject ? { teamsSubject: m.subject } : {}),
-        ...(m.scheduledStart ? { scheduledStart: m.scheduledStart, recordedAt: m.scheduledStart } : {}),
+        ...(m.scheduledStart ? { recordedAt: m.scheduledStart } : {}),
       });
     } catch (err) {
       console.warn('[outlook] kunne ikke tilføje mødet', m.id, err);

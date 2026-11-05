@@ -18,7 +18,7 @@
   * { box-sizing: border-box; }
   body { margin: 0; padding: 16px; font: 14px/1.5 "Segoe UI", system-ui, sans-serif; color: var(--fg); background: var(--bg); }
   h1 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
-  #status { margin: 0 0 16px; }
+  #status, #series { margin: 0 0 16px; }
   [data-tone="ok"] { color: var(--ok); }
   [data-tone="warn"] { color: var(--warn); }
   [data-tone="error"] { color: var(--error); }
@@ -35,12 +35,17 @@
 <main>
   <h1>OS2taletiltekst</h1>
   <p id="status" role="status" aria-live="polite">Læser mødet …</p>
+  <p id="series" data-tone="warn" hidden>
+    Mødet er en del af en serie. Teams optager alle møder i serien, ikke kun dette, når OS2taletiltekst er slået
+    til. Optagelser af møder i serien, som OS2taletiltekst ikke er slået til for, bliver liggende i Teams.
+  </p>
   <button id="arm" type="button" hidden>Slå OS2taletiltekst til</button>
   <button id="disarm" type="button" hidden>Slå OS2taletiltekst fra</button>
   <p class="note">
     Når mødet er slut, åbner du det i OS2taletiltekst for at få referatet. Indtil da bliver optagelsen i Teams.
-    Når transskriptionen er hentet, slettes optagelsen. Åbner du ikke mødet inden for 30 dage, henter
-    OS2taletiltekst den ikke.
+    Åbner du ikke mødet inden for 30 dage, henter OS2taletiltekst det ikke.
+    <!-- What happens to the recording depends on the server's setup: filled in from /api/outlook/config. -->
+    <span id="recording-note"></span>
   </p>
 </main>
 </body>

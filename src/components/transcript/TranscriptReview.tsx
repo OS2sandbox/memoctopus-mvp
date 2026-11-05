@@ -1319,7 +1319,7 @@ export function TranscriptReview({
           </div>
 
           {piiReplacements.length > 0 && (
-            <OnboardingHint stepId="review.pii-checkboxes" meetingId={meetingId}>
+            <OnboardingHint stepId="review.pii-checkboxes">
             <div style={{ marginTop: 18 }}>
               {piiReplacements.map((r, i) => (
                 <div
@@ -1418,7 +1418,7 @@ export function TranscriptReview({
           </div>
 
           {/* Skabelon, kategorier & ekstra instruktioner */}
-          <OnboardingHint stepId="review.skabelon-panel" meetingId={meetingId}>
+          <OnboardingHint stepId="review.skabelon-panel">
           <div style={{ marginTop: 28 }}>
             <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4, marginBottom: 10 }}>skabelon</div>
 
@@ -1639,7 +1639,7 @@ export function TranscriptReview({
           </div>
 
           {/* Generate button */}
-          <OnboardingHint stepId="review.generate-button" meetingId={meetingId}>
+          <OnboardingHint stepId="review.generate-button">
             <div style={{ display: 'inline-block', width: '100%' }}>
               <button
                 onClick={proceedToMinutes}
@@ -1762,10 +1762,10 @@ export function TranscriptReview({
           </span>
         ) : audioDiscarded ? (
           <span
-            title="Teams frigiver først optagelsen efter mødet, så lyden kan ikke følges live. Den transskriberes på serveren og slettes derefter."
+            title="Lyden fra et Teams-møde når aldrig din browser. Er mødet optaget, transskriberes optagelsen på serveren, og lyden gemmes ikke."
             style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}
           >
-            lyden blev slettet efter transskription
+            ingen lyd — Teams-møder gemmes kun som tekst
           </span>
         ) : (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted-2)' }}>

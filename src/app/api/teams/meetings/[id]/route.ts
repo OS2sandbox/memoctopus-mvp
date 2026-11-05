@@ -8,9 +8,13 @@ import { unregisterTeamsMeeting } from '@/lib/teams/register';
 import { readPendingTranscript } from '@/lib/pending-artifacts';
 import {
   POLL_GIVE_UP_MS,
+  RECOLLECT_WINDOW_MS,
   getTeamsMeeting,
   giveUpAnchor,
-  setTeamsMeetingState,
+  hasStarted,
+  isDeferred,
+  markTeamsMeetingOpened,
+  requestRecollect,
   type TeamsMeetingRow,
 } from '@/lib/teams/store';
 
@@ -70,6 +74,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   let row = await getTeamsMeeting(userId, id);
   if (!row) return NextResponse.json({ error: 'not_found' }, { status: 404 });
 
+  // Its owner looking at an Outlook-armed meeting once it has begun is what lifts
+  // the deferral (isDeferred), so the background poller collects it even if the
+  // tab is closed before the meeting ends — as the screen says it may be.
+  if (isDeferred(row) && hasStarted(row, new Date())) {
+    row = await markTeamsMeetingOpened(userId, id);
+  }
+
   if (req.nextUrl.searchParams.get('poll') === '1') {
     // A forced poll is also the "Prøv igen" button, so it has to be able to
     // revive a row the poller has already written off as failed.
@@ -108,10 +119,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 /**
  * Turns OS2taletiltekst off for a meeting: un-arm it (if we armed it) and forget it.
  *
- * The row is deleted even when the Graph side could not be undone — the user
- * asked us to stop collecting — but `disarmed: false` says the meeting may still
- * be armed in Teams (Graph failed, or TEAMS_GRAPH_ENABLED is off and there is no
- * way to reach it from here).
+ * Answers `{ ok, disarmed, keptForOtherOccurrences }`, see unregisterTeamsMeeting.
+ * `disarmed: false` says the meeting may still be armed in Teams although it
+ * should not be (Graph failed, or TEAMS_GRAPH_ENABLED is off and there is no way
+ * to reach it from here); `keptForOtherOccurrences` that it was left armed on
+ * purpose, for other occurrences of the same series that are still registered.
  */
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -123,20 +135,21 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const row = await getTeamsMeeting(userId, id);
   if (!row) return NextResponse.json({ error: 'not_found' }, { status: 404 });
 
-  const { disarmed } = await unregisterTeamsMeeting(userId, row);
-  return NextResponse.json({ ok: true, disarmed });
+  const result = await unregisterTeamsMeeting(userId, row);
+  return NextResponse.json({ ok: true, ...result });
 }
 
 /**
  * `{ action: 'recollect' }`: the row says `ready` but the transcript it stands for
  * is no longer on the server (nobody collected it within the pending-artifacts TTL
  * and the sweep removed it). Graph still holds the artifacts, so the row is put back
- * into `awaiting_teams`; the caller then forces a poll (the same `?poll=1` that
- * "Prøv igen" uses) and the pipeline runs again. No new state.
+ * into `awaiting_teams` with a fresh give-up window; the caller then forces a poll
+ * (the same `?poll=1` that "Prøv igen" uses) and the pipeline runs again.
  *
- * Refused (409) for a row that is not `ready`, and once the poller would give up on
- * the meeting anyway: pollMeeting would otherwise mark the revived row `failed` and
- * the ready state would be lost for good.
+ * The recording stays in OneDrive until the user has the transcript, so this is
+ * allowed for RECOLLECT_WINDOW_MS (30 days) after the meeting. Once the recording
+ * has been deleted only Teams' own transcript is left, and the old 24 h bound
+ * applies. Refused (409) for a row that is not `ready`, or outside that window.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await auth.api.getSession({ headers: await headers() });
@@ -162,11 +175,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // The stash is still there: nothing is missing, the browser just has not collected it.
   if (await readPendingTranscript(id)) return NextResponse.json(serialize(row));
 
-  const anchor = giveUpAnchor(row);
-  if (anchor && anchor.getTime() < Date.now() - POLL_GIVE_UP_MS) {
+  // Measured from the meeting itself (or from when we were handed it), not from an
+  // earlier "Hent igen": asking again must not stretch the bound for ever.
+  const born = giveUpAnchor({ scheduledEnd: row.scheduledEnd, createdAt: row.createdAt });
+  const recordingGone =
+    row.recordingCleanup === 'pending' || row.recordingCleanup === 'deleted' || row.recordingCleanup === 'recycled';
+  const windowMs = recordingGone ? POLL_GIVE_UP_MS : RECOLLECT_WINDOW_MS;
+  if (born && born.getTime() < Date.now() - windowMs) {
     return NextResponse.json({ error: 'window_closed' }, { status: 409 });
   }
 
-  await setTeamsMeetingState(userId, id, 'awaiting_teams', null);
-  return NextResponse.json(serialize((await getTeamsMeeting(userId, id)) ?? row));
+  const revived = await requestRecollect(userId, id);
+  return NextResponse.json(serialize(revived ?? row));
 }

@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, fireEvent, waitFor, act, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { screen, fireEvent, waitFor, act, within, cleanup, render as rtlRender } from '@testing-library/react';
 import { TopBar } from './TopBar';
 import { renderWithOnboarding } from '@/test/onboarding';
+import { OnboardingProvider } from '@/lib/onboarding/context';
+import { getStep } from '@/lib/onboarding/steps';
+import { WelcomeTour } from '@/components/onboarding/WelcomeTour';
 
 // Onboarding hints wrap the Arkiv nav link and, on a review page with unsaved
 // audio, the nav links themselves; mark them already-seen (for every meeting
@@ -448,5 +451,78 @@ describe('TopBar — wordmark link', () => {
     renderTopBar();
     const link = screen.getByRole('link', { name: /OS2taletiltekst/ });
     expect(link).toHaveAttribute('href', '/dashboard');
+  });
+});
+
+// ── Onboarding ─────────────────────────────────────────────────────────────
+
+describe('TopBar — onboarding', () => {
+  const EXPLAINER = 'topbar.arkiv-explainer';
+  const UNSAVED = 'topbar.unsaved-audio';
+  const copyOf = (id: string) => getStep(id).copy.replace(/\s+/g, ' ');
+  const fetchMock = vi.fn();
+  const savedStepIds = () =>
+    fetchMock.mock.calls.map(([, init]) => JSON.parse((init as RequestInit).body as string).stepId);
+
+  // Every hint unseen, welcome dialog already dealt with.
+  const noneSeen = { tourSkipped: true, tourCompleted: true, seen: [] };
+  const withProvider = (ui: React.ReactElement) => (
+    <OnboardingProvider initial={noneSeen}>{ui}</OnboardingProvider>
+  );
+
+  beforeEach(() => {
+    fetchMock.mockReset().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal('fetch', fetchMock);
+    // Radix Popper measures its content with ResizeObserver, which jsdom lacks.
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('"?" opens the welcome dialog', () => {
+    mockSessionData = { data: { user: { email: 'alice@example.com', id: 'u1' } } };
+    rtlRender(
+      withProvider(
+        <>
+          <TopBar />
+          <WelcomeTour />
+        </>,
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Se en hurtig gennemgang af OS2taletiltekst' }));
+
+    expect(screen.getByRole('dialog', { name: 'Sådan fungerer OS2taletiltekst' })).toBeInTheDocument();
+  });
+
+  it('shows the Arkiv explainer away from a review page', () => {
+    rtlRender(withProvider(<TopBar />));
+    expect(screen.getByText(copyOf(EXPLAINER))).toBeInTheDocument();
+  });
+
+  // The review page's audio loads from IndexedDB a moment after the first render.
+  // The explainer used to open in that moment, get swapped for the unsaved-audio
+  // warning in the same bubble, and be saved as seen without having been read.
+  it('never opens the Arkiv explainer on a review page, so the audio warning cannot use it up', () => {
+    mockPathname = '/meeting/abc/review';
+    mockHasAudio = false;
+    const { rerender, unmount } = rtlRender(withProvider(<TopBar />));
+    expect(screen.queryByText(copyOf(EXPLAINER))).toBeNull();
+
+    mockHasAudio = true;
+    rerender(withProvider(<TopBar />));
+    expect(screen.getByText(copyOf(UNSAVED))).toBeInTheDocument();
+
+    unmount();
+    expect(savedStepIds()).toEqual([UNSAVED]);
   });
 });

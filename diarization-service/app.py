@@ -34,19 +34,12 @@ DEVICE = os.environ.get("DIARIZATION_DEVICE") or ("cuda" if torch.cuda.is_availa
 # weights download even if the kwarg name differs across pyannote releases.
 HF_TOKEN = os.environ.get("HF_TOKEN")
 
-# Whether /metrics requires the same bearer token as /diarize. Off by default: the
-# service is not publicly exposed, and a Prometheus scraper that suddenly needs a
-# credential fails silently (the series just stop). Turn it on where the service is
-# reachable from outside the internal network.
-METRICS_REQUIRE_AUTH = os.environ.get("DIARIZATION_METRICS_REQUIRE_AUTH", "").lower() in ("1", "true", "yes")
-if METRICS_REQUIRE_AUTH and not API_KEY:
-    # require_auth() returns early when no key is configured, so the flag would silently
-    # protect nothing. Say so at startup instead of letting the operator assume otherwise.
-    print(
-        "[diarization] WARNING: DIARIZATION_METRICS_REQUIRE_AUTH is set but "
-        "DIARIZATION_API_KEY is empty, so /metrics is NOT protected. Set an API key.",
-        flush=True,
-    )
+# /metrics takes the same bearer token as /diarize whenever DIARIZATION_API_KEY is set:
+# some deployments publish the port on every interface, and request counts, latencies
+# and job outcomes are nobody else's business. DIARIZATION_METRICS_PUBLIC=true opens it
+# again for a scraper that cannot send a token (keep the port internal then). With no
+# key at all nothing is authenticated, /metrics included, as before.
+METRICS_PUBLIC = os.environ.get("DIARIZATION_METRICS_PUBLIC", "").lower() in ("1", "true", "yes")
 
 app = FastAPI(title="diarization-service")
 _bearer = HTTPBearer(auto_error=False)
@@ -138,7 +131,7 @@ diarization_queue_wait_seconds = Histogram(
 # Standard per-route request count / duration / in-progress series, plus /metrics.
 Instrumentator().instrument(app).expose(
     app,
-    dependencies=[Depends(require_auth)] if METRICS_REQUIRE_AUTH else None,
+    dependencies=None if METRICS_PUBLIC else [Depends(require_auth)],
 )
 
 

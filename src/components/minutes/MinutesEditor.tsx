@@ -314,7 +314,7 @@ export function MinutesEditor({
             >
               Referat
             </h1>
-            <OnboardingHint stepId="minutes.version-dropdown" meetingId={meetingId} condition={versions.length > 1}>
+            <OnboardingHint stepId="minutes.version-dropdown" condition={versions.length > 1}>
               <span>
                 <VersionDropdown version={version} activeVersionId={activeId} versions={versions} onSelect={loadVersion} />
               </span>
@@ -322,7 +322,7 @@ export function MinutesEditor({
           </div>
           <div className="flex items-center gap-3 mt-1">
             <SaveStatus state={saveState} />
-            <OnboardingHint stepId="minutes.save-version" meetingId={meetingId}>
+            <OnboardingHint stepId="minutes.save-version">
               <Button
                 variant="ghost"
                 size="sm"

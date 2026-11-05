@@ -12,13 +12,9 @@ vi.mock('@/lib/db', () => ({
 import { pool } from '@/lib/db';
 import { queryUserSchema, queryUserSchemaOne } from '@/lib/db/user-schema';
 import {
-  pollBackoffMs,
-  isTeamsMeetingDue,
   upsertTeamsMeeting,
   getTeamsMeeting,
-  getTeamsMeetingByGraphId,
   listTeamsMeetings,
-  listDueTeamsMeetings,
   markPollAttempt,
   setTeamsMeetingState,
   refreshTeamsMeetingSchedule,
@@ -28,8 +24,6 @@ import {
   listUserSchemaIds,
   userIdFromSchemaName,
   POLL_GIVE_UP_MS,
-  STALE_FETCHING_MS,
-  OUTLOOK_UNOPENED_GIVE_UP_MS,
   giveUpAnchor,
   isDeferred,
   markTeamsMeetingOpened,
@@ -80,6 +74,7 @@ function row(overrides: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     armResult: 'armed',
     scheduledStart: null,
     scheduledEnd: null,
+    occurrenceWindow: false,
     state: 'awaiting_teams',
     lastPolledAt: null,
     attempts: 0,
@@ -87,9 +82,13 @@ function row(overrides: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     transcriptId: null,
     recordingId: null,
     recordingCleanup: null,
+    recordingCleanupAt: null,
     recordingBytes: null,
+    recordingSizes: [],
     origin: null,
     openedAt: null,
+    recollectedAt: null,
+    recordingStalls: 0,
     createdAt: new Date('2026-09-08T08:00:00Z'),
     ...overrides,
   };
@@ -102,48 +101,8 @@ beforeEach(() => {
   mockPoolQuery.mockResolvedValue({ rows: [] } as never);
 });
 
-describe('pollBackoffMs', () => {
-  it('polls every 2 minutes for the first 15 attempts', () => {
-    expect(pollBackoffMs(0)).toBe(120_000);
-    expect(pollBackoffMs(14)).toBe(120_000);
-  });
-
-  it('backs off to 15 minutes afterwards', () => {
-    expect(pollBackoffMs(15)).toBe(900_000);
-    expect(pollBackoffMs(200)).toBe(900_000);
-  });
-});
-
-describe('isTeamsMeetingDue', () => {
-  const now = new Date('2026-09-08T12:00:00Z');
-  const ms = now.getTime();
-
-  it('is due when the meeting has ended and was never polled', () => {
-    expect(isTeamsMeetingDue(row({ scheduledEnd: new Date(ms - 60_000) }), now)).toBe(true);
-  });
-
-  it('is due when the schedule is unknown', () => {
-    expect(isTeamsMeetingDue(row({ scheduledEnd: null }), now)).toBe(true);
-  });
-
-  it('retries a meeting parked in needs_reauth', () => {
-    // The user re-consents in another tab; nothing else resets the row, so the
-    // poller has to pick it back up on its own.
-    expect(
-      isTeamsMeetingDue(row({ state: 'needs_reauth', scheduledEnd: new Date(ms - 60_000) }), now),
-    ).toBe(true);
-  });
-
-  it('picks up a row abandoned mid-fetch, but not one that just started', () => {
-    const base = { state: 'fetching' as const, scheduledEnd: new Date(ms - 3_600_000) };
-    expect(isTeamsMeetingDue(row({ ...base, lastPolledAt: new Date(ms - 60_000) }), now)).toBe(false);
-    expect(
-      isTeamsMeetingDue(
-        row({ ...base, attempts: 20, lastPolledAt: new Date(ms - STALE_FETCHING_MS - 1000) }),
-        now,
-      ),
-    ).toBe(true);
-  });
+describe('giveUpAnchor', () => {
+  const ms = new Date('2026-09-08T12:00:00Z').getTime();
 
   it('measures the window of a meeting with no schedule from when it was created', () => {
     // An ad-hoc "Mød nu" link Graph gives no window for used to poll forever.
@@ -153,131 +112,19 @@ describe('isTeamsMeetingDue', () => {
   // Graph expresses "this meeting has no schedule" as 0001-01-01T00:00:00Z rather
   // than by omitting the field, and every instant ("Mød nu") meeting carries it.
   // Read as a real scheduled end it sits two thousand years past the give-up
-  // window, so the meeting was abandoned on its first poll and the background
-  // poller skipped it forever. That is what broke instant meetings in production.
+  // window, so the meeting was abandoned on its first poll.
   it("ignores Graph's zero date and falls back to createdAt", () => {
     expect(
       giveUpAnchor({ scheduledEnd: new Date('0001-01-01T00:00:00Z'), createdAt: CREATED }),
     ).toBe(CREATED);
   });
 
-  it('polls an instant meeting instead of abandoning it', () => {
-    expect(
-      isTeamsMeetingDue(
-        row({ scheduledEnd: new Date('0001-01-01T00:00:00Z'), createdAt: new Date(ms - 60_000) }),
-        now,
-      ),
-    ).toBe(true);
-  });
-
-  // Giving up is pollMeeting's write, so a row past its window has to reach it.
-  // Leaving such rows out of the due list is what kept them in awaiting_teams
-  // for good: every one of them was last polled just inside the window.
-  it('keeps a polled row past its window due, so the poller can mark it failed', () => {
-    const lastPolledAt = new Date(ms - 60 * 60_000);
-    for (const state of ['awaiting_teams', 'needs_reauth'] as const) {
-      expect(
-        isTeamsMeetingDue(
-          row({
-            state,
-            scheduledEnd: new Date(ms - POLL_GIVE_UP_MS - 1000),
-            createdAt: new Date(ms - POLL_GIVE_UP_MS - 2000),
-            attempts: 101,
-            lastPolledAt,
-          }),
-          now,
-        ),
-      ).toBe(true);
-    }
-    // An instant meeting, bounded by createdAt, the same way.
-    expect(
-      isTeamsMeetingDue(
-        row({
-          scheduledEnd: new Date('0001-01-01T00:00:00Z'),
-          createdAt: new Date(ms - POLL_GIVE_UP_MS - 1000),
-          attempts: 101,
-          lastPolledAt,
-        }),
-        now,
-      ),
-    ).toBe(true);
-  });
-
-  it('still respects the backoff past the window', () => {
-    expect(
-      isTeamsMeetingDue(
-        row({
-          scheduledEnd: new Date(ms - POLL_GIVE_UP_MS - 1000),
-          createdAt: new Date(ms - POLL_GIVE_UP_MS - 2000),
-          attempts: 101,
-          lastPolledAt: new Date(ms - 60_000),
-        }),
-        now,
-      ),
-    ).toBe(false);
-  });
-
-  it('is not due before the meeting ends', () => {
-    expect(isTeamsMeetingDue(row({ scheduledEnd: new Date(ms + 60_000) }), now)).toBe(false);
-  });
-
-  it('is not due in another state', () => {
-    expect(isTeamsMeetingDue(row({ state: 'ready' }), now)).toBe(false);
-    expect(isTeamsMeetingDue(row({ state: 'failed' }), now)).toBe(false);
-  });
-
-  it('respects the fast backoff', () => {
-    const base = { scheduledEnd: new Date(ms - 3_600_000), attempts: 2 };
-    expect(isTeamsMeetingDue(row({ ...base, lastPolledAt: new Date(ms - 60_000) }), now)).toBe(
-      false,
-    );
-    expect(isTeamsMeetingDue(row({ ...base, lastPolledAt: new Date(ms - 180_000) }), now)).toBe(
-      true,
-    );
-  });
-
-  it('respects the slow backoff after 15 attempts', () => {
-    const base = { scheduledEnd: new Date(ms - 3_600_000), attempts: 20 };
-    expect(isTeamsMeetingDue(row({ ...base, lastPolledAt: new Date(ms - 300_000) }), now)).toBe(
-      false,
-    );
-    expect(
-      isTeamsMeetingDue(row({ ...base, lastPolledAt: new Date(ms - 16 * 60_000) }), now),
-    ).toBe(true);
-  });
-
-  it('measures the give-up window from registration for a meeting already long over', () => {
+  it('measures from registration for a meeting already long over', () => {
     // Pasting a link for a meeting held days ago used to be answered `failed`
     // before Graph was asked once, while Graph still had the transcript.
     expect(
-      isTeamsMeetingDue(
-        row({
-          scheduledEnd: new Date(ms - 5 * POLL_GIVE_UP_MS),
-          createdAt: new Date(ms - 60_000),
-        }),
-        now,
-      ),
-    ).toBe(true);
-    expect(
-      giveUpAnchor({
-        scheduledEnd: new Date(ms - 5 * POLL_GIVE_UP_MS),
-        createdAt: CREATED,
-      }),
+      giveUpAnchor({ scheduledEnd: new Date(ms - 5 * POLL_GIVE_UP_MS), createdAt: CREATED }),
     ).toBe(CREATED);
-  });
-
-  it('never abandons a row on the clock alone before it has ever been polled', () => {
-    // The window elapses while TEAMS_GRAPH_ENABLED is off or the instance is down.
-    expect(
-      isTeamsMeetingDue(
-        row({
-          scheduledEnd: new Date(ms - POLL_GIVE_UP_MS - 1000),
-          createdAt: new Date(ms - POLL_GIVE_UP_MS - 2000),
-          lastPolledAt: null,
-        }),
-        now,
-      ),
-    ).toBe(true);
   });
 });
 
@@ -292,42 +139,13 @@ describe('Outlook-armed meetings (storage rule)', () => {
     expect(isDeferred(row({ scheduledEnd: new Date(ms - 60 * 60_000) }))).toBe(false);
   });
 
-  it('is not due for the background poller while unopened', () => {
-    expect(isTeamsMeetingDue(row({ ...outlook, createdAt: new Date(ms - 2 * 60 * 60_000) }), now)).toBe(false);
-    // Not even a week later: the user may come back any time within the cap.
-    expect(
-      isTeamsMeetingDue(
-        row({
-          ...outlook,
-          scheduledEnd: new Date(ms - 7 * 24 * 60 * 60_000),
-          createdAt: new Date(ms - 8 * 24 * 60 * 60_000),
-        }),
-        now,
-      ),
-    ).toBe(false);
-  });
-
-  it('is due once the 30-day cap has passed, so it can be settled', () => {
-    expect(
-      isTeamsMeetingDue(
-        row({
-          ...outlook,
-          scheduledEnd: new Date(ms - OUTLOOK_UNOPENED_GIVE_UP_MS - 1000),
-          createdAt: new Date(ms - OUTLOOK_UNOPENED_GIVE_UP_MS - 2000),
-        }),
-        now,
-      ),
-    ).toBe(true);
-  });
-
-  it('polls normally once opened, its window measured from the opening', () => {
+  it('measures the window of an opened meeting from the opening', () => {
     const opened = row({
       ...outlook,
       scheduledEnd: new Date(ms - 10 * 24 * 60 * 60_000),
       createdAt: new Date(ms - 11 * 24 * 60 * 60_000),
       openedAt: new Date(ms - 60_000),
     });
-    expect(isTeamsMeetingDue(opened, now)).toBe(true);
     expect(giveUpAnchor(opened)).toEqual(new Date(ms - 60_000));
   });
 
@@ -356,7 +174,7 @@ describe('Outlook-armed meetings (storage rule)', () => {
     });
     const [, sql, params] = mockQueryOne.mock.calls[0];
     expect(sql).toMatch(/origin\s+= COALESCE\(teams_meetings\.origin, EXCLUDED\.origin\)/);
-    expect(params?.at(-1)).toBe('outlook');
+    expect(params).toContain('outlook');
   });
 });
 
@@ -400,6 +218,7 @@ describe('upsertTeamsMeeting', () => {
       null,
       null,
       null,
+      false,
     ]);
 
     expect(result).toEqual({
@@ -414,6 +233,7 @@ describe('upsertTeamsMeeting', () => {
       armResult: 'armed',
       scheduledStart: new Date('2026-09-08T09:00:00Z'),
       scheduledEnd: new Date('2026-09-08T10:00:00Z'),
+      occurrenceWindow: false,
       state: 'awaiting_teams',
       lastPolledAt: null,
       attempts: 3,
@@ -421,9 +241,13 @@ describe('upsertTeamsMeeting', () => {
       transcriptId: null,
       recordingId: null,
       recordingCleanup: null,
+      recordingCleanupAt: null,
       recordingBytes: null,
+      recordingSizes: [],
       origin: null,
       openedAt: null,
+      recollectedAt: null,
+      recordingStalls: 0,
       createdAt: CREATED,
     });
   });
@@ -558,46 +382,11 @@ describe('reads', () => {
     expect(found?.attempts).toBe(3);
   });
 
-  it('getTeamsMeetingByGraphId selects the newest row for a graph id', async () => {
-    mockQueryOne.mockResolvedValue(RAW as never);
-    const found = await getTeamsMeetingByGraphId(USER, 'GRAPH1');
-    const [, sql, params] = mockQueryOne.mock.calls[0];
-    expect(sql).toMatch(/WHERE graph_meeting_id = \$1/);
-    expect(sql).toMatch(/ORDER BY created_at DESC/);
-    expect(params).toEqual(['GRAPH1']);
-    expect(found?.id).toBe('m1');
-  });
-
   it('listTeamsMeetings maps every row', async () => {
     mockQuery.mockResolvedValue([RAW, { ...RAW, id: 'm2' }] as never);
     const rows = await listTeamsMeetings(USER);
     expect(rows.map((r) => r.id)).toEqual(['m1', 'm2']);
     expect(mockQuery.mock.calls[0][1]).toMatch(/ORDER BY created_at DESC/);
-  });
-});
-
-describe('listDueTeamsMeetings', () => {
-  it('filters on state, schedule and backoff', async () => {
-    const now = new Date('2026-09-08T12:00:00Z');
-    mockQuery.mockResolvedValue([RAW] as never);
-
-    const rows = await listDueTeamsMeetings(USER, now);
-
-    const [, sql, params] = mockQuery.mock.calls[0];
-    // Mirrors isTeamsMeetingDue: needs_reauth is retried, a stale fetching row is
-    // rescued, and a row with no schedule is bounded by created_at.
-    expect(sql).toMatch(/state IN \('awaiting_teams', 'needs_reauth'\)/);
-    expect(sql).toMatch(/state = 'fetching'/);
-    expect(sql).toMatch(/GREATEST\(scheduled_end, created_at, opened_at\) <= \$1::timestamptz/);
-    // No upper bound on the window: pollMeeting has to see those rows to fail them.
-    expect(sql).not.toMatch(/GREATEST\([^)]*\)\s*>=/);
-    expect(sql).toMatch(/\$5::int \* INTERVAL/);
-    expect(sql).toMatch(/CASE WHEN attempts < \$2::int THEN \$3::int ELSE \$4::int END/);
-    // Unopened Outlook meetings: only past the 30-day cap.
-    expect(sql).toMatch(/origin IS DISTINCT FROM 'outlook'\s+OR opened_at IS NOT NULL/);
-    expect(sql).toMatch(/\$6::bigint \* INTERVAL/);
-    expect(params).toEqual([now, 15, 120_000, 900_000, STALE_FETCHING_MS, OUTLOOK_UNOPENED_GIVE_UP_MS]);
-    expect(rows).toHaveLength(1);
   });
 });
 

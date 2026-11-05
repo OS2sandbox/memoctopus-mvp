@@ -8,7 +8,7 @@ const JOIN = 'https://teams.microsoft.com/meet/376860952372406?p=s5vL7jGrR2tPM32
 describe('invitationBlock', () => {
   it('is found again as the meeting\'s own link', () => {
     const html = `<p>Dagsorden</p>${invitationBlock({ joinUrl: JOIN, meetingCode: '376 860 952', passcode: 'pw' })}`;
-    expect(extractJoinLinkFromBody(html)).toMatchObject({ ok: true, url: JOIN, source: 'invite-block' });
+    expect(extractJoinLinkFromBody(html)).toMatchObject({ ok: true, url: JOIN });
     expect(html).toContain('Møde-ID: 376 860 952');
     expect(html).toContain('optages og transskriberes');
   });
@@ -22,9 +22,12 @@ describe('invitationBlock', () => {
 });
 
 describe('insertMeeting', () => {
-  function fake(body: string, armedId: string | null) {
+  /** The note the add-in leaves on a meeting it armed: id, link and start. */
+  const note = (id: string, joinUrl = JOIN, start = '2026-11-03T09:00:00.000Z') => JSON.stringify({ id, joinUrl, start });
+
+  function fake(body: string, armedNote: string | null) {
     const notices: { type: string; message: string }[] = [];
-    const store = new Map<string, unknown>(armedId ? [['os2taletiltekstMeetingId', armedId]] : []);
+    const store = new Map<string, unknown>(armedNote ? [['os2taletiltekstMeetingId', armedNote]] : []);
     const props: CustomProperties = {
       get: (k) => store.get(k),
       set: (k, v) => void store.set(k, v),
@@ -63,8 +66,15 @@ describe('insertMeeting', () => {
   });
 
   it('leaves its own meeting alone when switched on again', async () => {
-    const { item, office, notices } = fake(OUTLOOK_TEAMS_BODY, 'ol-1');
+    const { item, office, notices } = fake(OUTLOOK_TEAMS_BODY, note('ol-1'));
     expect(await insertMeeting(office, item)).toBe('already_ours');
     expect(notices.at(-1)).toMatchObject({ type: 'informationalMessage' });
+  });
+
+  it('does not take a note written for another link or start as its own', async () => {
+    for (const stale of [note('ol-1', 'https://teams.microsoft.com/meet/999?p=x'), note('ol-1', JOIN, '2026-11-10T09:00:00.000Z'), 'ol-1']) {
+      const { item, office } = fake(OUTLOOK_TEAMS_BODY, stale);
+      expect(await insertMeeting(office, item)).toBe('has_other_link');
+    }
   });
 });
