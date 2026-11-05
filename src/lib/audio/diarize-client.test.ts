@@ -52,6 +52,16 @@ describe('fetchDiarizationTurns', () => {
     expect(init.body).toBeInstanceOf(FormData);
   });
 
+  // The server enforces DIARIZATION_TIMEOUT_MS. A browser-side limit of its own could only
+  // be shorter or equal, and was baked in at build time, so a long meeting died here first.
+  it('sets no time limit of its own and waits for the server', async () => {
+    mockFetch.mockResolvedValueOnce(jsonResponse({ turns: [] }));
+
+    await fetchDiarizationTurns('meet-1', wav);
+
+    expect(mockFetch.mock.calls[0][1].signal).toBeUndefined();
+  });
+
   it('returns null when the response is not ok (service unreachable)', async () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({}, false));
     expect(await fetchDiarizationTurns('m', wav)).toBeNull();

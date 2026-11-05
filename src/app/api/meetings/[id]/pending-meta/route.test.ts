@@ -59,18 +59,16 @@ describe('GET /api/meetings/[id]/pending-meta', () => {
     });
     const body = await (await GET(makeRequest('meeting-1'), makeParams('meeting-1'))).json();
     expect(body).toEqual({
-      status: 'no-recording',
       participants: ['Mette Hansen', 'Jens Poulsen'],
       durationSeconds: 540,
     });
   });
 
-  it('answers no-recording even when the run produced no names', async () => {
+  it('answers even when the run produced no names', async () => {
     mockReadMeta.mockResolvedValue({ participants: [], durationSeconds: null, createdAt: Date.now() });
     const res = await GET(makeRequest('meeting-1'), makeParams('meeting-1'));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      status: 'no-recording',
       participants: [],
       durationSeconds: null,
     });

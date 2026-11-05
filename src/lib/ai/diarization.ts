@@ -31,11 +31,10 @@ type FetchInitWithDispatcher = Parameters<typeof undiciFetch>[1] & {
 
 // ─── pyannote implementation ──────────────────────────────────────────────────
 // Talks to the pyannote.audio diarization service (FastAPI wrapper around
-// speaker-diarization-community-1). As of the ensemble migration this is co-hosted
-// ON the hviske server itself (`POST /diarize`, same host:port as transcription) —
-// so by default we derive the base URL from HVISKE_URL (minus its `/v1` suffix) and
-// no separate service / SSH tunnel is needed. DIARIZATION_URL still overrides for
-// split deployments (e.g. the standalone diarization-service in docker-compose).
+// speaker-diarization-community-1): the standalone diarization-service/, which the AI
+// overlay runs and points DIARIZATION_URL at. With DIARIZATION_URL unset the base URL
+// is derived from HVISKE_URL (minus its `/v1` suffix), for a hviske server that
+// co-hosts `POST /diarize` on the same host:port.
 
 export class PyannoteProvider implements DiarizationProvider {
   private baseURL: string;
@@ -59,7 +58,7 @@ export class PyannoteProvider implements DiarizationProvider {
     if (isEnsembleDiarization()) return [];
 
     // The pyannote service decodes only PCM WAV. Callers now send the original
-    // compressed recording (small browser/bot upload — the win), so decode anything
+    // compressed recording (a small browser upload — the win), so decode anything
     // that isn't already WAV to 16 kHz mono WAV here with ffmpeg before forwarding.
     // This keeps diarization working regardless of the service version, and the
     // app→service hop is local in production (docker-compose). Fail-soft: if the

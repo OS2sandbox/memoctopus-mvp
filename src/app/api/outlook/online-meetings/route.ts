@@ -45,7 +45,8 @@ export async function POST(req: NextRequest) {
       joinUrl: created.joinUrl,
       occurrenceStart: window.start,
       occurrenceEnd: window.end,
-      resolved: { ...resolved, joinUrl: resolved.joinUrl || created.joinUrl },
+      // The user just created it with POST /me/onlineMeetings, so they organise it.
+      resolved: { ...resolved, joinUrl: resolved.joinUrl || created.joinUrl, isOrganizer: true },
     });
     return NextResponse.json({
       ...armed,

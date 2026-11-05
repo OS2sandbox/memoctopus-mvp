@@ -114,6 +114,67 @@ export function pickArtifact<T extends { createdDateTime: string | null }>(
   return items.length > 0 ? items[items.length - 1] : null;
 }
 
+/**
+ * A meeting with no window is usually a reused link (a personal meeting room, or
+ * a channel's). Artifacts further apart than this are different sittings.
+ */
+export const SESSION_GAP_MS = 2 * 60 * 60 * 1000;
+
+function createdAt(ref: ArtifactRef): number {
+  return ref.createdDateTime ? Date.parse(ref.createdDateTime) : NaN;
+}
+
+/**
+ * Every transcript and recording that belongs to this meeting, oldest first —
+ * not just the newest of each. Recording can be stopped and started again, and
+ * each stretch is its own artifact; taking only the newest dropped the rest of
+ * the meeting.
+ *
+ * With a window: everything in it (same bounds as {@link pickArtifact}). Without
+ * one: the newest artifact and everything that ran up to it without a gap of
+ * {@link SESSION_GAP_MS}, so a reused link does not pull in last week's
+ * sitting. Undated artifacts cannot be placed, so they are only used when
+ * nothing is dated, as {@link pickArtifact} does.
+ */
+export function selectArtifacts(
+  transcripts: ArtifactRef[],
+  recordings: ArtifactRef[],
+  window?: { start: Date; end: Date },
+): ArtifactRefs {
+  const tagged = [
+    ...transcripts.map((ref) => ({ ref, kind: 'transcripts' as const })),
+    ...recordings.map((ref) => ({ ref, kind: 'recordings' as const })),
+  ].filter((entry) => Number.isFinite(createdAt(entry.ref)));
+
+  let chosen: typeof tagged;
+  if (window) {
+    const from = window.start.getTime() - WINDOW_BEFORE_MS;
+    const to = window.end.getTime() + WINDOW_AFTER_MS;
+    chosen = tagged.filter((entry) => createdAt(entry.ref) >= from && createdAt(entry.ref) <= to);
+  } else if (tagged.length === 0) {
+    const t = pickArtifact(transcripts);
+    const r = pickArtifact(recordings);
+    return { transcripts: t ? [t] : [], recordings: r ? [r] : [] };
+  } else {
+    const newestFirst = [...tagged].sort((a, b) => createdAt(b.ref) - createdAt(a.ref));
+    chosen = [];
+    let earliest = createdAt(newestFirst[0].ref);
+    for (const entry of newestFirst) {
+      const ended = entry.ref.endDateTime ? Date.parse(entry.ref.endDateTime) : NaN;
+      const tail = Number.isFinite(ended) ? Math.max(ended, createdAt(entry.ref)) : createdAt(entry.ref);
+      if (tail < earliest - SESSION_GAP_MS) break;
+      chosen.push(entry);
+      earliest = Math.min(earliest, createdAt(entry.ref));
+    }
+  }
+
+  const oldestFirst = [...chosen].sort((a, b) => createdAt(a.ref) - createdAt(b.ref));
+  return {
+    transcripts: oldestFirst.filter((e) => e.kind === 'transcripts').map((e) => e.ref),
+    recordings: oldestFirst.filter((e) => e.kind === 'recordings').map((e) => e.ref),
+  };
+}
+
 export async function downloadTranscriptVtt(
   userId: string,
   graphMeetingId: string,

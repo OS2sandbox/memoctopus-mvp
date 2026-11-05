@@ -48,5 +48,9 @@ next-env.d.ts
 /audio-storage
 .env.docker
 
+# Python bytecode (diarization-service)
+__pycache__/
+*.pyc
+
 # Built by outlook-addin/build.mjs (npm run build / build:addin)
 /public/outlook-addin/

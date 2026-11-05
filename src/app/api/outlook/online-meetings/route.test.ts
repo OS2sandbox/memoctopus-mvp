@@ -48,7 +48,7 @@ beforeEach(() => {
   mockAuth.mockResolvedValue('user-1');
   mockCreate.mockResolvedValue({ graphMeetingId: 'graph-1', joinUrl: JOIN, meetingCode: '123 456 789', passcode: 'pw' });
   mockGet.mockResolvedValue({
-    graphMeetingId: 'graph-1', joinUrl: JOIN, subject: 'Møde', organizerId: 'me', isOrganizer: true,
+    graphMeetingId: 'graph-1', joinUrl: JOIN, subject: 'Møde', organizerId: 'me',
     scheduledStart: START, scheduledEnd: END, meetingType: null,
     options: { allowRecording: null, allowTranscription: null, recordAutomatically: null, meetingSpokenLanguageTag: null },
   });
@@ -66,7 +66,7 @@ describe('POST /api/outlook/online-meetings', () => {
     expect(body).toMatchObject({ id: 'ol-1', armResult: 'armed', joinUrl: JOIN, meetingCode: '123 456 789', passcode: 'pw' });
     expect(mockCreate).toHaveBeenCalledWith('user-1', { subject: 'Møde', start: new Date(START), end: new Date(END) });
     expect(mockGet).toHaveBeenCalledWith('user-1', 'graph-1');
-    expect(mockArm.mock.calls[0][1]).toMatchObject({ joinUrl: JOIN, occurrenceStart: new Date(START), occurrenceEnd: new Date(END) });
+    expect(mockArm.mock.calls[0][1]).toMatchObject({ joinUrl: JOIN, occurrenceStart: new Date(START), occurrenceEnd: new Date(END), resolved: expect.objectContaining({ isOrganizer: true }) });
   });
 
   it('refuses without a valid add-in token (or for a user not on the list), before touching Graph', async () => {

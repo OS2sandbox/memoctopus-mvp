@@ -4,13 +4,21 @@ import React, { useState, useEffect, KeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useIsMobile } from '@/lib/use-is-mobile';
-import { createMeeting, getAllMeetings } from '@/lib/storage';
+import { createMeeting, getAllMeetings, updateMeeting } from '@/lib/storage';
 import { importOutlookMeetings } from '@/lib/outlook/import-meetings';
 import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
 import { setPendingUploadFile } from '@/lib/pending-upload';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { armErrorMessage } from '@/components/dashboard/arm-error-message';
 import { signIn } from '@/lib/auth-client';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
+import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
+
+/** The parts of POST /api/teams/meetings' answer the dashboard keeps. */
+interface RegisteredTeamsMeeting {
+  subject?: string | null;
+  scheduledStart?: string | null;
+}
 
 interface TeamsStatus {
   /** False when the server has TEAMS_GRAPH_ENABLED off. Absent means on. */
@@ -18,6 +26,26 @@ interface TeamsStatus {
   microsoftLinked: boolean;
   scopesOk: boolean;
   missing: string[];
+  /** What this server does with a Teams recording. Absent means the defaults (true). */
+  recordingFetched?: boolean;
+  recordingDeleted?: boolean;
+}
+
+/**
+ * The line that says what happens to a Teams meeting's data, true for how this
+ * deployment is configured. Before the status has loaded it assumes the server's
+ * defaults: the recording is fetched, transcribed and then deleted.
+ */
+function teamsDataLine(status: TeamsStatus | null): string {
+  const fetched = status?.recordingFetched ?? true;
+  const deleted = status?.recordingDeleted ?? true;
+  const kept = 'teksten ligger kun på serveren, til din browser har gemt den.';
+  if (!fetched) {
+    return `teams-møder: serveren henter Teams' egen tekst-transskription, ingen lyd. ${kept} optagelsen bliver liggende i OneDrive.`;
+  }
+  return `teams-møder: serveren henter Teams' optagelse og transskriberer den. ${kept} ${
+    deleted ? 'derefter slettes optagelsen i din OneDrive, når det er dit eget møde.' : 'optagelsen bliver liggende i OneDrive.'
+  }`;
 }
 
 export default function OptaqPage() {
@@ -95,15 +123,19 @@ export default function OptaqPage() {
   // The local meeting is created first because its id is what registers the
   // meeting server-side. If Graph rejects the link, the orphan is removed again
   // so the Arkiv never fills with meetings that can never produce a referat.
-  async function joinMeeting(link: string) {
+  async function addTeamsMeeting(link: string) {
     if (linkLoading) return;
     setLinkLoading(true);
     setLinkError('');
     let localId: string | null = null;
+    // What the user typed under mødedetaljer applies to a pasted link as much as
+    // to a recording.
+    const typedTitle = title.trim();
     try {
       const dateStr = new Intl.DateTimeFormat('da', { day: 'numeric', month: 'long' }).format(new Date());
       const meeting = await createMeeting({
-        title: `Teams-møde · ${dateStr}`,
+        title: typedTitle || `Teams-møde · ${dateStr}`,
+        participants: participants.length > 0 ? participants : undefined,
         source: 'teams',
         graphManaged: true,
         meetingUrl: link,
@@ -118,10 +150,24 @@ export default function OptaqPage() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setLinkError(armErrorMessage(res.status, (body as { error?: string }).error));
+        setLinkError(armErrorMessage(res.status, body as { error?: string; message?: string }));
         await deleteMeetingAndUnregister(meeting.id).catch(() => {});
         setLinkLoading(false);
         return;
+      }
+      // Teams knows the meeting's name and when it is. Its name becomes the title
+      // in the Arkiv and in exports unless the user typed one, and its start is the
+      // referat's date. Best effort: the meeting works without either.
+      const registered = (await res.json().catch(() => ({}))) as RegisteredTeamsMeeting;
+      const subject = registered.subject?.trim();
+      const patch = {
+        ...(!typedTitle && subject ? { title: subject } : {}),
+        ...(registered.scheduledStart ? { recordedAt: registered.scheduledStart } : {}),
+      };
+      if (Object.keys(patch).length > 0) {
+        await updateMeeting(meeting.id, patch).catch((err) => {
+          console.warn('[dashboard] kunne ikke gemme mødets navn fra Teams:', err);
+        });
       }
       router.push(`/meeting/${meeting.id}`);
     } catch {
@@ -169,7 +215,9 @@ export default function OptaqPage() {
             maxWidth: 520, margin: '18px auto 0',
           }}>
             Dansk AI — kørt lokalt, frigivet åbent.<br />
-            Ingen data forlader din maskine.
+            {/* Only true of a recording made here: a Teams meeting is fetched and
+                transcribed by the server (see § databehandling). */}
+            Optagelser i browseren gemmes kun på din maskine.
           </div>
         </div>
 
@@ -262,46 +310,59 @@ export default function OptaqPage() {
                       }}>×</button>
                   </span>
                 ))}
-                <input
-                  value={adding}
-                  onChange={(e) => setAdding(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addParticipant(); } }}
-                  placeholder="+ tilføj"
-                  style={{
-                    fontFamily: 'var(--mono)', fontSize: 12,
-                    padding: '4px 10px', borderRadius: 999,
-                    border: '1px dashed var(--line-2)',
-                    color: 'var(--ink-2)', width: 90,
-                    background: 'transparent', outline: 'none',
-                  }}
-                />
+                <OnboardingHint stepId="dashboard.participant-chip">
+                  <input
+                    value={adding}
+                    onChange={(e) => setAdding(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addParticipant(); } }}
+                    placeholder="+ tilføj"
+                    style={{
+                      fontFamily: 'var(--mono)', fontSize: 12,
+                      padding: '4px 10px', borderRadius: 999,
+                      border: '1px dashed var(--line-2)',
+                      color: 'var(--ink-2)', width: 90,
+                      background: 'transparent', outline: 'none',
+                    }}
+                  />
+                </OnboardingHint>
               </div>
             </div>
           </div>
 
           {/* CENTER — record button + meeting link input */}
           <div style={{ textAlign: 'center', order: isMobile ? 1 : 0 }}>
-            <button
-              onClick={startRecording}
-              disabled={loading}
-              style={{
-                width: 200, height: 200, borderRadius: 999,
-                margin: '0 auto',
-                background: loading ? 'var(--ink-2)' : 'var(--ink)',
-                color: 'var(--bg)',
-                border: 'none', cursor: loading ? 'not-allowed' : 'pointer',
-                display: 'flex', flexDirection: 'column',
-                alignItems: 'center', justifyContent: 'center', gap: 14,
-                boxShadow: '0 1px 0 var(--line-2)',
-                transition: 'background 150ms',
-              }}
-            >
-              <span style={{ width: 22, height: 22, borderRadius: 999, background: 'var(--bg)' }} />
-              <span style={{
-                fontFamily: 'var(--mono)', fontSize: 13,
-                letterSpacing: 0.6, opacity: 0.85,
-              }}>optag</span>
-            </button>
+            <OnboardingHint stepId="dashboard.record-button">
+              <button
+                onClick={startRecording}
+                disabled={loading}
+                style={{
+                  width: 200, height: 200, borderRadius: 999,
+                  margin: '0 auto',
+                  background: loading ? 'var(--ink-2)' : 'var(--ink)',
+                  color: 'var(--bg)',
+                  border: 'none', cursor: loading ? 'not-allowed' : 'pointer',
+                  display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center', gap: 14,
+                  boxShadow: '0 1px 0 var(--line-2)',
+                  transition: 'background 150ms',
+                }}
+              >
+                <span style={{ width: 22, height: 22, borderRadius: 999, background: 'var(--bg)' }} />
+                <span style={{
+                  fontFamily: 'var(--mono)', fontSize: 13,
+                  letterSpacing: 0.6, opacity: 0.85,
+                }}>optag</span>
+              </button>
+            </OnboardingHint>
+
+            <OnboardingTooltip stepId="dashboard.keyboard-shortcuts">
+              <div tabIndex={0} style={{
+                marginTop: 10, fontFamily: 'var(--mono)', fontSize: 11,
+                color: 'var(--muted)', cursor: 'default', display: 'inline-block',
+              }}>
+                genveje: R · U
+              </div>
+            </OnboardingTooltip>
 
             {recordError && (
               <div style={{ marginTop: 14, maxWidth: 300, margin: '14px auto 0' }}>
@@ -315,7 +376,8 @@ export default function OptaqPage() {
                 <div style={{
                   fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted-2)',
                   letterSpacing: 0.4, marginBottom: 10,
-                }}>eller deltag i et møde</div>
+                }}>eller tag referat af et Teams-møde</div>
+                <OnboardingHint stepId="dashboard.teams-link">
                 <div
                   style={{
                     display: 'flex', alignItems: 'center', gap: 6,
@@ -333,7 +395,7 @@ export default function OptaqPage() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && meetingLink.trim()) {
                         e.preventDefault();
-                        joinMeeting(meetingLink.trim());
+                        addTeamsMeeting(meetingLink.trim());
                       }
                     }}
                     placeholder="Indsæt mødelink…"
@@ -345,7 +407,7 @@ export default function OptaqPage() {
                   />
                   <button
                     type="button"
-                    onClick={() => meetingLink.trim() && joinMeeting(meetingLink.trim())}
+                    onClick={() => meetingLink.trim() && addTeamsMeeting(meetingLink.trim())}
                     disabled={!meetingLink.trim() || linkLoading}
                     style={{
                       width: 30, height: 30, borderRadius: 999, flexShrink: 0,
@@ -360,6 +422,7 @@ export default function OptaqPage() {
                     {linkLoading ? '…' : '→'}
                   </button>
                 </div>
+                </OnboardingHint>
                 {linkError && (
                   <div style={{
                     marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11,
@@ -440,10 +503,20 @@ export default function OptaqPage() {
                 fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
                 lineHeight: 1.8, letterSpacing: 0.2,
               }}>
-                lyden gemmes lokalt på din enhed<br />
+                lyden fra browseroptagelser gemmes lokalt på din enhed<br />
                 slettes automatisk når referatet er genereret<br />
                 personoplysninger fjernes inden referat
               </div>
+              {/* A Teams meeting does not stay on the device: say what the server
+                  does with it instead of letting the lines above stand for it. */}
+              {!teamsOff && (
+                <div style={{
+                  marginTop: 10, fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)',
+                  lineHeight: 1.8, letterSpacing: 0.2,
+                }}>
+                  {teamsDataLine(teamsStatus)}
+                </div>
+              )}
             </div>
           </div>
         </div>

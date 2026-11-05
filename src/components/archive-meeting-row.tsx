@@ -16,6 +16,7 @@ import { formatDate, formatDuration, statusLabel, statusVariant } from '@/lib/ut
 import { Meeting } from '@/types';
 import { deleteMeetingAndUnregister } from '@/lib/teams/client-delete';
 import { ErrorBanner } from '@/components/ui/error-banner';
+import { OnboardingTooltip } from '@/components/onboarding/OnboardingTooltip';
 
 type ArchiveMeeting = Pick<Meeting, 'id' | 'title' | 'participants' | 'status' | 'createdAt'> & {
   durationSeconds: number | null;
@@ -35,13 +36,22 @@ function badgeFor(m: ArchiveMeeting): { label: string; variant: ReturnType<typeo
     // Armed from Outlook and over, but never opened: opening it starts the fetch.
     if (m.teamsState === 'deferred') return { label: 'Åbn for at hente', variant: 'default' };
   }
+  // The removed Playwright bot's state, no longer in MeetingStatus but still on
+  // meetings it left in IndexedDB. It never finished joining, so nothing was
+  // recorded by it after that — the meeting page explains this.
+  if ((m.status as string) === 'joining') return { label: 'Afbrudt', variant: 'secondary' };
   return { label: statusLabel(m.status), variant: statusVariant(m.status) };
 }
 
+/**
+ * Only a meeting that has reached Gennemgang or a referat has a page of its own to
+ * open on. Every other status — the live ones, a failed one, the old bot's
+ * `joining` — opens the meeting page, which knows what to show for it.
+ */
 function statusHref(m: ArchiveMeeting) {
-  if (m.status === 'awaiting_teams' || m.status === 'recording' || m.status === 'processing') return `/meeting/${m.id}`;
   if (m.status === 'review') return `/meeting/${m.id}/review`;
-  return `/meeting/${m.id}/minutes`;
+  if (m.status === 'minutes' || m.status === 'done' || m.status === 'redacted') return `/meeting/${m.id}/minutes`;
+  return `/meeting/${m.id}`;
 }
 
 export function ArchiveMeetingRow({
@@ -59,7 +69,6 @@ export function ArchiveMeetingRow({
   selected?: boolean;
   onToggleSelect?: () => void;
 }) {
-  const [hovered, setHovered] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -123,33 +132,30 @@ export function ArchiveMeetingRow({
 
   return (
     <>
-      <div
-        className="relative flex items-center gap-4 px-5 py-4 hover:bg-[var(--surface-2)] transition-colors"
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-      >
+      <div className="group relative flex items-center gap-4 px-5 py-4 hover:bg-[var(--surface-2)] transition-colors">
         <Link href={statusHref(meeting)} className="flex flex-1 min-w-0 items-center gap-4">
           {rowBody}
         </Link>
 
-        <button
-          onClick={(e) => {
-            e.preventDefault();
-            setDeleteError(null);
-            setDeleteOpen(true);
-          }}
-          className="ml-1 p-1.5 rounded text-[var(--muted)] hover:text-red-500 hover:bg-red-50 transition-colors"
-          style={{ opacity: hovered ? 1 : 0, pointerEvents: hovered ? 'auto' : 'none' }}
-          aria-label="Slet møde"
-        >
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="3 6 5 6 21 6" />
-            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-            <path d="M10 11v6" />
-            <path d="M14 11v6" />
-            <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-          </svg>
-        </button>
+        <OnboardingTooltip stepId="arkiv.delete-button-touch">
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              setDeleteError(null);
+              setDeleteOpen(true);
+            }}
+            className="ml-1 p-1.5 rounded text-[var(--muted)] hover:text-red-500 hover:bg-red-50 transition-colors opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus:opacity-100 focus:pointer-events-auto"
+            aria-label="Slet møde"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+              <path d="M10 11v6" />
+              <path d="M14 11v6" />
+              <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+            </svg>
+          </button>
+        </OnboardingTooltip>
       </div>
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>

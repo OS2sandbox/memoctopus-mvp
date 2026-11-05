@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { ArchiveMeetingRow } from './archive-meeting-row';
+import { renderWithOnboarding, FRESH_ONBOARDING } from '@/test/onboarding';
 
 // Mock next/link to render a simple anchor so we can inspect href
 vi.mock('next/link', () => ({
@@ -55,8 +56,9 @@ function renderRow(
     onToggleSelect?: () => void;
   } = {},
 ) {
-  return render(
+  return renderWithOnboarding(
     <ArchiveMeetingRow meeting={meeting as never} {...props} />,
+    { tourSkipped: true, tourCompleted: true, seen: FRESH_ONBOARDING.seen },
   );
 }
 
@@ -124,6 +126,16 @@ describe('ArchiveMeetingRow — basic rendering', () => {
     renderRow(makeRow());
     expect(screen.getByRole('button', { name: 'Slet møde' })).toBeInTheDocument();
   });
+
+  it('reveals the delete button on keyboard focus, not just mouse hover', () => {
+    renderRow(makeRow());
+    const deleteBtn = screen.getByRole('button', { name: 'Slet møde' });
+    // Visibility is CSS-driven (group-hover / group-focus-within), so a keyboard
+    // user tabbing to the button must not be left with an invisible target.
+    expect(deleteBtn.className).toMatch(/opacity-0/);
+    expect(deleteBtn.className).toMatch(/group-focus-within:opacity-100/);
+    expect(deleteBtn.className).toMatch(/focus:opacity-100/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -165,6 +177,13 @@ describe('ArchiveMeetingRow — status badge', () => {
     renderRow(makeRow({ status: 'awaiting_teams' }));
     expect(screen.getByText('Afventer Teams')).toBeInTheDocument();
     expect(screen.queryByText('awaiting_teams')).toBeNull();
+  });
+
+  // Left in IndexedDB by the removed Playwright bot, which never finished joining.
+  it('shows a Danish label for a meeting the old bot never finished joining', () => {
+    renderRow(makeRow({ status: 'joining' }));
+    expect(screen.getByText('Afbrudt')).toBeInTheDocument();
+    expect(screen.queryByText('joining')).toBeNull();
   });
 
   it('shows the raw status string for an unknown status', () => {
@@ -220,10 +239,13 @@ describe('ArchiveMeetingRow — link routing (statusHref)', () => {
     expect(link).toHaveAttribute('href', '/meeting/abc/minutes');
   });
 
-  it('links to /meeting/:id/minutes for an unknown status', () => {
-    renderRow(makeRow({ id: 'abc', status: 'unknown-status' }));
+  // The meeting page knows what to do with any status; the referat page only with
+  // a meeting that has one. A bot meeting stuck in `joining` linked to /minutes,
+  // which is a dead end — /meeting/:id shows the legacy notice with its transcript.
+  it.each(['joining', 'failed', 'unknown-status'])('links to /meeting/:id for %s', (status) => {
+    renderRow(makeRow({ id: 'abc', status }));
     const link = screen.getByRole('link');
-    expect(link).toHaveAttribute('href', '/meeting/abc/minutes');
+    expect(link).toHaveAttribute('href', '/meeting/abc');
   });
 });
 

@@ -160,6 +160,9 @@ const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  *    the add-in's redirect URIs on that one.
  * A malformed OUTLOOK_ADDIN_CLIENT_ID switches the add-in off rather than
  * quietly falling back to the other mode.
+ *
+ * When the flag is set but the rest is not, the add-in stays off and the only
+ * symptom is a 404 on its manifest, so the reason is logged, once per process.
  */
 export interface OutlookAddinConfig {
   /** The app registration the add-in signs in with. */
@@ -170,9 +173,22 @@ export interface OutlookAddinConfig {
 
 export function outlookAddinConfig(): OutlookAddinConfig | null {
   if (env('OUTLOOK_ADDIN_ENABLED')?.toLowerCase() !== 'true') return null;
-  if (!teamsGraphEnabled()) return null;
+  if (!teamsGraphEnabled()) return outlookAddinOff('it needs TEAMS_GRAPH_ENABLED=true');
   const microsoft = microsoftConfig();
-  if (!microsoft || !GUID_RE.test(microsoft.clientId) || !GUID_RE.test(microsoft.tenantId)) return null;
+  if (!microsoft) {
+    return outlookAddinOff(
+      'it needs Microsoft sign-in (MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET set, MICROSOFT_ENABLED not "false")',
+    );
+  }
+  if (!GUID_RE.test(microsoft.clientId)) {
+    return outlookAddinOff("MICROSOFT_CLIENT_ID must be the app registration's client id, a GUID");
+  }
+  if (!GUID_RE.test(microsoft.tenantId)) {
+    return outlookAddinOff(
+      `MICROSOFT_TENANT_ID must be the tenant id, a GUID, not "${microsoft.tenantId}": ` +
+        "the add-in's tokens are checked against that one tenant id",
+    );
+  }
   const tenantId = microsoft.tenantId.toLowerCase();
   const dashboardClient = microsoft.clientId.toLowerCase();
 
@@ -180,8 +196,20 @@ export function outlookAddinConfig(): OutlookAddinConfig | null {
   if (!addinClient || addinClient === dashboardClient) {
     return { clientId: dashboardClient, tenantId, token: 'api' };
   }
-  if (!GUID_RE.test(addinClient)) return null;
+  if (!GUID_RE.test(addinClient)) {
+    return outlookAddinOff(`OUTLOOK_ADDIN_CLIENT_ID must be an app registration's client id, a GUID, not "${addinClient}"`);
+  }
   return { clientId: addinClient, tenantId, token: 'id' };
+}
+
+let outlookAddinOffLogged = false;
+
+function outlookAddinOff(reason: string): null {
+  if (!outlookAddinOffLogged) {
+    outlookAddinOffLogged = true;
+    console.warn(`[outlook] OUTLOOK_ADDIN_ENABLED=true, but the add-in stays off: ${reason}. See docs/outlook-addin.md.`);
+  }
+  return null;
 }
 
 /**
@@ -227,6 +255,20 @@ export function microsoftConfig() {
   if (!flag('MICROSOFT_ENABLED')) return null;
 
   return { clientId, clientSecret, tenantId: env('MICROSOFT_TENANT_ID') || 'common' };
+}
+
+// The multi-tenant authorities: any tenant's users may sign in, so nothing they assert
+// about themselves is vouched for by *our* tenant.
+const MULTI_TENANT_AUTHORITIES = ['common', 'organizations', 'consumers'];
+
+/**
+ * True when MICROSOFT_TENANT_ID names one specific tenant, false for the multi-tenant
+ * authorities (blank, common, organizations, consumers) and when Microsoft login is off.
+ * Only in a single tenant does its admin control the `email` claim.
+ */
+export function microsoftSingleTenant(): boolean {
+  const tenant = microsoftConfig()?.tenantId.toLowerCase();
+  return !!tenant && !MULTI_TENANT_AUTHORITIES.includes(tenant);
 }
 
 /**

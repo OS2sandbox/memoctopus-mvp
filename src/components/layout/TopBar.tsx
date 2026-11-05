@@ -8,6 +8,8 @@ import { useIsMobile } from '@/lib/use-is-mobile';
 import { signOut, useSession } from '@/lib/auth-client';
 import { clearPendingUploads } from '@/lib/pending-upload';
 import { useReviewAudio } from '@/lib/review-audio-context';
+import { useOnboarding } from '@/lib/onboarding/context';
+import { OnboardingHint } from '@/components/onboarding/OnboardingHint';
 
 export function TopBar() {
   const pathname = usePathname();
@@ -18,6 +20,7 @@ export function TopBar() {
   const { data: session } = useSession();
   const { hasAudio } = useReviewAudio();
   const [isPending, startTransition] = useTransition();
+  const { openWelcome } = useOnboarding();
 
   const nav = [
     { href: '/dashboard', label: 'Optag', exact: true },
@@ -81,16 +84,24 @@ export function TopBar() {
             fontFamily: 'var(--mono)', fontWeight: 500, fontSize: 14,
             letterSpacing: '-0.03em', color: 'var(--ink)',
             textDecoration: 'none', flexShrink: 0,
+            display: 'flex', alignItems: 'center',
           }}
         >
-          memoctopus<span style={{ color: 'var(--accent)', padding: '0 5px' }}>·</span>referat
+          {/* The official OS2 lockup, and nothing beside it. A plain <img> rather
+              than next/image: it is a static SVG in public/, and next/image would
+              need dangerouslyAllowSVG to serve it at all. */}
+          <img
+            src="/brand/os2taletiltekst.svg"
+            alt="OS2taletiltekst"
+            style={{ height: 22, width: 'auto', display: 'block' }}
+          />
         </Link>
 
         {/* Nav */}
         <nav style={{ display: 'flex', gap: isMobile ? 16 : 22, marginLeft: isMobile ? 0 : 28 }}>
           {nav.map((item) => {
             const active = isActive(item.href, item.exact);
-            return (
+            const link = (
               <Link
                 key={item.href}
                 href={item.href}
@@ -107,12 +118,45 @@ export function TopBar() {
                 {item.label}
               </Link>
             );
+            if (item.href === '/arkiv') {
+              // Separate keys, so the two steps never share one hint instance.
+              if (reviewMeetingId && hasAudio) {
+                return (
+                  <OnboardingHint key="unsaved-audio" stepId="topbar.unsaved-audio" meetingId={reviewMeetingId}>
+                    {link}
+                  </OnboardingHint>
+                );
+              }
+              // Not on a review page: its audio loads from IndexedDB a moment after
+              // the first render, so the explainer would open, be replaced by the
+              // unsaved-audio warning, and count as seen without being read.
+              return (
+                <OnboardingHint key="arkiv-explainer" stepId="topbar.arkiv-explainer" condition={!reviewMeetingId}>
+                  {link}
+                </OnboardingHint>
+              );
+            }
+            return link;
           })}
         </nav>
 
         {/* User / sign-out */}
         {session?.user && (
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button
+              type="button"
+              onClick={openWelcome}
+              title="Se en hurtig gennemgang af OS2taletiltekst"
+              aria-label="Se en hurtig gennemgang af OS2taletiltekst"
+              style={{
+                fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--muted)',
+                background: 'none', border: '1px solid var(--line)', borderRadius: 4,
+                width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                cursor: 'pointer', flexShrink: 0,
+              }}
+            >
+              ?
+            </button>
             {!isMobile && (
               <span style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)' }}>
                 {session.user.email}

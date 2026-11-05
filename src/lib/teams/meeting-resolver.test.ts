@@ -193,7 +193,16 @@ describe('getMeeting', () => {
       meetingSpokenLanguageTag: null,
     });
     expect(resolved.subject).toBeNull();
-    expect(resolved.isOrganizer).toBe(false);
+  });
+
+  // Its callers want the schedule and the options. Who the signed-in user is
+  // matters only when a link is first resolved, and asking cost a Graph call on
+  // every poll.
+  it('asks Graph for the meeting only, not for the signed-in user', async () => {
+    routeGraph({ onlineMeetings: meeting() });
+    await getMeeting(USER, 'GRAPH-1');
+    expect(mockJson).toHaveBeenCalledTimes(1);
+    expect(mockJson.mock.calls[0][1]).toContain('/me/onlineMeetings/');
   });
 });
 

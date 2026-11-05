@@ -224,4 +224,37 @@ describe('DELETE /api/outlook/meetings/[id]', () => {
     expect((await del('ol-1')).status).toBe(401);
     expect(mockGet).not.toHaveBeenCalled();
   });
+
+  it('says so when the feature is off', async () => {
+    mockAuth.mockRejectedValueOnce(new AddinAuthError('disabled'));
+
+    const res = await del('ol-1');
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: 'disabled', message: expect.stringMatching(/ikke slået til/) });
+    expect(mockGet).not.toHaveBeenCalled();
+  });
+
+  it('answers a store failure with a message the pane can show', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockGet.mockRejectedValueOnce(new Error('connection terminated'));
+
+    const res = await del('ol-1');
+
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body).toMatchObject({ error: 'internal', message: expect.any(String) });
+    expect(body.message).not.toContain('connection terminated');
+  });
+
+  it('answers a failure while switching off with a message the pane can show', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockGet.mockResolvedValueOnce({ id: 'ol-1', origin: 'outlook' } as never);
+    mockUnregister.mockRejectedValueOnce(new Error('deadlock detected'));
+
+    const res = await del('ol-1');
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ error: 'internal', message: expect.any(String) });
+  });
 });

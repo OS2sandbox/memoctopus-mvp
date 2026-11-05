@@ -85,6 +85,20 @@ describe('LegacyBotMeetingScreen', () => {
     });
   });
 
+  // …and must say so: a button that silently comes back reads as one that did
+  // nothing.
+  it('says the meeting could not be deleted when the delete fails', async () => {
+    mockDeleteMeeting.mockRejectedValue(new Error('idb gone'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    renderScreen();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Slet mødet'));
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Mødet kunne ikke slettes');
+  });
+
   it('points the user at the mødelink box for new meetings', () => {
     renderScreen();
     expect(screen.getByText(/indsætte mødelinket på forsiden/)).toBeInTheDocument();

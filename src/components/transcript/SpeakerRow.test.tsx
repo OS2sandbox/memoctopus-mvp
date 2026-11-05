@@ -81,6 +81,17 @@ describe('SpeakerRow', () => {
       setup({ continuesSpeaker: false });
       expect(screen.getByRole('button', { name: 'Taler 2' })).toBeInTheDocument();
     });
+    // With the name printed only once per run, a screen reader landing in a
+    // continuation line had nothing to say whose words they were.
+    it('names whose line the text box is, though no name is shown', () => {
+      setup({ continuesSpeaker: true });
+      expect(screen.getByRole('textbox', { name: 'Taler 2, 00:12' })).toHaveValue('Hej med jer');
+    });
+
+    it('does not name a speaker that is still being recognised', () => {
+      setup({ continuesSpeaker: true, diarizing: true });
+      expect(screen.getByRole('textbox', { name: 'Ukendt taler, 00:12' })).toBeInTheDocument();
+    });
   });
 
   // It used to sit in the 96 px left rail *under* the timestamp, so it read as a

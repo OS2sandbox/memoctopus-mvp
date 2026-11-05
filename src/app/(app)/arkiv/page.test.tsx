@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { renderWithOnboarding } from '@/test/onboarding';
+
+// "Rediger arkiv" is wrapped in an OnboardingHint, whose useOnboarding() throws
+// outside a provider — the real page mounts under the app-level one. Marking the
+// tour finished keeps the popover closed so queries hit the button itself.
+const render = (ui: React.ReactElement) =>
+  renderWithOnboarding(ui, { tourSkipped: true, tourCompleted: true, seen: [] });
 
 vi.mock('next/link', () => ({
   default: ({ href, children }: { href: string; children: React.ReactNode }) => <a href={href}>{children}</a>,

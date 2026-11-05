@@ -95,12 +95,16 @@ export type ProviderOutcome = 'created' | 'already_ours' | 'has_other_link' | 'f
 export async function insertMeeting(office: OfficeApi, item: ProviderItem): Promise<ProviderOutcome> {
   await notify(item, 'progress', 'Opretter Teams-møde med OS2taletiltekst …');
   try {
-    const [body, armedId] = await Promise.all([
+    const [body, times] = await Promise.all([
       promised<string>((cb) => item.body.getAsync(office.CoercionType.Html, cb), office),
-      readArmedId(office, item),
+      readTimes(office, item),
     ]);
     const existing = extractJoinLinkFromBody(body);
     if (existing.ok || existing.reason === 'multiple_distinct') {
+      // Ours only if the note was written for this very link and start.
+      const armedId = existing.ok
+        ? await readArmedId(office, item, { joinUrl: existing.url, start: times?.start ?? null })
+        : null;
       if (armedId) {
         await notify(item, 'ok', 'Mødet har allerede et Teams-møde fra OS2taletiltekst.');
         return 'already_ours';
@@ -109,7 +113,6 @@ export async function insertMeeting(office: OfficeApi, item: ProviderItem): Prom
       return 'has_other_link';
     }
 
-    const times = await readTimes(office, item);
     if (!times) throw new Error('Mødets start og slut kunne ikke læses.');
     const subject = await promised<string>((cb) => item.subject.getAsync(cb), office).catch(() => '');
 
@@ -120,7 +123,7 @@ export async function insertMeeting(office: OfficeApi, item: ProviderItem): Prom
       (cb) => item.body.setAsync(body + invitationBlock(created), { coercionType: office.CoercionType.Html }, cb),
       office,
     );
-    await writeArmedId(office, item, created.id);
+    await writeArmedId(office, item, { id: created.id, joinUrl: created.joinUrl, start: times.start });
     console.info('[os2taletiltekst] provider: created and armed', created.id, created.armResult);
     await notify(item, 'ok', created.armed
       ? 'Teams-møde tilføjet. Det optages og transskriberes, og referatet kommer i OS2taletiltekst.'

@@ -23,6 +23,8 @@ export interface AddinConfig {
   scopes: string[];
   /** Which token goes to the server: `api` the access token, `id` the ID token. */
   token: 'api' | 'id';
+  /** Whether the server deletes the recording from Teams once the transcript is saved. */
+  deletesRecording: boolean;
 }
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -44,7 +46,8 @@ export function parseConfig(raw: unknown): AddinConfig {
   ) {
     throw new Error('Serverens opsætning af Outlook-tilføjelsesprogrammet er ufuldstændig.');
   }
-  return { clientId, tenantId, scopes: scopes as string[], token };
+  // Anything but an explicit true promises no deletion.
+  return { clientId, tenantId, scopes: scopes as string[], token, deletesRecording: value.deletesRecording === true };
 }
 
 export async function loadConfig(): Promise<AddinConfig> {

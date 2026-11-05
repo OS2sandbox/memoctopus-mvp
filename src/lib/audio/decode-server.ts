@@ -93,7 +93,7 @@ export function runFfmpeg(
 // VAD report 0 seconds of speech. Write the upload to a temporary file first so
 // ffmpeg can seek while demuxing.
 export async function decodeToMono16k(buffer: Buffer): Promise<Float32Array> {
-  const dir = await mkdtemp(join(tmpdir(), 'memoctopus-audio-'));
+  const dir = await mkdtemp(join(tmpdir(), 'os2taletiltekst-audio-'));
   const inputPath = join(dir, 'input');
 
   try {

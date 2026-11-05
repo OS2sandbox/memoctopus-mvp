@@ -29,6 +29,12 @@ npx vitest run src/lib/ai/       # Run a specific directory
 npx vitest run src/lib/ai/chapters.test.ts  # Run a single test file
 ```
 
+The diarization service has its own Python tests (pytest, Python 3.10+; the deps are
+listed in `diarization-service/tests/conftest.py`):
+```bash
+cd diarization-service && python3 -m pytest
+```
+
 ### Environment setup
 ```bash
 cp .env.example .env
@@ -39,7 +45,11 @@ npm run db:migrate
 
 ## Architecture
 
-This is a **Danish meeting minutes app** ("Referat") composed of two independent services:
+This is **OS2taletiltekst**, a Danish meeting-minutes app (the package is still called
+`referat`). It is one Next.js app; Teams meetings are handled inside it through Microsoft
+Graph (section 2), with nothing joining the call. The GPU services it can use — hviske
+STT, the pyannote `diarization-service/` and a vLLM chat model — run elsewhere or come
+from the `docker-compose.ai.yml` overlay (see Docker / deployment).
 
 ### 1. Next.js app (`src/`)
 
@@ -51,18 +61,31 @@ A Next.js 15 App Router application using the `(app)` route group for authentica
 
 Which login methods exist is decided in one place — `src/lib/auth/providers.ts`. It reads `process.env` **inside** its functions (same idiom as `src/lib/skabeloner/share-config.ts`), and is consumed by both `auth/index.ts` (to register providers) and `src/app/(marketing)/page.tsx` (to render buttons), so the server and the UI can't disagree. Three methods: email/password, Microsoft Entra ID (`socialProviders`), and one generic OIDC provider via the `genericOAuth` plugin — configured with `OIDC_*`, with `AUTHENTIK_*` honoured as a deprecated fallback.
 
+With one named tenant (`MICROSOFT_TENANT_ID`), the stored name and email follow Entra on every sign-in (`overrideUserInfoOnSignIn`). `src/lib/auth/entra-user-info.ts` vets the claims first (as the provider's `mapProfileToUser`): an email another user row already holds is not taken over — `users.email` is UNIQUE and the failed write would lock the user out — and a verified user is never downgraded.
+
 Auth config is deliberately **runtime-only**, never `NEXT_PUBLIC_*`: an operator changes `.env` and restarts, with no image rebuild. That is why `(marketing)/page.tsx` sets `export const dynamic = 'force-dynamic'` — without it Next prerenders the page and freezes the provider list into the build-time RSC payload (`src/app/(marketing)/page.test.tsx` guards this).
 
 **AI pipeline** (after a meeting is recorded):
-1. `src/lib/ai/transcription.ts` — STT via the hviske (`syvai/hviske-ensemble`) server's OpenAI-compatible API. Used for both the per-utterance live path (`/api/meetings/[id]/utterance`) and the batch transcribe pass. Configured via `HVISKE_URL` / `HVISKE_API_KEY`. Speaker diarization (`src/lib/ai/diarization.ts`) is now co-hosted on the same server at `POST /diarize`; hviske still returns plain text only, so segment timestamps are VAD-estimated and the diarization turns are merged on by time-overlap (`src/lib/audio/merge-speakers.ts`).
+1. `src/lib/ai/transcription.ts` — STT via the hviske (`syvai/hviske-ensemble`) server's OpenAI-compatible API. Used for both the per-utterance live path (`/api/meetings/[id]/utterance`) and the batch transcribe pass. Configured via `HVISKE_URL` / `HVISKE_API_KEY`. Speaker diarization (`src/lib/ai/diarization.ts`) is a separate pass over the whole recording by the standalone pyannote service in `diarization-service/` (`POST /diarize` at `DIARIZATION_URL`; the AI overlay runs it, and with the URL unset it is derived from `HVISKE_URL` for a hviske server that co-hosts `/diarize`). hviske returns plain text only, so segment timestamps are VAD-estimated and the diarization turns are merged on by time-overlap (`src/lib/audio/merge-speakers.ts`). The request's only time limit is `DIARIZATION_TIMEOUT_MS`, enforced server-side; the browser waits for the route.
    Whisper-family degeneration — runaway repetition and learned subtitle credits
    ("Danske tekster af …") — is handled in `src/lib/audio/hallucinations.ts`:
    `cleanTranscribedText()` cuts a loop off at its first echo and keeps the real words
    before it, rather than discarding the whole batch as the old boolean guard did.
-2. `src/lib/ai/pii.ts` — PII detection and replacement using OpenAI `gpt-4o`.
-3. `src/lib/ai/chapters.ts` — Chapter/topic segmentation using OpenAI.
-4. `src/lib/ai/minutes.ts` — Meeting minutes generation using OpenAI `gpt-4o`. Prompts are in Danish.
+2. `src/lib/ai/pii.ts` — PII detection and replacement.
+3. `src/lib/ai/chapters.ts` — Chapter/topic segmentation.
+4. `src/lib/ai/minutes.ts` — Meeting minutes generation. Prompts are in Danish.
 5. `src/lib/ai/clarifications.ts` — Generates clarification questions about ambiguous content.
+
+   Steps 2–5 call a chat model through `src/lib/ai/llm-client.ts`, which picks the backend:
+   `LLM_BASE_URL` (any OpenAI-compatible server) if set, else hosted OpenAI (`gpt-4o`) if
+   `OPENAI_API_KEY` is set, else the bundled vLLM at `vllm-chat:8000`, requesting
+   `VLLM_MODEL` (the overlay's default when unset). Minutes generation budgets its prompt
+   against the model's context window (`src/lib/ai/llm-limits.ts`: `LLM_CONTEXT_TOKENS`,
+   `LLM_MAX_OUTPUT_TOKENS`, falling back to `VLLM_CHAT_MAX_MODEL_LEN`), counting tokens
+   exactly with vLLM's `/tokenize` where available and a pessimistic estimate otherwise.
+   A meeting that fits is written in one call; a longer one is summarised in parts
+   (per chapter where there are chapters) and the referat written from the summaries.
+   Typed errors in `minutes-errors.ts` carry the Danish message the user sees.
 
 **Pending-artifact hand-off**: the Graph pipeline runs long after whoever armed the
 meeting closed the tab, and meetings live in the browser, so it stashes its output on
@@ -112,13 +135,18 @@ dead end and offers the saved transcript or a delete.
 - `meeting-resolver.ts` — `resolveJoinUrl()` looks the meeting up via
   `$filter=JoinWebUrl eq '…'` and decides `isOrganizer` against `/me`.
 - `meeting-arm.ts` — `armMeeting()` PATCHes `recordAutomatically` / `allowTranscription`;
-  returns `armed | armed_in_progress | not_organizer | policy_blocked`. `disarmMeeting()`
-  restores the options snapshotted before the PATCH. **`armed_in_progress` means only
-  "Graph gave this meeting no window"** (an instant meeting or a personal meeting link) —
-  not that the meeting is running. Delegated Graph has no roster and no in-progress flag,
-  so the two are indistinguishable, and such a link is routinely pasted in before anyone
-  joins, where `recordAutomatically` works fine. The screen therefore leads with
-  "Memoctopus er slået til" and offers the manual start as a condition, never as a fact.
+  returns `armed | armed_in_progress | armed_late | not_organizer | policy_blocked`.
+  `disarmMeeting()` restores the options snapshotted before the PATCH. **`armed_in_progress`
+  means only "Graph gave this meeting no window"** (an instant meeting or a personal meeting
+  link) — not that the meeting is running. Delegated Graph has no roster and no in-progress
+  flag, so the two are indistinguishable, and such a link is routinely pasted in before
+  anyone joins, where `recordAutomatically` works fine. The screen therefore leads with
+  "OS2taletiltekst er slået til" and offers the manual start as a condition, never as a
+  fact. **`armed_late`** is a booked meeting switched on 15 minutes or less before its
+  start, or after it (`isLateArm()`): people may already be in it, and a running meeting
+  ignores `recordAutomatically`. The screen states the manual start ("Start optagelse") at
+  once, because the poller does not look at a booked meeting before its end. Whatever is
+  recorded, from whenever it starts, is collected afterwards like any armed meeting.
 - `artifacts.ts` — lists and downloads transcripts (VTT) and recordings; recording download
   follows Graph's 302 by hand with `redirect: 'manual'`, dropping the bearer once the URL
   leaves the Graph origin.
@@ -129,7 +157,8 @@ dead end and offers the saved transcript or a delete.
   `/me/drive/special/recordings` by the **exact byte count we downloaded** and
   removed with `permanentDelete` (falling back to an ordinary delete when the tenant
   refuses). Never match on file name or time: that could delete a recording this
-  run never fetched. More than one file of that size deletes nothing. The poller
+  run never fetched. More than one file of that size deletes nothing; a meeting recorded
+  in stretches deletes each of its sizes (`recording_sizes`). The poller
   owns the orchestration (`cleanUpRecording()`): `recording_cleanup = 'pending'` is
   written in the same UPDATE that marks the row `ready`, retried every tick for a
   day, and never changes the meeting's state. A row whose recording is gone passes
@@ -164,6 +193,17 @@ dead end and offers the saved transcript or a delete.
   what it published". `coversMeeting()` is the safety net: when hviske comes back with
   less than `MIN_COVERAGE_RATIO` of the words Teams itself heard, Teams' own transcript
   (already downloaded) ships instead.
+  **A meeting recorded in stretches** (recording or transcription stopped and started
+  again) has one artifact per stretch. `selectArtifacts()` takes all of them — everything
+  in the window, or without one the newest sitting (`SESSION_GAP_MS`) — and
+  `runStretches()` places each on the meeting's clock by its Graph span (`timeline.ts`),
+  transcribes every recording along the cues inside it (or diarizes it under a scratch
+  stash id when no cue is), keeps Teams' text for transcribed-only stretches, and joins
+  the parts. One recording and one transcript still take the original single-pair path.
+  Every recording we transcribed is listed in `recording_sizes` and deleted. The recording
+  grace is measured from when Teams' transcript ended, not by attempts.
+  Stretches Teams publishes after the meeting was collected are not in it; "Hent igen"
+  collects again from everything Graph then holds.
 - `store.ts` — raw-SQL CRUD over the per-user `teams_meetings` table (same per-user schema
   rules as everything else), plus the polling-due predicate and backoff.
 - `poller.ts` — `pollMeeting()` / `pollDueMeetings()`; started from `src/instrumentation.ts`
@@ -181,9 +221,14 @@ dead end and offers the saved transcript or a delete.
 The single entry point is the user pasting a meeting's join link into the dashboard's
 **Mødelink** box. There is deliberately no calendar listing: it would need
 `Calendars.Read` — read access to the user's whole calendar — which is a far harder
-consent for a municipality to grant than the three meeting-scoped permissions the rest
-of the flow needs. `resolveJoinUrl()` gets subject and start/end off the
-`onlineMeeting` itself, so nothing is lost. Danish copy for the route's error codes
+consent for an organisation to grant than what the rest of the flow needs: four
+delegated Graph permissions (`OnlineMeetings.ReadWrite`,
+`OnlineMeetingTranscript.Read.All`, `OnlineMeetingRecording.Read.All`, `Files.ReadWrite`)
+plus `User.Read` and `offline_access`. Three of them are meeting-scoped;
+`Files.ReadWrite` reaches the user's whole OneDrive, though the app only ever touches the
+Recordings folder (recording cleanup, above), and it is dropped with
+`TEAMS_DELETE_RECORDING=false` or `transcript-only`. `resolveJoinUrl()` gets subject and
+start/end off the `onlineMeeting` itself, so nothing is lost. Danish copy for the route's error codes
 lives in `src/components/dashboard/arm-error-message.ts`.
 
 **Outlook add-in** (docs/outlook-addin.md): a second entry point. The task pane
@@ -213,7 +258,9 @@ path configurable via `AUDIO_STORAGE_PATH`.
 
 Overlays merge on top and are never used standalone: `docker-compose.ai.yml` adds the
 GPU services (hviske, diarization, vllm-chat) and repoints the app at them,
-`docker-compose.proxy.yml` is Syddjurs-specific TLS termination, and
+`docker-compose.proxy.yml` is TLS termination for one specific deployment (its host
+name and certificate are hard-coded in `nginx/nginx.conf`; it gives the diarize route a
+3600 s read timeout), and
 `docker-compose.tunnel.yml` reaches a remote diarization service over ssh.
 
 **The app only receives variables listed explicitly in `app.environment`.** There is no
@@ -230,8 +277,17 @@ the container. Note also that `.env.deploy.example`, not `.env.example`, is what
 | `HVISKE_API_KEY` | Bearer key for the hviske STT server |
 | `HVISKE_MODEL` | hviske model id (default `syvai/hviske-ensemble`) |
 | `ASR_LANGUAGE` | Transcription language (default `da`) |
-| `OPENAI_API_KEY` | Chapters, minutes, clarifications generation, and PII detection |
-| `AUDIO_STORAGE_PATH` | Filesystem path for audio files |
+| `HVISKE_DIARIZE` | `true`/`false` overrides whether transcription returns speakers inline (auto: on for the hosted platform, off for self-hosted hviske, which uses the diarization service) |
+| `HVISKE_BATCH_CONCURRENCY` | Cap on batch requests in flight to hviske (default: all at once) |
+| `DIARIZATION_URL` / `_API_KEY` | pyannote diarization service and its bearer key (blank URL = derived from `HVISKE_URL`) |
+| `DIARIZATION_TIMEOUT_MS` | The one time limit on a diarization request (default `300000`); a proxy in front must allow as long |
+| `OPENAI_API_KEY` | Hosted OpenAI for the chat-model steps (PII, chapters, minutes, clarifications) |
+| `LLM_BASE_URL` / `LLM_MODEL` | Any OpenAI-compatible chat endpoint, and the model to request (overrides the backend choice) |
+| `VLLM_MODEL` | The model the bundled vLLM serves; the app requests it on that backend (default `google/gemma-4-12b-it`) |
+| `LLM_CONTEXT_TOKENS` / `LLM_MAX_OUTPUT_TOKENS` | Chat model's context window and referat output cap (default 128000/16384 on OpenAI, 32768/8192 otherwise) |
+| `VLLM_CHAT_MAX_MODEL_LEN` | The bundled vLLM's `--max-model-len`; also the app's window on that backend when `LLM_CONTEXT_TOKENS` is unset |
+| `AUDIO_STORAGE_PATH` | Filesystem path for audio files and collected Teams transcripts |
+| `SKABELON_SHARE_CODE` / `_LINK` | Skabelon sharing: copy/paste code (on unless `false`) / import link (off unless `true`) |
 | `BETTER_AUTH_URL` / `BETTER_AUTH_SECRET` | better-auth base URL and signing secret |
 | `EMAIL_PASSWORD_ENABLED` | Kill switch for email/password (default on) |
 | `MICROSOFT_CLIENT_ID` / `_SECRET` / `_TENANT_ID` | Entra ID; enables itself when the id + secret are set |
@@ -241,7 +297,8 @@ the container. Note also that `.env.deploy.example`, not `.env.example`, is what
 | `OUTLOOK_ADDIN_ENABLED` | Opt-in (default off) for the Outlook add-in at `/outlook-addin/`. Needs `TEAMS_GRAPH_ENABLED` and a tenant-specific `MICROSOFT_TENANT_ID`; see docs/outlook-addin.md |
 | `OUTLOOK_ADDIN_ALLOWED_USERS` | Optional comma-separated e-mails; when set, the add-in's API refuses every other user (403 `not_allowed`). Empty = everyone |
 | `OUTLOOK_ADDIN_CLIENT_ID` | Optional second app registration for the add-in's sign-in (e.g. the one the admin center creates). Then the add-in sends that app's ID token and the user is matched by Entra object id. Empty = `MICROSOFT_CLIENT_ID` and its `access_as_user` API |
-| `GRAPH_BASE_URL` | Microsoft Graph base URL (default `https://graph.microsoft.com/v1.0`) |
+| `OUTLOOK_ADDIN_ID` | Optional GUID for the add-in in the manifest (default: a fixed GUID). Set it only when two installs share one tenant |
+| `GRAPH_BASE_URL` | Microsoft Graph base URL (default `https://graph.microsoft.com/v1.0`). Only https on a Microsoft Graph host (national clouds) or localhost (the mock server) is accepted; anything else is ignored with a warning |
 | `TEAMS_SPOKEN_LANGUAGE` | Language Teams transcribes in (default `da-DK`) |
 | `TEAMS_ARTIFACT_MODE` | `prefer-recording` (default) or `transcript-only` (also drops the recording scope from sign-in) |
 | `TEAMS_DELETE_RECORDING` | On unless `false`: delete the recording from the organizer's OneDrive once transcribed (adds `Files.ReadWrite` to sign-in; no effect in `transcript-only`) |
@@ -250,7 +307,32 @@ the container. Note also that `.env.deploy.example`, not `.env.example`, is what
 
 ## Testing conventions
 
-- **Vitest** throughout; there is no second test runner.
-- Component tests (`.test.tsx` in `src/components/`) run in `jsdom`; everything else runs in `node`.
+- **Vitest** for the app; **pytest** for `diarization-service/` (see Commands).
+- Tests run in `node`. Component tests (`.test.tsx` in `src/components/`) opt into `jsdom`
+  with a `// @vitest-environment jsdom` docblock at the top of the file.
+- `src/compose-environment.test.ts` fails when server code reads an environment variable
+  that `docker-compose.yml` does not pass to the app.
 - Test helpers: `src/test/helpers.ts` exports `FAKE_SESSION` and `makeJsonReq()`.
 - API route tests mock `@/lib/db/user-schema` and `@/lib/auth` to avoid real DB/auth dependencies.
+- **Real SQL without a database server:** `src/test/pglite.ts` backs `@/lib/db` with an
+  in-process Postgres (PGlite), so `ensureUserSchema` and the real queries run inside
+  `npm test`. Use it for anything whose correctness lives in SQL (filters, upserts,
+  migrations); name those files `*.db.test.ts`:
+  ```ts
+  vi.mock('@/lib/db', async () => (await import('@/test/pglite')).pgliteDbModule());
+  import { usePgliteDb, pgliteSql } from '@/test/pglite';
+  usePgliteDb(); // one database per file, user tables emptied before each test
+  ```
+  It is a single connection, so locking between two sessions (`withMeetingLock`) is
+  still mocked.
+- **Regression tests:** every bug fix comes with a test that fails when the fix is
+  reverted; check it by reverting before you commit.
+- **Guard tests** that fail when two things drift apart:
+  - `src/compose-environment.test.ts`: env vars read by server code vs `docker-compose.yml`.
+  - `src/lib/onboarding/registry-usage.test.ts`: onboarding step ids in the registry vs the
+    components that render them.
+  - `src/lib/outlook/manifest.test.ts`: the Outlook manifest output vs `ADDIN_VERSION`
+    (bump the version when the manifest changes; the admin must re-upload it).
+  - `src/lib/ai/llm-limits.test.ts` / `llm-client.test.ts`: the app's model and context
+    defaults vs `docker-compose.ai.yml`.
+- Vitest ignores `.claude/` (Claude Code worktrees live there).
