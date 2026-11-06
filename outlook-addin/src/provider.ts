@@ -1,69 +1,41 @@
 /**
- * The meeting-provider button (manifest 1.1). Outlook shows an admin-installed
- * provider add-in in place of its own Teams toggle on a new meeting; switching
- * it on runs this function, which:
+ * The add-in's menu command, "Teams-møde med referat" (manifest 1.1, the one
+ * function command a meeting-provider add-in may have). It switches OS2taletiltekst
+ * on for the Teams meeting Outlook's own toggle makes, without opening the pane:
  *
- *   1. checks the invitation has no Teams link yet (Outlook's own, or ours),
- *   2. asks OS2taletiltekst to create a Teams meeting for the appointment's
- *      subject and times, and arm it,
- *   3. appends the join link to the invitation, the way Teams does,
- *   4. notes the meeting id on the appointment, so the pane can switch it off.
+ *   1. reads the invitation's Teams link; if there is none yet, saves the
+ *      appointment so Outlook creates it (saveAndReadJoinLink: on the web and in
+ *      new Outlook the link otherwise only appears once the invitation is sent),
+ *   2. arms that meeting, exactly as the pane's "Slå til" does,
+ *   3. notes the meeting on the appointment, so the pane can switch it off.
  *
- * No Outlook Teams meeting is made, so there are never two. Outcomes are shown
- * as a notification bar on the form (at most 150 characters).
+ * It never makes a Teams meeting of its own: Outlook shows its Join button only
+ * for meetings made by its own toggle, so those are the ones worth arming.
+ * Outcomes are shown in the form's notification bar (at most 150 characters).
  */
 
-import { extractJoinLinkFromBody } from '../../src/lib/outlook/join-link-from-body';
-import { ApiError, createMeeting, type CreatedMeetingResponse } from './api';
+import { ApiError, armMeeting } from './api';
 import { getBearerToken, loadConfig } from './auth';
-import { readArmedId, readTimes, writeArmedId } from './meeting';
-import type { AsyncResult, OfficeApi, ProviderItem } from './office';
+import {
+  armedMessage,
+  noLinkMessage,
+  readArmedId,
+  readJoinLink,
+  readTimes,
+  saveAndReadJoinLink,
+  writeArmedId,
+  type SaveForLinkOptions,
+} from './meeting';
+import type { OfficeApi, ProviderItem } from './office';
 
 const NOTICE_KEY = 'os2taletiltekst-provider';
 const NOTICE_MAX = 150;
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-/**
- * The block appended to the invitation. The join anchor carries the id Teams'
- * own invitations use, so join-link-from-body.ts finds it as the meeting's link.
- */
-export function invitationBlock(meeting: Pick<CreatedMeetingResponse, 'joinUrl' | 'meetingCode' | 'passcode'>): string {
-  const url = new URL(meeting.joinUrl);
-  if (url.protocol !== 'https:') throw new Error('Teams-linket fra serveren er ikke https.');
-  const href = escapeHtml(url.href);
-  const lines = [
-    '<div id="os2taletiltekst-invite">',
-    '<hr>',
-    '<div style="font-size:20px;font-weight:600">Microsoft Teams-møde</div>',
-    `<div><b>Deltag:</b> <a id="meet_invite_block.action.join_link" href="${href}">${href}</a></div>`,
-    ...(meeting.meetingCode ? [`<div>Møde-ID: ${escapeHtml(meeting.meetingCode)}</div>`] : []),
-    ...(meeting.passcode ? [`<div>Adgangskode: ${escapeHtml(meeting.passcode)}</div>`] : []),
-    '<div style="color:#616161;font-size:12px">Mødet optages og transskriberes, så OS2taletiltekst kan lave et referat.</div>',
-    '<hr>',
-    '</div>',
-  ];
-  return lines.join('');
-}
+/** NO_LINK_AFTER_SAVE, short enough for the notification bar. */
+const NO_LINK_NOTICE = 'Slå "Teams-møde" til, og prøv igen. Eller send invitationen, åbn mødet igen, og slå OS2taletiltekst til.';
 
 function clip(text: string): string {
   return text.length > NOTICE_MAX ? `${text.slice(0, NOTICE_MAX - 1)}…` : text;
-}
-
-function promised<T>(run: (cb: (res: AsyncResult<T>) => void) => void, office: OfficeApi): Promise<T> {
-  return new Promise((resolve, reject) => {
-    run((res) => {
-      if (res.status === office.AsyncResultStatus.Succeeded) resolve(res.value);
-      else reject(new Error(res.error?.message ?? 'ukendt fejl'));
-    });
-  });
 }
 
 function notify(item: ProviderItem, tone: 'progress' | 'ok' | 'error', message: string): Promise<void> {
@@ -77,7 +49,7 @@ function notify(item: ProviderItem, tone: 'progress' | 'ok' | 'error', message: 
     try {
       item.notificationMessages.replaceAsync(NOTICE_KEY, payload, () => resolve());
     } catch (err) {
-      console.warn('[os2taletiltekst] provider: notification refused:', err);
+      console.warn('[os2taletiltekst] menu command: notification refused:', err);
       resolve();
     }
   });
@@ -90,48 +62,49 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-export type ProviderOutcome = 'created' | 'already_ours' | 'has_other_link' | 'failed';
+export type ProviderOutcome = 'armed' | 'already_ours' | 'no_link' | 'failed';
 
-export async function insertMeeting(office: OfficeApi, item: ProviderItem): Promise<ProviderOutcome> {
-  await notify(item, 'progress', 'Opretter Teams-møde med OS2taletiltekst …');
+export async function insertMeeting(
+  office: OfficeApi,
+  item: ProviderItem,
+  saveOptions?: SaveForLinkOptions,
+): Promise<ProviderOutcome> {
+  await notify(item, 'progress', 'Slår OS2taletiltekst til …');
   try {
-    const [body, times] = await Promise.all([
-      promised<string>((cb) => item.body.getAsync(office.CoercionType.Html, cb), office),
-      readTimes(office, item),
-    ]);
-    const existing = extractJoinLinkFromBody(body);
-    if (existing.ok || existing.reason === 'multiple_distinct') {
-      // Ours only if the note was written for this very link and start.
-      const armedId = existing.ok
-        ? await readArmedId(office, item, { joinUrl: existing.url, start: times?.start ?? null })
-        : null;
-      if (armedId) {
-        await notify(item, 'ok', 'Mødet har allerede et Teams-møde fra OS2taletiltekst.');
-        return 'already_ours';
-      }
-      await notify(item, 'error', 'Mødet har allerede et Teams-link. Fjern det, før OS2taletiltekst opretter et nyt, så der ikke bliver to møder.');
-      return 'has_other_link';
+    let link = await readJoinLink(office, item);
+    if (!link.ok && link.reason === 'none') {
+      await notify(item, 'progress', 'Gemmer mødet, så Teams laver linket …');
+      link = await saveAndReadJoinLink(office, item, saveOptions);
+    }
+    if (!link.ok) {
+      const message = link.reason === 'none' ? NO_LINK_NOTICE : noLinkMessage(link);
+      await notify(item, 'error', message);
+      return link.reason === 'none' ? 'no_link' : 'failed';
     }
 
-    if (!times) throw new Error('Mødets start og slut kunne ikke læses.');
-    const subject = await promised<string>((cb) => item.subject.getAsync(cb), office).catch(() => '');
+    const joinUrl = link.url;
+    const times = await readTimes(office, item);
+    if (await readArmedId(office, item, { joinUrl, start: times?.start ?? null })) {
+      await notify(item, 'ok', 'OS2taletiltekst er allerede slået til for mødet.');
+      return 'already_ours';
+    }
 
     const token = await getBearerToken(await loadConfig());
-    const created = await createMeeting(subject, times, token);
-
-    await promised<void>(
-      (cb) => item.body.setAsync(body + invitationBlock(created), { coercionType: office.CoercionType.Html }, cb),
-      office,
-    );
-    await writeArmedId(office, item, { id: created.id, joinUrl: created.joinUrl, start: times.start });
-    console.info('[os2taletiltekst] provider: created and armed', created.id, created.armResult);
-    await notify(item, 'ok', created.armed
-      ? 'Teams-møde tilføjet. Det optages og transskriberes, og referatet kommer i OS2taletiltekst.'
-      : 'Teams-møde tilføjet, men optagelse kunne ikke slås til automatisk. Start transskription i Teams.');
-    return 'created';
+    const result = await armMeeting(joinUrl, times, token);
+    if (result.managedInDashboard) {
+      await notify(item, 'ok', 'OS2taletiltekst er allerede slået til for mødet fra OS2taletiltekst.');
+      return 'already_ours';
+    }
+    if (result.armed || result.armResult === 'not_organizer' || result.armResult === 'policy_blocked') {
+      await writeArmedId(office, item, times ? { id: result.id, joinUrl, start: times.start } : null);
+    }
+    const message = armedMessage(result.armResult, result.alreadyRegistered);
+    console.info('[os2taletiltekst] menu command: armed', result.id, result.armResult);
+    await notify(item, message.tone === 'ok' ? 'ok' : 'error', message.text);
+    return result.armed ? 'armed' : 'failed';
   } catch (err) {
-    console.warn('[os2taletiltekst] provider failed:', err);
-    await notify(item, 'error', `OS2taletiltekst kunne ikke oprette mødet: ${errorText(err)}`);
+    console.warn('[os2taletiltekst] menu command failed:', err);
+    await notify(item, 'error', `OS2taletiltekst kunne ikke slås til: ${errorText(err)}`);
     return 'failed';
   }
 }
