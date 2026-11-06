@@ -36,12 +36,6 @@ export interface OrganizerItem {
     getAsync(coercionType: string, callback: (result: AsyncResult<string>) => void): void;
   };
   loadCustomPropertiesAsync(callback: (result: AsyncResult<CustomProperties>) => void): void;
-  /**
-   * Mailbox 1.3, compose, ReadWriteItem: saves the appointment. A new one lands
-   * in the organizer's calendar without invitations going out. The value is the
-   * item id. Optional here: a 1.0 manifest (ReadItem) cannot save.
-   */
-  saveAsync?(callback: (result: AsyncResult<string>) => void): void;
 }
 
 /** What the menu command uses besides the pane's reads: the form's notification bar. */

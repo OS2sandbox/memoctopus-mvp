@@ -36,60 +36,13 @@ export async function readJoinLink(office: OfficeApi, item: OrganizerItem): Prom
   }
 }
 
-export interface SaveForLinkOptions {
-  /** How many times to read the body after saving. */
-  tries?: number;
-  delayMs?: number;
-  /** For tests. */
-  wait?: (ms: number) => Promise<void>;
-}
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-/**
- * Saves the appointment so Outlook creates the Teams meeting its own toggle asks
- * for, then reads the body until the link shows up. Outlook on the web and new
- * Outlook only create it on save or send, which is after any add-in has had its
- * say, so this is the one way to arm a meeting made with Outlook's own Teams
- * toggle before it is sent. A new appointment is saved without invitations.
- *
- * Returns the last read: `none` when Outlook put no link in (the toggle is off,
- * or this Outlook only adds it on send). Throws when the save itself fails.
- */
-export async function saveAndReadJoinLink(
-  office: OfficeApi,
-  item: OrganizerItem,
-  { tries = 10, delayMs = 1500, wait = sleep }: SaveForLinkOptions = {},
-): Promise<JoinLinkFromBody> {
-  const save = item.saveAsync;
-  if (!save) throw new Error('Denne version af Outlook kan ikke gemme mødet fra OS2taletiltekst.');
-  await new Promise<void>((resolve, reject) => {
-    save.call(item, (res) => {
-      if (res.status === office.AsyncResultStatus.Succeeded) resolve();
-      else reject(new Error(`Mødet kunne ikke gemmes: ${res.error?.message ?? 'ukendt fejl'}`));
-    });
-  });
-  let link = await readJoinLink(office, item);
-  for (let read = 1; read < tries && !link.ok && link.reason === 'none'; read++) {
-    await wait(delayMs);
-    link = await readJoinLink(office, item);
-  }
-  console.info('[os2taletiltekst] saved for a Teams link:', link.ok ? 'found' : link.reason);
-  return link;
-}
-
-/** When saving did not bring a Teams link: the toggle is off, or Outlook adds it only on send. */
-export const NO_LINK_AFTER_SAVE =
-  'Outlook lavede ikke noget Teams-link, da mødet blev gemt. Er "Teams-møde" slået til? ' +
-  'Ellers: send invitationen, åbn mødet igen, og slå OS2taletiltekst til.';
-
 /** Danish text for a body without one usable Teams link. */
 export function noLinkMessage(result: Exclude<JoinLinkFromBody, { ok: true }>): string {
   switch (result.reason) {
     case 'none':
-      // In new Outlook and on the web the link only lands in the body when the
-      // meeting is saved, which "Slå til" does (saveAndReadJoinLink).
-      return 'Mødet har endnu intet Teams-link. Slå "Teams-møde" til, og tryk så "Slå OS2taletiltekst til". Mødet bliver gemt, så Teams laver linket.';
+      // In new Outlook and on the web the link only lands in the body once the
+      // invitation is sent, so that is the step to name.
+      return 'Mødet har endnu intet Teams-link. Slå "Teams-møde" til, send invitationen, og åbn så mødet og OS2taletiltekst igen.';
     case 'invalid':
       return 'Mødet har et link, der ligner et Teams-link, men det er ufuldstændigt. Indsæt det oprindelige link fra Teams igen.';
     case 'unknown_teams_host':

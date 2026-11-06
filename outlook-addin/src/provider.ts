@@ -1,13 +1,16 @@
 /**
  * The add-in's menu command, "Teams-møde med referat" (manifest 1.1, the one
  * function command a meeting-provider add-in may have). It switches OS2taletiltekst
- * on for the Teams meeting Outlook's own toggle makes, without opening the pane:
+ * on for the Teams meeting Outlook's own toggle made, without opening the pane:
  *
- *   1. reads the invitation's Teams link; if there is none yet, saves the
- *      appointment so Outlook creates it (saveAndReadJoinLink: on the web and in
- *      new Outlook the link otherwise only appears once the invitation is sent),
+ *   1. reads the invitation's Teams link,
  *   2. arms that meeting, exactly as the pane's "Slå til" does,
  *   3. notes the meeting on the appointment, so the pane can switch it off.
+ *
+ * On the web and in new Outlook the link is only there once the invitation has
+ * been sent, so before that it says to send and reopen. Saving the appointment
+ * from the add-in does not help: Outlook on the web then creates no Teams meeting
+ * and switches its own toggle off (tried 2026-11-06).
  *
  * It never makes a Teams meeting of its own: Outlook shows its Join button only
  * for meetings made by its own toggle, so those are the ones worth arming.
@@ -16,23 +19,14 @@
 
 import { ApiError, armMeeting } from './api';
 import { getBearerToken, loadConfig } from './auth';
-import {
-  armedMessage,
-  noLinkMessage,
-  readArmedId,
-  readJoinLink,
-  readTimes,
-  saveAndReadJoinLink,
-  writeArmedId,
-  type SaveForLinkOptions,
-} from './meeting';
+import { armedMessage, noLinkMessage, readArmedId, readJoinLink, readTimes, writeArmedId } from './meeting';
 import type { OfficeApi, ProviderItem } from './office';
 
 const NOTICE_KEY = 'os2taletiltekst-provider';
 const NOTICE_MAX = 150;
 
-/** NO_LINK_AFTER_SAVE, short enough for the notification bar. */
-const NO_LINK_NOTICE = 'Slå "Teams-møde" til, og prøv igen. Eller send invitationen, åbn mødet igen, og slå OS2taletiltekst til.';
+/** noLinkMessage('none'), short enough for the notification bar. */
+const NO_LINK_NOTICE = 'Mødet har endnu intet Teams-link. Slå "Teams-møde" til, send invitationen, og åbn så mødet og slå OS2taletiltekst til.';
 
 function clip(text: string): string {
   return text.length > NOTICE_MAX ? `${text.slice(0, NOTICE_MAX - 1)}…` : text;
@@ -64,18 +58,10 @@ function errorText(err: unknown): string {
 
 export type ProviderOutcome = 'armed' | 'already_ours' | 'no_link' | 'failed';
 
-export async function insertMeeting(
-  office: OfficeApi,
-  item: ProviderItem,
-  saveOptions?: SaveForLinkOptions,
-): Promise<ProviderOutcome> {
+export async function insertMeeting(office: OfficeApi, item: ProviderItem): Promise<ProviderOutcome> {
   await notify(item, 'progress', 'Slår OS2taletiltekst til …');
   try {
-    let link = await readJoinLink(office, item);
-    if (!link.ok && link.reason === 'none') {
-      await notify(item, 'progress', 'Gemmer mødet, så Teams laver linket …');
-      link = await saveAndReadJoinLink(office, item, saveOptions);
-    }
+    const link = await readJoinLink(office, item);
     if (!link.ok) {
       const message = link.reason === 'none' ? NO_LINK_NOTICE : noLinkMessage(link);
       await notify(item, 'error', message);

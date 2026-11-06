@@ -137,47 +137,41 @@ that: save, reopen, press the button. Two ways round that were tried:
   end without reading the calendar (`Calendars.Read`), which we do not want.
 - **Detecting the toggle**: Office.js has no API for it.
 
-## Manifest 1.1: arming before the invitation is sent
+## Manifest 1.1: the menu command, and what does not work
 
-In Outlook on the web and new Outlook, Outlook's own Teams toggle only creates the
-Teams meeting, and puts its link in the invitation, when the meeting is **saved or
-sent**. An add-in has no say after send (`OnAppointmentSend` runs before Outlook
-adds the link: see "Why not just use the Teams toggle?"). So both entry points save
-the meeting themselves when it has no link yet (`saveAndReadJoinLink()` in
-`outlook-addin/src/meeting.ts`, Office.js `item.saveAsync`, Mailbox 1.3). Microsoft
-documents that a new appointment saved this way goes to the organizer's calendar
-**without invitations**. Then they read the body until Outlook's link appears (up to
-about 15 s), and arm that meeting:
+Manifest 1.1.0.0 (same id) adds a menu command, **Teams-møde med referat**
+(`insertOs2Meeting`, `outlook-addin/src/provider.ts`), beside the pane button, and
+`ReadWriteItem` (1.0 had `ReadItem`). The command does what the pane's "Slå til" does,
+without opening the pane: it reads the Teams link Outlook's own toggle put in the
+invitation, arms that meeting, and reports in the form's notification bar. On the
+web and in new Outlook that link is only there once the invitation has been sent, so
+the flow stays **send, reopen, Slå til** (or the menu command).
 
-- the pane's **Slå OS2taletiltekst til**, now also offered on a meeting with no link;
-- the menu command **Teams-møde med referat** (`insertOs2Meeting`,
-  `outlook-addin/src/provider.ts`), the same without opening the pane, reporting in
-  the form's notification bar.
+Tried and dropped (2026-11-06), so nobody tries them again:
 
-Outlook's toggle must be on. If saving brings no link, both say so and fall back to
-"send, reopen, Slå til". **Unverified against a real tenant**: whether Outlook on the
-web creates its Teams meeting on an add-in's save as it does on the user's.
+- **Our own Teams meeting** (`POST /me/onlineMeetings`, `POST /api/outlook/online-meetings`,
+  still on the server): it records fine, but Outlook shows its **Join** button only for
+  meetings its own toggle made, or for provider add-ins published in Microsoft's
+  Marketplace, so attendees got a bare link in the text.
+- **Saving the meeting from the add-in** (`item.saveAsync`) so Outlook makes its link
+  before send: Outlook on the web made no Teams meeting on the add-in's save, and
+  switched its own Teams toggle **off**. A user who did not notice would send a
+  meeting without Teams.
+- **Outlook putting the add-in in place of its Teams toggle**, as Microsoft documents
+  for online-meeting providers: on the web it shows up as a menu beside the pane button.
 
-Neither makes a Teams meeting of its own any more. The first version of the menu
-command did (`POST /api/outlook/online-meetings`, still on the server), but Outlook
-shows its **Join** button only for meetings its own toggle made, or for provider
-add-ins published in Microsoft's Marketplace, so attendees of ours got a bare link.
+Arming before send without the reopen would take `Calendars.Read`, which is ruled out.
 
-Manifest 1.1.0.0 (same id): the menu command, the pane button, and `ReadWriteItem`,
-which `saveAsync` needs (1.0 had `ReadItem`). Outlook was documented to put a
-provider add-in in place of its Teams toggle; on the web it shows up as a menu next
-to the pane button instead. **It must be admin-installed.** Moving from 1.0:
-Integrated Apps → *OS2taletiltekst* → update it with the new `manifest.xml`; it took
-about a day to reach Outlook. **Rolling back** to 1.0 = updating it with a 1.0
-manifest again: `buildManifest()` as of commit `98fd3ab`, for this host.
+**It must be admin-installed.** Moving from 1.0: Integrated Apps → *OS2taletiltekst*
+→ update it with the new `manifest.xml`; it took about a day to reach Outlook.
+**Rolling back** to 1.0 = updating it with a 1.0 manifest again: `buildManifest()` as
+of commit `98fd3ab`, for this host.
 
 ## When it does not work
 
 **"Mødet har endnu intet Teams-link."** In new Outlook and Outlook on the web the
-Teams link only lands in the meeting text once the meeting is saved or sent. Switch
-Outlook's Teams toggle on and press the button: it saves the meeting first. If that
-brings no link, send the invitation, open the meeting again from the calendar, and
-press the button.
+Teams link only lands in the meeting text once the invitation is sent. Send it, open
+the meeting again from the calendar, and press the button.
 
 **"Microsoft-login mislykkedes … Fejlkode: …"** The pane shows the code Entra or
 MSAL gave. The full error is in the browser console (F12), on the line starting

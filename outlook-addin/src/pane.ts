@@ -9,14 +9,12 @@
 import { ApiError, armMeeting, disarmMeeting } from './api';
 import { getBearerToken, loadConfig, type AddinConfig } from './auth';
 import {
-  NO_LINK_AFTER_SAVE,
   armedMessage,
   noLinkMessage,
   readArmedId,
   readIsRecurring,
   readJoinLink,
   readTimes,
-  saveAndReadJoinLink,
   writeArmedId,
 } from './meeting';
 import { getOffice, type OfficeApi, type OrganizerItem } from './office';
@@ -56,12 +54,10 @@ export interface State {
   joinUrl: string | null;
   armedId: string | null;
   config: AddinConfig | null;
-  /** No Teams link yet: "Slå til" saves the meeting first, so Outlook makes one. */
-  canSave?: boolean;
 }
 
 function render(state: State): void {
-  show('arm', state.armedId == null && (state.joinUrl != null || state.canSave === true));
+  show('arm', state.joinUrl != null && state.armedId == null);
   show('disarm', state.armedId != null);
 }
 
@@ -75,21 +71,10 @@ function renderRecordingNote(config: AddinConfig | null): void {
 }
 
 export async function arm(state: State): Promise<void> {
-  if (!state.joinUrl && !state.canSave) return;
+  if (!state.joinUrl) return;
   busy(true);
+  say('Slår OS2taletiltekst til …', 'info');
   try {
-    if (!state.joinUrl) {
-      say('Gemmer mødet, så Teams laver linket …', 'info');
-      const link = await saveAndReadJoinLink(state.office, state.item);
-      if (!link.ok) {
-        say(link.reason === 'none' ? NO_LINK_AFTER_SAVE : noLinkMessage(link), link.reason === 'none' ? 'warn' : 'error');
-        return;
-      }
-      state.joinUrl = link.url;
-      state.canSave = false;
-      show('series', await readIsRecurring(state.office, state.item));
-    }
-    say('Slår OS2taletiltekst til …', 'info');
     state.config ??= await loadConfig();
     const token = await getBearerToken(state.config);
     const joinUrl = state.joinUrl;
@@ -196,7 +181,6 @@ export async function start(): Promise<void> {
         armedId ? 'ok' : 'info',
       );
     } else {
-      state.canSave = link.reason === 'none';
       say(noLinkMessage(link), link.reason === 'none' ? 'warn' : 'error');
     }
   } catch (err) {
