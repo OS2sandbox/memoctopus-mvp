@@ -41,14 +41,7 @@ function fakeOutlook({
   body = `<a href="${JOIN}">Deltag</a>`,
   props: initial = {} as Record<string, unknown>,
   series = 'none' as 'none' | 'series' | 'occurrence' | 'legacy',
-  // The body after a save: Outlook on the web writes its Teams block in only then.
-  afterSave = undefined as string | undefined,
 } = {}) {
-  let current = body;
-  const saveAsync = vi.fn((cb: (r: AsyncResult<string>) => void) => {
-    if (afterSave !== undefined) current = afterSave;
-    cb({ status: 'succeeded', value: 'item-id' });
-  });
   const store: Record<string, unknown> = { ...initial };
   const ok = <T>(value: T): AsyncResult<T> => ({ status: 'succeeded', value });
   const props: CustomProperties = {
@@ -60,9 +53,8 @@ function fakeOutlook({
   const item = {
     start: { getAsync: (cb: (r: AsyncResult<Date>) => void) => cb(ok(START)) },
     end: { getAsync: (cb: (r: AsyncResult<Date>) => void) => cb(ok(END)) },
-    body: { getAsync: (_coercion: string, cb: (r: AsyncResult<string>) => void) => cb(ok(current)) },
+    body: { getAsync: (_coercion: string, cb: (r: AsyncResult<string>) => void) => cb(ok(body)) },
     loadCustomPropertiesAsync: (cb: (r: AsyncResult<CustomProperties>) => void) => cb(ok(props)),
-    saveAsync,
     ...(series === 'legacy'
       ? {}
       : {
@@ -79,7 +71,7 @@ function fakeOutlook({
     AsyncResultStatus: { Succeeded: 'succeeded', Failed: 'failed' },
     context: { mailbox: { item }, requirements: { isSetSupported: () => true } },
   } as unknown as OfficeApi;
-  return { office, item, store, saveAsync };
+  return { office, item, store };
 }
 
 const CONFIG = { clientId: CLIENT, tenantId: TENANT, scopes: [`api://${CLIENT}/access_as_user`], token: 'api' as const, deletesRecording: true };
@@ -112,40 +104,6 @@ beforeEach(() => {
 afterEach(() => {
   vi.clearAllMocks();
   delete (globalThis as { Office?: unknown }).Office;
-});
-
-describe('arm, before Outlook has made the Teams link', () => {
-  it('saves the meeting, finds the link Outlook adds, and switches that meeting on', async () => {
-    const o = fakeOutlook({ body: '<p>Dagsorden</p>', afterSave: `<p>Dagsorden</p><a href="${JOIN}">Deltag</a>` });
-    vi.mocked(armMeeting).mockResolvedValue(armResponse());
-    const state = stateFor(o, { joinUrl: null, canSave: true });
-
-    await arm(state);
-
-    expect(o.saveAsync).toHaveBeenCalledTimes(1);
-    expect(armMeeting).toHaveBeenCalledWith(JOIN, { start: START, end: END }, 'token');
-    expect(state.joinUrl).toBe(JOIN);
-    expect(state.armedId).toBe('ol-1');
-    expect(visible('disarm')).toBe(true);
-  });
-
-  it('says to switch Outlook\'s Teams toggle on when saving brings no link, and keeps "Slå til"', async () => {
-    vi.useFakeTimers();
-    try {
-      const o = fakeOutlook({ body: '<p>Dagsorden</p>' });
-      const state = stateFor(o, { joinUrl: null, canSave: true });
-
-      const done = arm(state);
-      await vi.runAllTimersAsync();
-      await done;
-
-      expect(armMeeting).not.toHaveBeenCalled();
-      expect(text('status')).toMatch(/Er "Teams-møde" slået til\?/);
-      expect(visible('arm')).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 });
 
 describe('arm', () => {
@@ -293,13 +251,13 @@ describe('start', () => {
     expect(visible('disarm')).toBe(false);
   });
 
-  it('offers "Slå til" for a meeting with no Teams link yet, which saves it first', async () => {
+  it('says what to do when the meeting has no Teams link yet', async () => {
     (globalThis as { Office?: unknown }).Office = fakeOutlook({ body: '<p>Dagsorden</p>' }).office;
 
     await start();
 
-    expect(text('status')).toMatch(/Slå "Teams-møde" til/);
-    expect(visible('arm')).toBe(true);
+    expect(text('status')).toMatch(/send invitationen/);
+    expect(visible('arm')).toBe(false);
   });
 
   // Arming sets recordAutomatically on the one Teams meeting a series shares, so
