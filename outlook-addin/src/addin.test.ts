@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { getBearerToken, needsInteraction, parseConfig, pickToken, secondsLeft, signInErrorCode } from './auth';
-import { armedMessage, noLinkMessage, readArmedId, writeArmedId } from './meeting';
+import { armedMessage, noLinkMessage, readArmedId, saveAndReadJoinLink, writeArmedId } from './meeting';
 import type { AsyncResult, CustomProperties, OfficeApi, OrganizerItem } from './office';
 
 const CLIENT = '33333333-3333-3333-3333-333333333333';
@@ -178,7 +178,7 @@ describe('getBearerToken', () => {
 
 describe('messages', () => {
   it('tells the user to send the invitation when there is no link yet', () => {
-    expect(noLinkMessage({ ok: false, reason: 'none' })).toMatch(/send invitationen/);
+    expect(noLinkMessage({ ok: false, reason: 'none' })).toMatch(/Slå "Teams-møde" til/);
   });
   it('names an unknown Teams host', () => {
     expect(noLinkMessage({ ok: false, reason: 'unknown_teams_host', hosts: ['teams.evil.example'] }))
@@ -279,5 +279,46 @@ describe('the note on the appointment', () => {
     } as unknown as OrganizerItem;
     expect(await readArmedId(office, item, here)).toBeNull();
     await expect(writeArmedId(office, item, { id: 'ol-1', ...here })).resolves.toBeUndefined();
+  });
+});
+
+describe('saveAndReadJoinLink', () => {
+  const JOIN = 'https://teams.microsoft.com/meet/376860952372406?p=s5vL7jGrR2tPM32ZFk';
+  const office = {
+    CoercionType: { Html: 'html', Text: 'text' },
+    AsyncResultStatus: { Succeeded: 'succeeded', Failed: 'failed' },
+  } as unknown as OfficeApi;
+  const ok = <T>(value: T): AsyncResult<T> => ({ status: 'succeeded', value });
+
+  /** Outlook writes its Teams block in a moment after the save, on the `linkOnRead`th read. */
+  function fakeItem(linkOnRead: number | null, canSave = true) {
+    let reads = 0;
+    return {
+      body: {
+        getAsync: (_c: string, cb: (r: AsyncResult<string>) => void) => {
+          reads++;
+          cb(ok(linkOnRead !== null && reads >= linkOnRead ? `<a href="${JOIN}">Deltag</a>` : '<p>Dagsorden</p>'));
+        },
+      },
+      ...(canSave ? { saveAsync: (cb: (r: AsyncResult<string>) => void) => cb(ok('id')) } : {}),
+    } as unknown as OrganizerItem;
+  }
+  const wait = vi.fn(async () => {});
+  beforeEach(() => wait.mockClear());
+
+  it('keeps reading until Outlook has written the link in', async () => {
+    await expect(saveAndReadJoinLink(office, fakeItem(3), { tries: 5, delayMs: 10, wait }))
+      .resolves.toMatchObject({ ok: true, url: JOIN });
+    expect(wait).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives up after its tries with `none`', async () => {
+    await expect(saveAndReadJoinLink(office, fakeItem(null), { tries: 3, delayMs: 0, wait }))
+      .resolves.toMatchObject({ ok: false, reason: 'none' });
+    expect(wait).toHaveBeenCalledTimes(2);
+  });
+
+  it('says so when this Outlook cannot save', async () => {
+    await expect(saveAndReadJoinLink(office, fakeItem(1, false), { wait })).rejects.toThrow(/kan ikke gemme/);
   });
 });

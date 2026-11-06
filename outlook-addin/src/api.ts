@@ -63,26 +63,6 @@ export function armMeeting(
   );
 }
 
-export interface CreatedMeetingResponse extends ArmResponse {
-  joinUrl: string;
-  meetingCode: string | null;
-  passcode: string | null;
-}
-
-/** The meeting-provider button: a new Teams meeting for these times, armed. */
-export function createMeeting(
-  subject: string,
-  times: { start: Date; end: Date },
-  token: string,
-): Promise<CreatedMeetingResponse> {
-  const body = { subject, start: times.start.toISOString(), end: times.end.toISOString() };
-  return call<CreatedMeetingResponse>(
-    '/api/outlook/online-meetings',
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
-    token,
-  );
-}
-
 export function disarmMeeting(id: string, token: string): Promise<{ ok: true; disarmed: boolean }> {
   return call(`/api/outlook/meetings/${encodeURIComponent(id)}`, { method: 'DELETE' }, token);
 }
