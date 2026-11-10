@@ -49,7 +49,6 @@ export function RoleGrantDialog({ open, onOpenChange, user, orgUnits, orgUnitsEr
 
 interface FieldErrors {
   role?: string;
-  scope?: string;
   dates?: string;
 }
 
@@ -153,7 +152,7 @@ function GrantForm({
             label="Organisationsenhed (valgfri)"
             value={scope}
             onChange={(e) => setScope(e.target.value)}
-            error={errors.scope ?? orgUnitsError}
+            error={orgUnitsError}
             hint="Uden enhed gælder rollen for hele organisationen."
           >
             <option value="">Hele organisationen</option>
