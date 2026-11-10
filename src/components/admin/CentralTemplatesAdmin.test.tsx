@@ -23,7 +23,6 @@ const item = (over: Partial<CentralTemplateListItem>): CentralTemplateListItem =
   ownerOrgUnitUuid: ROOT,
   status: 'active',
   currentVersion: 3,
-  targetCount: 2,
   targets: [
     { orgUnitUuid: ROOT, includeDescendants: true },
     { orgUnitUuid: CHILD, includeDescendants: false },
@@ -38,7 +37,7 @@ const item = (over: Partial<CentralTemplateListItem>): CentralTemplateListItem =
 
 const ACTIVE = [
   item({}),
-  item({ id: B, name: 'Tom skabelon', description: '', targetCount: 1, targets: [{ orgUnitUuid: CHILD, includeDescendants: false }], ownerOrgUnitUuid: CHILD }),
+  item({ id: B, name: 'Tom skabelon', description: '', targets: [{ orgUnitUuid: CHILD, includeDescendants: false }], ownerOrgUnitUuid: CHILD }),
 ];
 const ARCHIVED = [item({ id: B, name: 'Gammel', status: 'archived', currentVersion: 7 })];
 
@@ -351,7 +350,7 @@ describe('CentralTemplatesAdmin — audience by role, group and unit', () => {
 
   it('names the roles, groups and units a template is available to', async () => {
     const row = await rowOf([
-      item({ ownerOrgUnitUuid: null, targets: [{ orgUnitUuid: CHILD, includeDescendants: true }], targetCount: 1, principalTargets: [P('role', 'a', 'Sagsbehandler'), P('group', 'g', 'Socialforvaltningen')] }),
+      item({ ownerOrgUnitUuid: null, targets: [{ orgUnitUuid: CHILD, includeDescendants: true }], principalTargets: [P('role', 'a', 'Sagsbehandler'), P('group', 'g', 'Socialforvaltningen')] }),
     ]);
     const audience = within(row).getByRole('list', { name: 'Til rådighed for, Bestyrelse' });
     expect(within(audience).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
@@ -370,7 +369,7 @@ describe('CentralTemplatesAdmin — audience by role, group and unit', () => {
   it('truncates a long audience with a "+N flere" disclosure (keyboard and touch), never hiding a flagged one', async () => {
     const many = ['a', 'b', 'c', 'd', 'e'].map((x) => P('role', x, `Rolle ${x.toUpperCase()}`));
     const row = await rowOf([
-      item({ targets: [], targetCount: 0, principalTargets: [...many, P('role', 'x', 'Udgået', 'inactive')] }),
+      item({ targets: [], principalTargets: [...many, P('role', 'x', 'Udgået', 'inactive')] }),
     ]);
     const audience = within(row).getByRole('list', { name: 'Til rådighed for, Bestyrelse' });
     // The flagged one is shown first, not folded away.
@@ -390,7 +389,7 @@ describe('CentralTemplatesAdmin — audience by role, group and unit', () => {
 
   it('flags a target that was withdrawn from the catalogue or is not in it', async () => {
     const row = await rowOf([
-      item({ targets: [], targetCount: 0, principalTargets: [P('role', 'a', 'Gammel', 'inactive'), P('group', 'g', 'Ukendt gruppe', 'unknown'), P('role', 'b', 'Sund')] }),
+      item({ targets: [], principalTargets: [P('role', 'a', 'Gammel', 'inactive'), P('group', 'g', 'Ukendt gruppe', 'unknown'), P('role', 'b', 'Sund')] }),
     ]);
     expect(within(row).getByText('Rolle: Gammel (ukendt/inaktiv)')).toBeInTheDocument();
     expect(within(row).getByText('Gruppe: Ukendt gruppe (ukendt/inaktiv)')).toBeInTheDocument();
@@ -399,14 +398,14 @@ describe('CentralTemplatesAdmin — audience by role, group and unit', () => {
 
   it('says so on a role nobody holds from their latest login (zero holders), never who holds it', async () => {
     const row = await rowOf([
-      item({ targets: [], targetCount: 0, principalTargets: [P('role', 'a', 'Sagsbehandler', 'active', 0), P('role', 'b', 'Leder', 'active', 7)] }),
+      item({ targets: [], principalTargets: [P('role', 'a', 'Sagsbehandler', 'active', 0), P('role', 'b', 'Leder', 'active', 7)] }),
     ]);
     expect(within(row).getByText('Rolle: Sagsbehandler (0 personer har den ved seneste login)')).toBeInTheDocument();
     expect(within(row).getByText('Rolle: Leder')).toBeInTheDocument();
   });
 
   it('still warns that nobody has it when there is no unit, role or group', async () => {
-    const row = await rowOf([item({ targets: [], targetCount: 0, principalTargets: [] })]);
+    const row = await rowOf([item({ targets: [], principalTargets: [] })]);
     expect(within(row).getByText('Ikke til rådighed for nogen')).toBeInTheDocument();
   });
 
@@ -416,14 +415,14 @@ describe('CentralTemplatesAdmin — audience by role, group and unit', () => {
     });
     setup(ADMIN_ME, {
       ...withSource('rollekatalog'),
-      'GET /api/admin/central-templates?status=active': () => json({ templates: [item({ targets: [], targetCount: 0, principalTargets: [] })] }),
+      'GET /api/admin/central-templates?status=active': () => json({ templates: [item({ targets: [], principalTargets: [] })] }),
     });
     const rk = renderWithToasts(<CentralTemplatesAdmin />);
     expect(await screen.findByText(/Vælg mindst én enhed i skabelonen/)).toBeInTheDocument();
     rk.unmount();
     setup(ADMIN_ME, {
       ...withSource('claims'),
-      'GET /api/admin/central-templates?status=active': () => json({ templates: [item({ targets: [], targetCount: 0, principalTargets: [] })] }),
+      'GET /api/admin/central-templates?status=active': () => json({ templates: [item({ targets: [], principalTargets: [] })] }),
     });
     renderWithToasts(<CentralTemplatesAdmin />);
     expect(await screen.findByText('Vælg mindst én rolle eller gruppe i skabelonen.')).toBeInTheDocument();

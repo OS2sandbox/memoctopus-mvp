@@ -5,8 +5,8 @@ import type { GenericOAuthConfig } from 'better-auth/plugins';
 import { claimSubset, readClaim } from '@/lib/authz/claims-roles';
 import { stashLoginClaims } from '@/lib/authz/claims-stash';
 import { decodeJwtPayload } from '@/lib/authz/identity';
-import { claimsModeConfigured, isGuid, type IdpPrompt } from './config-file';
-import { providerClaimSpecs, type OidcProviderConfig } from './providers';
+import { claimsModeConfigured, type IdpPrompt } from './config-file';
+import { providerClaimSpecs, singleTenantId, type OidcProviderConfig } from './providers';
 
 type Profile = Record<string, unknown>;
 
@@ -270,7 +270,7 @@ const ENTRA_AUTHORITY = 'https://login.microsoftonline.com';
  * multi-tenant authority (only possible outside claims mode) the issuer varies per tenant and cannot be checked.
  */
 export function checkEntraIdToken(claims: Profile, m: Pick<EntraProviderConfig, 'clientId' | 'tenantId'>, now = Date.now()): 'ok' | 'aud' | 'iss' | 'tid' | 'exp' {
-  const singleTenant = isGuid(m.tenantId) ? m.tenantId.trim().toLowerCase() : undefined;
+  const singleTenant = singleTenantId(m.tenantId) ?? undefined;
   const base = checkIdTokenClaims(claims, m.clientId, singleTenant ? `${ENTRA_AUTHORITY}/${singleTenant}/v2.0` : undefined, now);
   if (base !== 'ok') return base;
   if (singleTenant && !(typeof claims.tid === 'string' && claims.tid.trim().toLowerCase() === singleTenant)) return 'tid';

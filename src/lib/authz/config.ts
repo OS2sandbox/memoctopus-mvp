@@ -1,7 +1,6 @@
 // Access-control settings. Read from process.env at CALL time (same idiom as
 // src/lib/auth/providers.ts) so an operator can change .env and restart
 // without an image rebuild. Never NEXT_PUBLIC_*.
-import { microsoftTenantId } from '@/lib/auth/providers';
 
 export type AccessSource = 'local' | 'rollekatalog' | 'claims';
 export type DirectoryMatchMode = 'userid-claim' | 'extuuid-claim' | 'email';
@@ -115,13 +114,4 @@ export function directoryMatchMode(): DirectoryMatchMode {
 
 export function directoryUserIdClaim(): string {
   return clean('DIRECTORY_USERID_CLAIM') || 'preferred_username';
-}
-
-// Multi-tenant aliases are not a single tenant: any Entra tenant can sign in.
-const MULTI_TENANT_ALIASES = new Set(['common', 'organizations', 'consumers']);
-
-/** The configured Entra tenant (config file, else MICROSOFT_TENANT_ID) when it names exactly one tenant, else null. */
-export function singleTenantId(): string | null {
-  const tenant = (microsoftTenantId() ?? '').trim().toLowerCase();
-  return tenant && !MULTI_TENANT_ALIASES.has(tenant) ? tenant : null;
 }

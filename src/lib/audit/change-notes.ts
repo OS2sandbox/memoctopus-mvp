@@ -6,14 +6,14 @@
 // the event already carries: from central_template_versions for the central templates, and from the
 // acting person's own skabelon_versions for a personal template edit. Nothing is copied into audit_events.
 //
-// Who sees it: whoever may read the audit event (audit.read, already scoped by the event's actor
-// unit; the CSV additionally needs audit.export). A change note describes a change, it is not the
+// Who sees it: whoever may read the audit event (audit.read, which is global-only; the CSV
+// additionally needs audit.export). A change note describes a change, it is not the
 // prompt; the prompt itself is never part of this lookup. A personal note is text the person wrote
 // in their own template history: it reaches log readers only through this lookup.
 import { pool } from '@/lib/db';
 import { getUserSchemaName } from '@/lib/db/user-schema';
 import { safeLogError } from './safe-log';
-import { UUID_RE } from './record';
+import { UUID_RE } from '@/lib/ids';
 import type { AuditEventRow } from './query';
 
 /** The five write events of a central template; each carries the version whose note is shown. */

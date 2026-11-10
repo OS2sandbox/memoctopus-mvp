@@ -14,6 +14,7 @@ import { isRoleKey } from './capabilities';
 import { roleScopeRule } from './role-rules';
 import { accessSource, localAdminEnabled } from './config';
 import { defaultRunner, type SqlQueryable, type SqlRunner } from './pg-runner';
+import { isUuid } from '@/lib/ids';
 import type { RoleKey } from './types';
 
 // Serialises tree moves: two concurrent "A under B" / "B under A" must not both pass the cycle check.
@@ -21,9 +22,6 @@ const ORG_TREE_LOCK = 'referat:org-tree';
 
 const MAX_MEMBERS = 1000;
 const MAX_NAME_LENGTH = 200;
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID_RE.test(v);
 
 // ─── Views (the only shapes that leave this module) ────────────────────────
 
@@ -111,9 +109,8 @@ interface GrantShape {
 
 /**
  * Role/scope/date rules, derived from the role matrix (capabilities.ts) via
- * roleScopeRule so they cannot drift from it: a role with no scoped capability
- * or with administrative power takes no scope (global only); a role with scoped
- * capabilities that may not be global needs one; the rest may have one.
+ * roleScopeRule so they cannot drift from it: a role whose `scope` is 'none' or
+ * 'global-only' takes no org unit; an 'optional' one may have one.
  */
 export function validateGrantShape(input: GrantShape): RoleKey {
   const { roleKey, scopeOrgUnitUuid, startDate, stopDate } = input;

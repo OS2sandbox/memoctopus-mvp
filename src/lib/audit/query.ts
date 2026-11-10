@@ -2,15 +2,12 @@
 // table name, which is a trusted constant (overridden only by the Postgres test
 // lane, which runs in a throwaway schema, like scope.ts's orgUnitsTable).
 //
-// Visibility fails closed. A global audit.read sees every row. A scoped reader
-// sees only rows whose actor_org_unit_uuid is in their covered units; a row with
-// no unit snapshot (NULL) is invisible to them, because nobody can say whose it is.
-import { orgUnitsInScope, type ScopeEnv } from '@/lib/authz/scope';
-import type { Principal } from '@/lib/authz/types';
+// audit.read is global-only (GLOBAL_ONLY_CAPABILITIES), so whoever reaches this sees every row.
 import { pool } from '@/lib/db';
 import { EVENT_TYPES } from './events';
 import type { EventOutcome, EventSource } from './events/types';
-import { TABLE_RE, UUID_RE } from './record';
+import { UUID_RE } from '@/lib/ids';
+import { TABLE_RE } from './record';
 
 const DEFAULT_PAGE_SIZE = 50;
 export const MAX_PAGE_SIZE = 100;
@@ -34,20 +31,12 @@ function checkedTable(env: AuditQueryEnv): string {
   return env.table;
 }
 
-type AuditScope = { all: true } | { all: false; orgUnitUuids: string[] };
-
-/** Which actor org units the principal may read audit events for (audit.read). */
-export async function auditScopeFor(principal: Principal, env?: ScopeEnv): Promise<AuditScope> {
-  const covered = await orgUnitsInScope(principal, 'audit.read', env);
-  return covered.all ? { all: true } : { all: false, orgUnitUuids: covered.uuids };
-}
-
 export interface AuditFilters {
   eventTypes?: string[];
   actorUserId?: string;
   /**
    * Name search: a case-insensitive substring of the actor's name snapshot (actor_name, as written
-   * when the event happened), or an exact actor_user_id. It only narrows; it never widens scope.
+   * when the event happened), or an exact actor_user_id. It only narrows.
    */
   q?: string;
   /** Matches the primary or the secondary entity. */
@@ -116,7 +105,6 @@ interface ListOptions {
   /** The `nextCursor` of the previous page: rows with a lower id are returned. */
   cursor?: string;
   limit?: number;
-  scope: AuditScope;
 }
 
 interface AuditPage {
@@ -124,8 +112,6 @@ interface AuditPage {
   /** Pass as `cursor` for the next page; null when this was the last one. */
   nextCursor: string | null;
 }
-
-const EMPTY: AuditPage = { rows: [], nextCursor: null };
 
 function clampLimit(limit: number | undefined, max: number): number {
   if (limit === undefined) return Math.min(DEFAULT_PAGE_SIZE, max);
@@ -139,23 +125,13 @@ export function likeContains(text: string): string {
 }
 
 /** The WHERE conditions (and their parameters) shared by the viewer and the export. */
-function buildWhere(
-  filters: AuditFilters,
-  scope: AuditScope,
-  cursor: string | undefined,
-  params: unknown[],
-): string[] | null {
+function buildWhere(filters: AuditFilters, cursor: string | undefined, params: unknown[]): string[] {
   const where: string[] = [];
   const add = (sql: (p: string) => string, value: unknown) => {
     params.push(value);
     where.push(sql(`$${params.length}`));
   };
 
-  if (!scope.all) {
-    const units = scope.orgUnitUuids.filter((u) => UUID_RE.test(u));
-    if (units.length === 0) return null; // a scoped reader with no units sees nothing
-    add((p) => `actor_org_unit_uuid = ANY(${p}::uuid[])`, units);
-  }
   if (cursor !== undefined) {
     if (!ID_RE.test(cursor)) throw new RangeError('invalid cursor');
     add((p) => `id < ${p}::bigint`, cursor);
@@ -189,8 +165,7 @@ async function selectPage(
 ): Promise<AuditPage> {
   const table = checkedTable(env);
   const params: unknown[] = [];
-  const where = buildWhere(opts.filters ?? {}, opts.scope, opts.cursor, params);
-  if (where === null) return EMPTY;
+  const where = buildWhere(opts.filters ?? {}, opts.cursor, params);
   params.push(limit + 1);
   const { rows } = await env.query(
     `SELECT ${COLUMNS} FROM ${table}

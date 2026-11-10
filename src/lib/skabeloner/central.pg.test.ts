@@ -5,6 +5,7 @@
 // runs unchanged in a throwaway schema through CentralEnv.schema.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from 'pg';
+import type { z } from 'zod';
 import { hasPg, withFreshSchema } from '@/test/pg';
 import { makePrincipal } from '@/test/helpers';
 import { createRunner, type ClientLike, type SqlResult, type SqlRunner } from '@/lib/authz/pg-runner';
@@ -17,18 +18,27 @@ vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied }));
 import { deleteOrgUnit } from '@/lib/authz/access-admin';
 import { NotFoundError, VersionConflictError } from '@/lib/authz/access-errors';
 import type { Principal } from '@/lib/authz/types';
+import * as service from './central';
 import {
-  archiveCentralTemplate,
-  createCentralTemplate,
   getManageableTemplate,
   listCatalogue,
   listManageableTemplates,
   listScopeOrgUnits,
   listVersions,
-  restoreCentralTemplate,
-  updateCentralTemplate,
   type CentralEnv,
 } from './central';
+import { centralStateChangeSchema, createCentralTemplateSchema, updateCentralTemplateSchema } from './central-schemas';
+
+// The routes parse every body once, at the edge (http.ts parseBody), and the service takes the
+// parsed output; these tests parse their raw objects the same way first.
+const createCentralTemplate = async (p: Principal, raw: z.input<typeof createCentralTemplateSchema>, env?: CentralEnv) =>
+  service.createCentralTemplate(p, createCentralTemplateSchema.parse(raw), env);
+const updateCentralTemplate = async (p: Principal, id: string, raw: z.input<typeof updateCentralTemplateSchema>, env?: CentralEnv) =>
+  service.updateCentralTemplate(p, id, updateCentralTemplateSchema.parse(raw), env);
+const archiveCentralTemplate = async (p: Principal, id: string, raw: z.input<typeof centralStateChangeSchema>, env?: CentralEnv) =>
+  service.archiveCentralTemplate(p, id, centralStateChangeSchema.parse(raw), env);
+const restoreCentralTemplate = async (p: Principal, id: string, raw: z.input<typeof centralStateChangeSchema>, env?: CentralEnv) =>
+  service.restoreCentralTemplate(p, id, centralStateChangeSchema.parse(raw), env);
 
 const NOTE = 'Opdateret efter dialog med afdelingen';
 
@@ -201,22 +211,6 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         expect(await count(c, 'central_templates')).toBe(0);
         expect(await count(c, 'central_template_targets')).toBe(0);
         expect(await count(c, 'central_template_versions')).toBe(0);
-        await close();
-      }));
-
-    it.each([
-      ['too short', 'kort'],
-      ['empty', ''],
-      ['spaces only', '            '],
-      ['9 characters padded with spaces', '   123456789   '],
-    ])('rejects a change note that is %s and writes nothing', (_n, changeNote) =>
-      withFreshSchema(async (c, schema) => {
-        const { runner, close } = makeRunner(c, schema);
-        const t = await tree(c);
-        await expect(
-          createCentralTemplate(managerOf('mgr', t.a), { ...BASE, ownerOrgUnitUuid: t.a, changeNote }, { schema, runner }),
-        ).rejects.toMatchObject({ code: 'change_note_invalid', message: 'Beskriv ændringen (mindst 10 tegn)' });
-        expect(await count(c, 'central_templates')).toBe(0);
         await close();
       }));
 

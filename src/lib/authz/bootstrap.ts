@@ -15,8 +15,9 @@
 //   DELETE FROM system_flags WHERE key = 'bootstrap_admin_done';
 // which re-arms the bootstrap for the next allow-listed SSO login, or insert a
 // role_assignments row by hand.
+import { singleTenantId } from '@/lib/auth/providers';
 import { ADMIN_LOCK_NAME, ADMIN_ROLE, USABLE_LOCAL_ADMIN_SQL } from './admin-sql';
-import { accessSource, bootstrapAdminEmails, localAdminEnabled, singleTenantId } from './config';
+import { accessSource, bootstrapAdminEmails, localAdminEnabled } from './config';
 import type { IdentityClaims } from './identity';
 import { defaultRunner, type SqlQueryable, type SqlRunner } from './pg-runner';
 

@@ -27,7 +27,6 @@ const ITEM = {
   ownerOrgUnitUuid: OWNER,
   status: 'active' as const,
   currentVersion: 3,
-  targetCount: 1,
   targets: [{ orgUnitUuid: CHILD, includeDescendants: true }],
   principalTargets: [{ kind: 'role' as const, identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active' as const, holders: 2 }],
   updatedAt: '2026-06-02T08:00:00.000Z',

@@ -78,7 +78,7 @@ describe('resolvePrincipal', () => {
     const p = await resolvePrincipal('u1');
     expect(p.roles).toEqual(['bruger', 'admin']);
     expect(p.capabilities).toContain('audit.read');
-    expect(p.scopes['audit.read']).toEqual({ global: true, roots: [] });
+    expect(p.scopes['template.manage']).toEqual({ global: true, roots: [] });
     expect(p.source).toBe('local');
   });
 

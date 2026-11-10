@@ -4,14 +4,10 @@
 // attacker could password-sign-up with a pre-assigned address. In claims mode there
 // is nothing to match: the login's own claims are the roles (authz/claims-roles.ts),
 // written straight onto the person's own directory row.
+import { singleTenantId } from '@/lib/auth/providers';
+import { UUID_RE } from '@/lib/ids';
 import { directoryConfigIssue, transformUserId } from '@/lib/rollekatalog/config';
-import {
-  accessSource,
-  directoryMatchMode,
-  directoryUserIdClaim,
-  singleTenantId,
-  type DirectoryMatchMode,
-} from './config';
+import { accessSource, directoryMatchMode, directoryUserIdClaim, type DirectoryMatchMode } from './config';
 import type { ExternalIdentity } from './identity';
 import { defaultRunner, type SqlQueryable, type SqlRunner } from './pg-runner';
 
@@ -29,7 +25,6 @@ interface MatchResult {
   directoryUserUuid?: string;
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UNIQUE_VIOLATION = '23505';
 
 interface Candidate {

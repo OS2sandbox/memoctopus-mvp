@@ -295,6 +295,25 @@ describe('Microsoft logins need a pinned single tenant and a matching tid (all m
     vi.doUnmock('@/lib/audit/record');
   });
 
+  it('a tenant DOMAIN name is not pinned: refused with the not-pinned warning, never a quiet tid mismatch', async () => {
+    // A valid Entra authority, but a token's tid is always the GUID, so it could never match.
+    vi.resetModules();
+    vi.doMock('@/lib/db', () => ({ pool: {} }));
+    vi.doMock('@/lib/audit/record', () => ({ recordEvent: async () => {} }));
+    const fresh = await import('./directory-match');
+    vi.stubEnv('MICROSOFT_TENANT_ID', 'kommune.onmicrosoft.com');
+    const warn = console.warn as unknown as ReturnType<typeof vi.fn>;
+    warn.mockClear();
+    const { runner, calls } = db([D1]);
+    expect((await fresh.matchDirectoryUser(ms('userid-claim', TID), 'userid-claim', runner)).status).toBe('refused');
+    expect(calls).toHaveLength(0);
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).toContain('microsoft_tenant_not_pinned');
+    expect(logged).not.toContain('kommune.onmicrosoft.com');
+    vi.doUnmock('@/lib/db');
+    vi.doUnmock('@/lib/audit/record');
+  });
+
   it('does not warn in local mode or for a pinned-tenant mismatch', async () => {
     vi.resetModules();
     vi.doMock('@/lib/db', () => ({ pool: {} }));

@@ -35,7 +35,6 @@ const LOG_READER_ME = {
   ...READER_ME,
   roles: ['bruger', 'admin'] as typeof ADMIN_ME.roles,
   capabilities: ['template.use', 'audit.read'] as typeof ADMIN_ME.capabilities,
-  scopes: { 'audit.read': { global: false, roots: [] } },
 };
 
 function setup(me = ADMIN_ME, list: Parameters<typeof installFetch>[0]['GET /x'] = () => json({ events: [ev()], nextCursor: null })) {
@@ -75,7 +74,7 @@ describe('AuditLog', () => {
     }
   });
 
-  it('omits the IP line when the API returned none (scoped reader)', async () => {
+  it('omits the IP line when no IP address was stored', async () => {
     setup();
     render(<AuditLog />);
     const row = (await screen.findByText('Anne Admin hentede en eksport (pdf)')).closest('li')!;
@@ -517,19 +516,6 @@ describe('AuditLog', () => {
       expect(new Date(p.get('from')!).getTime()).toBe(new Date('2026-10-01T00:00:00').getTime());
       expect(p.has('limit')).toBe(false);
     });
-  });
-
-  it('tells a scoped reader that they only see their own units', async () => {
-    setup(LOG_READER_ME);
-    render(<AuditLog />);
-    expect(await screen.findByText(/kun hændelser fra de enheder/)).toBeInTheDocument();
-  });
-
-  it('does not show that notice to a global reader', async () => {
-    setup();
-    render(<AuditLog />);
-    await screen.findByText('Anne Admin hentede en eksport (pdf)');
-    expect(screen.queryByText(/kun hændelser fra de enheder/)).toBeNull();
   });
 
   it('explains that self-reported events are not confirmed by the server', async () => {

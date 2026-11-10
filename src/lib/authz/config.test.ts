@@ -8,7 +8,6 @@ import {
   localAdminEnabled,
   requireRoleToLogin,
   roleClaimsMaxSeconds,
-  singleTenantId,
 } from './config';
 
 afterEach(() => vi.unstubAllEnvs());
@@ -188,16 +187,5 @@ describe('roleClaimsMaxSeconds (ROLE_CLAIMS_MAX_SECONDS)', () => {
   it.each(['0', '-5', '59', '1.5', 'soon', '99999999999', String(30 * 86_400 + 1), '1e3'])('falls back to the default for "%s", never to "unlimited"', (v) => {
     vi.stubEnv('ROLE_CLAIMS_MAX_SECONDS', v);
     expect(roleClaimsMaxSeconds()).toBe(28_800);
-  });
-});
-
-describe('singleTenantId', () => {
-  it('is the tenant only when it names exactly one tenant', () => {
-    vi.stubEnv('MICROSOFT_TENANT_ID', ' Tenant-1 ');
-    expect(singleTenantId()).toBe('tenant-1');
-    for (const alias of ['common', 'organizations', 'consumers', '']) {
-      vi.stubEnv('MICROSOFT_TENANT_ID', alias);
-      expect(singleTenantId()).toBeNull();
-    }
   });
 });

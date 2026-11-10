@@ -167,40 +167,67 @@ describe('outbox', () => {
 });
 
 describe('events lost before delivery are counted', () => {
+  const total = (u: string) => getDroppedLocally(u).reduce((sum, e) => sum + e.count, 0);
+
   it('eviction beyond 1000, expiry after 7 days and nothing else add to the count', async () => {
-    expect(getDroppedLocally('u')).toBeNull();
+    expect(getDroppedLocally('u')).toEqual([]);
     for (let i = 0; i < OUTBOX_MAX_EVENTS + 5; i++) await addToOutbox('u', ev(i), i);
-    expect(getDroppedLocally('u')?.count).toBe(5);
+    expect(total('u')).toBe(5);
     await takeDue('u', 10, OUTBOX_MAX_EVENTS + 10); // nothing expired yet
-    expect(getDroppedLocally('u')?.count).toBe(5);
+    expect(total('u')).toBe(5);
     await takeDue('u', 10, OUTBOX_TTL_MS + OUTBOX_MAX_EVENTS + 100); // everything is older than 7 days now
-    expect(getDroppedLocally('u')?.count).toBe(5 + OUTBOX_MAX_EVENTS);
+    expect(total('u')).toBe(5 + OUTBOX_MAX_EVENTS);
   });
 
-  it('is kept per user, with a new id whenever the count changes (a retry of the same count is idempotent)', () => {
+  it('is kept per user; every loss is a new entry with its own id, and a re-read is stable (a retry is idempotent)', () => {
     addDroppedLocally('a', 2);
-    const first = getDroppedLocally('a')!;
-    expect(getDroppedLocally('a')).toEqual(first);
+    const [first] = getDroppedLocally('a');
+    expect(getDroppedLocally('a')).toEqual([first]);
     addDroppedLocally('a', 1);
-    const second = getDroppedLocally('a')!;
-    expect(second.count).toBe(3);
-    expect(second.clientEventId).not.toBe(first.clientEventId);
-    expect(getDroppedLocally('b')).toBeNull();
+    const entries = getDroppedLocally('a');
+    expect(entries.map((e) => e.count)).toEqual([2, 1]);
+    expect(entries[0]).toEqual(first);
+    expect(entries[1].clientEventId).not.toBe(first.clientEventId);
+    expect(getDroppedLocally('b')).toEqual([]);
   });
 
-  it('subtracts what was reported and forgets the count at zero', () => {
+  it('removes only the entries the server confirmed and forgets the list when it is empty', () => {
     addDroppedLocally('a', 5);
-    clearDroppedLocally('a', 2);
-    expect(getDroppedLocally('a')?.count).toBe(3);
-    clearDroppedLocally('a', 3);
-    expect(getDroppedLocally('a')).toBeNull();
-    clearDroppedLocally('a', 1); // nothing there: no error
+    addDroppedLocally('a', 2);
+    const [five, two] = getDroppedLocally('a');
+    clearDroppedLocally('a', [five.clientEventId]);
+    expect(getDroppedLocally('a')).toEqual([two]);
+    clearDroppedLocally('a', [two.clientEventId]);
+    expect(getDroppedLocally('a')).toEqual([]);
+    clearDroppedLocally('a', [two.clientEventId]); // nothing there: no error
+  });
+
+  it('two tabs flushing at once never report the same loss twice', () => {
+    // The server stores one audit.events_dropped row per clientEventId (a repeat is deduped).
+    const stored = new Map<string, number>();
+    const serverStores = (sent: { count: number; clientEventId: string }) => stored.set(sent.clientEventId, sent.count);
+    addDroppedLocally('a', 3);
+    const sentByA = getDroppedLocally('a'); // tab A posts, its response is still out
+    addDroppedLocally('a', 1); // meanwhile tab B loses one more event
+    const sentByB = getDroppedLocally('a'); // and posts too
+    sentByA.forEach(serverStores);
+    sentByB.forEach(serverStores);
+    clearDroppedLocally('a', sentByA.map((e) => e.clientEventId));
+    clearDroppedLocally('a', sentByB.map((e) => e.clientEventId));
+    expect([...stored.values()].reduce((sum, n) => sum + n, 0)).toBe(4);
+    expect(getDroppedLocally('a')).toEqual([]);
+  });
+
+  it('bounds the list: beyond 1000 entries a loss is added to the newest one', () => {
+    for (let i = 0; i < 1001; i++) addDroppedLocally('a', 1);
+    expect(getDroppedLocally('a')).toHaveLength(1000);
+    expect(total('a')).toBe(1001);
   });
 
   it('ignores zero and negative counts and never throws', () => {
     addDroppedLocally('a', 0);
     addDroppedLocally('a', -3);
-    expect(getDroppedLocally('a')).toBeNull();
+    expect(getDroppedLocally('a')).toEqual([]);
   });
 });
 

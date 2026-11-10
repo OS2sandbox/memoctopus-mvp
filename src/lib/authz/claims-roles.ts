@@ -116,9 +116,9 @@ export function roleMapsFor(
   providerId: string,
 ): { appRoleMap: RoleMap; groupRoleMap: RoleMap } | null {
   if (config.state !== 'ok') return null;
-  const own = config.byProvider?.get(providerId);
+  const own = config.byProvider.get(providerId);
   if (own) return own;
-  return (config.providerCount ?? 1) === 1 ? config : null;
+  return config.providerCount === 1 ? config : null;
 }
 
 /** Roles that the mapping grants for these claim values. Unknown values grant nothing. */

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { listSkabeloner, createSkabelon, getCentralDefaultId } from '@/lib/skabeloner/server';
+import { listSkabeloner, createSkabelon } from '@/lib/skabeloner/server';
+import { effectiveDefaults, effectiveSkabelon } from '@/lib/skabeloner/effective-default';
 import { withHandler } from '@/lib/api-handler';
 import { recordServerEvent } from '@/lib/audit/record';
 import { safeLogError } from '@/lib/audit/safe-log';
@@ -23,18 +24,9 @@ async function getHandler(): Promise<NextResponse> {
     safeLogError('skabeloner/GET central', err);
     centralError = true;
   }
-  // The default is ONE template: the person's central choice while it is still available to them, otherwise
-  // the personal flag. An unavailable central default is simply ignored (the personal one applies again).
-  let centralDefaultId: string | null = null;
-  try {
-    centralDefaultId = await getCentralDefaultId(session.user.id);
-  } catch (err) {
-    safeLogError('skabeloner/GET central default', err);
-  }
-  const centralDefault = centralDefaultId ? centralSkabeloner.find((c) => c.id === centralDefaultId) : undefined;
+  // The default is ONE template across both lists (effective-default.ts).
   return NextResponse.json({
-    skabeloner: centralDefault ? skabeloner.map((s) => ({ ...s, isDefault: false })) : skabeloner,
-    centralSkabeloner: centralSkabeloner.map((c) => ({ ...c, isDefault: c.id === centralDefault?.id })),
+    ...(await effectiveDefaults(session.user.id, skabeloner, centralSkabeloner)),
     ...(centralError ? { centralError: true } : {}),
   });
 }
@@ -70,7 +62,7 @@ async function postHandler(req: NextRequest): Promise<NextResponse> {
     entityId: skabelon.id,
     details: { hasPrompt: skabelon.prompt.trim().length > 0 },
   });
-  return NextResponse.json({ skabelon }, { status: 201 });
+  return NextResponse.json({ skabelon: await effectiveSkabelon(session.user.id, skabelon) }, { status: 201 });
 }
 
 export const GET = withHandler('skabeloner/GET', getHandler);

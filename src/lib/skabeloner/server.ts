@@ -1,5 +1,6 @@
 import { safeLogError } from '@/lib/audit/safe-log';
 import { queryUserSchema, queryUserSchemaOne, withUserSchemaTx, type UserSchemaTxQuery } from '@/lib/db/user-schema';
+import { UUID_RE } from '@/lib/ids';
 import type { Skabelon } from '@/types';
 
 // Raw row shape from the per-user `skabeloner` table.
@@ -89,8 +90,6 @@ export async function setDefaultSkabelon(userId: string, id: string): Promise<Sk
 
 // ─── The central default ────────────────────────────────────────────────────────
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** The id of the person's chosen central default, or null. It may no longer be available to them: check against their list. */
 export async function getCentralDefaultId(userId: string): Promise<string | null> {
   const row = await queryUserSchemaOne<{ template_id: string }>(userId, `SELECT template_id::text AS template_id FROM skabelon_central_default`);
@@ -100,7 +99,7 @@ export async function getCentralDefaultId(userId: string): Promise<string | null
 /**
  * Makes a central template the default. The CALLER has checked that it is available to the person. The
  * personal flags stay as they are (the fallback when the central template is withdrawn); readers treat
- * an available central default as the one default.
+ * an available central default as the one default (effective-default.ts).
  */
 export async function setCentralDefault(userId: string, id: string): Promise<void> {
   if (!UUID_RE.test(id)) return;

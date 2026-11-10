@@ -8,10 +8,17 @@ import {
   type RoleKey,
 } from './types';
 
+/**
+ * The one rule for how an assignment of a role relates to org units:
+ *  - 'none': the role grants nothing unit-scoped, so it takes no unit; a NULL scope is its normal grant.
+ *  - 'optional': for org units, or with a NULL scope for everywhere.
+ *  - 'global-only': administrative power that cannot be narrowed to a unit; never given for one unit.
+ */
+export type RoleScope = 'none' | 'optional' | 'global-only';
+
 interface RoleDefinition {
   capabilities: Capability[];
-  /** May a NULL scope on an assignment of this role mean "everywhere"? */
-  globalScopeAllowed: boolean;
+  scope: RoleScope;
 }
 
 // The one place the role matrix lives. Exhaustive Record: adding a RoleKey
@@ -19,7 +26,7 @@ interface RoleDefinition {
 export const ROLE_DEFINITIONS: Record<RoleKey, RoleDefinition> = {
   'bruger': {
     capabilities: ['template.use'],
-    globalScopeAllowed: false,
+    scope: 'none',
   },
   // Global (NULL scope) is the "superuser" who manages every shared prompt, which is
   // what an IdP claim can grant (a claim carries no org unit). Scoped grants (local /
@@ -27,34 +34,28 @@ export const ROLE_DEFINITIONS: Record<RoleKey, RoleDefinition> = {
   // the caller's problem, see dropStaleAssignments and the grant validation.
   'bygger': {
     capabilities: ['template.use', 'template.manage'],
-    globalScopeAllowed: true,
+    scope: 'optional',
   },
   'admin': {
     capabilities: [...CAPABILITIES],
-    globalScopeAllowed: true,
+    scope: 'global-only',
   },
 };
 
 export const SCOPED_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   'template.manage',
-  'audit.read',
 ]);
 
 // Capabilities that cannot be narrowed to an org unit. They only take effect
 // from a GLOBAL assignment: a role granted for one unit must not quietly hand
 // out whole-system power (a "unit administrator" could otherwise promote
-// themselves to a global one; a unit-scoped grant could export the whole log).
+// themselves to a global one; a unit-scoped grant could read or export the whole log).
 export const GLOBAL_ONLY_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
+  'audit.read',
   'audit.export',
   'access.manage',
   'sync.run',
 ]);
-
-/** Roles whose power is administrative and therefore cannot be given for one unit only. */
-export function roleRequiresGlobalScope(role: RoleKey): boolean {
-  const caps = ROLE_DEFINITIONS[role].capabilities;
-  return caps.includes('access.manage') || caps.includes('sync.run');
-}
 
 export function isRoleKey(value: string): value is RoleKey {
   return (ROLE_KEYS as readonly string[]).includes(value);
@@ -105,11 +106,11 @@ export function buildPrincipalFromAssignments(input: BuildPrincipalInput): Princ
   if (!requireRoleToLogin) roles.add('bruger');
 
   const capabilities = new Set<Capability>();
-  // The implicit baseline is global by nature; assignments are global only
-  // when NULL-scoped on a role that may be global (fail closed otherwise).
+  // The implicit baseline is global by nature; an assignment is global when NULL-scoped
+  // (a unit-scoped one never hands out a GLOBAL_ONLY capability).
   const grants = active.map((a) => ({
     role: a.roleKey,
-    global: a.scopeOrgUnitUuid === null && ROLE_DEFINITIONS[a.roleKey].globalScopeAllowed,
+    global: a.scopeOrgUnitUuid === null,
   }));
   if (!requireRoleToLogin) grants.push({ role: 'bruger', global: true });
   for (const { role, global } of grants) {
@@ -128,8 +129,7 @@ export function buildPrincipalFromAssignments(input: BuildPrincipalInput): Princ
       if (!SCOPED_CAPABILITIES.has(cap)) continue;
       const scope = (scopes[cap] ??= { global: false, roots: [] });
       if (a.scopeOrgUnitUuid === null) {
-        // Fail closed: a NULL scope on a role that is not allowed to be global contributes nothing.
-        if (def.globalScopeAllowed) scope.global = true;
+        scope.global = true;
         continue;
       }
       let roots = seenRoots.get(cap);

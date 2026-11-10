@@ -133,7 +133,6 @@ export function listItemDto(t: CentralTemplateListItem): CentralTemplateListItem
     ownerOrgUnitUuid: t.ownerOrgUnitUuid,
     status: t.status,
     currentVersion: t.currentVersion,
-    targetCount: t.targetCount,
     targets: t.targets.map(target),
     principalTargets: t.principalTargets.map(principalView),
     updatedAt: t.updatedAt,

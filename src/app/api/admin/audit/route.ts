@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { changeNotesFor, type ChangeNote } from '@/lib/audit/change-notes';
 import { filterShape, searchParamsToObject, toFilters } from '@/lib/audit/filters';
-import { auditScopeFor, listAuditEvents, MAX_PAGE_SIZE, type AuditEventRow } from '@/lib/audit/query';
+import { listAuditEvents, MAX_PAGE_SIZE, type AuditEventRow } from '@/lib/audit/query';
 import { parseWith } from '@/lib/authz/access-http';
 import { withAuthz } from '@/lib/authz/guard';
 import { safeLogError } from '@/lib/audit/safe-log';
@@ -16,8 +16,8 @@ const querySchema = z
   .strict();
 
 // Explicit whitelist (never a spread of the row): a column added later does not
-// reach the browser by accident. Network data is for global readers only.
-function view(row: AuditEventRow, includeNetwork: boolean, note?: ChangeNote) {
+// reach the browser by accident.
+function view(row: AuditEventRow, note?: ChangeNote) {
   return {
     id: row.id,
     occurredAt: row.occurredAt.toISOString(),
@@ -26,7 +26,6 @@ function view(row: AuditEventRow, includeNetwork: boolean, note?: ChangeNote) {
     outcome: row.outcome,
     actorUserId: row.actorUserId,
     actorName: row.actorName,
-    actorOrgUnitUuid: row.actorOrgUnitUuid,
     entityType: row.entityType,
     entityId: row.entityId,
     secondaryEntityType: row.secondaryEntityType,
@@ -34,26 +33,25 @@ function view(row: AuditEventRow, includeNetwork: boolean, note?: ChangeNote) {
     requestId: row.requestId,
     details: row.details,
     clientOccurredAt: row.clientOccurredAt ? row.clientOccurredAt.toISOString() : null,
+    ipAddress: row.ipAddress,
     // Looked up from the template changelog at read time; audit_events itself holds no note.
     ...(note ? { changeNote: note.changeNote, templateName: note.templateName } : {}),
-    ...(includeNetwork ? { ipAddress: row.ipAddress, userAgent: row.userAgent } : {}),
   };
 }
 
-export const GET = withAuthz('admin/audit GET', 'audit.read', async (req, { principal }) => {
+export const GET = withAuthz('admin/audit GET', 'audit.read', async (req) => {
   const parsed = parseWith(querySchema, searchParamsToObject(req.nextUrl.searchParams));
   if (!parsed.ok) return parsed.response;
   const { cursor, limit, ...filters } = parsed.data;
 
-  const scope = await auditScopeFor(principal);
-  const page = await listAuditEvents({ filters: toFilters(filters), cursor, limit, scope });
+  const page = await listAuditEvents({ filters: toFilters(filters), cursor, limit });
   const notes = await changeNotesFor(page.rows).catch((err) => {
     // The log must stay readable if the changelog lookup fails; the note is then simply absent.
     safeLogError('admin/audit change notes', err);
     return new Map<string, ChangeNote>();
   });
   return NextResponse.json(
-    { events: page.rows.map((r) => view(r, scope.all, notes.get(r.id))), nextCursor: page.nextCursor },
+    { events: page.rows.map((r) => view(r, notes.get(r.id))), nextCursor: page.nextCursor },
     { headers: { 'Cache-Control': 'no-store' } },
   );
 });

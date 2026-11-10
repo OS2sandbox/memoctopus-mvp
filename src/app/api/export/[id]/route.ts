@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { MinutesContent } from '@/types';
 import { minutesToBody } from '@/lib/minutes-format';
 import { withHandler } from '@/lib/api-handler';
-import { asEntityUuid, emitAudit } from '@/app/api/meetings/ai-audit';
+import { emitAudit } from '@/app/api/meetings/ai-audit';
+import { asEntityUuid } from '@/lib/ids';
 import { requireAppAccess } from '@/lib/authz/app-access';
 
 async function postHandler(req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<NextResponse> {

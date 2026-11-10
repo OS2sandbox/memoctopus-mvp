@@ -3,7 +3,6 @@
 // role/group target reaches), so the two cannot drift apart.
 
 const SCHEMA_RE = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
-export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** `"schema".table`; the schema is a trusted constant, but is validated anyway. */
 export function qualifyTable(schema: string, table: string): string {

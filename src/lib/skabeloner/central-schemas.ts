@@ -5,8 +5,8 @@ import { noNul, wellFormed } from './text-guards';
 
 // Request bodies for the manager-side central template routes. Every object is
 // strict: unknown keys are rejected, never silently ignored. Messages are
-// Danish; the routes only echo issue paths and codes (access-http.ts), the
-// service layer raises the same messages as ValidationError.
+// Danish. The routes parse once with these (http.ts parseBody, the only place
+// that decides which messages reach the client) and hand the output to the service.
 
 export { CHANGE_NOTE_MESSAGE };
 export const NUL_MESSAGE = 'Teksten må ikke indeholde nul-tegn';

@@ -1,5 +1,6 @@
 import { pool } from '@/lib/db';
 import { hasCapability } from './permissions';
+import { isUuid } from '@/lib/ids';
 import type { Capability, CapabilityScope, Principal } from './types';
 
 // Org-tree traversal for scoped capabilities. The tree comes from synced or
@@ -20,18 +21,12 @@ function defaultEnv(): ScopeEnv {
   return { query: (text, params) => pool.query(text, params), orgUnitsTable: 'public.org_units' };
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-// Ids can come from request bodies. Reject malformed ones here instead of
-// letting Postgres raise on the ::uuid cast (which would surface as a 500).
-function isUuid(value: string): boolean {
-  return UUID_RE.test(value);
-}
-
 function normalise(uuid: string): string {
   return uuid.toLowerCase();
 }
 
+// Ids can come from request bodies. Reject malformed ones (isUuid) instead of
+// letting Postgres raise on the ::uuid cast (which would surface as a 500).
 function validRoots(roots: Root[]): Root[] {
   return roots.filter((r) => isUuid(r.orgUnitUuid)).map((r) => ({ ...r, orgUnitUuid: normalise(r.orgUnitUuid) }));
 }

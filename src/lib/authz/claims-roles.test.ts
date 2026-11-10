@@ -38,6 +38,8 @@ const rolesCfg = (appRoleMap: Record<string, string>, groupRoleMap: Record<strin
   state: 'ok',
   appRoleMap: new Map(Object.entries(appRoleMap).map(([k, role]) => [k, { role: role as never, global: true }])),
   groupRoleMap: new Map(Object.entries(groupRoleMap).map(([k, role]) => [k, { role: role as never, global: true }])),
+  byProvider: new Map(),
+  providerCount: 1,
 });
 
 beforeEach(() => {
@@ -186,7 +188,7 @@ describe('per-provider role maps', () => {
     expect(decideFromClaims({ roles: ['admin'] }, 'b', multi()).external).toEqual([{ kind: 'role', identifier: 'admin' }]);
   });
 
-  it('with exactly one provider the global map applies, and so does a missing count (older state)', () => {
+  it('with exactly one provider the global map applies', () => {
     expect(decideFromClaims({ roles: ['admin'] }, 'p', { ...(multi() as Extract<RolesConfig, { state: 'ok' }>), providerCount: 1 }).roles).toEqual(['admin']);
     expect(roleMapsFor(rolesCfg({ admin: 'admin' }), 'p')?.appRoleMap.has('admin')).toBe(true);
   });

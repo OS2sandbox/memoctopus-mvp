@@ -101,7 +101,7 @@ async function main() {
   heading('1. OIDC: claims become roles');
   const admin = await oidc('admin.a');
   const meAdmin = await admin.get<MeResponse>('/api/me');
-  check('admin.a (claim referat-admin) is administrator, globally', meAdmin.json?.roles?.includes('admin') && meAdmin.json?.scopes?.['audit.read']?.global === true, brief(meAdmin));
+  check('admin.a (claim referat-admin) is administrator, globally', meAdmin.json?.roles?.includes('admin') && meAdmin.json?.capabilities?.includes('audit.read'), brief(meAdmin));
   check('/api/me says source=claims, readOnly=true', meAdmin.json?.source === 'claims' && meAdmin.json?.readOnly === true);
   const adminRows = await rolesInDb('admin.a@example.dk');
   check('one role row, source claims, no org unit, fresh', adminRows.length === 1 && adminRows[0].source === 'claims' && adminRows[0].scope_org_unit_uuid === null && Date.now() - new Date(adminRows[0].synced_at).getTime() < 60_000, JSON.stringify(adminRows));

@@ -3,7 +3,8 @@ import { prepareVadBatches, transcribeVadBatches, transcribeEnsemble, isEnsemble
 import type { TranscriptSegment } from '@/types';
 import { withHandler } from '@/lib/api-handler';
 import { safeLogError } from '@/lib/audit/safe-log';
-import { asEntityUuid, elapsedMs, emitAudit, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
+import { elapsedMs, emitAudit, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
+import { asEntityUuid } from '@/lib/ids';
 import { requireAppAccess } from '@/lib/authz/app-access';
 
 interface Params {

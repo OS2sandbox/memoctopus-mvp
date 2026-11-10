@@ -26,6 +26,8 @@ const ROLES: RolesConfig = {
   state: 'ok',
   appRoleMap: role({ 'referat-admin': 'admin', 'referat-bruger': 'bruger' }),
   groupRoleMap: role({}),
+  byProvider: new Map(),
+  providerCount: 1,
 };
 const SPECS = { claims: {}, rolesClaim: { name: 'roles', format: 'array' as const, separator: ',' } };
 

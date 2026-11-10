@@ -7,7 +7,6 @@ vi.mock('@/lib/authz/principal', () => ({ resolvePrincipal: vi.fn() }));
 vi.mock('@/lib/db', () => ({ pool: { query: vi.fn() }, db: {} }));
 vi.mock('@/lib/audit/query', async (orig) => ({
   ...(await orig<typeof import('@/lib/audit/query')>()),
-  auditScopeFor: vi.fn(),
   listAuditEvents: vi.fn(),
 }));
 
@@ -15,12 +14,11 @@ import { GET } from './route';
 import { auth } from '@/lib/auth';
 import { pool } from '@/lib/db';
 import { resolvePrincipal } from '@/lib/authz/principal';
-import { auditScopeFor, listAuditEvents, type AuditEventRow } from '@/lib/audit/query';
+import { listAuditEvents, type AuditEventRow } from '@/lib/audit/query';
 import { FAKE_PRINCIPAL_ADMIN, FAKE_SESSION, NO_PARAMS, makeJsonReq, makePrincipal } from '@/test/helpers';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockResolve = vi.mocked(resolvePrincipal);
-const mockScope = vi.mocked(auditScopeFor);
 const mockList = vi.mocked(listAuditEvents);
 const req = (qs = '') => makeJsonReq(`http://localhost/api/admin/audit${qs}`, 'GET');
 
@@ -48,16 +46,9 @@ const row = (over: Partial<AuditEventRow> = {}): AuditEventRow => ({
   ...over,
 });
 
-const LOG_READER = makePrincipal({
-  roles: ['bruger', 'admin'],
-  capabilities: ['template.use', 'audit.read'],
-  scopes: { 'audit.read': { global: false, roots: [{ orgUnitUuid: UNIT, includeDescendants: true }] } },
-});
-
 beforeEach(() => {
   mockGetSession.mockReset().mockResolvedValue(FAKE_SESSION as never);
   mockResolve.mockReset().mockResolvedValue(FAKE_PRINCIPAL_ADMIN);
-  mockScope.mockReset().mockResolvedValue({ all: true });
   mockList.mockReset().mockResolvedValue({ rows: [row()], nextCursor: '5' });
 });
 
@@ -79,7 +70,7 @@ describe('GET /api/admin/audit (audit.read)', () => {
     expect(mockList).not.toHaveBeenCalled();
   });
 
-  it('a global reader gets rows, the cursor, and the network fields', async () => {
+  it('a reader gets rows, the cursor, and the IP address', async () => {
     const res = await GET(req('?limit=20'), NO_PARAMS);
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('no-store');
@@ -91,21 +82,10 @@ describe('GET /api/admin/audit (audit.read)', () => {
       eventType: 'export.download',
       entityId: ENTITY,
       ipAddress: '10.0.0.1',
-      userAgent: 'UA/1.0',
     });
-    expect(mockList).toHaveBeenCalledWith(expect.objectContaining({ scope: { all: true }, limit: 20 }));
-  });
-
-  it('a scoped reader is passed the scope and gets NO ip or user agent keys', async () => {
-    mockResolve.mockResolvedValue(LOG_READER);
-    mockScope.mockResolvedValue({ all: false, orgUnitUuids: [UNIT] });
-    const res = await GET(req(), NO_PARAMS);
-    expect(res.status).toBe(200);
-    expect(mockList).toHaveBeenCalledWith(expect.objectContaining({ scope: { all: false, orgUnitUuids: [UNIT] } }));
-    const event = (await res.json()).events[0];
-    expect('ipAddress' in event).toBe(false);
-    expect('userAgent' in event).toBe(false);
-    expect(JSON.stringify(event)).not.toContain('10.0.0.1');
+    expect(body.events[0]).not.toHaveProperty('userAgent');
+    expect(body.events[0]).not.toHaveProperty('actorOrgUnitUuid');
+    expect(mockList).toHaveBeenCalledWith(expect.objectContaining({ limit: 20 }));
   });
 
   it('attaches the change note of a central template event, read from the changelog', async () => {
@@ -164,13 +144,10 @@ describe('GET /api/admin/audit (audit.read)', () => {
     });
   });
 
-  it('passes a trimmed name search as q, together with the scope', async () => {
-    mockResolve.mockResolvedValue(LOG_READER);
-    mockScope.mockResolvedValue({ all: false, orgUnitUuids: [UNIT] });
+  it('passes a trimmed name search as q', async () => {
     await GET(req(`?q=${encodeURIComponent('  Mette %_ Æ  ')}&actorUserId=u9`), NO_PARAMS);
     const call = mockList.mock.calls[0][0];
     expect(call.filters).toMatchObject({ q: 'Mette %_ Æ', actorUserId: 'u9' });
-    expect(call.scope).toEqual({ all: false, orgUnitUuids: [UNIT] });
   });
 
   it.each([

@@ -12,6 +12,7 @@ import { AUDIT_EXPORT_MAX_ROWS, AUDIT_TRUNCATED_HEADER, auditExportFilename } fr
 import { eventTypeLabel, outcomeLabels, sourceBadgeLabels, sourceLabels } from '@/lib/audit/labels.da';
 import { summariseEvent } from '@/lib/audit/summary.da';
 import { useMe } from '@/lib/hooks/use-me';
+import { UUID_RE } from '@/lib/ids';
 import { apiRequest } from './api';
 import { AdminPage } from './AdminPage';
 import { formatDateTime } from './format';
@@ -62,7 +63,6 @@ interface Filters {
 }
 
 const DEFAULT_FILTERS: Filters = { q: '', category: '', period: '7d', outcome: '', source: '', entityId: '', from: '', to: '' };
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PAGE_SIZE = 50;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -271,7 +271,6 @@ export function AuditLog() {
   }, [applied, fetchPage]);
 
   const canExport = !!me && me.capabilities.includes('audit.export');
-  const isGlobalReader = !!me && me.scopes['audit.read']?.global === true;
 
   async function runExport() {
     if (exportInFlight.current) return;
@@ -349,11 +348,6 @@ export function AuditLog() {
   return (
     <AdminPage title="Log" description="Aktivitet i løsningen. Loggen viser kun, hvad der er sket, aldrig indholdet af møder, referater eller skabeloner.">
       <ErrorBanner message={meError} />
-      {me && !isGlobalReader && (
-        <p role="status" className="text-[13px] text-[var(--muted)]">
-          Du ser kun hændelser fra de enheder, din rolle gælder for.
-        </p>
-      )}
 
       <form
         role="search"

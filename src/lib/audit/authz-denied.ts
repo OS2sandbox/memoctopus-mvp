@@ -10,7 +10,8 @@
 // In memory and per process, bounded like the login-failed throttle.
 //
 // Events carry ids and short codes ONLY (see ./events and ./record).
-import { recordEvent, UUID_RE } from './record';
+import { UUID_RE } from '@/lib/ids';
+import { recordEvent } from './record';
 import { CODE_RE } from './events/types';
 import { safeRequestContext, type HeaderSource } from './request-context';
 import { createThrottle } from './throttle';

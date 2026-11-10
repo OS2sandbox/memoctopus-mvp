@@ -280,17 +280,39 @@ export function microsoftTenantId(): string | undefined {
 }
 
 // The multi-tenant authorities: any tenant's users may sign in, so nothing they assert
-// about themselves is vouched for by *our* tenant.
+// about themselves is vouched for by *our* tenant. A deliberate setting outside claims
+// mode, so singleTenantId does not warn about them.
 const MULTI_TENANT_AUTHORITIES = ['common', 'organizations', 'consumers'];
 
+let tenantNotGuidWarned = false;
+
 /**
- * True when MICROSOFT_TENANT_ID names one specific tenant, false for the multi-tenant
- * authorities (blank, common, organizations, consumers) and when Microsoft login is off.
- * Only in a single tenant does its admin control the `email` claim.
+ * The one rule for "a single Entra tenant": the tenant (default: as configured, enabled or not)
+ * as a trimmed, lower-cased GUID, else null. A token's `tid` is always the GUID, so a tenant
+ * domain name (a valid Entra authority) can never be checked against it and counts as not
+ * pinned, with one content-free warning per process; the multi-tenant authorities and blank
+ * are null without one. Used for the id-token tid/iss check, email vetting, directory
+ * linking, bootstrap and claims logins.
+ */
+export function singleTenantId(tenantId: string | undefined = microsoftTenantId()): string | null {
+  const tenant = (tenantId ?? '').trim().toLowerCase();
+  if (isGuid(tenant)) return tenant;
+  if (tenant && !MULTI_TENANT_AUTHORITIES.includes(tenant) && !tenantNotGuidWarned) {
+    tenantNotGuidWarned = true;
+    console.warn(
+      '[auth] Microsoft tenant is not a tenant id (code microsoft_tenant_not_guid): it counts as multi-tenant; set MICROSOFT_TENANT_ID to your tenant GUID',
+    );
+  }
+  return null;
+}
+
+/**
+ * True when Microsoft login is on and its tenant is one tenant (singleTenantId), false for the
+ * multi-tenant authorities, a non-GUID and when Microsoft login is off. Only in a single tenant
+ * does its admin control the `email` claim.
  */
 export function microsoftSingleTenant(): boolean {
-  const tenant = microsoftConfig()?.tenantId.toLowerCase();
-  return !!tenant && !MULTI_TENANT_AUTHORITIES.includes(tenant);
+  return !!microsoftConfig() && singleTenantId() !== null;
 }
 
 /**

@@ -68,8 +68,8 @@ export async function createMeeting(data: {
 export async function updateMeeting(
   id: string,
   patch: Partial<Omit<StoredMeeting, 'id' | 'createdAt'>>,
-  // Machine writes (the Teams bot's roster poll) pass `automatic: true`: a roster that
-  // changed because people joined or left is not a user edit, so it is not reported as one.
+  // Machine writes (the Teams hand-off in TeamsMeetingScreen, which writes the speaker names
+  // Teams published) pass `automatic: true`: they are not a user edit, so not reported as one.
   opts: { automatic?: boolean } = {},
 ): Promise<void> {
   const db = await getDB();

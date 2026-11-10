@@ -189,6 +189,15 @@ describe('POST /api/skabeloner', () => {
     expect((await res.json()).error).toBe('Navn er påkrævet');
   });
 
+  it('answers with the effective default flag: an available central default wins, as in GET', async () => {
+    mockCreate.mockResolvedValue({ ...FAKE_SKABELON, isDefault: true });
+    mockListCentral.mockResolvedValue([{ id: CENTRAL_ID, source: 'central', name: 'Dialogmøde', locked: true, version: 3 }]);
+    mockCentralDefaultId.mockResolvedValue(CENTRAL_ID);
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', { name: 'Standardreferat' }));
+    expect(res.status).toBe(201);
+    expect((await res.json()).skabelon.isDefault).toBe(false);
+  });
+
   it('creates and returns the skabelon with status 201', async () => {
     mockCreate.mockResolvedValue(FAKE_SKABELON);
     const res = await POST(makeJsonReq(BASE_URL, 'POST', {

@@ -37,6 +37,7 @@
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import { ROLE_KEYS, type RoleKey } from '@/lib/authz/types';
+import { UUID_RE } from '@/lib/ids';
 import { isHttpsOrLoopbackHttp } from '@/lib/net/url-policy';
 
 // providerId ends up in the callback path and in accounts.provider_id, so it must be a
@@ -68,8 +69,7 @@ export function claimsModeConfigured(): boolean {
   return (process.env.ACCESS_SOURCE ?? '').trim().toLowerCase() === 'claims';
 }
 
-const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const isGuid = (v: string): boolean => GUID_RE.test(v.trim());
+export const isGuid = (v: string): boolean => UUID_RE.test(v.trim());
 
 /** Authorities of Microsoft's multi-tenant endpoints: any tenant can sign in through them. */
 const MULTI_TENANT_PATH_RE = /\/(common|organizations|consumers)(\/|$)/i;
@@ -357,11 +357,11 @@ export type RolesConfig =
       state: 'ok';
       /**
        * The global maps. They apply to a provider without its own `byProvider` entry ONLY when the file has exactly one
-       * provider (`providerCount`, absent = 1): with several providers, one provider's role names must not grant
-       * roles through another.
+       * provider (`providerCount`): with several providers, one provider's role names must not grant roles through
+       * another.
        */
-      byProvider?: ReadonlyMap<string, ProviderRoleMaps>;
-      providerCount?: number;
+      byProvider: ReadonlyMap<string, ProviderRoleMaps>;
+      providerCount: number;
     } & ProviderRoleMaps);
 
 export interface CatalogueEntry {

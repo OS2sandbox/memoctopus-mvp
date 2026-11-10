@@ -90,73 +90,89 @@ export function backoffMs(attempts: number): number {
 //
 // An event that leaves the queue WITHOUT being delivered (evicted because the queue is full,
 // expired after 7 days, refused for good by the server, or never queued because storage failed)
-// is counted here and reported with the next successful flush as one audit.events_dropped row
-// (reason client_outbox), so a loss is a counted event and not silence. The count lives in
-// localStorage (per user; IndexedDB would need a schema bump) with an in-memory fallback, and
-// carries an id that changes whenever the count does, so a retry after a lost response is
-// idempotent on the server while a later, larger count is a new report.
+// is counted here and reported with a later successful flush as an audit.events_dropped row
+// (reason client_outbox), so a loss is a counted event and not silence. The counts live in
+// localStorage (per user; IndexedDB would need a schema bump) with an in-memory fallback, as a
+// list of deltas: every loss is its own entry with its own id, and an entry is removed only once
+// the server confirmed that id. Every tab of the origin shares the list, so two tabs may send the
+// same entry, which the server dedupes on the id; a running total under a fresh id would instead
+// be stored twice.
 export interface DroppedLocally {
   count: number;
   clientEventId: string;
 }
 
 const DROPPED_KEY = (userId: string) => `referat-audit-dropped-u-${userId}`;
-const droppedMemory = new Map<string, DroppedLocally>();
+const droppedMemory = new Map<string, DroppedLocally[]>();
+/** Bounds the list in localStorage; beyond it a loss is added to the newest entry (under a new id). */
+const DROPPED_MAX_ENTRIES = 1000;
 
 function newId(): string {
   return crypto.randomUUID();
 }
 
-function readDropped(userId: string): DroppedLocally | null {
+const isEntry = (v: unknown): v is DroppedLocally =>
+  !!v &&
+  typeof (v as DroppedLocally).count === 'number' &&
+  (v as DroppedLocally).count > 0 &&
+  typeof (v as DroppedLocally).clientEventId === 'string';
+
+function readDropped(userId: string): DroppedLocally[] {
   try {
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(DROPPED_KEY(userId)) : null;
     if (raw) {
-      const v = JSON.parse(raw) as Partial<DroppedLocally>;
-      if (typeof v.count === 'number' && v.count > 0 && typeof v.clientEventId === 'string') {
-        return { count: v.count, clientEventId: v.clientEventId };
+      const v = JSON.parse(raw) as unknown;
+      if (Array.isArray(v)) {
+        return v.filter(isEntry).map(({ count, clientEventId }) => ({ count, clientEventId }));
       }
     }
   } catch {
     // Fall through to the in-memory copy.
   }
-  return droppedMemory.get(userId) ?? null;
+  return droppedMemory.get(userId) ?? [];
 }
 
-function writeDropped(userId: string, value: DroppedLocally | null): void {
-  if (value) droppedMemory.set(userId, value);
+function writeDropped(userId: string, entries: DroppedLocally[]): void {
+  if (entries.length > 0) droppedMemory.set(userId, entries);
   else droppedMemory.delete(userId);
   try {
     if (typeof localStorage === 'undefined') return;
-    if (value) localStorage.setItem(DROPPED_KEY(userId), JSON.stringify(value));
+    if (entries.length > 0) localStorage.setItem(DROPPED_KEY(userId), JSON.stringify(entries));
     else localStorage.removeItem(DROPPED_KEY(userId));
   } catch {
     // The in-memory copy still reports it during this page load.
   }
 }
 
-/** Count `n` events that were lost before delivery. Never throws. */
+/** Count `n` events that were lost before delivery, as a new entry. Never throws. */
 export function addDroppedLocally(userId: string, n: number): void {
   if (n <= 0) return;
   try {
-    const current = readDropped(userId);
-    writeDropped(userId, { count: Math.min((current?.count ?? 0) + n, 1_000_000), clientEventId: newId() });
+    const entries = readDropped(userId);
+    if (entries.length >= DROPPED_MAX_ENTRIES) {
+      const last = entries.pop()!;
+      entries.push({ count: Math.min(last.count + n, 1_000_000), clientEventId: newId() });
+    } else {
+      entries.push({ count: Math.min(n, 1_000_000), clientEventId: newId() });
+    }
+    writeDropped(userId, entries);
   } catch {
     // Best effort.
   }
 }
 
-/** What is waiting to be reported, or null. */
-export function getDroppedLocally(userId: string): DroppedLocally | null {
+/** What is waiting to be reported, oldest first (empty when nothing is). */
+export function getDroppedLocally(userId: string): DroppedLocally[] {
   return readDropped(userId);
 }
 
-/** The server confirmed `reported` lost events: subtract them (more may have been added meanwhile). */
-export function clearDroppedLocally(userId: string, reported: number): void {
+/** The server confirmed these entries: remove them (others may have been added meanwhile). */
+export function clearDroppedLocally(userId: string, clientEventIds: string[]): void {
   try {
-    const current = readDropped(userId);
-    if (!current) return;
-    const left = current.count - reported;
-    writeDropped(userId, left > 0 ? { count: left, clientEventId: newId() } : null);
+    const confirmed = new Set(clientEventIds);
+    const entries = readDropped(userId);
+    const left = entries.filter((e) => !confirmed.has(e.clientEventId));
+    if (left.length !== entries.length) writeDropped(userId, left);
   } catch {
     // Best effort.
   }

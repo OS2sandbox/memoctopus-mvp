@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { changeNotesFor } from '@/lib/audit/change-notes';
 import { AUDIT_EXPORT_MAX_ROWS, AUDIT_TRUNCATED_HEADER, auditExportFilename, auditRowsToCsv } from '@/lib/audit/csv';
 import { filterShape, searchParamsToObject, toFilters } from '@/lib/audit/filters';
-import { auditScopeFor, collectAuditEvents } from '@/lib/audit/query';
+import { collectAuditEvents } from '@/lib/audit/query';
 import { recordServerEvent } from '@/lib/audit/record';
 import { safeLogError } from '@/lib/audit/safe-log';
 import { parseWith } from '@/lib/authz/access-http';
@@ -11,16 +11,12 @@ import { withAuthz } from '@/lib/authz/guard';
 
 const querySchema = z.object(filterShape).strict();
 
-export const GET = withAuthz('admin/audit/export GET', 'audit.export', async (req, { principal, session }) => {
+export const GET = withAuthz('admin/audit/export GET', 'audit.export', async (req, { session }) => {
   const parsed = parseWith(querySchema, searchParamsToObject(req.nextUrl.searchParams));
   if (!parsed.ok) return parsed.response;
 
-  // audit.export is global-only, but the rows are still limited by the caller's
-  // audit.read scope: an export can never show more than the viewer does.
-  const scope = await auditScopeFor(principal);
   const { rows, truncated } = await collectAuditEvents({
     filters: toFilters(parsed.data),
-    scope,
     maxRows: AUDIT_EXPORT_MAX_ROWS,
   });
 

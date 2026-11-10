@@ -16,10 +16,9 @@
 // export: more than `invalidRowAllowance(total)` bad rows in one array also fails the
 // payload as invalid_response, before anything is written.
 import { z } from 'zod';
+import { UUID_RE } from '@/lib/ids';
 import { RollekatalogError } from './errors';
 import { isOrgUnitConstraintType, type ScopeConstraint } from './types';
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const lower = (s: string) => s.trim().toLowerCase();
 

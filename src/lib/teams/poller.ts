@@ -9,7 +9,7 @@ import { teamsFailureCode } from './failure-code';
 import { classifyGraphError, GraphError } from './graph-client';
 import { graphDate, realDate } from './graph-dates';
 import { getMeeting } from './meeting-resolver';
-import { processTeamsMeeting } from './pipeline';
+import { processTeamsMeeting, type PipelineOutcome } from './pipeline';
 import { deleteRecordingFromDrive } from './recording-cleanup';
 import {
   POLL_GIVE_UP_MS,
@@ -202,8 +202,9 @@ async function pollMeetingInner(
       { incrementAttempts: !(transient || options.force) },
     );
 
+  let outcome: PipelineOutcome | undefined;
   try {
-    const outcome = await processTeamsMeeting(
+    outcome = await processTeamsMeeting(
       userId,
       {
         id: row.id,
@@ -266,6 +267,17 @@ async function pollMeetingInner(
       } catch (ackErr) {
         safeLogError(`teams/poller ${id}: could not remove the server-held transcript of a deleted meeting`, ackErr);
       }
+      // The DELETE skipped the recording too (it was not `pending` yet), and with the row gone
+      // nothing is left for the retry to hang on: this is the one chance to remove it from OneDrive.
+      if (outcome?.status === 'ready' && outcome.recordingBytes != null && deleteRecordingEnabled()) {
+        try {
+          await deleteRecordingFromDrive(userId, outcome.recordingBytes);
+        } catch (delErr) {
+          safeLogError(`teams/poller ${id}: could not delete the recording of a deleted meeting from OneDrive`, delErr);
+        }
+      }
+      // Nothing was fetched for the person: they deleted the meeting.
+      verdict.value = undefined;
       return row;
     }
     const message = err instanceof Error ? err.message : String(err);

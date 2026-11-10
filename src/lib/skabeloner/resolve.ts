@@ -36,7 +36,8 @@
 import { pool } from '@/lib/db';
 import { claimsFreshnessSeconds } from '@/lib/authz/config';
 import { MAX_ORG_DEPTH } from '@/lib/authz/scope';
-import { UUID_RE, heldRoleSql, qualifyTable } from './audience-sql';
+import { UUID_RE } from '@/lib/ids';
+import { heldRoleSql, qualifyTable } from './audience-sql';
 import type { CentralSkabelonSummary } from './central-types';
 
 export interface ResolveEnv {

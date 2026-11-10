@@ -264,15 +264,15 @@ async function sendBatch(userId: string, due: OutboxEvent[]): Promise<boolean> {
   while (batch.length > 1 && new TextEncoder().encode(JSON.stringify({ events: batch.map(wire) })).length > MAX_BODY_BYTES) {
     batch = batch.slice(0, Math.ceil(batch.length / 2));
   }
-  // The report of events lost earlier rides along with the first batch that goes out.
-  const lost = getDroppedLocally(userId) ?? undefined;
+  // The oldest report of events lost earlier rides along with the batch (one per request).
+  const lost = getDroppedLocally(userId)[0];
   let result = await post(batch.map(wire), lost);
   const reported = result === 'ok' && !!lost;
   // The report itself may be what an older instance refused: send the events without it.
   if (lost && result === 'rejected') result = await post(batch.map(wire));
   if (result === 'ok') {
     await removeFromOutbox(userId, batch.map((e) => e.clientEventId));
-    if (reported && lost) clearDroppedLocally(userId, lost.count);
+    if (reported && lost) clearDroppedLocally(userId, [lost.clientEventId]);
     return true;
   }
   if (result === 'transient') {
@@ -306,11 +306,12 @@ async function settleSingle(userId: string, ev: OutboxEvent, result: PostResult)
   return true;
 }
 
-/** Reports lost events when there is nothing else to send. */
+/** Reports lost events when there is nothing else to send, one entry per request, oldest first. */
 async function reportDroppedOnly(userId: string): Promise<void> {
-  const lost = getDroppedLocally(userId);
-  if (!lost) return;
-  if ((await post([], lost)) === 'ok') clearDroppedLocally(userId, lost.count);
+  for (const lost of getDroppedLocally(userId)) {
+    if ((await post([], lost)) !== 'ok') return;
+    clearDroppedLocally(userId, [lost.clientEventId]);
+  }
 }
 
 /** Sends everything that is due for this user. Events leave the queue only after a 2xx. */

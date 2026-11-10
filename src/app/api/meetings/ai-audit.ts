@@ -4,19 +4,10 @@
 // titles or error messages.
 import type { AuditEventOf, EventType } from '@/lib/audit/events';
 import { noteDroppedEvents } from '@/lib/audit/dropped';
-import { recordServerEvent, UUID_RE } from '@/lib/audit/record';
+import { recordServerEvent } from '@/lib/audit/record';
 import type { HeaderSource } from '@/lib/audit/request-context';
 import { describeError } from '@/lib/audit/safe-log';
 import { createThrottle } from '@/lib/audit/throttle';
-
-/**
- * Route params and form fields are client-supplied and never verified against a
- * meeting, so an id only becomes an audit entity when it is a well-formed UUID;
- * anything else yields undefined (the event is then logged without an entity).
- */
-export function asEntityUuid(value: unknown): string | undefined {
-  return typeof value === 'string' && UUID_RE.test(value) ? value : undefined;
-}
 
 export const elapsedMs = (t0: number): number => Math.max(0, Date.now() - t0);
 

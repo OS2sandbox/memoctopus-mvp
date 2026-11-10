@@ -1,6 +1,7 @@
 import { pool } from '@/lib/db';
 import { realDate } from '@/lib/teams/graph-dates';
 import { queryUserSchema, queryUserSchemaOne } from '@/lib/db/user-schema';
+import { UUID_RE } from '@/lib/ids';
 import type { ResolvedMeetingOptions } from '@/lib/teams/meeting-resolver';
 
 /**
@@ -534,8 +535,6 @@ export async function deleteTeamsMeeting(userId: string, id: string): Promise<vo
 }
 
 // ─── Cross-user discovery ───────────────────────────────────────────────────
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Inverse of `getUserSchemaName()`: `u_<userId with - replaced by _>`.

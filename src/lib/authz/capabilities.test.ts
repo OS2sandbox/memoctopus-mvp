@@ -45,16 +45,16 @@ describe('role matrix tripwire', () => {
       'access.manage',
       'sync.run',
     ]);
-    expect([...GLOBAL_ONLY_CAPABILITIES].sort()).toEqual(['access.manage', 'audit.export', 'sync.run']);
-    expect([...SCOPED_CAPABILITIES].sort()).toEqual(['audit.read', 'template.manage']);
+    expect([...GLOBAL_ONLY_CAPABILITIES].sort()).toEqual(['access.manage', 'audit.export', 'audit.read', 'sync.run']);
+    expect([...SCOPED_CAPABILITIES].sort()).toEqual(['template.manage']);
   });
 
   it('pins the full role -> capabilities matrix', () => {
     expect(ROLE_DEFINITIONS).toEqual({
-      'bruger': { capabilities: ['template.use'], globalScopeAllowed: false },
+      'bruger': { capabilities: ['template.use'], scope: 'none' },
       'bygger': {
         capabilities: ['template.use', 'template.manage'],
-        globalScopeAllowed: true,
+        scope: 'optional',
       },
       'admin': {
         capabilities: [
@@ -65,7 +65,7 @@ describe('role matrix tripwire', () => {
           'access.manage',
           'sync.run',
         ],
-        globalScopeAllowed: true,
+        scope: 'global-only',
       },
     });
   });
@@ -119,7 +119,6 @@ describe('buildPrincipalFromAssignments', () => {
     const admin = build([{ roleKey: 'admin' }]);
     expect(admin.capabilities).toEqual([...CAPABILITIES]);
     expect(admin.scopes['template.manage']?.global).toBe(true);
-    expect(admin.scopes['audit.read']?.global).toBe(true);
   });
 
   it('a unit-scoped admin gets NO global-only capability (no self-promotion to global admin)', () => {
@@ -127,14 +126,13 @@ describe('buildPrincipalFromAssignments', () => {
     expect(p.capabilities).not.toContain('access.manage');
     expect(p.capabilities).not.toContain('sync.run');
     expect(p.capabilities).not.toContain('audit.export');
-    expect(p.scopes['audit.read']?.roots).toEqual([{ orgUnitUuid: OU_A, includeDescendants: true }]);
-    expect(p.scopes['audit.read']?.global).toBe(false);
   });
 
-  it('a unit-scoped admin can read the log of its unit but not export the whole log', () => {
+  it('a unit-scoped admin can neither read nor export the log', () => {
     const p = build([{ roleKey: 'admin', scopeOrgUnitUuid: OU_A }]);
-    expect(p.capabilities).toContain('audit.read');
+    expect(p.capabilities).not.toContain('audit.read');
     expect(p.capabilities).not.toContain('audit.export');
+    expect(p.scopes['audit.read']).toBeUndefined();
   });
 
   it('a global grant elsewhere still unlocks the global-only capabilities', () => {
@@ -212,8 +210,9 @@ describe('buildPrincipalFromAssignments', () => {
       global: true,
       roots: [{ orgUnitUuid: OU_A, includeDescendants: true }],
     });
-    // audit.read comes from the admin grant only.
-    expect(p.scopes['audit.read']).toEqual({ global: true, roots: [] });
+    // audit.read comes from the admin grant only, and is global-only (no scope entry).
+    expect(p.capabilities).toContain('audit.read');
+    expect(p.scopes['audit.read']).toBeUndefined();
   });
 
   it('a unit-scoped bygger never becomes global and never reaches the log or access administration', () => {

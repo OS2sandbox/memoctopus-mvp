@@ -3,7 +3,7 @@
 // case is table-testable. The rule that matters is FAIL CLOSED: Rollekatalog
 // silently drops a constraint that resolves to empty, so "no scope" must never be
 // read as "all units" for a role that is not explicitly allowed to be global.
-import type { RoleKey } from '@/lib/authz/types';
+import { ROLE_DEFINITIONS } from '@/lib/authz/capabilities';
 import { isOrgUnitConstraintType, type DerivedScope, type ScopeInput } from './types';
 
 const norm = (v: string): string => v.trim().toLowerCase();
@@ -32,11 +32,12 @@ function constraintUnits(input: ScopeInput): { all: string[]; known: string[]; u
 }
 
 /**
- * - bruger needs no scope: it yields one NULL-scope row (`global` here only
+ * By the role's `scope` in the role matrix (capabilities.ts):
+ * - 'none' (bruger) needs no scope: it yields one NULL-scope row (`global` here only
  *   means "no org unit"; the role grants nothing scoped).
- * - admin is never scoped (it needs a global assignment): constraints are ignored, and
+ * - 'global-only' (admin) is never scoped: constraints are ignored, and
  *   it is global only when listed in `globalRoles`.
- * - Other roles take their units from the org-unit constraint only. Unit uuids that
+ * - 'optional' roles take their units from the org-unit constraint only. Unit uuids that
  *   are not in the mirror are ignored; when all of them are unknown the assignment
  *   has no scope.
  * - No scope: a role in `globalRoles` becomes global, every other role gets no row.
@@ -51,20 +52,24 @@ function constraintUnits(input: ScopeInput): { all: string[]; known: string[]; u
  *   with no constraints at all can become global.
  */
 export function deriveScope(input: ScopeInput): DerivedScope {
-  const role: RoleKey = input.roleKey;
-  if (role === 'bruger') return { kind: 'global' };
-
+  const role = input.roleKey;
   const globalAllowed = input.globalRoles.includes(role);
-  const c = constraintUnits(input);
-  if (role === 'admin') {
-    if (c.unrecognised && c.all.length === 0) return { kind: 'none' };
-    return globalAllowed ? { kind: 'global' } : { kind: 'none' };
+  switch (ROLE_DEFINITIONS[role].scope) {
+    case 'none':
+      return { kind: 'global' };
+    case 'global-only': {
+      const c = constraintUnits(input);
+      if (c.unrecognised && c.all.length === 0) return { kind: 'none' };
+      return globalAllowed ? { kind: 'global' } : { kind: 'none' };
+    }
+    case 'optional': {
+      const c = constraintUnits(input);
+      const units = c.known;
+      const namedUnknownUnitsOnly = units.length === 0 && c.all.length > 0;
+
+      if (units.length > 0) return { kind: 'scoped', orgUnitUuids: units, includeDescendants: input.includeDescendants };
+      if (namedUnknownUnitsOnly || c.unrecognised) return { kind: 'none' };
+      return globalAllowed ? { kind: 'global' } : { kind: 'none' };
+    }
   }
-
-  const units = c.known;
-  const namedUnknownUnitsOnly = units.length === 0 && c.all.length > 0;
-
-  if (units.length > 0) return { kind: 'scoped', orgUnitUuids: units, includeDescendants: input.includeDescendants };
-  if (namedUnknownUnitsOnly || c.unrecognised) return { kind: 'none' };
-  return globalAllowed ? { kind: 'global' } : { kind: 'none' };
 }

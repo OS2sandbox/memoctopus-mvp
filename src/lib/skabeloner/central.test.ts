@@ -2,6 +2,7 @@
 // map. What only a database can prove (atomicity, the row lock, the trigger,
 // the RESTRICT FK) is in central.pg.test.ts.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { z } from 'zod';
 import { makeFakeRunner, type Responder } from '@/test/fake-runner';
 import { makePrincipal } from '@/test/helpers';
 
@@ -19,18 +20,28 @@ const scope = vi.hoisted(() => ({
 vi.mock('@/lib/authz/scope', () => scope);
 
 import { ForbiddenError, NotFoundError, ValidationError, VersionConflictError } from '@/lib/authz/access-errors';
+import type { Principal } from '@/lib/authz/types';
+import * as service from './central';
 import {
-  archiveCentralTemplate,
-  createCentralTemplate,
   getManageableTemplate,
   listCatalogue,
   listManageableTemplates,
   listScopeOrgUnits,
   listVersions,
-  restoreCentralTemplate,
-  updateCentralTemplate,
   type CentralEnv,
 } from './central';
+import { centralStateChangeSchema, createCentralTemplateSchema, updateCentralTemplateSchema } from './central-schemas';
+
+// The routes parse every body once, at the edge (http.ts parseBody), and the service takes the
+// parsed output; these tests parse their raw objects the same way first.
+const createCentralTemplate = async (p: Principal, raw: z.input<typeof createCentralTemplateSchema>, env?: CentralEnv) =>
+  service.createCentralTemplate(p, createCentralTemplateSchema.parse(raw), env);
+const updateCentralTemplate = async (p: Principal, id: string, raw: z.input<typeof updateCentralTemplateSchema>, env?: CentralEnv) =>
+  service.updateCentralTemplate(p, id, updateCentralTemplateSchema.parse(raw), env);
+const archiveCentralTemplate = async (p: Principal, id: string, raw: z.input<typeof centralStateChangeSchema>, env?: CentralEnv) =>
+  service.archiveCentralTemplate(p, id, centralStateChangeSchema.parse(raw), env);
+const restoreCentralTemplate = async (p: Principal, id: string, raw: z.input<typeof centralStateChangeSchema>, env?: CentralEnv) =>
+  service.restoreCentralTemplate(p, id, centralStateChangeSchema.parse(raw), env);
 
 const OWNER = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const CHILD = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -255,14 +266,6 @@ describe('createCentralTemplate', () => {
         code: 'target_outside_owner',
       });
     });
-
-    it('rejects an unknown kind and an over-long identifier before touching the database', async () => {
-      scope.hasGlobalScope.mockReturnValue(true);
-      const { env, calls } = setup();
-      await expect(createCentralTemplate(manager, { ...wide, principalTargets: [{ kind: 'user', identifier: 'x' }] } as never, env)).rejects.toBeInstanceOf(ValidationError);
-      await expect(createCentralTemplate(manager, { ...wide, principalTargets: [{ kind: 'role', identifier: 'x'.repeat(201) }] }, env)).rejects.toBeInstanceOf(ValidationError);
-      expect(calls).toHaveLength(0);
-    });
   });
 
   it('rolls back when the audit write fails: nothing is committed', async () => {
@@ -271,20 +274,6 @@ describe('createCentralTemplate', () => {
     await expect(createCentralTemplate(manager, input, env)).rejects.toThrow('audit down');
     expect(sqls().at(-1)).toBe('ROLLBACK');
     expect(sqls()).not.toContain('COMMIT');
-  });
-
-  it.each([
-    ['too short', 'for kort'],
-    ['whitespace only', '              '],
-    ['empty', ''],
-  ])('refuses a change note that is %s, before touching the database', async (_n, changeNote) => {
-    const { env, calls } = setup();
-    await expect(createCentralTemplate(manager, { ...input, changeNote }, env)).rejects.toMatchObject({
-      name: 'ValidationError',
-      code: 'change_note_invalid',
-      message: 'Beskriv ændringen (mindst 10 tegn)',
-    });
-    expect(calls).toHaveLength(0);
   });
 
   it('404 when the owner unit is outside the caller scope, and writes nothing', async () => {
@@ -332,14 +321,6 @@ describe('createCentralTemplate', () => {
       recordEvent.mockRejectedValueOnce(Object.assign(new Error('nul'), { code }));
       await expect(createCentralTemplate(manager, input, env)).rejects.toBeInstanceOf(ValidationError);
     }
-  });
-
-  it('rejects a lone surrogate as a ValidationError before touching the database', async () => {
-    const { env, calls } = setup();
-    await expect(createCentralTemplate(manager, { ...input, prompt: 'Skriv \ud800 kort.' }, env)).rejects.toBeInstanceOf(
-      ValidationError,
-    );
-    expect(writes(calls)).toEqual([]);
   });
 
   it('rejects an invalid schema name (the seam is a trusted constant, not request input)', async () => {
@@ -567,16 +548,16 @@ describe('updateCentralTemplate', () => {
     expect(recordEvent).not.toHaveBeenCalled();
   });
 
-  it('409 when the version-filtered UPDATE hits no row (lost race), carrying the version now current', async () => {
-    let selects = 0;
-    const fake = makeFakeRunner((sql) => {
-      if (sql.startsWith('UPDATE')) return [];
-      if (sql.includes('WHERE ct.id')) return [row({ current_version: selects++ === 0 ? 3 : 5 })];
-      return [];
-    });
-    const err = await updateCentralTemplate(manager, TPL, { ...base, name: 'Nyt' }, { schema: 'public', runner: fake.runner }).catch((e) => e);
-    expect(err).toMatchObject({ code: 'version_conflict', currentVersion: 5 });
-    expect(fake.sqls().at(-1)).toBe('ROLLBACK');
+  it('fails loudly (not a 409) when the version-filtered UPDATE hits no row under the row lock', async () => {
+    const lost = setup({ updated: [] });
+    const err = await updateCentralTemplate(manager, TPL, { ...base, name: 'Nyt' }, lost.env).catch((e) => e);
+    expect(err).not.toBeInstanceOf(VersionConflictError);
+    expect(err).toMatchObject({ message: 'central template row lock violated' });
+    expect(lost.sqls().at(-1)).toBe('ROLLBACK');
+    const archived = setup({ updated: [] });
+    await expect(archiveCentralTemplate(manager, TPL, { baseVersion: 3, changeNote: NOTE }, archived.env)).rejects.toThrow('central template row lock violated');
+    expect(archived.sqls().at(-1)).toBe('ROLLBACK');
+    expect(recordEvent).not.toHaveBeenCalled();
   });
 
   it('locks the row first (FOR UPDATE) so concurrent writers are serialised', async () => {
@@ -617,19 +598,6 @@ describe('updateCentralTemplate', () => {
     expect(scope.orgSubtreeUuids.mock.calls[0][0]).toEqual([{ orgUnitUuid: OWNER, includeDescendants: true }]);
     expect(writes(calls)).toEqual([]);
   });
-
-  it('requires the change note on every update', async () => {
-    const { env, calls } = setup();
-    await expect(updateCentralTemplate(manager, TPL, { baseVersion: 3, name: 'Nyt' } as never, env)).rejects.toMatchObject({ code: 'change_note_invalid' });
-    await expect(updateCentralTemplate(manager, TPL, { baseVersion: 3, name: 'Nyt', changeNote: ' kort ' }, env)).rejects.toMatchObject({ code: 'change_note_invalid' });
-    expect(calls).toHaveLength(0);
-  });
-
-  it('rejects unknown fields such as status or owner (strict)', async () => {
-    const { env } = setup();
-    await expect(updateCentralTemplate(manager, TPL, { ...base, ownerOrgUnitUuid: OTHER } as never, env)).rejects.toBeInstanceOf(ValidationError);
-    await expect(updateCentralTemplate(manager, TPL, { ...base, status: 'archived' } as never, env)).rejects.toBeInstanceOf(ValidationError);
-  });
 });
 
 describe('archive and restore', () => {
@@ -668,13 +636,6 @@ describe('archive and restore', () => {
     scope.isOrgUnitWithinScope.mockResolvedValue(false);
     await expect(archiveCentralTemplate(manager, TPL, input, setup().env)).rejects.toBeInstanceOf(NotFoundError);
   });
-
-  it('both need a change note', async () => {
-    const { env, calls } = setup();
-    await expect(archiveCentralTemplate(manager, TPL, { baseVersion: 3, changeNote: '   ' }, env)).rejects.toMatchObject({ code: 'change_note_invalid' });
-    await expect(restoreCentralTemplate(manager, TPL, { baseVersion: 3 } as never, env)).rejects.toMatchObject({ code: 'change_note_invalid' });
-    expect(calls).toHaveLength(0);
-  });
 });
 
 describe('reads', () => {
@@ -686,7 +647,7 @@ describe('reads', () => {
   });
 
   it('list: filters on the scoped owner units; a global scope passes NULL; default is active only', async () => {
-    const item = { id: TPL, name: 'A', description: '', owner_org_unit_uuid: OWNER, status: 'active', current_version: 2, target_count: 1, updated_at: new Date('2026-03-01T00:00:00Z'), created_by_name: 'Anne Ansvarlig', last_edited_by_name: 'Bo Beslutter', last_edited_at: new Date('2026-03-01T00:00:00Z') };
+    const item = { id: TPL, name: 'A', description: '', owner_org_unit_uuid: OWNER, status: 'active', current_version: 2, updated_at: new Date('2026-03-01T00:00:00Z'), created_by_name: 'Anne Ansvarlig', last_edited_by_name: 'Bo Beslutter', last_edited_at: new Date('2026-03-01T00:00:00Z') };
     const scoped = makeFakeRunner((sql) => {
       if (sql.startsWith('SELECT template_id')) return [{ template_id: TPL, org_unit_uuid: CHILD, include_descendants: true }];
       if (sql.startsWith('SELECT pt.template_id')) {
@@ -696,7 +657,7 @@ describe('reads', () => {
     });
     const out = await listManageableTemplates(manager, {}, { schema: 'public', runner: scoped.runner });
     expect(out).toEqual([{
-      id: TPL, name: 'A', description: '', ownerOrgUnitUuid: OWNER, status: 'active', currentVersion: 2, targetCount: 1,
+      id: TPL, name: 'A', description: '', ownerOrgUnitUuid: OWNER, status: 'active', currentVersion: 2,
       // The audience, named: units by uuid (the client resolves names), roles/groups with the catalogue's name and state.
       targets: [{ orgUnitUuid: CHILD, includeDescendants: true }],
       principalTargets: [{ kind: 'role', identifier: 'r', name: 'Rolle R', status: 'inactive', holders: 0 }],
@@ -711,7 +672,7 @@ describe('reads', () => {
   });
 
   it('list: creator and last editor come from the same single query (joined version rows, no N+1)', async () => {
-    const item = { id: TPL, name: 'A', description: '', owner_org_unit_uuid: OWNER, status: 'active', current_version: 2, target_count: 0, updated_at: new Date('2026-03-01T00:00:00Z'), created_by_name: null, last_edited_by_name: null, last_edited_at: null };
+    const item = { id: TPL, name: 'A', description: '', owner_org_unit_uuid: OWNER, status: 'active', current_version: 2, updated_at: new Date('2026-03-01T00:00:00Z'), created_by_name: null, last_edited_by_name: null, last_edited_at: null };
     const fake = makeFakeRunner((sql) => (sql.startsWith('SELECT template_id') || sql.startsWith('SELECT pt.template_id') ? [] : [item, { ...item, id: '99999999-9999-4999-8999-999999999999' }]));
     const out = await listManageableTemplates(manager, {}, { schema: 'public', runner: fake.runner });
     // One query for the page plus ONE each for the org-unit and the role/group audience: no N+1.
@@ -724,7 +685,7 @@ describe('reads', () => {
 
   it('list: a global manager also sees org-wide templates (null owner), listed without an owner', async () => {
     scope.orgUnitsInScope.mockResolvedValue({ all: true });
-    const item = { id: TPL, name: 'A', description: '', owner_org_unit_uuid: null, status: 'active', current_version: 1, target_count: 0, updated_at: new Date('2026-03-01T00:00:00Z'), created_by_name: null, last_edited_by_name: null, last_edited_at: null };
+    const item = { id: TPL, name: 'A', description: '', owner_org_unit_uuid: null, status: 'active', current_version: 1, updated_at: new Date('2026-03-01T00:00:00Z'), created_by_name: null, last_edited_by_name: null, last_edited_at: null };
     const fake = makeFakeRunner((sql) => (sql.startsWith('SELECT template_id') || sql.startsWith('SELECT pt.') ? [] : [item]));
     const out = await listManageableTemplates(manager, {}, { schema: 'public', runner: fake.runner });
     expect(out[0].ownerOrgUnitUuid).toBeNull();
@@ -854,12 +815,12 @@ describe('refusals are audited (authz.denied)', () => {
     expect(recordAuthzDenied.mock.calls.map((c) => c[0])).toEqual([denied('principal_targets_need_global'), denied('principal_targets_need_claims')]);
   });
 
-  it('version_conflict: a stale baseVersion, and a lost race on the version-filtered UPDATE', async () => {
+  it('version_conflict: a stale baseVersion; a violated row lock is a bug, not a refusal', async () => {
     await expect(updateCentralTemplate(manager, TPL, { ...edit, baseVersion: 1 }, setup().env)).rejects.toMatchObject({ code: 'version_conflict' });
     await expect(archiveCentralTemplate(manager, TPL, { ...state, baseVersion: 1 }, setup().env)).rejects.toMatchObject({ code: 'version_conflict' });
     const lost = setup({ updated: [] });
-    await expect(updateCentralTemplate(manager, TPL, edit, lost.env)).rejects.toMatchObject({ code: 'version_conflict' });
-    expect(recordAuthzDenied.mock.calls.map((c) => c[0])).toEqual([denied('version_conflict'), denied('version_conflict'), denied('version_conflict')]);
+    await expect(updateCentralTemplate(manager, TPL, edit, lost.env)).rejects.toThrow('central template row lock violated');
+    expect(recordAuthzDenied.mock.calls.map((c) => c[0])).toEqual([denied('version_conflict'), denied('version_conflict')]);
   });
 
   it('create: an organisation-wide template without a global right (403), and an owner unit out of scope; no template entity', async () => {
@@ -874,11 +835,10 @@ describe('refusals are audited (authz.denied)', () => {
     expect(recordAuthzDenied).not.toHaveBeenCalled();
   });
 
-  it('validation and state conflicts are not refusals (no_changes, template_archived, already_archived, invalid note)', async () => {
+  it('validation and state conflicts are not refusals (no_changes, template_archived, already_archived)', async () => {
     await expect(updateCentralTemplate(manager, TPL, { baseVersion: 3, changeNote: NOTE, name: 'Dialogmøde' }, setup().env)).rejects.toMatchObject({ code: 'no_changes' });
     await expect(updateCentralTemplate(manager, TPL, edit, setup({ template: [row({ status: 'archived' })] }).env)).rejects.toMatchObject({ code: 'template_archived' });
     await expect(archiveCentralTemplate(manager, TPL, state, setup({ template: [row({ status: 'archived' })] }).env)).rejects.toMatchObject({ code: 'already_archived' });
-    await expect(archiveCentralTemplate(manager, TPL, { baseVersion: 3, changeNote: 'for kort' }, setup().env)).rejects.toMatchObject({ code: 'change_note_invalid' });
     expect(recordAuthzDenied).not.toHaveBeenCalled();
   });
 

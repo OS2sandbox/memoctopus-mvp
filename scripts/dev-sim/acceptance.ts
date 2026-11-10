@@ -111,7 +111,7 @@ async function main() {
   heading('2. Who gets what after login (roles and scopes come from the mirror)');
   const mette = await as('mette.e');
   const meMette = await mette.get<MeResponse>('/api/me');
-  check('mette.e is administrator with global rights', meMette.json?.roles?.includes('admin') && meMette.json?.scopes?.['audit.read']?.global === true, brief(meMette));
+  check('mette.e is administrator with global rights', meMette.json?.roles?.includes('admin') && meMette.json?.capabilities?.includes('audit.read'), brief(meMette));
   check('readOnly=true in rollekatalog mode', meMette.json?.readOnly === true && meMette.json?.source === 'rollekatalog');
 
   const anne = await as('anne.p');

@@ -138,8 +138,7 @@ export interface CentralTemplateListItem {
   ownerOrgUnitUuid: string | null;
   status: CentralStatus;
   currentVersion: number;
-  /** Org-unit targets: the count and the targets themselves (names are resolved by the client from the scope list). */
-  targetCount: number;
+  /** Org-unit targets (names are resolved by the client from the scope list). */
   targets: CentralTarget[];
   principalTargets: CentralPrincipalTargetView[];
   updatedAt: string;

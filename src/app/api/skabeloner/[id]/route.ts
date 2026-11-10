@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSkabelon, updateSkabelonWithHistory, deleteSkabelon } from '@/lib/skabeloner/server';
+import { effectiveSkabelon } from '@/lib/skabeloner/effective-default';
 import { parseLocalChangeNote } from '@/lib/skabeloner/change-note';
 import { withHandler } from '@/lib/api-handler';
 import { recordServerEvent } from '@/lib/audit/record';
 import { requireAppAccess } from '@/lib/authz/app-access';
-import { UUID_RE } from '@/lib/audit/record';
+import { asEntityUuid } from '@/lib/ids';
 
 type Ctx = { params: Promise<{ id: string }> };
 
-// The id in the URL is not verified until the template is found: only a well-formed UUID becomes an entity.
-const entityOf = (id: string) => (UUID_RE.test(id) ? { entityId: id } : {});
+// The id in the URL is not verified until the template is found: only a well-formed UUID becomes an entity (asEntityUuid).
 
 export const GET = withHandler('skabeloner/[id] GET', async (_req: NextRequest, { params }: Ctx) => {
   const access = await requireAppAccess();
@@ -59,7 +59,7 @@ export const PUT = withHandler('skabeloner/[id] PUT', async (req: NextRequest, {
       type: 'template.update',
       outcome: 'error',
       actorUserId: session.user.id,
-      ...entityOf(id),
+      entityId: asEntityUuid(id),
       details: { changedFields: [], hasChangeNote: changeNote !== null },
     });
     throw err;
@@ -75,7 +75,8 @@ export const PUT = withHandler('skabeloner/[id] PUT', async (req: NextRequest, {
       details: { changedFields: changed, hasChangeNote: changeNote !== null, ...(version !== null ? { version } : {}) },
     });
   }
-  return NextResponse.json({ skabelon });
+  // Answered with the effective default flag (an available central default wins), as the list reports it.
+  return NextResponse.json({ skabelon: await effectiveSkabelon(session.user.id, skabelon) });
 });
 
 export const DELETE = withHandler('skabeloner/[id] DELETE', async (req: NextRequest, { params }: Ctx) => {
@@ -88,7 +89,7 @@ export const DELETE = withHandler('skabeloner/[id] DELETE', async (req: NextRequ
   try {
     ok = await deleteSkabelon(session.user.id, id);
   } catch (err) {
-    await recordServerEvent(req, { type: 'template.delete', outcome: 'error', actorUserId: session.user.id, ...entityOf(id) });
+    await recordServerEvent(req, { type: 'template.delete', outcome: 'error', actorUserId: session.user.id, entityId: asEntityUuid(id) });
     throw err;
   }
   if (!ok) return NextResponse.json({ error: 'Ikke fundet' }, { status: 404 });

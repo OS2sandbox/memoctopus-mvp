@@ -51,6 +51,8 @@ beforeEach(() => {
     state: 'ok',
     appRoleMap: role({ admin: 'admin', su: 'bygger' }),
     groupRoleMap: role({ 'g-log': 'bruger' }),
+    byProvider: new Map(),
+    providerCount: 1,
   };
   state.specs = {
     claims: {},

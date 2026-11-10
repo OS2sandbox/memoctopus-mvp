@@ -116,7 +116,7 @@ describe('meetings', () => {
       expectNoContent();
       h.report.mockClear();
       await updateMeeting(id, { participants: [SECRET_NAME, 'A', 'B'] }); // the mount effect re-saving the same list
-      await updateMeeting(id, { participants: ['X'] }, { automatic: true }); // the Teams roster sync
+      await updateMeeting(id, { participants: ['X'] }, { automatic: true }); // the Teams hand-off writing the names Teams published
       await updateMeeting(id, { status: 'review' });
       expect(h.report).not.toHaveBeenCalled();
     });

@@ -395,8 +395,10 @@ describe('warnDeprecatedAuthEnv', () => {
 });
 
 describe('microsoftSingleTenant', () => {
+  const GUID = '11111111-2222-3333-4444-555555555555';
+
   it('is true for one named tenant', () => {
-    process.env = { ...process.env, ...MICROSOFT, MICROSOFT_TENANT_ID: 'contoso-tenant-id' } as NodeJS.ProcessEnv;
+    process.env = { ...process.env, ...MICROSOFT, MICROSOFT_TENANT_ID: GUID } as NodeJS.ProcessEnv;
     expect(microsoftSingleTenant()).toBe(true);
   });
 
@@ -405,9 +407,55 @@ describe('microsoftSingleTenant', () => {
     expect(microsoftSingleTenant()).toBe(false);
   });
 
-  it('is false when Microsoft login is not configured at all', () => {
-    process.env = { ...process.env, MICROSOFT_TENANT_ID: 'contoso-tenant-id' } as NodeJS.ProcessEnv;
+  it('is false for a tenant domain name: a token tid (always the GUID) can never be checked against it', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env = { ...process.env, ...MICROSOFT, MICROSOFT_TENANT_ID: 'kommune.onmicrosoft.com' } as NodeJS.ProcessEnv;
     expect(microsoftSingleTenant()).toBe(false);
+  });
+
+  it('is false when Microsoft login is not configured at all', () => {
+    process.env = { ...process.env, MICROSOFT_TENANT_ID: GUID } as NodeJS.ProcessEnv;
+    expect(microsoftSingleTenant()).toBe(false);
+  });
+});
+
+describe('singleTenantId', () => {
+  const GUID = '11111111-2222-3333-4444-555555555555';
+  const fresh = async () => {
+    vi.resetModules();
+    return import('./providers');
+  };
+
+  it('is the trimmed, lower-cased GUID (upper case as configured on the server still pins it)', async () => {
+    const { singleTenantId } = await fresh();
+    process.env.MICROSOFT_TENANT_ID = ` ${GUID.toUpperCase()} `;
+    expect(singleTenantId()).toBe(GUID);
+    expect(singleTenantId(GUID.toUpperCase())).toBe(GUID);
+  });
+
+  it('is null, silently, for blank and the multi-tenant authorities', async () => {
+    const { singleTenantId } = await fresh();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const alias of ['', '  ', 'common', 'ORGANIZATIONS', 'consumers']) {
+      process.env.MICROSOFT_TENANT_ID = alias;
+      expect(singleTenantId(), alias).toBeNull();
+    }
+    delete process.env.MICROSOFT_TENANT_ID;
+    expect(singleTenantId()).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('is null for any other non-GUID, with ONE content-free warning per process', async () => {
+    const { singleTenantId } = await fresh();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const tenant of ['kommune.onmicrosoft.com', 'tenant-1', 'kommune.onmicrosoft.com']) {
+      process.env.MICROSOFT_TENANT_ID = tenant;
+      expect(singleTenantId(), tenant).toBeNull();
+    }
+    expect(warn).toHaveBeenCalledOnce();
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).toContain('microsoft_tenant_not_guid');
+    for (const value of ['kommune', 'tenant-1']) expect(logged).not.toContain(value);
   });
 });
 

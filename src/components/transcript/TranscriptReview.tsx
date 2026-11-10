@@ -457,9 +457,8 @@ export function TranscriptReview({
         const d = await res.json().catch(() => ({}));
         throw new Error(d.error ?? (mode === 'update' ? 'Kunne ikke opdatere skabelon' : 'Kunne ikke gemme skabelon'));
       }
-      const { skabelon: saved } = (await res.json()) as { skabelon: Skabelon };
-      // The raw row keeps a stale personal default while a central one is the default.
-      const skabelon = { ...saved, isDefault: saved.isDefault && !centralSkabeloner.some((c) => c.isDefault) };
+      // The flag is already the effective default (a central default wins), as in GET.
+      const { skabelon } = (await res.json()) as { skabelon: Skabelon };
       if (mode === 'update') {
         setSkabeloner((prev) => prev.map((s) => (s.id === skabelon.id ? skabelon : s)));
       } else {

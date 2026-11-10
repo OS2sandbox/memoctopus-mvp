@@ -101,11 +101,13 @@ export async function collectTeamsArtifacts(meetingId: string): Promise<void> {
       participants?: string[];
       durationSeconds?: number | null;
     };
+    // The speaker names come from Teams, not from the person: an automatic write, so it is not
+    // audited as a participants edit.
     await updateMeeting(meetingId, {
       status: 'processing',
       audioDurationSeconds: body.durationSeconds ?? null,
       ...(body.participants?.length ? { participants: body.participants } : {}),
-    });
+    }, { automatic: true });
     return;
   }
   // Nothing to collect within the deadline: the server-side transcript may still

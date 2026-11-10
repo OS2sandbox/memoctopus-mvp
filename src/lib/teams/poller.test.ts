@@ -564,6 +564,25 @@ describe('pollMeeting', () => {
     expect(mockMark).toHaveBeenCalledTimes(1);
   });
 
+  it('deletes the recording from OneDrive when the person deleted the meeting while the run was transcribing it', async () => {
+    const live = row();
+    mockGet.mockResolvedValueOnce(live).mockResolvedValue(null);
+    mockProcess.mockResolvedValueOnce({
+      status: 'ready', mode: 'recording+transcript', speakers: ['Mette Hansen'],
+      transcriptId: 't1', recordingId: 'r1', recordingBytes: 4242,
+    });
+    mockMark.mockRejectedValue(new Error('markPollAttempt: no such Teams meeting: m1'));
+    mockDeleteRecording.mockResolvedValueOnce('deleted');
+
+    await expect(pollMeeting('u1', 'm1', NOW)).resolves.toBe(live);
+
+    // No row is left for the retry to hang on: this is the one chance to remove it.
+    expect(mockDeleteRecording).toHaveBeenCalledWith('u1', 4242);
+    expect(vi.mocked(acknowledgePendingTranscript)).toHaveBeenCalledWith('m1', 'u1');
+    // A meeting the person deleted was not fetched for them.
+    expect(mockAuditFetch).not.toHaveBeenCalled();
+  });
+
   it('does not touch the stash when a failing poll finds its row still there', async () => {
     mockGet.mockResolvedValue(row());
     mockProcess.mockRejectedValueOnce(new Error('socket hang up'));

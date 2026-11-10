@@ -11,7 +11,6 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 import { __resetDroppedEvents } from '@/lib/audit/dropped';
 import {
   __resetLiveAudio,
-  asEntityUuid,
   elapsedMs,
   emitAudit,
   emitLiveAudioUpload,
@@ -29,24 +28,6 @@ beforeEach(() => {
   __resetLiveAudio();
 });
 afterEach(() => vi.restoreAllMocks());
-
-describe('asEntityUuid', () => {
-  it('accepts a well-formed UUID', () => {
-    expect(asEntityUuid(UUID)).toBe(UUID);
-  });
-
-  it.each(['meet-1', '', ' ', UUID + 'x', `${UUID}\n`, '../../etc/passwd', 'Referat om sag 42'])(
-    'rejects %j so arbitrary client strings never become an entity id',
-    (v) => expect(asEntityUuid(v)).toBeUndefined(),
-  );
-
-  it('rejects non-strings', () => {
-    expect(asEntityUuid(undefined)).toBeUndefined();
-    expect(asEntityUuid(null)).toBeUndefined();
-    expect(asEntityUuid(42)).toBeUndefined();
-    expect(asEntityUuid({ toString: () => UUID })).toBeUndefined();
-  });
-});
 
 describe('outcomeCodeOf', () => {
   it('maps a numeric HTTP status to http_<status>', () => {

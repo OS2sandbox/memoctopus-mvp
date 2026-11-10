@@ -3,7 +3,8 @@ import { HviskeProvider } from '@/lib/ai/transcription';
 import { withHandler } from '@/lib/api-handler';
 import { safeLogError } from '@/lib/audit/safe-log';
 import { requireAppAccess } from '@/lib/authz/app-access';
-import { asEntityUuid, elapsedMs, emitLiveAudioUpload, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
+import { elapsedMs, emitLiveAudioUpload, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
+import { asEntityUuid } from '@/lib/ids';
 
 interface Params {
   params: Promise<{ id: string }>;

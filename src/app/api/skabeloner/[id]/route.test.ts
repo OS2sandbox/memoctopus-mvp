@@ -22,11 +22,15 @@ vi.mock('@/lib/audit/record', async (importOriginal) => ({
 }));
 vi.mock('@/lib/db', () => ({ db: {}, pool: {} }));
 
+const mockCentralDefaultId = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/skabeloner/server', () => ({
   getSkabelon: vi.fn(),
   updateSkabelonWithHistory: vi.fn(),
   deleteSkabelon: vi.fn(),
+  getCentralDefaultId: mockCentralDefaultId,
 }));
+const mockListCentral = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/skabeloner/resolve', () => ({ listCentralForUser: mockListCentral }));
 
 import { GET, PUT, DELETE } from './route';
 import { auth } from '@/lib/auth';
@@ -260,6 +264,45 @@ describe('PUT /api/skabeloner/[id]', () => {
     expect(res.headers.get('Content-Type')).toContain('application/json');
     const json = await res.json();
     expect(json.error).toBeDefined();
+  });
+  describe('answers with the effective default flag (as GET /api/skabeloner)', () => {
+    const CENTRAL_ID = '99999999-2222-4333-8444-555555555555';
+    const central = { id: CENTRAL_ID, source: 'central', name: 'Dialogmøde', locked: true, version: 3 };
+    beforeEach(() => {
+      mockCentralDefaultId.mockReset();
+      mockListCentral.mockReset();
+    });
+
+    it('the personal default reads false while an available central template is the default', async () => {
+      mockUpdateSkabelon.mockResolvedValueOnce({ ...SAMPLE_SKABELON, name: 'Ny', isDefault: true });
+      mockListCentral.mockResolvedValue([central]);
+      mockCentralDefaultId.mockResolvedValue(CENTRAL_ID);
+      const res = await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Ny' }), CTX);
+      expect(res.status).toBe(200);
+      expect((await res.json()).skabelon).toMatchObject({ id: SK_ID, isDefault: false });
+    });
+
+    it('keeps the flag when the central default is no longer available, or the central list cannot be resolved', async () => {
+      mockCentralDefaultId.mockResolvedValue(CENTRAL_ID);
+      mockUpdateSkabelon.mockResolvedValueOnce({ ...SAMPLE_SKABELON, name: 'Ny', isDefault: true });
+      mockListCentral.mockResolvedValueOnce([]);
+      expect((await (await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Ny' }), CTX)).json()).skabelon.isDefault).toBe(true);
+
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      mockUpdateSkabelon.mockResolvedValueOnce({ ...SAMPLE_SKABELON, name: 'Ny', isDefault: true });
+      mockListCentral.mockRejectedValueOnce(new Error('db down'));
+      const res = await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Ny' }), CTX);
+      expect(res.status).toBe(200);
+      expect((await res.json()).skabelon.isDefault).toBe(true);
+      spy.mockRestore();
+    });
+
+    it('looks nothing up for a template that is not the personal default', async () => {
+      mockUpdateSkabelon.mockResolvedValueOnce({ ...SAMPLE_SKABELON, name: 'Ny' });
+      await PUT(makeJsonReq(BASE_URL, 'PUT', { name: 'Ny' }), CTX);
+      expect(mockListCentral).not.toHaveBeenCalled();
+      expect(mockCentralDefaultId).not.toHaveBeenCalled();
+    });
   });
 });
 

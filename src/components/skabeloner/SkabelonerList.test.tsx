@@ -1102,24 +1102,6 @@ describe('SkabelonerList — central templates as default', () => {
     expect(screen.getByRole('button', { name: 'Gør til standard' })).toBeInTheDocument();
   });
 
-  it('masks a stale personal default on a saved row while a central default is set', async () => {
-    const user = userEvent.setup();
-    const s = makeSkabelon({ id: 'per-1', name: 'Min skabelon', isDefault: false });
-    setupFetch([s], { code: true, link: false }, [makeCentral({ isDefault: true })]);
-    render(<SkabelonerList />);
-    await screen.findByTestId('central-skabelon');
-    await user.click(screen.getByRole('button', { name: 'Rediger' }));
-
-    // PUT answers with the raw row, whose personal flag is still true.
-    await act(async () => {
-      mockEditorOnSaved({ ...s, name: 'Rettet', isDefault: true });
-    });
-
-    await screen.findByText('Rettet');
-    expect(screen.getAllByRole('button', { name: 'Standardskabelon' })).toHaveLength(1);
-    expect(screen.getAllByText('Skabelon valgt som standard')).toHaveLength(1);
-  });
-
   it('clears the central default when a personal template is made the default', async () => {
     const user = userEvent.setup();
     setupFetch([makeSkabelon({ id: 'per-1', isDefault: false })], { code: true, link: false }, [makeCentral({ isDefault: true })]);

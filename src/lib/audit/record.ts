@@ -19,8 +19,8 @@ import { auditStdout, auditStoreIp } from './config';
 import { eventDef, isEventType, type AuditEventInput, type AuditEventOf, type EventType } from './events';
 import { CODE_RE, EVENT_OUTCOMES, EVENT_SOURCES, type EventOutcome, type EventSource } from './events/types';
 import { cleanUserAgent, requestContext, type HeaderSource, type RequestContext } from './request-context';
+import { UUID_RE } from '@/lib/ids';
 
-export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ENTITY_TYPE_RE = /^[a-z][a-z0-9_]{0,31}$/;
 const ACTOR_ID_RE = /^[^\s\u0000-\u001f]{1,128}$/;
 export const TABLE_RE = /^[A-Za-z0-9_."]{1,128}$/;
@@ -217,9 +217,8 @@ const NO_ACTOR: ActorSnapshot = { name: null, orgUnitUuid: null };
 
 /**
  * Name and primary org unit of the actor, copied into the row so the log still
- * reads correctly after the user or unit changes and so scoped readers can be
- * limited by unit. Primary = the member row flagged is_primary, else the only
- * unit when there is exactly one, else NULL (then only global readers see it).
+ * reads correctly after the user or unit changes. Primary = the member row
+ * flagged is_primary, else the only unit when there is exactly one, else NULL.
  */
 async function actorSnapshot(userId: string | null): Promise<ActorSnapshot> {
   if (!userId) return NO_ACTOR;

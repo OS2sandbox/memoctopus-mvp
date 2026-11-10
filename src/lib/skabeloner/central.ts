@@ -25,7 +25,8 @@
 //  - Optimistic concurrency: writes carry baseVersion. The row is locked
 //    FOR UPDATE first, so two concurrent writers with the same baseVersion are
 //    serialised and the second sees the new version and gets a
-//    VersionConflictError (409); the UPDATE also filters on current_version.
+//    VersionConflictError (409). The UPDATE also filters on current_version, as a
+//    tripwire: if it matches no row the lock was violated, which is a bug (500), not a 409.
 //
 // Refusals are audited too: a manager who is refused (a scoped manager touching a template out of
 //    scope or organisation-wide, role/group targets without the right or outside claims mode, a stale
@@ -38,9 +39,12 @@
 // called from manager-scoped routes. Ordinary users get the prompt-free
 // CentralSkabelonSummary from the resolver instead.
 //
+// Inputs are the PARSED bodies (z.output of central-schemas.ts): the routes validate
+// once, at the edge (http.ts parseBody), and the service does not parse again.
+//
 // Raw SQL through the SqlRunner seam with a configurable schema (default
 // 'public'), so the *.pg.test.ts lane runs the same code in a throwaway schema.
-import { z } from 'zod';
+import type { z } from 'zod';
 import type { AuditEventOf, EventType } from '@/lib/audit/events';
 import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 import { recordEvent } from '@/lib/audit/record';
@@ -49,14 +53,13 @@ import { defaultRunner, type SqlQueryable, type SqlRunner } from '@/lib/authz/pg
 import { accessSource, claimsFreshnessSeconds, type AccessSource } from '@/lib/authz/config';
 import { hasGlobalScope, isOrgUnitWithinScope, orgSubtreeUuids, orgUnitsInScope, type ScopeEnv } from '@/lib/authz/scope';
 import type { Principal } from '@/lib/authz/types';
-import { UUID_RE, heldRoleSql, qualifyTable } from './audience-sql';
-import {
+import { isUuid } from '@/lib/ids';
+import { heldRoleSql, qualifyTable } from './audience-sql';
+import type {
   centralStateChangeSchema,
   createCentralTemplateSchema,
-  dedupePrincipalTargets,
-  dedupeTargets,
   updateCentralTemplateSchema,
-  type CentralStatusFilter,
+  CentralStatusFilter,
 } from './central-schemas';
 import {
   CENTRAL_CONTENT_FIELDS,
@@ -107,8 +110,6 @@ function defaultCentralEnv(): CentralEnv {
 }
 
 const tbl = (env: CentralEnv, table: string): string => qualifyTable(env.schema, table);
-
-const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID_RE.test(v);
 
 const NOT_FOUND = 'Skabelonen findes ikke';
 
@@ -183,20 +184,6 @@ async function inTx<T>(env: CentralEnv, fn: (tx: SqlQueryable) => Promise<T>, re
 
 function scopeEnv(env: CentralEnv, q: SqlQueryable): ScopeEnv {
   return { query: (text, params) => q.query(text, params), orgUnitsTable: tbl(env, 'org_units') };
-}
-
-/**
- * The routes parse bodies with the same schemas; parsing again here keeps the
- * service safe for any other caller. Issue messages are only passed on where
- * the schemas set a Danish one (never zod's English defaults).
- */
-function parseInput<S extends z.ZodTypeAny>(schema: S, value: unknown): z.output<S> {
-  const parsed = schema.safeParse(value);
-  if (parsed.success) return parsed.data;
-  const issue = parsed.error.issues[0];
-  const isNote = issue.path[0] === 'changeNote';
-  const danish = isNote || issue.code === 'too_small' || issue.code === 'too_big' || issue.code === 'custom';
-  throw new ValidationError(danish ? issue.message : 'Ugyldigt input', isNote ? 'change_note_invalid' : 'invalid');
 }
 
 const iso = (d: unknown): string => (d instanceof Date ? d.toISOString() : String(d));
@@ -535,13 +522,12 @@ async function reload(env: CentralEnv, q: SqlQueryable, id: string): Promise<Cen
 
 export async function createCentralTemplate(
   principal: Principal,
-  rawInput: z.input<typeof createCentralTemplateSchema>,
+  input: z.output<typeof createCentralTemplateSchema>,
   env: CentralEnv = defaultCentralEnv(),
 ): Promise<CentralTemplateAdmin> {
-  const input = parseInput(createCentralTemplateSchema, rawInput);
   const owner = input.ownerOrgUnitUuid;
-  const targets = sortTargets(dedupeTargets(input.targets));
-  const principalTargets = sortPrincipal(dedupePrincipalTargets(input.principalTargets));
+  const targets = sortTargets(input.targets);
+  const principalTargets = sortPrincipal(input.principalTargets);
   const content: CentralTemplateContent = {
     name: input.name,
     description: input.description,
@@ -623,11 +609,9 @@ export async function createCentralTemplate(
 export async function updateCentralTemplate(
   principal: Principal,
   id: string,
-  rawInput: z.input<typeof updateCentralTemplateSchema>,
+  input: z.output<typeof updateCentralTemplateSchema>,
   env: CentralEnv = defaultCentralEnv(),
 ): Promise<CentralTemplateAdmin> {
-  const input = parseInput(updateCentralTemplateSchema, rawInput);
-
   return inTx(env, async (tx) => {
     const row = await loadManageable(env, tx, principal, id, true);
     await assertNoPrincipalTargetsUnlessGlobal(env, tx, principal, row.id);
@@ -669,7 +653,7 @@ export async function updateCentralTemplate(
       params.push(next[f]);
       return `${COLUMN[f]} = $${params.length}`;
     });
-    // The version filter is a second line of defence behind the row lock.
+    // The row is locked, so the version filter always matches; a miss means the lock was violated.
     const updated = await tx.query<{ current_version: number }>(
       `UPDATE ${tbl(env, 'central_templates')}
           SET ${[...sets, 'current_version = current_version + 1', 'updated_at = now()'].join(', ')}
@@ -677,10 +661,7 @@ export async function updateCentralTemplate(
         RETURNING current_version`,
       params,
     );
-    if (updated.rows.length === 0) {
-      const now = await selectRow(env, tx, row.id, false);
-      throw new VersionConflictError(now?.current_version ?? row.current_version);
-    }
+    if (updated.rows.length !== 1) throw new Error('central template row lock violated');
 
     if (targetsChanged) await replaceTargets(env, tx, row.id, nextTargets);
     if (principalChanged) await replacePrincipalTargets(env, tx, row.id, nextPrincipal);
@@ -732,11 +713,10 @@ export async function updateCentralTemplate(
 async function changeStatus(
   principal: Principal,
   id: string,
-  rawInput: z.input<typeof centralStateChangeSchema>,
+  input: z.output<typeof centralStateChangeSchema>,
   to: CentralStatus,
   env: CentralEnv,
 ): Promise<CentralTemplateAdmin> {
-  const input = parseInput(centralStateChangeSchema, rawInput);
   const archiving = to === 'archived';
 
   return inTx(env, async (tx) => {
@@ -757,10 +737,7 @@ async function changeStatus(
         RETURNING current_version`,
       [row.id, row.current_version, to],
     );
-    if (updated.rows.length === 0) {
-      const now = await selectRow(env, tx, row.id, false);
-      throw new VersionConflictError(now?.current_version ?? row.current_version);
-    }
+    if (updated.rows.length !== 1) throw new Error('central template row lock violated');
 
     const targets = await selectTargets(env, tx, row.id);
     const principalTargets = await selectPrincipalTargets(env, tx, row.id, false);
@@ -788,14 +765,14 @@ async function changeStatus(
 export const archiveCentralTemplate = (
   principal: Principal,
   id: string,
-  input: z.input<typeof centralStateChangeSchema>,
+  input: z.output<typeof centralStateChangeSchema>,
   env: CentralEnv = defaultCentralEnv(),
 ): Promise<CentralTemplateAdmin> => changeStatus(principal, id, input, 'archived', env);
 
 export const restoreCentralTemplate = (
   principal: Principal,
   id: string,
-  input: z.input<typeof centralStateChangeSchema>,
+  input: z.output<typeof centralStateChangeSchema>,
   env: CentralEnv = defaultCentralEnv(),
 ): Promise<CentralTemplateAdmin> => changeStatus(principal, id, input, 'active', env);
 
@@ -822,14 +799,12 @@ export async function listManageableTemplates(
     owner_org_unit_uuid: string | null;
     status: string;
     current_version: number;
-    target_count: number;
     updated_at: Date | string;
     created_by_name: string | null;
     last_edited_by_name: string | null;
     last_edited_at: Date | string | null;
   }>(
     `SELECT ct.id, ct.name, ct.description, ct.owner_org_unit_uuid, ct.status, ct.current_version, ct.updated_at,
-            (SELECT count(*)::int FROM ${tbl(env, 'central_template_targets')} t WHERE t.template_id = ct.id) AS target_count,
             v1.changed_by_name AS created_by_name,
             vc.changed_by_name AS last_edited_by_name, vc.changed_at AS last_edited_at
        FROM ${tbl(env, 'central_templates')} ct
@@ -875,7 +850,6 @@ export async function listManageableTemplates(
     ownerOrgUnitUuid: r.owner_org_unit_uuid,
     status: r.status as CentralStatus,
     currentVersion: r.current_version,
-    targetCount: r.target_count,
     targets: orgTargets.get(r.id) ?? [],
     principalTargets: principalTargets.get(r.id) ?? [],
     updatedAt: iso(r.updated_at),
