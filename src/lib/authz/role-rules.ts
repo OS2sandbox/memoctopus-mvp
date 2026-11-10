@@ -4,7 +4,7 @@
 import { ROLE_DEFINITIONS, type RoleScope } from './capabilities';
 import type { RoleKey } from './types';
 
-type ScopeRule = 'forbidden' | 'required' | 'optional';
+type ScopeRule = 'forbidden' | 'optional';
 
 const SCOPE_RULES: Record<RoleScope, ScopeRule> = {
   'none': 'forbidden',

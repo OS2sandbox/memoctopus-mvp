@@ -122,8 +122,6 @@ export function validateGrantShape(input: GrantShape): RoleKey {
       throw new ValidationError('Rollen kan ikke begrænses til en organisationsenhed', 'scope_forbidden');
     }
     if (!isUuid(scopeOrgUnitUuid)) throw new ValidationError('Ugyldig organisationsenhed', 'invalid_scope');
-  } else if (rule === 'required') {
-    throw new ValidationError('Rollen kræver en organisationsenhed', 'scope_required');
   }
 
   for (const d of [startDate, stopDate]) {

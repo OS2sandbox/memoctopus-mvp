@@ -171,7 +171,7 @@ dead end and offers the saved transcript or a delete.
   run never fetched. More than one file of that size deletes nothing. The poller
   owns the orchestration (`cleanUpRecording()`): `recording_cleanup = 'pending'` is
   written in the same UPDATE that marks the row `ready`, retried every tick for a
-  day, and never changes the meeting's state. Deleting a meeting (`DELETE /api/teams/meetings/[id]`) makes one last, time-boxed attempt while the row is still `pending` (the row is what the retry hangs on; a still-postponed attempt leaves the file in OneDrive) and removes the stash via `acknowledgePendingTranscript`; a run that was still transcribing when the row was deleted makes that one best-effort delete and removes the stash itself, with no `teams.artifacts_fetch` event. A row whose recording is gone passes
+  day, and never changes the meeting's state. Deleting a meeting (`DELETE /api/teams/meetings/[id]`) makes one last, time-boxed attempt while the row is still `pending` (the row is what the retry hangs on; a still-postponed attempt leaves the file in OneDrive) and removes the stash via `acknowledgePendingTranscript`; a run that was still transcribing when the row was deleted makes that one best-effort delete (its verdict is the `teams.recording_delete` event, no retry) and removes the stash itself, with no `teams.artifacts_fetch` event. A row whose recording is gone passes
   `recordingDeleted` to the pipeline, so "Hent igen" goes straight to Teams' own
   transcript. Needs `Files.ReadWrite`; off with `TEAMS_DELETE_RECORDING=false`.
   Teams' transcript has no delete in Graph either, and needs none: it is embedded

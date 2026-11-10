@@ -578,9 +578,26 @@ describe('pollMeeting', () => {
 
     // No row is left for the retry to hang on: this is the one chance to remove it.
     expect(mockDeleteRecording).toHaveBeenCalledWith('u1', 4242);
+    expect(mockAuditDelete).toHaveBeenCalledWith({ userId: 'u1', meetingId: 'm1', status: 'deleted' });
     expect(vi.mocked(acknowledgePendingTranscript)).toHaveBeenCalledWith('m1', 'u1');
     // A meeting the person deleted was not fetched for them.
     expect(mockAuditFetch).not.toHaveBeenCalled();
+  });
+
+  it('audits a failed OneDrive delete of a meeting deleted mid-run as failed', async () => {
+    mockGet.mockResolvedValueOnce(row()).mockResolvedValue(null);
+    mockProcess.mockResolvedValueOnce({
+      status: 'ready', mode: 'recording+transcript', speakers: [],
+      transcriptId: 't1', recordingId: 'r1', recordingBytes: 4242,
+    });
+    mockMark.mockRejectedValue(new Error('markPollAttempt: no such Teams meeting: m1'));
+    mockDeleteRecording.mockRejectedValueOnce(new Error('graph down'));
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockAuditDelete).toHaveBeenCalledWith({ userId: 'u1', meetingId: 'm1', status: 'failed' });
+    spy.mockRestore();
   });
 
   it('does not touch the stash when a failing poll finds its row still there', async () => {

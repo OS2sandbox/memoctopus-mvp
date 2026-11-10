@@ -89,7 +89,6 @@ function GrantForm({
   function validate(): FieldErrors {
     const e: FieldErrors = {};
     if (!roleKey) e.role = 'Vælg en rolle';
-    else if (rule === 'required' && !scope) e.scope = 'Rollen kræver en organisationsenhed';
     if (startDate && stopDate && stopDate <= startDate) e.dates = 'Slutdato skal ligge efter startdato';
     return e;
   }
@@ -151,13 +150,13 @@ function GrantForm({
       {rule !== 'forbidden' && (
         <>
           <Select
-            label={rule === 'required' ? 'Organisationsenhed' : 'Organisationsenhed (valgfri)'}
+            label="Organisationsenhed (valgfri)"
             value={scope}
             onChange={(e) => setScope(e.target.value)}
             error={errors.scope ?? orgUnitsError}
-            hint={rule === 'optional' ? 'Uden enhed gælder rollen for hele organisationen.' : undefined}
+            hint="Uden enhed gælder rollen for hele organisationen."
           >
-            <option value="">{rule === 'required' ? 'Vælg enhed' : 'Hele organisationen'}</option>
+            <option value="">Hele organisationen</option>
             {rows.map(({ unit, depth }) => (
               <option key={unit.uuid} value={unit.uuid}>
                 {indentedLabel(unit.name, depth)}

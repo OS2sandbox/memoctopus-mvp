@@ -270,11 +270,16 @@ async function pollMeetingInner(
       // The DELETE skipped the recording too (it was not `pending` yet), and with the row gone
       // nothing is left for the retry to hang on: this is the one chance to remove it from OneDrive.
       if (outcome?.status === 'ready' && outcome.recordingBytes != null && deleteRecordingEnabled()) {
+        let result: Exclude<RecordingCleanupState, 'pending'>;
         try {
-          await deleteRecordingFromDrive(userId, outcome.recordingBytes);
+          const deleted = await deleteRecordingFromDrive(userId, outcome.recordingBytes);
+          result = deleted === 'ambiguous' ? 'failed' : deleted;
         } catch (delErr) {
           safeLogError(`teams/poller ${id}: could not delete the recording of a deleted meeting from OneDrive`, delErr);
+          result = 'failed';
         }
+        // The same verdict cleanUpRecording reports; there is no retry, so this one is final.
+        await recordTeamsRecordingDelete({ userId, meetingId: id, status: result });
       }
       // Nothing was fetched for the person: they deleted the meeting.
       verdict.value = undefined;

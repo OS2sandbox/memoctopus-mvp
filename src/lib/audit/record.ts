@@ -243,7 +243,6 @@ async function actorSnapshot(userId: string | null): Promise<ActorSnapshot> {
 
 /**
  * actorSnapshot that never throws: a snapshot is metadata, so losing it must not lose the event.
- * Without the unit, only global readers see the row (fail closed).
  */
 export async function resolveActorSnapshot(userId: string | null): Promise<ActorSnapshot> {
   try {

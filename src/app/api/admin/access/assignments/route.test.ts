@@ -127,10 +127,10 @@ describe('POST /api/admin/access/assignments (access.manage)', () => {
   });
 
   it('maps the scope rules of the service to 400', async () => {
-    mockGrant.mockRejectedValue(new ValidationError('Rollen kræver en organisationsenhed', 'scope_required'));
-    const res = await post({ appUserId: 'u', roleKey: 'bygger' });
+    mockGrant.mockRejectedValue(new ValidationError('Rollen kan ikke begrænses til en organisationsenhed', 'scope_forbidden'));
+    const res = await post({ appUserId: 'u', roleKey: 'bruger' });
     expect(res.status).toBe(400);
-    expect((await res.json()).code).toBe('scope_required');
+    expect((await res.json()).code).toBe('scope_forbidden');
   });
 
   it('maps not-found and conflict from the service to 404 and 409', async () => {
