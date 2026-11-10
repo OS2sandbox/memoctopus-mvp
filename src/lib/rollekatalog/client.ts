@@ -28,7 +28,7 @@ import {
 
 export const API_KEY_HEADER = 'ApiKey';
 /** Retries after the first attempt (network, 5xx and 429 only; a timeout is never retried). */
-export const MAX_RETRIES = 2;
+const MAX_RETRIES = 2;
 const BASE_BACKOFF_MS = 250;
 
 export interface ClientOptions {

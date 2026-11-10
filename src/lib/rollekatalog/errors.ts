@@ -15,7 +15,7 @@ export const ROLLEKATALOG_ERROR_CODES = [
   'invalid_response',
   'too_large',
 ] as const;
-export type RollekatalogErrorCode = (typeof ROLLEKATALOG_ERROR_CODES)[number];
+type RollekatalogErrorCode = (typeof ROLLEKATALOG_ERROR_CODES)[number];
 
 export class RollekatalogError extends Error {
   readonly code: RollekatalogErrorCode;
@@ -30,7 +30,7 @@ export class RollekatalogError extends Error {
   }
 }
 
-export function isRollekatalogError(err: unknown): err is RollekatalogError {
+function isRollekatalogError(err: unknown): err is RollekatalogError {
   return err instanceof RollekatalogError;
 }
 

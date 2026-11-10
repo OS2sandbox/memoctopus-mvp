@@ -13,7 +13,7 @@ import { recordEvent } from './record';
 import { safeRequestContext, type HeaderSource, type RequestContext } from './request-context';
 
 /** The reasons the server itself reports; `client_outbox` is self-reported by the browser. */
-export type ServerDropReason = Exclude<DropReason, 'client_outbox'>;
+type ServerDropReason = Exclude<DropReason, 'client_outbox'>;
 
 export const DROPPED_WINDOW_MS = 10 * 60_000;
 const MAX_KEYS = 2_000;

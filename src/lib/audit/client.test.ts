@@ -1,8 +1,14 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { addToOutbox, OutboxEvent } from './outbox';
+
+/** An event as the client queues and sends it. */
+type WireEvent = Parameters<typeof addToOutbox>[1];
+/** A row of the fake outbox: the event, plus its attempts and (for the per-user split) the owning user. */
+type QueuedEvent = WireEvent & Partial<Pick<OutboxEvent, 'attempts'>> & { owner?: string };
 
 const h = vi.hoisted(() => ({
-  queue: [] as Array<Record<string, any>>,
+  queue: [] as QueuedEvent[],
   available: true,
   addFails: false,
   failed: [] as string[][],
@@ -12,7 +18,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('./outbox', () => ({
   outboxAvailable: () => h.available,
-  addToOutbox: vi.fn(async (u: string, ev: Record<string, any>) => {
+  addToOutbox: vi.fn(async (u: string, ev: WireEvent) => {
     if (h.addFails) throw new Error('quota');
     h.queue.push({ ...ev, attempts: 0, owner: u });
     return true;
@@ -41,7 +47,7 @@ let c: Client;
 let fetchMock: ReturnType<typeof vi.fn>;
 
 const respond = (status: number) => ({ ok: status >= 200 && status < 300, status }) as Response;
-const sentBodies = () => fetchMock.mock.calls.map((call) => JSON.parse(call[1].body as string).events as Array<Record<string, any>>);
+const sentBodies = () => fetchMock.mock.calls.map((call) => JSON.parse(call[1].body as string).events as WireEvent[]);
 
 async function load(userId: string | null = 'user-1') {
   c?.__resetAuditClient(); // removes the previous instance's window/document listeners

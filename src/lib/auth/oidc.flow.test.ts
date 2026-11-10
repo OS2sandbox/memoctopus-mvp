@@ -41,10 +41,11 @@ describe('OIDC login through the real plugins', () => {
   let base: string;
   const issued = new Map<string, Issued>();
   const userinfoCalls: string[] = [];
-  let db: Record<string, Array<Record<string, any>>>;
+  /** The memory adapter's tables; the tests read the account rows better-auth writes. */
+  let db: { user: unknown[]; session: unknown[]; account: Array<{ userId: string; providerId: string; accountId: string }>; verification: unknown[] };
   let auth: ReturnType<typeof makeAuth>;
   /** What the session.create.after hook saw: the account, the handed-over claims and the roles they decide. */
-  let logins: Array<{ providerId: string; claims: Record<string, unknown> | null; roles: string[] }>;
+  let logins: Array<{ providerId: string | undefined; claims: Record<string, unknown> | null; roles: string[] }>;
 
   const jwt = (payload: Record<string, unknown>) => `h.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.s`;
   const tokenClaims = (over: Record<string, unknown> = {}) => ({
@@ -127,7 +128,7 @@ describe('OIDC login through the real plugins', () => {
               logins.push({
                 providerId: account?.providerId,
                 claims,
-                roles: decideFromClaims(claims, account?.providerId, ROLES, SPECS, []).roles,
+                roles: account ? decideFromClaims(claims, account.providerId, ROLES, SPECS, []).roles : [],
               });
             },
           },
@@ -254,7 +255,7 @@ describe('OIDC login through the real plugins', () => {
     it('with an id token that has no e-mail address and no userinfo, the login is refused without logging a claim', async () => {
       const res = await login('c7', { idToken: tokenClaims({ email: undefined, roles: ['top-secret-role'] }) });
       expect(hasSession(res)).toBe(false);
-      expect(JSON.stringify((console.warn as any).mock.calls)).not.toContain('top-secret-role');
+      expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain('top-secret-role');
       expect(db.user).toHaveLength(0);
     });
   });

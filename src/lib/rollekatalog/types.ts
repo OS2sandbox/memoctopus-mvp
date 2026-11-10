@@ -61,7 +61,7 @@ export function emptySyncCounts(): SyncCounts {
  * unchanged; already_running = another run holds the advisory lock (no sync_runs row).
  * In sync_runs.status (CHECK 'running'|'success'|'failed') both 'aborted' and 'error' are stored as 'failed'.
  */
-export type SyncStatus = 'success' | 'aborted' | 'error' | 'already_running';
+type SyncStatus = 'success' | 'aborted' | 'error' | 'already_running';
 
 export interface SyncResult {
   status: SyncStatus;

@@ -1,11 +1,31 @@
 // A minimal cookie-keeping HTTP client for driving the app headlessly (acceptance.ts).
+import type { CentralSkabelonSummary, CentralTemplateAdmin } from '../../src/lib/skabeloner/central-types';
+import type { Skabelon } from '../../src/types';
 import { SIM } from './config';
 
-export interface Reply {
+// Bodies of app routes that both acceptance runs read (`T` of a Reply), on the app's own types.
+export interface SkabelonerBody {
+  skabeloner: Skabelon[];
+  centralSkabeloner: CentralSkabelonSummary[];
+}
+export interface TemplateBody {
+  template: CentralTemplateAdmin;
+}
+/** The fields of one /api/admin/audit row the runs read; the note and name are looked up at read time. */
+export interface AuditEventView {
+  eventType: string;
+  entityId: string | null;
+  changeNote?: string;
+  templateName?: string;
+}
+
+/** `T` is the body the caller expects from that route. It is not checked: the acceptance checks are the check. */
+export interface Reply<T = unknown> {
   status: number;
   headers: Headers;
   text: string;
-  json: any;
+  /** The parsed body; null when it is empty or not JSON. */
+  json: T | null;
 }
 
 export class AppSession {
@@ -31,7 +51,8 @@ export class AppSession {
     return [...this.cookies.keys()].some((k) => /session_token/.test(k));
   }
 
-  async request(method: string, url: string, body?: unknown, extra: Record<string, string> = {}): Promise<Reply> {
+  /** Without a `T` the body reads as an object of unknown fields: each one must be narrowed before use. */
+  async request<T = Record<string, unknown>>(method: string, url: string, body?: unknown, extra: Record<string, string> = {}): Promise<Reply<T>> {
     const target = url.startsWith('http') ? url : this.base + url;
     const res = await fetch(target, {
       method,
@@ -46,7 +67,7 @@ export class AppSession {
     });
     this.absorb(res);
     const text = await res.text();
-    let json: any = null;
+    let json: T | null = null;
     try {
       json = text ? JSON.parse(text) : null;
     } catch {
@@ -55,9 +76,9 @@ export class AppSession {
     return { status: res.status, headers: res.headers, text, json };
   }
 
-  get = (url: string, extra?: Record<string, string>) => this.request('GET', url, undefined, extra);
-  post = (url: string, body?: unknown, extra?: Record<string, string>) => this.request('POST', url, body ?? {}, extra);
-  put = (url: string, body?: unknown) => this.request('PUT', url, body ?? {});
+  get = <T = Record<string, unknown>>(url: string, extra?: Record<string, string>) => this.request<T>('GET', url, undefined, extra);
+  post = <T = Record<string, unknown>>(url: string, body?: unknown, extra?: Record<string, string>) => this.request<T>('POST', url, body ?? {}, extra);
+  put = <T = Record<string, unknown>>(url: string, body?: unknown) => this.request<T>('PUT', url, body ?? {});
 
   /** Follows redirects, carrying cookies; stops when the next hop is on the app and is a page. */
   private async follow(first: string, max = 12): Promise<Reply> {
@@ -77,8 +98,8 @@ export class AppSession {
 
   /** Logs in through the simulated IdP as `username` (no picker: login_hint). */
   async login(username: string, providerId = SIM.oidc.providerId): Promise<Reply> {
-    const start = await this.post('/api/auth/sign-in/oauth2', { providerId, callbackURL: '/dashboard' });
-    const authUrl = start.json?.url as string | undefined;
+    const start = await this.post<{ url?: string }>('/api/auth/sign-in/oauth2', { providerId, callbackURL: '/dashboard' });
+    const authUrl = start.json?.url;
     if (!authUrl) throw new Error(`login(${username}): no authorize URL (status ${start.status}: ${start.text.slice(0, 200)})`);
     const u = new URL(authUrl);
     u.searchParams.set('login_hint', username);
@@ -91,8 +112,8 @@ export class AppSession {
    * going along, exactly as a browser would send it.
    */
   async loginSaml(username: string, providerId = SIM.saml.providerId): Promise<Reply> {
-    const start = await this.post('/api/auth/sign-in/sso', { providerId, callbackURL: '/dashboard' });
-    const authUrl = start.json?.url as string | undefined;
+    const start = await this.post<{ url?: string }>('/api/auth/sign-in/sso', { providerId, callbackURL: '/dashboard' });
+    const authUrl = start.json?.url;
     if (!authUrl) throw new Error(`loginSaml(${username}): no IdP URL (status ${start.status}: ${start.text.slice(0, 200)})`);
     const u = new URL(authUrl);
     u.searchParams.set('login_hint', username);

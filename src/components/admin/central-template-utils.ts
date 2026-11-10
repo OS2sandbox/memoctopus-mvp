@@ -139,7 +139,7 @@ export function emptyAudienceHint(source?: SharingSource | null): string | null 
   return null;
 }
 
-export interface AudienceEntry {
+interface AudienceEntry {
   key: string;
   label: string;
   /** A role/group that is withdrawn from or missing in the catalogue: it reaches nobody. */

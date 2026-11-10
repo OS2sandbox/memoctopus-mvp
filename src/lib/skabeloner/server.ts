@@ -114,7 +114,7 @@ export async function setCentralDefault(userId: string, id: string): Promise<voi
 
 // ─── Own changelog (skabelon_versions, per-user schema) ─────────────────────────
 
-export interface SkabelonVersion {
+interface SkabelonVersion {
   version: number;
   changeNote: string | null;
   /** Field NAMES that changed in this version (empty for the first one). */
@@ -130,7 +130,7 @@ interface VersionRow {
 }
 
 /** The content fields a version tracks. Field NAMES only ever reach the audit log. */
-export const TRACKED_FIELDS = [
+const TRACKED_FIELDS = [
   'name',
   'description',
   'prompt',
@@ -140,7 +140,7 @@ export const TRACKED_FIELDS = [
   'includeDato',
 ] as const;
 
-export function changedSkabelonFields(prev: Skabelon, next: Skabelon) {
+function changedSkabelonFields(prev: Skabelon, next: Skabelon) {
   return TRACKED_FIELDS.filter((f) => prev[f] !== next[f]);
 }
 
@@ -212,7 +212,7 @@ export async function createSkabelon(userId: string, input: SkabelonInput): Prom
   });
 }
 
-export interface SkabelonUpdateResult {
+interface SkabelonUpdateResult {
   skabelon: Skabelon;
   /** Field names whose value changed (empty when only a note was written, or nothing changed). */
   changedFields: Array<(typeof TRACKED_FIELDS)[number]>;

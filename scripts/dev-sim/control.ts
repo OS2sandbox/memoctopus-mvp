@@ -8,7 +8,44 @@ import type { MockIdp } from './oidc';
 import type { MockSamlIdp } from './saml';
 import type { MockData, MockFault, MockRollekatalog } from '../../src/lib/rollekatalog/mock-server';
 
-type Json = Record<string, any>;
+/** The fields of the mock's data that this panel reads or edits (the rest is passed through untouched). */
+interface OrgUnitRow {
+  uuid: string;
+  name: string;
+  parentOrgUnitUuid?: string | null;
+}
+interface ConstraintRow {
+  constraintType: string;
+  constraintValues: string[];
+}
+interface AssignmentRow {
+  roleIdentifier: string;
+  roleName?: string;
+  roleConstraintValues?: ConstraintRow[];
+}
+interface RoleAssignmentRow {
+  extUuid: string | null;
+  userId: string;
+  assignments?: AssignmentRow[];
+}
+/** What the panel and the acceptance scripts POST; every field is optional and read defensively. */
+interface ControlBody {
+  kind?: string;
+  ms?: number;
+  mode?: string;
+  username?: string;
+  claims?: unknown;
+  users?: number;
+  userRoles?: unknown;
+  roleGroups?: unknown;
+  userId?: string;
+  name?: string;
+  email?: string;
+  orgUnitUuid?: string;
+  roles?: RoleSpec[];
+  disabled?: boolean;
+  parentOrgUnitUuid?: string | null;
+}
 const ITSYSTEM_CONSTRAINT = 'http://digital-identity.dk/constraints/orgunit/1';
 
 interface RoleSpec {
@@ -28,20 +65,20 @@ function toAssignments(roles: RoleSpec[]) {
 }
 
 function summarise(data: MockData) {
-  const assignmentsByUser = new Map<string, any[]>();
-  for (const row of data.roleAssignments as Json[]) assignmentsByUser.set(row.userId, row.assignments ?? []);
-  const unitName = new Map((data.orgUnits as Json[]).map((u) => [u.uuid, u.name]));
+  const assignmentsByUser = new Map<string, AssignmentRow[]>();
+  for (const row of data.roleAssignments as RoleAssignmentRow[]) assignmentsByUser.set(row.userId, row.assignments ?? []);
+  const unitName = new Map((data.orgUnits as OrgUnitRow[]).map((u) => [u.uuid, u.name]));
   const rolesOf = (userId: string) =>
     (assignmentsByUser.get(userId) ?? []).map((a) => ({
       role: a.roleIdentifier,
       orgUnits: (a.roleConstraintValues ?? [])
-        .filter((c: Json) => /orgunit|orgenhed/.test(c.constraintType))
-        .flatMap((c: Json) => c.constraintValues)
+        .filter((c) => /orgunit|orgenhed/.test(c.constraintType))
+        .flatMap((c) => c.constraintValues)
         .map((u: string) => ({ uuid: u, name: unitName.get(u) ?? '(ukendt enhed)' })),
     }));
   const known = new Set(data.users.map((u) => u.userId));
   return {
-    orgUnits: (data.orgUnits as Json[]).map((u) => ({ uuid: u.uuid, name: u.name, parent: u.parentOrgUnitUuid ?? null })),
+    orgUnits: (data.orgUnits as OrgUnitRow[]).map((u) => ({ uuid: u.uuid, name: u.name, parent: u.parentOrgUnitUuid ?? null })),
     users: [
       ...data.users.map((u) => ({
         userId: u.userId,
@@ -64,7 +101,7 @@ function summarise(data: MockData) {
 let seq = 0;
 const newUuid = (prefix: string) => `${prefix}0000-0000-4000-9000-${String(++seq).padStart(12, '0')}`;
 
-export interface ControlDeps {
+interface ControlDeps {
   rollekatalog: MockRollekatalog;
   llm: MockLlm;
   idp: MockIdp;
@@ -73,7 +110,7 @@ export interface ControlDeps {
 
 export async function startControl({ rollekatalog, llm, idp, samlIdp }: ControlDeps): Promise<{ close(): Promise<void> }> {
   const readJson = (req: http.IncomingMessage) =>
-    new Promise<Json>((resolve) => {
+    new Promise<ControlBody>((resolve) => {
       let s = '';
       req.on('data', (c) => (s += c));
       req.on('end', () => {
@@ -173,7 +210,7 @@ export async function startControl({ rollekatalog, llm, idp, samlIdp }: ControlD
         for (let i = 0; i < n; i++) {
           d.users.push({
             uuid: `not-a-uuid-${i}`, extUuid: null, userId: `broken${i}`, name: 'Ødelagt', email: null,
-            disabled: false, positions: [{ orgUnitUuid: (d.orgUnits[0] as Json).uuid }],
+            disabled: false, positions: [{ orgUnitUuid: (d.orgUnits[0] as OrgUnitRow).uuid }],
           });
         }
       });
@@ -232,7 +269,7 @@ export async function startControl({ rollekatalog, llm, idp, samlIdp }: ControlD
           uuid, extUuid, userId, name: name ?? userId, email: email ?? `${userId}@example.dk`,
           disabled: false, positions: [{ orgUnitUuid }],
         });
-        (d.roleAssignments as Json[]).push({ extUuid, userId, assignments: toAssignments(roles ?? [{ role: 'bruger' }]) });
+        (d.roleAssignments as RoleAssignmentRow[]).push({ extUuid, userId, assignments: toAssignments(roles ?? [{ role: 'bruger' }]) });
       });
       return ok();
     }
@@ -244,17 +281,17 @@ export async function startControl({ rollekatalog, llm, idp, samlIdp }: ControlD
         if (action === 'disabled' && u) u.disabled = body.disabled === true;
         if (action === 'remove' && u) u.positions = []; // v3 only exports users with a position
         if (action === 'roles') {
-          const row = (d.roleAssignments as Json[]).find((r) => r.userId === userId);
-          const assignments = toAssignments((body.roles ?? []) as RoleSpec[]);
+          const row = (d.roleAssignments as RoleAssignmentRow[]).find((r) => r.userId === userId);
+          const assignments = toAssignments(body.roles ?? []);
           if (row) row.assignments = assignments;
-          else (d.roleAssignments as Json[]).push({ extUuid: u?.extUuid ?? newUuid('9d3c'), userId, assignments });
+          else (d.roleAssignments as RoleAssignmentRow[]).push({ extUuid: u?.extUuid ?? newUuid('9d3c'), userId, assignments });
         }
       });
       return ok();
     }
     if (parts[0] === 'orgunit' && parts[1]) {
       mutate((d) => {
-        const u = (d.orgUnits as Json[]).find((x) => x.uuid === parts[1]);
+        const u = (d.orgUnits as OrgUnitRow[]).find((x) => x.uuid === parts[1]);
         if (!u) return;
         if (typeof body.name === 'string') u.name = body.name;
         if ('parentOrgUnitUuid' in body) u.parentOrgUnitUuid = body.parentOrgUnitUuid;

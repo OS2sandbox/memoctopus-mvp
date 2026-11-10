@@ -3,7 +3,7 @@
 // counters and short codes: never a key, a URL or data from Rollekatalog.
 import { NextResponse } from 'next/server';
 
-export interface RefreshResultLike {
+interface RefreshResultLike {
   status: 'success' | 'already_running' | 'aborted' | 'error';
   counts: unknown;
   /** A short code ('timeout', 'removal_threshold', ...); null on success. */
@@ -11,7 +11,7 @@ export interface RefreshResultLike {
 }
 
 // Codes that mean the upstream (or its configuration) is at fault rather than this app.
-export const UPSTREAM_CODES = new Set([
+const UPSTREAM_CODES = new Set([
   'not_configured',
   'insecure_url',
   'unauthorized',

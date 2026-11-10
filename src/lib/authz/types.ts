@@ -21,7 +21,7 @@ export interface CapabilityScope {
   roots: Array<{ orgUnitUuid: string; includeDescendants: boolean }>;
 }
 
-export type PrincipalSource = 'local' | 'rollekatalog' | 'claims' | 'baseline';
+type PrincipalSource = 'local' | 'rollekatalog' | 'claims' | 'baseline';
 
 export interface Principal {
   userId: string;

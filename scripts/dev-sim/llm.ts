@@ -7,7 +7,7 @@ import { SIM } from './config';
 
 export type LlmMode = 'ok' | 'echo-system' | 'echo-system-chunk';
 
-export interface LlmCall {
+interface LlmCall {
   at: string;
   system: string;
   user: string;

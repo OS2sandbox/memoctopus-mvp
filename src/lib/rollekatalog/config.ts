@@ -8,7 +8,7 @@
 import { ROLE_KEYS, type RoleKey } from '@/lib/authz/types';
 import { isLoopbackHost } from '@/lib/net/url-policy';
 
-export type UserIdTransform = 'none' | 'strip-upn-domain';
+type UserIdTransform = 'none' | 'strip-upn-domain';
 
 const DEFAULT_ITSYSTEM_ID = 'os2taletiltekst';
 /**
@@ -30,7 +30,7 @@ const DEFAULT_ROLE_STALE_MAX_SECONDS = 86_400;
  */
 const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 
-export type RollekatalogConfigIssue = 'not_configured' | 'insecure_url';
+type RollekatalogConfigIssue = 'not_configured' | 'insecure_url';
 
 function clean(name: string): string {
   return (process.env[name] ?? '').trim();
@@ -50,7 +50,7 @@ function intInRange(name: string, fallback: number, min: number, max: number): n
   return Number.isSafeInteger(n) && n >= min && n <= max ? n : fallback;
 }
 
-export type RollekatalogUrl = { url: string; issue: null } | { url: null; issue: RollekatalogConfigIssue };
+type RollekatalogUrl = { url: string; issue: null } | { url: null; issue: RollekatalogConfigIssue };
 
 /**
  * Validates a base URL: https, or http only for a loopback host or when

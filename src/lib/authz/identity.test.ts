@@ -96,7 +96,7 @@ describe('captureExternalIdentity', () => {
     const out = await captureExternalIdentity('u1', runner);
     expect(out.map((i) => i.providerId)).toEqual(['microsoft']);
     expect(calls.filter((c) => c.sql.includes('INSERT INTO'))).toHaveLength(1);
-    expect(JSON.stringify((console.warn as any).mock.calls)).not.toContain('not-a-jwt');
+    expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain('not-a-jwt');
   });
 
   it('skips tokens without sub', async () => {

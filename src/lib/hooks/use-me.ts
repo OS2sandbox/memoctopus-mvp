@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { isMeResponse, type MeResponse } from '@/lib/authz/me';
 
-export interface UseMeResult {
+interface UseMeResult {
   data: MeResponse | null;
   loading: boolean;
   error: string | null;

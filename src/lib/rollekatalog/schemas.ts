@@ -100,13 +100,13 @@ const orgUnitSchema = z
   })
   .strip();
 
-export interface RkPosition {
+interface RkPosition {
   orgUnitUuid: string;
   titleUuid: string | null;
   doNotInherit: boolean;
 }
 
-export interface RkUser {
+interface RkUser {
   uuid: string;
   extUuid: string | null;
   userId: string | null;
@@ -116,10 +116,10 @@ export interface RkUser {
   positions: RkPosition[];
 }
 
-export type RkOrgUnit = z.output<typeof orgUnitSchema>;
+type RkOrgUnit = z.output<typeof orgUnitSchema>;
 
 /** Rows that were dropped for failing their schema. Counts only. */
-export interface RkOrganisationSkipped {
+interface RkOrganisationSkipped {
   /** User rows that failed validation (e.g. a uuid that is not a uuid). The user is absent from the fetch. */
   users: number;
   orgUnits: number;
@@ -258,7 +258,7 @@ const userAssignmentsRowSchema = z
   })
   .strip();
 
-export interface RkAssignment {
+interface RkAssignment {
   roleIdentifier: string;
   roleName: string | null;
   /** Org-unit constraints only; KLE and every other type is dropped at parse time. */
@@ -325,9 +325,9 @@ export const roleAssignmentsSchema = z.array(z.unknown()).transform((raw, ctx): 
 // description, which are dropped here. Adding a field is a privacy decision. Row by row, like
 // the other arrays: a bad row is dropped and counted, too many bad rows fail the payload.
 
-export const CATALOGUE_VALUE_MAX = 200;
+const CATALOGUE_VALUE_MAX = 200;
 
-export interface RkCatalogueEntry {
+interface RkCatalogueEntry {
   kind: 'role' | 'group';
   identifier: string;
   name: string;

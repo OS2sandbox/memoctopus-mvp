@@ -30,7 +30,7 @@ import { errorCodeOf } from './errors';
 import { tryAdvisoryLock, exceedsRemovalThreshold, type Lock } from './sync';
 import { defaultSyncEnv, queryOnce, tbl, type SyncEnv } from './sync-run';
 
-export interface CatalogueRefreshCounts {
+interface CatalogueRefreshCounts {
   /** Entries in the answer (roles + groups, after dropping bad rows and duplicates). */
   fetched: number;
   /** Entries that are new in the catalogue. */
@@ -51,7 +51,7 @@ export const emptyCatalogueCounts = (): CatalogueRefreshCounts => ({
   skipped: 0,
 });
 
-export type CatalogueRefreshStatus = 'success' | 'aborted' | 'error' | 'already_running';
+type CatalogueRefreshStatus = 'success' | 'aborted' | 'error' | 'already_running';
 
 export interface CatalogueRefreshResult {
   status: CatalogueRefreshStatus;
@@ -60,13 +60,13 @@ export interface CatalogueRefreshResult {
   errorCode: string | null;
 }
 
-export interface CatalogueRefreshOptions {
+interface CatalogueRefreshOptions {
   trigger: 'cron' | 'manual';
   /** Bypass the removal threshold (admin button). The empty-response guard still applies. */
   force?: boolean;
 }
 
-export interface CatalogueRefreshDeps {
+interface CatalogueRefreshDeps {
   /** Test seam: the database (schema and connections). Production uses the app pool and `public`. */
   env?: SyncEnv;
   /** Test seam: the Rollekatalog client. Production reads URL, keys and limits from the environment. */

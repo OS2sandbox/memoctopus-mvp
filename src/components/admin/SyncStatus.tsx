@@ -21,7 +21,7 @@ export interface SyncRunView {
   errorCode: string | null;
 }
 
-export interface SyncResponse {
+interface SyncResponse {
   run: SyncRunView | null;
   configIssue: string | null;
   /** The Rollekatalog IT system the roles are assigned under; null outside Rollekatalog mode. */
@@ -34,7 +34,7 @@ const formatSyncTime = (iso: string | null) => formatDateTime(iso, { dateStyle: 
 export const canSeeSyncRun = (me: MeResponse) =>
   me.source === 'rollekatalog' && (me.capabilities.includes('sync.run') || me.capabilities.includes('access.manage'));
 
-export interface SyncRunState {
+interface SyncRunState {
   data: SyncResponse | null;
   loading: boolean;
   error: string | null;

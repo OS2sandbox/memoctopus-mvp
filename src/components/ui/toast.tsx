@@ -44,10 +44,9 @@ const toastVariants = cva(
 
 interface ToastProviderProps {
   children?: React.ReactNode;
-  dismissLabel?: string;
 }
 
-export function ToastProvider({ children, dismissLabel = 'Luk besked' }: ToastProviderProps) {
+export function ToastProvider({ children }: ToastProviderProps) {
   const [items, setItems] = React.useState<ToastItem[]>([]);
   const timers = React.useRef(new Map<number, ReturnType<typeof setTimeout>>());
   const nextId = React.useRef(1);
@@ -106,7 +105,7 @@ export function ToastProvider({ children, dismissLabel = 'Luk besked' }: ToastPr
             <button
               type="button"
               onClick={() => dismiss(item.id)}
-              aria-label={dismissLabel}
+              aria-label="Luk besked"
               className="shrink-0 rounded-[var(--radius-sm)] px-1 leading-none opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
             >
               <span aria-hidden>×</span>

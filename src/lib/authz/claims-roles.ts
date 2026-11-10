@@ -14,7 +14,7 @@ import { accessSource } from './config';
 import { defaultRunner, errorLabel, type SqlQueryable, type SqlRunner } from './pg-runner';
 import type { RoleKey } from './types';
 
-export type ClaimValues =
+type ClaimValues =
   | { status: 'unconfigured' }
   | { status: 'invalid' }
   | { status: 'ok'; values: string[] };
@@ -131,7 +131,7 @@ export function mapClaimRoles(values: readonly string[], map: RoleMap): RoleKey[
   return [...roles];
 }
 
-export interface ClaimsDecision {
+interface ClaimsDecision {
   /** Roles to hold after this login (global grants). */
   roles: RoleKey[];
   /** Role/group values the IdP claimed, to be filtered through the catalogue. */

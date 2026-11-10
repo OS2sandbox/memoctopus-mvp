@@ -7,7 +7,7 @@ import { loginRefusal, type AuthSession } from './guard';
 import { resolvePrincipal } from './principal';
 import type { Principal } from './types';
 
-export interface AppAccess {
+interface AppAccess {
   session: AuthSession;
   principal: Principal;
 }

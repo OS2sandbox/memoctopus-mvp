@@ -38,7 +38,7 @@ export interface CentralTarget {
 }
 
 /** What a role or group target points at: a value of the catalogue (public.external_roles). */
-export type PrincipalKind = 'role' | 'group';
+type PrincipalKind = 'role' | 'group';
 export const PRINCIPAL_KINDS = ['role', 'group'] as const;
 
 export interface CentralPrincipalTarget {

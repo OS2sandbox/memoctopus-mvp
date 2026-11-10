@@ -11,13 +11,13 @@ import { INTEGRATION_COUNT_KEYS } from '@/lib/audit/events/integration';
 import { CODE_RE } from '@/lib/audit/events/types';
 import type { HeaderSource } from '@/lib/audit/request-context';
 
-export interface IntegrationRunResult {
+interface IntegrationRunResult {
   status: 'success' | 'already_running' | 'aborted' | 'error';
   counts: unknown;
   errorCode: string | null;
 }
 
-export interface IntegrationRunAudit {
+interface IntegrationRunAudit {
   kind: 'org_sync' | 'role_catalogue';
   trigger: 'cron' | 'manual';
   result: IntegrationRunResult;

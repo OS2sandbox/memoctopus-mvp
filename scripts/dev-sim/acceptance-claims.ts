@@ -8,15 +8,37 @@
 //   npx tsx scripts/dev-sim/acceptance-claims.ts
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
-import { AppSession, type Reply } from './client';
+import type { listAppUsersWithRoles } from '../../src/lib/authz/access-admin';
+import type { MeResponse } from '../../src/lib/authz/me';
+import type { CatalogueRefreshResult } from '../../src/lib/rollekatalog/catalogue-sync';
+import type { CentralCatalogueEntry, CentralTemplateListItem, CentralTemplateVersion } from '../../src/lib/skabeloner/central-types';
+import type { listSkabelonVersions } from '../../src/lib/skabeloner/server';
+import type { Skabelon } from '../../src/types';
+import { AppSession, type AuditEventView, type Reply, type SkabelonerBody, type TemplateBody } from './client';
 import { controlUrl, SIM } from './config';
+
+// The bodies of the routes this run reads, on the app's own types where it has them.
+interface ErrorBody {
+  code?: string;
+}
+type UsersBody = Awaited<ReturnType<typeof listAppUsersWithRoles>>;
+interface CatalogueBody {
+  roles: CentralCatalogueEntry[];
+  canTarget: boolean;
+  canRefresh: boolean;
+}
+interface HistoryBody {
+  versions: NonNullable<Awaited<ReturnType<typeof listSkabelonVersions>>>;
+}
+/** What the control panel answers for /roles/refresh: the app's cron route's status and body. */
+type CronReply = { httpStatus: number; body: CatalogueRefreshResult | null } | null;
 
 const DB_URL = process.env.DATABASE_URL ?? 'postgres://localhost:5432/referat_sim';
 let failed = 0;
 let passed = 0;
 
 const heading = (name: string) => console.log(`\n── ${name}`);
-function check(name: string, ok: boolean, detail = '') {
+function check(name: string, ok: boolean | undefined, detail = '') {
   if (ok) passed++;
   else failed++;
   console.log(`${ok ? '  PASS' : '  FAIL'}  ${name}${ok ? '' : detail ? `\n          ${detail}` : ''}`);
@@ -78,7 +100,7 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────
   heading('1. OIDC: claims become roles');
   const admin = await oidc('admin.a');
-  const meAdmin = await admin.get('/api/me');
+  const meAdmin = await admin.get<MeResponse>('/api/me');
   check('admin.a (claim referat-admin) is administrator, globally', meAdmin.json?.roles?.includes('admin') && meAdmin.json?.scopes?.['audit.read']?.global === true, brief(meAdmin));
   check('/api/me says source=claims, readOnly=true', meAdmin.json?.source === 'claims' && meAdmin.json?.readOnly === true);
   const adminRows = await rolesInDb('admin.a@example.dk');
@@ -89,13 +111,13 @@ async function main() {
   check('the session ends with the role snapshot (about ROLE_CLAIMS_MAX_SECONDS, default 8 h)', session && Math.abs(session.left_s - 8 * 3600) < 5, JSON.stringify(session));
 
   const bruger = await oidc('bruger.c');
-  const meBruger = await bruger.get('/api/me');
+  const meBruger = await bruger.get<MeResponse>('/api/me');
   check('bruger.c: bruger only; the unknown claim value grants nothing', JSON.stringify(meBruger.json?.roles) === JSON.stringify(['bruger']) && !meBruger.json?.capabilities?.includes('template.manage'), brief(meBruger));
   check('values missing from the catalogue are NOT stored (privacy)', JSON.stringify(await externalOf('bruger.c@example.dk')) === JSON.stringify(['group:G-Okonomi', 'role:referat-bruger']), JSON.stringify(await externalOf('bruger.c@example.dk')));
 
   for (const [who, why] of [['ingen.i', 'no roles claim'], ['bad.b', 'a roles claim that is not a list']] as const) {
     const s = await oidc(who);
-    const me = await s.get('/api/me');
+    const me = await s.get<MeResponse>('/api/me');
     check(`${who} (${why}) gets no access (REQUIRE_ROLE_TO_LOGIN)`, me.status === 403, brief(me));
     check(`${who}: nothing stored for them`, (await rolesInDb(`${who}@example.dk`)).length === 0 && (await externalOf(`${who}@example.dk`)).length === 0);
   }
@@ -104,9 +126,9 @@ async function main() {
   heading('2. A role that leaves the claims leaves the app at the next login');
   await setClaims('admin.a', { roles: ['referat-bruger'], memberOf: 'G-Okonomi' });
   const admin2 = await oidc('admin.a');
-  const me2 = await admin2.get('/api/me');
+  const me2 = await admin2.get<MeResponse>('/api/me');
   check('after the next login admin.a is only bruger', JSON.stringify(me2.json?.roles) === JSON.stringify(['bruger']), brief(me2));
-  const stale = await admin.get('/api/me');
+  const stale = await admin.get<MeResponse>('/api/me');
   check('the OLD session of the same person lost the role too (roles are read live)', JSON.stringify(stale.json?.roles) === JSON.stringify(['bruger']), brief(stale));
   check('the rows were replaced, not accumulated', JSON.stringify((await rolesInDb('admin.a@example.dk')).map((r) => r.role_key)) === JSON.stringify(['bruger']));
   check('so were the stored groups', JSON.stringify(await externalOf('admin.a@example.dk')) === JSON.stringify(['group:G-Okonomi', 'role:referat-bruger']));
@@ -118,7 +140,7 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────
   heading('3. SAML: the same, through a signed assertion');
   const superS = await saml('super.s');
-  const meSuper = await superS.get('/api/me');
+  const meSuper = await superS.get<MeResponse>('/api/me');
   check('super.s (SAML attribute referat-superuser) is a GLOBAL bygger', meSuper.json?.roles?.includes('bygger') && meSuper.json?.scopes?.['template.manage']?.global === true, brief(meSuper));
   check('...and has no administrator power', !meSuper.json?.capabilities?.includes('access.manage') && !meSuper.json?.capabilities?.includes('audit.export'));
   check('SAML roles are stored the same way (source claims)', (await rolesInDb('super.s@example.dk')).every((r) => r.source === 'claims') && (await rolesInDb('super.s@example.dk')).length === 1);
@@ -127,18 +149,18 @@ async function main() {
   check('a SAML login leaves an external_identities snapshot (no id_token to read it from)', idpAccount === 1);
   await setClaims('super.s', {});
   await saml('super.s');
-  const meSuper2 = await superS.get('/api/me');
+  const meSuper2 = await superS.get<MeResponse>('/api/me');
   check('SAML: no roles attribute at the next login -> the role is gone', meSuper2.status === 403 && (await rolesInDb('super.s@example.dk')).length === 0, brief(meSuper2));
   await setClaims('super.s', null);
 
   // ─────────────────────────────────────────────────────────────────────
   heading('4. The in-app role administration is off');
   const admin3 = await oidc('admin.a'); // roles restored by the reset above
-  check('admin.a is administrator again after the claims were restored', (await admin3.get('/api/me')).json?.roles?.includes('admin'));
-  const users = await admin3.get('/api/admin/access/users');
+  check('admin.a is administrator again after the claims were restored', (await admin3.get<MeResponse>('/api/me')).json?.roles?.includes('admin'));
+  const users = await admin3.get<UsersBody>('/api/admin/access/users');
   check('the user list is still readable (access.manage)', users.status === 200, brief(users));
-  const target = users.json?.users?.find((u: any) => u.email === 'bruger.c@example.dk');
-  const grant = await admin3.post('/api/admin/access/assignments', { appUserId: target?.id ?? 'x', roleKey: 'bygger' });
+  const target = users.json?.users?.find((u) => u.email === 'bruger.c@example.dk');
+  const grant = await admin3.post<ErrorBody>('/api/admin/access/assignments', { appUserId: target?.id ?? 'x', roleKey: 'bygger' });
   check('granting a role answers 409 read_only', grant.status === 409 && grant.json?.code === 'read_only', brief(grant));
   const unit = await admin3.post('/api/admin/access/org-units', { name: 'Ny enhed' });
   check('creating an org unit answers 409', unit.status === 409, brief(unit));
@@ -154,7 +176,7 @@ async function main() {
   const pw = new AppSession('pw');
   const up = await pw.post('/api/auth/sign-up/email', { name: 'Pia Password', email: pwEmail, password: 'correct-horse-battery' });
   check('password sign-up is refused (hard-wired off in claims mode, whatever EMAIL_PASSWORD_ENABLED says)', up.status >= 400, brief(up));
-  const mePw = await pw.get('/api/me');
+  const mePw = await pw.get<MeResponse>('/api/me');
   check('...so there is no session and nothing to access', mePw.status === 401, brief(mePw));
   check('no user and no claims rows for it', (await db.query('select 1 from public.users where email = $1', [pwEmail])).rows.length === 0 && (await rolesInDb(pwEmail)).length === 0);
   const pwIn = await new AppSession('pw3').post('/api/auth/sign-in/email', { email: 'admin.a@example.dk', password: 'correct-horse-battery' });
@@ -171,24 +193,24 @@ async function main() {
   const superUser = await saml('super.s');
   const adminUser = await oidc('admin.a');
 
-  const cat0 = await superUser.get('/api/admin/central-templates/roles');
+  const cat0 = await superUser.get<CatalogueBody>('/api/admin/central-templates/roles');
   want('the superuser reads the catalogue (config entries are there from the start)', cat0, 200);
   check('it is global (canTarget) but may not refresh (no sync.run)', cat0.json?.canTarget === true && cat0.json?.canRefresh === false, JSON.stringify({ t: cat0.json?.canTarget, r: cat0.json?.canRefresh }));
-  check('the config catalogue is merged in, with names', (cat0.json?.roles ?? []).some((r: any) => r.kind === 'role' && r.identifier === 'referat-bruger' && r.source === 'config' && r.name === 'Referat: bruger'));
-  check('the administrator may refresh (sync.run and a READ key are configured)', (await adminUser.get('/api/admin/central-templates/roles')).json?.canRefresh === true);
+  check('the config catalogue is merged in, with names', (cat0.json?.roles ?? []).some((r) => r.kind === 'role' && r.identifier === 'referat-bruger' && r.source === 'config' && r.name === 'Referat: bruger'));
+  check('the administrator may refresh (sync.run and a READ key are configured)', (await adminUser.get<CatalogueBody>('/api/admin/central-templates/roles')).json?.canRefresh === true);
 
   want('a superuser cannot refresh the catalogue (sync.run is for administrators)', await superUser.post('/api/admin/central-templates/roles/refresh'), 403);
   const noCron = await fetch(`${SIM.appUrl}/api/internal/rollekatalog/roles`, { method: 'POST', headers: { 'X-Cron-Secret': 'wrong' } });
   check('the cron route refuses a wrong secret', noCron.status === 401, `status ${noCron.status}`);
-  const cron = (await control('/roles/refresh')) as { httpStatus: number; body: any } | null;
+  const cron = (await control('/roles/refresh')) as CronReply;
   // A re-run on the same database updates instead of adding.
   const cc = cron?.body?.counts;
   check('the cron route refreshes the catalogue from the mock Rollekatalog (READ key, GET only)', cron?.httpStatus === 200 && cc?.fetched === 6 && cc.added + cc.updated === 6, JSON.stringify(cron));
-  const cat1 = await adminUser.get('/api/admin/central-templates/roles');
-  const rk = (cat1.json?.roles ?? []).filter((r: any) => r.source === 'rollekatalog');
-  check('user roles (jobfunktionsroller) and role groups are in the catalogue, by name', rk.some((r: any) => r.kind === 'role' && r.identifier === 'sagsbehandler' && r.name === 'Sagsbehandler') && rk.some((r: any) => r.kind === 'group' && r.identifier === '11'), JSON.stringify(rk));
-  check('nothing but kind, identifier, name, source, active and the holders COUNT is exposed', rk.every((r: any) => JSON.stringify(Object.keys(r).sort()) === JSON.stringify(['active', 'holders', 'identifier', 'kind', 'name', 'source']) && Number.isInteger(r.holders)));
-  const viaButton = await adminUser.post('/api/admin/central-templates/roles/refresh');
+  const cat1 = await adminUser.get<CatalogueBody>('/api/admin/central-templates/roles');
+  const rk = (cat1.json?.roles ?? []).filter((r) => r.source === 'rollekatalog');
+  check('user roles (jobfunktionsroller) and role groups are in the catalogue, by name', rk.some((r) => r.kind === 'role' && r.identifier === 'sagsbehandler' && r.name === 'Sagsbehandler') && rk.some((r) => r.kind === 'group' && r.identifier === '11'), JSON.stringify(rk));
+  check('nothing but kind, identifier, name, source, active and the holders COUNT is exposed', rk.every((r) => JSON.stringify(Object.keys(r).sort()) === JSON.stringify(['active', 'holders', 'identifier', 'kind', 'name', 'source']) && Number.isInteger(r.holders)));
+  const viaButton = await adminUser.post<CatalogueRefreshResult>('/api/admin/central-templates/roles/refresh');
   check('the admin button works too, and a second refresh adds nothing', viaButton.status === 200 && viaButton.json?.counts?.added === 0, brief(viaButton));
 
   // bruger.c holds the role "sagsbehandler" (and group 11) at their next login; bruger.d does not.
@@ -197,11 +219,11 @@ async function main() {
   const brugerD = await oidc('bruger.d');
   check('the catalogue values the IdP claimed are stored for the person (and nothing else)', JSON.stringify(await externalOf('bruger.c@example.dk')) === JSON.stringify(['group:11', 'group:G-Okonomi', 'role:referat-bruger', 'role:sagsbehandler']), JSON.stringify(await externalOf('bruger.c@example.dk')));
 
-  const bad = await superUser.post('/api/admin/central-templates', { name: 'x', prompt: SECRET, targets: [], principalTargets: [{ kind: 'role', identifier: 'ukendt-rolle' }], changeNote: NOTE });
+  const bad = await superUser.post<ErrorBody>('/api/admin/central-templates', { name: 'x', prompt: SECRET, targets: [], principalTargets: [{ kind: 'role', identifier: 'ukendt-rolle' }], changeNote: NOTE });
   check('a role that is not in the catalogue cannot be a target', bad.status === 400 && bad.json?.code === 'principal_target_unknown', brief(bad));
   want('a plain user cannot create shared prompts', await brugerC.post('/api/admin/central-templates', { name: 'x', prompt: 'p', targets: [], changeNote: NOTE }), 403);
 
-  const created = await superUser.post('/api/admin/central-templates', {
+  const created = await superUser.post<TemplateBody>('/api/admin/central-templates', {
     name: `Sagsbehandlerreferat ${randomBytes(3).toString('hex')}`,
     description: 'Til sagsbehandlere',
     prompt: `Skriv et referat for sagsbehandlere. ${SECRET}`,
@@ -211,22 +233,23 @@ async function main() {
     changeNote: NOTE,
   });
   want('the superuser creates an organisation-wide template targeted at a ROLE (no owner unit)', created, 201);
-  const tid: string = created.json?.template?.id;
+  // A failed create is reported just above; everything after it then fails on its own.
+  const tid = created.json?.template?.id as string;
   check('it has no owner unit, and the audience is named', created.json?.template?.ownerOrgUnitUuid === null && created.json?.template?.principalTargets?.[0]?.name === 'Sagsbehandler', brief(created));
-  const listed = await superUser.get('/api/admin/central-templates?status=all');
-  const listedHolders = listed.json?.templates?.find((t: any) => t.id === tid)?.principalTargets?.[0]?.holders;
+  const listed = await superUser.get<{ templates: CentralTemplateListItem[] }>('/api/admin/central-templates?status=all');
+  const listedHolders = listed.json?.templates?.find((t) => t.id === tid)?.principalTargets?.[0]?.holders;
   check('the audience carries a holders COUNT (a number, never people)', Number.isInteger(listedHolders), String(listedHolders));
-  check('the list names the audience (kind, name, state)', JSON.stringify(listed.json?.templates?.find((t: any) => t.id === tid)?.principalTargets) === JSON.stringify([{ kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active', holders: listedHolders }]), brief(listed));
+  check('the list names the audience (kind, name, state)', JSON.stringify(listed.json?.templates?.find((t) => t.id === tid)?.principalTargets) === JSON.stringify([{ kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active', holders: listedHolders }]), brief(listed));
 
-  const mine = await brugerC.get('/api/skabeloner');
-  check('bruger.c (holds the role) sees it in the picker without configuring anything, and never its prompt', mine.json?.centralSkabeloner?.some((t: any) => t.id === tid) && !mine.text.includes(SECRET), brief(mine));
+  const mine = await brugerC.get<SkabelonerBody>('/api/skabeloner');
+  check('bruger.c (holds the role) sees it in the picker without configuring anything, and never its prompt', mine.json?.centralSkabeloner?.some((t) => t.id === tid) && !mine.text.includes(SECRET), brief(mine));
   await control('/llm/clear');
   const gen = await brugerC.post('/api/minutes', { segments, skabelonId: tid, skabelonSource: 'central', includeDeltagere: true });
   want('...and can generate minutes with it', gen, 200);
   const sent = (await llmCalls()).at(-1);
   check('the LLM got the stored prompt in the system message, the response does not echo it', !!sent?.system.includes(SECRET) && !gen.text.includes(SECRET));
-  const theirs = await brugerD.get('/api/skabeloner');
-  check('bruger.d (without the role) does not see it', !theirs.json?.centralSkabeloner?.some((t: any) => t.id === tid), brief(theirs));
+  const theirs = await brugerD.get<SkabelonerBody>('/api/skabeloner');
+  check('bruger.d (without the role) does not see it', !theirs.json?.centralSkabeloner?.some((t) => t.id === tid), brief(theirs));
   const denied = await brugerD.post('/api/minutes', { segments, skabelonId: tid, skabelonSource: 'central' });
   const madeUp = await brugerD.post('/api/minutes', { segments, skabelonId: '00000000-0000-4000-8000-0000000000aa', skabelonSource: 'central' });
   check('...and gets the very same 404 as for an id that does not exist', denied.status === 404 && madeUp.status === 404 && denied.text === madeUp.text, `${brief(denied)} | ${brief(madeUp)}`);
@@ -239,17 +262,17 @@ async function main() {
   want('withdrawing the audience entirely', await superUser.request('PUT', `/api/admin/central-templates/${tid}`, { baseVersion: 2, changeNote: 'Trækker adgangen tilbage til alle.', principalTargets: [] }), 200);
   want('...bruger.c loses it at once (404)', await brugerC.post('/api/minutes', { segments, skabelonId: tid, skabelonSource: 'central' }), 404);
   want('an update by one place reaches everyone: re-add the role', await superUser.request('PUT', `/api/admin/central-templates/${tid}`, { baseVersion: 3, changeNote: 'Giver sagsbehandlerne adgang igen.', prompt: `Opdateret prompt. ${SECRET}`, principalTargets: [{ kind: 'role', identifier: 'sagsbehandler' }] }), 200);
-  check('bruger.c has the new version without doing anything', (await brugerC.get('/api/skabeloner')).json?.centralSkabeloner?.find((t: any) => t.id === tid)?.version === 4);
-  const history = await superUser.get(`/api/admin/central-templates/${tid}/versions`);
+  check('bruger.c has the new version without doing anything', (await brugerC.get<SkabelonerBody>('/api/skabeloner')).json?.centralSkabeloner?.find((t) => t.id === tid)?.version === 4);
+  const history = await superUser.get<{ versions: CentralTemplateVersion[] }>(`/api/admin/central-templates/${tid}/versions`);
   check('the changelog names the audience of each version', history.json?.versions?.length === 4 && history.json.versions[0].principalTargets?.[0]?.name === 'Sagsbehandler' && history.json.versions[1].principalTargets?.length === 0, brief(history));
 
   // The catalogue withdraws the role: nobody matches it any more, the template keeps the (flagged) target.
   await control('/roles', { userRoles: [{ id: 101, name: 'Anden rolle', identifier: 'anden', description: '', itSystemName: 'S' }, { id: 103, name: 'Leder', identifier: 'leder', description: '', itSystemName: 'S' }] });
-  const refreshed = (await control('/roles/refresh')) as { httpStatus: number; body: any } | null;
-  check('a refresh without "sagsbehandler" deactivates it (never deletes)', refreshed?.httpStatus === 200 && refreshed.body?.counts?.deactivated >= 1, JSON.stringify(refreshed));
+  const refreshed = (await control('/roles/refresh')) as CronReply;
+  check('a refresh without "sagsbehandler" deactivates it (never deletes)', refreshed?.httpStatus === 200 && (refreshed.body?.counts?.deactivated ?? 0) >= 1, JSON.stringify(refreshed));
   want('bruger.c no longer receives the template (the catalogue entry is withdrawn)', await brugerC.post('/api/minutes', { segments, skabelonId: tid, skabelonSource: 'central' }), 404);
-  const flagged = await superUser.get('/api/admin/central-templates?status=all');
-  check('the manager sees the withdrawn target flagged as inactive', flagged.json?.templates?.find((t: any) => t.id === tid)?.principalTargets?.[0]?.status === 'inactive', brief(flagged));
+  const flagged = await superUser.get<{ templates: CentralTemplateListItem[] }>('/api/admin/central-templates?status=all');
+  check('the manager sees the withdrawn target flagged as inactive', flagged.json?.templates?.find((t) => t.id === tid)?.principalTargets?.[0]?.status === 'inactive', brief(flagged));
   await control('/reset');
   await control('/roles/refresh');
   check('when it returns to Rollekatalog, the entry is active again and bruger.c has the template', (await brugerC.post('/api/minutes', { segments, skabelonId: tid, skabelonSource: 'central' })).status === 200);
@@ -268,23 +291,23 @@ async function main() {
 
   // ─────────────────────────────────────────────────────────────────────
   heading('7. A person\'s own template changelog');
-  const own = await brugerC.post('/api/skabeloner', { name: 'Min egen skabelon', prompt: 'Skriv kort.' });
+  const own = await brugerC.post<{ skabelon: Skabelon }>('/api/skabeloner', { name: 'Min egen skabelon', prompt: 'Skriv kort.' });
   want('bruger.c creates a private template (still possible beside the shared ones)', own, [200, 201]);
-  const ownId: string = own.json?.skabelon?.id;
+  const ownId = own.json?.skabelon?.id as string; // as with tid: a failed create is already reported
   const PRIVATE_NOTE = `Strammet op efter mødet ${randomBytes(3).toString('hex')}`;
   want('an edit with an optional note', await brugerC.put(`/api/skabeloner/${ownId}`, { name: 'Min egen skabelon', prompt: 'Skriv meget kort.', changeNote: PRIVATE_NOTE }), 200);
   want('an edit without a note works too', await brugerC.put(`/api/skabeloner/${ownId}`, { name: 'Min egen skabelon', prompt: 'Skriv kort og præcist.' }), 200);
   const own404 = await brugerD.get(`/api/skabeloner/${ownId}/history`);
   check('nobody else can read the history', own404.status === 404, brief(own404));
-  const hist = await brugerC.get(`/api/skabeloner/${ownId}/history`);
+  const hist = await brugerC.get<HistoryBody>(`/api/skabeloner/${ownId}/history`);
   check('the own history lists versions newest first, with the note and the changed field names', hist.json?.versions?.length === 3 && hist.json.versions[1].changeNote === PRIVATE_NOTE && hist.json.versions[1].changedFields?.includes('prompt') && hist.json.versions[0].changeNote === null, brief(hist));
   const updates = (await db.query(`select details::text as d from public.audit_events where event_type = 'template.update'`)).rows.map((r) => r.d);
   check('the audit log says only THAT a note was written, never the note', updates.some((d) => d.includes('"hasChangeNote": true')) && updates.every((d) => !d.includes(PRIVATE_NOTE)), updates.join(' '));
   check('the note is nowhere in the shared schema', (await db.query(`select count(*)::int as n from public.audit_events where details::text like $1 or entity_id::text like $1`, [`%${PRIVATE_NOTE}%`])).rows[0].n === 0);
   // ...but the administrator (the log reader) sees it: looked up at read time in the person's own history, in the viewer and in the CSV.
-  const logView = await adminUser.get(`/api/admin/audit?entityId=${ownId}&limit=100`);
-  const ownEvents = (logView.json?.events ?? []).filter((e: any) => e.eventType === 'template.update' && e.entityId === ownId);
-  check('the log viewer shows the personal note to the audit reader (only on the edit that wrote it)', ownEvents.length === 2 && ownEvents.filter((e: any) => e.changeNote === PRIVATE_NOTE).length === 1 && ownEvents.filter((e: any) => e.changeNote === undefined).length === 1, brief(logView));
+  const logView = await adminUser.get<{ events: AuditEventView[] }>(`/api/admin/audit?entityId=${ownId}&limit=100`);
+  const ownEvents = (logView.json?.events ?? []).filter((e) => e.eventType === 'template.update' && e.entityId === ownId);
+  check('the log viewer shows the personal note to the audit reader (only on the edit that wrote it)', ownEvents.length === 2 && ownEvents.filter((e) => e.changeNote === PRIVATE_NOTE).length === 1 && ownEvents.filter((e) => e.changeNote === undefined).length === 1, brief(logView));
   const csv = await adminUser.get('/api/admin/audit/export');
   check('the CSV export has a change-note column and holds the note', csv.status === 200 && csv.text.split('\r\n')[0].endsWith('Ændringsbeskrivelse') && csv.text.includes(PRIVATE_NOTE), `status ${csv.status}`);
   const stillNone = (await db.query(`select count(*)::int as n from public.audit_events where details::text like $1`, [`%${PRIVATE_NOTE}%`])).rows[0].n;

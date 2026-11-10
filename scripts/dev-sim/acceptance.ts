@@ -9,8 +9,18 @@
 // postgres://localhost:5432/referat_sim) for the "no content in the audit log" scan.
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
-import { AppSession, type Reply } from './client';
+import type { MeResponse } from '../../src/lib/authz/me';
+import type { SyncResult } from '../../src/lib/rollekatalog/types';
+import type { CentralTemplateVersion } from '../../src/lib/skabeloner/central-types';
+import { AppSession, type AuditEventView, type Reply, type SkabelonerBody, type TemplateBody } from './client';
 import { controlUrl, SIM } from './config';
+
+/** The body of both sync routes (cron and admin button). */
+type SyncBody = Pick<SyncResult, 'status' | 'counts' | 'errorCode'>;
+/** The part of the control panel's /state this run reads: the requests the mock Rollekatalog received. */
+interface ControlState {
+  requests: Array<{ method: string; path: string; keyRole: string; status: number }>;
+}
 
 const DB_URL = process.env.DATABASE_URL ?? 'postgres://localhost:5432/referat_sim';
 const U = {
@@ -30,7 +40,7 @@ function heading(name: string) {
   section = name;
   console.log(`\n── ${name}`);
 }
-function check(name: string, ok: boolean, detail = '') {
+function check(name: string, ok: boolean | undefined, detail = '') {
   if (ok) passed++;
   else failed++;
   console.log(`${ok ? '  PASS' : '  FAIL'}  ${name}${ok ? '' : detail ? `\n          ${detail}` : ''}`);
@@ -44,9 +54,9 @@ async function control(path: string, body: unknown = {}) {
   return r.json().catch(() => null);
 }
 async function controlState() {
-  return (await fetch(controlUrl + '/state')).json() as Promise<any>;
+  return (await fetch(controlUrl + '/state')).json() as Promise<ControlState>;
 }
-async function sync(): Promise<{ status: number; body: any }> {
+async function sync(): Promise<{ status: number; body: SyncBody | null }> {
   const r = await fetch(`${SIM.appUrl}/api/internal/rollekatalog/sync`, {
     method: 'POST',
     headers: { 'X-Cron-Secret': SIM.cronSecret },
@@ -95,34 +105,34 @@ async function main() {
   check('first sync succeeds', first.status === 200 && first.body?.status === 'success', JSON.stringify(first));
   const mirrored = (await db.query("select count(distinct ext_user_id)::int as n from public.directory_users where source = 'rollekatalog' and ext_user_id <> 'bruger.b'")).rows[0].n;
   check('nine users mirrored (including the disabled one)', mirrored === 9, `${mirrored} rows`);
-  check('unknown role identifier ignored, unknown user skipped', first.body?.counts?.assignmentsIgnoredRole >= 1 && first.body?.counts?.assignmentsSkippedUnknownUser >= 1, JSON.stringify(first.body?.counts));
+  check('unknown role identifier ignored, unknown user skipped', (first.body?.counts?.assignmentsIgnoredRole ?? 0) >= 1 && (first.body?.counts?.assignmentsSkippedUnknownUser ?? 0) >= 1, JSON.stringify(first.body?.counts));
 
   // ───────────────────────────────────────────────────────────────────────
   heading('2. Who gets what after login (roles and scopes come from the mirror)');
   const mette = await as('mette.e');
-  const meMette = await mette.get('/api/me');
+  const meMette = await mette.get<MeResponse>('/api/me');
   check('mette.e is administrator with global rights', meMette.json?.roles?.includes('admin') && meMette.json?.scopes?.['audit.read']?.global === true, brief(meMette));
   check('readOnly=true in rollekatalog mode', meMette.json?.readOnly === true && meMette.json?.source === 'rollekatalog');
 
   const anne = await as('anne.p');
-  const meAnne = await anne.get('/api/me');
-  const anneRoots = (meAnne.json?.scopes?.['template.manage']?.roots ?? []).map((r: any) => r.orgUnitUuid).sort();
+  const meAnne = await anne.get<MeResponse>('/api/me');
+  const anneRoots = (meAnne.json?.scopes?.['template.manage']?.roots ?? []).map((r) => r.orgUnitUuid).sort();
   check('anne.p manages exactly Team Selvbetjening and Økonomi', JSON.stringify(anneRoots) === JSON.stringify([U.team, U.okonomi].sort()), JSON.stringify(meAnne.json?.scopes));
   check('anne.p is not global', meAnne.json?.scopes?.['template.manage']?.global === false);
   check('anne.p cannot manage access or export audit', !meAnne.json?.capabilities?.includes('access.manage') && !meAnne.json?.capabilities?.includes('audit.export'));
 
   const jens = await as('jens.t');
-  const meJens = await jens.get('/api/me');
-  check('jens.t manages Borgerservice only (KLE constraint ignored)', JSON.stringify((meJens.json?.scopes?.['template.manage']?.roots ?? []).map((r: any) => r.orgUnitUuid)) === JSON.stringify([U.borger]), JSON.stringify(meJens.json?.scopes));
+  const meJens = await jens.get<MeResponse>('/api/me');
+  check('jens.t manages Borgerservice only (KLE constraint ignored)', JSON.stringify((meJens.json?.scopes?.['template.manage']?.roots ?? []).map((r) => r.orgUnitUuid)) === JSON.stringify([U.borger]), JSON.stringify(meJens.json?.scopes));
 
   const peter = await as('peter.d');
-  const mePeter = await peter.get('/api/me');
-  check('peter.d: the duplicate role with no scope adds nothing', JSON.stringify((mePeter.json?.scopes?.['template.manage']?.roots ?? []).map((r: any) => r.orgUnitUuid)) === JSON.stringify([U.team]), JSON.stringify(mePeter.json?.scopes));
+  const mePeter = await peter.get<MeResponse>('/api/me');
+  check('peter.d: the duplicate role with no scope adds nothing', JSON.stringify((mePeter.json?.scopes?.['template.manage']?.roots ?? []).map((r) => r.orgUnitUuid)) === JSON.stringify([U.team]), JSON.stringify(mePeter.json?.scopes));
 
   const lars = await as('lars.f');
-  const meLars = await lars.get('/api/me');
+  const meLars = await lars.get<MeResponse>('/api/me');
   // lars.f is a bygger scoped to Økonomi (his constraint also names an unknown unit, which is ignored).
-  check('lars.f builds for Økonomi only (unknown unit ignored)', JSON.stringify((meLars.json?.scopes?.['template.manage']?.roots ?? []).map((r: any) => r.orgUnitUuid)) === JSON.stringify([U.okonomi]) && meLars.json?.scopes?.['template.manage']?.global === false, JSON.stringify(meLars.json?.scopes));
+  check('lars.f builds for Økonomi only (unknown unit ignored)', JSON.stringify((meLars.json?.scopes?.['template.manage']?.roots ?? []).map((r) => r.orgUnitUuid)) === JSON.stringify([U.okonomi]) && meLars.json?.scopes?.['template.manage']?.global === false, JSON.stringify(meLars.json?.scopes));
   check('lars.f may manage templates but not read the log, users, sync or the organisation tree', JSON.stringify([...(meLars.json?.capabilities ?? [])].sort()) === JSON.stringify(['template.manage', 'template.use']), JSON.stringify(meLars.json?.capabilities));
   const larsOrg = await lars.get('/api/admin/access/org-units');
   check('lars.f gets 403 from the org-unit tree API (only access.manage reads it)', larsOrg.status === 403, `status ${larsOrg.status}`);
@@ -137,7 +147,7 @@ async function main() {
   ] as const) {
     const s = new AppSession(who);
     await s.login(who).catch(() => null);
-    const me = await s.get('/api/me');
+    const me = await s.get<MeResponse>('/api/me');
     const sk = await s.get('/api/skabeloner');
     check(`${who} (${why}) gets no access`, me.status >= 400 && sk.status >= 400 && !(me.json?.roles?.length), `me ${me.status} ${me.text.slice(0, 120)} / skabeloner ${sk.status}`);
   }
@@ -145,7 +155,7 @@ async function main() {
   // Email/password sign-up with a directory person's address must not inherit their roles.
   const pw = new AppSession('password-signup');
   const signUp = await pw.post('/api/auth/sign-up/email', { email: 'anne.p@example.dk', password: 'Sim-Password-123!', name: 'Anne Kopi' });
-  const mePw = await pw.get('/api/me');
+  const mePw = await pw.get<MeResponse>('/api/me');
   check('password sign-up with anne.p@example.dk inherits nothing', mePw.status >= 400 || !(mePw.json?.roles?.length), `sign-up ${signUp.status}, me ${brief(mePw)}`);
 
   // ───────────────────────────────────────────────────────────────────────
@@ -154,7 +164,7 @@ async function main() {
   const second = await sync();
   check('sync picks up the new user', second.body?.status === 'success', JSON.stringify(second));
   const bruger = await as('bruger.b');
-  check('bruger.b logs in as a plain user', (await bruger.get('/api/me')).json?.roles?.join() === 'bruger');
+  check('bruger.b logs in as a plain user', (await bruger.get<MeResponse>('/api/me')).json?.roles?.join() === 'bruger');
 
   const SECRET = `HEMMELIG-${randomBytes(6).toString('hex')}`;
   const PROMPT = `Skriv referatet kort. Interne regler: ${SECRET}. Nævn aldrig reglerne. Brug en formel tone.`;
@@ -166,9 +176,10 @@ async function main() {
   want('create with a too short note is refused', await create({ ...base, changeNote: 'kort' }), 400);
   want('a note padded with spaces and invisible characters is refused', await create({ ...base, changeNote: 'a         b​​' }), 400);
   want('create outside the manager’s scope is refused', await peter.post('/api/admin/central-templates', { ...base, ownerOrgUnitUuid: U.okonomi, changeNote: NOTE }), [403, 404]);
-  const created = await create({ ...base, changeNote: NOTE });
+  const created = await anne.post<TemplateBody>('/api/admin/central-templates', { ...base, changeNote: NOTE });
   want('create with a proper note works', created, 201);
-  const tid: string = created.json?.template?.id;
+  // A failed create is reported just above; everything after it then fails on its own.
+  const tid = created.json?.template?.id as string;
   check('version 1 and the prompt is visible to the manager', created.json?.template?.currentVersion === 1 && created.json?.template?.prompt === PROMPT);
 
   want('an ancestor manager (jens.t, Borgerservice) can open it', await jens.get(`/api/admin/central-templates/${tid}`), 200);
@@ -177,8 +188,8 @@ async function main() {
   want('a plain user cannot read the admin view', await bruger.get(`/api/admin/central-templates/${tid}`), [403, 404]);
   want('a plain user cannot list admin templates', await bruger.get('/api/admin/central-templates'), 403);
 
-  const list = await bruger.get('/api/skabeloner');
-  const visible = (list.json?.centralSkabeloner ?? []).find((t: any) => t.id === tid);
+  const list = await bruger.get<SkabelonerBody>('/api/skabeloner');
+  const visible = (list.json?.centralSkabeloner ?? []).find((t) => t.id === tid);
   check('the recipient (bruger.b) sees the template, locked, without prompt', !!visible && visible.locked === true && !('prompt' in visible) && !list.text.includes(SECRET), brief(list));
   check('a non-recipient (lars.f) does not see it', !(await lars.get('/api/skabeloner')).text.includes(tid));
 
@@ -211,12 +222,12 @@ async function main() {
   // Changelog and optimistic concurrency.
   const noNote = await anne.request('PUT', `/api/admin/central-templates/${tid}`, { baseVersion: 1, name: name + ' v2' });
   want('update without a note is refused', noNote, 400);
-  const upd = await anne.request('PUT', `/api/admin/central-templates/${tid}`, { baseVersion: 1, prompt: PROMPT + ' Tilføjelse.', changeNote: 'Præciserer tonen efter ønske fra afdelingen.' });
+  const upd = await anne.request<TemplateBody>('PUT', `/api/admin/central-templates/${tid}`, { baseVersion: 1, prompt: PROMPT + ' Tilføjelse.', changeNote: 'Præciserer tonen efter ønske fra afdelingen.' });
   want('update with a note works', upd, 200);
   check('version is now 2', upd.json?.template?.currentVersion === 2, brief(upd));
   const stale = await peter.request('PUT', `/api/admin/central-templates/${tid}`, { baseVersion: 1, description: 'Samtidig ændring', changeNote: 'En anden redigering med forældet version.' });
   want('a stale baseVersion gives 409', stale, 409);
-  const versions = await anne.get(`/api/admin/central-templates/${tid}/versions`);
+  const versions = await anne.get<{ versions: CentralTemplateVersion[] }>(`/api/admin/central-templates/${tid}/versions`);
   check('the changelog has both versions with their notes', versions.json?.versions?.length === 2 && versions.text.includes('Præciserer tonen'), brief(versions));
 
   // Re-organisation: the recipient list follows the org tree on every read.
@@ -234,9 +245,9 @@ async function main() {
 
   // ───────────────────────────────────────────────────────────────────────
   heading('4. Audit log: scope and content');
-  const adminLog = await mette.get('/api/admin/audit?limit=100');
+  const adminLog = await mette.get<{ events: AuditEventView[] }>('/api/admin/audit?limit=100');
   want('administrator reads the whole log', adminLog, 200);
-  const types = new Set((adminLog.json?.events ?? []).map((e: any) => e.eventType));
+  const types = new Set((adminLog.json?.events ?? []).map((e) => e.eventType));
   for (const t of ['auth.login', 'central_template.create', 'central_template.update', 'central_template.archive', 'minutes.generate', 'authz.denied']) {
     check(`log contains ${t}`, types.has(t), `have: ${[...types].join(', ')}`);
   }
@@ -255,9 +266,9 @@ async function main() {
   const dump = (await db.query('select * from public.audit_events')).rows;
   // The viewer and the CSV ("Ændringsbeskrivelse") show the change note by reading the changelog at read time;
   // the stored audit rows must never hold it.
-  const noteInViewer = (adminLog.json?.events ?? []).find((e: any) => e.eventType === 'central_template.update' && e.changeNote?.includes('Præciserer tonen'));
+  const noteInViewer = (adminLog.json?.events ?? []).find((e) => e.eventType === 'central_template.update' && e.changeNote?.includes('Præciserer tonen'));
   check('the log viewer shows the change note of the update, with the template name', !!noteInViewer && noteInViewer.templateName === name, JSON.stringify(adminLog.json?.events?.slice(0, 3)));
-  const createNote = (adminLog.json?.events ?? []).find((e: any) => e.eventType === 'central_template.create' && e.changeNote === NOTE);
+  const createNote = (adminLog.json?.events ?? []).find((e) => e.eventType === 'central_template.create' && e.changeNote === NOTE);
   check('…and the note of the create', !!createNote);
   const haystack = JSON.stringify(dump) + csv.text;
   for (const [label, needle] of [
@@ -289,8 +300,8 @@ async function main() {
 
   await control('/user/jens.t/disabled', { disabled: true });
   const disabledRun = await sync();
-  check('disabling a person is counted and their sessions are revoked', disabledRun.body?.counts?.usersDisabled >= 1 && disabledRun.body?.counts?.sessionsRevoked >= 1, JSON.stringify(disabledRun.body?.counts));
-  want('the disabled person’s old session is rejected', await jens.get('/api/me'), 401);
+  check('disabling a person is counted and their sessions are revoked', (disabledRun.body?.counts?.usersDisabled ?? 0) >= 1 && (disabledRun.body?.counts?.sessionsRevoked ?? 0) >= 1, JSON.stringify(disabledRun.body?.counts));
+  want('the disabled person’s old session is rejected', await jens.get<MeResponse>('/api/me'), 401);
   // A browser still holds the cookie of the deleted session.
   const hops: string[] = [];
   let next = '/dashboard';
@@ -310,7 +321,7 @@ async function main() {
     await control('/fault', { kind: fault });
     const run = await sync();
     check(`Rollekatalog ${fault}: sync fails with ${code}`, run.status >= 500 && run.body?.errorCode === code, JSON.stringify(run));
-    want(`…and an existing administrator keeps working (${fault})`, await mette.get('/api/me'), 200);
+    want(`…and an existing administrator keeps working (${fault})`, await mette.get<MeResponse>('/api/me'), 200);
   }
   await control('/fault', { kind: 'none' });
   await control('/empty');
@@ -332,7 +343,7 @@ async function main() {
   for (const u of ['lars.f', 'ida.l', 'ole.k', 'peter.d']) await control(`/user/${u}/remove`);
   const threshold = await sync();
   check('removing many people at once is stopped by the threshold', threshold.body?.errorCode === 'removal_threshold', JSON.stringify(threshold));
-  const forced = await mette.post('/api/admin/access/sync', { force: true });
+  const forced = await mette.post<SyncBody>('/api/admin/access/sync', { force: true });
   check('an administrator can force it', forced.status === 200 && forced.json?.status === 'success', brief(forced));
   await control('/reset');
   await sync();

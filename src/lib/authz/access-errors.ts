@@ -6,7 +6,7 @@ import type { AccessSource } from './config';
 const READ_ONLY_MESSAGE = 'Skrivebeskyttet: roller og organisation styres af Rollekatalog';
 
 /** Why the write was refused, by what owns the roles (or, in local mode, the operator's kill switch). */
-export function readOnlyMessage(source?: AccessSource): string {
+function readOnlyMessage(source?: AccessSource): string {
   switch (source) {
     case 'claims':
       return 'Skrivebeskyttet: roller styres af identitetsudbyderen';

@@ -10,7 +10,7 @@
 import { authConfigCatalogue, authConfigCatalogueState, type CatalogueEntry, type CatalogueState } from '@/lib/auth/providers';
 import { defaultRunner, errorLabel, type SqlRunner } from './pg-runner';
 
-export interface CatalogueSyncResult {
+interface CatalogueSyncResult {
   /** Entries written (inserted or refreshed). */
   upserted: number;
   /** Config entries that are no longer in the file and were marked inactive. */

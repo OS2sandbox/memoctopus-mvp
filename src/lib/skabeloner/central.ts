@@ -102,7 +102,7 @@ const holdersSql = (env: CentralEnv, pt: string, param: string): string =>
      WHERE ur.kind = ${pt}.kind AND ur.identifier = ${pt}.identifier
        AND ${heldRoleSql((table) => tbl(env, table), 'ur', param)})`;
 
-export function defaultCentralEnv(): CentralEnv {
+function defaultCentralEnv(): CentralEnv {
   return { schema: 'public', runner: defaultRunner() };
 }
 

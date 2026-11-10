@@ -11,7 +11,7 @@ import type { Capability, Principal } from './types';
 
 export type AuthSession = NonNullable<Awaited<ReturnType<typeof auth.api.getSession>>>;
 
-export interface AuthzContext<P = Record<string, never>> {
+interface AuthzContext<P = Record<string, never>> {
   session: AuthSession;
   principal: Principal;
   /** The awaited Next 15 route params; an empty object for routes without any. */

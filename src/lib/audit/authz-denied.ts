@@ -15,7 +15,7 @@ import { CODE_RE } from './events/types';
 import { safeRequestContext, type HeaderSource } from './request-context';
 import { createThrottle } from './throttle';
 
-export interface AuthzDeniedEvent {
+interface AuthzDeniedEvent {
   actorUserId: string | null;
   /** Capability or guard that was required, e.g. 'access.manage'. */
   required: string;

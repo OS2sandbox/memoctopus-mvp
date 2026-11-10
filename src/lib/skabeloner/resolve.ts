@@ -50,7 +50,7 @@ export interface ResolveEnv {
   claimsMaxSeconds?: number | null;
 }
 
-export function defaultResolveEnv(): ResolveEnv {
+function defaultResolveEnv(): ResolveEnv {
   return { schema: 'public', query: (text, params) => pool.query(text, params) };
 }
 

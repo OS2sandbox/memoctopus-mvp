@@ -35,8 +35,7 @@ export function hasUnknownEventType(json: unknown): boolean {
 /** Response body for a batch with an unknown event type; the browser keys on `code`. */
 export const UNKNOWN_EVENT_TYPE_BODY = { error: 'Invalid request', code: 'unknown_event_type' } as const;
 
-export const CLIENT_OUTCOMES = ['success', 'error'] as const;
-export type ClientOutcome = (typeof CLIENT_OUTCOMES)[number];
+const CLIENT_OUTCOMES = ['success', 'error'] as const;
 
 // STRICT: any other key (an `actor`, `ip`, `userId`, `source` ...) fails parsing.
 // `details` is only shape-checked here; the per-type strict schema runs in

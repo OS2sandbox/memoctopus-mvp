@@ -60,7 +60,7 @@ export const CSV_HEADER = [
 ] as const;
 
 /** Change notes by audit row id (looked up at read time, never stored in the log). */
-export type CsvChangeNotes = ReadonlyMap<string, { changeNote: string }>;
+type CsvChangeNotes = ReadonlyMap<string, { changeNote: string }>;
 
 export function auditRowToCsvFields(row: AuditEventRow, notes?: CsvChangeNotes): unknown[] {
   return [

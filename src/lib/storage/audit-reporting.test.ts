@@ -9,7 +9,7 @@ import { validateEvent } from '@/lib/audit/record';
 import { reportAuditEvent } from '@/lib/audit/client';
 import type { AuditEventInput } from '@/lib/audit/events';
 
-type Row = Record<string, any>;
+type Row = Record<string, unknown>;
 const h = vi.hoisted(() => ({
   stores: {} as Record<string, Map<string, Row>>,
   report: vi.fn(),

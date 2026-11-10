@@ -268,7 +268,7 @@ const SWAP_SQL = `
     WHERE public.system_flags.value ->> 'fingerprint' IS DISTINCT FROM $2::text
   RETURNING (xmax = 0) AS inserted`;
 
-export type ConfigCheck = 'unchanged' | 'baseline' | 'changed';
+type ConfigCheck = 'unchanged' | 'baseline' | 'changed';
 
 /**
  * Stores the current fingerprint and records system.config_changed when it is new or

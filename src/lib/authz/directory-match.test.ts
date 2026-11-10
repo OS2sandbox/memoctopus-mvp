@@ -357,7 +357,7 @@ describe('links', () => {
       return [];
     });
     expect((await matchDirectoryUser(identity(), 'userid-claim', runner)).status).toBe('conflict');
-    const logged = JSON.stringify((console.warn as any).mock.calls);
+    const logged = JSON.stringify(vi.mocked(console.warn).mock.calls);
     expect(logged).not.toContain('ABC123');
     expect(logged).not.toContain('u1');
   });

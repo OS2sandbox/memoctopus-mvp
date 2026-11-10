@@ -27,7 +27,7 @@ const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID_RE.tes
 
 // ─── Views (the only shapes that leave this module) ────────────────────────
 
-export interface AssignmentView {
+interface AssignmentView {
   id: string;
   roleKey: string;
   scopeOrgUnitUuid: string | null;
@@ -39,7 +39,7 @@ export interface AssignmentView {
   active: boolean;
 }
 
-export interface AppUserView {
+interface AppUserView {
   id: string;
   name: string;
   email: string;

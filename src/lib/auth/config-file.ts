@@ -43,7 +43,7 @@ import { isHttpsOrLoopbackHttp } from '@/lib/net/url-policy';
 // safe URL segment. 'microsoft' is the id of the built-in Entra provider and may not be
 // reused by another identity source (two sources writing one provider_id would cross-match).
 export const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
-export const ENTRA_PROVIDER_ID = 'microsoft';
+const ENTRA_PROVIDER_ID = 'microsoft';
 /**
  * Ids no provider may take: 'microsoft' is the built-in Entra provider; 'credential' is
  * better-auth's e-mail/password account provider; 'password' and 'unknown' are the audit
@@ -53,7 +53,7 @@ export const ENTRA_PROVIDER_ID = 'microsoft';
 export const RESERVED_PROVIDER_IDS: readonly string[] = [ENTRA_PROVIDER_ID, 'credential', 'password', 'unknown'];
 
 /** https, or http for a loopback host outside production (dev simulation, a local Keycloak). */
-export function isAllowedIdpUrl(raw: string): boolean {
+function isAllowedIdpUrl(raw: string): boolean {
   let u: URL;
   try {
     u = new URL(raw);
@@ -73,7 +73,7 @@ export const isGuid = (v: string): boolean => GUID_RE.test(v.trim());
 
 /** Authorities of Microsoft's multi-tenant endpoints: any tenant can sign in through them. */
 const MULTI_TENANT_PATH_RE = /\/(common|organizations|consumers)(\/|$)/i;
-export function isMultiTenantAuthority(raw: string | undefined): boolean {
+function isMultiTenantAuthority(raw: string | undefined): boolean {
   if (!raw) return false;
   try {
     return MULTI_TENANT_PATH_RE.test(new URL(raw).pathname);
@@ -106,7 +106,7 @@ const MUTABLE_SAML_USERID_NAMES = new Set([
   'email', 'emailaddress', 'mail', 'upn', 'userprincipalname', 'preferred_username', 'preferredusername',
   'name', 'displayname', 'givenname', 'surname', 'samaccountname', 'mailnickname',
 ]);
-export function isMutableUserIdAttribute(attribute: string): boolean {
+function isMutableUserIdAttribute(attribute: string): boolean {
   const a = attribute.trim().toLowerCase();
   if (MUTABLE_USERID_CLAIMS.has(a)) return true;
   const last = a.split(/[/:#]/).filter(Boolean).pop() ?? a;
@@ -116,7 +116,7 @@ export function isMutableUserIdAttribute(attribute: string): boolean {
 const nonEmpty = (max: number) => z.string().trim().min(1).max(max);
 const urlString = z.string().trim().url().max(2048);
 /** The `prompt` parameter an OIDC / Entra provider may send to the IdP. */
-export const IDP_PROMPTS = ['login', 'select_account', 'consent'] as const;
+const IDP_PROMPTS = ['login', 'select_account', 'consent'] as const;
 export type IdpPrompt = (typeof IDP_PROMPTS)[number];
 
 /** An IdP endpoint: https only (http for a loopback host outside production). */
@@ -285,10 +285,10 @@ const samlSchema = z
     path: ['signingPrivateKey'],
   });
 
-export type OidcFileProvider = z.infer<typeof oidcSchema>;
-export type EntraFileProvider = z.infer<typeof entraSchema>;
+type OidcFileProvider = z.infer<typeof oidcSchema>;
+type EntraFileProvider = z.infer<typeof entraSchema>;
 export type SamlFileProvider = z.infer<typeof samlSchema> & { idpMetadata?: string };
-export type FileProvider = OidcFileProvider | EntraFileProvider | SamlFileProvider;
+type FileProvider = OidcFileProvider | EntraFileProvider | SamlFileProvider;
 
 // Picked by hand rather than z.discriminatedUnion: two of the three carry refinements, and a
 // per-type schema also gives a precise warning ("unknown type") instead of a union error.
@@ -339,13 +339,13 @@ const catalogueEntry = z
   .strict();
 const catalogueSchema = z.array(catalogueEntry).max(5000);
 
-export interface RoleMapping {
+interface RoleMapping {
   role: RoleKey;
   /** Claims carry no org unit, so a claim role can only ever be global. `global: false` disables the entry. */
   global: boolean;
 }
 
-export interface ProviderRoleMaps {
+interface ProviderRoleMaps {
   appRoleMap: ReadonlyMap<string, RoleMapping>;
   groupRoleMap: ReadonlyMap<string, RoleMapping>;
 }
@@ -375,7 +375,7 @@ export interface CatalogueEntry {
 /** 'absent': no catalogue section (or no config file). 'invalid': there is one, but it could not be used. */
 export type CatalogueState = 'absent' | 'invalid' | 'ok';
 
-export interface LoadedAuthConfig {
+interface LoadedAuthConfig {
   /** AUTH_CONFIG_FILE is set (even if it turned out to be unusable): legacy env providers then stay off. */
   configured: boolean;
   providers: FileProvider[];

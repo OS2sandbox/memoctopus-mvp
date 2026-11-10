@@ -33,7 +33,7 @@ export const changeNoteLength = (note: string): number => meaningfulLength(strip
 /** Longest optional note on a PERSONAL template edit (free text for the person themselves). */
 export const LOCAL_CHANGE_NOTE_MAX = 2000;
 
-export type LocalChangeNote = { ok: true; note: string | null } | { ok: false; error: string };
+type LocalChangeNote = { ok: true; note: string | null } | { ok: false; error: string };
 
 /**
  * The OPTIONAL "what did you change" note of a personal template edit. Absent, null or blank

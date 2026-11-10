@@ -38,7 +38,7 @@ type ClientEventType = Extract<EventType, `meeting.${string}`>;
  * write threw, the microphone would not start). Never 'denied': a local action cannot be refused, and
  * the server refuses that value. Default 'success'. Self-reported like the rest.
  */
-export interface ReportOptions {
+interface ReportOptions {
   outcome?: 'success' | 'error';
 }
 

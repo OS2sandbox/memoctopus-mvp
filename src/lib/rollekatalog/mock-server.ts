@@ -16,12 +16,12 @@ import path from 'node:path';
 
 export const MOCK_READ_KEY = 'mock-read-key-0000';
 export const MOCK_ORG_KEY = 'mock-org-key-0000';
-export const MOCK_ITSYSTEM = 'os2taletiltekst';
-export const MOCK_DOMAIN = 'Administrativt';
+const MOCK_ITSYSTEM = 'os2taletiltekst';
+const MOCK_DOMAIN = 'Administrativt';
 
-export type MockKeyRole = 'read' | 'org' | 'none' | 'unknown';
+type MockKeyRole = 'read' | 'org' | 'none' | 'unknown';
 
-export interface RecordedRequest {
+interface RecordedRequest {
   method: string;
   /** Pathname only. */
   path: string;
@@ -70,7 +70,7 @@ export interface MockFault {
   times?: number;
 }
 
-export interface MockOptions {
+interface MockOptions {
   readKey?: string;
   orgKey?: string;
   itSystem?: string;

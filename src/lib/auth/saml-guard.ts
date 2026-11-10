@@ -37,12 +37,12 @@ const MAX_RESPONSE_LENGTH = 262_144;
 /** The plugin's key for an AuthnRequest id it issued (value: JSON { id, providerId, expiresAt }). */
 const AUTHN_REQUEST_KEY_PREFIX = 'saml-authn-request:';
 
-export interface VerificationStore {
+interface VerificationStore {
   find(identifier: string): Promise<{ value: string } | null | undefined>;
   remove(identifier: string): Promise<unknown>;
 }
 
-export type GuardResult = { ok: true } | { ok: false; code: 'unparsable' | 'audience' | 'recipient' | 'destination' | 'unknown_request' | 'unsolicited' | 'algorithm' | 'identity' };
+type GuardResult = { ok: true } | { ok: false; code: 'unparsable' | 'audience' | 'recipient' | 'destination' | 'unknown_request' | 'unsolicited' | 'algorithm' | 'identity' };
 
 // The plugin validates the signature algorithm only from the redirect binding's SigAlg parameter, which a POST
 // response (the only binding used here) never has, so its `algorithms.onDeprecated` option never fires for a
@@ -100,7 +100,7 @@ function signatureAlgorithmsOf(samlContent: string): { signature: string[]; dige
   return { signature: collect('#sig'), digest: collect('#dig') };
 }
 
-export async function checkSamlResponseBinding(opts: {
+async function checkSamlResponseBinding(opts: {
   provider: SamlFileProvider;
   /** base64 SAMLResponse from the POST body */
   samlResponse: string;
@@ -239,7 +239,7 @@ interface HookContext {
  * (nothing to check), otherwise the verdict. A provider the config does not know is left to the
  * unknown-provider guard in saml.ts.
  */
-export async function guardAcsRequest(
+async function guardAcsRequest(
   ctx: HookContext,
   providers: readonly SamlFileProvider[],
   baseOverride?: string,

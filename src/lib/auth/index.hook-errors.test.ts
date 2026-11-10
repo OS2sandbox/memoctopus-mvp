@@ -4,6 +4,18 @@ import { describe, expect, it, vi } from 'vitest';
 const down = () => Promise.reject(Object.assign(new Error('connect ECONNREFUSED secret@example.dk'), { code: 'ECONNREFUSED' }));
 vi.mock('@/lib/db', () => ({ db: {}, pool: { query: down, connect: down } }));
 
+/** The two better-auth hooks these tests call. */
+interface AuthHooksView {
+  databaseHooks: { session: { create: { after(session: { userId: string }, ctx: unknown): Promise<unknown> } } };
+  hooks: { after(ctx: unknown): Promise<{ response?: unknown }> };
+}
+async function loadHooks(): Promise<AuthHooksView> {
+  const { auth } = await import('./index');
+  // Deliberately partial: the session hook is called with only the session fields it reads, which
+  // better-auth's full session type does not allow.
+  return auth.options as unknown as AuthHooksView;
+}
+
 describe('session.create.after hook', () => {
   it('resolves (never blocks login) when every database call fails, and logs no values', async () => {
     vi.stubEnv('BETTER_AUTH_SECRET', 'x'.repeat(40));
@@ -12,8 +24,7 @@ describe('session.create.after hook', () => {
     vi.stubEnv('BOOTSTRAP_ADMIN_EMAILS', 'secret@example.dk');
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const { auth } = await import('./index');
-    const options = (auth as unknown as { options: Record<string, any> }).options;
+    const options = await loadHooks();
     await expect(options.databaseHooks.session.create.after({ userId: 'u1' }, null)).resolves.toBeUndefined();
 
     expect(err).toHaveBeenCalled();
@@ -29,8 +40,7 @@ describe('session.create.after hook', () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const { auth } = await import('./index');
-    const options = (auth as unknown as { options: Record<string, any> }).options;
+    const options = await loadHooks();
     const session = { userId: 'u1', token: 'session-token-secret', ipAddress: '203.0.113.5', userAgent: 'UA' };
 
     await expect(options.databaseHooks.session.create.after(session, { path: '/sign-in/email' })).resolves.toBeUndefined();

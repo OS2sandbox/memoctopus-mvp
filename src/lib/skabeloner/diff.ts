@@ -3,7 +3,7 @@
 // full LCS table enormous, so the table size is bounded and larger inputs fall
 // back to "everything between the common head and tail changed".
 
-export type DiffLineType = 'equal' | 'insert' | 'delete';
+type DiffLineType = 'equal' | 'insert' | 'delete';
 
 interface DiffLine {
   type: DiffLineType;

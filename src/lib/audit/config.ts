@@ -24,7 +24,7 @@ export function auditStoreIp(): boolean {
   return flag('AUDIT_STORE_IP', true);
 }
 
-export const DEFAULT_AUDIT_RETENTION_DAYS = 365;
+const DEFAULT_AUDIT_RETENTION_DAYS = 365;
 const RETENTION_OPT_OUT = new Set(['0', 'off', 'false', 'never', 'forever']);
 
 /**
@@ -43,7 +43,7 @@ export function auditRetentionDays(): number | null {
   return Number.isSafeInteger(n) && n > 0 ? n : DEFAULT_AUDIT_RETENTION_DAYS;
 }
 
-export const DEFAULT_CLIENT_EVENTS_DAILY_CAP = 20000;
+const DEFAULT_CLIENT_EVENTS_DAILY_CAP = 20000;
 
 /**
  * Most client-reported (source = 'client') events stored per user per rolling 24 h. Default 20000

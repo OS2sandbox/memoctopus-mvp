@@ -17,11 +17,11 @@ const noDetails = () => z.object({}).strict();
 // Why a delete happened. `user` = the person asked; `auto_*` = the app did it on its
 // own (after minutes were generated, when the person left the page, when the tab closed,
 // or because a recording turned out to be empty).
-export const CLIENT_DELETE_TRIGGERS = ['user', 'auto_generate', 'auto_leave', 'auto_pagehide', 'auto_empty'] as const;
+const CLIENT_DELETE_TRIGGERS = ['user', 'auto_generate', 'auto_leave', 'auto_pagehide', 'auto_empty'] as const;
 export type DeleteTrigger = (typeof CLIENT_DELETE_TRIGGERS)[number];
 const trigger = () => z.enum(CLIENT_DELETE_TRIGGERS).optional();
 
-export const METADATA_FIELDS = ['title', 'recorded_at', 'participants', 'speakers'] as const;
+const METADATA_FIELDS = ['title', 'recorded_at', 'participants', 'speakers'] as const;
 
 export const meetingEvents = {
   'meeting.delete': defineEvent({ ...base, details: z.object({ trigger: trigger() }).strict() }),

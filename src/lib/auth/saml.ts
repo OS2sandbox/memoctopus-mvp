@@ -94,7 +94,7 @@ export function defaultSsoFor(p: SamlFileProvider, base = authBaseUrl()): Defaul
 }
 
 /** Called for every successful SAML login with the app user and the mapped assertion attributes. */
-export type SamlLoginHook = (userId: string, providerId: string, userInfo: Record<string, unknown>) => Promise<void>;
+type SamlLoginHook = (userId: string, providerId: string, userInfo: Record<string, unknown>) => Promise<void>;
 
 /**
  * Options for the sso plugin. Hardened beyond its defaults: no runtime provider registration

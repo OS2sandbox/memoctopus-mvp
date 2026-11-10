@@ -90,7 +90,7 @@ export function dedupePrincipalTargets<T extends { kind: string; identifier: str
   return out;
 }
 
-export const centralPrincipalTargetsSchema = z
+const centralPrincipalTargetsSchema = z
   .array(centralPrincipalTargetSchema)
   .max(CENTRAL_LIMITS.principalTargets, `Højst ${CENTRAL_LIMITS.principalTargets} roller og grupper`)
   .transform((targets) => dedupePrincipalTargets(targets));

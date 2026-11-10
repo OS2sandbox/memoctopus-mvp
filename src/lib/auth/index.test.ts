@@ -27,9 +27,39 @@ beforeEach(() => {
   vi.stubEnv('AUTH_IP_HEADERS', '');
 });
 
-async function loadOptions() {
+/** The parts of better-auth's options these tests read or call. */
+interface AuthOptionsView {
+  databaseHooks: {
+    session: { create: { after(session: { userId: string; token?: string; ipAddress?: string }, ctx: unknown): Promise<unknown> } };
+  };
+  hooks: { before?: unknown; after(ctx: unknown): Promise<{ response?: unknown } | undefined> };
+  account: { encryptOAuthTokens?: boolean; accountLinking?: unknown };
+  session?: unknown;
+  advanced?: unknown;
+  emailAndPassword?: unknown;
+  disabledPaths: string[];
+  socialProviders: {
+    microsoft: {
+      scope?: string[];
+      overrideUserInfoOnSignIn?: boolean;
+      getUserInfo(token: { idToken: string }): Promise<{ user: unknown }>;
+    };
+  };
+  plugins: Array<{
+    id: string;
+    options: {
+      config: Array<{ providerId: string }>;
+      defaultSSO: Array<{ providerId: string }>;
+      provisionUser(args: { user: { id: string }; userInfo: Record<string, unknown>; provider: { providerId: string } }): Promise<void>;
+    };
+  }>;
+}
+
+async function loadOptions(): Promise<AuthOptionsView> {
   const { auth } = await import('./index');
-  return (auth as unknown as { options: Record<string, any> }).options;
+  // Deliberately partial: the tests call the session hook with only the session fields it reads, which
+  // better-auth's full session type does not allow; everything else in the view matches the real options.
+  return auth.options as unknown as AuthOptionsView;
 }
 
 describe('auth wiring', () => {
@@ -103,14 +133,14 @@ describe('auth wiring from the config file', () => {
     ...extra,
   });
   const SAML = { type: 'saml', id: 'kommune', entryPoint: 'https://idp.example/sso', idpEntityId: 'https://idp.example', cert: 'MIICcert' };
-  const plugin = (options: any, id: string) => options.plugins.find((p: { id: string }) => p.id === id);
-  const names = (options: any) => options.plugins.map((p: { id: string }) => p.id);
+  const plugin = (options: AuthOptionsView, id: string) => options.plugins.find((p: { id: string }) => p.id === id)!;
+  const names = (options: AuthOptionsView) => options.plugins.map((p: { id: string }) => p.id);
 
   it('registers every OIDC provider of the file with its own scopes and pkce', async () => {
     useConfig({ providers: [OIDC('fka'), OIDC('authentik', { scopes: ['openid', 'profile', 'email', 'groups'], pkce: false })] });
     const options = await loadOptions();
     const configs = plugin(options, 'generic-oauth').options.config;
-    expect(configs.map((c: any) => c.providerId)).toEqual(['fka', 'authentik']);
+    expect(configs.map((c) => c.providerId)).toEqual(['fka', 'authentik']);
     expect(configs[0]).toMatchObject({ scopes: ['openid', 'profile', 'email'], pkce: true, clientSecret: 'fka-secret' });
     expect(configs[1]).toMatchObject({ scopes: ['openid', 'profile', 'email', 'groups'], pkce: false });
   });
@@ -144,7 +174,7 @@ describe('auth wiring from the config file', () => {
     expect(names(options).at(-1)).toBe('next-cookies');
     const sso = plugin(options, 'sso').options;
     expect(sso).toMatchObject({ providersLimit: 0, trustEmailVerified: false, provisionUserOnEveryLogin: true });
-    expect(sso.defaultSSO.map((d: any) => d.providerId)).toEqual(['kommune']);
+    expect(sso.defaultSSO.map((d) => d.providerId)).toEqual(['kommune']);
     expect(options.disabledPaths).toEqual(expect.arrayContaining(['/sso/register', '/sso/update-provider', '/sso/delete-provider', '/oauth2/link', '/link-social']));
     expect(typeof options.hooks.before).toBe('function');
   });

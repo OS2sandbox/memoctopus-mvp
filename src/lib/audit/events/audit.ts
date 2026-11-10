@@ -5,7 +5,7 @@ import { count, defineEvent } from './types';
 // Why events were not stored. The first two are emitted by the server about its own
 // limits (once per person and window, with a count); `client_outbox` is the browser
 // reporting that its own queue lost events before they were delivered (self-reported).
-export const DROP_REASONS = ['daily_cap', 'rate_limit', 'client_outbox'] as const;
+const DROP_REASONS = ['daily_cap', 'rate_limit', 'client_outbox'] as const;
 export type DropReason = (typeof DROP_REASONS)[number];
 
 export const auditEvents = {

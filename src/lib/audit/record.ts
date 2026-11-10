@@ -50,7 +50,7 @@ interface ValidatedEvent {
   clientOccurredAt: Date | null;
 }
 
-export type ValidationResult = { ok: true; value: ValidatedEvent } | { ok: false; code: string };
+type ValidationResult = { ok: true; value: ValidatedEvent } | { ok: false; code: string };
 
 const isScalar = (v: unknown): v is string | number | boolean | null =>
   v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
@@ -208,7 +208,7 @@ export function validateEvent(input: AuditEventInput): ValidationResult {
 
 // ─── Actor snapshot ────────────────────────────────────────────────────────
 
-export interface ActorSnapshot {
+interface ActorSnapshot {
   name: string | null;
   orgUnitUuid: string | null;
 }
@@ -257,7 +257,7 @@ export async function resolveActorSnapshot(userId: string | null): Promise<Actor
 
 // ─── Writing ───────────────────────────────────────────────────────────────
 
-export interface RecordOptions {
+interface RecordOptions {
   /**
    * Insert on this transaction handle and THROW on failure (admin changes).
    * Without it the write is best-effort and never throws.

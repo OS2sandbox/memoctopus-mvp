@@ -36,7 +36,7 @@ import {
 import type { EntraProviderConfig } from './oidc-config';
 import { authBaseUrl } from './saml';
 
-export type { CatalogueEntry, CatalogueState, ClaimListSpec, ClaimMapping, RolesConfig, SamlFileProvider };
+export type { CatalogueEntry, CatalogueState, ClaimListSpec, RolesConfig, SamlFileProvider };
 
 import { artifactMode, deleteRecordingEnabled } from '../teams/artifact-mode';
 
@@ -69,7 +69,7 @@ export interface OidcProviderConfig {
 }
 
 /** Which claims carry roles/groups for a login method; absent entries mean "not configured". */
-export interface ProviderClaimSpecs {
+interface ProviderClaimSpecs {
   claims: ClaimMapping;
   rolesClaim?: ClaimListSpec;
   groupsClaim?: ClaimListSpec;

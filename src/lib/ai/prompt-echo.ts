@@ -7,9 +7,9 @@
 // ─── Sanitising client-controlled strings that end up in the instruction ─────
 
 export const MAX_PARTICIPANTS = 100;
-export const MAX_PARTICIPANT_CHARS = 80;
+const MAX_PARTICIPANT_CHARS = 80;
 export const MAX_CHAPTERS = 200;
-export const MAX_CHAPTER_FIELD_CHARS = 120;
+const MAX_CHAPTER_FIELD_CHARS = 120;
 
 /**
  * One line of plain text: control characters and line/paragraph separators become
@@ -67,12 +67,12 @@ export function sanitizeChapters<T extends ChapterLike>(chapters: T[] | undefine
 // ─── Output echo detection ────────────────────────────────────────────────────
 
 // All thresholds are measured in LETTERS (see `normalise`), not characters of the raw text.
-export const ECHO_MIN_CHECKED_CHARS = 30;
-export const ECHO_WINDOW_CHARS = 60;
-export const ECHO_SHORT_PROMPT_BELOW = 75;
-export const ECHO_PLACEHOLDER = '[udeladt]';
+const ECHO_MIN_CHECKED_CHARS = 30;
+const ECHO_WINDOW_CHARS = 60;
+const ECHO_SHORT_PROMPT_BELOW = 75;
+const ECHO_PLACEHOLDER = '[udeladt]';
 
-export interface EchoSpan {
+interface EchoSpan {
   /** Inclusive start / exclusive end, as offsets into the ORIGINAL output text. */
   start: number;
   end: number;
@@ -145,12 +145,12 @@ function windowFor(normalisedLength: number): number {
 }
 
 /** Windows of a prompt, built once and reused over many output fields. */
-export interface PromptEchoMatcher {
+interface PromptEchoMatcher {
   windowSize: number;
   grams: Set<string>;
 }
 
-export function buildPromptEchoMatcher(prompt: string): PromptEchoMatcher | null {
+function buildPromptEchoMatcher(prompt: string): PromptEchoMatcher | null {
   const p = normalise(prompt).text;
   const w = windowFor(p.length);
   if (w === 0) return null;

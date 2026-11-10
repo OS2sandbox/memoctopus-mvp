@@ -126,7 +126,7 @@ describe('runLoginHooks', () => {
     accountQuery.mockRejectedValue(Object.assign(new Error('secret-value'), { code: '08006' }));
     await expect(runLoginHooks('u1')).resolves.toBeUndefined();
     expect(accountQuery).toHaveBeenCalledTimes(1);
-    const logged = JSON.stringify((console.error as any).mock.calls);
+    const logged = JSON.stringify(vi.mocked(console.error).mock.calls);
     expect(logged).toContain('scrub_tokens');
     expect(logged).not.toContain('secret-value');
   });
@@ -143,7 +143,7 @@ describe('runLoginHooks', () => {
     bootstrap.mockRejectedValue(Object.assign(new TypeError('x secret@example.dk'), { code: '08006' }));
     await expect(runLoginHooks('u1')).resolves.toBeUndefined();
     expect(bootstrap).toHaveBeenCalled();
-    const logged = JSON.stringify((console.error as any).mock.calls);
+    const logged = JSON.stringify(vi.mocked(console.error).mock.calls);
     expect(logged).toContain('capture_identity');
     expect(logged).toContain('TypeError/08006');
     expect(logged).not.toContain('secret@example.dk');
@@ -155,7 +155,7 @@ describe('runLoginHooks', () => {
     expect(capture).toHaveBeenCalled();
     expect(bootstrap).toHaveBeenCalled(); // bootstrap itself fails closed on the same ConfigError
     expect(match).not.toHaveBeenCalled();
-    const logged = JSON.stringify((console.error as any).mock.calls);
+    const logged = JSON.stringify(vi.mocked(console.error).mock.calls);
     expect(logged).toContain('access_source (ConfigError)');
     expect(logged).not.toContain('rolekatalog');
   });
@@ -173,7 +173,7 @@ describe('runLoginHooks', () => {
     vi.stubEnv('ACCESS_SOURCE', 'rollekatalog');
     match.mockRejectedValue(new Error('boom'));
     await expect(runLoginHooks('u1')).resolves.toBeUndefined();
-    expect(JSON.stringify((console.error as any).mock.calls)).toContain('match_directory_user');
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).toContain('match_directory_user');
   });
 });
 
@@ -214,7 +214,7 @@ describe('authMethodOf', () => {
 });
 
 describe('auditLogin', () => {
-  const session = { userId: 'u1', token: 'session-token-secret', ipAddress: '198.51.100.4', userAgent: 'UA/9' } as any;
+  const session = { userId: 'u1', token: 'session-token-secret', ipAddress: '198.51.100.4', userAgent: 'UA/9' };
 
   it('records one auth.login with method/provider, the session ip/ua, and no token', async () => {
     await auditLogin(session, { path: '/oauth2/callback/:providerId', params: { providerId: 'keycloak' } });
@@ -243,7 +243,7 @@ describe('auditLogin', () => {
       throw new Error('sync boom');
     });
     await expect(auditLogin(session, null)).resolves.toBeUndefined();
-    expect(JSON.stringify((console.error as any).mock.calls)).not.toContain('secret@example.dk');
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain('secret@example.dk');
   });
 
   it('does not wait for a hung audit write', async () => {
@@ -384,7 +384,7 @@ describe('auditAuthFailure', () => {
       throw new Error('sync');
     });
     await expect(auditAuthFailure(passwordCtx(apiError(401), 'a@b.dk', '203.0.113.41'))).resolves.toBeUndefined();
-    await expect(auditAuthFailure({ get path(): string { throw new Error('getter'); } } as any)).resolves.toBeUndefined();
+    await expect(auditAuthFailure({ get path(): string { throw new Error('getter'); } })).resolves.toBeUndefined();
   });
 });
 
@@ -553,7 +553,7 @@ describe('runLoginHooks in claims mode', () => {
       stashLoginClaims('microsoft', 'oid-1', claims);
       await runLoginHooks('u1', ctx);
       expect(applyClaims).toHaveBeenCalledWith({ userId: 'u1', providerId: 'microsoft', claims: null });
-      expect(JSON.stringify((console.warn as any).mock.calls)).not.toMatch(/99999999|admin/);
+      expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toMatch(/99999999|admin/);
     });
 
     it('a multi-tenant configuration has no single tenant, so nobody gets claim roles through it', async () => {
@@ -605,7 +605,7 @@ describe('runLoginHooks in claims mode', () => {
     accountQuery.mockRejectedValue(Object.assign(new Error('secret-value'), { code: '08006' }));
     await expect(runLoginHooks('u1', oidcCtx)).resolves.toBeUndefined();
     expect(clearClaims).toHaveBeenCalledWith('u1');
-    const logged = JSON.stringify((console.error as any).mock.calls);
+    const logged = JSON.stringify(vi.mocked(console.error).mock.calls);
     expect(logged).toContain('claims_roles');
     expect(logged).not.toContain('secret-value');
   });
@@ -652,7 +652,7 @@ describe('SAML', () => {
   });
 
   it('records auth.login with method saml (valid against the closed catalogue)', async () => {
-    await auditLogin({ userId: 'u1' } as any, acs());
+    await auditLogin({ userId: 'u1' }, acs());
     const [event] = recordEvent.mock.calls[0];
     expect(event.details).toEqual({ method: 'saml', provider: 'kommune' });
     expect(validateEvent(event).ok).toBe(true);
@@ -682,7 +682,7 @@ describe('SAML', () => {
     });
 
     it('records auth.login_failed with method saml and no assertion content', async () => {
-      await auditAuthFailure({ ...withLocation('/?error=bad'), body: { SAMLResponse: 'PHNhbWw+c2VjcmV0LXZhbHVlPC9zYW1sPg==' } } as any);
+      await auditAuthFailure({ ...withLocation('/?error=bad'), body: { SAMLResponse: 'PHNhbWw+c2VjcmV0LXZhbHVlPC9zYW1sPg==' } });
       const [event] = recordEvent.mock.calls[0];
       expect(event.details).toEqual({ reason: 'oauth_error', method: 'saml', provider: 'kommune' });
       expect(validateEvent(event).ok).toBe(true);
@@ -716,7 +716,7 @@ describe('runSamlLoginHooks', () => {
     bootstrap.mockRejectedValue(new Error('boom ola@k.dk'));
     await expect(runSamlLoginHooks('u1', 'kommune', attrs)).resolves.toBeUndefined();
     expect(applyClaims).toHaveBeenCalled();
-    const logged = JSON.stringify((console.error as any).mock.calls);
+    const logged = JSON.stringify(vi.mocked(console.error).mock.calls);
     expect(logged).toContain('bootstrap_admin');
     expect(logged).not.toContain('ola@k.dk');
   });
@@ -742,6 +742,6 @@ describe('runSamlLoginHooks', () => {
     await expect(runSamlLoginHooks('u1', 'kommune', attrs)).resolves.toBeUndefined();
     vi.stubEnv('ACCESS_SOURCE', 'bogus');
     await expect(runSamlLoginHooks('u1', 'kommune', attrs)).resolves.toBeUndefined();
-    expect(JSON.stringify((console.error as any).mock.calls)).not.toContain('ola@k.dk');
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain('ola@k.dk');
   });
 });
