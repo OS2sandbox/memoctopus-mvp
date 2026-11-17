@@ -448,6 +448,44 @@ describe('RecordingScreen — start recording', () => {
     );
   });
 
+  // Regression: with suppression/echo-cancellation on, the browser gates all but
+  // the dominant speaker, so room recordings lost every other voice.
+  it('records in room mode by default (no noise suppression, AGC on)', async () => {
+    renderScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
+    });
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({
+      audio: { noiseSuppression: false, echoCancellation: false, autoGainControl: true },
+    });
+  });
+
+  it('switches to headset constraints when the mic-mode toggle is clicked, and persists it', async () => {
+    renderScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByText('mikrofon: møderum'));
+    });
+    expect(screen.getByText('mikrofon: headset')).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
+    });
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({
+      audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: false },
+    });
+    expect(window.localStorage.getItem('referat.capture-mode')).toBe('headset');
+  });
+
+  it('uses a stored headset preference on the next visit', async () => {
+    window.localStorage.setItem('referat.capture-mode', 'headset');
+    renderScreen();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Start optagelse' }));
+    });
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({
+      audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: false },
+    });
+  });
+
   it('transitions to recording state after start', async () => {
     renderScreen();
     await act(async () => {
