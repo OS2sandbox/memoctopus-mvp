@@ -52,8 +52,13 @@ const dbUserLookups: UserLookups = {
  * to write. The name always follows Entra. The email follows it only when no other user
  * holds the new address (logged when skipped). A verified user stays verified.
  *
- * Returns {} — better-auth's own behaviour — on a first sign-in (nothing stored to protect)
- * and if the lookup fails.
+ * Returns { emailVerified: true } on a first sign-in: Entra issues no email_verified
+ * claim for its own accounts, so better-auth would map the profile unverified and refuse
+ * to link it to the user holding that email (?error=account_not_linked). This function
+ * only runs with one named tenant, where the mail attribute is directory-managed, so the
+ * self-registered-lookalike attack the strict default guards against cannot occur.
+ *
+ * Returns {} — better-auth's own behaviour — if the lookup fails.
  */
 export async function entraUserInfoOverrides(
   profile: { sub?: unknown; email?: unknown },
@@ -62,7 +67,9 @@ export async function entraUserInfoOverrides(
   if (typeof profile.sub !== 'string' || !profile.sub) return {};
   try {
     const stored = await lookups.userForMicrosoftAccount(profile.sub);
-    if (!stored) return {};
+    // First sign-in: nothing stored to protect, but the account link is about to be
+    // judged on the profile's emailVerified — which Entra never asserts. See docstring.
+    if (!stored) return { emailVerified: true };
 
     const overrides: { email?: string; emailVerified?: boolean } = {};
     const claimed = typeof profile.email === 'string' ? profile.email.toLowerCase() : null;

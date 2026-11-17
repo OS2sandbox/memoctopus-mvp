@@ -78,10 +78,14 @@ describe('entraUserInfoOverrides', () => {
     expect(out).not.toHaveProperty('emailVerified');
   });
 
-  it('changes nothing on a first sign-in (no linked account yet)', async () => {
+  it('asserts a verified email on a first sign-in, so the account can be linked', async () => {
     const l = lookups({ linked: null, holders: { 'new@example.test': 'user-other' } });
 
-    expect(await entraUserInfoOverrides({ sub: 'sub-1', email: 'new@example.test' }, l)).toEqual({});
+    // Entra sends no email_verified claim, so without this better-auth maps the profile
+    // unverified and refuses to link it to the existing user (?error=account_not_linked).
+    expect(await entraUserInfoOverrides({ sub: 'sub-1', email: 'new@example.test' }, l)).toEqual({
+      emailVerified: true,
+    });
     expect(l.userIdForEmail).not.toHaveBeenCalled();
   });
 
