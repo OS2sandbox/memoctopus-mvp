@@ -21,6 +21,10 @@ import type { TranscriptSegment } from '@/types';
 import { saveAudio, saveTranscript, updateMeeting, deleteMeeting, getMeeting, getTranscript, getAudio } from '@/lib/storage';
 import { startDiarization, finishDiarization } from '@/lib/audio/diarize-client';
 import {
+  micConstraints, loadCaptureMode, saveCaptureMode,
+  CAPTURE_MODE_LABELS, type CaptureMode,
+} from '@/lib/audio/capture-mode';
+import {
   float32ToWavBlob, newVadBatchState, sealCurrentBatch,
   splitTextWithIntervals,
   BATCH_DURATION_S, MAX_WORDS_PER_LINE,
@@ -150,6 +154,24 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
   const searchParams = useSearchParams();
   const isMobile = useIsMobile();
   const [recordingState, setRecordingState] = useState<RecordingState>('idle');
+  // 'room' (default) records everyone in the room; 'headset' keeps browser noise
+  // suppression for a single speaker. Loaded in an effect, not the initializer,
+  // so server render and first client render agree.
+  const [captureMode, setCaptureMode] = useState<CaptureMode>('room');
+  const captureModeRef = useRef<CaptureMode>('room');
+  // Declared before the autostart effect: both run on mount, in order, so the
+  // stored mode is in the ref before an autostarted startRecording reads it.
+  useEffect(() => {
+    const stored = loadCaptureMode();
+    captureModeRef.current = stored;
+    setCaptureMode(stored);
+  }, []);
+  const toggleCaptureMode = () => {
+    const next: CaptureMode = captureMode === 'room' ? 'headset' : 'room';
+    captureModeRef.current = next;
+    setCaptureMode(next);
+    saveCaptureMode(next);
+  };
   const [elapsed, setElapsed] = useState(0);
   const [volumeLevel, setVolumeLevel] = useState(0);
   const [showSilenceWarning, setShowSilenceWarning] = useState(false);
@@ -722,7 +744,9 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
     let stream: MediaStream | null = null;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: false },
+        // Ref, not state: autostart calls startRecording from an effect that may
+        // run before the captureMode load-effect's re-render reaches this closure.
+        audio: micConstraints(captureModeRef.current),
       });
 
       // Volume meter + PCM capture worklet — non-critical. If Web Audio can't open the
@@ -1584,6 +1608,21 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       }}>
         {recordingState === 'idle' && (
           <>
+            <button
+              onClick={toggleCaptureMode}
+              title={captureMode === 'room'
+                ? 'Møderum: optager alle talere i rummet. Klik for headset-tilstand (én taler, støjreduktion til).'
+                : 'Headset: støjreduktion til, bedst til én taler. Klik for møderum-tilstand (optager alle i rummet).'}
+              aria-label={`Mikrofon-tilstand: ${CAPTURE_MODE_LABELS[captureMode]}. Klik for at skifte.`}
+              style={{
+                fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted-2)',
+                background: 'none', border: 'none', cursor: 'pointer',
+                textDecoration: 'underline', textUnderlineOffset: 3,
+                position: 'absolute', left: isMobile ? 16 : 48,
+              }}
+            >
+              mikrofon: {CAPTURE_MODE_LABELS[captureMode]}
+            </button>
             <OnboardingHint stepId="recording.start-button">
               <button
                 onClick={startRecording}
