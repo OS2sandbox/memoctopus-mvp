@@ -16,6 +16,7 @@ vi.mock('@/lib/ai/diarization', () => ({
 
 import { NextRequest } from 'next/server';
 import { POST } from './route';
+import { DIARIZE_PING_INTERVAL_MS } from '@/lib/audio/diarize-stream';
 import { auth } from '@/lib/auth';
 import { FAKE_SESSION } from '@/test/helpers';
 
@@ -34,6 +35,12 @@ function makeAudioRequest(byteLength: number, mimeType = 'audio/wav'): NextReque
 
 function makeRequestWithoutAudio(): NextRequest {
   return new NextRequest(BASE_URL, { method: 'POST', body: new FormData() });
+}
+
+// Collects the route's NDJSON stream once it has closed.
+async function readEvents(res: Response): Promise<Array<Record<string, unknown>>> {
+  const text = await new Response(res.body).text();
+  return text.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
 }
 
 beforeEach(() => {
@@ -69,7 +76,7 @@ describe('POST /api/meetings/[id]/diarize', () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
       const res = await POST(makeAudioRequest(1_999), PARAMS);
       expect(res.status).toBe(200);
-      expect((await res.json()).turns).toEqual([]);
+      expect(await readEvents(res)).toEqual([{ type: 'done', turns: [] }]);
       expect(mockDiarize).not.toHaveBeenCalled();
     });
   });
@@ -85,7 +92,27 @@ describe('POST /api/meetings/[id]/diarize', () => {
 
       const res = await POST(makeAudioRequest(5_000), PARAMS);
       expect(res.status).toBe(200);
-      expect((await res.json()).turns).toEqual(turns);
+      const events = await readEvents(res);
+      expect(events.at(-1)).toEqual({ type: 'done', turns });
+    });
+
+    it('emits pings while the provider is still working', async () => {
+      vi.useFakeTimers();
+      try {
+        mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
+        let resolveDiarize!: (turns: unknown[]) => void;
+        mockDiarize.mockReturnValueOnce(new Promise((resolve) => { resolveDiarize = resolve; }));
+
+        const res = await POST(makeAudioRequest(5_000), PARAMS);
+        await vi.advanceTimersByTimeAsync(DIARIZE_PING_INTERVAL_MS + 1);
+        resolveDiarize([]);
+
+        const events = await readEvents(res);
+        expect(events[0]).toEqual({ type: 'ping' });
+        expect(events.at(-1)).toEqual({ type: 'done', turns: [] });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('passes buffer and mime type to the provider', async () => {
@@ -103,13 +130,13 @@ describe('POST /api/meetings/[id]/diarize', () => {
   });
 
   describe('diarization errors', () => {
-    it('returns 200 with empty turns when the provider throws', async () => {
+    it('returns 200 with an error event when the provider throws', async () => {
       mockGetSession.mockResolvedValueOnce(FAKE_SESSION as never);
       mockDiarize.mockRejectedValueOnce(new Error('service down'));
 
       const res = await POST(makeAudioRequest(5_000), PARAMS);
       expect(res.status).toBe(200);
-      expect((await res.json()).turns).toEqual([]);
+      expect((await readEvents(res)).at(-1)).toEqual({ type: 'error' });
     });
 
     it('does not propagate provider exceptions to the caller', async () => {

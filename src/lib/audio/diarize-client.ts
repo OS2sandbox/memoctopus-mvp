@@ -21,21 +21,44 @@ import { notifyTranscriptUpdated } from '@/lib/transcript-events';
 // automatic speaker recognition is unavailable rather than silently showing one
 // speaker as if diarization had succeeded.
 // No time limit of its own: the route enforces DIARIZATION_TIMEOUT_MS against the
-// diarization service and always answers, so the browser just waits for it.
+// diarization service. The response is an NDJSON stream whose pings keep bytes
+// flowing during the minutes-to-an-hour wait, so idle-connection middleboxes
+// (VPN/firewall/proxy) don't cut the request before the turns arrive.
 export async function fetchDiarizationTurns(meetingId: string, audio: Blob): Promise<SpeakerTurn[] | null> {
   try {
     const fd = new FormData();
     fd.append('audio', audio, 'recording');
+
     const res = await fetch(`/api/meetings/${meetingId}/diarize`, {
       method: 'POST',
       body: fd,
     });
-    if (!res.ok) {
+    if (!res.ok || !res.body) {
       console.error('[diarize] non-OK response:', res.status);
       return null;
     }
-    const { turns } = await res.json() as { turns: SpeakerTurn[] };
-    return Array.isArray(turns) ? turns : [];
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffered = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buffered.indexOf('\n')) >= 0) {
+        const line = buffered.slice(0, nl).trim();
+        buffered = buffered.slice(nl + 1);
+        if (!line) continue;
+        const event = JSON.parse(line) as { type: string; turns?: SpeakerTurn[] };
+        if (event.type === 'done') return Array.isArray(event.turns) ? event.turns : [];
+        if (event.type === 'error') return null;
+        // 'ping' and unknown events: keep reading.
+      }
+    }
+    // Stream ended without a terminal event — the connection was cut mid-wait.
+    console.error('[diarize] stream ended without result');
+    return null;
   } catch (err) {
     console.error('[diarize] request failed:', err);
     return null;
@@ -96,6 +119,7 @@ export async function finishDiarization(meetingId: string, turns: SpeakerTurn[] 
     const segments = (turns.length > 0 && current.segments.every((s) => s.speaker === DEFAULT_SPEAKER_LABEL))
       ? assignSpeakers(current.segments, turns)
       : current.segments;
+
     await saveTranscriptSegments(meetingId, segments, 'done');
     notifyTranscriptUpdated(meetingId);
   } catch (err) {
