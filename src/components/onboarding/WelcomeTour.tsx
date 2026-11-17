@@ -5,7 +5,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { useOnboarding } from '@/lib/onboarding/context';
 
 const POINTS = [
-  { title: 'Optag eller upload', body: 'Start en optagelse, tilføj et Teams-mødelink eller upload en lydfil.' },
+  // Neutral about Teams: this dialog shows everywhere, but the Teams link box is
+  // hidden where Teams is switched off (see dashboard.client.tsx).
+  {
+    title: 'Optag eller upload',
+    body: 'Start en optagelse eller upload en lydfil — eller indsæt et Teams-mødelink, hvis Teams er slået til hos jer.',
+  },
   { title: 'Gennemgå', body: 'Vælg skabelon, tildel talere og håndter følsomme oplysninger.' },
   { title: 'Generér referat og eksportér', body: 'Få et automatisk udkast, som du kan redigere og eksportere.' },
   { title: 'Arkiv', body: 'Find tidligere møder og dine skabeloner samlet ét sted. Rediger eksisterende skabeloner, hent tidligere referater eller opret et nyt referat.' },
@@ -13,10 +18,11 @@ const POINTS = [
 
 /**
  * The global entry point: shown automatically for a first-time user, and
- * reopenable at any time from the TopBar's "Se en hurtig gennemgang" button.
- * This is deliberately a one-shot overview, not a step-by-step spotlight tour
- * — the 38 registered steps are independent, anchored hints (see
- * src/lib/onboarding/steps.ts), not a designed narrative sequence.
+ * reopenable at any time from the TopBar's "?" button. This is deliberately a
+ * one-shot overview, not a step-by-step spotlight tour — the registered steps
+ * are independent, anchored hints (see src/lib/onboarding/steps.ts), not a
+ * designed narrative sequence. "kom i gang" shows every hint again; "spring
+ * over" (or Escape, or the backdrop) marks them all seen.
  */
 export function WelcomeTour() {
   const { showWelcome, closeWelcome, startTour } = useOnboarding();

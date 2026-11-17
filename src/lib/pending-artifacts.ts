@@ -3,6 +3,7 @@ import path from 'path';
 import type { TranscriptSegment } from '@/types';
 import { recordTeamsStashDelete } from '@/lib/teams/audit';
 import { safeLogError } from '@/lib/audit/safe-log';
+import { assertSafeMeetingId } from '@/lib/teams/meeting-id';
 
 // Transient server-side hand-off for artifacts produced without a browser present.
 //
@@ -38,12 +39,6 @@ function rootDir(): string {
   return path.join(base, 'pending-artifacts');
 }
 
-function assertSafeId(meetingId: string): void {
-  if (!/^[\w-]+$/.test(meetingId)) {
-    throw new Error(`Invalid meetingId: ${meetingId}`);
-  }
-}
-
 function metaPath(meetingId: string): string {
   return path.join(rootDir(), `${meetingId}.meta.json`);
 }
@@ -56,19 +51,20 @@ function ownerPath(meetingId: string): string {
   return path.join(rootDir(), `${meetingId}.owner.json`);
 }
 
-// Ownership binding for a bot recording. Meetings live in the client's IndexedDB
+// Ownership binding for a meeting's stash. Meetings live in the client's IndexedDB
 // (no server meetings table), so the only server-side record of WHO owns a meetingId
-// is written here at session-create time. Every client-facing bot route checks it so
-// one authenticated user can't pull down (or control) another user's recording by
-// supplying their meetingId. Without this the stash is keyed by meetingId alone.
+// is written here when the meeting is registered with the Teams integration. Every
+// hand-off route checks it so one authenticated user can't pull down another
+// user's transcript by supplying their meetingId. Without this the stash is keyed
+// by meetingId alone.
 export async function setMeetingOwner(meetingId: string, userId: string): Promise<void> {
-  assertSafeId(meetingId);
+  assertSafeMeetingId(meetingId);
   await fs.mkdir(rootDir(), { recursive: true });
   await fs.writeFile(ownerPath(meetingId), JSON.stringify({ userId, createdAt: Date.now() }));
 }
 
 export async function getMeetingOwner(meetingId: string): Promise<string | null> {
-  assertSafeId(meetingId);
+  assertSafeMeetingId(meetingId);
   try {
     const { userId } = JSON.parse(await fs.readFile(ownerPath(meetingId), 'utf8')) as { userId: string };
     return userId ?? null;
@@ -213,12 +209,13 @@ export async function sweepExpired(exceptId?: string): Promise<void> {
  * The browser has saved the transcript into IndexedDB: the server copy (and the
  * meta record and owner binding that go with it) has done its job and is removed.
  * Idempotent, and it leaves a run in progress alone, so a stale acknowledgement can
- * never delete the result of a re-collect that is under way.
+ * never delete the result of a re-collect that is under way. Returns false for
+ * such a stale acknowledgement, true otherwise.
  */
-export async function acknowledgePendingTranscript(meetingId: string, actorUserId?: string): Promise<void> {
-  assertSafeId(meetingId);
+export async function acknowledgePendingTranscript(meetingId: string, actorUserId?: string): Promise<boolean> {
+  assertSafeMeetingId(meetingId);
   const stashed = await readPendingTranscript(meetingId);
-  if (stashed?.status === 'processing') return;
+  if (stashed?.status === 'processing') return false;
   await deletePendingMeta(meetingId);
   const removed = await removeTranscriptFile(meetingId);
   await fs.unlink(ownerPath(meetingId)).catch(() => {});
@@ -226,21 +223,19 @@ export async function acknowledgePendingTranscript(meetingId: string, actorUserI
   if (stashed?.status === 'ready' && removed !== 'absent') {
     await recordTeamsStashDelete({ trigger: 'handoff', meetingId, userId: actorUserId, failed: removed === 'failed' });
   }
+  return true;
 }
 
 
-// Records that the run finished with no usable recording: either the meeting was
-// transcript-only, or Teams produced no recording at all. The client polls and
-// gets `{ status: 'no-recording' }`.
-//
-// `meta` still matters when there is no audio: Teams' transcript names every
-// speaker, and those names are what pre-fills the participant list in
-// Gennemgang. Dropping them here would narrow that to the recording modes.
-export async function markNoRecording(
+// What a finished run knows about the meeting beyond its transcript: the speakers
+// Teams' transcript names, which pre-fill the participant list in Gennemgang, and
+// the duration. Its presence is also what tells the client (via pending-meta) that
+// the run has finished.
+export async function storePendingMeta(
   meetingId: string,
   meta: Partial<Pick<PendingMeta, 'participants' | 'durationSeconds'>> = {},
 ): Promise<void> {
-  assertSafeId(meetingId);
+  assertSafeMeetingId(meetingId);
   await fs.mkdir(rootDir(), { recursive: true });
   const full: PendingMeta = {
     participants: meta.participants ?? [],
@@ -251,7 +246,7 @@ export async function markNoRecording(
 }
 
 export async function readPendingMeta(meetingId: string): Promise<PendingMeta | null> {
-  assertSafeId(meetingId);
+  assertSafeMeetingId(meetingId);
   try {
     return JSON.parse(await fs.readFile(metaPath(meetingId), 'utf8')) as PendingMeta;
   } catch (err) {
@@ -264,7 +259,7 @@ export async function readPendingMeta(meetingId: string): Promise<PendingMeta | 
 
 
 export async function deletePendingMeta(meetingId: string): Promise<void> {
-  assertSafeId(meetingId);
+  assertSafeMeetingId(meetingId);
   await fs.unlink(metaPath(meetingId)).catch(() => {});
 }
 
@@ -272,7 +267,7 @@ export async function storePendingTranscript(
   meetingId: string,
   transcript: Omit<PendingTranscript, 'createdAt'>,
 ): Promise<void> {
-  assertSafeId(meetingId);
+  assertSafeMeetingId(meetingId);
   await fs.mkdir(rootDir(), { recursive: true });
   // The timer in pending-sweeper.ts is what bounds retention. This inline sweep is
   // only a fallback for a process where the instrumentation hook never ran, and it
@@ -283,7 +278,7 @@ export async function storePendingTranscript(
 }
 
 export async function readPendingTranscript(meetingId: string): Promise<PendingTranscript | null> {
-  assertSafeId(meetingId);
+  assertSafeMeetingId(meetingId);
   try {
     return JSON.parse(await fs.readFile(transcriptPath(meetingId), 'utf8')) as PendingTranscript;
   } catch (err) {
@@ -295,6 +290,6 @@ export async function readPendingTranscript(meetingId: string): Promise<PendingT
 }
 
 export async function deletePendingTranscript(meetingId: string): Promise<void> {
-  assertSafeId(meetingId);
+  assertSafeMeetingId(meetingId);
   await fs.unlink(transcriptPath(meetingId)).catch(() => {});
 }

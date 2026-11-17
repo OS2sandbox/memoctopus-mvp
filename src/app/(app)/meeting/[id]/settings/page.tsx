@@ -135,7 +135,7 @@ export default function MeetingSettingsPage() {
 
   return (
     <div>
-      <OnboardingHint stepId="meeting-settings.processstrip-export" meetingId={id}>
+      <OnboardingHint stepId="meeting-settings.processstrip-export">
         <div>
           <ProcessStrip meetingId={id} activePhase="export" />
         </div>
@@ -179,7 +179,7 @@ export default function MeetingSettingsPage() {
             {/* Disabled when title hasn't loaded: an empty meetingTitle bypasses the
                 RedactDialog type-to-confirm guard ('' === '' passes), so we block
                 opening until the title is confirmed. */}
-            <OnboardingHint stepId="meeting-settings.redact-purpose" meetingId={id}>
+            <OnboardingHint stepId="meeting-settings.redact-purpose">
               <Button
                 variant="danger-ghost"
                 size="sm"

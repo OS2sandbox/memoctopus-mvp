@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getLlmLimits, transcriptBudgetChars } from './llm-limits';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import {
+  CHAT_TEMPLATE_TOKENS,
+  charsPerToken,
+  countTokens,
+  getLlmLimits,
+  promptRoomTokens,
+  transcriptBudgetChars,
+} from './llm-limits';
 
 const ENV = process.env;
 
@@ -55,10 +64,25 @@ describe('getLlmLimits overrides', () => {
     expect(getLlmLimits()).toEqual({ contextTokens: 65_536, maxOutputTokens: 8_192 });
   });
 
+  // VLLM_CHAT_MAX_MODEL_LEN describes the bundled vLLM, and compose passes it whether or
+  // not that is the backend in use.
+  it.each([
+    ['hosted OpenAI', { OPENAI_API_KEY: 'sk-x' }, 128_000],
+    ['a custom LLM_BASE_URL', { LLM_BASE_URL: 'http://my-llm:8000/v1' }, 32_768],
+  ])('ignores VLLM_CHAT_MAX_MODEL_LEN on %s', (_label, env, expected) => {
+    Object.assign(process.env, env, { VLLM_CHAT_MAX_MODEL_LEN: '65536' });
+    expect(getLlmLimits().contextTokens).toBe(expected);
+  });
+
   it('prefers an explicit LLM_CONTEXT_TOKENS over VLLM_CHAT_MAX_MODEL_LEN', () => {
     process.env.LLM_CONTEXT_TOKENS = '16384';
     process.env.VLLM_CHAT_MAX_MODEL_LEN = '65536';
     expect(getLlmLimits().contextTokens).toBe(16_384);
+  });
+
+  it("keeps its self-hosted default window in step with docker-compose.ai.yml's", () => {
+    const compose = readFileSync(path.join(process.cwd(), 'docker-compose.ai.yml'), 'utf8');
+    expect(compose).toContain(`--max-model-len=\${VLLM_CHAT_MAX_MODEL_LEN:-${getLlmLimits().contextTokens}}`);
   });
 
   it('falls back past an invalid VLLM_CHAT_MAX_MODEL_LEN to the default', () => {
@@ -67,84 +91,46 @@ describe('getLlmLimits overrides', () => {
   });
 });
 
-describe('transcriptBudgetChars — hosted OpenAI (no tokenizer endpoint)', () => {
+describe('countTokens — hosted OpenAI (no tokenizer endpoint)', () => {
   beforeEach(() => {
     process.env.OPENAI_API_KEY = 'sk-x';
   });
 
-  it('falls back to the 2.5 chars/token estimate for both the fixed prompt and the sample', async () => {
-    // 1000 fixed chars / 2.5 = 400 tokens; sample "x".repeat(2500) / 2.5 = 1000 tokens →
-    // 2.5 chars/token ratio; (10000 - 2000 - 400) * 2.5 = 19000
-    const budget = await transcriptBudgetChars('x'.repeat(1000), 'x'.repeat(2500), {
-      contextTokens: 10_000,
-      maxOutputTokens: 2_000,
-    });
-    expect(budget).toBe(19_000);
+  it('estimates at a pessimistic 2.5 chars/token', async () => {
+    expect(await countTokens('x'.repeat(1000))).toBe(400);
+    expect(await countTokens('x'.repeat(1001))).toBe(401); // rounds up
   });
 
-  it('can be negative when the context is too small', async () => {
-    const budget = await transcriptBudgetChars('', '', { contextTokens: 1_000, maxOutputTokens: 2_000 });
-    expect(budget).toBeLessThan(0);
+  it('is 0 for empty text', async () => {
+    expect(await countTokens('')).toBe(0);
   });
 
   it('never calls out to a tokenizer endpoint', async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
 
-    await transcriptBudgetChars('fixed text', 'transcript text', {
-      contextTokens: 10_000,
-      maxOutputTokens: 2_000,
-    });
+    await countTokens('transcript text');
 
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
-describe('transcriptBudgetChars — self-hosted vLLM (exact tokenizer)', () => {
+describe('countTokens — self-hosted vLLM (exact tokenizer)', () => {
   // No OPENAI_API_KEY, no LLM_BASE_URL → self-hosted vLLM, so countTokensExact() calls out.
 
-  function mockTokenize(countFor: (text: string) => number) {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url: string, init: RequestInit) => {
-        const body = JSON.parse(init.body as string) as { prompt: string };
-        return {
-          ok: true,
-          json: async () => ({ count: countFor(body.prompt) }),
-        };
-      }),
-    );
-  }
+  it('uses the exact count from the tokenizer instead of the estimate', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ count: 1_500 }) })));
 
-  it('uses the exact token count from the tokenizer instead of the chars/token guess', async () => {
-    // Real tokenizer says the fixed prompt is 100 tokens (not 1000/2.5=400 as the guess
-    // would say) and the transcript sample of 3000 chars is 1500 tokens (2 chars/token —
-    // worse than the 2.5 fallback, exercising a case the old guess would get wrong).
-    mockTokenize((text) => (text.includes('SAMPLE') ? 1_500 : 100));
-
-    const sample = 'x'.repeat(2994) + 'SAMPLE'; // 3000 chars total
-    const budget = await transcriptBudgetChars('fixed prompt', sample, {
-      contextTokens: 10_000,
-      maxOutputTokens: 2_000,
-    });
-
-    // (10000 - 2000 - 100) tokens * (3000 chars / 1500 tokens) = 15800
-    expect(sample.length).toBe(3_000);
-    expect(budget).toBe(15_800);
+    expect(await countTokens('x'.repeat(3_000))).toBe(1_500);
   });
 
-  it('falls back to the chars/token estimate when the tokenizer call fails', async () => {
+  it('falls back to the estimate when the tokenizer call fails', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false })));
 
-    const budget = await transcriptBudgetChars('x'.repeat(1000), 'x'.repeat(2500), {
-      contextTokens: 10_000,
-      maxOutputTokens: 2_000,
-    });
-
-    expect(budget).toBe(19_000);
+    expect(await countTokens('x'.repeat(1000))).toBe(400);
   });
 
-  it('falls back to the chars/token estimate when the tokenizer is unreachable', async () => {
+  it('falls back to the estimate when the tokenizer is unreachable', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -152,11 +138,28 @@ describe('transcriptBudgetChars — self-hosted vLLM (exact tokenizer)', () => {
       }),
     );
 
-    const budget = await transcriptBudgetChars('x'.repeat(1000), 'x'.repeat(2500), {
-      contextTokens: 10_000,
-      maxOutputTokens: 2_000,
-    });
+    expect(await countTokens('x'.repeat(1000))).toBe(400);
+  });
+});
 
-    expect(budget).toBe(19_000);
+describe('budget arithmetic', () => {
+  it('charsPerToken is the measured ratio, or the fallback for an empty count', () => {
+    expect(charsPerToken('x'.repeat(3000), 1500)).toBe(2);
+    expect(charsPerToken('', 0)).toBe(2.5);
+  });
+
+  it('promptRoomTokens reserves the output, the fixed prompt and the chat template', () => {
+    expect(promptRoomTokens(400, { contextTokens: 10_000, maxOutputTokens: 2_000 })).toBe(
+      10_000 - 2_000 - 400 - CHAT_TEMPLATE_TOKENS,
+    );
+  });
+
+  it('promptRoomTokens can be negative when the context is too small', () => {
+    expect(promptRoomTokens(0, { contextTokens: 1_000, maxOutputTokens: 2_000 })).toBeLessThan(0);
+  });
+
+  it('transcriptBudgetChars converts tokens to characters with a 10% margin', () => {
+    // 7000 tokens × 2 chars/token = 14000 chars, less 10%.
+    expect(transcriptBudgetChars(7_000, 2)).toBe(12_600);
   });
 });

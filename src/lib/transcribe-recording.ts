@@ -1,76 +1,28 @@
 import { transcribeWithVadBatches, transcribeEnsemble, isEnsembleDiarization } from '@/lib/audio/vad-batch-server';
-import { getDiarizationProvider, type SpeakerTurn } from '@/lib/ai/diarization';
+import { getDiarizationProvider } from '@/lib/ai/diarization';
 import { assignSpeakers } from '@/lib/audio/merge-speakers';
 import { storePendingTranscript } from '@/lib/pending-artifacts';
 import { safeLogError } from '@/lib/audit/safe-log';
 
-export interface TranscribeRecordingOptions {
-  /**
-   * Speaker timeline to merge in instead of running diarization. Teams meetings
-   * supply this from the meeting's own VTT transcript, where the turns already
-   * carry human display names — no pyannote pass needed, and no `Taler N`.
-   */
-  turns?: SpeakerTurn[];
-  /** Keep the turn labels verbatim (real names) rather than remapping to `Taler N`. */
-  preserveNames?: boolean;
-}
-
-// Server-side processing of a Teams recording, kicked off the moment the audio
-// lands. The server already holds the audio, so transcribing it here keeps the
-// browser out of the critical path.
-//
-// Transcription (ffmpeg decode + VAD + simultaneous hviske fan-out) and diarization
-// run in parallel; the merged transcript is stashed with storePendingTranscript for
-// the browser to collect through /pending-meta and /pending-transcript into
-// IndexedDB. No audio is held for the browser. Everything is fail-soft: on failure
-// the stash is marked 'failed'.
-//
-// When `opts.turns` is supplied the diarization pass is skipped entirely: the
-// caller already knows who spoke when (a VTT's turns). The only caller today
-// (Graph pipeline mode 3) passes no options.
+// Server-side transcription of a Teams recording (see teams/pipeline.ts, where it
+// is the recording-only mode): hviske transcribes while diarization runs in
+// parallel, and the merged transcript goes into the pending stash the browser
+// collects. Fail-soft: a failure marks the stash 'failed' instead of throwing,
+// and the caller reads that verdict back.
 export async function transcribeRecording(
   meetingId: string,
   buffer: Buffer,
   mimeType: string,
-  opts: TranscribeRecordingOptions = {},
 ): Promise<void> {
   const t0 = Date.now();
-  const injectedTurns = opts.turns;
-  const mergeOptions = { preserveNames: opts.preserveNames === true };
 
   try {
     // Ensemble path: one call returns diarized, timestamped segments — no separate
-    // diarization pass to merge. Injected turns still win, because they carry names.
+    // diarization pass to merge.
     if (isEnsembleDiarization()) {
-      const ensembleSegments = await transcribeEnsemble(buffer, mimeType);
-      const segments = injectedTurns?.length
-        ? assignSpeakers(ensembleSegments, injectedTurns, mergeOptions)
-        : ensembleSegments;
+      const segments = await transcribeEnsemble(buffer, mimeType);
       await storePendingTranscript(meetingId, { status: 'ready', segments, diarized: true });
       console.log(`[transcribe-recording] ${meetingId}: ${segments.length} ensemble segments in ${Date.now() - t0} ms`);
-      return;
-    }
-
-    if (injectedTurns) {
-      // Turns are known up front — transcribe only.
-      let transcribed;
-      try {
-        transcribed = await transcribeWithVadBatches(buffer);
-      } catch (err) {
-        safeLogError(`transcribe-recording ${meetingId} transcription failed`, err);
-        await storePendingTranscript(meetingId, { status: 'failed' });
-        return;
-      }
-      const segments = assignSpeakers(transcribed, injectedTurns, mergeOptions);
-      await storePendingTranscript(meetingId, {
-        status: 'ready',
-        segments,
-        diarized: injectedTurns.length > 0,
-      });
-      console.log(
-        `[transcribe-recording] ${meetingId}: ${segments.length} segments ` +
-        `(injected turns=${injectedTurns.length}) in ${Date.now() - t0} ms`,
-      );
       return;
     }
 
@@ -87,11 +39,11 @@ export async function transcribeRecording(
 
     const turns = diarization.status === 'fulfilled' ? diarization.value : [];
     if (diarization.status === 'rejected') {
-      // Non-fatal: ship the transcript with default labels; the client can diarize.
+      // Non-fatal: ship the transcript with default labels.
       safeLogError(`transcribe-recording ${meetingId} diarization failed`, diarization.reason);
     }
 
-    const segments = assignSpeakers(transcription.value, turns, mergeOptions);
+    const segments = assignSpeakers(transcription.value, turns);
     await storePendingTranscript(meetingId, {
       status: 'ready',
       segments,

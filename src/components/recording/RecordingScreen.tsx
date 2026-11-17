@@ -1360,7 +1360,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       </div>
 
       {/* Audio lifecycle notice (direct-microphone path) */}
-      <OnboardingHint stepId="recording.audio-lifecycle" meetingId={meetingId}>
+      <OnboardingHint stepId="recording.audio-lifecycle">
         <div style={{ marginTop: 8, fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--muted)' }}>
           lyden gemmes lokalt og slettes automatisk, når referatet er lavet
         </div>
@@ -1548,7 +1548,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
 
           {/* Live clarifications — things worth nailing down, refreshed on a countdown */}
           {(recordingState === 'recording' || clarifications.length > 0) && (
-            <OnboardingHint stepId="recording.clarify-panel" meetingId={meetingId}>
+            <OnboardingHint stepId="recording.clarify-panel">
               <div>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10,
@@ -1603,7 +1603,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
       }}>
         {recordingState === 'idle' && (
           <>
-            <OnboardingHint stepId="recording.start-button" meetingId={meetingId}>
+            <OnboardingHint stepId="recording.start-button">
               <button
                 onClick={startRecording}
                 style={{
@@ -1643,7 +1643,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
             >
               annullér
             </button>
-            <OnboardingHint stepId="recording.pause-button" meetingId={meetingId}>
+            <OnboardingHint stepId="recording.pause-button">
               <button
                 onClick={recordingState === 'recording' ? pauseRecording : resumeRecording}
                 style={{
@@ -1670,7 +1670,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
                 )}
               </button>
             </OnboardingHint>
-            <OnboardingHint stepId="recording.stop-save-continue" meetingId={meetingId}>
+            <OnboardingHint stepId="recording.stop-save-continue">
               <button
                 onClick={stopAndSave}
                 style={{

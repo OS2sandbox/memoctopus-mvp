@@ -1,4 +1,5 @@
-// Browser-only audio utilities used by the VAD-based recording and upload flows.
+// Energy-based voice activity detection. Pure computation, no browser or Node APIs;
+// the server-side batch pass (vad-batch-server.ts) runs it over decoded recordings.
 
 // Simple energy-based VAD. Avoids onnxruntime-web entirely — no WASM, no
 // dynamic module imports, no asset path issues in Next.js.

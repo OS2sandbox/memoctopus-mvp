@@ -7,17 +7,12 @@
 // onboarding) and never write to onboarding_progress — they render every time
 // the anchor is hovered/focused, matching a plain tooltip's behavior.
 
-export type OnboardingCluster =
-  | 'dashboard-nav'
-  | 'meeting-creation'
-  | 'recording'
-  | 'review-minutes'
-  | 'export-share'
-  | 'arkiv-skabeloner';
-
 export type OnboardingStep = {
   id: string;
-  cluster: OnboardingCluster;
+  /**
+   * Orders the hint queue: when several hints are waiting, the highest severity
+   * shows first (mount order among equals). Tooltips ignore it.
+   */
   severity: 'high' | 'medium' | 'low';
   /**
    * `global` — shown once ever, then never again until the user asks for the
@@ -42,7 +37,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   // ── Dashboard + nav ─────────────────────────────────────────────────────
   'dashboard.record-button': {
     id: 'dashboard.record-button',
-    cluster: 'dashboard-nav',
     severity: 'high',
     scope: 'global',
     placement: 'top',
@@ -51,7 +45,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'dashboard.teams-link': {
     id: 'dashboard.teams-link',
-    cluster: 'dashboard-nav',
     severity: 'high',
     scope: 'global',
     placement: 'top',
@@ -60,7 +53,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'dashboard.keyboard-shortcuts': {
     id: 'dashboard.keyboard-shortcuts',
-    cluster: 'dashboard-nav',
     severity: 'medium',
     scope: 'global',
     placement: 'bottom',
@@ -69,7 +61,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'dashboard.participant-chip': {
     id: 'dashboard.participant-chip',
-    cluster: 'dashboard-nav',
     severity: 'low',
     scope: 'global',
     placement: 'top',
@@ -78,7 +69,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'topbar.unsaved-audio': {
     id: 'topbar.unsaved-audio',
-    cluster: 'dashboard-nav',
     severity: 'high',
     scope: 'per-meeting',
     placement: 'bottom',
@@ -87,7 +77,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'topbar.arkiv-explainer': {
     id: 'topbar.arkiv-explainer',
-    cluster: 'dashboard-nav',
     severity: 'low',
     scope: 'global',
     placement: 'bottom',
@@ -98,7 +87,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   // ── Meeting creation + settings ─────────────────────────────────────────
   'meeting-new.upload-mode': {
     id: 'meeting-new.upload-mode',
-    cluster: 'meeting-creation',
     severity: 'high',
     scope: 'global',
     placement: 'top',
@@ -107,7 +95,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'meeting-new.record-mic-permission': {
     id: 'meeting-new.record-mic-permission',
-    cluster: 'meeting-creation',
     severity: 'medium',
     scope: 'global',
     placement: 'top',
@@ -116,7 +103,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'meeting-new.participants-field': {
     id: 'meeting-new.participants-field',
-    cluster: 'meeting-creation',
     severity: 'low',
     scope: 'global',
     placement: 'top',
@@ -125,7 +111,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'meeting-settings.processstrip-export': {
     id: 'meeting-settings.processstrip-export',
-    cluster: 'meeting-creation',
     severity: 'medium',
     scope: 'global',
     placement: 'bottom',
@@ -134,7 +119,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'meeting-settings.redact-purpose': {
     id: 'meeting-settings.redact-purpose',
-    cluster: 'meeting-creation',
     severity: 'high',
     scope: 'global',
     placement: 'top',
@@ -143,7 +127,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'meeting-settings.redact-redirect': {
     id: 'meeting-settings.redact-redirect',
-    cluster: 'meeting-creation',
     severity: 'low',
     scope: 'global',
     placement: 'top',
@@ -154,7 +137,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   // ── Recording flow ──────────────────────────────────────────────────────
   'recording.start-button': {
     id: 'recording.start-button',
-    cluster: 'recording',
     severity: 'high',
     scope: 'global',
     placement: 'top',
@@ -163,7 +145,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'recording.pause-button': {
     id: 'recording.pause-button',
-    cluster: 'recording',
     severity: 'medium',
     scope: 'global',
     placement: 'top',
@@ -172,7 +153,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'recording.stop-save-continue': {
     id: 'recording.stop-save-continue',
-    cluster: 'recording',
     severity: 'high',
     scope: 'global',
     placement: 'top',
@@ -181,7 +161,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'recording.clarify-panel': {
     id: 'recording.clarify-panel',
-    cluster: 'recording',
     severity: 'medium',
     scope: 'global',
     placement: 'left',
@@ -190,7 +169,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'recording.audio-lifecycle': {
     id: 'recording.audio-lifecycle',
-    cluster: 'recording',
     severity: 'medium',
     scope: 'global',
     placement: 'bottom',
@@ -199,7 +177,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'recording.signal-bars': {
     id: 'recording.signal-bars',
-    cluster: 'recording',
     severity: 'low',
     scope: 'global',
     placement: 'bottom',
@@ -208,7 +185,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'recording.star-marker': {
     id: 'recording.star-marker',
-    cluster: 'recording',
     severity: 'low',
     scope: 'global',
     placement: 'top',
@@ -219,7 +195,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   // ── Review + minutes ─────────────────────────────────────────────────────
   'review.pii-checkboxes': {
     id: 'review.pii-checkboxes',
-    cluster: 'review-minutes',
     severity: 'high',
     scope: 'global',
     placement: 'left',
@@ -228,7 +203,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'review.skabelon-panel': {
     id: 'review.skabelon-panel',
-    cluster: 'review-minutes',
     severity: 'high',
     scope: 'global',
     placement: 'left',
@@ -237,7 +211,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'review.generate-button': {
     id: 'review.generate-button',
-    cluster: 'review-minutes',
     severity: 'high',
     scope: 'global',
     placement: 'top',
@@ -246,7 +219,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'review.speaker-assign': {
     id: 'review.speaker-assign',
-    cluster: 'review-minutes',
     severity: 'medium',
     scope: 'global',
     placement: 'right',
@@ -255,7 +227,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'review.unknown-voices': {
     id: 'review.unknown-voices',
-    cluster: 'review-minutes',
     severity: 'medium',
     scope: 'global',
     placement: 'right',
@@ -264,7 +235,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'review.chapter-title-edit': {
     id: 'review.chapter-title-edit',
-    cluster: 'review-minutes',
     severity: 'low',
     scope: 'global',
     placement: 'top',
@@ -273,7 +243,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'minutes.save-version': {
     id: 'minutes.save-version',
-    cluster: 'review-minutes',
     severity: 'medium',
     scope: 'global',
     placement: 'bottom',
@@ -282,7 +251,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'minutes.version-dropdown': {
     id: 'minutes.version-dropdown',
-    cluster: 'review-minutes',
     severity: 'low',
     scope: 'global',
     placement: 'bottom',
@@ -293,7 +261,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   // ── Export/share + skabelon import ──────────────────────────────────────
   'export.post-download-link': {
     id: 'export.post-download-link',
-    cluster: 'export-share',
     severity: 'medium',
     scope: 'global',
     placement: 'top',
@@ -302,7 +269,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'share.terminology-bridge': {
     id: 'share.terminology-bridge',
-    cluster: 'export-share',
     severity: 'low',
     scope: 'global',
     placement: 'top',
@@ -311,7 +277,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'skabelon-import.explainer': {
     id: 'skabelon-import.explainer',
-    cluster: 'export-share',
     severity: 'medium',
     scope: 'global',
     placement: 'bottom',
@@ -320,7 +285,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'skabelon-import.error-next-steps': {
     id: 'skabelon-import.error-next-steps',
-    cluster: 'export-share',
     severity: 'medium',
     scope: 'global',
     placement: 'bottom',
@@ -329,7 +293,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'skabelon-import.idempotency': {
     id: 'skabelon-import.idempotency',
-    cluster: 'export-share',
     severity: 'low',
     scope: 'global',
     placement: 'top',
@@ -340,7 +303,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   // ── Arkiv + skabeloner ───────────────────────────────────────────────────
   'arkiv.delete-button-touch': {
     id: 'arkiv.delete-button-touch',
-    cluster: 'arkiv-skabeloner',
     severity: 'high',
     scope: 'global',
     placement: 'left',
@@ -349,7 +311,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'arkiv.bulk-edit-button': {
     id: 'arkiv.bulk-edit-button',
-    cluster: 'arkiv-skabeloner',
     severity: 'medium',
     scope: 'global',
     placement: 'bottom',
@@ -358,7 +319,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'skabeloner.tab-purpose': {
     id: 'skabeloner.tab-purpose',
-    cluster: 'arkiv-skabeloner',
     severity: 'high',
     scope: 'global',
     placement: 'bottom',
@@ -367,7 +327,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'skabeloner.category-helper': {
     id: 'skabeloner.category-helper',
-    cluster: 'arkiv-skabeloner',
     severity: 'medium',
     scope: 'global',
     placement: 'top',
@@ -376,7 +335,6 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
   },
   'skabeloner.share-button': {
     id: 'skabeloner.share-button',
-    cluster: 'arkiv-skabeloner',
     severity: 'low',
     scope: 'global',
     placement: 'top',
@@ -384,6 +342,15 @@ export const ONBOARDING_STEPS: Record<string, OnboardingStep> = {
     copy: 'Del-knappen kopierer en kode eller et link, som andre kan indsætte under “Ny skabelon” for at få din skabelon.',
   },
 };
+
+/**
+ * Every popover step remembered once per user: what "spring over" in the welcome
+ * dialog marks seen. The per-meeting warning is left out on purpose — it is about
+ * losing this meeting's audio, not about learning the product.
+ */
+export const ONE_TIME_HINT_IDS: readonly string[] = Object.values(ONBOARDING_STEPS)
+  .filter((s) => s.engine === 'popover' && s.scope === 'global')
+  .map((s) => s.id);
 
 export function getStep(id: string): OnboardingStep {
   // Own keys only: 'constructor', 'toString' etc. are inherited from Object.prototype,

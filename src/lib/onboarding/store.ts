@@ -1,9 +1,9 @@
 import { queryUserSchema, queryUserSchemaOne } from '@/lib/db/user-schema';
+import { ONE_TIME_HINT_IDS } from './steps';
 
 export type OnboardingStateRow = {
   tourSkipped: boolean;
   tourCompleted: boolean;
-  lastStepId: string | null;
 };
 
 export type SeenStep = { stepId: string; meetingId: string | null };
@@ -12,13 +12,11 @@ export async function getOnboardingState(userId: string): Promise<OnboardingStat
   const row = await queryUserSchemaOne<{
     tour_skipped_at: string | null;
     tour_completed_at: string | null;
-    last_step_id: string | null;
-  }>(userId, `SELECT tour_skipped_at, tour_completed_at, last_step_id FROM onboarding_state WHERE id = 'singleton'`);
+  }>(userId, `SELECT tour_skipped_at, tour_completed_at FROM onboarding_state WHERE id = 'singleton'`);
 
   return {
     tourSkipped: !!row?.tour_skipped_at,
     tourCompleted: !!row?.tour_completed_at,
-    lastStepId: row?.last_step_id ?? null,
   };
 }
 
@@ -38,38 +36,32 @@ export async function getSeenSteps(userId: string): Promise<SeenStep[]> {
 }
 
 export async function markStepSeen(userId: string, stepId: string, meetingId: string | null): Promise<void> {
-  // One statement, same reasoning as resetHints below: the progress insert and the
-  // state upsert must commit together on the same connection, or a concurrent
-  // resetHints can land between them and leave the two tables inconsistent.
   await queryUserSchema(
     userId,
-    `WITH progress AS (
-       INSERT INTO onboarding_progress (step_id, meeting_id, status)
-       VALUES ($1, $2, 'seen')
-       ON CONFLICT ON CONSTRAINT onboarding_progress_step_meeting_unique DO NOTHING
-     )
-     INSERT INTO onboarding_state (id, last_step_id, updated_at)
-     VALUES ('singleton', $1, NOW())
-     ON CONFLICT (id) DO UPDATE SET last_step_id = EXCLUDED.last_step_id, updated_at = NOW()`,
+    `INSERT INTO onboarding_progress (step_id, meeting_id, status)
+     VALUES ($1, $2, 'seen')
+     ON CONFLICT ON CONSTRAINT onboarding_progress_step_meeting_unique DO NOTHING`,
     [stepId, meetingId ?? ''],
   );
 }
 
+/**
+ * "spring over": no hints at all, not just no welcome dialog. Marks every one-time
+ * hint seen in the same statement as the skip flag (see resetHints for why one
+ * statement). The "?" button replays them via resetHints.
+ */
 export async function skipTour(userId: string): Promise<void> {
   await queryUserSchema(
     userId,
-    `INSERT INTO onboarding_state (id, tour_skipped_at, updated_at)
+    `WITH hints AS (
+       INSERT INTO onboarding_progress (step_id, meeting_id, status)
+       SELECT step_id, '', 'seen' FROM unnest($1::text[]) AS t(step_id)
+       ON CONFLICT ON CONSTRAINT onboarding_progress_step_meeting_unique DO NOTHING
+     )
+     INSERT INTO onboarding_state (id, tour_skipped_at, updated_at)
      VALUES ('singleton', NOW(), NOW())
      ON CONFLICT (id) DO UPDATE SET tour_skipped_at = NOW(), updated_at = NOW()`,
-  );
-}
-
-export async function completeTour(userId: string): Promise<void> {
-  await queryUserSchema(
-    userId,
-    `INSERT INTO onboarding_state (id, tour_completed_at, updated_at)
-     VALUES ('singleton', NOW(), NOW())
-     ON CONFLICT (id) DO UPDATE SET tour_completed_at = NOW(), updated_at = NOW()`,
+    [ONE_TIME_HINT_IDS],
   );
 }
 
@@ -80,13 +72,14 @@ export async function completeTour(userId: string): Promise<void> {
  */
 export async function resetHints(userId: string): Promise<void> {
   // One statement (a data-modifying CTE always runs to completion, referenced or not), so
-  // the delete and the state write commit together and a concurrent markStepSeen cannot
-  // land between them. Two separate queries would run on two pooled connections.
+  // the delete and the state write commit together. Two separate queries would run on two
+  // pooled connections, and a crash between them could leave an empty progress table with
+  // no completed tour, which reads as a first-time user.
   await queryUserSchema(
     userId,
     `WITH cleared AS (DELETE FROM onboarding_progress)
-     INSERT INTO onboarding_state (id, tour_completed_at, tour_skipped_at, last_step_id, updated_at)
-     VALUES ('singleton', NOW(), NULL, NULL, NOW())
-     ON CONFLICT (id) DO UPDATE SET tour_completed_at = NOW(), tour_skipped_at = NULL, last_step_id = NULL, updated_at = NOW()`,
+     INSERT INTO onboarding_state (id, tour_completed_at, tour_skipped_at, updated_at)
+     VALUES ('singleton', NOW(), NULL, NOW())
+     ON CONFLICT (id) DO UPDATE SET tour_completed_at = NOW(), tour_skipped_at = NULL, updated_at = NOW()`,
   );
 }

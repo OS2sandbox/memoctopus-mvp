@@ -33,18 +33,33 @@ export async function requireAppAccess(): Promise<AppAccess | NextResponse> {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+  const access = await appAccessForUser(session.user.id);
+  if (access === 'unavailable') {
+    return NextResponse.json({ error: 'Adgangskontrol er midlertidigt utilgængelig' }, { status: 503 });
+  }
+  if (access === 'forbidden') return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  return { session, principal: access };
+}
+
+/**
+ * The same check for a caller identified otherwise than by the session cookie (the
+ * Outlook add-in's Entra token, src/lib/outlook/addin-gate.ts): the live principal,
+ * or why not. `unavailable` = the lookup failed (fail closed); `forbidden` = refused,
+ * with the denial event already written.
+ */
+export async function appAccessForUser(userId: string): Promise<Principal | 'unavailable' | 'forbidden'> {
   let principal: Principal;
   try {
-    principal = await resolvePrincipal(session.user.id);
+    principal = await resolvePrincipal(userId);
   } catch (err) {
     safeLogError('app-access principal', err);
-    return NextResponse.json({ error: 'Adgangskontrol er midlertidigt utilgængelig' }, { status: 503 });
+    return 'unavailable';
   }
 
   const refusal = loginRefusal(principal);
   if (refusal) {
     recordAuthzDenied({ actorUserId: principal.userId, required: 'login', reason: refusal });
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    return 'forbidden';
   }
-  return { session, principal };
+  return principal;
 }

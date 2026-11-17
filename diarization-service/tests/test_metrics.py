@@ -137,16 +137,8 @@ def test_tiny_upload_counts_success_without_observing_duration(load_app):
 
 # ── /metrics access ───────────────────────────────────────────────────────────
 
-def test_metrics_is_open_by_default_even_when_a_key_is_set(load_app):
+def test_metrics_requires_the_bearer_token_whenever_a_key_is_set(load_app):
     client = TestClient(load_app(DIARIZATION_API_KEY="secret").app)
-
-    assert client.get("/metrics").status_code == 200
-
-
-def test_metrics_requires_the_bearer_token_when_the_flag_is_set(load_app):
-    client = TestClient(
-        load_app(DIARIZATION_API_KEY="secret", DIARIZATION_METRICS_REQUIRE_AUTH="true").app
-    )
 
     assert client.get("/metrics").status_code == 401
     assert client.get("/metrics", headers={"Authorization": "Bearer nope"}).status_code == 401
@@ -154,24 +146,22 @@ def test_metrics_requires_the_bearer_token_when_the_flag_is_set(load_app):
     assert client.get("/health").status_code == 200  # health stays open for probes
 
 
+def test_metrics_is_open_without_a_key_like_diarize(load_app):
+    # No key means no auth anywhere (local dev); /metrics is no exception.
+    assert TestClient(load_app().app).get("/metrics").status_code == 200
+
+
 @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes"])
-def test_flag_accepts_the_documented_spellings(load_app, value):
-    client = TestClient(
-        load_app(DIARIZATION_API_KEY="secret", DIARIZATION_METRICS_REQUIRE_AUTH=value).app
-    )
+def test_opt_out_opens_metrics_for_a_scraper_without_the_token(load_app, value):
+    client = TestClient(load_app(DIARIZATION_API_KEY="secret", DIARIZATION_METRICS_PUBLIC=value).app)
+
+    assert client.get("/metrics").status_code == 200
+    # ...and only /metrics: /diarize still wants the token.
+    assert client.post("/diarize", files=WAV).status_code == 401
+
+
+@pytest.mark.parametrize("value", ["", "false", "0", "no"])
+def test_anything_else_keeps_metrics_protected(load_app, value):
+    client = TestClient(load_app(DIARIZATION_API_KEY="secret", DIARIZATION_METRICS_PUBLIC=value).app)
 
     assert client.get("/metrics").status_code == 401
-
-
-def test_warns_at_startup_when_the_flag_is_set_but_there_is_no_key(load_app, capsys):
-    app = load_app(DIARIZATION_METRICS_REQUIRE_AUTH="true")
-
-    assert "DIARIZATION_API_KEY" in capsys.readouterr().out
-    # ...and the flag really does nothing without a key, which is what the warning is for.
-    assert TestClient(app.app).get("/metrics").status_code == 200
-
-
-def test_no_warning_when_the_flag_is_set_with_a_key(load_app, capsys):
-    load_app(DIARIZATION_API_KEY="secret", DIARIZATION_METRICS_REQUIRE_AUTH="true")
-
-    assert "WARNING" not in capsys.readouterr().out

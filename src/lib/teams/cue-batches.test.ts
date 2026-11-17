@@ -99,7 +99,7 @@ describe('planCueBatches', () => {
   it('groups overlapping cues from two speakers', () => {
     const batches = planCueBatches(
       [
-        cue(39.2, 40.3, 'Velkommen til syddjurs', 'Nikolaj'),
+        cue(39.2, 40.3, 'Velkommen til mødet', 'Nikolaj'),
         cue(39.4, 41.2, '5 til udstyring thank you', 'Peter'),
         cue(46.2, 47.5, 'En blå baggrund det her', 'Peter'),
       ],

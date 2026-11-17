@@ -2,42 +2,30 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAppAccess } from '@/lib/authz/app-access';
 import { teamsGraphEnabled } from '@/lib/auth/providers';
 import { GraphError, TEAMS_DISABLED_MESSAGE } from '@/lib/teams/graph-client';
-import { graphDate } from '@/lib/teams/graph-dates';
-import { getMeetingOwner, setMeetingOwner } from '@/lib/pending-artifacts';
+import { parseGraphDate } from '@/lib/teams/graph-dates';
 import { recordTeamsRegister } from '@/lib/teams/audit';
 import { teamsFailureCode } from '@/lib/teams/failure-code';
 import { teamsErrorResponse } from '@/lib/teams/http-errors';
-import { armMeeting, isArmed, type ArmResult } from '@/lib/teams/meeting-arm';
-import { resolveJoinUrl } from '@/lib/teams/meeting-resolver';
-import { claimMeetingSnapshot, listTeamsMeetings, upsertTeamsMeeting } from '@/lib/teams/store';
-
-/** ISO string → Date, tolerating a missing or unparseable value. */
-function toDate(value: string | null | undefined): Date | null {
-  if (!value) return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-/**
- * The meeting id is the client's own IndexedDB id, and it ends up as a file
- * name in the pending stash and in the pipeline's scratch directory. Anything
- * outside this alphabet (`../…`) is rejected at the boundary rather than
- * relying on a downstream call happening to validate first.
- */
-const SAFE_MEETING_ID = /^[\w-]+$/;
+import { isArmed } from '@/lib/teams/meeting-arm';
+import { isSafeMeetingId } from '@/lib/teams/meeting-id';
+import { MeetingIdTakenError, registerTeamsMeeting, type RegisterProgress } from '@/lib/teams/register';
+import { isDeferred, listTeamsMeetings } from '@/lib/teams/store';
 
 function str(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 /**
- * Where each of the caller's registered Teams meetings stands, for the Arkiv.
+ * The caller's registered Teams meetings, read from their own per-user schema.
  *
- * The browser's copy of a Teams meeting keeps `awaiting_teams` until the
- * transcript is collected, because that status is what renders the meeting's
- * Teams screen (with "Prøv igen" and "Slet"). So the archive cannot tell from its
- * own data that the server has given up; it asks here. Only id and state go out:
- * the list is read from the caller's own per-user schema.
+ * Two uses. The Arkiv reads `state`: the browser's copy of a Teams meeting keeps
+ * `awaiting_teams` until the transcript is collected, because that status is
+ * what renders the meeting's Teams screen (with "Prøv igen" and "Slet"), so the
+ * archive cannot tell from its own data that the server has given up.
+ *
+ * And the dashboard imports meetings armed from Outlook, which exist only here
+ * until a browser has seen them: those rows carry what a new local meeting needs.
+ * `deferred` says the meeting is waiting for its user to open it.
  */
 export async function GET() {
   const access = await requireAppAccess();
@@ -46,7 +34,20 @@ export async function GET() {
 
   const rows = await listTeamsMeetings(session.user.id);
   return NextResponse.json({
-    meetings: rows.map((row) => ({ id: row.id, state: row.state })),
+    meetings: rows.map((row) => ({
+      id: row.id,
+      state: row.state,
+      ...(row.origin === 'outlook'
+        ? {
+            origin: row.origin,
+            deferred: isDeferred(row),
+            subject: row.subject,
+            joinUrl: row.joinUrl,
+            scheduledStart: row.scheduledStart ? row.scheduledStart.toISOString() : null,
+            createdAt: row.createdAt ? row.createdAt.toISOString() : null,
+          }
+        : {}),
+    })),
   });
 }
 
@@ -82,73 +83,30 @@ export async function POST(req: NextRequest) {
   const meetingId = typeof body.meetingId === 'string' ? body.meetingId.trim() : '';
   const joinUrl = typeof body.joinUrl === 'string' ? body.joinUrl : '';
   if (!meetingId) return NextResponse.json({ error: 'missing-meeting-id' }, { status: 400 });
-  if (!SAFE_MEETING_ID.test(meetingId)) {
+  if (!isSafeMeetingId(meetingId)) {
     return NextResponse.json({ error: 'invalid-meeting-id' }, { status: 400 });
   }
   if (!joinUrl) return NextResponse.json({ error: 'invalid-url' }, { status: 400 });
 
   const userId = session.user.id;
 
-  // The pending stash is keyed by meetingId across all users, and the pipeline
-  // will write this meeting's transcript and recording into it. Binding the id
-  // to its owner here does two things: it stops another user's browser from
-  // collecting these artifacts, and it makes the hand-off work at all — both
-  // the pending-meta and pending-transcript routes deny by default when no owner is
-  // recorded.
-  const existingOwner = await getMeetingOwner(meetingId);
-  if (existingOwner && existingOwner !== userId) {
-    return NextResponse.json({ error: 'meeting-id-taken' }, { status: 409 });
-  }
-  await setMeetingOwner(meetingId, userId);
-
   // The client knows which *occurrence* of a recurring series it armed; Graph's
-  // onlineMeeting only knows the series-level window. Prefer the occurrence, or
-  // artifacts of occurrence 2+ fall outside the pick window and are never found.
+  // onlineMeeting only knows the series-level window (see registerTeamsMeeting).
   const eventId = str(body.eventId) ?? null;
-  const occurrenceStart = toDate(graphDate(str(body.scheduledStart)));
-  const occurrenceEnd = toDate(graphDate(str(body.scheduledEnd)));
+  const occurrenceStart = parseGraphDate(str(body.scheduledStart));
+  const occurrenceEnd = parseGraphDate(str(body.scheduledEnd));
 
   // What is known of the arm step, for the audit event of a failure that comes after it.
-  let isOrganizer: boolean | undefined;
-  let armedResult: ArmResult | undefined;
+  const progress: RegisterProgress = {};
 
   try {
-    const resolved = await resolveJoinUrl(userId, joinUrl);
-    isOrganizer = resolved.isOrganizer;
-
-    // Only the organizer may PATCH meeting options; an invitee is registered
-    // anyway, because their transcript is readable if somebody starts
-    // transcription manually.
-    const outcome = resolved.isOrganizer
-      ? await armMeeting(userId, resolved.graphMeetingId)
-      : null;
-    const armResult = outcome?.result ?? ('not_organizer' as const);
-    armedResult = armResult;
-
-    // What the organizer had before we ever PATCHed this Graph meeting, for the
-    // disarm to restore — claimed once per graphMeetingId, not per local id, so
-    // a recurring series' second+ occurrence (its own local id, same Graph
-    // meeting) gets back the true original instead of its own already-armed
-    // values. See claimMeetingSnapshot. The claimed value itself is not needed
-    // here — disarm reads it back later by graphMeetingId.
-    if (outcome && outcome.result !== 'not_organizer') {
-      await claimMeetingSnapshot(userId, resolved.graphMeetingId, outcome.previousOptions);
-    }
-
-    const row = await upsertTeamsMeeting(userId, {
-      id: meetingId,
-      graphMeetingId: resolved.graphMeetingId,
-      joinUrl: resolved.joinUrl,
-      subject: resolved.subject,
-      organizerId: resolved.organizerId,
-      isOrganizer: resolved.isOrganizer,
-      armed: isArmed(armResult),
-      armResult,
+    const { row, armResult } = await registerTeamsMeeting(userId, {
+      meetingId,
+      joinUrl,
       eventId,
-      scheduledStart: occurrenceStart ?? toDate(resolved.scheduledStart),
-      scheduledEnd: occurrenceEnd ?? toDate(resolved.scheduledEnd),
-      state: 'awaiting_teams',
-    });
+      occurrenceStart,
+      occurrenceEnd,
+    }, progress);
 
     // Arming PATCHed the user's Teams meeting options on their behalf: worth a trace.
     await recordTeamsRegister(req, {
@@ -172,14 +130,17 @@ export async function POST(req: NextRequest) {
       state: row.state,
     });
   } catch (err) {
+    if (err instanceof MeetingIdTakenError) {
+      return NextResponse.json({ error: 'meeting-id-taken' }, { status: 409 });
+    }
     await recordTeamsRegister(req, {
       userId,
       meetingId,
       outcome: 'error',
       code: teamsFailureCode(err),
       // The meeting may be armed in Teams although saving the row failed afterwards.
-      ...(armedResult !== undefined ? { armed: isArmed(armedResult), armResult: armedResult } : {}),
-      ...(isOrganizer !== undefined ? { isOrganizer } : {}),
+      ...(progress.armResult !== undefined ? { armed: isArmed(progress.armResult), armResult: progress.armResult } : {}),
+      ...(progress.isOrganizer !== undefined ? { isOrganizer: progress.isOrganizer } : {}),
     });
     return teamsErrorResponse(err);
   }

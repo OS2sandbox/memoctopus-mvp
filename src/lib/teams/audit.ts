@@ -31,7 +31,7 @@ async function emit(label: string, write: () => Promise<unknown>): Promise<void>
 
 type Req = HeaderSource;
 
-/** POST /api/teams/meetings. After a failure only `code` is certain; what is known of the arm step is passed along. */
+/** POST /api/teams/meetings and the Outlook add-in's POST /api/outlook/meetings. After a failure only `code` is certain; what is known of the arm step is passed along. */
 export function recordTeamsRegister(
   req: Req,
   run: {
@@ -59,7 +59,7 @@ export function recordTeamsRegister(
   return emit('teams.meeting_register', () => recordServerEvent(req, event));
 }
 
-/** DELETE /api/teams/meetings/[id]. `code` is only given when the options in Teams could not be put back. */
+/** DELETE /api/teams/meetings/[id] and /api/outlook/meetings/[id]. `code` is only given when the options in Teams could not be put back. */
 export function recordTeamsUnregister(
   req: Req,
   run: { userId: string; meetingId: string; disarmed: boolean; code?: string },

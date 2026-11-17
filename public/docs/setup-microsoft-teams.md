@@ -14,6 +14,22 @@ til en times ventetid på, at Teams-politikken slår igennem.
 `TEAMS_GRAPH_ENABLED=true` i OS2taletiltekst' miljøvariabler og genstarte appen, og det
 skal først ske, **når trin 1 er gennemført**. Se rammen under trin 1.
 
+## Kort version
+
+1. **Entra admin center:** giv app-registreringen de delegerede Graph-tilladelser
+   `OnlineMeetings.ReadWrite`, `OnlineMeetingTranscript.Read.All`,
+   `OnlineMeetingRecording.Read.All`, `Files.ReadWrite`, `User.Read` og
+   `offline_access`, og tryk **Grant admin consent**.
+2. **Teams admin center:** slå *Transcription* og *Meeting recording* til i
+   mødepolitikken. Det kan tage op til en time at slå igennem.
+3. **Teams admin center:** kontrollér, at API-adgang til transskriptioner ikke er
+   slået fra.
+4. **Driften:** sæt `TEAMS_GRAPH_ENABLED=true` og genstart appen. **Først efter
+   trin 1**, ellers kan ingen logge ind med Microsoft.
+5. **Medarbejderne:** log ud og ind igen med Microsoft.
+
+Resten af guiden forklarer hvert trin, fejlbeskederne og hvor data ligger.
+
 ## Trin 1. Giv appen adgang til møderne
 
 Foretages i **Entra admin center** ([entra.microsoft.com](https://entra.microsoft.com))
@@ -29,7 +45,7 @@ af en bruger med rollen *Global administrator* eller *Privileged role administra
    | `OnlineMeetings.ReadWrite` | Slå automatisk transskription til på det enkelte møde |
    | `OnlineMeetingTranscript.Read.All` | Hente mødets transskription bagefter |
    | `OnlineMeetingRecording.Read.All` | Hente mødets optagelse bagefter (kan udelades ved `TEAMS_ARTIFACT_MODE=transcript-only`) |
-   | `Files.ReadWrite` | Slette optagelsen fra arrangørens OneDrive, når den er transskriberet (kan udelades ved `TEAMS_DELETE_RECORDING=false` eller `TEAMS_ARTIFACT_MODE=transcript-only`) |
+   | `Files.ReadWrite` | Slette optagelsen fra arrangørens OneDrive, når medarbejderens browser har gemt transskriptionen (kan udelades ved `TEAMS_DELETE_RECORDING=false` eller `TEAMS_ARTIFACT_MODE=transcript-only`) |
    | `User.Read` | Læse brugerens eget navn og e-mail (findes typisk allerede) |
    | `offline_access` | Fornye adgangen, så brugeren ikke skal logge ind igen hver time |
 
@@ -154,8 +170,11 @@ OS2taletiltekst henter en kopi af optagelsen, transskriberer den og sletter dere
 lyden. Selve lydoptagelsen bliver aldrig gemt i OS2taletiltekst og bliver aldrig sendt
 til medarbejderens browser.
 
-Når transskriptionen er færdig, sletter OS2taletiltekst også optagelsen i arrangørens
-OneDrive. Filen slettes permanent og lægges ikke i papirkurven. Det er det,
+Når medarbejderens browser har gemt transskriptionen, sletter OS2taletiltekst også
+optagelsen i arrangørens OneDrive. Indtil da bliver den liggende, så mødet kan hentes
+igen, hvis noget går galt undervejs. Måtte OS2taletiltekst falde tilbage til Teams'
+egen tekst-transskription (fx fordi vores egen model ikke kunne nås), bliver
+optagelsen også liggende. Filen slettes permanent og lægges ikke i papirkurven. Det er det,
 tilladelsen `Files.ReadWrite` bruges til, og kun til det: Microsoft Graph har
 ingen funktion til at slette en mødeoptagelse, så filen må slettes som en fil i
 medarbejderens OneDrive. OS2taletiltekst finder den i mappen *Optagelser* på dens
@@ -191,9 +210,9 @@ transskriptionen. Bliver den aldrig hentet (fx fordi fanen blev lukket), slettes
 filen senest cirka en time efter, at den blev lagt, af en oprydning der kører
 hvert femte minut uanset om andre møder bliver behandlet. Er filen væk, når
 medarbejderen kommer tilbage, tilbyder skærmen "Hent igen", som henter
-transskriptionen fra Teams på ny, så længe mødet er under et døgn gammelt. Er
-optagelsen på det tidspunkt slettet fra OneDrive, er det Teams' egen
-tekst-transskription, der hentes.
+transskriptionen fra Teams på ny. Det kan lade sig gøre i op til 30 dage efter
+mødet, så længe optagelsen stadig ligger i OneDrive. Er den slettet, er grænsen et
+døgn.
 Herefter ligger transskriptionen og referatet kun i medarbejderens browser
 (IndexedDB), ikke i en central database.
 

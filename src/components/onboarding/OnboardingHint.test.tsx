@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import React from 'react';
+import React, { useState } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, fireEvent, act } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react';
 import { OnboardingProvider } from '@/lib/onboarding/context';
 import { OnboardingHint } from './OnboardingHint';
 import { getStep } from '@/lib/onboarding/steps';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 
 const fetchMock = vi.fn();
 
@@ -108,8 +109,9 @@ describe('OnboardingHint — one instance reused for different steps', () => {
   }
 
   it('does not mark the new step seen when it was only queued, never shown', () => {
-    // C mounts first and holds the slot; the reused instance shows A, then is
-    // re-pointed at B while C is still ahead of it in the queue.
+    // The reused instance shows H first (same severity as C, mounted earlier),
+    // then is re-pointed at B, which queues behind C.
+    const H = 'review.generate-button';
     function Tree({ step, meetingId }: { step: string; meetingId: string | null }) {
       return (
         <Provider>
@@ -122,12 +124,12 @@ describe('OnboardingHint — one instance reused for different steps', () => {
         </Provider>
       );
     }
-    const { rerender, unmount } = render(<Tree step={A} meetingId={null} />);
-    expect(screen.getByText(copyOf(A))).toBeTruthy();
+    const { rerender, unmount } = render(<Tree step={H} meetingId={null} />);
+    expect(screen.getByText(copyOf(H))).toBeTruthy();
 
     rerender(<Tree step={B} meetingId="m-1" />);
-    // A was shown, so leaving it counts as seen; B is queued behind C.
-    expect(saves()).toEqual([{ stepId: A, meetingId: null }]);
+    // H was shown, so leaving it counts as seen; B is queued behind C.
+    expect(saves()).toEqual([{ stepId: H, meetingId: null }]);
     expect(screen.queryByText(copyOf(B))).toBeNull();
 
     unmount();
@@ -144,6 +146,143 @@ describe('OnboardingHint — one instance reused for different steps', () => {
       { stepId: A, meetingId: null },
       { stepId: B, meetingId: 'm-1' },
     ]);
+  });
+});
+
+// One bubble at a time, and the important one first: a new user should meet
+// "optag" before the Arkiv explainer, whatever order the page mounts them in.
+describe('OnboardingHint — queue across different steps', () => {
+  it('opens the higher-severity step first, then the next when it is dismissed', async () => {
+    expect(getStep(A).severity).toBe('low');
+    expect(getStep(C).severity).toBe('high');
+    render(
+      <Provider>
+        <OnboardingHint stepId={A}>
+          <span>arkiv</span>
+        </OnboardingHint>
+        <OnboardingHint stepId={C}>
+          <span>optag</span>
+        </OnboardingHint>
+      </Provider>,
+    );
+    expect(screen.getByText(copyOf(C))).toBeTruthy();
+    expect(screen.queryByText(copyOf(A))).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('forstået'));
+    });
+    expect(screen.queryByText(copyOf(C))).toBeNull();
+    expect(screen.getByText(copyOf(A))).toBeTruthy();
+  });
+
+  it('keeps steps of equal severity in mount order', () => {
+    const H = 'review.generate-button'; // high, like C
+    render(
+      <Provider>
+        <OnboardingHint stepId={H}>
+          <span>first</span>
+        </OnboardingHint>
+        <OnboardingHint stepId={C}>
+          <span>second</span>
+        </OnboardingHint>
+      </Provider>,
+    );
+    expect(screen.getByText(copyOf(H))).toBeTruthy();
+    expect(screen.queryByText(copyOf(C))).toBeNull();
+  });
+
+  it('does not pull an open bubble away when a more important one mounts later', () => {
+    function Page({ loaded }: { loaded: boolean }) {
+      return (
+        <Provider>
+          <OnboardingHint stepId={A}>
+            <span>arkiv</span>
+          </OnboardingHint>
+          {loaded && (
+            <OnboardingHint stepId={C}>
+              <span>optag</span>
+            </OnboardingHint>
+          )}
+        </Provider>
+      );
+    }
+    const { rerender } = render(<Page loaded={false} />);
+    expect(screen.getByText(copyOf(A))).toBeTruthy();
+
+    rerender(<Page loaded />);
+    expect(screen.getByText(copyOf(A))).toBeTruthy();
+    expect(screen.queryByText(copyOf(C))).toBeNull();
+
+    fireEvent.click(screen.getByText('forstået'));
+    expect(screen.getByText(copyOf(C))).toBeTruthy();
+  });
+});
+
+// The bubble is portaled to the end of <body> and focus stays put, so without
+// these a screen-reader user never hears that a hint appeared.
+describe('OnboardingHint — screen readers', () => {
+  it('announces the copy politely and ties it to the anchor while open', async () => {
+    render(
+      <Provider>
+        <OnboardingHint stepId={A}>
+          <button>arkiv</button>
+        </OnboardingHint>
+      </Provider>,
+    );
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent(copyOf(A));
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(screen.getByRole('button', { name: 'arkiv' })).toHaveAttribute('aria-describedby', status.id);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('forstået'));
+    });
+    expect(screen.getByRole('button', { name: 'arkiv' })).not.toHaveAttribute('aria-describedby');
+  });
+});
+
+// A modal dialog (z-50) blocks the rest of the page with pointer-events: none on
+// <body>. A hint drawn above it could be read but not dismissed, and Escape meant
+// for the dialog dismissed the hint too, unread.
+describe('OnboardingHint — modal dialogs', () => {
+  function Page() {
+    const [open, setOpen] = useState(false);
+    return (
+      <Provider>
+        <OnboardingHint stepId={A}>
+          <span>anchor</span>
+        </OnboardingHint>
+        <button onClick={() => setOpen(true)}>åbn dialog</button>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogContent>
+            <DialogTitle>En dialog</DialogTitle>
+          </DialogContent>
+        </Dialog>
+      </Provider>
+    );
+  }
+
+  it('draws the bubble below dialogs', () => {
+    render(<Page />);
+    const wrapper = screen.getByText(copyOf(A)).closest('[data-radix-popper-content-wrapper]') as HTMLElement;
+    expect(Number(wrapper.style.zIndex)).toBeLessThan(50);
+  });
+
+  it('steps aside while a modal dialog is open and comes back, unread, when it closes', async () => {
+    render(<Page />);
+    expect(screen.getByText(copyOf(A))).toBeTruthy();
+
+    fireEvent.click(screen.getByText('åbn dialog'));
+    expect(screen.getByRole('dialog', { name: 'En dialog' })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(copyOf(A))).toBeNull());
+
+    await act(async () => {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
+    });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'En dialog' })).toBeNull());
+
+    await waitFor(() => expect(screen.getByText(copyOf(A))).toBeTruthy());
+    expect(saves()).toEqual([]);
   });
 });
 

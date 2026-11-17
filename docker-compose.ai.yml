@@ -76,6 +76,9 @@ services:
   # across the vLLM services well under 1.0 (here: 0.50 chat + 0.25 hviske).
   vllm-chat:
     image: vllm/vllm-openai:${VLLM_IMAGE_TAG:-v0.24.0}
+    # The app reads VLLM_MODEL and VLLM_CHAT_MAX_MODEL_LEN too (base file), so it requests
+    # this model and budgets for this window. Their defaults here are repeated in the app
+    # (DEFAULT_VLLM_MODEL, getLlmLimits) and tests keep the copies equal.
     command:
       - --model=${VLLM_MODEL:-google/gemma-4-12b-it}
       - --served-model-name=${VLLM_MODEL:-google/gemma-4-12b-it}

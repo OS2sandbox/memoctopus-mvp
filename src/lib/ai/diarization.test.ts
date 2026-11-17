@@ -3,12 +3,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const mockDecode = vi.hoisted(() => vi.fn());
 const mockEncode = vi.hoisted(() => vi.fn());
 const mockUndiciFetch = vi.hoisted(() => vi.fn());
+const agentOptions = vi.hoisted(() => [] as unknown[]);
 
 vi.mock('undici', async (importOriginal) => {
   const actual = await importOriginal<typeof import('undici')>();
 
+  // The real Agent, recording what it was built with.
+  class RecordingAgent extends actual.Agent {
+    constructor(options: ConstructorParameters<typeof actual.Agent>[0]) {
+      super(options);
+      agentOptions.push(options);
+    }
+  }
+
   return {
     ...actual,
+    Agent: RecordingAgent,
     fetch: mockUndiciFetch,
   };
 });
@@ -48,6 +58,7 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 
 beforeEach(() => {
   process.env = { ...ENV };
+  agentOptions.length = 0;
   mockUndiciFetch.mockReset();
   mockDecode.mockReset();
   mockEncode.mockReset();
@@ -56,10 +67,43 @@ beforeEach(() => {
 afterEach(() => {
   process.env = ENV;
   setDiarizationProvider(null as never); // reset the singleton between tests
+  vi.restoreAllMocks();
 });
 
 describe('PyannoteProvider.diarize', () => {
   const buf = Buffer.alloc(5_000, 1);
+
+  // The browser has no time limit of its own (it waits for this route), so this one
+  // number is the whole budget for a diarization request: our abort signal, and undici's
+  // own header/body timers, which would otherwise cut a long CPU job off first.
+  describe('DIARIZATION_TIMEOUT_MS', () => {
+    beforeEach(() => {
+      delete process.env.HVISKE_DIARIZE;
+      mockUndiciFetch.mockResolvedValue(jsonResponse({ turns: [] }));
+    });
+
+    it('sets the abort signal and both undici timers', async () => {
+      process.env.DIARIZATION_TIMEOUT_MS = '3600000';
+      const timeout = vi.spyOn(AbortSignal, 'timeout');
+
+      await new PyannoteProvider().diarize(buf, 'audio/wav');
+
+      expect(timeout).toHaveBeenCalledWith(3_600_000);
+      expect(agentOptions.at(-1)).toMatchObject({ headersTimeout: 3_600_000, bodyTimeout: 3_600_000 });
+      expect(mockUndiciFetch.mock.calls[0][1].signal).toBe(timeout.mock.results[0].value);
+    });
+
+    it.each([[undefined], [''], ['abc'], ['0'], ['-5']])('defaults to 5 minutes for %j', async (value) => {
+      if (value === undefined) delete process.env.DIARIZATION_TIMEOUT_MS;
+      else process.env.DIARIZATION_TIMEOUT_MS = value;
+      const timeout = vi.spyOn(AbortSignal, 'timeout');
+
+      await new PyannoteProvider().diarize(buf, 'audio/wav');
+
+      expect(timeout).toHaveBeenCalledWith(300_000);
+      expect(agentOptions.at(-1)).toMatchObject({ headersTimeout: 300_000, bodyTimeout: 300_000 });
+    });
+  });
 
   it('POSTs to <DIARIZATION_URL>/diarize and returns parsed turns', async () => {
     process.env.DIARIZATION_URL = 'http://diar:5000';

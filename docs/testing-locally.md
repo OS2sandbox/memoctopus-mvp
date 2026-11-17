@@ -8,7 +8,7 @@ a real meeting to end.
 ## A. Offline with the mock Graph server
 
 The mock (`scripts/mock-graph/server.mjs`, no dependencies) serves the slice of
-`graph.microsoft.com/v1.0` that `src/lib/teams/*` uses: `/me`, `/me/calendarView`,
+`graph.microsoft.com/v1.0` that `src/lib/teams/*` uses: `/me`,
 `/me/onlineMeetings` lookup by join URL, meeting option PATCH, transcripts (VTT)
 and recordings (302 to an off-origin blob, like real Graph), plus the two drive
 calls that delete a transcribed recording from OneDrive. On macOS it
@@ -37,7 +37,7 @@ It prints the meetings it knows and their join links:
 | `mtgpast` | organizer | ended 10 min ago, artifacts ready | the happy path, instantly |
 | `mtgsoon` | organizer | starts in 5 min | arming; end it by hand to test pickup |
 | `mtginvitee` | invitee | in 1 h | the "ask the organizer" path |
-| `mtgweekly` | organizer | tomorrow, recurring | series handling in the calendar list |
+| `mtgweekly` | organizer | tomorrow, recurring | pasting a recurring meeting's link |
 
 Control endpoints (no auth):
 
@@ -89,16 +89,20 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5432/referat_mock \
 
 This inserts an `accounts` row for provider `microsoft` with a token the mock
 accepts, an expiry in 2099 (so better-auth never tries to refresh) and the full
-Graph scope list. `--remove` takes it away again. Reload the dashboard: the
-"Kommende Teams-møder" section appears.
+Graph scope list. `--remove` takes it away again. Reload the dashboard: the hint
+"Teams-referater kræver, at du logger ind med Microsoft." is gone, and the meeting-link
+box under the record button ("eller deltag i et møde", *Indsæt mødelink…*) takes a
+Teams link.
 
 ### 5. Walk the flow
 
-1. Dashboard → "Kommende Teams-møder" → **Tag referat** on *Budgetmøde Q4*. Check
-   `/__mock/state`: `recordAutomatically`, `allowTranscription` and
-   `meetingSpokenLanguageTag=da-DK` are now set on `mtgsoon`.
-2. Same on *Møde hvor du kun er inviteret*: you get the organizer instructions.
-3. Paste the `mtgpast` join link into the "deltag i et møde" box. Its artifacts are
+1. Paste the `mtgsoon` join link (*Budgetmøde Q4*, from the mock's banner) into the
+   dashboard's meeting-link box and press Enter. The meeting screen says
+   OS2taletiltekst is switched on. Check `/__mock/state`: `recordAutomatically`,
+   `allowTranscription` and `meetingSpokenLanguageTag=da-DK` are now set on `mtgsoon`.
+2. Same with the `mtginvitee` link (*Møde hvor du kun er inviteret*): you get the
+   organizer instructions.
+3. Paste the `mtgpast` join link into the same box. Its artifacts are
    ready, so within one poll interval (or on **Tjek nu**) the meeting goes to
    Gennemgang with *Mette Hansen* and *Jens Nielsen* on the segments.
 4. End `mtgsoon` by hand with the control endpoint. Note: the poller only starts
@@ -119,7 +123,6 @@ B=http://localhost:3004
 curl -c cj -H 'content-type: application/json' -H "origin: $B" -X POST $B/api/auth/sign-up/email \
   -d '{"email":"you@example.com","password":"Passw0rd!xyz","name":"Test"}'
 curl -b cj $B/api/teams/status
-curl -b cj "$B/api/teams/calendar?days=7"
 curl -b cj -H 'content-type: application/json' -H "origin: $B" -X POST $B/api/teams/meetings \
   -d '{"meetingId":"m1","joinUrl":"<mtgpast join url from the mock banner>"}'
 curl -b cj "$B/api/teams/meetings/m1?poll=1"
@@ -147,13 +150,14 @@ for Teams (Business Basic or higher, or E3/E5).
    `TEAMS_POLL_INTERVAL_MS=30000`, and **no**
    `GRAPH_BASE_URL`. Remove any mock account row first
    (`npm run mock:graph:seed -- you@example.com --remove`) or use a different database.
-4. Sign in with Microsoft. The consent screen must list the meeting and calendar
-   scopes. If you had signed in with Microsoft before, sign out and in again so the
-   stored scopes are refreshed; `/api/teams/status` should report `scopesOk: true`.
+4. Sign in with Microsoft. The consent screen lists the meeting permissions and
+   `Files.ReadWrite`; no calendar permission is requested. If you had signed in with
+   Microsoft before, sign out and in again so the stored scopes are refreshed;
+   `/api/teams/status` should report `scopesOk: true`.
 5. In Outlook or Teams, schedule a meeting starting in a few minutes, invite the
-   second user. On the dashboard, **Tag referat**. Open the meeting's *Meeting
-   options* in Teams: "Record and transcribe automatically" is now on and the
-   spoken language is Danish.
+   second user. Paste its join link into the dashboard's meeting-link box. Open the
+   meeting's *Meeting options* in Teams: "Record and transcribe automatically" is now
+   on and the spoken language is Danish.
 6. Join as both users, talk Danish for two or three minutes, then **End meeting
    for all**. Transcripts usually appear within a few minutes, recordings a bit
    later. The waiting screen polls every 15 s; **Tjek nu** forces it.

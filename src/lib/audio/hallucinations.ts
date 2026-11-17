@@ -15,17 +15,26 @@
 // transcribed correctly for eight seconds and then span out contributed nothing at
 // all. `cleanTranscribedText` instead keeps the good prefix and cuts the loop off.
 
-/** Phrases a Whisper-family model emits over silence, matched on the whole line. */
+/**
+ * Phrases a Whisper-family model emits over silence, matched on the whole line.
+ *
+ * The line is the whole of what the model returned for a 27 s window or a group of
+ * Teams cues, so the open-ended patterns only apply to a short line — a credit is a
+ * name and a year, not a paragraph. A catch-all `^undertekster? .*$` used to drop
+ * real speech such as "Undertekster på kommunens videoer skal vi have styr på…".
+ */
 const CREDIT_PHRASES = [
   /^tak skal (du|i) have\.?$/i,
   /^tak for (at se med|i dag)\.?$/i,
   /^(danske )?(under)?tekster af .*$/i,
   /^(danske )?tekster? .*scandinavian text service.*$/i,
-  /^undertekster? .*$/i,
   /^subtitles by .*$/i,
   /^amara\.org.*$/i,
   /^tekstning af .*$/i,
 ];
+
+/** Longer than this, a line is speech, whatever it opens with. */
+const MAX_CREDIT_WORDS = 12;
 
 /** A repeated run this long or longer is a loop, not speech. */
 const MAX_WORD_RUN = 3;
@@ -34,6 +43,7 @@ const MAX_PHRASE_RUN = 3;
 
 function isCreditPhrase(text: string): boolean {
   const line = text.trim().replace(/\s+/g, ' ');
+  if (line.split(' ').length > MAX_CREDIT_WORDS) return false;
   return CREDIT_PHRASES.some((re) => re.test(line));
 }
 
@@ -44,22 +54,29 @@ function isCreditPhrase(text: string): boolean {
  * Two shapes are detected: the same word repeated (`så så så så`) and a short
  * phrase repeated (`det er noget, der er noget, der er noget`). Both are cut at
  * the start of the repetition, so the first occurrence is kept — it is usually
- * real speech, and only the echo after it is not.
+ * real speech, and only the echo after it is not. When a window holds more than
+ * one loop, the earliest cut wins: everything after it is the model spinning.
  */
 export function degenerationStart(words: string[]): number {
   const lower = words.map((w) => w.toLowerCase().replace(/[.,!?;:]+$/, ''));
+  let cut = words.length;
 
-  // Single word repeated MAX_WORD_RUN+ times in a row.
+  // Single word repeated MAX_WORD_RUN+ times in a row. The first such run is the
+  // earliest one, so the scan stops there.
   let runStart = 0;
   for (let i = 1; i <= lower.length; i++) {
     if (i < lower.length && lower[i] === lower[runStart]) continue;
-    if (i - runStart > MAX_WORD_RUN) return runStart + 1;
+    if (i - runStart > MAX_WORD_RUN) {
+      cut = runStart + 1;
+      break;
+    }
     runStart = i;
   }
 
-  // Phrase of 2–6 words repeated MAX_PHRASE_RUN+ times back to back.
+  // Phrase of 2–6 words repeated MAX_PHRASE_RUN+ times back to back. Only a loop
+  // that would cut earlier than what was already found is worth looking for.
   for (let size = 2; size <= 6; size++) {
-    for (let i = 0; i + size * (MAX_PHRASE_RUN + 1) <= lower.length; i++) {
+    for (let i = 0; i + size < cut && i + size * (MAX_PHRASE_RUN + 1) <= lower.length; i++) {
       let reps = 1;
       while (
         i + size * (reps + 1) <= lower.length &&
@@ -68,11 +85,14 @@ export function degenerationStart(words: string[]): number {
       ) {
         reps++;
       }
-      if (reps > MAX_PHRASE_RUN) return i + size;
+      if (reps > MAX_PHRASE_RUN) {
+        cut = i + size;
+        break;
+      }
     }
   }
 
-  return words.length;
+  return cut;
 }
 
 /**

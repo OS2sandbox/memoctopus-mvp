@@ -9,11 +9,15 @@ interface Params {
 }
 
 // Speaker diarization for the batch processing pass. Stateless compute: takes the
-// full recording (one WAV of the whole meeting), runs the self-hosted pyannote
-// service, and returns speaker turns. No persistence — the client merges the turns
-// onto its transcript segments (see merge-speakers.ts) and stores the result in
-// IndexedDB. Diarization must run over the WHOLE recording in one pass because
+// full recording (the original compressed file of the whole meeting), runs the
+// self-hosted pyannote service, and returns speaker turns. No persistence — the client
+// merges the turns onto its transcript segments (see merge-speakers.ts) and stores the
+// result in IndexedDB. Diarization must run over the WHOLE recording in one pass because
 // speaker identity is global, so this is a single request, not per-utterance.
+//
+// The request's only time limit is DIARIZATION_TIMEOUT_MS, enforced by the provider
+// against the diarization service; the browser waits for this route without one of its
+// own, and a reverse proxy in front must allow as long (nginx/nginx.conf, DEPLOY.md).
 // Not audited: it is a pipeline step on audio that audio.upload already covers.
 async function postHandler(req: NextRequest, _ctx: Params) {
   const access = await requireAppAccess();

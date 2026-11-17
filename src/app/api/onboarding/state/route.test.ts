@@ -27,7 +27,7 @@ beforeEach(() => {
   mockGetSession.mockResolvedValue(FAKE_SESSION as never);
   store.getOnboardingState.mockReset();
   store.getSeenSteps.mockReset();
-  store.getOnboardingState.mockResolvedValue({ tourSkipped: false, tourCompleted: false, lastStepId: null });
+  store.getOnboardingState.mockResolvedValue({ tourSkipped: false, tourCompleted: false });
   store.getSeenSteps.mockResolvedValue([]);
 });
 
@@ -50,11 +50,10 @@ describe('GET /api/onboarding/state', () => {
     store.getOnboardingState.mockResolvedValueOnce({
       tourSkipped: false,
       tourCompleted: true,
-      lastStepId: 'dashboard.record-button',
     });
     store.getSeenSteps.mockResolvedValueOnce([
       { stepId: 'dashboard.record-button', meetingId: null },
-      { stepId: 'recording.audio-lifecycle', meetingId: 'm-1' },
+      { stepId: 'topbar.unsaved-audio', meetingId: 'm-1' },
     ]);
 
     const res = await GET();
@@ -62,10 +61,9 @@ describe('GET /api/onboarding/state', () => {
     await expect(res.json()).resolves.toEqual({
       tourSkipped: false,
       tourCompleted: true,
-      lastStepId: 'dashboard.record-button',
       seen: [
         { stepId: 'dashboard.record-button', meetingId: null },
-        { stepId: 'recording.audio-lifecycle', meetingId: 'm-1' },
+        { stepId: 'topbar.unsaved-audio', meetingId: 'm-1' },
       ],
     });
   });
@@ -75,7 +73,6 @@ describe('GET /api/onboarding/state', () => {
     await expect(res.json()).resolves.toEqual({
       tourSkipped: false,
       tourCompleted: false,
-      lastStepId: null,
       seen: [],
     });
   });

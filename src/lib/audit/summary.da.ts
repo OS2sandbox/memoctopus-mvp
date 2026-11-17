@@ -91,6 +91,7 @@ const AUDIO_CHANNEL_TEXT: Record<string, { what: string; purpose: string }> = {
 const TEAMS_ARM_TEXT: Record<string, string> = {
   armed: ' og slog automatisk optagelse og transskription til i mødet',
   armed_in_progress: ' og slog optagelse og transskription til (hvis mødet allerede var i gang, skal den startes manuelt)',
+  armed_late: ' og slog optagelse og transskription til efter mødets planlagte start (hvis mødet allerede var i gang, skal den startes manuelt)',
   not_organizer: ' som deltager (mødets indstillinger er ikke ændret)',
   policy_blocked: ', men organisationens politik i Teams blokerer transskription',
 };

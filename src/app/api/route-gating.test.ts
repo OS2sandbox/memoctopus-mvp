@@ -30,8 +30,11 @@ describe('API route gating', () => {
         const r = rel(f);
         if (r === 'health/route.ts' || r.startsWith('auth/')) return false;
         if (r.startsWith('internal/')) return false; // secret-authenticated, below
+        // Public by design: the add-in's client and tenant id, which every sign-in URL shows anyway.
+        if (r === 'outlook/config/route.ts') return false;
         const src = readFileSync(f, 'utf8');
-        return !/\b(withAuthz|requireAppAccess)\b/.test(src);
+        // requireAddinUser: the Outlook add-in's Entra token, then the same access check (addin-gate.ts).
+        return !/\b(withAuthz|requireAppAccess|requireAddinUser)\b/.test(src);
       })
       .map(rel);
     expect(ungated).toEqual([]);

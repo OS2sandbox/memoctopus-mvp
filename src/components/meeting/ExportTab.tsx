@@ -59,7 +59,7 @@ export function ExportTab({ meetingId }: { meetingId: string }) {
       <div style={{ maxWidth: 780, margin: '0 auto' }}>
 
         {/* Header */}
-        <OnboardingHint stepId="share.terminology-bridge" meetingId={meetingId}>
+        <OnboardingHint stepId="share.terminology-bridge">
           <div style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: 0.4 }}>04 · eksport</div>
         </OnboardingHint>
         <h1 style={{ fontWeight: 300, fontSize: isMobile ? 32 : 42, lineHeight: 1.04, letterSpacing: '-0.025em', margin: '8px 0 0' }}>

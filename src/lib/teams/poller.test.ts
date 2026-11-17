@@ -38,12 +38,14 @@ vi.mock('./store', async (importOriginal) => {
     refreshTeamsMeetingSchedule: vi.fn(),
     listPendingRecordingCleanups: vi.fn().mockResolvedValue([]),
     settleRecordingCleanup: vi.fn().mockResolvedValue(true),
+    markTeamsMeetingOpened: vi.fn(),
   };
 });
 
 import {
   GIVE_UP_MESSAGE,
   MEETING_GONE_MESSAGE,
+  NOT_OPENED_MESSAGE,
   POLL_LOCK_KEY,
   REAUTH_GIVE_UP_MESSAGE,
   TRANSCRIPTS_DISABLED_MESSAGE,
@@ -51,7 +53,9 @@ import {
   pollMeeting,
   startPoller,
   cleanUpRecording,
+  combineCleanup,
   RECORDING_CLEANUP_GIVE_UP_MS,
+  RECORDING_STALL_LIMIT,
 } from './poller';
 import { GraphError } from './graph-client';
 import { acknowledgePendingTranscript } from '@/lib/pending-artifacts';
@@ -69,6 +73,8 @@ import {
   refreshTeamsMeetingSchedule,
   listPendingRecordingCleanups,
   settleRecordingCleanup,
+  markTeamsMeetingOpened,
+  OUTLOOK_UNOPENED_GIVE_UP_MS,
   type TeamsMeetingRow,
 } from './store';
 
@@ -85,6 +91,7 @@ const mockListCleanups = vi.mocked(listPendingRecordingCleanups);
 const mockSettle = vi.mocked(settleRecordingCleanup);
 const mockAuditFetch = vi.mocked(recordTeamsArtifactsFetch);
 const mockAuditDelete = vi.mocked(recordTeamsRecordingDelete);
+const mockMarkOpened = vi.mocked(markTeamsMeetingOpened);
 
 /** What getMeeting answers by default: the same window the row already has. */
 function graphMeeting(over: Record<string, unknown> = {}) {
@@ -118,6 +125,7 @@ function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     armed: true,
     scheduledStart: new Date('2026-09-08T10:00:00Z'),
     scheduledEnd: new Date('2026-09-08T11:00:00Z'),
+    occurrenceWindow: false,
     state: 'awaiting_teams',
     lastPolledAt: null,
     attempts: 0,
@@ -125,7 +133,13 @@ function row(over: Partial<TeamsMeetingRow> = {}): TeamsMeetingRow {
     transcriptId: null,
     recordingId: null,
     recordingCleanup: null,
+    recordingCleanupAt: null,
     recordingBytes: null,
+    recordingSizes: [],
+    origin: null,
+    openedAt: null,
+    recollectedAt: null,
+    recordingStalls: 0,
     eventId: null,
     armResult: 'armed',
     createdAt: new Date('2026-09-08T09:00:00Z'),
@@ -325,10 +339,10 @@ describe('pollMeeting', () => {
     mockProcess.mockResolvedValueOnce({
       status: 'ready',
       mode: 'recording+transcript',
-      speakers: ['Mette Hansen'],
       transcriptId: 't1',
       recordingId: 'r1',
       recordingBytes: null,
+      recordingSizes: [],
     });
 
     await pollMeeting('u1', 'm1', NOW);
@@ -343,6 +357,7 @@ describe('pollMeeting', () => {
         scheduledEnd: new Date('2026-09-08T11:00:00Z'),
         attempts: 0,
         recordingDeleted: false,
+        recordingUnreachable: false,
       },
       NOW,
     );
@@ -351,6 +366,8 @@ describe('pollMeeting', () => {
       failureReason: null,
       transcriptId: 't1',
       recordingId: 'r1',
+      recordingBytes: null,
+      recordingSizes: [],
     });
   });
 
@@ -470,6 +487,35 @@ describe('pollMeeting', () => {
     expect(mockQuery).not.toHaveBeenCalled();
   });
 
+  // A recording that times out mid-download every time is not "Teams has nothing
+  // yet". Counted nowhere, it was fetched again for a day and then given up on as
+  // if Teams had never published anything.
+  it('counts a stalled recording download as a stall, not as an attempt', async () => {
+    mockGet.mockResolvedValue(row({ attempts: 3 }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending', transient: true, recordingStalled: true });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockMark).toHaveBeenCalledWith(
+      'u1',
+      'm1',
+      { state: 'awaiting_teams', failureReason: null },
+      { incrementAttempts: false, countRecordingStall: true },
+    );
+  });
+
+  it.each([
+    [RECORDING_STALL_LIMIT - 1, false],
+    [RECORDING_STALL_LIMIT, true],
+  ])('after %i stalled downloads, stops asking for the recording: %s', async (stalls, unreachable) => {
+    mockGet.mockResolvedValue(row({ recordingStalls: stalls }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockProcess.mock.calls[0][1].recordingUnreachable).toBe(unreachable);
+  });
+
   it('does not count a forced poll ("Tjek nu") that finds nothing yet', async () => {
     mockGet.mockResolvedValue(row());
     mockProcess.mockResolvedValueOnce({ status: 'pending' });
@@ -493,10 +539,10 @@ describe('pollMeeting', () => {
     mockProcess.mockResolvedValueOnce({
       status: 'ready',
       mode: 'transcript-only',
-      speakers: [],
       transcriptId: 't1',
       recordingId: null,
       recordingBytes: null,
+      recordingSizes: [],
     });
 
     await pollMeeting('u1', 'm1', NOW, { force: true });
@@ -514,6 +560,22 @@ describe('pollMeeting', () => {
       'u1',
       'm1',
       { state: 'needs_reauth', failureReason: 'Log ind igen.' },
+      { incrementAttempts: true },
+    );
+  });
+
+  it('waits for a new sign-in, instead of failing the meeting, when a scope is missing', async () => {
+    mockGet.mockResolvedValue(row());
+    mockProcess.mockRejectedValueOnce(
+      new GraphError('consent_required', 'Log ind med Microsoft igen.', { status: 403 }),
+    );
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockMark).toHaveBeenCalledWith(
+      'u1',
+      'm1',
+      { state: 'needs_reauth', failureReason: 'Log ind med Microsoft igen.' },
       { incrementAttempts: true },
     );
   });
@@ -552,8 +614,7 @@ describe('pollMeeting', () => {
     // The row exists when the poll starts and is gone when the run has finished.
     mockGet.mockResolvedValueOnce(live).mockResolvedValue(null);
     mockProcess.mockResolvedValueOnce({
-      status: 'ready', mode: 'recording+transcript', speakers: ['Mette Hansen'],
-      transcriptId: 't1', recordingId: 'r1', recordingBytes: null,
+      status: 'ready', mode: 'recording+transcript', transcriptId: 't1', recordingId: 'r1', recordingBytes: null, recordingSizes: [],
     });
     mockMark.mockRejectedValue(new Error('markPollAttempt: no such Teams meeting: m1'));
 
@@ -564,40 +625,22 @@ describe('pollMeeting', () => {
     expect(mockMark).toHaveBeenCalledTimes(1);
   });
 
-  it('deletes the recording from OneDrive when the person deleted the meeting while the run was transcribing it', async () => {
+  it('leaves the recording in OneDrive when the person deleted the meeting while the run was transcribing it', async () => {
     const live = row();
     mockGet.mockResolvedValueOnce(live).mockResolvedValue(null);
     mockProcess.mockResolvedValueOnce({
-      status: 'ready', mode: 'recording+transcript', speakers: ['Mette Hansen'],
-      transcriptId: 't1', recordingId: 'r1', recordingBytes: 4242,
+      status: 'ready', mode: 'recording+transcript', transcriptId: 't1', recordingId: 'r1', recordingBytes: 4242, recordingSizes: [4242],
     });
     mockMark.mockRejectedValue(new Error('markPollAttempt: no such Teams meeting: m1'));
-    mockDeleteRecording.mockResolvedValueOnce('deleted');
 
     await expect(pollMeeting('u1', 'm1', NOW)).resolves.toBe(live);
 
-    // No row is left for the retry to hang on: this is the one chance to remove it.
-    expect(mockDeleteRecording).toHaveBeenCalledWith('u1', 4242);
-    expect(mockAuditDelete).toHaveBeenCalledWith({ userId: 'u1', meetingId: 'm1', status: 'deleted' });
+    // A recording is deleted only once its person has the transcript, and this one never got it.
+    expect(mockDeleteRecording).not.toHaveBeenCalled();
+    expect(mockAuditDelete).not.toHaveBeenCalled();
     expect(vi.mocked(acknowledgePendingTranscript)).toHaveBeenCalledWith('m1', 'u1');
     // A meeting the person deleted was not fetched for them.
     expect(mockAuditFetch).not.toHaveBeenCalled();
-  });
-
-  it('audits a failed OneDrive delete of a meeting deleted mid-run as failed', async () => {
-    mockGet.mockResolvedValueOnce(row()).mockResolvedValue(null);
-    mockProcess.mockResolvedValueOnce({
-      status: 'ready', mode: 'recording+transcript', speakers: [],
-      transcriptId: 't1', recordingId: 'r1', recordingBytes: 4242,
-    });
-    mockMark.mockRejectedValue(new Error('markPollAttempt: no such Teams meeting: m1'));
-    mockDeleteRecording.mockRejectedValueOnce(new Error('graph down'));
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    await pollMeeting('u1', 'm1', NOW);
-
-    expect(mockAuditDelete).toHaveBeenCalledWith({ userId: 'u1', meetingId: 'm1', status: 'failed' });
-    spy.mockRestore();
   });
 
   it('does not touch the stash when a failing poll finds its row still there', async () => {
@@ -616,7 +659,7 @@ describe('pollMeeting', () => {
     mockGet.mockResolvedValueOnce(row());
     mockMark.mockResolvedValueOnce(after);
     mockProcess.mockResolvedValueOnce({
-      status: 'ready', mode: 'transcript-only', speakers: [], transcriptId: null, recordingId: null, recordingBytes: null,
+      status: 'ready', mode: 'transcript-only', transcriptId: null, recordingId: null, recordingBytes: null, recordingSizes: [],
     });
 
     expect(await pollMeeting('u1', 'm1', NOW)).toBe(after);
@@ -835,6 +878,30 @@ describe('startPoller', () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect(mockConnect).toHaveBeenCalledTimes(2);
   });
+
+  // register() can run more than once in a process (dev reloads); a second poller
+  // would double every Graph call and race the first for each meeting.
+  it('starts once: a second call adds no second timer, and either stop function stops it', async () => {
+    vi.useFakeTimers();
+    vi.stubEnv('VITEST', '');
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('TEAMS_POLL_INTERVAL_MS', '1000');
+    const c = { query: vi.fn().mockResolvedValue({ rows: [{ locked: false }] }), release: vi.fn() };
+    mockConnect.mockResolvedValue(c);
+    const spy = vi.spyOn(global, 'setInterval');
+
+    startPoller();
+    const stop = startPoller();
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    stop();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(mockConnect).not.toHaveBeenCalled();
+
+    startPoller()();
+    expect(spy).toHaveBeenCalledTimes(2);
+    spy.mockRestore();
+  });
 });
 
 describe('pollMeeting — a meeting whose window has already gone', () => {
@@ -894,6 +961,64 @@ describe('pollMeeting — re-reading the meeting from Graph', () => {
     });
   });
 
+  // Occurrence 3 of a weekly series: Outlook registered that day's window, Graph's
+  // onlineMeeting only knows the series'. Overwriting the one with the other made
+  // the pipeline look for artifacts in the wrong week, and the meeting failed.
+  it("keeps a window registered for one occurrence of a series, but takes Graph's new subject", async () => {
+    const occurrence = {
+      occurrenceWindow: true,
+      scheduledStart: new Date('2026-09-08T10:00:00Z'),
+      scheduledEnd: new Date('2026-09-08T11:00:00Z'),
+    };
+    mockGet.mockResolvedValue(row(occurrence));
+    mockGetMeeting.mockResolvedValue(graphMeeting({
+      scheduledStart: '2026-08-25T10:00:00Z',
+      scheduledEnd: '2026-08-25T11:00:00Z',
+      subject: 'Nyt navn',
+    }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockRefresh).toHaveBeenCalledWith('u1', 'm1', {
+      scheduledStart: occurrence.scheduledStart,
+      scheduledEnd: occurrence.scheduledEnd,
+      subject: 'Nyt navn',
+    });
+    expect(mockProcess).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({
+        scheduledStart: occurrence.scheduledStart,
+        scheduledEnd: occurrence.scheduledEnd,
+      }),
+      NOW,
+    );
+  });
+
+  it('writes nothing for an occurrence when only the series window differs', async () => {
+    mockGet.mockResolvedValue(row({ occurrenceWindow: true }));
+    mockGetMeeting.mockResolvedValue(graphMeeting({
+      scheduledStart: '2026-08-25T10:00:00Z',
+      scheduledEnd: '2026-08-25T11:00:00Z',
+    }));
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  it('still fails an occurrence whose meeting Graph no longer has', async () => {
+    mockGet.mockResolvedValue(row({ occurrenceWindow: true }));
+    mockGetMeeting.mockRejectedValue(new GraphError('not_found', 'væk', { status: 404 }));
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', {
+      state: 'failed',
+      failureReason: MEETING_GONE_MESSAGE,
+    });
+  });
+
   it('does not poll a meeting that has been moved into the future', async () => {
     // The row was due on its OLD window; after the re-read it is not yet time.
     mockGet.mockResolvedValue(row());
@@ -947,6 +1072,54 @@ describe('pollMeeting — re-reading the meeting from Graph', () => {
     await pollMeeting('u1', 'm1', NOW);
 
     expect(mockGetMeeting).not.toHaveBeenCalled();
+  });
+
+  // The screen forces a poll whenever it opens after the meeting's end, so a
+  // collected meeting gets forced polls too. Re-reading it then turned a meeting
+  // since deleted in Teams from `ready` into `failed`, and its referat was lost.
+  // "Hent igen" days after the meeting: a full window from the request, like a
+  // link pasted for a meeting long over. Measured from the meeting instead, the
+  // revived row was failed on its first poll and the referat lost for good.
+  it('gives a re-collected meeting a full window from when it was asked for', async () => {
+    const days = (n: number) => new Date(NOW.getTime() - n * 24 * 60 * 60 * 1000);
+    mockGet.mockResolvedValue(row({
+      scheduledStart: days(5),
+      scheduledEnd: days(5),
+      createdAt: days(6),
+      lastPolledAt: days(5),
+      recollectedAt: new Date(NOW.getTime() - 60_000),
+    }));
+    mockGetMeeting.mockResolvedValue(graphMeeting({
+      scheduledStart: days(5).toISOString(),
+      scheduledEnd: days(5).toISOString(),
+    }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending', transient: true });
+
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expect(mockProcess).toHaveBeenCalled();
+    expect(mockMark).not.toHaveBeenCalledWith('u1', 'm1', expect.objectContaining({ state: 'failed' }));
+  });
+
+  it('keeps a collected meeting ready under a forced poll, even if Teams has since deleted it', async () => {
+    mockGet.mockResolvedValue(row({ state: 'ready' }));
+    mockGetMeeting.mockRejectedValue(new GraphError('not_found', 'væk', { status: 404 }));
+
+    const result = await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expect(mockGetMeeting).not.toHaveBeenCalled();
+    expect(mockMark).not.toHaveBeenCalled();
+    expect(mockSetState).not.toHaveBeenCalled();
+    expect(result.state).toBe('ready');
+  });
+
+  it('still re-reads a failed meeting the user retries', async () => {
+    mockGet.mockResolvedValue(row({ state: 'failed', failureReason: 'Ingen lyd' }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expect(mockGetMeeting).toHaveBeenCalledWith('u1', 'graph-1');
   });
 });
 
@@ -1015,16 +1188,26 @@ describe('pollMeeting — "Mødet er slut – hent nu" before the booked end', (
 });
 
 describe('deleting the recording from OneDrive', () => {
-  const READY_AT = new Date('2026-09-08T11:50:00Z');
+  /** When the meeting turned ready: a week before the browser collected it. */
+  const READY_AT = new Date('2026-09-01T11:50:00Z');
+  /** When the browser acknowledged the transcript, and the delete was queued. */
+  const QUEUED_AT = new Date('2026-09-08T11:50:00Z');
   const pending = (over: Partial<TeamsMeetingRow> = {}) =>
-    row({ state: 'ready', lastPolledAt: READY_AT, recordingCleanup: 'pending', recordingBytes: 4242, ...over });
+    row({
+      state: 'ready',
+      lastPolledAt: READY_AT,
+      recordingCleanup: 'pending',
+      recordingCleanupAt: QUEUED_AT,
+      recordingBytes: 4242,
+      ...over,
+    });
   const transcribed = (recordingBytes: number | null = 4242): PipelineOutcome => ({
     status: 'ready',
     mode: 'recording+transcript',
-    speakers: [],
     transcriptId: 't1',
     recordingId: 'r1',
     recordingBytes,
+    recordingSizes: recordingBytes == null ? [] : [recordingBytes],
   });
 
   let warn: ReturnType<typeof vi.spyOn>;
@@ -1038,11 +1221,15 @@ describe('deleting the recording from OneDrive', () => {
     error.mockRestore();
   });
 
-  it('queues the delete in the write that marks the meeting ready, then deletes', async () => {
+  // Ready means stashed on the server, not saved by the user: the stash expires
+  // after an hour, and an uncollected meeting is re-collected from Teams. Deleting
+  // the recording here made that re-collection fall back to Teams' own transcript,
+  // or find nothing. The delete is queued when the browser acknowledges the
+  // transcript (pending-transcript DELETE), and the poller's tick carries it out.
+  it('remembers which recording to delete, but deletes nothing when the meeting turns ready', async () => {
     mockGet.mockResolvedValue(row());
     mockProcess.mockResolvedValueOnce(transcribed());
-    mockMark.mockResolvedValueOnce(pending());
-    mockDeleteRecording.mockResolvedValueOnce('deleted');
+    mockMark.mockResolvedValueOnce(row({ state: 'ready', recordingBytes: 4242 }));
 
     const result = await pollMeeting('u1', 'm1', NOW);
 
@@ -1051,13 +1238,13 @@ describe('deleting the recording from OneDrive', () => {
       failureReason: null,
       transcriptId: 't1',
       recordingId: 'r1',
-      recordingCleanup: 'pending',
       recordingBytes: 4242,
+      recordingSizes: [4242],
     });
-    expect(mockDeleteRecording).toHaveBeenCalledWith('u1', 4242);
-    expect(mockSettle).toHaveBeenCalledWith('u1', 'm1', 'deleted');
+    expect(mockDeleteRecording).not.toHaveBeenCalled();
+    expect(mockSettle).not.toHaveBeenCalled();
     expect(result.state).toBe('ready');
-    expect(result.recordingCleanup).toBe('deleted');
+    expect(result.recordingCleanup).toBeNull();
   });
 
   it('does not delete while the meeting is not ready', async () => {
@@ -1069,36 +1256,31 @@ describe('deleting the recording from OneDrive', () => {
     expect(mockDeleteRecording).not.toHaveBeenCalled();
   });
 
-  it('leaves OneDrive alone when no recording was downloaded', async () => {
-    mockGet.mockResolvedValue(row());
+  it('records that no recording of ours stands behind the transcript', async () => {
+    mockGet.mockResolvedValue(row({ recordingBytes: 4242 }));
     mockProcess.mockResolvedValueOnce(transcribed(null));
 
     await pollMeeting('u1', 'm1', NOW);
 
-    expect(mockDeleteRecording).not.toHaveBeenCalled();
+    expect(mockMark.mock.calls[0][2]).toMatchObject({ recordingBytes: null });
     expect(mockMark.mock.calls[0][2]).not.toHaveProperty('recordingCleanup');
   });
 
-  it('leaves OneDrive alone when TEAMS_DELETE_RECORDING=false', async () => {
-    process.env.TEAMS_DELETE_RECORDING = 'false';
-    mockGet.mockResolvedValue(row());
-    mockProcess.mockResolvedValueOnce(transcribed());
+  // Those bytes name the file a queued or finished delete is about.
+  it('leaves the recorded size alone once a delete has been queued', async () => {
+    mockGet.mockResolvedValue(row({ recordingCleanup: 'deleted', recordingBytes: 4242 }));
+    mockProcess.mockResolvedValueOnce(transcribed(null));
 
     await pollMeeting('u1', 'm1', NOW);
 
-    expect(mockDeleteRecording).not.toHaveBeenCalled();
-    expect(mockMark.mock.calls[0][2]).not.toHaveProperty('recordingCleanup');
+    expect(mockMark.mock.calls[0][2]).not.toHaveProperty('recordingBytes');
   });
 
-  it('keeps the meeting ready and the delete pending when Graph is throttled', async () => {
-    mockGet.mockResolvedValue(row());
-    mockProcess.mockResolvedValueOnce(transcribed());
-    mockMark.mockResolvedValueOnce(pending());
+  it('keeps the delete pending when Graph is throttled', async () => {
     mockDeleteRecording.mockRejectedValueOnce(new GraphError('unavailable', 'throttled', { status: 429 }));
 
-    const result = await pollMeeting('u1', 'm1', NOW);
+    const result = await cleanUpRecording('u1', pending(), NOW);
 
-    expect(result.state).toBe('ready');
     expect(result.recordingCleanup).toBe('pending');
     expect(mockSettle).not.toHaveBeenCalled();
   });
@@ -1114,6 +1296,37 @@ describe('deleting the recording from OneDrive', () => {
 
     expect(mockSettle).toHaveBeenCalledWith('u1', 'm1', stored);
     expect(result.recordingCleanup).toBe(stored);
+  });
+
+  it('deletes every recording of a meeting that was recorded in stretches', async () => {
+    mockDeleteRecording.mockResolvedValueOnce('deleted').mockResolvedValueOnce('deleted');
+
+    const result = await cleanUpRecording('u1', pending({ recordingBytes: 1111, recordingSizes: [1111, 2222] }), NOW);
+
+    expect(mockDeleteRecording.mock.calls.map((c) => c[1])).toEqual([1111, 2222]);
+    expect(mockSettle).toHaveBeenCalledWith('u1', 'm1', 'deleted');
+    expect(result.recordingCleanup).toBe('deleted');
+  });
+
+  it('falls back to the single size on a row from before recording_sizes', async () => {
+    mockDeleteRecording.mockResolvedValueOnce('deleted');
+
+    await cleanUpRecording('u1', pending({ recordingBytes: 4242, recordingSizes: [] }), NOW);
+
+    expect(mockDeleteRecording.mock.calls.map((c) => c[1])).toEqual([4242]);
+  });
+
+  it('retries the whole set when one delete is throttled, and counts the ones already gone as done', async () => {
+    mockDeleteRecording
+      .mockResolvedValueOnce('deleted')
+      .mockRejectedValueOnce(new GraphError('http', 'throttled', { status: 429 }));
+    const row1 = pending({ recordingBytes: 1111, recordingSizes: [1111, 2222] });
+
+    expect((await cleanUpRecording('u1', row1, NOW)).recordingCleanup).toBe('pending');
+    expect(mockSettle).not.toHaveBeenCalled();
+
+    mockDeleteRecording.mockResolvedValueOnce('not_found').mockResolvedValueOnce('deleted');
+    expect((await cleanUpRecording('u1', row1, NOW)).recordingCleanup).toBe('deleted');
   });
 
   it('waits for the user to sign in again when the files scope is missing', async () => {
@@ -1135,12 +1348,14 @@ describe('deleting the recording from OneDrive', () => {
     expect(mockSettle).toHaveBeenCalledWith('u1', 'm1', 'failed');
   });
 
-  it('gives up on an unreachable Graph after a day', async () => {
-    mockDeleteRecording.mockRejectedValueOnce(new GraphError('unavailable', 'nede'));
-    const later = new Date(READY_AT.getTime() + RECORDING_CLEANUP_GIVE_UP_MS + 1);
+  it('gives up on an unreachable Graph a day after the delete was queued', async () => {
+    mockDeleteRecording.mockRejectedValue(new GraphError('unavailable', 'nede'));
 
-    await cleanUpRecording('u1', pending(), later);
+    // A week after the meeting turned ready, but only an hour after it was queued.
+    await cleanUpRecording('u1', pending(), new Date(QUEUED_AT.getTime() + 60 * 60_000));
+    expect(mockSettle).not.toHaveBeenCalled();
 
+    await cleanUpRecording('u1', pending(), new Date(QUEUED_AT.getTime() + RECORDING_CLEANUP_GIVE_UP_MS + 1));
     expect(mockSettle).toHaveBeenCalledWith('u1', 'm1', 'failed');
   });
 
@@ -1153,8 +1368,10 @@ describe('deleting the recording from OneDrive', () => {
   it.each([
     ['deleted', true],
     ['recycled', true],
+    // Queued for deletion: not ours to download again.
+    ['pending', true],
     ['not_found', false],
-    ['pending', false],
+    ['failed', false],
   ] as const)('a re-run after cleanup %s skips the recording: %s', async (recordingCleanup, skipped) => {
     mockGet.mockResolvedValue(row({ recordingCleanup }));
     mockProcess.mockResolvedValueOnce({ status: 'pending' });
@@ -1200,10 +1417,10 @@ describe('audit events of the Teams poller', () => {
   const ready = (over: Partial<Extract<PipelineOutcome, { status: 'ready' }>> = {}): PipelineOutcome => ({
     status: 'ready',
     mode: 'recording+transcript',
-    speakers: ['Mette Hansen'],
     transcriptId: 't1',
     recordingId: 'r1',
     recordingBytes: 4242,
+    recordingSizes: [4242],
     ...over,
   });
 
@@ -1332,5 +1549,126 @@ describe('audit events of the Teams poller', () => {
 
     expect(mockAuditDelete).not.toHaveBeenCalled();
     expect(result).toBe(pending);
+  });
+});
+
+describe('pollMeeting — Outlook-armed meetings', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.TEAMS_GRAPH_ENABLED = 'true';
+    mockGetMeeting.mockResolvedValue(graphMeeting());
+  });
+
+  const unopened = (over: Partial<TeamsMeetingRow> = {}) =>
+    row({ origin: 'outlook', openedAt: null, ...over });
+
+  it('leaves an unopened meeting alone in the background, and asks Graph nothing', async () => {
+    mockGet.mockResolvedValue(unopened());
+
+    const result = await pollMeeting('u1', 'm1', NOW);
+
+    expect(result.state).toBe('awaiting_teams');
+    expect(mockGetMeeting).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+    expect(mockMark).not.toHaveBeenCalled();
+    expect(mockMarkOpened).not.toHaveBeenCalled();
+  });
+
+  it('settles an unopened meeting after 30 days', async () => {
+    mockGet.mockResolvedValue(
+      unopened({
+        scheduledStart: null,
+        scheduledEnd: new Date(NOW.getTime() - OUTLOOK_UNOPENED_GIVE_UP_MS - 1000),
+        createdAt: new Date(NOW.getTime() - OUTLOOK_UNOPENED_GIVE_UP_MS - 2000),
+      }),
+    );
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', { state: 'failed', failureReason: NOT_OPENED_MESSAGE });
+    expect(mockGetMeeting).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('does not fetch a meeting opened after the 30-day cap, and does not revive it', async () => {
+    const old = {
+      scheduledStart: null,
+      scheduledEnd: new Date(NOW.getTime() - OUTLOOK_UNOPENED_GIVE_UP_MS - 1000),
+      createdAt: new Date(NOW.getTime() - OUTLOOK_UNOPENED_GIVE_UP_MS - 2000),
+    };
+    mockGet.mockResolvedValue(unopened(old));
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+    expect(mockMark).toHaveBeenCalledWith('u1', 'm1', { state: 'failed', failureReason: NOT_OPENED_MESSAGE });
+    expect(mockMarkOpened).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+
+    // Already failed: "Prøv igen" leaves it failed.
+    vi.clearAllMocks();
+    mockGet.mockResolvedValue(unopened({ ...old, state: 'failed', failureReason: NOT_OPENED_MESSAGE }));
+    const result = await pollMeeting('u1', 'm1', NOW, { force: true });
+    expect(result.state).toBe('failed');
+    expect(mockSetState).not.toHaveBeenCalled();
+    expect(mockMark).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('starts the fetch when the user opens it after the meeting', async () => {
+    // Opened a week after the meeting: the window starts at the opening.
+    const end = new Date(NOW.getTime() - 7 * 24 * 60 * 60_000);
+    const before = unopened({
+      scheduledStart: new Date(end.getTime() - 60 * 60_000),
+      scheduledEnd: end,
+      createdAt: new Date(end.getTime() - 2 * 24 * 60 * 60_000),
+      lastPolledAt: null,
+    });
+    mockGet.mockResolvedValue(before);
+    mockMarkOpened.mockResolvedValue({ ...before, openedAt: NOW });
+    mockGetMeeting.mockResolvedValue(
+      graphMeeting({
+        scheduledStart: before.scheduledStart!.toISOString(),
+        scheduledEnd: end.toISOString(),
+      }),
+    );
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expect(mockMarkOpened).toHaveBeenCalledWith('u1', 'm1');
+    expect(mockProcess).toHaveBeenCalled();
+    expect(mockMark).not.toHaveBeenCalledWith('u1', 'm1', expect.objectContaining({ state: 'failed' }));
+  });
+
+  it('does not count opening before the meeting has begun', async () => {
+    mockGet.mockResolvedValue(
+      unopened({
+        scheduledStart: new Date(NOW.getTime() + 60 * 60_000),
+        scheduledEnd: new Date(NOW.getTime() + 2 * 60 * 60_000),
+      }),
+    );
+
+    await pollMeeting('u1', 'm1', NOW, { force: true });
+
+    expect(mockMarkOpened).not.toHaveBeenCalled();
+    expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('polls an opened meeting like any other', async () => {
+    mockGet.mockResolvedValue(row({ origin: 'outlook', openedAt: new Date(NOW.getTime() - 60_000) }));
+    mockProcess.mockResolvedValueOnce({ status: 'pending' });
+
+    await pollMeeting('u1', 'm1', NOW);
+
+    expect(mockProcess).toHaveBeenCalled();
+    expect(mockMarkOpened).not.toHaveBeenCalled();
+  });
+});
+
+describe('combineCleanup', () => {
+  it('is as weak as the weakest delete', () => {
+    expect(combineCleanup(['deleted', 'deleted'])).toBe('deleted');
+    expect(combineCleanup(['deleted', 'not_found'])).toBe('deleted');
+    expect(combineCleanup(['deleted', 'recycled'])).toBe('recycled');
+    expect(combineCleanup(['deleted', 'ambiguous'])).toBe('failed');
+    expect(combineCleanup(['not_found', 'not_found'])).toBe('not_found');
   });
 });

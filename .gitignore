@@ -62,3 +62,6 @@ __pycache__/
 /public/ort-wasm-simd-threaded*
 /public/silero_vad_*.onnx
 /public/vad.worklet.bundle.min.js
+
+# Built by outlook-addin/build.mjs (npm run build / build:addin)
+/public/outlook-addin/

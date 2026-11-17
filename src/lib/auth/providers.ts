@@ -191,6 +191,52 @@ export function teamsGraphEnabled(): boolean {
   return env('TEAMS_GRAPH_ENABLED')?.toLowerCase() === 'true';
 }
 
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The Outlook add-in: a button in Outlook's meeting form that arms the meeting
+ * through the same Graph integration. Opt-in like TEAMS_GRAPH_ENABLED (only an
+ * explicit "true"), and only ever on together with it, since everything after
+ * the button is the Graph pipeline.
+ *
+ * Returns what the add-in signs in against, or null when it is off. The tenant
+ * must be a real tenant id: the add-in's tokens are accepted from that tenant
+ * alone, so `common` or `organizations` would mean any Microsoft tenant.
+ *
+ * When the flag is set but the rest is not, the add-in stays off and the only
+ * symptom is a 404 on its manifest, so the reason is logged, once per process.
+ */
+export function outlookAddinConfig(): { clientId: string; tenantId: string } | null {
+  if (env('OUTLOOK_ADDIN_ENABLED')?.toLowerCase() !== 'true') return null;
+  if (!teamsGraphEnabled()) return outlookAddinOff('it needs TEAMS_GRAPH_ENABLED=true');
+  const microsoft = microsoftConfig();
+  if (!microsoft) {
+    return outlookAddinOff(
+      'it needs Microsoft sign-in (MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET set, MICROSOFT_ENABLED not "false")',
+    );
+  }
+  if (!GUID_RE.test(microsoft.clientId)) {
+    return outlookAddinOff("MICROSOFT_CLIENT_ID must be the app registration's client id, a GUID");
+  }
+  if (!GUID_RE.test(microsoft.tenantId)) {
+    return outlookAddinOff(
+      `MICROSOFT_TENANT_ID must be the tenant id, a GUID, not "${microsoft.tenantId}": ` +
+        "the add-in's tokens are checked against that one tenant id",
+    );
+  }
+  return { clientId: microsoft.clientId.toLowerCase(), tenantId: microsoft.tenantId.toLowerCase() };
+}
+
+let outlookAddinOffLogged = false;
+
+function outlookAddinOff(reason: string): null {
+  if (!outlookAddinOffLogged) {
+    outlookAddinOffLogged = true;
+    console.warn(`[outlook] OUTLOOK_ADDIN_ENABLED=true, but the add-in stays off: ${reason}. See docs/outlook-addin.md.`);
+  }
+  return null;
+}
+
 /**
  * Delegated scopes the Teams integration needs in the current configuration:
  * empty while it is off; otherwise the full list, minus the recording scope in

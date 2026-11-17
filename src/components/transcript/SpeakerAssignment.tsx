@@ -259,7 +259,7 @@ export function SpeakerAssignment({
             <span className="sa-dot" />
             <EditableName name={row.name} onRename={onRename} />
             <span className="sa-tag">talte ikke</span>
-            <OnboardingHint stepId="review.speaker-assign" meetingId={meetingId}>
+            <OnboardingHint stepId="review.speaker-assign">
               <button
                 type="button"
                 className="sa-trigger"
@@ -284,7 +284,7 @@ export function SpeakerAssignment({
         <div className="sa-row pending unnamed">
           <span className="sa-dot" />
           <EditableName name={row.name} onRename={onRename} />
-          <OnboardingHint stepId="review.speaker-assign" meetingId={meetingId}>
+          <OnboardingHint stepId="review.speaker-assign">
             <button
               type="button"
               className="sa-trigger primary"
@@ -338,7 +338,7 @@ export function SpeakerAssignment({
           machine's "Taler N" labels never lead the view. Collapsed by default. */}
       {!hasPending && voices.length > 0 && (
         <div>
-          <OnboardingHint stepId="review.unknown-voices" meetingId={meetingId}>
+          <OnboardingHint stepId="review.unknown-voices">
             <button
               type="button"
               className="sa-sub"

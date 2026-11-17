@@ -108,3 +108,16 @@ export function splitTextWithIntervals(
     };
   });
 }
+
+export async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  const queue = tasks.map((task, i) => ({ task, i }));
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
+    let item: typeof queue[0] | undefined;
+    while ((item = queue.shift()) !== undefined) {
+      results[item.i] = await item.task();
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}

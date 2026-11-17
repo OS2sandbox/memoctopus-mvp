@@ -23,7 +23,8 @@ vi.mock('@/lib/teams/meeting-arm', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/teams/meeting-arm')>()),
   armMeeting: vi.fn(),
 }));
-vi.mock('@/lib/teams/store', () => ({
+vi.mock('@/lib/teams/store', async (importOriginal) => ({
+  isDeferred: (await importOriginal<typeof import('@/lib/teams/store')>()).isDeferred,
   upsertTeamsMeeting: vi.fn(),
   claimMeetingSnapshot: vi.fn(),
   listTeamsMeetings: vi.fn(),
@@ -99,12 +100,19 @@ beforeEach(() => {
     transcriptId: null,
     recordingId: null,
     recordingCleanup: null,
+    recordingCleanupAt: null,
     recordingBytes: null,
+    recordingSizes: [],
+    origin: null,
+    openedAt: null,
+    recollectedAt: null,
+    recordingStalls: 0,
     state: 'awaiting_teams' as const,
     eventId: null,
     armResult: 'not_organizer' as const,
     createdAt: new Date('2026-09-08T09:00:00Z'),
     ...row,
+    occurrenceWindow: row.occurrenceWindow ?? false,
   }));
 });
 
@@ -225,6 +233,8 @@ describe('POST /api/teams/meetings', () => {
         eventId: 'evt-2',
         scheduledStart: new Date('2026-09-15T10:00:00.000Z'),
         scheduledEnd: new Date('2026-09-15T11:00:00.000Z'),
+        // …and marks it, so the poller does not put the series' window back.
+        occurrenceWindow: true,
       }),
     );
   });
@@ -264,6 +274,7 @@ describe('POST /api/teams/meetings', () => {
       expect.objectContaining({
         eventId: null,
         scheduledEnd: new Date('2026-09-08T11:00:00.000Z'),
+        occurrenceWindow: false,
       }),
     );
   });
@@ -498,5 +509,30 @@ describe('GET /api/teams/meetings', () => {
     const res = await GET();
     expect(res.status).toBe(401);
     expect(vi.mocked(listTeamsMeetings)).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/teams/meetings — Outlook meetings', () => {
+  it('hands over what the dashboard needs to import an Outlook-armed meeting', async () => {
+    vi.mocked(listTeamsMeetings).mockResolvedValue([
+      {
+        id: 'ol-1', state: 'awaiting_teams', origin: 'outlook', openedAt: null,
+        subject: 'Styregruppe', joinUrl: JOIN,
+        scheduledStart: new Date('2026-10-27T09:00:00Z'), createdAt: new Date('2026-10-26T08:00:00Z'),
+      },
+      { id: 'd-1', state: 'ready', origin: null, openedAt: null, subject: 'Hemmeligt', joinUrl: JOIN },
+    ] as never);
+
+    const body = await (await GET()).json();
+
+    expect(body.meetings).toEqual([
+      {
+        id: 'ol-1', state: 'awaiting_teams', origin: 'outlook', deferred: true,
+        subject: 'Styregruppe', joinUrl: JOIN,
+        scheduledStart: '2026-10-27T09:00:00.000Z', createdAt: '2026-10-26T08:00:00.000Z',
+      },
+      // A dashboard meeting already lives in the browser: id and state only.
+      { id: 'd-1', state: 'ready' },
+    ]);
   });
 });

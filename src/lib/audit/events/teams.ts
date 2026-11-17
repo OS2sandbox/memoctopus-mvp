@@ -24,7 +24,7 @@ export const teamsEvents = {
         armed: z.boolean().optional(),
         isOrganizer: z.boolean().optional(),
         // The one-shot arm PATCH's verdict (TeamsArmResult in teams/store.ts).
-        armResult: z.enum(['armed', 'armed_in_progress', 'not_organizer', 'policy_blocked']).optional(),
+        armResult: z.enum(['armed', 'armed_in_progress', 'armed_late', 'not_organizer', 'policy_blocked']).optional(),
         code: code().optional(),
       })
       .strict(),

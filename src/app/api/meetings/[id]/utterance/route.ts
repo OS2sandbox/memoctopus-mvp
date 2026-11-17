@@ -5,6 +5,7 @@ import { safeLogError } from '@/lib/audit/safe-log';
 import { requireAppAccess } from '@/lib/authz/app-access';
 import { elapsedMs, emitLiveAudioUpload, outcomeCodeOf } from '@/app/api/meetings/ai-audit';
 import { asEntityUuid } from '@/lib/ids';
+import { cleanTranscribedText } from '@/lib/audio/hallucinations';
 
 interface Params {
   params: Promise<{ id: string }>;
@@ -16,28 +17,6 @@ let _provider: HviskeProvider | null = null;
 function getProvider(): HviskeProvider {
   if (!_provider) _provider = new HviskeProvider();
   return _provider;
-}
-
-// Whisper-based models hallucinate looping repetitions when given short or noisy
-// audio. Detect this by checking if a single word dominates the output (>50% of
-// all words) or if the same word appears 3+ times consecutively.
-function isHallucinatedRepetition(text: string): boolean {
-  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
-  if (words.length < 4) return false;
-
-  const freq: Record<string, number> = {};
-  for (const w of words) freq[w] = (freq[w] ?? 0) + 1;
-  if (Math.max(...Object.values(freq)) / words.length > 0.5) return true;
-
-  let streak = 1;
-  for (let i = 1; i < words.length; i++) {
-    if (words[i] === words[i - 1]) {
-      if (++streak >= 3) return true;
-    } else {
-      streak = 1;
-    }
-  }
-  return false;
 }
 
 // Per-utterance transcription for the VAD-based recording/upload path.
@@ -66,8 +45,10 @@ async function postHandler(req: NextRequest, { params }: Params) {
     // The audio of a live recording goes up utterance by utterance: logged at most once per
     // person and meeting per 5 minutes (see emitLiveAudioUpload), never the audio or the text.
     emitLiveAudioUpload(req, { actorUserId: session.user.id, entityId: asEntityUuid(id), outcome: 'success', bytes: audioBytes, durationMs: elapsedMs(t0) });
-    if (isHallucinatedRepetition(text)) return NextResponse.json({ text: '', latencyMs });
-    return NextResponse.json({ text, latencyMs });
+    // The same cleaning as the batch path (vad-batch-server), so a live recording
+    // and an upload of the same audio keep the same words: a repetition loop is
+    // cut off after the real speech before it, and a subtitle credit is dropped.
+    return NextResponse.json({ text: cleanTranscribedText(text ?? ''), latencyMs });
   } catch (err) {
     const totalMs = Date.now() - t0;
     safeLogError(`utterance failed after ${totalMs} ms`, err);

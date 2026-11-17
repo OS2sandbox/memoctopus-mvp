@@ -450,9 +450,14 @@ describe('RedactDialog — redirect tooltip is reachable by keyboard', () => {
     await tabTo(user, wrapper);
     expect(await screen.findByRole('tooltip')).toHaveTextContent(copy);
 
-    // Escape cannot be asserted on the tooltip alone here: the dialog and the tooltip resolve to
-    // two different copies of @radix-ui/react-dismissable-layer, so the dialog's capture-phase
-    // handler claims Escape first and the whole dialog closes (which takes the tooltip with it).
+    // Regression: the dialog and the tooltip used to resolve to two copies of
+    // @radix-ui/react-dismissable-layer, so the dialog claimed Escape first and the
+    // whole dialog closed. With one copy (package.json `overrides`) the layers stack:
+    // the first Escape closes only the tooltip, the second closes the dialog.
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+    expect(props.onOpenChange).not.toHaveBeenCalled();
+
     await user.keyboard('{Escape}');
     expect(props.onOpenChange).toHaveBeenCalledWith(false);
   });

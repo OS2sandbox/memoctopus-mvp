@@ -9,6 +9,10 @@
  *   - the host is exactly teams.microsoft.com or teams.live.com — no subdomain
  *     spoofing (`evil.teams.microsoft.com`) and no suffix spoofing
  *     (`teams.microsoft.com.evil.com`)
+ *   - no userinfo and no explicit port. A real join link has neither, and
+ *     `https://evil.example@teams.microsoft.com/…` or `…teams.microsoft.com:8443/…`
+ *     reads as a Teams link to a person while being something else to a parser or
+ *     a proxy. (`:443` is the https default, so URL drops it and it passes.)
  *
  * One exception to the tight host rule: a link copied out of an Outlook email in
  * a tenant running Microsoft Defender Safe Links has been rewritten to
@@ -32,7 +36,19 @@ const SAFELINKS_HOST = 'safelinks.protection.outlook.com';
 /** Safe Links wrappers are regional (eur03., nam02., …), and occasionally nested. */
 const MAX_UNWRAP_DEPTH = 3;
 
-function isSafeLinksHost(hostname: string): boolean {
+/** Is this exactly one of the Teams hosts a join link may point at? Exported so the
+ *  Outlook body extractor can tell an unknown Teams-like host from a broken link
+ *  without keeping its own copy of the list. */
+export function isAllowedTeamsHost(hostname: string): boolean {
+  return ALLOWED_HOSTS.has(hostname.toLowerCase());
+}
+
+/** Userinfo or an explicit port, on any layer (Safe Links wrapper included). */
+function hasUserinfoOrPort(url: URL): boolean {
+  return url.username !== '' || url.password !== '' || url.port !== '';
+}
+
+export function isSafeLinksHost(hostname: string): boolean {
   // The leading dot is load-bearing: it keeps `evilsafelinks.protection.outlook.com`
   // and `safelinks.protection.outlook.com.evil.com` out.
   return hostname === SAFELINKS_HOST || hostname.endsWith(`.${SAFELINKS_HOST}`);
@@ -54,6 +70,7 @@ export function validateTeamsUrl(input: string): TeamsUrlCheck {
 
   // A non-https scheme is not a "wrong host" — it can't be a real join link at all.
   if (parsed.protocol !== 'https:') return { ok: false, reason: 'invalid-url' };
+  if (hasUserinfoOrPort(parsed)) return { ok: false, reason: 'invalid-url' };
 
   for (let depth = 0; isSafeLinksHost(parsed.hostname) && depth < MAX_UNWRAP_DEPTH; depth += 1) {
     // searchParams decodes the wrapper's encoding, handing back the original link.
@@ -65,6 +82,7 @@ export function validateTeamsUrl(input: string): TeamsUrlCheck {
       return { ok: false, reason: 'invalid-url' };
     }
     if (parsed.protocol !== 'https:') return { ok: false, reason: 'invalid-url' };
+    if (hasUserinfoOrPort(parsed)) return { ok: false, reason: 'invalid-url' };
   }
 
   if (!ALLOWED_HOSTS.has(parsed.hostname)) return { ok: false, reason: 'wrong-host' };

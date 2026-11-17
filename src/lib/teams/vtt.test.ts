@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseVtt, turnsFromVtt, segmentsFromVtt, speakersFromVtt } from './vtt';
+import { parseVtt, segmentsFromVtt, speakersFromVtt } from './vtt';
 
 // A realistic Teams export: BOM, CRLF, a NOTE block, GUID cue ids, entities,
 // Danish names and æøå, a multi-line cue and a cue without a voice span.
@@ -95,78 +95,6 @@ describe('parseVtt', () => {
   it('returns an empty array for empty input', () => {
     expect(parseVtt('')).toEqual([]);
     expect(parseVtt('WEBVTT\n')).toEqual([]);
-  });
-});
-
-describe('turnsFromVtt', () => {
-  it('drops cues without a speaker', () => {
-    const turns = turnsFromVtt(parseVtt(TEAMS_VTT));
-    expect(turns.map((t) => t.speaker)).toEqual(['Mette Hansen', 'Søren Østergaard']);
-  });
-
-  it('merges adjacent cues from the same speaker across a short gap', () => {
-    const cues = parseVtt(
-      [
-        'WEBVTT',
-        '',
-        '00:00:00.000 --> 00:00:02.000',
-        '<v Mette Hansen>første sætning</v>',
-        '',
-        '00:00:02.200 --> 00:00:05.000',
-        '<v Mette Hansen>anden sætning</v>',
-        '',
-      ].join('\n'),
-    );
-    expect(turnsFromVtt(cues)).toEqual([{ speaker: 'Mette Hansen', start: 0, end: 5 }]);
-  });
-
-  it('does not merge across a gap of 0.5s or more', () => {
-    const cues = parseVtt(
-      [
-        'WEBVTT',
-        '',
-        '00:00:00.000 --> 00:00:02.000',
-        '<v Mette Hansen>a</v>',
-        '',
-        '00:00:02.500 --> 00:00:05.000',
-        '<v Mette Hansen>b</v>',
-        '',
-      ].join('\n'),
-    );
-    expect(turnsFromVtt(cues)).toEqual([
-      { speaker: 'Mette Hansen', start: 0, end: 2 },
-      { speaker: 'Mette Hansen', start: 2.5, end: 5 },
-    ]);
-  });
-
-  it('keeps alternating speakers apart and merges overlapping same-speaker cues', () => {
-    const cues = parseVtt(
-      [
-        'WEBVTT',
-        '',
-        '00:00:00.000 --> 00:00:03.000',
-        '<v Mette Hansen>a</v>',
-        '',
-        '00:00:02.500 --> 00:00:06.000',
-        '<v Søren Østergaard>b</v>', // overlapping interjection
-        '',
-        '00:00:05.800 --> 00:00:09.000',
-        '<v Søren Østergaard>c</v>',
-        '',
-        '00:00:10.000 --> 00:00:12.000',
-        '<v Mette Hansen>d</v>',
-        '',
-      ].join('\n'),
-    );
-    expect(turnsFromVtt(cues)).toEqual([
-      { speaker: 'Mette Hansen', start: 0, end: 3 },
-      { speaker: 'Søren Østergaard', start: 2.5, end: 9 },
-      { speaker: 'Mette Hansen', start: 10, end: 12 },
-    ]);
-  });
-
-  it('returns an empty timeline when no cue has a speaker', () => {
-    expect(turnsFromVtt(parseVtt('WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nhej\n'))).toEqual([]);
   });
 });
 

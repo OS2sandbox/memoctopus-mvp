@@ -20,7 +20,14 @@ vi.mock('./graph-client', async () => {
 });
 
 import { GRAPH_DOWNLOAD_TIMEOUT_MS, GraphError } from './graph-client';
-import { listArtifacts, pickArtifact, downloadTranscriptVtt, downloadRecording } from './artifacts';
+import {
+  listArtifacts,
+  pickArtifact,
+  selectArtifacts,
+  SESSION_GAP_MS,
+  downloadTranscriptVtt,
+  downloadRecording,
+} from './artifacts';
 
 const MEETING = 'MSpiZGE=';
 
@@ -71,6 +78,61 @@ describe('listArtifacts', () => {
     const refs = await listArtifacts('u1', MEETING);
     expect(refs.transcripts).toEqual([]);
     expect(refs.recordings).toEqual([]);
+  });
+});
+
+describe('selectArtifacts', () => {
+  const ref = (id: string, created: string | null, end: string | null = null) => ({ id, createdDateTime: created, endDateTime: end });
+  const WINDOW = { start: new Date('2026-09-08T10:00:00Z'), end: new Date('2026-09-08T11:00:00Z') };
+
+  it('takes every stretch of the meeting in its window, oldest first', () => {
+    // Recording stopped and started again: two of each.
+    const picked = selectArtifacts(
+      [ref('t2', '2026-09-08T10:40:00Z'), ref('t1', '2026-09-08T10:00:00Z')],
+      [ref('r1', '2026-09-08T10:00:00Z'), ref('r2', '2026-09-08T10:40:00Z')],
+      WINDOW,
+    );
+
+    expect(picked.transcripts.map((r) => r.id)).toEqual(['t1', 't2']);
+    expect(picked.recordings.map((r) => r.id)).toEqual(['r1', 'r2']);
+  });
+
+  it('leaves out another occurrence of the series', () => {
+    const picked = selectArtifacts(
+      [ref('last-week', '2026-09-01T10:05:00Z'), ref('t1', '2026-09-08T10:05:00Z')],
+      [],
+      WINDOW,
+    );
+
+    expect(picked.transcripts.map((r) => r.id)).toEqual(['t1']);
+  });
+
+  it('without a window, keeps the sitting the newest artifact belongs to', () => {
+    // A reused link: yesterday's sitting is far more than a session gap away.
+    const picked = selectArtifacts(
+      [ref('yesterday', '2026-09-07T09:00:00Z', '2026-09-07T09:30:00Z'), ref('t1', '2026-09-08T09:00:00Z', '2026-09-08T09:20:00Z'), ref('t2', '2026-09-08T09:25:00Z', '2026-09-08T09:50:00Z')],
+      [ref('r2', '2026-09-08T09:25:00Z', '2026-09-08T09:50:00Z')],
+    );
+
+    expect(picked.transcripts.map((r) => r.id)).toEqual(['t1', 't2']);
+    expect(picked.recordings.map((r) => r.id)).toEqual(['r2']);
+  });
+
+  it('without a window, measures the gap from where an artifact ended', () => {
+    const longAgoStart = new Date(Date.parse('2026-09-08T12:00:00Z') - SESSION_GAP_MS - 60 * 60_000).toISOString();
+    const picked = selectArtifacts(
+      // Started three hours before the newest, but ran until an hour before it.
+      [ref('long', longAgoStart, '2026-09-08T11:00:00Z'), ref('new', '2026-09-08T12:00:00Z')],
+      [],
+    );
+
+    expect(picked.transcripts.map((r) => r.id)).toEqual(['long', 'new']);
+  });
+
+  it('falls back to the last of each when nothing is dated', () => {
+    const picked = selectArtifacts([ref('a', null), ref('b', null)], [ref('r', null)]);
+
+    expect(picked).toEqual({ transcripts: [ref('b', null)], recordings: [ref('r', null)] });
   });
 });
 

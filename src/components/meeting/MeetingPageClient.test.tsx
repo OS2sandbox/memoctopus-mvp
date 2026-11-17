@@ -67,8 +67,14 @@ vi.mock('@/components/recording/TeamsMeetingScreen', () => ({
 }));
 
 vi.mock('@/components/transcript/TranscriptReview', () => ({
-  TranscriptReview: (props: { meetingId: string }) => (
-    <div data-testid="transcript-review" data-meeting-id={props.meetingId}>TranscriptReview</div>
+  TranscriptReview: (props: { meetingId: string; audioDiscarded?: boolean }) => (
+    <div
+      data-testid="transcript-review"
+      data-meeting-id={props.meetingId}
+      data-audio-discarded={String(Boolean(props.audioDiscarded))}
+    >
+      TranscriptReview
+    </div>
   ),
 }));
 
@@ -85,8 +91,14 @@ vi.mock('@/components/meeting/ExportTab', () => ({
 }));
 
 vi.mock('@/components/meeting/ProcessingTranscription', () => ({
-  ProcessingTranscription: (props: { meetingId: string }) => (
-    <div data-testid="processing-transcription" data-meeting-id={props.meetingId}>ProcessingTranscription</div>
+  ProcessingTranscription: (props: { meetingId: string; graphManaged?: boolean }) => (
+    <div
+      data-testid="processing-transcription"
+      data-meeting-id={props.meetingId}
+      data-graph-managed={String(Boolean(props.graphManaged))}
+    >
+      ProcessingTranscription
+    </div>
   ),
 }));
 
@@ -457,6 +469,21 @@ describe('MeetingPageClient — recording tab (teams source)', () => {
 // ─── Review tab — with transcript ────────────────────────────────────────────
 
 describe('MeetingPageClient — review tab', () => {
+  // Only a meeting collected through Microsoft Graph has its audio transcribed on
+  // the server and never stored here. The old bot uploaded its recording to the
+  // browser, so a bot meeting without audio has simply lost it.
+  it.each([
+    ['a Graph meeting', { source: 'teams', graphManaged: true }, 'true'],
+    ['an old bot meeting', { source: 'teams' }, 'false'],
+    ['a local recording', { source: 'local' }, 'false'],
+  ] as const)('says whether the audio was discarded for %s', async (_label, overrides, expected) => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({ status: 'review', ...overrides }));
+    mockGetTranscript.mockResolvedValue(makeTranscript());
+
+    renderClient({ initialTab: 'review' });
+    expect(await screen.findByTestId('transcript-review')).toHaveAttribute('data-audio-discarded', expected);
+  });
+
   it('renders TranscriptReview when review tab is active and transcript exists', async () => {
     mockGetMeeting.mockResolvedValue(makeMeeting({ status: 'review' }));
     mockGetTranscript.mockResolvedValue(makeTranscript());
@@ -475,6 +502,17 @@ describe('MeetingPageClient — review tab', () => {
     await waitFor(() => {
       expect(screen.getByTestId('processing-transcription')).toBeInTheDocument();
     });
+    expect(screen.getByTestId('processing-transcription')).toHaveAttribute('data-graph-managed', 'false');
+  });
+
+  // So it can send a Graph meeting whose server copy is gone back to the Teams
+  // screen ("Hent igen") instead of reporting a missing audio file.
+  it('tells ProcessingTranscription when the meeting is collected from Teams', async () => {
+    mockGetMeeting.mockResolvedValue(makeMeeting({ source: 'teams', graphManaged: true, status: 'processing' }));
+    mockGetTranscript.mockResolvedValue(null);
+
+    renderClient({ initialTab: 'review' });
+    expect(await screen.findByTestId('processing-transcription')).toHaveAttribute('data-graph-managed', 'true');
   });
 
   it('shows transcription failed message when status is failed and no transcript', async () => {
@@ -879,16 +917,20 @@ describe('MeetingPageClient — pagehide cleanup', () => {
     mockGetMeeting.mockResolvedValue(makeMeeting({ audioDeleted: false }));
     mockGetAudio.mockResolvedValue({ blob: mockAudioBlob, mimeType: 'audio/webm' });
 
-    const { unmount } = renderClient({ initialTab: 'recording' });
-    await waitFor(() => screen.getByTestId('recording-screen'));
+    try {
+      const { unmount } = renderClient({ initialTab: 'recording' });
+      await waitFor(() => screen.getByTestId('recording-screen'));
 
-    expect(addSpy).toHaveBeenCalledWith('pagehide', expect.any(Function));
+      // The screen renders as soon as the meeting is loaded; the listener only
+      // follows once the audio has loaded too, a few ticks later.
+      await waitFor(() => expect(addSpy).toHaveBeenCalledWith('pagehide', expect.any(Function)));
 
-    unmount();
-    expect(removeSpy).toHaveBeenCalledWith('pagehide', expect.any(Function));
-
-    addSpy.mockRestore();
-    removeSpy.mockRestore();
+      unmount();
+      expect(removeSpy).toHaveBeenCalledWith('pagehide', expect.any(Function));
+    } finally {
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
+    }
   });
 });
 

@@ -1,4 +1,5 @@
 import { sweepExpired } from '@/lib/pending-artifacts';
+import { clearStaleScratch } from '@/lib/teams/scratch';
 
 /**
  * Keeps the pending hand-off files (see pending-artifacts.ts) from outliving their
@@ -44,6 +45,9 @@ export function startPendingSweeper(): () => void {
   };
 
   console.log(`[pending-sweeper] started, sweeping every ${SWEEP_INTERVAL_MS} ms`);
+  // Audio a run that died left in its scratch directory; see scratch.ts. Once is
+  // enough: a run only dies with the process, and this runs as the next one starts.
+  void clearStaleScratch().catch((err) => console.error('[pending-sweeper] scratch cleanup failed:', err));
   void tick();
   const timer = setInterval(() => { void tick(); }, SWEEP_INTERVAL_MS);
 
