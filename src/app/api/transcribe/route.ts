@@ -57,7 +57,14 @@ export async function POST(req: NextRequest) {
       chapters = await groupIntoChapters(segments);
     }
   } catch (chapErr) {
-    console.error('Chapter generation failed (non-fatal):', chapErr);
+    // Leaving chapters empty is deliberate, but it silently changes how the referat is
+    // generated downstream, so record the size that caused it — the transcript length is
+    // what distinguishes a context overflow from any other failure here.
+    console.error(
+      `Chapter generation failed (non-fatal) for ${segments.length} segments, ` +
+        `${segments.reduce((n, s) => n + s.text.length, 0)} chars:`,
+      chapErr,
+    );
   }
 
   const rawText = segments.map((s) => s.text).join(' ');
