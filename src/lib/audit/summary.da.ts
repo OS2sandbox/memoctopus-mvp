@@ -55,7 +55,10 @@ const METHOD_TEXT: Record<string, string> = {
 };
 
 // Refusals of a central template write (central.ts): the reason is a closed code, never the template's content.
+// out_of_scope, principal_targets_need_global and org_wide_needs_global come from the earlier owner-unit
+// model and are kept so older log rows still read well.
 const TEMPLATE_MANAGE_REFUSAL: Record<string, string> = {
+  not_owner: 'fik afvist en ændring af en central skabelon, som en anden har oprettet',
   out_of_scope: 'fik afvist en ændring af en central skabelon uden for sit område',
   principal_targets_need_global: 'fik afvist en ændring af en central skabelon, der kræver tilladelse for hele organisationen (roller eller grupper)',
   principal_targets_need_claims: 'fik afvist at gøre en central skabelon tilgængelig for roller eller grupper, fordi rollerne ikke kommer fra login',

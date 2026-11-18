@@ -8,7 +8,7 @@ const U = (n: number) => `7e5e0000-0000-4000-8000-${String(n).padStart(12, '0')}
 const O = (n: number) => `5a1b0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const E = (n: number) => `9d3c0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
-const DEFAULTS: MapperConfig = { includeDescendants: true, globalRoles: ['admin'] };
+const DEFAULTS: MapperConfig = { globalRoles: ['admin'] };
 
 function fixtureInput(): MapperInput {
   const d = fixtureData();
@@ -96,28 +96,28 @@ describe('mapToMirror with the fixtures', () => {
   });
 
   it('maps role assignments per the fixture cases', () => {
-    expect(rolesOf(set, U(3))).toEqual([`bruger@null`, `bygger@${O(3)}`, `bygger@${O(4)}`].sort()); // anne: two KOMBIT units
-    expect(rolesOf(set, U(2))).toEqual([`bygger@${O(2)}`]); // jens: internal type, KLE ignored
-    expect(rolesOf(set, U(6))).toEqual([`bygger@${O(3)}`]); // peter: duplicate entries unioned
+    // bygger is not tied to org units: whatever its constraints (two KOMBIT units, KLE, an unknown unit,
+    // none), it becomes one NULL-scope row.
+    expect(rolesOf(set, U(3))).toEqual(['bruger@null', 'bygger@null']); // anne: two KOMBIT units
+    expect(rolesOf(set, U(2))).toEqual(['bygger@null']); // jens: internal type plus KLE
+    expect(rolesOf(set, U(6))).toEqual(['bygger@null']); // peter: duplicate entries unioned
     expect(rolesOf(set, U(5))).toEqual(['bruger@null']); // disabled user keeps the row; the principal checks `disabled`
-    expect(rolesOf(set, U(4))).toEqual(['bruger@null', `bygger@${O(4)}`]); // lars: unknown unit ignored
+    expect(rolesOf(set, U(4))).toEqual(['bruger@null', 'bygger@null']); // lars: unknown unit
     expect(rolesOf(set, U(1))).toEqual(['admin@null']); // mette: constraint on admin ignored
     expect(rolesOf(set, U(9))).toEqual(['admin@null']);
-    expect(rolesOf(set, U(7))).toEqual([]); // ida: bygger without constraint is not global by default
-    expect(rolesOf(set, U(8))).toEqual([]); // ole: bygger with only an unknown unit
-    expect(set.assignments).toHaveLength(10);
+    expect(rolesOf(set, U(7))).toEqual(['bygger@null']); // ida: bygger without constraint
+    expect(rolesOf(set, U(8))).toEqual(['bygger@null']); // ole: bygger with only an unknown unit
+    expect(set.assignments).toHaveLength(11);
   });
 
   it('counts what it dropped', () => {
     expect(set.stats.assignmentsIgnoredRole).toBe(1); // referat_legacy
     expect(set.stats.assignmentsSkippedUnknownUser).toBe(1); // ghost.u
-    expect(set.stats.assignmentsWithoutScope).toBe(2); // ida (unscoped bygger) and ole (bygger with only an unknown unit)
+    expect(set.stats.assignmentsWithoutScope).toBe(0);
   });
 
-  it('every scoped row carries the descendants setting', () => {
-    expect(set.assignments.filter((a) => a.scopeOrgUnitUuid).every((a) => a.includeDescendants)).toBe(true);
-    const flat = mapToMirror(fixtureInput(), { ...DEFAULTS, includeDescendants: false });
-    expect(flat.assignments.filter((a) => a.scopeOrgUnitUuid).every((a) => !a.includeDescendants)).toBe(true);
+  it('every row is unscoped and covers descendants', () => {
+    expect(set.assignments.every((a) => a.scopeOrgUnitUuid === null && a.includeDescendants)).toBe(true);
   });
 
   it('never produces more than one row per (user, role, scope)', () => {
@@ -131,10 +131,12 @@ describe('mapToMirror with the fixtures', () => {
 });
 
 describe('mapToMirror: GLOBAL_ROLES on the fixtures', () => {
-  it('GLOBAL_ROLES can make an unscoped bygger global', () => {
-    const set = mapToMirror(fixtureInput(), { ...DEFAULTS, globalRoles: ['admin', 'bygger'] });
+  it('only decides the administrators: without admin in it, mette and rune get no row; byggere are unaffected', () => {
+    const set = mapToMirror(fixtureInput(), { globalRoles: [] });
+    expect(rolesOf(set, U(1))).toEqual([]);
+    expect(rolesOf(set, U(9))).toEqual([]);
     expect(rolesOf(set, U(7))).toEqual(['bygger@null']);
-    expect(rolesOf(set, U(8))).toEqual([]); // a bygger that names only an unknown unit is never widened to global
+    expect(set.stats.assignmentsWithoutScope).toBe(2);
   });
 });
 
@@ -322,21 +324,20 @@ describe('mapToMirror: assignment edge cases', () => {
     expect(set.stats.assignmentsIgnoredRole).toBe(3);
   });
 
-  it('unions duplicate (user, role) entries and never lets an unconstrained one widen a scoped role', () => {
+  it('unions duplicate (user, role) entries into one unscoped row', () => {
     const set = mapToMirror(
       input({
         ...base,
         assignments: [assignment(1, { id: 'bygger', units: [1] }, { id: 'bygger', units: [2] }, { id: 'bygger' })],
       }),
-      { ...DEFAULTS, globalRoles: ['admin', 'bygger'] },
+      DEFAULTS,
     );
-    expect(rolesOf(set, U(1))).toEqual([`bygger@${O(1)}`, `bygger@${O(2)}`]);
+    expect(rolesOf(set, U(1))).toEqual(['bygger@null']);
   });
 
-  it('a role in GLOBAL_ROLES without scope is a single global row; a role not in it is counted', () => {
+  it('an admin not in GLOBAL_ROLES gets no row and is counted; bygger needs no GLOBAL_ROLES', () => {
     const roles: RoleKey[] = ['bygger'];
     const set = mapToMirror(input({ ...base, assignments: [assignment(1, { id: 'bygger' }), assignment(2, { id: 'admin' })] }), {
-      ...DEFAULTS,
       globalRoles: roles,
     });
     expect(rolesOf(set, U(1))).toEqual(['bygger@null']);
@@ -352,7 +353,7 @@ describe('mapToMirror: assignment edge cases', () => {
       assignments: [{ roleIdentifier: role, roleName: null, roleConstraintValues: constraints }],
     });
 
-    it('admin and a GLOBAL_ROLES bygger with only a KLE constraint get no row and are counted; unconstrained ones are global', () => {
+    it('admin with only a KLE constraint gets no row and is counted; a bygger with one still gets its row', () => {
       const set = mapToMirror(
         input({
           ...base,
@@ -366,12 +367,12 @@ describe('mapToMirror: assignment edge cases', () => {
         { ...DEFAULTS, globalRoles: ['admin', 'bygger'] },
       );
       expect(rolesOf(set, U(1))).toEqual([]);
-      expect(rolesOf(set, U(2))).toEqual([]);
+      expect(rolesOf(set, U(2))).toEqual(['bygger@null']);
       expect(rolesOf(set, U(3))).toEqual(['bygger@null']);
-      expect(set.stats.assignmentsWithoutScope).toBe(2);
+      expect(set.stats.assignmentsWithoutScope).toBe(1);
     });
 
-    it('an unknown-type duplicate entry cannot be widened by an unconstrained sibling', () => {
+    it('an unknown-type admin entry cannot be widened by an unconstrained sibling', () => {
       const set = mapToMirror(
         input({
           ...base,
@@ -380,13 +381,13 @@ describe('mapToMirror: assignment edge cases', () => {
               extUuid: E(1),
               userId: 'user1',
               assignments: [
-                { roleIdentifier: 'bygger', roleConstraintValues: KLE_C },
-                { roleIdentifier: 'bygger', roleConstraintValues: [] },
+                { roleIdentifier: 'admin', roleConstraintValues: KLE_C },
+                { roleIdentifier: 'admin', roleConstraintValues: [] },
               ],
             },
           ],
         }),
-        { ...DEFAULTS, globalRoles: ['bygger'] },
+        DEFAULTS,
       );
       expect(rolesOf(set, U(1))).toEqual([]);
       expect(set.stats.assignmentsWithoutScope).toBe(1);
@@ -423,7 +424,7 @@ describe('mapToMirror: assignment edge cases', () => {
         DEFAULTS,
       );
       expect(rolesOf(set, U(1))).toEqual(['bruger@null']);
-      expect(rolesOf(set, U(2))).toEqual([`bygger@${O(1)}`]);
+      expect(rolesOf(set, U(2))).toEqual(['bygger@null']);
     });
 
     it('applies across rows that resolve to the same user, and to a group whose only entry was the broken one', () => {
@@ -450,7 +451,7 @@ describe('mapToMirror: assignment edge cases', () => {
         }),
         DEFAULTS,
       );
-      expect(rolesOf(set, U(1))).toEqual([`bygger@${O(1)}`]);
+      expect(rolesOf(set, U(1))).toEqual(['bygger@null']);
     });
   });
 
@@ -459,7 +460,7 @@ describe('mapToMirror: assignment edge cases', () => {
       input({ ...base, assignments: [assignment(1, { id: 'bygger', units: [1] }), assignment(1, { id: 'bygger', units: [2] })] }),
       DEFAULTS,
     );
-    expect(rolesOf(set, U(1))).toEqual([`bygger@${O(1)}`, `bygger@${O(2)}`]);
+    expect(rolesOf(set, U(1))).toEqual(['bygger@null']);
   });
 });
 

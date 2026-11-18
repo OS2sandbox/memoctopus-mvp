@@ -38,33 +38,31 @@ describe('GET /api/me', () => {
     expect((await GET(req(), NO_PARAMS)).status).toBe(403);
   });
 
-  it('returns the baseline user with empty scopes', async () => {
+  it('returns the baseline user', async () => {
     const res = await GET(req(), NO_PARAMS);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       user: { id: 'user-123', name: 'Anna', email: 'anna@example.dk' },
       roles: ['bruger'],
       capabilities: ['template.use'],
-      scopes: {},
       source: 'local',
       readOnly: false,
       requireRoleToLogin: false,
     });
   });
 
-  it('reports scopes as ids only', async () => {
-    const unit = '11111111-1111-4111-8111-111111111111';
+  it('reports a bygger by roles and capabilities only (no org-unit scopes)', async () => {
     mockResolve.mockResolvedValue(
       makePrincipal({
         roles: ['bruger', 'bygger'],
         capabilities: ['template.use', 'template.manage'],
-        scopes: { 'template.manage': { global: false, roots: [{ orgUnitUuid: unit, includeDescendants: true }] } },
         source: 'local',
       }),
     );
     const json = await (await GET(req(), NO_PARAMS)).json();
-    expect(json.scopes).toEqual({ 'template.manage': { global: false, roots: [{ orgUnitUuid: unit, includeDescendants: true }] } });
     expect(json.roles).toContain('bygger');
+    expect(json.capabilities).toEqual(['template.use', 'template.manage']);
+    expect(json).not.toHaveProperty('scopes');
   });
 
   it('marks the response read-only outside local mode', async () => {

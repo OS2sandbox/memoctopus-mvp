@@ -153,15 +153,11 @@ export function maxResponseBytes(): number {
   return intInRange('ROLLEKATALOG_MAX_RESPONSE_BYTES', DEFAULT_MAX_RESPONSE_BYTES, 1024, 512 * 1024 * 1024);
 }
 
-/** A constraint-derived scope root covers its whole subtree (the plan's "OrgUnit subtree"). */
-export function scopeDescendants(): boolean {
-  return boolFlag('ROLLEKATALOG_SCOPE_DESCENDANTS', true);
-}
-
 /**
- * Roles that may become GLOBAL from an assignment that carries no usable org-unit
- * scope. Default admin only. 'none' means no role. Unknown tokens are
- * dropped; an unset or empty variable gives the default.
+ * Roles that Rollekatalog may grant as GLOBAL roles; only the administrator role
+ * (`global-only` in capabilities.ts) depends on it, bruger and bygger are never tied to
+ * units. Default admin only. 'none' means no role. Unknown tokens are dropped; an
+ * unset or empty variable gives the default.
  */
 export function globalRoles(): RoleKey[] {
   const raw = clean('ROLLEKATALOG_GLOBAL_ROLES').toLowerCase();

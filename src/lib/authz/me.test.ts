@@ -5,7 +5,6 @@ const base: MeResponse = {
   user: { id: 'u1', name: 'Anne', email: 'a@example.dk' },
   roles: ['bruger'],
   capabilities: ['template.use'],
-  scopes: {},
   source: 'local',
   readOnly: false,
   requireRoleToLogin: false,

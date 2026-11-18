@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   GLOBAL_ONLY_CAPABILITIES,
   ROLE_DEFINITIONS,
-  SCOPED_CAPABILITIES,
   buildPrincipalFromAssignments,
 } from './capabilities';
 import { CAPABILITIES, ROLE_KEYS, type RoleAssignmentRow } from './types';
@@ -31,7 +30,7 @@ function build(
 
 describe('role matrix tripwire', () => {
   // Pinned as literals on purpose: changing the matrix must be a conscious edit here too.
-  it('pins roles, capabilities and scoped capabilities', () => {
+  it('pins roles, capabilities and the global-only capabilities', () => {
     expect([...ROLE_KEYS]).toEqual([
       'bruger',
       'bygger',
@@ -40,13 +39,19 @@ describe('role matrix tripwire', () => {
     expect([...CAPABILITIES]).toEqual([
       'template.use',
       'template.manage',
+      'template.manage_all',
       'audit.read',
       'audit.export',
       'access.manage',
       'sync.run',
     ]);
-    expect([...GLOBAL_ONLY_CAPABILITIES].sort()).toEqual(['access.manage', 'audit.export', 'audit.read', 'sync.run']);
-    expect([...SCOPED_CAPABILITIES].sort()).toEqual(['template.manage']);
+    expect([...GLOBAL_ONLY_CAPABILITIES].sort()).toEqual([
+      'access.manage',
+      'audit.export',
+      'audit.read',
+      'sync.run',
+      'template.manage_all',
+    ]);
   });
 
   it('pins the full role -> capabilities matrix', () => {
@@ -54,12 +59,13 @@ describe('role matrix tripwire', () => {
       'bruger': { capabilities: ['template.use'], scope: 'none' },
       'bygger': {
         capabilities: ['template.use', 'template.manage'],
-        scope: 'optional',
+        scope: 'none',
       },
       'admin': {
         capabilities: [
           'template.use',
           'template.manage',
+          'template.manage_all',
           'audit.read',
           'audit.export',
           'access.manage',
@@ -77,7 +83,6 @@ describe('buildPrincipalFromAssignments', () => {
     expect(p.roles).toEqual(['bruger']);
     expect(p.capabilities).toEqual(['template.use']);
     expect(p.source).toBe('baseline');
-    expect(p.scopes).toEqual({});
   });
 
   it('gives an assignment-less user nothing when requireRoleToLogin is true', () => {
@@ -92,33 +97,25 @@ describe('buildPrincipalFromAssignments', () => {
     expect(p.capabilities).toEqual(['template.use']);
   });
 
-  it('bygger with NULL scope is the GLOBAL superuser (template.manage everywhere), but never access.manage', () => {
+  it('bygger manages its own templates (template.manage), never all of them, access or the log', () => {
     const p = build([{ roleKey: 'bygger', scopeOrgUnitUuid: null }]);
-    expect(p.capabilities).toContain('template.manage');
-    expect(p.capabilities).not.toContain('access.manage');
-    expect(p.scopes['template.manage']).toEqual({ global: true, roots: [] });
+    expect(p.capabilities).toEqual(['template.use', 'template.manage']);
   });
 
-  it('still fails closed for a role that may not be global: bruger with a NULL scope adds no scoped power', () => {
+  it('a bygger row from an older version that names a unit grants the same as an unscoped one', () => {
+    const p = build([{ roleKey: 'bygger', scopeOrgUnitUuid: OU_A, includeDescendants: false }]);
+    expect(p.capabilities).toEqual(['template.use', 'template.manage']);
+  });
+
+  it('bruger with a NULL scope adds nothing beyond template.use', () => {
     const p = build([{ roleKey: 'bruger', scopeOrgUnitUuid: null }]);
     expect(p.capabilities).toEqual(['template.use']);
-    expect(p.scopes).toEqual({});
   });
 
-  it('scopes bygger to its org unit', () => {
-    const p = build([
-      { roleKey: 'bygger', scopeOrgUnitUuid: OU_A, includeDescendants: false },
-    ]);
-    expect(p.scopes['template.manage']).toEqual({
-      global: false,
-      roots: [{ orgUnitUuid: OU_A, includeDescendants: false }],
-    });
-  });
-
-  it('treats NULL scope as global for admin', () => {
+  it('a NULL-scoped admin holds every capability, template.manage_all included', () => {
     const admin = build([{ roleKey: 'admin' }]);
     expect(admin.capabilities).toEqual([...CAPABILITIES]);
-    expect(admin.scopes['template.manage']?.global).toBe(true);
+    expect(admin.capabilities).toContain('template.manage_all');
   });
 
   it('a unit-scoped admin gets NO global-only capability (no self-promotion to global admin)', () => {
@@ -126,13 +123,14 @@ describe('buildPrincipalFromAssignments', () => {
     expect(p.capabilities).not.toContain('access.manage');
     expect(p.capabilities).not.toContain('sync.run');
     expect(p.capabilities).not.toContain('audit.export');
+    expect(p.capabilities).not.toContain('template.manage_all');
+    expect(p.capabilities).toEqual(['template.use', 'template.manage']);
   });
 
   it('a unit-scoped admin can neither read nor export the log', () => {
     const p = build([{ roleKey: 'admin', scopeOrgUnitUuid: OU_A }]);
     expect(p.capabilities).not.toContain('audit.read');
     expect(p.capabilities).not.toContain('audit.export');
-    expect(p.scopes['audit.read']).toBeUndefined();
   });
 
   it('a global grant elsewhere still unlocks the global-only capabilities', () => {
@@ -140,23 +138,14 @@ describe('buildPrincipalFromAssignments', () => {
     expect(p.capabilities).toContain('audit.export');
   });
 
-  it('a NULL-scoped bygger is not global, so contributes no global-only capability', () => {
-    expect(GLOBAL_ONLY_CAPABILITIES.has('audit.export')).toBe(true);
+  it('a bygger contributes no global-only capability', () => {
     const p = build([{ roleKey: 'bygger', scopeOrgUnitUuid: null }]);
-    expect(p.capabilities).not.toContain('audit.export');
+    for (const cap of GLOBAL_ONLY_CAPABILITIES) expect(p.capabilities).not.toContain(cap);
   });
 
-  it('keeps template.use for a scoped role when REQUIRE_ROLE_TO_LOGIN removes the baseline', () => {
-    const p = build([{ roleKey: 'bygger', scopeOrgUnitUuid: OU_A }], { requireRoleToLogin: true });
+  it('keeps template.use for a bygger when REQUIRE_ROLE_TO_LOGIN removes the baseline', () => {
+    const p = build([{ roleKey: 'bygger' }], { requireRoleToLogin: true });
     expect(p.capabilities).toContain('template.use');
-  });
-
-  it('does not give non-scoped capabilities a scope entry', () => {
-    const admin = build([{ roleKey: 'admin' }]);
-    expect(admin.scopes['access.manage']).toBeUndefined();
-    expect(admin.scopes['sync.run']).toBeUndefined();
-    expect(admin.scopes['audit.export']).toBeUndefined();
-    expect(admin.scopes['template.use']).toBeUndefined();
   });
 
   it('ignores expired and not-yet-started assignments', () => {
@@ -166,7 +155,6 @@ describe('buildPrincipalFromAssignments', () => {
     ]);
     expect(p.roles).toEqual(['bruger']);
     expect(p.capabilities).toEqual(['template.use']);
-    expect(p.scopes).toEqual({});
   });
 
   it('uses a half-open interval: active at startDate, over at stopDate', () => {
@@ -181,49 +169,25 @@ describe('buildPrincipalFromAssignments', () => {
     expect(p.disabled).toBe(true);
     expect(p.roles).toEqual([]);
     expect(p.capabilities).toEqual([]);
-    expect(p.scopes).toEqual({});
   });
 
-  it('merges duplicate and overlapping scopes without duplicates', () => {
+  it('merges duplicate grants without duplicate roles or capabilities', () => {
     const p = build([
       { roleKey: 'bygger', scopeOrgUnitUuid: OU_A, includeDescendants: false },
-      { roleKey: 'bygger', scopeOrgUnitUuid: OU_A, includeDescendants: true },
-      { roleKey: 'bygger', scopeOrgUnitUuid: OU_B, includeDescendants: false },
-      { roleKey: 'bygger', scopeOrgUnitUuid: OU_B, includeDescendants: false },
-    ]);
-    expect(p.scopes['template.manage']?.roots).toEqual([
-      { orgUnitUuid: OU_A, includeDescendants: true },
-      { orgUnitUuid: OU_B, includeDescendants: false },
-    ]);
-    expect(p.roles).toEqual(['bruger', 'bygger']);
-    expect(new Set(p.capabilities).size).toBe(p.capabilities.length);
-  });
-
-  it('merges a global grant with unit grants from different roles', () => {
-    const p = build([
+      { roleKey: 'bygger', scopeOrgUnitUuid: OU_B },
+      { roleKey: 'bygger' },
       { roleKey: 'admin' },
-      { roleKey: 'bygger', scopeOrgUnitUuid: OU_A },
     ]);
-    // Both roles carry template.manage, so the global admin grant makes it global and the
-    // unit root of the bygger grant is kept next to it.
-    expect(p.scopes['template.manage']).toEqual({
-      global: true,
-      roots: [{ orgUnitUuid: OU_A, includeDescendants: true }],
-    });
-    // audit.read comes from the admin grant only, and is global-only (no scope entry).
-    expect(p.capabilities).toContain('audit.read');
-    expect(p.scopes['audit.read']).toBeUndefined();
+    expect(p.roles).toEqual(['bruger', 'bygger', 'admin']);
+    expect(p.capabilities).toEqual([...CAPABILITIES]);
   });
 
-  it('a unit-scoped bygger never becomes global and never reaches the log or access administration', () => {
+  it('bygger rows that name units never reach the log, access administration or every template', () => {
     const p = build([
       { roleKey: 'bygger', scopeOrgUnitUuid: OU_A },
       { roleKey: 'bygger', scopeOrgUnitUuid: OU_B, includeDescendants: false },
     ]);
-    expect(p.scopes['template.manage']?.global).toBe(false);
-    expect(p.capabilities).not.toContain('audit.read');
-    expect(p.capabilities).not.toContain('access.manage');
-    expect(p.scopes['audit.read']).toBeUndefined();
+    expect(p.capabilities).toEqual(['template.use', 'template.manage']);
   });
 
   it('ignores unknown role keys', () => {

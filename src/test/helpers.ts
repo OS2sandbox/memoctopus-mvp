@@ -19,7 +19,6 @@ export function makePrincipal(overrides: Partial<Principal> = {}): Principal {
     directoryUserUuid: null,
     roles: ['bruger'],
     capabilities: ['template.use'],
-    scopes: {},
     disabled: false,
     source: 'baseline',
     ...overrides,
@@ -32,10 +31,6 @@ export const FAKE_PRINCIPAL_ADMIN: Principal = makePrincipal({
   directoryUserUuid: 'dddd0000-0000-4000-8000-000000000001',
   roles: ['bruger', 'admin'],
   capabilities: [...CAPABILITIES],
-  scopes: {
-    'template.manage': { global: true, roots: [] },
-    'audit.read': { global: true, roots: [] },
-  },
   source: 'local',
 });
 

@@ -1,7 +1,7 @@
 // Needs a real Postgres 15+; skipped unless TEST_DATABASE_URL is set (see src/test/pg.ts).
 // Proves what the mocked tests cannot: atomicity of template + targets + version
-// + audit, the row lock under concurrent writers, scope and subtree rules over
-// the real org tree, the immutability trigger and the RESTRICT FK. The service
+// + audit, the row lock under concurrent writers, the creator rule over real
+// rows, the immutability trigger and the RESTRICT FKs. The service
 // runs unchanged in a throwaway schema through CentralEnv.schema.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from 'pg';
@@ -16,14 +16,14 @@ const recordAuthzDenied = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => und
 vi.mock('@/lib/audit/authz-denied', () => ({ recordAuthzDenied }));
 
 import { deleteOrgUnit } from '@/lib/authz/access-admin';
-import { NotFoundError, VersionConflictError } from '@/lib/authz/access-errors';
+import { ForbiddenError, NotFoundError, VersionConflictError } from '@/lib/authz/access-errors';
 import type { Principal } from '@/lib/authz/types';
 import * as service from './central';
 import {
   getManageableTemplate,
   listCatalogue,
   listManageableTemplates,
-  listScopeOrgUnits,
+  listAudienceOrgUnits,
   listVersions,
   type CentralEnv,
 } from './central';
@@ -69,20 +69,20 @@ async function user(c: Client, id: string, name = id) {
   await c.query('INSERT INTO users (id, name, email) VALUES ($1, $2, $3)', [id, name, `${id}@example.dk`]);
 }
 
-const managerOf = (userId: string, ...roots: string[]): Principal =>
+/** A bygger: manages the templates they created. */
+const bygger = (userId: string): Principal =>
   makePrincipal({
     userId,
     roles: ['bygger'],
     capabilities: ['template.use', 'template.manage'],
-    scopes: { 'template.manage': { global: false, roots: roots.map((orgUnitUuid) => ({ orgUnitUuid, includeDescendants: true })) } },
   });
 
-const globalManager = (userId: string): Principal =>
+/** An administrator: template.manage_all, so every template. */
+const admin = (userId: string): Principal =>
   makePrincipal({
     userId,
     roles: ['admin'],
-    capabilities: ['template.use', 'template.manage'],
-    scopes: { 'template.manage': { global: true, roots: [] } },
+    capabilities: ['template.use', 'template.manage', 'template.manage_all'],
   });
 
 /**
@@ -149,15 +149,14 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         await user(c, 'mgr', 'Mikkel Manager');
 
         const out = await createCentralTemplate(
-          managerOf('mgr', t.a),
-          { ...BASE, ownerOrgUnitUuid: t.a, targets: [{ orgUnitUuid: t.a1 }, { orgUnitUuid: t.a, includeDescendants: false }], changeNote: `  ${NOTE}  ` },
+          bygger('mgr'),
+          { ...BASE, targets: [{ orgUnitUuid: t.a1 }, { orgUnitUuid: t.a, includeDescendants: false }], changeNote: `  ${NOTE}  ` },
           env,
         );
 
         expect(out).toMatchObject({
           name: 'Dialogmøde',
           prompt: BASE.prompt,
-          ownerOrgUnitUuid: t.a,
           status: 'active',
           currentVersion: 1,
           allowUserInstruction: false,
@@ -168,7 +167,9 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         expect([...out.targets].map((x) => x.orgUnitUuid).sort()).toEqual([t.a, t.a1].sort());
 
         const row = (await c.query('SELECT * FROM central_templates')).rows[0];
-        expect(row).not.toHaveProperty('created_by_user_id');
+        // The creator owns the template; there is no owner unit any more.
+        expect(row.created_by_user_id).toBe('mgr');
+        expect(row).not.toHaveProperty('owner_org_unit_uuid');
         expect(row.current_version).toBe(1);
 
         const v = (await c.query('SELECT * FROM central_template_versions')).rows;
@@ -183,8 +184,8 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
           actor_user_id: 'mgr',
           entity_type: 'central_template',
           entity_id: out.id,
-          secondary_entity_type: 'org_unit',
-          secondary_entity_id: t.a,
+          secondary_entity_type: null,
+          secondary_entity_id: null,
           outcome: 'success',
         });
         expect(a[0].details).toEqual({ version: 1, targetCount: 2, principalTargetCount: 0 });
@@ -206,7 +207,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         };
         const t = await tree(c);
         await expect(
-          createCentralTemplate(managerOf('mgr', t.a), { ...BASE, ownerOrgUnitUuid: t.a, targets: [{ orgUnitUuid: t.a1 }], changeNote: NOTE }, { schema, runner: failing }),
+          createCentralTemplate(bygger('mgr'), { ...BASE, targets: [{ orgUnitUuid: t.a1 }], changeNote: NOTE }, { schema, runner: failing }),
         ).rejects.toThrow('audit down');
         expect(await count(c, 'central_templates')).toBe(0);
         expect(await count(c, 'central_template_targets')).toBe(0);
@@ -216,16 +217,15 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
 
     it('the table itself refuses a short or blank note, an unknown change type and a blank prompt (defence in depth)', () =>
       withFreshSchema(async (c) => {
-        const t = await tree(c);
-        const tpl = (await c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt) VALUES ($1, 'x', 'p') RETURNING id`, [t.a])).rows[0].id;
+        const tpl = (await c.query(`INSERT INTO central_templates (created_by_user_id, name, prompt) VALUES ('mgr', 'x', 'p') RETURNING id`)).rows[0].id;
         const ins = (changeType: string, note: string) =>
           c.query(`INSERT INTO central_template_versions (template_id, version, change_type, change_note, content, targets) VALUES ('${tpl}', 1, '${changeType}', '${note}', '{}', '[]')`);
         await expectSqlState(ins('create', 'kort'), '23514');
         await expectSqlState(ins('create', '         '), '23514'); // 9 characters
         await expectSqlState(ins('delete', 'en lang nok note'), '23514');
         await ins('create', 'en lang nok note');
-        await expectSqlState(c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt) VALUES ('${t.a}', 'x', '   ')`), '23514');
-        await expectSqlState(c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt, status) VALUES ('${t.a}', 'x', 'p', 'deleted')`), '23514');
+        await expectSqlState(c.query(`INSERT INTO central_templates (created_by_user_id, name, prompt) VALUES ('mgr', 'x', '   ')`), '23514');
+        await expectSqlState(c.query(`INSERT INTO central_templates (created_by_user_id, name, prompt, status) VALUES ('mgr', 'x', 'p', 'deleted')`), '23514');
       }));
 
     describe('table CHECKs are plain length bounds (the meaningful-character rule is app-side only)', () => {
@@ -235,8 +235,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
           [tpl, note, version],
         );
       const newTemplate = async (c: Client) => {
-        const t = await tree(c);
-        const r = await c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt) VALUES ($1, 'x', 'p') RETURNING id`, [t.a]);
+        const r = await c.query(`INSERT INTO central_templates (created_by_user_id, name, prompt) VALUES ('mgr', 'x', 'p') RETURNING id`);
         return { tpl: r.rows[0].id as string };
       };
 
@@ -259,64 +258,53 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
 
       it('refuses an empty template name', () =>
         withFreshSchema(async (c) => {
-          const t = await tree(c);
-          await expectSqlState(c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt) VALUES ($1, '', 'p')`, [t.a]), '23514');
+          await expectSqlState(c.query(`INSERT INTO central_templates (created_by_user_id, name, prompt) VALUES ('mgr', '', 'p')`), '23514');
         }));
 
       it('accepts a one-character name, a Danish name and the 120 character cap, and refuses 121', () =>
         withFreshSchema(async (c) => {
-          const t = await tree(c);
-          const ins = (name: string) => c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt) VALUES ($1, $2, 'p')`, [t.a, name]);
+          const ins = (name: string) => c.query(`INSERT INTO central_templates (created_by_user_id, name, prompt) VALUES ('mgr', $1, 'p')`, [name]);
           await ins('x');
           await ins('Møde på Å');
           await ins('n'.repeat(120));
           await expectSqlState(ins('n'.repeat(121)), '23514');
         }));
 
-      it('has no created_by_user_id column on central_templates', () =>
+      it('has a created_by_user_id column and no owner_org_unit_uuid on central_templates', () =>
         withFreshSchema(async (c, schema) => {
           const r = await c.query(
-            `SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'central_templates' AND column_name = 'created_by_user_id'`,
+            `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'central_templates' AND column_name IN ('created_by_user_id', 'owner_org_unit_uuid')`,
             [schema],
           );
-          expect(r.rowCount).toBe(0);
+          expect(r.rows.map((x) => x.column_name)).toEqual(['created_by_user_id']);
         }));
     });
 
-    it('rejects targets outside the owner subtree: sibling, parent, other branch; the owner and descendants are fine', () =>
+    it('any existing unit may be targeted (parent, root, other branch); an unknown unit is refused and nothing is written', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
         const env: CentralEnv = { schema, runner };
         const t = await tree(c);
-        // Global scope, so only the owner-subtree rule can refuse.
-        const p = globalManager('mgr');
-        const create = (target: string) =>
-          createCentralTemplate(p, { ...BASE, ownerOrgUnitUuid: t.a1, targets: [{ orgUnitUuid: target }], changeNote: NOTE }, env);
-
-        await expect(create(t.b)).rejects.toMatchObject({ code: 'target_outside_owner' }); // sibling of the owner's parent
-        await expect(create(t.a)).rejects.toMatchObject({ code: 'target_outside_owner' }); // parent: no upward delegation
-        await expect(create(t.root)).rejects.toMatchObject({ code: 'target_outside_owner' }); // ancestor
-        await expect(create(t.b1)).rejects.toMatchObject({ code: 'target_outside_owner' }); // other branch
-        await expect(create('99999999-9999-4999-8999-999999999999')).rejects.toMatchObject({ code: 'target_outside_owner' }); // unknown unit
+        const p = bygger('mgr');
+        await expect(
+          createCentralTemplate(p, { ...BASE, targets: [{ orgUnitUuid: t.a1 }, { orgUnitUuid: '99999999-9999-4999-8999-999999999999' }], changeNote: NOTE }, env),
+        ).rejects.toMatchObject({ code: 'target_unknown' });
         expect(await count(c, 'central_templates')).toBe(0);
 
-        const ok = await createCentralTemplate(p, { ...BASE, ownerOrgUnitUuid: t.a1, targets: [{ orgUnitUuid: t.a1 }, { orgUnitUuid: t.a11 }], changeNote: NOTE }, env);
-        expect(ok.targets).toHaveLength(2);
+        const ok = await createCentralTemplate(
+          p,
+          { ...BASE, targets: [{ orgUnitUuid: t.root }, { orgUnitUuid: t.a }, { orgUnitUuid: t.b1, includeDescendants: false }], changeNote: NOTE },
+          env,
+        );
+        expect(ok.targets).toHaveLength(3);
         await close();
       }));
 
-    it('refuses an owner unit outside the caller scope or unknown (404) and writes nothing', () =>
+    it('refuses a caller without template.manage (403) and writes nothing', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
         const env: CentralEnv = { schema, runner };
-        const t = await tree(c);
-        const mgrA = managerOf('mgr', t.a);
-        for (const owner of [t.b, t.root, '99999999-9999-4999-8999-999999999999']) {
-          await expect(createCentralTemplate(mgrA, { ...BASE, ownerOrgUnitUuid: owner, changeNote: NOTE }, env)).rejects.toBeInstanceOf(NotFoundError);
-        }
-        // Without the capability, even a "global-looking" principal is refused (fail closed).
-        const plain = makePrincipal({ scopes: { 'template.manage': { global: true, roots: [] } } });
-        await expect(createCentralTemplate(plain, { ...BASE, ownerOrgUnitUuid: t.a, changeNote: NOTE }, env)).rejects.toBeInstanceOf(NotFoundError);
+        await expect(createCentralTemplate(makePrincipal(), { ...BASE, changeNote: NOTE }, env)).rejects.toBeInstanceOf(ForbiddenError);
         expect(await count(c, 'central_templates')).toBe(0);
         await close();
       }));
@@ -329,8 +317,8 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
       const t = await tree(c);
       await user(c, 'mgr', 'Mikkel Manager');
       await user(c, 'colleague', 'Karen Kollega');
-      const mgr = managerOf('mgr', t.a);
-      const tpl = await createCentralTemplate(mgr, { ...BASE, ownerOrgUnitUuid: t.a, targets: [{ orgUnitUuid: t.a1 }], changeNote: 'Første version til afdelingen' }, env);
+      const mgr = bygger('mgr');
+      const tpl = await createCentralTemplate(mgr, { ...BASE, targets: [{ orgUnitUuid: t.a1 }], changeNote: 'Første version til afdelingen' }, env);
       return { env, t, mgr, tpl, close: made.close };
     }
 
@@ -372,7 +360,8 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
     it('two concurrent updates with the same baseVersion: exactly one succeeds, the other conflicts', () =>
       withFreshSchema(async (c, schema) => {
         const { env, mgr, tpl, close } = await seeded(c, schema);
-        const colleague = managerOf('colleague', (await c.query(`SELECT uuid FROM org_units WHERE name = 'A'`)).rows[0].uuid);
+        // Two writers who may both edit it: the creator and an administrator.
+        const colleague = admin('colleague');
         const results = await Promise.allSettled([
           updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: 'Ændring fra den første leder', prompt: 'Prompt fra leder et.' }, env),
           updateCentralTemplate(colleague, tpl.id, { baseVersion: 1, changeNote: 'Ændring fra den anden leder', prompt: 'Prompt fra leder to.' }, env),
@@ -416,27 +405,27 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         await close();
       }));
 
-    it('a new target outside the owner subtree is refused and the old targets stay', () =>
+    it('an unknown target unit is refused and the old targets stay', () =>
       withFreshSchema(async (c, schema) => {
         const { env, mgr, tpl, t, close } = await seeded(c, schema);
-        for (const bad of [t.b, t.root, t.b1]) {
-          await expect(updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE, targets: [{ orgUnitUuid: bad }] }, env)).rejects.toMatchObject({ code: 'target_outside_owner' });
-        }
+        await expect(
+          updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE, targets: [{ orgUnitUuid: '99999999-9999-4999-8999-999999999999' }] }, env),
+        ).rejects.toMatchObject({ code: 'target_unknown' });
         expect((await c.query('SELECT org_unit_uuid FROM central_template_targets')).rows).toEqual([{ org_unit_uuid: t.a1 }]);
         expect(await count(c, 'central_template_versions')).toBe(1);
         await close();
       }));
 
-    it('a colleague whose scope covers the owner unit can edit; the creator is not special', () =>
+    it('another bygger cannot edit (404); an administrator can, and the changelog names them', () =>
       withFreshSchema(async (c, schema) => {
-        const { env, tpl, t, close } = await seeded(c, schema);
-        const colleague = managerOf('colleague', t.a);
-        const out = await updateCentralTemplate(colleague, tpl.id, { baseVersion: 1, changeNote: 'Rettet af en kollega', name: 'Kollegas navn' }, env);
-        expect(out.name).toBe('Kollegas navn');
+        const { env, tpl, close } = await seeded(c, schema);
+        await expect(updateCentralTemplate(bygger('colleague'), tpl.id, { baseVersion: 1, changeNote: NOTE, name: 'Nej' }, env)).rejects.toBeInstanceOf(NotFoundError);
+        const out = await updateCentralTemplate(admin('colleague'), tpl.id, { baseVersion: 1, changeNote: 'Rettet af en administrator', name: 'Admins navn' }, env);
+        expect(out.name).toBe('Admins navn');
         const v = (await c.query('SELECT changed_by_user_id, changed_by_name FROM central_template_versions WHERE version = 2')).rows[0];
         expect(v).toEqual({ changed_by_user_id: 'colleague', changed_by_name: 'Karen Kollega' });
-        // A manager scoped to a unit BELOW the owner does not cover the owner.
-        await expect(updateCentralTemplate(managerOf('x', t.a1), tpl.id, { baseVersion: 2, changeNote: NOTE, name: 'Nej' }, env)).rejects.toBeInstanceOf(NotFoundError);
+        // Editing does not move the ownership: the creator still manages it.
+        expect((await c.query('SELECT created_by_user_id FROM central_templates')).rows[0].created_by_user_id).toBe('mgr');
         await close();
       }));
 
@@ -470,14 +459,13 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
   });
 
   describe('refusals leave an authz.denied row, written after the rollback', () => {
-    it('an out-of-scope or stale write is refused, rolled back and reported once each, with the template as entity', () =>
+    it("another bygger's write or a stale one is refused, rolled back and reported once each, with the template as entity", () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
         const env: CentralEnv = { schema, runner };
-        const t = await tree(c);
-        const mgrA = managerOf('a', t.a);
-        const mgrB = managerOf('b', t.b);
-        const own = await createCentralTemplate(mgrB, { ...BASE, ownerOrgUnitUuid: t.b, changeNote: NOTE }, env);
+        const mgrA = bygger('a');
+        const mgrB = bygger('b');
+        const own = await createCentralTemplate(mgrB, { ...BASE, changeNote: NOTE }, env);
         const before = await count(c, 'audit_events');
         recordAuthzDenied.mockClear();
 
@@ -487,7 +475,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         await expect(archiveCentralTemplate(mgrA, '99999999-9999-4999-8999-999999999999', { baseVersion: 1, changeNote: NOTE }, env)).rejects.toBeInstanceOf(NotFoundError);
 
         expect(recordAuthzDenied.mock.calls.map((x) => x[0])).toEqual([
-          { actorUserId: 'a', required: 'template.manage', reason: 'out_of_scope', entityType: 'central_template', entityId: own.id },
+          { actorUserId: 'a', required: 'template.manage', reason: 'not_owner', entityType: 'central_template', entityId: own.id },
           { actorUserId: 'b', required: 'template.manage', reason: 'version_conflict', entityType: 'central_template', entityId: own.id },
         ]);
         // Nothing of the refused writes was kept, and no central_template.* event was written for them.
@@ -497,16 +485,15 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
       }));
   });
 
-  describe('scope: 404 outside, never a leak', () => {
-    it('a manager of unit A cannot read, list, edit, archive or see the history of a template owned by B', () =>
+  describe('ownership: 404 for anybody else, never a leak', () => {
+    it("bygger A cannot read, list, edit, archive or see the history of bygger B's template; an administrator sees both", () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
         const env: CentralEnv = { schema, runner };
-        const t = await tree(c);
-        const mgrA = managerOf('a', t.a);
-        const mgrB = managerOf('b', t.b);
-        const own = await createCentralTemplate(mgrB, { ...BASE, ownerOrgUnitUuid: t.b, changeNote: NOTE }, env);
-        const mine = await createCentralTemplate(mgrA, { ...BASE, name: 'Min', ownerOrgUnitUuid: t.a, changeNote: NOTE }, env);
+        const mgrA = bygger('a');
+        const mgrB = bygger('b');
+        const own = await createCentralTemplate(mgrB, { ...BASE, changeNote: NOTE }, env);
+        const mine = await createCentralTemplate(mgrA, { ...BASE, name: 'Min', changeNote: NOTE }, env);
 
         await expect(getManageableTemplate(mgrA, own.id, env)).rejects.toBeInstanceOf(NotFoundError);
         await expect(listVersions(mgrA, own.id, env)).rejects.toBeInstanceOf(NotFoundError);
@@ -518,55 +505,53 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
 
         expect((await listManageableTemplates(mgrA, { status: 'all' }, env)).map((x) => x.id)).toEqual([mine.id]);
         expect((await listManageableTemplates(mgrB, { status: 'all' }, env)).map((x) => x.id)).toEqual([own.id]);
-        expect((await listManageableTemplates(globalManager('g'), { status: 'all' }, env)).map((x) => x.id).sort()).toEqual([own.id, mine.id].sort());
+        expect((await listManageableTemplates(admin('g'), { status: 'all' }, env)).map((x) => x.id).sort()).toEqual([own.id, mine.id].sort());
         expect(await listManageableTemplates(makePrincipal(), { status: 'all' }, env)).toEqual([]);
         await close();
       }));
 
-    it('a manager scoped to a parent unit manages templates owned by its descendants', () =>
+    it('a template without a recorded creator (its first version had no author) is for administrators only', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
         const env: CentralEnv = { schema, runner };
-        const t = await tree(c);
-        const deep = await createCentralTemplate(globalManager('g'), { ...BASE, ownerOrgUnitUuid: t.a11, changeNote: NOTE }, env);
-        expect((await getManageableTemplate(managerOf('a', t.a), deep.id, env)).id).toBe(deep.id);
-        expect((await listManageableTemplates(managerOf('a', t.a), {}, env)).map((x) => x.id)).toEqual([deep.id]);
+        const id = (await c.query(`INSERT INTO central_templates (name, prompt) VALUES ('x', 'p') RETURNING id`)).rows[0].id;
+        await expect(getManageableTemplate(bygger('mgr'), id, env)).rejects.toBeInstanceOf(NotFoundError);
+        expect(await listManageableTemplates(bygger('mgr'), {}, env)).toEqual([]);
+        expect((await getManageableTemplate(admin('adm'), id, env)).id).toBe(id);
         await close();
       }));
 
-    it('shows creator and last editor (an ancestor manager editing a descendant template) in list and detail, with the edit time', () =>
+    it('shows creator and last editor (an administrator editing a bygger template) in list and detail, with the edit time', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
         const env: CentralEnv = { schema, runner };
-        const t = await tree(c);
         await user(c, 'owner', 'Olga Ejer');
-        await user(c, 'anc', 'Anders Ancestor');
-        const created = await createCentralTemplate(managerOf('owner', t.a11), { ...BASE, ownerOrgUnitUuid: t.a11, changeNote: NOTE }, env);
-        const [created1] = await listManageableTemplates(managerOf('owner', t.a11), {}, env);
+        await user(c, 'anc', 'Anders Admin');
+        const created = await createCentralTemplate(bygger('owner'), { ...BASE, changeNote: NOTE }, env);
+        const [created1] = await listManageableTemplates(bygger('owner'), {}, env);
         expect(created1).toMatchObject({ createdByName: 'Olga Ejer', lastEditedByName: 'Olga Ejer' });
 
-        await updateCentralTemplate(managerOf('anc', t.a), created.id, { baseVersion: 1, changeNote: NOTE, name: 'Nyt navn' }, env);
-        const [item] = await listManageableTemplates(managerOf('anc', t.a), {}, env);
-        expect(item).toMatchObject({ currentVersion: 2, createdByName: 'Olga Ejer', lastEditedByName: 'Anders Ancestor' });
-        const detail = await getManageableTemplate(managerOf('anc', t.a), created.id, env);
-        expect(detail).toMatchObject({ createdByName: 'Olga Ejer', lastEditedByName: 'Anders Ancestor' });
+        await updateCentralTemplate(admin('anc'), created.id, { baseVersion: 1, changeNote: NOTE, name: 'Nyt navn' }, env);
+        const [item] = await listManageableTemplates(admin('anc'), {}, env);
+        expect(item).toMatchObject({ currentVersion: 2, createdByName: 'Olga Ejer', lastEditedByName: 'Anders Admin' });
+        const detail = await getManageableTemplate(admin('anc'), created.id, env);
+        expect(detail).toMatchObject({ createdByName: 'Olga Ejer', lastEditedByName: 'Anders Admin' });
         const v2 = (await c.query('SELECT changed_at FROM central_template_versions WHERE version = 2')).rows[0];
         expect(detail.lastEditedAt).toBe(new Date(v2.changed_at).toISOString());
         expect(item.lastEditedAt).toBe(detail.lastEditedAt);
         await close();
       }));
 
-    it('lists the scope org units for the pickers: only the subtree, parents above the scope hidden', () =>
+    it('lists every org unit for the audience picker, to any bygger; nothing without template.manage', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
         const env: CentralEnv = { schema, runner };
         const t = await tree(c);
-        const scoped = await listScopeOrgUnits(managerOf('a', t.a), env);
-        expect(scoped.map((u) => u.name)).toEqual(['A', 'A1', 'A11']);
-        expect(scoped.find((u) => u.name === 'A')!.parentUuid).toBeNull();
-        expect(scoped.find((u) => u.name === 'A1')!.parentUuid).toBe(t.a);
-        expect((await listScopeOrgUnits(globalManager('g'), env)).map((u) => u.name)).toEqual(['A', 'A1', 'A11', 'B', 'B1', 'Kommune']);
-        expect(await listScopeOrgUnits(makePrincipal(), env)).toEqual([]);
+        const units = await listAudienceOrgUnits(bygger('a'), env);
+        expect(units.map((u) => u.name)).toEqual(['A', 'A1', 'A11', 'B', 'B1', 'Kommune']);
+        expect(units.find((u) => u.name === 'Kommune')!.parentUuid).toBeNull();
+        expect(units.find((u) => u.name === 'A1')!.parentUuid).toBe(t.a);
+        expect(await listAudienceOrgUnits(makePrincipal(), env)).toEqual([]);
         await close();
       }));
   });
@@ -577,8 +562,8 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         const { runner, close } = makeRunner(c, schema);
         const env: CentralEnv = { schema, runner };
         const t = await tree(c);
-        const mgr = managerOf('mgr', t.a);
-        const tpl = await createCentralTemplate(mgr, { ...BASE, ownerOrgUnitUuid: t.a, targets: [{ orgUnitUuid: t.a1 }], changeNote: NOTE }, env);
+        const mgr = bygger('mgr');
+        const tpl = await createCentralTemplate(mgr, { ...BASE, targets: [{ orgUnitUuid: t.a1 }], changeNote: NOTE }, env);
 
         const archived = await archiveCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: 'Bruges ikke længere' }, env);
         expect(archived).toMatchObject({ status: 'archived', currentVersion: 2, prompt: BASE.prompt });
@@ -611,10 +596,9 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
 
   describe('the changelog is append-only', () => {
     async function withVersion(c: Client) {
-      const t = await tree(c);
-      const id = (await c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt) VALUES ($1, 'x', 'p') RETURNING id`, [t.a])).rows[0].id;
+      const id = (await c.query(`INSERT INTO central_templates (created_by_user_id, name, prompt) VALUES ('mgr', 'x', 'p') RETURNING id`)).rows[0].id;
       await c.query(`INSERT INTO central_template_versions (template_id, version, change_type, change_note, content, targets) VALUES ($1, 1, 'create', 'en lang nok note', '{}', '[]')`, [id]);
-      return { t, id };
+      return { id };
     }
 
     it('refuses UPDATE, DELETE and TRUNCATE with SQLSTATE 55000, and a template delete that would cascade', () =>
@@ -645,33 +629,15 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
   });
 
   describe('org unit deletion', () => {
-    it('is RESTRICTed by the FK while the unit owns a template, even an archived one', () =>
-      withFreshSchema(async (c) => {
-        const t = await tree(c);
-        await c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt, status) VALUES ($1, 'x', 'p', 'archived')`, [t.b1]);
-        // ON DELETE RESTRICT: accept restrict_violation (23001) and foreign_key_violation (23503).
-        await expectSqlState(c.query(`DELETE FROM org_units WHERE uuid = '${t.b1}'`), ['23001', '23503']);
-        await c.query('DELETE FROM org_units WHERE uuid = $1', [t.a11]);
-      }));
-
-    it('deleteOrgUnit answers 409 in Danish instead of a raw FK error, and the unit survives', () =>
+    it('deleteOrgUnit refuses a unit a template is aimed at (409 in Danish); a unit no template targets is deletable', () =>
       withFreshSchema(async (c, schema) => {
         vi.stubEnv('ACCESS_SOURCE', 'local');
         try {
           const { runner, close } = makeRunner(c, schema, { rewritePublic: true });
           const t = await tree(c);
-          await createCentralTemplate(
-            globalManager('g'),
-            { ...BASE, ownerOrgUnitUuid: t.b1, changeNote: NOTE },
-            { schema, runner },
-          );
-          await expect(deleteOrgUnit(t.b1, 'admin', runner)).rejects.toMatchObject({
-            name: 'ConflictError',
-            code: 'has_central_templates',
-            message: expect.stringContaining('centrale skabeloner'),
-          });
+          await createCentralTemplate(admin('g'), { ...BASE, targets: [{ orgUnitUuid: t.b1 }], changeNote: NOTE }, { schema, runner });
+          await expect(deleteOrgUnit(t.b1, 'admin', runner)).rejects.toMatchObject({ name: 'ConflictError', code: 'has_template_targets' });
           expect(await count(c, 'org_units', 'uuid = $1', [t.b1])).toBe(1);
-          // A unit without templates is still deletable.
           await deleteOrgUnit(t.a11, 'admin', runner);
           expect(await count(c, 'org_units', 'uuid = $1', [t.a11])).toBe(0);
           await close();
@@ -685,8 +651,8 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         const { runner, close } = makeRunner(c, schema);
         const t = await tree(c);
         const tpl = await createCentralTemplate(
-          globalManager('g'),
-          { ...BASE, ownerOrgUnitUuid: t.a, targets: [{ orgUnitUuid: t.a11 }], changeNote: NOTE },
+          admin('g'),
+          { ...BASE, targets: [{ orgUnitUuid: t.a11 }], changeNote: NOTE },
           { schema, runner },
         );
         await c.query('DELETE FROM org_units WHERE uuid = $1', [t.a11]);
@@ -703,10 +669,9 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
         const env: CentralEnv = { schema, runner };
-        const t = await tree(c);
-        const mgr = managerOf('mgr', t.a);
+        const mgr = bygger('mgr');
         const secret = { name: 'Hemmeligt navn', prompt: 'Hemmelig promptTekst', note: 'Hemmelig ændringsnote her' };
-        const tpl = await createCentralTemplate(mgr, { ...BASE, name: secret.name, prompt: secret.prompt, ownerOrgUnitUuid: t.a, changeNote: secret.note }, env);
+        const tpl = await createCentralTemplate(mgr, { ...BASE, name: secret.name, prompt: secret.prompt, changeNote: secret.note }, env);
         await updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: secret.note, prompt: 'Hemmelig promptTekst 2' }, env);
         await archiveCentralTemplate(mgr, tpl.id, { baseVersion: 2, changeNote: secret.note }, env);
         await restoreCentralTemplate(mgr, tpl.id, { baseVersion: 3, changeNote: secret.note }, env);
@@ -717,12 +682,12 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         await close();
       }));
   });
-  describe('organisation-wide templates and role/group targets', () => {
+  describe('role/group targets', () => {
     async function role(c: Client, kind: 'role' | 'group', identifier: string, name = identifier, active = true) {
       await c.query(`INSERT INTO external_roles (kind, identifier, name, source, active) VALUES ($1, $2, $3, 'rollekatalog', $4)`, [kind, identifier, name, active]);
     }
 
-    it('a global manager creates an org-wide template (NULL owner) with role and group targets; names are snapshotted', () =>
+    it('a bygger creates a template with role and group targets only; names are snapshotted', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
         const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
@@ -731,11 +696,10 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         await role(c, 'group', 'social', 'Socialforvaltningen');
 
         const out = await createCentralTemplate(
-          globalManager('adm'),
+          bygger('adm'),
           { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'sagsbehandler' }, { kind: 'group', identifier: 'social' }], changeNote: NOTE },
           env,
         );
-        expect(out.ownerOrgUnitUuid).toBeNull();
         expect(out.principalTargets).toEqual([
           { kind: 'group', identifier: 'social', name: 'Socialforvaltningen', status: 'active', holders: 0 },
           { kind: 'role', identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active', holders: 0 },
@@ -753,41 +717,17 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         await close();
       }));
 
-    it('a scoped manager can neither create org-wide, nor see, read or touch one; a global manager sees it in the list', () =>
+    it('a bygger adds role/group targets to their own template in claims mode', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
         const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
-        const t = await tree(c);
-        await user(c, 'adm');
-        await user(c, 'mgr');
-        const scoped = managerOf('mgr', t.root); // even the root of the whole tree is not "the whole organisation"
-        await expect(createCentralTemplate(scoped, { ...BASE, targets: [], changeNote: NOTE }, env)).rejects.toMatchObject({ code: 'org_wide_needs_global' });
-
-        const wide = await createCentralTemplate(globalManager('adm'), { ...BASE, targets: [], changeNote: NOTE }, env);
-        expect(await count(c, 'central_templates')).toBe(1);
-        expect((await listManageableTemplates(scoped, { status: 'all' }, env)).map((x) => x.id)).toEqual([]);
-        expect((await listManageableTemplates(globalManager('adm'), { status: 'all' }, env)).map((x) => x.id)).toEqual([wide.id]);
-        await expect(getManageableTemplate(scoped, wide.id, env)).rejects.toBeInstanceOf(NotFoundError);
-        await expect(listVersions(scoped, wide.id, env)).rejects.toBeInstanceOf(NotFoundError);
-        await expect(updateCentralTemplate(scoped, wide.id, { baseVersion: 1, changeNote: NOTE, name: 'Kapret' }, env)).rejects.toBeInstanceOf(NotFoundError);
-        await expect(archiveCentralTemplate(scoped, wide.id, { baseVersion: 1, changeNote: NOTE }, env)).rejects.toBeInstanceOf(NotFoundError);
-        expect((await c.query('SELECT name, status FROM central_templates')).rows[0]).toEqual({ name: BASE.name, status: 'active' });
-        await close();
-      }));
-
-    it('a scoped manager cannot add role/group targets even to their own template', () =>
-      withFreshSchema(async (c, schema) => {
-        const { runner, close } = makeRunner(c, schema);
-        const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
-        const t = await tree(c);
         await user(c, 'mgr');
         await role(c, 'role', 'sagsbehandler');
-        const mgr = managerOf('mgr', t.a);
-        const tpl = await createCentralTemplate(mgr, { ...BASE, ownerOrgUnitUuid: t.a, changeNote: NOTE }, env);
-        await expect(
-          updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE, principalTargets: [{ kind: 'role', identifier: 'sagsbehandler' }] }, env),
-        ).rejects.toMatchObject({ code: 'principal_targets_need_global' });
-        expect(await count(c, 'central_template_principal_targets')).toBe(0);
+        const mgr = bygger('mgr');
+        const tpl = await createCentralTemplate(mgr, { ...BASE, changeNote: NOTE }, env);
+        const out = await updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE, principalTargets: [{ kind: 'role', identifier: 'sagsbehandler' }] }, env);
+        expect(out.principalTargets.map((x) => x.identifier)).toEqual(['sagsbehandler']);
+        expect(await count(c, 'central_template_principal_targets')).toBe(1);
         await close();
       }));
 
@@ -798,7 +738,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         await user(c, 'adm');
         await role(c, 'role', 'a', 'Rolle A');
         await role(c, 'role', 'gone', 'Udgået', false);
-        const adm = globalManager('adm');
+        const adm = admin('adm');
         await expect(createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'gone' }], changeNote: NOTE }, env)).rejects.toMatchObject({ code: 'principal_target_unknown' });
         await expect(createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'finnes-ikke' }], changeNote: NOTE }, env)).rejects.toMatchObject({ code: 'principal_target_unknown' });
         expect(await count(c, 'central_templates')).toBe(0);
@@ -820,7 +760,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         await user(c, 'adm');
         await role(c, 'role', 'a', 'Rolle A');
         await role(c, 'group', 'b', 'Gruppe B');
-        const adm = globalManager('adm');
+        const adm = admin('adm');
         const tpl = await createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
         const out = await updateCentralTemplate(adm, tpl.id, { baseVersion: 1, changeNote: NOTE, principalTargets: [{ kind: 'group', identifier: 'b' }] }, env);
         expect(out.principalTargets.map((p) => p.identifier)).toEqual(['b']);
@@ -845,7 +785,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         await user(c, 'adm');
         await role(c, 'role', 'a', 'Rolle A');
         await role(c, 'role', 'free', 'Fri');
-        const tpl = await createCentralTemplate(globalManager('adm'), { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
+        const tpl = await createCentralTemplate(admin('adm'), { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
         await expectSqlState(c.query(`DELETE FROM external_roles WHERE identifier = 'a'`), '23503');
         await c.query(`DELETE FROM external_roles WHERE identifier = 'free'`);
         // The composite FK also stops a target that is not in the catalogue at all.
@@ -869,7 +809,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
         await user(c, 'adm');
         await role(c, 'role', 'a');
-        await createCentralTemplate(globalManager('adm'), { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
+        await createCentralTemplate(admin('adm'), { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
         await expectSqlState(c.query(`UPDATE central_template_versions SET principal_targets = '[]'::jsonb`), '55000');
         await expectSqlState(c.query('DELETE FROM central_template_versions'), '55000');
         await close();
@@ -880,7 +820,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         const claims: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
         await user(c, 'adm');
         await role(c, 'role', 'a', 'Rolle A');
-        const adm = globalManager('adm');
+        const adm = admin('adm');
         for (const accessSource of ['local', 'rollekatalog'] as const) {
           await expect(
             createCentralTemplate(adm, { ...BASE, targets: [], principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, { ...claims, accessSource }),
@@ -897,30 +837,20 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         await close();
       }));
 
-    it('a SCOPED manager cannot update, archive or restore a template that reaches roles (403, unchanged), but can still read it', () =>
+    it("a template that reaches roles is still only its creator's (and an administrator's): another bygger gets 404", () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = makeRunner(c, schema);
         const env: CentralEnv = { schema, runner, accessSource: 'claims', claimsMaxSeconds: 3600 };
-        const t = await tree(c);
-        await user(c, 'adm');
         await user(c, 'mgr');
+        await user(c, 'adm');
         await role(c, 'role', 'a', 'Rolle A');
-        const mgr = managerOf('mgr', t.a);
-        // Owned by A, so the scoped manager sees it, but a global manager gave it a role audience.
-        const tpl = await createCentralTemplate(globalManager('adm'), { ...BASE, ownerOrgUnitUuid: t.a, principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
-        const denied = { name: 'ForbiddenError', code: 'principal_targets_need_global' };
-        await expect(updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE, name: 'Kapret' }, env)).rejects.toMatchObject(denied);
-        await expect(updateCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE, targets: [{ orgUnitUuid: t.a1 }] }, env)).rejects.toMatchObject(denied);
-        await expect(archiveCentralTemplate(mgr, tpl.id, { baseVersion: 1, changeNote: NOTE }, env)).rejects.toMatchObject(denied);
+        const mgr = bygger('mgr');
+        const tpl = await createCentralTemplate(mgr, { ...BASE, principalTargets: [{ kind: 'role', identifier: 'a' }], changeNote: NOTE }, env);
+        await expect(updateCentralTemplate(bygger('other'), tpl.id, { baseVersion: 1, changeNote: NOTE, name: 'Kapret' }, env)).rejects.toBeInstanceOf(NotFoundError);
+        await expect(archiveCentralTemplate(bygger('other'), tpl.id, { baseVersion: 1, changeNote: NOTE }, env)).rejects.toBeInstanceOf(NotFoundError);
         expect((await c.query('SELECT name, status, current_version FROM central_templates')).rows[0]).toEqual({ name: BASE.name, status: 'active', current_version: 1 });
-        await archiveCentralTemplate(globalManager('adm'), tpl.id, { baseVersion: 1, changeNote: NOTE }, env);
-        await expect(restoreCentralTemplate(mgr, tpl.id, { baseVersion: 2, changeNote: NOTE }, env)).rejects.toMatchObject(denied);
-        expect((await c.query('SELECT status, current_version FROM central_templates')).rows[0]).toEqual({ status: 'archived', current_version: 2 });
-        expect((await getManageableTemplate(mgr, tpl.id, env)).principalTargets).toHaveLength(1);
-        expect((await listVersions(mgr, tpl.id, env)).map((v) => v.version)).toEqual([2, 1]);
-        // Without role targets the same scoped manager works as before.
-        const plain = await createCentralTemplate(mgr, { ...BASE, name: 'Egen', ownerOrgUnitUuid: t.a, changeNote: NOTE }, env);
-        await expect(updateCentralTemplate(mgr, plain.id, { baseVersion: 1, changeNote: NOTE, name: 'Egen 2' }, env)).resolves.toMatchObject({ name: 'Egen 2' });
+        await archiveCentralTemplate(admin('adm'), tpl.id, { baseVersion: 1, changeNote: NOTE }, env);
+        await expect(restoreCentralTemplate(mgr, tpl.id, { baseVersion: 2, changeNote: NOTE }, env)).resolves.toMatchObject({ status: 'active', currentVersion: 3 });
         await close();
       }));
 
@@ -943,7 +873,7 @@ describe.skipIf(!hasPg)('central templates (real Postgres)', () => {
         await has('u4', 'a'); // no directory user at all
         expect((await c.query('SELECT count(*)::int AS n FROM directory_users')).rows[0].n).toBe(3);
 
-        const adm = globalManager('adm');
+        const adm = admin('adm');
         const cat = (await listCatalogue(env)).entries;
         expect(cat.find((e) => e.identifier === 'a')!.holders).toBe(1);
         expect(cat.find((e) => e.identifier === 'b')!.holders).toBe(0);

@@ -11,7 +11,6 @@
 import { ADMIN_LOCK_NAME, ADMIN_ROLE, USABLE_LOCAL_ADMIN_SQL, activeSql } from './admin-sql';
 import { ConflictError, NotFoundError, ReadOnlyModeError, ValidationError } from './access-errors';
 import { isRoleKey } from './capabilities';
-import { roleScopeRule } from './role-rules';
 import { accessSource, localAdminEnabled } from './config';
 import { defaultRunner, type SqlQueryable, type SqlRunner } from './pg-runner';
 import { isUuid } from '@/lib/ids';
@@ -108,20 +107,14 @@ interface GrantShape {
 }
 
 /**
- * Role/scope/date rules, derived from the role matrix (capabilities.ts) via
- * roleScopeRule so they cannot drift from it: a role whose `scope` is 'none' or
- * 'global-only' takes no org unit; an 'optional' one may have one.
+ * Role/date rules. No role takes an org unit (`scope` in capabilities.ts is 'none' or
+ * 'global-only' for every role), so any unit is refused.
  */
 export function validateGrantShape(input: GrantShape): RoleKey {
   const { roleKey, scopeOrgUnitUuid, startDate, stopDate } = input;
   if (!isRoleKey(roleKey)) throw new ValidationError('Ukendt rolle', 'unknown_role');
-
-  const rule = roleScopeRule(roleKey);
   if (scopeOrgUnitUuid !== null) {
-    if (rule === 'forbidden') {
-      throw new ValidationError('Rollen kan ikke begrænses til en organisationsenhed', 'scope_forbidden');
-    }
-    if (!isUuid(scopeOrgUnitUuid)) throw new ValidationError('Ugyldig organisationsenhed', 'invalid_scope');
+    throw new ValidationError('Rollen kan ikke begrænses til en organisationsenhed', 'scope_forbidden');
   }
 
   for (const d of [startDate, stopDate]) {
@@ -253,8 +246,8 @@ async function ensureDirectoryUsers(
 interface GrantRoleInput {
   appUserId: string;
   roleKey: string;
+  /** Always refused when set: no role is tied to an org unit (validateGrantShape). */
   scopeOrgUnitUuid?: string | null;
-  includeDescendants?: boolean;
   startDate?: Date | null;
   stopDate?: Date | null;
   actorUserId: string;
@@ -262,23 +255,18 @@ interface GrantRoleInput {
 
 export async function grantRole(input: GrantRoleInput, runner: SqlRunner = defaultRunner()): Promise<AssignmentView> {
   assertLocalMode();
-  const scope = input.scopeOrgUnitUuid ? input.scopeOrgUnitUuid.toLowerCase() : null;
   const startDate = input.startDate ?? null;
   const stopDate = input.stopDate ?? null;
-  const roleKey = validateGrantShape({ roleKey: input.roleKey, scopeOrgUnitUuid: scope, startDate, stopDate });
-  // Without a scope the flag has no meaning; store the column default.
-  const includeDescendants = scope === null ? true : (input.includeDescendants ?? true);
+  const roleKey = validateGrantShape({
+    roleKey: input.roleKey,
+    scopeOrgUnitUuid: input.scopeOrgUnitUuid ?? null,
+    startDate,
+    stopDate,
+  });
 
   return inTx(runner, async (tx) => {
     const user = await tx.query('SELECT 1 FROM public.users WHERE id = $1', [input.appUserId]);
     if (user.rows.length === 0) throw new NotFoundError('Brugeren findes ikke', 'user_not_found');
-
-    if (scope !== null) {
-      // FOR SHARE: a concurrent deleteOrgUnit (FOR UPDATE) waits for us, so it
-      // cannot cascade-delete the assignment we are about to insert.
-      const unit = await tx.query('SELECT 1 FROM public.org_units WHERE uuid = $1::uuid FOR SHARE', [scope]);
-      if (unit.rows.length === 0) throw new NotFoundError('Organisationsenheden findes ikke', 'org_unit_not_found');
-    }
 
     const dir = (await ensureDirectoryUsers(tx, [input.appUserId])).get(input.appUserId);
     if (!dir) throw new NotFoundError('Brugeren findes ikke', 'user_not_found');
@@ -287,11 +275,11 @@ export async function grantRole(input: GrantRoleInput, runner: SqlRunner = defau
     // DO NOTHING covers the NULLS NOT DISTINCT key, so a repeated global grant conflicts too.
     const inserted = await tx.query<{ id: string }>(
       `INSERT INTO public.role_assignments
-         (directory_user_uuid, role_key, scope_org_unit_uuid, include_descendants, source, start_date, stop_date, created_by_user_id)
-       VALUES ($1::uuid, $2, $3::uuid, $4, 'local', $5, $6, $7)
+         (directory_user_uuid, role_key, source, start_date, stop_date, created_by_user_id)
+       VALUES ($1::uuid, $2, 'local', $3, $4, $5)
        ON CONFLICT DO NOTHING
        RETURNING id`,
-      [dir.uuid, roleKey, scope, includeDescendants, startDate, stopDate, input.actorUserId],
+      [dir.uuid, roleKey, startDate, stopDate, input.actorUserId],
     );
     const id = inserted.rows[0]?.id;
     if (!id) throw new ConflictError('Rollen er allerede tildelt', 'already_assigned');
@@ -527,18 +515,6 @@ export async function deleteOrgUnit(
     );
     if (assigned.rows.length > 0) {
       throw new ConflictError('Enheden har rolletildelinger. Fjern dem først.', 'has_role_assignments');
-    }
-
-    // The owner FK is RESTRICT (archived templates keep their history), so say why instead of surfacing a raw FK error.
-    const owns = await tx.query(
-      'SELECT 1 FROM public.central_templates WHERE owner_org_unit_uuid = $1::uuid LIMIT 1',
-      [id],
-    );
-    if (owns.rows.length > 0) {
-      throw new ConflictError(
-        'Enheden ejer centrale skabeloner og kan ikke slettes. Skabeloner kan arkiveres, men ikke slettes.',
-        'has_central_templates',
-      );
     }
 
     // The targets FK CASCADES: deleting the unit would silently drop it from every central template that is

@@ -33,12 +33,12 @@ Menu names differ by version and language; confirm them in your installation.
    | Identifier | Name | Org-unit data constraint |
    |---|---|---|
    | `bruger` | Bruger | no |
-   | `bygger` | Bygger | yes (needed unless listed in `ROLLEKATALOG_GLOBAL_ROLES`: without a unit the role grants nothing, section 4) |
-   | `admin` | Admin | no (cannot be scoped to a unit; constraint values are ignored; log access, user and role administration and sync are Admin only) |
+   | `bygger` | Bygger | no (not tied to units; constraint values are ignored, section 4) |
+   | `admin` | Admin | no (constraint values are ignored; all central templates, log access, user and role administration and sync are Admin only) |
 
    The identifiers are the RoleKeys `admin`, `bygger` and `bruger`. The exact identifiers OS2ai uses for its Admin / Bygger / Bruger roles are **unverified**: if your IT system uses other identifiers, create the system roles with the identifiers above (or the assignments are counted as `assignmentsIgnoredRole`).
 
-   For a role that takes a constraint, use the organisation-unit constraint type (internal `http://digital-identity.dk/constraints/orgunit/1`, "Enhed", or KOMBIT `.../orgenhed/1`). Other constraint types, KLE for instance, are never used as scope, and they are dropped when the answer is parsed (only the fact that such a constraint existed is kept). An assignment that carries a non-empty constraint of another type and no usable org-unit scope gets **no row**, even for a role in `ROLLEKATALOG_GLOBAL_ROLES` and for `admin`: it is restricted in a way the app cannot read, so it is never widened to global (counted as `assignmentsWithoutScope`). Only an assignment with no constraint at all can become global.
+   No role needs a data constraint. Constraint types other than the two org-unit types (internal `http://digital-identity.dk/constraints/orgunit/1`, "Enhed", or KOMBIT `.../orgenhed/1`), KLE for instance, are dropped when the answer is parsed (only the fact that such a constraint existed is kept); an `admin` assignment that carries one and no org-unit constraint gets **no row** (section 4).
 2. **Build the access.** Create a *jobfunktionsrolle* (UserRole) from each system role, optionally group them in *rollebuketter* (RoleGroups), and assign them to persons, titles or org units. Choose the org unit as the data constraint (*dataafgrænsning*) for `bygger`. Assign `bruger` too if you will use `REQUIRE_ROLE_TO_LOGIN=true`.
 
    **Every person needs at least one position (*stilling*) in an org unit in Rollekatalog to be mirrored at all.** `organisation/v3` lists only users that have a position, so a person without one is absent from the answer, is never mirrored and cannot log in with a role. This applies to administrators too, and in particular to **external or consultant administrators**, who often have no position: give them one. **Losing the last position disables the person at the next sync and ends their sessions** (section 5), administrators included. Check this before you remove or move a position of an administrator.
@@ -86,17 +86,15 @@ Verify with a known user before go-live (also one who signs in through SAML, if 
 
 **Several Rollekatalog domains.** Role assignments are matched to users on `extUuid` first. The `userId` fallback (for entries without an `extUuid`, only when the `userId` is unique in the mirror) is only safe when `ROLLEKATALOG_DOMAIN` selects **one** domain: userIds are only unique within a domain, so on an installation that serves several domains through one mirror a shared `userId` could attach an assignment to the wrong person. In that case do not rely on the fallback; make sure `extUuid` is set on the assignments, or run one domain per app instance.
 
-## 4. Scope: who may manage what
+## 4. Constraints on roles
 
-Rollekatalog gives each assignment an optional constraint. **The scope of `bygger` is the org-unit constraint and nothing else**: the units named in the constraint of the assignment. There are no manager- or substitute-based strategies.
+No role in the app is tied to org units: a Bygger manages the central templates they created, whatever unit Rollekatalog names, and shares them with any unit (`templates.md`). The sync therefore **ignores the org-unit constraint** on every role and writes one unscoped row per person and role.
 
-- **Descendants.** A scope unit also covers its sub-units by default (`ROLLEKATALOG_SCOPE_DESCENDANTS=true`); `false` means only that unit.
-- **Unknown units are ignored.** Rollekatalog's organisation export leaves out inactive and excluded units. If all named units are unknown, the assignment gets no scope and is **not** widened to global.
-- **Unrecognised constraint types fail closed.** An assignment with a non-empty constraint of a type that is not one of the two org-unit types (KLE, or a type a newer Rollekatalog adds) and no known org-unit scope gets no row, even for a global role: it is restricted in a way the app cannot read. Counted in `assignmentsWithoutScope`.
-- **Duplicates are unioned.** Several assignments of one role to one person give the union of their units; an unconstrained duplicate never widens a scoped role. If **any** entry for that person and role fails validation and is dropped (counted under `assignmentRowsSkippedInvalid`), the **whole group** for that person and role is dropped, so a dropped scoped entry can never leave an unconstrained sibling that would widen to global.
-- `bruger` needs no scope. `admin` can never be scoped.
+- `bruger` and `bygger` are granted whatever constraint the assignment carries.
+- `admin` is granted only when it is listed in `ROLLEKATALOG_GLOBAL_ROLES` (default `admin`); `none` removes every Rollekatalog administrator.
+- **Unreadable constraints fail closed for `admin`.** An `admin` assignment with a non-empty constraint of a type that is not one of the two org-unit types (KLE, or a type a newer Rollekatalog adds) and no org-unit constraint gets no row: it is restricted in a way the app cannot read. Counted in `assignmentsWithoutScope` ("Roller uden område (ikke tildelt)").
+- If **any** entry for a person and role fails validation and is dropped (counted under `assignmentRowsSkippedInvalid`), the **whole group** for that person and role is dropped.
 
-**`ROLLEKATALOG_GLOBAL_ROLES` and why it exists.** Rollekatalog **silently drops a constraint that resolves to empty** (for example a deleted unit): the assignment then looks unconstrained, which a naive reading would turn into "all units". The app never reads "no scope" as "everywhere". When an assignment has no usable org-unit scope **and no constraint at all**, a role listed in `ROLLEKATALOG_GLOBAL_ROLES` becomes **global** (default: `admin` only); every other role gets **no row** (fail closed) and the sync counts it as `assignmentsWithoutScope` ("Roller uden område (ikke tildelt)"). For an organisation-wide `bygger` add it (`ROLLEKATALOG_GLOBAL_ROLES=admin,bygger`). `none` allows no role, which also makes `admin` fail closed; a non-empty value without a valid role falls back to the default.
 
 ## 5. Staleness, removal and guards
 
@@ -156,7 +154,7 @@ Every variable, its default and its meaning is in `.env.example` (section "Rolle
 - `ROLLEKATALOG_TIMEOUT_MS` accepts 1000 to 300000; a larger value is rejected and the default (2 minutes) used, because the HTTP client ends a wait for response headers after 300 s anyway. Both calls are bulk downloads.
 - `ROLLEKATALOG_MAX_RESPONSE_BYTES` (default 64 MiB, a guess): a larger response is `too_large`.
 - `ROLLEKATALOG_ITSYSTEM_ID` accepts letters, digits, `_` and `-`; `ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT` is 0 to 100.
-- `ROLLEKATALOG_SCOPE_DESCENDANTS` and `ROLLEKATALOG_GLOBAL_ROLES`: section 4. `ROLE_STALE_MAX_SECONDS`: section 5. `ROLLEKATALOG_ROLES_PATH` / `ROLLEKATALOG_ROLEGROUPS_PATH`: section 12 (a path under `/api/read/`, or `none`).
+- `ROLLEKATALOG_GLOBAL_ROLES`: section 4. `ROLE_STALE_MAX_SECONDS`: section 5. `ROLLEKATALOG_ROLES_PATH` / `ROLLEKATALOG_ROLEGROUPS_PATH`: section 12 (a path under `/api/read/`, or `none`).
 - `DIRECTORY_USERID_TRANSFORM=strip-upn-domain` needs `DIRECTORY_USERID_DOMAIN`, otherwise nothing matches.
 - `INTERNAL_CRON_SECRET` is shared by all the `/api/internal/*` cron routes (`DEPLOY.md`).
 
@@ -193,7 +191,7 @@ The codes appear in the sync responses, `sync_runs.error_code`, and the admin pa
 | `unexpected` | anything else | app log |
 
 Symptoms:
-- **A user has no elevated role although Rollekatalog shows one.** In the last run's counts look at `assignmentsWithoutScope` (no known org unit in the constraint, role not in `ROLLEKATALOG_GLOBAL_ROLES`), `assignmentsIgnoredRole` (identifier is not one of our three) and `assignmentsSkippedUnknownUser` (the entry matches no user in the organisation answer: assignments are matched on `extUuid`, or on `userId` only when the entry has no `extUuid` and the userId is unique). Also check that the last successful sync is younger than `ROLE_STALE_MAX_SECONDS`.
+- **A user has no elevated role although Rollekatalog shows one.** In the last run's counts look at `assignmentsWithoutScope` (an `admin` assignment while `admin` is not in `ROLLEKATALOG_GLOBAL_ROLES`, or one with an unreadable constraint), `assignmentsIgnoredRole` (identifier is not one of our three) and `assignmentsSkippedUnknownUser` (the entry matches no user in the organisation answer: assignments are matched on `extUuid`, or on `userId` only when the entry has no `extUuid` and the userId is unique). Also check that the last successful sync is younger than `ROLE_STALE_MAX_SECONDS`.
 - **A user is not linked.** For Microsoft logins first `MICROSOFT_TENANT_ID` (must be your one tenant id, a GUID; the log shows `microsoft_tenant_not_pinned` when it is not), then `DIRECTORY_MATCH`, the claim, `DIRECTORY_USERID_TRANSFORM` and, with `strip-upn-domain`, `DIRECTORY_USERID_DOMAIN` (section 3); the person must exist in the mirror (sync first).
 - **Everybody lost access.** Look at the last sync run (failing for longer than `ROLE_STALE_MAX_SECONDS`?). Temporary way out: `ACCESS_SOURCE=local` (section 7).
 
@@ -254,4 +252,4 @@ Short answer: **role and group sharing needs `ACCESS_SOURCE=claims`; in the Roll
 3. Put the role and group values that a shared prompt may be aimed at into the `catalogue` section of the file, or refresh them from Rollekatalog (section 12, optional; the identifiers must equal what the IdP sends, section 12 open question 1).
 4. Set `ACCESS_SOURCE=claims`, restart, log in with one person per role and check Administration, Brugere og roller; create a test prompt aimed at a role and check that a holder sees it and a non-holder gets the identical 404.
 
-What you give up by moving from the sync to claims: the organisation tree (units, members, "Hele organisationen" is then the only unit-like audience) and unit-scoped Bygger roles; a claim carries no unit, so a Bygger from a claim is global. Choose per installation; the two modes are not combined.
+What you give up by moving from the sync to claims: the organisation tree (units and members), so a template can then only be shared with roles and groups. Choose per installation; the two modes are not combined.

@@ -148,8 +148,6 @@ const contentShape = {
 
 export const createCentralTemplateSchema = z
   .object({
-    // Omitted or null = an organisation-wide template (global managers only).
-    ownerOrgUnitUuid: uuidSchema.nullish().transform((v) => v ?? null),
     name: contentShape.name,
     description: contentShape.description.default(''),
     prompt: contentShape.prompt,

@@ -73,28 +73,19 @@ describe('resolvePrincipal', () => {
     expect(p.source).toBe('baseline');
   });
 
-  it('resolves an assigned role with global scope', async () => {
+  it('resolves an assigned global role', async () => {
     rowsRef.rows = [row()];
     const p = await resolvePrincipal('u1');
     expect(p.roles).toEqual(['bruger', 'admin']);
     expect(p.capabilities).toContain('audit.read');
-    expect(p.scopes['template.manage']).toEqual({ global: true, roots: [] });
+    expect(p.capabilities).toContain('template.manage_all');
     expect(p.source).toBe('local');
   });
 
-  it('keeps an org-unit scope on a scoped role', async () => {
+  it('a bygger row that names an org unit (older version) still grants template.manage only', async () => {
     rowsRef.rows = [row({ roleKey: 'bygger', scopeOrgUnitUuid: OU, includeDescendants: false })];
     const p = await resolvePrincipal('u1');
-    expect(p.scopes['template.manage']).toEqual({
-      global: false,
-      roots: [{ orgUnitUuid: OU, includeDescendants: false }],
-    });
-  });
-
-  it('bygger with NULL scope is global (the superuser)', async () => {
-    rowsRef.rows = [row({ roleKey: 'bygger', scopeOrgUnitUuid: null })];
-    const p = await resolvePrincipal('u1');
-    expect(p.scopes['template.manage']).toEqual({ global: true, roots: [] });
+    expect(p.capabilities).toEqual(['template.use', 'template.manage']);
   });
 
   it('a disabled directory user yields a disabled principal without roles', async () => {
@@ -323,11 +314,11 @@ describe('resolvePrincipal in claims mode', () => {
     vi.stubEnv('REQUIRE_ROLE_TO_LOGIN', 'false');
   });
 
-  it('a fresh claims role resolves, tagged claims; global NULL scope on a role that may be global', async () => {
+  it('a fresh claims role resolves, tagged claims', async () => {
     rowsRef.rows = [row({ roleKey: 'bygger', source: 'claims', syncedAt: new Date() })];
     const p = await resolvePrincipal('u1');
     expect(p.roles).toEqual(['bruger', 'bygger']);
-    expect(p.scopes['template.manage']).toEqual({ global: true, roots: [] });
+    expect(p.capabilities).toEqual(['template.use', 'template.manage']);
     expect(p.source).toBe('claims');
   });
 

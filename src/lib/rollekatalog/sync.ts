@@ -31,7 +31,6 @@ import { createRunner, errorLabel, type SqlQueryable } from '@/lib/authz/pg-runn
 import { createRollekatalogClient, type RollekatalogClient } from './client';
 import {
   rollekatalogConfigIssue,
-  scopeDescendants,
   globalRoles,
   syncMaxRemovalPercent,
 } from './config';
@@ -625,10 +624,7 @@ export async function runSync(opts: RunSyncOptions, deps: SyncDeps = {}): Promis
 
     const client = deps.client ?? createRollekatalogClient();
     const fetched = await fetchAll(client);
-    const mirror = mapToMirror(fetched, {
-      includeDescendants: scopeDescendants(),
-      globalRoles: globalRoles(),
-    });
+    const mirror = mapToMirror(fetched, { globalRoles: globalRoles() });
     const counts = await applyMirror(env, mirror, {
       force: opts.force === true,
       maxRemovalPercent: syncMaxRemovalPercent(),

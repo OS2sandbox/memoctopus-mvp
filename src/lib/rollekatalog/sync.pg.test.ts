@@ -127,7 +127,7 @@ const ZERO: SyncCounts = {
   assignmentsRemoved: 0,
   assignmentsIgnoredRole: 1,
   assignmentsSkippedUnknownUser: 1,
-  assignmentsWithoutScope: 2,
+  assignmentsWithoutScope: 0,
   usersSkippedInvalid: 0,
   orgUnitsSkippedInvalid: 0,
   assignmentRowsSkippedInvalid: 0,
@@ -146,11 +146,11 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         orgUnitsUpserted: 5,
         orgUnitsOrphaned: 0,
         orgUnitCyclesBroken: 0,
-        assignmentsUpserted: 10,
+        assignmentsUpserted: 11,
         assignmentsRemoved: 0,
         assignmentsIgnoredRole: 1,
         assignmentsSkippedUnknownUser: 1,
-        assignmentsWithoutScope: 2,
+        assignmentsWithoutScope: 0,
         usersSkippedInvalid: 0,
         orgUnitsSkippedInvalid: 0,
         assignmentRowsSkippedInvalid: 0,
@@ -160,7 +160,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
       expect(await count(h.c, 'directory_users', "source = 'rollekatalog'")).toBe(9);
       expect(await count(h.c, 'org_units', "source = 'rollekatalog'")).toBe(5);
       expect(await count(h.c, 'org_unit_members')).toBe(12);
-      expect(await count(h.c, 'role_assignments', "source = 'rollekatalog'")).toBe(10);
+      expect(await count(h.c, 'role_assignments', "source = 'rollekatalog'")).toBe(11);
 
       const sofie = (await rows(h.c, `SELECT * FROM directory_users WHERE ext_user_id = 'sofie.s'`))[0];
       expect(sofie).toMatchObject({ uuid: U(5), ext_uuid: E(5), disabled: true, source: 'rollekatalog', app_user_id: null });
@@ -172,12 +172,13 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
       expect(byUuid[O(3)].parent_uuid).toBe(O(2));
       expect(byUuid[O(1)].parent_uuid).toBeNull();
 
+      // Byggere are not tied to org units: anne's two unit constraints become one unscoped row.
       expect(await roleRows(h.c, U(3))).toEqual([
         { role_key: 'bruger', scope_org_unit_uuid: null, include_descendants: true },
-        { role_key: 'bygger', scope_org_unit_uuid: O(3), include_descendants: true },
-        { role_key: 'bygger', scope_org_unit_uuid: O(4), include_descendants: true },
+        { role_key: 'bygger', scope_org_unit_uuid: null, include_descendants: true },
       ]);
-      expect(await roleRows(h.c, U(7))).toEqual([]); // ida: bygger without scope is not global
+      expect(await roleRows(h.c, U(7))).toEqual([{ role_key: 'bygger', scope_org_unit_uuid: null, include_descendants: true }]); // ida: no constraint
+      expect(await count(h.c, 'role_assignments', 'scope_org_unit_uuid IS NOT NULL')).toBe(0);
       expect(await roleRows(h.c, U(9))).toEqual([{ role_key: 'admin', scope_org_unit_uuid: null, include_descendants: true }]);
 
       // The run is recorded, counts only.
@@ -225,7 +226,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
           assignmentRowsSkippedInvalid: 1,
           membershipsSkippedInvalid: 0,
           assignmentsSkippedUnknownUser: 2, // the fixture's one + the skipped user's
-          assignmentsUpserted: 10,
+          assignmentsUpserted: 11,
         });
 
         expect(await count(h.c, 'directory_users', "source = 'rollekatalog'")).toBe(9);
@@ -235,7 +236,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         const child = (await rows(h.c, 'SELECT parent_uuid FROM org_units WHERE uuid = $1', [O(21)]))[0];
         expect(child.parent_uuid).toBeNull();
         // The rest is exactly the fixture result.
-        expect(await count(h.c, 'role_assignments', "source = 'rollekatalog'")).toBe(10);
+        expect(await count(h.c, 'role_assignments', "source = 'rollekatalog'")).toBe(11);
         expect(await count(h.c, 'org_unit_members')).toBe(12);
 
         // The counters are persisted in sync_runs.counts and read back; no row content is.
@@ -477,7 +478,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
       expect(r.counts.usersUpserted).toBe(1);
       const anne = (await rows(h.c, 'SELECT name, email, ext_user_id, app_user_id FROM directory_users WHERE uuid = $1', [U(3)]))[0];
       expect(anne).toEqual({ name: 'Anne Omdøbt', email: 'anne.ny@example.dk', ext_user_id: 'anne.ny', app_user_id: 'app-anne' });
-      expect((await roleRows(h.c, U(3))).length).toBe(3); // still joined (extUuid matches)
+      expect((await roleRows(h.c, U(3))).length).toBe(2); // still joined (extUuid matches)
     }));
 
   it('never touches source=local rows, and a local ext_uuid does not break the sync', () =>
@@ -676,20 +677,20 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         mock.setData({ roleAssignments: [] });
         const aborted = await h.run();
         expect(aborted).toMatchObject({ status: 'aborted', errorCode: 'removal_threshold' });
-        expect(await count(h.c, 'role_assignments')).toBe(10);
+        expect(await count(h.c, 'role_assignments')).toBe(11);
         const forced = await h.run({ force: true });
         expect(forced).toMatchObject({ status: 'success' });
-        expect(forced.counts.assignmentsRemoved).toBe(10);
+        expect(forced.counts.assignmentsRemoved).toBe(11);
         expect(await count(h.c, 'role_assignments')).toBe(0);
       }));
 
     it('removal threshold on ELEVATED assignments aborts although the total ratio is within the limit; force applies it', () =>
       withHarness(async (h) => {
         await h.run();
-        expect(await count(h.c, 'role_assignments')).toBe(10);
-        expect(await count(h.c, 'role_assignments', `role_key <> 'bruger'`)).toBe(7);
+        expect(await count(h.c, 'role_assignments')).toBe(11);
+        expect(await count(h.c, 'role_assignments', `role_key <> 'bruger'`)).toBe(8);
         const d = fixtureData();
-        // Three users lose every elevated role but keep bruger: 3/10 of all rows (not over 30 %), 3/7 of the elevated ones.
+        // Three users lose every elevated role but keep bruger: 3/11 of all rows (not over 30 %), 3/8 of the elevated ones.
         const stripped = new Set(['mette.e', 'rune.a', 'jens.t']);
         mock.setData({
           roleAssignments: (d.roleAssignments as Array<{ userId: string; assignments: Array<{ roleIdentifier: string }> }>).map((a) =>
@@ -698,19 +699,19 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
         });
         const aborted = await h.run();
         expect(aborted).toMatchObject({ status: 'aborted', errorCode: 'removal_threshold' });
-        expect(await count(h.c, 'role_assignments')).toBe(10);
+        expect(await count(h.c, 'role_assignments')).toBe(11);
         const forced = await h.run({ force: true });
         expect(forced).toMatchObject({ status: 'success' });
         expect(forced.counts.assignmentsRemoved).toBe(3);
-        expect(await count(h.c, 'role_assignments', `role_key <> 'bruger'`)).toBe(4);
+        expect(await count(h.c, 'role_assignments', `role_key <> 'bruger'`)).toBe(5);
       }));
 
     it('an assignment entry that turns invalid counts as an elevated removal (the whole role group is dropped)', () =>
       withHarness(async (h) => {
         await h.run();
         const d = fixtureData();
-        // anne.p holds two bygger rows; a broken entry for that role drops both. With
-        // mette.e and rune.a gone as well, 4 of 7 elevated rows disappear.
+        // A broken entry for anne.p's bygger role drops her whole bygger group. With
+        // mette.e and rune.a gone as well, 3 of 8 elevated rows disappear.
         mock.setData({
           roleAssignments: (d.roleAssignments as Array<{ userId: string; assignments: unknown[] }>).map((a) => {
             if (a.userId === 'anne.p') return { ...a, assignments: [...a.assignments, { roleIdentifier: 'bygger', roleConstraintValues: 'broken' }] };
@@ -719,7 +720,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
           }),
         });
         expect(await h.run()).toMatchObject({ status: 'aborted', errorCode: 'removal_threshold' });
-        expect(await count(h.c, 'role_assignments')).toBe(10);
+        expect(await count(h.c, 'role_assignments')).toBe(11);
       }));
 
     it('stays below the threshold: one of nine users and one assignment go through without force', () =>
@@ -730,7 +731,7 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
           users: d.users.filter((u) => u.userId !== 'rune.a'),
           roleAssignments: (d.roleAssignments as Array<{ userId: string }>).filter((a) => a.userId !== 'rune.a'),
         });
-        expect((await h.run()).status).toBe('success'); // 1/9 users, 1/10 assignments, both under 30 %
+        expect((await h.run()).status).toBe('success'); // 1/9 users, 1/11 assignments, both under 30 %
       }));
 
     it('ROLLEKATALOG_SYNC_MAX_REMOVAL_PERCENT is honoured', () =>
@@ -825,23 +826,10 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
   });
 
   describe('assignments', () => {
-    it('follows scope changes in place and honours ROLLEKATALOG_SCOPE_DESCENDANTS', () =>
+    it('a changed or added constraint changes nothing: byggere are not tied to org units', () =>
       withHarness(async (h) => {
         await h.run();
-        const idBefore = (await rows(h.c, `SELECT id FROM role_assignments WHERE directory_user_uuid = $1 AND role_key = 'bruger'`, [U(3)]))[0].id;
-
-        vi.stubEnv('ROLLEKATALOG_SCOPE_DESCENDANTS', 'false');
-        const flat = await h.run({ force: true });
-        expect(flat.counts.assignmentsUpserted).toBe(5); // every scoped row flips: anne 2, jens, peter, lars
-        expect(flat.counts.assignmentsRemoved).toBe(0);
-        expect(await count(h.c, 'role_assignments', 'scope_org_unit_uuid IS NOT NULL AND include_descendants = true')).toBe(0);
-        // Unchanged rows keep their identity.
-        expect((await rows(h.c, `SELECT id FROM role_assignments WHERE directory_user_uuid = $1 AND role_key = 'bruger'`, [U(3)]))[0].id).toBe(idBefore);
-      }));
-
-    it('a changed constraint replaces the scope row', () =>
-      withHarness(async (h) => {
-        await h.run();
+        const before = await snapshot(h.c);
         const d = fixtureData();
         mock.setData({
           roleAssignments: (d.roleAssignments as Array<{ userId: string; assignments: Array<{ roleIdentifier: string; roleConstraintValues: unknown[] }> }>).map((a) =>
@@ -856,16 +844,25 @@ describe.skipIf(!hasPg)('Rollekatalog sync (real Postgres)', () => {
           ),
         });
         const r = await h.run();
-        expect(r.counts.assignmentsUpserted).toBe(1);
-        expect(r.counts.assignmentsRemoved).toBe(1);
-        expect(await roleRows(h.c, U(2))).toEqual([{ role_key: 'bygger', scope_org_unit_uuid: O(4), include_descendants: true }]);
+        expect(r.counts.assignmentsUpserted).toBe(0);
+        expect(r.counts.assignmentsRemoved).toBe(0);
+        expect(await roleRows(h.c, U(2))).toEqual([{ role_key: 'bygger', scope_org_unit_uuid: null, include_descendants: true }]);
+        expect(await snapshot(h.c)).toEqual(before);
       }));
 
-    it('ROLLEKATALOG_GLOBAL_ROLES can make an unscoped bygger global', () =>
+    it('a bygger without a constraint is granted without ROLLEKATALOG_GLOBAL_ROLES', () =>
       withHarness(async (h) => {
-        vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'admin,bygger');
+        vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'admin');
         await h.run();
         expect(await roleRows(h.c, U(7))).toEqual([{ role_key: 'bygger', scope_org_unit_uuid: null, include_descendants: true }]);
+      }));
+
+    it('ROLLEKATALOG_GLOBAL_ROLES=none leaves the administrators without a row', () =>
+      withHarness(async (h) => {
+        vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'none');
+        const r = await h.run();
+        expect(r.counts.assignmentsWithoutScope).toBe(2);
+        expect(await roleRows(h.c, U(9))).toEqual([]);
       }));
   });
 

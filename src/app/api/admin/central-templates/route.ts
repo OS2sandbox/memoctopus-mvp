@@ -14,8 +14,8 @@ function queryObject(req: NextRequest): Record<string, string> {
   return out;
 }
 
-// The service only returns templates whose owner unit is inside the caller's
-// template.manage scope; another manager's templates are never listed.
+// The service only returns the caller's own templates (all of them for an
+// administrator); another bygger's templates are never listed.
 export const GET = withAuthz('admin/central-templates GET', 'template.manage', async (req, { principal }) => {
   const q = parseWith(querySchema, queryObject(req));
   if (!q.ok) return q.response;

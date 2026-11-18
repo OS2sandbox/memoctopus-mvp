@@ -20,7 +20,6 @@ const item = (over: Partial<CentralTemplateListItem>): CentralTemplateListItem =
   id: A,
   name: 'Bestyrelse',
   description: 'Standard referat',
-  ownerOrgUnitUuid: ROOT,
   status: 'active',
   currentVersion: 3,
   targets: [
@@ -37,13 +36,12 @@ const item = (over: Partial<CentralTemplateListItem>): CentralTemplateListItem =
 
 const ACTIVE = [
   item({}),
-  item({ id: B, name: 'Tom skabelon', description: '', targets: [{ orgUnitUuid: CHILD, includeDescendants: false }], ownerOrgUnitUuid: CHILD }),
+  item({ id: B, name: 'Tom skabelon', description: '', targets: [{ orgUnitUuid: CHILD, includeDescendants: false }] }),
 ];
 const ARCHIVED = [item({ id: B, name: 'Gammel', status: 'archived', currentVersion: 7 })];
 
 const DETAIL: CentralTemplateAdmin = {
   id: A,
-  ownerOrgUnitUuid: ROOT,
   name: 'Bestyrelse',
   description: 'Standard referat',
   prompt: 'Hemmelig prompt',
@@ -93,12 +91,12 @@ function setup(me = ADMIN_ME, extra: Parameters<typeof installFetch>[0] = {}) {
 }
 
 describe('CentralTemplatesAdmin — list', () => {
-  it('shows name, owner unit, status, version, availability count and update time', async () => {
+  it('shows name, status, version, availability and update time, and no Ejerenhed column', async () => {
     setup();
     renderWithToasts(<CentralTemplatesAdmin />);
     const row = (await screen.findByText('Bestyrelse')).closest('tr')!;
     expect(within(row).getByText('Standard referat')).toBeInTheDocument();
-    expect(within(row).getByText('Kommune')).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Ejerenhed' })).toBeNull();
     expect(within(row).getByText('Aktiv')).toBeInTheDocument();
     expect(within(row).getByText('3')).toBeInTheDocument();
     // The audience is named, not counted.
@@ -107,6 +105,17 @@ describe('CentralTemplatesAdmin — list', () => {
     expect(screen.getByRole('columnheader', { name: 'Til rådighed for' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Modtagere' })).toBeNull();
     expect(within(row).getByText(formatTime('2026-10-02T10:00:00.000Z'))).toBeInTheDocument();
+  });
+
+  it('tells an administrator they see every template and a bygger that they see their own', async () => {
+    setup();
+    const first = renderWithToasts(<CentralTemplatesAdmin />);
+    expect(await screen.findByText(/Som administrator ser og ændrer du alle centrale skabeloner/)).toBeInTheDocument();
+    first.unmount();
+    vi.unstubAllGlobals();
+    setup(READER_ME);
+    renderWithToasts(<CentralTemplatesAdmin />);
+    expect(await screen.findByText(/Du ser og ændrer de skabeloner, du selv har oprettet/)).toBeInTheDocument();
   });
 
   it('shows who created and who last edited each template, with the time of the last edit', async () => {
@@ -246,7 +255,8 @@ describe('CentralTemplatesAdmin — gating and actions', () => {
     renderWithToasts(<CentralTemplatesAdmin />);
     await userEvent.click(await screen.findByRole('button', { name: 'Ny central skabelon' }));
     expect(await screen.findByRole('dialog', { name: 'Ny central skabelon' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Ejerenhed')).toHaveValue('');
+    expect(screen.getByLabelText('Navn')).toHaveValue('');
+    expect(screen.queryByLabelText('Ejerenhed')).toBeNull();
   });
 
   it('shows the error when the template cannot be loaded for editing', async () => {
@@ -350,7 +360,7 @@ describe('CentralTemplatesAdmin — audience by role, group and unit', () => {
 
   it('names the roles, groups and units a template is available to', async () => {
     const row = await rowOf([
-      item({ ownerOrgUnitUuid: null, targets: [{ orgUnitUuid: CHILD, includeDescendants: true }], principalTargets: [P('role', 'a', 'Sagsbehandler'), P('group', 'g', 'Socialforvaltningen')] }),
+      item({ targets: [{ orgUnitUuid: CHILD, includeDescendants: true }], principalTargets: [P('role', 'a', 'Sagsbehandler'), P('group', 'g', 'Socialforvaltningen')] }),
     ]);
     const audience = within(row).getByRole('list', { name: 'Til rådighed for, Bestyrelse' });
     expect(within(audience).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
@@ -358,12 +368,6 @@ describe('CentralTemplatesAdmin — audience by role, group and unit', () => {
       'Gruppe: Socialforvaltningen',
       'Enhed: Børn (inkl. underenheder)',
     ]);
-  });
-
-  it('shows an org-wide template as "Hele organisationen", not as a missing unit', async () => {
-    const row = await rowOf([item({ ownerOrgUnitUuid: null })]);
-    expect(within(row).getByText('Hele organisationen')).toBeInTheDocument();
-    expect(within(row).queryByText('Ukendt enhed')).toBeNull();
   });
 
   it('truncates a long audience with a "+N flere" disclosure (keyboard and touch), never hiding a flagged one', async () => {
@@ -502,20 +506,20 @@ describe('CentralTemplatesAdmin — role catalogue refresh', () => {
     expect(screen.queryByRole('dialog', { name: 'Gennemtving opdateringen?' })).toBeNull();
   });
 
-  it('outside claims mode the picker is explained instead of offered, but a global manager still gets org-wide templates', async () => {
-    setup(ADMIN_ME, { 'GET /api/admin/central-templates/roles': () => json({ ...ROLES, canTarget: false, isGlobalManager: true, reason: 'needs_claims' }) });
+  it('outside claims mode the picker is explained instead of offered, and the units stay available', async () => {
+    setup(ADMIN_ME, { 'GET /api/admin/central-templates/roles': () => json({ ...ROLES, canTarget: false, reason: 'needs_claims' }) });
     renderWithToasts(<CentralTemplatesAdmin />);
     await userEvent.click(await screen.findByRole('button', { name: 'Ny central skabelon' }));
     await screen.findByRole('dialog', { name: 'Ny central skabelon' });
     expect(screen.queryByLabelText('Søg i roller og grupper')).toBeNull();
     expect(screen.getByText(/kun vælges, når rollerne kommer fra brugernes login/)).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Hele organisationen (ingen ejerenhed)' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Til rådighed for: Kommune')).toBeInTheDocument();
   });
 
   it('in Rollekatalog mode the screen and the locked picker say that units are the route and what the municipality must do for roles', async () => {
     setup(ADMIN_ME, {
       'GET /api/admin/central-templates/roles': () =>
-        json({ ...ROLES, canTarget: false, isGlobalManager: true, reason: 'needs_claims', source: 'rollekatalog' }),
+        json({ ...ROLES, canTarget: false, reason: 'needs_claims', source: 'rollekatalog' }),
     });
     renderWithToasts(<CentralTemplatesAdmin />);
     expect(await screen.findByText(/Her deles skabeloner med enheder\. Deling efter rolle eller gruppe er først muligt/)).toBeInTheDocument();
@@ -525,21 +529,20 @@ describe('CentralTemplatesAdmin — role catalogue refresh', () => {
     expect(screen.getByText(/identitetsudbyder \(login\) sende rollerne med/)).toBeInTheDocument();
   });
 
-  it('passes the catalogue and the global-manager flag on to the editor, so a global manager can pick roles', async () => {
+  it('passes the catalogue and canTarget on to the editor, so roles can be picked in claims mode', async () => {
     setup();
     renderWithToasts(<CentralTemplatesAdmin />);
     await userEvent.click(await screen.findByRole('button', { name: 'Ny central skabelon' }));
     await screen.findByRole('dialog', { name: 'Ny central skabelon' });
     expect(screen.getByLabelText('Til rådighed for rolle: Sagsbehandler')).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Hele organisationen (ingen ejerenhed)' })).toBeInTheDocument();
   });
 
-  it('a scoped manager gets no role picker and must pick an owner', async () => {
-    setup(READER_ME, { 'GET /api/admin/central-templates/roles': () => json({ ...ROLES, canTarget: false }) });
+  it('a bygger is a full manager of their own templates: same editor, any unit and the roles', async () => {
+    setup(READER_ME);
     renderWithToasts(<CentralTemplatesAdmin />);
     await userEvent.click(await screen.findByRole('button', { name: 'Ny central skabelon' }));
     await screen.findByRole('dialog', { name: 'Ny central skabelon' });
-    expect(screen.queryByLabelText('Søg i roller og grupper')).toBeNull();
-    expect(screen.queryByRole('option', { name: 'Hele organisationen (ingen ejerenhed)' })).toBeNull();
+    expect(screen.getByLabelText('Til rådighed for rolle: Sagsbehandler')).toBeInTheDocument();
+    expect(screen.getByLabelText('Til rådighed for: Kommune')).toBeInTheDocument();
   });
 });

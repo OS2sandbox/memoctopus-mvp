@@ -74,13 +74,9 @@ describe('listCentralForUser', () => {
     // Cycle safety: UNION (not UNION ALL) plus a depth cap.
     expect(sql).toMatch(/\bUNION\b(?!\s+ALL)/);
     expect(sql).toMatch(/depth < \$2::int/);
-    // Owner-subtree re-check at read time: an upward walk from each candidate target to the owner unit.
-    expect(sql).toMatch(/owner_org_unit_uuid/);
-    expect(sql).toMatch(/walk\(template_id, target_uuid, owner_uuid, cur_uuid, depth\)/);
-    expect(sql).toMatch(/w\.cur_uuid = w\.owner_uuid/);
-    expect(sql).toMatch(/w\.depth < \$2::int/);
-    // The walk starts only from targets the user matches, in the same single statement.
-    expect(sql).toMatch(/cand\(template_id, target_uuid, owner_uuid\)/);
+    // A template has no owner unit: a target counts as it is, with no walk to an owner.
+    expect(sql).not.toMatch(/owner/);
+    expect(sql).toMatch(/cand\(template_id\)/);
     expect(sql).not.toMatch(/ct\.id = \$4/);
   });
 
@@ -90,15 +86,13 @@ describe('listCentralForUser', () => {
     const [sql, params] = query.mock.calls[0];
     expect(params).toEqual(['user-1', MAX_ORG_DEPTH, 28800]);
     // The branches are alternatives (OR): a template reaches the user through either.
-    expect(sql).toMatch(/w\.cur_uuid = w\.owner_uuid\)\s+OR ct\.id IN \(SELECT c\.template_id FROM cand c WHERE c\.owner_uuid IS NULL\)\s+OR ct\.id IN \(/);
+    expect(sql).toMatch(/ct\.id IN \(SELECT template_id FROM cand\)\s+OR ct\.id IN \(/);
     expect(sql).toMatch(/ur\.user_id = \$1/);
     expect(sql).toMatch(/ur\.seen_at > now\(\) - make_interval\(secs => \$3::int\)/);
     expect(sql).toMatch(/er\.active/);
     expect(sql).toMatch(/d\.app_user_id = \$1 AND d\.disabled = false/);
     // The branch is switched off by a NULL freshness, not by different SQL.
     expect(sql).toMatch(/\$3::int IS NOT NULL/);
-    // Org-wide templates (no owner) keep their unit targets without the owner walk.
-    expect(sql).toMatch(/c\.owner_uuid IS NULL/);
   });
 
   it('the role/group branch follows ACCESS_SOURCE: on (with ROLE_CLAIMS_MAX_SECONDS) in claims mode, off otherwise', async () => {
@@ -175,9 +169,8 @@ describe('resolveCentralTemplate', () => {
     const [sql, params] = query.mock.calls[0];
     expect(params).toEqual(['user-1', MAX_ORG_DEPTH, null, ID]);
     expect(sql).toContain('ct.id = $4::uuid');
-    // The id filter is pushed into the candidate step so only this template's targets are walked.
+    // The id filter is pushed into the candidate step so only this template's targets are matched.
     expect(sql).toMatch(/ct\.status = 'active' AND ct\.id = \$4::uuid/);
-    expect(sql).toMatch(/w\.cur_uuid = w\.owner_uuid/);
     expect(sql).toMatch(/d\.disabled = false/);
     expect(sql).toMatch(/ct\.status = 'active'/);
   });

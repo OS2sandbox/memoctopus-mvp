@@ -20,7 +20,6 @@ const UNITS: CentralScopeOrgUnit[] = [
 
 const TEMPLATE: CentralTemplateAdmin = {
   id: ID,
-  ownerOrgUnitUuid: ROOT,
   name: 'Bestyrelse',
   description: 'Standard',
   prompt: 'Linje A\nLinje B',
@@ -68,9 +67,6 @@ describe('CentralTemplateEditor — create', () => {
     setup(null);
     const save = saveButton('Opret skabelon');
     expect(save).toBeDisabled();
-    expect(screen.getByText('Vælg en ejerenhed')).toBeInTheDocument();
-
-    await userEvent.selectOptions(screen.getByLabelText('Ejerenhed'), ROOT);
     expect(screen.getByText('Angiv et navn')).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText('Navn'), 'Ny skabelon');
     expect(screen.getByText('Angiv en prompt')).toBeInTheDocument();
@@ -97,7 +93,6 @@ describe('CentralTemplateEditor — create', () => {
     const { mock, onSaved, onOpenChange } = setup(null, {
       'POST /api/admin/central-templates': () => json({ template: TEMPLATE }, 201),
     });
-    await userEvent.selectOptions(screen.getByLabelText('Ejerenhed'), ROOT);
     await userEvent.type(screen.getByLabelText('Navn'), 'Ny skabelon');
     await userEvent.type(screen.getByLabelText('Prompt'), 'Skriv kort');
     await userEvent.click(screen.getByLabelText('Til rådighed for: Børn'));
@@ -105,7 +100,6 @@ describe('CentralTemplateEditor — create', () => {
     await userEvent.click(saveButton('Opret skabelon'));
 
     expect(body(mock, 'POST', '/api/admin/central-templates')).toEqual({
-      ownerOrgUnitUuid: ROOT,
       name: 'Ny skabelon',
       description: '',
       prompt: 'Skriv kort',
@@ -125,46 +119,48 @@ describe('CentralTemplateEditor — create', () => {
 
   it('warns about zero recipients and keeps both user permissions off by default', () => {
     setup(null);
-    expect(screen.queryByText(/ikke til rådighed for nogen/)).toBeNull(); // only once an owner is chosen
+    expect(screen.getByRole('status')).toHaveTextContent('Skabelonen er ikke til rådighed for nogen');
     expect(screen.getByRole('switch', { name: /egen instruktion/ })).not.toBeChecked();
     expect(screen.getByRole('switch', { name: /slå kategorier til og fra/ })).not.toBeChecked();
     expect(screen.getByText(/Slået fra: prompten bruges uændret/)).toBeInTheDocument();
     expect(screen.getByText(/Slået fra: kategorierne ovenfor er faste/)).toBeInTheDocument();
   });
 
-  it('warns that nobody has the template once an owner is chosen, and offers only that subtree', async () => {
+  it('has no Ejerenhed and offers every unit of the organisation as audience', () => {
     setup(null);
-    await userEvent.selectOptions(screen.getByLabelText('Ejerenhed'), CHILD);
-    expect(screen.getByRole('status')).toHaveTextContent('Skabelonen er ikke til rådighed for nogen');
-    expect(screen.getByLabelText('Til rådighed for: Børn')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Til rådighed for: Kommune')).toBeNull();
-    expect(screen.queryByLabelText('Til rådighed for: Andet')).toBeNull();
+    expect(screen.queryByLabelText('Ejerenhed')).toBeNull();
+    expect(screen.queryByText(/ejerenhed/i)).toBeNull();
+    for (const name of ['Kommune', 'Børn', 'Andet']) {
+      expect(screen.getByLabelText(`Til rådighed for: ${name}`)).toBeInTheDocument();
+    }
   });
 
-  it('drops targets that fall outside the subtree when the owner changes', async () => {
+  it('sends units from separate trees in one audience, and never an owner', async () => {
     const { mock } = setup(null, { 'POST /api/admin/central-templates': () => json({ template: TEMPLATE }, 201) });
-    await userEvent.selectOptions(screen.getByLabelText('Ejerenhed'), ROOT);
     await userEvent.click(screen.getByLabelText('Til rådighed for: Børn'));
-    await userEvent.selectOptions(screen.getByLabelText('Ejerenhed'), OTHER);
-    expect(screen.queryByLabelText('Til rådighed for: Børn')).toBeNull();
+    await userEvent.click(screen.getByLabelText('Til rådighed for: Andet'));
     await userEvent.type(screen.getByLabelText('Navn'), 'N');
     await userEvent.type(screen.getByLabelText('Prompt'), 'P');
     await userEvent.type(screen.getByLabelText('Ændringsbeskrivelse'), NOTE);
     await userEvent.click(saveButton('Opret skabelon'));
-    expect(body(mock, 'POST', '/api/admin/central-templates').targets).toEqual([]);
+    const sent = body(mock, 'POST', '/api/admin/central-templates');
+    expect(sent.targets).toEqual([
+      { orgUnitUuid: CHILD, includeDescendants: true },
+      { orgUnitUuid: OTHER, includeDescendants: true },
+    ]);
+    expect(sent).not.toHaveProperty('ownerOrgUnitUuid');
   });
 
   it('shows the server message when the API refuses', async () => {
     setup(null, {
       'POST /api/admin/central-templates': () =>
-        json({ error: 'Enheden findes ikke', code: 'org_unit_not_found' }, 404),
+        json({ error: 'En valgt enhed findes ikke', code: 'target_unknown' }, 400),
     });
-    await userEvent.selectOptions(screen.getByLabelText('Ejerenhed'), ROOT);
     await userEvent.type(screen.getByLabelText('Navn'), 'N');
     await userEvent.type(screen.getByLabelText('Prompt'), 'P');
     await userEvent.type(screen.getByLabelText('Ændringsbeskrivelse'), NOTE);
     await userEvent.click(saveButton('Opret skabelon'));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Enheden findes ikke');
+    expect(await screen.findByRole('alert')).toHaveTextContent('En valgt enhed findes ikke');
   });
 });
 
@@ -172,8 +168,7 @@ describe('CentralTemplateEditor — edit', () => {
   it('requires a real change and shows the version', () => {
     setup(TEMPLATE);
     expect(screen.getByText('Version 3')).toBeInTheDocument();
-    expect(screen.getByText('Ejerenhed:').closest('p')).toHaveTextContent('Ejerenhed: Kommune');
-    expect(screen.queryByLabelText('Ejerenhed')).toBeNull();
+    expect(screen.queryByText(/Ejerenhed/)).toBeNull();
     expect(saveButton('Gem ændringer')).toBeDisabled();
     expect(screen.getByText('Ingen ændringer at gemme')).toBeInTheDocument();
   });
@@ -395,38 +390,18 @@ const CATALOGUE: CentralCatalogueEntry[] = [
   { kind: 'role', identifier: 'gammel', name: 'Gammel rolle', source: 'rollekatalog', active: false, holders: 0 },
 ];
 
-describe('CentralTemplateEditor — organisation-wide templates and role/group targets', () => {
-  const GLOBAL = { catalogue: CATALOGUE, isGlobalManager: true };
+describe('CentralTemplateEditor — role/group targets', () => {
+  // Claims mode: roles and groups can be targeted (the roles route says canTarget).
+  const GLOBAL = { catalogue: CATALOGUE, canTargetPrincipals: true };
 
-  it('a scoped manager must pick an owner unit and gets no role/group picker, only an explanation if the template has some', () => {
-    setup(null, {}, { catalogue: CATALOGUE, isGlobalManager: false });
-    expect(screen.getByText('Vælg en ejerenhed')).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: /Hele organisationen/ })).toBeNull();
-    expect(screen.getByText(/Kun en bygger med tilladelse for hele organisationen kan vælge roller og grupper/)).toBeInTheDocument();
-    expect(screen.queryByLabelText('Søg i roller og grupper')).toBeNull();
-  });
-
-  it('a global manager may leave the owner empty (organisation-wide) and then picks from ALL units and the roles', async () => {
-    setup(null, {}, GLOBAL);
-    expect(screen.getByLabelText('Ejerenhed')).toHaveValue('');
-    expect(screen.getByRole('option', { name: 'Hele organisationen (ingen ejerenhed)' })).toBeInTheDocument();
-    expect(screen.queryByText('Vælg en ejerenhed')).toBeNull();
-    // No owner: every unit may be a target.
-    expect(screen.getByLabelText('Til rådighed for: Andet')).toBeInTheDocument();
-    expect(screen.getByLabelText('Til rådighed for: Kommune')).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText('Ejerenhed'), CHILD);
-    expect(screen.queryByLabelText('Til rådighed for: Andet')).toBeNull();
-  });
-
-  it('without org units (claims mode) there is no owner select and no unit picker, just the roles and groups', () => {
+  it('without org units (claims mode) there is no unit picker, just the roles and groups', () => {
     setup(null, {}, { ...GLOBAL, units: [] });
-    expect(screen.queryByLabelText('Ejerenhed')).toBeNull();
-    expect(screen.getByText(/Hele organisationen \(ingen ejerenhed\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/ejerenhed/i)).toBeNull();
     expect(screen.queryByText('Hvem skal have skabelonen til rådighed?')).toBeNull();
     expect(screen.getByLabelText('Til rådighed for rolle: Sagsbehandler')).toBeInTheDocument();
   });
 
-  it('creates an org-wide template targeted at a role and a group: owner null, only kind and identifier are sent', async () => {
+  it('creates a template targeted at a role and a group: only kind and identifier are sent, never an owner', async () => {
     const { mock } = setup(null, { 'POST /api/admin/central-templates': () => json({ template: TEMPLATE }, 201) }, { ...GLOBAL, units: [] });
     await userEvent.type(screen.getByLabelText('Navn'), 'Ny skabelon');
     await userEvent.type(screen.getByLabelText('Prompt'), 'Skriv kort');
@@ -435,7 +410,7 @@ describe('CentralTemplateEditor — organisation-wide templates and role/group t
     await userEvent.type(screen.getByLabelText('Ændringsbeskrivelse'), NOTE);
     await userEvent.click(saveButton('Opret skabelon'));
     const sent = body(mock, 'POST', '/api/admin/central-templates');
-    expect(sent.ownerOrgUnitUuid).toBeNull();
+    expect(sent).not.toHaveProperty('ownerOrgUnitUuid');
     expect(sent.targets).toEqual([]);
     expect(sent.principalTargets).toEqual([
       { kind: 'role', identifier: 'sagsbehandler' },
@@ -453,7 +428,6 @@ describe('CentralTemplateEditor — organisation-wide templates and role/group t
   it('editing: shows the chosen roles with name, kind and identifier, flags a withdrawn one and sends the change as a diff', async () => {
     const withTargets = {
       ...TEMPLATE,
-      ownerOrgUnitUuid: null,
       principalTargets: [
         { kind: 'role' as const, identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active' as const, holders: 4 },
         { kind: 'role' as const, identifier: 'gammel', name: 'Gammel rolle', status: 'inactive' as const, holders: 0 },
@@ -461,7 +435,6 @@ describe('CentralTemplateEditor — organisation-wide templates and role/group t
       ],
     };
     const { mock } = setup(withTargets, { [`PUT /api/admin/central-templates/${ID}`]: () => json({ template: withTargets }) }, GLOBAL);
-    expect(screen.getByText('Ejerenhed:').closest('p')).toHaveTextContent('Hele organisationen (ingen ejerenhed)');
 
     const chosen = screen.getByRole('list', { name: 'Valgte roller og grupper' });
     expect(within(chosen).getByText('Sagsbehandler')).toBeInTheDocument();
@@ -491,9 +464,9 @@ describe('CentralTemplateEditor — organisation-wide templates and role/group t
     expect(within(chosen).getByText('ukendt/inaktiv')).toBeInTheDocument();
   });
 
-  it('a scoped manager sees the roles of their template read-only (no remove button) and saves without sending them', async () => {
+  it('outside claims mode the roles of a template are read-only (no remove button) and a save does not send them', async () => {
     const t = { ...TEMPLATE, principalTargets: [{ kind: 'role' as const, identifier: 'sagsbehandler', name: 'Sagsbehandler', status: 'active' as const, holders: 4 }] };
-    const { mock } = setup(t, { [`PUT /api/admin/central-templates/${ID}`]: () => json({ template: t }) }, { catalogue: CATALOGUE, isGlobalManager: false });
+    const { mock } = setup(t, { [`PUT /api/admin/central-templates/${ID}`]: () => json({ template: t }) }, { catalogue: CATALOGUE, canTargetPrincipals: false, targetLockedReason: 'needs_claims' });
     expect(within(screen.getByRole('list', { name: 'Valgte roller og grupper' })).getByText('Sagsbehandler')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Fjern rolle/ })).toBeNull();
     await userEvent.clear(screen.getByLabelText('Navn'));
@@ -516,7 +489,7 @@ describe('CentralTemplateEditor — organisation-wide templates and role/group t
     expect(screen.getByText('Ingen roller eller grupper matcher')).toBeInTheDocument();
     cleanup();
 
-    setup(null, {}, { catalogue: [], isGlobalManager: true });
+    setup(null, {}, { catalogue: [], canTargetPrincipals: true });
     expect(screen.getByText(/Rollekataloget er tomt/)).toBeInTheDocument();
   });
 
@@ -536,7 +509,7 @@ describe('CentralTemplateEditor — organisation-wide templates and role/group t
 
   it('zero-match feedback: a role nobody holds from their latest login is flagged in the list and once chosen', async () => {
     const quiet = [{ ...CATALOGUE[0], holders: 0 }, { ...CATALOGUE[1], holders: 12 }];
-    setup(null, {}, { catalogue: quiet, isGlobalManager: true });
+    setup(null, {}, { catalogue: quiet, canTargetPrincipals: true });
     const list = screen.getByRole('list', { name: 'Roller og grupper' });
     expect(within(list).getByText('0 personer har den ved seneste login')).toBeInTheDocument();
     expect(within(list).getByText('12 personer har den')).toBeInTheDocument();
@@ -545,15 +518,20 @@ describe('CentralTemplateEditor — organisation-wide templates and role/group t
     expect(within(chosen).getByText('0 personer har den ved seneste login')).toBeInTheDocument();
   });
 
-  it('outside claims mode the picker is replaced by the reason (roles come from login claims), but org-wide stays possible', () => {
-    setup(null, {}, { catalogue: CATALOGUE, isGlobalManager: true, canTargetPrincipals: false, targetLockedReason: 'needs_claims' });
+  it('outside claims mode the picker is replaced by the reason (roles come from login claims), and units stay available', () => {
+    setup(null, {}, { catalogue: CATALOGUE, canTargetPrincipals: false, targetLockedReason: 'needs_claims' });
     expect(screen.getByText(/kun vælges, når rollerne kommer fra brugernes login/)).toBeInTheDocument();
     expect(screen.queryByLabelText('Søg i roller og grupper')).toBeNull();
-    expect(screen.getByRole('option', { name: 'Hele organisationen (ingen ejerenhed)' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Til rådighed for: Kommune')).toBeInTheDocument();
+  });
+
+  it('by default (no canTargetPrincipals) roles and groups cannot be picked', () => {
+    setup(null, {}, { catalogue: CATALOGUE, targetLockedReason: 'needs_claims' });
+    expect(screen.queryByLabelText('Søg i roller og grupper')).toBeNull();
   });
 
   it('the locked picker says which route applies in local and Rollekatalog mode', () => {
-    setup(null, {}, { catalogue: CATALOGUE, isGlobalManager: true, canTargetPrincipals: false, targetLockedReason: 'needs_claims', accessSource: 'local' });
+    setup(null, {}, { catalogue: CATALOGUE, canTargetPrincipals: false, targetLockedReason: 'needs_claims', accessSource: 'local' });
     expect(screen.getByText(/mens rollerne styres i appen/)).toBeInTheDocument();
     expect(screen.getByText(/Her deles en skabelon med enheder/)).toBeInTheDocument();
     expect(screen.getByText(/appen sættes til ACCESS_SOURCE=claims/)).toBeInTheDocument();
@@ -567,7 +545,7 @@ describe('CentralTemplateEditor — organisation-wide templates and role/group t
         { kind: 'role' as const, identifier: 'gammel', name: 'Gammel rolle', status: 'inactive' as const, holders: 0 },
       ],
     };
-    setup(t, {}, { catalogue: [], catalogueLoaded: false, isGlobalManager: true });
+    setup(t, {}, { catalogue: [], catalogueLoaded: false, canTargetPrincipals: true });
     const chosen = screen.getByRole('list', { name: 'Valgte roller og grupper' });
     expect(within(chosen).getAllByText('ukendt/inaktiv')).toHaveLength(1); // only the one the server itself calls inactive
     expect(within(chosen).getByText('Sagsbehandler')).toBeInTheDocument();

@@ -79,7 +79,12 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
         await addUser(c, 'u1');
         await addUser(c, 'u2');
         const unit = await createOrgUnit({ name: 'Borgerservice', actorUserId: 'x' }, runner);
-        await grantRole({ appUserId: 'u1', roleKey: 'bygger', scopeOrgUnitUuid: unit.uuid, actorUserId: 'x' }, runner);
+        const granted = await grantRole({ appUserId: 'u1', roleKey: 'bygger', actorUserId: 'x' }, runner);
+        // No grant takes a unit any more; a row that names one is from an older version, and is still listed with its name.
+        await c.query(
+          `UPDATE role_assignments SET scope_org_unit_uuid = $1 WHERE id = $2`,
+          [unit.uuid, granted.id],
+        );
         const { users } = await listAppUsersWithRoles({}, runner);
         expect(users.map((u) => [u.id, u.roles.length])).toEqual([['u1', 1], ['u2', 0]]);
         expect(users[0].roles[0]).toMatchObject({ scopeOrgUnitName: 'Borgerservice', active: true, source: 'local' });
@@ -292,7 +297,9 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
         await expect(deleteOrgUnit(a, 'x', runner)).rejects.toMatchObject({ code: 'has_children' });
 
         await addUser(c, 'm1');
-        await grantRole({ appUserId: 'm1', roleKey: 'bygger', scopeOrgUnitUuid: leaf, actorUserId: 'x' }, runner);
+        // A role row scoped to a unit can only come from an older version (no grant takes a unit now).
+        const granted = await grantRole({ appUserId: 'm1', roleKey: 'bygger', actorUserId: 'x' }, runner);
+        await c.query('UPDATE role_assignments SET scope_org_unit_uuid = $1 WHERE id = $2', [leaf, granted.id]);
         await expect(deleteOrgUnit(leaf, 'x', runner)).rejects.toMatchObject({ code: 'has_role_assignments' });
         expect((await c.query('SELECT count(*)::int AS n FROM role_assignments')).rows[0].n).toBe(1);
 
@@ -307,36 +314,24 @@ describe.skipIf(!hasPg)('access-admin (real Postgres)', () => {
     it('refuses to delete a unit that is a target of a central template (the FK would cascade silently)', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = schemaRunner(c, schema);
-        const owner = (await c.query(`INSERT INTO org_units (name, source) VALUES ('Ejer', 'local') RETURNING uuid`)).rows[0].uuid;
         const target = (await c.query(`INSERT INTO org_units (name, source) VALUES ('Mål', 'local') RETURNING uuid`)).rows[0].uuid;
-        const tpl = (await c.query(`INSERT INTO central_templates (owner_org_unit_uuid, name, prompt) VALUES ($1, 'x', 'p') RETURNING id`, [owner])).rows[0].id;
+        const tpl = (await c.query(`INSERT INTO central_templates (created_by_user_id, name, prompt) VALUES ('x', 'x', 'p') RETURNING id`)).rows[0].id;
         await c.query('INSERT INTO central_template_targets (template_id, org_unit_uuid) VALUES ($1, $2)', [tpl, target]);
         await expect(deleteOrgUnit(target, 'x', runner)).rejects.toMatchObject({ code: 'has_template_targets' });
         expect((await c.query('SELECT count(*)::int AS n FROM central_template_targets')).rows[0].n).toBe(1);
         await close();
       }));
 
-    it('CONCURRENCY: a grant scoped to a unit and the deletion of that unit never lose the assignment silently', () =>
+    it('a grant that names a unit is refused and writes nothing (no role is tied to org units)', () =>
       withFreshSchema(async (c, schema) => {
         const { runner, close } = schemaRunner(c, schema);
         await addUser(c, 'm1');
-        for (let round = 0; round < 8; round++) {
-          const u = (await createOrgUnit({ name: `U${round}`, actorUserId: 'x' }, runner)).uuid;
-          const [grant, del] = await Promise.allSettled([
-            grantRole({ appUserId: 'm1', roleKey: 'bygger', scopeOrgUnitUuid: u, actorUserId: 'x' }, runner),
-            deleteOrgUnit(u, 'x', runner),
-          ]);
-          const unitExists = (await c.query('SELECT 1 FROM org_units WHERE uuid = $1', [u])).rows.length === 1;
-          const assigned = (await c.query('SELECT 1 FROM role_assignments WHERE scope_org_unit_uuid = $1', [u])).rows.length === 1;
-          // Either the unit is gone and nothing was granted, or the grant stands and the delete was refused.
-          if (grant.status === 'fulfilled') {
-            expect(unitExists && assigned).toBe(true);
-            expect(del.status).toBe('rejected');
-          } else {
-            expect(unitExists).toBe(false);
-            expect(assigned).toBe(false);
-          }
-        }
+        const u = (await createOrgUnit({ name: 'U', actorUserId: 'x' }, runner)).uuid;
+        await expect(
+          grantRole({ appUserId: 'm1', roleKey: 'bygger', scopeOrgUnitUuid: u, actorUserId: 'x' }, runner),
+        ).rejects.toMatchObject({ code: 'scope_forbidden' });
+        expect((await c.query('SELECT count(*)::int AS n FROM role_assignments')).rows[0].n).toBe(0);
+        await deleteOrgUnit(u, 'x', runner);
         await close();
       }));
   });

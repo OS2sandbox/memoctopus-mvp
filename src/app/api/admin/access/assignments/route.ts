@@ -10,7 +10,6 @@ const bodySchema = z
     appUserId: appUserIdSchema,
     roleKey: roleKeySchema,
     scopeOrgUnitUuid: uuidSchema.nullable().optional(),
-    includeDescendants: z.boolean().optional(),
     startDate: isoDateSchema.nullable().optional(),
     stopDate: isoDateSchema.nullable().optional(),
   })

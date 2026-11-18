@@ -3,19 +3,17 @@ import type { CentralTemplateAdmin, CentralTemplateVersion } from '@/lib/skabelo
 import { makePrincipal } from '@/test/helpers';
 
 export const T1 = '11111111-1111-4111-8111-111111111111';
-export const OWNER = '22222222-2222-4222-8222-222222222222';
+export const PARENT = '22222222-2222-4222-8222-222222222222';
 export const CHILD = '33333333-3333-4333-8333-333333333333';
 export const NOTE = 'Præciseret formuleringen af prompten';
 
 export const manager = makePrincipal({
   roles: ['bruger', 'bygger'],
   capabilities: ['template.use', 'template.manage'],
-  scopes: { 'template.manage': { global: false, roots: [{ orgUnitUuid: OWNER, includeDescendants: true }] } },
 });
 
 export const ADMIN_TEMPLATE: CentralTemplateAdmin = {
   id: T1,
-  ownerOrgUnitUuid: OWNER,
   name: 'Fagreferat',
   description: 'Til fagmøder',
   prompt: 'HEMMELIG PROMPT',

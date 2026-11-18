@@ -24,7 +24,6 @@ const mockRun = vi.mocked(runCatalogueRefresh);
 const admin = makePrincipal({
   roles: ['bruger', 'admin'],
   capabilities: ['template.use', 'template.manage', 'sync.run'],
-  scopes: { 'template.manage': { global: true, roots: [] }, 'sync.run': { global: true, roots: [] } },
 });
 
 const counts = { fetched: 5, added: 2, updated: 3, deactivated: 1, skipped: 0 };

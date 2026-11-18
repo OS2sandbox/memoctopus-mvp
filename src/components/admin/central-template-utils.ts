@@ -12,7 +12,7 @@ import type {
 } from '@/lib/skabeloner/central-types';
 import { CENTRAL_CONTENT_FIELDS } from '@/lib/skabeloner/central-types';
 import { formatDateTime } from './format';
-import { selfAndDescendants, type TreeUnit } from './org-tree';
+import type { TreeUnit } from './org-tree';
 
 export const FLAG_TEXT = 'ukendt/inaktiv';
 
@@ -174,13 +174,6 @@ export function truncateAudience(entries: readonly AudienceEntry[], max = 3): { 
   const warn = (e: AudienceEntry) => e.flagged || e.empty;
   const ordered = [...entries.filter(warn), ...entries.filter((e) => !warn(e))];
   return { shown: ordered.slice(0, max), more: ordered.slice(max) };
-}
-
-/** Keeps only targets inside the owner's subtree (the server refuses anything else). */
-export function targetsWithinOwner(units: readonly TreeUnit[], ownerUuid: string, targets: readonly CentralTarget[]) {
-  if (!ownerUuid) return [];
-  const allowed = selfAndDescendants(units, ownerUuid);
-  return targets.filter((t) => allowed.has(t.orgUnitUuid));
 }
 
 export function unitNameLookup(units: readonly TreeUnit[]): (uuid: string) => string {

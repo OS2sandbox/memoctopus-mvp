@@ -145,8 +145,8 @@ describe('PUT /api/admin/central-templates/[id]', () => {
     expect((await res.json()).code).toBe('template_archived');
   });
 
-  it('400 when the service rejects targets outside the owner subtree or an empty change', async () => {
-    mockUpdate.mockRejectedValueOnce(new ValidationError('Uden for ejerenhed', 'target_outside_owner'));
+  it('400 when the service rejects an unknown target unit or an empty change', async () => {
+    mockUpdate.mockRejectedValueOnce(new ValidationError('En valgt enhed findes ikke', 'target_unknown'));
     expect((await put(BODY)).status).toBe(400);
     mockUpdate.mockRejectedValueOnce(new ValidationError('Ingen ændringer', 'no_changes'));
     const res = await put(BODY);

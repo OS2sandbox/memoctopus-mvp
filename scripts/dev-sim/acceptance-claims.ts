@@ -141,7 +141,7 @@ async function main() {
   heading('3. SAML: the same, through a signed assertion');
   const superS = await saml('super.s');
   const meSuper = await superS.get<MeResponse>('/api/me');
-  check('super.s (SAML attribute referat-superuser) is a GLOBAL bygger', meSuper.json?.roles?.includes('bygger') && meSuper.json?.scopes?.['template.manage']?.global === true, brief(meSuper));
+  check('super.s (SAML attribute referat-superuser) is a bygger, managing the templates they create', meSuper.json?.roles?.includes('bygger') && !!meSuper.json?.capabilities?.includes('template.manage') && !meSuper.json?.capabilities?.includes('template.manage_all'), brief(meSuper));
   check('...and has no administrator power', !meSuper.json?.capabilities?.includes('access.manage') && !meSuper.json?.capabilities?.includes('audit.export'));
   check('SAML roles are stored the same way (source claims)', (await rolesInDb('super.s@example.dk')).every((r) => r.source === 'claims') && (await rolesInDb('super.s@example.dk')).length === 1);
   check('SAML groups arrive too (delimited attribute)', JSON.stringify(await externalOf('super.s@example.dk')) === JSON.stringify(['group:G-Borgerservice', 'role:referat-superuser']), JSON.stringify(await externalOf('super.s@example.dk')));
@@ -195,7 +195,7 @@ async function main() {
 
   const cat0 = await superUser.get<CatalogueBody>('/api/admin/central-templates/roles');
   want('the superuser reads the catalogue (config entries are there from the start)', cat0, 200);
-  check('it is global (canTarget) but may not refresh (no sync.run)', cat0.json?.canTarget === true && cat0.json?.canRefresh === false, JSON.stringify({ t: cat0.json?.canTarget, r: cat0.json?.canRefresh }));
+  check('roles can be targeted in claims mode (canTarget), but the superuser may not refresh (no sync.run)', cat0.json?.canTarget === true && cat0.json?.canRefresh === false, JSON.stringify({ t: cat0.json?.canTarget, r: cat0.json?.canRefresh }));
   check('the config catalogue is merged in, with names', (cat0.json?.roles ?? []).some((r) => r.kind === 'role' && r.identifier === 'referat-bruger' && r.source === 'config' && r.name === 'Referat: bruger'));
   check('the administrator may refresh (sync.run and a READ key are configured)', (await adminUser.get<CatalogueBody>('/api/admin/central-templates/roles')).json?.canRefresh === true);
 
@@ -232,10 +232,11 @@ async function main() {
     principalTargets: [{ kind: 'role', identifier: 'sagsbehandler' }],
     changeNote: NOTE,
   });
-  want('the superuser creates an organisation-wide template targeted at a ROLE (no owner unit)', created, 201);
+  want('the superuser creates a template targeted at a ROLE', created, 201);
   // A failed create is reported just above; everything after it then fails on its own.
   const tid = created.json?.template?.id as string;
-  check('it has no owner unit, and the audience is named', created.json?.template?.ownerOrgUnitUuid === null && created.json?.template?.principalTargets?.[0]?.name === 'Sagsbehandler', brief(created));
+  check('it has no owner unit, and the audience is named', !!created.json?.template && !('ownerOrgUnitUuid' in created.json.template) && created.json.template.principalTargets?.[0]?.name === 'Sagsbehandler', brief(created));
+  want('the administrator (admin.a) can open the superuser’s template', await adminUser.get(`/api/admin/central-templates/${tid}`), 200);
   const listed = await superUser.get<{ templates: CentralTemplateListItem[] }>('/api/admin/central-templates?status=all');
   const listedHolders = listed.json?.templates?.find((t) => t.id === tid)?.principalTargets?.[0]?.holders;
   check('the audience carries a holders COUNT (a number, never people)', Number.isInteger(listedHolders), String(listedHolders));
@@ -283,11 +284,11 @@ async function main() {
   want('restore brings it back', await superUser.post(`/api/admin/central-templates/${tid}/restore`, { baseVersion: 5, changeNote: 'Genopretter, den skulle alligevel bruges.' }), 200);
   want('...to the role holder', await brugerC.post('/api/minutes', { segments, skabelonId: tid, skabelonSource: 'central' }), 200);
 
-  // Only this run's template: the database may hold other templates from earlier runs (e.g. the Rollekatalog mode's, which have owner units).
+  // Only this run's template: the database may hold other templates from earlier runs.
   const events = (await db.query(`select event_type, details::text as d, secondary_entity_id from public.audit_events where event_type like 'central_template.%' and entity_id = $1`, [tid])).rows;
   const kinds = new Set(events.map((e) => e.event_type));
   check('create, retarget, update, archive and restore are in the log', ['central_template.create', 'central_template.retarget', 'central_template.update', 'central_template.archive', 'central_template.restore'].every((t) => kinds.has(t)), [...kinds].join(', '));
-  check('the org-wide template has no owner unit in the log, and only counts for the audience', events.every((e) => e.secondary_entity_id === null) && events.every((e) => !/sagsbehandler|Sagsbehandler|"11"/.test(e.d)), events.map((e) => e.d).join(' '));
+  check('the template events carry no secondary entity, and only counts for the audience', events.every((e) => e.secondary_entity_id === null) && events.every((e) => !/sagsbehandler|Sagsbehandler|"11"/.test(e.d)), events.map((e) => e.d).join(' '));
 
   // ─────────────────────────────────────────────────────────────────────
   heading('7. A person\'s own template changelog');

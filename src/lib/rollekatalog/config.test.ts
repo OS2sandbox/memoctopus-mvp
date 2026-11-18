@@ -15,7 +15,6 @@ import {
   roleGroupsPath,
   roleStaleMaxSeconds,
   rolesPath,
-  scopeDescendants,
   syncMaxRemovalPercent,
   timeoutMs,
   transformUserId,
@@ -112,13 +111,6 @@ describe('simple settings', () => {
     expect(maxResponseBytes()).toBe(2048);
     vi.stubEnv('ROLLEKATALOG_MAX_RESPONSE_BYTES', '12');
     expect(maxResponseBytes()).toBe(64 * 1024 * 1024);
-  });
-  it('scope descendants defaults to true', () => {
-    expect(scopeDescendants()).toBe(true);
-    vi.stubEnv('ROLLEKATALOG_SCOPE_DESCENDANTS', 'false');
-    expect(scopeDescendants()).toBe(false);
-    vi.stubEnv('ROLLEKATALOG_SCOPE_DESCENDANTS', 'maybe');
-    expect(scopeDescendants()).toBe(true);
   });
   it('global roles: default administrator only; none; unknown tokens dropped', () => {
     expect(globalRoles()).toEqual(['admin']);

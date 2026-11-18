@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ErrorBanner } from '@/components/ui/error-banner';
@@ -9,10 +9,8 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { useToast } from '@/components/ui/toast';
 import { roleDescriptions, roleLabels } from '@/lib/authz/labels.da';
-import { roleScopeRule } from '@/lib/authz/role-rules';
 import { ROLE_KEYS, type RoleKey } from '@/lib/authz/types';
 import { apiRequest } from './api';
-import { flattenOrgTree, indentedLabel, type TreeUnit } from './org-tree';
 
 interface GrantTarget {
   id: string;
@@ -23,21 +21,16 @@ interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   user: GrantTarget | null;
-  orgUnits: TreeUnit[];
-  /** Set when the unit list could not be loaded, so a scoped role cannot be granted. */
-  orgUnitsError?: string | null;
   onGranted: () => void;
 }
 
-export function RoleGrantDialog({ open, onOpenChange, user, orgUnits, orgUnitsError, onGranted }: Props) {
+export function RoleGrantDialog({ open, onOpenChange, user, onGranted }: Props) {
   return (
     <Dialog open={open && user !== null} onOpenChange={onOpenChange}>
       <DialogContent>
         {user && (
           <GrantForm
             user={user}
-            orgUnits={orgUnits}
-            orgUnitsError={orgUnitsError ?? null}
             onClose={() => onOpenChange(false)}
             onGranted={onGranted}
           />
@@ -54,34 +47,23 @@ interface FieldErrors {
 
 function GrantForm({
   user,
-  orgUnits,
-  orgUnitsError,
   onClose,
   onGranted,
 }: {
   user: GrantTarget;
-  orgUnits: TreeUnit[];
-  orgUnitsError: string | null;
   onClose: () => void;
   onGranted: () => void;
 }) {
   const { toast } = useToast();
   const [roleKey, setRoleKey] = useState<RoleKey | ''>('');
-  const [scope, setScope] = useState('');
-  const [includeDescendants, setIncludeDescendants] = useState(true);
   const [startDate, setStartDate] = useState('');
   const [stopDate, setStopDate] = useState('');
   const [errors, setErrors] = useState<FieldErrors>({});
   const [serverError, setServerError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const rows = useMemo(() => flattenOrgTree(orgUnits), [orgUnits]);
-  const rule = roleKey ? roleScopeRule(roleKey) : 'forbidden';
-
   function changeRole(next: string) {
     setRoleKey(next as RoleKey | '');
-    // The old scope may not be allowed for the new role.
-    setScope('');
     setErrors({});
   }
 
@@ -100,14 +82,12 @@ function GrantForm({
     if (Object.keys(e).length > 0 || !roleKey) return;
 
     setSubmitting(true);
-    const hasScope = rule !== 'forbidden' && scope !== '';
     const res = await apiRequest('/api/admin/access/assignments', {
       method: 'POST',
       json: {
         appUserId: user.id,
         roleKey,
-        scopeOrgUnitUuid: hasScope ? scope : null,
-        ...(hasScope ? { includeDescendants } : {}),
+        scopeOrgUnitUuid: null,
         startDate: startDate || null,
         stopDate: stopDate || null,
       },
@@ -145,36 +125,6 @@ function GrantForm({
           </option>
         ))}
       </Select>
-
-      {rule !== 'forbidden' && (
-        <>
-          <Select
-            label="Organisationsenhed (valgfri)"
-            value={scope}
-            onChange={(e) => setScope(e.target.value)}
-            error={orgUnitsError}
-            hint="Uden enhed gælder rollen for hele organisationen."
-          >
-            <option value="">Hele organisationen</option>
-            {rows.map(({ unit, depth }) => (
-              <option key={unit.uuid} value={unit.uuid}>
-                {indentedLabel(unit.name, depth)}
-              </option>
-            ))}
-          </Select>
-          {scope !== '' && (
-            <label className="flex items-center gap-2 text-sm text-[var(--ink)]">
-              <input
-                type="checkbox"
-                checked={includeDescendants}
-                onChange={(e) => setIncludeDescendants(e.target.checked)}
-                className="h-4 w-4 accent-[var(--accent)]"
-              />
-              Gælder også underenheder
-            </label>
-          )}
-        </>
-      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">

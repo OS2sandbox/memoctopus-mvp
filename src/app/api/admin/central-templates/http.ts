@@ -112,7 +112,6 @@ export function adminDto(t: CentralTemplateAdmin): CentralTemplateAdmin {
   return {
     ...content(t),
     id: t.id,
-    ownerOrgUnitUuid: t.ownerOrgUnitUuid,
     status: t.status,
     currentVersion: t.currentVersion,
     targets: t.targets.map(target),
@@ -130,7 +129,6 @@ export function listItemDto(t: CentralTemplateListItem): CentralTemplateListItem
     id: t.id,
     name: t.name,
     description: t.description,
-    ownerOrgUnitUuid: t.ownerOrgUnitUuid,
     status: t.status,
     currentVersion: t.currentVersion,
     targets: t.targets.map(target),

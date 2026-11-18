@@ -14,18 +14,9 @@
 // the identical "not found".
 //
 // The membership is computed with ONE query: a cycle-safe, depth-capped upward
-// walk from the user's own units (UNION + depth cap, like scope.ts), so cost
+// walk from the user's own units (UNION + MAX_ORG_DEPTH, scope.ts), so cost
 // follows the user's ancestry chain, not the size of the org tree. Bad data
 // (a cycle) terminates; anything deeper than MAX_ORG_DEPTH is not covered.
-//
-// Owner subtree, re-checked at READ time: a (template, target) pair counts only
-// while the target is the template's owner unit or a descendant of it RIGHT NOW
-// (a second capped upward walk from each matching target to the owner). Targets
-// are validated on write, but a re-org or a local move can drift them out of the
-// owner's scope afterwards; such a target silently stops delivering (fail closed),
-// and so does restoring an archived template with stale targets. A template WITHOUT an
-// owner is organisation-wide (only global managers write those): its unit targets count
-// as they are.
 //
 // Prompt confidentiality is structural:
 //  - listCentralForUser returns the prompt-free CentralSkabelonSummary and its
@@ -80,15 +71,11 @@ const SUMMARY_COLUMNS = `ct.id, ct.name, ct.description, ct.include_deltagere, c
  * seconds (null = no role/group branch) and `$4` the template id when `byId`. Prefixed with a WITH
  * clause by the callers.
  *
- * Org-unit branch, four steps in one statement:
+ * Org-unit branch, three steps in one statement:
  *  - mine:  the user's own units (non-disabled linked directory user).
  *  - chain: those units plus their ancestors (capped upward walk).
- *  - cand:  (template, target) pairs of ACTIVE templates that match the user by membership. Only these
- *           are validated below, so the cost follows the user's ancestry, not the size of the target table.
- *  - walk:  from each candidate target upward through parent_uuid until it reaches the template's owner
- *           unit. A target counts only if the owner is reached within the cap (target = owner is depth 0),
- *           so a unit re-organised out of the owner's subtree stops delivering at READ time. Not reaching
- *           the owner (moved away, cycle, deeper than the cap, unknown) fails closed.
+ *  - cand:  templates with an ACTIVE status and a target that matches the user by membership: one of
+ *           the user's own units, or an ancestor of one when the target includes descendants.
  */
 function audienceSql(t: (table: string) => string, byId: boolean): { cte: string; where: string } {
   return {
@@ -108,29 +95,19 @@ function audienceSql(t: (table: string) => string, byId: boolean): { cte: string
            JOIN chain c ON p.uuid = c.parent_uuid
           WHERE c.depth < $2::int
        ),
-       cand(template_id, target_uuid, owner_uuid) AS (
-         SELECT DISTINCT tg.template_id, tg.org_unit_uuid, ct.owner_org_unit_uuid
+       cand(template_id) AS (
+         SELECT DISTINCT tg.template_id
            FROM ${t('central_template_targets')} tg
            JOIN ${t('central_templates')} ct ON ct.id = tg.template_id
           WHERE ct.status = 'active'${byId ? ' AND ct.id = $4::uuid' : ''}
             AND (tg.org_unit_uuid IN (SELECT uuid FROM mine)
                  OR (tg.include_descendants AND tg.org_unit_uuid IN (SELECT uuid FROM chain)))
-       ),
-       walk(template_id, target_uuid, owner_uuid, cur_uuid, depth) AS (
-         SELECT c.template_id, c.target_uuid, c.owner_uuid, c.target_uuid, 0
-           FROM cand c
-         UNION
-         SELECT w.template_id, w.target_uuid, w.owner_uuid, u.parent_uuid, w.depth + 1
-           FROM walk w
-           JOIN ${t('org_units')} u ON u.uuid = w.cur_uuid
-          WHERE w.cur_uuid <> w.owner_uuid AND w.depth < $2::int
        )`,
     // Role/group branch: the user's claim row is fresh, the catalogue entry still active, and the
     // user is a linked, non-disabled directory user (same gate as the org-unit branch).
     where: `ct.status = 'active'
         AND (
-          ct.id IN (SELECT w.template_id FROM walk w WHERE w.cur_uuid = w.owner_uuid)
-          OR ct.id IN (SELECT c.template_id FROM cand c WHERE c.owner_uuid IS NULL)
+          ct.id IN (SELECT template_id FROM cand)
           OR ct.id IN (
             SELECT pt.template_id
               FROM ${t('central_template_principal_targets')} pt

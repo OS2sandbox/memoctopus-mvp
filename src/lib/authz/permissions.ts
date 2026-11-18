@@ -1,6 +1,6 @@
 // Pure predicates over an already-resolved Principal. No DB, no env, no async.
 // Everything fails closed, and a disabled principal is denied regardless of
-// what its capability list says. Scope-aware checks live in scope.ts.
+// what its capability list says.
 import { capabilityLabels, roleLabels } from './labels.da';
 import { ROLE_DEFINITIONS } from './capabilities';
 import { ROLE_KEYS, type Capability, type Principal } from './types';

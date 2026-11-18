@@ -108,38 +108,46 @@ async function main() {
   check('unknown role identifier ignored, unknown user skipped', (first.body?.counts?.assignmentsIgnoredRole ?? 0) >= 1 && (first.body?.counts?.assignmentsSkippedUnknownUser ?? 0) >= 1, JSON.stringify(first.body?.counts));
 
   // ───────────────────────────────────────────────────────────────────────
-  heading('2. Who gets what after login (roles and scopes come from the mirror)');
+  heading('2. Who gets what after login (roles come from the mirror; no role is tied to a unit)');
   const mette = await as('mette.e');
   const meMette = await mette.get<MeResponse>('/api/me');
   check('mette.e is administrator with global rights', meMette.json?.roles?.includes('admin') && meMette.json?.capabilities?.includes('audit.read'), brief(meMette));
+  check('mette.e manages every central template (template.manage_all)', !!meMette.json?.capabilities?.includes('template.manage_all'), brief(meMette));
   check('readOnly=true in rollekatalog mode', meMette.json?.readOnly === true && meMette.json?.source === 'rollekatalog');
+  check('/api/me reports no unit scopes', !!meMette.json && !('scopes' in meMette.json), brief(meMette));
 
+  // A bygger is a bygger, whatever org-unit constraint Rollekatalog attaches: they manage the templates they created.
+  const BYGGER_CAPS = JSON.stringify(['template.manage', 'template.use']);
+  const capsOf = (me: Reply<MeResponse>) => JSON.stringify([...(me.json?.capabilities ?? [])].sort());
   const anne = await as('anne.p');
   const meAnne = await anne.get<MeResponse>('/api/me');
-  const anneRoots = (meAnne.json?.scopes?.['template.manage']?.roots ?? []).map((r) => r.orgUnitUuid).sort();
-  check('anne.p manages exactly Team Selvbetjening and Økonomi', JSON.stringify(anneRoots) === JSON.stringify([U.team, U.okonomi].sort()), JSON.stringify(meAnne.json?.scopes));
-  check('anne.p is not global', meAnne.json?.scopes?.['template.manage']?.global === false);
+  check('anne.p (bygger, constrained to two units) is a plain bygger', meAnne.json?.roles?.includes('bygger') && capsOf(meAnne) === BYGGER_CAPS, capsOf(meAnne));
   check('anne.p cannot manage access or export audit', !meAnne.json?.capabilities?.includes('access.manage') && !meAnne.json?.capabilities?.includes('audit.export'));
 
   const jens = await as('jens.t');
   const meJens = await jens.get<MeResponse>('/api/me');
-  check('jens.t manages Borgerservice only (KLE constraint ignored)', JSON.stringify((meJens.json?.scopes?.['template.manage']?.roots ?? []).map((r) => r.orgUnitUuid)) === JSON.stringify([U.borger]), JSON.stringify(meJens.json?.scopes));
+  check('jens.t (bygger with a KLE constraint too) is a plain bygger', capsOf(meJens) === BYGGER_CAPS, capsOf(meJens));
 
   const peter = await as('peter.d');
   const mePeter = await peter.get<MeResponse>('/api/me');
-  check('peter.d: the duplicate role with no scope adds nothing', JSON.stringify((mePeter.json?.scopes?.['template.manage']?.roots ?? []).map((r) => r.orgUnitUuid)) === JSON.stringify([U.team]), JSON.stringify(mePeter.json?.scopes));
+  check('peter.d (duplicate bygger rows) is a plain bygger', capsOf(mePeter) === BYGGER_CAPS, capsOf(mePeter));
 
   const lars = await as('lars.f');
   const meLars = await lars.get<MeResponse>('/api/me');
-  // lars.f is a bygger scoped to Økonomi (his constraint also names an unknown unit, which is ignored).
-  check('lars.f builds for Økonomi only (unknown unit ignored)', JSON.stringify((meLars.json?.scopes?.['template.manage']?.roots ?? []).map((r) => r.orgUnitUuid)) === JSON.stringify([U.okonomi]) && meLars.json?.scopes?.['template.manage']?.global === false, JSON.stringify(meLars.json?.scopes));
-  check('lars.f may manage templates but not read the log, users, sync or the organisation tree', JSON.stringify([...(meLars.json?.capabilities ?? [])].sort()) === JSON.stringify(['template.manage', 'template.use']), JSON.stringify(meLars.json?.capabilities));
+  check('lars.f may manage his own templates but not read the log, users, sync or the organisation tree', capsOf(meLars) === BYGGER_CAPS, capsOf(meLars));
   const larsOrg = await lars.get('/api/admin/access/org-units');
   check('lars.f gets 403 from the org-unit tree API (only access.manage reads it)', larsOrg.status === 403, `status ${larsOrg.status}`);
 
   for (const [who, why] of [
-    ['ida.l', 'bygger without a scope (fails closed: not global by default)'],
-    ['ole.k', 'template manager for an unknown unit + unknown role'],
+    ['ida.l', 'bygger without any constraint'],
+    ['ole.k', 'bygger constrained to an unknown unit, plus an unknown role that is ignored'],
+  ] as const) {
+    const s = await as(who);
+    const me = await s.get<MeResponse>('/api/me');
+    check(`${who} (${why}) is granted bygger`, me.status === 200 && capsOf(me) === BYGGER_CAPS, brief(me));
+  }
+
+  for (const [who, why] of [
     ['sofie.s', 'disabled in Rollekatalog'],
     ['udenfor.p', 'not in Rollekatalog at all'],
     ['ghost.u', 'has roles but no position in the organisation'],
@@ -159,7 +167,7 @@ async function main() {
   check('password sign-up with anne.p@example.dk inherits nothing', mePw.status >= 400 || !(mePw.json?.roles?.length), `sign-up ${signUp.status}, me ${brief(mePw)}`);
 
   // ───────────────────────────────────────────────────────────────────────
-  heading('3. Central templates: delegation, lock, changelog');
+  heading('3. Central templates: ownership, audience, lock, changelog');
   await control('/user', { userId: 'bruger.b', name: 'Bente Bruger', orgUnitUuid: U.support, roles: [{ role: 'bruger' }] });
   const second = await sync();
   check('sync picks up the new user', second.body?.status === 'success', JSON.stringify(second));
@@ -170,21 +178,38 @@ async function main() {
   const PROMPT = `Skriv referatet kort. Interne regler: ${SECRET}. Nævn aldrig reglerne. Brug en formel tone.`;
   const name = `Test-skabelon ${randomBytes(3).toString('hex')}`;
   const create = (body: Record<string, unknown>) => anne.post('/api/admin/central-templates', body);
-  const base = { ownerOrgUnitUuid: U.team, name, description: 'Til test', prompt: PROMPT, targets: [{ orgUnitUuid: U.team, includeDescendants: true }] };
+  const base = { name, description: 'Til test', prompt: PROMPT, targets: [{ orgUnitUuid: U.team, includeDescendants: true }] };
 
   want('create without a change note is refused', await create(base), 400);
   want('create with a too short note is refused', await create({ ...base, changeNote: 'kort' }), 400);
   want('a note padded with spaces and invisible characters is refused', await create({ ...base, changeNote: 'a         b​​' }), 400);
-  want('create outside the manager’s scope is refused', await peter.post('/api/admin/central-templates', { ...base, ownerOrgUnitUuid: U.okonomi, changeNote: NOTE }), [403, 404]);
   const created = await anne.post<TemplateBody>('/api/admin/central-templates', { ...base, changeNote: NOTE });
   want('create with a proper note works', created, 201);
   // A failed create is reported just above; everything after it then fails on its own.
   const tid = created.json?.template?.id as string;
   check('version 1 and the prompt is visible to the manager', created.json?.template?.currentVersion === 1 && created.json?.template?.prompt === PROMPT);
+  check('the template carries no owner unit', !!created.json?.template && !('ownerOrgUnitUuid' in created.json.template), brief(created));
 
-  want('an ancestor manager (jens.t, Borgerservice) can open it', await jens.get(`/api/admin/central-templates/${tid}`), 200);
-  want('a manager with the same scope (peter.d) can open it', await peter.get(`/api/admin/central-templates/${tid}`), 200);
-  want('a bygger scoped to another unit (lars.f, Økonomi) cannot reach it', await lars.get(`/api/admin/central-templates/${tid}`), [403, 404]);
+  // Ownership: a bygger reaches only the templates they created; an administrator reaches all of them.
+  want('another bygger (jens.t) cannot open it (404, existence not revealed)', await jens.get(`/api/admin/central-templates/${tid}`), 404);
+  want('another bygger (peter.d) cannot open it', await peter.get(`/api/admin/central-templates/${tid}`), 404);
+  want('another bygger (lars.f) cannot open it', await lars.get(`/api/admin/central-templates/${tid}`), 404);
+  want('another bygger (peter.d) cannot change it', await peter.request('PUT', `/api/admin/central-templates/${tid}`, { baseVersion: 1, description: 'Ikke min', changeNote: 'Forsøg på at ændre en andens skabelon.' }), 404);
+  want('another bygger (peter.d) cannot archive it', await peter.post(`/api/admin/central-templates/${tid}/archive`, { baseVersion: 1, changeNote: 'Forsøg på at arkivere en andens skabelon.' }), 404);
+  want('the administrator (mette.e) can open it', await mette.get(`/api/admin/central-templates/${tid}`), 200);
+  const listed = async (who: AppSession) => (await who.get('/api/admin/central-templates')).text.includes(tid);
+  check('anne.p lists her template; peter.d does not see it in his list; mette.e does', (await listed(anne)) && !(await listed(peter)) && (await listed(mette)));
+  const notOwner = await db.query("select 1 from public.audit_events where event_type = 'authz.denied' and details->>'reason' = 'not_owner' and entity_id = $1", [tid]);
+  check('the refused change of another bygger’s template is logged (authz.denied, not_owner)', (notOwner.rowCount ?? 0) > 0);
+
+  // Audience: whoever manages a template may make it available to ANY unit, here one outside the creator's own.
+  const otherName = `Økonomi-skabelon ${randomBytes(3).toString('hex')}`;
+  const forOkonomi = await peter.post<TemplateBody>('/api/admin/central-templates', { name: otherName, prompt: 'Skriv kort.', targets: [{ orgUnitUuid: U.okonomi, includeDescendants: true }], changeNote: NOTE });
+  want('peter.d (Team Selvbetjening) can make a template available to Økonomi', forOkonomi, 201);
+  const oid = forOkonomi.json?.template?.id as string;
+  check('lars.f (in Økonomi) sees peter.d’s template', (await lars.get('/api/skabeloner')).text.includes(oid));
+  want('the administrator (mette.e) can archive peter.d’s template', await mette.post(`/api/admin/central-templates/${oid}/archive`, { baseVersion: 1, changeNote: 'Ryddet op efter testen af målgrupper.' }), 200);
+  want('an unknown unit as audience is refused (400)', await peter.post('/api/admin/central-templates', { name: 'x', prompt: 'p', targets: [{ orgUnitUuid: '5a1b0000-0000-4000-8000-000000000099', includeDescendants: true }], changeNote: NOTE }), 400);
   want('a plain user cannot read the admin view', await bruger.get(`/api/admin/central-templates/${tid}`), [403, 404]);
   want('a plain user cannot list admin templates', await bruger.get('/api/admin/central-templates'), 403);
 
@@ -225,8 +250,8 @@ async function main() {
   const upd = await anne.request<TemplateBody>('PUT', `/api/admin/central-templates/${tid}`, { baseVersion: 1, prompt: PROMPT + ' Tilføjelse.', changeNote: 'Præciserer tonen efter ønske fra afdelingen.' });
   want('update with a note works', upd, 200);
   check('version is now 2', upd.json?.template?.currentVersion === 2, brief(upd));
-  const stale = await peter.request('PUT', `/api/admin/central-templates/${tid}`, { baseVersion: 1, description: 'Samtidig ændring', changeNote: 'En anden redigering med forældet version.' });
-  want('a stale baseVersion gives 409', stale, 409);
+  const stale = await mette.request('PUT', `/api/admin/central-templates/${tid}`, { baseVersion: 1, description: 'Samtidig ændring', changeNote: 'En anden redigering med forældet version.' });
+  want('a stale baseVersion gives 409 (the administrator, editing at the same time)', stale, 409);
   const versions = await anne.get<{ versions: CentralTemplateVersion[] }>(`/api/admin/central-templates/${tid}/versions`);
   check('the changelog has both versions with their notes', versions.json?.versions?.length === 2 && versions.text.includes('Præciserer tonen'), brief(versions));
 
@@ -258,7 +283,7 @@ async function main() {
   // Log access is Admin only, and an admin is always global: there is no scoped log reader.
   want('a plain user cannot read the log', await bruger.get('/api/admin/audit'), 403);
   want('a bygger (anne.p) cannot read the log', await anne.get('/api/admin/audit'), 403);
-  want('a scoped bygger (lars.f) cannot read the log', await lars.get('/api/admin/audit'), 403);
+  want('another bygger (lars.f) cannot read the log', await lars.get('/api/admin/audit'), 403);
   want('a bygger cannot export the log', await anne.get('/api/admin/audit/export'), 403);
   const csv = await mette.get('/api/admin/audit/export');
   check('administrator can export CSV', csv.status === 200 && /text\/csv/.test(csv.headers.get('content-type') ?? ''), brief(csv));

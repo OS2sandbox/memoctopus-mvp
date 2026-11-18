@@ -1,7 +1,7 @@
 // Needs a real Postgres 15+; skipped unless TEST_DATABASE_URL is set (see src/test/pg.ts).
 // End to end: mock Rollekatalog -> runSync -> an app user linked to its directory
-// row -> resolvePrincipal -> org-tree scope checks. It proves the pieces fit: what
-// the sync writes is exactly what the permission code reads.
+// row -> resolvePrincipal. It proves the pieces fit: what the sync writes is exactly
+// what the permission code reads.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from 'pg';
 import { hasPg, withFreshSchema, pgSchemaEnv } from '@/test/pg';
@@ -27,7 +27,6 @@ vi.mock('@/lib/db', async () => {
 });
 
 import { resolvePrincipal } from '@/lib/authz/principal';
-import { isOrgUnitWithinScope, orgUnitsInScope, type ScopeEnv } from '@/lib/authz/scope';
 import type { Principal } from '@/lib/authz/types';
 import { createRollekatalogClient } from './client';
 import { fixtureData, startMockRollekatalog, type MockRollekatalog } from './mock-server';
@@ -38,7 +37,6 @@ const O = (n: number) => `5a1b0000-0000-4000-8000-${String(n).padStart(12, '0')}
 
 // Fixture tree:  1 Kommune > 2 Borgerservice > 3 Team Selvbetjening > 5 Digital Support
 //                1 Kommune > 4 Økonomi
-const ALL_UNITS = [1, 2, 3, 4, 5];
 
 let mock: MockRollekatalog;
 const opened: Client[] = [];
@@ -71,10 +69,10 @@ const schemaEnv = pgSchemaEnv(opened);
 interface World {
   c: Client;
   schema: string;
-  scopeEnv: ScopeEnv;
   sync: (opts?: { force?: boolean }) => ReturnType<typeof runSync>;
   principalOf: (directoryUuid: string) => Promise<Principal>;
-  inScope: (p: Principal, cap: Parameters<typeof isOrgUnitWithinScope>[1]) => Promise<number[]>;
+  /** The scope column of the person's mirrored rows (null = no org unit). */
+  scopesOf: (directoryUuid: string) => Promise<Array<string | null>>;
 }
 
 async function withWorld(fn: (w: World) => Promise<void>) {
@@ -83,14 +81,9 @@ async function withWorld(fn: (w: World) => Promise<void>) {
     const env = schemaEnv(schema);
     let tick = 0;
     const base = Date.now();
-    const scopeEnv: ScopeEnv = {
-      query: (text, params) => c.query(text, params as unknown[]),
-      orgUnitsTable: `"${schema}".org_units`,
-    };
     const world: World = {
       c,
       schema,
-      scopeEnv,
       sync: (opts = {}) =>
         runSync(
           { trigger: 'cron', ...opts },
@@ -108,19 +101,17 @@ async function withWorld(fn: (w: World) => Promise<void>) {
         await c.query('UPDATE directory_users SET app_user_id = $1 WHERE uuid = $2', [appUser, directoryUuid]);
         return resolvePrincipal(appUser);
       },
-      // Which fixture units are inside the principal's scope for the capability.
-      inScope: async (p, cap) => {
-        const hits: number[] = [];
-        for (const n of ALL_UNITS) if (await isOrgUnitWithinScope(p, cap, O(n), scopeEnv)) hits.push(n);
-        return hits;
-      },
+      scopesOf: async (directoryUuid) =>
+        (await c.query('SELECT scope_org_unit_uuid FROM role_assignments WHERE directory_user_uuid = $1', [directoryUuid])).rows.map(
+          (r) => r.scope_org_unit_uuid,
+        ),
     };
     await fn(world);
   });
 }
 
-describe.skipIf(!hasPg)('Rollekatalog sync -> principal -> scope (real Postgres)', () => {
-  it('a bygger constrained to Borgerservice may manage templates for exactly that subtree', () =>
+describe.skipIf(!hasPg)('Rollekatalog sync -> principal (real Postgres)', () => {
+  it('a bygger constrained to Borgerservice becomes an unscoped bygger: template.manage, no administration', () =>
     withWorld(async (w) => {
       expect((await w.sync()).status).toBe('success');
       const jens = await w.principalOf(U(2)); // bygger, constraint = Borgerservice (2)
@@ -128,68 +119,22 @@ describe.skipIf(!hasPg)('Rollekatalog sync -> principal -> scope (real Postgres)
       expect(jens.disabled).toBe(false);
       expect(jens.source).toBe('rollekatalog');
       expect(jens.roles).toEqual(['bruger', 'bygger']);
-      expect(jens.capabilities).toContain('template.manage');
-      expect(jens.capabilities).not.toContain('audit.read');
-      expect(jens.capabilities).not.toContain('access.manage');
-      expect(jens.capabilities).not.toContain('sync.run');
-
-      expect(jens.scopes['template.manage']).toEqual({ global: false, roots: [{ orgUnitUuid: O(2), includeDescendants: true }] });
-      // Borgerservice, Team Selvbetjening and Digital Support. NOT Kommune (the parent) and NOT Økonomi (a sibling).
-      expect(await w.inScope(jens, 'template.manage')).toEqual([2, 3, 5]);
-      expect(await isOrgUnitWithinScope(jens, 'template.manage', O(4), w.scopeEnv)).toBe(false);
-      expect(await isOrgUnitWithinScope(jens, 'template.manage', O(1), w.scopeEnv)).toBe(false);
-      expect(await orgUnitsInScope(jens, 'template.manage', w.scopeEnv)).toEqual({ all: false, uuids: expect.arrayContaining([O(2), O(3), O(5)]) });
+      expect(jens.capabilities).toEqual(['template.use', 'template.manage']);
+      // Byggere are not tied to org units: the constraint is not stored.
+      expect(await w.scopesOf(U(2))).toEqual([null]);
     }));
 
-  it('two constrained units give exactly those two subtrees (anne: Team Selvbetjening and Økonomi)', () =>
+  it('every bygger counts, whatever its constraints: two units, an unknown unit, none (anne, lars, ole, ida)', () =>
     withWorld(async (w) => {
       await w.sync();
-      const anne = await w.principalOf(U(3));
-      expect(await w.inScope(anne, 'template.manage')).toEqual([3, 4, 5]);
-      expect(await isOrgUnitWithinScope(anne, 'template.manage', O(2), w.scopeEnv)).toBe(false);
-    }));
-
-  it('an assignment with a constraint on an unknown unit grants no scoped capability at all', () =>
-    withWorld(async (w) => {
-      await w.sync();
-      const ole = await w.principalOf(U(8)); // bygger constrained only to a unit Rollekatalog does not export
-      expect(ole.roles).toEqual(['bruger']);
-      expect(ole.capabilities).not.toContain('template.manage');
-      expect(await w.inScope(ole, 'template.manage')).toEqual([]);
-    }));
-
-  it('a bygger without a usable constraint gets NO template.manage scope under the defaults', () =>
-    withWorld(async (w) => {
-      await w.sync();
-      const ida = await w.principalOf(U(7)); // bygger, no constraint
-      expect(ida.roles).toEqual(['bruger']);
-      expect(ida.capabilities).not.toContain('template.manage');
-      expect(ida.scopes['template.manage']).toBeUndefined();
-      expect(await w.inScope(ida, 'template.manage')).toEqual([]);
-      expect(await orgUnitsInScope(ida, 'template.manage', w.scopeEnv)).toEqual({ all: false, uuids: [] });
-    }));
-
-  it('a bygger with a known and an unknown unit manages templates for exactly the known one (lars: Økonomi, a leaf)', () =>
-    withWorld(async (w) => {
-      await w.sync();
-      const lars = await w.principalOf(U(4));
-      expect(lars.roles).toEqual(['bruger', 'bygger']);
-      expect(lars.capabilities).toContain('template.manage');
-      expect(lars.capabilities).not.toContain('audit.read');
-      expect(await w.inScope(lars, 'template.manage')).toEqual([4]);
-    }));
-
-  it('ROLLEKATALOG_GLOBAL_ROLES makes the same unscoped bygger global (the explicit opt-in), but never an administrator', () =>
-    withWorld(async (w) => {
-      vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'admin,bygger');
-      await w.sync();
-      const ida = await w.principalOf(U(7));
-      expect(ida.roles).toEqual(['bruger', 'bygger']);
-      expect(ida.scopes['template.manage']).toEqual({ global: true, roots: [] });
-      expect(await w.inScope(ida, 'template.manage')).toEqual(ALL_UNITS);
-      // bygger has no administrative capability, global or not.
-      expect(ida.capabilities).not.toContain('audit.read');
-      expect(ida.capabilities).not.toContain('access.manage');
+      for (const n of [3, 4, 7, 8]) {
+        const p = await w.principalOf(U(n));
+        expect(p.roles, `user ${n}`).toContain('bygger');
+        expect(p.capabilities, `user ${n}`).toContain('template.manage');
+        expect(p.capabilities, `user ${n}`).not.toContain('template.manage_all');
+        expect(p.capabilities, `user ${n}`).not.toContain('audit.read');
+        expect((await w.scopesOf(U(n))).every((s) => s === null), `user ${n}`).toBe(true);
+      }
     }));
 
   it('admin becomes global, even when Rollekatalog attached an org-unit constraint to it', () =>
@@ -199,10 +144,19 @@ describe.skipIf(!hasPg)('Rollekatalog sync -> principal -> scope (real Postgres)
         // mette.e carries a constraint on the admin role, rune.a none: both are global administrators.
         const admin = await w.principalOf(U(n));
         expect(admin.roles).toContain('admin');
-        expect(admin.capabilities).toEqual(expect.arrayContaining(['access.manage', 'sync.run', 'audit.export', 'template.manage']));
-        expect(admin.scopes['template.manage']).toEqual({ global: true, roots: [] });
-        expect(await w.inScope(admin, 'template.manage')).toEqual(ALL_UNITS);
+        expect(admin.capabilities).toEqual(
+          expect.arrayContaining(['access.manage', 'sync.run', 'audit.export', 'template.manage', 'template.manage_all']),
+        );
+        expect(await w.scopesOf(U(n))).toEqual([null]);
       }
+    }));
+
+  it('ROLLEKATALOG_GLOBAL_ROLES without admin leaves the administrators without a row; byggere are unaffected', () =>
+    withWorld(async (w) => {
+      vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'none');
+      await w.sync();
+      expect((await w.principalOf(U(9))).roles).not.toContain('admin');
+      expect((await w.principalOf(U(2))).roles).toContain('bygger');
     }));
 
   it('a user disabled in Rollekatalog is disabled in the principal, with no capabilities, although the roles are still listed upstream', () =>
@@ -211,7 +165,6 @@ describe.skipIf(!hasPg)('Rollekatalog sync -> principal -> scope (real Postgres)
       expect(await w.c.query('SELECT count(*)::int AS n FROM role_assignments WHERE directory_user_uuid = $1', [U(5)])).toMatchObject({ rows: [{ n: 1 }] });
       const sofie = await w.principalOf(U(5));
       expect(sofie).toMatchObject({ disabled: true, roles: [], capabilities: [] });
-      expect(await w.inScope(sofie, 'template.manage')).toEqual([]);
     }));
 
   it('a user who disappears upstream is disabled on the next sync and loses everything at once', () =>
@@ -253,10 +206,10 @@ describe.skipIf(!hasPg)('Rollekatalog sync -> principal -> scope (real Postgres)
       expect(await resolvePrincipal(`app-${U(9)}`)).toMatchObject({ disabled: true, capabilities: [], roles: [] });
     }));
 
-  it('a role revoked upstream is gone after the next sync; a moved constraint moves the scope', () =>
+  it('a role revoked upstream is gone after the next sync; a moved constraint changes nothing', () =>
     withWorld(async (w) => {
       await w.sync();
-      expect(await w.inScope(await w.principalOf(U(2)), 'template.manage')).toEqual([2, 3, 5]);
+      expect((await w.principalOf(U(2))).capabilities).toContain('template.manage');
 
       const d = fixtureData();
       mock.setData({
@@ -271,21 +224,15 @@ describe.skipIf(!hasPg)('Rollekatalog sync -> principal -> scope (real Postgres)
             : a,
         ),
       });
-      await w.sync();
-      expect(await w.inScope(await resolvePrincipal(`app-${U(2)}`), 'template.manage')).toEqual([4]);
+      const moved = await w.sync();
+      expect(moved.counts.assignmentsUpserted).toBe(0);
+      expect(await w.scopesOf(U(2))).toEqual([null]);
 
       mock.setData({ roleAssignments: (d.roleAssignments as Array<{ userId: string }>).filter((a) => a.userId !== 'jens.t') });
       await w.sync();
       const jens = await resolvePrincipal(`app-${U(2)}`);
       expect(jens.capabilities).not.toContain('template.manage');
       expect(jens.roles).toEqual(['bruger']); // the implicit baseline stays
-    }));
-
-  it('ROLLEKATALOG_SCOPE_DESCENDANTS=false covers the unit only, not its subtree', () =>
-    withWorld(async (w) => {
-      vi.stubEnv('ROLLEKATALOG_SCOPE_DESCENDANTS', 'false');
-      await w.sync();
-      expect(await w.inScope(await w.principalOf(U(2)), 'template.manage')).toEqual([2]);
     }));
 
   describe('mode and staleness rules, with synced data', () => {

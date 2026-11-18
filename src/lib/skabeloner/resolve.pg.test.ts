@@ -47,15 +47,14 @@ async function person(c: Client, id: string, opts: { units?: string[]; linked?: 
 
 async function template(
   c: Client,
-  owner: string | null,
   name: string,
   targets: Array<{ unit: string; descendants?: boolean }>,
   opts: { status?: 'active' | 'archived'; version?: number } = {},
 ): Promise<string> {
   const r = await c.query(
-    `INSERT INTO central_templates (owner_org_unit_uuid, name, prompt, status, current_version)
-     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-    [owner, name, PROMPT, opts.status ?? 'active', opts.version ?? 1],
+    `INSERT INTO central_templates (created_by_user_id, name, prompt, status, current_version)
+     VALUES ('bygger', $1, $2, $3, $4) RETURNING id`,
+    [name, PROMPT, opts.status ?? 'active', opts.version ?? 1],
   );
   for (const t of targets) {
     await c.query(
@@ -90,8 +89,8 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
   it('a member of the target unit receives it, with or without include_descendants', () =>
     withFreshSchema(async (c, schema) => {
       const t = await tree(c);
-      const incl = await template(c, t.a, 'Med', [{ unit: t.a1, descendants: true }]);
-      const excl = await template(c, t.a, 'Uden', [{ unit: t.a1, descendants: false }]);
+      const incl = await template(c, 'Med', [{ unit: t.a1, descendants: true }]);
+      const excl = await template(c, 'Uden', [{ unit: t.a1, descendants: false }]);
       await person(c, 'u-a1', { units: [t.a1] });
       expect(await ids(c, schema, 'u-a1')).toEqual([incl, excl].sort());
     }));
@@ -99,8 +98,8 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
   it('a member of a DESCENDANT receives it only when the target includes descendants', () =>
     withFreshSchema(async (c, schema) => {
       const t = await tree(c);
-      const incl = await template(c, t.a, 'Med', [{ unit: t.a, descendants: true }]);
-      await template(c, t.a, 'Uden', [{ unit: t.a, descendants: false }]);
+      const incl = await template(c, 'Med', [{ unit: t.a, descendants: true }]);
+      await template(c, 'Uden', [{ unit: t.a, descendants: false }]);
       await person(c, 'u-deep', { units: [t.a11] });
       expect(await ids(c, schema, 'u-deep')).toEqual([incl]);
 
@@ -111,7 +110,7 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
   it('members of a sibling, a parent or another branch receive nothing', () =>
     withFreshSchema(async (c, schema) => {
       const t = await tree(c);
-      const tpl = await template(c, t.a, 'Kun A1', [{ unit: t.a1, descendants: true }]);
+      const tpl = await template(c, 'Kun A1', [{ unit: t.a1, descendants: true }]);
       await person(c, 'u-sibling', { units: [t.a] }); // parent of the target
       await person(c, 'u-other', { units: [t.b1] });
       await person(c, 'u-root', { units: [t.root] });
@@ -126,7 +125,7 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
   it('an unlinked app user and a disabled directory user receive nothing (fail closed)', () =>
     withFreshSchema(async (c, schema) => {
       const t = await tree(c);
-      const tpl = await template(c, t.a, 'Alle i A', [{ unit: t.a, descendants: true }]);
+      const tpl = await template(c, 'Alle i A', [{ unit: t.a, descendants: true }]);
       await person(c, 'u-unlinked', { linked: false });
       await person(c, 'u-disabled', { units: [t.a1], disabled: true });
       await person(c, 'u-ok', { units: [t.a1] });
@@ -142,10 +141,10 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
   it('a user in several units receives the union, each template once', () =>
     withFreshSchema(async (c, schema) => {
       const t = await tree(c);
-      const viaA = await template(c, t.root, 'Via A', [{ unit: t.a, descendants: true }]);
-      const viaB = await template(c, t.root, 'Via B', [{ unit: t.b1, descendants: false }]);
-      const both = await template(c, t.root, 'Begge', [{ unit: t.a1, descendants: true }, { unit: t.b, descendants: true }]);
-      await template(c, t.root, 'Ingen', [{ unit: t.a11, descendants: false }]);
+      const viaA = await template(c, 'Via A', [{ unit: t.a, descendants: true }]);
+      const viaB = await template(c, 'Via B', [{ unit: t.b1, descendants: false }]);
+      const both = await template(c, 'Begge', [{ unit: t.a1, descendants: true }, { unit: t.b, descendants: true }]);
+      await template(c, 'Ingen', [{ unit: t.a11, descendants: false }]);
       await person(c, 'u-multi', { units: [t.a1, t.b1] });
       expect(await ids(c, schema, 'u-multi')).toEqual([viaA, viaB, both].sort());
     }));
@@ -153,7 +152,7 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
   it('archived templates are neither listed nor resolvable; restoring brings them back with the stored version', () =>
     withFreshSchema(async (c, schema) => {
       const t = await tree(c);
-      const tpl = await template(c, t.a, 'Arkiveret', [{ unit: t.a, descendants: true }], { status: 'archived', version: 5 });
+      const tpl = await template(c, 'Arkiveret', [{ unit: t.a, descendants: true }], { status: 'archived', version: 5 });
       await person(c, 'u-1', { units: [t.a] });
       const { env } = envOf(c, schema);
       expect(await ids(c, schema, 'u-1')).toEqual([]);
@@ -167,7 +166,7 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
   it('a template with zero targets reaches nobody', () =>
     withFreshSchema(async (c, schema) => {
       const t = await tree(c);
-      await template(c, t.a, 'Ingen modtagere', []);
+      await template(c, 'Ingen modtagere', []);
       await person(c, 'u-1', { units: [t.a] });
       expect(await ids(c, schema, 'u-1')).toEqual([]);
     }));
@@ -175,7 +174,7 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
   it('the summary never carries the prompt; resolve is the only place that reads it', () =>
     withFreshSchema(async (c, schema) => {
       const t = await tree(c);
-      await template(c, t.a, 'T', [{ unit: t.a, descendants: true }]);
+      await template(c, 'T', [{ unit: t.a, descendants: true }]);
       await person(c, 'u-1', { units: [t.a] });
       const { env, calls } = envOf(c, schema);
       const list = await listCentralForUser('u-1', env);
@@ -197,8 +196,8 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
       const y = await unit(c, 'Y', x);
       await c.query('UPDATE org_units SET parent_uuid = $1 WHERE uuid = $2', [y, x]); // X -> Y -> X
       const outside = await unit(c, 'Udenfor');
-      const viaCycle = await template(c, x, 'I cyklen', [{ unit: x, descendants: true }]);
-      await template(c, outside, 'Andet sted', [{ unit: outside, descendants: true }]);
+      const viaCycle = await template(c, 'I cyklen', [{ unit: x, descendants: true }]);
+      await template(c, 'Andet sted', [{ unit: outside, descendants: true }]);
       await person(c, 'u-cycle', { units: [y] });
       expect(await ids(c, schema, 'u-cycle')).toEqual([viaCycle]);
       const { env } = envOf(c, schema);
@@ -209,7 +208,7 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
     withFreshSchema(async (c, schema) => {
       const x = await unit(c, 'Selv');
       await c.query('UPDATE org_units SET parent_uuid = uuid WHERE uuid = $1', [x]);
-      const tpl = await template(c, x, 'T', [{ unit: x, descendants: true }]);
+      const tpl = await template(c, 'T', [{ unit: x, descendants: true }]);
       await person(c, 'u-1', { units: [x] });
       expect(await ids(c, schema, 'u-1')).toEqual([tpl]);
     }));
@@ -219,128 +218,62 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
       const chain: string[] = [];
       for (let i = 0; i < MAX_ORG_DEPTH + 6; i++) chain.push(await unit(c, `N${i}`, chain[i - 1] ?? null));
       const leaf = chain[chain.length - 1];
-      const tooFar = await template(c, chain[0], 'Rod', [{ unit: chain[0], descendants: true }]);
-      const near = await template(c, chain[chain.length - 10], 'Nær', [{ unit: chain[chain.length - 10], descendants: true }]);
+      const tooFar = await template(c, 'Rod', [{ unit: chain[0], descendants: true }]);
+      const near = await template(c, 'Nær', [{ unit: chain[chain.length - 10], descendants: true }]);
       await person(c, 'u-leaf', { units: [leaf] });
       const got = await ids(c, schema, 'u-leaf');
       expect(got).toContain(near);
       expect(got).not.toContain(tooFar);
     }));
 
-  describe('owner-subtree re-check at read time', () => {
+  describe('targets follow the CURRENT org tree (a template has no owner unit)', () => {
     const move = (c: Client, unitUuid: string, parent: string | null) =>
       c.query('UPDATE org_units SET parent_uuid = $1 WHERE uuid = $2', [parent, unitUuid]);
 
-    it('baseline: a target inside the owner subtree delivers to its members and (included) descendants', () =>
+    it('baseline: a target delivers to its members and (included) descendants', () =>
       withFreshSchema(async (c, schema) => {
         const t = await tree(c);
-        const tpl = await template(c, t.a, 'Baseline', [{ unit: t.a1, descendants: true }]);
+        const tpl = await template(c, 'Baseline', [{ unit: t.a1, descendants: true }]);
         await person(c, 'u-a1', { units: [t.a1] });
         await person(c, 'u-a11', { units: [t.a11] });
+        await person(c, 'u-a', { units: [t.a] });
         expect(await ids(c, schema, 'u-a1')).toEqual([tpl]);
         expect(await ids(c, schema, 'u-a11')).toEqual([tpl]);
+        expect(await ids(c, schema, 'u-a')).toEqual([]); // never upwards
         const { env } = envOf(c, schema);
         expect(await resolveCentralTemplate('u-a11', tpl, env)).toMatchObject({ id: tpl, prompt: PROMPT });
       }));
 
-    it('a target re-parented OUTSIDE the owner subtree stops delivering, and delivers again when moved back', () =>
+    it('a target anywhere in the tree delivers; moving a unit keeps its own target and changes what descendants reach', () =>
       withFreshSchema(async (c, schema) => {
         const t = await tree(c);
-        const tpl = await template(c, t.a, 'Drift', [{ unit: t.a1, descendants: false }]);
+        const onA1 = await template(c, 'Direkte', [{ unit: t.a1, descendants: false }]);
+        const underA = await template(c, 'Under A', [{ unit: t.a, descendants: true }]);
+        const underB = await template(c, 'Under B', [{ unit: t.b, descendants: true }]);
         await person(c, 'u-a1', { units: [t.a1] });
+        expect(await ids(c, schema, 'u-a1')).toEqual([onA1, underA].sort());
+
+        await move(c, t.a1, t.b); // A1 now sits under B
+        expect(await ids(c, schema, 'u-a1')).toEqual([onA1, underB].sort());
         const { env } = envOf(c, schema);
-        expect(await ids(c, schema, 'u-a1')).toEqual([tpl]);
-
-        await move(c, t.a1, t.b); // A1 now sits under B, outside owner A
-        expect(await ids(c, schema, 'u-a1')).toEqual([]);
-        expect(await resolveCentralTemplate('u-a1', tpl, env)).toBeNull();
-
-        await move(c, t.a1, t.a);
-        expect(await ids(c, schema, 'u-a1')).toEqual([tpl]);
-        expect(await resolveCentralTemplate('u-a1', tpl, env)).toMatchObject({ id: tpl });
+        expect(await resolveCentralTemplate('u-a1', underA, env)).toBeNull();
+        expect(await resolveCentralTemplate('u-a1', underB, env)).toMatchObject({ id: underB });
       }));
 
-    it('restoring an archived template does not re-activate a drifted target', () =>
+    it('an archived template delivers nothing; once active again it delivers', () =>
       withFreshSchema(async (c, schema) => {
         const t = await tree(c);
-        const tpl = await template(c, t.a, 'Arkiv', [{ unit: t.a1, descendants: true }], { status: 'archived' });
+        const tpl = await template(c, 'Arkiv', [{ unit: t.a1, descendants: true }], { status: 'archived' });
         await person(c, 'u-a1', { units: [t.a1] });
-        await move(c, t.a1, t.b);
+        expect(await ids(c, schema, 'u-a1')).toEqual([]);
         await c.query(`UPDATE central_templates SET status = 'active' WHERE id = $1`, [tpl]);
-        expect(await ids(c, schema, 'u-a1')).toEqual([]);
-      }));
-
-    it('a target equal to the owner unit delivers', () =>
-      withFreshSchema(async (c, schema) => {
-        const t = await tree(c);
-        const tpl = await template(c, t.a, 'Ejer', [{ unit: t.a, descendants: false }]);
-        await person(c, 'u-a', { units: [t.a] });
-        expect(await ids(c, schema, 'u-a')).toEqual([tpl]);
-      }));
-
-    it(`a target ${MAX_ORG_DEPTH} levels below the owner delivers; one level further does not`, () =>
-      withFreshSchema(async (c, schema) => {
-        const chain: string[] = [];
-        for (let i = 0; i <= MAX_ORG_DEPTH + 1; i++) chain.push(await unit(c, `D${i}`, chain[i - 1] ?? null));
-        const atCap = await template(c, chain[0], 'Ved grænsen', [{ unit: chain[MAX_ORG_DEPTH], descendants: false }]);
-        const beyond = await template(c, chain[0], 'Over grænsen', [{ unit: chain[MAX_ORG_DEPTH + 1], descendants: false }]);
-        await person(c, 'u-cap', { units: [chain[MAX_ORG_DEPTH]] });
-        await person(c, 'u-beyond', { units: [chain[MAX_ORG_DEPTH + 1]] });
-        expect(await ids(c, schema, 'u-cap')).toEqual([atCap]);
-        expect(await ids(c, schema, 'u-beyond')).toEqual([]);
-        const { env } = envOf(c, schema);
-        expect(await resolveCentralTemplate('u-beyond', beyond, env)).toBeNull();
-      }), 60_000);
-
-    it('a parent cycle that never reaches the owner terminates and delivers nothing', () =>
-      withFreshSchema(async (c, schema) => {
-        const owner = await unit(c, 'Ejer');
-        const x = await unit(c, 'X', owner);
-        const y = await unit(c, 'Y', x);
-        await move(c, x, y); // X -> Y -> X, detached from the owner
-        const tpl = await template(c, owner, 'Cyklisk', [{ unit: y, descendants: true }]);
-        await person(c, 'u-cycle', { units: [y] });
-        await person(c, 'u-below', { units: [await unit(c, 'Z', x)] });
-        expect(await ids(c, schema, 'u-cycle')).toEqual([]);
-        expect(await ids(c, schema, 'u-below')).toEqual([]);
-        const { env } = envOf(c, schema);
-        expect(await resolveCentralTemplate('u-cycle', tpl, env)).toBeNull();
-      }));
-
-    it('include_descendants on a drifted target does not deliver to its descendants either', () =>
-      withFreshSchema(async (c, schema) => {
-        const t = await tree(c);
-        const tpl = await template(c, t.a, 'Drift med børn', [{ unit: t.a1, descendants: true }]);
-        await person(c, 'u-a1', { units: [t.a1] });
-        await person(c, 'u-a11', { units: [t.a11] });
-        await move(c, t.a1, t.b);
-        expect(await ids(c, schema, 'u-a1')).toEqual([]);
-        expect(await ids(c, schema, 'u-a11')).toEqual([]);
-        const { env } = envOf(c, schema);
-        expect(await resolveCentralTemplate('u-a11', tpl, env)).toBeNull();
-      }));
-
-    it('with several targets, valid ones still deliver while the drifted one does not', () =>
-      withFreshSchema(async (c, schema) => {
-        const t = await tree(c);
-        const a2 = await unit(c, 'A2', t.a);
-        const tpl = await template(c, t.a, 'Flere', [
-          { unit: t.a1, descendants: true },
-          { unit: a2, descendants: true },
-        ]);
-        await person(c, 'u-a1', { units: [t.a1] });
-        await person(c, 'u-a2', { units: [a2] });
-        await person(c, 'u-both', { units: [t.a1, a2] });
-        await move(c, t.a1, t.b);
-        expect(await ids(c, schema, 'u-a1')).toEqual([]);
-        expect(await ids(c, schema, 'u-a2')).toEqual([tpl]);
-        expect(await ids(c, schema, 'u-both')).toEqual([tpl]);
+        expect(await ids(c, schema, 'u-a1')).toEqual([tpl]);
       }));
 
     it('stays ONE query per call', () =>
       withFreshSchema(async (c, schema) => {
         const t = await tree(c);
-        const tpl = await template(c, t.a, 'En', [{ unit: t.a1, descendants: true }]);
+        const tpl = await template(c, 'En', [{ unit: t.a1, descendants: true }]);
         await person(c, 'u-1', { units: [t.a11] });
         const { env, calls } = envOf(c, schema);
         await listCentralForUser('u-1', env);
@@ -363,8 +296,8 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
         );
         leaf = r.rows[0].uuid;
       }
-      const all = await template(c, root, 'Hele kommunen', [{ unit: root, descendants: true }]);
-      const other = await template(c, kids[1], 'Anden gren', [{ unit: kids[1], descendants: true }]);
+      const all = await template(c, 'Hele kommunen', [{ unit: root, descendants: true }]);
+      const other = await template(c, 'Anden gren', [{ unit: kids[1], descendants: true }]);
       await person(c, 'u-leaf', { units: [leaf] });
 
       const { env, calls } = envOf(c, schema);
@@ -395,15 +328,15 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
     const idsFor = async (c: Client, schema: string, userId: string, max: number | null = MAX) =>
       (await listCentralForUser(userId, envOf(c, schema, max).env)).map((x) => x.id).sort();
 
-    /** An organisation-wide template (no owner) targeted at one role. */
+    /** A template targeted at one role and no org unit. */
     async function wide(c: Client, name = 'Org-bred') {
       await catalogue(c, 'role', 'sagsbehandler');
-      const id = await template(c, null, name, []);
+      const id = await template(c, name, []);
       await target(c, id, 'role', 'sagsbehandler');
       return id;
     }
 
-    it('a person holding the role receives an org-wide template with no org units at all; the prompt only to the server resolver', () =>
+    it('a person holding the role receives a template with no org units at all; the prompt only to the server resolver', () =>
       withFreshSchema(async (c, schema) => {
         const tpl = await wide(c);
         await person(c, 'u-yes');
@@ -422,7 +355,7 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
       withFreshSchema(async (c, schema) => {
         await catalogue(c, 'role', 'x');
         await catalogue(c, 'group', 'x');
-        const tpl = await template(c, null, 'Kun rollen', []);
+        const tpl = await template(c, 'Kun rollen', []);
         await target(c, tpl, 'role', 'x');
         await person(c, 'u-group');
         await holds(c, 'u-group', 'group', 'x');
@@ -504,10 +437,10 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
       withFreshSchema(async (c, schema) => {
         const t = await tree(c);
         await catalogue(c, 'role', 'r');
-        const both = await template(c, t.a, 'Begge', [{ unit: t.a1 }]);
+        const both = await template(c, 'Begge', [{ unit: t.a1 }]);
         await target(c, both, 'role', 'r');
-        const unitOnly = await template(c, t.a, 'Kun enhed', [{ unit: t.a1 }]);
-        const roleOnly = await template(c, null, 'Kun rolle', []);
+        const unitOnly = await template(c, 'Kun enhed', [{ unit: t.a1 }]);
+        const roleOnly = await template(c, 'Kun rolle', []);
         await target(c, roleOnly, 'role', 'r');
 
         await person(c, 'u-unit', { units: [t.a1] });
@@ -523,15 +456,14 @@ describe.skipIf(!hasPg)('central template audience (real Postgres)', () => {
         expect(all).toHaveLength(3);
       }));
 
-    it('an org-wide template (no owner) delivers its unit targets without the owner walk; owned ones still re-check the owner subtree', () =>
+    it('unit targets in different branches of the tree all deliver (no owner subtree limits them)', () =>
       withFreshSchema(async (c, schema) => {
         const t = await tree(c);
-        const wideUnits = await template(c, null, 'Org-bred', [{ unit: t.b1 }, { unit: t.a1 }]);
-        // Owned by A but targeting B1 (outside A's subtree: drifted data): still blocked.
-        const drifted = await template(c, t.a, 'Skred', [{ unit: t.b1 }]);
+        const spread = await template(c, 'Spredt', [{ unit: t.b1 }, { unit: t.a1 }]);
         await person(c, 'u-b1', { units: [t.b1] });
-        expect(await idsFor(c, schema, 'u-b1', null)).toEqual([wideUnits]);
-        expect(await idsFor(c, schema, 'u-b1', null)).not.toContain(drifted);
+        await person(c, 'u-a11', { units: [t.a11] });
+        expect(await idsFor(c, schema, 'u-b1', null)).toEqual([spread]);
+        expect(await idsFor(c, schema, 'u-a11', null)).toEqual([spread]);
       }));
 
     it('the plan holds with ONE statement per call, and a user without role rows is not slowed by them', () =>

@@ -16,7 +16,6 @@ import { apiRequest } from './api';
 import { AdminPage } from './AdminPage';
 import { OrganisationAdmin } from './OrganisationAdmin';
 import { RoleGrantDialog } from './RoleGrantDialog';
-import { describeAssignmentScope } from './scope-text';
 import { RoleSourceCard } from './RoleSourceCard';
 import { LastSyncLine, SyncStatus, canSeeSyncRun, useSyncRun } from './SyncStatus';
 import { useOrgUnits } from './useOrgUnits';
@@ -60,7 +59,7 @@ export function UsersAdmin() {
   // One read of the latest sync run serves the explanation card, the "last synchronised" line and the sync panel.
   const sync = useSyncRun(!!me && canSeeSyncRun(me));
   const [users, setUsers] = useState<AppUser[]>([]);
-  // One read of the org units serves the role-grant dialog and the Organisation section below.
+  // The org units of the Organisation section below.
   const org = useOrgUnits();
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -167,7 +166,6 @@ export function UsersAdmin() {
                         {user.roles.map((a) => (
                           <li key={a.id} className="flex flex-wrap items-center gap-2">
                             <span className="font-medium">{roleName(a.roleKey)}</span>
-                            <span className="text-[13px] text-[var(--muted)]">{describeAssignmentScope(a)}</span>
                             <Badge variant="outline">{sourceName(a.source)}</Badge>
                             {!a.active && <Badge variant="warning">{inactiveReason(a)}</Badge>}
                             {(a.startDate || a.stopDate) && (
@@ -234,8 +232,6 @@ export function UsersAdmin() {
           open={grantFor !== null}
           onOpenChange={(o) => !o && setGrantFor(null)}
           user={grantFor ? { id: grantFor.id, name: grantFor.name } : null}
-          orgUnits={org.units}
-          orgUnitsError={org.error ? 'Kunne ikke hente organisationsenheder.' : null}
           onGranted={() => load(appliedQ)}
         />
       )}

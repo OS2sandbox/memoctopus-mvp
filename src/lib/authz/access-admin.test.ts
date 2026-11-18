@@ -60,10 +60,13 @@ describe('validateGrantShape', () => {
     expect(validateGrantShape({ ...base, roleKey: 'bruger' })).toBe('bruger');
   });
 
-  it('allows bygger with a scope, or without one (the global superuser)', () => {
+  it('allows bygger without a unit, and refuses it with one (no role is tied to org units)', () => {
     expect(validateGrantShape({ ...base, roleKey: 'bygger' })).toBe('bygger');
-    expect(validateGrantShape({ ...base, roleKey: 'bygger', scopeOrgUnitUuid: U1 })).toBe(
-      'bygger',
+    expect(() => validateGrantShape({ ...base, roleKey: 'bygger', scopeOrgUnitUuid: U1 })).toThrow(
+      expect.objectContaining({ code: 'scope_forbidden' }),
+    );
+    expect(() => validateGrantShape({ ...base, roleKey: 'bruger', scopeOrgUnitUuid: U1 })).toThrow(
+      expect.objectContaining({ code: 'scope_forbidden' }),
     );
   });
 
@@ -74,7 +77,7 @@ describe('validateGrantShape', () => {
     );
   });
 
-  it('rejects a malformed scope uuid', () => {
+  it('rejects a malformed scope uuid as well', () => {
     expect(() => validateGrantShape({ ...base, roleKey: 'bygger', scopeOrgUnitUuid: 'nope' })).toThrow(
       ValidationError,
     );
@@ -171,37 +174,23 @@ describe('grantRole', () => {
 
     const insert = calls.find((c) => c.sql.includes('INSERT INTO public.role_assignments'))!;
     expect(insert.sql).toContain("'local'");
-    expect(insert.params).toEqual([DIR, 'admin', null, true, null, null, 'admin-1']);
+    expect(insert.params).toEqual([DIR, 'admin', null, null, 'admin-1']);
 
     expect(recordEvent).not.toHaveBeenCalled();
   });
 
-  it('locks the scope unit FOR SHARE and lowercases it', async () => {
-    const { runner, calls } = makeFakeRunner((sql, p) =>
-      sql.includes('FROM public.org_units WHERE uuid = $1::uuid FOR SHARE') ? [{ '?column?': 1 }] : happy()(sql, p, true),
-    );
-    await grantRole({ ...input, roleKey: 'bygger', scopeOrgUnitUuid: U1.toUpperCase() }, runner);
-    const lock = calls.find((c) => c.sql.includes('FOR SHARE'))!;
-    expect(lock.params).toEqual([U1]);
-  });
-
-  it('stores include_descendants true for a global grant even if false was sent', async () => {
+  it('refuses a grant that names an org unit before any query', async () => {
     const { runner, calls } = makeFakeRunner(happy());
-    await grantRole({ ...input, includeDescendants: false }, runner);
-    expect(calls.find((c) => c.sql.includes('INSERT INTO public.role_assignments'))!.params[3]).toBe(true);
+    await expect(grantRole({ ...input, roleKey: 'bygger', scopeOrgUnitUuid: U1 }, runner)).rejects.toMatchObject({
+      code: 'scope_forbidden',
+    });
+    expect(calls).toHaveLength(0);
   });
 
   it('404 for an unknown user, before any write', async () => {
     const { runner, calls } = makeFakeRunner(respondBy([]));
     await expect(grantRole(input, runner)).rejects.toMatchObject({ code: 'user_not_found' });
     expect(calls.some((c) => c.sql.includes('INSERT'))).toBe(false);
-  });
-
-  it('404 for an unknown scope unit', async () => {
-    const { runner } = makeFakeRunner(respondBy([['FROM public.users WHERE id = $1', [{ x: 1 }]]]));
-    await expect(grantRole({ ...input, roleKey: 'bygger', scopeOrgUnitUuid: U1 }, runner)).rejects.toMatchObject({
-      code: 'org_unit_not_found',
-    });
   });
 
   it('409 when the same role is already assigned (insert returns no row)', async () => {
@@ -473,26 +462,15 @@ describe('org units', () => {
   });
 
   describe('deleteOrgUnit', () => {
-    const run = (over: { source?: string; children?: boolean; assigned?: boolean; exists?: boolean; owns?: boolean; targeted?: boolean }) =>
+    const run = (over: { source?: string; children?: boolean; assigned?: boolean; exists?: boolean; targeted?: boolean }) =>
       makeFakeRunner(
         respondBy([
           ['SELECT source FROM public.org_units', over.exists === false ? [] : [{ source: over.source ?? 'local' }]],
           ['WHERE parent_uuid', over.children ? [{ x: 1 }] : []],
           ['WHERE scope_org_unit_uuid', over.assigned ? [{ x: 1 }] : []],
-          ['FROM public.central_templates', over.owns ? [{ x: 1 }] : []],
           ['FROM public.central_template_targets', over.targeted ? [{ x: 1 }] : []],
         ]),
       );
-
-    it('409 with a Danish message while it owns central templates (the RESTRICT FK), without deleting', async () => {
-      const { runner, calls } = run({ owns: true });
-      await expect(deleteOrgUnit(U1, 'a', runner)).rejects.toMatchObject({
-        code: 'has_central_templates',
-        message: expect.stringContaining('centrale skabeloner'),
-      });
-      expect(calls.some((c) => c.sql.startsWith('DELETE'))).toBe(false);
-      expect(recordEvent).not.toHaveBeenCalled();
-    });
 
     it('409 while it is a target of central templates (the targets FK cascades silently), without deleting', async () => {
       const { runner, calls } = run({ targeted: true });
@@ -507,6 +485,8 @@ describe('org units', () => {
       const { runner, calls } = run({});
       await deleteOrgUnit(U1, 'a', runner);
       expect(calls.some((c) => c.sql.startsWith('DELETE FROM public.org_units'))).toBe(true);
+      // A unit no longer owns templates (a template belongs to its creator), so nothing asks about one.
+      expect(calls.some((c) => c.sql.includes('FROM public.central_templates'))).toBe(false);
       expect(recordEvent).not.toHaveBeenCalled();
     });
 

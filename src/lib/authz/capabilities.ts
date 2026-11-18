@@ -2,19 +2,18 @@ import {
   CAPABILITIES,
   ROLE_KEYS,
   type Capability,
-  type CapabilityScope,
   type Principal,
   type RoleAssignmentRow,
   type RoleKey,
 } from './types';
 
 /**
- * The one rule for how an assignment of a role relates to org units:
- *  - 'none': the role grants nothing unit-scoped, so it takes no unit; a NULL scope is its normal grant.
- *  - 'optional': for org units, or with a NULL scope for everywhere.
- *  - 'global-only': administrative power that cannot be narrowed to a unit; never given for one unit.
+ * The one rule for how an assignment of a role relates to org units. No role is tied to org units:
+ *  - 'none': the role takes no unit; a NULL scope is its normal grant.
+ *  - 'global-only': administrative power that is never given for one unit (an assignment that names
+ *    one, from an older version, grants none of the GLOBAL_ONLY capabilities).
  */
-export type RoleScope = 'none' | 'optional' | 'global-only';
+export type RoleScope = 'none' | 'global-only';
 
 interface RoleDefinition {
   capabilities: Capability[];
@@ -28,13 +27,11 @@ export const ROLE_DEFINITIONS: Record<RoleKey, RoleDefinition> = {
     capabilities: ['template.use'],
     scope: 'none',
   },
-  // Global (NULL scope) is the "superuser" who manages every shared prompt, which is
-  // what an IdP claim can grant (a claim carries no org unit). Scoped grants (local /
-  // Rollekatalog) still work; a NULL scope from a source that cannot be global stays
-  // the caller's problem, see dropStaleAssignments and the grant validation.
+  // Creates central templates, shares them with any unit (or role/group) and manages the
+  // ones they created themselves (src/lib/skabeloner/central.ts). Not tied to org units.
   'bygger': {
     capabilities: ['template.use', 'template.manage'],
-    scope: 'optional',
+    scope: 'none',
   },
   'admin': {
     capabilities: [...CAPABILITIES],
@@ -42,15 +39,12 @@ export const ROLE_DEFINITIONS: Record<RoleKey, RoleDefinition> = {
   },
 };
 
-export const SCOPED_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
-  'template.manage',
-]);
-
 // Capabilities that cannot be narrowed to an org unit. They only take effect
 // from a GLOBAL assignment: a role granted for one unit must not quietly hand
 // out whole-system power (a "unit administrator" could otherwise promote
 // themselves to a global one; a unit-scoped grant could read or export the whole log).
 export const GLOBAL_ONLY_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
+  'template.manage_all',
   'audit.read',
   'audit.export',
   'access.manage',
@@ -92,7 +86,6 @@ export function buildPrincipalFromAssignments(input: BuildPrincipalInput): Princ
       directoryUserUuid,
       roles: [],
       capabilities: [],
-      scopes: {},
       disabled: true,
       source: input.source ?? 'baseline',
     };
@@ -120,40 +113,11 @@ export function buildPrincipalFromAssignments(input: BuildPrincipalInput): Princ
     }
   }
 
-  const scopes: Partial<Record<Capability, CapabilityScope>> = {};
-  const seenRoots = new Map<Capability, Map<string, boolean>>();
-
-  for (const a of active) {
-    const def = ROLE_DEFINITIONS[a.roleKey];
-    for (const cap of def.capabilities) {
-      if (!SCOPED_CAPABILITIES.has(cap)) continue;
-      const scope = (scopes[cap] ??= { global: false, roots: [] });
-      if (a.scopeOrgUnitUuid === null) {
-        scope.global = true;
-        continue;
-      }
-      let roots = seenRoots.get(cap);
-      if (!roots) seenRoots.set(cap, (roots = new Map()));
-      // Same unit granted twice: the wider (descendants) grant wins.
-      roots.set(a.scopeOrgUnitUuid, (roots.get(a.scopeOrgUnitUuid) ?? false) || a.includeDescendants);
-    }
-  }
-  for (const [cap, roots] of seenRoots) {
-    const scope = scopes[cap]!;
-    scope.roots = [...roots].map(([orgUnitUuid, includeDescendants]) => ({
-      orgUnitUuid,
-      includeDescendants,
-    }));
-  }
-  // A capability granted by a role but with no scope contribution keeps an
-  // empty scope object, which covers nothing.
-
   return {
     userId,
     directoryUserUuid,
     roles: ROLE_KEYS.filter((r) => roles.has(r)),
     capabilities: CAPABILITIES.filter((c) => capabilities.has(c)),
-    scopes,
     disabled: false,
     source: active.length > 0 ? (input.source ?? 'local') : 'baseline',
   };

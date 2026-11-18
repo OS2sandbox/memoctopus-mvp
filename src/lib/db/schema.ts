@@ -354,10 +354,10 @@ export const centralTemplates = pgTable(
   'central_templates',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    // RESTRICT: an org unit that owns a central template cannot be deleted. NULL = an
-    // ORGANISATION-WIDE template (claims mode has no org units): only a manager with a GLOBAL
-    // template.manage assignment may touch it, and a scoped manager never sees it.
-    ownerOrgUnitUuid: uuid('owner_org_unit_uuid').references(() => orgUnits.uuid, { onDelete: 'restrict' }),
+    // Who created it (no FK, like every *_user_id here): a bygger manages the templates they
+    // created, an administrator (template.manage_all) every template. NULL only for a row whose
+    // first version had no author, which then only an administrator can manage.
+    createdByUserId: text('created_by_user_id'),
     name: text('name').notNull(),
     description: text('description').notNull().default(''),
     prompt: text('prompt').notNull(),
@@ -373,7 +373,7 @@ export const centralTemplates = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    index('central_templates_owner_idx').on(t.ownerOrgUnitUuid),
+    index('central_templates_created_by_idx').on(t.createdByUserId),
     check('central_templates_status_check', sql`${t.status} in ('active', 'archived')`),
     check(
       'central_templates_name_check',

@@ -14,7 +14,6 @@ import {
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/toast';
 import { CENTRAL_LIMITS, diffPrincipals, principalKey, principalsEqual } from '@/lib/skabeloner/central-types';
@@ -38,11 +37,9 @@ import {
   principalKindLabels,
   type SharingSource,
   targetsEqual,
-  targetsWithinOwner,
   unitNameLookup,
   viewAgainstCatalogue,
 } from './central-template-utils';
-import { flattenOrgTree, indentedLabel } from './org-tree';
 import { OrgUnitTargetPicker } from './OrgUnitTargetPicker';
 import { PrincipalTargetPicker } from './PrincipalTargetPicker';
 import { PromptDiff } from './TemplateVersionHistory';
@@ -52,21 +49,16 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   /** null = create a new central template. */
   template: CentralTemplateAdmin | null;
-  /** Units inside the caller's template.manage scope (owner and recipient pickers). */
+  /** Every org unit (the audience picker); empty in claims mode, which has none. */
   units: CentralScopeOrgUnit[];
   /** The role/group catalogue for the role/group picker. */
   catalogue?: CentralCatalogueEntry[];
-  /**
-   * The caller holds template.manage for the whole organisation: only then may a template have no
-   * owner unit and be made available to roles and groups (the server enforces the same).
-   */
-  isGlobalManager?: boolean;
   /** false: the catalogue could not be loaded, so `catalogue` says nothing about a target (its server-side state is shown instead). Default true. */
   catalogueLoaded?: boolean;
-  /** May role/group targets be changed: a global manager in claims mode. Default: `isGlobalManager`. */
+  /** May role/group targets be changed: only in claims mode (the server enforces the same). Default false. */
   canTargetPrincipals?: boolean;
-  /** Why role/group targets cannot be changed: roles only exist in claims mode ('needs_claims'), or the caller is not global. */
-  targetLockedReason?: 'needs_claims' | 'needs_global' | null;
+  /** Why role/group targets cannot be changed: roles only exist in claims mode. */
+  targetLockedReason?: 'needs_claims' | null;
   /** The server's access mode; makes the locked role/group picker say which sharing route applies. */
   accessSource?: SharingSource | null;
   onSaved: () => void;
@@ -78,9 +70,8 @@ export function CentralTemplateEditor({
   template,
   units,
   catalogue = [],
-  isGlobalManager = false,
   catalogueLoaded = true,
-  canTargetPrincipals,
+  canTargetPrincipals = false,
   targetLockedReason = null,
   accessSource = null,
   onSaved,
@@ -116,9 +107,8 @@ export function CentralTemplateEditor({
             template={template}
             units={units}
             catalogue={catalogue}
-            isGlobalManager={isGlobalManager}
             catalogueLoaded={catalogueLoaded}
-            canTargetPrincipals={canTargetPrincipals ?? isGlobalManager}
+            canTargetPrincipals={canTargetPrincipals}
             targetLockedReason={targetLockedReason}
             accessSource={accessSource}
             onClose={() => onOpenChange(false)}
@@ -194,7 +184,6 @@ function EditorForm({
   template,
   units,
   catalogue,
-  isGlobalManager,
   catalogueLoaded,
   canTargetPrincipals,
   targetLockedReason,
@@ -207,10 +196,9 @@ function EditorForm({
   template: CentralTemplateAdmin | null;
   units: CentralScopeOrgUnit[];
   catalogue: CentralCatalogueEntry[];
-  isGlobalManager: boolean;
   catalogueLoaded: boolean;
   canTargetPrincipals: boolean;
-  targetLockedReason: 'needs_claims' | 'needs_global' | null;
+  targetLockedReason: 'needs_claims' | null;
   accessSource: SharingSource | null;
   /** Closes at once (after a successful save). */
   onClose: () => void;
@@ -223,7 +211,6 @@ function EditorForm({
   // What the edit is based on. Replaced only by an explicit reload after a conflict.
   const [base, setBase] = useState<CentralTemplateAdmin | null>(template);
   const [content, setContent] = useState<CentralTemplateContent>(() => contentOf(template));
-  const [owner, setOwner] = useState(template?.ownerOrgUnitUuid ?? '');
   const [targets, setTargets] = useState<CentralTarget[]>(() => template?.targets ?? []);
   const catalogueByKey = useMemo(() => new Map(catalogue.map((e) => [principalKey(e), e])), [catalogue]);
   // Names and states come from the catalogue when it knows the entry; a target it does not know is flagged.
@@ -243,17 +230,10 @@ function EditorForm({
   const editing = template !== null;
   const unitName = useMemo(() => unitNameLookup(units), [units]);
   // The unit picker is hidden without org units (claims mode); then it cannot warn about an empty audience.
-  const unitPickerShown = !(units.length === 0 && (isGlobalManager || template?.ownerOrgUnitUuid === null));
-  const ownerOptions = useMemo(() => flattenOrgTree(units), [units]);
+  const unitPickerShown = units.length > 0;
 
   const set = <K extends keyof CentralTemplateContent>(key: K, value: CentralTemplateContent[K]) =>
     setContent((c) => ({ ...c, [key]: value }));
-
-  function changeOwner(next: string) {
-    setOwner(next);
-    // Targets must stay inside the owner's subtree; without an owner (organisation-wide) any unit may be chosen.
-    setTargets((t) => (next === '' ? t : targetsWithinOwner(units, next, t)));
-  }
 
   const changedFields = base ? changedContentFields(contentOf(base), content) : [];
   const targetsChanged = base ? !targetsEqual(base.targets, targets) : false;
@@ -266,12 +246,11 @@ function EditorForm({
     note.trim() !== '' ||
     (editing
       ? changedFields.length > 0 || targetsChanged || principalsChanged
-      : owner !== '' || targets.length > 0 || principals.length > 0 || changedContentFields(EMPTY, content).length > 0);
+      : targets.length > 0 || principals.length > 0 || changedContentFields(EMPTY, content).length > 0);
   useEffect(() => onGuardChange(dirty, saving), [dirty, saving, onGuardChange]);
 
   // First blocking reason, shown next to the disabled save button.
   const reason = ((): string | null => {
-    if (!editing && !owner && !isGlobalManager) return 'Vælg en ejerenhed';
     if (content.name.trim() === '') return 'Angiv et navn';
     if (content.prompt.trim() === '') return 'Angiv en prompt';
     if (editing && changedFields.length === 0 && !targetsChanged && !principalsChanged) return 'Ingen ændringer at gemme';
@@ -299,7 +278,6 @@ function EditorForm({
       : await apiRequest<{ template: CentralTemplateAdmin }>('/api/admin/central-templates', {
           method: 'POST',
           json: {
-            ownerOrgUnitUuid: owner || null,
             ...content,
             targets,
             principalTargets: principals.map(({ kind, identifier }) => ({ kind, identifier })),
@@ -353,7 +331,7 @@ function EditorForm({
       <DialogHeader>
         <DialogTitle>{editing ? 'Rediger central skabelon' : 'Ny central skabelon'}</DialogTitle>
         <DialogDescription>
-          Brugerne kan ikke ændre en central skabelon. Kun du og andre byggere kan redigere den.
+          Brugerne kan ikke ændre en central skabelon. Kun du og administratorer kan redigere den.
         </DialogDescription>
       </DialogHeader>
 
@@ -399,36 +377,6 @@ function EditorForm({
             </Button>
           </div>
         </section>
-      )}
-
-      {editing ? (
-        <p className="text-sm text-[var(--ink)]">
-          <span className="font-medium">Ejerenhed:</span>{' '}
-          {base!.ownerOrgUnitUuid === null ? 'Hele organisationen (ingen ejerenhed)' : unitName(base!.ownerOrgUnitUuid)}
-        </p>
-      ) : units.length === 0 && isGlobalManager ? (
-        <p className="text-sm text-[var(--ink)]">
-          <span className="font-medium">Ejerenhed:</span> Hele organisationen (ingen ejerenhed). Kun byggere
-          for hele organisationen kan redigere skabelonen.
-        </p>
-      ) : (
-        <Select
-          label="Ejerenhed"
-          value={owner}
-          onChange={(e) => changeOwner(e.target.value)}
-          hint={
-            isGlobalManager
-              ? 'Uden ejerenhed gælder skabelonen hele organisationen, og kun byggere for hele organisationen kan redigere den. Med en ejerenhed skal de enheder, der får skabelonen til rådighed, ligge under den.'
-              : 'Skabelonen kan administreres af alle, der er byggere for denne enhed. De enheder, der får skabelonen til rådighed, skal ligge under den.'
-          }
-        >
-          <option value="">{isGlobalManager ? 'Hele organisationen (ingen ejerenhed)' : 'Vælg enhed …'}</option>
-          {ownerOptions.map(({ unit, depth }) => (
-            <option key={unit.uuid} value={unit.uuid}>
-              {indentedLabel(unit.name, depth)}
-            </option>
-          ))}
-        </Select>
       )}
 
       <div className="flex flex-col gap-1.5">
@@ -522,15 +470,13 @@ function EditorForm({
       {unitPickerShown && (
         <OrgUnitTargetPicker
           units={units}
-          ownerUuid={editing ? (base!.ownerOrgUnitUuid ?? '') : owner}
-          orgWide={isGlobalManager && (editing ? base!.ownerOrgUnitUuid === null : owner === '')}
           value={targets}
           onChange={setTargets}
           hasOtherAudience={principals.length > 0}
         />
       )}
 
-      {(isGlobalManager || canTargetPrincipals || principals.length > 0 || catalogue.length > 0) && (
+      {(canTargetPrincipals || principals.length > 0 || catalogue.length > 0) && (
         <PrincipalTargetPicker
           catalogue={catalogue}
           value={principals}

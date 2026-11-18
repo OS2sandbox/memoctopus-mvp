@@ -25,8 +25,8 @@ interface Props {
   onChange: (targets: CentralPrincipalTargetView[]) => void;
   /** false: the list is shown but cannot be changed (see `lockedReason`). */
   canEdit: boolean;
-  /** Why it cannot be changed: 'needs_claims' = roles only come from login claims in ACCESS_SOURCE=claims; anything else = not a global manager. */
-  lockedReason?: 'needs_claims' | 'needs_global' | null;
+  /** Why it cannot be changed: 'needs_claims' = roles only come from login claims in ACCESS_SOURCE=claims; null = the catalogue could not be loaded. */
+  lockedReason?: 'needs_claims' | null;
   /** The server's access mode, so the locked text can say which sharing route applies (units vs. roles/groups). */
   accessSource?: SharingSource | null;
   /** Units are chosen too, so no roles is not "nobody". */
@@ -108,7 +108,7 @@ export function PrincipalTargetPicker({
         <p className="text-[13px] text-[var(--muted)]">
           {lockedReason === 'needs_claims'
             ? rolesLockedText(accessSource)
-            : 'Kun en bygger med tilladelse for hele organisationen kan vælge roller og grupper.'}
+            : 'Rollekataloget kunne ikke hentes, så roller og grupper kan ikke ændres lige nu.'}
         </p>
       ) : catalogue.length === 0 ? (
         <p className="text-[13px] text-[var(--muted)]">

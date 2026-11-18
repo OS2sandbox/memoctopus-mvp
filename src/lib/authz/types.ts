@@ -8,18 +8,13 @@ export type RoleKey = (typeof ROLE_KEYS)[number];
 export const CAPABILITIES = [
   'template.use',
   'template.manage',
+  'template.manage_all',
   'audit.read',
   'audit.export',
   'access.manage',
   'sync.run',
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
-
-export interface CapabilityScope {
-  /** True only when a role that allows global scope was assigned with a NULL org unit. */
-  global: boolean;
-  roots: Array<{ orgUnitUuid: string; includeDescendants: boolean }>;
-}
 
 type PrincipalSource = 'local' | 'rollekatalog' | 'claims' | 'baseline';
 
@@ -28,7 +23,6 @@ export interface Principal {
   directoryUserUuid: string | null;
   roles: RoleKey[];
   capabilities: Capability[];
-  scopes: Partial<Record<Capability, CapabilityScope>>;
   disabled: boolean;
   source: PrincipalSource;
 }

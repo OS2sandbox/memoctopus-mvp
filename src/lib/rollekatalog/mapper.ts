@@ -60,7 +60,6 @@ export interface MirrorSet {
 }
 
 export interface MapperConfig {
-  includeDescendants: boolean;
   globalRoles: readonly RoleKey[];
 }
 
@@ -178,7 +177,6 @@ function mapAssignments(
   input: MapperInput,
   config: MapperConfig,
   users: MirrorUser[],
-  unitUuids: ReadonlySet<string>,
 ): { rows: MirrorAssignment[]; ignoredRole: number; skippedUnknownUser: number; withoutScope: number } {
   const byExt = new Map<string, string>();
   const byUserId = new Map<string, string[]>();
@@ -242,24 +240,10 @@ function mapAssignments(
       roleKey: g.role,
       constraints: g.constraints,
       hasUnrecognisedConstraints: g.hasUnrecognisedConstraints,
-      knownOrgUnitUuids: unitUuids,
       globalRoles: config.globalRoles,
-      includeDescendants: config.includeDescendants,
     });
-    if (scope.kind === 'none') {
-      withoutScope++;
-    } else if (scope.kind === 'global') {
-      rows.push({ directoryUserUuid: g.user, roleKey: g.role, scopeOrgUnitUuid: null, includeDescendants: true });
-    } else {
-      for (const unit of scope.orgUnitUuids) {
-        rows.push({
-          directoryUserUuid: g.user,
-          roleKey: g.role,
-          scopeOrgUnitUuid: unit,
-          includeDescendants: scope.includeDescendants,
-        });
-      }
-    }
+    if (scope.kind === 'none') withoutScope++;
+    else rows.push({ directoryUserUuid: g.user, roleKey: g.role, scopeOrgUnitUuid: null, includeDescendants: true });
   }
   return { rows, ignoredRole, skippedUnknownUser, withoutScope };
 }
@@ -269,7 +253,7 @@ export function mapToMirror(input: MapperInput, config: MapperConfig): MirrorSet
   const userUuids = new Set(users.map((u) => u.uuid));
   const { units, orphaned, cycles } = mapOrgUnits(input.organisation);
   const unitUuids = new Set(units.map((u) => u.uuid));
-  const assignments = mapAssignments(input, config, users, unitUuids);
+  const assignments = mapAssignments(input, config, users);
 
   return {
     users,

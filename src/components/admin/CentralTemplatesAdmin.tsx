@@ -48,12 +48,11 @@ export function CentralTemplatesAdmin() {
   const [templates, setTemplates] = useState<CentralTemplateListItem[]>([]);
   const [units, setUnits] = useState<CentralScopeOrgUnit[]>([]);
   const [catalogue, setCatalogue] = useState<CentralCatalogueEntry[]>([]);
-  // From the catalogue endpoint: may this caller target roles and groups (a global manager), and may
-  // they refresh the catalogue from Rollekatalog.
+  // From the catalogue endpoint: can roles and groups be targeted (claims mode), and may this caller
+  // refresh the catalogue from Rollekatalog.
   const [catalogueInfo, setCatalogueInfo] = useState({
     canTarget: false,
-    isGlobalManager: false,
-    reason: null as 'needs_claims' | 'needs_global' | null,
+    reason: null as 'needs_claims' | null,
     source: null as SharingSource | null,
     canRefresh: false,
     lastRefreshedAt: null as string | null,
@@ -103,8 +102,7 @@ export function CentralTemplatesAdmin() {
     const roles = await apiRequest<{
       roles: CentralCatalogueEntry[];
       canTarget: boolean;
-      isGlobalManager?: boolean;
-      reason?: 'needs_claims' | 'needs_global' | null;
+      reason?: 'needs_claims' | null;
       source?: SharingSource | null;
       canRefresh: boolean;
       lastRefreshedAt: string | null;
@@ -116,7 +114,6 @@ export function CentralTemplatesAdmin() {
       setCatalogueError(null);
       setCatalogueInfo({
         canTarget: roles.data.canTarget,
-        isGlobalManager: roles.data.isGlobalManager ?? roles.data.canTarget,
         reason: roles.data.reason ?? null,
         source: roles.data.source ?? null,
         canRefresh: roles.data.canRefresh,
@@ -179,7 +176,11 @@ export function CentralTemplatesAdmin() {
   return (
     <AdminPage
       title="Centrale skabeloner"
-      description="Fælles skabeloner, som du gør til rådighed for enheder, roller og grupper. Brugerne kan bruge dem, men ikke læse eller ændre dem."
+      description={`Fælles skabeloner, som du gør til rådighed for enheder, roller og grupper. Brugerne kan bruge dem, men ikke læse eller ændre dem. ${
+        me?.capabilities.includes('template.manage_all')
+          ? 'Som administrator ser og ændrer du alle centrale skabeloner.'
+          : 'Du ser og ændrer de skabeloner, du selv har oprettet.'
+      }`}
     >
       <ErrorBanner message={meError} />
       <ErrorBanner message={loadError ?? catalogueError} onRetry={retry} />
@@ -229,7 +230,6 @@ export function CentralTemplatesAdmin() {
           <TableHeader>
             <TableRow>
               <TableHead>Skabelon</TableHead>
-              <TableHead>Ejerenhed</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Version</TableHead>
               <TableHead>Til rådighed for</TableHead>
@@ -240,22 +240,13 @@ export function CentralTemplatesAdmin() {
           </TableHeader>
           <TableBody>
             {templates.length === 0 && !loadError ? (
-              <TableEmptyRow colSpan={8}>Ingen centrale skabeloner</TableEmptyRow>
+              <TableEmptyRow colSpan={7}>Ingen centrale skabeloner</TableEmptyRow>
             ) : (
               templates.map((t) => (
                 <TableRow key={t.id}>
                   <TableCell>
                     <div className="font-medium">{t.name}</div>
                     {t.description && <div className="text-[13px] text-[var(--muted)]">{t.description}</div>}
-                  </TableCell>
-                  <TableCell>
-                    {t.ownerOrgUnitUuid === null ? (
-                      <span title="Ingen ejerenhed: kun byggere for hele organisationen kan redigere den">
-                        Hele organisationen
-                      </span>
-                    ) : (
-                      unitName(t.ownerOrgUnitUuid)
-                    )}
                   </TableCell>
                   <TableCell>
                     <Badge variant={t.status === 'active' ? 'success' : 'secondary'}>
@@ -322,7 +313,6 @@ export function CentralTemplatesAdmin() {
           template={editor.template}
           units={units}
           catalogue={catalogue}
-          isGlobalManager={catalogueInfo.isGlobalManager}
           canTargetPrincipals={catalogueInfo.canTarget}
           targetLockedReason={catalogueInfo.reason}
           accessSource={catalogueInfo.source}

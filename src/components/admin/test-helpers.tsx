@@ -11,11 +11,7 @@ export const json = (body: unknown, status = 200) =>
 export const ADMIN_ME: MeResponse = {
   user: { id: 'admin-1', name: 'Anne Admin', email: 'anne@example.dk' },
   roles: ['bruger', 'admin'],
-  capabilities: ['template.use', 'template.manage', 'audit.read', 'audit.export', 'access.manage', 'sync.run'],
-  scopes: {
-    'template.manage': { global: true, roots: [] },
-    'audit.read': { global: true, roots: [] },
-  },
+  capabilities: ['template.use', 'template.manage', 'template.manage_all', 'audit.read', 'audit.export', 'access.manage', 'sync.run'],
   source: 'local',
   readOnly: false,
   requireRoleToLogin: false,
@@ -27,15 +23,12 @@ export const CLAIMS_ME: MeResponse = { ...ADMIN_ME, source: 'claims', readOnly: 
 /** Local mode with the kill switch ACCESS_LOCAL_ADMIN=false. */
 export const LOCKED_LOCAL_ME: MeResponse = { ...ADMIN_ME, source: 'local', readOnly: true };
 
-/** A bygger: manages templates (scoped) but not access. */
+/** A bygger: manages the central templates they created, but not access. */
 export const READER_ME: MeResponse = {
   ...ADMIN_ME,
   user: { id: 'sk-1', name: 'Sven Skabelon', email: 'sven@example.dk' },
   roles: ['bruger', 'bygger'],
   capabilities: ['template.use', 'template.manage'],
-  scopes: {
-    'template.manage': { global: false, roots: [] },
-  },
 };
 
 type Handler = (url: string, init?: RequestInit) => Promise<Response>;

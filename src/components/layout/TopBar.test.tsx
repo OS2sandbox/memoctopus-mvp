@@ -65,7 +65,6 @@ const meWith = (capabilities: string[]) => ({
   user: { id: 'u1', name: 'A', email: 'a@example.com' },
   roles: ['bruger'],
   capabilities,
-  scopes: {},
   source: 'local',
   readOnly: false,
 });

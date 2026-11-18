@@ -10,9 +10,9 @@ import { GET, POST } from './route';
 import { auth } from '@/lib/auth';
 import { resolvePrincipal } from '@/lib/authz/principal';
 import { createCentralTemplate, listManageableTemplates } from '@/lib/skabeloner/central';
-import { ForbiddenError, NotFoundError, ValidationError } from '@/lib/authz/access-errors';
+import { ConflictError, ValidationError } from '@/lib/authz/access-errors';
 import { FAKE_SESSION, makeJsonReq, makePrincipal, NO_PARAMS } from '@/test/helpers';
-import { ADMIN_TEMPLATE, CHILD, manager, NOTE, OWNER } from '@/test/central-fixtures';
+import { ADMIN_TEMPLATE, CHILD, manager, NOTE } from '@/test/central-fixtures';
 
 const mockGetSession = vi.mocked(auth.api.getSession);
 const mockResolve = vi.mocked(resolvePrincipal);
@@ -24,7 +24,6 @@ const ITEM = {
   id: ADMIN_TEMPLATE.id,
   name: 'Fagreferat',
   description: 'Til fagmøder',
-  ownerOrgUnitUuid: OWNER,
   status: 'active' as const,
   currentVersion: 3,
   targets: [{ orgUnitUuid: CHILD, includeDescendants: true }],
@@ -35,7 +34,6 @@ const ITEM = {
   lastEditedAt: '2026-06-02T08:00:00.000Z',
 };
 const VALID = {
-  ownerOrgUnitUuid: OWNER,
   name: 'Fagreferat',
   prompt: 'Skriv et referat',
   targets: [{ orgUnitUuid: CHILD, includeDescendants: true }],
@@ -99,7 +97,6 @@ describe('POST /api/admin/central-templates', () => {
     const [principal, input] = mockCreate.mock.calls[0];
     expect(principal).toBe(manager);
     expect(input).toMatchObject({
-      ownerOrgUnitUuid: OWNER,
       name: 'Fagreferat',
       changeNote: NOTE,
       allowUserInstruction: false,
@@ -133,7 +130,8 @@ describe('POST /api/admin/central-templates', () => {
 
   it.each([
     ['unknown key', { ...VALID, status: 'archived' }],
-    ['bad owner uuid', { ...VALID, ownerOrgUnitUuid: 'x' }],
+    // There is no owner unit any more: a template belongs to its creator.
+    ['an owner unit', { ...VALID, ownerOrgUnitUuid: CHILD }],
     ['bad target uuid', { ...VALID, targets: [{ orgUnitUuid: 'x' }] }],
     ['blank name', { ...VALID, name: ' ' }],
     ['blank prompt', { ...VALID, prompt: '  ' }],
@@ -166,30 +164,16 @@ describe('POST /api/admin/central-templates', () => {
     expect((await res.json()).code).toBe('invalid_json');
   });
 
-  it('404 when the owner unit is outside the caller scope', async () => {
-    mockCreate.mockRejectedValue(new NotFoundError('Organisationsenheden findes ikke', 'org_unit_not_found'));
-    const res = await post(VALID);
-    expect(res.status).toBe(404);
-    expect((await res.json()).code).toBe('org_unit_not_found');
-  });
-
-  describe('organisation-wide templates and role/group targets', () => {
-    it('accepts a body without an owner (org-wide) and with role/group targets, deduplicated', async () => {
-      const { ownerOrgUnitUuid: _o, ...rest } = VALID;
+  describe('role/group targets', () => {
+    it('accepts role/group targets, deduplicated', async () => {
       const role = { kind: 'role', identifier: ' sagsbehandler ' };
-      expect((await post({ ...rest, principalTargets: [role, { ...role, identifier: 'sagsbehandler' }, { kind: 'group', identifier: 'g' }] })).status).toBe(201);
+      expect((await post({ ...VALID, principalTargets: [role, { ...role, identifier: 'sagsbehandler' }, { kind: 'group', identifier: 'g' }] })).status).toBe(201);
       const input = mockCreate.mock.calls[0][1];
-      expect(input.ownerOrgUnitUuid).toBeNull();
       // Trimmed, and the duplicate is gone.
       expect(input.principalTargets).toEqual([
         { kind: 'role', identifier: 'sagsbehandler' },
         { kind: 'group', identifier: 'g' },
       ]);
-    });
-
-    it('treats an explicit null owner like an absent one', async () => {
-      await post({ ...VALID, ownerOrgUnitUuid: null });
-      expect(mockCreate.mock.calls[0][1].ownerOrgUnitUuid).toBeNull();
     });
 
     it.each([
@@ -205,11 +189,11 @@ describe('POST /api/admin/central-templates', () => {
       expect(mockCreate).not.toHaveBeenCalled();
     });
 
-    it('403 with the Danish reason when the service says only a global manager may', async () => {
-      mockCreate.mockRejectedValue(new ForbiddenError('Kun en global bygger', 'principal_targets_need_global'));
+    it('409 with the Danish reason when the service says roles need claims mode', async () => {
+      mockCreate.mockRejectedValue(new ConflictError('Kun med roller fra login', 'principal_targets_need_claims'));
       const res = await post({ ...VALID, principalTargets: [{ kind: 'role', identifier: 'x' }] });
-      expect(res.status).toBe(403);
-      expect(await res.json()).toEqual({ error: 'Kun en global bygger', code: 'principal_targets_need_global' });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: 'Kun med roller fra login', code: 'principal_targets_need_claims' });
     });
 
     it('lists the audience of each template, named, in the DTO whitelist', async () => {
@@ -221,10 +205,10 @@ describe('POST /api/admin/central-templates', () => {
     });
   });
 
-  it('400 when the service rejects targets outside the owner subtree', async () => {
-    mockCreate.mockRejectedValue(new ValidationError('Modtagere skal ligge under ejerenheden', 'target_outside_owner'));
+  it('400 when the service rejects a target unit that does not exist', async () => {
+    mockCreate.mockRejectedValue(new ValidationError('En valgt enhed findes ikke', 'target_unknown'));
     const res = await post(VALID);
     expect(res.status).toBe(400);
-    expect(await res.json()).toMatchObject({ code: 'target_outside_owner' });
+    expect(await res.json()).toMatchObject({ code: 'target_unknown' });
   });
 });

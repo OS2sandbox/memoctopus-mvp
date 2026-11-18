@@ -25,7 +25,7 @@ const U = (n: number) => `7e5e0000-0000-4000-8000-${String(n).padStart(12, '0')}
 const O = (n: number) => `5a1b0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const E = (n: number) => `9d3c0000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
-const DEFAULTS: MapperConfig = { includeDescendants: true, globalRoles: ['admin'] };
+const DEFAULTS: MapperConfig = { globalRoles: ['admin'] };
 
 function fixtureMirror(): MirrorSet {
   const d = fixtureData();
@@ -79,8 +79,8 @@ describe('planMirror', () => {
     expect(plan.users.insert).toHaveLength(9);
     expect(plan.users.update).toHaveLength(0);
     expect(plan.orgUnits.insert.map((u) => u.uuid)).toEqual([O(1), O(2), O(4), O(3), O(5)]); // parents first
-    expect(plan.assignments.insert).toHaveLength(10);
-    expect(plan.counts).toMatchObject({ usersUpserted: 9, orgUnitsUpserted: 5, assignmentsUpserted: 10, assignmentsRemoved: 0, usersDisabled: 0 });
+    expect(plan.assignments.insert).toHaveLength(11);
+    expect(plan.counts).toMatchObject({ usersUpserted: 9, orgUnitsUpserted: 5, assignmentsUpserted: 11, assignmentsRemoved: 0, usersDisabled: 0 });
     expect(plan.removal).toEqual({
       users: { removed: 0, base: 0 },
       assignments: { removed: 0, base: 0 },
@@ -170,9 +170,9 @@ describe('planMirror', () => {
     expect(plan.assignments.insert).toHaveLength(1);
     expect(plan.counts).toMatchObject({ assignmentsUpserted: 2, assignmentsRemoved: 1 });
     expect(first).toBeDefined();
-    expect(plan.removal.assignments).toEqual({ removed: 1, base: 10 });
-    // `first` is an elevated row (the fixture has 7 elevated rows and 3 bruger rows).
-    expect(plan.removal.elevatedAssignments).toEqual({ removed: first.roleKey === 'bruger' ? 0 : 1, base: 7 });
+    expect(plan.removal.assignments).toEqual({ removed: 1, base: 11 });
+    // `first` is an elevated row (the fixture has 8 elevated rows and 3 bruger rows).
+    expect(plan.removal.elevatedAssignments).toEqual({ removed: first.roleKey === 'bruger' ? 0 : 1, base: 8 });
   });
 
   it('elevated removals are counted apart from bruger rows (the baseline dominates the total)', () => {
@@ -180,17 +180,17 @@ describe('planMirror', () => {
     const existing = existingFrom(mirror);
     const elevated = mirror.assignments.filter((a) => a.roleKey !== 'bruger');
     const bruger = mirror.assignments.filter((a) => a.roleKey === 'bruger');
-    expect(elevated).toHaveLength(7);
-    // Three elevated rows vanish: 3/10 overall is exactly the 30 % limit, 3/7 elevated is over it.
+    expect(elevated).toHaveLength(8);
+    // Three elevated rows vanish: 3/11 overall is under the 30 % limit, 3/8 elevated is over it.
     const fetched: MirrorSet = { ...mirror, assignments: [...bruger, ...elevated.slice(3)] };
     const plan = planMirror(existing, fetched);
-    expect(plan.removal.assignments).toEqual({ removed: 3, base: 10 });
-    expect(plan.removal.elevatedAssignments).toEqual({ removed: 3, base: 7 });
-    expect(exceedsRemovalThreshold(3, 10, 30)).toBe(false);
-    expect(exceedsRemovalThreshold(3, 7, 30)).toBe(true);
+    expect(plan.removal.assignments).toEqual({ removed: 3, base: 11 });
+    expect(plan.removal.elevatedAssignments).toEqual({ removed: 3, base: 8 });
+    expect(exceedsRemovalThreshold(3, 11, 30)).toBe(false);
+    expect(exceedsRemovalThreshold(3, 8, 30)).toBe(true);
     // Losing only baseline rows never touches the elevated ratio.
     const noBruger = planMirror(existing, { ...mirror, assignments: elevated });
-    expect(noBruger.removal.elevatedAssignments).toEqual({ removed: 0, base: 7 });
+    expect(noBruger.removal.elevatedAssignments).toEqual({ removed: 0, base: 8 });
   });
 
   it('small elevated base: one removed row of one or two trips, an empty base never does', () => {
@@ -448,7 +448,7 @@ describe('runSync flow', () => {
       mock.setData({ roleAssignments: [...base.roleAssignments, 'junk', { userId: 5 }] });
       const r = await runSync({ trigger: 'cron' }, deps(makeFakeSyncEnv(baseScript()).env));
       expect(r).toMatchObject({ status: 'success' });
-      expect(r.counts).toMatchObject({ assignmentRowsSkippedInvalid: 2, assignmentsUpserted: 10 });
+      expect(r.counts).toMatchObject({ assignmentRowsSkippedInvalid: 2, assignmentsUpserted: 11 });
     });
 
     it('more bad users than the allowance aborts as invalid_response before any transaction or write', async () => {
@@ -479,7 +479,7 @@ describe('runSync flow', () => {
     const f = makeFakeSyncEnv(baseScript());
     const r = await runSync({ trigger: 'cron' }, deps(f.env));
     expect(r).toMatchObject({ status: 'success', runId: RUN_ID, errorCode: null });
-    expect(r.counts).toMatchObject({ usersUpserted: 9, orgUnitsUpserted: 5, assignmentsUpserted: 10 });
+    expect(r.counts).toMatchObject({ usersUpserted: 9, orgUnitsUpserted: 5, assignmentsUpserted: 11 });
 
     const sqls = f.sqls();
     const begin = sqls.indexOf('BEGIN');
@@ -595,13 +595,13 @@ describe('runSync flow', () => {
     expect(f.released.find((r) => r.conn === lockConn)).toEqual({ conn: lockConn, destroy: true });
   });
 
-  it('sets the scope configuration from the environment at call time', async () => {
-    vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'admin,bygger');
+  it('reads ROLLEKATALOG_GLOBAL_ROLES from the environment at call time', async () => {
+    vi.stubEnv('ROLLEKATALOG_GLOBAL_ROLES', 'none');
     const f = makeFakeSyncEnv(baseScript());
     const r = await runSync({ trigger: 'cron' }, deps(f.env));
-    // ida.l's unscoped bygger is now a global row, so one more assignment than with the default.
-    expect(r.counts.assignmentsUpserted).toBe(11);
-    expect(r.counts.assignmentsWithoutScope).toBe(1);
+    // Without admin in the list, mette.e's and rune.a's admin assignments get no row.
+    expect(r.counts.assignmentsUpserted).toBe(9);
+    expect(r.counts.assignmentsWithoutScope).toBe(2);
   });
 });
 

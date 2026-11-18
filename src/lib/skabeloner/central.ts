@@ -3,22 +3,17 @@
 // central_template_versions.
 //
 // Rules (docs/central-access/templates.md):
-//  - A manager may touch a template iff template.manage covers its OWNER org
-//    unit. Anything outside that scope is NotFound (existence is not revealed);
-//    a principal without the capability gets the same, so the service fails
-//    closed even if a route forgot the guard.
-//  - A template with NO owner unit is ORGANISATION-WIDE (claims mode has no org
-//    units): only a manager with a GLOBAL template.manage may create or touch
-//    it; to a scoped manager it does not exist.
-//  - Targets (recipient units) must lie inside the owner unit's subtree: no
-//    sideways or upward delegation. An ownerless template may target any existing unit.
-//  - Role/group targets (recipients by catalogue role or group) are for global
-//    managers only, and can only be ADDED while ACCESS_SOURCE=claims (that is the only mode
-//    in which anybody holds a role from a login claim; elsewhere they would silently reach
-//    nobody); every one must be an ACTIVE catalogue entry when it is added (one that is
-//    kept while the catalogue later deactivates it just stops matching).
-//  - A scoped manager may not change, archive or restore a template that has role/group
-//    targets (it reaches people outside their scope); reading it stays allowed.
+//  - A template belongs to the person who created it (created_by_user_id). A bygger
+//    (template.manage) reads and manages the templates they created; an administrator
+//    (template.manage_all) every template. Anybody else's template is NotFound (existence
+//    is not revealed); a principal without template.manage gets the same, so the service
+//    fails closed even if a route forgot the guard.
+//  - Whoever manages a template chooses its audience freely: any existing org unit, and
+//    roles/groups of the catalogue. Role/group targets can only be ADDED while
+//    ACCESS_SOURCE=claims (that is the only mode in which anybody holds a role from a login
+//    claim; elsewhere they would silently reach nobody); every one must be an ACTIVE
+//    catalogue entry when it is added (one that is kept while the catalogue later
+//    deactivates it just stops matching).
 //  - Every write is ONE transaction: the template row (+ targets), a version
 //    row with the mandatory change note, and the audit event (recordEvent with
 //    `tx`, which throws, so everything rolls back together).
@@ -28,12 +23,11 @@
 //    VersionConflictError (409). The UPDATE also filters on current_version, as a
 //    tripwire: if it matches no row the lock was violated, which is a bug (500), not a 409.
 //
-// Refusals are audited too: a manager who is refused (a scoped manager touching a template out of
-//    scope or organisation-wide, role/group targets without the right or outside claims mode, a stale
-//    baseVersion, an organisation-wide create without a global right) leaves an `authz.denied` row
+// Refusals are audited too: a manager who is refused (a bygger touching another person's template,
+//    role/group targets outside claims mode, a stale baseVersion) leaves an `authz.denied` row
 //    (required 'template.manage', a closed reason, the template as entity), written AFTER the
 //    transaction has rolled back and never carrying a name, prompt or change note. The answer to the
-//    caller is unchanged (a template out of scope is the same 404 as one that does not exist).
+//    caller is unchanged (another person's template is the same 404 as one that does not exist).
 //
 // Reading the prompt: every function here returns it, so they must only be
 // called from manager-scoped routes. Ordinary users get the prompt-free
@@ -49,9 +43,9 @@ import type { AuditEventOf, EventType } from '@/lib/audit/events';
 import { recordAuthzDenied } from '@/lib/audit/authz-denied';
 import { recordEvent } from '@/lib/audit/record';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError, VersionConflictError } from '@/lib/authz/access-errors';
+import { hasCapability } from '@/lib/authz/permissions';
 import { defaultRunner, type SqlQueryable, type SqlRunner } from '@/lib/authz/pg-runner';
 import { accessSource, claimsFreshnessSeconds, type AccessSource } from '@/lib/authz/config';
-import { hasGlobalScope, isOrgUnitWithinScope, orgSubtreeUuids, orgUnitsInScope, type ScopeEnv } from '@/lib/authz/scope';
 import type { Principal } from '@/lib/authz/types';
 import { isUuid } from '@/lib/ids';
 import { heldRoleSql, qualifyTable } from './audience-sql';
@@ -129,22 +123,17 @@ const COLUMN: Record<CentralContentField, string> = {
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 /**
- * "Not found" for a template (or unit) that EXISTS but is outside the manager's scope. The answer is the
- * same 404 as for one that does not exist (same class family, message and code); the subclass only lets
- * the service tell the two apart for the audit log.
+ * "Not found" for a template that EXISTS but belongs to another person. The answer is the same 404 as
+ * for one that does not exist (same class family, message and code); the subclass only lets the service
+ * tell the two apart for the audit log.
  */
-class OutOfScopeError extends NotFoundError {}
+class NotOwnerError extends NotFoundError {}
 
 /** The refusals the log records, by the code the service answers with; everything else is a validation or state problem. */
-const AUDITED_REFUSAL_CODES: ReadonlySet<string> = new Set([
-  'principal_targets_need_global',
-  'principal_targets_need_claims',
-  'org_wide_needs_global',
-  'version_conflict',
-]);
+const AUDITED_REFUSAL_CODES: ReadonlySet<string> = new Set(['principal_targets_need_claims', 'version_conflict']);
 
 function refusalReason(err: unknown): string | null {
-  if (err instanceof OutOfScopeError) return 'out_of_scope';
+  if (err instanceof NotOwnerError) return 'not_owner';
   if ((err instanceof ForbiddenError || err instanceof ConflictError) && AUDITED_REFUSAL_CODES.has(err.code)) return err.code;
   return null;
 }
@@ -182,10 +171,6 @@ async function inTx<T>(env: CentralEnv, fn: (tx: SqlQueryable) => Promise<T>, re
   }
 }
 
-function scopeEnv(env: CentralEnv, q: SqlQueryable): ScopeEnv {
-  return { query: (text, params) => q.query(text, params), orgUnitsTable: tbl(env, 'org_units') };
-}
-
 const iso = (d: unknown): string => (d instanceof Date ? d.toISOString() : String(d));
 
 const sortTargets = (targets: readonly CentralTarget[]): CentralTarget[] =>
@@ -199,7 +184,7 @@ const snapshotOf = (views: readonly CentralPrincipalTargetView[]): CentralPrinci
 
 interface TemplateRow {
   id: string;
-  owner_org_unit_uuid: string | null;
+  created_by_user_id: string | null;
   name: string;
   description: string;
   prompt: string;
@@ -238,7 +223,6 @@ function adminView(
   return {
     ...contentOf(r),
     id: r.id,
-    ownerOrgUnitUuid: r.owner_org_unit_uuid,
     status: r.status as CentralStatus,
     currentVersion: r.current_version,
     targets: sortTargets(targets),
@@ -255,7 +239,7 @@ function adminView(
 
 async function selectRow(env: CentralEnv, q: SqlQueryable, id: string, lock: boolean): Promise<TemplateRow | null> {
   const { rows } = await q.query<TemplateRow>(
-    `SELECT ct.id, ct.owner_org_unit_uuid, ct.name, ct.description, ct.prompt,
+    `SELECT ct.id, ct.created_by_user_id, ct.name, ct.description, ct.prompt,
             ct.include_deltagere, ct.include_beslutningspunkter, ct.include_dagsorden, ct.include_dato,
             ct.allow_user_instruction, ct.allow_toggle_overrides, ct.status, ct.current_version,
             ct.created_at, ct.updated_at,
@@ -334,14 +318,13 @@ async function replacePrincipalTargets(
 }
 
 /**
- * Role/group targets are for GLOBAL managers (the owner-subtree rule has no meaning for them), and a
- * target that is NEWLY added must be an active entry of the catalogue. A target that was already
- * there may have been deactivated since; keeping it is fine (it just stops matching anybody).
+ * A role/group target that is NEWLY added must be an active entry of the catalogue, and is only
+ * possible in claims mode. A target that was already there may have been deactivated since; keeping
+ * it is fine (it just stops matching anybody).
  */
 async function assertPrincipalTargetsAllowed(
   env: CentralEnv,
   q: SqlQueryable,
-  principal: Principal,
   added: readonly CentralPrincipalTarget[],
 ): Promise<void> {
   if (added.length === 0) return;
@@ -350,12 +333,6 @@ async function assertPrincipalTargetsAllowed(
     throw new ConflictError(
       'Roller og grupper kan kun vælges, når rollerne kommer fra brugernes login (ACCESS_SOURCE=claims)',
       'principal_targets_need_claims',
-    );
-  }
-  if (!hasGlobalScope(principal, 'template.manage')) {
-    throw new ForbiddenError(
-      'Kun en bygger med tilladelse for hele organisationen kan gøre en skabelon tilgængelig for roller og grupper',
-      'principal_targets_need_global',
     );
   }
   const { rows } = await q.query(
@@ -369,42 +346,14 @@ async function assertPrincipalTargetsAllowed(
   }
 }
 
-/**
- * A template that reaches roles/groups reaches people outside any unit scope, so only a GLOBAL
- * manager may change, archive or restore it. Reading it stays allowed. Called with the row locked.
- */
-async function assertNoPrincipalTargetsUnlessGlobal(
-  env: CentralEnv,
-  q: SqlQueryable,
-  principal: Principal,
-  templateId: string,
-): Promise<void> {
-  if (hasGlobalScope(principal, 'template.manage')) return;
-  const { rows } = await q.query(
-    `SELECT 1 FROM ${tbl(env, 'central_template_principal_targets')} WHERE template_id = $1::uuid LIMIT 1`,
-    [templateId],
-  );
-  if (rows.length > 0) {
-    throw new ForbiddenError(
-      'Skabelonen er gjort tilgængelig for roller eller grupper. Kun en bygger med tilladelse for hele organisationen kan ændre, arkivere eller genoprette den',
-      'principal_targets_need_global',
-    );
-  }
-}
-
-/** Every owner-less (organisation-wide) write needs a GLOBAL template.manage. */
-function assertGlobalForOrgWide(principal: Principal): void {
-  if (!hasGlobalScope(principal, 'template.manage')) {
-    throw new ForbiddenError(
-      'Kun en bygger med tilladelse for hele organisationen kan oprette en skabelon uden ejerenhed',
-      'org_wide_needs_global',
-    );
-  }
+/** Every write needs template.manage; checked here too, so the service fails closed without the route guard. */
+function assertManager(principal: Principal): void {
+  if (!hasCapability(principal, 'template.manage')) throw new ForbiddenError('Du har ikke adgang til centrale skabeloner');
 }
 
 /**
- * Loads a template the principal may manage, or throws NotFound: unknown,
- * ill-formed id, owner unit outside template.manage scope, or no capability.
+ * Loads a template the principal may manage, or throws NotFound: unknown or ill-formed id, no
+ * template.manage, or another person's template for a manager without template.manage_all.
  * With `lock` the row is locked FOR UPDATE (writers).
  */
 async function loadManageable(
@@ -414,46 +363,24 @@ async function loadManageable(
   id: string,
   lock: boolean,
 ): Promise<TemplateRow> {
-  if (!isUuid(id)) throw new NotFoundError(NOT_FOUND);
+  if (!isUuid(id) || !hasCapability(principal, 'template.manage')) throw new NotFoundError(NOT_FOUND);
   const row = await selectRow(env, q, id.toLowerCase(), lock);
   if (!row) throw new NotFoundError(NOT_FOUND);
-  // An organisation-wide template (no owner unit) belongs to the global managers only.
-  const inScope =
-    row.owner_org_unit_uuid === null
-      ? hasGlobalScope(principal, 'template.manage')
-      : await isOrgUnitWithinScope(principal, 'template.manage', row.owner_org_unit_uuid, scopeEnv(env, q));
-  if (!inScope) throw new OutOfScopeError(NOT_FOUND);
+  if (!hasCapability(principal, 'template.manage_all') && row.created_by_user_id !== principal.userId) {
+    throw new NotOwnerError(NOT_FOUND);
+  }
   return row;
 }
 
-/**
- * Targets must be inside the owner's subtree (the owner itself included). Unknown units are not in it.
- * An organisation-wide template (no owner) may target any EXISTING unit (its manager is global).
- */
-async function assertTargetsInOwnerSubtree(
-  env: CentralEnv,
-  q: SqlQueryable,
-  ownerUuid: string | null,
-  targets: readonly CentralTarget[],
-): Promise<void> {
+/** Every target must be an existing org unit (any unit: whoever manages a template chooses its audience). */
+async function assertTargetsExist(env: CentralEnv, q: SqlQueryable, targets: readonly CentralTarget[]): Promise<void> {
   if (targets.length === 0) return;
-  if (ownerUuid === null) {
-    const { rows } = await q.query(`SELECT uuid FROM ${tbl(env, 'org_units')} WHERE uuid = ANY($1::uuid[])`, [
-      targets.map((t) => t.orgUnitUuid),
-    ]);
-    if (rows.length !== targets.length) {
-      throw new ValidationError('En valgt enhed findes ikke', 'target_outside_owner');
-    }
-    return;
-  }
-  const subtree = await orgSubtreeUuids([{ orgUnitUuid: ownerUuid, includeDescendants: true }], scopeEnv(env, q));
-  for (const t of targets) {
-    if (!subtree.has(t.orgUnitUuid.toLowerCase())) {
-      throw new ValidationError(
-        'En valgt enhed findes ikke eller ligger uden for skabelonens ejerenhed',
-        'target_outside_owner',
-      );
-    }
+  // FOR SHARE: a concurrent deleteOrgUnit (FOR UPDATE) waits for us instead of racing the targets FK.
+  const { rows } = await q.query(`SELECT uuid FROM ${tbl(env, 'org_units')} WHERE uuid = ANY($1::uuid[]) FOR SHARE`, [
+    targets.map((t) => t.orgUnitUuid),
+  ]);
+  if (rows.length !== new Set(targets.map((t) => t.orgUnitUuid.toLowerCase())).size) {
+    throw new ValidationError('En valgt enhed findes ikke', 'target_unknown');
   }
 }
 
@@ -503,10 +430,6 @@ async function appendVersion(env: CentralEnv, q: SqlQueryable, v: VersionInsert)
   );
 }
 
-/** The owner unit as the audit event's secondary entity; an organisation-wide template has none. */
-const ownerRef = (row: TemplateRow): { secondaryEntityId?: string } =>
-  row.owner_org_unit_uuid ? { secondaryEntityId: row.owner_org_unit_uuid } : {};
-
 /** Audit row on the SAME transaction: throws on failure, so the whole change rolls back. */
 async function audit<T extends EventType>(env: CentralEnv, tx: SqlQueryable, event: AuditEventOf<T>): Promise<void> {
   await recordEvent(event, { tx, table: tbl(env, 'audit_events') });
@@ -525,7 +448,6 @@ export async function createCentralTemplate(
   input: z.output<typeof createCentralTemplateSchema>,
   env: CentralEnv = defaultCentralEnv(),
 ): Promise<CentralTemplateAdmin> {
-  const owner = input.ownerOrgUnitUuid;
   const targets = sortTargets(input.targets);
   const principalTargets = sortPrincipal(input.principalTargets);
   const content: CentralTemplateContent = {
@@ -541,33 +463,19 @@ export async function createCentralTemplate(
   };
 
   return inTx(env, async (tx) => {
-    if (owner === null) {
-      assertGlobalForOrgWide(principal);
-    } else {
-      // FOR SHARE: a concurrent deleteOrgUnit (FOR UPDATE) waits for us instead of racing the RESTRICT FK.
-      const unit = await tx.query(`SELECT 1 FROM ${tbl(env, 'org_units')} WHERE uuid = $1::uuid FOR SHARE`, [owner]);
-      const inScope =
-        unit.rows.length > 0 && (await isOrgUnitWithinScope(principal, 'template.manage', owner, scopeEnv(env, tx)));
-      if (!inScope) {
-        // A unit that exists but is out of scope is a refusal (logged); a unit that does not exist is not.
-        throw unit.rows.length > 0
-          ? new OutOfScopeError('Organisationsenheden findes ikke', 'org_unit_not_found')
-          : new NotFoundError('Organisationsenheden findes ikke', 'org_unit_not_found');
-      }
-    }
-
-    await assertTargetsInOwnerSubtree(env, tx, owner, targets);
-    await assertPrincipalTargetsAllowed(env, tx, principal, principalTargets);
+    assertManager(principal);
+    await assertTargetsExist(env, tx, targets);
+    await assertPrincipalTargetsAllowed(env, tx, principalTargets);
 
     const inserted = await tx.query<{ id: string }>(
       `INSERT INTO ${tbl(env, 'central_templates')}
-         (owner_org_unit_uuid, name, description, prompt,
+         (created_by_user_id, name, description, prompt,
           include_deltagere, include_beslutningspunkter, include_dagsorden, include_dato,
           allow_user_instruction, allow_toggle_overrides, status, current_version)
-       VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', 1)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', 1)
        RETURNING id`,
       [
-        owner,
+        principal.userId,
         content.name,
         content.description,
         content.prompt,
@@ -597,7 +505,6 @@ export async function createCentralTemplate(
       type: 'central_template.create',
       actorUserId: principal.userId,
       entityId: id,
-      ...(owner ? { secondaryEntityId: owner } : {}),
       details: { version: 1, targetCount: targets.length, principalTargetCount: principalTargets.length },
     });
     return reload(env, tx, id);
@@ -614,7 +521,6 @@ export async function updateCentralTemplate(
 ): Promise<CentralTemplateAdmin> {
   return inTx(env, async (tx) => {
     const row = await loadManageable(env, tx, principal, id, true);
-    await assertNoPrincipalTargetsUnlessGlobal(env, tx, principal, row.id);
     if (row.current_version !== input.baseVersion) throw new VersionConflictError(row.current_version);
     if (row.status !== 'active') {
       throw new ConflictError('Skabelonen er arkiveret. Genopret den, før den kan ændres.', 'template_archived');
@@ -636,15 +542,10 @@ export async function updateCentralTemplate(
     if (changedFields.length === 0 && !targetsChanged && !principalChanged) {
       throw new ValidationError('Der er ingen ændringer at gemme', 'no_changes');
     }
-    if (targetsChanged) await assertTargetsInOwnerSubtree(env, tx, row.owner_org_unit_uuid, nextTargets);
+    if (targetsChanged) await assertTargetsExist(env, tx, nextTargets);
     if (principalChanged) {
       const had = new Set(currentPrincipal.map(principalKey));
-      await assertPrincipalTargetsAllowed(
-        env,
-        tx,
-        principal,
-        nextPrincipal.filter((t) => !had.has(principalKey(t))),
-      );
+      await assertPrincipalTargetsAllowed(env, tx, nextPrincipal.filter((t) => !had.has(principalKey(t))));
     }
 
     const newVersion = row.current_version + 1;
@@ -686,14 +587,12 @@ export async function updateCentralTemplate(
             type: 'central_template.retarget',
             actorUserId: principal.userId,
             entityId: row.id,
-            ...ownerRef(row),
             details: { version: newVersion, targetCount: nextTargets.length, principalTargetCount: nextPrincipal.length },
           }
         : {
             type: 'central_template.update',
             actorUserId: principal.userId,
             entityId: row.id,
-            ...ownerRef(row),
             details: {
               version: newVersion,
               changedFields: [
@@ -721,7 +620,6 @@ async function changeStatus(
 
   return inTx(env, async (tx) => {
     const row = await loadManageable(env, tx, principal, id, true);
-    await assertNoPrincipalTargetsUnlessGlobal(env, tx, principal, row.id);
     if (row.current_version !== input.baseVersion) throw new VersionConflictError(row.current_version);
     if (row.status === to) {
       throw archiving
@@ -755,7 +653,6 @@ async function changeStatus(
       type: archiving ? 'central_template.archive' : 'central_template.restore',
       actorUserId: principal.userId,
       entityId: row.id,
-      ...ownerRef(row),
       details: { version: newVersion },
     });
     return reload(env, tx, row.id);
@@ -779,8 +676,8 @@ export const restoreCentralTemplate = (
 // ─── Reads ─────────────────────────────────────────────────────────────────
 
 /**
- * Templates whose OWNER unit is inside the caller's template.manage scope; organisation-wide ones
- * (no owner) only for a global manager. Default filter: active only.
+ * The templates the caller manages: the ones they created, or every template with
+ * template.manage_all. Default filter: active only.
  */
 export async function listManageableTemplates(
   principal: Principal,
@@ -788,15 +685,14 @@ export async function listManageableTemplates(
   env: CentralEnv = defaultCentralEnv(),
 ): Promise<CentralTemplateListItem[]> {
   const q = env.runner;
-  const scope = await orgUnitsInScope(principal, 'template.manage', scopeEnv(env, q));
-  if (!scope.all && scope.uuids.length === 0) return [];
+  if (!hasCapability(principal, 'template.manage')) return [];
+  const all = hasCapability(principal, 'template.manage_all');
 
   const status = opts.status ?? 'active';
   const { rows } = await q.query<{
     id: string;
     name: string;
     description: string;
-    owner_org_unit_uuid: string | null;
     status: string;
     current_version: number;
     updated_at: Date | string;
@@ -804,16 +700,16 @@ export async function listManageableTemplates(
     last_edited_by_name: string | null;
     last_edited_at: Date | string | null;
   }>(
-    `SELECT ct.id, ct.name, ct.description, ct.owner_org_unit_uuid, ct.status, ct.current_version, ct.updated_at,
+    `SELECT ct.id, ct.name, ct.description, ct.status, ct.current_version, ct.updated_at,
             v1.changed_by_name AS created_by_name,
             vc.changed_by_name AS last_edited_by_name, vc.changed_at AS last_edited_at
        FROM ${tbl(env, 'central_templates')} ct
        LEFT JOIN ${tbl(env, 'central_template_versions')} v1 ON v1.template_id = ct.id AND v1.version = 1
        LEFT JOIN ${tbl(env, 'central_template_versions')} vc ON vc.template_id = ct.id AND vc.version = ct.current_version
       WHERE ($1::text IS NULL OR ct.status = $1)
-        AND ($2::uuid[] IS NULL OR ct.owner_org_unit_uuid = ANY($2::uuid[]))
+        AND ($2::text IS NULL OR ct.created_by_user_id = $2)
       ORDER BY ct.updated_at DESC, ct.id`,
-    [status === 'all' ? null : status, scope.all ? null : scope.uuids],
+    [status === 'all' ? null : status, all ? null : principal.userId],
   );
   // The audience of every listed template, two statements for the whole page.
   const ids = rows.map((r) => r.id);
@@ -847,7 +743,6 @@ export async function listManageableTemplates(
     id: r.id,
     name: r.name,
     description: r.description,
-    ownerOrgUnitUuid: r.owner_org_unit_uuid,
     status: r.status as CentralStatus,
     currentVersion: r.current_version,
     targets: orgTargets.get(r.id) ?? [],
@@ -872,7 +767,7 @@ export async function getManageableTemplate(
   );
 }
 
-/** The changelog, newest first. Same scope rule as the template itself. */
+/** The changelog, newest first. Same rule as the template itself. */
 export async function listVersions(
   principal: Principal,
   id: string,
@@ -907,30 +802,21 @@ export async function listVersions(
   }));
 }
 
-/**
- * Org units the caller may use as owner or target: those inside the
- * template.manage scope (a global scope offers all). A parent outside the set
- * is hidden (parentUuid null), so a scoped manager learns nothing about the
- * units above its scope.
- */
-export async function listScopeOrgUnits(
+/** Every org unit, for the audience picker: whoever manages a template may make it available to any unit. */
+export async function listAudienceOrgUnits(
   principal: Principal,
   env: CentralEnv = defaultCentralEnv(),
 ): Promise<CentralScopeOrgUnit[]> {
-  const scope = await orgUnitsInScope(principal, 'template.manage', scopeEnv(env, env.runner));
-  if (!scope.all && scope.uuids.length === 0) return [];
-
+  if (!hasCapability(principal, 'template.manage')) return [];
   const { rows } = await env.runner.query<{ uuid: string; name: string; parent_uuid: string | null }>(
-    `SELECT uuid, name, parent_uuid FROM ${tbl(env, 'org_units')}
-      WHERE ($1::uuid[] IS NULL OR uuid = ANY($1::uuid[]))
-      ORDER BY lower(name), uuid`,
-    [scope.all ? null : scope.uuids],
+    `SELECT uuid, name, parent_uuid FROM ${tbl(env, 'org_units')} ORDER BY lower(name), uuid`,
+    [],
   );
-  const visible = new Set(rows.map((r) => r.uuid));
+  const known = new Set(rows.map((r) => r.uuid));
   return rows.map((r) => ({
     uuid: r.uuid,
     name: r.name,
-    parentUuid: r.parent_uuid !== null && visible.has(r.parent_uuid) ? r.parent_uuid : null,
+    parentUuid: r.parent_uuid !== null && known.has(r.parent_uuid) ? r.parent_uuid : null,
   }));
 }
 
@@ -938,7 +824,7 @@ export async function listScopeOrgUnits(
  * The role/group catalogue as the target picker needs it: every entry (inactive ones too, so a
  * target that was withdrawn from the catalogue can still be named), both sources merged. Names and
  * identifiers only. Callers must hold template.manage; whether the caller may actually USE it for
- * targeting (global managers only) is the caller's `canTarget`.
+ * targeting (claims mode only) is the caller's `canTarget`.
  */
 export async function listCatalogue(env: CentralEnv = defaultCentralEnv()): Promise<{
   entries: CentralCatalogueEntry[];

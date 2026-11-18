@@ -7,7 +7,6 @@ import {
   diffTargets,
   noteLength,
   noteProblem,
-  targetsWithinOwner,
   truncateAudience,
   viewAgainstCatalogue,
 } from './central-template-utils';
@@ -71,19 +70,6 @@ describe('diff helpers', () => {
     expect(d.changed.map((t) => t.orgUnitUuid)).toEqual(['b']);
   });
 
-  it('drops targets outside the owner subtree, and all when there is no owner', () => {
-    const units = [
-      { uuid: 'r', name: 'R', parentUuid: null },
-      { uuid: 'c', name: 'C', parentUuid: 'r' },
-      { uuid: 'x', name: 'X', parentUuid: null },
-    ];
-    const t = [
-      { orgUnitUuid: 'c', includeDescendants: true },
-      { orgUnitUuid: 'x', includeDescendants: true },
-    ];
-    expect(targetsWithinOwner(units, 'r', t)).toEqual([t[0]]);
-    expect(targetsWithinOwner(units, '', t)).toEqual([]);
-  });
 });
 
 describe('role/group targets', () => {

@@ -50,7 +50,7 @@ describe('explainDenial', () => {
 
   it('pins the exact string and names the granting roles', () => {
     expect(explainDenial(user, 'template.manage')).toBe(
-      'Du har ikke rettigheden »Administrere skabeloner«. Rettigheden gives af: Bygger, Admin.',
+      'Du har ikke rettigheden »Administrere egne centrale skabeloner«. Rettigheden gives af: Bygger, Admin.',
     );
   });
 

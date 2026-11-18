@@ -1,16 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ToastProvider } from '@/components/ui/toast';
 import { RoleGrantDialog } from './RoleGrantDialog';
-
-const ROOT = '11111111-1111-4111-8111-111111111111';
-const CHILD = '22222222-2222-4222-8222-222222222222';
-const units = [
-  { uuid: CHILD, name: 'Børn', parentUuid: ROOT },
-  { uuid: ROOT, name: 'Kommune', parentUuid: null },
-];
 
 const json = (body: unknown, status = 200) =>
   Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }));
@@ -26,7 +19,6 @@ function setup(props: Partial<React.ComponentProps<typeof RoleGrantDialog>> = {}
         open
         onOpenChange={onOpenChange}
         user={{ id: 'user-9', name: 'Bo Bruger' }}
-        orgUnits={units}
         onGranted={onGranted}
         {...props}
       />
@@ -44,54 +36,14 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('RoleGrantDialog — scope rules per role', () => {
-  it('hides the scope field until a scoped role is chosen', async () => {
+describe('RoleGrantDialog — no org unit', () => {
+  it('never asks for an org unit, whatever the role (no role is tied to units)', async () => {
     setup();
-    expect(screen.queryByLabelText(/Organisationsenhed/)).toBeNull();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bruger');
-    expect(screen.queryByLabelText(/Organisationsenhed/)).toBeNull();
-  });
-
-  it('makes the unit optional for Bygger too: no unit means the global superuser', async () => {
-    setup();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bygger');
-    const select = screen.getByLabelText('Organisationsenhed (valgfri)');
-    expect(within(select).getByRole('option', { name: 'Hele organisationen' })).toBeInTheDocument();
-  });
-
-  it('hides the unit for Admin (global only) and for Bruger, but offers it for Bygger', async () => {
-    setup();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bygger');
-    expect(screen.getByLabelText('Organisationsenhed (valgfri)')).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'admin');
-    expect(screen.queryByLabelText(/Organisationsenhed/)).toBeNull();
-  });
-
-  it('shows units as an indented hierarchy', async () => {
-    setup();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bygger');
-    const options = within(screen.getByLabelText('Organisationsenhed (valgfri)')).getAllByRole('option');
-    expect(options.map((o) => o.textContent)).toEqual(['Hele organisationen', 'Kommune', '\u2003└ Børn']);
-  });
-
-  it('clears the chosen unit when the role changes to one without scope', async () => {
-    fetchMock.mockReturnValue(json({ assignment: {} }, 201));
-    setup();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bygger');
-    await userEvent.selectOptions(screen.getByLabelText('Organisationsenhed (valgfri)'), ROOT);
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bruger');
-    await userEvent.click(screen.getByRole('button', { name: 'Tildel rolle' }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(body()).toMatchObject({ roleKey: 'bruger', scopeOrgUnitUuid: null });
-    expect(body()).not.toHaveProperty('includeDescendants');
-  });
-
-  it('only offers "inkl. underenheder" once a unit is chosen', async () => {
-    setup();
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bygger');
-    expect(screen.queryByLabelText('Gælder også underenheder')).toBeNull();
-    await userEvent.selectOptions(screen.getByLabelText('Organisationsenhed (valgfri)'), ROOT);
-    expect(screen.getByLabelText('Gælder også underenheder')).toBeChecked();
+    for (const role of ['bruger', 'bygger', 'admin']) {
+      await userEvent.selectOptions(screen.getByLabelText('Rolle'), role);
+      expect(screen.queryByLabelText(/Organisationsenhed/)).toBeNull();
+      expect(screen.queryByLabelText('Gælder også underenheder')).toBeNull();
+    }
   });
 });
 
@@ -112,12 +64,6 @@ describe('RoleGrantDialog — validation', () => {
     expect(screen.getByText('Slutdato skal ligge efter startdato')).toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
   });
-
-  it('surfaces a load error for the unit list on the scope field', async () => {
-    setup({ orgUnits: [], orgUnitsError: 'Kunne ikke hente organisationsenheder.' });
-    await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bygger');
-    expect(screen.getByText('Kunne ikke hente organisationsenheder.')).toBeInTheDocument();
-  });
 });
 
 describe('RoleGrantDialog — end date wording', () => {
@@ -132,8 +78,6 @@ describe('RoleGrantDialog — submit', () => {
     fetchMock.mockReturnValue(json({ assignment: { id: 'a1' } }, 201));
     setup();
     await userEvent.selectOptions(screen.getByLabelText('Rolle'), 'bygger');
-    await userEvent.selectOptions(screen.getByLabelText('Organisationsenhed (valgfri)'), CHILD);
-    await userEvent.click(screen.getByLabelText('Gælder også underenheder'));
     await userEvent.type(screen.getByLabelText('Startdato (valgfri)'), '2026-01-01');
     await userEvent.type(screen.getByLabelText('Gælder indtil (valgfri)'), '2026-12-31');
     await userEvent.click(screen.getByRole('button', { name: 'Tildel rolle' }));
@@ -144,8 +88,7 @@ describe('RoleGrantDialog — submit', () => {
     expect(body()).toEqual({
       appUserId: 'user-9',
       roleKey: 'bygger',
-      scopeOrgUnitUuid: CHILD,
-      includeDescendants: false,
+      scopeOrgUnitUuid: null,
       startDate: '2026-01-01',
       stopDate: '2026-12-31',
     });

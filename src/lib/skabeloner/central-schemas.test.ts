@@ -14,7 +14,7 @@ const UNIT_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const UNIT_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const NOTE = 'Første version til hele afdelingen';
 
-const validCreate = { ownerOrgUnitUuid: UNIT_A, name: 'Dialogmøde', prompt: 'Skriv kort.', changeNote: NOTE };
+const validCreate = { name: 'Dialogmøde', prompt: 'Skriv kort.', changeNote: NOTE };
 
 describe('changeNoteSchema', () => {
   it('trims, then requires at least 10 non-space characters, with the Danish message', () => {
@@ -177,11 +177,10 @@ describe('createCentralTemplateSchema', () => {
     expect(createCentralTemplateSchema.safeParse({ ...validCreate, prompt: 'a'.repeat(20000) }).success).toBe(true);
   });
 
-  it('requires the owner unit (a uuid) and a change note', () => {
+  it('requires a change note and takes no owner unit (a template belongs to its creator)', () => {
     const { changeNote: _n, ...noNote } = validCreate;
     expect(createCentralTemplateSchema.safeParse(noNote).success).toBe(false);
-    expect(createCentralTemplateSchema.safeParse({ ...validCreate, ownerOrgUnitUuid: 'x' }).success).toBe(false);
-    expect(createCentralTemplateSchema.parse({ ...validCreate, ownerOrgUnitUuid: UNIT_A.toUpperCase() }).ownerOrgUnitUuid).toBe(UNIT_A);
+    expect(createCentralTemplateSchema.safeParse({ ...validCreate, ownerOrgUnitUuid: UNIT_A }).success).toBe(false);
   });
 });
 

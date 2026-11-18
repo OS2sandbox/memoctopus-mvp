@@ -77,7 +77,6 @@ describe('POST /api/admin/access/assignments (access.manage)', () => {
       appUserId: 'app-1',
       roleKey: 'bygger',
       scopeOrgUnitUuid: UNIT,
-      includeDescendants: false,
       startDate: '2026-01-01',
       stopDate: '2027-01-01T00:00:00Z',
     });
@@ -87,7 +86,6 @@ describe('POST /api/admin/access/assignments (access.manage)', () => {
       appUserId: 'app-1',
       roleKey: 'bygger',
       scopeOrgUnitUuid: UNIT,
-      includeDescendants: false,
       startDate: new Date('2026-01-01'),
       stopDate: new Date('2027-01-01T00:00:00Z'),
       actorUserId: FAKE_SESSION.user.id,
@@ -107,7 +105,7 @@ describe('POST /api/admin/access/assignments (access.manage)', () => {
     ['bad scope uuid', { appUserId: 'u', roleKey: 'admin', scopeOrgUnitUuid: 'not-a-uuid' }],
     ['numeric date', { appUserId: 'u', roleKey: 'bruger', startDate: 12345 }],
     ['free-text date', { appUserId: 'u', roleKey: 'bruger', startDate: 'next tuesday' }],
-    ['non-boolean flag', { appUserId: 'u', roleKey: 'admin', includeDescendants: 'yes' }],
+    ['descendants flag (no role takes a unit)', { appUserId: 'u', roleKey: 'admin', includeDescendants: true }],
     ['array body', [1]],
     ['null body', null],
   ])('400 for %s', async (_n, body) => {

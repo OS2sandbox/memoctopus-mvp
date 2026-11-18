@@ -26,7 +26,6 @@ const VIEW = { uuid: U1, name: 'Kommune', parentUuid: null, source: 'local', mem
 const manager = makePrincipal({
   roles: ['bruger', 'bygger'],
   capabilities: ['template.use', 'template.manage'],
-  scopes: { 'template.manage': { global: false, roots: [{ orgUnitUuid: U2, includeDescendants: true }] } },
 });
 
 beforeEach(() => {

@@ -48,14 +48,14 @@ function setup(me = ADMIN_ME, extra: Parameters<typeof installFetch>[0] = {}) {
 }
 
 describe('UsersAdmin — rendering', () => {
-  it('lists users with Danish role labels, scope wording and source badges', async () => {
+  it('lists users with Danish role labels and source badges, without unit wording (no role is tied to a unit)', async () => {
     setup();
     renderWithToasts(<UsersAdmin />);
     const row = (await screen.findByText('Bo Bruger')).closest('tr')!;
     expect(within(row).getByText('Bygger')).toBeInTheDocument();
-    expect(within(row).getByText('Børn – Denne enhed og alle underenheder')).toBeInTheDocument();
+    expect(within(row).queryByText(/Denne enhed og alle underenheder/)).toBeNull();
     expect(within(row).getByText('Admin')).toBeInTheDocument();
-    expect(within(row).getByText('Hele organisationen')).toBeInTheDocument();
+    expect(within(row).queryByText('Hele organisationen')).toBeNull();
     expect(within(row).getByText('Lokal')).toBeInTheDocument();
     expect(within(row).getByText('Rollekatalog')).toBeInTheDocument();
     const carla = screen.getByText('Carla Ny').closest('tr')!;

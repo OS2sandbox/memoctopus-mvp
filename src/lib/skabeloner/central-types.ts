@@ -117,8 +117,6 @@ export interface CentralTemplateContent {
 /** Manager-side view: includes the prompt. Never returned to ordinary users. */
 export interface CentralTemplateAdmin extends CentralTemplateContent {
   id: string;
-  /** null = an organisation-wide template: only a manager with a GLOBAL template.manage can touch it. */
-  ownerOrgUnitUuid: string | null;
   status: CentralStatus;
   currentVersion: number;
   targets: CentralTarget[];
@@ -135,7 +133,6 @@ export interface CentralTemplateListItem {
   id: string;
   name: string;
   description: string;
-  ownerOrgUnitUuid: string | null;
   status: CentralStatus;
   currentVersion: number;
   /** Org-unit targets (names are resolved by the client from the scope list). */
@@ -185,7 +182,7 @@ export interface TemplateRef {
   version: number | null;
 }
 
-/** An org unit as offered to the owner/target pickers. */
+/** An org unit as offered to the audience picker. */
 export interface CentralScopeOrgUnit {
   uuid: string;
   name: string;

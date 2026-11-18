@@ -63,7 +63,7 @@ describe('GET /api/admin/audit/export (audit.export)', () => {
   });
 
   it('403 for a reader without audit.export (reading is not exporting)', async () => {
-    mockResolve.mockResolvedValue(makePrincipal({ capabilities: ['template.use', 'audit.read'], scopes: { 'audit.read': { global: true, roots: [] } } }));
+    mockResolve.mockResolvedValue(makePrincipal({ capabilities: ['template.use', 'audit.read'] }));
     expect((await GET(req(), NO_PARAMS)).status).toBe(403);
     expect(mockCollect).not.toHaveBeenCalled();
     expect(mockRecord).not.toHaveBeenCalled();

@@ -20,15 +20,9 @@ const mockCatalogue = vi.mocked(listCatalogue);
 const URL_ = 'http://localhost/api/admin/central-templates/roles';
 const get = () => GET(makeJsonReq(URL_, 'GET'), NO_PARAMS);
 
-const globalManager = makePrincipal({
-  roles: ['bruger', 'bygger'],
-  capabilities: ['template.use', 'template.manage'],
-  scopes: { 'template.manage': { global: true, roots: [] } },
-});
 const globalAdmin = makePrincipal({
   roles: ['bruger', 'admin'],
   capabilities: ['template.use', 'template.manage', 'sync.run'],
-  scopes: { 'template.manage': { global: true, roots: [] } },
 });
 
 const ENTRIES = [
@@ -41,7 +35,7 @@ beforeEach(() => {
   vi.stubEnv('ROLLEKATALOG_URL', 'https://rk.example.dk');
   vi.stubEnv('ROLLEKATALOG_READ_API_KEY', 'read-key');
   mockSession.mockReset().mockResolvedValue(FAKE_SESSION as never);
-  mockResolve.mockReset().mockResolvedValue(globalManager);
+  mockResolve.mockReset().mockResolvedValue(manager);
   mockCatalogue.mockReset().mockResolvedValue({ entries: ENTRIES, lastRefreshedAt: '2026-06-02T08:00:00.000Z' });
 });
 afterEach(() => vi.unstubAllEnvs());
@@ -64,12 +58,10 @@ describe('GET /api/admin/central-templates/roles (template.manage)', () => {
     expect(body.lastRefreshedAt).toBe('2026-06-02T08:00:00.000Z');
   });
 
-  it('canTarget only for a manager with a GLOBAL scope; a scoped one still sees the list', async () => {
-    expect((await (await get()).json()).canTarget).toBe(true);
-    mockResolve.mockResolvedValueOnce(manager);
-    const scoped = await (await get()).json();
-    expect(scoped.canTarget).toBe(false);
-    expect(scoped.roles).toHaveLength(2);
+  it('canTarget for every bygger in claims mode (no unit scope decides it any more)', async () => {
+    const body = await (await get()).json();
+    expect(body.canTarget).toBe(true);
+    expect(body).not.toHaveProperty('isGlobalManager');
   });
 
   it('reports the access mode and why roles cannot be targeted outside claims mode', async () => {

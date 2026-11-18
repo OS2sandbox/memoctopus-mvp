@@ -118,19 +118,9 @@ export interface ScopeInput {
    * derives it from any non-org-unit entry in `constraints`.
    */
   hasUnrecognisedConstraints?: boolean;
-  /** Lower-case uuids of every org unit in the mirror; unknown constraint units are ignored. */
-  knownOrgUnitUuids: ReadonlySet<string>;
   /** ROLLEKATALOG_GLOBAL_ROLES. */
   globalRoles: readonly RoleKey[];
-  /** ROLLEKATALOG_SCOPE_DESCENDANTS. */
-  includeDescendants: boolean;
 }
 
-/**
- * none = no role_assignments row (fail closed); global = one row with a NULL scope;
- * scoped = one row per unit.
- */
-export type DerivedScope =
-  | { kind: 'none' }
-  | { kind: 'global' }
-  | { kind: 'scoped'; orgUnitUuids: string[]; includeDescendants: boolean };
+/** none = no role_assignments row (fail closed); global = one row with a NULL scope. */
+export type DerivedScope = { kind: 'none' } | { kind: 'global' };
