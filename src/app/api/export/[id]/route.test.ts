@@ -128,6 +128,106 @@ describe('POST /api/export/[id]', () => {
     expect((await res.arrayBuffer()).byteLength).toBeGreaterThan(0);
   });
 
+  // ── Regression: inline formatting and ordered lists survive export ──────────
+  // (the old renderers stripped **bold**/*italic* and turned `1.` lines into •)
+
+  // A recording jsPDF stand-in: captures every text() call with the font state
+  // it was drawn under, so the tests assert our layout logic, not jspdf internals.
+  function makeFakeJsPDF() {
+    const textCalls: Array<{ text: string; font: string; style: string }> = [];
+    let font = 'helvetica';
+    let style = 'normal';
+    class FakeJsPDF {
+      internal = { pageSize: { getWidth: () => 210 } };
+      setFont(f: string, s: string) { font = f; style = s; }
+      setFontSize() {}
+      setTextColor() {}
+      setDrawColor() {}
+      line() {}
+      addPage() {}
+      getTextWidth(t: string) { return t.length; }
+      text(t: string) { textCalls.push({ text: t, font, style }); }
+      output() { return new ArrayBuffer(8); }
+    }
+    return { FakeJsPDF, textCalls };
+  }
+
+  it('PDF: bold and italic words are drawn in the matching font style', async () => {
+    const { FakeJsPDF, textCalls } = makeFakeJsPDF();
+    vi.doMock('jspdf', () => ({ jsPDF: FakeJsPDF }));
+    try {
+      const res = await POST(makeJsonReq(BASE_URL, 'POST', {
+        content: { body: 'En **vigtig** og *lille* beslutning' },
+        format: 'pdf',
+      }));
+      expect(res.status).toBe(200);
+      expect(textCalls).toContainEqual({ text: 'vigtig', font: 'helvetica', style: 'bold' });
+      expect(textCalls).toContainEqual({ text: 'lille', font: 'helvetica', style: 'italic' });
+      expect(textCalls).toContainEqual({ text: 'og', font: 'helvetica', style: 'normal' });
+      // The markers themselves must not leak into the document.
+      expect(textCalls.some((c) => c.text.includes('*'))).toBe(false);
+    } finally {
+      vi.doUnmock('jspdf');
+    }
+  });
+
+  it('PDF: ordered items keep their numbers, bullets keep their dot', async () => {
+    const { FakeJsPDF, textCalls } = makeFakeJsPDF();
+    vi.doMock('jspdf', () => ({ jsPDF: FakeJsPDF }));
+    try {
+      const res = await POST(makeJsonReq(BASE_URL, 'POST', {
+        content: { body: '1. første\n2. andet\n\n- et punkt' },
+        format: 'pdf',
+      }));
+      expect(res.status).toBe(200);
+      const texts = textCalls.map((c) => c.text);
+      expect(texts).toContain('1.  ');
+      expect(texts).toContain('2.  ');
+      expect(texts).toContain('•  ');
+    } finally {
+      vi.doUnmock('jspdf');
+    }
+  });
+
+  // jszip is docx's own runtime dependency — the natural tool to open its output.
+  async function readDocx(res: Response) {
+    const JSZip = (await import('jszip')).default;
+    const zip = await JSZip.loadAsync(await res.arrayBuffer());
+    return {
+      document: await zip.file('word/document.xml')!.async('string'),
+      numbering: await zip.file('word/numbering.xml')?.async('string'),
+    };
+  }
+
+  it('docx: bold and italic come through as run properties, not stripped or literal', async () => {
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', {
+      content: { body: 'En **vigtig** og *lille* beslutning' },
+      format: 'docx',
+    }));
+    expect(res.status).toBe(200);
+    const { document } = await readDocx(res);
+    expect(document).toContain('vigtig');
+    expect(document).toMatch(/<w:b\b/);
+    expect(document).toMatch(/<w:i\b/);
+    expect(document).not.toContain('**');
+  });
+
+  it('docx: ordered items become a real numbered list, and a second list restarts', async () => {
+    const res = await POST(makeJsonReq(BASE_URL, 'POST', {
+      content: { body: '1. et\n2. to\n\n1. ny liste' },
+      format: 'docx',
+    }));
+    expect(res.status).toBe(200);
+    const { document, numbering } = await readDocx(res);
+    expect(numbering).toBeDefined();
+    const numIds = [...document.matchAll(/<w:numId w:val="(\d+)"/g)].map((m) => m[1]);
+    expect(numIds).toHaveLength(3);
+    expect(numIds[0]).toBe(numIds[1]); // same list
+    expect(numIds[2]).not.toBe(numIds[0]); // new list = new numbering instance
+    // No literal numerals baked into the text.
+    expect(document).not.toMatch(/<w:t[^>]*>1\./);
+  });
+
   it('returns a parseable JSON 500 when the PDF renderer throws', async () => {
     // Simulate jsPDF throwing (e.g. dynamic-import failure or internal error)
     vi.doMock('jspdf', () => { throw new Error('jsPDF unavailable'); });
