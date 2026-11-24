@@ -116,7 +116,7 @@ export function NoteScreen({ noteId, autostart }: { noteId: string; autostart: b
       router.push(`/note/${note.id}?autostart=1`);
     } catch (err) {
       console.error('[note] could not create a new note', err);
-      setError('Der kunne ikke oprettes en ny note. Prøv igen.');
+      setError('Noten kunne ikke oprettes. Prøv igen.');
       setBusy(false);
     }
   }
@@ -140,7 +140,7 @@ export function NoteScreen({ noteId, autostart }: { noteId: string; autostart: b
   if (loaded.status === 'missing') {
     return (
       <div style={{ maxWidth: 560, margin: '64px auto', padding: '0 16px', textAlign: 'center' }}>
-        <p style={{ fontSize: 15, color: 'var(--ink-2)', marginBottom: 20 }}>Noten findes ikke. Den kan være slettet.</p>
+        <p style={{ fontSize: 15, color: 'var(--ink-2)', marginBottom: 20 }}>Noten findes ikke. Den er måske slettet.</p>
         <Link href="/dashboard" style={{ ...mono, color: 'var(--ink-2)' }}>↶ til forsiden</Link>
       </div>
     );

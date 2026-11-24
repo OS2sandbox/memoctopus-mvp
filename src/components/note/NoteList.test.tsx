@@ -61,6 +61,6 @@ describe('NoteList', () => {
 
     render(<NoteList />);
 
-    expect(await screen.findByText('Kunne ikke indlæse dine noter. Prøv at genindlæse siden.')).toBeInTheDocument();
+    expect(await screen.findByText('Dine noter kunne ikke indlæses. Genindlæs siden, og prøv igen.')).toBeInTheDocument();
   });
 });

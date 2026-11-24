@@ -795,7 +795,7 @@ describe('RecordingScreen — stopAndSave', () => {
     await stop();
 
     await waitFor(() => {
-      expect(screen.getByText(/1 af 1 dele er endnu ikke transskriberet/)).toBeInTheDocument();
+      expect(screen.getByText(/1 af 1 dele mangler at blive transskriberet/)).toBeInTheDocument();
     });
     // The panel shows the queue as soon as stopping starts; the status follows.
     await waitFor(async () => expect((await getMeeting(meetingId))?.status).toBe('processing'));
@@ -1170,7 +1170,7 @@ describe('RecordingScreen — offline and start-up failures', () => {
 
     fetchMock.mockClear();
     setOnline(false);
-    expect(screen.getByText(/Optagelsen fortsætter, og live-transskriptionen er sat på pause/)).toBeInTheDocument();
+    expect(screen.getByText(/Optagelsen fortsætter. Live-teksten kommer tilbage, når forbindelsen er genoprettet/)).toBeInTheDocument();
     await speak();
 
     expect(fetchMock).not.toHaveBeenCalled();

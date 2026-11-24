@@ -92,8 +92,9 @@ meeting closed the tab, and meetings live in the browser, so it stashes its outp
 disk under `${AUDIO_STORAGE_PATH}/pending-artifacts` via
 `src/lib/pending-artifacts.ts`. The browser collects it through
 `GET /api/meetings/[id]/pending-meta` (speaker names and duration) and
-`/pending-transcript` (the segments), both of which delete the stashed record as they
-hand it over. Both are session-gated and additionally check an owner file, so one
+`/pending-transcript` (the segments). Reading deletes nothing: the client acknowledges
+with `DELETE /pending-transcript` once it has saved the transcript, and a TTL sweep
+(`src/lib/pending-sweeper.ts`) removes what is never collected. Both are session-gated and additionally check an owner file, so one
 user cannot collect another's artifacts. `pending-transcript` is polled for *every*
 meeting, local recordings included, where it answers `{ status: 'none' }` and the
 client falls back to its own batch pass. `src/lib/transcribe-recording.ts`
@@ -102,10 +103,40 @@ client falls back to its own batch pass. `src/lib/transcribe-recording.ts`
 **Raw meeting audio never reaches the browser from a Teams meeting.** Graph publishes
 nothing until a meeting has ended and the poller will not ask before `scheduled_end`,
 so nobody can follow a Teams meeting live here and nobody has a reason to hold the
-audio afterwards. All three pipeline modes therefore transcribe server-side and then
-call `markNoRecording()`; there is no code path that stashes audio, and
+audio afterwards. All three pipeline modes therefore transcribe server-side; there is
+no code path that stashes audio, and
 `pending-artifacts.ts` exposes none. Enforced per mode in `pipeline.test.ts`, so a
 fourth mode that stashed audio would fail the suite.
+
+**In-person recording resilience** (`src/lib/recording/`, `src/lib/storage/recording.ts`):
+the final transcript of a browser recording is built from 27 s VAD batches sent while
+recording, not from the live captions. Each sealed batch is written to the IndexedDB
+ledger (`recordingBatches`) with its audio (`pendingAudio`) *before* it is sent, by the
+per-meeting queue in `batch-queue.ts`, which retries with backoff until it has the text
+and outlives the screen. `completeBatch` stores the text and deletes the audio in one
+transaction; audio never transcribed is given up after 24 h (`PENDING_AUDIO_TTL_MS`,
+`sweepExpiredPendingAudio`) and becomes a visible marker line. Untranscribed audio thus
+rests only in the browser and only until transcribed; nothing is stored server-side.
+Offline (`connectivity.ts`) recording continues and live captions pause; a recording
+cannot *start* offline (VAD assets come from the server). `finish.ts`
+(`finishRecording`) is the only code that turns a ledger into the transcript: a stopped
+meeting with untranscribed batches stays `processing` and is settled when its queue
+drains, with the screen open or not. `RecordingRecovery` (mounted in the app layout)
+picks up what a closed tab left. A `recording` meeting with ledger rows is an
+interrupted recording: reopening it offers to resume (the timeline continues from
+where it stopped), finish or delete, and Arkiv and the dashboard list it. A resumed
+meeting keeps no playback audio and diarizes only its last session.
+
+**Notes** (`src/lib/storage/notes.ts`, `src/components/note/`, `/note/[id]`): personal
+dictation, started from the dashboard (shortcut N). A note is a `StoredMeeting` with
+`kind: 'note'` whose text is its transcript's `rawText`; it skips PII, speakers and the
+referat, is listed under Arkiv's "Noter" tab, and every meeting list filters it out.
+The audio is held in memory, transcribed on stop via `transcribe-batches`, and never
+stored. Text appears after stop, not live.
+
+**Upload**: several files can be uploaded in a chosen order; `POST /api/audio/concat`
+(`src/lib/audio/concat-server.ts`) joins them with ffmpeg into one 16 kHz mono FLAC in a
+temp dir, and the single-file pipeline runs on that, so diarization stays one pass.
 
 **Meeting status flow**: `awaiting_teams` (Teams/Graph) or `recording` (in person) →
 `processing` → `review` → `minutes` → `done` (also `redacted`, `failed`). The Postgres
@@ -322,6 +353,10 @@ the container. Note also that `.env.deploy.example`, not `.env.example`, is what
   ```
   It is a single connection, so locking between two sessions (`withMeetingLock`) is
   still mocked.
+- **Real IndexedDB in tests:** client storage whose correctness lives in transactions
+  (the recording ledger, notes, the v2 upgrade) is tested against `fake-indexeddb`
+  (`import 'fake-indexeddb/auto'`), not hand mocks. The client database is at version 2;
+  `upgrade()` in `src/lib/storage/db.ts` is version-aware, and only that file changes it.
 - **Regression tests:** every bug fix comes with a test that fails when the fix is
   reverted; check it by reverting before you commit.
 - **Guard tests** that fail when two things drift apart:

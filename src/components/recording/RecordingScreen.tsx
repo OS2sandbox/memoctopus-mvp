@@ -1521,7 +1521,7 @@ export function RecordingScreen({ meetingId, existingRecording, isActiveRecordin
           background: 'var(--accent-wash)',
           fontSize: 13.5, color: 'var(--ink-2)',
         }}>
-          Ingen forbindelse til serveren. Optagelsen fortsætter, og live-transskriptionen er sat på pause, indtil du er online igen.
+          Ingen forbindelse til serveren. Optagelsen fortsætter. Live-teksten kommer tilbage, når forbindelsen er genoprettet, og alt det optagne bliver transskriberet.
         </div>
       )}
 

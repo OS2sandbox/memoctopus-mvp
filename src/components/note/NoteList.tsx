@@ -41,7 +41,7 @@ export function NoteList() {
   if (loaded.status === 'failed') {
     return (
       <ErrorBanner
-        message="Kunne ikke indlæse dine noter. Prøv at genindlæse siden."
+        message="Dine noter kunne ikke indlæses. Genindlæs siden, og prøv igen."
         onRetry={() => window.location.reload()}
         className="mt-4"
       />

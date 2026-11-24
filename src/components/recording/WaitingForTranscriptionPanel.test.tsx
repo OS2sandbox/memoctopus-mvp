@@ -15,7 +15,7 @@ describe('WaitingForTranscriptionPanel', () => {
 
   it('says what is missing and that it is sent once online again', () => {
     render(<WaitingForTranscriptionPanel {...base} online={false} />);
-    expect(screen.getByText(/1 af 3 dele er endnu ikke transskriberet/)).toBeInTheDocument();
+    expect(screen.getByText(/1 af 3 dele mangler at blive transskriberet/)).toBeInTheDocument();
     expect(screen.getByText(/gemmes lyden i browseren i op til 24 timer/)).toBeInTheDocument();
   });
 

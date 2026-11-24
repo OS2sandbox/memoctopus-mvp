@@ -45,7 +45,7 @@ export function WaitingForTranscriptionPanel({
 
       {!online && (
         <p style={{ marginTop: 12, fontSize: 13.5, color: 'var(--ink-2)', lineHeight: 1.5 }}>
-          {waiting} af {total} dele er endnu ikke transskriberet. De sendes automatisk, når du er online igen.
+          {waiting} af {total} dele mangler at blive transskriberet. De sendes automatisk, når forbindelsen er tilbage. Lyden slettes, så snart den er transskriberet, og senest efter 24 timer.
           {!persistFailed && ' Indtil da gemmes lyden i browseren i op til 24 timer.'}
         </p>
       )}
