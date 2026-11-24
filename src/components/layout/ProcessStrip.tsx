@@ -35,7 +35,10 @@ export function ProcessStrip({ meetingId, activePhase, completedPhases = [], onT
       {PHASES.map((phase, i) => {
         const isActive = phase.key === activePhase;
         const isCompleted = completedPhases.includes(phase.key) || i < activeIndex;
-        const isReachable = isCompleted || isActive;
+        // The step after a completed one is where the meeting stands, so it opens
+        // too, without a ✓: a meeting with a referat can go to Eksport.
+        const isNext = i > 0 && completedPhases.includes(PHASES[i - 1].key);
+        const isReachable = isCompleted || isActive || isNext;
 
         const stepBadge = (
           <span style={{

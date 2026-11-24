@@ -24,6 +24,7 @@ interface MinutesEditorProps {
   activeVersionId: string | null;
   versions: VersionRecord[];
   onSaved?: () => void;
+  onExport: () => void;
 }
 
 const AUTOSAVE_DELAY = 1500;
@@ -157,6 +158,7 @@ export function MinutesEditor({
   activeVersionId: initialActiveId,
   versions: initialVersions,
   onSaved,
+  onExport,
 }: MinutesEditorProps) {
   const [body, setBody] = useState<string>(() => minutesToBody(initialContent));
   const [title, setTitle] = useState<string>(() => initialContent.header?.title ?? meetingTitle);
@@ -336,7 +338,8 @@ export function MinutesEditor({
             <Button
               variant="default"
               size="sm"
-              onClick={() => (window.location.href = `/meeting/${meetingId}/export`)}
+              // Saved first, so the export tab reads the text on screen.
+              onClick={() => void flushSave().then(onExport)}
             >
               Eksportér
             </Button>

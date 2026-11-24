@@ -135,6 +135,36 @@ describe('ProcessStrip', () => {
     expect(links.length + buttons.length).toBeLessThanOrEqual(1);
   });
 
+  // A meeting with a referat: Referat is done, so Eksport is the next step and
+  // can be opened, without claiming it has been done.
+  it('makes the step after the last completed one reachable, without a ✓', async () => {
+    const user = userEvent.setup();
+    const onTabChange = vi.fn();
+    render(
+      <ProcessStrip
+        meetingId="m-1"
+        activePhase="minutes"
+        onTabChange={onTabChange}
+        completedPhases={['recording', 'review', 'minutes']}
+      />,
+    );
+
+    const exportBtn = screen.getByRole('button', { name: /eksport/i });
+    expect(exportBtn).toHaveTextContent('4');
+    await user.click(exportBtn);
+    expect(onTabChange).toHaveBeenCalledWith('export');
+  });
+
+  it('links the next step when rendered without onTabChange', () => {
+    render(<ProcessStrip meetingId="m-1" activePhase="minutes" completedPhases={['recording', 'review', 'minutes']} />);
+    expect(screen.getByRole('link', { name: /eksport/i })).toHaveAttribute('href', '/meeting/m-1/export');
+  });
+
+  it('does not open a step that only follows the active one', () => {
+    render(<ProcessStrip meetingId="m-1" activePhase="minutes" onTabChange={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /eksport/i })).toBeNull();
+  });
+
   it('explicitly completed phases are marked with ✓', () => {
     render(
       <ProcessStrip

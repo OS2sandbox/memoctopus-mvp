@@ -99,6 +99,7 @@ function defaultProps(
     version: 1,
     activeVersionId: 'v1',
     versions: [v1],
+    onExport: () => {},
     ...overrides,
   };
 }
@@ -754,6 +755,30 @@ describe('MinutesEditor — version dropdown and version restore', () => {
     fireEvent.mouseDown(document.body);
 
     expect(screen.queryByText('nuværende')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Eksportér
+// ---------------------------------------------------------------------------
+describe('MinutesEditor — Eksportér', () => {
+  // The button used to set window.location.href, a full page load that dropped
+  // the in-memory state and raced the unmount save against the export page's read.
+  it('saves pending edits, then hands over to the export tab without a page load', async () => {
+    const hrefBefore = window.location.href;
+    const onExport = vi.fn(() => {
+      expect(mockSaveMinutes).toHaveBeenCalledWith(
+        MEETING_ID,
+        expect.objectContaining({ body: 'Ny tekst' }),
+      );
+    });
+    render(<MinutesEditor {...defaultProps({ onExport })} />);
+    fireEvent.change(screen.getByTestId('rich-editor'), { target: { value: 'Ny tekst' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Eksportér' }));
+
+    await waitFor(() => expect(onExport).toHaveBeenCalledTimes(1));
+    expect(window.location.href).toBe(hrefBefore);
   });
 });
 
